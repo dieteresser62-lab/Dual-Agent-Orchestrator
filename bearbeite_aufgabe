@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TASK_FILE="Aufgabe.md"
+STATE_FILE=".orchestrator/state.json"
+STATE_PHASE=""
+EXTRA_ARGS=()
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  exec python3 "$SCRIPT_DIR/src/orchestrator.py" --help
+fi
+
+cd "$SCRIPT_DIR"
+
+if [[ $# -gt 0 && "${1:-}" != -* ]]; then
+  TASK_FILE="$1"
+  shift
+fi
+
+if [[ $# -gt 0 ]]; then
+  EXTRA_ARGS=("$@")
+fi
+
+if [[ -f "$STATE_FILE" ]]; then
+  STATE_PHASE="$(python3 -c 'import json,sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        data = json.load(f)
+    print(str(data.get("phase", "")).strip())
+except Exception:
+    print("")
+' "$STATE_FILE")"
+fi
+
+if [[ -f "$STATE_FILE" && "$STATE_PHASE" != "done" ]]; then
+  echo "[INFO] Existing state found at $STATE_FILE -> resuming current run."
+  exec python3 "$SCRIPT_DIR/src/orchestrator.py" \
+    --resume \
+    --allow-fallback-to-gemini \
+    --agent-live-stream \
+    --agent-live-stream-mode compact \
+    --agent-live-stream-channels stdout \
+    --agent-output none \
+    --task-file "$TASK_FILE" \
+    "${EXTRA_ARGS[@]}"
+else
+  if [[ -f "$STATE_FILE" && "$STATE_PHASE" == "done" ]]; then
+    echo "[INFO] Existing state is completed (phase=done) -> starting new run."
+  fi
+  exec python3 "$SCRIPT_DIR/src/orchestrator.py" \
+    --force-overwrite-state \
+    --allow-fallback-to-gemini \
+    --agent-live-stream \
+    --agent-live-stream-mode compact \
+    --agent-live-stream-channels stdout \
+    --agent-output none \
+    --task-file "$TASK_FILE" \
+    "${EXTRA_ARGS[@]}"
+fi

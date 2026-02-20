@@ -1,0 +1,7 @@
+.orchestrator/
+__pycache__/
+.codex/
+*.log
+Aufgabe.md
+*.pyc
+.env
