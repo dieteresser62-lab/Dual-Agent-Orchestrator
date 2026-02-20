@@ -18,6 +18,14 @@ Der Orchestrator nimmt eine Aufgabenbeschreibung im Markdown-Format, plant die U
 
 Dieses Tool wurde primär für **Linux/Unix-Umgebungen** (inkl. macOS und WSL unter Windows) entwickelt und benötigt eine `bash`-kompatible Shell.
 
+### Benötigte KI CLI-Tools
+
+Der Orchestrator verlässt sich auf externe Kommandozeilen-Tools für die Kommunikation mit den Modellen. Es wird vorausgesetzt, dass **mindestens zwei, idealerweise drei** der folgenden CLI-Tools auf dem System installiert und im `$PATH` verfügbar sind:
+
+- **`codex`** (OpenAI / ChatGPT CLI) - Häufig Hauptakteur für Planung und Code-Generierung.
+- **`claude`** (Anthropic CLI) - Wird standardmäßig für Review, Bewertung oder eigenständige Agenten-Aufgaben genutzt.
+- **`gemini`** (Google Gemini CLI) - Dient u.a. als nützlicher Fallback-Agent bei Rate-Limits oder als alternative Engine.
+
 ### Globale Verfügbarkeit einrichten
 
 Damit das Tool (`bearbeite_aufgabe`) aus jedem beliebigen Projektverzeichnis komfortabel aufgerufen werden kann, empfiehlt es sich, einen symbolischen Link (Symlink) in einem Verzeichnis anzulegen, das sich in deinem System-Pfad (`$PATH`) befindet (z. B. `~/.local/bin` oder `/usr/local/bin`):
