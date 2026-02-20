@@ -3,6 +3,10 @@ from __future__ import annotations
 import textwrap
 
 
+def _delimit_block(label: str, content: str) -> str:
+    return f"<<<{label}_BEGIN>>>\n{content}\n<<<{label}_END>>>"
+
+
 def build_phase1_claude_plan_prompt(
     task_text: str,
     shared_text: str,
@@ -15,12 +19,12 @@ def build_phase1_claude_plan_prompt(
 
         Aufgabe:
         ---
-        {task_text}
+        {_delimit_block("TASK", task_text)}
         ---
 
         Gemeinsame Plan-Datei (bisheriger Verlauf):
         ---
-        {shared_text or '(leer)'}
+        {_delimit_block("SHARED", shared_text or '(leer)')}
         ---
 
         Noch offene Findings aus letztem Codex-Review:
@@ -53,12 +57,12 @@ def build_phase1_codex_review_prompt(
 
         Aufgabe:
         ---
-        {task_text}
+        {_delimit_block("TASK", task_text)}
         ---
 
         Gemeinsame Plan-Datei (Claude + bisherige Historie):
         ---
-        {shared_text}
+        {_delimit_block("SHARED", shared_text)}
         ---
 
         Offene Findings aus dem VORHERIGEN Zyklus:
@@ -108,12 +112,12 @@ def build_phase1_claude_confirm_prompt(
 
         Aufgabe:
         ---
-        {task_text}
+        {_delimit_block("TASK", task_text)}
         ---
 
         Gemeinsame Plan-Datei inkl. aktuellem Codex-Review:
         ---
-        {shared_text}
+        {_delimit_block("SHARED", shared_text)}
         ---
 
         Codex-Contract in diesem Zyklus:
@@ -146,17 +150,17 @@ def build_phase2_codex_implement_prompt(
 
         Aufgabe:
         ---
-        {task_text}
+        {_delimit_block("TASK", task_text)}
         ---
 
         Finaler abgestimmter Plan aus PHASE 1:
         ---
-        {plan_text}
+        {_delimit_block("PLAN", plan_text)}
         ---
 
         Gemeinsame Implementierungs-Datei (bisheriger Verlauf inkl. Claude Findings):
         ---
-        {shared_text or '(leer)'}
+        {_delimit_block("SHARED", shared_text or '(leer)')}
         ---
 
         Offene Claude-Findings aus dem VORHERIGEN Zyklus:
@@ -192,27 +196,27 @@ def build_phase2_claude_review_prompt(
 
         Aufgabe:
         ---
-        {task_text}
+        {_delimit_block("TASK", task_text)}
         ---
 
         Abgestimmter Plan aus PHASE 1:
         ---
-        {plan_text}
+        {_delimit_block("PLAN", plan_text)}
         ---
 
         Gemeinsame Implementierungs-Datei:
         ---
-        {shared_text}
+        {_delimit_block("SHARED", shared_text)}
         ---
 
         Lokaler Test-Snapshot (konfigurierter Testbefehl):
         ---
-        {test_snapshot}
+        {_delimit_block("TEST_SNAPSHOT", test_snapshot)}
         ---
 
         Repository-Snapshot:
         ---
-        {snapshot}
+        {_delimit_block("SNAPSHOT", snapshot)}
         ---
 
         Offene Findings aus dem VORHERIGEN Zyklus:

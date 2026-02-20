@@ -415,6 +415,13 @@ def is_quota_or_rate_limit_error(text: str) -> bool:
     return any(marker in raw for marker in markers)
 
 
+def compute_retry_backoff_seconds(error_text: str, attempt: int) -> int:
+    exponential = min(30, 2 * (2 ** max(0, attempt - 1)))
+    if is_quota_or_rate_limit_error(error_text):
+        return max(10, exponential)
+    return exponential
+
+
 def run_agent_checked(
     *,
     agent_key: str,
@@ -447,6 +454,7 @@ def run_agent_checked(
         return None
 
     for attempt in range(1, max_retries + 2):
+        has_next_attempt = attempt < (max_retries + 1)
         prompt_to_send = prompt
         if attempt > 1:
             prompt_to_send = (
@@ -472,8 +480,8 @@ def run_agent_checked(
             validation_error = validate_output_contract(output)
             if validation_error:
                 errors.append(validation_error)
-                continue
-            return output
+            else:
+                return output
         except Exception as exc:
             error_text = shorten(str(exc))
             errors.append(error_text)
@@ -511,10 +519,18 @@ def run_agent_checked(
                     validation_error = validate_output_contract(fallback_output)
                     if validation_error:
                         errors.append(f"gemini fallback invalid output: {validation_error}")
-                        continue
-                    return fallback_output
+                    else:
+                        return fallback_output
                 except Exception as fallback_exc:
                     errors.append(f"gemini fallback failed: {shorten(str(fallback_exc))}")
+
+        if has_next_attempt:
+            delay_seconds = compute_retry_backoff_seconds(errors[-1], attempt)
+            print(
+                f"[RETRY] {agent_key} attempt={attempt} failed. "
+                f"Waiting {delay_seconds}s before retry."
+            )
+            time.sleep(delay_seconds)
 
     raise RuntimeError(
         f"{agent_key} did not produce valid output after {max_retries + 1} attempts: "

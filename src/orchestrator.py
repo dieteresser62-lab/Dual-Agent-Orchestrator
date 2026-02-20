@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import functools
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -49,6 +50,10 @@ MAX_ERROR_CHARS = 1800
 MAX_DIFF_CHARS = 14000
 TEST_TIMEOUT_SECONDS = 300
 FINDING_ID_PATTERN = re.compile(r"^F-\d{3}$")
+DELIMITED_SECTION_PATTERN = re.compile(
+    r"<<<\s*([A-Z_]+)_BEGIN\s*>>>.*?<<<\s*\1_END\s*>>>",
+    re.IGNORECASE | re.DOTALL,
+)
 
 @dataclass
 class RunContext:
@@ -269,18 +274,28 @@ def find_task_file(explicit_path: str | None) -> Path:
 
 
 def validate_done_marker(text: str) -> bool:
-    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    lines = [line.strip() for line in strip_delimited_sections(text).splitlines() if line.strip()]
     if not lines:
         return False
     return lines[-1] == "STATUS: DONE"
 
 
+def strip_delimited_sections(text: str) -> str:
+    cleaned = text or ""
+    while True:
+        next_value = DELIMITED_SECTION_PATTERN.sub("", cleaned)
+        if next_value == cleaned:
+            return cleaned
+        cleaned = next_value
+
+
 def parse_flag(text: str, key: str) -> str | None:
+    contract_text = strip_delimited_sections(text)
     pattern = re.compile(rf"^\s*{re.escape(key)}\s*:\s*(YES|NO)\s*$", re.IGNORECASE | re.MULTILINE)
-    match = pattern.search(text or "")
-    if not match:
+    matches = list(pattern.finditer(contract_text))
+    if not matches:
         return None
-    return match.group(1).upper()
+    return matches[-1].group(1).upper()
 
 
 def format_findings_list(finding_ids: list[str]) -> str:
@@ -290,11 +305,12 @@ def format_findings_list(finding_ids: list[str]) -> str:
 
 
 def parse_open_findings(text: str) -> list[str] | None:
+    contract_text = strip_delimited_sections(text)
     pattern = re.compile(r"^\s*OPEN_FINDINGS\s*:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
-    match = pattern.search(text or "")
-    if not match:
+    matches = list(pattern.finditer(contract_text))
+    if not matches:
         return None
-    raw = match.group(1).strip()
+    raw = matches[-1].group(1).strip()
     if raw.upper() == "NONE":
         return []
     finding_ids = [part.strip().upper() for part in raw.split(",") if part.strip()]
@@ -302,12 +318,13 @@ def parse_open_findings(text: str) -> list[str] | None:
 
 
 def parse_finding_status_map(text: str) -> dict[str, str]:
+    contract_text = strip_delimited_sections(text)
     pattern = re.compile(
         r"^\s*FINDING_STATUS\s*:\s*([A-Za-z0-9_-]+)\s*\|\s*(OPEN|CLOSED)\s*\|.+$",
         re.IGNORECASE | re.MULTILINE,
     )
     status_map: dict[str, str] = {}
-    for match in pattern.finditer(text or ""):
+    for match in pattern.finditer(contract_text):
         finding_id = match.group(1).strip().upper()
         status = match.group(2).strip().upper()
         status_map[finding_id] = status
@@ -315,12 +332,13 @@ def parse_finding_status_map(text: str) -> dict[str, str]:
 
 
 def parse_new_findings(text: str) -> dict[str, str]:
+    contract_text = strip_delimited_sections(text)
     pattern = re.compile(
         r"^\s*NEW_FINDING\s*:\s*([A-Za-z0-9_-]+)\s*\|\s*(.+?)\s*\|\s*(.+?)\s*$",
         re.IGNORECASE | re.MULTILINE,
     )
     found: dict[str, str] = {}
-    for match in pattern.finditer(text or ""):
+    for match in pattern.finditer(contract_text):
         finding_id = match.group(1).strip().upper()
         summary = match.group(2).strip()
         acceptance = match.group(3).strip()
@@ -388,6 +406,14 @@ def validate_claude_phase2_contract(output: str, previous_open_findings: list[st
     return validate_agent_contract(output, previous_open_findings, "CLAUDE_APPROVAL")
 
 
+def validate_codex_phase1_contract_error(output: str, previous_open_findings: list[str]) -> str | None:
+    return validate_codex_phase1_contract(output, previous_open_findings)[0]
+
+
+def validate_claude_phase2_contract_error(output: str, previous_open_findings: list[str]) -> str | None:
+    return validate_claude_phase2_contract(output, previous_open_findings)[0]
+
+
 def approval_gate(message: str) -> bool:
     print(f"\n{'=' * 60}")
     print(message)
@@ -447,9 +473,10 @@ def run_phase1(task_text: str, state: dict, args: argparse.Namespace, ctx: RunCo
             log_prefix=f"phase1-cycle{cycle}-codex-review",
             max_retries=max(args.max_agent_retries, 0),
             required_flags=["CODEX_APPROVAL"],
-            output_validator=lambda output: validate_codex_phase1_contract(
-                output, previous_open_findings
-            )[0],
+            output_validator=functools.partial(
+                validate_codex_phase1_contract_error,
+                previous_open_findings=list(previous_open_findings),
+            ),
         )
         append_markdown(ctx.phase1_shared_file, f"Phase 1 / Zyklus {cycle} / Codex Review", codex_review)
 
@@ -575,9 +602,10 @@ def run_phase2(task_text: str, plan_text: str, state: dict, args: argparse.Names
             log_prefix=f"phase2-cycle{cycle}-claude-review",
             max_retries=max(args.max_agent_retries, 0),
             required_flags=["CLAUDE_APPROVAL"],
-            output_validator=lambda output: validate_claude_phase2_contract(
-                output, previous_open_findings
-            )[0],
+            output_validator=functools.partial(
+                validate_claude_phase2_contract_error,
+                previous_open_findings=list(previous_open_findings),
+            ),
         )
         append_markdown(ctx.phase2_shared_file, f"Phase 2 / Zyklus {cycle} / Claude Review", claude_review)
 
