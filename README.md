@@ -1,44 +1,68 @@
 # Dual-Agent Ticketing Orchestrator
 
-Universeller Orchestrator fuer einen zweiphasigen Agenten-Workflow (Planung + Implementierung) mit Artefakten unter `.orchestrator/`.
+Ein leistungsstarkes CLI-Tool zur Automatisierung komplexer Coding-Aufgaben durch einen intelligenten, zweiphasigen KI-Agenten-Workflow (Planung und Implementierung).
 
-## Schnellstart
+## 🌟 Überblick
+
+Der Orchestrator nimmt eine Aufgabenbeschreibung im Markdown-Format, plant die Umsetzung im Detail (Phase 1) und führt anschließend die notwendigen Code-Änderungen durch (Phase 2). Der gesamte Verarbeitungsstatus und alle generierten Artefakte werden im Ordner `.orchestrator/` gesichert.
+
+### Kernfunktionen
+
+- **Zweiphasiger Agenten-Workflow**: Klare Trennung zwischen Lösungsdesign (Planung) und tatsächlicher Ausführung (Implementierung).
+- **Zustandsspeicherung & Resume (Fortsetzen)**: Wird ein Prozess unterbrochen, kann er über `.orchestrator/state.json` exakt dort fortgesetzt werden, wo er gestoppt hat.
+- **Live-Streaming**: Im Terminal kann der direkte Gedankengang und Fortschritt der Agenten im kompakten Modus mitverfolgt werden.
+- **Test-Integration**: Kommandozeilen-Tests können direkt in den Workflow integriert werden.
+- **Agenten Fallback**: Unterstützt einen automatisierten Fallback (z.B. auf Gemini), um Ausfallsicherheit zu gewährleisten.
+
+## 🚀 Schnellstart
+
+Erstelle eine Datei namens `Aufgabe.md` mit deiner Anforderung und starte den Orchestrator:
 
 ```bash
 ./bearbeite_aufgabe
 ```
 
-- Standard-Task-Datei: `Aufgabe.md`
-- Resume-first Verhalten bei bestehendem `.orchestrator/state.json`
-- Live-Stream im kompakten Modus
+*Wenn bereits ein `.orchestrator/state.json` existiert und nicht als "done" markiert ist, setzt das Skript den letzten Lauf automatisch fort (Resume-first).*
 
-## Hilfe
+## 📖 Nutzung
 
-```bash
-./bearbeite_aufgabe --help
-python3 src/orchestrator.py --help
-```
+### Eigene Task-Datei verwenden
 
-## Eigene Task-Datei
+Du kannst eine beliebige Markdown-Datei als Aufgabe übergeben:
 
 ```bash
 ./bearbeite_aufgabe my-task.md
 ```
 
-## Testkommando konfigurieren
+### Testkommando konfigurieren
 
-Tests in Phase 2 sind ueber `--test-command` steuerbar.
+Tests in Phase 2 (Implementierung) können über den Parameter `--test-command` gesteuert werden. Wenn der Test fehlschlägt, kann der Agent versuchen, den Fehler zu beheben.
 
 ```bash
+# Mit Pytest
 python3 src/orchestrator.py --task-file my-task.md --test-command "pytest -x"
+
+# Mit npm
 python3 src/orchestrator.py --task-file my-task.md --test-command "npm test"
+
+# Tests explizit überspringen
 python3 src/orchestrator.py --task-file my-task.md --test-command ""
 ```
 
-Leerer Wert (`""`) ueberspringt den Testlauf explizit.
+### Dry-Run Modus
 
-## Dry-Run
+Nützlich zum Testen der Konfiguration, ohne echte Agenten-Aufrufe auszulösen:
 
 ```bash
 python3 src/orchestrator.py --dry-run --auto --task-file example-task.md --test-command ""
+```
+
+## ❓ Hilfe
+
+Alle verfügbaren Argumente und Optionen können über die Hilfe angezeigt werden:
+
+```bash
+./bearbeite_aufgabe --help
+# oder direkt über Python:
+python3 src/orchestrator.py --help
 ```
