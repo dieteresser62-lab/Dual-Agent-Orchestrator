@@ -14,7 +14,28 @@ Der Orchestrator nimmt eine Aufgabenbeschreibung im Markdown-Format, plant die U
 - **Test-Integration**: Kommandozeilen-Tests können direkt in den Workflow integriert werden.
 - **Agenten Fallback**: Unterstützt einen automatisierten Fallback (z.B. auf Gemini), um Ausfallsicherheit zu gewährleisten.
 
-## 🚀 Schnellstart
+## � Voraussetzungen und Installation
+
+Dieses Tool wurde primär für **Linux/Unix-Umgebungen** (inkl. macOS und WSL unter Windows) entwickelt und benötigt eine `bash`-kompatible Shell.
+
+### Globale Verfügbarkeit einrichten
+
+Damit das Tool (`bearbeite_aufgabe`) aus jedem beliebigen Projektverzeichnis komfortabel aufgerufen werden kann, empfiehlt es sich, einen symbolischen Link (Symlink) in einem Verzeichnis anzulegen, das sich in deinem System-Pfad (`$PATH`) befindet (z. B. `~/.local/bin` oder `/usr/local/bin`):
+
+```bash
+# Optional: Verzeichnis anlegen, falls es noch nicht existiert
+mkdir -p ~/.local/bin
+
+# Symbolischen Link erstellen (ersetze den Pfad durch deinen tatsächlichen Klon-Pfad)
+ln -s /absoluter/pfad/zu/Dual-Agent-Orchestrator/bearbeite_aufgabe ~/.local/bin/bearbeite_aufgabe
+
+# Sicherstellen, dass das Skript ausführbar ist
+chmod +x /absoluter/pfad/zu/Dual-Agent-Orchestrator/bearbeite_aufgabe
+```
+
+Sobald dies eingerichtet ist und `~/.local/bin` in deinem Pfad liegt (oft Standard in modernen Distributionen), kannst du `bearbeite_aufgabe` in jedem beliebigen Ordner in deinem Terminal aufrufen.
+
+## �🚀 Schnellstart
 
 Erstelle eine Datei namens `Aufgabe.md` mit deiner Anforderung und starte den Orchestrator:
 
