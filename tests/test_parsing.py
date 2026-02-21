@@ -5,7 +5,9 @@ from orchestrator import (
     parse_finding_status_map,
     parse_new_findings,
     parse_open_findings,
+    parse_changed_files_from_impl_report,
     strip_delimited_sections,
+    truncate_shared,
     validate_agent_contract,
     validate_done_marker,
 )
@@ -183,3 +185,32 @@ CODEX_APPROVAL: NO
     err, open_ids = validate_agent_contract(out, ["F-001"], "CODEX_APPROVAL")
     assert err is None
     assert open_ids == ["F-001"]
+
+
+def test_truncate_shared_keeps_recent_tail_with_marker() -> None:
+    src = "abcdefghijklmnopqrstuvwxyz"
+    out = truncate_shared(src, 5)
+    assert out.startswith("...[earlier history truncated]")
+    assert out.endswith("vwxyz")
+
+
+def test_truncate_shared_noop_when_under_limit() -> None:
+    src = "abc"
+    assert truncate_shared(src, 10) == src
+
+
+def test_parse_changed_files_from_impl_report_ignores_noise() -> None:
+    report = """
+## Summary
+ok
+
+## Changed Files
+- src/a.py
+- not a path | noise
+- `tests/test_a.py`
+random text
+
+## Implemented Fixes
+done
+"""
+    assert parse_changed_files_from_impl_report(report) == ["src/a.py", "tests/test_a.py"]

@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+
+FINDING_ID_PATTERN = re.compile(r"^F-\d{3}$")
+logger = logging.getLogger(__name__)
 
 
 def read_file(path: Path) -> str:
@@ -54,15 +58,26 @@ def new_run_id() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ")
 
 
-def build_artifact_paths(run_id: str, artifact_runs_dir: Path) -> dict[str, str]:
+def build_artifact_paths(run_id: str, artifact_runs_dir: Path) -> dict[str, str | Path]:
     run_dir = artifact_runs_dir / run_id
     return {
         "run_id": run_id,
-        "run_dir": str(run_dir),
-        "task": str(run_dir / "00_task.md"),
-        "phase1_shared": str(run_dir / "10_phase1_plan.md"),
-        "phase2_shared": str(run_dir / "20_phase2_implementation.md"),
+        "run_dir": run_dir,
+        "task": run_dir / "00_task.md",
+        "phase1_shared": run_dir / "10_phase1_plan.md",
+        "phase2_shared": run_dir / "20_phase2_implementation.md",
     }
+
+
+def _is_within_allowed_roots(path: Path, allowed_roots: tuple[Path, ...]) -> bool:
+    return any(path.is_relative_to(root) for root in allowed_roots)
+
+
+def _validate_loaded_path(raw: str, allowed_roots: tuple[Path, ...]) -> str:
+    resolved = Path(raw).resolve()
+    if not _is_within_allowed_roots(resolved, allowed_roots):
+        raise ValueError(f"path '{raw}' resolves outside allowed roots")
+    return str(resolved)
 
 
 def load_state(state_file: Path) -> dict:
@@ -71,8 +86,8 @@ def load_state(state_file: Path) -> dict:
     return json.loads(state_file.read_text(encoding="utf-8"))
 
 
-def save_state(state_dir: Path, state_file: Path, state: dict) -> None:
-    state_dir.mkdir(parents=True, exist_ok=True)
+def save_state(state_file: Path, state: dict) -> None:
+    state_file.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_file(state_file, json.dumps(state, indent=2, ensure_ascii=True) + "\n")
 
 
@@ -80,15 +95,22 @@ def init_state(
     task_file: Path,
     phase1_max_cycles: int,
     phase2_max_cycles: int,
-    artifacts: dict[str, str],
+    artifacts: dict[str, str | Path],
 ) -> dict:
+    serialized_artifacts = {
+        "run_id": str(artifacts["run_id"]),
+        "run_dir": str(artifacts["run_dir"]),
+        "task": str(artifacts["task"]),
+        "phase1_shared": str(artifacts["phase1_shared"]),
+        "phase2_shared": str(artifacts["phase2_shared"]),
+    }
     return {
         "version": 2,
         "task_file": str(task_file),
         "started_at": now_iso(),
         "updated_at": now_iso(),
         "phase": "phase1",
-        "artifacts": artifacts,
+        "artifacts": serialized_artifacts,
         "phase1": {
             "status": "pending",
             "cycle": 0,
@@ -109,6 +131,7 @@ def init_state(
             "finding_history": {},
             "implementation_ready": "NO",
             "last_test_exit": None,
+            "last_test_snapshot": "",
             "error": None,
             "completed_at": None,
         },
@@ -122,14 +145,12 @@ def ensure_state_shape(
     phase2_max_cycles: int,
     artifact_runs_dir: Path,
 ) -> dict:
-    finding_id_pattern = re.compile(r"^F-\d{3}$")
-
     def sanitize_phase_findings(phase_state: dict) -> None:
         raw_open = phase_state.get("open_findings", [])
         sanitized_open = [
             str(fid).upper()
             for fid in raw_open
-            if finding_id_pattern.match(str(fid).upper())
+            if FINDING_ID_PATTERN.match(str(fid).upper())
         ]
         phase_state["open_findings"] = sanitized_open
 
@@ -137,27 +158,58 @@ def ensure_state_shape(
         sanitized_history: dict[str, str] = {}
         for fid, status in raw_history.items():
             fid_up = str(fid).upper()
-            if not finding_id_pattern.match(fid_up):
+            if not FINDING_ID_PATTERN.match(fid_up):
                 continue
             sanitized_history[fid_up] = str(status).upper()
         phase_state["finding_history"] = sanitized_history
 
     if state.get("version") == 2 and "phase1" in state and "phase2" in state:
-        state.setdefault("task_file", str(task_file))
+        allowed_roots = (artifact_runs_dir.parent.resolve(), Path.cwd().resolve())
+        raw_task_file = str(state.get("task_file", str(task_file)))
+        try:
+            state["task_file"] = _validate_loaded_path(raw_task_file, allowed_roots)
+        except ValueError:
+            logger.warning(
+                "Invalid task_file in state: %r; using CLI task file.",
+                raw_task_file,
+            )
+            state["task_file"] = str(task_file.resolve())
         state.setdefault("phase", "phase1")
         state.setdefault("updated_at", now_iso())
         artifacts = state.setdefault("artifacts", {})
         if not artifacts.get("run_id"):
             migrated = build_artifact_paths(new_run_id(), artifact_runs_dir)
-            artifacts.setdefault("run_id", migrated["run_id"])
-            artifacts.setdefault("run_dir", migrated["run_dir"])
-            artifacts.setdefault("task", migrated["task"])
-            artifacts.setdefault("phase1_shared", migrated["phase1_shared"])
-            artifacts.setdefault("phase2_shared", migrated["phase2_shared"])
+            artifacts.setdefault("run_id", str(migrated["run_id"]))
+            artifacts.setdefault("run_dir", str(migrated["run_dir"]))
+            artifacts.setdefault("task", str(migrated["task"]))
+            artifacts.setdefault("phase1_shared", str(migrated["phase1_shared"]))
+            artifacts.setdefault("phase2_shared", str(migrated["phase2_shared"]))
+        else:
+            try:
+                artifacts["run_dir"] = _validate_loaded_path(str(artifacts["run_dir"]), allowed_roots)
+                artifacts["task"] = _validate_loaded_path(str(artifacts["task"]), allowed_roots)
+                artifacts["phase1_shared"] = _validate_loaded_path(
+                    str(artifacts["phase1_shared"]), allowed_roots
+                )
+                artifacts["phase2_shared"] = _validate_loaded_path(
+                    str(artifacts["phase2_shared"]), allowed_roots
+                )
+            except (KeyError, ValueError) as exc:
+                logger.warning(
+                    "Invalid artifact paths in state (reason: %s); regenerating artifact paths.",
+                    exc,
+                )
+                migrated = build_artifact_paths(new_run_id(), artifact_runs_dir)
+                artifacts["run_id"] = str(migrated["run_id"])
+                artifacts["run_dir"] = str(migrated["run_dir"])
+                artifacts["task"] = str(migrated["task"])
+                artifacts["phase1_shared"] = str(migrated["phase1_shared"])
+                artifacts["phase2_shared"] = str(migrated["phase2_shared"])
         state["phase1"].setdefault("open_findings", [])
         state["phase1"].setdefault("finding_history", {})
         state["phase2"].setdefault("open_findings", [])
         state["phase2"].setdefault("finding_history", {})
+        state["phase2"].setdefault("last_test_snapshot", "")
         sanitize_phase_findings(state["phase1"])
         sanitize_phase_findings(state["phase2"])
         return state

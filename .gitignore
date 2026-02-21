@@ -5,3 +5,5 @@ __pycache__/
 task.md
 *.pyc
 .env
+.venv/
+.pytest_cache/

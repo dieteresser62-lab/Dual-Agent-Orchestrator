@@ -2,8 +2,19 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 import agent_runtime
-from agent_runtime import OrchestratorConfig, compute_retry_backoff_seconds, run_agent_checked
+from agent_adapters import AGENT_REGISTRY, CodexAdapter, GeminiAdapter
+from agent_runtime import (
+    OrchestratorConfig,
+    QuotaReachedError,
+    collect_file_snapshots,
+    compute_retry_backoff_seconds,
+    run_agent,
+    run_agent_checked,
+    run_tests_snapshot,
+)
 
 
 def test_compute_retry_backoff_seconds_exponential() -> None:
@@ -25,7 +36,7 @@ def test_run_agent_checked_retries_with_backoff(monkeypatch, tmp_path: Path) -> 
     def fake_run_agent(*args, **kwargs):  # type: ignore[no-untyped-def]
         calls.append(1)
         if len(calls) == 1:
-            raise RuntimeError("HTTP 429 too many requests")
+            raise RuntimeError("temporary network glitch")
         return "CODEX_APPROVAL: YES\nOPEN_FINDINGS: NONE\nSTATUS: DONE"
 
     monkeypatch.setattr(agent_runtime, "run_agent", fake_run_agent)
@@ -39,7 +50,7 @@ def test_run_agent_checked_retries_with_backoff(monkeypatch, tmp_path: Path) -> 
         required_flags=["CODEX_APPROVAL"],
         output_validator=None,
         config=OrchestratorConfig(dry_run=False),
-        agents={"codex": {"command": ["codex"], "timeout": 1, "env": {}}},
+        agents={"codex": AGENT_REGISTRY["codex"]},
         log_dir=tmp_path,
         write_file=lambda path, content: path.write_text(content, encoding="utf-8"),
         shorten=lambda text, limit=1800: (text or "")[:limit],
@@ -49,7 +60,7 @@ def test_run_agent_checked_retries_with_backoff(monkeypatch, tmp_path: Path) -> 
 
     assert "STATUS: DONE" in output
     assert len(calls) == 2
-    assert sleeps == [10]
+    assert sleeps == [2]
 
 
 def test_run_agent_checked_validation_error_backoff(monkeypatch, tmp_path: Path) -> None:
@@ -71,7 +82,7 @@ def test_run_agent_checked_validation_error_backoff(monkeypatch, tmp_path: Path)
         required_flags=[],
         output_validator=lambda _output: "not valid" if len(calls) == 1 else None,
         config=OrchestratorConfig(dry_run=False),
-        agents={"codex": {"command": ["codex"], "timeout": 1, "env": {}}},
+        agents={"codex": AGENT_REGISTRY["codex"]},
         log_dir=tmp_path,
         write_file=lambda path, content: path.write_text(content, encoding="utf-8"),
         shorten=lambda text, limit=1800: (text or "")[:limit],
@@ -89,9 +100,9 @@ def test_run_agent_checked_sets_sticky_quota_flag_after_gemini_fallback(
 ) -> None:
     called_agents: list[str] = []
 
-    def fake_run_agent(agent_key, *args, **kwargs):  # type: ignore[no-untyped-def]
-        called_agents.append(agent_key)
-        if agent_key == "claude":
+    def fake_run_agent(adapter, *args, **kwargs):  # type: ignore[no-untyped-def]
+        called_agents.append(adapter.name)
+        if adapter.name == "claude":
             raise RuntimeError("HTTP 429 rate limit")
         return "CLAUDE_APPROVAL: YES\nOPEN_FINDINGS: NONE\nSTATUS: DONE"
 
@@ -107,10 +118,7 @@ def test_run_agent_checked_sets_sticky_quota_flag_after_gemini_fallback(
         required_flags=["CLAUDE_APPROVAL"],
         output_validator=None,
         config=config,
-        agents={
-            "claude": {"command": ["claude"], "timeout": 1, "env": {}},
-            "gemini": {"command": ["gemini"], "timeout": 1, "env": {}},
-        },
+        agents={"claude": AGENT_REGISTRY["claude"], "gemini": AGENT_REGISTRY["gemini"]},
         log_dir=tmp_path,
         write_file=lambda path, content: path.write_text(content, encoding="utf-8"),
         shorten=lambda text, limit=1800: (text or "")[:limit],
@@ -128,8 +136,8 @@ def test_run_agent_checked_uses_gemini_directly_after_quota_flag(
 ) -> None:
     called_agents: list[str] = []
 
-    def fake_run_agent(agent_key, *args, **kwargs):  # type: ignore[no-untyped-def]
-        called_agents.append(agent_key)
+    def fake_run_agent(adapter, *args, **kwargs):  # type: ignore[no-untyped-def]
+        called_agents.append(adapter.name)
         return "CLAUDE_APPROVAL: YES\nOPEN_FINDINGS: NONE\nSTATUS: DONE"
 
     config = OrchestratorConfig(
@@ -148,10 +156,7 @@ def test_run_agent_checked_uses_gemini_directly_after_quota_flag(
         required_flags=["CLAUDE_APPROVAL"],
         output_validator=None,
         config=config,
-        agents={
-            "claude": {"command": ["claude"], "timeout": 1, "env": {}},
-            "gemini": {"command": ["gemini"], "timeout": 1, "env": {}},
-        },
+        agents={"claude": AGENT_REGISTRY["claude"], "gemini": AGENT_REGISTRY["gemini"]},
         log_dir=tmp_path,
         write_file=lambda path, content: path.write_text(content, encoding="utf-8"),
         shorten=lambda text, limit=1800: (text or "")[:limit],
@@ -161,3 +166,212 @@ def test_run_agent_checked_uses_gemini_directly_after_quota_flag(
 
     assert "STATUS: DONE" in output
     assert called_agents == ["gemini"]
+
+
+@pytest.mark.parametrize("agent_key", ["codex", "gemini"])
+def test_run_agent_checked_quota_errors_fail_fast_without_retries(
+    monkeypatch, tmp_path: Path, agent_key: str
+) -> None:
+    calls: list[str] = []
+    sleeps: list[int] = []
+
+    def fake_run_agent(adapter, *args, **kwargs):  # type: ignore[no-untyped-def]
+        _ = args
+        _ = kwargs
+        calls.append(adapter.name)
+        raise RuntimeError("usage cap exceeded")
+
+    monkeypatch.setattr(agent_runtime, "run_agent", fake_run_agent)
+    monkeypatch.setattr(agent_runtime.time, "sleep", lambda sec: sleeps.append(sec))
+
+    with pytest.raises(QuotaReachedError) as exc_info:
+        run_agent_checked(
+            agent_key=agent_key,
+            prompt="prompt",
+            log_prefix="unit",
+            max_retries=3,
+            required_flags=[],
+            output_validator=None,
+            config=OrchestratorConfig(dry_run=False),
+            agents={agent_key: AGENT_REGISTRY[agent_key]},
+            log_dir=tmp_path,
+            write_file=lambda path, content: path.write_text(content, encoding="utf-8"),
+            shorten=lambda text, limit=1800: (text or "")[:limit],
+            parse_flag=lambda text, key: "YES",
+            validate_done_marker=lambda text: True,
+        )
+
+    assert exc_info.value.agent_key == agent_key
+    assert calls == [agent_key]
+    assert sleeps == []
+
+
+def test_run_agent_checked_dual_quota_claude_and_gemini_fail_fast(
+    monkeypatch, tmp_path: Path
+) -> None:
+    calls: list[str] = []
+    sleeps: list[int] = []
+
+    def fake_run_agent(adapter, *args, **kwargs):  # type: ignore[no-untyped-def]
+        _ = args
+        _ = kwargs
+        calls.append(adapter.name)
+        if adapter.name == "claude":
+            raise RuntimeError("HTTP 429 rate limit")
+        raise RuntimeError("too many requests")
+
+    monkeypatch.setattr(agent_runtime, "run_agent", fake_run_agent)
+    monkeypatch.setattr(agent_runtime.time, "sleep", lambda sec: sleeps.append(sec))
+
+    with pytest.raises(QuotaReachedError) as exc_info:
+        run_agent_checked(
+            agent_key="claude",
+            prompt="prompt",
+            log_prefix="unit",
+            max_retries=3,
+            required_flags=[],
+            output_validator=None,
+            config=OrchestratorConfig(dry_run=False, allow_fallback_to_gemini=True),
+            agents={"claude": AGENT_REGISTRY["claude"], "gemini": AGENT_REGISTRY["gemini"]},
+            log_dir=tmp_path,
+            write_file=lambda path, content: path.write_text(content, encoding="utf-8"),
+            shorten=lambda text, limit=1800: (text or "")[:limit],
+            parse_flag=lambda text, key: "YES",
+            validate_done_marker=lambda text: True,
+        )
+
+    assert exc_info.value.agent_key == "gemini"
+    assert calls == ["claude", "gemini"]
+    assert sleeps == []
+
+
+def test_collect_file_snapshots_truncates_limits_and_handles_missing(tmp_path: Path) -> None:
+    import os
+
+    file_a = tmp_path / "a.py"
+    file_b = tmp_path / "b.py"
+    file_a.write_text("1\n2\n3\n4\n", encoding="utf-8")
+    file_b.write_text("ok\n", encoding="utf-8")
+
+    cwd = Path.cwd()
+    try:
+        # Function resolves paths from current working directory.
+        os.chdir(tmp_path)
+        output = collect_file_snapshots(
+            changed_files=["a.py", "not a path line", "missing.py", "b.py"],
+            max_lines=2,
+            max_files=2,
+        )
+    finally:
+        os.chdir(cwd)
+
+    assert "<<<FILES_BEGIN>>>" in output
+    assert "### a.py" in output
+    assert "1\n2" in output
+    assert "...[truncated to 2 lines]" in output
+    assert "### missing.py" in output or "### b.py" in output
+    assert "<<<FILES_END>>>" in output
+
+
+def test_run_tests_snapshot_uses_shell_true_and_raw_command(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class Result:
+        returncode = 0
+        stdout = "ok"
+        stderr = ""
+
+    def fake_run(command, **kwargs):  # type: ignore[no-untyped-def]
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return Result()
+
+    monkeypatch.setattr(agent_runtime.subprocess, "run", fake_run)
+
+    rc, snapshot = run_tests_snapshot(
+        config=OrchestratorConfig(dry_run=False),
+        test_command="npm test",
+        test_timeout_seconds=30,
+        shorten=lambda text, _limit: text or "",
+    )
+
+    assert rc == 0
+    assert "Exit code: 0" in snapshot
+    assert captured["command"] == "npm test"
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["shell"] is True
+
+
+def test_run_agent_calls_adapter_cleanup_on_timeout(monkeypatch) -> None:
+    class TimeoutAdapter:
+        name = "timeout"
+        cli_binary = "timeout"
+        timeout = 1
+        env: dict[str, str] = {}
+        required_hosts: tuple[str, ...] = ()
+
+        def __init__(self) -> None:
+            self.cleaned = False
+
+        def build_command(self, prompt: str) -> tuple[list[str], bool]:
+            _ = prompt
+            return ["timeout-cli"], True
+
+        def extract_output(self, stdout: str, stderr: str, extra_files: dict[str, str]) -> str:
+            _ = stdout
+            _ = stderr
+            _ = extra_files
+            return ""
+
+        def stream_filter(self, channel: str, line: str, state: dict[str, str | bool]) -> bool:
+            _ = channel
+            _ = line
+            _ = state
+            return False
+
+        def cleanup(self) -> None:
+            self.cleaned = True
+
+    adapter = TimeoutAdapter()
+
+    def fake_run(*args, **kwargs):  # type: ignore[no-untyped-def]
+        _ = args
+        raise agent_runtime.subprocess.TimeoutExpired("timeout-cli", kwargs["timeout"])
+
+    monkeypatch.setattr(agent_runtime.subprocess, "run", fake_run)
+
+    try:
+        run_agent(
+            adapter,
+            "prompt",
+            config=OrchestratorConfig(dry_run=False, agent_live_stream=False),
+            shorten=lambda text, _limit: text or "",
+        )
+    except RuntimeError:
+        pass
+    else:  # pragma: no cover - defensive
+        assert False, "expected RuntimeError"
+
+    assert adapter.cleaned is True
+
+
+def test_gemini_adapter_uses_stdin_prompt() -> None:
+    adapter = GeminiAdapter()
+    command, use_stdin_prompt = adapter.build_command("long prompt")
+
+    assert command == ["gemini"]
+    assert use_stdin_prompt is True
+
+
+def test_codex_adapter_cleanup_deletes_temp_message_file() -> None:
+    adapter = CodexAdapter()
+    command, use_stdin_prompt = adapter.build_command("prompt")
+
+    assert "--output-last-message" in command
+    assert use_stdin_prompt is True
+    temp_path = Path(command[-1])
+    assert temp_path.exists()
+
+    adapter.cleanup()
+    assert not temp_path.exists()

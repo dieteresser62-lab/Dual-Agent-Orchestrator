@@ -97,3 +97,91 @@ def test_new_run_id_format() -> None:
     assert len(run_id) == 16
     assert run_id[8] == "-"
     assert run_id.endswith("Z")
+
+
+def test_ensure_state_shape_accepts_paths_under_artifact_root(tmp_path: Path) -> None:
+    artifact_runs_dir = tmp_path / "artifacts" / "runs"
+    run_dir = artifact_runs_dir / "r-fixed"
+    task_file = tmp_path / "task.md"
+    task_file.write_text("x", encoding="utf-8")
+    state = {
+        "version": 2,
+        "task_file": str(task_file),
+        "phase": "phase1",
+        "updated_at": "now",
+        "artifacts": {
+            "run_id": "r-fixed",
+            "run_dir": str(run_dir),
+            "task": str(run_dir / "00_task.md"),
+            "phase1_shared": str(run_dir / "10_phase1_plan.md"),
+            "phase2_shared": str(run_dir / "20_phase2_implementation.md"),
+        },
+        "phase1": {"open_findings": [], "finding_history": {}},
+        "phase2": {"open_findings": [], "finding_history": {}},
+    }
+
+    shaped = ensure_state_shape(state, task_file, 2, 2, artifact_runs_dir)
+    assert shaped["artifacts"]["run_id"] == "r-fixed"
+    assert shaped["artifacts"]["run_dir"] == str(run_dir.resolve())
+
+
+def test_ensure_state_shape_accepts_paths_under_cwd(monkeypatch, tmp_path: Path) -> None:
+    cwd = tmp_path / "workspace"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+    artifact_runs_dir = tmp_path / "artifacts" / "runs"
+    run_dir = cwd / "local-run"
+    task_file = cwd / "task.md"
+    task_file.write_text("x", encoding="utf-8")
+    state = {
+        "version": 2,
+        "task_file": str(task_file),
+        "phase": "phase1",
+        "updated_at": "now",
+        "artifacts": {
+            "run_id": "cwd-run",
+            "run_dir": str(run_dir),
+            "task": str(run_dir / "00_task.md"),
+            "phase1_shared": str(run_dir / "10_phase1_plan.md"),
+            "phase2_shared": str(run_dir / "20_phase2_implementation.md"),
+        },
+        "phase1": {"open_findings": [], "finding_history": {}},
+        "phase2": {"open_findings": [], "finding_history": {}},
+    }
+
+    shaped = ensure_state_shape(state, task_file, 2, 2, artifact_runs_dir)
+    assert shaped["artifacts"]["run_id"] == "cwd-run"
+    assert shaped["artifacts"]["run_dir"] == str(run_dir.resolve())
+    assert shaped["task_file"] == str(task_file.resolve())
+
+
+def test_ensure_state_shape_rejects_traversal_and_regenerates_artifacts(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cwd = tmp_path / "workspace"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+    artifact_runs_dir = tmp_path / "artifacts" / "runs"
+    task_file = cwd / "task.md"
+    task_file.write_text("x", encoding="utf-8")
+    bad_path = "../outside/evil-path"
+    state = {
+        "version": 2,
+        "task_file": bad_path,
+        "phase": "phase1",
+        "updated_at": "now",
+        "artifacts": {
+            "run_id": "bad-run",
+            "run_dir": bad_path,
+            "task": bad_path,
+            "phase1_shared": bad_path,
+            "phase2_shared": bad_path,
+        },
+        "phase1": {"open_findings": [], "finding_history": {}},
+        "phase2": {"open_findings": [], "finding_history": {}},
+    }
+
+    shaped = ensure_state_shape(state, task_file, 2, 2, artifact_runs_dir)
+    assert shaped["artifacts"]["run_id"] != "bad-run"
+    assert Path(str(shaped["artifacts"]["run_dir"])).is_relative_to(artifact_runs_dir.parent.resolve())
+    assert shaped["task_file"] == str(task_file.resolve())

@@ -37,6 +37,11 @@ GERMAN_TOKENS = [  # allowlist:german
     "simuliert",
     "leer",
     "Zeit",
+    "Ergebnis",
+    "Zusammenfassung",
+    "Bericht",
+    "Pruefung",
+    "Prüfung",
 ]
 PATTERNS = [re.compile(re.escape(token), re.IGNORECASE) for token in GERMAN_TOKENS]
 

@@ -1,6 +1,8 @@
 # Title
 Example task for the dual-agent orchestrator
 
+Note: this task is processed by two agents in sequence (planning/review, then implementation/review), so keep requirements concrete and testable.
+
 ## Background
 Describe the current technical state and the problem.
 

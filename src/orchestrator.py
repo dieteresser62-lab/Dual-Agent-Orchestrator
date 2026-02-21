@@ -3,14 +3,18 @@ from __future__ import annotations
 
 import argparse
 import functools
+import logging
 import re
+import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
 from agent_runtime import (
-    AGENTS,
+    AGENT_REGISTRY,
     OrchestratorConfig,
+    QuotaReachedError,
+    collect_file_snapshots,
     preflight as runtime_preflight,
     repo_snapshot as runtime_repo_snapshot,
     run_agent_checked as runtime_run_agent_checked,
@@ -22,8 +26,10 @@ from prompts import (
     build_phase1_codex_review_prompt,
     build_phase2_claude_review_prompt,
     build_phase2_codex_implement_prompt,
+    build_test_failure_block,
 )
 from state_io import (
+    FINDING_ID_PATTERN,
     append_markdown,
     build_artifact_paths as state_build_artifact_paths,
     checkpoint_path as state_checkpoint_path,
@@ -32,13 +38,14 @@ from state_io import (
     load_cycle_checkpoint as state_load_cycle_checkpoint,
     load_state as state_load_state,
     new_run_id as state_new_run_id,
+    now_iso as state_now_iso,
     read_file,
     save_state as state_save_state,
     write_cycle_checkpoint as state_write_cycle_checkpoint,
     write_file,
 )
 
-TASK_FILE_CANDIDATES = ("task.md",)
+DEFAULT_TASK_FILE = "task.md"
 ARTIFACT_ROOT_DIR = Path(".orchestrator")
 ARTIFACT_RUNS_DIR = ARTIFACT_ROOT_DIR / "runs"
 LATEST_RUN_FILE = ARTIFACT_ROOT_DIR / "LATEST_RUN.txt"
@@ -47,13 +54,15 @@ STATE_FILE = STATE_DIR / "state.json"
 LOG_DIR = STATE_DIR / "logs"
 CHECKPOINT_DIR = STATE_DIR / "checkpoints"
 MAX_ERROR_CHARS = 1800
+MIN_AGENT_OUTPUT_MAX_CHARS = 200
 MAX_DIFF_CHARS = 14000
 TEST_TIMEOUT_SECONDS = 300
-FINDING_ID_PATTERN = re.compile(r"^F-\d{3}$")
+MAX_SHARED_CHARS = 30000
 DELIMITED_SECTION_PATTERN = re.compile(
     r"<<<\s*([A-Z_]+)_BEGIN\s*>>>.*?<<<\s*\1_END\s*>>>",
     re.IGNORECASE | re.DOTALL,
 )
+logger = logging.getLogger(__name__)
 
 @dataclass
 class RunContext:
@@ -83,13 +92,13 @@ class RunContext:
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    def configure_artifacts(self, artifacts: dict[str, str]) -> None:
+    def configure_artifacts(self, artifacts: dict[str, str | Path]) -> None:
         self.run_artifact_dir = Path(artifacts["run_dir"])
         self.task_snapshot_file = Path(artifacts["task"])
         self.phase1_shared_file = Path(artifacts["phase1_shared"])
         self.phase2_shared_file = Path(artifacts["phase2_shared"])
 
-    def build_artifact_paths(self, run_id: str) -> dict[str, str]:
+    def build_artifact_paths(self, run_id: str) -> dict[str, str | Path]:
         return state_build_artifact_paths(run_id, self.artifact_runs_dir)
 
     def new_run_id(self) -> str:
@@ -99,14 +108,14 @@ class RunContext:
         return state_load_state(self.state_file)
 
     def save_state(self, state: dict) -> None:
-        state_save_state(self.state_dir, self.state_file, state)
+        state_save_state(self.state_file, state)
 
     def init_state(
         self,
         task_file: Path,
         phase1_max_cycles: int,
         phase2_max_cycles: int,
-        artifacts: dict[str, str],
+        artifacts: dict[str, str | Path],
     ) -> dict:
         return state_init_state(task_file, phase1_max_cycles, phase2_max_cycles, artifacts)
 
@@ -148,7 +157,7 @@ class RunContext:
             required_flags=required_flags,
             output_validator=output_validator,
             config=self.config,
-            agents=AGENTS,
+            agents=AGENT_REGISTRY,
             log_dir=self.log_dir,
             write_file=write_file,
             shorten=shorten,
@@ -157,18 +166,18 @@ class RunContext:
         )
 
     def preflight(self, required_agents: list[str], strict: bool) -> bool:
-        return runtime_preflight(required_agents, strict, AGENTS)
+        return runtime_preflight(required_agents, strict, AGENT_REGISTRY)
 
     def checkpoint_cycle_state(self, phase: str, cycle: int, state: dict) -> None:
         path = state_write_cycle_checkpoint(self.checkpoint_dir, phase, cycle, state)
-        print(f"[CHECKPOINT] saved {path}")
+        logger.info("[CHECKPOINT] saved %s", path)
 
     def recover_state_from_checkpoint(self, state: dict) -> dict:
         phase = str(state.get("phase", "phase1"))
         if phase not in ("phase1", "phase2"):
             return state
         phase_state = state.get(phase, {})
-        if phase_state.get("status") != "running":
+        if phase_state.get("status") not in ("running", "frozen"):
             return state
 
         cycle = int(phase_state.get("cycle", 0))
@@ -178,15 +187,11 @@ class RunContext:
         recovered = state_load_cycle_checkpoint(self.checkpoint_dir, phase, cycle)
         if recovered is None:
             path = state_checkpoint_path(self.checkpoint_dir, phase, cycle)
-            print(f"[RECOVERY] no checkpoint found at {path}; continuing without rollback.")
+            logger.warning("[RECOVERY] no checkpoint found at %s; continuing without rollback.", path)
             return state
 
-        print(f"[RECOVERY] restored checkpoint for {phase} cycle={cycle}.")
+        logger.info("[RECOVERY] restored checkpoint for %s cycle=%s.", phase, cycle)
         return recovered
-
-
-def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def format_duration(total_seconds: float) -> str:
@@ -205,6 +210,45 @@ def shorten(text: str | None, limit: int = MAX_ERROR_CHARS) -> str:
     if len(raw) <= limit:
         return raw
     return f"{raw[:limit]} ...[truncated]"
+
+
+def truncate_shared(text: str, limit: int) -> str:
+    if limit <= 0:
+        return "...[earlier history truncated]"
+    if len(text) <= limit:
+        return text
+    return "...[earlier history truncated]\n\n" + text[-limit:]
+
+
+def parse_changed_files_from_impl_report(impl_report: str) -> list[str]:
+    lines = (impl_report or "").splitlines()
+    changed: list[str] = []
+    in_section = False
+
+    for raw_line in lines:
+        line = raw_line.rstrip()
+        stripped = line.strip()
+
+        if not in_section:
+            if re.match(r"^#+\s*Changed Files\s*$", stripped, re.IGNORECASE):
+                in_section = True
+            continue
+
+        if not stripped:
+            if changed:
+                break
+            continue
+        if re.match(r"^#+\s+", stripped):
+            break
+        if stripped.startswith("IMPLEMENTATION_READY:") or stripped.startswith("STATUS:"):
+            break
+
+        match = re.match(r"^[-*]\s+(`?)([^`]+)\1\s*$", stripped)
+        if match:
+            candidate = match.group(2).strip()
+            if candidate and re.match(r"^[^\s|:][^|:\s]*$", candidate):
+                changed.append(candidate)
+    return changed
 
 
 def print_summary_report(state: dict) -> None:
@@ -249,12 +293,12 @@ def print_summary_report(state: dict) -> None:
     # If an ID is both open and closed over time, current open state wins.
     closed_ids -= open_ids
 
-    print("\nRun Summary:")
-    print(f"  - duration: {duration}")
-    print(f"  - phase1 cycles: {p1_cycles}")
-    print(f"  - phase2 cycles: {p2_cycles}")
-    print(f"  - closed findings: {len(closed_ids)}")
-    print(f"  - open findings: {len(open_ids)}")
+    logger.info("Run Summary:")
+    logger.info("  - duration: %s", duration)
+    logger.info("  - phase1 cycles: %s", p1_cycles)
+    logger.info("  - phase2 cycles: %s", p2_cycles)
+    logger.info("  - closed findings: %s", len(closed_ids))
+    logger.info("  - open findings: %s", len(open_ids))
 
 
 def find_task_file(explicit_path: str | None) -> Path:
@@ -264,12 +308,11 @@ def find_task_file(explicit_path: str | None) -> Path:
             return path
         raise FileNotFoundError(f"Task file not found: {path}")
 
-    for candidate in TASK_FILE_CANDIDATES:
-        path = Path(candidate)
-        if path.exists():
-            return path
+    path = Path(DEFAULT_TASK_FILE)
+    if path.exists():
+        return path
     raise FileNotFoundError(
-        f"Task file missing. Expected one of: {', '.join(TASK_FILE_CANDIDATES)}"
+        f"Task file missing. Expected: {DEFAULT_TASK_FILE}"
     )
 
 
@@ -281,12 +324,7 @@ def validate_done_marker(text: str) -> bool:
 
 
 def strip_delimited_sections(text: str) -> str:
-    cleaned = text or ""
-    while True:
-        next_value = DELIMITED_SECTION_PATTERN.sub("", cleaned)
-        if next_value == cleaned:
-            return cleaned
-        cleaned = next_value
+    return DELIMITED_SECTION_PATTERN.sub("", text or "")
 
 
 def parse_flag(text: str, key: str) -> str | None:
@@ -426,11 +464,30 @@ def approval_gate(message: str) -> bool:
     return response == "y"
 
 
+def freeze_current_phase(state: dict, error: QuotaReachedError, ctx: RunContext) -> None:
+    phase_key = str(state.get("phase", "phase1"))
+    if phase_key not in ("phase1", "phase2"):
+        phase_key = "phase1"
+    phase_state = state.get(phase_key, {})
+    cycle = int(phase_state.get("cycle", 0))
+    if cycle > 0:
+        phase_state["cycle"] = cycle - 1
+    phase_state["status"] = "frozen"
+    phase_state["error"] = str(error)
+    state["phase"] = phase_key
+    state["updated_at"] = state_now_iso()
+    ctx.save_state(state)
+
+    logger.error("Run frozen due to quota/rate limit on %s.", error.agent_key)
+    logger.error("%s", error)
+    logger.info("Resume later with --resume after quota/rate-limit resets.")
+
+
 def run_phase1(task_text: str, state: dict, args: argparse.Namespace, ctx: RunContext) -> None:
     phase1 = state["phase1"]
     phase1["status"] = "running"
     state["phase"] = "phase1"
-    state["updated_at"] = now_iso()
+    state["updated_at"] = state_now_iso()
     ctx.save_state(state)
 
     start_cycle = int(phase1.get("cycle", 0)) + 1
@@ -440,11 +497,11 @@ def run_phase1(task_text: str, state: dict, args: argparse.Namespace, ctx: RunCo
         ctx.checkpoint_cycle_state("phase1", cycle, state)
         phase1["cycle"] = cycle
         phase1["error"] = None
-        state["updated_at"] = now_iso()
+        state["updated_at"] = state_now_iso()
         ctx.save_state(state)
 
-        print(f"\n=== PHASE 1 | cycle {cycle}/{max_cycles}: Claude plan ===")
-        shared = read_file(ctx.phase1_shared_file)
+        logger.info("=== PHASE 1 | cycle %s/%s: Claude plan ===", cycle, max_cycles)
+        shared = truncate_shared(read_file(ctx.phase1_shared_file), args.max_shared_chars)
         previous_open_findings = [str(item).upper() for item in phase1.get("open_findings", [])]
         claude_plan = ctx.run_agent_checked(
             agent_key="claude",
@@ -460,8 +517,8 @@ def run_phase1(task_text: str, state: dict, args: argparse.Namespace, ctx: RunCo
         )
         append_markdown(ctx.phase1_shared_file, f"Phase 1 / Cycle {cycle} / Claude Plan", claude_plan)
 
-        print(f"=== PHASE 1 | cycle {cycle}/{max_cycles}: Codex review ===")
-        shared = read_file(ctx.phase1_shared_file)
+        logger.info("=== PHASE 1 | cycle %s/%s: Codex review ===", cycle, max_cycles)
+        shared = truncate_shared(read_file(ctx.phase1_shared_file), args.max_shared_chars)
         codex_review = ctx.run_agent_checked(
             agent_key="codex",
             prompt=build_phase1_codex_review_prompt(
@@ -493,8 +550,8 @@ def run_phase1(task_text: str, state: dict, args: argparse.Namespace, ctx: RunCo
             finding_history[finding_id] = value
         phase1["finding_history"] = finding_history
 
-        print(f"=== PHASE 1 | cycle {cycle}/{max_cycles}: Claude confirmation ===")
-        shared = read_file(ctx.phase1_shared_file)
+        logger.info("=== PHASE 1 | cycle %s/%s: Claude confirmation ===", cycle, max_cycles)
+        shared = truncate_shared(read_file(ctx.phase1_shared_file), args.max_shared_chars)
         claude_confirm = ctx.run_agent_checked(
             agent_key="claude",
             prompt=build_phase1_claude_confirm_prompt(
@@ -512,32 +569,33 @@ def run_phase1(task_text: str, state: dict, args: argparse.Namespace, ctx: RunCo
 
         claude_approval = parse_flag(claude_confirm, "CLAUDE_APPROVAL") or "NO"
         if codex_approval == "NO" and claude_approval == "YES":
-            print("[WARN] Claude approval overridden to NO because Codex has open findings.")
+            logger.warning("Claude approval overridden to NO because Codex has open findings.")
             claude_approval = "NO"
 
         phase1["codex_approval"] = codex_approval
         phase1["claude_approval"] = claude_approval
-        state["updated_at"] = now_iso()
+        state["updated_at"] = state_now_iso()
         ctx.save_state(state)
 
         if codex_approval == "YES" and claude_approval == "YES":
             phase1["status"] = "completed"
-            phase1["completed_at"] = now_iso()
+            phase1["completed_at"] = state_now_iso()
             state["phase"] = "phase2"
-            state["updated_at"] = now_iso()
+            state["updated_at"] = state_now_iso()
             ctx.save_state(state)
-            print("[OK] PHASE 1 completed: both Claude and Codex approved the plan.")
+            logger.info("[OK] PHASE 1 completed: both Claude and Codex approved the plan.")
             return
 
-        print(
-            "[INFO] PHASE 1 not approved yet. "
-            f"CODEX_APPROVAL={codex_approval}, CLAUDE_APPROVAL={claude_approval}, "
-            f"OPEN_FINDINGS={format_findings_list(parsed_open_findings)}."
+        logger.info(
+            "PHASE 1 not approved yet. CODEX_APPROVAL=%s, CLAUDE_APPROVAL=%s, OPEN_FINDINGS=%s.",
+            codex_approval,
+            claude_approval,
+            format_findings_list(parsed_open_findings),
         )
 
     phase1["status"] = "failed"
     phase1["error"] = "Phase 1 reached max cycles without dual approval."
-    state["updated_at"] = now_iso()
+    state["updated_at"] = state_now_iso()
     ctx.save_state(state)
     raise RuntimeError(phase1["error"])
 
@@ -546,7 +604,7 @@ def run_phase2(task_text: str, plan_text: str, state: dict, args: argparse.Names
     phase2 = state["phase2"]
     phase2["status"] = "running"
     state["phase"] = "phase2"
-    state["updated_at"] = now_iso()
+    state["updated_at"] = state_now_iso()
     ctx.save_state(state)
 
     start_cycle = int(phase2.get("cycle", 0)) + 1
@@ -556,12 +614,17 @@ def run_phase2(task_text: str, plan_text: str, state: dict, args: argparse.Names
         ctx.checkpoint_cycle_state("phase2", cycle, state)
         phase2["cycle"] = cycle
         phase2["error"] = None
-        state["updated_at"] = now_iso()
+        state["updated_at"] = state_now_iso()
         ctx.save_state(state)
 
-        print(f"\n=== PHASE 2 | cycle {cycle}/{max_cycles}: Codex implementation ===")
-        shared = read_file(ctx.phase2_shared_file)
+        logger.info("=== PHASE 2 | cycle %s/%s: Codex implementation ===", cycle, max_cycles)
+        shared = truncate_shared(read_file(ctx.phase2_shared_file), args.max_shared_chars)
         previous_open_findings = [str(item).upper() for item in phase2.get("open_findings", [])]
+        last_test_exit = phase2.get("last_test_exit")
+        last_test_snapshot = str(phase2.get("last_test_snapshot", "") or "")
+        test_failure_context = ""
+        if isinstance(last_test_exit, int) and last_test_exit != 0 and last_test_snapshot.strip():
+            test_failure_context = build_test_failure_block(last_test_snapshot, ctx.test_command)
         impl_report = ctx.run_agent_checked(
             agent_key="codex",
             prompt=build_phase2_codex_implement_prompt(
@@ -570,6 +633,7 @@ def run_phase2(task_text: str, plan_text: str, state: dict, args: argparse.Names
                 shared,
                 cycle,
                 format_findings_list(previous_open_findings),
+                test_failure_context=test_failure_context,
             ),
             log_prefix=f"phase2-cycle{cycle}-codex-implement",
             max_retries=max(args.max_agent_retries, 0),
@@ -577,23 +641,43 @@ def run_phase2(task_text: str, plan_text: str, state: dict, args: argparse.Names
         )
         append_markdown(ctx.phase2_shared_file, f"Phase 2 / Cycle {cycle} / Codex Implement", impl_report)
 
-        print(f"=== PHASE 2 | cycle {cycle}/{max_cycles}: local test snapshot ===")
+        logger.info("=== PHASE 2 | cycle %s/%s: local test snapshot ===", cycle, max_cycles)
         test_exit, test_snapshot = ctx.run_tests_snapshot()
         phase2["last_test_exit"] = test_exit
+        phase2["last_test_snapshot"] = test_snapshot
         append_markdown(
             ctx.phase2_shared_file,
             f"Phase 2 / Cycle {cycle} / Orchestrator Tests",
             test_snapshot,
         )
 
-        print(f"=== PHASE 2 | cycle {cycle}/{max_cycles}: Claude review ===")
-        shared = read_file(ctx.phase2_shared_file)
+        logger.info("=== PHASE 2 | cycle %s/%s: Claude review ===", cycle, max_cycles)
+        shared = truncate_shared(read_file(ctx.phase2_shared_file), args.max_shared_chars)
+        changed_files = parse_changed_files_from_impl_report(impl_report)
+        if not changed_files:
+            try:
+                result = subprocess.run(
+                    ["git", "diff", "--name-only"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if result.returncode == 0:
+                    changed_files = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+            except Exception:
+                changed_files = []
+        file_snapshots = collect_file_snapshots(
+            changed_files=changed_files,
+            max_lines=args.file_snapshot_max_lines,
+            max_files=args.file_snapshot_max_files,
+        )
         claude_review = ctx.run_agent_checked(
             agent_key="claude",
             prompt=build_phase2_claude_review_prompt(
                 task_text=task_text,
                 plan_text=plan_text,
                 shared_text=shared,
+                file_snapshots=file_snapshots,
                 test_snapshot=test_snapshot,
                 cycle=cycle,
                 previous_open_block=format_findings_list(previous_open_findings),
@@ -623,28 +707,29 @@ def run_phase2(task_text: str, plan_text: str, state: dict, args: argparse.Names
         phase2["finding_history"] = finding_history
         phase2["implementation_ready"] = implementation_ready
         phase2["claude_approval"] = claude_approval
-        state["updated_at"] = now_iso()
+        state["updated_at"] = state_now_iso()
         ctx.save_state(state)
 
         if implementation_ready == "YES" and test_exit == 0 and claude_approval == "YES":
             phase2["status"] = "completed"
-            phase2["completed_at"] = now_iso()
+            phase2["completed_at"] = state_now_iso()
             state["phase"] = "done"
-            state["updated_at"] = now_iso()
+            state["updated_at"] = state_now_iso()
             ctx.save_state(state)
-            print("[OK] PHASE 2 completed: implementation approved and tests passed.")
+            logger.info("[OK] PHASE 2 completed: implementation approved and tests passed.")
             return
 
-        print(
-            "[INFO] PHASE 2 not approved yet. "
-            f"IMPLEMENTATION_READY={implementation_ready}, test_exit={test_exit}, "
-            f"CLAUDE_APPROVAL={claude_approval}, "
-            f"OPEN_FINDINGS={format_findings_list(parsed_open_findings)}."
+        logger.info(
+            "PHASE 2 not approved yet. IMPLEMENTATION_READY=%s, test_exit=%s, CLAUDE_APPROVAL=%s, OPEN_FINDINGS=%s.",
+            implementation_ready,
+            test_exit,
+            claude_approval,
+            format_findings_list(parsed_open_findings),
         )
 
     phase2["status"] = "failed"
     phase2["error"] = "Phase 2 reached max cycles without approval/pass condition."
-    state["updated_at"] = now_iso()
+    state["updated_at"] = state_now_iso()
     ctx.save_state(state)
     raise RuntimeError(phase2["error"])
 
@@ -695,7 +780,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--auto",
         action="store_true",
-        help="Skip manual gate between phase 1 and phase 2.",
+        default=True,
+        help="Deprecated: phase transition gate is skipped by default.",
+    )
+    parser.add_argument(
+        "--manual-gate",
+        action="store_true",
+        help="Require manual confirmation before starting phase 2.",
     )
     parser.add_argument(
         "--dry-run",
@@ -706,6 +797,24 @@ def parse_args() -> argparse.Namespace:
         "--test-command",
         default="",
         help="Shell command for tests (e.g. 'npm test', 'pytest'). Empty = skip tests.",
+    )
+    parser.add_argument(
+        "--max-shared-chars",
+        type=int,
+        default=MAX_SHARED_CHARS,
+        help=f"Max chars from shared history included in prompts (default: {MAX_SHARED_CHARS}).",
+    )
+    parser.add_argument(
+        "--file-snapshot-max-lines",
+        type=int,
+        default=500,
+        help="Max lines per changed file snapshot for Claude review (default: 500).",
+    )
+    parser.add_argument(
+        "--file-snapshot-max-files",
+        type=int,
+        default=10,
+        help="Max number of changed files included in snapshot (default: 10).",
     )
     parser.add_argument(
         "--no-recover",
@@ -746,15 +855,33 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="If Claude hits quota/rate limits, retry that step with Gemini.",
     )
+    level_group = parser.add_mutually_exclusive_group()
+    level_group.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Enable debug logging.",
+    )
+    level_group.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Show warnings and errors only.",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+    log_level = logging.INFO
+    if args.verbose:
+        log_level = logging.DEBUG
+    elif args.quiet:
+        log_level = logging.WARNING
+    logging.basicConfig(level=log_level, format="[%(levelname)s] %(message)s")
+
     config = OrchestratorConfig(
         dry_run=bool(args.dry_run),
         agent_output_mode=args.agent_output,
-        agent_output_max_chars=max(200, int(args.agent_output_max_chars)),
+        agent_output_max_chars=max(MIN_AGENT_OUTPUT_MAX_CHARS, int(args.agent_output_max_chars)),
         agent_live_stream=bool(args.agent_live_stream),
         agent_live_stream_mode=args.agent_live_stream_mode,
         agent_live_stream_channels=args.agent_live_stream_channels,
@@ -770,26 +897,26 @@ def main() -> int:
         if not args.no_recover:
             state = ctx.recover_state_from_checkpoint(state)
             ctx.save_state(state)
-        print(f"Loaded state from {ctx.state_file}")
+        logger.info("Loaded state from %s", ctx.state_file)
         ctx.configure_artifacts(state["artifacts"])
-        write_file(ctx.latest_run_file, state["artifacts"]["run_dir"])
+        write_file(ctx.latest_run_file, str(state["artifacts"]["run_dir"]))
     else:
         if ctx.state_file.exists() and not args.resume and not args.force_overwrite_state:
-            print(f"[WARN] Existing state at {ctx.state_file} will be overwritten.")
+            logger.warning("Existing state at %s will be overwritten.", ctx.state_file)
             try:
                 confirm = input("Continue and overwrite? [y/N] ").strip().lower()
             except (EOFError, KeyboardInterrupt):
-                print("\nAborted.")
+                logger.info("Aborted.")
                 return 1
             if confirm != "y":
-                print("Use --resume to continue the existing run.")
+                logger.info("Use --resume to continue the existing run.")
                 return 0
         artifacts = ctx.build_artifact_paths(ctx.new_run_id())
         ctx.configure_artifacts(artifacts)
         state = ctx.init_state(task_file, args.phase1_max_cycles, args.phase2_max_cycles, artifacts)
         ctx.save_state(state)
-        print(f"Initialized new state at {ctx.state_file}")
-        write_file(ctx.latest_run_file, artifacts["run_dir"])
+        logger.info("Initialized new state at %s", ctx.state_file)
+        write_file(ctx.latest_run_file, str(artifacts["run_dir"]))
 
     ctx.run_artifact_dir.mkdir(parents=True, exist_ok=True)
 
@@ -798,7 +925,7 @@ def main() -> int:
 
     if args.from_phase:
         state["phase"] = args.from_phase
-        state["updated_at"] = now_iso()
+        state["updated_at"] = state_now_iso()
         ctx.save_state(state)
 
     required_agents = ["claude", "codex"]
@@ -810,32 +937,40 @@ def main() -> int:
     current_phase = state.get("phase", "phase1")
 
     if current_phase in ("phase1", "phase2") and state["phase1"].get("status") != "completed":
-        run_phase1(task_text, state, args, ctx)
+        try:
+            run_phase1(task_text, state, args, ctx)
+        except QuotaReachedError as exc:
+            freeze_current_phase(state, exc, ctx)
+            return 2
 
     if state["phase1"].get("status") != "completed":
-        print("[ERROR] Phase 1 is not completed. Stopping before implementation.")
+        logger.error("Phase 1 is not completed. Stopping before implementation.")
         return 1
 
-    if not args.auto and state["phase2"].get("status") != "completed":
+    if args.manual_gate and state["phase2"].get("status") != "completed":
         if not approval_gate("PHASE 1 completed. Start PHASE 2 (implementation)?"):
-            print("Pipeline aborted at phase transition gate.")
+            logger.info("Pipeline aborted at phase transition gate.")
             return 1
 
     if state["phase2"].get("status") != "completed":
         plan_text = read_file(ctx.phase1_shared_file)
-        run_phase2(task_text, plan_text, state, args, ctx)
+        try:
+            run_phase2(task_text, plan_text, state, args, ctx)
+        except QuotaReachedError as exc:
+            freeze_current_phase(state, exc, ctx)
+            return 2
 
     if state["phase2"].get("status") != "completed":
-        print("[ERROR] Phase 2 did not complete successfully.")
+        logger.error("Phase 2 did not complete successfully.")
         return 1
 
-    print("\nPipeline completed successfully.")
-    print("Artifacts:")
-    print(f"  - {ctx.task_snapshot_file}")
-    print(f"  - {ctx.phase1_shared_file}")
-    print(f"  - {ctx.phase2_shared_file}")
-    print(f"  - latest pointer: {ctx.latest_run_file}")
-    print(f"State: {ctx.state_file}")
+    logger.info("Pipeline completed successfully.")
+    logger.info("Artifacts:")
+    logger.info("  - %s", ctx.task_snapshot_file)
+    logger.info("  - %s", ctx.phase1_shared_file)
+    logger.info("  - %s", ctx.phase2_shared_file)
+    logger.info("  - latest pointer: %s", ctx.latest_run_file)
+    logger.info("State: %s", ctx.state_file)
     print_summary_report(state)
     return 0
 

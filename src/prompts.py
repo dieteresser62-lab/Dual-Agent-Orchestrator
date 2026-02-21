@@ -143,7 +143,9 @@ def build_phase2_codex_implement_prompt(
     shared_text: str,
     cycle: int,
     open_block: str,
+    test_failure_context: str = "",
 ) -> str:
+    test_failure_section = f"\n\n{test_failure_context.strip()}\n" if test_failure_context.strip() else ""
     return textwrap.dedent(
         f"""
         You are Codex Implementer in this repository. We are in PHASE 2, cycle {cycle}.
@@ -167,6 +169,7 @@ def build_phase2_codex_implement_prompt(
         ---
         {open_block}
         ---
+        {test_failure_section}
 
         Assignment:
         1) Implement/fix in the repository according to the plan and previous findings.
@@ -185,6 +188,7 @@ def build_phase2_claude_review_prompt(
     task_text: str,
     plan_text: str,
     shared_text: str,
+    file_snapshots: str,
     test_snapshot: str,
     cycle: int,
     previous_open_block: str,
@@ -207,6 +211,11 @@ def build_phase2_claude_review_prompt(
         Shared implementation file:
         ---
         {_delimit_block("SHARED", shared_text)}
+        ---
+
+        Changed file snapshots:
+        ---
+        {file_snapshots or _delimit_block("FILES", "(empty)")}
         ---
 
         Local test snapshot (configured test command):
@@ -248,5 +257,23 @@ def build_phase2_claude_review_prompt(
         - CONTRACT lines as defined above
         - Marker line: CLAUDE_APPROVAL: YES or CLAUDE_APPROVAL: NO
         - The final line MUST be exactly: STATUS: DONE
+        """
+    ).strip()
+
+
+def build_test_failure_block(test_snapshot: str, test_command: str, max_chars: int = 3000) -> str:
+    snapshot = (test_snapshot or "").strip()
+    if len(snapshot) > max_chars:
+        snapshot = snapshot[:max_chars] + "\n...[truncated]"
+    command = (test_command or "").strip() or "(unset)"
+    return textwrap.dedent(
+        f"""
+        <<<TEST_FAILURE_PRIORITY_BEGIN>>>
+        Fix the failing tests before any other work.
+        Re-run locally with: {command}
+
+        Latest failing test output:
+        {snapshot or "(empty)"}
+        <<<TEST_FAILURE_PRIORITY_END>>>
         """
     ).strip()

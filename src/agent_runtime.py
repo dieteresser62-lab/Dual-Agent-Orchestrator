@@ -1,16 +1,30 @@
 from __future__ import annotations
 
 import os
-import selectors
-import shlex
+import logging
+import queue
+import re
 import shutil
 import socket
 import subprocess
-import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, TextIO
+
+from agent_adapters import AGENT_REGISTRY, AgentAdapter
+
+TEST_OUTPUT_LIMIT = 7000
+ERROR_TRUNCATION_LIMIT = 1200
+logger = logging.getLogger(__name__)
+
+
+class QuotaReachedError(RuntimeError):
+    def __init__(self, agent_key: str, detail: str) -> None:
+        self.agent_key = agent_key
+        message = f"{agent_key} quota/rate limit reached: {detail}"
+        super().__init__(message)
 
 
 @dataclass
@@ -30,49 +44,6 @@ class StreamResult:
     returncode: int
     stdout: str
     stderr: str
-
-
-BASE_CODEX_COMMAND = [
-    "codex",
-    "exec",
-    "--skip-git-repo-check",
-    "--sandbox",
-    "workspace-write",
-    "--color",
-    "never",
-]
-
-AGENTS = {
-    "codex": {
-        "command": BASE_CODEX_COMMAND,
-        "timeout": 1800,
-        "env": {"NO_COLOR": "1"},
-        "required_hosts": ("chatgpt.com", "api.openai.com"),
-    },
-    "claude": {
-        "command": [
-            "claude",
-            "-p",
-            "--output-format",
-            "text",
-            "--no-session-persistence",
-            "--model",
-            "opus",
-        ],
-        "timeout": 1800,
-        "env": {"NO_COLOR": "1"},
-        "required_hosts": ("api.anthropic.com",),
-    },
-    "gemini": {
-        "command": [
-            "gemini",
-            "-p",
-        ],
-        "timeout": 1800,
-        "env": {"NO_COLOR": "1"},
-        "required_hosts": ("generativelanguage.googleapis.com",),
-    },
-}
 
 
 def can_resolve_host(hostname: str) -> bool:
@@ -135,9 +106,24 @@ def run_tests_snapshot(
         return 0, "Exit code: 0\n[skip] No test command configured."
     if config.dry_run:
         return 0, f"Exit code: 0\n[dry-run] '{command_text}' simulated."
-    rc, stdout, stderr = run_local_command(shlex.split(command_text), timeout=test_timeout_seconds)
+    try:
+        result = subprocess.run(
+            command_text,
+            capture_output=True,
+            text=True,
+            timeout=test_timeout_seconds,
+            check=False,
+            shell=True,
+        )
+        rc = result.returncode
+        stdout = result.stdout or ""
+        stderr = result.stderr or ""
+    except Exception as exc:
+        rc = 1
+        stdout = ""
+        stderr = str(exc)
     combined = (stdout + "\n" + stderr).strip()
-    return rc, f"Exit code: {rc}\n{shorten(combined, 7000)}"
+    return rc, f"Exit code: {rc}\n{shorten(combined, TEST_OUTPUT_LIMIT)}"
 
 
 def build_dry_run_agent_output(agent_key: str, prompt: str) -> str:
@@ -170,119 +156,33 @@ def print_agent_output(
     if config.agent_output_mode == "none":
         return
 
-    print(f"[AGENT] {agent_key} attempt={attempt} log={log_path}")
+    logger.info("[AGENT] %s attempt=%s log=%s", agent_key, attempt, log_path)
     if config.agent_live_stream:
-        print("[AGENT] live stream was enabled; final response saved to log.")
+        logger.info("[AGENT] live stream was enabled; final response saved to log.")
         return
     if config.agent_output_mode == "full":
-        print(output.strip())
+        logger.info("%s", output.strip())
         return
 
-    print(shorten(output, config.agent_output_max_chars))
-
-
-def should_emit_live_line(
-    agent_key: str,
-    channel: str,
-    line: str,
-    stream_state: dict[str, str | bool],
-    *,
-    config: OrchestratorConfig,
-) -> bool:
-    if config.agent_live_stream_channels == "stdout" and channel != "stdout":
-        return False
-    if config.agent_live_stream_channels == "stderr" and channel != "stderr":
-        return False
-    if config.agent_live_stream_mode == "full":
-        return True
-
-    txt = line.strip()
-    if not txt:
-        return False
-
-    if agent_key == "codex" and channel == "stderr":
-        if txt == "user":
-            stream_state["skip_prompt_echo"] = True
-            return False
-        if bool(stream_state.get("skip_prompt_echo", False)):
-            if txt.startswith("mcp startup:") or txt in {"thinking", "codex", "exec"}:
-                stream_state["skip_prompt_echo"] = False
-            else:
-                return False
-
-        noisy_prefixes = (
-            "Reading prompt from stdin...",
-            "OpenAI Codex ",
-            "workdir:",
-            "model:",
-            "provider:",
-            "approval:",
-            "sandbox:",
-            "reasoning effort:",
-            "reasoning summaries:",
-            "session id:",
-            "mcp startup:",
-            "--------",
-            "diff --git ",
-            "index ",
-            "--- a/",
-            "+++ b/",
-            "@@",
-            "deleted file mode ",
-            "new file mode ",
-            "file update:",
-            "apply_patch(",
-            "/bin/bash -lc ",
-            "succeeded in ",
-            "tokens used",
-        )
-        if txt.startswith(noisy_prefixes):
-            return False
-        if txt.startswith("202") and "ERROR codex_core::rollout::list" in txt:
-            return False
-        if txt.startswith(("+", "-")) and len(txt) > 2:
-            return False
-
-    last_line = str(stream_state.get("last_emitted_line", ""))
-    if txt == last_line:
-        return False
-    stream_state["last_emitted_line"] = txt
-    return True
+    logger.info("%s", shorten(output, config.agent_output_max_chars))
 
 
 def run_agent(
-    agent_key: str,
+    adapter: AgentAdapter,
     prompt: str,
     *,
     config: OrchestratorConfig,
-    agents: dict,
     shorten: Callable[[str | None, int], str],
 ) -> str:
+    agent_key = adapter.name
     if config.dry_run:
         return build_dry_run_agent_output(agent_key, prompt)
 
-    agent_config = agents[agent_key]
-    command_parts = list(agent_config["command"])
-    use_stdin_prompt = True
-    if agent_key == "gemini":
-        # Gemini headless mode requires the prompt as CLI argument.
-        command_parts.extend([prompt])
-        use_stdin_prompt = False
+    command_parts, use_stdin_prompt = adapter.build_command(prompt)
     env = os.environ.copy()
-    env.update(agent_config.get("env", {}))
-    timeout_seconds = agent_config.get("timeout", 600)
-
-    last_message_file = None
-    if agent_key == "codex":
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            suffix=".txt",
-            prefix=f"{agent_key}-last-message-",
-            delete=False,
-        ) as tmp:
-            last_message_file = tmp.name
-        command_parts.extend(["--output-last-message", last_message_file])
+    env.update(adapter.env)
+    timeout_seconds = adapter.timeout
+    extra_files: dict[str, str] = {}
 
     try:
         try:
@@ -304,10 +204,7 @@ def run_agent(
                     process.stdin.write(prompt)
                 process.stdin.close()
 
-                selector = selectors.DefaultSelector()
-                selector.register(process.stdout, selectors.EVENT_READ, "stdout")
-                selector.register(process.stderr, selectors.EVENT_READ, "stderr")
-
+                stream_queue: queue.Queue[tuple[str, str | None]] = queue.Queue()
                 stdout_chunks: list[str] = []
                 stderr_chunks: list[str] = []
                 start = time.monotonic()
@@ -316,47 +213,65 @@ def run_agent(
                     "last_emitted_line": "",
                 }
 
-                while True:
+                def read_stream(stream: TextIO, channel: str) -> None:
+                    try:
+                        while True:
+                            line = stream.readline()
+                            if line == "":
+                                break
+                            stream_queue.put((channel, line))
+                    finally:
+                        stream_queue.put((channel, None))
+                        try:
+                            stream.close()
+                        except Exception:
+                            pass
+
+                threads = [
+                    threading.Thread(
+                        target=read_stream,
+                        args=(process.stdout, "stdout"),
+                        daemon=True,
+                    ),
+                    threading.Thread(
+                        target=read_stream,
+                        args=(process.stderr, "stderr"),
+                        daemon=True,
+                    ),
+                ]
+                for thread in threads:
+                    thread.start()
+
+                completed_channels: set[str] = set()
+                while len(completed_channels) < 2:
                     if time.monotonic() - start > timeout_seconds:
                         process.kill()
                         raise subprocess.TimeoutExpired(command_parts, timeout_seconds)
-
-                    events = selector.select(timeout=0.2)
-                    if not events:
-                        if process.poll() is not None:
-                            break
+                    try:
+                        channel, line = stream_queue.get(timeout=0.2)
+                    except queue.Empty:
                         continue
 
-                    for key, _ in events:
-                        stream = key.fileobj
-                        channel = key.data
-                        line = stream.readline()
-                        if line == "":
-                            try:
-                                selector.unregister(stream)
-                            except Exception:
-                                pass
-                            try:
-                                stream.close()
-                            except Exception:
-                                pass
-                            continue
-                        if channel == "stdout":
-                            stdout_chunks.append(line)
-                        else:
-                            stderr_chunks.append(line)
-                        if should_emit_live_line(
-                            agent_key, channel, line, stream_state, config=config
-                        ):
-                            print(f"[{agent_key}:{channel}] {line.rstrip()}")
+                    if line is None:
+                        completed_channels.add(channel)
+                        continue
+                    if channel == "stdout":
+                        stdout_chunks.append(line)
+                    else:
+                        stderr_chunks.append(line)
 
-                try:
-                    selector.close()
-                except Exception:
-                    pass
+                    if config.agent_live_stream_channels == "stdout" and channel != "stdout":
+                        continue
+                    if config.agent_live_stream_channels == "stderr" and channel != "stderr":
+                        continue
+                    if config.agent_live_stream_mode == "full" or adapter.stream_filter(
+                        channel, line, stream_state
+                    ):
+                        logger.info("[%s:%s] %s", agent_key, channel, line.rstrip())
 
-                process.wait(timeout=1)
-
+                for thread in threads:
+                    thread.join(timeout=1)
+                process.wait(timeout=5)
                 result = StreamResult(
                     process.returncode if process.returncode is not None else 1,
                     "".join(stdout_chunks),
@@ -372,30 +287,26 @@ def run_agent(
                     timeout=timeout_seconds,
                     check=False,
                 )
-        except subprocess.TimeoutExpired:
-            raise RuntimeError(f"{agent_key} timed out after {timeout_seconds}s.")
-
-        stdout = (result.stdout or "").strip()
-        if last_message_file and Path(last_message_file).exists():
-            last_message = Path(last_message_file).read_text(encoding="utf-8").strip()
-            if last_message:
-                stdout = last_message
-
-        stderr = (result.stderr or "").strip()
-        if result.returncode != 0:
-            error_text = shorten(stderr or stdout or "Unknown CLI error without output.")
-            raise RuntimeError(f"{agent_key} failed: {error_text}")
-
-        if not stdout:
-            raise RuntimeError(f"{agent_key} returned empty output.")
-
-        return stdout
-    finally:
-        if last_message_file:
+        finally:
             try:
-                Path(last_message_file).unlink(missing_ok=True)
-            except OSError:
-                pass
+                adapter.cleanup()
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("Adapter cleanup failed for %s: %s", agent_key, exc)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"{agent_key} timed out after {timeout_seconds}s.")
+
+    stdout = (result.stdout or "").strip()
+    stderr = (result.stderr or "").strip()
+    output = adapter.extract_output(stdout, stderr, extra_files)
+    if result.returncode != 0:
+        error_text = shorten(
+            stderr or output or "Unknown CLI error without output.",
+            ERROR_TRUNCATION_LIMIT,
+        )
+        raise RuntimeError(f"{agent_key} failed: {error_text}")
+    if not output:
+        raise RuntimeError(f"{agent_key} returned empty output.")
+    return output
 
 
 def is_quota_or_rate_limit_error(text: str) -> bool:
@@ -432,7 +343,7 @@ def run_agent_checked(
     required_flags: list[str] | None,
     output_validator: Callable[[str], str | None] | None,
     config: OrchestratorConfig,
-    agents: dict,
+    agents: dict[str, AgentAdapter],
     log_dir: Path,
     write_file: Callable[[Path, str], None],
     shorten: Callable[[str | None, int], str],
@@ -444,12 +355,12 @@ def run_agent_checked(
     effective_agent_key = agent_key
 
     if (
-        agent_key == "claude"
+        effective_agent_key == "claude"
         and config.allow_fallback_to_gemini
         and config.claude_quota_reached
     ):
         effective_agent_key = "gemini"
-        print("[INFO] Claude quota previously exceeded - using Gemini directly.")
+        logger.info("Claude quota previously exceeded - using Gemini directly.")
 
     def validate_output_contract(output: str) -> str | None:
         if not validate_done_marker(output):
@@ -476,10 +387,9 @@ def run_agent_checked(
 
         try:
             output = run_agent(
-                effective_agent_key,
+                agents[effective_agent_key],
                 prompt_to_send,
                 config=config,
-                agents=agents,
                 shorten=shorten,
             )
             log_path = log_dir / f"{log_prefix}.attempt-{attempt}.log"
@@ -493,7 +403,7 @@ def run_agent_checked(
             else:
                 return output
         except Exception as exc:
-            error_text = shorten(str(exc))
+            error_text = shorten(str(exc), ERROR_TRUNCATION_LIMIT)
             errors.append(error_text)
 
             if (
@@ -501,20 +411,20 @@ def run_agent_checked(
                 and effective_agent_key == "claude"
                 and is_quota_or_rate_limit_error(error_text)
             ):
-                print("[WARN] Claude quota/rate limit detected. Attempting Gemini fallback.")
+                logger.warning("Claude quota/rate limit detected. Attempting Gemini fallback.")
                 try:
                     fallback_output = run_agent(
-                        "gemini",
+                        agents["gemini"],
                         prompt_to_send,
                         config=config,
-                        agents=agents,
                         shorten=shorten,
                     )
                     fallback_log_path = log_dir / f"{log_prefix}.attempt-{attempt}.gemini-fallback.log"
                     write_file(fallback_log_path, fallback_output)
-                    print(
-                        "[AGENT] fallback "
-                        f"from=claude to=gemini attempt={attempt} log={fallback_log_path}"
+                    logger.info(
+                        "[AGENT] fallback from=claude to=gemini attempt=%s log=%s",
+                        attempt,
+                        fallback_log_path,
                     )
                     if config.agent_output_mode != "none":
                         print_agent_output(
@@ -533,48 +443,109 @@ def run_agent_checked(
                         config.claude_quota_reached = True
                         return fallback_output
                 except Exception as fallback_exc:
-                    errors.append(f"gemini fallback failed: {shorten(str(fallback_exc))}")
+                    fallback_error = shorten(str(fallback_exc), ERROR_TRUNCATION_LIMIT)
+                    errors.append(f"gemini fallback failed: {fallback_error}")
+                    if is_quota_or_rate_limit_error(fallback_error):
+                        config.claude_quota_reached = True
+                        raise QuotaReachedError("gemini", fallback_error) from fallback_exc
+
+            if is_quota_or_rate_limit_error(error_text):
+                if effective_agent_key == "claude" and config.allow_fallback_to_gemini:
+                    raise QuotaReachedError("claude", error_text) from exc
+                raise QuotaReachedError(effective_agent_key, error_text) from exc
 
         if has_next_attempt:
             delay_seconds = compute_retry_backoff_seconds(errors[-1], attempt)
-            print(
-                f"[RETRY] {effective_agent_key} attempt={attempt} failed. "
-                f"Waiting {delay_seconds}s before retry."
+            logger.info(
+                "[RETRY] %s attempt=%s failed. Waiting %ss before retry.",
+                effective_agent_key,
+                attempt,
+                delay_seconds,
             )
             time.sleep(delay_seconds)
 
     raise RuntimeError(
         f"{effective_agent_key} did not produce valid output after {max_retries + 1} attempts: "
-        f"{shorten(chr(10).join(errors), 1200)}"
+        f"{shorten(chr(10).join(errors), ERROR_TRUNCATION_LIMIT)}"
     )
 
 
-def preflight(required_agents: list[str], strict: bool, agents: dict) -> bool:
+def preflight(required_agents: list[str], strict: bool, agents: dict[str, AgentAdapter]) -> bool:
     ok = True
-    print("Preflight: checking CLI binaries and DNS resolution.")
+    logger.info("Preflight: checking CLI binaries and DNS resolution.")
 
     for agent_key in required_agents:
         agent_config = agents[agent_key]
-        cli_binary = agent_config["command"][0]
+        cli_binary = agent_config.cli_binary
         if shutil.which(cli_binary) is None:
-            print(f"[ERROR] Missing CLI binary for '{agent_key}': {cli_binary}")
+            logger.error("Missing CLI binary for '%s': %s", agent_key, cli_binary)
             ok = False
 
     missing_hosts: list[tuple[str, str]] = []
     for agent_key in required_agents:
-        for host in agents[agent_key].get("required_hosts", ()):
+        for host in agents[agent_key].required_hosts:
             if not can_resolve_host(host):
                 missing_hosts.append((agent_key, host))
 
     if missing_hosts:
-        print("[WARN] DNS resolution failed for:")
+        logger.warning("DNS resolution failed for:")
         for agent_key, host in missing_hosts:
-            print(f"  - {agent_key}: {host}")
+            logger.warning("  - %s: %s", agent_key, host)
         if strict:
             ok = False
 
     if ok:
-        print("Preflight result: OK")
+        logger.info("Preflight result: OK")
     else:
-        print("Preflight result: FAILED")
+        logger.error("Preflight result: FAILED")
     return ok
+
+
+def collect_file_snapshots(changed_files: list[str], max_lines: int, max_files: int) -> str:
+    def is_plausible_path(value: str) -> bool:
+        if not value or value.startswith("#"):
+            return False
+        if value.startswith("..."):
+            return False
+        if re.search(r"\s", value):
+            return False
+        return bool(re.match(r"^[^\s|:][^|:]*$", value))
+
+    parts: list[str] = []
+    seen: set[str] = set()
+    selected = 0
+    for raw in changed_files:
+        path_text = raw.strip()
+        if not is_plausible_path(path_text):
+            continue
+        if path_text in seen:
+            continue
+        seen.add(path_text)
+        if selected >= max_files:
+            break
+
+        selected += 1
+        path = Path(path_text)
+        parts.append(f"### {path_text}")
+        if not path.exists():
+            parts.append("[missing] File does not exist.")
+            parts.append("")
+            continue
+        if path.is_dir():
+            parts.append("[skip] Path is a directory.")
+            parts.append("")
+            continue
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except Exception as exc:  # pragma: no cover - defensive
+            parts.append(f"[error] Could not read file: {exc}")
+            parts.append("")
+            continue
+        truncated = lines[:max_lines]
+        parts.append("\n".join(truncated) if truncated else "(empty)")
+        if len(lines) > max_lines:
+            parts.append(f"...[truncated to {max_lines} lines]")
+        parts.append("")
+
+    body = "\n".join(parts).strip() or "(empty)"
+    return f"<<<FILES_BEGIN>>>\n{body}\n<<<FILES_END>>>"

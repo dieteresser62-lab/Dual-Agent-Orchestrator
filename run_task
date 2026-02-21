@@ -1,7 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$( cd "$( dirname "$(readlink -f "$0")" )" && pwd )"
+if command -v realpath >/dev/null 2>&1; then
+  SCRIPT_PATH="$(realpath "$0")"
+else
+  case "$0" in
+    /*) SCRIPT_PATH="$0" ;;
+    *) SCRIPT_PATH="$(pwd)/$0" ;;
+  esac
+fi
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd -P)"
 TASK_FILE="task.md"
 STATE_FILE=".orchestrator/state.json"
 STATE_PHASE=""
@@ -20,6 +28,26 @@ if [[ $# -gt 0 ]]; then
   EXTRA_ARGS=("$@")
 fi
 
+DETECTED_TEST_CMD=""
+if [[ ${RUN_TASK_TEST_CMD+x} == x ]]; then
+  # Explicit override (including empty string to force skip).
+  DETECTED_TEST_CMD="${RUN_TASK_TEST_CMD}"
+elif [[ -f pyproject.toml ]] && grep -q '\[tool\.pytest\]' pyproject.toml; then
+  DETECTED_TEST_CMD="python3 -m pytest tests/ -v"
+elif [[ -f package.json ]] && python3 -c 'import json,sys
+try:
+    with open("package.json", encoding="utf-8") as f:
+        data = json.load(f)
+except Exception:
+    sys.exit(1)
+scripts = data.get("scripts", {})
+sys.exit(0 if isinstance(scripts, dict) and "test" in scripts else 1)
+'; then
+  DETECTED_TEST_CMD="npm test"
+elif [[ -f Makefile ]] && grep -Eq '^[[:space:]]*test:' Makefile; then
+  DETECTED_TEST_CMD="make test"
+fi
+
 if [[ -f "$STATE_FILE" ]]; then
   STATE_PHASE="$(python3 -c 'import json,sys
 try:
@@ -33,9 +61,23 @@ fi
 
 if [[ -f "$STATE_FILE" && "$STATE_PHASE" != "done" ]]; then
   echo "[INFO] Existing state found at $STATE_FILE -> resuming current run."
+  FROZEN_STATUS="$(python3 -c 'import json,sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        data = json.load(f)
+    p1 = str((data.get("phase1") or {}).get("status", "")).strip().lower()
+    p2 = str((data.get("phase2") or {}).get("status", "")).strip().lower()
+    print("yes" if p1 == "frozen" or p2 == "frozen" else "no")
+except Exception:
+    print("no")
+' "$STATE_FILE")"
+  if [[ "$FROZEN_STATUS" == "yes" ]]; then
+    echo "[WARN] Vorheriger Lauf wurde wegen API-Quota eingefroren. Stelle sicher, dass dein Quota zurückgesetzt ist, bevor du fortfährst."
+  fi
   exec python3 "$SCRIPT_DIR/src/orchestrator.py" \
     --resume \
     --allow-fallback-to-gemini \
+    --test-command "$DETECTED_TEST_CMD" \
     --agent-live-stream \
     --agent-live-stream-mode compact \
     --agent-live-stream-channels stdout \
@@ -49,6 +91,7 @@ else
   exec python3 "$SCRIPT_DIR/src/orchestrator.py" \
     --force-overwrite-state \
     --allow-fallback-to-gemini \
+    --test-command "$DETECTED_TEST_CMD" \
     --agent-live-stream \
     --agent-live-stream-mode compact \
     --agent-live-stream-channels stdout \
