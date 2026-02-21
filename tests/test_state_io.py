@@ -21,7 +21,7 @@ def test_init_state_has_expected_defaults(tmp_path: Path) -> None:
         "phase1_shared": str(tmp_path / "runs" / "r1" / "10_phase1_plan.md"),
         "phase2_shared": str(tmp_path / "runs" / "r1" / "20_phase2_implementation.md"),
     }
-    state = init_state(Path("Aufgabe.md"), 3, 4, artifacts)
+    state = init_state(Path("task.md"), 3, 4, artifacts)
 
     assert state["version"] == 2
     assert state["phase"] == "phase1"
@@ -34,7 +34,7 @@ def test_init_state_has_expected_defaults(tmp_path: Path) -> None:
 def test_ensure_state_shape_keeps_v2_and_sanitizes_findings(tmp_path: Path) -> None:
     state = {
         "version": 2,
-        "task_file": "Aufgabe.md",
+        "task_file": "task.md",
         "phase": "phase1",
         "updated_at": "now",
         "artifacts": {},
@@ -48,7 +48,7 @@ def test_ensure_state_shape_keeps_v2_and_sanitizes_findings(tmp_path: Path) -> N
         },
     }
 
-    shaped = ensure_state_shape(state, Path("Aufgabe.md"), 2, 2, tmp_path)
+    shaped = ensure_state_shape(state, Path("task.md"), 2, 2, tmp_path)
     assert shaped["phase1"]["open_findings"] == ["F-001"]
     assert shaped["phase1"]["finding_history"] == {"F-001": "OPEN"}
     assert shaped["phase2"]["open_findings"] == ["F-002"]
@@ -58,7 +58,7 @@ def test_ensure_state_shape_keeps_v2_and_sanitizes_findings(tmp_path: Path) -> N
 
 def test_ensure_state_shape_reinitializes_non_v2_state(tmp_path: Path) -> None:
     old_state = {"version": 1, "phase": "phase2"}
-    shaped = ensure_state_shape(old_state, Path("Aufgabe.md"), 1, 1, tmp_path)
+    shaped = ensure_state_shape(old_state, Path("task.md"), 1, 1, tmp_path)
 
     assert shaped["version"] == 2
     assert shaped["phase1"]["cycle"] == 0

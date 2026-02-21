@@ -1,97 +1,74 @@
-# Dual-Agent Ticketing Orchestrator
+# Dual-Agent Task Orchestrator
 
-Ein leistungsstarkes CLI-Tool zur Automatisierung komplexer Coding-Aufgaben durch einen intelligenten, zweiphasigen KI-Agenten-Workflow (Planung und Implementierung).
+A CLI tool that automates complex coding work with a two-phase agent workflow: planning and implementation.
 
-## 🌟 Überblick
+## Overview
 
-Der Orchestrator nimmt eine Aufgabenbeschreibung im Markdown-Format, plant die Umsetzung im Detail (Phase 1) und führt anschließend die notwendigen Code-Änderungen durch (Phase 2). Der gesamte Verarbeitungsstatus und alle generierten Artefakte werden im Ordner `.orchestrator/` gesichert.
+The orchestrator reads a Markdown task description, creates/revises an implementation plan in Phase 1, and executes/fixes in Phase 2. State and artifacts are stored in `.orchestrator/`.
 
-### Kernfunktionen
+## Key Features
 
-- **Zweiphasiger Agenten-Workflow**: Klare Trennung zwischen Lösungsdesign (Planung) und tatsächlicher Ausführung (Implementierung).
-- **Zustandsspeicherung & Resume (Fortsetzen)**: Wird ein Prozess unterbrochen, kann er über `.orchestrator/state.json` exakt dort fortgesetzt werden, wo er gestoppt hat.
-- **Live-Streaming**: Im Terminal kann der direkte Gedankengang und Fortschritt der Agenten im kompakten Modus mitverfolgt werden.
-- **Test-Integration**: Kommandozeilen-Tests können direkt in den Workflow integriert werden.
-- **Agenten Fallback**: Unterstützt einen automatisierten Fallback (z.B. auf Gemini), um Ausfallsicherheit zu gewährleisten.
+- Two-phase workflow: planning and implementation are separated.
+- Stateful resume: continue from `.orchestrator/state.json`.
+- Live streaming: follow agent output in compact or full mode.
+- Test integration: run a configurable test command in Phase 2.
+- Claude to Gemini fallback: optional quota/rate-limit fallback support.
 
-## � Voraussetzungen und Installation
+## Requirements
 
-Dieses Tool wurde primär für **Linux/Unix-Umgebungen** (inkl. macOS und WSL unter Windows) entwickelt und benötigt eine `bash`-kompatible Shell.
+Designed for Linux/Unix-like shells (including macOS and WSL).
 
-### Benötigte KI CLI-Tools
+Install at least two (ideally all three) CLIs and make sure they are in `$PATH`:
 
-Der Orchestrator verlässt sich auf externe Kommandozeilen-Tools für die Kommunikation mit den Modellen. Es wird vorausgesetzt, dass **mindestens zwei, idealerweise drei** der folgenden CLI-Tools auf dem System installiert und im `$PATH` verfügbar sind:
+- `codex`
+- `claude`
+- `gemini`
 
-- **`codex`** (OpenAI / ChatGPT CLI) - Häufig Hauptakteur für Planung und Code-Generierung.
-- **`claude`** (Anthropic CLI) - Wird standardmäßig für Review, Bewertung oder eigenständige Agenten-Aufgaben genutzt.
-- **`gemini`** (Google Gemini CLI) - Dient u.a. als nützlicher Fallback-Agent bei Rate-Limits oder als alternative Engine.
+## Optional Global Command
 
-### Globale Verfügbarkeit einrichten
-
-Damit das Tool (`bearbeite_aufgabe`) aus jedem beliebigen Projektverzeichnis komfortabel aufgerufen werden kann, empfiehlt es sich, einen symbolischen Link (Symlink) in einem Verzeichnis anzulegen, das sich in deinem System-Pfad (`$PATH`) befindet (z. B. `~/.local/bin` oder `/usr/local/bin`):
+Create a symlink to run `run_task` from any project:
 
 ```bash
-# Optional: Verzeichnis anlegen, falls es noch nicht existiert
 mkdir -p ~/.local/bin
-
-# Symbolischen Link erstellen (ersetze den Pfad durch deinen tatsächlichen Klon-Pfad)
-ln -s /absoluter/pfad/zu/Dual-Agent-Orchestrator/bearbeite_aufgabe ~/.local/bin/bearbeite_aufgabe
-
-# Sicherstellen, dass das Skript ausführbar ist
-chmod +x /absoluter/pfad/zu/Dual-Agent-Orchestrator/bearbeite_aufgabe
+ln -s /absolute/path/to/Dual-Agent-Orchestrator/run_task ~/.local/bin/run_task
+chmod +x /absolute/path/to/Dual-Agent-Orchestrator/run_task
 ```
 
-Sobald dies eingerichtet ist und `~/.local/bin` in deinem Pfad liegt (oft Standard in modernen Distributionen), kannst du `bearbeite_aufgabe` in jedem beliebigen Ordner in deinem Terminal aufrufen.
+## Quick Start
 
-## �🚀 Schnellstart
-
-Erstelle eine Datei namens `Aufgabe.md` mit deiner Anforderung und starte den Orchestrator:
+Create `task.md` and run:
 
 ```bash
-./bearbeite_aufgabe
+./run_task
 ```
 
-*Wenn bereits ein `.orchestrator/state.json` existiert und nicht als "done" markiert ist, setzt das Skript den letzten Lauf automatisch fort (Resume-first).*
+If `.orchestrator/state.json` exists and is not `done`, execution resumes automatically.
 
-## 📖 Nutzung
+## Usage
 
-### Eigene Task-Datei verwenden
-
-Du kannst eine beliebige Markdown-Datei als Aufgabe übergeben:
+Use a custom task file:
 
 ```bash
-./bearbeite_aufgabe my-task.md
+./run_task my-task.md
 ```
 
-### Testkommando konfigurieren
-
-Tests in Phase 2 (Implementierung) können über den Parameter `--test-command` gesteuert werden. Wenn der Test fehlschlägt, kann der Agent versuchen, den Fehler zu beheben.
+Run with tests:
 
 ```bash
-# Mit Pytest
 python3 src/orchestrator.py --task-file my-task.md --test-command "pytest -x"
-
-# Mit npm
 python3 src/orchestrator.py --task-file my-task.md --test-command "npm test"
-
-# Tests explizit überspringen
 python3 src/orchestrator.py --task-file my-task.md --test-command ""
 ```
 
-### Dry-Run Modus
-
-Nützlich zum Testen der Konfiguration, ohne echte Agenten-Aufrufe auszulösen:
+Dry run:
 
 ```bash
 python3 src/orchestrator.py --dry-run --auto --task-file example-task.md --test-command ""
 ```
 
-## ❓ Hilfe
-
-Alle verfügbaren Argumente und Optionen können über die Hilfe angezeigt werden:
+Help:
 
 ```bash
-./bearbeite_aufgabe --help
-# oder direkt über Python:
+./run_task --help
 python3 src/orchestrator.py --help
 ```

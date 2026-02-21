@@ -2,6 +2,6 @@
 __pycache__/
 .codex/
 *.log
-Aufgabe.md
+task.md
 *.pyc
 .env

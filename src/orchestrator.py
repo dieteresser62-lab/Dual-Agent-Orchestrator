@@ -38,7 +38,7 @@ from state_io import (
     write_file,
 )
 
-TASK_FILE_CANDIDATES = ("Aufgabe.md", "aufgabe.md")
+TASK_FILE_CANDIDATES = ("task.md",)
 ARTIFACT_ROOT_DIR = Path(".orchestrator")
 ARTIFACT_RUNS_DIR = ARTIFACT_ROOT_DIR / "runs"
 LATEST_RUN_FILE = ARTIFACT_ROOT_DIR / "LATEST_RUN.txt"
@@ -419,7 +419,7 @@ def approval_gate(message: str) -> bool:
     print(message)
     print(f"{'=' * 60}")
     try:
-        response = input("Fortfahren? [y/N] ").strip().lower()
+        response = input("Continue? [y/N] ").strip().lower()
     except (EOFError, KeyboardInterrupt):
         print("\nAborted.")
         return False
@@ -458,7 +458,7 @@ def run_phase1(task_text: str, state: dict, args: argparse.Namespace, ctx: RunCo
             max_retries=max(args.max_agent_retries, 0),
             required_flags=["CLAUDE_APPROVAL"],
         )
-        append_markdown(ctx.phase1_shared_file, f"Phase 1 / Zyklus {cycle} / Claude Plan", claude_plan)
+        append_markdown(ctx.phase1_shared_file, f"Phase 1 / Cycle {cycle} / Claude Plan", claude_plan)
 
         print(f"=== PHASE 1 | cycle {cycle}/{max_cycles}: Codex review ===")
         shared = read_file(ctx.phase1_shared_file)
@@ -478,7 +478,7 @@ def run_phase1(task_text: str, state: dict, args: argparse.Namespace, ctx: RunCo
                 previous_open_findings=list(previous_open_findings),
             ),
         )
-        append_markdown(ctx.phase1_shared_file, f"Phase 1 / Zyklus {cycle} / Codex Review", codex_review)
+        append_markdown(ctx.phase1_shared_file, f"Phase 1 / Cycle {cycle} / Codex Review", codex_review)
 
         codex_approval = parse_flag(codex_review, "CODEX_APPROVAL") or "NO"
         parsed_open_findings = parse_open_findings(codex_review) or []
@@ -508,7 +508,7 @@ def run_phase1(task_text: str, state: dict, args: argparse.Namespace, ctx: RunCo
             max_retries=max(args.max_agent_retries, 0),
             required_flags=["CLAUDE_APPROVAL"],
         )
-        append_markdown(ctx.phase1_shared_file, f"Phase 1 / Zyklus {cycle} / Claude Confirm", claude_confirm)
+        append_markdown(ctx.phase1_shared_file, f"Phase 1 / Cycle {cycle} / Claude Confirm", claude_confirm)
 
         claude_approval = parse_flag(claude_confirm, "CLAUDE_APPROVAL") or "NO"
         if codex_approval == "NO" and claude_approval == "YES":
@@ -575,14 +575,14 @@ def run_phase2(task_text: str, plan_text: str, state: dict, args: argparse.Names
             max_retries=max(args.max_agent_retries, 0),
             required_flags=["IMPLEMENTATION_READY"],
         )
-        append_markdown(ctx.phase2_shared_file, f"Phase 2 / Zyklus {cycle} / Codex Implement", impl_report)
+        append_markdown(ctx.phase2_shared_file, f"Phase 2 / Cycle {cycle} / Codex Implement", impl_report)
 
         print(f"=== PHASE 2 | cycle {cycle}/{max_cycles}: local test snapshot ===")
         test_exit, test_snapshot = ctx.run_tests_snapshot()
         phase2["last_test_exit"] = test_exit
         append_markdown(
             ctx.phase2_shared_file,
-            f"Phase 2 / Zyklus {cycle} / Orchestrator Tests",
+            f"Phase 2 / Cycle {cycle} / Orchestrator Tests",
             test_snapshot,
         )
 
@@ -607,7 +607,7 @@ def run_phase2(task_text: str, plan_text: str, state: dict, args: argparse.Names
                 previous_open_findings=list(previous_open_findings),
             ),
         )
-        append_markdown(ctx.phase2_shared_file, f"Phase 2 / Zyklus {cycle} / Claude Review", claude_review)
+        append_markdown(ctx.phase2_shared_file, f"Phase 2 / Cycle {cycle} / Claude Review", claude_review)
 
         implementation_ready = parse_flag(impl_report, "IMPLEMENTATION_READY") or "NO"
         claude_approval = parse_flag(claude_review, "CLAUDE_APPROVAL") or "NO"
@@ -653,7 +653,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Orchestrates a dual-agent workflow with two phases and shared Markdown artifacts."
     )
-    parser.add_argument("--task-file", help="Path to task file (default: Aufgabe.md or aufgabe.md).")
+    parser.add_argument("--task-file", help="Path to task file (default: task.md).")
     parser.add_argument(
         "--resume",
         action="store_true",
@@ -817,7 +817,7 @@ def main() -> int:
         return 1
 
     if not args.auto and state["phase2"].get("status") != "completed":
-        if not approval_gate("PHASE 1 abgeschlossen. PHASE 2 (Implementierung) starten?"):
+        if not approval_gate("PHASE 1 completed. Start PHASE 2 (implementation)?"):
             print("Pipeline aborted at phase transition gate.")
             return 1
 

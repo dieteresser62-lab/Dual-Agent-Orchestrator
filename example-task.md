@@ -1,23 +1,23 @@
-# Titel
-Beispielaufgabe fuer den Dual-Agent Orchestrator
+# Title
+Example task for the dual-agent orchestrator
 
-## Hintergrund
-Beschreibe den aktuellen technischen Stand und das Problem.
+## Background
+Describe the current technical state and the problem.
 
-## Ziel
-Definiere klar, welches Ergebnis erreicht werden soll.
+## Goal
+Define clearly which outcome must be achieved.
 
-## Umsetzung
-1. Liste konkrete Arbeitsschritte.
-2. Nenne betroffene Dateien oder Module.
-3. Definiere technische Randbedingungen.
+## Implementation
+1. List concrete work steps.
+2. Name affected files or modules.
+3. Define technical constraints.
 
-## Akzeptanzkriterien
-1. Kriterium 1
-2. Kriterium 2
-3. Kriterium 3
+## Acceptance Criteria
+1. Criterion 1
+2. Criterion 2
+3. Criterion 3
 
 ## DoD
-- Implementierung fertig
-- Review erfolgt
-- Tests dokumentiert
+- Implementation complete
+- Review completed
+- Tests documented

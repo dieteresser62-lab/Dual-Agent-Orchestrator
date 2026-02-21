@@ -35,7 +35,7 @@ def write_file(path: Path, content: str) -> None:
 
 def append_markdown(path: Path, heading: str, body: str) -> None:
     stamp = now_iso()
-    section = f"## {heading}\n\n_Zeit: {stamp}_\n\n{body.strip()}\n"
+    section = f"## {heading}\n\n_Time: {stamp}_\n\n{body.strip()}\n"
     existing = ""
     if path.exists():
         existing = path.read_text(encoding="utf-8")

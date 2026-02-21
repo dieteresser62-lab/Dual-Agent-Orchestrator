@@ -22,6 +22,7 @@ class OrchestratorConfig:
     agent_live_stream_mode: str = "compact"
     agent_live_stream_channels: str = "both"
     allow_fallback_to_gemini: bool = False
+    claude_quota_reached: bool = False
 
 
 @dataclass
@@ -143,7 +144,7 @@ def build_dry_run_agent_output(agent_key: str, prompt: str) -> str:
     lines = [
         f"# Dry Run Output ({agent_key})",
         "",
-        "Diese Antwort wurde vom Orchestrator simuliert.",
+        "This response was simulated by the orchestrator.",
     ]
     if "CODEX_APPROVAL:" in prompt:
         lines.append("CODEX_APPROVAL: YES")
@@ -440,6 +441,15 @@ def run_agent_checked(
 ) -> str:
     required_flags = required_flags or []
     errors: list[str] = []
+    effective_agent_key = agent_key
+
+    if (
+        agent_key == "claude"
+        and config.allow_fallback_to_gemini
+        and config.claude_quota_reached
+    ):
+        effective_agent_key = "gemini"
+        print("[INFO] Claude quota previously exceeded - using Gemini directly.")
 
     def validate_output_contract(output: str) -> str | None:
         if not validate_done_marker(output):
@@ -459,14 +469,14 @@ def run_agent_checked(
         if attempt > 1:
             prompt_to_send = (
                 f"{prompt}\n\n"
-                "Deine letzte Antwort war formal nicht akzeptabel. "
-                "Korrigiere nur die genannten Maengel.\n"
-                f"Fehlerkontext:\n{chr(10).join(errors[-2:])}\n"
+                "Your last response was formally unacceptable. "
+                "Fix only the issues listed below.\n"
+                f"Error context:\n{chr(10).join(errors[-2:])}\n"
             )
 
         try:
             output = run_agent(
-                agent_key,
+                effective_agent_key,
                 prompt_to_send,
                 config=config,
                 agents=agents,
@@ -475,7 +485,7 @@ def run_agent_checked(
             log_path = log_dir / f"{log_prefix}.attempt-{attempt}.log"
             write_file(log_path, output)
             print_agent_output(
-                agent_key, log_path, attempt, output, config=config, shorten=shorten
+                effective_agent_key, log_path, attempt, output, config=config, shorten=shorten
             )
             validation_error = validate_output_contract(output)
             if validation_error:
@@ -488,10 +498,10 @@ def run_agent_checked(
 
             if (
                 config.allow_fallback_to_gemini
-                and agent_key == "claude"
+                and effective_agent_key == "claude"
                 and is_quota_or_rate_limit_error(error_text)
             ):
-                print("[WARN] Claude quota/rate limit erkannt. Versuche Fallback auf Gemini.")
+                print("[WARN] Claude quota/rate limit detected. Attempting Gemini fallback.")
                 try:
                     fallback_output = run_agent(
                         "gemini",
@@ -520,6 +530,7 @@ def run_agent_checked(
                     if validation_error:
                         errors.append(f"gemini fallback invalid output: {validation_error}")
                     else:
+                        config.claude_quota_reached = True
                         return fallback_output
                 except Exception as fallback_exc:
                     errors.append(f"gemini fallback failed: {shorten(str(fallback_exc))}")
@@ -527,13 +538,13 @@ def run_agent_checked(
         if has_next_attempt:
             delay_seconds = compute_retry_backoff_seconds(errors[-1], attempt)
             print(
-                f"[RETRY] {agent_key} attempt={attempt} failed. "
+                f"[RETRY] {effective_agent_key} attempt={attempt} failed. "
                 f"Waiting {delay_seconds}s before retry."
             )
             time.sleep(delay_seconds)
 
     raise RuntimeError(
-        f"{agent_key} did not produce valid output after {max_retries + 1} attempts: "
+        f"{effective_agent_key} did not produce valid output after {max_retries + 1} attempts: "
         f"{shorten(chr(10).join(errors), 1200)}"
     )
 

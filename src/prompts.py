@@ -15,32 +15,32 @@ def build_phase1_claude_plan_prompt(
 ) -> str:
     return textwrap.dedent(
         f"""
-        Du bist Claude Code. Wir sind in PHASE 1 (Planung), Zyklus {cycle}.
+        You are Claude Code. We are in PHASE 1 (planning), cycle {cycle}.
 
-        Aufgabe:
+        Task:
         ---
         {_delimit_block("TASK", task_text)}
         ---
 
-        Gemeinsame Plan-Datei (bisheriger Verlauf):
+        Shared planning file (history so far):
         ---
-        {_delimit_block("SHARED", shared_text or '(leer)')}
+        {_delimit_block("SHARED", shared_text or '(empty)')}
         ---
 
-        Noch offene Findings aus letztem Codex-Review:
+        Open findings from the previous Codex review:
         ---
         {open_block}
         ---
 
-        Ziel:
-        - Erstelle oder revidiere den Implementierungsplan so, dass alle offenen Findings geschlossen werden.
-        - Fuege keine Nebenarbeiten hinzu, die nicht fuer Finding-Schliessung oder Task-Erfuellung noetig sind.
+        Goal:
+        - Create or revise the implementation plan so all open findings are closed.
+        - Do not add side work that is not necessary for closing findings or completing the task.
 
-        Ausgabeformat (Markdown):
-        - Abschnitte: Planstand, Arbeitspakete, Akzeptanzkriterien, Risiken, Teststrategie, Offene Fragen
-        - Marker-Zeile: ADDRESSED_FINDINGS: <ID1,ID2,...> oder NONE
-        - Marker-Zeile: CLAUDE_APPROVAL: YES oder CLAUDE_APPROVAL: NO
-        - Letzte Zeile MUSS exakt sein: STATUS: DONE
+        Output format (Markdown):
+        - Sections: Plan Status, Work Packages, Acceptance Criteria, Risks, Test Strategy, Open Questions
+        - Marker line: ADDRESSED_FINDINGS: <ID1,ID2,...> or NONE
+        - Marker line: CLAUDE_APPROVAL: YES or CLAUDE_APPROVAL: NO
+        - The final line MUST be exactly: STATUS: DONE
         """
     ).strip()
 
@@ -53,48 +53,48 @@ def build_phase1_codex_review_prompt(
 ) -> str:
     return textwrap.dedent(
         f"""
-        Du bist Codex Reviewer. Wir sind in PHASE 1 (Plan-Review), Zyklus {cycle}.
+        You are Codex Reviewer. We are in PHASE 1 (plan review), cycle {cycle}.
 
-        Aufgabe:
+        Task:
         ---
         {_delimit_block("TASK", task_text)}
         ---
 
-        Gemeinsame Plan-Datei (Claude + bisherige Historie):
+        Shared planning file (Claude + historical context):
         ---
         {_delimit_block("SHARED", shared_text)}
         ---
 
-        Offene Findings aus dem VORHERIGEN Zyklus:
+        Open findings from the PREVIOUS cycle:
         ---
         {previous_open_block}
         ---
 
-        Aufgaben:
-        1) Pruefe den Plan auf Luecken, Umsetzbarkeit und Testbarkeit.
-        2) Schließe vorherige Findings explizit oder lasse sie offen, mit knapper Begruendung.
-        3) Neue Findings NUR wenn sie blocker-relevant sind.
-        4) Gib klare Freigabeentscheidung gemaess CONTRACT.
+        Tasks:
+        1) Review the plan for gaps, implementability, and testability.
+        2) Explicitly close previous findings or keep them open, with concise reasoning.
+        3) Add new findings ONLY if they are blocker-level.
+        4) Provide a clear approval decision according to the CONTRACT.
 
-        CONTRACT (verpflichtend):
-        - Fuer JEDES vorher offene Finding eine Zeile:
-          FINDING_STATUS: <ID> | OPEN|CLOSED | <kurze Begruendung>
-        - Fuer jedes NEUE offene Finding:
-          NEW_FINDING: <ID> | <Kurzbeschreibung> | <Akzeptanztest>
-        - Zusammenfassung:
+        CONTRACT (mandatory):
+        - For EACH previously open finding, one line:
+          FINDING_STATUS: <ID> | OPEN|CLOSED | <short rationale>
+        - For each NEW open finding:
+          NEW_FINDING: <ID> | <short description> | <acceptance test>
+        - Summary:
           OPEN_FINDINGS: NONE
-          oder
+          or
           OPEN_FINDINGS: <ID1,ID2,...>
-        - Entscheidungsregel:
-          CODEX_APPROVAL: YES NUR wenn OPEN_FINDINGS: NONE
-          CODEX_APPROVAL: NO NUR wenn OPEN_FINDINGS nicht leer
-        - ID-Format zwingend: F-001, F-002, ...
+        - Decision rule:
+          CODEX_APPROVAL: YES only when OPEN_FINDINGS: NONE
+          CODEX_APPROVAL: NO only when OPEN_FINDINGS is not empty
+        - Mandatory ID format: F-001, F-002, ...
 
-        Ausgabeformat (Markdown):
-        - Abschnitte: Findings, Erforderliche Anpassungen, Konsolidierter Plan
-        - CONTRACT-Zeilen wie oben
-        - Marker-Zeile: CODEX_APPROVAL: YES oder CODEX_APPROVAL: NO
-        - Letzte Zeile MUSS exakt sein: STATUS: DONE
+        Output format (Markdown):
+        - Sections: Findings, Required Adjustments, Consolidated Plan
+        - CONTRACT lines as defined above
+        - Marker line: CODEX_APPROVAL: YES or CODEX_APPROVAL: NO
+        - The final line MUST be exactly: STATUS: DONE
         """
     ).strip()
 
@@ -108,31 +108,31 @@ def build_phase1_claude_confirm_prompt(
 ) -> str:
     return textwrap.dedent(
         f"""
-        Du bist Claude Code. Finale Bestaetigung fuer PHASE 1, Zyklus {cycle}.
+        You are Claude Code. Final confirmation for PHASE 1, cycle {cycle}.
 
-        Aufgabe:
+        Task:
         ---
         {_delimit_block("TASK", task_text)}
         ---
 
-        Gemeinsame Plan-Datei inkl. aktuellem Codex-Review:
+        Shared planning file including the current Codex review:
         ---
         {_delimit_block("SHARED", shared_text)}
         ---
 
-        Codex-Contract in diesem Zyklus:
+        Codex contract in this cycle:
         - CODEX_APPROVAL: {codex_approval}
         - OPEN_FINDINGS: {open_block}
 
-        Aufgaben:
-        1) Bestimme, ob der aktuelle Plan implementierungsreif ist.
-        2) Falls nein, nenne knappe Pflichtanpassungen fuer den naechsten Zyklus.
-        3) Wenn CODEX_APPROVAL=NO oder OPEN_FINDINGS nicht leer ist, setze CLAUDE_APPROVAL zwingend auf NO.
+        Tasks:
+        1) Determine whether the current plan is implementation-ready.
+        2) If not, list concise mandatory adjustments for the next cycle.
+        3) If CODEX_APPROVAL=NO or OPEN_FINDINGS is not empty, CLAUDE_APPROVAL must be NO.
 
-        Ausgabeformat (Markdown):
-        - Abschnitte: Entscheidung, Begruendung, Naechste Pflichtanpassungen
-        - Marker-Zeile: CLAUDE_APPROVAL: YES oder CLAUDE_APPROVAL: NO
-        - Letzte Zeile MUSS exakt sein: STATUS: DONE
+        Output format (Markdown):
+        - Sections: Decision, Justification, Next Mandatory Adjustments
+        - Marker line: CLAUDE_APPROVAL: YES or CLAUDE_APPROVAL: NO
+        - The final line MUST be exactly: STATUS: DONE
         """
     ).strip()
 
@@ -146,37 +146,37 @@ def build_phase2_codex_implement_prompt(
 ) -> str:
     return textwrap.dedent(
         f"""
-        Du bist Codex Implementierer in diesem Repository. Wir sind in PHASE 2, Zyklus {cycle}.
+        You are Codex Implementer in this repository. We are in PHASE 2, cycle {cycle}.
 
-        Aufgabe:
+        Task:
         ---
         {_delimit_block("TASK", task_text)}
         ---
 
-        Finaler abgestimmter Plan aus PHASE 1:
+        Final aligned plan from PHASE 1:
         ---
         {_delimit_block("PLAN", plan_text)}
         ---
 
-        Gemeinsame Implementierungs-Datei (bisheriger Verlauf inkl. Claude Findings):
+        Shared implementation file (history so far including Claude findings):
         ---
-        {_delimit_block("SHARED", shared_text or '(leer)')}
+        {_delimit_block("SHARED", shared_text or '(empty)')}
         ---
 
-        Offene Claude-Findings aus dem VORHERIGEN Zyklus:
+        Open Claude findings from the PREVIOUS cycle:
         ---
         {open_block}
         ---
 
-        Auftrag:
-        1) Implementiere/fixe im Repository gemaess Plan und bisherigen Findings.
-        2) Beruecksichtige explizit die offenen Claude-Beanstandungen.
-        3) Fasse umgesetzte Aenderungen knapp zusammen.
+        Assignment:
+        1) Implement/fix in the repository according to the plan and previous findings.
+        2) Explicitly address all open Claude objections.
+        3) Summarize implemented changes concisely.
 
-        Ausgabeformat (Markdown):
-        - Abschnitte: Summary, Geaenderte Dateien, Umgesetzte Fixes, Restpunkte
-        - Marker-Zeile: IMPLEMENTATION_READY: YES oder IMPLEMENTATION_READY: NO
-        - Letzte Zeile MUSS exakt sein: STATUS: DONE
+        Output format (Markdown):
+        - Sections: Summary, Changed Files, Implemented Fixes, Remaining Items
+        - Marker line: IMPLEMENTATION_READY: YES or IMPLEMENTATION_READY: NO
+        - The final line MUST be exactly: STATUS: DONE
         """
     ).strip()
 
@@ -192,61 +192,61 @@ def build_phase2_claude_review_prompt(
 ) -> str:
     return textwrap.dedent(
         f"""
-        Du bist Claude Code Reviewer. Wir sind in PHASE 2 Review, Zyklus {cycle}.
+        You are Claude Code Reviewer. We are in PHASE 2 review, cycle {cycle}.
 
-        Aufgabe:
+        Task:
         ---
         {_delimit_block("TASK", task_text)}
         ---
 
-        Abgestimmter Plan aus PHASE 1:
+        Aligned plan from PHASE 1:
         ---
         {_delimit_block("PLAN", plan_text)}
         ---
 
-        Gemeinsame Implementierungs-Datei:
+        Shared implementation file:
         ---
         {_delimit_block("SHARED", shared_text)}
         ---
 
-        Lokaler Test-Snapshot (konfigurierter Testbefehl):
+        Local test snapshot (configured test command):
         ---
         {_delimit_block("TEST_SNAPSHOT", test_snapshot)}
         ---
 
-        Repository-Snapshot:
+        Repository snapshot:
         ---
         {_delimit_block("SNAPSHOT", snapshot)}
         ---
 
-        Offene Findings aus dem VORHERIGEN Zyklus:
+        Open findings from the PREVIOUS cycle:
         ---
         {previous_open_block}
         ---
 
-        Aufgaben:
-        1) Pruefe Erfuellung der Aufgabe und Plan-Compliance.
-        2) Finde Bugs, Regressionen, Sicherheits-/Wartungsrisiken und Test-Luecken.
-        3) Falls nicht freigabefaehig, nenne konkrete Pflicht-Fixes fuer den naechsten Zyklus.
+        Tasks:
+        1) Verify task fulfillment and plan compliance.
+        2) Find bugs, regressions, security/maintenance risks, and test gaps.
+        3) If not approvable, provide concrete mandatory fixes for the next cycle.
 
-        CONTRACT (verpflichtend):
-        - Fuer JEDES vorher offene Finding eine Zeile:
-          FINDING_STATUS: <ID> | OPEN|CLOSED | <kurze Begruendung>
-        - Fuer jedes NEUE offene Finding:
-          NEW_FINDING: <ID> | <Kurzbeschreibung> | <Akzeptanztest>
-        - Zusammenfassung:
+        CONTRACT (mandatory):
+        - For EACH previously open finding, one line:
+          FINDING_STATUS: <ID> | OPEN|CLOSED | <short rationale>
+        - For each NEW open finding:
+          NEW_FINDING: <ID> | <short description> | <acceptance test>
+        - Summary:
           OPEN_FINDINGS: NONE
-          oder
+          or
           OPEN_FINDINGS: <ID1,ID2,...>
-        - Entscheidungsregel:
-          CLAUDE_APPROVAL: YES NUR wenn OPEN_FINDINGS: NONE
-          CLAUDE_APPROVAL: NO NUR wenn OPEN_FINDINGS nicht leer
-        - ID-Format zwingend: F-001, F-002, ...
+        - Decision rule:
+          CLAUDE_APPROVAL: YES only when OPEN_FINDINGS: NONE
+          CLAUDE_APPROVAL: NO only when OPEN_FINDINGS is not empty
+        - Mandatory ID format: F-001, F-002, ...
 
-        Ausgabeformat (Markdown):
-        - Abschnitte: Findings, Pflicht-Fixes, Freigabe
-        - CONTRACT-Zeilen wie oben
-        - Marker-Zeile: CLAUDE_APPROVAL: YES oder CLAUDE_APPROVAL: NO
-        - Letzte Zeile MUSS exakt sein: STATUS: DONE
+        Output format (Markdown):
+        - Sections: Findings, Mandatory Fixes, Approval
+        - CONTRACT lines as defined above
+        - Marker line: CLAUDE_APPROVAL: YES or CLAUDE_APPROVAL: NO
+        - The final line MUST be exactly: STATUS: DONE
         """
     ).strip()
