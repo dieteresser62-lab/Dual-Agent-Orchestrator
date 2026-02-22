@@ -14,6 +14,7 @@ The orchestrator reads a Markdown task description, creates/revises an implement
 - Test integration: run a configurable test command in Phase 2.
 - Claude to Gemini fallback: optional quota/rate-limit fallback support.
 - Fail-fast quota stop: freezes the run when an agent hits its API quota.
+- Git safety preflight: blocks execution on dirty repositories by default.
 
 ## Requirements
 
@@ -163,6 +164,8 @@ python3 src/orchestrator.py --help
 | `--file-snapshot-max-lines` | `500` | Max lines per changed file snapshot for Claude review. |
 | `--file-snapshot-max-files` | `10` | Max number of changed files included in snapshot. |
 
+The orchestrator truncates shared history (`--max-shared-chars`) and changed-file snapshots to prevent prompt/context blowups. Keep each `task.md` narrowly scoped (explicitly name allowed files) so agents do not drift into unrelated areas.
+
 ### Recovery & Fallback
 
 | Flag | Default | Description |
@@ -170,6 +173,9 @@ python3 src/orchestrator.py --help
 | `--no-recover` | off | Disable automatic rollback to last cycle checkpoint after crashes. |
 | `--allow-fallback-to-gemini` | off | If Claude hits quota/rate limits, retry that step with Gemini. |
 | `--strict-preflight` | off | Fail preflight if DNS resolution fails for provider hosts. |
+| `--skip-git-check` | off | Skip git cleanliness check in preflight (not recommended). |
+
+In watch mode, fallback state is task-local: if one inbox task falls back from Claude to Gemini due to quota/rate-limit errors, the next `.md` task starts with a fresh config and tries Claude first again.
 
 ### Log Level
 

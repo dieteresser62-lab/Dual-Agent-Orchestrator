@@ -68,6 +68,51 @@ def run_local_command(args: list[str], timeout: int = 20) -> tuple[int, str, str
         return 1, "", str(exc)
 
 
+def check_git_clean() -> tuple[bool, str]:
+    if shutil.which("git") is None:
+        return True, "Git not found in PATH; skipping git cleanliness check."
+
+    inside_rc, inside_out, inside_err = run_local_command(
+        ["git", "rev-parse", "--is-inside-work-tree"]
+    )
+    if inside_rc != 0 or inside_out.strip() != "true":
+        detail = (inside_err or inside_out).strip() or "not a git worktree"
+        return True, f"Git cleanliness check skipped ({detail})."
+
+    head_rc, _, _ = run_local_command(["git", "rev-parse", "--verify", "HEAD"])
+    status_rc, status_out, status_err = run_local_command(
+        ["git", "status", "--porcelain", "--untracked-files=normal"]
+    )
+    if status_rc != 0:
+        detail = status_err.strip() or "git status failed"
+        return False, f"Git cleanliness check failed: {detail}"
+
+    if head_rc == 0:
+        refresh_rc, _, refresh_err = run_local_command(["git", "update-index", "-q", "--refresh"])
+        if refresh_rc != 0:
+            detail = refresh_err.strip() or "git update-index failed"
+            return False, f"Git cleanliness check failed: {detail}"
+
+        diff_rc, _, diff_err = run_local_command(["git", "diff-index", "--quiet", "HEAD", "--"])
+        if diff_rc not in (0, 1):
+            detail = diff_err.strip() or "git diff-index failed"
+            return False, f"Git cleanliness check failed: {detail}"
+        if diff_rc == 1:
+            return (
+                False,
+                "Git working tree has tracked changes. Commit/stash/revert before running orchestrator.",
+            )
+
+    if status_out.strip():
+        return (
+            False,
+            "Git working tree is not clean (includes untracked and/or staged files). "
+            "Commit/stash/revert before running orchestrator.",
+        )
+
+    return True, "Git working tree is clean."
+
+
 def repo_snapshot(max_diff_chars: int) -> str:
     if shutil.which("git") is None:
         return "Git is not available in PATH."
@@ -470,9 +515,15 @@ def run_agent_checked(
     )
 
 
-def preflight(required_agents: list[str], strict: bool, agents: dict[str, AgentAdapter]) -> bool:
+def preflight(
+    required_agents: list[str],
+    strict: bool,
+    agents: dict[str, AgentAdapter],
+    *,
+    skip_git_check: bool = False,
+) -> bool:
     ok = True
-    logger.info("Preflight: checking CLI binaries and DNS resolution.")
+    logger.info("Preflight: checking CLI binaries, DNS resolution, and git cleanliness.")
 
     for agent_key in required_agents:
         agent_config = agents[agent_key]
@@ -492,6 +543,16 @@ def preflight(required_agents: list[str], strict: bool, agents: dict[str, AgentA
         for agent_key, host in missing_hosts:
             logger.warning("  - %s: %s", agent_key, host)
         if strict:
+            ok = False
+
+    if skip_git_check:
+        logger.info("Git cleanliness check skipped via --skip-git-check.")
+    else:
+        git_ok, git_message = check_git_clean()
+        if git_ok:
+            logger.info("%s", git_message)
+        else:
+            logger.error("%s", git_message)
             ok = False
 
     if ok:

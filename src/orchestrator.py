@@ -166,8 +166,13 @@ class RunContext:
             validate_done_marker=validate_done_marker,
         )
 
-    def preflight(self, required_agents: list[str], strict: bool) -> bool:
-        return runtime_preflight(required_agents, strict, AGENT_REGISTRY)
+    def preflight(self, required_agents: list[str], strict: bool, *, skip_git_check: bool = False) -> bool:
+        return runtime_preflight(
+            required_agents,
+            strict,
+            AGENT_REGISTRY,
+            skip_git_check=skip_git_check,
+        )
 
     def checkpoint_cycle_state(self, phase: str, cycle: int, state: dict) -> None:
         path = state_write_cycle_checkpoint(self.checkpoint_dir, phase, cycle, state)
@@ -779,6 +784,11 @@ def parse_args() -> argparse.Namespace:
         help="Fail preflight if DNS resolution fails for provider hosts.",
     )
     parser.add_argument(
+        "--skip-git-check",
+        action="store_true",
+        help="Skip git cleanliness check in preflight (not recommended).",
+    )
+    parser.add_argument(
         "--auto",
         action="store_true",
         default=True,
@@ -955,7 +965,11 @@ def run_pipeline(task_file: Path, args: argparse.Namespace, force_new: bool = Fa
     required_agents = ["claude", "codex"]
     if ctx.config.allow_fallback_to_gemini:
         required_agents.append("gemini")
-    if not ctx.preflight(required_agents, strict=args.strict_preflight):
+    if not ctx.preflight(
+        required_agents,
+        strict=args.strict_preflight,
+        skip_git_check=bool(args.skip_git_check),
+    ):
         return 1
 
     current_phase = state.get("phase", "phase1")

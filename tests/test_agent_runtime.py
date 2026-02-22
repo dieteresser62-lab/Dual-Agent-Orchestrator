@@ -9,8 +9,10 @@ from agent_adapters import AGENT_REGISTRY, CodexAdapter, GeminiAdapter
 from agent_runtime import (
     OrchestratorConfig,
     QuotaReachedError,
+    check_git_clean,
     collect_file_snapshots,
     compute_retry_backoff_seconds,
+    preflight,
     run_agent,
     run_agent_checked,
     run_tests_snapshot,
@@ -243,6 +245,122 @@ def test_run_agent_checked_dual_quota_claude_and_gemini_fail_fast(
     assert exc_info.value.agent_key == "gemini"
     assert calls == ["claude", "gemini"]
     assert sleeps == []
+
+
+def test_check_git_clean_skips_when_git_missing(monkeypatch) -> None:
+    monkeypatch.setattr(agent_runtime.shutil, "which", lambda _name: None)
+
+    ok, message = check_git_clean()
+
+    assert ok is True
+    assert "skipping git cleanliness check" in message.lower()
+
+
+def test_check_git_clean_skips_when_not_in_git_repo(monkeypatch) -> None:
+    monkeypatch.setattr(agent_runtime.shutil, "which", lambda _name: "/usr/bin/git")
+
+    def fake_run_local_command(args, timeout=20):  # type: ignore[no-untyped-def]
+        _ = timeout
+        if args == ["git", "rev-parse", "--is-inside-work-tree"]:
+            return 128, "", "fatal: not a git repository"
+        raise AssertionError(f"Unexpected command: {args}")
+
+    monkeypatch.setattr(agent_runtime, "run_local_command", fake_run_local_command)
+
+    ok, message = check_git_clean()
+
+    assert ok is True
+    assert "skipped" in message.lower()
+
+
+def test_check_git_clean_fails_on_tracked_changes(monkeypatch) -> None:
+    monkeypatch.setattr(agent_runtime.shutil, "which", lambda _name: "/usr/bin/git")
+
+    def fake_run_local_command(args, timeout=20):  # type: ignore[no-untyped-def]
+        _ = timeout
+        table = {
+            ("git", "rev-parse", "--is-inside-work-tree"): (0, "true\n", ""),
+            ("git", "rev-parse", "--verify", "HEAD"): (0, "abc123\n", ""),
+            ("git", "status", "--porcelain", "--untracked-files=normal"): (0, "", ""),
+            ("git", "update-index", "-q", "--refresh"): (0, "", ""),
+            ("git", "diff-index", "--quiet", "HEAD", "--"): (1, "", ""),
+        }
+        try:
+            return table[tuple(args)]
+        except KeyError as exc:  # pragma: no cover - defensive
+            raise AssertionError(f"Unexpected command: {args}") from exc
+
+    monkeypatch.setattr(agent_runtime, "run_local_command", fake_run_local_command)
+
+    ok, message = check_git_clean()
+
+    assert ok is False
+    assert "tracked changes" in message.lower()
+
+
+def test_check_git_clean_fails_on_untracked_files(monkeypatch) -> None:
+    monkeypatch.setattr(agent_runtime.shutil, "which", lambda _name: "/usr/bin/git")
+
+    def fake_run_local_command(args, timeout=20):  # type: ignore[no-untyped-def]
+        _ = timeout
+        table = {
+            ("git", "rev-parse", "--is-inside-work-tree"): (0, "true\n", ""),
+            ("git", "rev-parse", "--verify", "HEAD"): (0, "abc123\n", ""),
+            ("git", "status", "--porcelain", "--untracked-files=normal"): (0, "?? task.md\n", ""),
+            ("git", "update-index", "-q", "--refresh"): (0, "", ""),
+            ("git", "diff-index", "--quiet", "HEAD", "--"): (0, "", ""),
+        }
+        try:
+            return table[tuple(args)]
+        except KeyError as exc:  # pragma: no cover - defensive
+            raise AssertionError(f"Unexpected command: {args}") from exc
+
+    monkeypatch.setattr(agent_runtime, "run_local_command", fake_run_local_command)
+
+    ok, message = check_git_clean()
+
+    assert ok is False
+    assert "not clean" in message.lower()
+
+
+def test_preflight_skip_git_check_bypasses_dirty_repo(monkeypatch) -> None:
+    calls = {"count": 0}
+    monkeypatch.setattr(agent_runtime.shutil, "which", lambda _name: "/usr/bin/tool")
+    monkeypatch.setattr(agent_runtime, "can_resolve_host", lambda _host: True)
+
+    def fake_check_git_clean() -> tuple[bool, str]:
+        calls["count"] += 1
+        return False, "dirty"
+
+    monkeypatch.setattr(agent_runtime, "check_git_clean", fake_check_git_clean)
+
+    ok = preflight(
+        required_agents=["codex"],
+        strict=False,
+        agents={"codex": AGENT_REGISTRY["codex"]},
+        skip_git_check=True,
+    )
+
+    assert ok is True
+    assert calls["count"] == 0
+
+
+def test_preflight_fails_when_git_not_clean(monkeypatch) -> None:
+    monkeypatch.setattr(agent_runtime.shutil, "which", lambda _name: "/usr/bin/tool")
+    monkeypatch.setattr(agent_runtime, "can_resolve_host", lambda _host: True)
+    monkeypatch.setattr(
+        agent_runtime,
+        "check_git_clean",
+        lambda: (False, "dirty"),
+    )
+
+    ok = preflight(
+        required_agents=["codex"],
+        strict=False,
+        agents={"codex": AGENT_REGISTRY["codex"]},
+    )
+
+    assert ok is False
 
 
 def test_collect_file_snapshots_truncates_limits_and_handles_missing(tmp_path: Path) -> None:
