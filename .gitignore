@@ -3,6 +3,8 @@ __pycache__/
 .codex/
 *.log
 task.md
+inbox/
+outbox/
 *.pyc
 .env
 .venv/

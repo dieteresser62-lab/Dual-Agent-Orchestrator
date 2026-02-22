@@ -14,6 +14,7 @@ TASK_FILE="task.md"
 STATE_FILE=".orchestrator/state.json"
 STATE_PHASE=""
 EXTRA_ARGS=()
+WATCH_MODE="no"
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   exec python3 "$SCRIPT_DIR/src/orchestrator.py" --help
@@ -27,6 +28,13 @@ fi
 if [[ $# -gt 0 ]]; then
   EXTRA_ARGS=("$@")
 fi
+
+for arg in "${EXTRA_ARGS[@]}"; do
+  if [[ "$arg" == "--watch" ]]; then
+    WATCH_MODE="yes"
+    break
+  fi
+done
 
 DETECTED_TEST_CMD=""
 if [[ ${RUN_TASK_TEST_CMD+x} == x ]]; then
@@ -46,6 +54,17 @@ sys.exit(0 if isinstance(scripts, dict) and "test" in scripts else 1)
   DETECTED_TEST_CMD="npm test"
 elif [[ -f Makefile ]] && grep -Eq '^[[:space:]]*test:' Makefile; then
   DETECTED_TEST_CMD="make test"
+fi
+
+if [[ "$WATCH_MODE" == "yes" ]]; then
+  exec python3 "$SCRIPT_DIR/src/orchestrator.py" \
+    --allow-fallback-to-gemini \
+    --test-command "$DETECTED_TEST_CMD" \
+    --agent-live-stream \
+    --agent-live-stream-mode compact \
+    --agent-live-stream-channels stdout \
+    --agent-output none \
+    "${EXTRA_ARGS[@]}"
 fi
 
 if [[ -f "$STATE_FILE" ]]; then

@@ -20,6 +20,7 @@ from agent_runtime import (
     run_agent_checked as runtime_run_agent_checked,
     run_tests_snapshot as runtime_run_tests_snapshot,
 )
+from inbox_watcher import watch_inbox
 from prompts import (
     build_phase1_claude_confirm_prompt,
     build_phase1_claude_plan_prompt,
@@ -855,6 +856,27 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="If Claude hits quota/rate limits, retry that step with Gemini.",
     )
+    parser.add_argument(
+        "--watch",
+        action="store_true",
+        help="Watch inbox directory for .md tasks and process continuously.",
+    )
+    parser.add_argument(
+        "--inbox-dir",
+        default="inbox",
+        help="Directory to watch for task .md files in watch mode (default: inbox).",
+    )
+    parser.add_argument(
+        "--outbox-dir",
+        default="outbox",
+        help="Directory where processed task files are moved in watch mode (default: outbox).",
+    )
+    parser.add_argument(
+        "--poll-interval",
+        type=float,
+        default=5.0,
+        help="Polling interval in seconds for watch mode (default: 5.0).",
+    )
     level_group = parser.add_mutually_exclusive_group()
     level_group.add_argument(
         "--verbose",
@@ -869,15 +891,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> int:
-    args = parse_args()
-    log_level = logging.INFO
-    if args.verbose:
-        log_level = logging.DEBUG
-    elif args.quiet:
-        log_level = logging.WARNING
-    logging.basicConfig(level=log_level, format="[%(levelname)s] %(message)s")
-
+def run_pipeline(task_file: Path, args: argparse.Namespace, force_new: bool = False) -> int:
     config = OrchestratorConfig(
         dry_run=bool(args.dry_run),
         agent_output_mode=args.agent_output,
@@ -888,11 +902,10 @@ def main() -> int:
         allow_fallback_to_gemini=bool(args.allow_fallback_to_gemini),
     )
     ctx = RunContext(config=config, test_command=str(args.test_command or ""))
-    task_file = find_task_file(args.task_file)
 
     ctx.init_dirs()
 
-    if args.resume and ctx.state_file.exists():
+    if args.resume and ctx.state_file.exists() and not force_new:
         state = ctx.ensure_state_shape(ctx.load_state(), task_file, args)
         if not args.no_recover:
             state = ctx.recover_state_from_checkpoint(state)
@@ -901,7 +914,12 @@ def main() -> int:
         ctx.configure_artifacts(state["artifacts"])
         write_file(ctx.latest_run_file, str(state["artifacts"]["run_dir"]))
     else:
-        if ctx.state_file.exists() and not args.resume and not args.force_overwrite_state:
+        if (
+            ctx.state_file.exists()
+            and not args.resume
+            and not args.force_overwrite_state
+            and not force_new
+        ):
             logger.warning("Existing state at %s will be overwritten.", ctx.state_file)
             try:
                 confirm = input("Continue and overwrite? [y/N] ").strip().lower()
@@ -973,6 +991,30 @@ def main() -> int:
     logger.info("State: %s", ctx.state_file)
     print_summary_report(state)
     return 0
+
+
+def main() -> int:
+    args = parse_args()
+    log_level = logging.INFO
+    if args.verbose:
+        log_level = logging.DEBUG
+    elif args.quiet:
+        log_level = logging.WARNING
+    logging.basicConfig(level=log_level, format="[%(levelname)s] %(message)s")
+
+    if args.watch:
+        if args.task_file:
+            logger.warning("--task-file is ignored in --watch mode.")
+        return watch_inbox(
+            inbox_dir=Path(args.inbox_dir),
+            outbox_dir=Path(args.outbox_dir),
+            poll_interval=max(0.1, float(args.poll_interval)),
+            args=args,
+            process_task=run_pipeline,
+        )
+
+    task_file = find_task_file(args.task_file)
+    return run_pipeline(task_file, args)
 
 
 if __name__ == "__main__":

@@ -47,6 +47,34 @@ If `.orchestrator/state.json` exists and is not `done`, execution resumes automa
 
 `task.md` is gitignored by default, so each user creates it locally per task.
 
+## Watch Mode (Inbox/Outbox)
+
+You can run the orchestrator as a queue worker that watches an inbox directory for new Markdown tasks:
+
+```bash
+./run_task --watch
+```
+
+Default behavior in watch mode:
+
+- Monitor `inbox/` for `*.md` files.
+- Process files in FIFO order (oldest modified first).
+- Skip very new files until they are stable (minimum age: 1 second).
+- Move every processed task file to `outbox/` with a timestamp prefix, even if the run fails.
+- Keep waiting for the next task until you stop with `Ctrl+C`.
+
+Custom directories and poll interval:
+
+```bash
+./run_task --watch --inbox-dir /path/to/inbox --outbox-dir /path/to/outbox --poll-interval 2
+```
+
+Single-file mode is unchanged and still works:
+
+```bash
+./run_task my-task.md
+```
+
 ## Artifact Layout
 
 Run artifacts are written to `.orchestrator/runs/<run_id>/`:
@@ -98,6 +126,10 @@ python3 src/orchestrator.py --help
 | `--from-phase <phase1\|phase2>` | auto | Force the starting phase (overrides state). |
 | `--dry-run` | off | Simulate agent responses and tests to validate wiring. |
 | `--manual-gate` | off | Require manual confirmation before starting Phase 2. |
+| `--watch` | off | Watch inbox directory for `.md` tasks and process continuously. |
+| `--inbox-dir <path>` | `inbox` | Inbox directory used by watch mode. |
+| `--outbox-dir <path>` | `outbox` | Outbox directory used by watch mode. |
+| `--poll-interval <seconds>` | `5.0` | Poll interval for watch mode. |
 
 ### Cycle Limits
 
