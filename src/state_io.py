@@ -20,6 +20,7 @@ def read_file(path: Path) -> str:
 
 def atomic_write_file(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    # Write to a temp file in the same directory, then atomically replace the target.
     with tempfile.NamedTemporaryFile(
         mode="w",
         encoding="utf-8",
@@ -44,6 +45,7 @@ def append_markdown(path: Path, heading: str, body: str) -> None:
     if path.exists():
         existing = path.read_text(encoding="utf-8")
     if existing.strip():
+        # Keep an explicit separator so each cycle appends as an independent section.
         next_content = existing.rstrip() + "\n\n---\n\n" + section
     else:
         next_content = section
@@ -76,6 +78,7 @@ def _is_within_allowed_roots(path: Path, allowed_roots: tuple[Path, ...]) -> boo
 def _validate_loaded_path(raw: str, allowed_roots: tuple[Path, ...]) -> str:
     resolved = Path(raw).resolve()
     if not _is_within_allowed_roots(resolved, allowed_roots):
+        # Reject paths outside orchestrator/workspace roots to prevent state-file path injection.
         raise ValueError(f"path '{raw}' resolves outside allowed roots")
     return str(resolved)
 
@@ -164,6 +167,7 @@ def ensure_state_shape(
         phase_state["finding_history"] = sanitized_history
 
     if state.get("version") == 2 and "phase1" in state and "phase2" in state:
+        # Loaded paths are validated against known roots before reuse.
         allowed_roots = (artifact_runs_dir.parent.resolve(), Path.cwd().resolve())
         raw_task_file = str(state.get("task_file", str(task_file)))
         try:
@@ -178,6 +182,7 @@ def ensure_state_shape(
         state.setdefault("updated_at", now_iso())
         artifacts = state.setdefault("artifacts", {})
         if not artifacts.get("run_id"):
+            # Backfill missing artifact metadata for older state files.
             migrated = build_artifact_paths(new_run_id(), artifact_runs_dir)
             artifacts.setdefault("run_id", str(migrated["run_id"]))
             artifacts.setdefault("run_dir", str(migrated["run_dir"]))
@@ -199,6 +204,7 @@ def ensure_state_shape(
                     "Invalid artifact paths in state (reason: %s); regenerating artifact paths.",
                     exc,
                 )
+                # Regenerate a safe artifact bundle when persisted paths are incomplete/invalid.
                 migrated = build_artifact_paths(new_run_id(), artifact_runs_dir)
                 artifacts["run_id"] = str(migrated["run_id"])
                 artifacts["run_dir"] = str(migrated["run_dir"])

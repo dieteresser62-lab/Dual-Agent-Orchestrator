@@ -183,6 +183,7 @@ class RunContext:
         if phase not in ("phase1", "phase2"):
             return state
         phase_state = state.get(phase, {})
+        # Recover only when a phase was interrupted mid-run.
         if phase_state.get("status") not in ("running", "frozen"):
             return state
 
@@ -227,6 +228,7 @@ def truncate_shared(text: str, limit: int) -> str:
 
 
 def parse_changed_files_from_impl_report(impl_report: str) -> list[str]:
+    # Consume only the "Changed Files" block to avoid false positives from prose text.
     lines = (impl_report or "").splitlines()
     changed: list[str] = []
     in_section = False
@@ -323,6 +325,7 @@ def find_task_file(explicit_path: str | None) -> Path:
 
 
 def validate_done_marker(text: str) -> bool:
+    # Check marker outside delimited snapshots (those blocks can contain arbitrary text).
     lines = [line.strip() for line in strip_delimited_sections(text).splitlines() if line.strip()]
     if not lines:
         return False
@@ -395,6 +398,7 @@ def validate_agent_contract(
     previous_open_findings: list[str],
     approval_key: str,
 ) -> tuple[str | None, list[str] | None]:
+    # This contract keeps review outcomes deterministic and machine-checkable.
     approval = parse_flag(output, approval_key)
     if approval not in ("YES", "NO"):
         return f"missing or invalid {approval_key} marker", None
@@ -477,6 +481,7 @@ def freeze_current_phase(state: dict, error: QuotaReachedError, ctx: RunContext)
     phase_state = state.get(phase_key, {})
     cycle = int(phase_state.get("cycle", 0))
     if cycle > 0:
+        # Retry the same logical cycle after resume because it never finished cleanly.
         phase_state["cycle"] = cycle - 1
     phase_state["status"] = "frozen"
     phase_state["error"] = str(error)
@@ -500,6 +505,7 @@ def run_phase1(task_text: str, state: dict, args: argparse.Namespace, ctx: RunCo
     max_cycles = int(phase1.get("max_cycles", args.phase1_max_cycles))
 
     for cycle in range(start_cycle, max_cycles + 1):
+        # Save a rollback point before each cycle mutates state and artifacts.
         ctx.checkpoint_cycle_state("phase1", cycle, state)
         phase1["cycle"] = cycle
         phase1["error"] = None
@@ -550,6 +556,7 @@ def run_phase1(task_text: str, state: dict, args: argparse.Namespace, ctx: RunCo
         status_map = parse_finding_status_map(codex_review)
         new_finding_map = parse_new_findings(codex_review)
         finding_history = dict(phase1.get("finding_history", {}))
+        # Keep cumulative finding history so later cycles can close prior findings explicitly.
         for finding_id, value in status_map.items():
             finding_history[finding_id] = value
         for finding_id, value in new_finding_map.items():
@@ -575,6 +582,7 @@ def run_phase1(task_text: str, state: dict, args: argparse.Namespace, ctx: RunCo
 
         claude_approval = parse_flag(claude_confirm, "CLAUDE_APPROVAL") or "NO"
         if codex_approval == "NO" and claude_approval == "YES":
+            # Prevent contradictory approvals within the same cycle.
             logger.warning("Claude approval overridden to NO because Codex has open findings.")
             claude_approval = "NO"
 
@@ -617,6 +625,7 @@ def run_phase2(task_text: str, plan_text: str, state: dict, args: argparse.Names
     max_cycles = int(phase2.get("max_cycles", args.phase2_max_cycles))
 
     for cycle in range(start_cycle, max_cycles + 1):
+        # Save a rollback point before implementation and local test execution.
         ctx.checkpoint_cycle_state("phase2", cycle, state)
         phase2["cycle"] = cycle
         phase2["error"] = None
@@ -630,6 +639,7 @@ def run_phase2(task_text: str, plan_text: str, state: dict, args: argparse.Names
         last_test_snapshot = str(phase2.get("last_test_snapshot", "") or "")
         test_failure_context = ""
         if isinstance(last_test_exit, int) and last_test_exit != 0 and last_test_snapshot.strip():
+            # Push failing-test context into the prompt to prioritize red tests first.
             test_failure_context = build_test_failure_block(last_test_snapshot, ctx.test_command)
         impl_report = ctx.run_agent_checked(
             agent_key="codex",
@@ -661,6 +671,7 @@ def run_phase2(task_text: str, plan_text: str, state: dict, args: argparse.Names
         shared = truncate_shared(read_file(ctx.phase2_shared_file), args.max_shared_chars)
         changed_files = parse_changed_files_from_impl_report(impl_report)
         if not changed_files:
+            # Fallback for implementations that forgot the "Changed Files" report section.
             try:
                 result = subprocess.run(
                     ["git", "diff", "--name-only"],
@@ -706,6 +717,7 @@ def run_phase2(task_text: str, plan_text: str, state: dict, args: argparse.Names
         status_map = parse_finding_status_map(claude_review)
         new_finding_map = parse_new_findings(claude_review)
         finding_history = dict(phase2.get("finding_history", {}))
+        # Preserve per-cycle review decisions for traceability across retries.
         for finding_id, value in status_map.items():
             finding_history[finding_id] = value
         for finding_id, value in new_finding_map.items():
@@ -924,6 +936,7 @@ def run_pipeline(task_file: Path, args: argparse.Namespace, force_new: bool = Fa
     if args.resume and ctx.state_file.exists() and not force_new:
         state = ctx.ensure_state_shape(ctx.load_state(), task_file, args)
         if not args.no_recover:
+            # Restore last checkpoint to avoid continuing from a partially updated state.
             state = ctx.recover_state_from_checkpoint(state)
             ctx.save_state(state)
         logger.info("Loaded state from %s", ctx.state_file)

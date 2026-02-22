@@ -4,6 +4,7 @@ import textwrap
 
 
 def _delimit_block(label: str, content: str) -> str:
+    # Delimited blocks let downstream parsers strip injected context reliably.
     return f"<<<{label}_BEGIN>>>\n{content}\n<<<{label}_END>>>"
 
 
@@ -264,6 +265,7 @@ def build_phase2_claude_review_prompt(
 def build_test_failure_block(test_snapshot: str, test_command: str, max_chars: int = 3000) -> str:
     snapshot = (test_snapshot or "").strip()
     if len(snapshot) > max_chars:
+        # Keep prompts bounded so repeated failures do not bloat context windows.
         snapshot = snapshot[:max_chars] + "\n...[truncated]"
     command = (test_command or "").strip() or "(unset)"
     return textwrap.dedent(

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Resolve the script location robustly, even when realpath is unavailable.
 if command -v realpath >/dev/null 2>&1; then
   SCRIPT_PATH="$(realpath "$0")"
 else
@@ -15,11 +16,14 @@ STATE_FILE=".orchestrator/state.json"
 STATE_PHASE=""
 EXTRA_ARGS=()
 WATCH_MODE="no"
+SKIP_GIT_CHECK_ENV="${RUN_TASK_SKIP_GIT_CHECK:-}"
 
+# Forward help output directly to the Python CLI to keep behavior centralized.
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   exec python3 "$SCRIPT_DIR/src/orchestrator.py" --help
 fi
 
+# First positional argument is treated as task file for convenience.
 if [[ $# -gt 0 && "${1:-}" != -* ]]; then
   TASK_FILE="$1"
   shift
@@ -29,8 +33,26 @@ if [[ $# -gt 0 ]]; then
   EXTRA_ARGS=("$@")
 fi
 
+if [[ -n "$SKIP_GIT_CHECK_ENV" ]]; then
+  case "${SKIP_GIT_CHECK_ENV,,}" in
+    1|true|yes|on)
+      HAS_SKIP_GIT_CHECK="no"
+      for arg in "${EXTRA_ARGS[@]}"; do
+        if [[ "$arg" == "--skip-git-check" ]]; then
+          HAS_SKIP_GIT_CHECK="yes"
+          break
+        fi
+      done
+      if [[ "$HAS_SKIP_GIT_CHECK" == "no" ]]; then
+        EXTRA_ARGS+=("--skip-git-check")
+      fi
+      ;;
+  esac
+fi
+
 for arg in "${EXTRA_ARGS[@]}"; do
   if [[ "$arg" == "--watch" ]]; then
+    # Watch mode has its own state lifecycle and should never auto-resume old runs.
     WATCH_MODE="yes"
     break
   fi
@@ -40,6 +62,7 @@ DETECTED_TEST_CMD=""
 if [[ ${RUN_TASK_TEST_CMD+x} == x ]]; then
   # Explicit override (including empty string to force skip).
   DETECTED_TEST_CMD="${RUN_TASK_TEST_CMD}"
+# Auto-detect a sensible test command in common project layouts.
 elif [[ -f pyproject.toml ]] && grep -q '\[tool\.pytest\]' pyproject.toml; then
   DETECTED_TEST_CMD="python3 -m pytest tests/ -v"
 elif [[ -f package.json ]] && python3 -c 'import json,sys
@@ -57,6 +80,7 @@ elif [[ -f Makefile ]] && grep -Eq '^[[:space:]]*test:' Makefile; then
 fi
 
 if [[ "$WATCH_MODE" == "yes" ]]; then
+  # In watch mode, always start a fresh task-processing loop.
   exec python3 "$SCRIPT_DIR/src/orchestrator.py" \
     --allow-fallback-to-gemini \
     --test-command "$DETECTED_TEST_CMD" \
@@ -68,6 +92,7 @@ if [[ "$WATCH_MODE" == "yes" ]]; then
 fi
 
 if [[ -f "$STATE_FILE" ]]; then
+  # Read only the minimal phase field to decide resume-vs-new behavior.
   STATE_PHASE="$(python3 -c 'import json,sys
 try:
     with open(sys.argv[1], encoding="utf-8") as f:
@@ -79,6 +104,7 @@ except Exception:
 fi
 
 if [[ -f "$STATE_FILE" && "$STATE_PHASE" != "done" ]]; then
+  # Resume in-progress work to preserve cycle history and checkpoints.
   echo "[INFO] Existing state found at $STATE_FILE -> resuming current run."
   FROZEN_STATUS="$(python3 -c 'import json,sys
 try:
@@ -91,6 +117,7 @@ except Exception:
     print("no")
 ' "$STATE_FILE")"
   if [[ "$FROZEN_STATUS" == "yes" ]]; then
+    # Frozen runs indicate prior quota/rate-limit interruptions.
     echo "[WARN] Previous run was frozen due to API quota. Make sure your quota has been reset before continuing."
   fi
   exec python3 "$SCRIPT_DIR/src/orchestrator.py" \
@@ -105,6 +132,7 @@ except Exception:
     "${EXTRA_ARGS[@]}"
 else
   if [[ -f "$STATE_FILE" && "$STATE_PHASE" == "done" ]]; then
+    # A completed run should not be resumed; start a clean state instead.
     echo "[INFO] Existing state is completed (phase=done) -> starting new run."
   fi
   exec python3 "$SCRIPT_DIR/src/orchestrator.py" \

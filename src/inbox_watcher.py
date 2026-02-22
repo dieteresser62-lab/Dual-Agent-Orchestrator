@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 def list_inbox_tasks(inbox_dir: Path) -> list[Path]:
     tasks = [path for path in inbox_dir.glob("*.md") if path.is_file()]
+    # Oldest-first ordering keeps processing deterministic across watcher restarts.
     return sorted(tasks, key=lambda path: (path.stat().st_mtime, path.name))
 
 
@@ -41,6 +42,7 @@ def build_outbox_destination(outbox_subdir: Path, source_name: str) -> Path:
     suffix = Path(source_name).suffix
     counter = 1
     while True:
+        # Add numeric suffix when multiple tasks share the same millisecond timestamp.
         candidate = outbox_subdir / f"{stamp}_{stem}_{counter}{suffix}"
         if not candidate.exists():
             return candidate
@@ -85,6 +87,7 @@ def acquire_inbox_lock(inbox_dir: Path) -> TextIO | None:
     lock_path = inbox_dir / ".lock"
     handle = lock_path.open("a+", encoding="utf-8")
     if fcntl is None:
+        # Non-Unix fallback keeps functionality but cannot enforce single-process safety.
         logger.warning("fcntl not available; running without single-instance inbox lock.")
         return handle
 
@@ -164,6 +167,7 @@ def watch_inbox(
                 attempts = read_attempt_count(task_file) + 1
                 write_attempt_count(task_file, attempts)
                 if attempts >= max_retries:
+                    # Poison-pill naming makes permanently failing tasks visible to operators.
                     poison_name = f"{task_file.name}.poison"
                     try:
                         destination = move_to_outbox(task_file, outbox_failed_dir, source_name=poison_name)
@@ -196,6 +200,7 @@ def watch_inbox(
                 attempts = read_attempt_count(task_file) + 1
                 write_attempt_count(task_file, attempts)
                 if attempts >= max_retries:
+                    # Treat move failures like processing failures to avoid infinite busy loops.
                     poison_name = f"{task_file.name}.poison"
                     try:
                         destination = move_to_outbox(task_file, outbox_failed_dir, source_name=poison_name)

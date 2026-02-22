@@ -47,6 +47,7 @@ class CodexAdapter:
 
     def build_command(self, prompt: str) -> tuple[list[str], bool]:
         self.cleanup()
+        # Persist the final assistant message to a temp file because stream logs can be noisy.
         with tempfile.NamedTemporaryFile(
             mode="w",
             encoding="utf-8",
@@ -77,6 +78,7 @@ class CodexAdapter:
 
         if channel == "stderr":
             if txt == "user":
+                # Codex echoes the prompt; suppress it to keep live logs signal-focused.
                 state["skip_prompt_echo"] = True
                 return False
             if bool(state.get("skip_prompt_echo", False)):
@@ -86,6 +88,7 @@ class CodexAdapter:
                     return False
 
             noisy_prefixes = (
+                # Suppress boilerplate CLI metadata and diff streams in compact mode.
                 "Reading prompt from stdin...",
                 "OpenAI Codex ",
                 "workdir:",

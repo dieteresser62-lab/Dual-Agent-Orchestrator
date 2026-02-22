@@ -202,6 +202,14 @@ RUN_TASK_TEST_CMD="py -m pytest" ./run_task        # custom command
 RUN_TASK_TEST_CMD="" ./run_task                     # explicitly skip tests
 ```
 
+If you intentionally run with a dirty Git working tree (for example during local iteration), set:
+
+```bash
+RUN_TASK_SKIP_GIT_CHECK=1 ./run_task --watch
+```
+
+This appends `--skip-git-check` automatically unless you already passed it explicitly.
+
 ## Exit Codes
 
 | Code | Meaning |

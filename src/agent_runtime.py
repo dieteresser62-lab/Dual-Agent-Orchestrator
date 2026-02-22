@@ -87,6 +87,25 @@ def check_git_clean() -> tuple[bool, str]:
         detail = status_err.strip() or "git status failed"
         return False, f"Git cleanliness check failed: {detail}"
 
+    def format_status_excerpt(limit: int = 10) -> str:
+        lines = [line for line in status_out.splitlines() if line.strip()]
+        if not lines:
+            return "(empty)"
+        excerpt = lines[:limit]
+        if len(lines) > limit:
+            excerpt.append("...")
+        return "; ".join(excerpt)
+
+    # Keep only tracked changes here; untracked files are handled below with full status output.
+    tracked_paths: list[str] = []
+    for line in status_out.splitlines():
+        row = line.rstrip()
+        if len(row) < 4:
+            continue
+        if row.startswith("?? "):
+            continue
+        tracked_paths.append(row[3:])
+
     if head_rc == 0:
         refresh_rc, _, refresh_err = run_local_command(["git", "update-index", "-q", "--refresh"])
         if refresh_rc != 0:
@@ -98,16 +117,28 @@ def check_git_clean() -> tuple[bool, str]:
             detail = diff_err.strip() or "git diff-index failed"
             return False, f"Git cleanliness check failed: {detail}"
         if diff_rc == 1:
+            # Provide a short actionable summary instead of dumping full status output.
+            summary = ""
+            if tracked_paths:
+                listed = ", ".join(tracked_paths[:5])
+                if len(tracked_paths) > 5:
+                    listed = f"{listed}, ..."
+                summary = f" Changed files: {listed}."
+            summary = f"{summary} git status --porcelain: {format_status_excerpt()}."
             return (
                 False,
-                "Git working tree has tracked changes. Commit/stash/revert before running orchestrator.",
+                "Git working tree has tracked changes. Commit/stash/revert before running orchestrator, "
+                "or run with --skip-git-check if this is intentional."
+                f"{summary}",
             )
 
     if status_out.strip():
         return (
             False,
             "Git working tree is not clean (includes untracked and/or staged files). "
-            "Commit/stash/revert before running orchestrator.",
+            "Commit/stash/revert before running orchestrator, or run with --skip-git-check "
+            "if this is intentional. "
+            f"git status --porcelain: {format_status_excerpt()}.",
         )
 
     return True, "Git working tree is clean."
@@ -152,6 +183,7 @@ def run_tests_snapshot(
     if config.dry_run:
         return 0, f"Exit code: 0\n[dry-run] '{command_text}' simulated."
     try:
+        # `shell=True` is intentional because test commands can be user-provided pipelines.
         result = subprocess.run(
             command_text,
             capture_output=True,
@@ -232,6 +264,7 @@ def run_agent(
     try:
         try:
             if config.agent_live_stream:
+                # Stream mode captures stdout/stderr incrementally while still preserving full output.
                 process = subprocess.Popen(
                     command_parts,
                     stdin=subprocess.PIPE,
@@ -375,6 +408,7 @@ def is_quota_or_rate_limit_error(text: str) -> bool:
 def compute_retry_backoff_seconds(error_text: str, attempt: int) -> int:
     exponential = min(30, 2 * (2 ** max(0, attempt - 1)))
     if is_quota_or_rate_limit_error(error_text):
+        # Quota/rate issues usually need more time to recover than transient CLI errors.
         return max(10, exponential)
     return exponential
 
@@ -404,6 +438,7 @@ def run_agent_checked(
         and config.allow_fallback_to_gemini
         and config.claude_quota_reached
     ):
+        # Once Claude is confirmed quota-blocked, switch directly to Gemini for this run.
         effective_agent_key = "gemini"
         logger.info("Claude quota previously exceeded - using Gemini directly.")
 
@@ -423,6 +458,7 @@ def run_agent_checked(
         has_next_attempt = attempt < (max_retries + 1)
         prompt_to_send = prompt
         if attempt > 1:
+            # Tell the agent exactly why the previous response was rejected.
             prompt_to_send = (
                 f"{prompt}\n\n"
                 "Your last response was formally unacceptable. "
@@ -456,6 +492,7 @@ def run_agent_checked(
                 and effective_agent_key == "claude"
                 and is_quota_or_rate_limit_error(error_text)
             ):
+                # Fallback is only used for quota/rate failures, not generic Claude errors.
                 logger.warning("Claude quota/rate limit detected. Attempting Gemini fallback.")
                 try:
                     fallback_output = run_agent(

@@ -281,7 +281,7 @@ def test_check_git_clean_fails_on_tracked_changes(monkeypatch) -> None:
         table = {
             ("git", "rev-parse", "--is-inside-work-tree"): (0, "true\n", ""),
             ("git", "rev-parse", "--verify", "HEAD"): (0, "abc123\n", ""),
-            ("git", "status", "--porcelain", "--untracked-files=normal"): (0, "", ""),
+            ("git", "status", "--porcelain", "--untracked-files=normal"): (0, " M run_task\n", ""),
             ("git", "update-index", "-q", "--refresh"): (0, "", ""),
             ("git", "diff-index", "--quiet", "HEAD", "--"): (1, "", ""),
         }
@@ -296,6 +296,8 @@ def test_check_git_clean_fails_on_tracked_changes(monkeypatch) -> None:
 
     assert ok is False
     assert "tracked changes" in message.lower()
+    assert "run_task" in message
+    assert "git status --porcelain" in message
 
 
 def test_check_git_clean_fails_on_untracked_files(monkeypatch) -> None:
@@ -321,6 +323,8 @@ def test_check_git_clean_fails_on_untracked_files(monkeypatch) -> None:
 
     assert ok is False
     assert "not clean" in message.lower()
+    assert "?? task.md" in message
+    assert "git status --porcelain" in message
 
 
 def test_preflight_skip_git_check_bypasses_dirty_repo(monkeypatch) -> None:
