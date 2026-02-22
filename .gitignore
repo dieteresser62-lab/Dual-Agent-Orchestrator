@@ -9,3 +9,5 @@ outbox/
 .env
 .venv/
 .pytest_cache/
+.venv-linux/
+Inbox/
