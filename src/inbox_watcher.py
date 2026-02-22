@@ -18,11 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 def list_inbox_tasks(inbox_dir: Path) -> list[Path]:
-    tasks = [
-        path
-        for path in inbox_dir.glob("*.md")
-        if path.is_file() and not path.name.endswith(".attempts")
-    ]
+    tasks = [path for path in inbox_dir.glob("*.md") if path.is_file()]
     return sorted(tasks, key=lambda path: (path.stat().st_mtime, path.name))
 
 
@@ -197,9 +193,28 @@ def watch_inbox(
                 delete_attempt_sidecar(task_file)
                 logger.info("Moved task to done outbox: %s", destination)
             except Exception:
-                logger.exception("Failed to move %s to done outbox.", task_file)
-
-            if failed_with_exception:
+                attempts = read_attempt_count(task_file) + 1
+                write_attempt_count(task_file, attempts)
+                if attempts >= max_retries:
+                    poison_name = f"{task_file.name}.poison"
+                    try:
+                        destination = move_to_outbox(task_file, outbox_failed_dir, source_name=poison_name)
+                        delete_attempt_sidecar(task_file)
+                        logger.warning(
+                            "Task marked poison after %s/%s failures and moved to failed outbox: %s",
+                            attempts,
+                            max_retries,
+                            destination,
+                        )
+                    except Exception:
+                        logger.exception("Failed to move poison task %s to outbox.", task_file)
+                else:
+                    logger.warning(
+                        "Task move to done failed (%s/%s). Leaving in inbox for retry: %s",
+                        attempts,
+                        max_retries,
+                        task_file.name,
+                    )
                 continue
 
             logger.info("Task finished with exit code %s: %s", exit_code, task_file.name)

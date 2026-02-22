@@ -877,6 +877,12 @@ def parse_args() -> argparse.Namespace:
         default=5.0,
         help="Polling interval in seconds for watch mode (default: 5.0).",
     )
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=3,
+        help="Maximum retries per inbox task in watch mode before poison-pill move (default: 3).",
+    )
     level_group = parser.add_mutually_exclusive_group()
     level_group.add_argument(
         "--verbose",
@@ -1009,6 +1015,7 @@ def main() -> int:
             inbox_dir=Path(args.inbox_dir),
             outbox_dir=Path(args.outbox_dir),
             poll_interval=max(0.1, float(args.poll_interval)),
+            max_retries=max(0, int(args.max_retries)),
             args=args,
             process_task=run_pipeline,
         )

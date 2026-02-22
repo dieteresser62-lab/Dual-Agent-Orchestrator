@@ -386,6 +386,46 @@ def test_attempt_sidecar_is_removed_after_success(tmp_path: Path) -> None:
     assert len(list((outbox / "done").glob("*.md"))) == 1
 
 
+def test_done_move_failure_counts_retries_and_poison_pills(tmp_path: Path, monkeypatch) -> None:
+    inbox = tmp_path / "inbox"
+    outbox = tmp_path / "outbox"
+    inbox.mkdir()
+    task = inbox / "ok.md"
+    task.write_text("x", encoding="utf-8")
+    calls: list[str] = []
+
+    def process_task(task_file: Path, _: Namespace, _force_new: bool) -> int:
+        calls.append(task_file.name)
+        return 0
+
+    def fake_move_to_outbox(task_file: Path, outbox_subdir: Path, *, source_name: str | None = None) -> Path:
+        if outbox_subdir.name == "done":
+            raise RuntimeError("simulated done move failure")
+        destination = outbox_subdir / f"fake_{source_name or task_file.name}"
+        task_file.rename(destination)
+        return destination
+
+    monkeypatch.setattr("inbox_watcher.move_to_outbox", fake_move_to_outbox)
+
+    result = watch_inbox(
+        inbox_dir=inbox,
+        outbox_dir=outbox,
+        poll_interval=0.01,
+        args=_args(),
+        process_task=process_task,
+        max_retries=2,
+        sleep_fn=_InterruptingSleep(interrupt_after=1),
+        time_fn=lambda: task.stat().st_mtime + 2.0 if task.exists() else 10_000.0,
+    )
+
+    assert result == 0
+    assert calls == ["ok.md", "ok.md"]
+    assert not task.exists()
+    assert len(list((outbox / "failed").glob("*.poison"))) == 1
+    assert len(list((outbox / "done").glob("*.md"))) == 0
+    assert not (inbox / "ok.md.attempts").exists()
+
+
 def test_watch_fails_fast_when_lock_already_held(tmp_path: Path) -> None:
     if fcntl is None:
         pytest.skip("fcntl not available on this platform")
