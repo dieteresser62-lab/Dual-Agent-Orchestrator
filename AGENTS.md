@@ -1,10 +1,10 @@
 ## Execution Policy
-- Bei umsetzbaren Entwicklungsaufgaben sofort mit der Implementierung starten.
-- Nicht erst nach Bestätigung fragen.
-- Nur dann Rückfragen stellen, wenn:
-  - Anforderungen fachlich unklar sind,
-  - mehrere valide Richtungen mit unterschiedlichen Trade-offs existieren,
-  - Rechte/Secrets/externes Escalation-Approval nötig sind,
-  - eine potenziell destruktive Aktion ansteht.
-- Nach Änderungen automatisch relevante Tests/Lint ausführen.
-- Ergebnis knapp berichten (Änderungen, Teststatus, offene Risiken).
+- For actionable development tasks, start implementation immediately.
+- Do not ask for confirmation first.
+- Only ask clarifying questions when:
+  - Requirements are technically unclear,
+  - Multiple valid directions with different trade-offs exist,
+  - Permissions/secrets/external escalation approval are needed,
+  - A potentially destructive action is pending.
+- After changes, automatically run relevant tests/lint.
+- Report results briefly (changes, test status, open risks).

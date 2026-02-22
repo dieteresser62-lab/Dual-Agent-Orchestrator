@@ -91,7 +91,7 @@ except Exception:
     print("no")
 ' "$STATE_FILE")"
   if [[ "$FROZEN_STATUS" == "yes" ]]; then
-    echo "[WARN] Vorheriger Lauf wurde wegen API-Quota eingefroren. Stelle sicher, dass dein Quota zurückgesetzt ist, bevor du fortfährst."
+    echo "[WARN] Previous run was frozen due to API quota. Make sure your quota has been reset before continuing."
   fi
   exec python3 "$SCRIPT_DIR/src/orchestrator.py" \
     --resume \

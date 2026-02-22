@@ -5,7 +5,13 @@ from argparse import Namespace
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
 from inbox_watcher import watch_inbox
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - non-Unix fallback
+    fcntl = None
 
 
 def _args() -> Namespace:
@@ -72,7 +78,7 @@ def test_watch_picks_up_md_file_and_moves_to_outbox(tmp_path: Path) -> None:
 
     assert result == 0
     assert calls == [task]
-    moved = list(outbox.glob("*.md"))
+    moved = list((outbox / "done").glob("*.md"))
     assert len(moved) == 1
     assert moved[0].name.endswith("_task.md")
     assert not task.exists()
@@ -98,7 +104,8 @@ def test_watch_ignores_non_md_files(tmp_path: Path) -> None:
 
     assert result == 0
     assert calls == []
-    assert list(outbox.glob("*")) == []
+    assert list((outbox / "done").glob("*")) == []
+    assert list((outbox / "failed").glob("*")) == []
 
 
 def test_watch_fifo_order_by_mtime(tmp_path: Path) -> None:
@@ -174,7 +181,7 @@ def test_outbox_name_collision_is_resolved(tmp_path: Path, monkeypatch) -> None:
     )
 
     assert result == 0
-    moved = sorted(path.name for path in outbox.glob("*.md"))
+    moved = sorted(path.name for path in (outbox / "done").glob("*.md"))
     assert len(moved) == 2
     assert moved[0] == "20260222T093000.123Z_job.md"
     assert moved[1] == "20260222T093000.123Z_job_1.md"
@@ -198,6 +205,7 @@ def test_watch_continues_after_pipeline_failure_exit_code(tmp_path: Path) -> Non
         poll_interval=0.01,
         args=_args(),
         process_task=process_task,
+        max_retries=1,
         sleep_fn=sleeper,
         time_fn=lambda: (inbox / "bad.md").stat().st_mtime + 2.0 if (inbox / "bad.md").exists() else 10_000.0,
     )
@@ -205,7 +213,7 @@ def test_watch_continues_after_pipeline_failure_exit_code(tmp_path: Path) -> Non
     assert result == 0
     assert calls == ["bad.md"]
     assert not (inbox / "bad.md").exists()
-    assert len(list(outbox.glob("*.md"))) == 1
+    assert len(list((outbox / "failed").glob("*.poison"))) == 1
 
 
 def test_watch_creates_directories_and_exits_on_keyboard_interrupt(tmp_path: Path) -> None:
@@ -228,6 +236,8 @@ def test_watch_creates_directories_and_exits_on_keyboard_interrupt(tmp_path: Pat
     assert result == 0
     assert inbox.exists()
     assert outbox.exists()
+    assert (outbox / "done").exists()
+    assert (outbox / "failed").exists()
 
 
 def test_watch_skips_too_fresh_files_until_stable(tmp_path: Path) -> None:
@@ -267,3 +277,136 @@ def test_watch_skips_too_fresh_files_until_stable(tmp_path: Path) -> None:
 
     assert result == 0
     assert calls == ["fresh.md"]
+
+
+def test_failure_retries_then_poison(tmp_path: Path) -> None:
+    inbox = tmp_path / "inbox"
+    outbox = tmp_path / "outbox"
+    inbox.mkdir()
+    task = inbox / "bad.md"
+    task.write_text("x", encoding="utf-8")
+    calls: list[str] = []
+
+    def process_task(task_file: Path, _: Namespace, _force_new: bool) -> int:
+        calls.append(task_file.name)
+        return 1
+
+    sleeper = _InterruptingSleep(interrupt_after=1)
+    result = watch_inbox(
+        inbox_dir=inbox,
+        outbox_dir=outbox,
+        poll_interval=0.01,
+        args=_args(),
+        process_task=process_task,
+        max_retries=3,
+        sleep_fn=sleeper,
+        time_fn=lambda: task.stat().st_mtime + 2.0 if task.exists() else 10_000.0,
+    )
+
+    assert result == 0
+    assert calls == ["bad.md", "bad.md", "bad.md"]
+    failed = list((outbox / "failed").glob("*.poison"))
+    assert len(failed) == 1
+    assert not task.exists()
+    assert not (inbox / "bad.md.attempts").exists()
+
+
+def test_retry_count_survives_restart(tmp_path: Path) -> None:
+    inbox = tmp_path / "inbox"
+    outbox = tmp_path / "outbox"
+    inbox.mkdir()
+    task = inbox / "restart.md"
+    task.write_text("x", encoding="utf-8")
+    base_mtime = task.stat().st_mtime
+
+    first_run_calls = {"count": 0}
+    first_times = iter([base_mtime + 2.0, base_mtime + 2.0, base_mtime + 0.0])
+
+    def first_process(_: Path, __: Namespace, ___: bool) -> int:
+        first_run_calls["count"] += 1
+        return 1
+
+    first_result = watch_inbox(
+        inbox_dir=inbox,
+        outbox_dir=outbox,
+        poll_interval=0.01,
+        args=_args(),
+        process_task=first_process,
+        max_retries=3,
+        sleep_fn=_InterruptingSleep(interrupt_after=1),
+        time_fn=lambda: next(first_times),
+    )
+    assert first_result == 0
+    assert first_run_calls["count"] == 2
+    assert task.exists()
+    assert (inbox / "restart.md.attempts").read_text(encoding="utf-8").strip() == "2"
+
+    second_calls: list[str] = []
+
+    def second_process(task_file: Path, _: Namespace, _force_new: bool) -> int:
+        second_calls.append(task_file.name)
+        return 1
+
+    second_result = watch_inbox(
+        inbox_dir=inbox,
+        outbox_dir=outbox,
+        poll_interval=0.01,
+        args=_args(),
+        process_task=second_process,
+        max_retries=3,
+        sleep_fn=_InterruptingSleep(interrupt_after=1),
+        time_fn=lambda: task.stat().st_mtime + 2.0 if task.exists() else 10_000.0,
+    )
+    assert second_result == 0
+    assert second_calls == ["restart.md"]
+    assert not task.exists()
+    assert len(list((outbox / "failed").glob("*.poison"))) == 1
+    assert not (inbox / "restart.md.attempts").exists()
+
+
+def test_attempt_sidecar_is_removed_after_success(tmp_path: Path) -> None:
+    inbox = tmp_path / "inbox"
+    outbox = tmp_path / "outbox"
+    inbox.mkdir()
+    task = inbox / "ok.md"
+    task.write_text("x", encoding="utf-8")
+    (inbox / "ok.md.attempts").write_text("2", encoding="utf-8")
+
+    result = watch_inbox(
+        inbox_dir=inbox,
+        outbox_dir=outbox,
+        poll_interval=0.01,
+        args=_args(),
+        process_task=lambda *_: 0,
+        sleep_fn=_InterruptingSleep(interrupt_after=1),
+        time_fn=lambda: task.stat().st_mtime + 2.0 if task.exists() else 10_000.0,
+    )
+    assert result == 0
+    assert not (inbox / "ok.md.attempts").exists()
+    assert len(list((outbox / "done").glob("*.md"))) == 1
+
+
+def test_watch_fails_fast_when_lock_already_held(tmp_path: Path) -> None:
+    if fcntl is None:
+        pytest.skip("fcntl not available on this platform")
+
+    inbox = tmp_path / "inbox"
+    outbox = tmp_path / "outbox"
+    inbox.mkdir(parents=True, exist_ok=True)
+    lock_file = (inbox / ".lock").open("a+", encoding="utf-8")
+    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        result = watch_inbox(
+            inbox_dir=inbox,
+            outbox_dir=outbox,
+            poll_interval=0.01,
+            args=_args(),
+            process_task=lambda *_: 0,
+            sleep_fn=_InterruptingSleep(interrupt_after=1),
+            time_fn=lambda: 10_000.0,
+        )
+    finally:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        lock_file.close()
+
+    assert result == 1
