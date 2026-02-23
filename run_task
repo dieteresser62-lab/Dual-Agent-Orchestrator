@@ -33,9 +33,18 @@ if [[ $# -gt 0 ]]; then
   EXTRA_ARGS=("$@")
 fi
 
+for arg in "${EXTRA_ARGS[@]}"; do
+  if [[ "$arg" == "--watch" ]]; then
+    # Watch mode has its own state lifecycle and should never auto-resume old runs.
+    WATCH_MODE="yes"
+    break
+  fi
+done
+
 if [[ -n "$SKIP_GIT_CHECK_ENV" ]]; then
   case "${SKIP_GIT_CHECK_ENV,,}" in
     1|true|yes|on)
+      # Re-checking args here keeps explicit CLI flags authoritative over env defaults.
       HAS_SKIP_GIT_CHECK="no"
       for arg in "${EXTRA_ARGS[@]}"; do
         if [[ "$arg" == "--skip-git-check" ]]; then
@@ -50,13 +59,20 @@ if [[ -n "$SKIP_GIT_CHECK_ENV" ]]; then
   esac
 fi
 
-for arg in "${EXTRA_ARGS[@]}"; do
-  if [[ "$arg" == "--watch" ]]; then
-    # Watch mode has its own state lifecycle and should never auto-resume old runs.
-    WATCH_MODE="yes"
-    break
+if [[ "$WATCH_MODE" == "yes" && ${RUN_TASK_SKIP_GIT_CHECK+x} != x ]]; then
+  # Queue-worker mode is typically used with local WIP changes; do not block on clean-tree checks by default.
+  HAS_SKIP_GIT_CHECK="no"
+  for arg in "${EXTRA_ARGS[@]}"; do
+    if [[ "$arg" == "--skip-git-check" ]]; then
+      HAS_SKIP_GIT_CHECK="yes"
+      break
+    fi
+  done
+  if [[ "$HAS_SKIP_GIT_CHECK" == "no" ]]; then
+    EXTRA_ARGS+=("--skip-git-check")
+    echo "[INFO] Watch mode: enabling --skip-git-check by default (override with RUN_TASK_SKIP_GIT_CHECK=0)."
   fi
-done
+fi
 
 DETECTED_TEST_CMD=""
 if [[ ${RUN_TASK_TEST_CMD+x} == x ]]; then
@@ -66,6 +82,7 @@ if [[ ${RUN_TASK_TEST_CMD+x} == x ]]; then
 elif [[ -f pyproject.toml ]] && grep -q '\[tool\.pytest\]' pyproject.toml; then
   DETECTED_TEST_CMD="python3 -m pytest tests/ -v"
 elif [[ -f package.json ]] && python3 -c 'import json,sys
+# Return success only when package.json defines a "test" script key.
 try:
     with open("package.json", encoding="utf-8") as f:
         data = json.load(f)
@@ -81,12 +98,22 @@ fi
 
 if [[ "$WATCH_MODE" == "yes" ]]; then
   # In watch mode, always start a fresh task-processing loop.
+  WATCH_CHANNELS="${RUN_TASK_WATCH_STREAM_CHANNELS:-stderr}"
+  case "$WATCH_CHANNELS" in
+    stderr|stdout|both)
+      ;;
+    *)
+      echo "[WARN] Invalid RUN_TASK_WATCH_STREAM_CHANNELS='$WATCH_CHANNELS'; falling back to 'stderr'."
+      WATCH_CHANNELS="stderr"
+      ;;
+  esac
+  echo "[INFO] Watch mode: live stream channels = $WATCH_CHANNELS (override via RUN_TASK_WATCH_STREAM_CHANNELS=stdout|stderr|both)."
   exec python3 "$SCRIPT_DIR/src/orchestrator.py" \
     --allow-fallback-to-gemini \
     --test-command "$DETECTED_TEST_CMD" \
     --agent-live-stream \
     --agent-live-stream-mode compact \
-    --agent-live-stream-channels stdout \
+    --agent-live-stream-channels "$WATCH_CHANNELS" \
     --agent-output none \
     "${EXTRA_ARGS[@]}"
 fi
@@ -135,6 +162,7 @@ else
     # A completed run should not be resumed; start a clean state instead.
     echo "[INFO] Existing state is completed (phase=done) -> starting new run."
   fi
+  # Force-overwrite ensures stale state from old completed runs cannot leak into a new task.
   exec python3 "$SCRIPT_DIR/src/orchestrator.py" \
     --force-overwrite-state \
     --allow-fallback-to-gemini \

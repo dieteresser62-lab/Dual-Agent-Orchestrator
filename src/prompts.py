@@ -4,7 +4,7 @@ import textwrap
 
 
 def _delimit_block(label: str, content: str) -> str:
-    # Delimited blocks let downstream parsers strip injected context reliably.
+    # Keep envelope format in sync with `DELIMITED_SECTION_PATTERN` in orchestrator.py.
     return f"<<<{label}_BEGIN>>>\n{content}\n<<<{label}_END>>>"
 
 
@@ -40,7 +40,8 @@ def build_phase1_claude_plan_prompt(
         Output format (Markdown):
         - Sections: Plan Status, Work Packages, Acceptance Criteria, Risks, Test Strategy, Open Questions
         - Marker line: ADDRESSED_FINDINGS: <ID1,ID2,...> or NONE
-        - Marker line: CLAUDE_APPROVAL: YES or CLAUDE_APPROVAL: NO
+        - Marker line: PHASE1_APPROVAL: YES or PHASE1_APPROVAL: NO
+        - Legacy compatibility marker (optional): CLAUDE_APPROVAL: YES or CLAUDE_APPROVAL: NO
         - The final line MUST be exactly: STATUS: DONE
         """
     ).strip()
@@ -52,6 +53,7 @@ def build_phase1_codex_review_prompt(
     cycle: int,
     previous_open_block: str,
 ) -> str:
+    # Contract lines are intentionally rigid so the orchestrator can parse results deterministically.
     return textwrap.dedent(
         f"""
         You are Codex Reviewer. We are in PHASE 1 (plan review), cycle {cycle}.
@@ -87,14 +89,17 @@ def build_phase1_codex_review_prompt(
           or
           OPEN_FINDINGS: <ID1,ID2,...>
         - Decision rule:
-          CODEX_APPROVAL: YES only when OPEN_FINDINGS: NONE
-          CODEX_APPROVAL: NO only when OPEN_FINDINGS is not empty
+          PHASE1_APPROVAL: YES only when OPEN_FINDINGS: NONE
+          PHASE1_APPROVAL: NO only when OPEN_FINDINGS is not empty
+        - Legacy compatibility marker (optional):
+          CODEX_APPROVAL: YES|NO
         - Mandatory ID format: F-001, F-002, ...
 
         Output format (Markdown):
         - Sections: Findings, Required Adjustments, Consolidated Plan
         - CONTRACT lines as defined above
-        - Marker line: CODEX_APPROVAL: YES or CODEX_APPROVAL: NO
+        - Marker line: PHASE1_APPROVAL: YES or PHASE1_APPROVAL: NO
+        - Legacy compatibility marker (optional): CODEX_APPROVAL: YES or CODEX_APPROVAL: NO
         - The final line MUST be exactly: STATUS: DONE
         """
     ).strip()
@@ -122,17 +127,18 @@ def build_phase1_claude_confirm_prompt(
         ---
 
         Codex contract in this cycle:
-        - CODEX_APPROVAL: {codex_approval}
+        - PHASE1_APPROVAL: {codex_approval}
         - OPEN_FINDINGS: {open_block}
 
         Tasks:
         1) Determine whether the current plan is implementation-ready.
         2) If not, list concise mandatory adjustments for the next cycle.
-        3) If CODEX_APPROVAL=NO or OPEN_FINDINGS is not empty, CLAUDE_APPROVAL must be NO.
+        3) If PHASE1_APPROVAL=NO or OPEN_FINDINGS is not empty, PHASE1_APPROVAL must be NO.
 
         Output format (Markdown):
         - Sections: Decision, Justification, Next Mandatory Adjustments
-        - Marker line: CLAUDE_APPROVAL: YES or CLAUDE_APPROVAL: NO
+        - Marker line: PHASE1_APPROVAL: YES or PHASE1_APPROVAL: NO
+        - Legacy compatibility marker (optional): CLAUDE_APPROVAL: YES or CLAUDE_APPROVAL: NO
         - The final line MUST be exactly: STATUS: DONE
         """
     ).strip()
@@ -195,6 +201,7 @@ def build_phase2_claude_review_prompt(
     previous_open_block: str,
     snapshot: str,
 ) -> str:
+    # This prompt mirrors phase-1 contract semantics so finding lifecycle stays machine-checkable.
     return textwrap.dedent(
         f"""
         You are Claude Code Reviewer. We are in PHASE 2 review, cycle {cycle}.
@@ -249,14 +256,17 @@ def build_phase2_claude_review_prompt(
           or
           OPEN_FINDINGS: <ID1,ID2,...>
         - Decision rule:
-          CLAUDE_APPROVAL: YES only when OPEN_FINDINGS: NONE
-          CLAUDE_APPROVAL: NO only when OPEN_FINDINGS is not empty
+          PHASE2_APPROVAL: YES only when OPEN_FINDINGS: NONE
+          PHASE2_APPROVAL: NO only when OPEN_FINDINGS is not empty
+        - Legacy compatibility marker (optional):
+          CLAUDE_APPROVAL: YES|NO
         - Mandatory ID format: F-001, F-002, ...
 
         Output format (Markdown):
         - Sections: Findings, Mandatory Fixes, Approval
         - CONTRACT lines as defined above
-        - Marker line: CLAUDE_APPROVAL: YES or CLAUDE_APPROVAL: NO
+        - Marker line: PHASE2_APPROVAL: YES or PHASE2_APPROVAL: NO
+        - Legacy compatibility marker (optional): CLAUDE_APPROVAL: YES or CLAUDE_APPROVAL: NO
         - The final line MUST be exactly: STATUS: DONE
         """
     ).strip()

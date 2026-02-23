@@ -40,6 +40,8 @@ def _args() -> Namespace:
 
 
 class _InterruptingSleep:
+    """Test helper that stops infinite watch loops after N sleep calls."""
+
     def __init__(self, interrupt_after: int) -> None:
         self.calls = 0
         self._interrupt_after = interrupt_after
@@ -151,6 +153,8 @@ def test_outbox_name_collision_is_resolved(tmp_path: Path, monkeypatch) -> None:
     calls = {"count": 0}
 
     class _FixedDateTime:
+        """Freeze timestamp generation so outbox-name collision behavior is deterministic."""
+
         @classmethod
         def now(cls, tz=None):  # noqa: ANN001
             return datetime(2026, 2, 22, 9, 30, 0, 123000, tzinfo=timezone.utc)
@@ -312,6 +316,7 @@ def test_failure_retries_then_poison(tmp_path: Path) -> None:
 
 
 def test_retry_count_survives_restart(tmp_path: Path) -> None:
+    # Sidecar retry counter must survive process restart and continue from prior attempts.
     inbox = tmp_path / "inbox"
     outbox = tmp_path / "outbox"
     inbox.mkdir()

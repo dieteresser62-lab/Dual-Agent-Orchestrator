@@ -41,6 +41,8 @@ class OrchestratorConfig:
 
 @dataclass
 class StreamResult:
+    """Lightweight CompletedProcess-compatible container for streamed runs."""
+
     returncode: int
     stdout: str
     stderr: str
@@ -69,9 +71,11 @@ def run_local_command(args: list[str], timeout: int = 20) -> tuple[int, str, str
 
 
 def check_git_clean() -> tuple[bool, str]:
+    """Validate repo cleanliness with explicit handling for detached/non-git environments."""
     if shutil.which("git") is None:
         return True, "Git not found in PATH; skipping git cleanliness check."
 
+    # Step 1: confirm we are in a git worktree before running stricter checks.
     inside_rc, inside_out, inside_err = run_local_command(
         ["git", "rev-parse", "--is-inside-work-tree"]
     )
@@ -79,6 +83,7 @@ def check_git_clean() -> tuple[bool, str]:
         detail = (inside_err or inside_out).strip() or "not a git worktree"
         return True, f"Git cleanliness check skipped ({detail})."
 
+    # Step 2: gather porcelain status plus HEAD existence for tracked-change checks.
     head_rc, _, _ = run_local_command(["git", "rev-parse", "--verify", "HEAD"])
     status_rc, status_out, status_err = run_local_command(
         ["git", "status", "--porcelain", "--untracked-files=normal"]
@@ -107,6 +112,7 @@ def check_git_clean() -> tuple[bool, str]:
         tracked_paths.append(row[3:])
 
     if head_rc == 0:
+        # Step 3: refresh index and compare tracked files against HEAD.
         refresh_rc, _, refresh_err = run_local_command(["git", "update-index", "-q", "--refresh"])
         if refresh_rc != 0:
             detail = refresh_err.strip() or "git update-index failed"
@@ -211,10 +217,14 @@ def build_dry_run_agent_output(agent_key: str, prompt: str) -> str:
     ]
     if "CODEX_APPROVAL:" in prompt:
         lines.append("CODEX_APPROVAL: YES")
+    if "PHASE1_APPROVAL:" in prompt:
+        lines.append("PHASE1_APPROVAL: YES")
     if "OPEN_FINDINGS:" in prompt:
         lines.append("OPEN_FINDINGS: NONE")
     if "CLAUDE_APPROVAL:" in prompt:
         lines.append("CLAUDE_APPROVAL: YES")
+    if "PHASE2_APPROVAL:" in prompt:
+        lines.append("PHASE2_APPROVAL: YES")
     if "IMPLEMENTATION_READY:" in prompt:
         lines.append("IMPLEMENTATION_READY: YES")
     lines.append("STATUS: DONE")
@@ -251,6 +261,7 @@ def run_agent(
     config: OrchestratorConfig,
     shorten: Callable[[str | None, int], str],
 ) -> str:
+    """Run an adapter command once, with optional live streaming and strict output checks."""
     agent_key = adapter.name
     if config.dry_run:
         return build_dry_run_agent_output(agent_key, prompt)
@@ -292,6 +303,7 @@ def run_agent(
                 }
 
                 def read_stream(stream: TextIO, channel: str) -> None:
+                    # Use sentinel None to signal channel completion to the main loop.
                     try:
                         while True:
                             line = stream.readline()
@@ -429,6 +441,7 @@ def run_agent_checked(
     parse_flag: Callable[[str, str], str | None],
     validate_done_marker: Callable[[str], bool],
 ) -> str:
+    """Run an agent with retries, contract validation, and optional Claude->Gemini fallback."""
     required_flags = required_flags or []
     errors: list[str] = []
     effective_agent_key = agent_key
@@ -445,7 +458,13 @@ def run_agent_checked(
     def validate_output_contract(output: str) -> str | None:
         if not validate_done_marker(output):
             return "missing required final completion marker 'STATUS: DONE'"
-        missing_flags = [flag for flag in required_flags if parse_flag(output, flag) is None]
+        missing_flags: list[str] = []
+        for flag in required_flags:
+            candidates = [part.strip() for part in str(flag).split("|") if part.strip()]
+            if not candidates:
+                continue
+            if all(parse_flag(output, candidate) is None for candidate in candidates):
+                missing_flags.append("|".join(candidates))
         if missing_flags:
             return f"missing required flags: {', '.join(missing_flags)}"
         if output_validator:
@@ -600,7 +619,10 @@ def preflight(
 
 
 def collect_file_snapshots(changed_files: list[str], max_lines: int, max_files: int) -> str:
+    """Collect bounded plaintext snapshots for changed files referenced in review prompts."""
+
     def is_plausible_path(value: str) -> bool:
+        # Reject markdown/prose lines so only filename-like entries are considered.
         if not value or value.startswith("#"):
             return False
         if value.startswith("..."):

@@ -61,6 +61,8 @@ Default behavior in watch mode:
 - Monitor `inbox/` for `*.md` files.
 - Process files in FIFO order (oldest modified first).
 - Skip very new files until they are stable (minimum age: 1 second).
+- Enable `--skip-git-check` automatically (so local WIP changes do not block queue processing).
+- Stream only `stderr` live by default (keeps watch logs quieter when agents emit verbose `stdout` status text).
 - Move every processed task file to `outbox/` with a timestamp prefix, even if the run fails.
 - Keep waiting for the next task until you stop with `Ctrl+C`.
 
@@ -122,6 +124,7 @@ python3 src/orchestrator.py --help
 | Flag | Default | Description |
 |---|---|---|
 | `--task-file <path>` | `task.md` | Path to the Markdown task file. |
+| `--agents-file <path>` | `Dual-Agent-Orchestrator/AGENTS.md` | AGENTS instructions prepended to every agent prompt. |
 | `--resume` | off | Resume from existing `.orchestrator/state.json`. |
 | `--force-overwrite-state` | off | Overwrite existing state without confirmation prompt. |
 | `--from-phase <phase1\|phase2>` | auto | Force the starting phase (overrides state). |
@@ -202,13 +205,66 @@ RUN_TASK_TEST_CMD="py -m pytest" ./run_task        # custom command
 RUN_TASK_TEST_CMD="" ./run_task                     # explicitly skip tests
 ```
 
-If you intentionally run with a dirty Git working tree (for example during local iteration), set:
+If you want to control this behavior manually, set:
 
 ```bash
-RUN_TASK_SKIP_GIT_CHECK=1 ./run_task --watch
+RUN_TASK_SKIP_GIT_CHECK=0 ./run_task --watch     # enforce clean-tree check even in watch mode
+RUN_TASK_SKIP_GIT_CHECK=1 ./run_task my-task.md  # skip check in single-file mode
+RUN_TASK_WATCH_STREAM_CHANNELS=stdout ./run_task --watch  # override watch live stream channels
+RUN_TASK_WATCH_STREAM_CHANNELS=both ./run_task --watch    # stream both channels in watch mode
 ```
 
-This appends `--skip-git-check` automatically unless you already passed it explicitly.
+The wrapper still respects an explicitly passed `--skip-git-check`.
+`RUN_TASK_WATCH_STREAM_CHANNELS` accepts `stderr` (default), `stdout`, or `both`; invalid values fall back to `stderr`.
+
+## Agent Instruction Files
+
+The dual-agent orchestration contract is defined through repository-local instruction files:
+
+| File | Location | Required | Primary role |
+|---|---|---|---|
+| `AGENTS.md` | Orchestrator repo root | Yes | Global runtime policy and machine-parseable marker contract consumed by `src/orchestrator.py`. |
+| `CLAUDE.md` | Project root | Yes | Claude role profile (Phase 1 final confirmation, Phase 2 review). |
+| `CODEX.md` | Project root | Yes | Codex role profile (Phase 1 plan review, Phase 2 implementation). |
+| `GEMINI.md` | Project root | Yes (for fallback setups) | Contract-compatible fallback profile for Gemini. |
+
+`AGENTS.md` is intentionally the single source of truth for shared execution policy, safety, validation, and output markers.  
+`CLAUDE.md`, `CODEX.md`, and `GEMINI.md` should stay lean and role-specific, and should not duplicate global policy text.
+
+### Contract Markers (must stay synchronized)
+
+The parser in `src/orchestrator.py` and prompts in `src/prompts.py` expect stable markers:
+
+- Final line in orchestrated outputs: `STATUS: DONE`
+- Approval markers by step:
+  - `PHASE1_APPROVAL: YES|NO` (Phase 1 review + confirm)
+  - `PHASE2_APPROVAL: YES|NO` (Phase 2 review)
+  - `IMPLEMENTATION_READY: YES|NO` (Phase 2 implementation report)
+- Legacy compatibility approvals accepted by parser:
+  - `CODEX_APPROVAL: YES|NO`
+  - `CLAUDE_APPROVAL: YES|NO`
+- Findings lifecycle markers for review steps:
+  - `OPEN_FINDINGS: NONE` or `OPEN_FINDINGS: F-001,F-002,...`
+  - `FINDING_STATUS: <ID> | OPEN|CLOSED | <rationale>`
+  - `NEW_FINDING: <ID> | <description> | <acceptance test>`
+- Finding IDs must use `F-001` format.
+
+Decision consistency rule:
+- `*_APPROVAL: YES` only with `OPEN_FINDINGS: NONE`
+- `*_APPROVAL: NO` only when findings remain open
+
+Maintenance flow:
+1. Update `AGENTS.md` when runtime/output-contract policy changes.
+2. Keep `CLAUDE.md`, `CODEX.md`, and `GEMINI.md` aligned, role-specific, and non-contradictory.
+3. If marker semantics change, update `src/prompts.py` and `src/orchestrator.py` in the same change.
+
+Target-repository guidance:
+- In external target repositories, keep `AGENTS.md` focused on orchestration/runtime contract.
+- Put project/domain constraints (architecture, stack rules, coding conventions, folder ownership) in that target repo's `CLAUDE.md` / `CODEX.md` / `GEMINI.md`.
+
+Verification:
+- `./run_task --help` shows the default `--agents-file` path.
+- Run `python3 -m pytest tests/ -v` after contract/parser/orchestration changes.
 
 ## Exit Codes
 

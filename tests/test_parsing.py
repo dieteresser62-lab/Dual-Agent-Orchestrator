@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from orchestrator import (
     parse_flag,
+    parse_first_flag,
     parse_finding_status_map,
     parse_new_findings,
     parse_open_findings,
@@ -56,6 +57,19 @@ CODEX_APPROVAL: NO
 CODEX_APPROVAL: YES
 """
     assert parse_flag(text, "CODEX_APPROVAL") == "YES"
+
+
+def test_parse_first_flag_prefers_first_matching_key() -> None:
+    text = """
+CODEX_APPROVAL: NO
+PHASE1_APPROVAL: YES
+"""
+    assert parse_first_flag(text, ["PHASE1_APPROVAL", "CODEX_APPROVAL"]) == "YES"
+
+
+def test_parse_first_flag_falls_back_to_legacy_key() -> None:
+    text = "CODEX_APPROVAL: NO"
+    assert parse_first_flag(text, ["PHASE1_APPROVAL", "CODEX_APPROVAL"]) == "NO"
 
 
 def test_parse_open_findings_none() -> None:
@@ -185,6 +199,17 @@ CODEX_APPROVAL: NO
     err, open_ids = validate_agent_contract(out, ["F-001"], "CODEX_APPROVAL")
     assert err is None
     assert open_ids == ["F-001"]
+
+
+def test_validate_agent_contract_accepts_approval_key_aliases() -> None:
+    out = """
+FINDING_STATUS: F-001 | CLOSED | fixed
+OPEN_FINDINGS: NONE
+CODEX_APPROVAL: YES
+"""
+    err, open_ids = validate_agent_contract(out, ["F-001"], ["PHASE1_APPROVAL", "CODEX_APPROVAL"])
+    assert err is None
+    assert open_ids == []
 
 
 def test_truncate_shared_keeps_recent_tail_with_marker() -> None:

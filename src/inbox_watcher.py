@@ -85,6 +85,7 @@ def delete_attempt_sidecar(task_file: Path) -> None:
 
 def acquire_inbox_lock(inbox_dir: Path) -> TextIO | None:
     lock_path = inbox_dir / ".lock"
+    # Open in a+ so the lock file is created if missing without truncating existing content.
     handle = lock_path.open("a+", encoding="utf-8")
     if fcntl is None:
         # Non-Unix fallback keeps functionality but cannot enforce single-process safety.
@@ -121,6 +122,8 @@ def watch_inbox(
     sleep_fn: Callable[[float], None] = time.sleep,
     time_fn: Callable[[], float] = time.time,
 ) -> int:
+    """Continuously process stable inbox tasks and move them to done/failed outboxes."""
+
     inbox_dir.mkdir(parents=True, exist_ok=True)
     outbox_done_dir = outbox_dir / "done"
     outbox_failed_dir = outbox_dir / "failed"
@@ -197,6 +200,7 @@ def watch_inbox(
                 delete_attempt_sidecar(task_file)
                 logger.info("Moved task to done outbox: %s", destination)
             except Exception:
+                # Keep retry accounting symmetrical with processing failures.
                 attempts = read_attempt_count(task_file) + 1
                 write_attempt_count(task_file, attempts)
                 if attempts >= max_retries:

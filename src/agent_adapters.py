@@ -6,6 +6,8 @@ from typing import Protocol
 
 
 class AgentAdapter(Protocol):
+    """Minimal adapter contract for each agent CLI backend."""
+
     name: str
     cli_binary: str
     timeout: int
@@ -26,6 +28,8 @@ class AgentAdapter(Protocol):
 
 
 class CodexAdapter:
+    """Adapter for Codex CLI with compact streaming and temp-file final output."""
+
     name = "codex"
     cli_binary = "codex"
     timeout = 1800
@@ -35,7 +39,9 @@ class CodexAdapter:
     _base_command = [
         "codex",
         "exec",
+        # Orchestrator enforces its own git-safety checks before invoking the CLI.
         "--skip-git-repo-check",
+        # Keep filesystem access constrained to repository and temp directories.
         "--sandbox",
         "workspace-write",
         "--color",
@@ -66,6 +72,7 @@ class CodexAdapter:
         if self._last_message_file:
             path = Path(self._last_message_file)
             if path.exists():
+                # Prefer the explicit "last assistant message" file over mixed stream output.
                 content = path.read_text(encoding="utf-8").strip()
                 if content:
                     output = content
@@ -139,6 +146,8 @@ class CodexAdapter:
 
 
 class ClaudeAdapter:
+    """Adapter for Claude CLI configured for stateless plain-text responses."""
+
     name = "claude"
     cli_binary = "claude"
     timeout = 1800
@@ -181,6 +190,8 @@ class ClaudeAdapter:
 
 
 class GeminiAdapter:
+    """Adapter for Gemini CLI using stdin prompts and plain stdout output."""
+
     name = "gemini"
     cli_binary = "gemini"
     timeout = 1800
@@ -212,6 +223,7 @@ class GeminiAdapter:
 
 
 AGENT_REGISTRY: dict[str, AgentAdapter] = {
+    # Singleton adapter instances avoid repeated CLI configuration setup.
     "codex": CodexAdapter(),
     "claude": ClaudeAdapter(),
     "gemini": GeminiAdapter(),

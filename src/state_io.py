@@ -8,6 +8,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Canonical finding identifiers exchanged by both agents, e.g. F-001.
 FINDING_ID_PATTERN = re.compile(r"^F-\d{3}$")
 logger = logging.getLogger(__name__)
 
@@ -72,10 +73,12 @@ def build_artifact_paths(run_id: str, artifact_runs_dir: Path) -> dict[str, str 
 
 
 def _is_within_allowed_roots(path: Path, allowed_roots: tuple[Path, ...]) -> bool:
+    """Return True when `path` resolves inside any trusted root directory."""
     return any(path.is_relative_to(root) for root in allowed_roots)
 
 
 def _validate_loaded_path(raw: str, allowed_roots: tuple[Path, ...]) -> str:
+    """Validate persisted paths from state before they are reused."""
     resolved = Path(raw).resolve()
     if not _is_within_allowed_roots(resolved, allowed_roots):
         # Reject paths outside orchestrator/workspace roots to prevent state-file path injection.
@@ -100,6 +103,7 @@ def init_state(
     phase2_max_cycles: int,
     artifacts: dict[str, str | Path],
 ) -> dict:
+    """Create a fresh version-2 orchestrator state document."""
     serialized_artifacts = {
         "run_id": str(artifacts["run_id"]),
         "run_dir": str(artifacts["run_dir"]),
@@ -148,6 +152,8 @@ def ensure_state_shape(
     phase2_max_cycles: int,
     artifact_runs_dir: Path,
 ) -> dict:
+    """Normalize loaded state (schema, safe paths, and finding-id hygiene)."""
+
     def sanitize_phase_findings(phase_state: dict) -> None:
         raw_open = phase_state.get("open_findings", [])
         sanitized_open = [

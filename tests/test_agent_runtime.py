@@ -97,9 +97,37 @@ def test_run_agent_checked_validation_error_backoff(monkeypatch, tmp_path: Path)
     assert sleeps == [2]
 
 
+def test_run_agent_checked_accepts_alternative_required_flags(monkeypatch, tmp_path: Path) -> None:
+    def fake_run_agent(*args, **kwargs):  # type: ignore[no-untyped-def]
+        _ = args
+        _ = kwargs
+        return "CODEX_APPROVAL: YES\nOPEN_FINDINGS: NONE\nSTATUS: DONE"
+
+    monkeypatch.setattr(agent_runtime, "run_agent", fake_run_agent)
+
+    output = run_agent_checked(
+        agent_key="codex",
+        prompt="prompt",
+        log_prefix="unit",
+        max_retries=0,
+        required_flags=["PHASE1_APPROVAL|CODEX_APPROVAL"],
+        output_validator=None,
+        config=OrchestratorConfig(dry_run=False),
+        agents={"codex": AGENT_REGISTRY["codex"]},
+        log_dir=tmp_path,
+        write_file=lambda path, content: path.write_text(content, encoding="utf-8"),
+        shorten=lambda text, limit=1800: (text or "")[:limit],
+        parse_flag=lambda text, key: "YES" if f"{key}: YES" in text else None,
+        validate_done_marker=lambda text: text.strip().endswith("STATUS: DONE"),
+    )
+
+    assert "STATUS: DONE" in output
+
+
 def test_run_agent_checked_sets_sticky_quota_flag_after_gemini_fallback(
     monkeypatch, tmp_path: Path
 ) -> None:
+    # After one successful fallback, later Claude calls should bypass Claude immediately.
     called_agents: list[str] = []
 
     def fake_run_agent(adapter, *args, **kwargs):  # type: ignore[no-untyped-def]

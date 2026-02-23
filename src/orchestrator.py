@@ -54,11 +54,16 @@ STATE_DIR = Path(".orchestrator")
 STATE_FILE = STATE_DIR / "state.json"
 LOG_DIR = STATE_DIR / "logs"
 CHECKPOINT_DIR = STATE_DIR / "checkpoints"
+DEFAULT_AGENTS_FILE = (Path(__file__).resolve().parent.parent / "AGENTS.md").resolve()
 MAX_ERROR_CHARS = 1800
 MIN_AGENT_OUTPUT_MAX_CHARS = 200
+# Keep repo snapshots useful but bounded when embedded into prompts/artifacts.
 MAX_DIFF_CHARS = 14000
 TEST_TIMEOUT_SECONDS = 300
+# Cap how much historical shared markdown is sent back to agents each cycle.
 MAX_SHARED_CHARS = 30000
+MAX_AGENTS_INSTRUCTIONS_CHARS = 12000
+# Delimited blocks are the machine-readable envelope shared across prompt + parser helpers.
 DELIMITED_SECTION_PATTERN = re.compile(
     r"<<<\s*([A-Z_]+)_BEGIN\s*>>>.*?<<<\s*\1_END\s*>>>",
     re.IGNORECASE | re.DOTALL,
@@ -67,8 +72,11 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class RunContext:
+    """Dependency-injection wrapper for runtime helpers and artifact paths."""
+
     config: OrchestratorConfig
     test_command: str = ""
+    agents_instructions: str = ""
     artifact_root_dir: Path = ARTIFACT_ROOT_DIR
     artifact_runs_dir: Path = ARTIFACT_RUNS_DIR
     latest_run_file: Path = LATEST_RUN_FILE
@@ -150,9 +158,19 @@ class RunContext:
         required_flags: list[str] | None = None,
         output_validator=None,
     ) -> str:
+        prompt_to_send = prompt
+        if self.agents_instructions.strip():
+            # Keep project instructions explicit and stable for all backend agents.
+            prompt_to_send = (
+                "Project execution instructions (from AGENTS.md):\n"
+                "<<<AGENTS_MD_BEGIN>>>\n"
+                f"{self.agents_instructions.strip()}\n"
+                "<<<AGENTS_MD_END>>>\n\n"
+                f"{prompt}"
+            )
         return runtime_run_agent_checked(
             agent_key=agent_key,
-            prompt=prompt,
+            prompt=prompt_to_send,
             log_prefix=log_prefix,
             max_retries=max_retries,
             required_flags=required_flags,
@@ -225,6 +243,27 @@ def truncate_shared(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return "...[earlier history truncated]\n\n" + text[-limit:]
+
+
+def load_agents_instructions(agents_file: Path) -> str:
+    if not agents_file.exists():
+        logger.info("AGENTS instructions file not found: %s", agents_file)
+        return ""
+    text = read_file(agents_file).strip()
+    if not text:
+        logger.info("AGENTS instructions file is empty: %s", agents_file)
+        return ""
+    if len(text) > MAX_AGENTS_INSTRUCTIONS_CHARS:
+        # Bound prompt growth when AGENTS.md contains large reference sections.
+        truncated = text[:MAX_AGENTS_INSTRUCTIONS_CHARS]
+        logger.warning(
+            "AGENTS instructions truncated to %s chars: %s",
+            MAX_AGENTS_INSTRUCTIONS_CHARS,
+            agents_file,
+        )
+        return f"{truncated}\n...[truncated]"
+    logger.info("Loaded AGENTS instructions from %s", agents_file)
+    return text
 
 
 def parse_changed_files_from_impl_report(impl_report: str) -> list[str]:
@@ -345,6 +384,14 @@ def parse_flag(text: str, key: str) -> str | None:
     return matches[-1].group(1).upper()
 
 
+def parse_first_flag(text: str, keys: list[str] | tuple[str, ...]) -> str | None:
+    for key in keys:
+        value = parse_flag(text, key)
+        if value in ("YES", "NO"):
+            return value
+    return None
+
+
 def format_findings_list(finding_ids: list[str]) -> str:
     if not finding_ids:
         return "NONE"
@@ -396,12 +443,20 @@ def parse_new_findings(text: str) -> dict[str, str]:
 def validate_agent_contract(
     output: str,
     previous_open_findings: list[str],
-    approval_key: str,
+    approval_keys: str | list[str] | tuple[str, ...],
 ) -> tuple[str | None, list[str] | None]:
     # This contract keeps review outcomes deterministic and machine-checkable.
-    approval = parse_flag(output, approval_key)
+    if isinstance(approval_keys, str):
+        keys = [approval_keys]
+    else:
+        keys = list(approval_keys)
+    if not keys:
+        return "missing approval key configuration", None
+
+    canonical_key = keys[0]
+    approval = parse_first_flag(output, keys)
     if approval not in ("YES", "NO"):
-        return f"missing or invalid {approval_key} marker", None
+        return f"missing or invalid {canonical_key} marker", None
 
     open_findings = parse_open_findings(output)
     if open_findings is None:
@@ -414,11 +469,12 @@ def validate_agent_contract(
         return "OPEN_FINDINGS contains duplicate finding ids", None
 
     if approval == "YES" and open_findings:
-        return f"{approval_key}: YES is only allowed when OPEN_FINDINGS: NONE", None
+        return f"{canonical_key}: YES is only allowed when OPEN_FINDINGS: NONE", None
     if approval == "NO" and not open_findings:
-        return f"{approval_key}: NO requires at least one open finding", None
+        return f"{canonical_key}: NO requires at least one open finding", None
 
     status_map = parse_finding_status_map(output)
+    # Every previously open finding must receive an explicit OPEN/CLOSED decision each cycle.
     for finding_id in status_map:
         if not FINDING_ID_PATTERN.match(finding_id):
             return (
@@ -447,11 +503,11 @@ def validate_agent_contract(
 
 
 def validate_codex_phase1_contract(output: str, previous_open_findings: list[str]) -> tuple[str | None, list[str] | None]:
-    return validate_agent_contract(output, previous_open_findings, "CODEX_APPROVAL")
+    return validate_agent_contract(output, previous_open_findings, ["PHASE1_APPROVAL", "CODEX_APPROVAL"])
 
 
 def validate_claude_phase2_contract(output: str, previous_open_findings: list[str]) -> tuple[str | None, list[str] | None]:
-    return validate_agent_contract(output, previous_open_findings, "CLAUDE_APPROVAL")
+    return validate_agent_contract(output, previous_open_findings, ["PHASE2_APPROVAL", "CLAUDE_APPROVAL"])
 
 
 def validate_codex_phase1_contract_error(output: str, previous_open_findings: list[str]) -> str | None:
@@ -505,6 +561,7 @@ def run_phase1(task_text: str, state: dict, args: argparse.Namespace, ctx: RunCo
     max_cycles = int(phase1.get("max_cycles", args.phase1_max_cycles))
 
     for cycle in range(start_cycle, max_cycles + 1):
+        # Cycle order is strict: Claude plan -> Codex contract review -> Claude confirmation.
         # Save a rollback point before each cycle mutates state and artifacts.
         ctx.checkpoint_cycle_state("phase1", cycle, state)
         phase1["cycle"] = cycle
@@ -525,7 +582,7 @@ def run_phase1(task_text: str, state: dict, args: argparse.Namespace, ctx: RunCo
             ),
             log_prefix=f"phase1-cycle{cycle}-claude-plan",
             max_retries=max(args.max_agent_retries, 0),
-            required_flags=["CLAUDE_APPROVAL"],
+            required_flags=["PHASE1_APPROVAL|CLAUDE_APPROVAL"],
         )
         append_markdown(ctx.phase1_shared_file, f"Phase 1 / Cycle {cycle} / Claude Plan", claude_plan)
 
@@ -541,7 +598,7 @@ def run_phase1(task_text: str, state: dict, args: argparse.Namespace, ctx: RunCo
             ),
             log_prefix=f"phase1-cycle{cycle}-codex-review",
             max_retries=max(args.max_agent_retries, 0),
-            required_flags=["CODEX_APPROVAL"],
+            required_flags=["PHASE1_APPROVAL|CODEX_APPROVAL"],
             output_validator=functools.partial(
                 validate_codex_phase1_contract_error,
                 previous_open_findings=list(previous_open_findings),
@@ -549,7 +606,7 @@ def run_phase1(task_text: str, state: dict, args: argparse.Namespace, ctx: RunCo
         )
         append_markdown(ctx.phase1_shared_file, f"Phase 1 / Cycle {cycle} / Codex Review", codex_review)
 
-        codex_approval = parse_flag(codex_review, "CODEX_APPROVAL") or "NO"
+        codex_approval = parse_first_flag(codex_review, ["PHASE1_APPROVAL", "CODEX_APPROVAL"]) or "NO"
         parsed_open_findings = parse_open_findings(codex_review) or []
         phase1["open_findings"] = parsed_open_findings
 
@@ -576,11 +633,11 @@ def run_phase1(task_text: str, state: dict, args: argparse.Namespace, ctx: RunCo
             ),
             log_prefix=f"phase1-cycle{cycle}-claude-confirm",
             max_retries=max(args.max_agent_retries, 0),
-            required_flags=["CLAUDE_APPROVAL"],
+            required_flags=["PHASE1_APPROVAL|CLAUDE_APPROVAL"],
         )
         append_markdown(ctx.phase1_shared_file, f"Phase 1 / Cycle {cycle} / Claude Confirm", claude_confirm)
 
-        claude_approval = parse_flag(claude_confirm, "CLAUDE_APPROVAL") or "NO"
+        claude_approval = parse_first_flag(claude_confirm, ["PHASE1_APPROVAL", "CLAUDE_APPROVAL"]) or "NO"
         if codex_approval == "NO" and claude_approval == "YES":
             # Prevent contradictory approvals within the same cycle.
             logger.warning("Claude approval overridden to NO because Codex has open findings.")
@@ -591,6 +648,7 @@ def run_phase1(task_text: str, state: dict, args: argparse.Namespace, ctx: RunCo
         state["updated_at"] = state_now_iso()
         ctx.save_state(state)
 
+        # Phase 1 completes only on dual-approval with no open findings implied by contract.
         if codex_approval == "YES" and claude_approval == "YES":
             phase1["status"] = "completed"
             phase1["completed_at"] = state_now_iso()
@@ -625,6 +683,7 @@ def run_phase2(task_text: str, plan_text: str, state: dict, args: argparse.Names
     max_cycles = int(phase2.get("max_cycles", args.phase2_max_cycles))
 
     for cycle in range(start_cycle, max_cycles + 1):
+        # Cycle order is strict: Codex implementation -> local tests -> Claude review.
         # Save a rollback point before implementation and local test execution.
         ctx.checkpoint_cycle_state("phase2", cycle, state)
         phase2["cycle"] = cycle
@@ -702,7 +761,7 @@ def run_phase2(task_text: str, plan_text: str, state: dict, args: argparse.Names
             ),
             log_prefix=f"phase2-cycle{cycle}-claude-review",
             max_retries=max(args.max_agent_retries, 0),
-            required_flags=["CLAUDE_APPROVAL"],
+            required_flags=["PHASE2_APPROVAL|CLAUDE_APPROVAL"],
             output_validator=functools.partial(
                 validate_claude_phase2_contract_error,
                 previous_open_findings=list(previous_open_findings),
@@ -711,7 +770,7 @@ def run_phase2(task_text: str, plan_text: str, state: dict, args: argparse.Names
         append_markdown(ctx.phase2_shared_file, f"Phase 2 / Cycle {cycle} / Claude Review", claude_review)
 
         implementation_ready = parse_flag(impl_report, "IMPLEMENTATION_READY") or "NO"
-        claude_approval = parse_flag(claude_review, "CLAUDE_APPROVAL") or "NO"
+        claude_approval = parse_first_flag(claude_review, ["PHASE2_APPROVAL", "CLAUDE_APPROVAL"]) or "NO"
         parsed_open_findings = parse_open_findings(claude_review) or []
         phase2["open_findings"] = parsed_open_findings
         status_map = parse_finding_status_map(claude_review)
@@ -728,6 +787,7 @@ def run_phase2(task_text: str, plan_text: str, state: dict, args: argparse.Names
         state["updated_at"] = state_now_iso()
         ctx.save_state(state)
 
+        # Require all three gates to pass in the same cycle before marking phase complete.
         if implementation_ready == "YES" and test_exit == 0 and claude_approval == "YES":
             phase2["status"] = "completed"
             phase2["completed_at"] = state_now_iso()
@@ -757,6 +817,15 @@ def parse_args() -> argparse.Namespace:
         description="Orchestrates a dual-agent workflow with two phases and shared Markdown artifacts."
     )
     parser.add_argument("--task-file", help="Path to task file (default: task.md).")
+    parser.add_argument(
+        "--agents-file",
+        default=str(DEFAULT_AGENTS_FILE),
+        help=(
+            "Path to AGENTS instructions injected into all agent prompts "
+            f"(default: {DEFAULT_AGENTS_FILE})."
+        ),
+    )
+    # State lifecycle and retry tuning.
     parser.add_argument(
         "--resume",
         action="store_true",
@@ -790,6 +859,7 @@ def parse_args() -> argparse.Namespace:
         default=6,
         help="Maximum implementation/review cycles in phase 2 (default: 6).",
     )
+    # Preflight and execution gates.
     parser.add_argument(
         "--strict-preflight",
         action="store_true",
@@ -821,6 +891,7 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="Shell command for tests (e.g. 'npm test', 'pytest'). Empty = skip tests.",
     )
+    # Prompt-context and snapshot bounds.
     parser.add_argument(
         "--max-shared-chars",
         type=int,
@@ -844,6 +915,7 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Disable automatic rollback to last cycle checkpoint after crashes.",
     )
+    # Agent output controls.
     parser.add_argument(
         "--agent-output",
         choices=["none", "summary", "full"],
@@ -878,6 +950,7 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="If Claude hits quota/rate limits, retry that step with Gemini.",
     )
+    # Watch mode options.
     parser.add_argument(
         "--watch",
         action="store_true",
@@ -905,6 +978,7 @@ def parse_args() -> argparse.Namespace:
         default=3,
         help="Maximum retries per inbox task in watch mode before poison-pill move (default: 3).",
     )
+    # Logging verbosity controls.
     level_group = parser.add_mutually_exclusive_group()
     level_group.add_argument(
         "--verbose",
@@ -929,7 +1003,12 @@ def run_pipeline(task_file: Path, args: argparse.Namespace, force_new: bool = Fa
         agent_live_stream_channels=args.agent_live_stream_channels,
         allow_fallback_to_gemini=bool(args.allow_fallback_to_gemini),
     )
-    ctx = RunContext(config=config, test_command=str(args.test_command or ""))
+    agents_file = Path(str(args.agents_file)).expanduser().resolve()
+    ctx = RunContext(
+        config=config,
+        test_command=str(args.test_command or ""),
+        agents_instructions=load_agents_instructions(agents_file),
+    )
 
     ctx.init_dirs()
 
@@ -943,6 +1022,7 @@ def run_pipeline(task_file: Path, args: argparse.Namespace, force_new: bool = Fa
         ctx.configure_artifacts(state["artifacts"])
         write_file(ctx.latest_run_file, str(state["artifacts"]["run_dir"]))
     else:
+        # Start a fresh run unless explicit resume is requested and available.
         if (
             ctx.state_file.exists()
             and not args.resume
@@ -971,6 +1051,7 @@ def run_pipeline(task_file: Path, args: argparse.Namespace, force_new: bool = Fa
     write_file(ctx.task_snapshot_file, task_text)
 
     if args.from_phase:
+        # Expert override for restarting directly from a specific phase.
         state["phase"] = args.from_phase
         state["updated_at"] = state_now_iso()
         ctx.save_state(state)
@@ -987,6 +1068,7 @@ def run_pipeline(task_file: Path, args: argparse.Namespace, force_new: bool = Fa
 
     current_phase = state.get("phase", "phase1")
 
+    # Resume logic: run phase 1 unless already completed in persisted state.
     if current_phase in ("phase1", "phase2") and state["phase1"].get("status") != "completed":
         try:
             run_phase1(task_text, state, args, ctx)
