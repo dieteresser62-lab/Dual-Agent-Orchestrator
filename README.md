@@ -6,6 +6,8 @@ A CLI tool that automates complex coding work with a two-phase agent workflow: p
 
 The orchestrator reads a Markdown task description, creates/revises an implementation plan in Phase 1, and executes/fixes in Phase 2. State and artifacts are stored in `.orchestrator/`.
 
+![Workflow](https://www.plantuml.com/plantuml/proxy?cache=no&src=https://raw.githubusercontent.com/dieteresser62-lab/Dual-Agent-Orchestrator/master/workflow.puml)
+
 ## Key Features
 
 - Two-phase workflow: planning and implementation are separated.

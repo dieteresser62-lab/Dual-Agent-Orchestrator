@@ -1,0 +1,54 @@
+@startuml
+skinparam DefaultFontName Arial
+skinparam BackgroundColor transparent
+
+title Dual-Agent Orchestrator Workflow
+
+start
+
+:<b>./run_task</b> liest task.md;
+
+if (Ist .orchestrator/state.json vorhanden?) then (ja)
+  :Resume (letzten Stand fortsetzen);
+else (nein)
+  :Preflight Check
+  (Git-Tree sauber?);
+endif
+
+partition "Phase 1: Planning" {
+  repeat
+    :<b>Agent 1 (z.B. Claude)</b>
+    Erstellt/Verfeinert Implementierungsplan;
+    
+    :<b>Agent 2 (z.B. Codex)</b>
+    Prüft den Plan;
+    
+  repeat while (Freigabe?) is (PHASE1_APPROVAL: NO)
+  -> PHASE1_APPROVAL: YES;
+}
+
+partition "Phase 2: Implementation" {
+  repeat
+    :<b>Agent 2 (z.B. Codex)</b>
+    Setzt den Code um;
+    
+    :<b>Agent 1 (z.B. Claude)</b>
+    Prüft den Code;
+    
+    if (Code OK? (OPEN_FINDINGS: NONE)) then (ja)
+      :<b>Test Command</b>
+      (falls konfiguriert);
+      if (Tests erfolgreich?) then (ja)
+        break
+      else (nein)
+      endif
+    else (nein)
+    endif
+    -> Fehler/Findings beheben;
+    
+  repeat while (Zyklus)
+}
+
+:<b>STATUS: DONE</b>;
+stop
+@enduml
