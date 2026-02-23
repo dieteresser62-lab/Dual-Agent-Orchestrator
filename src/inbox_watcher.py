@@ -15,6 +15,7 @@ except ImportError:  # pragma: no cover - non-Unix fallback
     fcntl = None
 
 logger = logging.getLogger(__name__)
+STUCK_RETRY_MULTIPLIER = 3
 
 
 def list_inbox_tasks(inbox_dir: Path) -> list[Path]:
@@ -57,6 +58,24 @@ def move_to_outbox(task_file: Path, outbox_subdir: Path, *, source_name: str | N
 
 def attempt_sidecar_path(task_file: Path) -> Path:
     return task_file.with_name(f"{task_file.name}.attempts")
+
+
+def success_marker_path(task_file: Path) -> Path:
+    return task_file.with_name(f"{task_file.name}.success")
+
+
+def has_success_marker(task_file: Path) -> bool:
+    return success_marker_path(task_file).exists()
+
+
+def write_success_marker(task_file: Path) -> None:
+    marker = success_marker_path(task_file)
+    marker.write_text(datetime.now(timezone.utc).isoformat(), encoding="utf-8")
+
+
+def delete_success_marker(task_file: Path) -> None:
+    with contextlib.suppress(FileNotFoundError):
+        success_marker_path(task_file).unlink()
 
 
 def read_attempt_count(task_file: Path) -> int:
@@ -156,14 +175,41 @@ def watch_inbox(
 
             task_file = ready[0]
             logger.info("Processing inbox task: %s", task_file)
+            stuck_limit = max_retries * STUCK_RETRY_MULTIPLIER
+            if stuck_limit > 0:
+                current_attempts = read_attempt_count(task_file)
+                if current_attempts >= stuck_limit:
+                    stuck_destination = task_file.with_suffix(".md.stuck")
+                    logger.critical(
+                        "Task %s stuck after %s attempts (limit %s). Renaming to %s for manual intervention.",
+                        task_file.name,
+                        current_attempts,
+                        stuck_limit,
+                        stuck_destination.name,
+                    )
+                    try:
+                        task_file.rename(stuck_destination)
+                        delete_attempt_sidecar(task_file)
+                        delete_success_marker(task_file)
+                    except Exception:
+                        logger.exception("Failed to rename stuck task %s.", task_file)
+                    continue
+
             exit_code: int | None = None
             failed_with_exception = False
+            task_succeeded_already = has_success_marker(task_file)
 
-            try:
-                exit_code = process_task(task_file, args, True)
-            except Exception:
-                failed_with_exception = True
-                logger.exception("Task processing crashed for %s.", task_file)
+            if task_succeeded_already:
+                logger.info(
+                    "Skipping re-execution for already-succeeded task; retrying move only: %s",
+                    task_file.name,
+                )
+            else:
+                try:
+                    exit_code = process_task(task_file, args, True)
+                except Exception:
+                    failed_with_exception = True
+                    logger.exception("Task processing crashed for %s.", task_file)
 
             failed = failed_with_exception or (exit_code is not None and exit_code != 0)
             if failed:
@@ -175,6 +221,7 @@ def watch_inbox(
                     try:
                         destination = move_to_outbox(task_file, outbox_failed_dir, source_name=poison_name)
                         delete_attempt_sidecar(task_file)
+                        delete_success_marker(task_file)
                         logger.warning(
                             "Task marked poison after %s/%s failures and moved to failed outbox: %s",
                             attempts,
@@ -195,38 +242,73 @@ def watch_inbox(
                 logger.info("Task finished with exit code %s: %s", exit_code, task_file.name)
                 continue
 
+            if not task_succeeded_already:
+                try:
+                    write_success_marker(task_file)
+                except Exception:
+                    logger.exception("Failed to write success marker for %s.", task_file)
+
             try:
                 destination = move_to_outbox(task_file, outbox_done_dir)
                 delete_attempt_sidecar(task_file)
+                delete_success_marker(task_file)
                 logger.info("Moved task to done outbox: %s", destination)
             except Exception:
                 # Keep retry accounting symmetrical with processing failures.
                 attempts = read_attempt_count(task_file) + 1
                 write_attempt_count(task_file, attempts)
+                marker_exists = has_success_marker(task_file)
                 if attempts >= max_retries:
-                    # Treat move failures like processing failures to avoid infinite busy loops.
-                    poison_name = f"{task_file.name}.poison"
+                    failed_name = f"{task_file.name}.move_error" if marker_exists else f"{task_file.name}.poison"
                     try:
-                        destination = move_to_outbox(task_file, outbox_failed_dir, source_name=poison_name)
+                        destination = move_to_outbox(task_file, outbox_failed_dir, source_name=failed_name)
                         delete_attempt_sidecar(task_file)
+                        delete_success_marker(task_file)
+                        if marker_exists:
+                            logger.warning(
+                                "Task SUCCEEDED (exit 0) but move to done/ failed (%s/%s). "
+                                "Marking as move_error despite successful execution: %s",
+                                attempts,
+                                max_retries,
+                                destination,
+                            )
+                        else:
+                            logger.warning(
+                                "Task marked poison after %s/%s failures and moved to failed outbox: %s",
+                                attempts,
+                                max_retries,
+                                destination,
+                            )
+                    except Exception:
+                        if marker_exists:
+                            logger.exception(
+                                "Failed to move succeeded-but-unmoved task %s to failed outbox.",
+                                task_file,
+                            )
+                        else:
+                            logger.exception("Failed to move poison task %s to outbox.", task_file)
+                else:
+                    if marker_exists:
                         logger.warning(
-                            "Task marked poison after %s/%s failures and moved to failed outbox: %s",
+                            "Task SUCCEEDED (exit 0) but move to done/ failed (%s/%s). "
+                            "Leaving in inbox to retry move only: %s",
                             attempts,
                             max_retries,
-                            destination,
+                            task_file.name,
                         )
-                    except Exception:
-                        logger.exception("Failed to move poison task %s to outbox.", task_file)
-                else:
-                    logger.warning(
-                        "Task move to done failed (%s/%s). Leaving in inbox for retry: %s",
-                        attempts,
-                        max_retries,
-                        task_file.name,
-                    )
+                    else:
+                        logger.warning(
+                            "Task move to done failed (%s/%s). Leaving in inbox for retry: %s",
+                            attempts,
+                            max_retries,
+                            task_file.name,
+                        )
                 continue
 
-            logger.info("Task finished with exit code %s: %s", exit_code, task_file.name)
+            if task_succeeded_already:
+                logger.info("Task bookkeeping completed for previously succeeded task: %s", task_file.name)
+            else:
+                logger.info("Task finished with exit code %s: %s", exit_code, task_file.name)
     except KeyboardInterrupt:
         logger.info("Watch mode stopped.")
         return 0

@@ -20,6 +20,7 @@ def test_phase1_claude_plan_prompt_includes_markers_and_delimiters() -> None:
     assert "<<<TASK_BEGIN>>>" in prompt
     assert "<<<SHARED_BEGIN>>>" in prompt
     assert "PHASE1_APPROVAL: YES or PHASE1_APPROVAL: NO" in prompt
+    assert "PLANNING ONLY:" in prompt
     assert prompt.endswith("STATUS: DONE")
 
 
@@ -33,6 +34,7 @@ def test_phase1_codex_review_prompt_handles_special_characters() -> None:
     )
     assert task_text in prompt
     assert "PHASE1_APPROVAL: YES or PHASE1_APPROVAL: NO" in prompt
+    assert "REVIEW ONLY:" in prompt
     assert prompt.endswith("STATUS: DONE")
 
 
@@ -46,6 +48,7 @@ def test_phase1_claude_confirm_prompt_contains_codex_contract() -> None:
     )
     assert "PHASE1_APPROVAL: NO" in prompt
     assert "OPEN_FINDINGS: F-010" in prompt
+    assert "CONFIRMATION ONLY:" in prompt
     assert prompt.endswith("STATUS: DONE")
 
 
@@ -79,6 +82,7 @@ def test_phase2_claude_review_prompt_embeds_all_sections() -> None:
     assert "<<<FILES_BEGIN>>>" in prompt
     assert "<<<SNAPSHOT_BEGIN>>>" in prompt
     assert "PHASE2_APPROVAL: YES only when OPEN_FINDINGS: NONE" in prompt
+    assert "REVIEW ONLY:" in prompt
     assert prompt.endswith("STATUS: DONE")
 
 

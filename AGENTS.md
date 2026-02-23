@@ -23,6 +23,7 @@
   - `src/prompts.py`
   - `src/state_io.py`
 - Do not manually edit `.orchestrator/state.json` or checkpoint files.
+- Orchestrated runs may execute in a dirty worktree. Treat unrelated existing changes as pre-existing context, not as a stop condition.
 - Keep instruction files synchronized and non-contradictory:
   - `AGENTS.md`
   - `CLAUDE.md`

@@ -11,6 +11,8 @@ from orchestrator import (
     truncate_shared,
     validate_agent_contract,
     validate_done_marker,
+    validate_phase1_planning_only_output,
+    validate_phase2_review_only_output,
 )
 
 
@@ -239,3 +241,47 @@ random text
 done
 """
     assert parse_changed_files_from_impl_report(report) == ["src/a.py", "tests/test_a.py"]
+
+
+def test_validate_phase1_planning_only_output_rejects_tool_narration() -> None:
+    out = """
+I will now check cli_help.
+PHASE1_APPROVAL: YES
+STATUS: DONE
+"""
+    err = validate_phase1_planning_only_output(out)
+    assert err is not None
+
+
+def test_validate_phase1_planning_only_output_accepts_normal_plan_text() -> None:
+    out = """
+## Plan Status
+Ready.
+PHASE1_APPROVAL: YES
+STATUS: DONE
+"""
+    err = validate_phase1_planning_only_output(out)
+    assert err is None
+
+
+def test_validate_phase2_review_only_output_rejects_tool_narration() -> None:
+    out = """
+I will now read css/balance.css and patch it.
+PHASE2_APPROVAL: YES
+OPEN_FINDINGS: NONE
+STATUS: DONE
+"""
+    err = validate_phase2_review_only_output(out)
+    assert err is not None
+
+
+def test_validate_phase2_review_only_output_accepts_normal_review_text() -> None:
+    out = """
+## Findings
+No blocker issues found.
+OPEN_FINDINGS: NONE
+PHASE2_APPROVAL: YES
+STATUS: DONE
+"""
+    err = validate_phase2_review_only_output(out)
+    assert err is None

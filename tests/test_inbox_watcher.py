@@ -424,11 +424,118 @@ def test_done_move_failure_counts_retries_and_poison_pills(tmp_path: Path, monke
     )
 
     assert result == 0
-    assert calls == ["ok.md", "ok.md"]
+    assert calls == ["ok.md"]
     assert not task.exists()
-    assert len(list((outbox / "failed").glob("*.poison"))) == 1
+    assert len(list((outbox / "failed").glob("*.move_error"))) == 1
     assert len(list((outbox / "done").glob("*.md"))) == 0
     assert not (inbox / "ok.md.attempts").exists()
+    assert not (inbox / "ok.md.success").exists()
+
+
+def test_success_marker_skips_reexecution(tmp_path: Path, monkeypatch) -> None:
+    inbox = tmp_path / "inbox"
+    outbox = tmp_path / "outbox"
+    inbox.mkdir()
+    task = inbox / "ok.md"
+    task.write_text("x", encoding="utf-8")
+    (inbox / "ok.md.success").write_text("already-done", encoding="utf-8")
+    process_calls: list[str] = []
+    move_attempts = {"done": 0}
+
+    def process_task(task_file: Path, _: Namespace, _force_new: bool) -> int:
+        process_calls.append(task_file.name)
+        return 0
+
+    def fake_move_to_outbox(task_file: Path, outbox_subdir: Path, *, source_name: str | None = None) -> Path:
+        if outbox_subdir.name == "done":
+            move_attempts["done"] += 1
+            if move_attempts["done"] == 1:
+                raise RuntimeError("transient move failure")
+        destination = outbox_subdir / f"fake_{source_name or task_file.name}"
+        task_file.rename(destination)
+        return destination
+
+    monkeypatch.setattr("inbox_watcher.move_to_outbox", fake_move_to_outbox)
+
+    result = watch_inbox(
+        inbox_dir=inbox,
+        outbox_dir=outbox,
+        poll_interval=0.01,
+        args=_args(),
+        process_task=process_task,
+        max_retries=3,
+        sleep_fn=_InterruptingSleep(interrupt_after=1),
+        time_fn=lambda: task.stat().st_mtime + 2.0 if task.exists() else 10_000.0,
+    )
+
+    assert result == 0
+    assert process_calls == []
+    assert len(list((outbox / "done").glob("*.md"))) == 1
+    assert not task.exists()
+    assert not (inbox / "ok.md.success").exists()
+    assert not (inbox / "ok.md.attempts").exists()
+
+
+def test_move_error_suffix_for_succeeded_task(tmp_path: Path, monkeypatch) -> None:
+    inbox = tmp_path / "inbox"
+    outbox = tmp_path / "outbox"
+    inbox.mkdir()
+    task = inbox / "ok.md"
+    task.write_text("x", encoding="utf-8")
+
+    def fake_move_to_outbox(task_file: Path, outbox_subdir: Path, *, source_name: str | None = None) -> Path:
+        if outbox_subdir.name == "done":
+            raise RuntimeError("done move always fails")
+        destination = outbox_subdir / f"fake_{source_name or task_file.name}"
+        task_file.rename(destination)
+        return destination
+
+    monkeypatch.setattr("inbox_watcher.move_to_outbox", fake_move_to_outbox)
+
+    result = watch_inbox(
+        inbox_dir=inbox,
+        outbox_dir=outbox,
+        poll_interval=0.01,
+        args=_args(),
+        process_task=lambda *_: 0,
+        max_retries=1,
+        sleep_fn=_InterruptingSleep(interrupt_after=1),
+        time_fn=lambda: task.stat().st_mtime + 2.0 if task.exists() else 10_000.0,
+    )
+
+    assert result == 0
+    assert len(list((outbox / "failed").glob("*.move_error"))) == 1
+    assert len(list((outbox / "failed").glob("*.poison"))) == 0
+    assert not (inbox / "ok.md.success").exists()
+
+
+def test_stuck_task_safety_net_renames_to_stuck(tmp_path: Path) -> None:
+    inbox = tmp_path / "inbox"
+    outbox = tmp_path / "outbox"
+    inbox.mkdir()
+    task = inbox / "stuck.md"
+    task.write_text("x", encoding="utf-8")
+    (inbox / "stuck.md.attempts").write_text("6", encoding="utf-8")
+    (inbox / "stuck.md.success").write_text("old", encoding="utf-8")
+    calls: list[str] = []
+
+    result = watch_inbox(
+        inbox_dir=inbox,
+        outbox_dir=outbox,
+        poll_interval=0.01,
+        args=_args(),
+        process_task=lambda task_file, _args, _force_new: calls.append(task_file.name) or 0,
+        max_retries=2,
+        sleep_fn=_InterruptingSleep(interrupt_after=1),
+        time_fn=lambda: task.stat().st_mtime + 2.0 if task.exists() else 10_000.0,
+    )
+
+    assert result == 0
+    assert calls == []
+    assert not task.exists()
+    assert (inbox / "stuck.md.stuck").exists()
+    assert not (inbox / "stuck.md.attempts").exists()
+    assert not (inbox / "stuck.md.success").exists()
 
 
 def test_watch_fails_fast_when_lock_already_held(tmp_path: Path) -> None:

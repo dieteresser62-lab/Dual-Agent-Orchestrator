@@ -1,8 +1,17 @@
 from __future__ import annotations
 
+import re
 import tempfile
 from pathlib import Path
 from typing import Protocol
+
+
+def _trim_after_done_marker(text: str) -> str:
+    marker = "STATUS: DONE"
+    idx = text.find(marker)
+    if idx < 0:
+        return text.strip()
+    return text[: idx + len(marker)].strip()
 
 
 class AgentAdapter(Protocol):
@@ -84,6 +93,18 @@ class CodexAdapter:
             return False
 
         if channel == "stderr":
+            # Compact watch logs should hide Codex internal workflow chatter.
+            if txt in {"thinking", "codex", "exec", "file update", "shell"}:
+                return False
+            if txt.startswith("**") and txt.endswith("**"):
+                return False
+            if txt.startswith("Success. Updated the following files:"):
+                return False
+            if re.match(r"^\d{1,3}(,\d{3})+$", txt):
+                return False
+            if re.match(r"^[MADRCU?]{1,2}\s+\S+", txt):
+                return False
+
             if txt == "user":
                 # Codex echoes the prompt; suppress it to keep live logs signal-focused.
                 state["skip_prompt_echo"] = True
@@ -205,7 +226,8 @@ class GeminiAdapter:
     def extract_output(self, stdout: str, stderr: str, extra_files: dict[str, str]) -> str:
         _ = stderr
         _ = extra_files
-        return (stdout or "").strip()
+        # Gemini occasionally appends meta/tool chatter after the contract footer.
+        return _trim_after_done_marker(stdout or "")
 
     def stream_filter(self, channel: str, line: str, state: dict[str, str | bool]) -> bool:
         _ = channel

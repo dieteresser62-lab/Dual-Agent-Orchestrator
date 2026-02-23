@@ -62,7 +62,7 @@ Default behavior in watch mode:
 - Process files in FIFO order (oldest modified first).
 - Skip very new files until they are stable (minimum age: 1 second).
 - Enable `--skip-git-check` automatically (so local WIP changes do not block queue processing).
-- Stream only `stderr` live by default (keeps watch logs quieter when agents emit verbose `stdout` status text).
+- Stream only `stdout` live by default (reduces noisy internal CLI traces from `stderr`).
 - Move every processed task file to `outbox/` with a timestamp prefix, even if the run fails.
 - Keep waiting for the next task until you stop with `Ctrl+C`.
 
@@ -215,7 +215,7 @@ RUN_TASK_WATCH_STREAM_CHANNELS=both ./run_task --watch    # stream both channels
 ```
 
 The wrapper still respects an explicitly passed `--skip-git-check`.
-`RUN_TASK_WATCH_STREAM_CHANNELS` accepts `stderr` (default), `stdout`, or `both`; invalid values fall back to `stderr`.
+`RUN_TASK_WATCH_STREAM_CHANNELS` accepts `stdout` (default), `stderr`, or `both`; invalid values fall back to `stdout`.
 
 ## Agent Instruction Files
 

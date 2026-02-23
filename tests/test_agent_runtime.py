@@ -514,6 +514,17 @@ def test_gemini_adapter_uses_stdin_prompt() -> None:
     assert use_stdin_prompt is True
 
 
+def test_gemini_adapter_trims_trailing_text_after_done_marker() -> None:
+    adapter = GeminiAdapter()
+    output = adapter.extract_output(
+        "PHASE1_APPROVAL: YES\nSTATUS: DONEI will now patch files\n",
+        "",
+        {},
+    )
+    assert output.endswith("STATUS: DONE")
+    assert "I will now patch files" not in output
+
+
 def test_codex_adapter_cleanup_deletes_temp_message_file() -> None:
     adapter = CodexAdapter()
     command, use_stdin_prompt = adapter.build_command("prompt")

@@ -333,10 +333,18 @@ def run_agent(
                     thread.start()
 
                 completed_channels: set[str] = set()
+                # Emit a periodic heartbeat so long silent "thinking" phases are visible.
+                heartbeat_interval_seconds = 30.0
+                last_heartbeat = start
                 while len(completed_channels) < 2:
                     if time.monotonic() - start > timeout_seconds:
                         process.kill()
                         raise subprocess.TimeoutExpired(command_parts, timeout_seconds)
+                    now = time.monotonic()
+                    if now - last_heartbeat >= heartbeat_interval_seconds:
+                        elapsed = int(now - start)
+                        logger.info("[AGENT] %s still running (elapsed: %ss)", agent_key, elapsed)
+                        last_heartbeat = now
                     try:
                         channel, line = stream_queue.get(timeout=0.2)
                     except queue.Empty:
@@ -558,9 +566,10 @@ def run_agent_checked(
         if has_next_attempt:
             delay_seconds = compute_retry_backoff_seconds(errors[-1], attempt)
             logger.info(
-                "[RETRY] %s attempt=%s failed. Waiting %ss before retry.",
+                "[RETRY] %s attempt=%s failed. Reason: %s. Waiting %ss before retry.",
                 effective_agent_key,
                 attempt,
+                shorten(errors[-1], 400),
                 delay_seconds,
             )
             time.sleep(delay_seconds)

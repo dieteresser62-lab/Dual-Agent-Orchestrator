@@ -36,6 +36,7 @@ def build_phase1_claude_plan_prompt(
         Goal:
         - Create or revise the implementation plan so all open findings are closed.
         - Do not add side work that is not necessary for closing findings or completing the task.
+        - PLANNING ONLY: do not execute commands, do not read/edit files, do not call tools, and do not start implementation.
 
         Output format (Markdown):
         - Sections: Plan Status, Work Packages, Acceptance Criteria, Risks, Test Strategy, Open Questions
@@ -78,6 +79,7 @@ def build_phase1_codex_review_prompt(
         2) Explicitly close previous findings or keep them open, with concise reasoning.
         3) Add new findings ONLY if they are blocker-level.
         4) Provide a clear approval decision according to the CONTRACT.
+        5) REVIEW ONLY: do not execute commands, do not read/edit files, do not call tools, and do not start implementation.
 
         CONTRACT (mandatory):
         - For EACH previously open finding, one line:
@@ -134,6 +136,7 @@ def build_phase1_claude_confirm_prompt(
         1) Determine whether the current plan is implementation-ready.
         2) If not, list concise mandatory adjustments for the next cycle.
         3) If PHASE1_APPROVAL=NO or OPEN_FINDINGS is not empty, PHASE1_APPROVAL must be NO.
+        4) CONFIRMATION ONLY: do not execute commands, do not read/edit files, do not call tools, and do not start implementation.
 
         Output format (Markdown):
         - Sections: Decision, Justification, Next Mandatory Adjustments
@@ -182,6 +185,8 @@ def build_phase2_codex_implement_prompt(
         1) Implement/fix in the repository according to the plan and previous findings.
         2) Explicitly address all open Claude objections.
         3) Summarize implemented changes concisely.
+        4) The repository can already contain unrelated local changes. Do NOT stop because of a dirty git worktree.
+           Ignore unrelated diffs, edit only files relevant to this task, and do not request confirmation just for pre-existing changes.
 
         Output format (Markdown):
         - Sections: Summary, Changed Files, Implemented Fixes, Remaining Items
@@ -245,6 +250,7 @@ def build_phase2_claude_review_prompt(
         1) Verify task fulfillment and plan compliance.
         2) Find bugs, regressions, security/maintenance risks, and test gaps.
         3) If not approvable, provide concrete mandatory fixes for the next cycle.
+        4) REVIEW ONLY: do not execute commands, do not read/edit files, do not call tools, and do not implement code.
 
         CONTRACT (mandatory):
         - For EACH previously open finding, one line:

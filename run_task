@@ -98,13 +98,13 @@ fi
 
 if [[ "$WATCH_MODE" == "yes" ]]; then
   # In watch mode, always start a fresh task-processing loop.
-  WATCH_CHANNELS="${RUN_TASK_WATCH_STREAM_CHANNELS:-stderr}"
+  WATCH_CHANNELS="${RUN_TASK_WATCH_STREAM_CHANNELS:-stdout}"
   case "$WATCH_CHANNELS" in
     stderr|stdout|both)
       ;;
     *)
-      echo "[WARN] Invalid RUN_TASK_WATCH_STREAM_CHANNELS='$WATCH_CHANNELS'; falling back to 'stderr'."
-      WATCH_CHANNELS="stderr"
+      echo "[WARN] Invalid RUN_TASK_WATCH_STREAM_CHANNELS='$WATCH_CHANNELS'; falling back to 'stdout'."
+      WATCH_CHANNELS="stdout"
       ;;
   esac
   echo "[INFO] Watch mode: live stream channels = $WATCH_CHANNELS (override via RUN_TASK_WATCH_STREAM_CHANNELS=stdout|stderr|both)."

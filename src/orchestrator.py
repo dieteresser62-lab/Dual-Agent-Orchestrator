@@ -518,6 +518,55 @@ def validate_claude_phase2_contract_error(output: str, previous_open_findings: l
     return validate_claude_phase2_contract(output, previous_open_findings)[0]
 
 
+def validate_phase1_planning_only_output(output: str) -> str | None:
+    contract_text = strip_delimited_sections(output)
+    suspicious_patterns = [
+        r"(?im)^\s*i will now\b",
+        r"(?im)^\s*i'll now\b",
+        r"(?im)\bcli_help\b",
+        r"(?im)\brun_shell_command\b",
+        r"(?im)^\s*i will (begin|start) by (searching|reading|checking|examining|inspecting)\b",
+    ]
+    for pattern in suspicious_patterns:
+        if re.search(pattern, contract_text):
+            return (
+                "phase1 output contains tool/implementation narration; "
+                "planning/review/confirmation must be reasoning-only with no command execution behavior"
+            )
+    return None
+
+
+def validate_phase2_review_only_output(output: str) -> str | None:
+    contract_text = strip_delimited_sections(output)
+    suspicious_patterns = [
+        r"(?im)^\s*i will now\b",
+        r"(?im)^\s*i'll now\b",
+        r"(?im)\bcli_help\b",
+        r"(?im)\brun_shell_command\b",
+        r"(?im)^\s*i will (begin|start) by (searching|reading|checking|examining|inspecting)\b",
+    ]
+    for pattern in suspicious_patterns:
+        if re.search(pattern, contract_text):
+            return (
+                "phase2 review output contains tool/implementation narration; "
+                "review must be reasoning-only with no command execution behavior"
+            )
+    return None
+
+
+def chain_validators(*validators):
+    def _validate(output: str) -> str | None:
+        for validator in validators:
+            if validator is None:
+                continue
+            err = validator(output)
+            if err:
+                return err
+        return None
+
+    return _validate
+
+
 def approval_gate(message: str) -> bool:
     print(f"\n{'=' * 60}")
     print(message)
@@ -583,6 +632,7 @@ def run_phase1(task_text: str, state: dict, args: argparse.Namespace, ctx: RunCo
             log_prefix=f"phase1-cycle{cycle}-claude-plan",
             max_retries=max(args.max_agent_retries, 0),
             required_flags=["PHASE1_APPROVAL|CLAUDE_APPROVAL"],
+            output_validator=validate_phase1_planning_only_output,
         )
         append_markdown(ctx.phase1_shared_file, f"Phase 1 / Cycle {cycle} / Claude Plan", claude_plan)
 
@@ -599,9 +649,12 @@ def run_phase1(task_text: str, state: dict, args: argparse.Namespace, ctx: RunCo
             log_prefix=f"phase1-cycle{cycle}-codex-review",
             max_retries=max(args.max_agent_retries, 0),
             required_flags=["PHASE1_APPROVAL|CODEX_APPROVAL"],
-            output_validator=functools.partial(
-                validate_codex_phase1_contract_error,
-                previous_open_findings=list(previous_open_findings),
+            output_validator=chain_validators(
+                validate_phase1_planning_only_output,
+                functools.partial(
+                    validate_codex_phase1_contract_error,
+                    previous_open_findings=list(previous_open_findings),
+                ),
             ),
         )
         append_markdown(ctx.phase1_shared_file, f"Phase 1 / Cycle {cycle} / Codex Review", codex_review)
@@ -634,6 +687,7 @@ def run_phase1(task_text: str, state: dict, args: argparse.Namespace, ctx: RunCo
             log_prefix=f"phase1-cycle{cycle}-claude-confirm",
             max_retries=max(args.max_agent_retries, 0),
             required_flags=["PHASE1_APPROVAL|CLAUDE_APPROVAL"],
+            output_validator=validate_phase1_planning_only_output,
         )
         append_markdown(ctx.phase1_shared_file, f"Phase 1 / Cycle {cycle} / Claude Confirm", claude_confirm)
 
@@ -762,9 +816,12 @@ def run_phase2(task_text: str, plan_text: str, state: dict, args: argparse.Names
             log_prefix=f"phase2-cycle{cycle}-claude-review",
             max_retries=max(args.max_agent_retries, 0),
             required_flags=["PHASE2_APPROVAL|CLAUDE_APPROVAL"],
-            output_validator=functools.partial(
-                validate_claude_phase2_contract_error,
-                previous_open_findings=list(previous_open_findings),
+            output_validator=chain_validators(
+                validate_phase2_review_only_output,
+                functools.partial(
+                    validate_claude_phase2_contract_error,
+                    previous_open_findings=list(previous_open_findings),
+                ),
             ),
         )
         append_markdown(ctx.phase2_shared_file, f"Phase 2 / Cycle {cycle} / Claude Review", claude_review)
@@ -973,7 +1030,8 @@ def parse_args() -> argparse.Namespace:
         help="Polling interval in seconds for watch mode (default: 5.0).",
     )
     parser.add_argument(
-        "--max-retries",
+        "--watch-max-retries",
+        dest="watch_max_retries",
         type=int,
         default=3,
         help="Maximum retries per inbox task in watch mode before poison-pill move (default: 3).",
@@ -1124,10 +1182,12 @@ def main() -> int:
             inbox_dir=Path(args.inbox_dir),
             outbox_dir=Path(args.outbox_dir),
             poll_interval=max(0.1, float(args.poll_interval)),
-            max_retries=max(0, int(args.max_retries)),
+            max_retries=max(0, int(args.watch_max_retries)),
             args=args,
             process_task=run_pipeline,
         )
+    if args.watch_max_retries != 3:
+        logger.warning("--watch-max-retries is only used in --watch mode.")
 
     task_file = find_task_file(args.task_file)
     return run_pipeline(task_file, args)
