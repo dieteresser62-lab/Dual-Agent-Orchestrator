@@ -8,6 +8,7 @@
 
 - `docs/internal/reference-target-repo-agents.md` — Rollen, Stop-Regeln, Review-Grundsätze, Validierung, Sicherheit.
 - `docs/internal/reference-target-repo-slice-execution-rules.md` — Slice-Ablage, Diff-Risiko-Block, Commit-Regeln, Review-Zyklus, Rollback.
+- `docs/internal/reference-target-repo-claude.md`, `-gemini.md`, `-codex.md` — die Rollendateien des Zielrepos, wortgleich. Belegen die Review-Pflichten und die dortige Rollenzuschnitte.
 
 Diese beiden Dokumente beschreiben das Verfahren, das hier automatisiert werden soll. Sie sind **Referenz, nicht Laufzeitregel dieses Repos** — verbindlich für den Orchestrator bleibt dessen eigene `AGENTS.md` im Wurzelverzeichnis. Wo dieses Dokument von den Referenzen abweicht, ist die Abweichung unten ausgewiesen und begründet.
 

@@ -8,16 +8,21 @@
 
 ## 1. Was vorliegt
 
-Vier Dokumente unter `docs/internal/`:
+Dokumente unter `docs/internal/`:
 
 | Datei | Inhalt | Status |
 |---|---|---|
 | `requirements-orchestrator-modernization.md` | Anforderungsbeschreibung für Codex, Revision 2 | **Hauptdokument** |
 | `reference-target-repo-agents.md` | `AGENTS.md` der Ruhestandsuite, wortgleich | Referenz, unverändert |
 | `reference-target-repo-slice-execution-rules.md` | `SLICE_EXECUTION_RULES.md` der Ruhestandsuite, wortgleich | Referenz, unverändert |
+| `reference-target-repo-claude.md` | `CLAUDE.md` der Ruhestandsuite, wortgleich | Referenz, später ergänzt |
+| `reference-target-repo-gemini.md` | `GEMINI.md` der Ruhestandsuite, wortgleich | Referenz, später ergänzt |
+| `reference-target-repo-codex.md` | `CODEX.md` der Ruhestandsuite, wortgleich | Referenz, später ergänzt |
 | `handover-orchestrator-modernization.md` | dieses Dokument | Übergabe |
 
 Kein Code wurde geändert. Der Beitrag besteht ausschließlich aus diesen neuen Dateien.
+
+*Nachtrag der lokalen Session:* Die drei Rollendateien-Referenzen stammen nicht aus der Cloud-Session, sondern wurden lokal ergänzt. Die ursprüngliche Lieferung umfasste vier Dokumente.
 
 ---
 
