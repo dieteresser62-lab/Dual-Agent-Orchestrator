@@ -1,120 +1,163 @@
 # Übergabe: Modernisierung des Dual-Agent-Orchestrators
 
 **Stand:** 2026-08-10
-**Zweck:** Übergabe aus einer Cloud-Session (Container-Klon von GitHub) in eine neue Session auf dem lokalen Arbeitsverzeichnis.
+**Anforderungsstand:** Revision 5
+**Zweck:** Kompakter, lokal verifizierter Wiedereinstieg und Übergabe an den Review des Arbeitsplans.
 **Ablage:** `docs/internal/`
 
 ---
 
-## 1. Was vorliegt
-
-Dokumente unter `docs/internal/`:
+## 1. Maßgebliche Dokumente
 
 | Datei | Inhalt | Status |
 |---|---|---|
-| `requirements-orchestrator-modernization.md` | Anforderungsbeschreibung für Codex, Revision 2 | **Hauptdokument** |
-| `reference-target-repo-agents.md` | `AGENTS.md` der Ruhestandsuite, wortgleich | Referenz, unverändert |
-| `reference-target-repo-slice-execution-rules.md` | `SLICE_EXECUTION_RULES.md` der Ruhestandsuite, wortgleich | Referenz, unverändert |
-| `reference-target-repo-claude.md` | `CLAUDE.md` der Ruhestandsuite, wortgleich | Referenz, später ergänzt |
-| `reference-target-repo-gemini.md` | `GEMINI.md` der Ruhestandsuite, wortgleich | Referenz, später ergänzt |
-| `reference-target-repo-codex.md` | `CODEX.md` der Ruhestandsuite, wortgleich | Referenz, später ergänzt |
-| `handover-orchestrator-modernization.md` | dieses Dokument | Übergabe |
+| `requirements-orchestrator-modernization.md` | Anforderungen R-1 bis R-18 und verbindliche Architekturentscheidungen | Hauptdokument, Revision 5 |
+| `orchestrator-modernization-work-plan.md` | Umsetzungsslices, Abhängigkeiten, Abdeckungsmatrix und Testplan | zur Nutzerprüfung vorgelegt |
+| `reference-target-repo-agents.md` | `AGENTS.md` der Ruhestandsuite | historische Verfahrensreferenz |
+| `reference-target-repo-slice-execution-rules.md` | manuelle Slice-Regeln der Ruhestandsuite | historische Verfahrensreferenz |
+| `reference-target-repo-claude.md` | alte Claude-Rolle des Zielrepos | historische Referenz |
+| `reference-target-repo-gemini.md` | alte Gemini-/Antigravity-Rolle des Zielrepos | historische Referenz |
+| `reference-target-repo-codex.md` | alte Codex-Rolle des Zielrepos | historische Referenz |
 
-Kein Code wurde geändert. Der Beitrag besteht ausschließlich aus diesen neuen Dateien.
-
-*Nachtrag der lokalen Session:* Die drei Rollendateien-Referenzen stammen nicht aus der Cloud-Session, sondern wurden lokal ergänzt. Die ursprüngliche Lieferung umfasste vier Dokumente.
+Die Referenzdateien belegen den manuellen Ausgangsprozess. Sie sind nicht die Laufzeitregeln dieses Repos und werden nicht an das neue Rollenmodell angepasst. Maßgeblich bleiben die Root-`AGENTS.md` für den aktuellen Code und die Anforderungsbeschreibung für den geplanten Umbau.
 
 ---
 
-## 2. Vorbehalt zur Analysebasis — vor Weiterarbeit prüfen
+## 2. Lokal verifizierter Repository-Stand
 
-Die Analyse entstand in einem Container, der `origin/master` bei Commit **`0bd3bad`** („Docs: Add PlantUML workflow diagram") geklont hatte. **Das lokale Arbeitsverzeichnis hat einen anderen Stand.** Wie stark er abweicht, ist unbekannt.
+- Aktiver Branch: `feature/orchestrator-modernization`
+- Basis: `master` bei `0bd3bad`
+- HEAD vor den aktuellen Planungsänderungen: `75337eb`
+- Der Branch liegt vier Dokumentationscommits vor `master` und besitzt keinen konfigurierten Upstream.
+- Der Arbeitsbaum war vor den Änderungen dieser Planungsrunde sauber.
+- Gegenüber `master` war kein Quell- oder Testcode geändert.
+- Die vorhandene Pipeline arbeitet weiterhin mit Phase 1/Phase 2 und Claude→Gemini-Fallback.
+- `.orchestrator/state.json` liegt in Version 2 vor und steht auf `phase: done`; er stammt vom 2026-02-23.
+- Verbindliche Validierung: `python3 -m pytest tests/ -v`
+- Ergebnis der erneuten lokalen Prüfung am 2026-08-10: **92 gesammelt, 92 bestanden**.
 
-### Betroffen — muss nachverifiziert werden
-
-**§3 der Anforderungsbeschreibung** („Verifizierter Ist-Zustand", Befunde B-1 bis B-17). Jeder Befund nennt Datei und Zeilenbereich, geprüft gegen `0bd3bad`. Bei abweichendem lokalem Stand können Zeilennummern verschoben, Befunde bereits behoben oder neue hinzugekommen sein.
-
-**Erste Aufgabe in der neuen Session:** §3 gegen den lokalen Code neu verifizieren und die Tabelle korrigieren. Bis dahin ist §3 als „unverifiziert gegenüber lokalem Stand" zu behandeln.
-
-Ebenfalls zu prüfen: die Testanzahl. Im Container waren es 92 grüne Tests (`python3 -m pytest tests/ -v`). Diese Zahl steht an mehreren Stellen im Anforderungsdokument und ist auf den lokalen Stand anzupassen.
-
-### Nicht betroffen — unabhängig vom Code-Stand
-
-- **§2 Verfahren** — stammt aus der Nutzervorgabe und den beiden Referenzdokumenten.
-- **§5 Slice-Regeln** — aus den Stop-Regeln des Zielrepos abgeleitet.
-- **§6 Randbedingungen** — Sprachregel, Validierung, Vorrangregel, Stop-Regeln.
-- **§7 Entscheidungen** — Sachfragen, nicht Code-Befunde.
-- **§9/§10 Liefergegenstände und Abnahmekriterien** — Formvorgaben.
-
-Die 17 Anforderungen in §4 sind überwiegend verhaltensbeschrieben und damit robust; ihre Begründungen verweisen aber auf §3 und sind nach dessen Korrektur gegenzulesen.
+Die frühere Angabe „91 bestanden, 1 übersprungen" wurde in Revision 4 korrigiert.
 
 ---
 
-## 3. Inhaltliche Zusammenfassung
+## 3. Lokal verifizierte CLIs
 
-### Ausgangspunkt
+| Instanz | Befehl | Version | Verifizierter Non-Interactive-Modus |
+|---|---|---:|---|
+| Codex | `codex` | 0.147.0 | `codex exec`, read-only, ephemeral, JSONL |
+| Claude Code | `claude` | 2.1.226 | Print, JSON, Plan-Modus, keine Tools, keine Sessionpersistenz |
+| Antigravity | `agy` und `agy.exe` | 1.1.11 | Print, JSON, Plan-/Sandbox-Modus; natives Linux-`agy` bevorzugt |
+| Gemini CLI | `gemini` | 0.39.1 | noch installiert, im Zielsystem nicht mehr verwendet |
 
-Das Repo entstand Ende 2025 unter der Annahme, ein Coding-Agent könne eine Aufgabe kaum ohne Abdriften beenden. Daraus folgten monolithische Phase 2, harte Zyklendeckel, aggressive Kontextbeschneidung. Die Frage ist heute eine andere: nicht ob ein Agent die Aufgabe schafft, sondern ob er rechtzeitig aufhört. Die Struktur muss von einer Hilfestellung für schwache Modelle zu einer Leine für starke werden.
+### 3.1 Positiver Live-Smoke
 
-### Verfahren (§2 der Anforderungsbeschreibung)
+Am 2026-08-10 wurden alle drei benötigten CLIs außerhalb der einschränkenden Test-Sandbox mit einem werkzeuglosen Minimalprompt gestartet. Codex, Claude und Antigravity antworteten jeweils exakt `EXTERNAL_CONTROL_OK` und endeten mit Exitcode 0. Codex und Claude meldeten einen gültigen Login; der erfolgreiche Antigravity-Aufruf bestätigte dessen operative Authentifizierung.
 
-Drei Instanzen mit getrennten Rechten:
+Die offizielle OpenAI-Dokumentation führt `codex exec` als stabilen Non-Interactive-/CI-Modus und dokumentiert JSONL, read-only Sandbox sowie separate Finalausgabe: <https://learn.chatgpt.com/docs/developer-commands?surface=cli>.
 
-- **Codex** schreibt als einziger Code, ist Autor von Arbeitsplan und Slice-Dokumenten, gibt nie frei, committet nie.
-- **Claude Code** reviewt als erste Instanz, schreibt nur Dokumentation.
-- **Antigravity** reviewt abschließend, schreibt nur Dokumentation, hält das Commit-Recht.
+### 3.2 Erkenntnis aus den negativen Sandbox-Versuchen
 
-Ablauf: Planung mit Reviewkette → je Slice Implementierung mit Reviewkette und lokalem Commit → Endreview durch alle drei über den gesamten Branch-Diff. Jede Rückgabe an Codex setzt die Kette wieder auf Claude zurück. Push und Merge bleiben Nutzerentscheidungen.
+Die ersten Aufrufe innerhalb einer äußeren Umgebung mit schreibgeschütztem Benutzer-/Runtimebereich und eingeschränktem Netzwerk beziehungsweise Loopback scheiterten vor dem eigentlichen Modellaufruf:
 
-Harte Gates: rote Validierung blockiert (Ausnahme nur für Red-State-Slices mit benannter Folge-Slice), Teständerungen halten an, Stop-Regeln halten an, kein Verdikt gilt als Ablehnung, keine Freigabe ohne Findings, Pre-Mortem-Pflicht, unerwartete Dateien blockieren den Commit, Iterationszähler je Slice.
+- Codex konnte seinen internen App-Server nicht initialisieren.
+- Claude erreichte den Provider nicht und lief in den äußeren Timeout.
+- Antigravity konnte Log-/Crashdateien sowie den lokalen Language-Server-Socket nicht anlegen.
 
-### Anforderungen (§4)
+Die Sicherheit muss deshalb zwei Grenzen getrennt behandeln:
 
-17 Stück, priorisiert, jede mit Abnahmekriterium. Die tragenden:
+1. Reviewer sehen das Zielrepository technisch read-only.
+2. CLI-private Runtime-, Log- und Tempverzeichnisse bleiben beschreibbar; Provider-Egress und der Antigravity-Loopback werden gezielt erlaubt.
 
-- **R-1 (Blocker):** Der Normalpfad ist heute blockiert — `run_task` erzwingt den Gemini-Fallback, der Preflight scheitert ohne die Binary. Reparatur vor Modernisierung.
-- **R-5 (Blocker):** Eine einzige git-basierte Diff-Quelle, die unversionierte Dateien sieht und nach Slice-Commits noch funktioniert. Voraussetzung für R-9, R-10, R-15.
-- **R-6 (Blocker):** Einheitlicher Contract-Validator für jeden Review-Aufruf, Finding-Klassen `BLOCKER`/`OBSERVATION`, Antwortkanal des Implementierers, Finding-Record statt Statusstring. Voraussetzung für R-7.
-- **R-7 bis R-11:** dritter Reviewer und Rollentausch, Slice-Modell mit State-Migration, Git-Integration, Test-Riegel, Gesamtabnahme.
-- **R-15 bis R-17:** Stop-Regeln als echtes Gate statt Prompt-Prosa, pfadabhängige Validierungsmatrix, committete Prüfspur in Plan- und Slice-Dokumenten.
+Diese Runtime-Freigaben geben keinem Reviewer Schreibrechte im Repository.
 
-### Zwei Erweiterungen gegenüber dem manuellen Verfahren
+### 3.3 Noch ausstehende Adapterevidenz
 
-**Finding-Klassen.** „Keine Freigabe ohne Findings" und „Freigabe nur ohne offene Findings" schließen einander aus, solange es nur eine Finding-Sorte gibt. Mit `BLOCKER` und `OBSERVATION` passt beides zusammen.
+Die grundsätzliche externe Steuerbarkeit ist bewiesen. Slice 3 muss über die tatsächlichen neuen Adapterbefehle zusätzlich verifizieren:
 
-**Widerspruchsrecht des Implementierers.** Die Entscheidungstabelle des manuellen Verfahrens kennt „abgelehnt", der Marker-Kontrakt des Orchestrators nicht. Ergänzt als `FINDING_RESPONSE: ACCEPTED|REJECTED` — ein bestrittenes Finding bleibt offen, bis der meldende Reviewer zustimmt. Widerspruchsrecht, kein Vetorecht.
+- negativen Schreibversuch je CLI in einem Wegwerf-Repository,
+- Text-/JSON-/Stream-Auswertung,
+- realistischen Langprompt über einen sicheren Eingabekanal,
+- Timeout und kontrolliertes Prozessende,
+- Auth-, Quota- und Netzwerkfehler,
+- Versions-/Fähigkeitsprüfung und Nutzergate für ungetestete Versionen.
 
----
-
-## 4. Entscheidungsstand (§7)
-
-| Punkt | Stand |
-|---|---|
-| 7.2 Wer committet | **entschieden:** Antigravity, mit Sicherheitsprüfung gegen den Slice-Scope. Offen bleibt nur, ob technisch durch Antigravity selbst oder mechanisch durch den Orchestrator auf dessen Freigabe hin. |
-| 7.3 Slice-Maß | **entschieden:** höchstens 10 produktive Programmdateien; Dokumentation und Tests zählen nicht mit. Offen bleibt die Endungsliste für dieses Repo. |
-| 7.1 Plattform | offen — Empfehlung: Wrapper nach Python, löst macOS und Windows zugleich. |
-| 7.4 Ping-Pong-Bremse | offen — N, Abbruchzustand, Exitcode. |
-| 7.5 Ankerwerte bei Rechenkernen | offen — Empfehlung: eigener `ANCHOR`-Kontraktblock. Betrifft die Zielarchitektur, nicht dieses Repo. |
-| 7.6 Marker-Namensraum | offen — Empfehlung: generisch mit Instanz-ID, Finding-IDs mit Quellenpräfix, Legacy-Marker entfernen. |
-| 7.7 Migrationsweg | offen — Empfehlung: Umbau im Bestand; die Kopplung sitzt allein in `orchestrator.py`. |
-| 7.8 Mensch als Gate | **offen, Annahme gesetzt:** Nutzer ist Gate bei Push und Merge, nicht vor jedem Slice-Commit. Die Referenzregeln sehen ihn zusätzlich vor jedem Slice-Commit vor. Zu bestätigen oder zu verwerfen. |
-| 7.9 Slice-Dokumente vs. Laufartefakte | offen — zwei parallele Aufzeichnungen desselben Vorgangs vermeiden. |
+Live-Smokes werden nach Installation oder Versionsänderung ausgeführt, nicht bei jedem Start, weil sie Tokens beziehungsweise Quota verbrauchen.
 
 ---
 
-## 5. Altlasten auf GitHub
+## 4. Verbindliches Zielverfahren
 
-Auf `origin` existiert der Branch `claude/orchestrator-modernisierung-i2cm99` mit zwei Commits (`25e1faf`, `72958ae`). Sie enthalten eine **ältere Fassung** der Anforderungsbeschreibung (Revision 1, ohne die Einarbeitung des manuellen Verfahrens) und die beiden Referenzdokumente nicht.
+### Rollen
 
-**Maßgeblich ist ausschließlich die lokale Fassung** (Revision 2). Der Remote-Branch ist nicht weiterzuverwenden. Er kann gelöscht werden; das ist eine Nutzerentscheidung.
+- **Codex:** alleiniger Implementierer; Autor von Plan und Slice-Dokumenten; keine eigene Freigabe; kein Commit.
+- **Claude Code:** adversarialer Reviewer jeder Korrekturrunde; schreibt nur Reviewdokumentation.
+- **Antigravity:** prüft nur einen von Claude freigegebenen Stand, einmal je Anlauf; autorisiert den Commit.
+- **Orchestrator:** führt den von Antigravity autorisierten Commit mechanisch mit Scope-Prüfung und exakt begrenztem Staging aus.
+
+### Ablauf
+
+1. Codex erstellt oder überarbeitet Plan beziehungsweise Slice.
+2. Claude prüft; bei Blockern korrigiert Codex und Claude prüft erneut.
+3. Nach Claude-Freigabe prüft Antigravity genau einmal.
+4. Eine Antigravity-Rückgabe beginnt wieder bei Codex und anschließend Claude.
+5. Nach beiden Freigaben erzeugt der Orchestrator den lokalen Commit.
+6. Nach dem letzten Slice folgt ein Endreview über den gesamten Branch-Diff.
+
+Es gibt keinen Agentenfallback. Der Ausfall einer Instanz hält den Lauf definiert an. Push und Merge bleiben Nutzerentscheidungen.
 
 ---
 
-## 6. Erste Schritte in der neuen Session
+## 5. Bestätigte Architekturentscheidungen
 
-1. Lokalen Stand feststellen: `git log --oneline -5`, `git status --short`, Testlauf.
-2. §3 der Anforderungsbeschreibung gegen den lokalen Code neu verifizieren, Befunde und Zeilenangaben korrigieren, Testanzahl anpassen.
-3. Entscheidung zu §7.8 treffen (Mensch als Gate vor jedem Slice-Commit?).
-4. Erst danach: Feature-Branch anlegen und Codex mit der Erstellung des Arbeitsplans beauftragen.
+1. Python übernimmt die vollständige Einstiegspunkt- und Wrapperlogik; `run_task` bleibt höchstens ein dünner Starter.
+2. Unterstützt werden Linux, macOS und WSL2; native Windows-Unterstützung wird erst nach automatisierter Verifikation zugesichert.
+3. Agentenbefehle sind konfigurierbar; Antigravity darf als natives `agy`, `agy.exe` oder expliziter Pfad aufgelöst werden. Unter WSL2 hat das native `agy` Vorrang.
+4. Antigravity autorisiert Commits, der Orchestrator führt sie mechanisch aus.
+5. Pro Slice gelten höchstens zehn produktive Dateien; Pfadklassen sind konfigurierbar und unbekannte Dateien zählen produktiv.
+6. Nach vier Rückgaben an Codex hält die Arbeitseinheit mit `awaiting_user_decision` an; kein Reset und kein WIP-Commit.
+7. Exitcodes unterscheiden Erfolg, technischen Fehler, Quota, Instanzausfall und Nutzergate.
+8. Fachliche Rechenkerne verwenden strukturierte, nach Planfreigabe geschützte Ankerwerte.
+9. Marker sind schrittbezogen und weisen die Instanz separat aus; Phase- und Legacy-Marker entfallen mit State-Version 3.
+10. Der Umbau erfolgt inkrementell im Bestand; aktive Version-2-Läufe werden nicht künstlich in Slices migriert.
+11. Ein normaler Slice-Commit benötigt kein zusätzliches Nutzergate; risikobedingte Gates bleiben zwingend, `--manual-slice-gate` ist optional.
+12. Runtime-State und Logs bleiben flüchtig; Plan- und Slice-MDs bilden die committete Prüfspur, Git wird nach dem Commit historische Source of Truth.
+13. Die Root-Rollendatei heißt künftig `ANTIGRAVITY.md`; die historische Referenz `reference-target-repo-gemini.md` bleibt bestehen.
 
-Schritt 2 vor Schritt 4 — ein Arbeitsplan auf Basis unverifizierter Befunde erzeugt Slices für Probleme, die es möglicherweise nicht mehr gibt.
+---
+
+## 6. Tragfähige Teile und bekannte Defizite
+
+### Beibehalten
+
+- atomare State-Schreibvorgänge und Pfadvalidierung in `src/state_io.py`,
+- Adaptergrundmuster in `src/agent_adapters.py`,
+- Prozess-, Retry- und Streaminggrundlagen in `src/agent_runtime.py`,
+- Inbox-Watcher mit Locking, Retry und Poison-Pill in `src/inbox_watcher.py`,
+- bestehende Findings- und Markertests als Migrationsbasis.
+
+### Ersetzen oder erweitern
+
+- Zwei-Phasen-State und monolithische Ablaufsteuerung,
+- Gemini-Fallback und Gemini-Adapter,
+- asymmetrische und teilweise fehlende Contract-Validierung,
+- arbeitsbaumbezogene statt branchbezogene Diff-Ermittlung,
+- unvollständige Pfadprüfung für Dateischnappschüsse,
+- unstrukturierte Findings-Historie,
+- einzelner Validierungsbefehl,
+- rein promptbasierte Stop-Regeln,
+- nicht skriptbarer Dry-Run,
+- flüchtige statt committierte Reviewspur.
+
+Die vollständige Zuordnung steht in den Befunden B-1 bis B-18 und Anforderungen R-1 bis R-18 des Hauptdokuments.
+
+---
+
+## 7. Aktueller Übergabepunkt
+
+In dieser Planungsrunde werden ausschließlich folgende Dokumente geändert beziehungsweise neu angelegt:
+
+- `requirements-orchestrator-modernization.md`
+- `handover-orchestrator-modernization.md`
+- `orchestrator-modernization-work-plan.md`
+
+Quellcode, Tests, Root-Rollendateien und Laufzeit-State bleiben unverändert. Es wird kein Commit und kein Push erzeugt. Nächster Schritt ist der Nutzerreview des Arbeitsplans einschließlich Slice-Zerlegung. Erst nach dessen Freigabe beginnt der formale Claude-/Antigravity-Reviewzyklus und anschließend die Slice-Implementierung.
