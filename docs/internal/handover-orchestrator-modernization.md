@@ -27,8 +27,8 @@ Die Referenzdateien belegen den manuellen Ausgangsprozess. Sie sind nicht die La
 
 - Aktiver Branch: `feature/orchestrator-modernization`
 - Basis: `master` bei `0bd3bad`
-- Aktueller HEAD: `76c06c7` (`Bind reviews to orchestrator validation attestations`)
-- Der Branch liegt fünfzehn lokale Commits vor `master`. Ein Upstream ist nicht konfiguriert.
+- Freigegebener Implementierungscommit der Revision 9: `76c06c7` (`Bind reviews to orchestrator validation attestations`)
+- Die nachgelagerte Auditprojektion wird separat lokal committed. Ein Upstream ist nicht konfiguriert.
 - Slices 01 bis 07 sowie die Revision-9-Querschnittskorrektur sind lokal committed. Gemini-Fallback und Agentenersetzung wurden in Slice 01 entfernt; konfigurierbare Drei-Agenten-Adapter, wurzelgebundene Dateischnappschüsse, die kanonische Branch-Diff-Quelle, der typisierte v3-Contract-/Finding-Kern sowie State v3 mit Work Units und Resume-Persistenz sind implementiert.
 - Der aktive Defaultpfad verwendet übergangsweise weiterhin die alte Phase-1-/Phase-2-Steuerung mit Codex und Claude. Der Antigravity-Adapter ist verfügbar, wird aber erst mit der neuen asymmetrischen State-Maschine aus Slice 10 als automatischer Abschlussreviewer verdrahtet.
 - Revision 9 der Validierungsarchitektur ist als vom Nutzer beauftragte Querschnittskorrektur nach Slice 07 committed: ein Orchestratorlauf je kanonischem Diff-Fingerprint, fingerprintgebundene Attestierung für beide Reviewer und mehr Reviewbudget für Implementierungsanalyse statt wiederholter Vollsuiten. Editor-Lockdateien gehören weiterhin nicht zum Scope.
