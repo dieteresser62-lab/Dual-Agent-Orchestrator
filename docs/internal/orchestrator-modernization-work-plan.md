@@ -124,7 +124,7 @@ Jede Slice-MD wird unmittelbar vor Beginn ihres Slice angelegt und dann aus der 
 |---:|---|
 | 1 | [`docs/internal/slice-orchestrator-modernization-01-remove-agent-fallback.md`](slice-orchestrator-modernization-01-remove-agent-fallback.md) |
 | 2 | [`docs/internal/slice-orchestrator-modernization-02-python-cli-config.md`](slice-orchestrator-modernization-02-python-cli-config.md) |
-| 3 | `docs/internal/slice-orchestrator-modernization-03-three-agent-adapters.md` |
+| 3 | [`docs/internal/slice-orchestrator-modernization-03-three-agent-adapters.md`](slice-orchestrator-modernization-03-three-agent-adapters.md) |
 | 4 | `docs/internal/slice-orchestrator-modernization-04-root-bound-snapshots.md` |
 | 5 | `docs/internal/slice-orchestrator-modernization-05-canonical-branch-diff.md` |
 | 6 | `docs/internal/slice-orchestrator-modernization-06-contract-finding-core.md` |
@@ -187,11 +187,12 @@ Die Audit-Komponente aus Slice 8 prüft bei Start eines Slice, dass genau diese 
 **Test-Riegel:** ja. **Red-State:** nein.
 **Risiko/Rückfalloption:** Wrapperregression; alter Aufrufvertrag wird durch Kompatibilitätstests geschützt.
 
-### Slice 3 — Konfigurierbare Drei-Agenten-Adapter und Rollenrechte
+### [Slice 3 — Konfigurierbare Drei-Agenten-Adapter und Rollenrechte](slice-orchestrator-modernization-03-three-agent-adapters.md)
 
 **Zweck:** Gemini durch Antigravity ersetzen, alle Adapter aktuell und konfigurierbar machen und Reviewer-Prozesse technisch read-only starten.
 **Anforderungen:** R-2, R-3; Teil von R-13.
 **Voraussichtlich betroffene Dateien:** `src/agent_adapters.py`, `src/agent_runtime.py`, `src/cli.py`, optional `src/agent_config.py` (neu), `tests/test_agent_runtime.py`, `tests/test_agent_adapters.py` (neu), `tests/test_cli.py`.
+**Umsetzungsstatus:** Implementierung und 154 Tests grün; Claude und Antigravity haben den Slice mit `OPEN_FINDINGS: NONE` freigegeben; lokaler Commit ist freigegeben.
 
 **Akzeptanzkriterien:**
 

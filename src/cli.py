@@ -13,6 +13,8 @@ from typing import Callable, Mapping, Sequence
 
 import tomllib
 
+from agent_config import AgentConfigError, add_agent_arguments, resolve_agent_settings
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_AGENTS_FILE = (PROJECT_ROOT / "AGENTS.md").resolve()
@@ -435,6 +437,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Live-stream channels (default: RUN_TASK_WATCH_STREAM_CHANNELS or stdout).",
     )
+    add_agent_arguments(parser)
     parser.add_argument(
         "--watch",
         action="store_true",
@@ -507,6 +510,11 @@ def parse_args(
             args.test_command = repo_config.validation.default_command
         else:
             args.test_command = detect_test_command(repo_root)
+
+    try:
+        args.agent_settings = resolve_agent_settings(args, env)
+    except AgentConfigError as exc:
+        raise ConfigError(str(exc)) from exc
 
     if args.skip_git_check is None:
         env_skip = _parse_env_bool("RUN_TASK_SKIP_GIT_CHECK", env)

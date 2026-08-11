@@ -5,17 +5,28 @@ from pathlib import Path
 import pytest
 
 import agent_runtime
-from agent_adapters import AGENT_REGISTRY, CodexAdapter, GeminiAdapter
+from agent_adapters import (
+    AGENT_REGISTRY,
+    AgentBudgetError,
+    AgentPermissionError,
+    CapabilitySpec,
+    ClaudeAdapter,
+    CodexAdapter,
+)
+from agent_config import AgentSettings
 from agent_runtime import (
+    AgentCompatibilityError,
     OrchestratorConfig,
     QuotaReachedError,
     check_git_clean,
     collect_file_snapshots,
     compute_retry_backoff_seconds,
+    create_read_only_reviewer_workspace,
     preflight,
     run_agent,
     run_agent_checked,
     run_tests_snapshot,
+    verify_agent_capabilities,
 )
 
 
@@ -59,7 +70,7 @@ def test_run_agent_checked_retries_with_backoff(monkeypatch, tmp_path: Path) -> 
         required_flags=["CODEX_APPROVAL"],
         output_validator=None,
         config=OrchestratorConfig(dry_run=False),
-        agents={"codex": AGENT_REGISTRY["codex"], "gemini": AGENT_REGISTRY["gemini"]},
+        agents={"codex": AGENT_REGISTRY["codex"]},
         log_dir=tmp_path,
         write_file=lambda path, content: path.write_text(content, encoding="utf-8"),
         shorten=lambda text, limit=1800: (text or "")[:limit],
@@ -102,6 +113,44 @@ def test_run_agent_checked_validation_error_backoff(monkeypatch, tmp_path: Path)
     assert "STATUS: DONE" in output
     assert len(calls) == 2
     assert sleeps == [2]
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        AgentPermissionError("denied Bash(find /)"),
+        AgentBudgetError("budget guard stopped the call"),
+    ],
+)
+def test_run_agent_checked_does_not_retry_policy_failure(
+    monkeypatch, tmp_path: Path, failure: Exception
+) -> None:
+    calls: list[int] = []
+
+    def fake_run_agent(*args, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append(1)
+        raise failure
+
+    monkeypatch.setattr(agent_runtime, "run_agent", fake_run_agent)
+
+    with pytest.raises(type(failure)):
+        run_agent_checked(
+            agent_key="claude",
+            prompt="prompt",
+            log_prefix="unit",
+            max_retries=3,
+            required_flags=[],
+            output_validator=None,
+            config=OrchestratorConfig(dry_run=False),
+            agents={"claude": AGENT_REGISTRY["claude"]},
+            log_dir=tmp_path,
+            write_file=lambda path, content: path.write_text(content, encoding="utf-8"),
+            shorten=lambda text, limit=1800: (text or "")[:limit],
+            parse_flag=lambda text, key: None,
+            validate_done_marker=lambda text: True,
+        )
+
+    assert calls == [1]
 
 
 def test_run_agent_checked_accepts_alternative_required_flags(monkeypatch, tmp_path: Path) -> None:
@@ -156,7 +205,7 @@ def test_run_agent_checked_quota_errors_stop_requested_agent_without_substitutio
             required_flags=[],
             output_validator=None,
             config=OrchestratorConfig(dry_run=False),
-            agents={agent_key: AGENT_REGISTRY[agent_key], "gemini": AGENT_REGISTRY["gemini"]},
+            agents={agent_key: AGENT_REGISTRY[agent_key]},
             log_dir=tmp_path,
             write_file=lambda path, content: path.write_text(content, encoding="utf-8"),
             shorten=lambda text, limit=1800: (text or "")[:limit],
@@ -290,6 +339,32 @@ def test_preflight_fails_when_git_not_clean(monkeypatch) -> None:
     assert ok is False
 
 
+def test_agent_capability_check_is_lazy_and_cached(monkeypatch) -> None:
+    adapter = CodexAdapter(
+        AgentSettings("codex", "codex", "gpt-5.6-sol", 1800, "medium")
+    )
+    calls: list[list[str]] = []
+
+    def fake_local(args, timeout=20):  # type: ignore[no-untyped-def]
+        _ = timeout
+        calls.append(args)
+        if args[-1] == "--version":
+            return 0, "codex-cli 0.147.0\n", ""
+        return 0, " ".join(adapter.capability.required_help_flags), ""
+
+    monkeypatch.setattr(agent_runtime, "_resolve_agent_binary", lambda _binary: "/bin/codex")
+    monkeypatch.setattr(agent_runtime, "run_local_command", fake_local)
+
+    verify_agent_capabilities(adapter)
+    verify_agent_capabilities(adapter)
+
+    assert adapter.capability_verified is True
+    assert calls == [
+        ["/bin/codex", "--version"],
+        ["/bin/codex", "exec", "--help"],
+    ]
+
+
 def test_collect_file_snapshots_truncates_limits_and_handles_missing(tmp_path: Path) -> None:
     import os
 
@@ -352,9 +427,15 @@ def test_run_agent_calls_adapter_cleanup_on_timeout(monkeypatch) -> None:
     class TimeoutAdapter:
         name = "timeout"
         cli_binary = "timeout"
+        model = "model"
+        effort = "medium"
         timeout = 1
+        reviewer = False
         env: dict[str, str] = {}
         required_hosts: tuple[str, ...] = ()
+        capability = CapabilitySpec((), (), (r".*",), ())
+        capability_verified = True
+        metadata: dict[str, object] = {}
 
         def __init__(self) -> None:
             self.cleaned = False
@@ -374,6 +455,9 @@ def test_run_agent_calls_adapter_cleanup_on_timeout(monkeypatch) -> None:
             _ = line
             _ = state
             return False
+
+        def validate_process_output(self, stderr: str) -> None:
+            _ = stderr
 
         def cleanup(self) -> None:
             self.cleaned = True
@@ -401,33 +485,125 @@ def test_run_agent_calls_adapter_cleanup_on_timeout(monkeypatch) -> None:
     assert adapter.cleaned is True
 
 
-def test_gemini_adapter_uses_stdin_prompt() -> None:
-    adapter = GeminiAdapter()
-    command, use_stdin_prompt = adapter.build_command("long prompt")
+def test_read_only_reviewer_workspace_blocks_writes_and_preserves_source(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    tracked = source / "tracked.txt"
+    tracked.write_text("original\n", encoding="utf-8")
 
-    assert command == ["gemini"]
-    assert use_stdin_prompt is True
+    workspace = create_read_only_reviewer_workspace(source)
+    try:
+        copied = workspace.root / "tracked.txt"
+        with pytest.raises(PermissionError):
+            copied.write_text("changed\n", encoding="utf-8")
+        assert copied.read_text(encoding="utf-8") == "original\n"
+        assert tracked.read_text(encoding="utf-8") == "original\n"
+        with pytest.raises(PermissionError):
+            (workspace.container / "outside-repo.txt").write_text(
+                "unexpected\n", encoding="utf-8"
+            )
+    finally:
+        workspace.cleanup()
+
+    assert not workspace.container.exists()
 
 
-def test_gemini_adapter_trims_trailing_text_after_done_marker() -> None:
-    adapter = GeminiAdapter()
-    output = adapter.extract_output(
-        "PHASE1_APPROVAL: YES\nSTATUS: DONEI will now patch files\n",
-        "",
-        {},
+def test_reviewer_process_pwd_matches_disposable_working_directory(
+    monkeypatch, tmp_path: Path
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "tracked.txt").write_text("original\n", encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    class ReviewerAdapter:
+        name = "reviewer"
+        cli_binary = "reviewer"
+        model = "model"
+        effort = "medium"
+        timeout = 30
+        reviewer = True
+        env: dict[str, str] = {}
+        required_hosts: tuple[str, ...] = ()
+        capability = CapabilitySpec((), (), (r".*",), ())
+        capability_verified = True
+        metadata: dict[str, object] = {}
+
+        def bind_reviewer_workspace(self, source_root: Path, snapshot_root: Path) -> None:
+            captured["bound_source"] = source_root
+            captured["bound_snapshot"] = snapshot_root
+
+        def build_command(self, prompt: str) -> tuple[list[str], bool]:
+            return ["reviewer"], True
+
+        def extract_output(self, stdout: str, stderr: str, extra_files: dict[str, str]) -> str:
+            return stdout
+
+        def stream_filter(self, channel: str, line: str, state: dict[str, str | bool]) -> bool:
+            return False
+
+        def validate_process_output(self, stderr: str) -> None:
+            return None
+
+        def cleanup(self) -> None:
+            return None
+
+    class Result:
+        returncode = 0
+        stdout = "STATUS: DONE"
+        stderr = ""
+
+    def fake_run(*args, **kwargs):  # type: ignore[no-untyped-def]
+        captured.update(kwargs)
+        return Result()
+
+    monkeypatch.setattr(agent_runtime.subprocess, "run", fake_run)
+    output = run_agent(
+        ReviewerAdapter(),
+        "prompt",
+        config=OrchestratorConfig(repo_root=source, agent_live_stream=False),
+        shorten=lambda text, limit: (text or "")[:limit],
     )
-    assert output.endswith("STATUS: DONE")
-    assert "I will now patch files" not in output
+
+    working_directory = captured["cwd"]
+    process_environment = captured["env"]
+    assert isinstance(working_directory, Path)
+    assert isinstance(process_environment, dict)
+    assert process_environment["PWD"] == str(working_directory)
+    assert captured["bound_snapshot"] == working_directory
+    assert not working_directory.exists()
+    assert output == "STATUS: DONE"
 
 
-def test_codex_adapter_cleanup_deletes_temp_message_file() -> None:
-    adapter = CodexAdapter()
-    command, use_stdin_prompt = adapter.build_command("prompt")
+def test_unknown_agent_version_is_a_non_retryable_gate(monkeypatch, tmp_path: Path) -> None:
+    adapter = ClaudeAdapter(
+        AgentSettings("claude", "claude", "sonnet", 1800, "medium")
+    )
+    calls: list[list[str]] = []
 
-    assert "--output-last-message" in command
-    assert use_stdin_prompt is True
-    temp_path = Path(command[-1])
-    assert temp_path.exists()
+    def fake_local(args, timeout=20):  # type: ignore[no-untyped-def]
+        _ = timeout
+        calls.append(args)
+        return 0, "9.9.9 (Claude Code)\n", ""
 
-    adapter.cleanup()
-    assert not temp_path.exists()
+    monkeypatch.setattr(agent_runtime, "_resolve_agent_binary", lambda _binary: "/bin/claude")
+    monkeypatch.setattr(agent_runtime, "run_local_command", fake_local)
+
+    with pytest.raises(AgentCompatibilityError, match="Unsupported claude CLI version"):
+        run_agent_checked(
+            agent_key="claude",
+            prompt="prompt",
+            log_prefix="unit",
+            max_retries=3,
+            required_flags=[],
+            output_validator=None,
+            config=OrchestratorConfig(dry_run=False),
+            agents={"claude": adapter},
+            log_dir=tmp_path,
+            write_file=lambda path, content: path.write_text(content, encoding="utf-8"),
+            shorten=lambda text, limit=1800: (text or "")[:limit],
+            parse_flag=lambda text, key: None,
+            validate_done_marker=lambda text: True,
+        )
+
+    assert calls == [["/bin/claude", "--version"]]

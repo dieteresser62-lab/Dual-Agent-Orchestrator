@@ -1,19 +1,26 @@
 from __future__ import annotations
 
-import os
+import json
 import logging
+import os
 import queue
 import re
 import shutil
 import socket
 import subprocess
+import tempfile
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, TextIO
 
-from agent_adapters import AGENT_REGISTRY, AgentAdapter
+from agent_adapters import (
+    AGENT_REGISTRY,
+    AgentAdapter,
+    AgentBudgetError,
+    AgentPermissionError,
+)
 
 TEST_OUTPUT_LIMIT = 7000
 ERROR_TRUNCATION_LIMIT = 1200
@@ -27,6 +34,10 @@ class QuotaReachedError(RuntimeError):
         super().__init__(message)
 
 
+class AgentCompatibilityError(RuntimeError):
+    """Raised for missing, unknown, or capability-incompatible CLI versions."""
+
+
 @dataclass
 class OrchestratorConfig:
     dry_run: bool = False
@@ -35,6 +46,10 @@ class OrchestratorConfig:
     agent_live_stream: bool = False
     agent_live_stream_mode: str = "compact"
     agent_live_stream_channels: str = "both"
+    repo_root: Path = field(default_factory=lambda: Path.cwd().resolve())
+    review_test_command: str = "python3 -m pytest tests/ -v"
+    review_probe_path: str = "README.md"
+    strict_preflight: bool = False
 
 
 @dataclass
@@ -44,6 +59,57 @@ class StreamResult:
     returncode: int
     stdout: str
     stderr: str
+
+
+@dataclass
+class ReviewerWorkspace:
+    root: Path
+    container: Path
+
+    def cleanup(self) -> None:
+        if not self.container.exists():
+            return
+        for path in sorted(self.container.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+            if path.is_symlink():
+                continue
+            try:
+                path.chmod(0o700 if path.is_dir() else 0o600)
+            except OSError:
+                pass
+        try:
+            self.container.chmod(0o700)
+        except OSError:
+            pass
+        shutil.rmtree(self.container, ignore_errors=True)
+
+
+def create_read_only_reviewer_workspace(repo_root: Path) -> ReviewerWorkspace:
+    """Copy the current repository state and remove write bits without following symlinks."""
+    source = repo_root.resolve()
+    container = Path(tempfile.mkdtemp(prefix="dao-review-workspace-"))
+    destination = container / "repo"
+
+    def ignore_generated(_directory: str, names: list[str]) -> set[str]:
+        ignored = {".orchestrator", ".pytest_cache", "__pycache__"}
+        return {name for name in names if name in ignored}
+
+    try:
+        shutil.copytree(source, destination, symlinks=True, ignore=ignore_generated)
+        paths = sorted(destination.rglob("*"), key=lambda item: len(item.parts), reverse=True)
+        for path in paths:
+            if path.is_symlink():
+                continue
+            if path.is_dir():
+                path.chmod(0o555)
+            elif path.is_file():
+                executable = bool(path.stat().st_mode & 0o111)
+                path.chmod(0o555 if executable else 0o444)
+        destination.chmod(0o555)
+        container.chmod(0o555)
+        return ReviewerWorkspace(root=destination, container=container)
+    except Exception:
+        ReviewerWorkspace(root=destination, container=container).cleanup()
+        raise
 
 
 def can_resolve_host(hostname: str) -> bool:
@@ -66,6 +132,85 @@ def run_local_command(args: list[str], timeout: int = 20) -> tuple[int, str, str
         return result.returncode, (result.stdout or ""), (result.stderr or "")
     except Exception as exc:
         return 1, "", str(exc)
+
+
+def _resolve_agent_binary(binary: str) -> str | None:
+    candidate = Path(binary).expanduser()
+    if candidate.is_absolute() or "/" in binary or "\\" in binary:
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            return None
+        if resolved.is_file() and os.access(resolved, os.X_OK):
+            return str(resolved)
+        return None
+    return shutil.which(binary)
+
+
+def verify_agent_capabilities(adapter: AgentAdapter, *, strict_dns: bool = False) -> None:
+    """Verify the configured role once, immediately before its first real invocation."""
+    if adapter.capability_verified:
+        return
+    resolved_binary = _resolve_agent_binary(adapter.cli_binary)
+    if resolved_binary is None:
+        raise AgentCompatibilityError(
+            f"Missing CLI binary for '{adapter.name}': {adapter.cli_binary}"
+        )
+
+    version_rc, version_out, version_err = run_local_command(
+        [resolved_binary, *adapter.capability.version_args]
+    )
+    version_text = (version_out or version_err).strip()
+    if version_rc != 0 or not version_text:
+        raise AgentCompatibilityError(
+            f"Cannot determine {adapter.name} version using {resolved_binary}: "
+            f"{(version_err or version_out).strip() or 'empty output'}"
+        )
+    if not any(
+        re.fullmatch(pattern, version_text)
+        for pattern in adapter.capability.supported_version_patterns
+    ):
+        raise AgentCompatibilityError(
+            f"Unsupported {adapter.name} CLI version {version_text!r}; "
+            "run the documented capability matrix and approve this version before retrying."
+        )
+
+    help_rc, help_out, help_err = run_local_command(
+        [resolved_binary, *adapter.capability.help_args]
+    )
+    help_text = "\n".join(part for part in (help_out, help_err) if part)
+    if help_rc != 0:
+        raise AgentCompatibilityError(
+            f"Cannot inspect {adapter.name} capabilities: {help_text.strip() or 'empty output'}"
+        )
+    adapter.validate_process_output(help_err)
+    missing_flags = [
+        flag for flag in adapter.capability.required_help_flags if flag not in help_text
+    ]
+    if missing_flags:
+        raise AgentCompatibilityError(
+            f"{adapter.name} {version_text!r} is missing required capability flags: "
+            f"{', '.join(missing_flags)}"
+        )
+
+    if strict_dns:
+        missing_hosts = [host for host in adapter.required_hosts if not can_resolve_host(host)]
+        if missing_hosts:
+            raise AgentCompatibilityError(
+                f"DNS resolution failed for {adapter.name}: {', '.join(missing_hosts)}"
+            )
+
+    adapter.capability_verified = True
+    logger.info(
+        "Agent ready: role=%s binary=%s version=%s model=%s effort=%s timeout=%ss profile=%s",
+        adapter.name,
+        resolved_binary,
+        version_text,
+        adapter.model,
+        adapter.effort,
+        adapter.timeout,
+        "read-only-reviewer" if adapter.reviewer else "workspace-write-implementer",
+    )
 
 
 def check_git_clean() -> tuple[bool, str]:
@@ -264,145 +409,174 @@ def run_agent(
     if config.dry_run:
         return build_dry_run_agent_output(agent_key, prompt)
 
-    command_parts, use_stdin_prompt = adapter.build_command(prompt)
-    env = os.environ.copy()
-    env.update(adapter.env)
+    verify_agent_capabilities(adapter, strict_dns=config.strict_preflight)
+    workspace: ReviewerWorkspace | None = None
+    execution_root = config.repo_root.resolve()
     timeout_seconds = adapter.timeout
     extra_files: dict[str, str] = {}
 
     try:
-        try:
-            if config.agent_live_stream:
-                # Stream mode captures stdout/stderr incrementally while still preserving full output.
-                process = subprocess.Popen(
-                    command_parts,
-                    stdin=subprocess.PIPE,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    env=env,
-                    bufsize=1,
-                )
-                assert process.stdin is not None
-                assert process.stdout is not None
-                assert process.stderr is not None
+        if adapter.reviewer:
+            workspace = create_read_only_reviewer_workspace(execution_root)
+            source_root = execution_root
+            execution_root = workspace.root
+            adapter.bind_reviewer_workspace(source_root, execution_root)
 
-                if use_stdin_prompt:
-                    process.stdin.write(prompt)
-                process.stdin.close()
-
-                stream_queue: queue.Queue[tuple[str, str | None]] = queue.Queue()
-                stdout_chunks: list[str] = []
-                stderr_chunks: list[str] = []
-                start = time.monotonic()
-                stream_state: dict[str, str | bool] = {
-                    "skip_prompt_echo": False,
-                    "last_emitted_line": "",
+        command_parts, use_stdin_prompt = adapter.build_command(prompt)
+        env = os.environ.copy()
+        env.update(adapter.env)
+        if adapter.reviewer:
+            env.update(
+                {
+                    "PYTHONDONTWRITEBYTECODE": "1",
+                    "RUN_TASK_REVIEW_TEST_COMMAND": config.review_test_command,
+                    "RUN_TASK_REVIEW_PROBE_PATH": config.review_probe_path,
+                    "RUN_TASK_REVIEW_TIMEOUT": str(adapter.timeout),
                 }
+            )
+        env["PWD"] = str(execution_root)
 
-                def read_stream(stream: TextIO, channel: str) -> None:
-                    # Use sentinel None to signal channel completion to the main loop.
+        if config.agent_live_stream:
+            # Stream mode captures stdout/stderr incrementally while still preserving full output.
+            process = subprocess.Popen(
+                command_parts,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+                cwd=execution_root,
+                bufsize=1,
+            )
+            assert process.stdin is not None
+            assert process.stdout is not None
+            assert process.stderr is not None
+
+            if use_stdin_prompt:
+                process.stdin.write(prompt)
+            process.stdin.close()
+
+            stream_queue: queue.Queue[tuple[str, str | None]] = queue.Queue()
+            stdout_chunks: list[str] = []
+            stderr_chunks: list[str] = []
+            start = time.monotonic()
+            stream_state: dict[str, str | bool] = {
+                "skip_prompt_echo": False,
+                "last_emitted_line": "",
+            }
+
+            def read_stream(stream: TextIO, channel: str) -> None:
+                # Use sentinel None to signal channel completion to the main loop.
+                try:
+                    while True:
+                        line = stream.readline()
+                        if line == "":
+                            break
+                        stream_queue.put((channel, line))
+                finally:
+                    stream_queue.put((channel, None))
                     try:
-                        while True:
-                            line = stream.readline()
-                            if line == "":
-                                break
-                            stream_queue.put((channel, line))
-                    finally:
-                        stream_queue.put((channel, None))
-                        try:
-                            stream.close()
-                        except Exception:
-                            pass
+                        stream.close()
+                    except Exception:
+                        pass
 
-                threads = [
-                    threading.Thread(
-                        target=read_stream,
-                        args=(process.stdout, "stdout"),
-                        daemon=True,
-                    ),
-                    threading.Thread(
-                        target=read_stream,
-                        args=(process.stderr, "stderr"),
-                        daemon=True,
-                    ),
-                ]
-                for thread in threads:
-                    thread.start()
+            threads = [
+                threading.Thread(
+                    target=read_stream,
+                    args=(process.stdout, "stdout"),
+                    daemon=True,
+                ),
+                threading.Thread(
+                    target=read_stream,
+                    args=(process.stderr, "stderr"),
+                    daemon=True,
+                ),
+            ]
+            for thread in threads:
+                thread.start()
 
-                completed_channels: set[str] = set()
-                # Emit a periodic heartbeat so long silent "thinking" phases are visible.
-                heartbeat_interval_seconds = 30.0
-                last_heartbeat = start
-                while len(completed_channels) < 2:
-                    if time.monotonic() - start > timeout_seconds:
-                        process.kill()
-                        raise subprocess.TimeoutExpired(command_parts, timeout_seconds)
-                    now = time.monotonic()
-                    if now - last_heartbeat >= heartbeat_interval_seconds:
-                        elapsed = int(now - start)
-                        logger.info("[AGENT] %s still running (elapsed: %ss)", agent_key, elapsed)
-                        last_heartbeat = now
-                    try:
-                        channel, line = stream_queue.get(timeout=0.2)
-                    except queue.Empty:
-                        continue
+            completed_channels: set[str] = set()
+            heartbeat_interval_seconds = 30.0
+            last_heartbeat = start
+            while len(completed_channels) < 2:
+                if time.monotonic() - start > timeout_seconds:
+                    process.kill()
+                    raise subprocess.TimeoutExpired(command_parts, timeout_seconds)
+                now = time.monotonic()
+                if now - last_heartbeat >= heartbeat_interval_seconds:
+                    elapsed = int(now - start)
+                    logger.info("[AGENT] %s still running (elapsed: %ss)", agent_key, elapsed)
+                    last_heartbeat = now
+                try:
+                    channel, line = stream_queue.get(timeout=0.2)
+                except queue.Empty:
+                    continue
 
-                    if line is None:
-                        completed_channels.add(channel)
-                        continue
-                    if channel == "stdout":
-                        stdout_chunks.append(line)
-                    else:
-                        stderr_chunks.append(line)
+                if line is None:
+                    completed_channels.add(channel)
+                    continue
+                if channel == "stdout":
+                    stdout_chunks.append(line)
+                else:
+                    stderr_chunks.append(line)
 
-                    if config.agent_live_stream_channels == "stdout" and channel != "stdout":
-                        continue
-                    if config.agent_live_stream_channels == "stderr" and channel != "stderr":
-                        continue
-                    if config.agent_live_stream_mode == "full" or adapter.stream_filter(
-                        channel, line, stream_state
-                    ):
-                        logger.info("[%s:%s] %s", agent_key, channel, line.rstrip())
+                if config.agent_live_stream_channels == "stdout" and channel != "stdout":
+                    continue
+                if config.agent_live_stream_channels == "stderr" and channel != "stderr":
+                    continue
+                if config.agent_live_stream_mode == "full" or adapter.stream_filter(
+                    channel, line, stream_state
+                ):
+                    logger.info("[%s:%s] %s", agent_key, channel, line.rstrip())
 
-                for thread in threads:
-                    thread.join(timeout=1)
-                process.wait(timeout=5)
-                result = StreamResult(
-                    process.returncode if process.returncode is not None else 1,
-                    "".join(stdout_chunks),
-                    "".join(stderr_chunks),
-                )
-            else:
-                result = subprocess.run(
-                    command_parts,
-                    input=(prompt if use_stdin_prompt else None),
-                    capture_output=True,
-                    text=True,
-                    env=env,
-                    timeout=timeout_seconds,
-                    check=False,
-                )
-        finally:
-            try:
-                adapter.cleanup()
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.warning("Adapter cleanup failed for %s: %s", agent_key, exc)
-    except subprocess.TimeoutExpired:
-        raise RuntimeError(f"{agent_key} timed out after {timeout_seconds}s.")
+            for thread in threads:
+                thread.join(timeout=1)
+            process.wait(timeout=5)
+            result = StreamResult(
+                process.returncode if process.returncode is not None else 1,
+                "".join(stdout_chunks),
+                "".join(stderr_chunks),
+            )
+        else:
+            result = subprocess.run(
+                command_parts,
+                input=(prompt if use_stdin_prompt else None),
+                capture_output=True,
+                text=True,
+                env=env,
+                cwd=execution_root,
+                timeout=timeout_seconds,
+                check=False,
+            )
 
-    stdout = (result.stdout or "").strip()
-    stderr = (result.stderr or "").strip()
-    output = adapter.extract_output(stdout, stderr, extra_files)
-    if result.returncode != 0:
-        error_text = shorten(
-            stderr or output or "Unknown CLI error without output.",
-            ERROR_TRUNCATION_LIMIT,
-        )
-        raise RuntimeError(f"{agent_key} failed: {error_text}")
-    if not output:
-        raise RuntimeError(f"{agent_key} returned empty output.")
-    return output
+        stdout = (result.stdout or "").strip()
+        stderr = (result.stderr or "").strip()
+        adapter.validate_process_output(stderr)
+        output = adapter.extract_output(stdout, stderr, extra_files)
+        if result.returncode != 0:
+            error_text = shorten(
+                stderr or output or "Unknown CLI error without output.",
+                ERROR_TRUNCATION_LIMIT,
+            )
+            raise RuntimeError(f"{agent_key} failed: {error_text}")
+        if not output:
+            raise RuntimeError(f"{agent_key} returned empty output.")
+        if adapter.metadata:
+            logger.info(
+                "[AGENT_USAGE] role=%s metadata=%s",
+                agent_key,
+                json.dumps(adapter.metadata, ensure_ascii=False, sort_keys=True),
+            )
+        return output
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"{agent_key} timed out after {timeout_seconds}s.") from exc
+    finally:
+        try:
+            adapter.cleanup()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("Adapter cleanup failed for %s: %s", agent_key, exc)
+        if workspace is not None:
+            workspace.cleanup()
 
 
 def is_quota_or_rate_limit_error(text: str) -> bool:
@@ -498,6 +672,9 @@ def run_agent_checked(
                 errors.append(validation_error)
             else:
                 return output
+        except (AgentCompatibilityError, AgentBudgetError, AgentPermissionError):
+            # Capability, budget, and permission policy failures require a decision, not retries.
+            raise
         except Exception as exc:
             error_text = shorten(str(exc), ERROR_TRUNCATION_LIMIT)
             errors.append(error_text)
@@ -529,28 +706,15 @@ def preflight(
     *,
     skip_git_check: bool = False,
 ) -> bool:
+    _ = strict
+    _ = agents
     ok = True
-    logger.info("Preflight: checking CLI binaries, DNS resolution, and git cleanliness.")
-
-    for agent_key in required_agents:
-        agent_config = agents[agent_key]
-        cli_binary = agent_config.cli_binary
-        if shutil.which(cli_binary) is None:
-            logger.error("Missing CLI binary for '%s': %s", agent_key, cli_binary)
-            ok = False
-
-    missing_hosts: list[tuple[str, str]] = []
-    for agent_key in required_agents:
-        for host in agents[agent_key].required_hosts:
-            if not can_resolve_host(host):
-                missing_hosts.append((agent_key, host))
-
-    if missing_hosts:
-        logger.warning("DNS resolution failed for:")
-        for agent_key, host in missing_hosts:
-            logger.warning("  - %s: %s", agent_key, host)
-        if strict:
-            ok = False
+    logger.info("Preflight: checking git cleanliness; agent capability checks are lazy.")
+    if required_agents:
+        logger.info(
+            "Deferred agent checks until first role use: %s.",
+            ", ".join(required_agents),
+        )
 
     if skip_git_check:
         logger.info("Git cleanliness check skipped via --skip-git-check.")

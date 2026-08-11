@@ -11,8 +11,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from cli import DEFAULT_AGENTS_FILE, DEFAULT_MAX_SHARED_CHARS, DEFAULT_TASK_FILE
-from agent_runtime import (
+from agent_adapters import (
     AGENT_REGISTRY,
+    AgentAdapter,
+    AgentBudgetError,
+    AgentPermissionError,
+    build_agent_registry,
+)
+from agent_runtime import (
+    AgentCompatibilityError,
     OrchestratorConfig,
     QuotaReachedError,
     collect_file_snapshots,
@@ -76,6 +83,7 @@ class RunContext:
     config: OrchestratorConfig
     test_command: str = ""
     agents_instructions: str = ""
+    agents: dict[str, AgentAdapter] = field(default_factory=lambda: dict(AGENT_REGISTRY))
     artifact_root_dir: Path = ARTIFACT_ROOT_DIR
     artifact_runs_dir: Path = ARTIFACT_RUNS_DIR
     latest_run_file: Path = LATEST_RUN_FILE
@@ -175,7 +183,7 @@ class RunContext:
             required_flags=required_flags,
             output_validator=output_validator,
             config=self.config,
-            agents=AGENT_REGISTRY,
+            agents=self.agents,
             log_dir=self.log_dir,
             write_file=write_file,
             shorten=shorten,
@@ -187,7 +195,7 @@ class RunContext:
         return runtime_preflight(
             required_agents,
             strict,
-            AGENT_REGISTRY,
+            self.agents,
             skip_git_check=skip_git_check,
         )
 
@@ -882,12 +890,16 @@ def run_pipeline(task_file: Path, args: argparse.Namespace, force_new: bool = Fa
         agent_live_stream=bool(args.agent_live_stream),
         agent_live_stream_mode=args.agent_live_stream_mode,
         agent_live_stream_channels=args.agent_live_stream_channels,
+        repo_root=Path.cwd().resolve(),
+        review_test_command=str(args.test_command or ""),
+        strict_preflight=bool(args.strict_preflight),
     )
     agents_file = Path(str(args.agents_file)).expanduser().resolve()
     ctx = RunContext(
         config=config,
         test_command=str(args.test_command or ""),
         agents_instructions=load_agents_instructions(agents_file),
+        agents=build_agent_registry(args.agent_settings),
     )
 
     ctx.init_dirs()
@@ -953,6 +965,9 @@ def run_pipeline(task_file: Path, args: argparse.Namespace, force_new: bool = Fa
         except QuotaReachedError as exc:
             freeze_current_phase(state, exc, ctx)
             return 2
+        except (AgentCompatibilityError, AgentBudgetError, AgentPermissionError) as exc:
+            logger.error("Agent invocation gate: %s", exc)
+            return 1
 
     if state["phase1"].get("status") != "completed":
         logger.error("Phase 1 is not completed. Stopping before implementation.")
@@ -970,6 +985,9 @@ def run_pipeline(task_file: Path, args: argparse.Namespace, force_new: bool = Fa
         except QuotaReachedError as exc:
             freeze_current_phase(state, exc, ctx)
             return 2
+        except (AgentCompatibilityError, AgentBudgetError, AgentPermissionError) as exc:
+            logger.error("Agent invocation gate: %s", exc)
+            return 1
 
     if state["phase2"].get("status") != "completed":
         logger.error("Phase 2 did not complete successfully.")

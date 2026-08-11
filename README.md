@@ -21,10 +21,11 @@ The orchestrator reads a Markdown task description, creates/revises an implement
 
 Supported platforms are Linux, macOS, and WSL2. Native Windows is not yet supported because the complete CLI pipeline has not been verified there. Python 3.11 or newer is required; TOML parsing uses the standard library and needs no third-party package.
 
-Install both CLIs and make sure they are in `$PATH`:
+Install all three role CLIs and make sure they are in `$PATH` (or configure an explicit path):
 
 - `codex`
 - `claude`
+- `agy` (preferred under Linux/WSL2) or explicitly configured `agy.exe`
 
 ## Optional Global Command
 
@@ -161,6 +162,24 @@ python3 src/cli.py --help
 | `--agent-live-stream-mode <compact\|full>` | `compact` | Verbosity for live stream output. |
 | `--agent-live-stream-channels <both\|stdout\|stderr>` | env or `stdout` | Which output channels to print in live stream. |
 
+### Agent Commands and Models
+
+Agent-local values use CLI → `RUN_TASK_*` environment → role default. They are intentionally not read from repository `orchestrator.toml`.
+
+| Role | CLI options | Environment prefix | Defaults |
+|---|---|---|---|
+| Codex | `--codex-binary`, `--codex-model`, `--codex-timeout`, `--codex-effort` | `RUN_TASK_CODEX_*` | `codex`, `gpt-5.6-sol`, 1800s, `medium` |
+| Claude | `--claude-binary`, `--claude-model`, `--claude-timeout`, `--claude-effort` | `RUN_TASK_CLAUDE_*` | `claude`, `sonnet`, 1800s, `medium` |
+| Antigravity | `--antigravity-binary`, `--antigravity-model`, `--antigravity-timeout`, `--antigravity-effort` | `RUN_TASK_ANTIGRAVITY_*` | native `agy` detection, `gemini-3.1-pro-high`, 1800s, `high` |
+
+`--claude-max-budget-usd` or `RUN_TASK_CLAUDE_MAX_BUDGET_USD` adds an optional print-mode safety ceiling. Opus is not the default; select it explicitly with `--claude-model opus` only for a justified escalation.
+
+```bash
+./run_task --claude-model sonnet --claude-effort medium
+RUN_TASK_ANTIGRAVITY_BINARY=agy.exe ./run_task
+./run_task --codex-binary /opt/codex/bin/codex --codex-timeout 2400
+```
+
 ### Context Limits
 
 | Flag | Default | Description |
@@ -263,6 +282,14 @@ manual_slice_gate = false
 ```
 
 Patterns use `/`, are relative to the repository root, and may not contain `..`. The productive pattern list may not be empty; later scope consumers conservatively treat paths that match no configured class as productive. Agent binary paths, models, and timeouts deliberately do not belong in this versioned file; their role-specific configuration is introduced with the agent adapters.
+
+### Role-bound execution profiles
+
+Agent binaries and capabilities are checked lazily immediately before the first real use of that role. The runtime logs the resolved executable, version, model, effort, timeout, and rights profile. A missing binary therefore blocks only its own step; an unknown version or missing required flag stops with a compatibility error until its live-smoke matrix has been approved.
+
+Codex is the implementation role and runs with `workspace-write`. Claude and Antigravity are reviewer roles: each receives a disposable read-only repository copy while its private temp, cache, prompt, and log files remain writable outside that copy. Claude starts in safe mode with a compact dedicated system prompt, exposes read tools separately from their permissions, and allows Bash only for the exact review harness. Antigravity uses its terminal sandbox; `--mode plan` is not treated as a security boundary.
+
+The single harness `src/review_harness.py` runs the configured validation once with bytecode and pytest cache disabled, performs `git diff --check`, captures `git status --short`, and proves that opening a tracked file for writing is denied. It returns compact JSON so successful reviews do not feed an entire verbose test log back through many model turns. Claude JSON metadata such as turn count, usage, estimated cost, and rejected tool attempts is retained in the runtime log.
 
 ## Agent Instruction Files
 

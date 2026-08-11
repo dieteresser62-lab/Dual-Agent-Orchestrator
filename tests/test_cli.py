@@ -36,6 +36,19 @@ def _isolate_process_environment(monkeypatch) -> None:
         "RUN_TASK_SKIP_GIT_CHECK",
         "RUN_TASK_TEST_CMD",
         "RUN_TASK_WATCH_STREAM_CHANNELS",
+        "RUN_TASK_CODEX_BINARY",
+        "RUN_TASK_CODEX_MODEL",
+        "RUN_TASK_CODEX_TIMEOUT",
+        "RUN_TASK_CODEX_EFFORT",
+        "RUN_TASK_CLAUDE_BINARY",
+        "RUN_TASK_CLAUDE_MODEL",
+        "RUN_TASK_CLAUDE_TIMEOUT",
+        "RUN_TASK_CLAUDE_EFFORT",
+        "RUN_TASK_CLAUDE_MAX_BUDGET_USD",
+        "RUN_TASK_ANTIGRAVITY_BINARY",
+        "RUN_TASK_ANTIGRAVITY_MODEL",
+        "RUN_TASK_ANTIGRAVITY_TIMEOUT",
+        "RUN_TASK_ANTIGRAVITY_EFFORT",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -132,6 +145,68 @@ def test_every_public_parser_action_has_help_text() -> None:
     formatted = parser.format_help()
     assert "--dry-run" in formatted
     assert "Simulate agent responses" in formatted
+
+
+def test_agent_setting_precedence_cli_over_environment_and_defaults(tmp_path: Path) -> None:
+    args = parse_args(
+        [
+            "--claude-binary",
+            "/cli/claude",
+            "--claude-model",
+            "opus",
+            "--claude-timeout",
+            "321",
+            "--claude-effort",
+            "high",
+            "--claude-max-budget-usd",
+            "2.5",
+        ],
+        cwd=tmp_path,
+        environ={
+            "RUN_TASK_CLAUDE_BINARY": "/env/claude",
+            "RUN_TASK_CLAUDE_MODEL": "sonnet",
+            "RUN_TASK_CLAUDE_TIMEOUT": "999",
+            "RUN_TASK_CLAUDE_EFFORT": "low",
+            "RUN_TASK_CLAUDE_MAX_BUDGET_USD": "1.0",
+            "RUN_TASK_ANTIGRAVITY_BINARY": "agy.exe",
+        },
+    )
+
+    claude = args.agent_settings["claude"]
+    assert claude.binary == "/cli/claude"
+    assert claude.model == "opus"
+    assert claude.timeout_seconds == 321
+    assert claude.effort == "high"
+    assert claude.max_budget_usd == 2.5
+    assert args.agent_settings["antigravity"].binary == "agy.exe"
+    assert args.agent_settings["codex"].model == "gpt-5.6-sol"
+
+
+def test_quota_conscious_reviewer_defaults_are_explicit(tmp_path: Path) -> None:
+    args = parse_args([], cwd=tmp_path, environ={})
+
+    assert args.agent_settings["claude"].model == "sonnet"
+    assert args.agent_settings["claude"].effort == "medium"
+    assert args.agent_settings["claude"].timeout_seconds == 1800
+    assert args.agent_settings["claude"].max_budget_usd is None
+    assert args.agent_settings["antigravity"].model == "gemini-3.1-pro-high"
+    assert args.agent_settings["antigravity"].effort == "high"
+
+
+@pytest.mark.parametrize(
+    ("environment", "message"),
+    [
+        ({"RUN_TASK_CLAUDE_TIMEOUT": "0"}, "claude timeout"),
+        ({"RUN_TASK_CLAUDE_EFFORT": "extreme"}, "claude effort"),
+        ({"RUN_TASK_CLAUDE_MAX_BUDGET_USD": "free"}, "claude max budget"),
+        ({"RUN_TASK_ANTIGRAVITY_TIMEOUT": "nope"}, "antigravity timeout"),
+    ],
+)
+def test_invalid_agent_environment_is_a_configuration_error(
+    environment: dict[str, str], message: str, tmp_path: Path
+) -> None:
+    with pytest.raises(ConfigError, match=message):
+        parse_args([], cwd=tmp_path, environ=environment)
 
 
 @pytest.mark.parametrize(
@@ -399,5 +474,9 @@ def test_readme_cli_defaults_match_resolved_parser_contract() -> None:
     assert "| `--agent-output <none\\|summary\\|full>` | `none` |" in readme
     assert "| `--agent-live-stream` / `--no-agent-live-stream` | on |" in readme
     assert "| `--skip-git-check` / `--no-skip-git-check` | off; on in watch mode |" in readme
+    assert "| Claude | `--claude-binary`, `--claude-model`" in readme
+    assert "`claude`, `sonnet`, 1800s, `medium`" in readme
+    assert "Opus is not the default" in readme
+    assert "`gpt-5.6-sol`" in readme
     assert build_parser().get_default("agent_output") == "none"
     assert build_parser().get_default("agent_live_stream") is True
