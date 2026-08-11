@@ -27,14 +27,15 @@ Die Referenzdateien belegen den manuellen Ausgangsprozess. Sie sind nicht die La
 
 - Aktiver Branch: `feature/orchestrator-modernization`
 - Basis: `master` bei `0bd3bad`
-- Aktueller Ausgangs-HEAD: `743cdc2` (`Implement state-v3 work units and resume persistence`)
-- Der Branch liegt vierzehn lokale Commits vor `master`. Ein Upstream ist nicht konfiguriert.
-- Slices 01 bis 07 sind lokal committed. Gemini-Fallback und Agentenersetzung wurden in Slice 01 entfernt; konfigurierbare Drei-Agenten-Adapter, wurzelgebundene Dateischnappschüsse, die kanonische Branch-Diff-Quelle, der typisierte v3-Contract-/Finding-Kern sowie State v3 mit Work Units und Resume-Persistenz sind implementiert.
+- Aktueller HEAD: `76c06c7` (`Bind reviews to orchestrator validation attestations`)
+- Der Branch liegt fünfzehn lokale Commits vor `master`. Ein Upstream ist nicht konfiguriert.
+- Slices 01 bis 07 sowie die Revision-9-Querschnittskorrektur sind lokal committed. Gemini-Fallback und Agentenersetzung wurden in Slice 01 entfernt; konfigurierbare Drei-Agenten-Adapter, wurzelgebundene Dateischnappschüsse, die kanonische Branch-Diff-Quelle, der typisierte v3-Contract-/Finding-Kern sowie State v3 mit Work Units und Resume-Persistenz sind implementiert.
 - Der aktive Defaultpfad verwendet übergangsweise weiterhin die alte Phase-1-/Phase-2-Steuerung mit Codex und Claude. Der Antigravity-Adapter ist verfügbar, wird aber erst mit der neuen asymmetrischen State-Maschine aus Slice 10 als automatischer Abschlussreviewer verdrahtet.
-- Revision 9 der Validierungsarchitektur liegt als vom Nutzer beauftragte Querschnittskorrektur nach Slice 07 vor: ein Orchestratorlauf je kanonischem Diff-Fingerprint, fingerprintgebundene Attestierung für beide Reviewer und mehr Reviewbudget für Implementierungsanalyse statt wiederholter Vollsuiten. Die bekannte Editor-Lockdatei gehört weiterhin nicht zum Scope.
+- Revision 9 der Validierungsarchitektur ist als vom Nutzer beauftragte Querschnittskorrektur nach Slice 07 committed: ein Orchestratorlauf je kanonischem Diff-Fingerprint, fingerprintgebundene Attestierung für beide Reviewer und mehr Reviewbudget für Implementierungsanalyse statt wiederholter Vollsuiten. Editor-Lockdateien gehören weiterhin nicht zum Scope.
 - `.orchestrator/state.json` liegt in Version 2 vor und steht auf `phase: done`; er stammt vom 2026-02-23.
 - Verbindliche Validierung: `python3 -m pytest tests/ -v`
 - Ergebnis der lokalen Prüfung für Slice 07 am 2026-08-11: **277 gesammelt, 277 bestanden**; zusätzlich sind 52 fokussierte State-/I/O-Tests, Compile, Diffcheck und der aktive v2-Dry-Run grün. Claude F-001 ist korrigiert, formal geschlossen und mit `PHASE2_APPROVAL: YES` freigegeben. Antigravity prüfte den vollständigen finalen Slice-Diff und erteilte `SLICE_APPROVAL: 07 | YES`; der lokale Commit ist autorisiert.
+- Ergebnis der Revision-9-Abnahme am 2026-08-11: fachlicher Diff-Fingerprint `81f7cb377434c32bd7278d56d88b14f365f1ea1732e6534e961dfea5e32a4336`, **283 gesammelt, 283 bestanden**, aktiver v2-Dry-Run grün. Claude schloss F-002 und erteilte `PHASE2_APPROVAL: YES`; Antigravity schloss A-01 bis A-03 auf dem vollständigen finalen Diff und erteilte `FINAL_APPROVAL: YES`. Diese Zeile ist die deterministische Auditprojektion nach dem Commit und gehört nicht zum fachlichen Reviewfingerprint.
 
 Der frühere Planungsbaseline-Stand `75337eb` mit 92 Tests und noch vorhandenem Claude→Gemini-Fallback ist nur historische Analysebasis der Revisionen 1 bis 5 und beschreibt nicht mehr den aktuellen Arbeitsbaum.
 
