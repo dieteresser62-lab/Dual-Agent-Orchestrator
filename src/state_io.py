@@ -5,14 +5,43 @@ import logging
 import os
 import re
 import tempfile
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Mapping
 
 from path_policy import PathPolicyError, resolve_path_within_roots
+from workflow_state import WorkflowState, WorkflowStateValidationError
 
 # Canonical finding identifiers exchanged by both agents, e.g. F-001.
 FINDING_ID_PATTERN = re.compile(r"^F-\d{3}$")
 logger = logging.getLogger(__name__)
+
+
+class StateSchemaError(ValueError):
+    """Raised when persisted state cannot be interpreted without guessing."""
+
+
+class UnknownStateVersionError(StateSchemaError):
+    """Raised for an unsupported or missing state schema version."""
+
+
+class ActiveV2StateError(StateSchemaError):
+    """Raised when an unfinished v2 run requires an explicit user restart choice."""
+
+
+class StatePathError(StateSchemaError):
+    """Raised when a state or checkpoint path escapes its configured roots."""
+
+
+@dataclass(frozen=True)
+class CompletedV2State:
+    """Read-only recognition result for a historically completed v2 run."""
+
+    version: int
+    phase: str
+    task_file: str | None
+    completed_at: str | None
 
 
 def read_file(path: Path) -> str:
@@ -34,7 +63,11 @@ def atomic_write_file(path: Path, content: str) -> None:
     ) as tmp:
         tmp.write(content)
         tmp_path = Path(tmp.name)
-    os.replace(tmp_path, path)
+    try:
+        os.replace(tmp_path, path)
+    finally:
+        # A failed replace must not leave an ambiguous partial-state candidate behind.
+        tmp_path.unlink(missing_ok=True)
 
 
 def write_file(path: Path, content: str) -> None:
@@ -169,7 +202,8 @@ def ensure_state_shape(
             sanitized_history[fid_up] = str(status).upper()
         phase_state["finding_history"] = sanitized_history
 
-    if state.get("version") == 2 and "phase1" in state and "phase2" in state:
+    version = state.get("version")
+    if type(version) is int and version == 2 and "phase1" in state and "phase2" in state:
         # Loaded paths are validated against known roots before reuse.
         allowed_roots = (artifact_runs_dir.parent.resolve(), Path.cwd().resolve())
         raw_task_file = str(state.get("task_file", str(task_file)))
@@ -222,11 +256,10 @@ def ensure_state_shape(
         sanitize_phase_findings(state["phase1"])
         sanitize_phase_findings(state["phase2"])
         return state
-    return init_state(
-        task_file,
-        phase1_max_cycles,
-        phase2_max_cycles,
-        build_artifact_paths(new_run_id(), artifact_runs_dir),
+    if type(version) is int and version == 2:
+        raise StateSchemaError("version-2 state is missing phase1 or phase2 data")
+    raise UnknownStateVersionError(
+        f"cannot resume unsupported state version {version!r}; state was left unchanged"
     )
 
 
@@ -246,3 +279,152 @@ def load_cycle_checkpoint(checkpoint_dir: Path, phase: str, cycle: int) -> dict 
     if not path.exists():
         return None
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def load_workflow_state(
+    state_file: Path,
+    *,
+    allowed_roots: tuple[Path, ...],
+) -> WorkflowState | CompletedV2State | None:
+    """Load v3 state or classify a completed v2 state without modifying either."""
+    path = _resolve_state_storage_path(state_file, allowed_roots)
+    if not path.exists():
+        return None
+    raw = _read_json_object(path, "workflow state")
+    version = raw.get("version")
+    if type(version) is int and version == 3:
+        try:
+            state = WorkflowState.from_dict(raw)
+            resolve_path_within_roots(state.task_file, allowed_roots)
+        except (WorkflowStateValidationError, PathPolicyError) as exc:
+            raise StateSchemaError(f"invalid version-3 workflow state: {exc}") from exc
+        return state
+    if type(version) is int and version == 2:
+        phase = raw.get("phase")
+        if phase == "done":
+            phase2 = raw.get("phase2")
+            completed_at = (
+                phase2.get("completed_at") if isinstance(phase2, Mapping) else None
+            )
+            return CompletedV2State(
+                version=2,
+                phase="done",
+                task_file=raw.get("task_file") if isinstance(raw.get("task_file"), str) else None,
+                completed_at=(completed_at if isinstance(completed_at, str) else None),
+            )
+        status = _legacy_v2_status(raw)
+        raise ActiveV2StateError(
+            "version-2 state is active or frozen "
+            f"({status}); start a new version-3 run explicitly; state was left unchanged"
+        )
+    raise UnknownStateVersionError(
+        f"unsupported state version {version!r}; state was left unchanged"
+    )
+
+
+def save_workflow_state(
+    state_file: Path,
+    state: WorkflowState,
+    *,
+    allowed_roots: tuple[Path, ...],
+) -> None:
+    """Atomically persist validated v3 state below an explicit root."""
+    path = _resolve_state_storage_path(state_file, allowed_roots)
+    try:
+        resolve_path_within_roots(state.task_file, allowed_roots)
+        validated = WorkflowState.from_dict(state.to_dict())
+    except (PathPolicyError, WorkflowStateValidationError) as exc:
+        raise StateSchemaError(f"refusing to save invalid version-3 state: {exc}") from exc
+    atomic_write_file(path, json.dumps(validated.to_dict(), indent=2, ensure_ascii=True) + "\n")
+
+
+def workflow_checkpoint_path(
+    checkpoint_dir: Path,
+    *,
+    work_unit_id: int,
+    slice_id: int,
+    round_number: int,
+) -> Path:
+    """Return the collision-free, 1-based v3 checkpoint name."""
+    for value, label in (
+        (work_unit_id, "work_unit_id"),
+        (slice_id, "slice_id"),
+        (round_number, "round_number"),
+    ):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise StateSchemaError(f"{label} must be a 1-based integer")
+    return checkpoint_dir / (
+        f"work-unit-{work_unit_id:04d}-slice-{slice_id:04d}-round-{round_number:04d}.json"
+    )
+
+
+def write_workflow_checkpoint(
+    checkpoint_dir: Path,
+    state: WorkflowState,
+    *,
+    allowed_roots: tuple[Path, ...],
+) -> Path:
+    current = state.current_work_unit
+    path = workflow_checkpoint_path(
+        checkpoint_dir,
+        work_unit_id=current.work_unit_id,
+        slice_id=current.slice_id,
+        round_number=current.round_number,
+    )
+    save_workflow_state(path, state, allowed_roots=allowed_roots)
+    return path.resolve()
+
+
+def load_workflow_checkpoint(
+    checkpoint_dir: Path,
+    *,
+    work_unit_id: int,
+    slice_id: int,
+    round_number: int,
+    allowed_roots: tuple[Path, ...],
+) -> WorkflowState | None:
+    path = workflow_checkpoint_path(
+        checkpoint_dir,
+        work_unit_id=work_unit_id,
+        slice_id=slice_id,
+        round_number=round_number,
+    )
+    loaded = load_workflow_state(path, allowed_roots=allowed_roots)
+    if loaded is None:
+        return None
+    if isinstance(loaded, CompletedV2State):
+        raise StateSchemaError("a version-3 checkpoint cannot contain version-2 state")
+    current = loaded.current_work_unit
+    expected = (work_unit_id, slice_id, round_number)
+    actual = (current.work_unit_id, current.slice_id, current.round_number)
+    if actual != expected:
+        raise StateSchemaError(
+            f"checkpoint identity mismatch: filename={expected}, state={actual}"
+        )
+    return loaded
+
+
+def _resolve_state_storage_path(path: Path, allowed_roots: tuple[Path, ...]) -> Path:
+    try:
+        return resolve_path_within_roots(path, allowed_roots)
+    except PathPolicyError as exc:
+        raise StatePathError(f"state path '{path}' is not allowed: {exc}") from exc
+
+
+def _read_json_object(path: Path, label: str) -> dict:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise StateSchemaError(f"could not read {label}: {exc}") from exc
+    if not isinstance(raw, dict):
+        raise StateSchemaError(f"{label} must contain a JSON object")
+    return raw
+
+
+def _legacy_v2_status(raw: Mapping[str, object]) -> str:
+    states: list[str] = []
+    for phase_name in ("phase1", "phase2"):
+        phase = raw.get(phase_name)
+        if isinstance(phase, Mapping) and isinstance(phase.get("status"), str):
+            states.append(f"{phase_name}={phase['status']}")
+    return ", ".join(states) or f"phase={raw.get('phase')!r}"

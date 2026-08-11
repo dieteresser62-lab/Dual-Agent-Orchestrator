@@ -134,7 +134,7 @@ Jede Slice-MD wird unmittelbar vor Beginn ihres Slice angelegt und dann aus der 
 | 4 | `docs/internal/slice-orchestrator-modernization-04-root-bound-snapshots.md` |
 | 5 | `docs/internal/slice-orchestrator-modernization-05-canonical-branch-diff.md` |
 | 6 | [`docs/internal/slice-orchestrator-modernization-06-contract-finding-core.md`](slice-orchestrator-modernization-06-contract-finding-core.md) |
-| 7 | `docs/internal/slice-orchestrator-modernization-07-state-v3-work-units.md` |
+| 7 | [`docs/internal/slice-orchestrator-modernization-07-state-v3-work-units.md`](slice-orchestrator-modernization-07-state-v3-work-units.md) |
 | 8 | `docs/internal/slice-orchestrator-modernization-08-audit-trail.md` |
 | 9 | `docs/internal/slice-orchestrator-modernization-09-branch-commit-transaction.md` |
 | 10 | `docs/internal/slice-orchestrator-modernization-10-asymmetric-review-chain.md` |
@@ -292,11 +292,13 @@ Die Audit-Komponente aus Slice 8 prüft bei Start eines Slice, dass genau diese 
 **Test-Riegel:** ja. **Red-State:** nein.
 **Risiko/Rückfalloption:** Contract-Schnitt betrifft viele Prompts; zentrale Tests werden vor der Aufrufermigration aufgebaut, der bestehende Ablauf bleibt bis Slice 18 startbar und unverändert aktiv.
 
-### Slice 7 — State-Version 3 und Work Units
+### [Slice 7 — State-Version 3 und Work Units](slice-orchestrator-modernization-07-state-v3-work-units.md)
 
 **Zweck:** Einen expliziten State für Plan, Slices, Korrektureinheiten, Reviewer-Schritte, Gates und Resume einführen.
 **Anforderungen:** R-8; Voraussetzung für R-18.
 **Voraussichtlich betroffene Dateien:** `src/workflow_state.py` (neu), `src/state_io.py`, `src/orchestrator.py`, `tests/test_state_io.py`, `tests/test_workflow_state.py` (neu).
+**Tatsächlich betroffene Dateien vor Review:** `src/workflow_state.py` (neu), `src/state_io.py`, `src/orchestrator.py`, `tests/test_state_io.py`, `tests/test_workflow_state.py` (neu), Arbeitsplan-, Übergabe- und Slice-MD.
+**Umsetzungsstatus:** lokal additiv implementiert; 52 fokussierte State-/I/O-Tests, 277 Tests der Vollsuite, Compile, Diffcheck und aktiver v2-Dry-Run sind grün. Claude F-001 (fehlender Test des unvollständigen v2-States) ist korrigiert und formal geschlossen; `PHASE2_APPROVAL: YES`. Antigravity prüfte den vollständigen finalen Slice-Diff seit `4364c11` und erteilte `SLICE_APPROVAL: 07 | YES` bei `OPEN_FINDINGS: NONE`; lokaler Slice-Commit autorisiert. Die Teständerungen sind durch die arbeitsplanweite Revision-8-Ausnahme autorisiert.
 
 **Akzeptanzkriterien:**
 

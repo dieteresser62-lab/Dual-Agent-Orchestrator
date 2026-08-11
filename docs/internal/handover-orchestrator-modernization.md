@@ -27,14 +27,14 @@ Die Referenzdateien belegen den manuellen Ausgangsprozess. Sie sind nicht die La
 
 - Aktiver Branch: `feature/orchestrator-modernization`
 - Basis: `master` bei `0bd3bad`
-- Aktueller Slice-Start-HEAD: `021a2aa62444` (`Document reviewer quotas and full-slice approval`)
-- Der Branch liegt zwölf lokale Commits vor `master`. Ein Upstream ist nicht konfiguriert.
-- Slices 01 bis 05 sind lokal committed. Gemini-Fallback und Agentenersetzung wurden in Slice 01 entfernt; konfigurierbare Drei-Agenten-Adapter, wurzelgebundene Dateischnappschüsse und die kanonische Branch-Diff-Quelle sind implementiert.
+- Aktueller Slice-Start-HEAD: `4364c11c1b02` (`Implement state-v3 contract and finding core`)
+- Der Branch liegt dreizehn lokale Commits vor `master`. Ein Upstream ist nicht konfiguriert.
+- Slices 01 bis 06 sind lokal committed. Gemini-Fallback und Agentenersetzung wurden in Slice 01 entfernt; konfigurierbare Drei-Agenten-Adapter, wurzelgebundene Dateischnappschüsse, die kanonische Branch-Diff-Quelle sowie der typisierte v3-Contract-/Finding-Kern sind implementiert.
 - Der aktive Defaultpfad verwendet übergangsweise weiterhin die alte Phase-1-/Phase-2-Steuerung mit Codex und Claude. Der Antigravity-Adapter ist verfügbar, wird aber erst mit der neuen asymmetrischen State-Maschine aus Slice 10 als automatischer Abschlussreviewer verdrahtet.
-- Slice 06 liegt lokal uncommitted zur Prüfung vor: neuer typisierter v3-Contract-/Finding-Kern, additive Prompt-/Orchestrator-Einstiege, drei Testpfade und Revision-8-Dokumentation. Die bekannte Editor-Lockdatei gehört weiterhin nicht zum Scope.
+- Slice 07 liegt lokal uncommitted zur Prüfung vor: typisierter State v3 mit Slices und Work Units, fail-closed v2-/Versionsklassifikation, wurzelgebundene atomare Persistenz, kollisionsfreie Checkpoints und idempotente Resume-Seiteneffekte. Die bekannte Editor-Lockdatei gehört weiterhin nicht zum Scope.
 - `.orchestrator/state.json` liegt in Version 2 vor und steht auf `phase: done`; er stammt vom 2026-02-23.
 - Verbindliche Validierung: `python3 -m pytest tests/ -v`
-- Ergebnis der erneuten lokalen Prüfung für Slice 06 am 2026-08-11: **236 gesammelt, 236 bestanden**. Claude F-001/F-002 sind korrigiert und mit formal gültigem `PHASE2_APPROVAL: YES` geschlossen. Antigravity prüfte den vollständigen Slice-Diff und erteilte `SLICE_APPROVAL: 06 | YES` bei `OPEN_FINDINGS: NONE`; der lokale Commit ist autorisiert.
+- Ergebnis der lokalen Prüfung für Slice 07 am 2026-08-11: **277 gesammelt, 277 bestanden**; zusätzlich sind 52 fokussierte State-/I/O-Tests, Compile, Diffcheck und der aktive v2-Dry-Run grün. Claude F-001 ist korrigiert, formal geschlossen und mit `PHASE2_APPROVAL: YES` freigegeben. Antigravity prüfte den vollständigen finalen Slice-Diff und erteilte `SLICE_APPROVAL: 07 | YES`; der lokale Commit ist autorisiert.
 
 Der frühere Planungsbaseline-Stand `75337eb` mit 92 Tests und noch vorhandenem Claude→Gemini-Fallback ist nur historische Analysebasis der Revisionen 1 bis 5 und beschreibt nicht mehr den aktuellen Arbeitsbaum.
 
@@ -158,4 +158,4 @@ Die vollständige Zuordnung steht in den Befunden B-1 bis B-18 und Anforderungen
 
 ## 7. Aktueller Übergabepunkt
 
-Slice 06 ist lokal implementiert, validiert und von beiden Reviewern freigegeben. Der neue v3-Contract-/Finding-Kern bleibt additiv; der aktive v2-Defaultpfad und seine Marker-/Promptsemantik sind unverändert und im Dry-Run grün. Die drei Testpfade sind durch die Nutzerfreigabe und die arbeitsplanweite Revision-8-Ausnahme autorisiert. Claude Sonnet 5/High fand F-001 (gemischte Finding-Herkunft) und F-002 (instabile Ankerherkunft); beide sind korrigiert, mit 236 Tests validiert und formal geschlossen. Antigravity prüfte anschließend den vollständigen Slice-Diff seit `021a2aa` einschließlich aller Korrekturrunden und autorisierte den lokalen Commit. Ein Push erfolgt nicht automatisch.
+Slice 07 ist lokal implementiert, validiert und von beiden Reviewern freigegeben. State v3 bleibt additiv hinter einer Development-Mode-Fassade; der aktive v2-Defaultpfad ist weiterhin startbar und im Dry-Run grün. Unbekannte Zustände werden auch am v2-Resume-Rand nicht mehr still neu initialisiert, sondern mit Exitcode 1 und klarer Meldung unverändert abgelehnt. 52 fokussierte Tests und die Vollsuite mit 277 Tests sind grün. Claude Sonnet 5/High fand nur F-001 (fehlender direkter Test für einen unvollständigen v2-State); der Test ist ergänzt, fokussiert bestätigt und F-001 formal geschlossen. Antigravity prüfte anschließend das vollständige finale Slice-Paket seit `4364c11`, meldete keine Findings und autorisierte den lokalen Commit. Ein Push erfolgt nicht automatisch.

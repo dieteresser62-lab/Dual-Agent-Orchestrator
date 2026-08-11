@@ -54,21 +54,27 @@ from repo_changes import (
     resolve_merge_base,
 )
 from state_io import (
+    CompletedV2State,
     FINDING_ID_PATTERN,
+    StateSchemaError,
     append_markdown,
     build_artifact_paths as state_build_artifact_paths,
     checkpoint_path as state_checkpoint_path,
     ensure_state_shape as state_ensure_state_shape,
     init_state as state_init_state,
     load_cycle_checkpoint as state_load_cycle_checkpoint,
+    load_workflow_state as state_load_workflow_state,
     load_state as state_load_state,
     new_run_id as state_new_run_id,
     now_iso as state_now_iso,
     read_file,
     save_state as state_save_state,
+    save_workflow_state as state_save_workflow_state,
     write_cycle_checkpoint as state_write_cycle_checkpoint,
+    write_workflow_checkpoint as state_write_workflow_checkpoint,
     write_file,
 )
+from workflow_state import WorkflowState, init_workflow_state
 
 ARTIFACT_ROOT_DIR = Path(".orchestrator")
 ARTIFACT_RUNS_DIR = ARTIFACT_ROOT_DIR / "runs"
@@ -258,6 +264,49 @@ class RunContext:
 
         logger.info("[RECOVERY] restored checkpoint for %s cycle=%s.", phase, cycle)
         return recovered
+
+    def init_v3_workflow_state(
+        self,
+        *,
+        run_id: str,
+        task_file: Path,
+        branch: str,
+        branch_base: str,
+        slice_count: int,
+    ) -> WorkflowState:
+        """Create development-mode v3 state without changing the active v2 path."""
+        return init_workflow_state(
+            run_id=run_id,
+            task_file=str(task_file.resolve()),
+            branch=branch,
+            branch_base=branch_base,
+            slice_count=slice_count,
+        )
+
+    def load_v3_workflow_state(self) -> WorkflowState | CompletedV2State | None:
+        """Load/classify state through the additive fail-closed v3 boundary."""
+        return state_load_workflow_state(
+            self.state_file,
+            allowed_roots=(self.config.repo_root,),
+        )
+
+    def save_v3_workflow_state(self, state: WorkflowState) -> None:
+        """Persist development-mode v3 state atomically and root-bound."""
+        state_save_workflow_state(
+            self.state_file,
+            state,
+            allowed_roots=(self.config.repo_root,),
+        )
+
+    def checkpoint_v3_workflow_state(self, state: WorkflowState) -> Path:
+        """Persist a v3 checkpoint whose identity is encoded in its filename."""
+        path = state_write_workflow_checkpoint(
+            self.checkpoint_dir,
+            state,
+            allowed_roots=(self.config.repo_root,),
+        )
+        logger.info("[CHECKPOINT] saved %s", path)
+        return path
 
 
 def format_duration(total_seconds: float) -> str:
@@ -959,7 +1008,11 @@ def run_pipeline(task_file: Path, args: argparse.Namespace, force_new: bool = Fa
     ctx.init_dirs()
 
     if args.resume and ctx.state_file.exists() and not force_new:
-        state = ctx.ensure_state_shape(ctx.load_state(), task_file, args)
+        try:
+            state = ctx.ensure_state_shape(ctx.load_state(), task_file, args)
+        except StateSchemaError as exc:
+            logger.error("Cannot resume persisted state: %s", exc)
+            return 1
         if not args.no_recover:
             # Restore last checkpoint to avoid continuing from a partially updated state.
             state = ctx.recover_state_from_checkpoint(state)

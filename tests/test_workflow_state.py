@@ -1,0 +1,216 @@
+from __future__ import annotations
+
+from dataclasses import replace
+
+import pytest
+
+from workflow_state import (
+    DEFAULT_MAX_CODEX_RETURNS,
+    GateReason,
+    GateStatus,
+    Reviewer,
+    SliceStatus,
+    WorkflowState,
+    WorkflowStateValidationError,
+    WorkflowStep,
+    WorkUnitKind,
+    WorkUnitStatus,
+    init_workflow_state,
+)
+
+
+def make_state():
+    return init_workflow_state(
+        run_id="run-1",
+        task_file="/repo/task.md",
+        branch="feature/state-v3",
+        branch_base="a" * 40,
+        slice_count=3,
+        timestamp="2026-08-11T10:00:00+00:00",
+    )
+
+
+def test_init_workflow_state_uses_v3_and_one_based_ids() -> None:
+    state = make_state()
+
+    assert state.version == 3
+    assert tuple(item.slice_id for item in state.slices) == (1, 2, 3)
+    assert tuple(item.work_unit_id for item in state.work_units) == (1,)
+    assert state.current_slice_id == 1
+    assert state.current_work_unit_id == 1
+    assert state.current_step is WorkflowStep.CODEX_PLAN
+    assert state.current_work_unit.round_number == 1
+    assert state.current_work_unit.codex_return_count == 0
+    assert state.current_work_unit.max_codex_returns == DEFAULT_MAX_CODEX_RETURNS
+    assert state.current_work_unit.gate.status is GateStatus.CLEAR
+    assert state.branch_base == "a" * 40
+    assert state.current_slice.start_commit == "a" * 40
+    assert state.current_slice.commit_ref is None
+    assert state.slices[1].start_commit is None
+
+
+@pytest.mark.parametrize("slice_count", [0, -1, True])
+def test_init_rejects_non_one_based_slice_count(slice_count: int) -> None:
+    with pytest.raises(WorkflowStateValidationError, match="slice_count"):
+        init_workflow_state(
+            run_id="run-1",
+            task_file="/repo/task.md",
+            branch="feature/state-v3",
+            branch_base="abc123",
+            slice_count=slice_count,
+        )
+
+
+def test_state_rejects_non_contiguous_or_mismatched_ids() -> None:
+    state = make_state()
+    bad_slices = (replace(state.slices[0], slice_id=2), *state.slices[1:])
+    with pytest.raises(WorkflowStateValidationError, match="slice ids"):
+        replace(state, slices=bad_slices)
+
+    with pytest.raises(WorkflowStateValidationError, match="current_step"):
+        replace(state, current_step=WorkflowStep.CLAUDE_PLAN_REVIEW)
+
+
+@pytest.mark.parametrize("step", list(WorkflowStep))
+def test_resume_cursor_preserves_every_persistable_step(step: WorkflowStep) -> None:
+    state = make_state()
+    unit = replace(state.current_work_unit, current_step=step)
+    state_at_step = replace(state, current_step=step, work_units=(unit,))
+
+    loaded = WorkflowState.from_dict(state_at_step.to_dict())
+    cursor = loaded.resume_cursor()
+
+    assert cursor.work_unit_id == 1
+    assert cursor.slice_id == 1
+    assert cursor.step is step
+    assert cursor.round_number == 1
+
+
+def test_completed_side_effect_is_persisted_and_idempotent() -> None:
+    state = make_state()
+    updated = state.mark_side_effect_completed("review:claude:round-1", updated_at="later")
+    repeated = updated.mark_side_effect_completed("review:claude:round-1", updated_at="latest")
+    loaded = WorkflowState.from_dict(updated.to_dict())
+
+    assert repeated is updated
+    assert loaded.updated_at == "later"
+    assert loaded.current_work_unit.completed_side_effects == ("review:claude:round-1",)
+    assert loaded.resume_cursor().should_execute("review:claude:round-1") is False
+    assert loaded.resume_cursor().should_execute("review:antigravity:round-1") is True
+
+
+def test_fourth_review_denial_enters_user_gate_without_reset() -> None:
+    state = make_state()
+    for expected_count in range(1, DEFAULT_MAX_CODEX_RETURNS + 1):
+        state = state.record_review_denial(
+            reviewer=Reviewer.CLAUDE,
+            open_findings=("C-01",),
+            return_step=WorkflowStep.CODEX_PLAN_REVISION,
+            updated_at=f"round-{expected_count}",
+        )
+        assert state.current_work_unit.codex_return_count == expected_count
+
+    unit = state.current_work_unit
+    assert unit.round_number == DEFAULT_MAX_CODEX_RETURNS
+    assert unit.status is WorkUnitStatus.AWAITING_USER_DECISION
+    assert unit.gate.status is GateStatus.AWAITING_USER_DECISION
+    assert unit.gate.reason is GateReason.ITERATION_LIMIT
+    assert unit.reviewer is Reviewer.CLAUDE
+    assert unit.open_findings == ("C-01",)
+    assert state.current_step is WorkflowStep.CODEX_PLAN_REVISION
+    assert state.current_slice.status is SliceStatus.AWAITING_USER_DECISION
+    assert state.current_slice.commit_ref is None
+
+
+def test_resume_after_user_decision_keeps_saved_step_and_review_context() -> None:
+    state = make_state()
+    for _ in range(DEFAULT_MAX_CODEX_RETURNS):
+        state = state.record_review_denial(
+            reviewer=Reviewer.ANTIGRAVITY,
+            open_findings=("A-01",),
+            return_step=WorkflowStep.CODEX_CORRECTION,
+        )
+
+    resumed = state.resume_after_user_decision(updated_at="resumed")
+
+    assert resumed.current_step is WorkflowStep.CODEX_CORRECTION
+    assert resumed.current_work_unit.status is WorkUnitStatus.IN_PROGRESS
+    assert resumed.current_work_unit.gate.status is GateStatus.CLEAR
+    assert resumed.current_work_unit.codex_return_count == DEFAULT_MAX_CODEX_RETURNS
+    assert resumed.current_work_unit.reviewer is Reviewer.ANTIGRAVITY
+    assert resumed.current_work_unit.open_findings == ("A-01",)
+    assert resumed.current_slice.status is SliceStatus.IN_PROGRESS
+
+
+def test_review_denial_requires_findings_and_unique_records() -> None:
+    state = make_state()
+    with pytest.raises(WorkflowStateValidationError, match="requires open findings"):
+        state.record_review_denial(
+            reviewer=Reviewer.CLAUDE,
+            open_findings=(),
+            return_step=WorkflowStep.CODEX_CORRECTION,
+        )
+    with pytest.raises(WorkflowStateValidationError, match="unique"):
+        state.record_review_denial(
+            reviewer=Reviewer.CLAUDE,
+            open_findings=("C-01", "C-01"),
+            return_step=WorkflowStep.CODEX_CORRECTION,
+        )
+
+
+def test_state_parser_rejects_unknown_or_missing_fields() -> None:
+    raw = make_state().to_dict()
+    raw["surprise"] = True
+    with pytest.raises(WorkflowStateValidationError, match="unexpected"):
+        WorkflowState.from_dict(raw)
+
+    raw = make_state().to_dict()
+    del raw["branch_base"]
+    with pytest.raises(WorkflowStateValidationError, match="missing"):
+        WorkflowState.from_dict(raw)
+
+
+def test_state_roundtrip_preserves_full_structure() -> None:
+    state = make_state().mark_side_effect_completed("plan:written", updated_at="later")
+    assert WorkflowState.from_dict(state.to_dict()) == state
+
+
+def test_multi_slice_transition_persists_start_and_commit_references() -> None:
+    state = make_state()
+    plan_done = state.complete_current_work_unit(updated_at="plan-done")
+    slice_one = plan_done.start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+        updated_at="slice-one",
+    )
+    slice_one_done = slice_one.complete_current_slice(
+        commit_ref="b" * 40,
+        updated_at="slice-one-done",
+    )
+    slice_two = slice_one_done.start_work_unit(
+        slice_id=2,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+        slice_start_commit="b" * 40,
+        updated_at="slice-two",
+    )
+    resumed = WorkflowState.from_dict(slice_two.to_dict()).resume_cursor()
+
+    assert slice_two.slices[0].status is SliceStatus.COMPLETED
+    assert slice_two.slices[0].commit_ref == "b" * 40
+    assert slice_two.current_slice.start_commit == "b" * 40
+    assert slice_two.current_work_unit_id == 3
+    assert resumed.slice_id == 2
+    assert resumed.work_unit_id == 3
+    assert resumed.step is WorkflowStep.CODEX_IMPLEMENTATION
+
+
+def test_new_slice_cannot_start_without_persisted_start_commit() -> None:
+    state = make_state().complete_current_work_unit()
+    with pytest.raises(WorkflowStateValidationError, match="slice_start_commit"):
+        state.start_work_unit(
+            slice_id=2,
+            kind=WorkUnitKind.SLICE,
+            step=WorkflowStep.CODEX_IMPLEMENTATION,
+        )
