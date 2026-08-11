@@ -105,23 +105,39 @@ def test_claude_defaults_are_quota_conscious_and_permissions_are_separate() -> N
         assert command[command.index("--model") + 1] == "sonnet"
         assert command[command.index("--effort") + 1] == "medium"
         assert command[command.index("--output-format") + 1] == "json"
-        assert command[command.index("--tools") + 1] == "Bash,Read,Grep,Glob"
+        assert command[command.index("--tools") + 1] == "Bash,Read"
         allowed = command[command.index("--allowedTools") + 1]
-        assert "Read,Grep,Glob" in allowed
+        assert allowed.startswith("Read,Bash(")
         assert "review_harness.py" in allowed
         assert command[command.index("--permission-mode") + 1] == "dontAsk"
-        assert command[command.index("--disallowedTools") + 1] == "Edit,Write,NotebookEdit"
+        assert command[command.index("--disallowedTools") + 1] == (
+            "Edit,Write,NotebookEdit,Grep,Glob"
+        )
         assert "--safe-mode" in command
+        assert "--strict-mcp-config" in command
+        assert command[command.index("--prompt-suggestions") + 1] == "false"
         assert "--system-prompt" in command
         assert "--append-system-prompt" not in command
+        policy = command[command.index("--system-prompt") + 1]
+        assert "at most 6 tool calls" in policy
+        assert "do not explore the repository" in policy
+        schema = json.loads(command[command.index("--json-schema") + 1])
+        assert schema["properties"]["response"]["maxLength"] == 12_000
         assert command[command.index("--max-budget-usd") + 1] == "1.25"
         assert "--no-session-persistence" in command
         assert "plan" not in command
         assert "opus" not in command
         assert "secret long prompt" not in command
-        assert use_stdin is True
+        packet_dir = Path(command[command.index("--add-dir") + 1])
+        packet_path = packet_dir / "review-packet.md"
+        assert packet_path.read_text(encoding="utf-8") == "secret long prompt"
+        assert str(packet_path) in command[-1]
+        assert "at most 6 tool calls" in command[-1]
+        assert use_stdin is False
     finally:
         adapter.cleanup()
+
+    assert not packet_dir.exists()
 
 
 def test_claude_json_envelope_tracks_usage_and_rejects_permission_denials() -> None:
@@ -138,6 +154,56 @@ def test_claude_json_envelope_tracks_usage_and_rejects_permission_denials() -> N
 
     assert adapter.extract_output(success, "", {}).endswith("STATUS: DONE")
     assert adapter.metadata["num_turns"] == 2
+
+    marker_discussion = json.dumps(
+        {
+            "is_error": False,
+            "result": (
+                "The parser must preserve the literal `STATUS: DONE` when discussed.\n"
+                "PHASE2_APPROVAL: YES\n"
+                "OPEN_FINDINGS: NONE\n"
+                "STATUS: DONE\n"
+                "trailing chatter"
+            ),
+            "permission_denials": [],
+        }
+    )
+    marker_output = adapter.extract_output(marker_discussion, "", {})
+    assert "PHASE2_APPROVAL: YES" in marker_output
+    assert marker_output.endswith("STATUS: DONE")
+    assert "trailing chatter" not in marker_output
+
+    structured = json.dumps(
+        {
+            "is_error": False,
+            "result": "",
+            "structured_output": {
+                "response": "OPEN_FINDINGS: NONE\nSTATUS: DONE\ntrailing chatter"
+            },
+            "permission_denials": [],
+        }
+    )
+    assert adapter.extract_output(structured, "", {}).endswith("STATUS: DONE")
+
+    encoded_result = json.dumps(
+        {
+            "is_error": False,
+            "result": json.dumps(
+                {"response": "OPEN_FINDINGS: NONE\nSTATUS: DONE"}
+            ),
+            "permission_denials": [],
+        }
+    )
+    assert adapter.extract_output(encoded_result, "", {}).endswith("STATUS: DONE")
+
+    object_result = json.dumps(
+        {
+            "is_error": False,
+            "result": {"response": "OPEN_FINDINGS: NONE\nSTATUS: DONE"},
+            "permission_denials": [],
+        }
+    )
+    assert adapter.extract_output(object_result, "", {}).endswith("STATUS: DONE")
 
     denied = json.dumps(
         {

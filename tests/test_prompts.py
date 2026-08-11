@@ -83,6 +83,11 @@ def test_phase2_claude_review_prompt_embeds_all_sections() -> None:
     assert "<<<SNAPSHOT_BEGIN>>>" in prompt
     assert "PHASE2_APPROVAL: YES only when OPEN_FINDINGS: NONE" in prompt
     assert "REVIEW ONLY:" in prompt
+    assert "complete evidence set" in prompt
+    assert "Do not explore unrelated repository files" in prompt
+    assert "exact review harness once" in prompt
+    assert "at most six tool calls" in prompt
+    assert "below 12000 characters" in prompt
     assert prompt.endswith("STATUS: DONE")
 
 

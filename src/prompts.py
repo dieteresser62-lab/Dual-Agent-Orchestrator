@@ -250,7 +250,9 @@ def build_phase2_claude_review_prompt(
         1) Verify task fulfillment and plan compliance.
         2) Find bugs, regressions, security/maintenance risks, and test gaps.
         3) If not approvable, provide concrete mandatory fixes for the next cycle.
-        4) REVIEW ONLY: do not execute commands, do not read/edit files, do not call tools, and do not implement code.
+        4) Treat this review packet as the complete evidence set. Do not explore unrelated repository files.
+        5) REVIEW ONLY: do not edit files or implement code. If validation is requested, use only the exact review harness once.
+        6) Use at most six tool calls and keep the response below 12000 characters.
 
         CONTRACT (mandatory):
         - For EACH previously open finding, one line:

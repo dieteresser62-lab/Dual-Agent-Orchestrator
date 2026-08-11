@@ -1,6 +1,6 @@
 # Slice 03: Konfigurierbare Drei-Agenten-Adapter und Rollenrechte
 
-**Status:** implementiert, vollständig validiert und durch Claude sowie Antigravity freigegeben
+**Status:** implementiert, vollständig validiert und durch Claude sowie Antigravity freigegeben; quotaorientierte Nachschärfung nach Slice 05 ebenfalls doppelt freigegeben
 **Feature-Branch:** `feature/orchestrator-modernization`
 **Branch-Basis des Slice:** `7fdd4587981599d21fbf53813cb97ca2bae0d182`
 **GitHub-Status:** nur lokal; kein Upstream; Push und Merge sind nicht Bestandteil dieses Slice
@@ -16,6 +16,7 @@ Zusätzlich beginnt mit diesem Slice die ressourcenschonende Reviewpolitik:
 - Codex verwendet den konfigurierbaren Default `gpt-5.6-sol` mit `medium`, entsprechend der zum Slice-Start geprüften offiziellen OpenAI-Modellführung.
 - Ein einzelner, exakt erlaubbarer Review-Harness bündelt Vollsuite, Git-/Diffprüfung und negativen Schreibtest in kompakter strukturierter Ausgabe, damit Reviewer keine Varianten abgewiesener Shellbefehle ausprobieren.
 - Claude-JSON-Hüllen werden einschließlich Fehler-, Nutzungs- und Permission-Denial-Metadaten ausgewertet und protokolliert.
+- Die nach Slice 05 ergänzte Quota-Härtung übergibt Claude genau ein externes Reviewpaket, erlaubt nur `Read` und den Harness, begrenzt den Auftrag auf sechs Werkzeugaufrufe und die strukturierte Antwort auf 12.000 Zeichen.
 - Delta-Reviews der späteren asymmetrischen Reviewkette bleiben fachlich Slice 10 zugeordnet; Slice 03 liefert dafür Modell-, Effort-, Rechte- und Harness-Grundlagen, verändert aber nicht vorzeitig die aktive Zwei-Phasen-Reihenfolge.
 
 ## Akzeptanzkriterien
@@ -24,10 +25,10 @@ Zusätzlich beginnt mit diesem Slice die ressourcenschonende Reviewpolitik:
 - CLI → Umgebung → Adapterdefault gilt für Binary, Modell, Effort und Timeout jeder Rolle; Agentenwerte werden nicht aus `orchestrator.toml` gelesen.
 - Unter WSL2 wird ein vorhandenes natives `agy` vor `agy.exe` bevorzugt; `agy.exe` und absolute Pfade bleiben explizit konfigurierbar.
 - Codex erhält `workspace-write`; Claude und Antigravity arbeiten ausschließlich in einer schreibgeschützten Wegwerfkopie des Repositorys. Beschreibbare CLI-Runtimepfade liegen außerhalb dieser Kopie.
-- Claude trennt `--tools` von `--allowedTools`, verwendet keinen interaktiven Planmodus, erlaubt nur Read/Grep/Glob und den exakt benannten Review-Harness und scheitert ohne Freigabedialog an anderen Werkzeugen.
+- Claude trennt `--tools` von `--allowedTools`, verwendet keinen interaktiven Planmodus, erlaubt nur `Read` und den exakt benannten Review-Harness und scheitert ohne Freigabedialog an anderen Werkzeugen.
 - Claude wird standardmäßig mit `sonnet`, `--effort medium`, Safe Mode, einem kompakten dedizierten Systemprompt, JSON-Ausgabe und ohne Sessionpersistenz gestartet; Modell, Effort, Timeout und optionales Budget sind überschreibbar.
 - Antigravity setzt Modell, Effort, JSON, Sandbox, Print-Timeout und Logpfad explizit. Sämtliche Optionen stehen vor dem werttragenden abschließenden `--print <prompt>`.
-- Realistische lange Prompts werden bei Codex und Claude über stdin transportiert. Antigravity erhält nur einen kurzen Verweis auf eine externe private Promptdatei; der eigentliche Prompt erscheint nicht in der Prozessliste.
+- Realistische lange Prompts werden bei Codex über stdin transportiert. Claude und Antigravity erhalten nur einen kurzen Verweis auf eine externe private Promptdatei; der eigentliche Prompt erscheint nicht in der Prozessliste.
 - Der Review-Harness läuft genau einmal, setzt `PYTHONDONTWRITEBYTECODE=1`, deaktiviert den pytest-Cacheprovider, gibt Erfolg kompakt und Fehler begrenzt aus und beweist, dass der Schreibversuch auf eine versionierte Datei scheitert.
 - JSON-/JSONL-Hüllen werden streng ausgewertet. `is_error`, fehlendes Ergebnis, nicht erfolgreicher Antigravity-Status, Berechtigungsablehnungen und relevante CLI-Warnungen sind Fehler statt leere Agentenantworten.
 - Binary, Version und Pflichtflags werden lazy unmittelbar vor dem ersten echten Schritt der jeweiligen Rolle geprüft und danach pro Adapterinstanz zwischengespeichert. Eine unbekannte Version erzeugt ein ausdrückliches Nutzergate beziehungsweise einen nicht retrybaren Kompatibilitätsfehler.
@@ -128,7 +129,7 @@ VALIDATION_RESULT: PASS | PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/ -q 
 
 - `src/agent_config.py` löst Binary, Modell, Effort, Timeout und optionales Claude-Budget mit CLI → Umgebung → Default auf; natives `agy` wird bevorzugt.
 - Die Registry enthält exakt Codex, Claude und Antigravity. Alle drei Adapter besitzen geprüfte Versions-/Flagverträge, explizite Modelle und harte Timeouts.
-- Codex nutzt stdin, JSONL, finale Nachrichtendatei und `workspace-write`. Claude nutzt Sonnet/Medium, Safe Mode, kompakten Systemprompt, stdin, Einzel-JSON sowie getrennte Tool- und Permissionlisten. Antigravity nutzt JSON, Sandbox, einen externen privaten Langprompt und abschließendes `--print <prompt>`.
+- Codex nutzt stdin, JSONL, finale Nachrichtendatei und `workspace-write`. Claude nutzt Sonnet/Medium, Safe Mode, kompakten Systemprompt, ein externes Reviewpaket, `Read` plus exakten Harness und ein begrenztes strukturiertes Einzel-JSON. Antigravity nutzt JSON, Sandbox, einen externen privaten Langprompt und abschließendes `--print <prompt>`.
 - Reviewer laufen in einer Wegwerfkopie, deren Repository und übergeordneter Container schreibgeschützt sind. `PWD` und Harnesspfad werden an diese Kopie gebunden; Runtime-, Cache-, Prompt- und Logdateien liegen außerhalb.
 - Der Review-Harness führt den konfigurierten Testbefehl einmal aus, unterdrückt Bytecode/pytest-Cache, prüft Diff und Status und führt einen nicht mutierenden negativen Schreibtest aus.
 - Claude-Hüllen protokollieren Nutzungs-, Kosten-, Subtype- und Permission-Denial-Metadaten. Budget- und Berechtigungsgates sind nicht retrybar und enden in beiden aktiven Phasen kontrolliert mit Exitcode 1.
@@ -152,6 +153,7 @@ Die lazy Capability-Prüfung war für die tatsächlich installierten Versionen e
 - Die aktuelle lokale Claude-Version ist bereits 2.1.227 statt der in Revision 5 dokumentierten 2.1.226; sie bleibt bis zum einmaligen erfolgreichen Live-Smoke außerhalb der freigegebenen Kompatibilitätsmatrix.
 - Antigravity liegt nativ als 1.1.12 und über `agy.exe` als 1.1.11 vor; beide Binaryvarianten werden getrennt behandelt, ohne Rollenfallback.
 - Der Review-Harness konkretisiert die nach Slice 02 vereinbarte Quota-Optimierung innerhalb der bereits geplanten Trennung von Werkzeugangebot und -berechtigung.
+- Der Feldlauf von Slice 05 mit 34 Claude-Turns, 29.304 Output-Tokens und 2,52 Millionen Cache-Read-Tokens zeigte, dass Safe Mode und Harness allein nicht genügen. Die Nachschärfung entfernt offene Suche, macht das Reviewpaket einmalig lesbar, deaktiviert MCPs und Promptvorschläge und begrenzt Werkzeugzahl sowie Antwortschema.
 - Der erste vollständige Claude-Feldlauf legte eine falsche geerbte `PWD`-Bindung offen: Nach einem nicht erlaubten `find /` wurde der Lauf korrekt verworfen. Die Hülle machte den Kostentreiber messbar (18 Runden, 656.179 Cache-Read-Tokens, 0,8649 USD). `PWD` wird deshalb nun explizit an den Snapshot gebunden und Permission-Denials sind nicht retrybar.
 - Ein anschließender Medium-Lauf wurde planmäßig durch das gesetzte 0,50-USD-Limit vor dem Verdikt beendet. Der Parser erkennt den Budget-Subtype nun ausdrücklich und wiederholt auch diesen Zustand nicht.
 - Der abschließende Claude-Kontrollreview verwendete als dokumentierte Quota-Ausnahme Sonnet/Low; der produktive Default bleibt Sonnet/Medium. Durch eingebetteten Produktdiff, genau zwei Runden und knappe Ausgabe sank der Lauf auf 28.788 Cache-Read-Tokens, 294 Output-Tokens und 0,2107 USD.
@@ -217,3 +219,38 @@ STATUS: DONE
 | Claude-Freigabe | bestätigt | `OPEN_FINDINGS: NONE`, Harness grün, `SLICE_APPROVAL: 03 \| YES` |
 | Antigravity-Freigabe | bestätigt | F-001 bis F-007 im Delta geschlossen; 154 Tests; `SLICE_APPROVAL: 03 \| YES` |
 | Lokaler Slice-Commit | freigegeben | doppelt freigegebener, scopegenauer Stand; Commit ist Abschluss dieses Slice |
+
+## Nachschärfung nach Slice 05
+
+Der historische Antigravity-Kontrollreview oben erhielt nur den letzten 22-KB-Korrekturdiff. Revision 7 ersetzt dieses Verfahren verbindlich: Ein Antigravity-Abschlussreview umfasst immer den vollständigen Diff des aktuellen Slice seit dessen Start-Commit; ein Rundendelta ist nur Navigationshilfe. Die technische Paketbildung der neuen State-Maschine bleibt Slice 10 zugeordnet, für manuelle Reviews gilt die Regel sofort.
+
+Für die quotaorientierte Claude-Härtung genehmigte der Nutzer am 2026-08-11 Änderungen an `tests/test_agent_adapters.py` und `tests/test_prompts.py`. Die finalen binären Testdiffs gegen `HEAD` sind gebunden an:
+
+```text
+d3b5821296f413e188bb15620ad56fd62549dc3cd41def349e366e049978d639  tests/test_agent_adapters.py
+de061483da5d9723d3f1ade854b914a649f2716bf0c393798d9273790db970c3  tests/test_prompts.py
+```
+
+Der erste neue Sonnet-High-Feldlauf benötigte vier Turns, 22.202 Cache-Read-Tokens und 0,2164 USD Kostenäquivalent. Er deckte einen bestehenden Parserfehler auf: Eine bloße Erwähnung von `STATUS: DONE` im Fließtext wurde als erstes Marker-Vorkommen abgeschnitten. `_trim_after_done_marker` verwendet deshalb nun die letzte eigenständige Markerzeile; ein Regressionstest hält dies fest.
+
+Der anschließende finale Claude-Kontrollreview lief erneut mit genau vier Turns. Der Harness bestand mit 182 Tests, Schreibprobe und Diffcheck; Claude bestätigte Pakettransport, Rechteprofil, Cleanup, Promptgeheimhaltung, strukturierte Ausgabeformen und Markerbehandlung ohne Blocker.
+
+```text
+PHASE2_APPROVAL: YES
+OPEN_FINDINGS: NONE
+STATUS: DONE
+```
+
+Finale Claude-Metadaten: 28.248 Cache-Read-Tokens, 6.991 Output-Tokens, 0,2296 USD Kostenäquivalent und keine Permission-Denials. Gegenüber dem Slice-05-Ausgangslauf mit 34 Turns, 2,52 Millionen Cache-Read-Tokens und 1,8357 USD reduziert der neue Pfad Turnzahl und Cache-Last deutlich. Der Sechs-Werkzeugaufrufe-Wert bleibt mangels CLI-Hardlimit ein expliziter Promptvertrag; das 12.000-Zeichen-Limit wird vom JSON-Schema technisch erzwungen.
+
+Antigravity erhielt anschließend den vollständigen Nachschärfungsdiff mit Adapter, Prompt, beiden genehmigten Testdateien, README, Slice-03-Audit und sämtlichen Revision-7-Vertragsklauseln. Der Markerparser-Fix war ausdrücklich nur ein enthaltener Teil, nicht der Reviewscope. Der Harness lief genau einmal und Antigravity meldete keine Findings.
+
+```text
+REVIEWER: antigravity
+VALIDATION_RESULT: PASS | review_harness.py | 182 tests passed, write access correctly denied, diff checks clean.
+SLICE_APPROVAL: REVIEW-HARDENING | YES
+OPEN_FINDINGS: NONE
+STATUS: DONE
+```
+
+Die strukturierte Hülle meldete einen Turn, 29,25 Sekunden Laufzeit, 40.268 Input-, 2.003 Output- und 65.107 Cache-Read-Tokens.

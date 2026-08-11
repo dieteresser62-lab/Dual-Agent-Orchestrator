@@ -15,6 +15,8 @@ from agent_config import AgentSettings, default_agent_settings
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 REVIEW_HARNESS = Path(__file__).resolve().parent / "review_harness.py"
+CLAUDE_REVIEW_MAX_TOOL_CALLS = 6
+CLAUDE_REVIEW_RESPONSE_MAX_CHARS = 12_000
 
 
 class AgentOutputError(RuntimeError):
@@ -38,11 +40,10 @@ class CapabilitySpec:
 
 
 def _trim_after_done_marker(text: str) -> str:
-    marker = "STATUS: DONE"
-    idx = text.find(marker)
-    if idx < 0:
+    matches = list(re.finditer(r"(?m)^STATUS: DONE[ \t]*\r?$", text))
+    if not matches:
         return text.strip()
-    return text[: idx + len(marker)].strip()
+    return text[: matches[-1].end()].strip()
 
 
 def _json_object(text: str, role: str) -> dict[str, object]:
@@ -263,6 +264,8 @@ class ClaudeAdapter(_BaseAdapter):
             r"^2\.1\.227 \(Claude Code\)$",
         ),
         required_help_flags=(
+            "--add-dir",
+            "--json-schema",
             "--model",
             "--effort",
             "--tools",
@@ -271,7 +274,9 @@ class ClaudeAdapter(_BaseAdapter):
             "--output-format",
             "--no-session-persistence",
             "--safe-mode",
+            "--strict-mcp-config",
             "--system-prompt",
+            "--prompt-suggestions",
         ),
     )
 
@@ -284,6 +289,7 @@ class ClaudeAdapter(_BaseAdapter):
         super().__init__(settings or default_agent_settings()["claude"])
         self.review_harness = review_harness.resolve()
         self._bound_review_harness: Path | None = None
+        self._review_packet_file: Path | None = None
 
     def bind_reviewer_workspace(self, source_root: Path, snapshot_root: Path) -> None:
         try:
@@ -299,13 +305,38 @@ class ClaudeAdapter(_BaseAdapter):
         return shlex.join([sys.executable, str(harness)])
 
     def build_command(self, prompt: str) -> tuple[list[str], bool]:
-        _ = prompt
-        self._new_runtime_dir()
+        runtime_dir = self._new_runtime_dir()
+        self._review_packet_file = runtime_dir / "review-packet.md"
+        self._review_packet_file.write_text(prompt, encoding="utf-8")
         harness_command = self.review_harness_command
         policy = (
-            "This is a read-only review. If validation is requested, run exactly once and "
-            f"without wrappers or redirections: {harness_command}. "
-            "Do not try alternative Bash commands when it is denied."
+            "You are a concise read-only reviewer. Use only the supplied review packet; "
+            "do not explore the repository. Use at most "
+            f"{CLAUDE_REVIEW_MAX_TOOL_CALLS} tool calls total: read the packet once and, "
+            "only when requested, run the exact review harness once. Do not try alternative "
+            "commands. Return only evidence, findings, decisions, and mandatory contract "
+            f"markers, within {CLAUDE_REVIEW_RESPONSE_MAX_CHARS} characters."
+        )
+        response_schema = json.dumps(
+            {
+                "type": "object",
+                "properties": {
+                    "response": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": CLAUDE_REVIEW_RESPONSE_MAX_CHARS,
+                    }
+                },
+                "required": ["response"],
+                "additionalProperties": False,
+            },
+            separators=(",", ":"),
+        )
+        directive = (
+            f"Read {self._review_packet_file} exactly once and follow it. "
+            f"Use at most {CLAUDE_REVIEW_MAX_TOOL_CALLS} tool calls. If validation is "
+            "requested, run exactly once and without wrappers or redirections: "
+            f"{harness_command}. Return the answer in the response field."
         )
         command = [
             self.cli_binary,
@@ -317,22 +348,30 @@ class ClaudeAdapter(_BaseAdapter):
             "--effort",
             self.effort,
             "--tools",
-            "Bash,Read,Grep,Glob",
+            "Bash,Read",
             "--allowedTools",
-            f"Read,Grep,Glob,Bash({harness_command})",
+            f"Read,Bash({harness_command})",
             "--disallowedTools",
-            "Edit,Write,NotebookEdit",
+            "Edit,Write,NotebookEdit,Grep,Glob",
             "--permission-mode",
             "dontAsk",
             "--safe-mode",
+            "--strict-mcp-config",
+            "--prompt-suggestions",
+            "false",
+            "--add-dir",
+            str(runtime_dir),
             "--system-prompt",
             policy,
+            "--json-schema",
+            response_schema,
             "--no-session-persistence",
             "--disable-slash-commands",
         ]
         if self.max_budget_usd is not None:
             command.extend(["--max-budget-usd", str(self.max_budget_usd)])
-        return command, True
+        command.append(directive)
+        return command, False
 
     def extract_output(self, stdout: str, stderr: str, extra_files: dict[str, str]) -> str:
         _ = stderr
@@ -366,7 +405,20 @@ class ClaudeAdapter(_BaseAdapter):
                 f"claude attempted {len(denials)} non-allowlisted tool call(s): "
                 f"{denial_detail[:1200]}"
             )
-        result = envelope.get("result")
+        result: object = envelope.get("result")
+        structured_output = envelope.get("structured_output")
+        if isinstance(structured_output, dict):
+            result = structured_output.get("response")
+        elif isinstance(result, dict):
+            result = result.get("response")
+        elif isinstance(result, str):
+            try:
+                decoded_result = json.loads(result)
+            except json.JSONDecodeError:
+                pass
+            else:
+                if isinstance(decoded_result, dict):
+                    result = decoded_result.get("response")
         if not isinstance(result, str) or not result.strip():
             raise AgentOutputError("claude JSON envelope has no non-empty result")
         return _trim_after_done_marker(result)
@@ -374,6 +426,7 @@ class ClaudeAdapter(_BaseAdapter):
     def cleanup(self) -> None:
         super().cleanup()
         self._bound_review_harness = None
+        self._review_packet_file = None
 
 
 class AntigravityAdapter(_BaseAdapter):
