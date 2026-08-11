@@ -25,6 +25,9 @@ from contracts import (
     ContractValidationError,
     ReadinessMarker,
     StepContract,
+    ValidationAttestation,
+    ValidationRecord,
+    ValidationStatus,
 )
 
 
@@ -300,17 +303,25 @@ STATUS: DONE
 
 
 def test_orchestrator_exposes_additive_v3_contract_entrypoint() -> None:
+    fingerprint = "a" * 64
     contract = StepContract(
         name="plan-review",
         reviewer=AgentRole.CLAUDE,
         approval_marker=ApprovalMarker.PLAN,
         slice_id="06",
         round_number=1,
-        expected_validation_command="python3 -m pytest tests/ -v",
+        review_fingerprint=fingerprint,
+        validation_attestation=ValidationAttestation(
+            attestation_id="validation-001",
+            diff_fingerprint=fingerprint,
+            expected_commands=("python3 -m pytest tests/ -v",),
+            records=(ValidationRecord(ValidationStatus.PASS, "python3 -m pytest tests/ -v", 0),),
+            output_digest="b" * 64,
+            summary="tests passed",
+        ),
     )
     output = """
 REVIEWER: claude
-VALIDATION_RESULT: PASS | python3 -m pytest tests/ -v | 0
 TEST_FILES_TOUCHED: NONE
 REVIEW_EVIDENCE: contract, parser | future drift | an unvalidated marker is added
 PRE_MORTEM: active and v3 parsers are accidentally mixed

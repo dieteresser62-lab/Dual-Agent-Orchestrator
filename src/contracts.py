@@ -12,6 +12,7 @@ DELIMITED_SECTION_PATTERN = re.compile(
 )
 SOURCE_FINDING_ID_PATTERN = re.compile(r"^(C|A)-(0[1-9]|[1-9][0-9]*)$")
 ANCHOR_ID_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]*$")
+SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
 class ContractValidationError(ValueError):
@@ -53,6 +54,12 @@ class FindingResponseDecision(str, Enum):
 class ValidationStatus(str, Enum):
     PASS = "PASS"
     FAIL = "FAIL"
+
+
+class ValidationAttestationStatus(str, Enum):
+    PASS = "PASS"
+    FAIL = "FAIL"
+    INCOMPLETE = "INCOMPLETE"
 
 
 @dataclass(frozen=True)
@@ -138,6 +145,65 @@ class ValidationRecord:
 
 
 @dataclass(frozen=True)
+class ValidationAttestation:
+    """Orchestrator-owned validation evidence bound to one review fingerprint."""
+
+    attestation_id: str
+    diff_fingerprint: str
+    expected_commands: tuple[str, ...]
+    records: tuple[ValidationRecord, ...]
+    output_digest: str
+    summary: str
+
+    def __post_init__(self) -> None:
+        if not self.attestation_id.strip():
+            raise ValueError("validation attestation requires an id")
+        if not SHA256_PATTERN.fullmatch(self.diff_fingerprint):
+            raise ValueError("validation attestation requires a SHA-256 diff fingerprint")
+        if not SHA256_PATTERN.fullmatch(self.output_digest):
+            raise ValueError("validation attestation requires a SHA-256 output digest")
+        if not self.expected_commands or any(
+            not command.strip() for command in self.expected_commands
+        ):
+            raise ValueError("validation attestation requires expected commands")
+        if len(set(self.expected_commands)) != len(self.expected_commands):
+            raise ValueError("validation attestation expected commands must be unique")
+        record_commands = tuple(record.command for record in self.records)
+        if len(set(record_commands)) != len(record_commands):
+            raise ValueError("validation attestation command records must be unique")
+        if unexpected := set(record_commands) - set(self.expected_commands):
+            raise ValueError(
+                "validation attestation contains unexpected commands: "
+                + ", ".join(sorted(unexpected))
+            )
+        if not self.summary.strip():
+            raise ValueError("validation attestation requires a summary")
+
+    @property
+    def missing_commands(self) -> tuple[str, ...]:
+        recorded = {record.command for record in self.records}
+        return tuple(
+            command for command in self.expected_commands if command not in recorded
+        )
+
+    @property
+    def complete(self) -> bool:
+        return not self.missing_commands
+
+    @property
+    def status(self) -> ValidationAttestationStatus:
+        if any(record.status is ValidationStatus.FAIL for record in self.records):
+            return ValidationAttestationStatus.FAIL
+        if not self.complete:
+            return ValidationAttestationStatus.INCOMPLETE
+        return ValidationAttestationStatus.PASS
+
+    @property
+    def passed(self) -> bool:
+        return self.status is ValidationAttestationStatus.PASS
+
+
+@dataclass(frozen=True)
 class StopRequest:
     rule_id: str
     rationale: str
@@ -188,7 +254,8 @@ class StepContract:
     approval_marker: ApprovalMarker
     slice_id: str
     round_number: int
-    expected_validation_command: str | None = None
+    review_fingerprint: str | None = None
+    validation_attestation: ValidationAttestation | None = None
     expected_test_files: tuple[str, ...] = ()
     test_changes_approved: bool = False
     red_state_followup_slice: str | None = None
@@ -205,6 +272,14 @@ class StepContract:
             raise ValueError("step contract round must be 1-based")
         if self.approval_marker is ApprovalMarker.SLICE and not self.slice_id.strip():
             raise ValueError("slice approval requires a slice id")
+        if self.review_fingerprint is not None:
+            if not SHA256_PATTERN.fullmatch(self.review_fingerprint):
+                raise ValueError("review contract requires a SHA-256 diff fingerprint")
+        if self.validation_attestation is not None:
+            if self.review_fingerprint is None:
+                raise ValueError("validation attestation requires a review fingerprint")
+            if self.validation_attestation.diff_fingerprint != self.review_fingerprint:
+                raise ValueError("validation attestation fingerprint does not match review")
         normalized = tuple(sorted(set(path.strip() for path in self.expected_test_files if path.strip())))
         object.__setattr__(self, "expected_test_files", normalized)
         if self.red_state_followup_slice is not None and not self.red_state_followup_slice.strip():
@@ -219,7 +294,7 @@ class ContractResult:
     approval: bool | None
     stopped: bool
     stop_request: StopRequest | None
-    validation: ValidationRecord | None
+    validation: ValidationAttestation | None
     test_files: tuple[str, ...]
     pre_mortem: str | None
     evidence: ReviewEvidence | None
@@ -539,6 +614,10 @@ def validate_review_response(
 ) -> ContractResult:
     text = strip_delimited_sections(output)
     _reject_v2_markers(text)
+    if _marker_count(text, "VALIDATION_RESULT"):
+        raise ContractValidationError(
+            "reviewers cannot emit VALIDATION_RESULT; validation must come from the bound orchestrator attestation"
+        )
     if _marker_count(text, "PLAN_READY") or _marker_count(text, "IMPLEMENTATION_READY"):
         raise ContractValidationError("review response cannot contain a readiness marker")
     _reject_unknown_contract_markers(text)
@@ -561,7 +640,7 @@ def validate_review_response(
             approval=None,
             stopped=True,
             stop_request=stop_request,
-            validation=None,
+            validation=contract.validation_attestation,
             test_files=(),
             pre_mortem=None,
             evidence=None,
@@ -575,7 +654,7 @@ def validate_review_response(
             f"missing or invalid {contract.approval_marker.value} marker"
         )
 
-    validation = _parse_validation(text)
+    validation = contract.validation_attestation
     test_files = _parse_test_files(text)
     if test_files != contract.expected_test_files:
         raise ContractValidationError(
@@ -601,18 +680,16 @@ def validate_review_response(
     )
     if approval:
         if validation is None:
-            raise ContractValidationError("approval requires VALIDATION_RESULT")
-        if (
-            validation.status is not ValidationStatus.PASS
-            and contract.red_state_followup_slice is None
-        ):
-            raise ContractValidationError("approval requires passing validation")
-        if (
-            contract.expected_validation_command is not None
-            and validation.command != contract.expected_validation_command
-        ):
             raise ContractValidationError(
-                "VALIDATION_RESULT command does not match the step contract"
+                "approval requires a bound orchestrator validation attestation"
+            )
+        if not validation.complete:
+            raise ContractValidationError(
+                "approval requires a complete validation attestation"
+            )
+        if not validation.passed and contract.red_state_followup_slice is None:
+            raise ContractValidationError(
+                "approval requires a complete passing validation attestation"
             )
         if test_files and not contract.test_changes_approved:
             raise ContractValidationError(

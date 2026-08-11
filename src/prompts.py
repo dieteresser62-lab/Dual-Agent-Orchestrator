@@ -22,7 +22,14 @@ def build_v3_review_contract(contract: StepContract) -> str:
     else:
         approval = f"{contract.approval_marker.value}: YES|NO"
     test_files = ",".join(contract.expected_test_files) or "NONE"
-    validation = contract.expected_validation_command or "<command>"
+    attestation = contract.validation_attestation
+    if attestation is None:
+        validation = "MISSING"
+    else:
+        validation = (
+            f"{attestation.attestation_id} | {attestation.diff_fingerprint} | "
+            f"{attestation.status.value} | {attestation.summary}"
+        )
     prefix = "C" if contract.reviewer.value == "claude" else "A"
     anchor_rule = ""
     if contract.anchor_origin is not None:
@@ -34,7 +41,8 @@ def build_v3_review_contract(contract: StepContract) -> str:
         f"""
         STATE-V3 CONTRACT (mandatory for step {contract.name}):
         - First non-empty line: REVIEWER: {contract.reviewer.value}
-        - Validation: VALIDATION_RESULT: PASS|FAIL | {validation} | <exit code>
+        - Bound orchestrator validation attestation: {validation}
+        - Do not rerun the full suite and do not emit VALIDATION_RESULT. Spend the review budget on implementation analysis. If additional focused validation is needed, require it in a finding acceptance test.
         - Test scope: TEST_FILES_TOUCHED: {test_files}
         - New finding: NEW_FINDING: {prefix}-01 | BLOCKER|OBSERVATION | <description> | <acceptance test>
         - Previous finding: FINDING_STATUS: <ID> | OPEN|CLOSED | <rationale>
@@ -89,6 +97,10 @@ def build_v3_review_prompt(
     return textwrap.dedent(
         f"""
         You are the {contract.reviewer.value} reviewer for {contract.name}.
+
+        Concentrate on implementation correctness, invariants, failure paths, security
+        boundaries, resume/idempotency behavior, and missing tests. Deterministic validation
+        has already been executed by the orchestrator for the bound fingerprint.
 
         Assignment:
         ---
@@ -348,8 +360,8 @@ def build_phase2_claude_review_prompt(
         2) Find bugs, regressions, security/maintenance risks, and test gaps.
         3) If not approvable, provide concrete mandatory fixes for the next cycle.
         4) Treat this review packet as the complete evidence set. Do not explore unrelated repository files.
-        5) REVIEW ONLY: do not edit files or implement code. If validation is requested, use only the exact review harness once.
-        6) Use at most six tool calls and keep the response below 12000 characters.
+        5) REVIEW ONLY: do not edit files or implement code. Do not rerun the supplied validation; inspect its snapshot and spend the tool budget on implementation analysis.
+        6) Read the supplied manifest and every numbered packet chunk exactly once; use no other tools and keep the response below 12000 characters.
 
         CONTRACT (mandatory):
         - For EACH previously open finding, one line:

@@ -15,12 +15,44 @@ from contracts import (
     FindingStatus,
     ReadinessMarker,
     StepContract,
+    ValidationAttestation,
+    ValidationAttestationStatus,
+    ValidationRecord,
+    ValidationStatus,
     apply_finding_responses,
     compare_anchors,
     parse_anchors,
     validate_review_response,
     validate_step_response,
 )
+
+
+REVIEW_FINGERPRINT = "a" * 64
+
+
+def _attestation(
+    *,
+    status: ValidationStatus = ValidationStatus.PASS,
+    complete: bool = True,
+    fingerprint: str = REVIEW_FINGERPRINT,
+) -> ValidationAttestation:
+    return ValidationAttestation(
+        attestation_id="validation-001",
+        diff_fingerprint=fingerprint,
+        expected_commands=(
+            "python3 -m pytest tests/ -v",
+            *(("python3 -m compileall -q src",) if not complete else ()),
+        ),
+        records=(
+            ValidationRecord(
+                status=status,
+                command="python3 -m pytest tests/ -v",
+                exit_code=0 if status is ValidationStatus.PASS else 1,
+            ),
+        ),
+        output_digest="b" * 64,
+        summary="277 tests passed" if status is ValidationStatus.PASS else "tests failed",
+    )
 
 
 def _contract(
@@ -30,6 +62,10 @@ def _contract(
     round_number: int = 1,
     test_files: tuple[str, ...] = (),
     tests_approved: bool = False,
+    validation_status: ValidationStatus = ValidationStatus.PASS,
+    validation_complete: bool = True,
+    with_attestation: bool = True,
+    red_state_followup_slice: str | None = None,
 ) -> StepContract:
     return StepContract(
         name="slice-06-review",
@@ -37,9 +73,15 @@ def _contract(
         approval_marker=marker,
         slice_id="06",
         round_number=round_number,
-        expected_validation_command="python3 -m pytest tests/ -v",
+        review_fingerprint=REVIEW_FINGERPRINT,
+        validation_attestation=(
+            _attestation(status=validation_status, complete=validation_complete)
+            if with_attestation
+            else None
+        ),
         expected_test_files=test_files,
         test_changes_approved=tests_approved,
+        red_state_followup_slice=red_state_followup_slice,
     )
 
 
@@ -59,7 +101,6 @@ def _valid_evidence_output(
     tests = ",".join(contract.expected_test_files) or "NONE"
     lines = [
         f"REVIEWER: {contract.reviewer.value}",
-        "VALIDATION_RESULT: PASS | python3 -m pytest tests/ -v | 0",
         f"TEST_FILES_TOUCHED: {tests}",
         "REVIEW_EVIDENCE: contracts, lifecycle, injection | parser drift | a new marker bypasses validation",
     ]
@@ -118,7 +159,6 @@ def test_open_blocker_requires_negative_approval() -> None:
             "review requires at least one finding or REVIEW_EVIDENCE record",
         ),
         ("PRE_MORTEM: a later workflow duplicates contract semantics\n", "approval requires PRE_MORTEM"),
-        ("VALIDATION_RESULT: PASS | python3 -m pytest tests/ -v | 0\n", "approval requires VALIDATION_RESULT"),
     ),
 )
 def test_positive_approval_requires_all_gate_records(
@@ -149,22 +189,79 @@ def test_pre_mortem_must_precede_positive_approval() -> None:
         "VALIDATION_RESULT: PASS | 0",
     ),
 )
-def test_invalid_validation_record_is_fail_closed(validation: str) -> None:
+def test_reviewer_validation_result_is_rejected(validation: str) -> None:
     contract = _contract()
     output = _valid_evidence_output(contract).replace(
-        "VALIDATION_RESULT: PASS | python3 -m pytest tests/ -v | 0", validation
+        "REVIEWER: claude", f"REVIEWER: claude\n{validation}"
     )
-    with pytest.raises(ContractValidationError, match="VALIDATION_RESULT"):
+    with pytest.raises(ContractValidationError, match="cannot emit VALIDATION_RESULT"):
         validate_review_response(output, contract)
 
 
-def test_validation_command_must_match_step_contract() -> None:
-    contract = _contract()
-    output = _valid_evidence_output(contract).replace(
-        "python3 -m pytest tests/ -v", "pytest -q"
-    )
-    with pytest.raises(ContractValidationError, match="command does not match"):
-        validate_review_response(output, contract)
+def test_positive_approval_requires_bound_passing_attestation() -> None:
+    missing = _contract(with_attestation=False)
+    with pytest.raises(ContractValidationError, match="bound orchestrator"):
+        validate_review_response(_valid_evidence_output(missing), missing)
+
+    failed = _contract(validation_status=ValidationStatus.FAIL)
+    with pytest.raises(ContractValidationError, match="complete passing"):
+        validate_review_response(_valid_evidence_output(failed), failed)
+
+    incomplete = _contract(validation_complete=False)
+    with pytest.raises(ContractValidationError, match="complete validation"):
+        validate_review_response(_valid_evidence_output(incomplete), incomplete)
+
+
+def test_attestation_fingerprint_must_match_review_contract() -> None:
+    with pytest.raises(ValueError, match="does not match review"):
+        StepContract(
+            name="slice-review",
+            reviewer=AgentRole.CLAUDE,
+            approval_marker=ApprovalMarker.SLICE,
+            slice_id="06",
+            round_number=1,
+            review_fingerprint=REVIEW_FINGERPRINT,
+            validation_attestation=_attestation(fingerprint="c" * 64),
+        )
+
+
+def test_attestation_derives_completeness_and_status_from_expected_matrix() -> None:
+    passing = _attestation()
+    assert passing.complete is True
+    assert passing.missing_commands == ()
+    assert passing.status is ValidationAttestationStatus.PASS
+
+    incomplete = _attestation(complete=False)
+    assert incomplete.complete is False
+    assert incomplete.missing_commands == ("python3 -m compileall -q src",)
+    assert incomplete.status is ValidationAttestationStatus.INCOMPLETE
+
+    failed = _attestation(status=ValidationStatus.FAIL, complete=False)
+    assert failed.status is ValidationAttestationStatus.FAIL
+
+
+def test_attestation_rejects_unexpected_or_duplicate_command_records() -> None:
+    common = {
+        "attestation_id": "validation-001",
+        "diff_fingerprint": REVIEW_FINGERPRINT,
+        "output_digest": "b" * 64,
+        "summary": "validation result",
+    }
+    with pytest.raises(ValueError, match="unexpected commands"):
+        ValidationAttestation(
+            expected_commands=("expected",),
+            records=(ValidationRecord(ValidationStatus.PASS, "other", 0),),
+            **common,
+        )
+    with pytest.raises(ValueError, match="records must be unique"):
+        ValidationAttestation(
+            expected_commands=("expected",),
+            records=(
+                ValidationRecord(ValidationStatus.PASS, "expected", 0),
+                ValidationRecord(ValidationStatus.PASS, "expected", 0),
+            ),
+            **common,
+        )
 
 
 def test_test_changes_require_matching_scope_and_prior_approval() -> None:
@@ -418,13 +515,15 @@ def test_anchor_origin_is_required_and_changes_are_detected() -> None:
 
 
 def test_review_steps_bind_anchors_to_stable_origin_not_step_name() -> None:
+    attestation = _attestation()
     first_contract = StepContract(
         name="slice-06-round-1",
         reviewer=AgentRole.CLAUDE,
         approval_marker=ApprovalMarker.SLICE,
         slice_id="06",
         round_number=1,
-        expected_validation_command="python3 -m pytest tests/ -v",
+        review_fingerprint=REVIEW_FINGERPRINT,
+        validation_attestation=attestation,
         anchor_origin="approved-plan:tax-rules",
     )
     second_contract = StepContract(
@@ -433,7 +532,8 @@ def test_review_steps_bind_anchors_to_stable_origin_not_step_name() -> None:
         approval_marker=ApprovalMarker.SLICE,
         slice_id="06",
         round_number=2,
-        expected_validation_command="python3 -m pytest tests/ -v",
+        review_fingerprint=REVIEW_FINGERPRINT,
+        validation_attestation=attestation,
         anchor_origin="approved-plan:tax-rules",
     )
     anchor = "ANCHOR: tax-01 | fixture | 42 | exact"
@@ -456,24 +556,25 @@ def test_review_anchor_requires_explicit_stable_origin() -> None:
 
 
 def test_red_state_approval_requires_named_followup_slice() -> None:
-    normal = _contract()
-    failed = _valid_evidence_output(normal).replace(
-        "VALIDATION_RESULT: PASS | python3 -m pytest tests/ -v | 0",
-        "VALIDATION_RESULT: FAIL | python3 -m pytest tests/ -v | 1",
-    )
-    with pytest.raises(ContractValidationError, match="requires passing validation"):
-        validate_review_response(failed, normal)
+    normal = _contract(validation_status=ValidationStatus.FAIL)
+    output = _valid_evidence_output(normal)
+    with pytest.raises(ContractValidationError, match="complete passing"):
+        validate_review_response(output, normal)
 
-    red_state = StepContract(
-        name=normal.name,
-        reviewer=normal.reviewer,
-        approval_marker=normal.approval_marker,
-        slice_id=normal.slice_id,
-        round_number=normal.round_number,
-        expected_validation_command=normal.expected_validation_command,
+    red_state = _contract(
+        validation_status=ValidationStatus.FAIL,
         red_state_followup_slice="07",
     )
-    assert validate_review_response(failed, red_state).approval is True
+    assert validate_review_response(_valid_evidence_output(red_state), red_state).approval is True
+
+    incomplete_red_state = _contract(
+        validation_complete=False,
+        red_state_followup_slice="07",
+    )
+    with pytest.raises(ContractValidationError, match="complete validation"):
+        validate_review_response(
+            _valid_evidence_output(incomplete_red_state), incomplete_red_state
+        )
 
 
 def test_malformed_duplicate_approval_marker_is_rejected() -> None:

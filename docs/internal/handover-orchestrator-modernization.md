@@ -1,7 +1,7 @@
 # Übergabe: Modernisierung des Dual-Agent-Orchestrators
 
 **Stand:** 2026-08-11
-**Anforderungsstand:** Revision 8
+**Anforderungsstand:** Revision 9
 **Zweck:** Kompakter, lokal verifizierter Wiedereinstieg und Übergabe an den Review des Arbeitsplans.
 **Ablage:** `docs/internal/`
 
@@ -11,7 +11,7 @@
 
 | Datei | Inhalt | Status |
 |---|---|---|
-| `requirements-orchestrator-modernization.md` | Anforderungen R-1 bis R-18 und verbindliche Architekturentscheidungen | Hauptdokument, Revision 8 |
+| `requirements-orchestrator-modernization.md` | Anforderungen R-1 bis R-18 und verbindliche Architekturentscheidungen | Hauptdokument, Revision 9 |
 | `orchestrator-modernization-work-plan.md` | Umsetzungsslices, Abhängigkeiten, Abdeckungsmatrix und Testplan | zur Nutzerprüfung vorgelegt |
 | `reference-target-repo-agents.md` | `AGENTS.md` der Ruhestandsuite | historische Verfahrensreferenz |
 | `reference-target-repo-slice-execution-rules.md` | manuelle Slice-Regeln der Ruhestandsuite | historische Verfahrensreferenz |
@@ -27,11 +27,11 @@ Die Referenzdateien belegen den manuellen Ausgangsprozess. Sie sind nicht die La
 
 - Aktiver Branch: `feature/orchestrator-modernization`
 - Basis: `master` bei `0bd3bad`
-- Aktueller Slice-Start-HEAD: `4364c11c1b02` (`Implement state-v3 contract and finding core`)
-- Der Branch liegt dreizehn lokale Commits vor `master`. Ein Upstream ist nicht konfiguriert.
-- Slices 01 bis 06 sind lokal committed. Gemini-Fallback und Agentenersetzung wurden in Slice 01 entfernt; konfigurierbare Drei-Agenten-Adapter, wurzelgebundene Dateischnappschüsse, die kanonische Branch-Diff-Quelle sowie der typisierte v3-Contract-/Finding-Kern sind implementiert.
+- Aktueller Ausgangs-HEAD: `743cdc2` (`Implement state-v3 work units and resume persistence`)
+- Der Branch liegt vierzehn lokale Commits vor `master`. Ein Upstream ist nicht konfiguriert.
+- Slices 01 bis 07 sind lokal committed. Gemini-Fallback und Agentenersetzung wurden in Slice 01 entfernt; konfigurierbare Drei-Agenten-Adapter, wurzelgebundene Dateischnappschüsse, die kanonische Branch-Diff-Quelle, der typisierte v3-Contract-/Finding-Kern sowie State v3 mit Work Units und Resume-Persistenz sind implementiert.
 - Der aktive Defaultpfad verwendet übergangsweise weiterhin die alte Phase-1-/Phase-2-Steuerung mit Codex und Claude. Der Antigravity-Adapter ist verfügbar, wird aber erst mit der neuen asymmetrischen State-Maschine aus Slice 10 als automatischer Abschlussreviewer verdrahtet.
-- Slice 07 liegt lokal uncommitted zur Prüfung vor: typisierter State v3 mit Slices und Work Units, fail-closed v2-/Versionsklassifikation, wurzelgebundene atomare Persistenz, kollisionsfreie Checkpoints und idempotente Resume-Seiteneffekte. Die bekannte Editor-Lockdatei gehört weiterhin nicht zum Scope.
+- Revision 9 der Validierungsarchitektur liegt als vom Nutzer beauftragte Querschnittskorrektur nach Slice 07 vor: ein Orchestratorlauf je kanonischem Diff-Fingerprint, fingerprintgebundene Attestierung für beide Reviewer und mehr Reviewbudget für Implementierungsanalyse statt wiederholter Vollsuiten. Die bekannte Editor-Lockdatei gehört weiterhin nicht zum Scope.
 - `.orchestrator/state.json` liegt in Version 2 vor und steht auf `phase: done`; er stammt vom 2026-02-23.
 - Verbindliche Validierung: `python3 -m pytest tests/ -v`
 - Ergebnis der lokalen Prüfung für Slice 07 am 2026-08-11: **277 gesammelt, 277 bestanden**; zusätzlich sind 52 fokussierte State-/I/O-Tests, Compile, Diffcheck und der aktive v2-Dry-Run grün. Claude F-001 ist korrigiert, formal geschlossen und mit `PHASE2_APPROVAL: YES` freigegeben. Antigravity prüfte den vollständigen finalen Slice-Diff und erteilte `SLICE_APPROVAL: 07 | YES`; der lokale Commit ist autorisiert.
@@ -45,11 +45,11 @@ Der frühere Planungsbaseline-Stand `75337eb` mit 92 Tests und noch vorhandenem 
 | Instanz | Befehl | Version | Verifizierter Non-Interactive-Modus |
 |---|---|---:|---|
 | Codex | `codex` | 0.147.0 | `codex exec`, `workspace-write`, ephemeral, JSONL und finale Nachrichtendatei |
-| Claude Code | `claude` | 2.1.227 | Print, Einzel-JSON, Safe Mode, externes Reviewpaket, `Read` plus exakter Harness, keine Sessionpersistenz |
+| Claude Code | `claude` | 2.1.227 | Print, Einzel-JSON, Safe Mode, externes Reviewpaket, im Normalreview nur `Read`, keine Sessionpersistenz |
 | Antigravity | `agy` | 1.1.12 | Print, JSON, Sandbox; natives Linux-`agy` bevorzugt, `agy.exe` bleibt explizit konfigurierbar |
 | Gemini CLI | `gemini` | 0.39.1 | noch installiert, im Zielsystem nicht mehr verwendet |
 
-Claude 2.1.227 und Antigravity 1.1.12 führten am 2026-08-11 die vollständigen Reviewer-Harnesses in schreibgeschützten Snapshots erfolgreich aus. Die folgenden Abschnitte 3.1 und 3.2 dokumentieren zusätzlich die ursprünglichen Positiv- und Negativ-Smokes vom 2026-08-10, nicht den heutigen Adapterendstand.
+Claude 2.1.227 und Antigravity 1.1.12 führten am 2026-08-11 die vollständigen Reviewer-Harnesses in schreibgeschützten Snapshots erfolgreich aus. Diese Fähigkeitsevidenz bleibt gültig, wird nach Revision 9 aber nicht pro Review wiederholt. Die folgenden Abschnitte 3.1 und 3.2 dokumentieren zusätzlich die ursprünglichen Positiv- und Negativ-Smokes vom 2026-08-10.
 
 ### 3.1 Positiver Live-Smoke
 
@@ -126,6 +126,7 @@ Es gibt keinen Agentenfallback. Eine Quota mit eindeutigem Resetzeitpunkt verset
 13. Runtime-State und Logs bleiben flüchtig; Plan- und Slice-MDs bilden die committete Prüfspur, Git wird nach dem Commit historische Source of Truth.
 14. Die Root-Rollendatei heißt künftig `ANTIGRAVITY.md`; die historische Referenz `reference-target-repo-gemini.md` bleibt bestehen.
 15. Für die Durchführung dieses Modernisierungsarbeitsplans sind ab Slice 06 alle zur jeweiligen Slice-Intention gehörenden Teständerungen vorab autorisiert. Pfadnachweis, Diff-Fingerprint, Review und Vollsuite bleiben Pflicht; nur die wiederholte separate Nutzerfreigabe entfällt. R-10 im Zielsystem bleibt unverändert.
+16. Die maßgebliche Validierung führt der Python-Orchestrator je kanonischem Diff-Fingerprint genau einmal aus. Claude und Antigravity prüfen dieselbe strukturierte Attestierung statt die Vollsuite erneut zu starten; Korrekturen invalidieren sie, Adapter-/Schreib-Smokes laufen nur über explizite Diagnosebefehle bei Installation, Versionswechsel oder Fehlersuche. Der aktive v2-Pfad liefert bis zum Cutover weiterhin seinen Testsnapshot, ohne dass der Adapter fälschlich eine v3-Attestierung voraussetzt. Claudes Paket wird manifestiert und verlustfrei segmentiert; sein Lesebudget wächst exakt mit der Chunkzahl, damit das frei werdende Modellbudget tatsächlich der tieferen Implementierungsprüfung dient.
 
 ---
 

@@ -10,6 +10,7 @@ from agent_adapters import (
     AgentOutputError,
     AgentPermissionError,
     AntigravityAdapter,
+    CLAUDE_REVIEW_PACKET_CHUNK_CHARS,
     ClaudeAdapter,
     CodexAdapter,
     build_agent_registry,
@@ -105,13 +106,12 @@ def test_claude_defaults_are_quota_conscious_and_permissions_are_separate() -> N
         assert command[command.index("--model") + 1] == "sonnet"
         assert command[command.index("--effort") + 1] == "medium"
         assert command[command.index("--output-format") + 1] == "json"
-        assert command[command.index("--tools") + 1] == "Bash,Read"
+        assert command[command.index("--tools") + 1] == "Read"
         allowed = command[command.index("--allowedTools") + 1]
-        assert allowed.startswith("Read,Bash(")
-        assert "review_harness.py" in allowed
+        assert allowed == "Read"
         assert command[command.index("--permission-mode") + 1] == "dontAsk"
         assert command[command.index("--disallowedTools") + 1] == (
-            "Edit,Write,NotebookEdit,Grep,Glob"
+            "Bash,Edit,Write,NotebookEdit,Grep,Glob"
         )
         assert "--safe-mode" in command
         assert "--strict-mcp-config" in command
@@ -119,8 +119,11 @@ def test_claude_defaults_are_quota_conscious_and_permissions_are_separate() -> N
         assert "--system-prompt" in command
         assert "--append-system-prompt" not in command
         policy = command[command.index("--system-prompt") + 1]
-        assert "at most 6 tool calls" in policy
+        assert "exactly 2 Read calls" in policy
         assert "do not explore the repository" in policy
+        assert "do not run validation commands" in policy
+        assert "legacy test snapshot" in policy
+        assert "failure paths" in policy
         schema = json.loads(command[command.index("--json-schema") + 1])
         assert schema["properties"]["response"]["maxLength"] == 12_000
         assert command[command.index("--max-budget-usd") + 1] == "1.25"
@@ -129,10 +132,13 @@ def test_claude_defaults_are_quota_conscious_and_permissions_are_separate() -> N
         assert "opus" not in command
         assert "secret long prompt" not in command
         packet_dir = Path(command[command.index("--add-dir") + 1])
-        packet_path = packet_dir / "review-packet.md"
+        manifest_path = packet_dir / "review-manifest.md"
+        packet_path = packet_dir / "review-packet-001.md"
         assert packet_path.read_text(encoding="utf-8") == "secret long prompt"
-        assert str(packet_path) in command[-1]
-        assert "at most 6 tool calls" in command[-1]
+        assert "review-packet-001.md" in manifest_path.read_text(encoding="utf-8")
+        assert str(manifest_path) in command[-1]
+        assert "2 Read calls total" in command[-1]
+        assert "Do not run tests or the review harness" in command[-1]
         assert use_stdin is False
     finally:
         adapter.cleanup()
@@ -230,20 +236,91 @@ def test_claude_json_envelope_tracks_usage_and_rejects_permission_denials() -> N
         adapter.extract_output('{"type":"event"}\n{"type":"result"}', "", {})
 
 
-def test_reviewer_harness_is_rebound_into_disposable_snapshot(tmp_path: Path) -> None:
+def test_normal_claude_review_does_not_expose_bound_harness() -> None:
+    adapter = ClaudeAdapter(_settings("claude"))
+    command, _ = adapter.build_command("prompt")
+
+    try:
+        allowed = command[command.index("--allowedTools") + 1]
+        assert allowed == "Read"
+        assert all("review_harness.py" not in part for part in command)
+    finally:
+        adapter.cleanup()
+
+
+def test_capability_smoke_is_explicit_and_binds_harness_into_snapshot(
+    tmp_path: Path,
+) -> None:
     source = tmp_path / "source"
     snapshot = tmp_path / "snapshot"
     harness = source / "src" / "review_harness.py"
     harness.parent.mkdir(parents=True)
     snapshot.mkdir()
-    adapter = ClaudeAdapter(_settings("claude"), review_harness=harness)
-    adapter.bind_reviewer_workspace(source, snapshot)
-    command, _ = adapter.build_command("prompt")
+
+    claude = ClaudeAdapter(_settings("claude"), review_harness=harness)
+    claude.bind_reviewer_workspace(source, snapshot)
+    claude_command, _ = claude.build_capability_smoke_command(
+        "diagnose", test_command="python3 -m pytest tests/ -v"
+    )
+    try:
+        bound_harness = str(snapshot / "src" / "review_harness.py")
+        assert claude_command[claude_command.index("--tools") + 1] == "Bash,Read"
+        allowed = claude_command[claude_command.index("--allowedTools") + 1]
+        assert bound_harness in allowed
+        assert "python3 -m pytest tests/ -v" in allowed
+        assert "capability diagnostic" in claude_command[-1]
+    finally:
+        claude.cleanup()
+
+    antigravity = AntigravityAdapter(
+        _settings("antigravity", binary="agy"), review_harness=harness
+    )
+    antigravity.bind_reviewer_workspace(source, snapshot)
+    antigravity_command, _ = antigravity.build_capability_smoke_command(
+        "diagnose", test_command="python3 -m pytest tests/ -v"
+    )
+    try:
+        assert str(snapshot / "src" / "review_harness.py") in antigravity_command[-1]
+        assert "python3 -m pytest tests/ -v" in antigravity_command[-1]
+        assert "capability diagnostic" in antigravity_command[-1]
+    finally:
+        antigravity.cleanup()
+
+
+def test_claude_review_packet_is_losslessly_chunked_with_dynamic_read_budget() -> None:
+    prompt = ("line\n" * 9_000) + ("x" * 30_000)
+    adapter = ClaudeAdapter(_settings("claude"))
+    command, _ = adapter.build_command(prompt)
 
     try:
-        allowed = command[command.index("--allowedTools") + 1]
-        assert str(snapshot / "src" / "review_harness.py") in allowed
-        assert str(source / "src" / "review_harness.py") not in allowed
+        packet_dir = Path(command[command.index("--add-dir") + 1])
+        chunks = sorted(packet_dir.glob("review-packet-*.md"))
+        assert len(chunks) >= 4
+        assert "".join(path.read_text(encoding="utf-8") for path in chunks) == prompt
+        assert all(len(path.read_text(encoding="utf-8")) <= 24_000 for path in chunks)
+        manifest = (packet_dir / "review-manifest.md").read_text(encoding="utf-8")
+        assert all(path.name in manifest for path in chunks)
+        expected_calls = len(chunks) + 1
+        policy = command[command.index("--system-prompt") + 1]
+        assert f"exactly {expected_calls} Read calls" in policy
+        assert f"{expected_calls} Read calls total" in command[-1]
+    finally:
+        adapter.cleanup()
+
+
+def test_claude_review_chunk_bound_is_exclusive_at_newline_edge() -> None:
+    prompt = ("x" * CLAUDE_REVIEW_PACKET_CHUNK_CHARS) + "\nremainder"
+    adapter = ClaudeAdapter(_settings("claude"))
+    command, _ = adapter.build_command(prompt)
+
+    try:
+        packet_dir = Path(command[command.index("--add-dir") + 1])
+        chunks = sorted(packet_dir.glob("review-packet-*.md"))
+        contents = [path.read_text(encoding="utf-8") for path in chunks]
+        assert "".join(contents) == prompt
+        assert all(
+            len(chunk) <= CLAUDE_REVIEW_PACKET_CHUNK_CHARS for chunk in contents
+        )
     finally:
         adapter.cleanup()
 

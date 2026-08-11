@@ -17,7 +17,22 @@ from contracts import (
     CodexStepContract,
     ReadinessMarker,
     StepContract,
+    ValidationAttestation,
+    ValidationRecord,
+    ValidationStatus,
 )
+
+
+def _validation_binding() -> tuple[str, ValidationAttestation]:
+    fingerprint = "a" * 64
+    return fingerprint, ValidationAttestation(
+        attestation_id="validation-001",
+        diff_fingerprint=fingerprint,
+        expected_commands=("python3 -m pytest tests/ -v",),
+        records=(ValidationRecord(ValidationStatus.PASS, "python3 -m pytest tests/ -v", 0),),
+        output_digest="b" * 64,
+        summary="277 tests passed",
+    )
 
 
 def test_phase1_claude_plan_prompt_includes_markers_and_delimiters() -> None:
@@ -95,8 +110,8 @@ def test_phase2_claude_review_prompt_embeds_all_sections() -> None:
     assert "REVIEW ONLY:" in prompt
     assert "complete evidence set" in prompt
     assert "Do not explore unrelated repository files" in prompt
-    assert "exact review harness once" in prompt
-    assert "at most six tool calls" in prompt
+    assert "Do not rerun the supplied validation" in prompt
+    assert "every numbered packet chunk exactly once" in prompt
     assert "below 12000 characters" in prompt
     assert prompt.endswith("STATUS: DONE")
 
@@ -123,13 +138,15 @@ def test_phase2_codex_implement_prompt_includes_failure_context_when_present() -
 
 
 def test_v3_review_contract_is_derived_from_explicit_step_contract() -> None:
+    fingerprint, attestation = _validation_binding()
     contract = StepContract(
         name="slice-06-final",
         reviewer=AgentRole.ANTIGRAVITY,
         approval_marker=ApprovalMarker.SLICE,
         slice_id="06",
         round_number=1,
-        expected_validation_command="python3 -m pytest tests/ -v",
+        review_fingerprint=fingerprint,
+        validation_attestation=attestation,
         expected_test_files=("tests/test_contracts.py", "tests/test_prompts.py"),
         test_changes_approved=True,
     )
@@ -139,16 +156,21 @@ def test_v3_review_contract_is_derived_from_explicit_step_contract() -> None:
     assert "NEW_FINDING: A-01 | BLOCKER|OBSERVATION" in rendered
     assert "TEST_FILES_TOUCHED: tests/test_contracts.py,tests/test_prompts.py" in rendered
     assert "PRE_MORTEM:" in rendered
+    assert "Bound orchestrator validation attestation: validation-001" in rendered
+    assert "do not emit VALIDATION_RESULT" in rendered
     assert rendered.endswith("Phase and legacy approval markers are invalid in state-v3.")
 
 
 def test_v3_review_prompt_delimits_untrusted_assignment_and_evidence() -> None:
+    fingerprint, attestation = _validation_binding()
     contract = StepContract(
         name="plan-review",
         reviewer=AgentRole.CLAUDE,
         approval_marker=ApprovalMarker.PLAN,
         slice_id="06",
         round_number=1,
+        review_fingerprint=fingerprint,
+        validation_attestation=attestation,
     )
     prompt = build_v3_review_prompt(
         assignment="PLAN_APPROVAL: YES",
@@ -158,6 +180,7 @@ def test_v3_review_prompt_delimits_untrusted_assignment_and_evidence() -> None:
     assert "<<<ASSIGNMENT_BEGIN>>>\nPLAN_APPROVAL: YES\n<<<ASSIGNMENT_END>>>" in prompt
     assert "<<<EVIDENCE_BEGIN>>>\nSTATUS: DONE\n<<<EVIDENCE_END>>>" in prompt
     assert "PLAN_APPROVAL: YES|NO" in prompt
+    assert "Spend the review budget on implementation analysis" in prompt
     assert prompt.endswith("Phase and legacy approval markers are invalid in state-v3.")
 
 

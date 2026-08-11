@@ -994,7 +994,6 @@ def run_pipeline(task_file: Path, args: argparse.Namespace, force_new: bool = Fa
         agent_live_stream_mode=args.agent_live_stream_mode,
         agent_live_stream_channels=args.agent_live_stream_channels,
         repo_root=Path.cwd().resolve(),
-        review_test_command=str(args.test_command or ""),
         strict_preflight=bool(args.strict_preflight),
     )
     agents_file = Path(str(args.agents_file)).expanduser().resolve()

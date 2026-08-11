@@ -97,6 +97,31 @@ def test_review_harness_fails_when_git_diff_check_fails(
     }
 
 
+def test_review_harness_sets_its_own_cache_suppression_environment(
+    monkeypatch, tmp_path: Path
+) -> None:
+    repo = _repo(tmp_path)
+    environments: list[dict[str, str]] = []
+
+    def record_environment(*args, **kwargs):  # type: ignore[no-untyped-def]
+        environments.append(dict(kwargs["env"]))
+        return 0, ""
+
+    monkeypatch.setattr(review_harness, "_run", record_environment)
+    rc, _ = run_review_checks(
+        repo_root=repo,
+        test_command="pytest",
+        probe_path="README.md",
+        timeout=30,
+        environ={},
+    )
+
+    assert rc == 0
+    assert environments
+    assert all(env["PYTHONDONTWRITEBYTECODE"] == "1" for env in environments)
+    assert all("-p no:cacheprovider" in env["PYTEST_ADDOPTS"] for env in environments)
+
+
 def test_review_harness_cli_rejects_missing_test_command(
     monkeypatch, capsys
 ) -> None:

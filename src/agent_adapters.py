@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shlex
@@ -15,7 +16,7 @@ from agent_config import AgentSettings, default_agent_settings
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 REVIEW_HARNESS = Path(__file__).resolve().parent / "review_harness.py"
-CLAUDE_REVIEW_MAX_TOOL_CALLS = 6
+CLAUDE_REVIEW_PACKET_CHUNK_CHARS = 24_000
 CLAUDE_REVIEW_RESPONSE_MAX_CHARS = 12_000
 
 
@@ -54,6 +55,28 @@ def _json_object(text: str, role: str) -> dict[str, object]:
     if not isinstance(value, dict):
         raise AgentOutputError(f"{role} JSON envelope must be an object")
     return value
+
+
+def _split_text_at_lines(text: str, max_chars: int) -> tuple[str, ...]:
+    """Split a review packet into bounded, lossless chunks readable in one call each."""
+    if max_chars < 1:
+        raise ValueError("review packet chunk size must be positive")
+    if not text:
+        return ("",)
+    chunks: list[str] = []
+    remaining = text
+    while remaining:
+        if len(remaining) <= max_chars:
+            chunks.append(remaining)
+            break
+        boundary = remaining.rfind("\n", 0, max_chars)
+        if boundary < 1:
+            boundary = max_chars
+        else:
+            boundary += 1
+        chunks.append(remaining[:boundary])
+        remaining = remaining[boundary:]
+    return tuple(chunks)
 
 
 class AgentAdapter(Protocol):
@@ -289,7 +312,8 @@ class ClaudeAdapter(_BaseAdapter):
         super().__init__(settings or default_agent_settings()["claude"])
         self.review_harness = review_harness.resolve()
         self._bound_review_harness: Path | None = None
-        self._review_packet_file: Path | None = None
+        self._review_manifest_file: Path | None = None
+        self._review_packet_files: tuple[Path, ...] = ()
 
     def bind_reviewer_workspace(self, source_root: Path, snapshot_root: Path) -> None:
         try:
@@ -299,22 +323,40 @@ class ClaudeAdapter(_BaseAdapter):
         else:
             self._bound_review_harness = snapshot_root / relative_harness
 
-    @property
-    def review_harness_command(self) -> str:
-        harness = self._bound_review_harness or self.review_harness
-        return shlex.join([sys.executable, str(harness)])
-
     def build_command(self, prompt: str) -> tuple[list[str], bool]:
         runtime_dir = self._new_runtime_dir()
-        self._review_packet_file = runtime_dir / "review-packet.md"
-        self._review_packet_file.write_text(prompt, encoding="utf-8")
-        harness_command = self.review_harness_command
+        chunks = _split_text_at_lines(prompt, CLAUDE_REVIEW_PACKET_CHUNK_CHARS)
+        self._review_packet_files = tuple(
+            runtime_dir / f"review-packet-{index:03d}.md"
+            for index in range(1, len(chunks) + 1)
+        )
+        manifest_lines = [
+            "# Review packet manifest",
+            "",
+            "Read every chunk below exactly once, in order. Their concatenation is the complete review packet.",
+            "",
+        ]
+        for packet_file, chunk in zip(self._review_packet_files, chunks, strict=True):
+            packet_file.write_text(chunk, encoding="utf-8")
+            digest = hashlib.sha256(chunk.encode("utf-8")).hexdigest()
+            manifest_lines.append(
+                f"- `{packet_file.name}` | chars={len(chunk)} | sha256={digest}"
+            )
+        self._review_manifest_file = runtime_dir / "review-manifest.md"
+        self._review_manifest_file.write_text(
+            "\n".join(manifest_lines) + "\n", encoding="utf-8"
+        )
+        read_call_budget = len(chunks) + 1
         policy = (
-            "You are a concise read-only reviewer. Use only the supplied review packet; "
-            "do not explore the repository. Use at most "
-            f"{CLAUDE_REVIEW_MAX_TOOL_CALLS} tool calls total: read the packet once and, "
-            "only when requested, run the exact review harness once. Do not try alternative "
-            "commands. Return only evidence, findings, decisions, and mandatory contract "
+            "You are a concise read-only reviewer. Use only the supplied manifest and "
+            "numbered review-packet chunks; "
+            "do not explore the repository and do not run validation commands. Authoritative "
+            "validation evidence is supplied by the orchestrator as either a legacy test "
+            "snapshot or a fingerprint-bound v3 attestation. Use the "
+            "available reasoning budget for adversarial implementation analysis: invariants, "
+            "failure paths, security boundaries, resume/idempotency risks, and missing tests. "
+            f"Use exactly {read_call_budget} Read calls: the manifest once, then every listed "
+            "chunk once in order. Return only evidence, findings, decisions, and mandatory contract "
             f"markers, within {CLAUDE_REVIEW_RESPONSE_MAX_CHARS} characters."
         )
         response_schema = json.dumps(
@@ -333,10 +375,11 @@ class ClaudeAdapter(_BaseAdapter):
             separators=(",", ":"),
         )
         directive = (
-            f"Read {self._review_packet_file} exactly once and follow it. "
-            f"Use at most {CLAUDE_REVIEW_MAX_TOOL_CALLS} tool calls. If validation is "
-            "requested, run exactly once and without wrappers or redirections: "
-            f"{harness_command}. Return the answer in the response field."
+            f"Read {self._review_manifest_file} exactly once, then read every listed packet "
+            f"chunk exactly once in order ({read_call_budget} Read calls total), and follow "
+            "the concatenated request. Do not run tests or the review harness; inspect the "
+            "supplied validation evidence and focus on the implementation. Return the answer "
+            "in the response field."
         )
         command = [
             self.cli_binary,
@@ -348,11 +391,11 @@ class ClaudeAdapter(_BaseAdapter):
             "--effort",
             self.effort,
             "--tools",
-            "Bash,Read",
+            "Read",
             "--allowedTools",
-            f"Read,Bash({harness_command})",
+            "Read",
             "--disallowedTools",
-            "Edit,Write,NotebookEdit,Grep,Glob",
+            "Bash,Edit,Write,NotebookEdit,Grep,Glob",
             "--permission-mode",
             "dontAsk",
             "--safe-mode",
@@ -372,6 +415,50 @@ class ClaudeAdapter(_BaseAdapter):
             command.extend(["--max-budget-usd", str(self.max_budget_usd)])
         command.append(directive)
         return command, False
+
+    def build_capability_smoke_command(
+        self,
+        prompt: str,
+        *,
+        test_command: str,
+        probe_path: str = "README.md",
+        timeout: int = 1800,
+    ) -> tuple[list[str], bool]:
+        """Build an explicit opt-in diagnostic command; never used by normal reviews."""
+        command, use_stdin = self.build_command(prompt)
+        harness = self._bound_review_harness or self.review_harness
+        harness_command = shlex.join(
+            [
+                sys.executable,
+                str(harness),
+                "--repo-root",
+                ".",
+                "--test-command",
+                test_command,
+                "--probe-path",
+                probe_path,
+                "--timeout",
+                str(timeout),
+            ]
+        )
+        command[command.index("--tools") + 1] = "Bash,Read"
+        command[command.index("--allowedTools") + 1] = (
+            f"Read,Bash({harness_command})"
+        )
+        command[command.index("--disallowedTools") + 1] = (
+            "Edit,Write,NotebookEdit,Grep,Glob"
+        )
+        command[command.index("--system-prompt") + 1] = (
+            "This is an explicit adapter/version capability diagnostic, not a normal "
+            "implementation review. Read only the supplied manifest and packet chunks, "
+            "then run the exact allowlisted review harness once. Do not try alternatives."
+        )
+        command[-1] = (
+            f"Read {self._review_manifest_file}, then every listed packet chunk exactly "
+            "once. Run this exact capability diagnostic once and no alternative: "
+            f"{harness_command}. Return the answer in the response field."
+        )
+        return command, use_stdin
 
     def extract_output(self, stdout: str, stderr: str, extra_files: dict[str, str]) -> str:
         _ = stderr
@@ -426,7 +513,8 @@ class ClaudeAdapter(_BaseAdapter):
     def cleanup(self) -> None:
         super().cleanup()
         self._bound_review_harness = None
-        self._review_packet_file = None
+        self._review_manifest_file = None
+        self._review_packet_files = ()
 
 
 class AntigravityAdapter(_BaseAdapter):
@@ -469,11 +557,6 @@ class AntigravityAdapter(_BaseAdapter):
         else:
             self._bound_review_harness = snapshot_root / relative_harness
 
-    @property
-    def review_harness_command(self) -> str:
-        harness = self._bound_review_harness or self.review_harness
-        return shlex.join([sys.executable, str(harness)])
-
     def build_command(self, prompt: str) -> tuple[list[str], bool]:
         runtime_dir = self._new_runtime_dir()
         self._prompt_file = runtime_dir / "review-prompt.md"
@@ -481,8 +564,9 @@ class AntigravityAdapter(_BaseAdapter):
         log_file = runtime_dir / "antigravity.log"
         directive = (
             f"Read the complete request from {self._prompt_file} and follow it. "
-            "The repository is read-only. If validation is requested, run exactly once and "
-            f"without wrappers or redirections: {self.review_harness_command}."
+            "The repository is read-only. Do not rerun full validation; inspect the supplied "
+            "orchestrator validation evidence and spend the review budget on "
+            "adversarial implementation analysis."
         )
         command = [
             self.cli_binary,
@@ -505,6 +589,39 @@ class AntigravityAdapter(_BaseAdapter):
             directive,
         ]
         return command, False
+
+    def build_capability_smoke_command(
+        self,
+        prompt: str,
+        *,
+        test_command: str,
+        probe_path: str = "README.md",
+        timeout: int = 1800,
+    ) -> tuple[list[str], bool]:
+        """Build an explicit opt-in diagnostic command; never used by normal reviews."""
+        command, use_stdin = self.build_command(prompt)
+        harness = self._bound_review_harness or self.review_harness
+        harness_command = shlex.join(
+            [
+                sys.executable,
+                str(harness),
+                "--repo-root",
+                ".",
+                "--test-command",
+                test_command,
+                "--probe-path",
+                probe_path,
+                "--timeout",
+                str(timeout),
+            ]
+        )
+        command[-1] = (
+            f"Read the complete diagnostic request from {self._prompt_file}. The repository "
+            "is read-only. This is an explicit adapter/version capability diagnostic, not "
+            "a normal review. Run this exact harness command once and no alternative: "
+            f"{harness_command}."
+        )
+        return command, use_stdin
 
     def extract_output(self, stdout: str, stderr: str, extra_files: dict[str, str]) -> str:
         _ = stderr

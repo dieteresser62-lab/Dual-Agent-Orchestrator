@@ -49,8 +49,6 @@ class OrchestratorConfig:
     agent_live_stream_mode: str = "compact"
     agent_live_stream_channels: str = "both"
     repo_root: Path = field(default_factory=lambda: Path.cwd().resolve())
-    review_test_command: str = "python3 -m pytest tests/ -v"
-    review_probe_path: str = "README.md"
     strict_preflight: bool = False
 
 
@@ -407,14 +405,13 @@ def run_agent(
         env = os.environ.copy()
         env.update(adapter.env)
         if adapter.reviewer:
-            env.update(
-                {
-                    "PYTHONDONTWRITEBYTECODE": "1",
-                    "RUN_TASK_REVIEW_TEST_COMMAND": config.review_test_command,
-                    "RUN_TASK_REVIEW_PROBE_PATH": config.review_probe_path,
-                    "RUN_TASK_REVIEW_TIMEOUT": str(adapter.timeout),
-                }
-            )
+            env["PYTHONDONTWRITEBYTECODE"] = "1"
+            for variable in (
+                "RUN_TASK_REVIEW_TEST_COMMAND",
+                "RUN_TASK_REVIEW_PROBE_PATH",
+                "RUN_TASK_REVIEW_TIMEOUT",
+            ):
+                env.pop(variable, None)
         env["PWD"] = str(execution_root)
 
         if config.agent_live_stream:

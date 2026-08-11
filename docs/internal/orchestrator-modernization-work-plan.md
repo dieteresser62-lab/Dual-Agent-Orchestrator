@@ -1,7 +1,7 @@
 # Arbeitsplan: Modernisierung des Dual-Agent-Orchestrators
 
-**Status:** Revision-6-/Revision-7-Stand freigegeben; Revision-8-Ausführungsausnahme für Teständerungen vom Nutzer verbindlich entschieden
-**Anforderungsbasis:** `requirements-orchestrator-modernization.md`, Revision 8
+**Status:** Revision-6-/Revision-7-Stand freigegeben; Revision-8-Testausnahme und Revision-9-Validierungsattestierung vom Nutzer verbindlich entschieden
+**Anforderungsbasis:** `requirements-orchestrator-modernization.md`, Revision 9
 **Feature-Branch:** `feature/orchestrator-modernization`
 **Branch-Basis:** `master` bei `0bd3bad`
 **GitHub-Status:** nur lokal; kein Upstream; Veröffentlichung ausstehend und nur nach Nutzerfreigabe
@@ -39,7 +39,7 @@ Python wird alleinige Quelle für CLI-, Resume-, Watch-, Testautodetektions- und
 
 Agentenbefehle werden mit der Priorität CLI-Option → Umgebungsvariable → optionale Repo-Konfiguration → Standard aufgelöst. Lokale absolute Pfade werden nicht in versionierte Konfiguration geschrieben. Die tatsächlich verwendeten Befehle und Versionen erscheinen im Preflight. Lokal sind `codex` 0.147.0, `claude` 2.1.226 sowie das native Linux-`agy` 1.1.12 und ein explizit konfigurierbarer `agy.exe`-Alternativpfad verfügbar.
 
-Repository-Sandbox und CLI-Prozessumgebung werden getrennt modelliert. Für Reviewer bedeutet read-only präzise: versionierte Repositorydateien und die Git-Metadaten sind nicht veränderbar; Python-Bytecode und pytest-Cache werden mit `PYTHONDONTWRITEBYTECODE=1` beziehungsweise `-p no:cacheprovider` unterdrückt; notwendige temporäre Daten und private CLI-Runtime-/Logpfade werden über dedizierte Verzeichnisse außerhalb des Repositorys (`TMPDIR`, `XDG_CACHE_HOME` und adapterspezifische Variablen) beschreibbar gemacht. Provider-Egress und der von Antigravity benötigte lokale Loopback-Socket werden erlaubt, ohne Schreibrechte auf versionierte Repositoryinhalte zu eröffnen. Das Reviewerprofil muss die vollständige Testsuite erfolgreich ausführen können, während ein gezielter Schreibversuch auf eine versionierte Datei weiterhin scheitert.
+Repository-Sandbox und CLI-Prozessumgebung werden getrennt modelliert. Für Reviewer bedeutet read-only präzise: versionierte Repositorydateien und die Git-Metadaten sind nicht veränderbar; notwendige temporäre Daten und private CLI-Runtime-/Logpfade werden über dedizierte Verzeichnisse außerhalb des Repositorys (`TMPDIR`, `XDG_CACHE_HOME` und adapterspezifische Variablen) beschreibbar gemacht. Provider-Egress und der von Antigravity benötigte lokale Loopback-Socket werden erlaubt, ohne Schreibrechte auf versionierte Repositoryinhalte zu eröffnen. Im normalen Review führt kein Modell die Vollsuite aus. Die Fähigkeitsevidenz nach Installation oder Versionswechsel beweist separat, dass das Read-only-Profil funktioniert und ein gezielter Schreibversuch auf eine versionierte Datei scheitert.
 
 ### 3.2 Repo-Konfiguration
 
@@ -69,6 +69,8 @@ State-Version 3 akzeptiert nur die neuen, schrittbezogenen Marker. Jede Agentena
 ### 3.6 Prüfspur
 
 Der Runtime-State ist während eines Laufs maschinenlesbare Wahrheit. Rohe Logs dienen nur der Diagnose. Der Orchestrator schreibt validierte Agentenantworten deterministisch in die vorgesehenen Abschnitte der Plan- und Slice-Dokumente. Nach dem Commit sind Git, Arbeitsplan und Slice-MD die historische Prüfspur; flüchtige Logs werden nicht als paralleles Auditformat behandelt.
+
+Die maßgebliche Validierung ist ein eigener Orchestratorrecord, keine Agentenaussage. Je kanonischem Diff-Fingerprint führt der Orchestrator die erforderliche Matrix einmal aus und bindet Attestierungs-ID, Befehle, Exitcodes, Vollständigkeit, Ergebnisdigest und Fingerprint an Claude- und Antigravity-Review. Beide Reviewer investieren ihr Budget in die Implementierungsanalyse; nach einer Korrektur verfällt die alte Attestierung. Deterministisch projizierte Auditabschnitte sind vom fachlichen Reviewfingerprint getrennt, damit ein Revieweintrag nicht seine eigene Freigabe invalidiert.
 
 ### 3.7 Quota-Wartepolitik
 
@@ -211,15 +213,15 @@ Die Audit-Komponente aus Slice 8 prüft bei Start eines Slice, dass genau diese 
 - CLI-Warnungen über wirkungslose oder inkompatible Optionen gelten als fehlgeschlagener Fähigkeitstest; insbesondere darf Antigravitys Hinweis, dass `--mode plan` zusammen mit `--disable-slash-commands` wirkungslos ist, nicht als wirksames Read-only-Profil verbucht werden.
 - Codex erhält Implementiererrechte; Claude und Antigravity erhalten technisch erzwungenen Lesezugriff.
 - Reviewer können weder Code, Tests noch Dokumente direkt verändern.
-- Verfügbarkeit eines Werkzeugs und dessen Berechtigung werden getrennt konfiguriert. Reviewer erhalten nur lesende Datei-/Git-Werkzeuge und exakt freigegebene Validierungsbefehle; ein interaktiver Planmodus wird nicht als Berechtigungskonzept für headless Läufe verwendet.
+- Verfügbarkeit eines Werkzeugs und dessen Berechtigung werden getrennt konfiguriert. Reviewer erhalten im Normalreview nur die für die Implementierungsanalyse erforderlichen Leserechte; Validierungsbefehle sind ausschließlich über explizite, getrennte Diagnosebefehle der Adapter freigegeben. Ein interaktiver Planmodus wird nicht als Berechtigungskonzept für headless Läufe verwendet.
 - CLI-Runtime-, Log- und Tempverzeichnisse sind separat beschreibbar; Antigravity kann seinen lokalen Language-Server-Loopback öffnen, während der Repositoryzugriff read-only bleibt.
-- Jede Reviewerrolle führt die vollständige Suite im definierten Read-only-Profil (`PYTHONDONTWRITEBYTECODE=1`, pytest ohne Cacheprovider, externe Temp-/Cachepfade) erfolgreich aus; ein gezielter Schreibversuch auf eine versionierte Repositorydatei scheitert weiterhin.
+- Jede Reviewerrolle besteht nach Installation oder Versionswechsel einen getrennten Fähigkeitssmoke: Die vollständige Suite ist im definierten Read-only-Profil (`PYTHONDONTWRITEBYTECODE=1`, pytest ohne Cacheprovider, externe Temp-/Cachepfade) ausführbar und ein gezielter Schreibversuch auf eine versionierte Repositorydatei scheitert. Dieser Nachweis wird nicht bei jedem fachlichen Review wiederholt.
 - Minimalprompts aller drei Adapter liefern den Abschlussmarker; ein eigener Isolationstest erzwingt je Reviewer mindestens einen tatsächlich erlaubten Werkzeugaufruf, damit ein tool-loser Smoke nicht fälschlich nur Authentifizierung und Erreichbarkeit bestätigt. Automatisierte Tests verwenden Fake-CLIs, Live-Smokes werden nach Installation oder Versionsänderung separat protokolliert.
 - Befehl, Version und Fähigkeiten werden geprüft. Eine noch nicht freigegebene Version hält mit Nutzergate an, bis die Kompatibilitätsmatrix erfolgreich ist.
 - Der vorgesehene Eingabekanal verarbeitet einen realistischen Langprompt, ohne Betriebssystemgrenzen für Kommandozeilenargumente zu überschreiten oder Prompttext in der Prozessliste offenzulegen.
-- Claude erhält ein einziges externes Reviewpaket statt offener Repositoryerkundung. Nur `Read` und der exakte Harness sind verfügbar; der Auftrag begrenzt den Lauf auf höchstens sechs Werkzeugaufrufe, das kleine JSON-Schema auf 12.000 Zeichen und Plugins, MCPs, Promptvorschläge sowie Sessionpersistenz bleiben deaktiviert.
+- Claude erhält ein einziges externes, manifestiertes Reviewpaket statt offener Repositoryerkundung. Es wird verlustfrei in begrenzte nummerierte Chunks zerlegt. Im Normalreview ist nur `Read` verfügbar; der Auftrag erlaubt exakt einen Leseaufruf für Manifest und jeden Chunk, begrenzt das kleine JSON-Schema auf 12.000 Zeichen und deaktiviert Plugins, MCPs, Promptvorschläge sowie Sessionpersistenz. Der Adapter akzeptiert dabei neutral die v2-Testsnapshot- oder v3-Attestierungsevidenz des aufrufenden Workflows. Der Harness gehört nur zum expliziten Adapter-/Versionsdiagnosebefehl.
 
-**Tests:** Befehlsaufbau, Ausgabeextraktion, Text-/JSON-/Streamfilter, Binaryauflösung, Version/Fähigkeiten, Timeout/Modell, Auth-/Quota-/Netz-/Berechtigungsfehler, tool-loser Minimalprompt getrennt vom erzwungenen Werkzeug-Isolationstest, Langprompt, Prozessende, Vollsuite je Reviewer im Read-only-Profil, negativer Schreibversuch auf eine versionierte Datei je CLI und Live-Smoke-Checkliste; vollständige Suite.
+**Tests:** Befehlsaufbau, Ausgabeextraktion, Text-/JSON-/Streamfilter, Binaryauflösung, Version/Fähigkeiten, Timeout/Modell, Auth-/Quota-/Netz-/Berechtigungsfehler, tool-loser Minimalprompt getrennt vom erzwungenen Werkzeug-Isolationstest, verlustfreie Langprompt-Segmentierung mit dynamischem Lesebudget, Prozessende, einmaliger Fähigkeitssmoke mit Vollsuite im Read-only-Profil, negativer Schreibversuch auf eine versionierte Datei je CLI und Live-Smoke-Checkliste; vollständige Suite.
 **Abhängigkeiten:** Slice 2.
 **Test-Riegel:** ja. **Red-State:** nein.
 **Risiko/Rückfalloption:** CLI-Versionen und benötigte Prozessressourcen unterscheiden sich je Plattform; adapterspezifische Abweichungen bleiben hinter dem gemeinsamen Protocol isoliert. Ein unbekannter Versions- oder Fähigkeitsstand führt zum Nutzergate statt zu optimistischer Ausführung.
@@ -327,6 +329,8 @@ Die Audit-Komponente aus Slice 8 prüft bei Start eines Slice, dass genau diese 
 - Reviewerfeedback wird nur nach erfolgreicher Contract-Validierung in den exakt vorgesehenen Abschnitt geschrieben.
 - Freier Reviewerinhalt kann keine anderen Dateien oder geschützten Dokumentabschnitte überschreiben.
 - Entscheidungstabelle, Validierung, Testfreigabe, Pre-Mortem und Findings werden aus strukturierten Records aktualisiert.
+- Eine strukturierte `VALIDATION_ATTESTATION` mit Attestierungs-ID, kanonischem Diff-Fingerprint, Matrixbefehlen, Exitcodes, Vollständigkeit, Kurzresultat und Ausgabedigest wird als eigenes Laufereignis projiziert; Reviewtexte können diese Felder nicht überschreiben.
+- Deterministisch verwaltete Auditabschnitte sind vom fachlichen Reviewgegenstand getrennt, damit die Projektion einer bereits validierten Reviewerantwort ihre eigene Fingerprintbindung nicht invalidiert.
 - Wiederholtes Rendern ist idempotent.
 - Rohe Logs sind nicht zweite Audit-Source-of-Truth.
 
@@ -346,7 +350,7 @@ Die Audit-Komponente aus Slice 8 prüft bei Start eines Slice, dass genau diese 
 - Planungsstart erstellt oder prüft einen zulässigen Feature-Branch und dokumentiert lokalen/Remote-Status.
 - Vor dem ersten Slice-Edit werden Branch, Status und Diff-Risiko persistiert.
 - Der Preflight unterscheidet neue Läufe von Resume: Ein neuer Lauf verlangt standardmäßig einen sauberen Ausgangsstand; beim Resume werden die aktuellen Änderungen gegen persistierten Slice-Scope, Ausgangsfingerprint und Gatezustand geprüft. Erwartete In-Scope-Änderungen eines pausierten Slice sind zulässig, scope-fremde oder seit dem Halt unerwartet veränderte Pfade blockieren weiterhin.
-- Commit erfordert Claude- und Antigravity-Freigabe für denselben Diff-Fingerprint.
+- Commit erfordert Claude- und Antigravity-Freigabe sowie eine vollständige grüne Orchestrator-Attestierung für denselben kanonischen Diff-Fingerprint.
 - Unerwartete oder nach Review veränderte Dateien blockieren.
 - Nur erlaubte Pfade werden staged; keine pauschale Add-Operation.
 - Commitmessage, Slice-ID und resultierender Hash werden dokumentiert.
@@ -373,6 +377,9 @@ Die Audit-Komponente aus Slice 8 prüft bei Start eines Slice, dass genau diese 
 - Zwei Codex-Nachbesserungen ergeben drei Claude- und einen Antigravity-Aufruf.
 - Fehlendes oder unparsbares Verdikt ist Ablehnung, kein Überspringen.
 - Freigaben beziehen sich nachweislich auf denselben Diff-Fingerprint.
+- Vor dem ersten Claude-Aufruf und nach jeder inhaltlichen Codex-Korrektur muss eine passende Orchestrator-Attestierung vorliegen. Claude und Antigravity konsumieren dieselbe Attestierung und starten weder Vollsuite noch Review-Harness erneut.
+- State-v3-Agentenantworten mit selbst behauptetem `VALIDATION_RESULT` sind ungültig; Validierung ist Contract-Eingabe, kein Modellverdikt. Fehlende, rote, unvollständige oder fingerprintfremde Attestierung hält vor der Freigabe fail-closed.
+- Ein Reviewer fordert zusätzliche gezielte Validierung ausschließlich über ein Finding-Akzeptanzkriterium an; Ausführung und Attestierung erfolgen mechanisch vor der nächsten Reviewrunde.
 - Prompts erhalten eine strukturierte, destillierte Sicht auf Planentscheidungen und den aktuellen Slice; die relevante Finding-/Reviewhistorie bleibt als Records erhalten und wird nicht durch blindes Abschneiden des ältesten Textes verfälscht.
 - Die neue Engine bleibt bis einschließlich Slice 17 hinter einem expliziten Entwicklungsmodus; der bestehende Defaultpfad bleibt startbar.
 
@@ -422,9 +429,9 @@ Die Audit-Komponente aus Slice 8 prüft bei Start eines Slice, dass genau diese 
 **Test-Riegel:** ja. **Red-State:** nein.
 **Risiko/Rückfalloption:** Fehlklassifikation; fail-closed-Verhalten und protokollierte Pfadklassen machen die Entscheidung prüfbar.
 
-### Slice 13 — Pfadabhängige Validierungsmatrix
+### Slice 13 — Pfadabhängige Validierungsmatrix und Attestierung
 
-**Zweck:** Standard- und Zusatzvalidierungen diffabhängig je prüfender Rolle tatsächlich ausführen und beweissicher berichten.
+**Zweck:** Standard- und Zusatzvalidierungen diffabhängig je kanonischem Fingerprint einmal durch den Orchestrator ausführen, attestieren und beweissicher an alle Reviewer binden.
 **Anforderungen:** R-16; Gate-Grundlage aus §2.5.
 **Voraussichtlich betroffene Dateien:** `src/gates.py`, `src/agent_runtime.py`, `src/workflow.py`, `src/contracts.py`, `src/cli.py`, optional `orchestrator.toml`, `tests/test_gates.py`, `tests/test_agent_runtime.py`, `tests/test_workflow.py`.
 
@@ -432,13 +439,15 @@ Die Audit-Komponente aus Slice 8 prüft bei Start eines Slice, dass genau diese 
 
 - Ein Standardbefehl und beliebig viele pathgebundene Zusatzbefehle sind deklarierbar.
 - Beispiel „`npm test` immer, `npm run build:engine` bei `engine/**`" funktioniert exakt.
-- Jede validierungspflichtige Rolle führt die erlaubten Befehle in ihrem Schritt aus; der Runtime-Layer erfasst Befehl, Exitcode und Ausgabe.
-- Claude und Antigravity führen die Vollsuite im Read-only-Profil mit unterdrücktem Python-/pytest-Repositorycache und externen Temp-/Cachepfaden erfolgreich aus; der parallel geprüfte Schreibversuch auf eine versionierte Datei bleibt verboten.
-- Der Contract-Marker muss mit der tatsächlich erfassten Ausführung übereinstimmen.
-- Rote oder unvollständige Validierung blockiert, außer einem ausdrücklich benannten Red-State/Folge-Slice-Paar.
-- Nicht ausgeführte Vollsuite wird ausdrücklich als unvollständig dokumentiert.
+- Der Orchestrator führt die ermittelte Matrix je kanonischem Diff-Fingerprint genau einmal aus und erfasst Befehl, Exitcode, Vollständigkeit, kompakte Ausgabe und Ausgabedigest in einer unveränderlichen Attestierung.
+- Claude und Antigravity erhalten dieselbe Attestierung als Contract-Input und führen die Vollsuite nicht erneut aus. Ein zweiter Reviewer desselben Fingerprints erhöht den Ausführungszähler nicht.
+- Der Attestierungsfingerprint muss mit Reviewpaket und Freigaben übereinstimmen; selbst gemeldete `VALIDATION_RESULT`-Marker von Agenten werden abgelehnt.
+- Eine inhaltliche Korrektur invalidiert die alte Attestierung und erzeugt genau einen neuen Matrixlauf. Reviewer-verlangte gezielte Akzeptanztests werden in diese nächste Matrix aufgenommen.
+- Read-only-Profil und negativer Schreibversuch bleiben Adapter-/Versions-Smokes und sind nicht Bestandteil jedes Slice-Reviews.
+- Eine vollständige rote Matrix blockiert, außer einem ausdrücklich benannten Red-State/Folge-Slice-Paar.
+- Nicht ausgeführte Pflichtbefehle werden als `INCOMPLETE` dokumentiert und blockieren ausnahmslos; die Red-State-Regel gilt dafür nicht.
 
-**Tests:** Matching mehrerer Pfade, kein Match, fehlender Befehl, Timeout, roter Exit, Markerabweichung, Red-State-Ausnahme sowie Vollsuite im Read-only-Reviewerprofil plus negativer Schreibtest; vollständige Suite.
+**Tests:** Matching mehrerer Pfade, kein Match, fehlender Befehl, Timeout, roter Exit, Fingerprintabweichung, Wiederverwendung derselben Attestierung für Claude/Antigravity ohne zweiten Lauf, Invalidierung nach Korrektur, gezielter Finding-Akzeptanztest, Red-State-Ausnahme sowie separate Adapter-Smokes; vollständige Suite.
 **Abhängigkeiten:** Slice 10, Slice 11 und Slice 12.
 **Test-Riegel:** ja. **Red-State:** nein.
 **Risiko/Rückfalloption:** Befehlsausführung und Plattformquoting; Befehle werden als strukturierte Argumentlisten behandelt, Shellstrings nur als ausdrücklich deklarierte Kompatibilitätsoption.
@@ -483,6 +492,7 @@ Die Audit-Komponente aus Slice 8 prüft bei Start eines Slice, dass genau diese 
 - Für jedes harte Gate aus §2.5 existieren je ein positives und negatives Szenario: grüne/rote Validierung einschließlich expliziter Red-State-Ausnahme, unveränderte/nicht freigegebene beziehungsweise nach Freigabe erneut geänderte Tests, ausbleibende/ausgelöste Stop-Regel, vorhandenes/fehlendes oder unparsbares Verdikt, vollständiger/fehlender Finding-/Prüfrecord, vorhandenes/fehlendes Pre-Mortem, erwartete/unerwartete Datei, unveränderter/geänderter freigegebener Anker sowie zulässige/überschrittene Rundenzahl.
 - Quota und sonstige Instanzausfälle sind zusätzlich je Rolle simulierbar. Quota-Szenarien steuern eine Fake Clock und decken die vorgesehenen Zeitformate, verlässlichen, bereits erreichten, fehlenden und mehrdeutigen Resetzeitpunkt, Sicherheitszuschlag, Maximalwartezeit, Warte-Heartbeat, Unterbrechung, geänderten Fingerprint und weiterhin bestehende Quota nach der zulässigen automatischen Fortsetzung ab, ohne real zu schlafen.
 - Szenarien prüfen Aufrufreihenfolge, State, Exitcode, Auditdokument und Commitentscheidung.
+- Szenarien zählen Validierungsausführungen: ein unveränderter Fingerprint mit Claude und Antigravity führt die Matrix genau einmal aus; Korrektur und neuer Fingerprint führen genau zu einer neuen Attestierung. Reviewerantworten mit `VALIDATION_RESULT` sowie fehlende/fingerprintfremde Attestierungen werden negativ getestet.
 - Der positive Dry-Run durchläuft Plan, mehrere Slices und Endreview vollständig.
 - Dry-Run genehmigt nichts mehr bedingungslos.
 
@@ -501,6 +511,7 @@ Die Audit-Komponente aus Slice 8 prüft bei Start eines Slice, dass genau diese 
 
 - Codex erstellt im Endreview einen Vollständigkeits-/Selbstprüfbericht ohne Freigaberecht.
 - Claude und Antigravity prüfen den gesamten Branch-Diff gegen die gespeicherte Basis.
+- Der Orchestrator validiert den Branch-Fingerprint genau einmal; Codex-Bericht, Claude und Antigravity verwenden dieselbe branchweite Attestierung ohne drei weitere Vollsuiten.
 - Prüfgegenstände sind Architekturdrift, Schnittstellen, tote Übergangszustände, Dokumentations-Sync und R-1 bis R-18.
 - Ein Endreview-Blocker erzeugt eine reguläre Korrektur-Work-Unit mit normaler Review- und Commitkette; anschließend beginnt das Endreview neu.
 - Der neue Workflow durchläuft Plan, mehrere Slices, Commits, Korrektur und erneutes Endreview vollständig im expliziten Entwicklungsmodus.
@@ -543,6 +554,7 @@ Die Audit-Komponente aus Slice 8 prüft bei Start eines Slice, dass genau diese 
 - Der Slice-Workflow ist der einzige Default; Entwicklungsflag, `--from-phase`, `run_phase1`, `run_phase2`, Phase-Marker und Legacy-Parserpfade sind entfernt und werden von der CLI ausdrücklich abgelehnt.
 - Positiver Dry-Run, Resume, Watch-Modus und Commitfolge funktionieren ohne Entwicklungsflag.
 - `AGENTS.md`, Parser, Prompts und alle Root-Rollendateien enthalten im selben Commit denselben neuen Marker- und Findings-Contract; es entsteht kein Zwischenstand mit gemischter Semantik.
+- Der gemeinsame Instruktionsvertrag weist deterministische Validierung ausschließlich dem Orchestrator zu, verbietet `VALIDATION_RESULT` in Agentenantworten und beschreibt die fingerprintgebundene Attestierung als Freigabevoraussetzung.
 - `GEMINI.md` wird durch `ANTIGRAVITY.md` ersetzt; Rollendateien sind schlank, widerspruchsfrei und technisch passend zu Codex, Claude und Antigravity.
 - Adversariales Review, fünf Prüfdimensionen, Finding-/Prüfrecord-Pflicht, Pre-Mortem, Verdiktkonsistenz und Rollenrechte stehen in den gemeinsamen Regeln.
 - Kein aktiver Ausführungspfad akzeptiert Legacy-Marker oder phasenbezogene Optionen.
@@ -625,7 +637,7 @@ Jeder Slice liefert einen grünen, startbaren Stand. Neue Komponenten werden bis
 | 10 | Die Review-State-Maschine ist end-to-end mit Fake-Agenten startbar, bleibt aber hinter dem Entwicklungsmodus. |
 | 11 | Nutzer- und Testgates halten resumefähig; positive und negative Pfade werden getestet, ohne den alten Default umzuschalten. |
 | 12 | Stop-Regeln ergänzen denselben getesteten Gate-Mechanismus; ohne ausgelöste Regel bleibt der Entwicklungsworkflow durchlaufbar. |
-| 13 | Die Validierungsmatrix wird mit grüner Vollsuite und Reviewer-Read-only-Profil integriert; rote Fälle halten kontrolliert. |
+| 13 | Die Validierungsmatrix wird einmal je Diff-Fingerprint ausgeführt und ihre Attestierung von allen Reviewern wiederverwendet; rote Fälle halten kontrolliert. |
 | 14 | Quota-Wartezustand, automatische Fortsetzung, sonstige Ausfälle und manuelle Resumewege sind mit Fake Clock getestet; der positive Entwicklungsworkflow bleibt grün. |
 | 15 | Der skriptbare Dry-Run nutzt dieselbe State-Maschine und ersetzt nur Backends; alle Gate- und Quota-Zeitszenarien laufen ohne API-Abhängigkeit oder reales Warten. |
 | 16 | Endreview und Korrektur-Work-Unit werden im Entwicklungsmodus vollständig durchlaufen; der Default bleibt unverändert. |
@@ -654,7 +666,7 @@ Jeder Slice liefert einen grünen, startbaren Stand. Neue Komponenten werden bis
 | R-13 Plattform | 2, 3, 19 | Slice 2: Python-Einstieg und Plattformdokumentation; Slice 3: Binarykonfiguration einschließlich `agy`/`agy.exe`; Slice 19: abschließende plattformübergreifende Evidenz und Nutzerdokumentation |
 | R-14 Dokumentation | 18, 19 | Root-Instruktionen/Marker atomar im Cutover; README, Diagramm und Beispiel anschließend synchron |
 | R-15 Stop-Regeln | 5, 12, 18 | Dateigrenze und deklarierte fachliche Regeln |
-| R-16 Validierung | 13, 18 | Standard plus pathgebundene Befehle je Rolle |
+| R-16 Validierung | 13, 18 | Matrix einmal je kanonischem Diff-Fingerprint, vollständige Attestierung und Wiederverwendung durch beide Reviewer |
 | R-17 Prüfspur | 8, 9, 19 | deterministische Slice-MD, Git-Historie und Nutzerdokumentation |
 | R-18 Quota/Instanzausfall | 1 (Vorbereitung), 7, 14 (primär), 15, 17 | terminierter Quota-Wartezustand mit automatischer Fortsetzung, Fake-Clock-Nachweis, differenzierte Exitcodes sowie Runtime-/Loopback-/Egress-Diagnose und Resume je Rolle |
 
@@ -693,9 +705,9 @@ Nach jedem Slice läuft vollständig:
 python3 -m pytest tests/ -v
 ```
 
-Gezielte Tests dürfen vorher zur Fehlersuche laufen, ersetzen aber nie die Vollsuite. Jede laut Workflow validierungspflichtige Instanz führt die konfigurierte Matrix selbst aus; Runtime und Contract gleichen Befehl und Exitcode ab.
+Gezielte Tests dürfen vorher zur Fehlersuche laufen, ersetzen aber nie die Vollsuite. Der Orchestrator führt die konfigurierte Matrix für den kanonischen Diff-Fingerprint genau einmal aus und bindet Befehle, Exitcodes, Vollständigkeit sowie Ergebnisdigest in eine Attestierung. Reviewer prüfen Implementierung und Testabdeckung gegen dieses Ergebnis, ohne dieselbe Matrix erneut auszuführen.
 
-Reviewer führen denselben semantischen Vollsuite-Befehl in einem schreibgeschützten Profil aus. Der Adapter setzt mindestens `PYTHONDONTWRITEBYTECODE=1`, ergänzt pytest um `-p no:cacheprovider` und leitet temporäre beziehungsweise private Cachepfade aus dem Repository heraus. Damit entstehen weder `__pycache__` noch `.pytest_cache` im Arbeitsbaum; die Tests dürfen externe Tempverzeichnisse beschreiben, aber keine versionierten Repositorydateien. Ein separater negativer Schreibtest beweist diese Grenze.
+Der Orchestrator führt die Validierungsmatrix je kanonischem Diff-Fingerprint genau einmal aus und erzeugt die für alle Reviewer maßgebliche Attestierung. Claude und Antigravity starten keine eigene Vollsuite. Das schreibgeschützte Reviewerprofil, externe private Cache-/Runtimepfade und der negative Schreibtest bleiben als getrennte Adapter-/Versionsdiagnose erhalten und laufen nach Installation, Versionswechsel oder ausdrücklicher Fehlersuche.
 
 ### Test-Riegel während dieses Umbaus
 

@@ -650,6 +650,9 @@ def test_reviewer_process_pwd_matches_disposable_working_directory(
         return Result()
 
     monkeypatch.setattr(agent_runtime.subprocess, "run", fake_run)
+    monkeypatch.setenv("RUN_TASK_REVIEW_TEST_COMMAND", "python3 -m pytest tests/ -v")
+    monkeypatch.setenv("RUN_TASK_REVIEW_PROBE_PATH", "README.md")
+    monkeypatch.setenv("RUN_TASK_REVIEW_TIMEOUT", "1800")
     output = run_agent(
         ReviewerAdapter(),
         "prompt",
@@ -662,6 +665,10 @@ def test_reviewer_process_pwd_matches_disposable_working_directory(
     assert isinstance(working_directory, Path)
     assert isinstance(process_environment, dict)
     assert process_environment["PWD"] == str(working_directory)
+    assert process_environment["PYTHONDONTWRITEBYTECODE"] == "1"
+    assert "RUN_TASK_REVIEW_TEST_COMMAND" not in process_environment
+    assert "RUN_TASK_REVIEW_PROBE_PATH" not in process_environment
+    assert "RUN_TASK_REVIEW_TIMEOUT" not in process_environment
     assert captured["bound_snapshot"] == working_directory
     assert not working_directory.exists()
     assert output == "STATUS: DONE"
