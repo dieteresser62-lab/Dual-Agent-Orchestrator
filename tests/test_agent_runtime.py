@@ -24,11 +24,13 @@ from agent_runtime import (
     compute_retry_backoff_seconds,
     create_read_only_reviewer_workspace,
     preflight,
+    repo_snapshot,
     run_agent,
     run_agent_checked,
     run_tests_snapshot,
     verify_agent_capabilities,
 )
+from repo_changes import ChangedPath, RepositoryChanges
 
 
 def test_compute_retry_backoff_seconds_exponential() -> None:
@@ -464,6 +466,23 @@ def test_collect_file_snapshots_skips_non_regular_file(
     )
 
     assert "### review-pipe\n[skip] Path is not a regular file." in output
+
+
+def test_repo_snapshot_renders_precollected_canonical_changes(tmp_path: Path) -> None:
+    changes = RepositoryChanges(
+        repository_root=tmp_path,
+        merge_base="a" * 40,
+        entries=(ChangedPath("src/new.py", "added", "A"),),
+        diff_text="diff body that is deliberately longer than the limit",
+        fingerprint="b" * 64,
+    )
+
+    snapshot = repo_snapshot(changes, max_diff_chars=12)
+
+    assert f"since {'a' * 40}" in snapshot
+    assert "A src/new.py" in snapshot
+    assert "b" * 64 in snapshot
+    assert "...[truncated]" in snapshot
 
 
 def test_run_tests_snapshot_uses_shell_true_and_raw_command(monkeypatch) -> None:

@@ -22,6 +22,7 @@ from agent_adapters import (
     AgentPermissionError,
 )
 from path_policy import PathPolicyError, resolve_repository_path
+from repo_changes import RepositoryChanges
 
 TEST_OUTPUT_LIMIT = 7000
 ERROR_TRUNCATION_LIMIT = 1200
@@ -294,30 +295,9 @@ def check_git_clean() -> tuple[bool, str]:
     return True, "Git working tree is clean."
 
 
-def repo_snapshot(max_diff_chars: int) -> str:
-    if shutil.which("git") is None:
-        return "Git is not available in PATH."
-
-    status_rc, status_out, status_err = run_local_command(["git", "status", "--short"])
-    diffstat_rc, diffstat_out, diffstat_err = run_local_command(["git", "diff", "--stat"])
-    diff_rc, diff_out, diff_err = run_local_command(["git", "diff"])
-
-    sections: list[str] = []
-    sections.append("=== git status --short ===")
-    sections.append((status_out if status_rc == 0 else status_err).strip() or "(empty)")
-    sections.append("\n=== git diff --stat ===")
-    sections.append((diffstat_out if diffstat_rc == 0 else diffstat_err).strip() or "(empty)")
-    sections.append("\n=== git diff (possibly truncated) ===")
-
-    raw_diff = (diff_out if diff_rc == 0 else diff_err).strip()
-    if not raw_diff:
-        sections.append("(empty)")
-    else:
-        sections.append(raw_diff[:max_diff_chars])
-        if len(raw_diff) > max_diff_chars:
-            sections.append("\n...[truncated]")
-
-    return "\n".join(sections).strip()
+def repo_snapshot(changes: RepositoryChanges, max_diff_chars: int) -> str:
+    """Render the already-collected canonical branch changes for a review prompt."""
+    return changes.render_snapshot(max_diff_chars)
 
 
 def run_tests_snapshot(

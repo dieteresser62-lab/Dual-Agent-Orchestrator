@@ -237,11 +237,13 @@ Die Audit-Komponente aus Slice 8 prüft bei Start eines Slice, dass genau diese 
 **Test-Riegel:** ja. **Red-State:** nein.
 **Risiko/Rückfalloption:** Zu strenge Normalisierung kann legitime Pfade blockieren; Positivfälle werden explizit abgedeckt.
 
-### Slice 5 — Kanonische Branch-Diff-Quelle
+### [Slice 5 — Kanonische Branch-Diff-Quelle](slice-orchestrator-modernization-05-canonical-branch-diff.md)
 
 **Zweck:** Eine einzige git-basierte Quelle für alle seit Branch-Basis geänderten Dateien und Inhalte bereitstellen.
 **Anforderungen:** R-5; Voraussetzung für R-9, R-10 und R-15.
 **Voraussichtlich betroffene Dateien:** `src/repo_changes.py` (neu), `src/agent_runtime.py`, `src/orchestrator.py`, `tests/test_repo_changes.py` (neu), `tests/test_agent_runtime.py`.
+**Tatsächlich betroffene Dateien vor Review:** `src/repo_changes.py` (neu), `src/agent_runtime.py`, `src/orchestrator.py`, `tests/test_repo_changes.py` (neu), `tests/test_agent_runtime.py`, Slice-MD und dieser Arbeitsplan.
+**Umsetzungsstatus:** implementiert, mit 182 Tests sowie Git-/Nicht-Git-Dry-Run validiert und durch Claude sowie Antigravity freigegeben; F-001 geschlossen, F-002 für Slice 10 vorgemerkt, lokaler Slice-Commit autorisiert.
 
 **Akzeptanzkriterien:**
 

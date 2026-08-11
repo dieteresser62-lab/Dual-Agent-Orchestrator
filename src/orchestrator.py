@@ -5,7 +5,6 @@ import argparse
 import functools
 import logging
 import re
-import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,6 +35,14 @@ from prompts import (
     build_phase2_claude_review_prompt,
     build_phase2_codex_implement_prompt,
     build_test_failure_block,
+)
+from repo_changes import (
+    NotGitRepositoryError,
+    RepositoryChanges,
+    RepositoryChangeError,
+    collect_repository_changes,
+    merge_reported_paths,
+    resolve_merge_base,
 )
 from state_io import (
     FINDING_ID_PATTERN,
@@ -152,8 +159,8 @@ class RunContext:
             shorten=shorten,
         )
 
-    def repo_snapshot(self) -> str:
-        return runtime_repo_snapshot(MAX_DIFF_CHARS)
+    def repo_snapshot(self, changes: RepositoryChanges) -> str:
+        return runtime_repo_snapshot(changes, MAX_DIFF_CHARS)
 
     def run_agent_checked(
         self,
@@ -789,20 +796,39 @@ def run_phase2(task_text: str, plan_text: str, state: dict, args: argparse.Names
 
         logger.info("=== PHASE 2 | cycle %s/%s: Claude review ===", cycle, max_cycles)
         shared = truncate_shared(read_file(ctx.phase2_shared_file), args.max_shared_chars)
-        changed_files = parse_changed_files_from_impl_report(impl_report)
-        if not changed_files:
-            # Fallback for implementations that forgot the "Changed Files" report section.
-            try:
-                result = subprocess.run(
-                    ["git", "diff", "--name-only"],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-                if result.returncode == 0:
-                    changed_files = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-            except Exception:
-                changed_files = []
+        try:
+            merge_base = resolve_merge_base(ctx.config.repo_root)
+            base_ref = merge_base.base_ref
+            base_commit = merge_base.commit
+            repository_changes = collect_repository_changes(
+                ctx.config.repo_root,
+                base_commit,
+            )
+        except NotGitRepositoryError as exc:
+            if not ctx.config.dry_run:
+                raise
+            base_ref = "dry-run-no-git"
+            base_commit = "DRY-RUN-NO-GIT"
+            logger.warning(
+                "Dry-run repository changes unavailable; using an empty simulation: %s",
+                exc,
+            )
+            repository_changes = RepositoryChanges(
+                repository_root=ctx.config.repo_root.resolve(),
+                merge_base=base_commit,
+                entries=(),
+                diff_text="",
+                fingerprint="0" * 64,
+            )
+        reported_files = parse_changed_files_from_impl_report(impl_report)
+        changed_files = merge_reported_paths(repository_changes, reported_files)
+        logger.info(
+            "Canonical repository changes: base_ref=%s merge_base=%s files=%s fingerprint=%s",
+            base_ref,
+            base_commit,
+            len(repository_changes.entries),
+            repository_changes.fingerprint,
+        )
         file_snapshots = collect_file_snapshots(
             changed_files=changed_files,
             max_lines=args.file_snapshot_max_lines,
@@ -819,7 +845,7 @@ def run_phase2(task_text: str, plan_text: str, state: dict, args: argparse.Names
                 test_snapshot=test_snapshot,
                 cycle=cycle,
                 previous_open_block=format_findings_list(previous_open_findings),
-                snapshot=ctx.repo_snapshot(),
+                snapshot=ctx.repo_snapshot(repository_changes),
             ),
             log_prefix=f"phase2-cycle{cycle}-claude-review",
             max_retries=max(args.max_agent_retries, 0),
@@ -986,7 +1012,12 @@ def run_pipeline(task_file: Path, args: argparse.Namespace, force_new: bool = Fa
         except QuotaReachedError as exc:
             freeze_current_phase(state, exc, ctx)
             return 2
-        except (AgentCompatibilityError, AgentBudgetError, AgentPermissionError) as exc:
+        except (
+            AgentCompatibilityError,
+            AgentBudgetError,
+            AgentPermissionError,
+            RepositoryChangeError,
+        ) as exc:
             logger.error("Agent invocation gate: %s", exc)
             return 1
 
