@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from orchestrator import (
     parse_flag,
     parse_first_flag,
@@ -13,6 +15,16 @@ from orchestrator import (
     validate_done_marker,
     validate_phase1_planning_only_output,
     validate_phase2_review_only_output,
+    validate_v3_review_contract,
+    validate_v3_codex_contract,
+)
+from contracts import (
+    AgentRole,
+    ApprovalMarker,
+    CodexStepContract,
+    ContractValidationError,
+    ReadinessMarker,
+    StepContract,
 )
 
 
@@ -285,3 +297,58 @@ STATUS: DONE
 """
     err = validate_phase2_review_only_output(out)
     assert err is None
+
+
+def test_orchestrator_exposes_additive_v3_contract_entrypoint() -> None:
+    contract = StepContract(
+        name="plan-review",
+        reviewer=AgentRole.CLAUDE,
+        approval_marker=ApprovalMarker.PLAN,
+        slice_id="06",
+        round_number=1,
+        expected_validation_command="python3 -m pytest tests/ -v",
+    )
+    output = """
+REVIEWER: claude
+VALIDATION_RESULT: PASS | python3 -m pytest tests/ -v | 0
+TEST_FILES_TOUCHED: NONE
+REVIEW_EVIDENCE: contract, parser | future drift | an unvalidated marker is added
+PRE_MORTEM: active and v3 parsers are accidentally mixed
+PLAN_APPROVAL: YES
+STATUS: DONE
+"""
+    assert validate_v3_review_contract(output, contract).approval is True
+
+
+def test_additive_v3_entrypoint_rejects_legacy_marker_without_changing_legacy_parser() -> None:
+    contract = StepContract(
+        name="plan-review",
+        reviewer=AgentRole.CLAUDE,
+        approval_marker=ApprovalMarker.PLAN,
+        slice_id="06",
+        round_number=1,
+    )
+    output = """
+REVIEWER: claude
+TEST_FILES_TOUCHED: NONE
+REVIEW_EVIDENCE: contract | drift | legacy marker accepted
+PHASE1_APPROVAL: YES
+PLAN_APPROVAL: YES
+STATUS: DONE
+"""
+    with pytest.raises(ContractValidationError, match="rejects PHASE1_APPROVAL"):
+        validate_v3_review_contract(output, contract)
+    assert parse_first_flag(output, ["PHASE1_APPROVAL", "CODEX_APPROVAL"]) == "YES"
+
+
+def test_orchestrator_exposes_additive_v3_codex_contract_entrypoint() -> None:
+    contract = CodexStepContract(
+        name="plan-draft",
+        readiness_marker=ReadinessMarker.PLAN,
+        slice_id="06",
+        round_number=1,
+    )
+    result = validate_v3_codex_contract(
+        "PLAN_READY: YES\nSTATUS: DONE", contract
+    )
+    assert result.ready is True

@@ -1,7 +1,7 @@
 # Übergabe: Modernisierung des Dual-Agent-Orchestrators
 
 **Stand:** 2026-08-11
-**Anforderungsstand:** Revision 7
+**Anforderungsstand:** Revision 8
 **Zweck:** Kompakter, lokal verifizierter Wiedereinstieg und Übergabe an den Review des Arbeitsplans.
 **Ablage:** `docs/internal/`
 
@@ -11,7 +11,7 @@
 
 | Datei | Inhalt | Status |
 |---|---|---|
-| `requirements-orchestrator-modernization.md` | Anforderungen R-1 bis R-18 und verbindliche Architekturentscheidungen | Hauptdokument, Revision 7 |
+| `requirements-orchestrator-modernization.md` | Anforderungen R-1 bis R-18 und verbindliche Architekturentscheidungen | Hauptdokument, Revision 8 |
 | `orchestrator-modernization-work-plan.md` | Umsetzungsslices, Abhängigkeiten, Abdeckungsmatrix und Testplan | zur Nutzerprüfung vorgelegt |
 | `reference-target-repo-agents.md` | `AGENTS.md` der Ruhestandsuite | historische Verfahrensreferenz |
 | `reference-target-repo-slice-execution-rules.md` | manuelle Slice-Regeln der Ruhestandsuite | historische Verfahrensreferenz |
@@ -27,14 +27,14 @@ Die Referenzdateien belegen den manuellen Ausgangsprozess. Sie sind nicht die La
 
 - Aktiver Branch: `feature/orchestrator-modernization`
 - Basis: `master` bei `0bd3bad`
-- Implementierungs-HEAD unmittelbar vor diesem autorisierten Dokumentationscommit: `00017c99f3a1` (`Harden reviewer context budgets`)
-- Der Branch liegt vor diesem Dokumentationscommit elf lokale Commits vor `master`; der kombinierte Revision-6-/Revision-7-Commit wird der zwölfte. Ein Upstream ist nicht konfiguriert.
+- Aktueller Slice-Start-HEAD: `021a2aa62444` (`Document reviewer quotas and full-slice approval`)
+- Der Branch liegt zwölf lokale Commits vor `master`. Ein Upstream ist nicht konfiguriert.
 - Slices 01 bis 05 sind lokal committed. Gemini-Fallback und Agentenersetzung wurden in Slice 01 entfernt; konfigurierbare Drei-Agenten-Adapter, wurzelgebundene Dateischnappschüsse und die kanonische Branch-Diff-Quelle sind implementiert.
 - Der aktive Defaultpfad verwendet übergangsweise weiterhin die alte Phase-1-/Phase-2-Steuerung mit Codex und Claude. Der Antigravity-Adapter ist verfügbar, wird aber erst mit der neuen asymmetrischen State-Maschine aus Slice 10 als automatischer Abschlussreviewer verdrahtet.
-- Vor dem autorisierten Dokumentationscommit enthält der Arbeitsbaum ausschließlich die drei gemeinsam freigegebenen Revision-6-/Revision-7-Dokumentänderungen sowie eine nicht zu committene Editor-Lockdatei. Nach dem scopegenauen Commit bleibt nur die Lockdatei unversioniert zurück.
+- Slice 06 liegt lokal uncommitted zur Prüfung vor: neuer typisierter v3-Contract-/Finding-Kern, additive Prompt-/Orchestrator-Einstiege, drei Testpfade und Revision-8-Dokumentation. Die bekannte Editor-Lockdatei gehört weiterhin nicht zum Scope.
 - `.orchestrator/state.json` liegt in Version 2 vor und steht auf `phase: done`; er stammt vom 2026-02-23.
 - Verbindliche Validierung: `python3 -m pytest tests/ -v`
-- Ergebnis der erneuten lokalen Prüfung am 2026-08-11: **182 gesammelt, 182 bestanden**.
+- Ergebnis der erneuten lokalen Prüfung für Slice 06 am 2026-08-11: **236 gesammelt, 236 bestanden**. Claude F-001/F-002 sind korrigiert und mit formal gültigem `PHASE2_APPROVAL: YES` geschlossen. Antigravity prüfte den vollständigen Slice-Diff und erteilte `SLICE_APPROVAL: 06 | YES` bei `OPEN_FINDINGS: NONE`; der lokale Commit ist autorisiert.
 
 Der frühere Planungsbaseline-Stand `75337eb` mit 92 Tests und noch vorhandenem Claude→Gemini-Fallback ist nur historische Analysebasis der Revisionen 1 bis 5 und beschreibt nicht mehr den aktuellen Arbeitsbaum.
 
@@ -125,6 +125,7 @@ Es gibt keinen Agentenfallback. Eine Quota mit eindeutigem Resetzeitpunkt verset
 12. Ein normaler Slice-Commit benötigt kein zusätzliches Nutzergate; risikobedingte Gates bleiben zwingend, `--manual-slice-gate` ist optional.
 13. Runtime-State und Logs bleiben flüchtig; Plan- und Slice-MDs bilden die committete Prüfspur, Git wird nach dem Commit historische Source of Truth.
 14. Die Root-Rollendatei heißt künftig `ANTIGRAVITY.md`; die historische Referenz `reference-target-repo-gemini.md` bleibt bestehen.
+15. Für die Durchführung dieses Modernisierungsarbeitsplans sind ab Slice 06 alle zur jeweiligen Slice-Intention gehörenden Teständerungen vorab autorisiert. Pfadnachweis, Diff-Fingerprint, Review und Vollsuite bleiben Pflicht; nur die wiederholte separate Nutzerfreigabe entfällt. R-10 im Zielsystem bleibt unverändert.
 
 ---
 
@@ -157,10 +158,4 @@ Die vollständige Zuordnung steht in den Befunden B-1 bis B-18 und Anforderungen
 
 ## 7. Aktueller Übergabepunkt
 
-In dieser Planungsrunde werden ausschließlich folgende Dokumente geändert beziehungsweise neu angelegt:
-
-- `requirements-orchestrator-modernization.md`
-- `handover-orchestrator-modernization.md`
-- `orchestrator-modernization-work-plan.md`
-
-Die Slice-Implementierung läuft bereits. Revision 7 härtet nach Slice 05 den Claude-Aufruf quotaorientiert und präzisiert für Slice 10, dass Antigravity immer den vollständigen Slice-Diff statt nur des letzten Korrekturdeltas prüft. Die neue Quota-Wartepolitik aus Revision 6 wird weiterhin erst in Slice 14 implementiert und in Slices 15 und 17 vollständig über Dry-Run/Fake Clock beziehungsweise Watch-Modus abgesichert. Claude und Antigravity haben den kombinierten Revision-6-/Revision-7-Stand vollständig freigegeben; der lokale Dokumentationscommit ist autorisiert. Ein Push erfolgt nicht automatisch.
+Slice 06 ist lokal implementiert, validiert und von beiden Reviewern freigegeben. Der neue v3-Contract-/Finding-Kern bleibt additiv; der aktive v2-Defaultpfad und seine Marker-/Promptsemantik sind unverändert und im Dry-Run grün. Die drei Testpfade sind durch die Nutzerfreigabe und die arbeitsplanweite Revision-8-Ausnahme autorisiert. Claude Sonnet 5/High fand F-001 (gemischte Finding-Herkunft) und F-002 (instabile Ankerherkunft); beide sind korrigiert, mit 236 Tests validiert und formal geschlossen. Antigravity prüfte anschließend den vollständigen Slice-Diff seit `021a2aa` einschließlich aller Korrekturrunden und autorisierte den lokalen Commit. Ein Push erfolgt nicht automatisch.

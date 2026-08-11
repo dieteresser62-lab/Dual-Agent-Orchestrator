@@ -2,10 +2,107 @@ from __future__ import annotations
 
 import textwrap
 
+from contracts import (
+    ApprovalMarker,
+    CodexStepContract,
+    ReadinessMarker,
+    StepContract,
+)
+
 
 def _delimit_block(label: str, content: str) -> str:
     # Keep envelope format in sync with `DELIMITED_SECTION_PATTERN` in orchestrator.py.
     return f"<<<{label}_BEGIN>>>\n{content}\n<<<{label}_END>>>"
+
+
+def build_v3_review_contract(contract: StepContract) -> str:
+    """Render the state-v3 records required by one explicit review step."""
+    if contract.approval_marker is ApprovalMarker.SLICE:
+        approval = f"SLICE_APPROVAL: {contract.slice_id} | YES|NO"
+    else:
+        approval = f"{contract.approval_marker.value}: YES|NO"
+    test_files = ",".join(contract.expected_test_files) or "NONE"
+    validation = contract.expected_validation_command or "<command>"
+    prefix = "C" if contract.reviewer.value == "claude" else "A"
+    anchor_rule = ""
+    if contract.anchor_origin is not None:
+        anchor_rule = (
+            "\n- Anchor values: ANCHOR: <id> | <input> | <expected> | <tolerance> "
+            f"(origin is bound to {contract.anchor_origin})"
+        )
+    return textwrap.dedent(
+        f"""
+        STATE-V3 CONTRACT (mandatory for step {contract.name}):
+        - First non-empty line: REVIEWER: {contract.reviewer.value}
+        - Validation: VALIDATION_RESULT: PASS|FAIL | {validation} | <exit code>
+        - Test scope: TEST_FILES_TOUCHED: {test_files}
+        - New finding: NEW_FINDING: {prefix}-01 | BLOCKER|OBSERVATION | <description> | <acceptance test>
+        - Previous finding: FINDING_STATUS: <ID> | OPEN|CLOSED | <rationale>
+        - Optional reclassification: FINDING_RECLASSIFIED: <ID> | BLOCKER|OBSERVATION | <rationale>
+        - If there is no concrete finding: REVIEW_EVIDENCE: <checked dimensions> | <largest residual risk> | <realistic break condition>
+        - Before a positive approval: PRE_MORTEM: <most likely failure cause in three months>
+        - Decision: {approval}
+        - A stop request replaces the decision: STOP_REQUESTED: <rule id> | <rationale>
+        {anchor_rule}
+        - Final non-empty line: STATUS: DONE
+        - Phase and legacy approval markers are invalid in state-v3.
+        """
+    ).strip()
+
+
+def build_v3_codex_contract(contract: CodexStepContract) -> str:
+    """Render the state-v3 records required by one explicit Codex step."""
+    if contract.readiness_marker is ReadinessMarker.IMPLEMENTATION:
+        readiness = f"IMPLEMENTATION_READY: {contract.slice_id} | YES|NO"
+    else:
+        readiness = "PLAN_READY: YES|NO"
+    lines = [
+        f"STATE-V3 CONTRACT (mandatory for step {contract.name}):",
+        f"- Readiness: {readiness}",
+        "- Open finding response: FINDING_RESPONSE: <ID> | ACCEPTED|REJECTED | <rationale>",
+    ]
+    if contract.require_validation:
+        command = contract.expected_validation_command or "<command>"
+        lines.append(
+            f"- Validation: VALIDATION_RESULT: PASS|FAIL | {command} | <exit code>"
+        )
+    if contract.require_test_files_record:
+        test_files = ",".join(contract.expected_test_files) or "NONE"
+        lines.append(f"- Test scope: TEST_FILES_TOUCHED: {test_files}")
+    lines.extend(
+        (
+            "- A stop request replaces readiness: STOP_REQUESTED: <rule id> | <rationale>",
+            "- Final non-empty line: STATUS: DONE",
+            "- Review approvals and phase/legacy markers are invalid for this Codex step.",
+        )
+    )
+    return "\n".join(lines)
+
+
+def build_v3_review_prompt(
+    *,
+    assignment: str,
+    evidence: str,
+    contract: StepContract,
+) -> str:
+    """Build a bounded additive v3 review prompt without changing legacy builders."""
+    return textwrap.dedent(
+        f"""
+        You are the {contract.reviewer.value} reviewer for {contract.name}.
+
+        Assignment:
+        ---
+        {_delimit_block("ASSIGNMENT", assignment)}
+        ---
+
+        Evidence:
+        ---
+        {_delimit_block("EVIDENCE", evidence)}
+        ---
+
+        {build_v3_review_contract(contract)}
+        """
+    ).strip()
 
 
 def build_phase1_claude_plan_prompt(

@@ -1,7 +1,7 @@
 # Arbeitsplan: Modernisierung des Dual-Agent-Orchestrators
 
-**Status:** kombinierter Revision-6-/Revision-7-Stand durch Claude und Antigravity freigegeben; Dokumentationscommit autorisiert
-**Anforderungsbasis:** `requirements-orchestrator-modernization.md`, Revision 7
+**Status:** Revision-6-/Revision-7-Stand freigegeben; Revision-8-Ausführungsausnahme für Teständerungen vom Nutzer verbindlich entschieden
+**Anforderungsbasis:** `requirements-orchestrator-modernization.md`, Revision 8
 **Feature-Branch:** `feature/orchestrator-modernization`
 **Branch-Basis:** `master` bei `0bd3bad`
 **GitHub-Status:** nur lokal; kein Upstream; Veröffentlichung ausstehend und nur nach Nutzerfreigabe
@@ -58,7 +58,7 @@ Antigravity trifft die Freigabeentscheidung. Der Orchestrator führt den Commit 
 
 ### 3.4 Nutzer-Gates
 
-Der Normalpfad benötigt nach Claude- und Antigravity-Freigabe kein drittes manuelles Slice-Verdikt. Zwingende Nutzerentscheidungen bleiben bei Teständerungen, Stop-Regeln, unerwarteten Dateien, vier erfolglosen Korrekturrunden, Ankeränderungen, Push und Merge. `--manual-slice-gate` fügt optional ein Gate vor jedem Slice-Commit ein.
+Der Normalpfad benötigt nach Claude- und Antigravity-Freigabe kein drittes manuelles Slice-Verdikt. Zwingende Nutzerentscheidungen bleiben bei Teständerungen, Stop-Regeln, unerwarteten Dateien, vier erfolglosen Korrekturrunden, Ankeränderungen, Push und Merge. Für die Ausführung genau dieses Modernisierungsarbeitsplans sind die erforderlichen Teständerungen ab Slice 06 vorab autorisiert und halten nicht erneut an; das zu implementierende Zielverhalten aus R-10 bleibt davon unberührt. `--manual-slice-gate` fügt optional ein Gate vor jedem Slice-Commit ein.
 
 Eine Quota mit eindeutig erkanntem, innerhalb der konfigurierten Maximalwartezeit liegendem Resetzeitpunkt ist bei aktivierter Wartepolitik kein Nutzergate. Der Orchestrator persistiert die Pause und setzt denselben Schritt nach Ablauf automatisch fort. Ohne verlässlichen Zeitpunkt oder nach ausgeschöpfter Wartepolitik bleibt Exitcode 2 mit manueller Fortsetzung über `--resume`.
 
@@ -133,7 +133,7 @@ Jede Slice-MD wird unmittelbar vor Beginn ihres Slice angelegt und dann aus der 
 | 3 | [`docs/internal/slice-orchestrator-modernization-03-three-agent-adapters.md`](slice-orchestrator-modernization-03-three-agent-adapters.md) |
 | 4 | `docs/internal/slice-orchestrator-modernization-04-root-bound-snapshots.md` |
 | 5 | `docs/internal/slice-orchestrator-modernization-05-canonical-branch-diff.md` |
-| 6 | `docs/internal/slice-orchestrator-modernization-06-contract-finding-core.md` |
+| 6 | [`docs/internal/slice-orchestrator-modernization-06-contract-finding-core.md`](slice-orchestrator-modernization-06-contract-finding-core.md) |
 | 7 | `docs/internal/slice-orchestrator-modernization-07-state-v3-work-units.md` |
 | 8 | `docs/internal/slice-orchestrator-modernization-08-audit-trail.md` |
 | 9 | `docs/internal/slice-orchestrator-modernization-09-branch-commit-transaction.md` |
@@ -266,11 +266,13 @@ Die Audit-Komponente aus Slice 8 prüft bei Start eines Slice, dass genau diese 
 **Test-Riegel:** ja. **Red-State:** nein.
 **Risiko/Rückfalloption:** Git-Eckfälle; Implementierung bleibt in einem eigenständigen Modul und ersetzt alte Aufrufer erst nach bestandenen Vergleichstests.
 
-### Slice 6 — Zentraler Contract- und Finding-Kern
+### [Slice 6 — Zentraler Contract- und Finding-Kern](slice-orchestrator-modernization-06-contract-finding-core.md)
 
 **Zweck:** Marker, Findings, Implementiererantworten, Anker und Verdiktkonsistenz in einem einzigen typisierten Contract-Modell zusammenführen.
 **Anforderungen:** R-6; Entscheidung §7.5 und §7.6; Voraussetzung für R-7.
 **Voraussichtlich betroffene Dateien:** `src/contracts.py` (neu), `src/prompts.py`, `src/orchestrator.py`, `tests/test_parsing.py`, `tests/test_prompts.py`, optional `tests/test_contracts.py` (neu).
+**Tatsächlich betroffene Dateien vor Review:** `src/contracts.py` (neu), `src/prompts.py`, `src/orchestrator.py`, `tests/test_contracts.py` (neu), `tests/test_parsing.py`, `tests/test_prompts.py`, Anforderungs-, Arbeitsplan-, Übergabe- und Slice-MD.
+**Umsetzungsstatus:** lokal implementiert und mit 236 Tests, Compile, Diffcheck sowie aktivem v2-Dry-Run validiert. Claude F-001/F-002 sind korrigiert und formal geschlossen; `PHASE2_APPROVAL: YES`. Antigravity prüfte den vollständigen Slice-Diff seit `021a2aa` und erteilte `SLICE_APPROVAL: 06 | YES` bei `OPEN_FINDINGS: NONE`. Lokaler Slice-Commit autorisiert. Die Teständerungen sind durch die arbeitsplanweite Revision-8-Ausnahme autorisiert.
 
 **Akzeptanzkriterien:**
 
@@ -695,7 +697,7 @@ Reviewer führen denselben semantischen Vollsuite-Befehl in einem schreibgeschü
 
 ### Test-Riegel während dieses Umbaus
 
-Jeder Implementierungsslice plant Regressionstests und berührt deshalb voraussichtlich `tests/**`. Vor dem ersten solchen Edit ist die gesonderte Teständerungsfreigabe für den jeweiligen Slice erforderlich. Die Freigabe wird an Pfade und Diff-Fingerprint gebunden. Der Plan selbst verändert keine Tests und löst deshalb noch keinen Test-Riegel aus.
+Jeder Implementierungsslice plant Regressionstests und berührt deshalb voraussichtlich `tests/**`. Für Slice 01 bis 05 wurden die gesonderten Teständerungsfreigaben historisch je Slice eingeholt und an Pfade sowie Diff-Fingerprint gebunden. Auf verbindliche Nutzerentscheidung sind ab Slice 06 alle zur dokumentierten Slice-Intention gehörenden Teständerungen dieses Modernisierungsarbeitsplans vorab autorisiert. Sie werden weiterhin als `TEST_FILES_TOUCHED` erfasst, scope- und fingerprintgenau reviewed und mit der Vollsuite validiert, halten die Implementierung aber nicht erneut für ein separates `TEST_CHANGE_APPROVAL` an. R-10 bleibt als Zielanforderung bestehen und wird einschließlich seines regulären Nutzer-Gates implementiert und getestet.
 
 ### Gate-Abdeckung
 

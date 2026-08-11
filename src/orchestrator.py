@@ -10,6 +10,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from cli import DEFAULT_AGENTS_FILE, DEFAULT_MAX_SHARED_CHARS, DEFAULT_TASK_FILE
+from contracts import (
+    CodexContractResult,
+    CodexStepContract,
+    ContractResult,
+    FindingRecord,
+    StepContract,
+    validate_codex_response,
+    validate_review_response,
+)
 from agent_adapters import (
     AGENT_REGISTRY,
     AgentAdapter,
@@ -82,6 +91,24 @@ DELIMITED_SECTION_PATTERN = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 logger = logging.getLogger(__name__)
+
+
+def validate_v3_review_contract(
+    output: str,
+    contract: StepContract,
+    previous_findings: tuple[FindingRecord, ...] = (),
+) -> ContractResult:
+    """Validate one development-mode v3 review without altering the active v2 path."""
+    return validate_review_response(output, contract, previous_findings)
+
+
+def validate_v3_codex_contract(
+    output: str,
+    contract: CodexStepContract,
+    previous_findings: tuple[FindingRecord, ...] = (),
+) -> CodexContractResult:
+    """Validate one development-mode v3 Codex step without altering the v2 path."""
+    return validate_codex_response(output, contract, previous_findings)
 
 @dataclass
 class RunContext:

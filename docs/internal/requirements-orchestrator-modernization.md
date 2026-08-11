@@ -4,6 +4,8 @@
 **Liefergegenstand dieses Dokuments:** ein Arbeitsplan mit Slice-Dokumenten — kein Code.
 **Stand des Repos:** Feature-Branch `feature/orchestrator-modernization`, abgezweigt von `master` bei Commit `0bd3bad`. 92 Tests gesammelt und 92 grün (`python3 -m pytest tests/ -v`). Lokal verifiziert am 2026-08-10: Der Code entspricht der Analysebasis, die Befunde in §3 wurden gegen diesen Stand nachgeprüft und bestätigt.
 
+**Revision 8** — Für die Durchführung dieses bereits freigegebenen Modernisierungsarbeitsplans entfällt ab Slice 06 die gesonderte Nutzerfreigabe vor Teständerungen. Die großflächige Überarbeitung darf alle zur jeweiligen Slice-Intention gehörenden Tests eigenständig anpassen; Testpfade, Diff und Validierung bleiben vollständig prüf- und dokumentationspflichtig. Diese Ausführungs-Ausnahme ändert nicht R-10 als Zielanforderung des späteren Orchestrators.
+
 **Revision 7** — Claude-Reviews erhalten ein einziges vorgebautes, begrenztes Reviewpaket statt offener Repositoryerkundung. Verfügbar bleiben nur `Read` und der exakt freigegebene Review-Harness; der Prompt begrenzt den Lauf auf höchstens sechs Werkzeugaufrufe und die strukturierte Antwort auf 12.000 Zeichen. Antigravitys Abschlussreview wird präzisiert: Prüfgegenstand ist immer der vollständige Diff des aktuellen Slice seit dessen persistiertem Start-Commit einschließlich aller Claude-/Codex-Korrekturrunden. Ein letzter Korrekturdelta darf hervorgehoben werden, ersetzt den Gesamtdiff aber nie.
 
 **Revision 6** — Quota-Erschöpfung mit einem eindeutig erkannten Resetzeitpunkt wird als persistierter Wartezustand modelliert. Der Python-Orchestrator darf im Vordergrund ressourcenschonend bis nach diesem Zeitpunkt warten und anschließend exakt denselben Rollenschritt automatisch fortsetzen. Ohne verlässlichen Resetzeitpunkt, bei Überschreitung der konfigurierten Maximalwartezeit oder nach ausgeschöpften automatischen Fortsetzungen bleibt der definierte Exitcode-2-/`--resume`-Pfad erhalten. Agentenfallback bleibt ausgeschlossen. Die Umsetzung ist R-18 sowie den späteren Slices 14, 15 und 17 zugeordnet; der bereits laufende Slice 02 wird dadurch nicht erweitert.
@@ -30,7 +32,7 @@ Codex aktualisiert auf ausdrückliche Nutzervorgabe zunächst Anforderungs- und 
 
 **In diesem Schritt ist zu liefern:**
 
-- Revision 7 dieser Anforderungsbeschreibung,
+- Revision 8 dieser Anforderungsbeschreibung,
 - die aktualisierte Übergabe,
 - eine Arbeitsplan-MD gemäß §9,
 - der dokumentierte lokale Branch- und GitHub-Status.
@@ -118,7 +120,7 @@ Der Push nach GitHub und der Merge nach `main` erfolgen erst nach ausdrückliche
 Diese Regeln gelten in jeder Phase und stehen nicht im Ermessen einer Instanz:
 
 - **Rote Validierung blockiert jede Freigabe.** Einzige Ausnahme: ein bewusst roter Contract-Slice nach der Red-State-Regel (§5), der eine namentlich benannte Folge-Slice hat. Ohne benannte Folge-Slice gilt die Ausnahme nicht.
-- **Änderungen an Testdateien halten die Pipeline an.** Es braucht eine ausdrückliche, gesonderte Abnahme der Teständerung, bevor der reguläre Review fortgesetzt wird.
+- **Änderungen an Testdateien halten die Pipeline an.** Es braucht eine ausdrückliche, gesonderte Abnahme der Teständerung, bevor der reguläre Review fortgesetzt wird. **Ausnahme für die Ausführung dieses Modernisierungsarbeitsplans:** Ab Slice 06 gelten die erforderlichen Teständerungen für alle verbleibenden Slices als vorab autorisiert; sie werden weiterhin scopegenau ausgewiesen, fingerprintgebunden reviewed und vollständig validiert, lösen aber kein separates Nutzergate aus. Diese zeitlich und sachlich begrenzte Ausnahme gilt nicht für den durch R-10 zu implementierenden Zielworkflow.
 - **Stop-Regeln halten die Pipeline an.** Greift eine Stop-Regel (§6.4), wird nicht implementiert, sondern gefragt. Eine Stop-Regel ist kein Hinweis, sondern ein Gate.
 - **Kein Verdikt gilt als Ablehnung.** Schweigen, ein fehlender Marker oder eine unparsbare Antwort sind ein NEIN.
 - **Keine Freigabe ohne Findings.** Ein Review ohne dokumentierte Findings ist unzulässig. Findet der Reviewer nichts Blockierendes, dokumentiert er die geprüften Dimensionen, das größte Restrisiko und die Bedingung, unter der die Implementierung brechen würde.
@@ -146,7 +148,9 @@ Für die Durchführung dieses Umbaus gelten folgende Marker. Ob die Zielimplemen
 | Stop-Regel greift | `STOP_REQUESTED: <regel-id> \| <Begründung>` |
 | Neues Finding | `NEW_FINDING: <ID> \| BLOCKER\|OBSERVATION \| <Beschreibung> \| <Akzeptanztest>` |
 | Lebenszyklus eines Findings | `FINDING_STATUS: <ID> \| OPEN\|CLOSED \| <Begründung>` |
+| Herabstufung oder andere Klassenänderung durch den meldenden Reviewer | `FINDING_RECLASSIFIED: <ID> \| BLOCKER\|OBSERVATION \| <Begründung>` |
 | Antwort des Implementierers auf ein Finding | `FINDING_RESPONSE: <ID> \| ACCEPTED\|REJECTED \| <Begründung>` |
+| Prüfrecord ohne konkrete Schwäche | `REVIEW_EVIDENCE: <geprüfte Dimensionen> \| <größtes Restrisiko> \| <realistische Bruchbedingung>` |
 | Pre-Mortem | `PRE_MORTEM: <wahrscheinlichste Fehlerursache in 3 Monaten>` |
 
 Finding-IDs tragen ein Präfix je Quelle: `C-01` (Claude), `A-01` (Antigravity). 1-basiert, keine Wiederverwendung, Gültigkeit über Slices hinweg.
@@ -493,7 +497,7 @@ State-Version 3 führt Work-Unit- und Slice-Zustände ein. Abgeschlossene Versio
 
 ### 7.8 Der Mensch als Gate — **entschieden: risikobasiert, optional je Slice**
 
-Ein normaler, von Claude und Antigravity freigegebener Slice benötigt standardmäßig kein zusätzliches Nutzer-Gate vor dem lokalen Commit. Zwingende Nutzergates bleiben bei Push, Merge, Teständerungen, Stop-Regeln, unerwarteten Dateien, erreichtem Iterationslimit und Änderungen an bereits freigegebenen Ankerwerten bestehen.
+Ein normaler, von Claude und Antigravity freigegebener Slice benötigt standardmäßig kein zusätzliches Nutzer-Gate vor dem lokalen Commit. Zwingende Nutzergates bleiben bei Push, Merge, Teständerungen, Stop-Regeln, unerwarteten Dateien, erreichtem Iterationslimit und Änderungen an bereits freigegebenen Ankerwerten bestehen. Für die Durchführung des aktuellen Modernisierungsarbeitsplans gilt ab Slice 06 ausschließlich beim Teständerungsgate die in Revision 8 dokumentierte Vorabautorisierung; R-10 und damit das Verhalten späterer Zielworkflow-Läufe bleiben unverändert.
 
 Eine Quota mit eindeutigem, innerhalb der konfigurierten Grenze liegendem Resetzeitpunkt ist bei aktivierter Wartepolitik kein zusätzliches Nutzergate. Fehlt diese Voraussetzung, endet der Prozess mit Exitcode 2 und wartet auf eine bewusste Fortsetzung über `--resume`.
 
