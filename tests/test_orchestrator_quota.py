@@ -42,11 +42,12 @@ def test_freeze_current_phase_marks_phase2_frozen_without_negative_cycle() -> No
     }
     ctx = _DummyContext()
 
-    freeze_current_phase(state, QuotaReachedError("gemini", "too many requests"), ctx)
+    freeze_current_phase(state, QuotaReachedError("codex", "too many requests"), ctx)
 
     assert state["phase"] == "phase2"
     assert state["phase2"]["status"] == "frozen"
     assert state["phase2"]["cycle"] == 0
     assert "quota/rate limit reached" in str(state["phase2"]["error"])
+    assert "codex" in str(state["phase2"]["error"])
     assert state["updated_at"] != "old"
     assert len(ctx.saved_states) == 1

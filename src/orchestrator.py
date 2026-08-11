@@ -871,7 +871,10 @@ def run_phase2(task_text: str, plan_text: str, state: dict, args: argparse.Names
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Orchestrates a dual-agent workflow with two phases and shared Markdown artifacts."
+        description=(
+            "Orchestrates a dual-agent workflow with two phases and shared Markdown artifacts. "
+            "Agent failures stop the run; agents are never substituted."
+        )
     )
     parser.add_argument("--task-file", help="Path to task file (default: task.md).")
     parser.add_argument(
@@ -1002,11 +1005,6 @@ def parse_args() -> argparse.Namespace:
         default="both",
         help="Which channels to print in live stream (default: both).",
     )
-    parser.add_argument(
-        "--allow-fallback-to-gemini",
-        action="store_true",
-        help="If Claude hits quota/rate limits, retry that step with Gemini.",
-    )
     # Watch mode options.
     parser.add_argument(
         "--watch",
@@ -1059,7 +1057,6 @@ def run_pipeline(task_file: Path, args: argparse.Namespace, force_new: bool = Fa
         agent_live_stream=bool(args.agent_live_stream),
         agent_live_stream_mode=args.agent_live_stream_mode,
         agent_live_stream_channels=args.agent_live_stream_channels,
-        allow_fallback_to_gemini=bool(args.allow_fallback_to_gemini),
     )
     agents_file = Path(str(args.agents_file)).expanduser().resolve()
     ctx = RunContext(
@@ -1115,8 +1112,6 @@ def run_pipeline(task_file: Path, args: argparse.Namespace, force_new: bool = Fa
         ctx.save_state(state)
 
     required_agents = ["claude", "codex"]
-    if ctx.config.allow_fallback_to_gemini:
-        required_agents.append("gemini")
     if not ctx.preflight(
         required_agents,
         strict=args.strict_preflight,

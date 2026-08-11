@@ -37,7 +37,7 @@ Die Modernisierung erfolgt inkrementell. Tragfähige State-, Prozess- und Watche
 
 Python wird alleinige Quelle für CLI-, Resume-, Watch-, Testautodetektions- und Konfigurationslogik. `run_task` bleibt als dünner Kompatibilitätsstarter. Zugesichert werden Linux, macOS und WSL2; native Windows-Unterstützung bleibt bis zu eigener CI-/Integrationsevidenz unzugesichert.
 
-Agentenbefehle werden mit der Priorität CLI-Option → Umgebungsvariable → optionale Repo-Konfiguration → Standard aufgelöst. Lokale absolute Pfade werden nicht in versionierte Konfiguration geschrieben. Die tatsächlich verwendeten Befehle und Versionen erscheinen im Preflight. Lokal sind `codex` 0.147.0, `claude` 2.1.226 sowie sowohl das native Linux-`agy` als auch `agy.exe` 1.1.11 verfügbar.
+Agentenbefehle werden mit der Priorität CLI-Option → Umgebungsvariable → optionale Repo-Konfiguration → Standard aufgelöst. Lokale absolute Pfade werden nicht in versionierte Konfiguration geschrieben. Die tatsächlich verwendeten Befehle und Versionen erscheinen im Preflight. Lokal sind `codex` 0.147.0, `claude` 2.1.226 sowie das native Linux-`agy` 1.1.12 und ein explizit konfigurierbarer `agy.exe`-Alternativpfad verfügbar.
 
 Repository-Sandbox und CLI-Prozessumgebung werden getrennt modelliert. Für Reviewer bedeutet read-only präzise: versionierte Repositorydateien und die Git-Metadaten sind nicht veränderbar; Python-Bytecode und pytest-Cache werden mit `PYTHONDONTWRITEBYTECODE=1` beziehungsweise `-p no:cacheprovider` unterdrückt; notwendige temporäre Daten und private CLI-Runtime-/Logpfade werden über dedizierte Verzeichnisse außerhalb des Repositorys (`TMPDIR`, `XDG_CACHE_HOME` und adapterspezifische Variablen) beschreibbar gemacht. Provider-Egress und der von Antigravity benötigte lokale Loopback-Socket werden erlaubt, ohne Schreibrechte auf versionierte Repositoryinhalte zu eröffnen. Das Reviewerprofil muss die vollständige Testsuite erfolgreich ausführen können, während ein gezielter Schreibversuch auf eine versionierte Datei weiterhin scheitert.
 
@@ -122,7 +122,7 @@ Jede Slice-MD wird unmittelbar vor Beginn ihres Slice angelegt und dann aus der 
 
 | Slice | Geplanter Zielpfad |
 |---:|---|
-| 1 | `docs/internal/slice-orchestrator-modernization-01-remove-agent-fallback.md` |
+| 1 | [`docs/internal/slice-orchestrator-modernization-01-remove-agent-fallback.md`](slice-orchestrator-modernization-01-remove-agent-fallback.md) |
 | 2 | `docs/internal/slice-orchestrator-modernization-02-python-cli-config.md` |
 | 3 | `docs/internal/slice-orchestrator-modernization-03-three-agent-adapters.md` |
 | 4 | `docs/internal/slice-orchestrator-modernization-04-root-bound-snapshots.md` |
@@ -144,11 +144,12 @@ Jede Slice-MD wird unmittelbar vor Beginn ihres Slice angelegt und dann aus der 
 
 Die Audit-Komponente aus Slice 8 prüft bei Start eines Slice, dass genau diese Datei existiert, vom Arbeitsplan verlinkt wird und die Pflichtabschnitte aus §9.2 der Anforderungen enthält.
 
-### Slice 1 — Ersatzagentenpfad entfernen
+### [Slice 1 — Ersatzagentenpfad entfernen](slice-orchestrator-modernization-01-remove-agent-fallback.md)
 
 **Zweck:** Den erzwungenen und optionalen Claude→Gemini-Fallback vollständig entfernen, bevor neue Rollen eingeführt werden.
 **Anforderungen:** R-1; Grundlage für R-18.
-**Voraussichtlich betroffene Dateien:** `run_task`, `src/orchestrator.py`, `src/agent_runtime.py`, `README.md`, `tests/test_agent_runtime.py`, `tests/test_orchestrator_quota.py`, `tests/test_orchestrator_watch_cli.py`.
+**Tatsächlich betroffene Dateien vor Review:** `.gitattributes`, `run_task`, `src/orchestrator.py`, `src/agent_runtime.py`, `README.md`, `tests/test_agent_runtime.py`, `tests/test_inbox_watcher.py`, `tests/test_orchestrator_quota.py`, `tests/test_orchestrator_watch_cli.py` sowie Plan- und Slice-Prüfspur.
+**Umsetzungsstatus:** Implementierung und Reviews abgeschlossen; C-16 bis C-26 geschlossen; Antigravity ohne neue Findings, lokaler Slice-Commit autorisiert.
 
 **Akzeptanzkriterien:**
 
@@ -193,19 +194,22 @@ Die Audit-Komponente aus Slice 8 prüft bei Start eines Slice, dass genau diese 
 **Akzeptanzkriterien:**
 
 - Registry enthält exakt `codex`, `claude` und `antigravity`; kein Gemini-Backend bleibt erreichbar.
-- Antigravity unterstützt konfigurierbar `agy`, `agy.exe` oder einen expliziten Pfad sowie `--print` und parsbare Ausgabe.
+- Antigravity unterstützt konfigurierbar `agy`, `agy.exe` oder einen expliziten Pfad sowie den werttragenden `--print <prompt>`-Aufruf und parsbare Ausgabe; Optionen werden vor `--print` angeordnet, damit kein Optionsname versehentlich als Prompt verarbeitet wird.
 - Unter WSL2 wird das native Linux-`agy` bevorzugt; `agy.exe` bleibt ein explizit konfigurierbarer Alternativbefehl derselben Rolle.
 - Agentenbefehle werden erst vor dem Schritt der jeweiligen Rolle verbindlich geprüft; eine fehlende Antigravity-Binary blockiert Codex- und Claude-Schritte nicht vorzeitig.
 - Modell und Timeout sind je Rolle konfigurierbar; kein Modellname ist im Adapter fest verdrahtet.
+- Headless-Aufrufe setzen das konfigurierte Modell und eine harte Prozesszeitgrenze explizit, verwenden eine maschinenlesbare Ausgabehülle und protokollieren CLI-Fehler einschließlich Berechtigungsablehnungen statt leeren Text als Agentenantwort zu behandeln.
+- CLI-Warnungen über wirkungslose oder inkompatible Optionen gelten als fehlgeschlagener Fähigkeitstest; insbesondere darf Antigravitys Hinweis, dass `--mode plan` zusammen mit `--disable-slash-commands` wirkungslos ist, nicht als wirksames Read-only-Profil verbucht werden.
 - Codex erhält Implementiererrechte; Claude und Antigravity erhalten technisch erzwungenen Lesezugriff.
 - Reviewer können weder Code, Tests noch Dokumente direkt verändern.
+- Verfügbarkeit eines Werkzeugs und dessen Berechtigung werden getrennt konfiguriert. Reviewer erhalten nur lesende Datei-/Git-Werkzeuge und exakt freigegebene Validierungsbefehle; ein interaktiver Planmodus wird nicht als Berechtigungskonzept für headless Läufe verwendet.
 - CLI-Runtime-, Log- und Tempverzeichnisse sind separat beschreibbar; Antigravity kann seinen lokalen Language-Server-Loopback öffnen, während der Repositoryzugriff read-only bleibt.
 - Jede Reviewerrolle führt die vollständige Suite im definierten Read-only-Profil (`PYTHONDONTWRITEBYTECODE=1`, pytest ohne Cacheprovider, externe Temp-/Cachepfade) erfolgreich aus; ein gezielter Schreibversuch auf eine versionierte Repositorydatei scheitert weiterhin.
-- Minimalprompts aller drei Adapter liefern den Abschlussmarker; automatisierte Tests verwenden Fake-CLIs, Live-Smokes werden nach Installation oder Versionsänderung separat protokolliert.
+- Minimalprompts aller drei Adapter liefern den Abschlussmarker; ein eigener Isolationstest erzwingt je Reviewer mindestens einen tatsächlich erlaubten Werkzeugaufruf, damit ein tool-loser Smoke nicht fälschlich nur Authentifizierung und Erreichbarkeit bestätigt. Automatisierte Tests verwenden Fake-CLIs, Live-Smokes werden nach Installation oder Versionsänderung separat protokolliert.
 - Befehl, Version und Fähigkeiten werden geprüft. Eine noch nicht freigegebene Version hält mit Nutzergate an, bis die Kompatibilitätsmatrix erfolgreich ist.
 - Der vorgesehene Eingabekanal verarbeitet einen realistischen Langprompt, ohne Betriebssystemgrenzen für Kommandozeilenargumente zu überschreiten oder Prompttext in der Prozessliste offenzulegen.
 
-**Tests:** Befehlsaufbau, Ausgabeextraktion, Text-/JSON-/Streamfilter, Binaryauflösung, Version/Fähigkeiten, Timeout/Modell, Auth-/Quota-/Netzfehler, Langprompt, Prozessende, Vollsuite je Reviewer im Read-only-Profil, negativer Schreibversuch auf eine versionierte Datei je CLI und Live-Smoke-Checkliste; vollständige Suite.
+**Tests:** Befehlsaufbau, Ausgabeextraktion, Text-/JSON-/Streamfilter, Binaryauflösung, Version/Fähigkeiten, Timeout/Modell, Auth-/Quota-/Netz-/Berechtigungsfehler, tool-loser Minimalprompt getrennt vom erzwungenen Werkzeug-Isolationstest, Langprompt, Prozessende, Vollsuite je Reviewer im Read-only-Profil, negativer Schreibversuch auf eine versionierte Datei je CLI und Live-Smoke-Checkliste; vollständige Suite.
 **Abhängigkeiten:** Slice 2.
 **Test-Riegel:** ja. **Red-State:** nein.
 **Risiko/Rückfalloption:** CLI-Versionen und benötigte Prozessressourcen unterscheiden sich je Plattform; adapterspezifische Abweichungen bleiben hinter dem gemeinsamen Protocol isoliert. Ein unbekannter Versions- oder Fähigkeitsstand führt zum Nutzergate statt zu optimistischer Ausführung.
@@ -431,13 +435,14 @@ Die Audit-Komponente aus Slice 8 prüft bei Start eines Slice, dass genau diese 
 - Quota endet mit 2, sonstiger Instanzausfall/Timeout mit 3, Policy-/Iterationshalt mit 4.
 - Meldung und State nennen Rolle, Slice/Work Unit, Schritt und Ursache.
 - Kein klassifizierter Instanzausfall wird intern automatisch wiederholt; erneuter Aufruf erfolgt nur durch eine bewusste Nutzerfortsetzung. Es gibt niemals einen Ersatzagenten.
+- Leere Ausgabe, unparsbare Ausgabehülle, `is_error`, Berechtigungsablehnung und generischer `Execution error` werden mit Exitcode und Invocation-ID als gescheiterter Instanzaufruf persistiert. Sie lösen weder ein stilles Wiederholen noch eine erfundene Prozesszustandsmeldung aus.
 - Fehlende Schreibbarkeit privater CLI-Runtimepfade, gesperrter erforderlicher Loopback oder fehlender Provider-Egress werden im Preflight beziehungsweise Aufruffehler eindeutig von einer Modellquota unterschieden.
 - Nach vier Rückgaben an Codex bleibt der Arbeitsbaum unverändert und State ist `awaiting_user_decision`.
 - Resume setzt am betroffenen Schritt fort; bereits committete Slices und persistierte Dokumentereignisse werden nicht wiederholt.
 - Resume aus jedem persistierbaren Haltezustand besteht den Preflight bei unverändertem, persistiertem In-Scope-Diff; scope-fremde oder nach dem Halt unerwartet veränderte Pfade halten weiterhin vor dem Agentenaufruf an.
 - Codex-, Claude- und Antigravity-Ausfälle sind separat getestet.
 
-**Tests:** simulierte Quota und Ausfälle je Rolle, Timeout, vierte Rückgabe, Resume bei Codex/Claude/Antigravity, Resume aus jedem Gatezustand mit zulässigem In-Scope-Diff, Ablehnung scope-fremder Änderungen und unveränderter Commitverlauf; vollständige Suite.
+**Tests:** simulierte Quota und Ausfälle je Rolle, Timeout, leere/unparsbare JSON-Hülle, Berechtigungsablehnung und `Execution error`, vierte Rückgabe, Resume bei Codex/Claude/Antigravity, Resume aus jedem Gatezustand mit zulässigem In-Scope-Diff, Ablehnung scope-fremder Änderungen und unveränderter Commitverlauf; vollständige Suite.
 **Abhängigkeiten:** Slice 7, Slice 10, Slice 11, Slice 12 und Slice 13.
 **Test-Riegel:** ja. **Red-State:** nein.
 **Risiko/Rückfalloption:** Doppelte Seiteneffekte beim Resume; jeder Seiteneffekt erhält einen persistierten Idempotenzschlüssel.
@@ -705,11 +710,13 @@ Die grundsätzliche externe Steuerbarkeit wurde am 2026-08-10 bereits außerhalb
 |---|---|---|
 | Codex | 0.147.0, `codex exec`, read-only, ephemeral, JSONL | Exitcode 0, Antwort `EXTERNAL_CONTROL_OK` |
 | Claude Code | 2.1.226, Print, JSON, Plan-Modus, keine Tools, keine Sessionpersistenz | Exitcode 0, Antwort `EXTERNAL_CONTROL_OK` |
-| Antigravity | 1.1.11, natives `agy`, Print, JSON, Plan-/Sandbox-Modus | Exitcode 0, Antwort `EXTERNAL_CONTROL_OK` |
+| Antigravity | 1.1.12, natives `agy`, werttragendes Print, JSON, Sandbox | Exitcode 0; erzwungener `git status`-Werkzeugaufruf extern steuerbar |
 
 Die offizielle OpenAI-Dokumentation bezeichnet `codex exec` als stabilen nicht-interaktiven Modus und dokumentiert JSONL, read-only Sandbox und separate Finalausgabe: <https://learn.chatgpt.com/docs/developer-commands?surface=cli>.
 
 Negative Vorversuche in einer zu engen äußeren Sandbox belegten die Runtime-Anforderungen: Codex benötigt initialisierbare interne App-Server-/Runtimepfade, Antigravity beschreibbare Log-/Crashpfade und einen lokalen Language-Server-Loopback, Claude Provider-Egress. Diese Ressourcen werden gezielt erlaubt; sie ändern nichts am read-only Repositoryzugriff der Reviewer.
+
+Ein erneuter Antigravity-Isolationstest am 2026-08-11 präzisierte außerdem den CLI-Vertrag: `--print` nimmt den Prompt als Wert und muss nach den übrigen Optionen stehen. Bei korrekter Reihenfolge führte 1.1.12 einen erzwungenen `git status`-Aufruf mit JSON-Hülle und Exitcode 0 aus. Gleichzeitig meldete die CLI, dass `--mode plan` bei gesetztem `--disable-slash-commands` keine Wirkung hat. Slice 3 muss diese Kombination deshalb ablehnen oder durch ein nachweislich wirksames Rechteprofil ersetzen; ein erfolgreicher Text-Smoke allein genügt weiterhin nicht.
 
 Die automatisierte Suite verwendet Fake-CLIs und verursacht keine API-Kosten. Slice 3 wiederholt nach Adapterimplementierung je einen bewusst ausgelösten Minimalprompt über exakt den Adapterbefehl und ergänzt negative Schreib-, Langprompt-, Stream-, Timeout-, Auth-, Quota- und Netzwerkfälle. Live-Smokes laufen nur nach Installation oder Versionsänderung, weil bereits Minimalaufrufe erhebliche Systemkontexte laden und Tokens beziehungsweise Quota verbrauchen.
 

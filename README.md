@@ -14,19 +14,17 @@ The orchestrator reads a Markdown task description, creates/revises an implement
 - Stateful resume: continue from `.orchestrator/state.json`.
 - Live streaming: follow agent output in compact or full mode.
 - Test integration: run a configurable test command in Phase 2.
-- Claude to Gemini fallback: optional quota/rate-limit fallback support.
-- Fail-fast quota stop: freezes the run when an agent hits its API quota.
+- Fail-fast agent handling: freezes the run when an agent hits its API quota; another agent is never substituted.
 - Git safety preflight: blocks execution on dirty repositories by default.
 
 ## Requirements
 
-Platform support: Linux and macOS only. Windows is not supported because the orchestrator depends on `claude`, `codex`, and `gemini` CLI tools invoked via bash.
+Platform support: Linux and macOS only. Windows is not supported because the orchestrator depends on `claude` and `codex` CLI tools invoked via bash.
 
-Install at least two (ideally all three) CLIs and make sure they are in `$PATH`:
+Install both CLIs and make sure they are in `$PATH`:
 
 - `codex`
 - `claude`
-- `gemini`
 
 ## Optional Global Command
 
@@ -171,16 +169,17 @@ python3 src/orchestrator.py --help
 
 The orchestrator truncates shared history (`--max-shared-chars`) and changed-file snapshots to prevent prompt/context blowups. Keep each `task.md` narrowly scoped (explicitly name allowed files) so agents do not drift into unrelated areas.
 
-### Recovery & Fallback
+### Recovery & Preflight
 
 | Flag | Default | Description |
 |---|---|---|
 | `--no-recover` | off | Disable automatic rollback to last cycle checkpoint after crashes. |
-| `--allow-fallback-to-gemini` | off | If Claude hits quota/rate limits, retry that step with Gemini. |
 | `--strict-preflight` | off | Fail preflight if DNS resolution fails for provider hosts. |
 | `--skip-git-check` | off | Skip git cleanliness check in preflight (not recommended). |
 
-In watch mode, fallback state is task-local: if one inbox task falls back from Claude to Gemini due to quota/rate-limit errors, the next `.md` task starts with a fresh config and tries Claude first again.
+Quota and rate-limit errors freeze the current run and identify the agent that failed. Resume later with `--resume`; the orchestrator never invokes another agent as a substitute.
+
+The former `--allow-fallback-to-gemini` option has been removed. Existing aliases, scheduled jobs, and wrapper scripts must drop this flag; agent failures now stop the run instead of selecting a substitute.
 
 ### Log Level
 
@@ -228,7 +227,7 @@ The dual-agent orchestration contract is defined through repository-local instru
 | `AGENTS.md` | Orchestrator repo root | Yes | Global runtime policy and machine-parseable marker contract consumed by `src/orchestrator.py`. |
 | `CLAUDE.md` | Project root | Yes | Claude role profile (Phase 1 final confirmation, Phase 2 review). |
 | `CODEX.md` | Project root | Yes | Codex role profile (Phase 1 plan review, Phase 2 implementation). |
-| `GEMINI.md` | Project root | Yes (for fallback setups) | Contract-compatible fallback profile for Gemini. |
+| `GEMINI.md` | Project root | Transitional | Legacy backend profile retained until the planned Antigravity adapter migration; the current runtime does not invoke it as a substitute. |
 
 `AGENTS.md` is intentionally the single source of truth for shared execution policy, safety, validation, and output markers.  
 `CLAUDE.md`, `CODEX.md`, and `GEMINI.md` should stay lean and role-specific, and should not duplicate global policy text.

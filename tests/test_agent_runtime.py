@@ -31,12 +31,19 @@ def test_compute_retry_backoff_seconds_rate_limit_floor() -> None:
     assert compute_retry_backoff_seconds("rate limit", 5) == 30
 
 
+def test_orchestrator_config_has_no_agent_substitution_state() -> None:
+    config = OrchestratorConfig()
+
+    assert not hasattr(config, "allow_fallback_to_gemini")
+    assert not hasattr(config, "claude_quota_reached")
+
+
 def test_run_agent_checked_retries_with_backoff(monkeypatch, tmp_path: Path) -> None:
-    calls: list[int] = []
+    calls: list[str] = []
     sleeps: list[int] = []
 
-    def fake_run_agent(*args, **kwargs):  # type: ignore[no-untyped-def]
-        calls.append(1)
+    def fake_run_agent(adapter, *args, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append(adapter.name)
         if len(calls) == 1:
             raise RuntimeError("temporary network glitch")
         return "CODEX_APPROVAL: YES\nOPEN_FINDINGS: NONE\nSTATUS: DONE"
@@ -52,7 +59,7 @@ def test_run_agent_checked_retries_with_backoff(monkeypatch, tmp_path: Path) -> 
         required_flags=["CODEX_APPROVAL"],
         output_validator=None,
         config=OrchestratorConfig(dry_run=False),
-        agents={"codex": AGENT_REGISTRY["codex"]},
+        agents={"codex": AGENT_REGISTRY["codex"], "gemini": AGENT_REGISTRY["gemini"]},
         log_dir=tmp_path,
         write_file=lambda path, content: path.write_text(content, encoding="utf-8"),
         shorten=lambda text, limit=1800: (text or "")[:limit],
@@ -61,7 +68,7 @@ def test_run_agent_checked_retries_with_backoff(monkeypatch, tmp_path: Path) -> 
     )
 
     assert "STATUS: DONE" in output
-    assert len(calls) == 2
+    assert calls == ["codex", "codex"]
     assert sleeps == [2]
 
 
@@ -124,82 +131,8 @@ def test_run_agent_checked_accepts_alternative_required_flags(monkeypatch, tmp_p
     assert "STATUS: DONE" in output
 
 
-def test_run_agent_checked_sets_sticky_quota_flag_after_gemini_fallback(
-    monkeypatch, tmp_path: Path
-) -> None:
-    # After one successful fallback, later Claude calls should bypass Claude immediately.
-    called_agents: list[str] = []
-
-    def fake_run_agent(adapter, *args, **kwargs):  # type: ignore[no-untyped-def]
-        called_agents.append(adapter.name)
-        if adapter.name == "claude":
-            raise RuntimeError("HTTP 429 rate limit")
-        return "CLAUDE_APPROVAL: YES\nOPEN_FINDINGS: NONE\nSTATUS: DONE"
-
-    config = OrchestratorConfig(dry_run=False, allow_fallback_to_gemini=True)
-    monkeypatch.setattr(agent_runtime, "run_agent", fake_run_agent)
-    monkeypatch.setattr(agent_runtime.time, "sleep", lambda _sec: None)
-
-    output = run_agent_checked(
-        agent_key="claude",
-        prompt="prompt",
-        log_prefix="unit",
-        max_retries=0,
-        required_flags=["CLAUDE_APPROVAL"],
-        output_validator=None,
-        config=config,
-        agents={"claude": AGENT_REGISTRY["claude"], "gemini": AGENT_REGISTRY["gemini"]},
-        log_dir=tmp_path,
-        write_file=lambda path, content: path.write_text(content, encoding="utf-8"),
-        shorten=lambda text, limit=1800: (text or "")[:limit],
-        parse_flag=lambda text, key: "YES" if f"{key}: YES" in text else None,
-        validate_done_marker=lambda text: text.strip().endswith("STATUS: DONE"),
-    )
-
-    assert "STATUS: DONE" in output
-    assert called_agents == ["claude", "gemini"]
-    assert config.claude_quota_reached is True
-
-
-def test_run_agent_checked_uses_gemini_directly_after_quota_flag(
-    monkeypatch, tmp_path: Path
-) -> None:
-    called_agents: list[str] = []
-
-    def fake_run_agent(adapter, *args, **kwargs):  # type: ignore[no-untyped-def]
-        called_agents.append(adapter.name)
-        return "CLAUDE_APPROVAL: YES\nOPEN_FINDINGS: NONE\nSTATUS: DONE"
-
-    config = OrchestratorConfig(
-        dry_run=False,
-        allow_fallback_to_gemini=True,
-        claude_quota_reached=True,
-    )
-    monkeypatch.setattr(agent_runtime, "run_agent", fake_run_agent)
-    monkeypatch.setattr(agent_runtime.time, "sleep", lambda _sec: None)
-
-    output = run_agent_checked(
-        agent_key="claude",
-        prompt="prompt",
-        log_prefix="unit",
-        max_retries=0,
-        required_flags=["CLAUDE_APPROVAL"],
-        output_validator=None,
-        config=config,
-        agents={"claude": AGENT_REGISTRY["claude"], "gemini": AGENT_REGISTRY["gemini"]},
-        log_dir=tmp_path,
-        write_file=lambda path, content: path.write_text(content, encoding="utf-8"),
-        shorten=lambda text, limit=1800: (text or "")[:limit],
-        parse_flag=lambda text, key: "YES" if f"{key}: YES" in text else None,
-        validate_done_marker=lambda text: text.strip().endswith("STATUS: DONE"),
-    )
-
-    assert "STATUS: DONE" in output
-    assert called_agents == ["gemini"]
-
-
-@pytest.mark.parametrize("agent_key", ["codex", "gemini"])
-def test_run_agent_checked_quota_errors_fail_fast_without_retries(
+@pytest.mark.parametrize("agent_key", ["claude", "codex"])
+def test_run_agent_checked_quota_errors_stop_requested_agent_without_substitution(
     monkeypatch, tmp_path: Path, agent_key: str
 ) -> None:
     calls: list[str] = []
@@ -223,7 +156,7 @@ def test_run_agent_checked_quota_errors_fail_fast_without_retries(
             required_flags=[],
             output_validator=None,
             config=OrchestratorConfig(dry_run=False),
-            agents={agent_key: AGENT_REGISTRY[agent_key]},
+            agents={agent_key: AGENT_REGISTRY[agent_key], "gemini": AGENT_REGISTRY["gemini"]},
             log_dir=tmp_path,
             write_file=lambda path, content: path.write_text(content, encoding="utf-8"),
             shorten=lambda text, limit=1800: (text or "")[:limit],
@@ -232,46 +165,8 @@ def test_run_agent_checked_quota_errors_fail_fast_without_retries(
         )
 
     assert exc_info.value.agent_key == agent_key
+    assert agent_key in str(exc_info.value)
     assert calls == [agent_key]
-    assert sleeps == []
-
-
-def test_run_agent_checked_dual_quota_claude_and_gemini_fail_fast(
-    monkeypatch, tmp_path: Path
-) -> None:
-    calls: list[str] = []
-    sleeps: list[int] = []
-
-    def fake_run_agent(adapter, *args, **kwargs):  # type: ignore[no-untyped-def]
-        _ = args
-        _ = kwargs
-        calls.append(adapter.name)
-        if adapter.name == "claude":
-            raise RuntimeError("HTTP 429 rate limit")
-        raise RuntimeError("too many requests")
-
-    monkeypatch.setattr(agent_runtime, "run_agent", fake_run_agent)
-    monkeypatch.setattr(agent_runtime.time, "sleep", lambda sec: sleeps.append(sec))
-
-    with pytest.raises(QuotaReachedError) as exc_info:
-        run_agent_checked(
-            agent_key="claude",
-            prompt="prompt",
-            log_prefix="unit",
-            max_retries=3,
-            required_flags=[],
-            output_validator=None,
-            config=OrchestratorConfig(dry_run=False, allow_fallback_to_gemini=True),
-            agents={"claude": AGENT_REGISTRY["claude"], "gemini": AGENT_REGISTRY["gemini"]},
-            log_dir=tmp_path,
-            write_file=lambda path, content: path.write_text(content, encoding="utf-8"),
-            shorten=lambda text, limit=1800: (text or "")[:limit],
-            parse_flag=lambda text, key: "YES",
-            validate_done_marker=lambda text: True,
-        )
-
-    assert exc_info.value.agent_key == "gemini"
-    assert calls == ["claude", "gemini"]
     assert sleeps == []
 
 

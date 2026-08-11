@@ -35,8 +35,6 @@ class OrchestratorConfig:
     agent_live_stream: bool = False
     agent_live_stream_mode: str = "compact"
     agent_live_stream_channels: str = "both"
-    allow_fallback_to_gemini: bool = False
-    claude_quota_reached: bool = False
 
 
 @dataclass
@@ -449,19 +447,9 @@ def run_agent_checked(
     parse_flag: Callable[[str, str], str | None],
     validate_done_marker: Callable[[str], bool],
 ) -> str:
-    """Run an agent with retries, contract validation, and optional Claude->Gemini fallback."""
+    """Run the requested agent with retries and contract validation."""
     required_flags = required_flags or []
     errors: list[str] = []
-    effective_agent_key = agent_key
-
-    if (
-        effective_agent_key == "claude"
-        and config.allow_fallback_to_gemini
-        and config.claude_quota_reached
-    ):
-        # Once Claude is confirmed quota-blocked, switch directly to Gemini for this run.
-        effective_agent_key = "gemini"
-        logger.info("Claude quota previously exceeded - using Gemini directly.")
 
     def validate_output_contract(output: str) -> str | None:
         if not validate_done_marker(output):
@@ -495,7 +483,7 @@ def run_agent_checked(
 
         try:
             output = run_agent(
-                agents[effective_agent_key],
+                agents[agent_key],
                 prompt_to_send,
                 config=config,
                 shorten=shorten,
@@ -503,7 +491,7 @@ def run_agent_checked(
             log_path = log_dir / f"{log_prefix}.attempt-{attempt}.log"
             write_file(log_path, output)
             print_agent_output(
-                effective_agent_key, log_path, attempt, output, config=config, shorten=shorten
+                agent_key, log_path, attempt, output, config=config, shorten=shorten
             )
             validation_error = validate_output_contract(output)
             if validation_error:
@@ -514,60 +502,14 @@ def run_agent_checked(
             error_text = shorten(str(exc), ERROR_TRUNCATION_LIMIT)
             errors.append(error_text)
 
-            if (
-                config.allow_fallback_to_gemini
-                and effective_agent_key == "claude"
-                and is_quota_or_rate_limit_error(error_text)
-            ):
-                # Fallback is only used for quota/rate failures, not generic Claude errors.
-                logger.warning("Claude quota/rate limit detected. Attempting Gemini fallback.")
-                try:
-                    fallback_output = run_agent(
-                        agents["gemini"],
-                        prompt_to_send,
-                        config=config,
-                        shorten=shorten,
-                    )
-                    fallback_log_path = log_dir / f"{log_prefix}.attempt-{attempt}.gemini-fallback.log"
-                    write_file(fallback_log_path, fallback_output)
-                    logger.info(
-                        "[AGENT] fallback from=claude to=gemini attempt=%s log=%s",
-                        attempt,
-                        fallback_log_path,
-                    )
-                    if config.agent_output_mode != "none":
-                        print_agent_output(
-                            "gemini",
-                            fallback_log_path,
-                            attempt,
-                            fallback_output,
-                            config=config,
-                            shorten=shorten,
-                        )
-
-                    validation_error = validate_output_contract(fallback_output)
-                    if validation_error:
-                        errors.append(f"gemini fallback invalid output: {validation_error}")
-                    else:
-                        config.claude_quota_reached = True
-                        return fallback_output
-                except Exception as fallback_exc:
-                    fallback_error = shorten(str(fallback_exc), ERROR_TRUNCATION_LIMIT)
-                    errors.append(f"gemini fallback failed: {fallback_error}")
-                    if is_quota_or_rate_limit_error(fallback_error):
-                        config.claude_quota_reached = True
-                        raise QuotaReachedError("gemini", fallback_error) from fallback_exc
-
             if is_quota_or_rate_limit_error(error_text):
-                if effective_agent_key == "claude" and config.allow_fallback_to_gemini:
-                    raise QuotaReachedError("claude", error_text) from exc
-                raise QuotaReachedError(effective_agent_key, error_text) from exc
+                raise QuotaReachedError(agent_key, error_text) from exc
 
         if has_next_attempt:
             delay_seconds = compute_retry_backoff_seconds(errors[-1], attempt)
             logger.info(
                 "[RETRY] %s attempt=%s failed. Reason: %s. Waiting %ss before retry.",
-                effective_agent_key,
+                agent_key,
                 attempt,
                 shorten(errors[-1], 400),
                 delay_seconds,
@@ -575,7 +517,7 @@ def run_agent_checked(
             time.sleep(delay_seconds)
 
     raise RuntimeError(
-        f"{effective_agent_key} did not produce valid output after {max_retries + 1} attempts: "
+        f"{agent_key} did not produce valid output after {max_retries + 1} attempts: "
         f"{shorten(chr(10).join(errors), ERROR_TRUNCATION_LIMIT)}"
     )
 

@@ -22,7 +22,6 @@ def _args() -> Namespace:
         agent_live_stream=False,
         agent_live_stream_mode="compact",
         agent_live_stream_channels="both",
-        allow_fallback_to_gemini=False,
         test_command="",
         resume=False,
         no_recover=False,

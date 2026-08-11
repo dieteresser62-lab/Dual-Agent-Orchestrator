@@ -109,7 +109,6 @@ if [[ "$WATCH_MODE" == "yes" ]]; then
   esac
   echo "[INFO] Watch mode: live stream channels = $WATCH_CHANNELS (override via RUN_TASK_WATCH_STREAM_CHANNELS=stdout|stderr|both)."
   exec python3 "$SCRIPT_DIR/src/orchestrator.py" \
-    --allow-fallback-to-gemini \
     --test-command "$DETECTED_TEST_CMD" \
     --agent-live-stream \
     --agent-live-stream-mode compact \
@@ -149,7 +148,6 @@ except Exception:
   fi
   exec python3 "$SCRIPT_DIR/src/orchestrator.py" \
     --resume \
-    --allow-fallback-to-gemini \
     --test-command "$DETECTED_TEST_CMD" \
     --agent-live-stream \
     --agent-live-stream-mode compact \
@@ -165,7 +163,6 @@ else
   # Force-overwrite ensures stale state from old completed runs cannot leak into a new task.
   exec python3 "$SCRIPT_DIR/src/orchestrator.py" \
     --force-overwrite-state \
-    --allow-fallback-to-gemini \
     --test-command "$DETECTED_TEST_CMD" \
     --agent-live-stream \
     --agent-live-stream-mode compact \
