@@ -19,7 +19,7 @@ The orchestrator reads a Markdown task description, creates/revises an implement
 
 ## Requirements
 
-Platform support: Linux and macOS only. Windows is not supported because the orchestrator depends on `claude` and `codex` CLI tools invoked via bash.
+Supported platforms are Linux, macOS, and WSL2. Native Windows is not yet supported because the complete CLI pipeline has not been verified there. Python 3.11 or newer is required; TOML parsing uses the standard library and needs no third-party package.
 
 Install both CLIs and make sure they are in `$PATH`:
 
@@ -99,22 +99,22 @@ Use a custom task file:
 Run with tests:
 
 ```bash
-python3 src/orchestrator.py --task-file my-task.md --test-command "pytest -x"
-python3 src/orchestrator.py --task-file my-task.md --test-command "npm test"
-python3 src/orchestrator.py --task-file my-task.md --test-command ""
+python3 src/cli.py --task-file my-task.md --test-command "pytest -x"
+python3 src/cli.py --task-file my-task.md --test-command "npm test"
+python3 src/cli.py --task-file my-task.md --test-command ""
 ```
 
 Dry run (simulates agent responses to validate workflow wiring):
 
 ```bash
-python3 src/orchestrator.py --dry-run --task-file example-task.md --test-command ""
+python3 src/cli.py --dry-run --task-file example-task.md --test-command ""
 ```
 
 Help:
 
 ```bash
 ./run_task --help
-python3 src/orchestrator.py --help
+python3 src/cli.py --help
 ```
 
 ## CLI Reference
@@ -123,10 +123,12 @@ python3 src/orchestrator.py --help
 
 | Flag | Default | Description |
 |---|---|---|
-| `--task-file <path>` | `task.md` | Path to the Markdown task file. |
+| `[task-file]` | `task.md` | Positional compatibility shorthand for the task file. |
+| `--task-file <path>` | `task.md` | Explicit task-file path; cannot be combined with the positional shorthand. |
+| `--config <path>` | `RUN_TASK_CONFIG` or `./orchestrator.toml` | Optional repository configuration. |
 | `--agents-file <path>` | `Dual-Agent-Orchestrator/AGENTS.md` | AGENTS instructions prepended to every agent prompt. |
-| `--resume` | off | Resume from existing `.orchestrator/state.json`. |
-| `--force-overwrite-state` | off | Overwrite existing state without confirmation prompt. |
+| `--resume` / `--no-resume` | auto | Unfinished state resumes automatically; either flag overrides that decision. |
+| `--force-overwrite-state` | auto for completed state | Overwrite existing state without confirmation; completed state enables it automatically. |
 | `--from-phase <phase1\|phase2>` | auto | Force the starting phase (overrides state). |
 | `--dry-run` | off | Simulate agent responses and tests to validate wiring. |
 | `--manual-gate` | off | Require manual confirmation before starting Phase 2. |
@@ -147,17 +149,17 @@ python3 src/orchestrator.py --help
 
 | Flag | Default | Description |
 |---|---|---|
-| `--test-command <cmd>` | _(empty = skip)_ | Shell command to run tests in Phase 2 (e.g. `pytest -x`, `npm test`). |
+| `--test-command <cmd>` | env → repo config → detection | Shell command for Phase 2; an explicitly empty value skips tests. |
 
 ### Agent Output
 
 | Flag | Default | Description |
 |---|---|---|
-| `--agent-output <none\|summary\|full>` | `summary` | How much of agent replies to show during execution. |
+| `--agent-output <none\|summary\|full>` | `none` | How much of completed agent replies to show. |
 | `--agent-output-max-chars` | `1800` | Max characters shown per reply in `summary` mode. |
-| `--agent-live-stream` | off | Stream agent CLI stdout/stderr live while running. |
+| `--agent-live-stream` / `--no-agent-live-stream` | on | Enable or disable live agent stdout/stderr. |
 | `--agent-live-stream-mode <compact\|full>` | `compact` | Verbosity for live stream output. |
-| `--agent-live-stream-channels <both\|stdout\|stderr>` | `both` | Which output channels to print in live stream. |
+| `--agent-live-stream-channels <both\|stdout\|stderr>` | env or `stdout` | Which output channels to print in live stream. |
 
 ### Context Limits
 
@@ -175,7 +177,7 @@ The orchestrator truncates shared history (`--max-shared-chars`) and changed-fil
 |---|---|---|
 | `--no-recover` | off | Disable automatic rollback to last cycle checkpoint after crashes. |
 | `--strict-preflight` | off | Fail preflight if DNS resolution fails for provider hosts. |
-| `--skip-git-check` | off | Skip git cleanliness check in preflight (not recommended). |
+| `--skip-git-check` / `--no-skip-git-check` | off; on in watch mode | Override the environment and the watch-mode default. |
 
 Quota and rate-limit errors freeze the current run and identify the agent that failed. Resume later with `--resume`; the orchestrator never invokes another agent as a substitute.
 
@@ -190,11 +192,27 @@ The former `--allow-fallback-to-gemini` option has been removed. Existing aliase
 
 `--verbose` and `--quiet` are mutually exclusive.
 
-## Auto-Detection of Test Commands (`run_task`)
+## Python Entrypoint and Configuration
 
-The `run_task` wrapper script automatically detects the test command before invoking the orchestrator. Detection priority:
+`src/cli.py` is the single source of truth for argument parsing, environment overrides, test detection, automatic resume, and watch defaults. `run_task` is only a compatibility launcher that locates this Python file and forwards every argument unchanged.
 
-1. If `pyproject.toml` exists and contains `[tool.pytest]` → `python3 -m pytest tests/ -v`
+Configuration values use this precedence:
+
+1. Explicit CLI option
+2. `RUN_TASK_*` environment variable
+3. Repository `orchestrator.toml`
+4. Built-in default or test-command auto-detection
+
+An explicitly empty test command is meaningful and disables tests; it is never replaced by auto-detection:
+
+```bash
+python3 src/cli.py --test-command ""
+RUN_TASK_TEST_CMD="" ./run_task
+```
+
+When no test command is configured, Python detects the first matching project layout:
+
+1. If `pyproject.toml` contains pytest tool configuration → `python3 -m pytest tests/ -v`
 2. If `package.json` exists and contains a `"test"` script → `npm test`
 3. If `Makefile` exists and contains a `test:` target → `make test`
 4. Otherwise → empty (tests skipped)
@@ -215,8 +233,36 @@ RUN_TASK_WATCH_STREAM_CHANNELS=stdout ./run_task --watch  # override watch live 
 RUN_TASK_WATCH_STREAM_CHANNELS=both ./run_task --watch    # stream both channels in watch mode
 ```
 
-The wrapper still respects an explicitly passed `--skip-git-check`.
+An explicit `--skip-git-check` or `--no-skip-git-check` overrides the environment and watch default.
 `RUN_TASK_WATCH_STREAM_CHANNELS` accepts `stdout` (default), `stderr`, or `both`; invalid values fall back to `stdout`.
+
+### Repository TOML Schema
+
+The optional `orchestrator.toml` contains only portable repository policy: path classes, named stop rules, validation commands, and the future manual slice-gate default. Unknown keys and invalid types or path patterns stop before workflow state is written.
+
+```toml
+[paths]
+productive = ["src/**/*.py", "run_task", "*.toml"]
+tests = ["tests/**"]
+documentation = ["docs/**", "*.md"]
+generated = [".orchestrator/**", "**/__pycache__/**"]
+
+[[stop_rules]]
+id = "DOMAIN-001"
+description = "Stop when the domain invariant changes."
+
+[validation]
+default_command = "python3 -m pytest tests/ -v"
+
+[[validation.rules]]
+patterns = ["engine/**"]
+command = "npm run build:engine"
+
+[workflow]
+manual_slice_gate = false
+```
+
+Patterns use `/`, are relative to the repository root, and may not contain `..`. The productive pattern list may not be empty; later scope consumers conservatively treat paths that match no configured class as productive. Agent binary paths, models, and timeouts deliberately do not belong in this versioned file; their role-specific configuration is introduced with the agent adapters.
 
 ## Agent Instruction Files
 

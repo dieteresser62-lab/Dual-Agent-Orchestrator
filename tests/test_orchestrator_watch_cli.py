@@ -24,6 +24,18 @@ def _require_git_worktree(repo_root: Path) -> None:
         pytest.skip("test requires a git worktree")
 
 
+@pytest.fixture(autouse=True)
+def _isolate_cli_environment(monkeypatch, tmp_path: Path) -> None:
+    for name in (
+        "RUN_TASK_CONFIG",
+        "RUN_TASK_SKIP_GIT_CHECK",
+        "RUN_TASK_TEST_CMD",
+        "RUN_TASK_WATCH_STREAM_CHANNELS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.chdir(tmp_path)
+
+
 def test_watch_mode_forwards_max_retries(monkeypatch, tmp_path: Path) -> None:
     inbox = tmp_path / "inbox"
     outbox = tmp_path / "outbox"
@@ -111,6 +123,58 @@ def test_run_task_never_forwards_removed_gemini_fallback_flag() -> None:
     wrapper = Path(__file__).resolve().parents[1] / "run_task"
 
     assert "--allow-fallback-to-gemini" not in wrapper.read_text(encoding="utf-8")
+
+
+def test_run_task_contains_only_launcher_logic() -> None:
+    wrapper = Path(__file__).resolve().parents[1] / "run_task"
+    text = wrapper.read_text(encoding="utf-8")
+
+    assert 'exec python3 "$SCRIPT_DIR/src/cli.py" "$@"' in text
+    assert "RUN_TASK_" not in text
+    assert "state.json" not in text
+    assert "--test-command" not in text
+    assert text.count("exec python3") == 1
+
+
+def test_run_task_and_python_entrypoint_have_identical_help() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    wrapper_result = subprocess.run(
+        [str(repo_root / "run_task"), "--help"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    python_result = subprocess.run(
+        [sys.executable, str(repo_root / "src" / "cli.py"), "--help"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert wrapper_result.returncode == 0
+    assert python_result.returncode == 0
+    assert wrapper_result.stdout == python_result.stdout
+    assert wrapper_result.stderr == python_result.stderr
+
+
+def test_run_task_symlink_forwards_to_python_entrypoint(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    link = tmp_path / "run-task-link"
+    link.symlink_to(repo_root / "run_task")
+
+    result = subprocess.run(
+        [str(link), "--help"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "--config CONFIG" in result.stdout
+    assert result.stderr == ""
 
 
 def test_run_task_is_checked_out_with_lf_endings() -> None:

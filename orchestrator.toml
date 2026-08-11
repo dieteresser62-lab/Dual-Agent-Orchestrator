@@ -1,0 +1,11 @@
+[paths]
+productive = ["src/**/*.py", "run_task", "*.toml"]
+tests = ["tests/**"]
+documentation = ["docs/**", "*.md"]
+generated = [".orchestrator/**", "**/__pycache__/**", ".pytest_cache/**"]
+
+[validation]
+default_command = "python3 -m pytest tests/ -v"
+
+[workflow]
+manual_slice_gate = false

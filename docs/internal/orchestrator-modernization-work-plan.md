@@ -123,7 +123,7 @@ Jede Slice-MD wird unmittelbar vor Beginn ihres Slice angelegt und dann aus der 
 | Slice | Geplanter Zielpfad |
 |---:|---|
 | 1 | [`docs/internal/slice-orchestrator-modernization-01-remove-agent-fallback.md`](slice-orchestrator-modernization-01-remove-agent-fallback.md) |
-| 2 | `docs/internal/slice-orchestrator-modernization-02-python-cli-config.md` |
+| 2 | [`docs/internal/slice-orchestrator-modernization-02-python-cli-config.md`](slice-orchestrator-modernization-02-python-cli-config.md) |
 | 3 | `docs/internal/slice-orchestrator-modernization-03-three-agent-adapters.md` |
 | 4 | `docs/internal/slice-orchestrator-modernization-04-root-bound-snapshots.md` |
 | 5 | `docs/internal/slice-orchestrator-modernization-05-canonical-branch-diff.md` |
@@ -165,11 +165,13 @@ Die Audit-Komponente aus Slice 8 prüft bei Start eines Slice, dass genau diese 
 **Test-Riegel:** ja. **Red-State:** nein.
 **Risiko/Rückfalloption:** Quota-Verhalten kann Watch-Modus beeinflussen; Änderungen bleiben auf die explizit genannten Dateien begrenzt und werden bei Fehlschlag dateiweise zurückgenommen.
 
-### Slice 2 — Python-Einstiegspunkt und deklarative Konfiguration
+### [Slice 2 — Python-Einstiegspunkt und deklarative Konfiguration](slice-orchestrator-modernization-02-python-cli-config.md)
 
 **Zweck:** Bash-Geschäftslogik durch einen portablen Python-Einstiegspunkt mit klarer Konfigurationspräzedenz ersetzen.
 **Anforderungen:** R-13; Grundlage für R-2, R-15 und R-16.
 **Voraussichtlich betroffene Dateien:** `run_task`, `src/cli.py` (neu), `src/orchestrator.py`, `pyproject.toml`, `orchestrator.toml` (Beispiel/Default, falls erforderlich), `README.md`, `tests/test_cli.py` (neu), `tests/test_orchestrator_watch_cli.py`.
+**Tatsächlich betroffene Dateien vor Review:** `run_task`, `src/cli.py`, `src/orchestrator.py`, `pyproject.toml`, `orchestrator.toml`, `README.md`, `tests/test_cli.py`, `tests/test_orchestrator_watch_cli.py` sowie Plan- und Slice-Prüfspur.
+**Umsetzungsstatus:** implementiert und doppelt freigegeben; Claude C-27 bis C-37 geschlossen, Antigravity ohne Findings, Vollsuite jeweils 131 Tests.
 
 **Akzeptanzkriterien:**
 
@@ -177,7 +179,7 @@ Die Audit-Komponente aus Slice 8 prüft bei Start eines Slice, dass genau diese 
 - `run_task` enthält keine Fallunterscheidung des Workflows und startet nur den Python-Einstiegspunkt.
 - CLI → Umgebung → Repo-Konfiguration → Standard ist getestet.
 - Unbekannte Schlüssel und ungültige Konfiguration scheitern mit verständlicher Meldung.
-- Pfade und Befehle werden ohne Bash-4-spezifische Syntax verarbeitet.
+- Pfade und Befehle werden ohne Bash-4-spezifische Syntax verarbeitet; der Python-Einstiegspunkt setzt Python 3.11 oder neuer voraus.
 - README dokumentiert Einstiegspunkt, Konfigurationspräzedenz und den zu diesem Slice tatsächlich unterstützten Plattformstand.
 
 **Tests:** Parser-, Präzedenz-, Auto-Detection-, Wrapper- und Plattformpfadtests; vollständige Suite. macOS-CI wird vorbereitet, WSL2 lokal geprüft.
@@ -626,7 +628,7 @@ Jeder Slice liefert einen grünen, startbaren Stand. Neue Komponenten werden bis
 | R-10 Test-Riegel | 5, 11, 17, 18 | unversionierte Tests, diffgebundene Zustimmung und Resume |
 | R-11 Gesamtabnahme | 16, 18 | kompletter Branch-Diff, Korrektur-Work-Unit und Defaultaktivierung |
 | R-12 Dry-Run | 15 | skriptbare positive und negative Gates |
-| R-13 Plattform | 2, 3, 19 | Python-Einstieg, Binarykonfiguration und Nutzerdokumentation |
+| R-13 Plattform | 2, 3, 19 | Slice 2: Python-Einstieg und Plattformdokumentation; Slice 3: Binarykonfiguration einschließlich `agy`/`agy.exe`; Slice 19: abschließende plattformübergreifende Evidenz und Nutzerdokumentation |
 | R-14 Dokumentation | 18, 19 | Root-Instruktionen/Marker atomar im Cutover; README, Diagramm und Beispiel anschließend synchron |
 | R-15 Stop-Regeln | 5, 12, 18 | Dateigrenze und deklarierte fachliche Regeln |
 | R-16 Validierung | 13, 18 | Standard plus pathgebundene Befehle je Rolle |

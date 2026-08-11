@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from cli import DEFAULT_AGENTS_FILE, DEFAULT_MAX_SHARED_CHARS, DEFAULT_TASK_FILE
 from agent_runtime import (
     AGENT_REGISTRY,
     OrchestratorConfig,
@@ -46,7 +47,6 @@ from state_io import (
     write_file,
 )
 
-DEFAULT_TASK_FILE = "task.md"
 ARTIFACT_ROOT_DIR = Path(".orchestrator")
 ARTIFACT_RUNS_DIR = ARTIFACT_ROOT_DIR / "runs"
 LATEST_RUN_FILE = ARTIFACT_ROOT_DIR / "LATEST_RUN.txt"
@@ -54,14 +54,13 @@ STATE_DIR = Path(".orchestrator")
 STATE_FILE = STATE_DIR / "state.json"
 LOG_DIR = STATE_DIR / "logs"
 CHECKPOINT_DIR = STATE_DIR / "checkpoints"
-DEFAULT_AGENTS_FILE = (Path(__file__).resolve().parent.parent / "AGENTS.md").resolve()
 MAX_ERROR_CHARS = 1800
 MIN_AGENT_OUTPUT_MAX_CHARS = 200
 # Keep repo snapshots useful but bounded when embedded into prompts/artifacts.
 MAX_DIFF_CHARS = 14000
 TEST_TIMEOUT_SECONDS = 300
 # Cap how much historical shared markdown is sent back to agents each cycle.
-MAX_SHARED_CHARS = 30000
+MAX_SHARED_CHARS = DEFAULT_MAX_SHARED_CHARS
 MAX_AGENTS_INSTRUCTIONS_CHARS = 12000
 # Delimited blocks are the machine-readable envelope shared across prompt + parser helpers.
 DELIMITED_SECTION_PATTERN = re.compile(
@@ -869,185 +868,11 @@ def run_phase2(task_text: str, plan_text: str, state: dict, args: argparse.Names
     raise RuntimeError(phase2["error"])
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Orchestrates a dual-agent workflow with two phases and shared Markdown artifacts. "
-            "Agent failures stop the run; agents are never substituted."
-        )
-    )
-    parser.add_argument("--task-file", help="Path to task file (default: task.md).")
-    parser.add_argument(
-        "--agents-file",
-        default=str(DEFAULT_AGENTS_FILE),
-        help=(
-            "Path to AGENTS instructions injected into all agent prompts "
-            f"(default: {DEFAULT_AGENTS_FILE})."
-        ),
-    )
-    # State lifecycle and retry tuning.
-    parser.add_argument(
-        "--resume",
-        action="store_true",
-        help="Resume from existing .orchestrator/state.json.",
-    )
-    parser.add_argument(
-        "--force-overwrite-state",
-        action="store_true",
-        help="Overwrite existing orchestrator state without confirmation prompt.",
-    )
-    parser.add_argument(
-        "--from-phase",
-        choices=["phase1", "phase2"],
-        help="Force starting phase (default: based on state).",
-    )
-    parser.add_argument(
-        "--max-agent-retries",
-        type=int,
-        default=1,
-        help="Retries per agent call after first failure (default: 1).",
-    )
-    parser.add_argument(
-        "--phase1-max-cycles",
-        type=int,
-        default=4,
-        help="Maximum Claude<->Codex planning cycles in phase 1 (default: 4).",
-    )
-    parser.add_argument(
-        "--phase2-max-cycles",
-        type=int,
-        default=6,
-        help="Maximum implementation/review cycles in phase 2 (default: 6).",
-    )
-    # Preflight and execution gates.
-    parser.add_argument(
-        "--strict-preflight",
-        action="store_true",
-        help="Fail preflight if DNS resolution fails for provider hosts.",
-    )
-    parser.add_argument(
-        "--skip-git-check",
-        action="store_true",
-        help="Skip git cleanliness check in preflight (not recommended).",
-    )
-    parser.add_argument(
-        "--auto",
-        action="store_true",
-        default=True,
-        help="Deprecated: phase transition gate is skipped by default.",
-    )
-    parser.add_argument(
-        "--manual-gate",
-        action="store_true",
-        help="Require manual confirmation before starting phase 2.",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Simulate agent responses and tests to validate workflow wiring.",
-    )
-    parser.add_argument(
-        "--test-command",
-        default="",
-        help="Shell command for tests (e.g. 'npm test', 'pytest'). Empty = skip tests.",
-    )
-    # Prompt-context and snapshot bounds.
-    parser.add_argument(
-        "--max-shared-chars",
-        type=int,
-        default=MAX_SHARED_CHARS,
-        help=f"Max chars from shared history included in prompts (default: {MAX_SHARED_CHARS}).",
-    )
-    parser.add_argument(
-        "--file-snapshot-max-lines",
-        type=int,
-        default=500,
-        help="Max lines per changed file snapshot for Claude review (default: 500).",
-    )
-    parser.add_argument(
-        "--file-snapshot-max-files",
-        type=int,
-        default=10,
-        help="Max number of changed files included in snapshot (default: 10).",
-    )
-    parser.add_argument(
-        "--no-recover",
-        action="store_true",
-        help="Disable automatic rollback to last cycle checkpoint after crashes.",
-    )
-    # Agent output controls.
-    parser.add_argument(
-        "--agent-output",
-        choices=["none", "summary", "full"],
-        default="summary",
-        help="Show agent replies during execution (default: summary).",
-    )
-    parser.add_argument(
-        "--agent-output-max-chars",
-        type=int,
-        default=1800,
-        help="Max chars shown per agent reply in summary mode (default: 1800).",
-    )
-    parser.add_argument(
-        "--agent-live-stream",
-        action="store_true",
-        help="Stream agent CLI stdout/stderr live while they are running.",
-    )
-    parser.add_argument(
-        "--agent-live-stream-mode",
-        choices=["compact", "full"],
-        default="compact",
-        help="Verbosity for live stream (default: compact).",
-    )
-    parser.add_argument(
-        "--agent-live-stream-channels",
-        choices=["both", "stdout", "stderr"],
-        default="both",
-        help="Which channels to print in live stream (default: both).",
-    )
-    # Watch mode options.
-    parser.add_argument(
-        "--watch",
-        action="store_true",
-        help="Watch inbox directory for .md tasks and process continuously.",
-    )
-    parser.add_argument(
-        "--inbox-dir",
-        default="inbox",
-        help="Directory to watch for task .md files in watch mode (default: inbox).",
-    )
-    parser.add_argument(
-        "--outbox-dir",
-        default="outbox",
-        help="Directory where processed task files are moved in watch mode (default: outbox).",
-    )
-    parser.add_argument(
-        "--poll-interval",
-        type=float,
-        default=5.0,
-        help="Polling interval in seconds for watch mode (default: 5.0).",
-    )
-    parser.add_argument(
-        "--watch-max-retries",
-        dest="watch_max_retries",
-        type=int,
-        default=3,
-        help="Maximum retries per inbox task in watch mode before poison-pill move (default: 3).",
-    )
-    # Logging verbosity controls.
-    level_group = parser.add_mutually_exclusive_group()
-    level_group.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Enable debug logging.",
-    )
-    level_group.add_argument(
-        "--quiet",
-        action="store_true",
-        help="Show warnings and errors only.",
-    )
-    return parser.parse_args()
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Compatibility import for callers that still import from orchestrator."""
+    from cli import parse_args as parse_cli_args
 
+    return parse_cli_args(argv)
 
 def run_pipeline(task_file: Path, args: argparse.Namespace, force_new: bool = False) -> int:
     config = OrchestratorConfig(
@@ -1162,31 +987,14 @@ def run_pipeline(task_file: Path, args: argparse.Namespace, force_new: bool = Fa
 
 
 def main() -> int:
-    args = parse_args()
-    log_level = logging.INFO
-    if args.verbose:
-        log_level = logging.DEBUG
-    elif args.quiet:
-        log_level = logging.WARNING
-    logging.basicConfig(level=log_level, format="[%(levelname)s] %(message)s")
+    """Delegate the executable interface to the Python CLI module."""
+    from cli import main as cli_main
 
-    if args.watch:
-        if args.task_file:
-            logger.warning("--task-file is ignored in --watch mode.")
-        return watch_inbox(
-            inbox_dir=Path(args.inbox_dir),
-            outbox_dir=Path(args.outbox_dir),
-            poll_interval=max(0.1, float(args.poll_interval)),
-            max_retries=max(0, int(args.watch_max_retries)),
-            args=args,
-            process_task=run_pipeline,
-        )
-    if args.watch_max_retries != 3:
-        logger.warning("--watch-max-retries is only used in --watch mode.")
-
-    task_file = find_task_file(args.task_file)
-    return run_pipeline(task_file, args)
-
+    return cli_main(
+        run_pipeline_fn=run_pipeline,
+        watch_inbox_fn=watch_inbox,
+        find_task_file_fn=find_task_file,
+    )
 
 if __name__ == "__main__":
     raise SystemExit(main())
