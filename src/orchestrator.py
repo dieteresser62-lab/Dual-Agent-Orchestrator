@@ -807,6 +807,7 @@ def run_phase2(task_text: str, plan_text: str, state: dict, args: argparse.Names
             changed_files=changed_files,
             max_lines=args.file_snapshot_max_lines,
             max_files=args.file_snapshot_max_files,
+            repository_root=ctx.config.repo_root,
         )
         claude_review = ctx.run_agent_checked(
             agent_key="claude",

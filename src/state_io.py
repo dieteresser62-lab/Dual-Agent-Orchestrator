@@ -8,6 +8,8 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+from path_policy import PathPolicyError, resolve_path_within_roots
+
 # Canonical finding identifiers exchanged by both agents, e.g. F-001.
 FINDING_ID_PATTERN = re.compile(r"^F-\d{3}$")
 logger = logging.getLogger(__name__)
@@ -72,18 +74,13 @@ def build_artifact_paths(run_id: str, artifact_runs_dir: Path) -> dict[str, str 
     }
 
 
-def _is_within_allowed_roots(path: Path, allowed_roots: tuple[Path, ...]) -> bool:
-    """Return True when `path` resolves inside any trusted root directory."""
-    return any(path.is_relative_to(root) for root in allowed_roots)
-
-
 def _validate_loaded_path(raw: str, allowed_roots: tuple[Path, ...]) -> str:
     """Validate persisted paths from state before they are reused."""
-    resolved = Path(raw).resolve()
-    if not _is_within_allowed_roots(resolved, allowed_roots):
-        # Reject paths outside orchestrator/workspace roots to prevent state-file path injection.
-        raise ValueError(f"path '{raw}' resolves outside allowed roots")
-    return str(resolved)
+    try:
+        return str(resolve_path_within_roots(raw, allowed_roots))
+    except PathPolicyError as exc:
+        # Preserve the state layer's existing ValueError contract for safe fallback handling.
+        raise ValueError(f"path '{raw}' is not allowed: {exc}") from exc
 
 
 def load_state(state_file: Path) -> dict:

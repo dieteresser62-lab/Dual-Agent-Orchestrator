@@ -21,6 +21,7 @@ from agent_adapters import (
     AgentBudgetError,
     AgentPermissionError,
 )
+from path_policy import PathPolicyError, resolve_repository_path
 
 TEST_OUTPUT_LIMIT = 7000
 ERROR_TRUNCATION_LIMIT = 1200
@@ -733,7 +734,13 @@ def preflight(
     return ok
 
 
-def collect_file_snapshots(changed_files: list[str], max_lines: int, max_files: int) -> str:
+def collect_file_snapshots(
+    changed_files: list[str],
+    max_lines: int,
+    max_files: int,
+    *,
+    repository_root: Path,
+) -> str:
     """Collect bounded plaintext snapshots for changed files referenced in review prompts."""
 
     def is_plausible_path(value: str) -> bool:
@@ -742,32 +749,44 @@ def collect_file_snapshots(changed_files: list[str], max_lines: int, max_files: 
             return False
         if value.startswith("..."):
             return False
-        if re.search(r"\s", value):
+        if any(character in value for character in ("\x00", "\n", "\r", "|")):
             return False
-        return bool(re.match(r"^[^\s|:][^|:]*$", value))
+        return True
 
     parts: list[str] = []
     seen: set[str] = set()
     selected = 0
+    root = repository_root.resolve()
     for raw in changed_files:
         path_text = raw.strip()
         if not is_plausible_path(path_text):
             continue
-        if path_text in seen:
+
+        try:
+            path = resolve_repository_path(path_text, root)
+        except PathPolicyError as exc:
+            logger.warning("Rejected file snapshot path %r: %s.", path_text, exc)
             continue
-        seen.add(path_text)
+
+        display_path = path.relative_to(root).as_posix() or "."
+        if display_path in seen:
+            continue
+        seen.add(display_path)
         if selected >= max_files:
             break
 
         selected += 1
-        path = Path(path_text)
-        parts.append(f"### {path_text}")
+        parts.append(f"### {display_path}")
         if not path.exists():
             parts.append("[missing] File does not exist.")
             parts.append("")
             continue
         if path.is_dir():
             parts.append("[skip] Path is a directory.")
+            parts.append("")
+            continue
+        if not path.is_file():
+            parts.append("[skip] Path is not a regular file.")
             parts.append("")
             continue
         try:

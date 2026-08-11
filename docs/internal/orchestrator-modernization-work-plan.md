@@ -217,11 +217,13 @@ Die Audit-Komponente aus Slice 8 prüft bei Start eines Slice, dass genau diese 
 **Test-Riegel:** ja. **Red-State:** nein.
 **Risiko/Rückfalloption:** CLI-Versionen und benötigte Prozessressourcen unterscheiden sich je Plattform; adapterspezifische Abweichungen bleiben hinter dem gemeinsamen Protocol isoliert. Ein unbekannter Versions- oder Fähigkeitsstand führt zum Nutzergate statt zu optimistischer Ausführung.
 
-### Slice 4 — Wurzelgebundene Dateischnappschüsse
+### [Slice 4 — Wurzelgebundene Dateischnappschüsse](slice-orchestrator-modernization-04-root-bound-file-snapshots.md)
 
 **Zweck:** Jeden vom Agenten oder Contract gemeldeten Pfad vor dem Lesen gegen die Repositorywurzel und erlaubte Pfadklassen validieren.
 **Anforderungen:** R-4.
 **Voraussichtlich betroffene Dateien:** `src/agent_runtime.py`, optional `src/path_policy.py` (neu), `src/state_io.py` nur zur Wiederverwendung gemeinsamer Logik, `tests/test_agent_runtime.py`, optional `tests/test_path_policy.py` (neu).
+**Tatsächlich betroffene Dateien vor Review:** `src/path_policy.py` (neu), `src/agent_runtime.py`, `src/orchestrator.py`, `src/state_io.py`, `tests/test_agent_runtime.py`, `tests/test_path_policy.py` (neu), Slice-MD und dieser Arbeitsplan.
+**Umsetzungsstatus:** Claude und Antigravity haben mit `OPEN_FINDINGS: NONE` freigegeben; die einzige umgesetzte Observation (Spezialdatei-Test) ist mit 170 Tests validiert; lokaler Slice-Commit autorisiert.
 
 **Akzeptanzkriterien:**
 

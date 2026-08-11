@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -366,24 +367,17 @@ def test_agent_capability_check_is_lazy_and_cached(monkeypatch) -> None:
 
 
 def test_collect_file_snapshots_truncates_limits_and_handles_missing(tmp_path: Path) -> None:
-    import os
-
     file_a = tmp_path / "a.py"
     file_b = tmp_path / "b.py"
     file_a.write_text("1\n2\n3\n4\n", encoding="utf-8")
     file_b.write_text("ok\n", encoding="utf-8")
 
-    cwd = Path.cwd()
-    try:
-        # Function resolves paths from current working directory.
-        os.chdir(tmp_path)
-        output = collect_file_snapshots(
-            changed_files=["a.py", "not a path line", "missing.py", "b.py"],
-            max_lines=2,
-            max_files=2,
-        )
-    finally:
-        os.chdir(cwd)
+    output = collect_file_snapshots(
+        changed_files=["a.py", "# ignored heading", "missing.py", "b.py"],
+        max_lines=2,
+        max_files=2,
+        repository_root=tmp_path,
+    )
 
     assert "<<<FILES_BEGIN>>>" in output
     assert "### a.py" in output
@@ -391,6 +385,85 @@ def test_collect_file_snapshots_truncates_limits_and_handles_missing(tmp_path: P
     assert "...[truncated to 2 lines]" in output
     assert "### missing.py" in output or "### b.py" in output
     assert "<<<FILES_END>>>" in output
+
+
+def test_collect_file_snapshots_rejects_paths_outside_repository(
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "repository with spaces"
+    repository.mkdir()
+    safe_file = repository / "safe.txt"
+    safe_file.write_text("SAFE CONTENT\n", encoding="utf-8")
+    secret_file = tmp_path / "secret.txt"
+    secret_file.write_text("FOREIGN SECRET CONTENT\n", encoding="utf-8")
+    (repository / "escape.txt").symlink_to(secret_file)
+
+    with caplog.at_level("WARNING", logger="agent_runtime"):
+        output = collect_file_snapshots(
+            changed_files=[
+                "../secret.txt",
+                r"..\secret.txt",
+                str(secret_file),
+                "escape.txt",
+                str(safe_file),
+            ],
+            max_lines=20,
+            max_files=1,
+            repository_root=repository,
+        )
+
+    assert "SAFE CONTENT" in output
+    assert "### safe.txt" in output
+    assert "FOREIGN SECRET CONTENT" not in output
+    assert "secret.txt" not in output
+    assert "escape.txt" not in output
+    assert caplog.text.count("Rejected file snapshot path") == 4
+
+
+def test_collect_file_snapshots_normalizes_duplicates_and_skips_directory(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source_file = source_dir / "module.py"
+    source_file.write_text("pass\n", encoding="utf-8")
+
+    output = collect_file_snapshots(
+        changed_files=[r"source\module.py", "source/module.py", "source"],
+        max_lines=20,
+        max_files=3,
+        repository_root=tmp_path,
+    )
+
+    assert output.count("### source/module.py") == 1
+    assert "### source\n[skip] Path is a directory." in output
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFO creation requires POSIX")
+def test_collect_file_snapshots_skips_non_regular_file(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fifo = tmp_path / "review-pipe"
+    os.mkfifo(fifo)
+    original_read_text = Path.read_text
+
+    def guarded_read_text(path: Path, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if path == fifo:
+            raise AssertionError("snapshot collector attempted to read a FIFO")
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", guarded_read_text)
+
+    output = collect_file_snapshots(
+        changed_files=[fifo.name],
+        max_lines=20,
+        max_files=1,
+        repository_root=tmp_path,
+    )
+
+    assert "### review-pipe\n[skip] Path is not a regular file." in output
 
 
 def test_run_tests_snapshot_uses_shell_true_and_raw_command(monkeypatch) -> None:
