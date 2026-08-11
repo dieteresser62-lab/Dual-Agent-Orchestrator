@@ -4,6 +4,10 @@
 **Liefergegenstand dieses Dokuments:** ein Arbeitsplan mit Slice-Dokumenten — kein Code.
 **Stand des Repos:** Feature-Branch `feature/orchestrator-modernization`, abgezweigt von `master` bei Commit `0bd3bad`. 92 Tests gesammelt und 92 grün (`python3 -m pytest tests/ -v`). Lokal verifiziert am 2026-08-10: Der Code entspricht der Analysebasis, die Befunde in §3 wurden gegen diesen Stand nachgeprüft und bestätigt.
 
+**Revision 7** — Claude-Reviews erhalten ein einziges vorgebautes, begrenztes Reviewpaket statt offener Repositoryerkundung. Verfügbar bleiben nur `Read` und der exakt freigegebene Review-Harness; der Prompt begrenzt den Lauf auf höchstens sechs Werkzeugaufrufe und die strukturierte Antwort auf 12.000 Zeichen. Antigravitys Abschlussreview wird präzisiert: Prüfgegenstand ist immer der vollständige Diff des aktuellen Slice seit dessen persistiertem Start-Commit einschließlich aller Claude-/Codex-Korrekturrunden. Ein letzter Korrekturdelta darf hervorgehoben werden, ersetzt den Gesamtdiff aber nie.
+
+**Revision 6** — Quota-Erschöpfung mit einem eindeutig erkannten Resetzeitpunkt wird als persistierter Wartezustand modelliert. Der Python-Orchestrator darf im Vordergrund ressourcenschonend bis nach diesem Zeitpunkt warten und anschließend exakt denselben Rollenschritt automatisch fortsetzen. Ohne verlässlichen Resetzeitpunkt, bei Überschreitung der konfigurierten Maximalwartezeit oder nach ausgeschöpften automatischen Fortsetzungen bleibt der definierte Exitcode-2-/`--resume`-Pfad erhalten. Agentenfallback bleibt ausgeschlossen. Die Umsetzung ist R-18 sowie den späteren Slices 14, 15 und 17 zugeordnet; der bereits laufende Slice 02 wird dadurch nicht erweitert.
+
 **Revision 5** — die externe Steuerbarkeit der drei lokal installierten CLIs wurde mit echten, werkzeuglosen Non-Interactive-Aufrufen verifiziert: Codex CLI 0.147.0 über `codex exec`/JSONL, Claude Code 2.1.226 über Print-/JSON-Modus und Antigravity 1.1.11 über Print-/JSON-/Plan-/Sandbox-Modus; alle drei lieferten `EXTERNAL_CONTROL_OK` mit Exitcode 0. Das inzwischen vorhandene native Linux-`agy` wurde ergänzt. Neu präzisiert sind der erforderliche Runtime-Korridor für CLI-eigene Dateien, Netzwerk und Loopback-Sockets, negative Schreibtests, Langprompt-/Stream-/Fehlerpfadtests sowie ein Gate für ungetestete CLI-Versionen.
 
 **Revision 4** — die Architekturentscheidungen aus §7 wurden auf Nutzervorgabe verbindlich getroffen. Zusätzlich aktualisiert: damaliger lokaler CLI-Stand (`agy.exe` 1.1.11 unter WSL2), mechanischer Commit durch den Orchestrator nach Antigravity-Freigabe, Exitcodes, Dateiklassifikation, menschliche Gates, Prüfspur und Rollendateiname. Die Testangabe wurde auf den tatsächlich verifizierten Stand von 92 grünen Tests korrigiert.
@@ -26,7 +30,7 @@ Codex aktualisiert auf ausdrückliche Nutzervorgabe zunächst Anforderungs- und 
 
 **In diesem Schritt ist zu liefern:**
 
-- Revision 5 dieser Anforderungsbeschreibung,
+- Revision 7 dieser Anforderungsbeschreibung,
 - die aktualisierte Übergabe,
 - eine Arbeitsplan-MD gemäß §9,
 - der dokumentierte lokale Branch- und GitHub-Status.
@@ -85,9 +89,9 @@ Für Slice *n* in der im Plan festgelegten Reihenfolge:
 
 1. **Codex** erstellt die Slice-MD (§9.2) **vor Beginn der Arbeiten**, inklusive Branch-Check (`git branch --show-current`), Statuscheck (`git status --short`) und Diff-Risiko-Block. Passt der aktive Branch nicht zum im Plan definierten Feature-Branch, stoppt Codex und fragt nach. Greift eine Stop-Regel (§2.5), stoppt Codex und fragt nach, statt zu implementieren.
 2. **Codex** implementiert Slice *n* einschließlich Tests, führt die Validierung gemäß §6.2 aus und trägt die Ergebnisse unter `## Ergebnisse` in die Slice-MD ein.
-3. **Claude Code** reviewt und führt die Validierung selbst aus. Feedback unter `## Review-Feedback von Claude` in der Slice-MD. Bei Mängeln oder roter Validierung: zurück zu Schritt 2.
+3. **Claude Code** reviewt und führt die Validierung selbst aus. Claude erhält dafür ein einziges, vom Orchestrator vorgebautes Reviewpaket mit den relevanten Anforderungen, Planentscheidungen, Findings, Dateischnappschüssen, dem kanonischen Diff und dem Validierungsauftrag. Offene Repositoryerkundung entfällt; erlaubt sind höchstens sechs Werkzeugaufrufe mit `Read` sowie dem exakt einmal ausführbaren Harness. Feedback unter `## Review-Feedback von Claude` in der Slice-MD. Bei Mängeln oder roter Validierung: zurück zu Schritt 2.
 4. **Codex** korrigiert und antwortet unter `## Review-Antworten von Codex`. Danach zurück zu Schritt 3. Die Schritte 2 bis 4 wiederholen sich, bis Claude freigibt.
-5. **Antigravity** reviewt den von Claude freigegebenen Slice und führt die Validierung selbst aus. Bei Mängeln: zurück zu Schritt 4.
+5. **Antigravity** reviewt den von Claude freigegebenen Slice und führt die Validierung selbst aus. Sein Reviewpaket enthält immer den vollständigen Slice-Diff vom persistierten Start-Commit des Slice bis zum Claude-freigegebenen Endstand, einschließlich aller in früheren Korrekturrunden entstandenen und danach unveränderten Dateien. Der letzte Korrekturdelta wird bei Bedarf zusätzlich markiert, darf den vollständigen Slice-Diff aber nicht ersetzen. Bei Mängeln: zurück zu Schritt 4.
 6. Nach Freigabe durch beide Reviewer autorisiert Antigravity den Commit. Der Orchestrator führt die Commit-Sicherheitsprüfung durch — `git status --short`, Dateiliste dokumentieren, gegen den Slice-Scope abgleichen und ausschließlich erlaubte Pfade stagen. Unerwartete Dateien oder ein seit dem Review veränderter Diff blockieren den Commit. Danach erzeugt der Orchestrator den lokalen Commit für Slice *n* mechanisch.
 7. Rückdokumentation des Slice-Status in die Arbeitsplan-MD, weiter mit Slice *n+1*.
 
@@ -121,7 +125,7 @@ Diese Regeln gelten in jeder Phase und stehen nicht im Ermessen einer Instanz:
 - **Pre-Mortem vor jeder Freigabe.**
 - **Unerwartete Dateien blockieren den Commit** (§2.3 Schritt 6).
 - **Ping-Pong-Bremse:** Iterationszähler je Slice. Nach N Runden ohne Einigung Abbruch mit definiertem Zustand statt endloser Schleife. N und das Abbruchverhalten legt der Plan fest (§7.4).
-- **Ausfall einer Instanz hält den Lauf an.** Kann eine der drei Instanzen nicht arbeiten — erschöpfte Quota, fehlende Binary, Zeitüberschreitung —, endet der Lauf mit definiertem Zustand und dokumentiertem Exitcode (R-18). **Es gibt keinen Ersatzagenten.** Keine Instanz vertritt eine andere, auch nicht vorübergehend. Der Wiederanlauf ist eine Nutzerentscheidung und erfolgt manuell über `--resume`. Das gilt für Codex und Claude Code, deren Ausfall den Korrekturzyklus unterbricht, ebenso wie für Antigravity, ohne dessen Verdikt kein Commit zustande kommt.
+- **Instanzausfälle und Quota-Wartezustände sind definiert.** Fehlende Binary, Zeitüberschreitung und sonstige Instanzausfälle halten den Lauf mit dokumentiertem Zustand und Exitcode an (R-18). Eine erkannte Quota mit eindeutigem Resetzeitpunkt darf stattdessen in `waiting_for_quota` wechseln, bis nach dem Reset warten und denselben Schritt automatisch fortsetzen. **Es gibt keinen Ersatzagenten.** Keine Instanz vertritt eine andere, auch nicht während der Wartezeit. Ohne verlässlichen Resetzeitpunkt oder bei ausgeschöpfter Wartepolitik hält der Lauf mit Exitcode 2 und bleibt manuell über `--resume` fortsetzbar. Das gilt gleichermaßen für Codex, Claude Code und Antigravity; ohne das jeweils vorgeschriebene Verdikt geht der Workflow nicht weiter.
 
 ### 2.6 Marker-Kontrakt des Meta-Verfahrens
 
@@ -214,7 +218,7 @@ Weitergehend: **Der Fallback-Mechanismus zwischen Agenten entfällt ersatzlos.**
 
 Gemini-Adapter durch die Antigravity-CLI ersetzen: Kommandozeile, `required_hosts`, `extract_output`, `stream_filter`. Der konkrete Befehl ist konfigurierbar und darf insbesondere `agy`, `agy.exe` oder ein expliziter Pfad sein. Codex- und Claude-Adapter werden gegen die aktuellen Kommandozeilen geprüft. Modell und Timeout werden je Adapter konfigurierbar statt hartkodiert. Die lokal erfolgreich geprüfte Kompatibilitätsbasis ist Codex CLI 0.147.0, Claude Code 2.1.226 und Antigravity 1.1.11.
 
-*Abnahme:* Alle drei Adapter starten und liefern auf einen Minimalprompt eine parsbare Antwort mit korrektem Abschlussmarker. Kein Modellname und kein plattformspezifischer Antigravity-Binaryname ist im Quelltext fest verdrahtet. Der Preflight dokumentiert je Rolle aufgelösten Befehl, Version und erkannte Fähigkeiten. Für jede neue oder ungetestete Version greift ein Nutzergate, bis Minimalprompt, strukturierte Text-/Streamausgabe, Langprompt über den vorgesehenen Eingabekanal, Timeout, Auth-/Quota-/Netzfehler und Prozessende verifiziert sind. Live-Smokes laufen nach Installation oder Versionsänderung, nicht bei jedem Start, weil sie Tokens beziehungsweise Quota verbrauchen.
+*Abnahme:* Alle drei Adapter starten und liefern auf einen Minimalprompt eine parsbare Antwort mit korrektem Abschlussmarker. Kein Modellname und kein plattformspezifischer Antigravity-Binaryname ist im Quelltext fest verdrahtet. Der Preflight dokumentiert je Rolle aufgelösten Befehl, Version und erkannte Fähigkeiten. Claudes Langprompt liegt als einziges externes Reviewpaket vor; der Prozess erhält nur dessen kurzen Verweis, `Read` und den exakten Harness, höchstens sechs Werkzeugaufrufe sowie ein kleines Antwortschema. Für jede neue oder ungetestete Version greift ein Nutzergate, bis Minimalprompt, strukturierte Text-/Streamausgabe, Langprompt über den vorgesehenen Eingabekanal, Timeout, Auth-/Quota-/Netzfehler und Prozessende verifiziert sind. Live-Smokes laufen nach Installation oder Versionsänderung, nicht bei jedem Start, weil sie Tokens beziehungsweise Quota verbrauchen.
 
 *Randbedingung:* Kein Eingriff in die Orchestrierungslogik in dieser Anforderung.
 
@@ -260,9 +264,11 @@ Antigravity wird aus der Fallback-Rolle in eine eigenständige, aber eng begrenz
 
 Die Reviewkette ist **asymmetrisch** und muss im Orchestrator auch so abgebildet sein: Claude Code wird in jeder Runde aufgerufen, Antigravity ausschließlich auf einem Stand, den Claude bereits freigegeben hat, und dort genau einmal. Ein Aufruf von Antigravity innerhalb der Korrekturschleife ist ein Fehler, kein Sonderfall.
 
+Antigravitys einmaliger Aufruf ist ein **vollständiges Slice-Abschlussreview**, kein Deltareview. Der Orchestrator bindet das Paket an den beim Slice-Start persistierten Commit und den finalen Diff-Fingerprint. Damit bleiben auch Dateien Prüfgegenstand, die nur in der ersten Implementierungsrunde geändert und in der letzten Korrekturrunde nicht mehr berührt wurden. Rundenbezogene Deltas dienen ausschließlich als Navigationshilfe.
+
 Freigabe nur, wenn **alle** vorgesehenen Freigaben vorliegen und kein Blocker offen ist. Fehlendes oder unparsbares Verdikt zählt als Ablehnung.
 
-*Abnahme:* In einem Lauf, in dem Codex zweimal nachbessern muss, wird Claude dreimal und Antigravity einmal aufgerufen — nachweisbar über die Laufartefakte. Antigravity wird nie vor einer Claude-Freigabe aufgerufen. Ein fehlendes Verdikt führt zur Ablehnung des Schritts, nicht zu dessen Überspringen.
+*Abnahme:* In einem Lauf, in dem Codex zweimal nachbessern muss, wird Claude dreimal und Antigravity einmal aufgerufen — nachweisbar über die Laufartefakte. Antigravity wird nie vor einer Claude-Freigabe aufgerufen. Sein Paket enthält nachweislich sowohl eine nur in Runde 1 geänderte Datei als auch den Korrekturpfad der letzten Runde und ist an den vollständigen Slice-Fingerprint gebunden. Ein fehlendes Verdikt führt zur Ablehnung des Schritts, nicht zu dessen Überspringen.
 
 ### R-8 (H) — Slice-Modell
 
@@ -340,20 +346,24 @@ Plan- und Slice-Dokumente inklusive Reviewfeedback, Antworten und Entscheidungst
 
 *Abnahme:* Nach Abschluss lässt sich allein aus dem Git-Verlauf nachvollziehen, wer was wann bemängelt, bestritten und freigegeben hat.
 
-### R-18 (B) — Ausfall einer Instanz als definierter Halt
+### R-18 (B) — Quota-Wartezustand und definierter Instanzausfall
 
-Eine erschöpfte Quota ist kein Fehler, der wegzufangen wäre, sondern ein regulärer Endzustand des Laufs. Dasselbe gilt für jeden anderen Ausfall einer Instanz. Erforderlich:
+Eine erschöpfte Quota ist von Absturz, fehlender Binary, Timeout, Authentifizierungs-, Berechtigungs- und Netzwerkfehlern zu unterscheiden. Meldet die betroffene CLI einen eindeutigen Resetzeitpunkt, ist die Quota kein endgültiger Endzustand, sondern eine planbare Pause. Erforderlich:
 
-- Erkennung je Agent, unterscheidbar von sonstigen Aufruffehlern — eine Quotagrenze ist etwas anderes als ein Absturz und muss anders gemeldet werden,
-- Halt mit definiertem Zustand: der laufende Slice bleibt unvollendet, bereits committete Slices bleiben unangetastet, am Arbeitsbaum wird nichts zurückgesetzt,
-- dokumentierter Exitcode statt durchfliegendem Traceback (behebt zugleich B-11),
-- eine Meldung, die benennt, welche Instanz ausgefallen ist, in welchem Slice und in welchem Schritt,
-- unterscheidbare Diagnose für fehlende CLI-Runtime-Schreibrechte, gesperrten erforderlichen Loopback und fehlenden Provider-Egress statt Fehlklassifikation als Quota,
-- Fortsetzbarkeit über `--resume` ohne Verlust des Slice-Fortschritts (setzt R-8 voraus).
+- adapter-spezifische Erkennung und Normalisierung eines verlässlichen Resetzeitpunkts aus absoluten Zeitstempeln, eindeutig bezogenen relativen Angaben, strukturierten Providerfeldern oder bekannten Provider-Fließtextmustern; relative Angaben werden gegen den erfassten Empfangszeitpunkt aufgelöst, unbekannter oder mehrdeutiger Fließtext aktiviert niemals die Automatik; Providertext, Parseweg, Empfangszeitpunkt, erkannte Zeitzone und normalisierter UTC-Zeitpunkt bleiben für die Diagnose erhalten,
+- ein persistierter State `waiting_for_quota` mit Rolle, Slice/Work Unit, Schritt, Resetzeitpunkt, Sicherheitszuschlag, automatischem Fortsetzungszähler und Idempotenzbezug,
+- ressourcenschonendes, unterbrechbares Warten ohne Busy Loop; der Vordergrundprozess und der Watch-Modus geben in einem konfigurierbaren, nicht spamartigen Intervall einen knappen Status mit Rolle, Work Unit/Task, lokalem und UTC-Fortsetzungszeitpunkt sowie verbleibender Wartezeit aus,
+- automatisches Fortsetzen exakt desselben Rollenschritts nach Resetzeitpunkt plus konfigurierbarem Sicherheitszuschlag; eine unvollständige oder unparsbare Teilantwort des gescheiterten Aufrufs gilt nicht als erfolgreiches Ergebnis,
+- erneuter Preflight gegen persistierten Slice-Scope, Diff-Fingerprint und Gatezustand unmittelbar vor dem Wiederaufruf; unerwartete oder scope-fremde Änderungen blockieren weiterhin,
+- eine begrenzte Wartepolitik mit konfigurierbarer Maximalwartezeit und begrenzter Zahl automatischer Fortsetzungen; Standard ist höchstens eine automatische Fortsetzung je blockiertem Schritt,
+- definierter Halt mit Exitcode 2 und manueller Fortsetzbarkeit über `--resume`, wenn kein eindeutiger Resetzeitpunkt vorliegt, die automatische Wartepolitik deaktiviert oder ausgeschöpft ist oder die Maximalwartezeit überschritten würde,
+- definierter Halt mit Exitcode 3 für fehlende Binary, Timeout und sonstige Instanzausfälle sowie unterscheidbare Diagnose für fehlende CLI-Runtime-Schreibrechte, gesperrten erforderlichen Loopback und fehlenden Provider-Egress,
+- Erhalt des unvollendeten Slice, aller bereits committierten Slices und des unveränderten Arbeitsbaums; ein kontrollierter Prozessabbruch während des Wartens lässt den State manuell resumefähig zurück,
+- eine Meldung, die betroffene Instanz, Slice/Work Unit, Schritt, Ursache, geplanten Fortsetzungszeitpunkt und Automatikstatus benennt.
 
-Der Orchestrator wartet nicht, versucht es nicht erneut und weicht nicht auf eine andere Instanz aus. Der Wiederanlauf ist eine Nutzerentscheidung.
+Das automatische Fortsetzen ist eine vorab konfigurierte Runtime-Politik und kein Agentenfallback. Während der Wartezeit und beim Wiederaufruf bleibt dieselbe Rolle vorgeschrieben; nachfolgende Rollen, insbesondere Antigravity vor einer ausstehenden Claude-Freigabe, werden nicht vorgezogen. Andere Instanzausfälle werden nicht automatisch wiederholt. Stirbt der WSL-/Terminalprozess während der Wartezeit, startet kein externer Scheduler selbsttätig einen neuen Prozess; der persistierte Zustand ermöglicht dann die bewusste Fortsetzung über `--resume`.
 
-*Abnahme:* Je ein simulierter Quotaausfall bei Codex, bei Claude Code und bei Antigravity führt zum dokumentierten Exitcode und hinterlässt einen Zustand, aus dem `--resume` denselben Slice sauber fortsetzt. In keinem der drei Fälle wird eine Ersatzinstanz aufgerufen. Der Fall ist im Dry-Run simulierbar (R-12).
+*Abnahme:* Je Rolle existieren deterministische Fake-Clock-Szenarien für absolute UTC-/Offset-Zeitstempel, eindeutig bezogene relative Angaben, strukturierte Providerfelder, bekannte Provider-Fließtextmuster, unbekannten beziehungsweise mehrdeutigen Fließtext, einen künftigen Resetzeitpunkt, bereits erreichten Zeitpunkt, Sicherheitszuschlag, fehlenden Zeitpunkt, überschrittene Maximalwartezeit, Prozessunterbrechung, weiterhin bestehende Quota nach der zulässigen automatischen Fortsetzung und veränderten Diff-Fingerprint. Der positive Fall wartet ohne reale Zeitverzögerung im Test, erzeugt den vereinbarten Warte-Heartbeat, ruft anschließend exakt dieselbe Rolle und denselben Schritt erneut auf und kann den Workflow normal abschließen. Die manuellen Fälle enden mit Exitcode 2 und bleiben über `--resume` fortsetzbar. In keinem Fall wird eine Ersatzinstanz oder eine nachfolgende Reviewrolle aufgerufen. Alle Fälle sind im Dry-Run simulierbar (R-12).
 
 *Hinweis:* R-18 hängt an R-8 (Slice-State und `--resume`) und ersetzt gemeinsam mit R-1 den bisherigen Fallback-Mechanismus.
 
@@ -459,7 +469,7 @@ Exitcodes:
 |---:|---|
 | 0 | Lauf vollständig abgeschlossen |
 | 1 | technischer, Konfigurations- oder interner Fehler |
-| 2 | Quota der benötigten Instanz erschöpft |
+| 2 | Quota kann nicht automatisch terminiert fortgesetzt werden oder die Wartepolitik ist ausgeschöpft |
 | 3 | Instanz nicht verfügbar, Aufruffehler oder Timeout |
 | 4 | Nutzerentscheidung oder Policy-Gate erforderlich |
 
@@ -484,6 +494,8 @@ State-Version 3 führt Work-Unit- und Slice-Zustände ein. Abgeschlossene Versio
 ### 7.8 Der Mensch als Gate — **entschieden: risikobasiert, optional je Slice**
 
 Ein normaler, von Claude und Antigravity freigegebener Slice benötigt standardmäßig kein zusätzliches Nutzer-Gate vor dem lokalen Commit. Zwingende Nutzergates bleiben bei Push, Merge, Teständerungen, Stop-Regeln, unerwarteten Dateien, erreichtem Iterationslimit und Änderungen an bereits freigegebenen Ankerwerten bestehen.
+
+Eine Quota mit eindeutigem, innerhalb der konfigurierten Grenze liegendem Resetzeitpunkt ist bei aktivierter Wartepolitik kein zusätzliches Nutzergate. Fehlt diese Voraussetzung, endet der Prozess mit Exitcode 2 und wartet auf eine bewusste Fortsetzung über `--resume`.
 
 Ein optionaler Modus `--manual-slice-gate` hält zusätzlich vor jedem Slice-Commit an. Damit kann ein sensibles Zielrepo die strengere Variante aktivieren, ohne den automatisierten Normalpfad zu blockieren.
 

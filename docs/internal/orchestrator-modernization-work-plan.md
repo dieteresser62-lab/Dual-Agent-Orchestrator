@@ -1,7 +1,7 @@
 # Arbeitsplan: Modernisierung des Dual-Agent-Orchestrators
 
-**Status:** nach Claude-Review überarbeitet; zur Nachprüfung bereit
-**Anforderungsbasis:** `requirements-orchestrator-modernization.md`, Revision 5
+**Status:** kombinierter Revision-6-/Revision-7-Stand durch Claude und Antigravity freigegeben; Dokumentationscommit autorisiert
+**Anforderungsbasis:** `requirements-orchestrator-modernization.md`, Revision 7
 **Feature-Branch:** `feature/orchestrator-modernization`
 **Branch-Basis:** `master` bei `0bd3bad`
 **GitHub-Status:** nur lokal; kein Upstream; Veröffentlichung ausstehend und nur nach Nutzerfreigabe
@@ -60,6 +60,8 @@ Antigravity trifft die Freigabeentscheidung. Der Orchestrator führt den Commit 
 
 Der Normalpfad benötigt nach Claude- und Antigravity-Freigabe kein drittes manuelles Slice-Verdikt. Zwingende Nutzerentscheidungen bleiben bei Teständerungen, Stop-Regeln, unerwarteten Dateien, vier erfolglosen Korrekturrunden, Ankeränderungen, Push und Merge. `--manual-slice-gate` fügt optional ein Gate vor jedem Slice-Commit ein.
 
+Eine Quota mit eindeutig erkanntem, innerhalb der konfigurierten Maximalwartezeit liegendem Resetzeitpunkt ist bei aktivierter Wartepolitik kein Nutzergate. Der Orchestrator persistiert die Pause und setzt denselben Schritt nach Ablauf automatisch fort. Ohne verlässlichen Zeitpunkt oder nach ausgeschöpfter Wartepolitik bleibt Exitcode 2 mit manueller Fortsetzung über `--resume`.
+
 ### 3.5 Contracts und Findings
 
 State-Version 3 akzeptiert nur die neuen, schrittbezogenen Marker. Jede Agentenantwort durchläuft denselben zentralen Contract-Validator. Findings werden als Records mit Quelle, Klasse, Status, Beschreibung, Akzeptanztest, Work Unit, Runde, Implementiererantwort und Schließbegründung gespeichert. `BLOCKER` blockiert; `OBSERVATION` bleibt sichtbar, blockiert aber nicht. Ein Codex-Widerspruch schließt kein Finding.
@@ -68,15 +70,19 @@ State-Version 3 akzeptiert nur die neuen, schrittbezogenen Marker. Jede Agentena
 
 Der Runtime-State ist während eines Laufs maschinenlesbare Wahrheit. Rohe Logs dienen nur der Diagnose. Der Orchestrator schreibt validierte Agentenantworten deterministisch in die vorgesehenen Abschnitte der Plan- und Slice-Dokumente. Nach dem Commit sind Git, Arbeitsplan und Slice-MD die historische Prüfspur; flüchtige Logs werden nicht als paralleles Auditformat behandelt.
 
-### 3.7 Migration
+### 3.7 Quota-Wartepolitik
+
+Die Runtime-Parameter für diese Funktion werden erst in Slice 14 eingeführt und erweitern den bereits abgeschlossenen Konfigurationsslice 02 nicht. Ihre Präzedenz ist CLI → Umgebung → Standard. Der Normalmodus ist `wait-until-reset`, der Sicherheitszuschlag beträgt standardmäßig 60 Sekunden, die Maximalwartezeit 24 Stunden und die Zahl automatischer Fortsetzungen je blockiertem Schritt eins. Alle Werte einschließlich des nicht spamartigen Statusintervalls sind konfigurierbar; `manual` deaktiviert das automatische Warten vollständig. Ein nicht eindeutig normalisierbarer Providerzeitpunkt aktiviert niemals die Automatik.
+
+### 3.8 Migration
 
 Der Umbau erfolgt im Bestand. Abgeschlossene Version-2-States bleiben erkennbar. Aktive oder eingefrorene Version-2-States werden mit unveränderten Artefakten und einer klaren Handlungsanweisung abgelehnt, weil eine zuverlässige Abbildung des monolithischen Phase-2-Fortschritts auf Slices nicht möglich ist. Unbekannte Schemaversionen führen immer zu einem Fehler.
 
-### 3.8 Ankerwerte
+### 3.9 Ankerwerte
 
 Die Infrastruktur unterstützt strukturierte `ANCHOR`-Records für deterministische Rechenkerne. Für diesen Umbau sind keine konkreten Ankerwerte erforderlich. Änderungen an einem bereits freigegebenen Anker wären ein zwingendes Nutzergate und würden die Planreviewkette zurücksetzen.
 
-### 3.9 Widersprüche zu den historischen Referenzen
+### 3.10 Widersprüche zu den historischen Referenzen
 
 | Referenzregel | Entscheidung dieses Plans |
 |---|---|
@@ -99,11 +105,11 @@ Die endgültigen Dateinamen dürfen im Slice-Review angepasst werden, solange di
 | Komponente | Verantwortung |
 |---|---|
 | `src/cli.py` | Argumente, Konfigurationspräzedenz, Python-Einstiegspunkt und Wrapperkompatibilität |
-| `src/agent_adapters.py` | CLI-spezifische Befehle, Ausgabeextraktion und Streamfilter |
-| `src/agent_runtime.py` | Prozessausführung, role-bound read-only/implementer modes, Fehlerklassifikation |
+| `src/agent_adapters.py` | CLI-spezifische Befehle, Ausgabeextraktion, Streamfilter und Quota-Resetzeit-Erkennung |
+| `src/agent_runtime.py` | Prozessausführung, role-bound read-only/implementer modes, Fehlerklassifikation und unterbrechbares Quota-Warten |
 | `src/contracts.py` | Marker, Finding-Records, Anker und zentrale Contract-Validierung |
 | `src/repo_changes.py` | Merge-Base, Branch-Diff, unversionierte Dateien, Scope und Committransaktion |
-| `src/workflow_state.py` | State-Version 3, Work Units, Schritte, Migration und Checkpoints |
+| `src/workflow_state.py` | State-Version 3, Work Units, Schritte, Quota-Wartezustand, Migration und Checkpoints |
 | `src/audit_trail.py` | deterministische Plan-/Slice-Dokumentation und Entscheidungstabellen |
 | `src/gates.py` | Test-, Stop-, Validierungs-, Iterations- und Nutzergates |
 | `src/workflow.py` | asymmetrische Plan-, Slice- und Endreview-State-Maschine |
@@ -192,7 +198,7 @@ Die Audit-Komponente aus Slice 8 prüft bei Start eines Slice, dass genau diese 
 **Zweck:** Gemini durch Antigravity ersetzen, alle Adapter aktuell und konfigurierbar machen und Reviewer-Prozesse technisch read-only starten.
 **Anforderungen:** R-2, R-3; Teil von R-13.
 **Voraussichtlich betroffene Dateien:** `src/agent_adapters.py`, `src/agent_runtime.py`, `src/cli.py`, optional `src/agent_config.py` (neu), `tests/test_agent_runtime.py`, `tests/test_agent_adapters.py` (neu), `tests/test_cli.py`.
-**Umsetzungsstatus:** Implementierung und 154 Tests grün; Claude und Antigravity haben den Slice mit `OPEN_FINDINGS: NONE` freigegeben; lokaler Commit ist freigegeben.
+**Umsetzungsstatus:** Implementierung und ursprüngliche 154 Tests grün; Claude und Antigravity haben den Slice freigegeben. Die quotaorientierte Nachschärfung nach Slice 05 ist mit 182 Tests und vollständigem Antigravity-Abschlussreview ebenfalls doppelt freigegeben.
 
 **Akzeptanzkriterien:**
 
@@ -211,6 +217,7 @@ Die Audit-Komponente aus Slice 8 prüft bei Start eines Slice, dass genau diese 
 - Minimalprompts aller drei Adapter liefern den Abschlussmarker; ein eigener Isolationstest erzwingt je Reviewer mindestens einen tatsächlich erlaubten Werkzeugaufruf, damit ein tool-loser Smoke nicht fälschlich nur Authentifizierung und Erreichbarkeit bestätigt. Automatisierte Tests verwenden Fake-CLIs, Live-Smokes werden nach Installation oder Versionsänderung separat protokolliert.
 - Befehl, Version und Fähigkeiten werden geprüft. Eine noch nicht freigegebene Version hält mit Nutzergate an, bis die Kompatibilitätsmatrix erfolgreich ist.
 - Der vorgesehene Eingabekanal verarbeitet einen realistischen Langprompt, ohne Betriebssystemgrenzen für Kommandozeilenargumente zu überschreiten oder Prompttext in der Prozessliste offenzulegen.
+- Claude erhält ein einziges externes Reviewpaket statt offener Repositoryerkundung. Nur `Read` und der exakte Harness sind verfügbar; der Auftrag begrenzt den Lauf auf höchstens sechs Werkzeugaufrufe, das kleine JSON-Schema auf 12.000 Zeichen und Plugins, MCPs, Promptvorschläge sowie Sessionpersistenz bleiben deaktiviert.
 
 **Tests:** Befehlsaufbau, Ausgabeextraktion, Text-/JSON-/Streamfilter, Binaryauflösung, Version/Fähigkeiten, Timeout/Modell, Auth-/Quota-/Netz-/Berechtigungsfehler, tool-loser Minimalprompt getrennt vom erzwungenen Werkzeug-Isolationstest, Langprompt, Prozessende, Vollsuite je Reviewer im Read-only-Profil, negativer Schreibversuch auf eine versionierte Datei je CLI und Live-Smoke-Checkliste; vollständige Suite.
 **Abhängigkeiten:** Slice 2.
@@ -357,6 +364,7 @@ Die Audit-Komponente aus Slice 8 prüft bei Start eines Slice, dass genau diese 
 - Codex erstellt Plan/Slice und implementiert, gibt aber niemals eigene Arbeit frei.
 - Claude wird in jeder Korrekturrunde aufgerufen.
 - Antigravity wird erst nach Claude-Freigabe und je Anlauf genau einmal aufgerufen.
+- Antigravity erhält dabei immer den vollständigen Diff des aktuellen Slice seit dem persistierten Slice-Start-Commit. Der letzte Korrekturdelta darf hervorgehoben werden, ersetzt aber weder frühere Slice-Dateien noch den vollständigen Fingerprint.
 - Antigravity-Rückgabe führt zu Codex und anschließend wieder zu Claude.
 - Zwei Codex-Nachbesserungen ergeben drei Claude- und einen Antigravity-Aufruf.
 - Fehlendes oder unparsbares Verdikt ist Ablehnung, kein Überspringen.
@@ -364,7 +372,7 @@ Die Audit-Komponente aus Slice 8 prüft bei Start eines Slice, dass genau diese 
 - Prompts erhalten eine strukturierte, destillierte Sicht auf Planentscheidungen und den aktuellen Slice; die relevante Finding-/Reviewhistorie bleibt als Records erhalten und wird nicht durch blindes Abschneiden des ältesten Textes verfälscht.
 - Die neue Engine bleibt bis einschließlich Slice 17 hinter einem expliziten Entwicklungsmodus; der bestehende Defaultpfad bleibt startbar.
 
-**Tests:** deterministische Fake-Agent-Sequenzen für Freigabe, mehrfache Claude-Runden, Antigravity-Rückgabe, fehlendes Verdikt und Resume; vollständige Suite.
+**Tests:** deterministische Fake-Agent-Sequenzen für Freigabe, mehrfache Claude-Runden, Antigravity-Rückgabe, fehlendes Verdikt und Resume; ein Mehr-Runden-Fall beweist, dass Antigravity sowohl einen ausschließlich in Runde 1 geänderten Pfad als auch den letzten Korrekturpfad im vollständigen Slice-Paket erhält; vollständige Suite.
 **Abhängigkeiten:** Slice 3, Slice 6, Slice 7, Slice 8 und Slice 9.
 **Test-Riegel:** ja. **Red-State:** nein.
 **Risiko/Rückfalloption:** Aufrufreihenfolge; State-Transitions werden als geschlossene Tabelle getestet und noch nicht als Default aktiviert.
@@ -431,28 +439,33 @@ Die Audit-Komponente aus Slice 8 prüft bei Start eines Slice, dass genau diese 
 **Test-Riegel:** ja. **Red-State:** nein.
 **Risiko/Rückfalloption:** Befehlsausführung und Plattformquoting; Befehle werden als strukturierte Argumentlisten behandelt, Shellstrings nur als ausdrücklich deklarierte Kompatibilitätsoption.
 
-### Slice 14 — Definierte Instanzausfälle, Rundenlimit und Resume
+### Slice 14 — Quota-Wartezustand, definierte Instanzausfälle, Rundenlimit und Resume
 
-**Zweck:** Quota, fehlende Binary, Timeout, Prozessfehler und Iterationsgrenze als unterscheidbare, fortsetzbare Endzustände modellieren.
+**Zweck:** Quota mit Resetzeitpunkt als automatisch fortsetzbare Pause und fehlende Binary, Timeout, Prozessfehler sowie Iterationsgrenze als unterscheidbare, manuell fortsetzbare Haltzustände modellieren.
 **Anforderungen:** R-18; Abschluss von R-8 und Entscheidung §7.4.
 **Voraussichtlich betroffene Dateien:** `src/agent_runtime.py`, `src/workflow.py`, `src/workflow_state.py`, `src/cli.py`, `src/inbox_watcher.py` nur für Zustandsklassifikation, `tests/test_agent_runtime.py`, `tests/test_workflow.py`, `tests/test_orchestrator_quota.py`.
 
 **Akzeptanzkriterien:**
 
-- Quota endet mit 2, sonstiger Instanzausfall/Timeout mit 3, Policy-/Iterationshalt mit 4.
-- Meldung und State nennen Rolle, Slice/Work Unit, Schritt und Ursache.
-- Kein klassifizierter Instanzausfall wird intern automatisch wiederholt; erneuter Aufruf erfolgt nur durch eine bewusste Nutzerfortsetzung. Es gibt niemals einen Ersatzagenten.
+- Der Adapter trennt Quota von Auth-, Netzwerk-, Berechtigungs-, Timeout-, Binary- und generischen Prozessfehlern. Adapter-spezifische Parser akzeptieren absolute UTC-/Offset-Zeitstempel, gegen den Empfangszeitpunkt eindeutig auflösbare relative Angaben, strukturierte Providerfelder und bekannte Provider-Fließtextmuster; unbekannter oder mehrdeutiger Fließtext fällt fail-safe auf Exitcode 2 zurück.
+- Ein verlässlicher Resetzeitpunkt innerhalb der konfigurierten Grenze erzeugt `waiting_for_quota`; State und Meldung nennen Rolle, Slice/Work Unit, Schritt, unveränderten Providertext, Parseweg, Empfangszeitpunkt, Zeitzone, UTC-Zeitpunkt, Sicherheitszuschlag, Automatikstatus und Fortsetzungszähler.
+- Der Vordergrundprozess wartet unterbrechbar und ohne Busy Loop bis Resetzeitpunkt plus Sicherheitszuschlag. CLI und Watch-Modus zeigen im konfigurierten Intervall einen knappen Heartbeat mit Rolle, Task/Work Unit, lokalem und UTC-Fortsetzungszeitpunkt sowie verbleibender Wartezeit. Danach prüft der Orchestrator Slice-Scope, Diff-Fingerprint und Gatezustand erneut und ruft exakt dieselbe Rolle im selben Schritt auf.
+- Teilweise, leere oder unparsbare Ausgabe des quota-beendeten Aufrufs wird nicht als erfolgreich persistiert. Nachfolgende Rollen werden nicht vorgezogen.
+- Ohne verlässlichen Resetzeitpunkt, bei deaktivierter oder ausgeschöpfter Automatik oder bei Überschreitung der Maximalwartezeit endet Quota mit 2; sonstiger Instanzausfall/Timeout endet mit 3, Policy-/Iterationshalt mit 4.
+- Automatische Fortsetzungen sind begrenzt; Standard ist höchstens eine je blockiertem Schritt. Bleibt die Quota danach bestehen, hält der Lauf mit Exitcode 2 manuell resumefähig an.
+- Andere klassifizierte Instanzausfälle werden intern nicht automatisch wiederholt. Es gibt niemals einen Ersatzagenten.
 - Leere Ausgabe, unparsbare Ausgabehülle, `is_error`, Berechtigungsablehnung und generischer `Execution error` werden mit Exitcode und Invocation-ID als gescheiterter Instanzaufruf persistiert. Sie lösen weder ein stilles Wiederholen noch eine erfundene Prozesszustandsmeldung aus.
 - Fehlende Schreibbarkeit privater CLI-Runtimepfade, gesperrter erforderlicher Loopback oder fehlender Provider-Egress werden im Preflight beziehungsweise Aufruffehler eindeutig von einer Modellquota unterschieden.
 - Nach vier Rückgaben an Codex bleibt der Arbeitsbaum unverändert und State ist `awaiting_user_decision`.
 - Resume setzt am betroffenen Schritt fort; bereits committete Slices und persistierte Dokumentereignisse werden nicht wiederholt.
 - Resume aus jedem persistierbaren Haltezustand besteht den Preflight bei unverändertem, persistiertem In-Scope-Diff; scope-fremde oder nach dem Halt unerwartet veränderte Pfade halten weiterhin vor dem Agentenaufruf an.
+- Ein kontrollierter Abbruch während `waiting_for_quota` bewahrt den Zustand. Endet der WSL-/Terminalprozess, erfolgt kein unsichtbarer Neustart; `--resume` stellt den Wiedereinstieg her.
 - Codex-, Claude- und Antigravity-Ausfälle sind separat getestet.
 
-**Tests:** simulierte Quota und Ausfälle je Rolle, Timeout, leere/unparsbare JSON-Hülle, Berechtigungsablehnung und `Execution error`, vierte Rückgabe, Resume bei Codex/Claude/Antigravity, Resume aus jedem Gatezustand mit zulässigem In-Scope-Diff, Ablehnung scope-fremder Änderungen und unveränderter Commitverlauf; vollständige Suite.
+**Tests:** simulierte Quota und Ausfälle je Rolle; Parserfälle für absolute UTC-/Offset-Zeitstempel, relative Sekunden-/Minutenangaben mit festem Empfangszeitpunkt, strukturierte Providerfelder, bekannte Provider-Fließtextmuster sowie unbekannten und mehrdeutigen Fließtext; Fake Clock für künftigen, bereits erreichten und fehlenden Resetzeitpunkt, Sicherheitszuschlag, Maximalwartezeit, Warte-Heartbeat und dessen Intervall, Abbruch während des Wartens und fortbestehende Quota nach der erlaubten automatischen Fortsetzung; Timeout, leere/unparsbare JSON-Hülle, Berechtigungsablehnung und `Execution error`; vierte Rückgabe; Resume bei Codex/Claude/Antigravity; Resume aus jedem Gatezustand mit zulässigem In-Scope-Diff, Ablehnung scope-fremder Änderungen und unveränderter Commitverlauf; vollständige Suite.
 **Abhängigkeiten:** Slice 7, Slice 10, Slice 11, Slice 12 und Slice 13.
 **Test-Riegel:** ja. **Red-State:** nein.
-**Risiko/Rückfalloption:** Doppelte Seiteneffekte beim Resume; jeder Seiteneffekt erhält einen persistierten Idempotenzschlüssel.
+**Risiko/Rückfalloption:** Doppelte Seiteneffekte beim Resume oder ein beendeter WSL-/Terminalprozess während der Wartezeit; jeder Seiteneffekt erhält einen persistierten Idempotenzschlüssel, der Wartezustand bleibt auf Platte und ist manuell resumefähig.
 
 ### Slice 15 — Skriptbarer Dry-Run für alle Gates
 
@@ -464,7 +477,7 @@ Die Audit-Komponente aus Slice 8 prüft bei Start eines Slice, dass genau diese 
 
 - Ein Szenario kann Antworten je Rolle, Work Unit, Runde und Schritt vorgeben.
 - Für jedes harte Gate aus §2.5 existieren je ein positives und negatives Szenario: grüne/rote Validierung einschließlich expliziter Red-State-Ausnahme, unveränderte/nicht freigegebene beziehungsweise nach Freigabe erneut geänderte Tests, ausbleibende/ausgelöste Stop-Regel, vorhandenes/fehlendes oder unparsbares Verdikt, vollständiger/fehlender Finding-/Prüfrecord, vorhandenes/fehlendes Pre-Mortem, erwartete/unerwartete Datei, unveränderter/geänderter freigegebener Anker sowie zulässige/überschrittene Rundenzahl.
-- Quota und sonstige Instanzausfälle sind zusätzlich je Rolle simulierbar.
+- Quota und sonstige Instanzausfälle sind zusätzlich je Rolle simulierbar. Quota-Szenarien steuern eine Fake Clock und decken die vorgesehenen Zeitformate, verlässlichen, bereits erreichten, fehlenden und mehrdeutigen Resetzeitpunkt, Sicherheitszuschlag, Maximalwartezeit, Warte-Heartbeat, Unterbrechung, geänderten Fingerprint und weiterhin bestehende Quota nach der zulässigen automatischen Fortsetzung ab, ohne real zu schlafen.
 - Szenarien prüfen Aufrufreihenfolge, State, Exitcode, Auditdokument und Commitentscheidung.
 - Der positive Dry-Run durchläuft Plan, mehrere Slices und Endreview vollständig.
 - Dry-Run genehmigt nichts mehr bedingungslos.
@@ -504,12 +517,13 @@ Die Audit-Komponente aus Slice 8 prüft bei Start eines Slice, dass genau diese 
 
 - Jeder Inbox-Task erhält isolierten Run-State und eine stabile Run-ID.
 - Ein Nutzer-/Policy-Gate wird nicht als Fehlerretry oder Poison-Pill gezählt; der Watcher hält kontrolliert und lässt den Task resumefähig.
-- Quota und Instanzausfall behalten ihre Exitcode-/State-Klasse.
+- `waiting_for_quota` wird nicht als Fehlerretry oder Poison-Pill gezählt. Der Watcher hält den aktuellen Task und die Queue kontrolliert, zeigt denselben knappen Warte-Heartbeat wie die Einzel-CLI, wartet bei aktiver Automatik bis zum Resetzeitpunkt und setzt danach denselben Task und Schritt fort.
+- Quota ohne terminierbare automatische Fortsetzung und sonstige Instanzausfälle behalten ihre Exitcode-/State-Klasse. Nach einem Prozessneustart bleibt der Task über `--resume` fortsetzbar; ein externer Scheduler wird nicht vorausgesetzt.
 - Erfolgreiche Tasks werden erst nach vollständig committierten Slices und Endreview in die Outbox verschoben.
 - Commitbedingte Änderungen lösen keinen falschen Dirty-Tree-Preflight aus.
 - Locking, Success-Marker, FIFO und Retry bestehender technischer Fehler bleiben erhalten.
 
-**Tests:** bestehende Watcher-Suite plus Gatepause, Resume, Quota, Instanzausfall, mehrere Slice-Commits und erfolgreicher Outbox-Move; vollständige Suite.
+**Tests:** bestehende Watcher-Suite plus Gatepause, terminierte Quota-Wartepause mit Fake Clock, Quota ohne Resetzeitpunkt, Prozessunterbrechung und Resume, Instanzausfall, mehrere Slice-Commits und erfolgreicher Outbox-Move; vollständige Suite.
 **Abhängigkeiten:** Slice 16.
 **Test-Riegel:** ja. **Red-State:** nein.
 **Risiko/Rückfalloption:** Queue-Stau durch Gate; der Halt nennt Task und Run-ID eindeutig und verarbeitet keine Folgetasks still weiter.
@@ -608,10 +622,10 @@ Jeder Slice liefert einen grünen, startbaren Stand. Neue Komponenten werden bis
 | 11 | Nutzer- und Testgates halten resumefähig; positive und negative Pfade werden getestet, ohne den alten Default umzuschalten. |
 | 12 | Stop-Regeln ergänzen denselben getesteten Gate-Mechanismus; ohne ausgelöste Regel bleibt der Entwicklungsworkflow durchlaufbar. |
 | 13 | Die Validierungsmatrix wird mit grüner Vollsuite und Reviewer-Read-only-Profil integriert; rote Fälle halten kontrolliert. |
-| 14 | Alle Ausfälle und Pausen besitzen getestete Exitcodes und Resumewege; der positive Entwicklungsworkflow bleibt grün. |
-| 15 | Der skriptbare Dry-Run nutzt dieselbe State-Maschine und ersetzt nur Backends; alle Gate-Szenarien laufen ohne API-Abhängigkeit. |
+| 14 | Quota-Wartezustand, automatische Fortsetzung, sonstige Ausfälle und manuelle Resumewege sind mit Fake Clock getestet; der positive Entwicklungsworkflow bleibt grün. |
+| 15 | Der skriptbare Dry-Run nutzt dieselbe State-Maschine und ersetzt nur Backends; alle Gate- und Quota-Zeitszenarien laufen ohne API-Abhängigkeit oder reales Warten. |
 | 16 | Endreview und Korrektur-Work-Unit werden im Entwicklungsmodus vollständig durchlaufen; der Default bleibt unverändert. |
-| 17 | Watch-Modus integriert die bereits getesteten Zustände; bestehende FIFO-, Lock- und Erfolgspfade bleiben regressionsgeschützt. |
+| 17 | Watch-Modus integriert Quota-Warten und die übrigen pausierten Zustände; bestehende FIFO-, Lock- und Erfolgspfade bleiben regressionsgeschützt. |
 | 18 | Default, neuer Contract und Root-Instruktionen wechseln atomar; Altoptionen sind entfernt und der vollständige Default-E2E-Test ist grün. |
 | 19 | Nur Nutzertexte, Diagramm, Beispiel und Konsistenztests ändern sich; die in Slice 18 aktivierte Runtime bleibt unverändert. |
 
@@ -638,7 +652,7 @@ Jeder Slice liefert einen grünen, startbaren Stand. Neue Komponenten werden bis
 | R-15 Stop-Regeln | 5, 12, 18 | Dateigrenze und deklarierte fachliche Regeln |
 | R-16 Validierung | 13, 18 | Standard plus pathgebundene Befehle je Rolle |
 | R-17 Prüfspur | 8, 9, 19 | deterministische Slice-MD, Git-Historie und Nutzerdokumentation |
-| R-18 Instanzausfall | 1 (Vorbereitung), 7, 14 (primär), 17 | differenzierte States/Exitcodes einschließlich Runtime-/Loopback-/Egress-Diagnose und Resume je Rolle |
+| R-18 Quota/Instanzausfall | 1 (Vorbereitung), 7, 14 (primär), 15, 17 | terminierter Quota-Wartezustand mit automatischer Fortsetzung, Fake-Clock-Nachweis, differenzierte Exitcodes sowie Runtime-/Loopback-/Egress-Diagnose und Resume je Rolle |
 
 Keine Anforderung ist zurückgestellt.
 
@@ -696,7 +710,7 @@ Jeder Implementierungsslice plant Regressionstests und berührt deshalb voraussi
 | unerwartete Datei | Commit blockiert, Arbeitsbaum unverändert |
 | Ankeränderung | unverändert akzeptiert; Änderung hält mit Exitcode 4 und setzt Planreview zurück |
 | Iterationslimit | vier Rückgaben, State `awaiting_user_decision`, Exitcode 4 |
-| Instanzausfall | Codex, Claude und Antigravity: Quota, Timeout und fehlende Binary |
+| Quota/Instanzausfall | Codex, Claude und Antigravity: Quota mit künftigem, erreichtem, fehlendem und mehrdeutigem Resetzeitpunkt; Wartegrenze, Sicherheitszuschlag, Automatiklimit, Unterbrechung, Timeout und fehlende Binary |
 | CLI-Kompatibilität | bekannte Version, ungetestete Version, fehlende Fähigkeit, negativer Schreibtest und Langprompt |
 | Resume | jeder persistierbare Schritt ohne doppelten Commit oder doppelte Doku; dirty In-Scope erlaubt, scope-fremd blockiert |
 | Endreview | Branch-Diff, Korrektur-Work-Unit und erneuter vollständiger Review |
@@ -742,6 +756,7 @@ Die automatisierte Suite verwendet Fake-CLIs und verursacht keine API-Kosten. Sl
 | Test-Riegel blockiert Selbstumbau | Freigabe je Slice als Kernpfad planen und diffgebunden dokumentieren |
 | Marker-/Instruktionsdrift | zentrale Contractdefinition; Root-Instruktionen und aktive Marker atomar in Slice 18 umschalten, Nutzerdokumentation separat in Slice 19 synchronisieren |
 | Watcher behandelt Pause als Fehler | eigene pausierte Zustandsklasse, kein Retry-/Poison-Zähler |
+| WSL-/Terminalprozess endet während einer Quota-Wartezeit | `waiting_for_quota` vor dem Warten atomar persistieren; manueller Wiedereinstieg über `--resume`, kein vorausgesetzter externer Scheduler |
 | zu große Slices | Scope- und 10-Dateien-Prüfung vor Edit; Stop statt stiller Erweiterung |
 
 ---
@@ -1007,3 +1022,36 @@ VALIDATION_RESULT: PASS | python3 -m pytest tests/ -v | 0
 PLAN_READY: YES
 
 STATUS: DONE
+
+---
+
+## 16. Gemeinsamer Revision-6-/Revision-7-Review
+
+Claude prüfte zunächst den vollständigen Drei-Dokument-Diff und anschließend den vollständigen aktuellen Inhalt von Anforderungen, Arbeitsplan und Übergabe. Der Harness lief je Reviewrunde genau einmal mit 182 bestandenen Tests, sauberem Diffcheck und blockierter Schreibprobe.
+
+- F-001: Übergabeheader und Dateitabelle nannten noch Revision 6. Beide Stellen wurden auf Revision 7 korrigiert und von Claude geschlossen.
+- D-REV-02: Die Übergabe stellte den historischen Planungsbaseline-Stand mit Gemini-Fallback und 92 Tests als aktuell dar. §2 nennt nun HEAD `00017c99f3a1`, elf lokale Commits vor `master`, die committed Slices 01–05, den entfernten Fallback, den Übergangspfad bis Slice 10 und 182 Tests. Claude schloss das Finding.
+- Observation: Der Lieferumfang in den Anforderungen nannte noch Revision 6. Die Zeile wurde vor Antigravity auf Revision 7 nachgezogen.
+- Die reviewlokale ID D-REV-02 ist ausdrücklich nicht das bereits in Slice 05 für einen späteren Slice-10-Orchestrator-Test verwendete F-002.
+
+```text
+REVIEWER: claude
+FINDING_STATUS: F-001 | CLOSED | Revision labels are consistent at Revision 7.
+FINDING_STATUS: D-REV-02 | CLOSED | Handover now reports the verified post-Slice-05 repository state.
+PLAN_APPROVAL: YES
+PHASE1_APPROVAL: YES
+OPEN_FINDINGS: NONE
+STATUS: DONE
+```
+
+Antigravity prüfte anschließend den vollständigen finalen Inhalt aller drei Dokumente und den gesamten Diff gegen `HEAD`, nicht nur Claudes letzte Korrektur. Der Harness lief genau einmal mit 182 Tests, sauberem Diffcheck und blockierter Schreibprobe. A-01 weist nicht blockierend auf die unversionierte Editor-Lockdatei hin; sie bleibt vom Commit ausgeschlossen und muss spätestens vor dem strikten Unerwartet-Datei-Gate aus Slice 9 geschlossen oder ignoriert werden.
+
+Die erste Antigravity-Antwort verwendete trotz fachlicher Freigabe `FINAL_APPROVAL` statt des verlangten `PLAN_APPROVAL` und ließ `OPEN_FINDINGS` aus. Sie galt deshalb fail-closed nicht als Freigabe. Dieselbe Konversation gab ohne erneute Validierung und ohne neuen Reviewgegenstand anschließend die bereits getroffene Entscheidung mit dem korrekten Contract aus:
+
+```text
+REVIEWER: antigravity
+VALIDATION_RESULT: PASS | review_harness.py | 182 passed; diff check clean; write probe blocked
+PLAN_APPROVAL: YES
+OPEN_FINDINGS: NONE
+STATUS: DONE
+```

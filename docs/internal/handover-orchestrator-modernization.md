@@ -1,7 +1,7 @@
 # Übergabe: Modernisierung des Dual-Agent-Orchestrators
 
-**Stand:** 2026-08-10
-**Anforderungsstand:** Revision 5
+**Stand:** 2026-08-11
+**Anforderungsstand:** Revision 7
 **Zweck:** Kompakter, lokal verifizierter Wiedereinstieg und Übergabe an den Review des Arbeitsplans.
 **Ablage:** `docs/internal/`
 
@@ -11,7 +11,7 @@
 
 | Datei | Inhalt | Status |
 |---|---|---|
-| `requirements-orchestrator-modernization.md` | Anforderungen R-1 bis R-18 und verbindliche Architekturentscheidungen | Hauptdokument, Revision 5 |
+| `requirements-orchestrator-modernization.md` | Anforderungen R-1 bis R-18 und verbindliche Architekturentscheidungen | Hauptdokument, Revision 7 |
 | `orchestrator-modernization-work-plan.md` | Umsetzungsslices, Abhängigkeiten, Abdeckungsmatrix und Testplan | zur Nutzerprüfung vorgelegt |
 | `reference-target-repo-agents.md` | `AGENTS.md` der Ruhestandsuite | historische Verfahrensreferenz |
 | `reference-target-repo-slice-execution-rules.md` | manuelle Slice-Regeln der Ruhestandsuite | historische Verfahrensreferenz |
@@ -23,20 +23,20 @@ Die Referenzdateien belegen den manuellen Ausgangsprozess. Sie sind nicht die La
 
 ---
 
-## 2. Lokal verifizierter Repository-Stand
+## 2. Aktueller, lokal verifizierter Repository-Stand
 
 - Aktiver Branch: `feature/orchestrator-modernization`
 - Basis: `master` bei `0bd3bad`
-- HEAD vor den aktuellen Planungsänderungen: `75337eb`
-- Der Branch liegt vier Dokumentationscommits vor `master` und besitzt keinen konfigurierten Upstream.
-- Der Arbeitsbaum war vor den Änderungen dieser Planungsrunde sauber.
-- Gegenüber `master` war kein Quell- oder Testcode geändert.
-- Die vorhandene Pipeline arbeitet weiterhin mit Phase 1/Phase 2 und Claude→Gemini-Fallback.
+- Implementierungs-HEAD unmittelbar vor diesem autorisierten Dokumentationscommit: `00017c99f3a1` (`Harden reviewer context budgets`)
+- Der Branch liegt vor diesem Dokumentationscommit elf lokale Commits vor `master`; der kombinierte Revision-6-/Revision-7-Commit wird der zwölfte. Ein Upstream ist nicht konfiguriert.
+- Slices 01 bis 05 sind lokal committed. Gemini-Fallback und Agentenersetzung wurden in Slice 01 entfernt; konfigurierbare Drei-Agenten-Adapter, wurzelgebundene Dateischnappschüsse und die kanonische Branch-Diff-Quelle sind implementiert.
+- Der aktive Defaultpfad verwendet übergangsweise weiterhin die alte Phase-1-/Phase-2-Steuerung mit Codex und Claude. Der Antigravity-Adapter ist verfügbar, wird aber erst mit der neuen asymmetrischen State-Maschine aus Slice 10 als automatischer Abschlussreviewer verdrahtet.
+- Vor dem autorisierten Dokumentationscommit enthält der Arbeitsbaum ausschließlich die drei gemeinsam freigegebenen Revision-6-/Revision-7-Dokumentänderungen sowie eine nicht zu committene Editor-Lockdatei. Nach dem scopegenauen Commit bleibt nur die Lockdatei unversioniert zurück.
 - `.orchestrator/state.json` liegt in Version 2 vor und steht auf `phase: done`; er stammt vom 2026-02-23.
 - Verbindliche Validierung: `python3 -m pytest tests/ -v`
-- Ergebnis der erneuten lokalen Prüfung am 2026-08-10: **92 gesammelt, 92 bestanden**.
+- Ergebnis der erneuten lokalen Prüfung am 2026-08-11: **182 gesammelt, 182 bestanden**.
 
-Die frühere Angabe „91 bestanden, 1 übersprungen" wurde in Revision 4 korrigiert.
+Der frühere Planungsbaseline-Stand `75337eb` mit 92 Tests und noch vorhandenem Claude→Gemini-Fallback ist nur historische Analysebasis der Revisionen 1 bis 5 und beschreibt nicht mehr den aktuellen Arbeitsbaum.
 
 ---
 
@@ -44,10 +44,12 @@ Die frühere Angabe „91 bestanden, 1 übersprungen" wurde in Revision 4 korrig
 
 | Instanz | Befehl | Version | Verifizierter Non-Interactive-Modus |
 |---|---|---:|---|
-| Codex | `codex` | 0.147.0 | `codex exec`, read-only, ephemeral, JSONL |
-| Claude Code | `claude` | 2.1.226 | Print, JSON, Plan-Modus, keine Tools, keine Sessionpersistenz |
-| Antigravity | `agy` und `agy.exe` | 1.1.11 | Print, JSON, Plan-/Sandbox-Modus; natives Linux-`agy` bevorzugt |
+| Codex | `codex` | 0.147.0 | `codex exec`, `workspace-write`, ephemeral, JSONL und finale Nachrichtendatei |
+| Claude Code | `claude` | 2.1.227 | Print, Einzel-JSON, Safe Mode, externes Reviewpaket, `Read` plus exakter Harness, keine Sessionpersistenz |
+| Antigravity | `agy` | 1.1.12 | Print, JSON, Sandbox; natives Linux-`agy` bevorzugt, `agy.exe` bleibt explizit konfigurierbar |
 | Gemini CLI | `gemini` | 0.39.1 | noch installiert, im Zielsystem nicht mehr verwendet |
+
+Claude 2.1.227 und Antigravity 1.1.12 führten am 2026-08-11 die vollständigen Reviewer-Harnesses in schreibgeschützten Snapshots erfolgreich aus. Die folgenden Abschnitte 3.1 und 3.2 dokumentieren zusätzlich die ursprünglichen Positiv- und Negativ-Smokes vom 2026-08-10, nicht den heutigen Adapterendstand.
 
 ### 3.1 Positiver Live-Smoke
 
@@ -103,7 +105,7 @@ Live-Smokes werden nach Installation oder Versionsänderung ausgeführt, nicht b
 5. Nach beiden Freigaben erzeugt der Orchestrator den lokalen Commit.
 6. Nach dem letzten Slice folgt ein Endreview über den gesamten Branch-Diff.
 
-Es gibt keinen Agentenfallback. Der Ausfall einer Instanz hält den Lauf definiert an. Push und Merge bleiben Nutzerentscheidungen.
+Es gibt keinen Agentenfallback. Eine Quota mit eindeutigem Resetzeitpunkt versetzt den Python-Orchestrator in einen persistierten Wartezustand; nach dem Zeitpunkt plus Sicherheitszuschlag setzt er exakt denselben Rollenschritt automatisch fort. Ohne verlässlichen Zeitpunkt oder nach ausgeschöpfter Wartepolitik hält Quota mit Exitcode 2 manuell resumefähig an. Andere Instanzausfälle halten weiterhin definiert an. Push und Merge bleiben Nutzerentscheidungen.
 
 ---
 
@@ -115,13 +117,14 @@ Es gibt keinen Agentenfallback. Der Ausfall einer Instanz hält den Lauf definie
 4. Antigravity autorisiert Commits, der Orchestrator führt sie mechanisch aus.
 5. Pro Slice gelten höchstens zehn produktive Dateien; Pfadklassen sind konfigurierbar und unbekannte Dateien zählen produktiv.
 6. Nach vier Rückgaben an Codex hält die Arbeitseinheit mit `awaiting_user_decision` an; kein Reset und kein WIP-Commit.
-7. Exitcodes unterscheiden Erfolg, technischen Fehler, Quota, Instanzausfall und Nutzergate.
-8. Fachliche Rechenkerne verwenden strukturierte, nach Planfreigabe geschützte Ankerwerte.
-9. Marker sind schrittbezogen und weisen die Instanz separat aus; Phase- und Legacy-Marker entfallen mit State-Version 3.
-10. Der Umbau erfolgt inkrementell im Bestand; aktive Version-2-Läufe werden nicht künstlich in Slices migriert.
-11. Ein normaler Slice-Commit benötigt kein zusätzliches Nutzergate; risikobedingte Gates bleiben zwingend, `--manual-slice-gate` ist optional.
-12. Runtime-State und Logs bleiben flüchtig; Plan- und Slice-MDs bilden die committete Prüfspur, Git wird nach dem Commit historische Source of Truth.
-13. Die Root-Rollendatei heißt künftig `ANTIGRAVITY.md`; die historische Referenz `reference-target-repo-gemini.md` bleibt bestehen.
+7. Exitcodes unterscheiden Erfolg, technischen Fehler, nicht automatisch fortsetzbare Quota, Instanzausfall und Nutzergate.
+8. Terminierbare Quota wird als `waiting_for_quota` mit Rolle, Schritt, UTC-Resetzeitpunkt, Sicherheitszuschlag und begrenztem Automatikzähler persistiert. Der laufende Vordergrundprozess wartet ressourcenschonend und unterbrechbar, prüft Scope/Fingerprint erneut und ruft dieselbe Rolle auf; ohne laufenden Prozess bleibt `--resume` der Wiedereinstieg.
+9. Fachliche Rechenkerne verwenden strukturierte, nach Planfreigabe geschützte Ankerwerte.
+10. Marker sind schrittbezogen und weisen die Instanz separat aus; Phase- und Legacy-Marker entfallen mit State-Version 3.
+11. Der Umbau erfolgt inkrementell im Bestand; aktive Version-2-Läufe werden nicht künstlich in Slices migriert.
+12. Ein normaler Slice-Commit benötigt kein zusätzliches Nutzergate; risikobedingte Gates bleiben zwingend, `--manual-slice-gate` ist optional.
+13. Runtime-State und Logs bleiben flüchtig; Plan- und Slice-MDs bilden die committete Prüfspur, Git wird nach dem Commit historische Source of Truth.
+14. Die Root-Rollendatei heißt künftig `ANTIGRAVITY.md`; die historische Referenz `reference-target-repo-gemini.md` bleibt bestehen.
 
 ---
 
@@ -160,4 +163,4 @@ In dieser Planungsrunde werden ausschließlich folgende Dokumente geändert bezi
 - `handover-orchestrator-modernization.md`
 - `orchestrator-modernization-work-plan.md`
 
-Quellcode, Tests, Root-Rollendateien und Laufzeit-State bleiben unverändert. Es wird kein Commit und kein Push erzeugt. Nächster Schritt ist der Nutzerreview des Arbeitsplans einschließlich Slice-Zerlegung. Erst nach dessen Freigabe beginnt der formale Claude-/Antigravity-Reviewzyklus und anschließend die Slice-Implementierung.
+Die Slice-Implementierung läuft bereits. Revision 7 härtet nach Slice 05 den Claude-Aufruf quotaorientiert und präzisiert für Slice 10, dass Antigravity immer den vollständigen Slice-Diff statt nur des letzten Korrekturdeltas prüft. Die neue Quota-Wartepolitik aus Revision 6 wird weiterhin erst in Slice 14 implementiert und in Slices 15 und 17 vollständig über Dry-Run/Fake Clock beziehungsweise Watch-Modus abgesichert. Claude und Antigravity haben den kombinierten Revision-6-/Revision-7-Stand vollständig freigegeben; der lokale Dokumentationscommit ist autorisiert. Ein Push erfolgt nicht automatisch.
