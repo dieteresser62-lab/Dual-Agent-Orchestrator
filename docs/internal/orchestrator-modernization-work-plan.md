@@ -144,7 +144,7 @@ Jede Slice-MD wird unmittelbar vor Beginn ihres Slice angelegt und dann aus der 
 | 12 | [`docs/internal/slice-orchestrator-modernization-12-stop-rules-file-limit.md`](slice-orchestrator-modernization-12-stop-rules-file-limit.md) |
 | 13 | [`docs/internal/slice-orchestrator-modernization-13-path-validation-matrix.md`](slice-orchestrator-modernization-13-path-validation-matrix.md) |
 | 14 | [`docs/internal/slice-orchestrator-modernization-14-quota-failure-resume.md`](slice-orchestrator-modernization-14-quota-failure-resume.md) |
-| 15 | `docs/internal/slice-orchestrator-modernization-15-scripted-dry-run.md` |
+| 15 | [`docs/internal/slice-orchestrator-modernization-15-scripted-dry-run.md`](slice-orchestrator-modernization-15-scripted-dry-run.md) |
 | 16 | `docs/internal/slice-orchestrator-modernization-16-branch-final-review.md` |
 | 17 | `docs/internal/slice-orchestrator-modernization-17-watch-mode-pauses.md` |
 | 18 | `docs/internal/slice-orchestrator-modernization-18-default-cutover-contract.md` |
@@ -496,11 +496,13 @@ Die Audit-Komponente aus Slice 8 prüft bei Start eines Slice, dass genau diese 
 **Test-Riegel:** ja. **Red-State:** nein.
 **Risiko/Rückfalloption:** Doppelte Seiteneffekte beim Resume oder ein beendeter WSL-/Terminalprozess während der Wartezeit; jeder Seiteneffekt erhält einen persistierten Idempotenzschlüssel, der Wartezustand bleibt auf Platte und ist manuell resumefähig.
 
-### Slice 15 — Skriptbarer Dry-Run für alle Gates
+### [Slice 15 — Skriptbarer Dry-Run für alle Gates](slice-orchestrator-modernization-15-scripted-dry-run.md)
 
 **Zweck:** Den vollständigen neuen Ablauf einschließlich negativer Pfade ohne echte Agenten oder API-Kosten deterministisch testbar machen.
 **Anforderungen:** R-12.
 **Voraussichtlich betroffene Dateien:** `src/agent_runtime.py`, `src/workflow.py`, `src/cli.py`, `src/contracts.py`, `src/gates.py`, `tests/test_workflow.py`, `tests/test_cli.py`, optional `tests/fixtures/dry_run_scenarios/`.
+**Tatsächlich betroffene Dateien vor Review:** `src/dry_run_scenarios.py` (neu), `src/agent_runtime.py`, `src/cli.py`, `src/workflow.py`, `tests/test_dry_run_scenarios.py` (neu), `tests/test_agent_runtime.py`, `tests/test_language_consistency.py` sowie Arbeitsplan, Übergabe und Slice-MD. Contract- und Gatecode bleiben unverändert produktiv und werden über dieselbe `WorkflowEngine` ausgeführt.
+**Umsetzungsstatus:** strikt versioniertes JSON-Schema, Fake Clock, Scripted Agent-/Change-/Validation-/Commitbackends, exakte Rollen-/Work-Unit-/Runden-/Schrittbindung, Erwartungs- und Auditprüfung sowie CLI-Aktivierung hinter `--development-mode --dry-run --dry-run-scenario` sind additiv implementiert. Die Positiv-/Negativmatrix umfasst die harten Gates und Slice-14-Ausfallpfade; der positive Sessiontest läuft durch Plan und zwei Slices. 179 fokussierte Tests und 507 Tests der Vollsuite sowie Compile, aktiver v2-Dry-Run und Diffcheck sind grün; Claude und Antigravity haben den korrigierten Slice freigegeben und alle Findings sind geschlossen. Das produktive Endreview und dessen Erweiterung desselben Sessiontests bleiben entsprechend der unmittelbar folgenden Slice-16-Definition dort verankert; der aktive v2-Defaultpfad bleibt unverändert.
 
 **Akzeptanzkriterien:**
 

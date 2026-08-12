@@ -478,6 +478,12 @@ def run_validation_matrix(
 
 
 def build_dry_run_agent_output(agent_key: str, prompt: str) -> str:
+    if _contract_repair_excerpt(prompt).startswith("STATE-V3 CONTRACT"):
+        raise AgentProcessError(
+            "state-v3 dry-run requires an explicit --dry-run-scenario; "
+            "implicit approval is forbidden",
+            kind_hint=AgentFailureKind.OUTPUT,
+        )
     lines = [
         f"# Dry Run Output ({agent_key})",
         "",
@@ -939,10 +945,9 @@ def _contract_repair_excerpt(prompt: str) -> str:
         "CONTRACT (mandatory):",
         "Output format (Markdown):",
     )
-    for marker in markers:
-        start = prompt.rfind(marker)
-        if start >= 0:
-            return prompt[start:].strip()
+    start = max(prompt.rfind(marker) for marker in markers)
+    if start >= 0:
+        return prompt[start:].strip()
     return (
         "Preserve all semantic content and finish with the exact final line "
         "STATUS: DONE."

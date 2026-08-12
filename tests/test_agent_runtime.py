@@ -55,6 +55,36 @@ def test_orchestrator_config_has_no_agent_substitution_state() -> None:
     assert not hasattr(config, "claude_quota_reached")
 
 
+def test_v3_dry_run_never_invents_an_approval_without_scenario() -> None:
+    with pytest.raises(agent_runtime.AgentProcessError, match="--dry-run-scenario"):
+        agent_runtime.build_dry_run_agent_output(
+            "claude",
+            "STATE-V3 CONTRACT (mandatory for step slice-15):\n"
+            "SLICE_APPROVAL: 15 | YES|NO",
+        )
+
+
+def test_v3_dry_run_uses_the_last_real_contract_after_embedded_v2_text() -> None:
+    with pytest.raises(agent_runtime.AgentProcessError, match="--dry-run-scenario"):
+        agent_runtime.build_dry_run_agent_output(
+            "claude",
+            "repository diff contains CONTRACT (mandatory):\n"
+            "STATE-V3 CONTRACT (mandatory for step slice-15):\n"
+            "SLICE_APPROVAL: 15 | YES|NO",
+        )
+
+
+def test_legacy_v2_dry_run_remains_available_until_cutover() -> None:
+    output = agent_runtime.build_dry_run_agent_output(
+        "claude",
+        "repository diff contains STATE-V3 CONTRACT\n"
+        "CONTRACT (mandatory):\nPHASE2_APPROVAL: YES|NO\nOPEN_FINDINGS: NONE",
+    )
+
+    assert "PHASE2_APPROVAL: YES" in output
+    assert output.endswith("STATUS: DONE")
+
+
 def test_runtime_executes_structured_validation_request(tmp_path: Path) -> None:
     request = ValidationRequest(
         "a" * 64,

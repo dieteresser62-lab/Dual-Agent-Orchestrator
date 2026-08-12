@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+THIS_FILE = Path(__file__).resolve()
 SOURCE_DIRS = (ROOT / "src", ROOT / "tests")
 ROOT_FILES = (ROOT / "run_task", ROOT / "README.md", ROOT / "example-task.md")
 ALLOWLIST_FILENAME_PATTERNS: tuple[str, ...] = ()
@@ -57,7 +58,7 @@ def _iter_content_files() -> list[Path]:
 def _is_allowlisted_line(path: Path, line: str) -> bool:
     if "# allowlist:german" in line:
         return True
-    if path == Path(__file__).resolve():
+    if path == THIS_FILE:
         return True
     return False
 
@@ -66,8 +67,9 @@ def _collect_content_hits() -> list[str]:
     hits: list[str] = []
     for path in _iter_content_files():
         rel_path = path.relative_to(ROOT)
+        resolved_path = path.resolve()
         for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-            if _is_allowlisted_line(path.resolve(), line):
+            if _is_allowlisted_line(resolved_path, line):
                 continue
             for pattern in PATTERNS:
                 match = pattern.search(line)

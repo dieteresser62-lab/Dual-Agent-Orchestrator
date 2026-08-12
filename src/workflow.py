@@ -228,6 +228,7 @@ class WorkflowContext:
 
 @dataclass(frozen=True)
 class CodexInvocation:
+    work_unit_id: int
     step: WorkflowStep
     round_number: int
     prompt: str
@@ -235,6 +236,8 @@ class CodexInvocation:
 
 @dataclass(frozen=True)
 class ReviewerInvocation:
+    work_unit_id: int
+    step: WorkflowStep
     reviewer: AgentRole
     round_number: int
     evidence_kind: EvidenceKind
@@ -499,7 +502,9 @@ class WorkflowEngine:
             findings=history.findings,
             contract=contract,
         )
-        invocation = CodexInvocation(state.current_step, unit.round_number, prompt)
+        invocation = CodexInvocation(
+            unit.work_unit_id, state.current_step, unit.round_number, prompt
+        )
         state, output = self._invoke_role(
             state,
             history,
@@ -665,6 +670,8 @@ class WorkflowEngine:
             contract=contract,
         )
         invocation = ReviewerInvocation(
+            work_unit_id=unit.work_unit_id,
+            step=state.current_step,
             reviewer=reviewer,
             round_number=review_round,
             evidence_kind=evidence_kind,

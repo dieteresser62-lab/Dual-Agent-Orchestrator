@@ -472,6 +472,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Simulate agent responses and tests to validate workflow wiring.",
     )
     parser.add_argument(
+        "--development-mode",
+        action="store_true",
+        help="Enable the additive state-v3 development workflow until the Slice-18 cutover.",
+    )
+    parser.add_argument(
+        "--dry-run-scenario",
+        help="JSON scenario for a deterministic state-v3 dry-run without agent/API calls.",
+    )
+    parser.add_argument(
+        "--dry-run-report",
+        help="Optional path for the scripted dry-run JSON audit report.",
+    )
+    parser.add_argument(
         "--test-command",
         default=None,
         help="Shell command for tests. An explicit empty value skips tests.",
@@ -620,6 +633,13 @@ def parse_args(
         parser.error("task file must be provided either positionally or with --task-file, not both")
     args.task_file = args.task_file or args.task_path or DEFAULT_TASK_FILE
     del args.task_path
+
+    if args.dry_run_scenario and not args.dry_run:
+        parser.error("--dry-run-scenario requires --dry-run")
+    if args.dry_run_scenario and not args.development_mode:
+        parser.error("--dry-run-scenario requires --development-mode")
+    if args.dry_run_report and not args.dry_run_scenario:
+        parser.error("--dry-run-report requires --dry-run-scenario")
 
     cli_config_value = args.config if args.config not in {None, ""} else None
     env_config_value = env.get("RUN_TASK_CONFIG") or None
@@ -773,6 +793,32 @@ def run_cli(
         )
     if args.completed_state_replaced:
         logger.info("Existing state is completed (phase=done); starting a new run.")
+    if args.dry_run_scenario:
+        from dry_run_scenarios import DryRunScenarioError, run_dry_run_scenario_file
+        from state_io import write_file
+        from workflow import WorkflowExecutionError
+
+        task_file = find_task_file_fn(args.task_file)
+        scenario_path = Path(args.dry_run_scenario).expanduser().resolve()
+        try:
+            report = run_dry_run_scenario_file(scenario_path, task_file=task_file)
+        except (DryRunScenarioError, WorkflowExecutionError) as exc:
+            logger.error("Scripted dry-run failed: %s", exc)
+            return 1
+        if args.dry_run_report:
+            report_path = Path(args.dry_run_report).expanduser().resolve()
+            write_file(report_path, report.audit_document + "\n")
+            logger.info("Scripted dry-run report: %s", report_path)
+        logger.info(
+            "Scripted dry-run %s: exit=%s state=%s step=%s validations=%s commits=%s",
+            scenario_path.name,
+            report.result.exit_code,
+            report.result.state.current_work_unit.status.value,
+            report.result.state.current_step.value,
+            sum(report.validation_counts.values()),
+            sum(call.startswith("commit:") for call in report.calls),
+        )
+        return report.result.exit_code
     if args.watch:
         logger.info("Watch mode: live stream channels = %s.", args.agent_live_stream_channels)
         if args.skip_git_check_source == "watch-default":
