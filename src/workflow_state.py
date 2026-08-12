@@ -79,30 +79,213 @@ class GateRecord:
     status: GateStatus = GateStatus.CLEAR
     reason: GateReason = GateReason.NONE
     detail: str | None = None
+    fingerprint: str | None = None
+    paths: tuple[str, ...] = ()
+    resume_step: WorkflowStep | None = None
 
     def __post_init__(self) -> None:
         if self.status is GateStatus.CLEAR:
-            if self.reason is not GateReason.NONE or self.detail is not None:
-                raise WorkflowStateValidationError("a clear gate cannot carry a reason or detail")
+            if (
+                self.reason is not GateReason.NONE
+                or self.detail is not None
+                or self.fingerprint is not None
+                or self.paths
+                or self.resume_step is not None
+            ):
+                raise WorkflowStateValidationError("a clear gate cannot carry gate evidence")
         elif self.reason is GateReason.NONE:
             raise WorkflowStateValidationError("a non-clear gate requires a reason")
         if self.detail is not None and not self.detail.strip():
             raise WorkflowStateValidationError("gate detail must be non-empty when present")
+        if any(not isinstance(path, str) or not path.strip() for path in self.paths):
+            raise WorkflowStateValidationError(
+                "gate.paths entries must be non-empty strings"
+            )
+        if len(set(self.paths)) != len(self.paths):
+            raise WorkflowStateValidationError("gate.paths entries must be unique")
+        if self.paths != tuple(sorted(self.paths)):
+            raise WorkflowStateValidationError("gate.paths must be sorted")
+        if self.fingerprint is not None and not SHA256_PATTERN.fullmatch(self.fingerprint):
+            raise WorkflowStateValidationError(
+                "gate fingerprint must be a lowercase SHA-256 digest"
+            )
+        if (
+            self.fingerprint is not None
+            and self.reason is GateReason.TEST_CHANGE
+            and not self.paths
+        ):
+            raise WorkflowStateValidationError("test-change gate requires changed test paths")
+        if (
+            self.fingerprint is not None
+            and self.reason is GateReason.MANUAL_SLICE
+            and not self.paths
+        ):
+            raise WorkflowStateValidationError("manual-slice gate requires slice paths")
+        if self.reason in {GateReason.TEST_CHANGE, GateReason.MANUAL_SLICE}:
+            for raw_path in self.paths:
+                path = PurePosixPath(raw_path)
+                if (
+                    path.is_absolute()
+                    or "\\" in raw_path
+                    or not path.parts
+                    or ".." in path.parts
+                ):
+                    raise WorkflowStateValidationError(
+                        "file-bound gate paths must be repository-relative POSIX paths"
+                    )
+        if (
+            self.fingerprint is not None
+            and self.reason is GateReason.ANCHOR_CHANGE
+            and self.resume_step is None
+        ):
+            raise WorkflowStateValidationError("anchor-change gate requires a resume step")
 
-    def to_dict(self) -> dict[str, str | None]:
+    def to_dict(self) -> dict[str, object]:
         return {
             "status": self.status.value,
             "reason": self.reason.value,
             "detail": self.detail,
+            "fingerprint": self.fingerprint,
+            "paths": list(self.paths),
+            "resume_step": self.resume_step.value if self.resume_step is not None else None,
         }
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> GateRecord:
-        _require_exact_keys(raw, {"status", "reason", "detail"}, "gate")
+        legacy_keys = {"status", "reason", "detail"}
+        current_keys = {*legacy_keys, "fingerprint", "paths", "resume_step"}
+        if set(raw) == legacy_keys:
+            fingerprint = None
+            paths: tuple[str, ...] = ()
+            resume_step = None
+        else:
+            _require_exact_keys(raw, current_keys, "gate")
+            fingerprint = _optional_string(raw["fingerprint"], "gate.fingerprint")
+            paths = _string_tuple(raw["paths"], "gate.paths")
+            resume_raw = raw["resume_step"]
+            resume_step = (
+                None
+                if resume_raw is None
+                else _enum_value(WorkflowStep, resume_raw, "gate.resume_step")
+            )
         return cls(
             status=_enum_value(GateStatus, raw["status"], "gate.status"),
             reason=_enum_value(GateReason, raw["reason"], "gate.reason"),
             detail=_optional_string(raw["detail"], "gate.detail"),
+            fingerprint=fingerprint,
+            paths=paths,
+            resume_step=resume_step,
+        )
+
+
+@dataclass(frozen=True)
+class GateDecisionRecord:
+    approved: bool
+    reason: GateReason
+    fingerprint: str
+    paths: tuple[str, ...]
+    decided_by: str
+    decided_at: str
+    rationale: str
+    resume_step: WorkflowStep | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.approved, bool):
+            raise WorkflowStateValidationError("gate decision approved must be a boolean")
+        if self.reason not in {
+            GateReason.TEST_CHANGE,
+            GateReason.ANCHOR_CHANGE,
+            GateReason.MANUAL_SLICE,
+        }:
+            raise WorkflowStateValidationError(
+                "a fingerprint-bound decision requires a user-gate reason"
+            )
+        if not SHA256_PATTERN.fullmatch(self.fingerprint):
+            raise WorkflowStateValidationError(
+                "gate decision fingerprint must be a lowercase SHA-256 digest"
+            )
+        if any(not isinstance(path, str) or not path.strip() for path in self.paths):
+            raise WorkflowStateValidationError(
+                "gate decision paths entries must be non-empty strings"
+            )
+        if len(set(self.paths)) != len(self.paths):
+            raise WorkflowStateValidationError(
+                "gate decision paths entries must be unique"
+            )
+        if self.paths != tuple(sorted(self.paths)):
+            raise WorkflowStateValidationError("gate decision paths must be sorted")
+        _require_non_empty(self.decided_by, "gate decision decided_by")
+        _require_timestamp(self.decided_at, "gate decision decided_at")
+        _require_non_empty(self.rationale, "gate decision rationale")
+        if self.reason is GateReason.TEST_CHANGE and not self.paths:
+            raise WorkflowStateValidationError(
+                "test-change decision requires changed test paths"
+            )
+        if self.reason is GateReason.MANUAL_SLICE and not self.paths:
+            raise WorkflowStateValidationError(
+                "manual-slice decision requires slice paths"
+            )
+        if self.reason in {GateReason.TEST_CHANGE, GateReason.MANUAL_SLICE}:
+            for raw_path in self.paths:
+                path = PurePosixPath(raw_path)
+                if (
+                    path.is_absolute()
+                    or "\\" in raw_path
+                    or not path.parts
+                    or ".." in path.parts
+                ):
+                    raise WorkflowStateValidationError(
+                        "file-bound decision paths must be repository-relative POSIX paths"
+                    )
+        if self.reason is GateReason.ANCHOR_CHANGE and self.resume_step is None:
+            raise WorkflowStateValidationError(
+                "anchor-change decision requires a resume step"
+            )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "approved": self.approved,
+            "reason": self.reason.value,
+            "fingerprint": self.fingerprint,
+            "paths": list(self.paths),
+            "decided_by": self.decided_by,
+            "decided_at": self.decided_at,
+            "rationale": self.rationale,
+            "resume_step": self.resume_step.value if self.resume_step is not None else None,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: Mapping[str, Any]) -> GateDecisionRecord:
+        _require_exact_keys(
+            raw,
+            {
+                "approved",
+                "reason",
+                "fingerprint",
+                "paths",
+                "decided_by",
+                "decided_at",
+                "rationale",
+                "resume_step",
+            },
+            "gate decision",
+        )
+        if not isinstance(raw["approved"], bool):
+            raise WorkflowStateValidationError("gate decision approved must be a boolean")
+        resume_raw = raw["resume_step"]
+        return cls(
+            approved=raw["approved"],
+            reason=_enum_value(GateReason, raw["reason"], "gate decision reason"),
+            fingerprint=_string(raw["fingerprint"], "gate decision fingerprint"),
+            paths=_string_tuple(raw["paths"], "gate decision paths"),
+            decided_by=_string(raw["decided_by"], "gate decision decided_by"),
+            decided_at=_string(raw["decided_at"], "gate decision decided_at"),
+            rationale=_string(raw["rationale"], "gate decision rationale"),
+            resume_step=(
+                None
+                if resume_raw is None
+                else _enum_value(WorkflowStep, resume_raw, "gate decision resume_step")
+            ),
         )
 
 
@@ -184,6 +367,9 @@ class WorkUnitRecord:
     reviewer: Reviewer | None = None
     open_findings: tuple[str, ...] = ()
     completed_side_effects: tuple[str, ...] = ()
+    gate_decisions: tuple[GateDecisionRecord, ...] = ()
+    active_test_fingerprint: str | None = None
+    active_test_paths: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _require_positive_int(self.work_unit_id, "work_unit_id")
@@ -210,10 +396,46 @@ class WorkUnitRecord:
                 )
             if self.reviewer is None:
                 raise WorkflowStateValidationError("iteration-limit gate requires a reviewer")
+        if (self.active_test_fingerprint is None) != (not self.active_test_paths):
+            raise WorkflowStateValidationError(
+                "active test fingerprint and paths must be persisted together"
+            )
+        if self.active_test_fingerprint is not None:
+            if not SHA256_PATTERN.fullmatch(self.active_test_fingerprint):
+                raise WorkflowStateValidationError(
+                    "active test fingerprint must be a lowercase SHA-256 digest"
+                )
+            if self.active_test_paths != tuple(sorted(set(self.active_test_paths))):
+                raise WorkflowStateValidationError(
+                    "active test paths must be sorted and unique"
+                )
+            if not self.has_gate_approval(
+                GateReason.TEST_CHANGE,
+                self.active_test_fingerprint,
+                self.active_test_paths,
+            ):
+                raise WorkflowStateValidationError(
+                    "active test evidence requires an exact approved test gate decision"
+                )
 
     def has_completed_side_effect(self, key: str) -> bool:
         _require_non_empty(key, "side-effect key")
         return key in self.completed_side_effects
+
+    def has_gate_approval(
+        self,
+        reason: GateReason,
+        fingerprint: str,
+        paths: tuple[str, ...],
+    ) -> bool:
+        expected_paths = tuple(sorted(set(paths)))
+        return any(
+            decision.approved
+            and decision.reason is reason
+            and decision.fingerprint == fingerprint
+            and decision.paths == expected_paths
+            for decision in self.gate_decisions
+        )
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -229,13 +451,14 @@ class WorkUnitRecord:
             "reviewer": self.reviewer.value if self.reviewer is not None else None,
             "open_findings": list(self.open_findings),
             "completed_side_effects": list(self.completed_side_effects),
+            "gate_decisions": [item.to_dict() for item in self.gate_decisions],
+            "active_test_fingerprint": self.active_test_fingerprint,
+            "active_test_paths": list(self.active_test_paths),
         }
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> WorkUnitRecord:
-        _require_exact_keys(
-            raw,
-            {
+        legacy_keys = {
                 "work_unit_id",
                 "slice_id",
                 "kind",
@@ -248,9 +471,47 @@ class WorkUnitRecord:
                 "reviewer",
                 "open_findings",
                 "completed_side_effects",
-            },
-            "work unit",
-        )
+            }
+        decision_keys = {*legacy_keys, "gate_decisions"}
+        current_keys = {
+            *decision_keys,
+            "active_test_fingerprint",
+            "active_test_paths",
+        }
+        if set(raw) == legacy_keys:
+            gate_decisions: tuple[GateDecisionRecord, ...] = ()
+            active_test_fingerprint = None
+            active_test_paths: tuple[str, ...] = ()
+        elif set(raw) == decision_keys:
+            raw_decisions = raw["gate_decisions"]
+            if not isinstance(raw_decisions, list):
+                raise WorkflowStateValidationError("work_unit.gate_decisions must be a list")
+            gate_decisions = tuple(
+                GateDecisionRecord.from_dict(
+                    _mapping(item, f"work_unit.gate_decisions[{index}]")
+                )
+                for index, item in enumerate(raw_decisions)
+            )
+            active_test_fingerprint = None
+            active_test_paths = ()
+        else:
+            _require_exact_keys(raw, current_keys, "work unit")
+            raw_decisions = raw["gate_decisions"]
+            if not isinstance(raw_decisions, list):
+                raise WorkflowStateValidationError("work_unit.gate_decisions must be a list")
+            gate_decisions = tuple(
+                GateDecisionRecord.from_dict(
+                    _mapping(item, f"work_unit.gate_decisions[{index}]")
+                )
+                for index, item in enumerate(raw_decisions)
+            )
+            active_test_fingerprint = _optional_string(
+                raw["active_test_fingerprint"],
+                "work_unit.active_test_fingerprint",
+            )
+            active_test_paths = _string_tuple(
+                raw["active_test_paths"], "work_unit.active_test_paths"
+            )
         reviewer_raw = raw["reviewer"]
         return cls(
             work_unit_id=_positive_int(raw["work_unit_id"], "work_unit.work_unit_id"),
@@ -275,6 +536,9 @@ class WorkUnitRecord:
             completed_side_effects=_string_tuple(
                 raw["completed_side_effects"], "work_unit.completed_side_effects"
             ),
+            gate_decisions=gate_decisions,
+            active_test_fingerprint=active_test_fingerprint,
+            active_test_paths=active_test_paths,
         )
 
 
@@ -532,6 +796,136 @@ class WorkflowState:
         )
         return self._replace_current_unit(updated_unit, updated_at=updated_at)
 
+    def record_active_test_approval(
+        self,
+        fingerprint: str | None,
+        paths: tuple[str, ...] = (),
+        *,
+        updated_at: str | None = None,
+    ) -> WorkflowState:
+        """Bind audit projection to the exact test approval used by the active review."""
+        normalized_paths = tuple(sorted(set(paths)))
+        if fingerprint is None:
+            normalized_paths = ()
+        current = self.current_work_unit
+        if (
+            current.active_test_fingerprint == fingerprint
+            and current.active_test_paths == normalized_paths
+        ):
+            return self
+        updated_unit = replace(
+            current,
+            active_test_fingerprint=fingerprint,
+            active_test_paths=normalized_paths,
+        )
+        return self._replace_current_unit(updated_unit, updated_at=updated_at)
+
+    def await_user_gate(
+        self,
+        *,
+        reason: GateReason,
+        detail: str,
+        fingerprint: str,
+        paths: tuple[str, ...] = (),
+        gate_step: WorkflowStep | None = None,
+        resume_step: WorkflowStep | None = None,
+        updated_at: str | None = None,
+    ) -> WorkflowState:
+        current = self.current_work_unit
+        normalized_paths = tuple(sorted(set(paths)))
+        gate = GateRecord(
+            status=GateStatus.AWAITING_USER_DECISION,
+            reason=reason,
+            detail=detail,
+            fingerprint=fingerprint,
+            paths=normalized_paths,
+            resume_step=resume_step,
+        )
+        next_step = gate_step or current.current_step
+        if current.status is WorkUnitStatus.AWAITING_USER_DECISION:
+            if current.gate == gate and current.current_step is next_step:
+                return self
+            raise WorkflowStateValidationError(
+                "cannot replace an unresolved user gate with different evidence"
+            )
+        if current.status is not WorkUnitStatus.IN_PROGRESS:
+            raise WorkflowStateValidationError(
+                "only an in-progress work unit can enter a user gate"
+            )
+        updated_unit = replace(
+            current,
+            status=WorkUnitStatus.AWAITING_USER_DECISION,
+            current_step=next_step,
+            gate=gate,
+        )
+        slices = tuple(
+            replace(item, status=SliceStatus.AWAITING_USER_DECISION)
+            if item.slice_id == self.current_slice_id
+            else item
+            for item in self.slices
+        )
+        return self._replace_current_unit(
+            updated_unit, slices=slices, updated_at=updated_at
+        )
+
+    def record_user_gate_decision(
+        self,
+        *,
+        approved: bool,
+        fingerprint: str,
+        paths: tuple[str, ...],
+        decided_by: str,
+        decided_at: str,
+        rationale: str,
+        updated_at: str | None = None,
+    ) -> WorkflowState:
+        current = self.current_work_unit
+        if current.status is not WorkUnitStatus.AWAITING_USER_DECISION:
+            raise WorkflowStateValidationError("workflow is not awaiting a user decision")
+        gate = current.gate
+        if gate.fingerprint is None:
+            raise WorkflowStateValidationError(
+                "this gate is not fingerprint-bound; use the legacy resume transition"
+            )
+        normalized_paths = tuple(sorted(set(paths)))
+        if fingerprint != gate.fingerprint or normalized_paths != gate.paths:
+            raise WorkflowStateValidationError(
+                "user decision does not match the persisted gate fingerprint and paths"
+            )
+        decision = GateDecisionRecord(
+            approved=approved,
+            reason=gate.reason,
+            fingerprint=fingerprint,
+            paths=normalized_paths,
+            decided_by=decided_by,
+            decided_at=decided_at,
+            rationale=rationale,
+            resume_step=gate.resume_step,
+        )
+        updated_unit = replace(
+            current,
+            gate_decisions=(*current.gate_decisions, decision),
+            status=(
+                WorkUnitStatus.IN_PROGRESS
+                if approved
+                else WorkUnitStatus.AWAITING_USER_DECISION
+            ),
+            gate=GateRecord() if approved else gate,
+        )
+        slices = self.slices
+        if approved:
+            slices = tuple(
+                replace(item, status=SliceStatus.IN_PROGRESS)
+                if item.slice_id == self.current_slice_id
+                else item
+                for item in self.slices
+            )
+        return self._replace_current_unit(
+            updated_unit,
+            slices=slices,
+            updated_at=updated_at or decided_at,
+        )
+
     def record_review_denial(
         self,
         *,
@@ -585,6 +979,10 @@ class WorkflowState:
         current = self.current_work_unit
         if current.status is not WorkUnitStatus.AWAITING_USER_DECISION:
             raise WorkflowStateValidationError("workflow is not awaiting a user decision")
+        if current.gate.fingerprint is not None:
+            raise WorkflowStateValidationError(
+                "fingerprint-bound gate requires an explicit recorded user decision"
+            )
         updated_unit = replace(
             current,
             status=WorkUnitStatus.IN_PROGRESS,
@@ -724,6 +1122,20 @@ def _now_iso() -> str:
 def _require_non_empty(value: str, label: str) -> None:
     if not isinstance(value, str) or not value.strip():
         raise WorkflowStateValidationError(f"{label} must be a non-empty string")
+
+
+def _require_timestamp(value: str, label: str) -> None:
+    _require_non_empty(value, label)
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise WorkflowStateValidationError(
+            f"{label} must be an ISO-8601 timestamp"
+        ) from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise WorkflowStateValidationError(
+            f"{label} must include an explicit timezone offset"
+        )
 
 
 def _require_positive_int(value: int, label: str) -> None:

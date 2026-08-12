@@ -375,6 +375,31 @@ def build_parser() -> argparse.ArgumentParser:
         help="Require confirmation before starting phase 2.",
     )
     parser.add_argument(
+        "--manual-slice-gate",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Require a resumable explicit user approval before each v3 slice commit.",
+    )
+    gate_group = parser.add_mutually_exclusive_group()
+    gate_group.add_argument(
+        "--approve-gate",
+        action="store_true",
+        help="With --resume, approve the exact fingerprint-bound v3 user gate in state.",
+    )
+    gate_group.add_argument(
+        "--reject-gate",
+        action="store_true",
+        help="With --resume, reject the exact fingerprint-bound v3 user gate in state.",
+    )
+    parser.add_argument(
+        "--gate-actor",
+        help="User or authority recorded for an explicit v3 gate decision.",
+    )
+    parser.add_argument(
+        "--gate-rationale",
+        help="Rationale recorded for an explicit v3 gate decision.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Simulate agent responses and tests to validate workflow wiring.",
@@ -502,6 +527,20 @@ def parse_args(
     repo_config = load_repo_config(config_path)
     args.repo_config = repo_config
     args.config_file = repo_config.source
+    if args.manual_slice_gate is None:
+        args.manual_slice_gate = repo_config.workflow.manual_slice_gate
+
+    gate_decision = True if args.approve_gate else False if args.reject_gate else None
+    if gate_decision is not None:
+        if args.resume is not True:
+            parser.error("--approve-gate/--reject-gate requires explicit --resume")
+        if not (args.gate_actor or "").strip():
+            parser.error("an explicit gate decision requires --gate-actor")
+        if not (args.gate_rationale or "").strip():
+            parser.error("an explicit gate decision requires --gate-rationale")
+    elif args.gate_actor is not None or args.gate_rationale is not None:
+        parser.error("--gate-actor/--gate-rationale require --approve-gate or --reject-gate")
+    args.gate_decision = gate_decision
 
     if args.test_command is None:
         if "RUN_TASK_TEST_CMD" in env:

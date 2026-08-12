@@ -140,7 +140,7 @@ Jede Slice-MD wird unmittelbar vor Beginn ihres Slice angelegt und dann aus der 
 | 8 | [`docs/internal/slice-orchestrator-modernization-08-audit-trail.md`](slice-orchestrator-modernization-08-audit-trail.md) |
 | 9 | [`docs/internal/slice-orchestrator-modernization-09-branch-commit-transaction.md`](slice-orchestrator-modernization-09-branch-commit-transaction.md) |
 | 10 | [`docs/internal/slice-orchestrator-modernization-10-asymmetric-review-chain.md`](slice-orchestrator-modernization-10-asymmetric-review-chain.md) |
-| 11 | `docs/internal/slice-orchestrator-modernization-11-test-change-gate.md` |
+| 11 | [`docs/internal/slice-orchestrator-modernization-11-resumable-user-gates.md`](slice-orchestrator-modernization-11-resumable-user-gates.md) |
 | 12 | `docs/internal/slice-orchestrator-modernization-12-stop-rules-file-limit.md` |
 | 13 | `docs/internal/slice-orchestrator-modernization-13-path-validation-matrix.md` |
 | 14 | `docs/internal/slice-orchestrator-modernization-14-agent-failures-resume.md` |
@@ -396,11 +396,13 @@ Die Audit-Komponente aus Slice 8 prüft bei Start eines Slice, dass genau diese 
 **Test-Riegel:** ja. **Red-State:** nein.
 **Risiko/Rückfalloption:** Aufrufreihenfolge; State-Transitions werden als geschlossene Tabelle getestet und noch nicht als Default aktiviert.
 
-### Slice 11 — Teständerungsriegel und Nutzerfreigabe
+### [Slice 11 — Resumefähige Nutzer-Gates](slice-orchestrator-modernization-11-resumable-user-gates.md)
 
 **Zweck:** Jede geänderte oder unversionierte Testdatei vor dem Review erkennen und an eine diffgebundene Nutzerfreigabe koppeln.
 **Anforderungen:** R-10; Entscheidung §7.8.
 **Voraussichtlich betroffene Dateien:** `src/gates.py` (neu), `src/workflow.py`, `src/workflow_state.py`, `src/cli.py`, `src/repo_changes.py`, `tests/test_gates.py` (neu), `tests/test_workflow.py`.
+**Tatsächlich betroffene Dateien vor Review:** `src/gates.py` (neu), `src/workflow.py`, `src/workflow_state.py`, `src/cli.py`, `src/repo_changes.py`, `src/audit_trail.py`, `tests/test_gates.py` (neu), `tests/test_workflow.py`, `tests/test_workflow_state.py`, `tests/test_repo_changes.py`, `tests/test_cli.py`, `tests/test_audit_trail.py` sowie Arbeitsplan, Übergabe und Slice-MD.
+**Umsetzungsstatus:** additive fingerprintgebundene Test-, manuelle Slice- und Anker-Gates implementiert; 153 fokussierte Gate-/Workflow-/State-/Diff-/CLI-/Audit-Tests sowie die vollständige Suite mit 376 Tests, Compile, aktiver v2-Dry-Run und Diffcheck sind grün. Claude und Antigravity haben den finalen Slice freigegeben; alle Findings sind geschlossen, der lokale Commit ist autorisiert und der aktive v2-Defaultpfad bleibt unverändert.
 
 **Akzeptanzkriterien:**
 

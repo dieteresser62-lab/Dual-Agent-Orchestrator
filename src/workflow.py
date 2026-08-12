@@ -5,9 +5,15 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Protocol
 
-from audit_trail import AuditEvent, ReviewAuditEvent, ValidationAuditEvent
+from audit_trail import (
+    AuditEvent,
+    AuthorizedTestChanges,
+    ReviewAuditEvent,
+    ValidationAuditEvent,
+)
 from contracts import (
     AgentRole,
+    AnchorRecord,
     ApprovalMarker,
     CodexContractResult,
     CodexStepContract,
@@ -22,12 +28,15 @@ from contracts import (
     validate_codex_response,
     validate_review_response,
 )
+from gates import AnchorChangeEvidence, TestChangeEvidence, detect_anchor_changes
 from prompts import (
     build_v3_codex_prompt,
     build_v3_review_contract,
     build_v3_review_prompt,
 )
 from workflow_state import (
+    GateDecisionRecord,
+    GateReason,
     Reviewer,
     WorkflowState,
     WorkflowStep,
@@ -58,6 +67,7 @@ class WorkflowChanges:
     fingerprint: str
     paths: tuple[str, ...]
     full_diff: str
+    gate_paths: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.start_commit.strip():
@@ -69,6 +79,14 @@ class WorkflowChanges:
             raise ValueError("workflow change paths must be sorted, unique, and non-empty")
         if not self.full_diff.strip():
             raise ValueError("workflow changes require the complete slice diff")
+        normalized_gate_paths = tuple(sorted(set(self.gate_paths)))
+        if self.gate_paths and normalized_gate_paths != self.gate_paths:
+            raise ValueError("workflow gate paths must be sorted and unique")
+
+    @property
+    def user_gate_paths(self) -> tuple[str, ...]:
+        """Include historical rename paths when the driver captured them."""
+        return self.gate_paths or self.paths
 
 
 @dataclass(frozen=True)
@@ -78,6 +96,10 @@ class WorkflowContext:
     slice_summary: str
     expected_test_files: tuple[str, ...] = ()
     test_changes_approved: bool = False
+    test_path_patterns: tuple[str, ...] = ("tests/**",)
+    manual_slice_gate: bool = False
+    approved_anchors: tuple[AnchorRecord, ...] = ()
+    current_anchors: tuple[AnchorRecord, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.assignment.strip():
@@ -89,10 +111,33 @@ class WorkflowContext:
         normalized = tuple(sorted(set(self.expected_test_files)))
         if normalized != self.expected_test_files:
             raise ValueError("expected test files must be sorted and unique")
+        if (
+            not self.test_path_patterns
+            or any(not pattern.strip() for pattern in self.test_path_patterns)
+            or len(set(self.test_path_patterns)) != len(self.test_path_patterns)
+        ):
+            raise ValueError("test path patterns must be non-empty and unique")
 
     @property
     def distilled_context(self) -> str:
-        return f"PLAN\n{self.distilled_plan}\n\nCURRENT SLICE\n{self.slice_summary}"
+        approved = self._render_anchors(self.approved_anchors)
+        current = self._render_anchors(self.current_anchors)
+        return (
+            f"PLAN\n{self.distilled_plan}\n\n"
+            f"CURRENT SLICE\n{self.slice_summary}\n\n"
+            f"APPROVED PLAN ANCHORS\n{approved}\n\n"
+            f"CURRENT ANCHORS\n{current}"
+        )
+
+    @staticmethod
+    def _render_anchors(anchors: tuple[AnchorRecord, ...]) -> str:
+        if not anchors:
+            return "NONE"
+        return "\n".join(
+            f"{item.anchor_id} | {item.origin} | {item.input_fixture} | "
+            f"{item.expected} | {item.tolerance}"
+            for item in sorted(anchors, key=lambda anchor: anchor.anchor_id)
+        )
 
 
 @dataclass(frozen=True)
@@ -138,6 +183,10 @@ class WorkflowDriver(Protocol):
     def collect_correction_delta(
         self, previous_fingerprint: str, current_fingerprint: str
     ) -> str: ...
+
+    def detect_test_changes(
+        self, changes: WorkflowChanges, patterns: tuple[str, ...]
+    ) -> TestChangeEvidence | None: ...
 
     def validate(self, changes: WorkflowChanges) -> ValidationAttestation: ...
 
@@ -185,6 +234,17 @@ class WorkflowRunResult:
     def completed(self) -> bool:
         return self.state.current_work_unit.status is WorkUnitStatus.COMPLETED
 
+    @property
+    def exit_code(self) -> int:
+        return (
+            4
+            if self.state.current_work_unit.status
+            is WorkUnitStatus.AWAITING_USER_DECISION
+            else 0
+            if self.completed
+            else 1
+        )
+
 
 class WorkflowEngine:
     """Additive state-v3 engine for the asymmetric Codex/Claude/Antigravity chain."""
@@ -203,6 +263,12 @@ class WorkflowEngine:
         if active_history.work_unit_id != current.work_unit_id:
             raise WorkflowExecutionError("workflow history belongs to a different work unit")
         if current.status is not WorkUnitStatus.IN_PROGRESS:
+            return WorkflowRunResult(state, active_history)
+
+        state, active_history, anchor_halted = self._apply_anchor_gate(
+            state, context, active_history
+        )
+        if anchor_halted:
             return WorkflowRunResult(state, active_history)
 
         for _ in range(100):
@@ -235,13 +301,47 @@ class WorkflowEngine:
                     return WorkflowRunResult(state, active_history)
                 continue
             if step is WorkflowStep.SLICE_COMMIT:
-                return self._commit(state, active_history)
+                return self._commit(state, active_history, context)
             if step is WorkflowStep.COMPLETED:
                 return WorkflowRunResult(state, active_history)
             raise WorkflowExecutionError(
                 f"step {step.value} is outside the Slice-10 development engine"
             )
         raise WorkflowExecutionError("workflow exceeded its deterministic transition bound")
+
+    def decide_current_gate(
+        self,
+        state: WorkflowState,
+        history: WorkflowHistory,
+        *,
+        approved: bool,
+        decided_by: str,
+        decided_at: str,
+        rationale: str,
+    ) -> WorkflowRunResult:
+        """Record an explicit decision against the exact persisted gate evidence."""
+        if history.work_unit_id != state.current_work_unit_id:
+            raise WorkflowExecutionError(
+                "workflow history belongs to a different gated work unit"
+            )
+        gate = state.current_work_unit.gate
+        if gate.fingerprint is None:
+            raise WorkflowExecutionError(
+                "current gate is not a fingerprint-bound Slice-11 user gate"
+            )
+        try:
+            updated = state.record_user_gate_decision(
+                approved=approved,
+                fingerprint=gate.fingerprint,
+                paths=gate.paths,
+                decided_by=decided_by,
+                decided_at=decided_at,
+                rationale=rationale,
+            )
+        except ValueError as exc:
+            raise WorkflowExecutionError(f"invalid user gate decision: {exc}") from exc
+        self.driver.checkpoint(updated, history)
+        return WorkflowRunResult(updated, history)
 
     def _run_codex(
         self,
@@ -250,7 +350,10 @@ class WorkflowEngine:
         history: WorkflowHistory,
     ) -> tuple[WorkflowState, WorkflowHistory]:
         unit = state.current_work_unit
-        is_plan = unit.kind is WorkUnitKind.PLAN
+        is_plan = state.current_step in (
+            WorkflowStep.CODEX_PLAN,
+            WorkflowStep.CODEX_PLAN_REVISION,
+        )
         readiness = ReadinessMarker.PLAN if is_plan else ReadinessMarker.IMPLEMENTATION
         contract = CodexStepContract(
             name=f"work-unit-{unit.work_unit_id}-{state.current_step.value}",
@@ -259,7 +362,9 @@ class WorkflowEngine:
             round_number=unit.round_number,
             require_test_files_record=not is_plan,
             expected_test_files=context.expected_test_files if not is_plan else (),
-            test_changes_approved=context.test_changes_approved,
+            # R-10 gates after implementation readiness and before review. Codex must be
+            # able to report test paths before a user approval exists.
+            test_changes_approved=True,
         )
         prompt = build_v3_codex_prompt(
             assignment=context.assignment,
@@ -294,6 +399,7 @@ class WorkflowEngine:
         reviewer: AgentRole,
     ) -> tuple[WorkflowState, WorkflowHistory]:
         unit = state.current_work_unit
+        is_plan_review = state.current_step is WorkflowStep.CLAUDE_PLAN_REVIEW
         if reviewer is AgentRole.ANTIGRAVITY and (
             history.latest_claude_review is None
             or history.latest_claude_review.approval is not True
@@ -304,6 +410,33 @@ class WorkflowEngine:
         start_commit = state.current_slice.start_commit or state.branch_base
         changes = self.driver.collect_changes(start_commit)
         self._validate_change_boundary(state, changes, unit.kind)
+        test_changes_approved = context.test_changes_approved
+        if not test_changes_approved:
+            test_evidence = self.driver.detect_test_changes(
+                changes, context.test_path_patterns
+            )
+            if test_evidence is not None:
+                test_changes_approved = test_changes_approved or unit.has_gate_approval(
+                    GateReason.TEST_CHANGE,
+                    test_evidence.fingerprint,
+                    test_evidence.paths,
+                )
+                if not test_changes_approved:
+                    state = state.await_user_gate(
+                        reason=GateReason.TEST_CHANGE,
+                        detail="test changes require explicit approval before review",
+                        fingerprint=test_evidence.fingerprint,
+                        paths=test_evidence.paths,
+                    )
+                    self.driver.checkpoint(state, history)
+                    return state, history
+                state = state.record_active_test_approval(
+                    test_evidence.fingerprint, test_evidence.paths
+                )
+            else:
+                state = state.record_active_test_approval(None)
+        else:
+            state = state.record_active_test_approval(None)
         if reviewer is AgentRole.ANTIGRAVITY:
             claude_validation = history.latest_claude_review.validation
             if (
@@ -327,7 +460,7 @@ class WorkflowEngine:
             reviewer=reviewer,
             approval_marker=(
                 ApprovalMarker.PLAN
-                if unit.kind is WorkUnitKind.PLAN
+                if is_plan_review
                 else ApprovalMarker.SLICE
             ),
             slice_id=f"{unit.slice_id:02d}",
@@ -335,9 +468,9 @@ class WorkflowEngine:
             review_fingerprint=changes.fingerprint,
             validation_attestation=attestation,
             expected_test_files=(
-                context.expected_test_files if unit.kind is not WorkUnitKind.PLAN else ()
+                context.expected_test_files if not is_plan_review else ()
             ),
-            test_changes_approved=context.test_changes_approved,
+            test_changes_approved=test_changes_approved,
         )
         if reviewer is AgentRole.CLAUDE and history.last_claude_fingerprint is not None:
             evidence_kind = EvidenceKind.CORRECTION_DELTA
@@ -376,13 +509,27 @@ class WorkflowEngine:
         if result.stopped:
             raise WorkflowExecutionError(f"{reviewer.value} requested a workflow stop")
         history = self._record_review(
-            history, unit.slice_id, review_round, result, changes.fingerprint
+            history,
+            unit.slice_id,
+            review_round,
+            result,
+            changes.fingerprint,
+            track_slice_approval=not is_plan_review,
         )
 
         if result.approval is True:
             if reviewer is AgentRole.CLAUDE:
-                if unit.kind is WorkUnitKind.PLAN:
+                if is_plan_review and unit.kind is WorkUnitKind.PLAN:
                     state = state.complete_current_work_unit()
+                elif is_plan_review:
+                    decision = self._latest_anchor_approval(state)
+                    if decision is None or decision.resume_step is None:
+                        raise WorkflowExecutionError(
+                            "anchor plan review has no persisted resume target"
+                        )
+                    key = f"anchor-plan-reviewed:{decision.fingerprint}"
+                    state = state.mark_side_effect_completed(key)
+                    state = state.with_current_step(decision.resume_step)
                 else:
                     state = state.with_current_step(
                         WorkflowStep.ANTIGRAVITY_SLICE_REVIEW
@@ -473,6 +620,8 @@ class WorkflowEngine:
         round_number: int,
         result: ContractResult,
         fingerprint: str,
+        *,
+        track_slice_approval: bool = True,
     ) -> WorkflowHistory:
         event = ReviewAuditEvent(
             event_id=len(history.events) + 1,
@@ -485,8 +634,9 @@ class WorkflowEngine:
             "events": (*history.events, event),
         }
         if result.reviewer is AgentRole.CLAUDE:
-            updates["last_claude_fingerprint"] = fingerprint
-            updates["latest_claude_review"] = result
+            if track_slice_approval:
+                updates["last_claude_fingerprint"] = fingerprint
+                updates["latest_claude_review"] = result
         else:
             updates["latest_antigravity_review"] = result
         return replace(history, **updates)
@@ -495,6 +645,7 @@ class WorkflowEngine:
         self,
         state: WorkflowState,
         history: WorkflowHistory,
+        context: WorkflowContext,
     ) -> WorkflowRunResult:
         start_commit = state.current_slice.start_commit
         if start_commit is None:
@@ -527,6 +678,18 @@ class WorkflowEngine:
             for finding in history.findings
         ):
             raise WorkflowExecutionError("slice commit requires no open blockers")
+        gate_paths = changes.user_gate_paths
+        if context.manual_slice_gate and not state.current_work_unit.has_gate_approval(
+            GateReason.MANUAL_SLICE, changes.fingerprint, gate_paths
+        ):
+            state = state.await_user_gate(
+                reason=GateReason.MANUAL_SLICE,
+                detail="manual slice approval is required before commit",
+                fingerprint=changes.fingerprint,
+                paths=gate_paths,
+            )
+            self.driver.checkpoint(state, history)
+            return WorkflowRunResult(state, history)
         commit_ref = self.driver.commit_slice(
             WorkflowCommitRequest(
                 slice_id=state.current_slice_id,
@@ -542,6 +705,81 @@ class WorkflowEngine:
         state = state.complete_current_slice(commit_ref=commit_ref)
         self.driver.checkpoint(state, history)
         return WorkflowRunResult(state, history, commit_ref)
+
+    def _apply_anchor_gate(
+        self,
+        state: WorkflowState,
+        context: WorkflowContext,
+        history: WorkflowHistory,
+    ) -> tuple[WorkflowState, WorkflowHistory, bool]:
+        if state.current_work_unit.kind is WorkUnitKind.PLAN:
+            return state, history, False
+        evidence = detect_anchor_changes(
+            context.approved_anchors, context.current_anchors
+        )
+        if evidence is None:
+            return state, history, False
+        paths = self._anchor_targets(evidence)
+        unit = state.current_work_unit
+        if unit.has_gate_approval(GateReason.ANCHOR_CHANGE, evidence.fingerprint, paths):
+            reset_key = f"anchor-plan-reset:{evidence.fingerprint}"
+            if unit.has_completed_side_effect(reset_key):
+                return state, history, False
+            state = state.mark_side_effect_completed(reset_key)
+            state = state.with_current_step(WorkflowStep.CODEX_PLAN_REVISION)
+            history = replace(
+                history,
+                last_claude_fingerprint=None,
+                latest_claude_review=None,
+                latest_antigravity_review=None,
+            )
+            self.driver.checkpoint(state, history)
+            return state, history, False
+        original_step = state.current_step
+        resume_step = (
+            WorkflowStep.CODEX_CORRECTION
+            if original_step is WorkflowStep.CODEX_CORRECTION
+            else WorkflowStep.CODEX_IMPLEMENTATION
+        )
+        state = state.await_user_gate(
+            reason=GateReason.ANCHOR_CHANGE,
+            detail="approved plan anchors changed and require plan review reset",
+            fingerprint=evidence.fingerprint,
+            paths=paths,
+            resume_step=resume_step,
+        )
+        self.driver.checkpoint(state, history)
+        return state, history, True
+
+    @staticmethod
+    def _latest_anchor_approval(state: WorkflowState) -> GateDecisionRecord | None:
+        return next(
+            (
+                decision
+                for decision in reversed(state.current_work_unit.gate_decisions)
+                if decision.approved
+                and decision.reason is GateReason.ANCHOR_CHANGE
+                and state.current_work_unit.has_completed_side_effect(
+                    f"anchor-plan-reset:{decision.fingerprint}"
+                )
+                and not state.current_work_unit.has_completed_side_effect(
+                    f"anchor-plan-reviewed:{decision.fingerprint}"
+                )
+            ),
+            None,
+        )
+
+    @staticmethod
+    def _anchor_targets(evidence: AnchorChangeEvidence) -> tuple[str, ...]:
+        return tuple(
+            sorted(
+                {
+                    *evidence.changes.added,
+                    *evidence.changes.removed,
+                    *evidence.changes.changed,
+                }
+            )
+        )
 
     @staticmethod
     def _validate_change_boundary(
@@ -577,8 +815,7 @@ class WorkflowEngine:
             WorkflowEngine._render_finding(item) for item in history.findings
         ) or "NONE"
         return (
-            f"DISTILLED PLAN\n{context.distilled_plan}\n\n"
-            f"CURRENT SLICE\n{context.slice_summary}\n\n"
+            f"DISTILLED CONTEXT\n{context.distilled_context}\n\n"
             f"EVIDENCE KIND\n{evidence_kind.value}\n\n"
             f"SLICE START COMMIT\n{changes.start_commit}\n\n"
             f"CURRENT FINGERPRINT\n{changes.fingerprint}\n\n"
@@ -599,3 +836,33 @@ class WorkflowEngine:
             f"summary={finding.summary} | acceptance={finding.acceptance_test} | "
             f"responses={responses} | closure={finding.status_rationale or 'NONE'}"
         )
+
+
+def authorized_test_changes_from_state(
+    state: WorkflowState,
+) -> AuthorizedTestChanges | None:
+    """Project the exact test approval recorded as active during the final review."""
+    unit = state.current_work_unit
+    if unit.active_test_fingerprint is None:
+        return None
+    decision = next(
+        (
+            item
+            for item in reversed(unit.gate_decisions)
+            if item.approved
+            and item.reason is GateReason.TEST_CHANGE
+            and item.fingerprint == unit.active_test_fingerprint
+            and item.paths == unit.active_test_paths
+        ),
+        None,
+    )
+    if decision is None:
+        return None
+    return AuthorizedTestChanges(
+        approved=True,
+        paths=decision.paths,
+        approved_by=decision.decided_by,
+        rationale=decision.rationale,
+        approved_at=decision.decided_at,
+        diff_fingerprint=decision.fingerprint,
+    )

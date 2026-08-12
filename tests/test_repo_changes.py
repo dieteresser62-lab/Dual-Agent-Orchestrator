@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from repo_changes import (
     NotGitRepositoryError,
     RepositoryChangeError,
     collect_repository_changes,
+    fingerprint_change_subset,
     merge_reported_paths,
     resolve_merge_base,
 )
@@ -443,3 +445,52 @@ def test_large_untracked_preview_is_bounded_but_fingerprint_covers_full_content(
     assert "untracked preview truncated" in first.diff_text
     assert len(first.diff_text) < 270_000
     assert first.fingerprint != second.fingerprint
+
+
+def test_subset_fingerprint_uses_payload_captured_with_repository_changes(
+    tmp_path: Path,
+) -> None:
+    repository, base_commit = _new_repository(tmp_path)
+    _git(repository, "switch", "-c", "feature/subset")
+    selected = repository / "tests" / "new_test.py"
+    selected.parent.mkdir()
+    selected.write_text("captured\n", encoding="utf-8")
+    changes = collect_repository_changes(repository, base_commit)
+
+    before = fingerprint_change_subset(changes, ("tests/new_test.py",))
+    selected.write_text("mutated after collection\n", encoding="utf-8")
+    after = fingerprint_change_subset(changes, ("tests/new_test.py",))
+
+    assert after == before
+
+
+def test_subset_fingerprint_rejects_paths_outside_the_captured_change_set(
+    tmp_path: Path,
+) -> None:
+    repository, base_commit = _new_repository(tmp_path)
+    _git(repository, "switch", "-c", "feature/subset-missing")
+    (repository / "changed.txt").write_text("changed\n", encoding="utf-8")
+    changes = collect_repository_changes(repository, base_commit)
+
+    with pytest.raises(RepositoryChangeError, match="do not reference"):
+        fingerprint_change_subset(changes, ("tests/missing.py",))
+    without_captured_payloads = replace(changes, fingerprint_entries=())
+    with pytest.raises(RepositoryChangeError, match="captured"):
+        fingerprint_change_subset(without_captured_payloads, ("changed.txt",))
+
+
+def test_subset_fingerprint_rejects_partial_captured_metadata(
+    tmp_path: Path,
+) -> None:
+    repository, base_commit = _new_repository(tmp_path)
+    _git(repository, "switch", "-c", "feature/subset-partial")
+    (repository / "first.txt").write_text("first\n", encoding="utf-8")
+    (repository / "second.txt").write_text("second\n", encoding="utf-8")
+    changes = collect_repository_changes(repository, base_commit)
+    partial = replace(changes, fingerprint_entries=changes.fingerprint_entries[:1])
+
+    with pytest.raises(
+        RepositoryChangeError,
+        match="captured fingerprint metadata does not cover the selected change entry",
+    ):
+        fingerprint_change_subset(partial, ("second.txt",))

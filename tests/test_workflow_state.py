@@ -276,3 +276,116 @@ def test_new_slice_cannot_start_without_persisted_start_commit() -> None:
             kind=WorkUnitKind.SLICE,
             step=WorkflowStep.CODEX_IMPLEMENTATION,
         )
+
+
+def test_fingerprint_bound_gate_rejects_mismatch_and_persists_denial_then_approval() -> None:
+    state = make_state().await_user_gate(
+        reason=GateReason.TEST_CHANGE,
+        detail="test approval required",
+        fingerprint="1" * 64,
+        paths=("tests/test_one.py",),
+        gate_step=WorkflowStep.CLAUDE_SLICE_REVIEW,
+        updated_at="halted",
+    )
+
+    assert state.current_work_unit.status is WorkUnitStatus.AWAITING_USER_DECISION
+    assert state.current_slice.status is SliceStatus.AWAITING_USER_DECISION
+    assert state.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
+    with pytest.raises(WorkflowStateValidationError, match="does not match"):
+        state.record_user_gate_decision(
+            approved=True,
+            fingerprint="2" * 64,
+            paths=("tests/test_one.py",),
+            decided_by="user",
+            decided_at="2026-08-12T12:00:00+00:00",
+            rationale="wrong fingerprint",
+        )
+    with pytest.raises(WorkflowStateValidationError, match="explicit recorded"):
+        state.resume_after_user_decision()
+
+    rejected = state.record_user_gate_decision(
+        approved=False,
+        fingerprint="1" * 64,
+        paths=("tests/test_one.py",),
+        decided_by="user",
+        decided_at="2026-08-12T12:00:00+00:00",
+        rationale="needs another look",
+    )
+    approved = rejected.record_user_gate_decision(
+        approved=True,
+        fingerprint="1" * 64,
+        paths=("tests/test_one.py",),
+        decided_by="user",
+        decided_at="2026-08-12T12:01:00+00:00",
+        rationale="reviewed",
+    )
+    active = approved.record_active_test_approval(
+        "1" * 64, ("tests/test_one.py",)
+    )
+    loaded = WorkflowState.from_dict(active.to_dict())
+
+    assert rejected.current_work_unit.status is WorkUnitStatus.AWAITING_USER_DECISION
+    assert loaded.current_work_unit.status is WorkUnitStatus.IN_PROGRESS
+    assert loaded.current_work_unit.gate.status is GateStatus.CLEAR
+    assert loaded.current_work_unit.has_gate_approval(
+        GateReason.TEST_CHANGE, "1" * 64, ("tests/test_one.py",)
+    )
+    assert [item.approved for item in loaded.current_work_unit.gate_decisions] == [
+        False,
+        True,
+    ]
+    assert loaded.current_work_unit.active_test_fingerprint == "1" * 64
+    assert loaded.current_work_unit.active_test_paths == ("tests/test_one.py",)
+
+
+def test_anchor_gate_persists_reset_and_resume_steps() -> None:
+    state = make_state().await_user_gate(
+        reason=GateReason.ANCHOR_CHANGE,
+        detail="anchor changed",
+        fingerprint="3" * 64,
+        paths=("RATE",),
+        gate_step=WorkflowStep.CODEX_PLAN_REVISION,
+        resume_step=WorkflowStep.CODEX_IMPLEMENTATION,
+    )
+    approved = state.record_user_gate_decision(
+        approved=True,
+        fingerprint="3" * 64,
+        paths=("RATE",),
+        decided_by="domain-owner",
+        decided_at="2026-08-12T12:00:00+00:00",
+        rationale="review the new anchor",
+    )
+    decision = approved.current_work_unit.gate_decisions[-1]
+
+    assert approved.current_step is WorkflowStep.CODEX_PLAN_REVISION
+    assert decision.reason is GateReason.ANCHOR_CHANGE
+    assert decision.resume_step is WorkflowStep.CODEX_IMPLEMENTATION
+
+
+def test_pre_slice11_v3_gate_and_work_unit_shapes_load_with_empty_new_fields() -> None:
+    raw = make_state().to_dict()
+    for unit in raw["work_units"]:
+        del unit["gate_decisions"]
+        del unit["active_test_fingerprint"]
+        del unit["active_test_paths"]
+        del unit["gate"]["fingerprint"]
+        del unit["gate"]["paths"]
+        del unit["gate"]["resume_step"]
+
+    loaded = WorkflowState.from_dict(raw)
+
+    assert loaded.current_work_unit.gate_decisions == ()
+    assert loaded.current_work_unit.gate.fingerprint is None
+
+
+def test_early_slice11_work_unit_shape_loads_without_active_test_evidence() -> None:
+    raw = make_state().to_dict()
+    for unit in raw["work_units"]:
+        del unit["active_test_fingerprint"]
+        del unit["active_test_paths"]
+
+    loaded = WorkflowState.from_dict(raw)
+
+    assert loaded.current_work_unit.gate_decisions == ()
+    assert loaded.current_work_unit.active_test_fingerprint is None
+    assert loaded.current_work_unit.active_test_paths == ()

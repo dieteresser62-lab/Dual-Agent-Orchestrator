@@ -187,20 +187,28 @@ class AuthorizedTestChanges:
     paths: tuple[str, ...]
     approved_by: str
     rationale: str
+    approved_at: str | None = None
+    diff_fingerprint: str | None = None
 
     def __post_init__(self) -> None:
         if not self.approved_by.strip():
             raise AuditTrailError("test approval requires an approver")
         if not self.rationale.strip():
             raise AuditTrailError("test approval requires a rationale")
+        if self.approved_at is not None and not self.approved_at.strip():
+            raise AuditTrailError("test approval timestamp must be non-empty")
+        if self.diff_fingerprint is not None and not re.fullmatch(
+            r"[0-9a-f]{64}", self.diff_fingerprint
+        ):
+            raise AuditTrailError("test approval fingerprint must be a SHA-256 digest")
         normalized: list[str] = []
         for raw_path in self.paths:
             if not isinstance(raw_path, str) or not raw_path.strip():
                 raise AuditTrailError("test approval paths must be non-empty strings")
             path = PurePosixPath(raw_path)
-            if path.is_absolute() or ".." in path.parts or path.parts[:1] != ("tests",):
+            if path.is_absolute() or ".." in path.parts or "\\" in raw_path:
                 raise AuditTrailError(
-                    f"test approval path must be repository-relative below tests/: {raw_path!r}"
+                    f"test approval path must be repository-relative POSIX: {raw_path!r}"
                 )
             normalized.append(path.as_posix())
         if len(set(normalized)) != len(normalized):
@@ -803,6 +811,8 @@ def _render_test_approval(projection: AuditProjection) -> str:
             (
                 f"- Teständerungsfreigabe: `{'YES' if approval.approved else 'NO'}`",  # allowlist:german
                 f"- Freigebende Stelle: {_safe(approval.approved_by)}",
+                f"- Freigabezeitpunkt: {_safe(approval.approved_at or 'nicht erfasst')}",  # allowlist:german
+                f"- Test-Diff-Fingerprint: `{_safe(approval.diff_fingerprint or 'nicht erfasst')}`",
                 f"- Begründung: {_safe(approval.rationale)}",
                 "- Pfade: "
                 + (

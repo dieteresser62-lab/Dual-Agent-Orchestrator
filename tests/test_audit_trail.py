@@ -661,10 +661,32 @@ def test_test_approval_paths_are_normalized_and_root_bound() -> None:
     )
     assert record.paths == ("tests/a.py", "tests/z.py")
 
-    with pytest.raises(AuditTrailError, match="below tests"):
+    with pytest.raises(AuditTrailError, match="repository-relative"):
         AuthorizedTestChanges(
             approved=True,
             paths=("../outside.py",),
             approved_by="user",
             rationale="approved",
         )
+
+
+def test_test_approval_projection_includes_timestamp_and_bound_fingerprint(
+    tmp_path: Path,
+) -> None:
+    document = _document(tmp_path)
+    projection = AuditProjection(
+        slice_id=8,
+        test_approval=AuthorizedTestChanges(
+            approved=True,
+            paths=("tests/test_audit_trail.py",),
+            approved_by="domain-owner",
+            rationale="reviewed exact test delta",
+            approved_at="2026-08-12T12:00:00+00:00",
+            diff_fingerprint="c" * 64,
+        ),
+    )
+
+    rendered = project_slice_audit(document, projection)
+
+    assert "2026-08-12T12:00:00+00:00" in rendered
+    assert f"`{'c' * 64}`" in rendered

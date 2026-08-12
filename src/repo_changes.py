@@ -8,7 +8,7 @@ import stat
 import subprocess
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
-from typing import Iterable, Sequence
+from typing import Iterable, Mapping, Sequence
 
 from audit_trail import AuditTrailError, strip_managed_audit_sections
 from path_policy import PathPolicyError, resolve_path_within_roots
@@ -46,12 +46,40 @@ class ChangedPath:
 
 
 @dataclass(frozen=True)
+class ChangeFingerprintEntry:
+    path: str
+    old_path: str | None
+    kind: str
+    payload_type: str | None
+    payload_size: int | None
+    payload_digest: str | None
+    payload_mode: int | None
+
+    def to_payload(self) -> dict[str, object]:
+        payload = None
+        if self.payload_type is not None:
+            payload = {
+                "type": self.payload_type,
+                "size": self.payload_size,
+                "sha256": self.payload_digest,
+                "mode": self.payload_mode,
+            }
+        return {
+            "path": self.path,
+            "old_path": self.old_path,
+            "kind": self.kind,
+            "payload": payload,
+        }
+
+
+@dataclass(frozen=True)
 class RepositoryChanges:
     repository_root: Path
     merge_base: str
     entries: tuple[ChangedPath, ...]
     diff_text: str
     fingerprint: str
+    fingerprint_entries: tuple[ChangeFingerprintEntry, ...] = ()
 
     @property
     def paths(self) -> tuple[str, ...]:
@@ -469,27 +497,13 @@ def collect_repository_changes(
     for entry in entries:
         if entry.kind != "deleted":
             payloads[entry.path] = _read_path_payload(root, entry.path)
+    fingerprint_entries = tuple(
+        _change_fingerprint_entry(entry, payloads) for entry in entries
+    )
     fingerprint_payload = {
         "version": 1,
         "merge_base": canonical_merge_base,
-        "entries": [
-            {
-                "path": entry.path,
-                "old_path": entry.old_path,
-                "kind": "added" if entry.kind == "untracked" else entry.kind,
-                "payload": (
-                    {
-                        "type": payloads[entry.path].content_type,
-                        "size": payloads[entry.path].fingerprint_size,
-                        "sha256": payloads[entry.path].fingerprint_digest,
-                        "mode": payloads[entry.path].mode,
-                    }
-                    if entry.path in payloads
-                    else None
-                ),
-            }
-            for entry in entries
-        ],
+        "entries": [entry.to_payload() for entry in fingerprint_entries],
     }
     serialized = json.dumps(
         fingerprint_payload,
@@ -513,7 +527,89 @@ def collect_repository_changes(
         entries=tuple(entries),
         diff_text="\n\n".join(part for part in diff_parts if part),
         fingerprint=fingerprint,
+        fingerprint_entries=fingerprint_entries,
     )
+
+
+def fingerprint_change_subset(
+    changes: RepositoryChanges,
+    selected_paths: Iterable[str],
+) -> str:
+    """Fingerprint only change entries selected by current or historical path.
+
+    The payload shape intentionally matches the canonical repository fingerprint, while
+    excluding unrelated entries. A rename is selected when either side is selected and
+    remains bound to the destination payload, so moving a test out of a test directory
+    cannot evade a previously captured test-change gate.
+    """
+    selected = {_normalize_selected_path(path) for path in selected_paths}
+    entries = tuple(
+        entry
+        for entry in changes.entries
+        if entry.path in selected or (entry.old_path is not None and entry.old_path in selected)
+    )
+    if not entries:
+        raise RepositoryChangeError(
+            "selected paths do not reference any canonical repository change entry"
+        )
+    stored_by_identity = {
+        (entry.path, entry.old_path, entry.kind): entry
+        for entry in changes.fingerprint_entries
+    }
+    if not changes.fingerprint_entries:
+        raise RepositoryChangeError(
+            "subset fingerprint requires payload metadata captured with repository changes"
+        )
+    try:
+        fingerprint_entries = tuple(
+            stored_by_identity[(
+                entry.path,
+                entry.old_path,
+                "added" if entry.kind == "untracked" else entry.kind,
+            )]
+            for entry in entries
+        )
+    except KeyError as exc:
+        raise RepositoryChangeError(
+            "captured fingerprint metadata does not cover the selected change entry"
+        ) from exc
+    fingerprint_payload = {
+        "version": 1,
+        "merge_base": changes.merge_base,
+        "entries": [entry.to_payload() for entry in fingerprint_entries],
+    }
+    serialized = json.dumps(
+        fingerprint_payload,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(serialized).hexdigest()
+
+
+def _change_fingerprint_entry(
+    entry: ChangedPath,
+    payloads: Mapping[str, _UntrackedPayload],
+) -> ChangeFingerprintEntry:
+    payload = payloads.get(entry.path)
+    return ChangeFingerprintEntry(
+        path=entry.path,
+        old_path=entry.old_path,
+        kind="added" if entry.kind == "untracked" else entry.kind,
+        payload_type=payload.content_type if payload is not None else None,
+        payload_size=payload.fingerprint_size if payload is not None else None,
+        payload_digest=payload.fingerprint_digest if payload is not None else None,
+        payload_mode=payload.mode if payload is not None else None,
+    )
+
+
+def _normalize_selected_path(raw_path: str) -> str:
+    if not isinstance(raw_path, str) or not raw_path.strip() or "\\" in raw_path:
+        raise RepositoryChangeError("selected change paths must be non-empty POSIX paths")
+    path = PurePosixPath(raw_path)
+    if path.is_absolute() or ".." in path.parts:
+        raise RepositoryChangeError("selected change paths must be repository-relative")
+    return path.as_posix()
 
 
 def merge_reported_paths(

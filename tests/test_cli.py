@@ -193,6 +193,51 @@ def test_quota_conscious_reviewer_defaults_are_explicit(tmp_path: Path) -> None:
     assert args.agent_settings["antigravity"].effort == "high"
 
 
+def test_manual_slice_gate_cli_overrides_repository_default(tmp_path: Path) -> None:
+    _write_config(tmp_path, "[workflow]\nmanual_slice_gate = true\n")
+
+    configured = parse_args([], cwd=tmp_path, environ={})
+    overridden = parse_args(["--no-manual-slice-gate"], cwd=tmp_path, environ={})
+
+    assert configured.manual_slice_gate is True
+    assert overridden.manual_slice_gate is False
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["--approve-gate", "--gate-actor", "user", "--gate-rationale", "ok"],
+        ["--resume", "--approve-gate", "--gate-rationale", "ok"],
+        ["--resume", "--approve-gate", "--gate-actor", "user"],
+        ["--resume", "--gate-actor", "user"],
+    ],
+)
+def test_gate_cli_decision_requires_explicit_resume_actor_and_rationale(
+    arguments: list[str], tmp_path: Path
+) -> None:
+    with pytest.raises(SystemExit):
+        parse_args(arguments, cwd=tmp_path, environ={})
+
+
+def test_gate_cli_records_explicit_approval_intent(tmp_path: Path) -> None:
+    args = parse_args(
+        [
+            "--resume",
+            "--approve-gate",
+            "--gate-actor",
+            "domain-owner",
+            "--gate-rationale",
+            "reviewed exact persisted evidence",
+        ],
+        cwd=tmp_path,
+        environ={},
+    )
+
+    assert args.gate_decision is True
+    assert args.gate_actor == "domain-owner"
+    assert args.gate_rationale == "reviewed exact persisted evidence"
+
+
 @pytest.mark.parametrize(
     ("environment", "message"),
     [

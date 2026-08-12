@@ -1,16 +1,18 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import pytest
 
 from contracts import (
     AgentRole,
+    AnchorRecord,
     ContractValidationError,
     ValidationAttestation,
     ValidationRecord,
     ValidationStatus,
 )
+from gates import TestChangeEvidence as GateTestChangeEvidence
 from workflow import (
     CodexInvocation,
     ContractRepairInvocation,
@@ -22,8 +24,11 @@ from workflow import (
     WorkflowContractError,
     WorkflowEngine,
     WorkflowExecutionError,
+    WorkflowHistory,
+    authorized_test_changes_from_state,
 )
 from workflow_state import (
+    GateReason,
     WorkflowStep,
     WorkUnitKind,
     WorkUnitStatus,
@@ -127,6 +132,9 @@ class FakeDriver:
     deltas: dict[tuple[str, str], str] = field(default_factory=dict)
     invalid_attestation: str | None = None
     fail_reviewer_once: bool = False
+    test_evidence_by_fingerprint: dict[str, GateTestChangeEvidence] = field(
+        default_factory=dict
+    )
     codex_calls: list[CodexInvocation] = field(default_factory=list)
     reviewer_calls: list[ReviewerInvocation] = field(default_factory=list)
     repair_calls: list[ContractRepairInvocation] = field(default_factory=list)
@@ -149,6 +157,12 @@ class FakeDriver:
         self, previous_fingerprint: str, current_fingerprint: str
     ) -> str:
         return self.deltas[(previous_fingerprint, current_fingerprint)]
+
+    def detect_test_changes(
+        self, changes: WorkflowChanges, patterns: tuple[str, ...]
+    ) -> GateTestChangeEvidence | None:
+        assert patterns
+        return self.test_evidence_by_fingerprint.get(changes.fingerprint)
 
     def validate(self, changes: WorkflowChanges) -> ValidationAttestation:
         self.validation_calls.append(changes.fingerprint)
@@ -521,3 +535,405 @@ def test_antigravity_is_not_called_when_fingerprint_changes_after_claude() -> No
     assert [call.reviewer for call in driver.reviewer_calls] == [AgentRole.CLAUDE]
     assert driver.validation_calls == [approved.fingerprint]
     assert driver.commit_calls == []
+
+
+def test_unapproved_test_change_halts_before_validation_and_review() -> None:
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    evidence = GateTestChangeEvidence((TEST_FILE,), "9" * 64)
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[],
+        test_evidence_by_fingerprint={changes.fingerprint: evidence},
+    )
+    context = replace(_context(), test_changes_approved=False)
+
+    result = WorkflowEngine(driver).run_current_work_unit(_slice_state(), context)
+
+    assert result.exit_code == 4
+    assert result.state.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
+    assert result.state.current_work_unit.gate.reason is GateReason.TEST_CHANGE
+    assert result.state.current_work_unit.gate.fingerprint == evidence.fingerprint
+    assert result.state.current_work_unit.gate.paths == (TEST_FILE,)
+    assert len(driver.codex_calls) == 1
+    assert driver.validation_calls == []
+    assert driver.reviewer_calls == []
+
+
+def test_rejected_then_approved_test_gate_resumes_same_review_without_repeating_codex() -> None:
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    evidence = GateTestChangeEvidence((TEST_FILE,), "9" * 64)
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[
+            _review_approval(AgentRole.CLAUDE),
+            _review_approval(AgentRole.ANTIGRAVITY),
+        ],
+        test_evidence_by_fingerprint={changes.fingerprint: evidence},
+    )
+    engine = WorkflowEngine(driver)
+    context = replace(_context(), test_changes_approved=False)
+    halted = engine.run_current_work_unit(_slice_state(), context)
+
+    rejected = engine.decide_current_gate(
+        halted.state,
+        halted.history,
+        approved=False,
+        decided_by="user",
+        decided_at="2026-08-12T12:00:00+00:00",
+        rationale="test assertion needs explanation",
+    )
+    assert rejected.exit_code == 4
+    assert rejected.state.current_work_unit.gate.reason is GateReason.TEST_CHANGE
+
+    approved = engine.decide_current_gate(
+        rejected.state,
+        rejected.history,
+        approved=True,
+        decided_by="user",
+        decided_at="2026-08-12T12:01:00+00:00",
+        rationale="test delta reviewed",
+    )
+    completed = engine.run_current_work_unit(
+        approved.state, context, approved.history
+    )
+
+    assert completed.completed
+    assert len(driver.codex_calls) == 1
+    assert [call.reviewer for call in driver.reviewer_calls] == [
+        AgentRole.CLAUDE,
+        AgentRole.ANTIGRAVITY,
+    ]
+    decisions = completed.state.current_work_unit.gate_decisions
+    assert [(item.approved, item.decided_by) for item in decisions] == [
+        (False, "user"),
+        (True, "user"),
+    ]
+    audit_record = authorized_test_changes_from_state(completed.state)
+    assert audit_record is not None
+    assert audit_record.approved_at == "2026-08-12T12:01:00+00:00"
+    assert audit_record.diff_fingerprint == evidence.fingerprint
+
+
+def test_test_audit_projection_uses_active_approval_not_latest_decision() -> None:
+    state = _slice_state()
+    paths = (TEST_FILE,)
+    first_fingerprint = "8" * 64
+    second_fingerprint = "9" * 64
+    for fingerprint, minute in (
+        (first_fingerprint, "00"),
+        (second_fingerprint, "01"),
+    ):
+        state = state.await_user_gate(
+            reason=GateReason.TEST_CHANGE,
+            detail="test approval required",
+            fingerprint=fingerprint,
+            paths=paths,
+        ).record_user_gate_decision(
+            approved=True,
+            fingerprint=fingerprint,
+            paths=paths,
+            decided_by="user",
+            decided_at=f"2026-08-12T12:{minute}:00+00:00",
+            rationale=f"approved {fingerprint[:1]}",
+        )
+    state = state.record_active_test_approval(first_fingerprint, paths)
+
+    audit_record = authorized_test_changes_from_state(state)
+
+    assert audit_record is not None
+    assert audit_record.diff_fingerprint == first_fingerprint
+    assert audit_record.rationale == "approved 8"
+
+
+def test_changed_test_fingerprint_expires_previous_gate_approval() -> None:
+    first = _changes("1", "src/early.py", TEST_FILE)
+    changed = _changes("2", "src/early.py", TEST_FILE)
+    first_evidence = GateTestChangeEvidence((TEST_FILE,), "8" * 64)
+    changed_evidence = GateTestChangeEvidence((TEST_FILE,), "9" * 64)
+
+    @dataclass
+    class ChangedAfterApprovalDriver(FakeDriver):
+        use_changed: bool = False
+
+        def collect_changes(self, start_commit: str) -> WorkflowChanges:
+            assert start_commit == START_COMMIT
+            return changed if self.use_changed else first
+
+    driver = ChangedAfterApprovalDriver(
+        snapshots=[first],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[],
+        test_evidence_by_fingerprint={
+            first.fingerprint: first_evidence,
+            changed.fingerprint: changed_evidence,
+        },
+    )
+    engine = WorkflowEngine(driver)
+    context = replace(_context(), test_changes_approved=False)
+    halted = engine.run_current_work_unit(_slice_state(), context)
+    approved = engine.decide_current_gate(
+        halted.state,
+        halted.history,
+        approved=True,
+        decided_by="user",
+        decided_at="2026-08-12T12:00:00+00:00",
+        rationale="first test diff reviewed",
+    )
+    driver.use_changed = True
+
+    expired = engine.run_current_work_unit(
+        approved.state, context, approved.history
+    )
+
+    assert expired.exit_code == 4
+    assert expired.state.current_work_unit.gate.fingerprint == changed_evidence.fingerprint
+    assert driver.reviewer_calls == []
+
+
+def test_manual_slice_gate_halts_before_commit_and_resumes_without_repeating_reviews() -> None:
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[
+            _review_approval(AgentRole.CLAUDE),
+            _review_approval(AgentRole.ANTIGRAVITY),
+        ],
+    )
+    engine = WorkflowEngine(driver)
+    context = replace(_context(), manual_slice_gate=True)
+
+    halted = engine.run_current_work_unit(_slice_state(), context)
+
+    assert halted.exit_code == 4
+    assert halted.state.current_step is WorkflowStep.SLICE_COMMIT
+    assert halted.state.current_work_unit.gate.reason is GateReason.MANUAL_SLICE
+    assert driver.commit_calls == []
+    approved = engine.decide_current_gate(
+        halted.state,
+        halted.history,
+        approved=True,
+        decided_by="release-owner",
+        decided_at="2026-08-12T12:00:00+00:00",
+        rationale="manual slice approval granted",
+    )
+    completed = engine.run_current_work_unit(
+        approved.state, context, approved.history
+    )
+
+    assert completed.completed
+    assert len(driver.codex_calls) == 1
+    assert len(driver.reviewer_calls) == 2
+    assert len(driver.commit_calls) == 1
+
+
+def test_manual_slice_gate_includes_both_rename_paths() -> None:
+    changes = WorkflowChanges(
+        start_commit=START_COMMIT,
+        fingerprint="1" * 64,
+        paths=("src/new_name.py",),
+        gate_paths=("src/new_name.py", "src/old_name.py"),
+        full_diff="rename from src/old_name.py\nrename to src/new_name.py",
+    )
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[
+            _review_approval(AgentRole.CLAUDE),
+            _review_approval(AgentRole.ANTIGRAVITY),
+        ],
+    )
+    state = init_workflow_state(
+        run_id="run-rename",
+        task_file="/repo/task.md",
+        branch="feature/workflow",
+        branch_base=START_COMMIT,
+        slice_count=1,
+        timestamp="2026-08-12T10:00:00+00:00",
+    ).complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    ).bind_current_slice_git_boundary(
+        start_commit=START_COMMIT,
+        scope_paths=("src/new_name.py",),
+        start_fingerprint="0" * 64,
+    )
+
+    halted = WorkflowEngine(driver).run_current_work_unit(
+        state, replace(_context(), manual_slice_gate=True)
+    )
+
+    assert halted.state.current_work_unit.gate.paths == (
+        "src/new_name.py",
+        "src/old_name.py",
+    )
+
+
+def test_anchor_change_resets_plan_review_then_returns_to_saved_slice_step() -> None:
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    approved_anchor = AnchorRecord("RATE", "approved plan", "1", "2", "exact")
+    changed_anchor = AnchorRecord("RATE", "approved plan", "1", "3", "exact")
+    plan_review = "\n".join(
+        (
+            "REVIEWER: claude",
+            "TEST_FILES_TOUCHED: NONE",
+            "REVIEW_EVIDENCE: anchor plan | stale approval | changed expectation",
+            "PRE_MORTEM: an anchor change bypasses plan review",
+            "PLAN_APPROVAL: YES",
+            "STATUS: DONE",
+        )
+    )
+    driver = FakeDriver(
+        snapshots=[changes, changes],
+        codex_outputs=[_codex_ready(plan=True), _codex_ready()],
+        reviewer_outputs=[
+            plan_review,
+            _review_approval(AgentRole.CLAUDE),
+            _review_approval(AgentRole.ANTIGRAVITY),
+        ],
+    )
+    engine = WorkflowEngine(driver)
+    context = replace(
+        _context(),
+        approved_anchors=(approved_anchor,),
+        current_anchors=(changed_anchor,),
+    )
+    halted = engine.run_current_work_unit(
+        _slice_state(), context, WorkflowHistory(2)
+    )
+
+    assert halted.exit_code == 4
+    assert halted.state.current_step is WorkflowStep.CODEX_IMPLEMENTATION
+    assert halted.state.current_work_unit.gate.reason is GateReason.ANCHOR_CHANGE
+    assert halted.history.latest_claude_review is None
+    approved = engine.decide_current_gate(
+        halted.state,
+        halted.history,
+        approved=True,
+        decided_by="domain-owner",
+        decided_at="2026-08-12T12:00:00+00:00",
+        rationale="new anchor may enter plan review",
+    )
+    completed = engine.run_current_work_unit(
+        approved.state, context, approved.history
+    )
+
+    assert completed.completed
+    assert [call.step for call in driver.codex_calls] == [
+        WorkflowStep.CODEX_PLAN_REVISION,
+        WorkflowStep.CODEX_IMPLEMENTATION,
+    ]
+    assert [call.reviewer for call in driver.reviewer_calls] == [
+        AgentRole.CLAUDE,
+        AgentRole.CLAUDE,
+        AgentRole.ANTIGRAVITY,
+    ]
+    assert any(
+        item.startswith("anchor-plan-reviewed:")
+        for item in completed.state.current_work_unit.completed_side_effects
+    )
+    assert "RATE | approved plan | 1 | 2 | exact" in driver.codex_calls[0].prompt
+    assert "RATE | approved plan | 1 | 3 | exact" in driver.codex_calls[0].prompt
+
+
+def test_reverted_anchor_change_resumes_without_plan_revision() -> None:
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    approved_anchor = AnchorRecord("RATE", "approved plan", "1", "2", "exact")
+    changed_anchor = AnchorRecord("RATE", "approved plan", "1", "3", "exact")
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[
+            _review_approval(AgentRole.CLAUDE),
+            _review_approval(AgentRole.ANTIGRAVITY),
+        ],
+    )
+    engine = WorkflowEngine(driver)
+    changed_context = replace(
+        _context(),
+        approved_anchors=(approved_anchor,),
+        current_anchors=(changed_anchor,),
+    )
+    halted = engine.run_current_work_unit(
+        _slice_state(), changed_context, WorkflowHistory(2)
+    )
+    approved = engine.decide_current_gate(
+        halted.state,
+        halted.history,
+        approved=True,
+        decided_by="domain-owner",
+        decided_at="2026-08-12T12:00:00+00:00",
+        rationale="anchor delta may proceed if still present",
+    )
+    reverted_context = replace(
+        _context(),
+        approved_anchors=(approved_anchor,),
+        current_anchors=(approved_anchor,),
+    )
+
+    completed = engine.run_current_work_unit(
+        approved.state, reverted_context, approved.history
+    )
+
+    assert completed.completed
+    assert [call.step for call in driver.codex_calls] == [
+        WorkflowStep.CODEX_IMPLEMENTATION
+    ]
+
+
+def test_anchor_change_during_correction_returns_to_correction_after_plan_review() -> None:
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    approved_anchor = AnchorRecord("RATE", "approved plan", "1", "2", "exact")
+    changed_anchor = AnchorRecord("RATE", "approved plan", "1", "3", "exact")
+    plan_review = "\n".join(
+        (
+            "REVIEWER: claude",
+            "TEST_FILES_TOUCHED: NONE",
+            "REVIEW_EVIDENCE: correction anchor | stale approval | changed expectation",
+            "PRE_MORTEM: correction context is discarded after anchor review",
+            "PLAN_APPROVAL: YES",
+            "STATUS: DONE",
+        )
+    )
+    driver = FakeDriver(
+        snapshots=[changes, changes],
+        codex_outputs=[_codex_ready(plan=True), _codex_ready()],
+        reviewer_outputs=[
+            plan_review,
+            _review_approval(AgentRole.CLAUDE),
+            _review_approval(AgentRole.ANTIGRAVITY),
+        ],
+    )
+    engine = WorkflowEngine(driver)
+    context = replace(
+        _context(),
+        approved_anchors=(approved_anchor,),
+        current_anchors=(changed_anchor,),
+    )
+    correction_state = _slice_state().with_current_step(WorkflowStep.CODEX_CORRECTION)
+
+    halted = engine.run_current_work_unit(
+        correction_state, context, WorkflowHistory(2)
+    )
+
+    assert halted.state.current_work_unit.gate.resume_step is WorkflowStep.CODEX_CORRECTION
+    approved = engine.decide_current_gate(
+        halted.state,
+        halted.history,
+        approved=True,
+        decided_by="domain-owner",
+        decided_at="2026-08-12T12:00:00+00:00",
+        rationale="new anchor may enter plan review",
+    )
+    completed = engine.run_current_work_unit(
+        approved.state, context, approved.history
+    )
+
+    assert completed.completed
+    assert [call.step for call in driver.codex_calls] == [
+        WorkflowStep.CODEX_PLAN_REVISION,
+        WorkflowStep.CODEX_CORRECTION,
+    ]
