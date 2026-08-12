@@ -32,7 +32,7 @@ _DEFAULT_MODELS = {
 
 _DEFAULT_EFFORTS = {
     "codex": "medium",
-    "claude": "medium",
+    "claude": "high",
     "antigravity": "high",
 }
 

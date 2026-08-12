@@ -169,13 +169,13 @@ Agent-local values use CLI → `RUN_TASK_*` environment → role default. They a
 | Role | CLI options | Environment prefix | Defaults |
 |---|---|---|---|
 | Codex | `--codex-binary`, `--codex-model`, `--codex-timeout`, `--codex-effort` | `RUN_TASK_CODEX_*` | `codex`, `gpt-5.6-sol`, 1800s, `medium` |
-| Claude | `--claude-binary`, `--claude-model`, `--claude-timeout`, `--claude-effort` | `RUN_TASK_CLAUDE_*` | `claude`, `sonnet`, 1800s, `medium` |
+| Claude | `--claude-binary`, `--claude-model`, `--claude-timeout`, `--claude-effort` | `RUN_TASK_CLAUDE_*` | `claude`, `sonnet`, 1800s, `high` |
 | Antigravity | `--antigravity-binary`, `--antigravity-model`, `--antigravity-timeout`, `--antigravity-effort` | `RUN_TASK_ANTIGRAVITY_*` | native `agy` detection, `gemini-3.1-pro-high`, 1800s, `high` |
 
 `--claude-max-budget-usd` or `RUN_TASK_CLAUDE_MAX_BUDGET_USD` adds an optional print-mode safety ceiling. Opus is not the default; select it explicitly with `--claude-model opus` only for a justified escalation.
 
 ```bash
-./run_task --claude-model sonnet --claude-effort medium
+./run_task --claude-model sonnet --claude-effort high
 RUN_TASK_ANTIGRAVITY_BINARY=agy.exe ./run_task
 ./run_task --codex-binary /opt/codex/bin/codex --codex-timeout 2400
 ```
@@ -290,6 +290,8 @@ Agent binaries and capabilities are checked lazily immediately before the first 
 Codex is the implementation role and runs with `workspace-write`. Claude and Antigravity are reviewer roles: each receives a disposable read-only repository copy while its private temp, cache, prompt, and log files remain writable outside that copy; reviewer processes retain `PYTHONDONTWRITEBYTECODE=1`. Claude starts in safe mode with a compact dedicated system prompt and one external review package. A manifest lists bounded, numbered chunks; the normal review exposes only `Read` and grants exactly enough calls to read the manifest and every chunk once. The supplied orchestrator evidence is the existing test snapshot on the active v2 path and the fingerprint-bound attestation on state v3. The 12,000-character schema-bound response directs the reasoning budget to implementation correctness, invariants, failure paths, security boundaries, resume/idempotency risks, and test gaps. MCP configuration, prompt suggestions, skills, plugins, and session persistence are disabled. Antigravity uses its terminal sandbox; `--mode plan` is not treated as a security boundary.
 
 The state-v3 target workflow runs the resolved validation matrix once in Python for each canonical diff fingerprint and supplies the resulting attestation to both reviewers. Reviewers do not rerun the full suite and state-v3 rejects agent-authored `VALIDATION_RESULT` claims. The harness `src/review_harness.py` remains a bounded adapter/version diagnostic: explicit opt-in command builders for Claude and Antigravity can run it with repository caches disabled and prove that tracked-file writes are denied after installation, a CLI version change, or explicit troubleshooting. It is never exposed by the normal review command. Claude JSON metadata such as turn count, usage, estimated cost, and rejected tool attempts is retained in the runtime log.
+
+Claude's first review of a slice receives only that slice's changed paths and hunks, together with its acceptance criteria, finding records, and fingerprint-bound validation attestation; it never receives unrelated repository content. After an implementation correction, Claude receives only the correction delta since its last reviewed fingerprint plus the updated records and attestation. A response rejected solely for missing or malformed contract markers is repaired from the rejected answer and the output contract without resending implementation evidence. Antigravity alone receives the complete final slice diff once for its closing review.
 
 ## Agent Instruction Files
 

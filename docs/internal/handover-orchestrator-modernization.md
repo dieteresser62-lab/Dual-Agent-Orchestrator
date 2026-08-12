@@ -1,7 +1,7 @@
 # Übergabe: Modernisierung des Dual-Agent-Orchestrators
 
-**Stand:** 2026-08-11
-**Anforderungsstand:** Revision 9
+**Stand:** 2026-08-12
+**Anforderungsstand:** Revision 10
 **Zweck:** Kompakter, lokal verifizierter Wiedereinstieg und Übergabe an den Review des Arbeitsplans.
 **Ablage:** `docs/internal/`
 
@@ -11,7 +11,7 @@
 
 | Datei | Inhalt | Status |
 |---|---|---|
-| `requirements-orchestrator-modernization.md` | Anforderungen R-1 bis R-18 und verbindliche Architekturentscheidungen | Hauptdokument, Revision 9 |
+| `requirements-orchestrator-modernization.md` | Anforderungen R-1 bis R-18 und verbindliche Architekturentscheidungen | Hauptdokument, Revision 10 |
 | `orchestrator-modernization-work-plan.md` | Umsetzungsslices, Abhängigkeiten, Abdeckungsmatrix und Testplan | zur Nutzerprüfung vorgelegt |
 | `reference-target-repo-agents.md` | `AGENTS.md` der Ruhestandsuite | historische Verfahrensreferenz |
 | `reference-target-repo-slice-execution-rules.md` | manuelle Slice-Regeln der Ruhestandsuite | historische Verfahrensreferenz |
@@ -28,10 +28,11 @@ Die Referenzdateien belegen den manuellen Ausgangsprozess. Sie sind nicht die La
 - Aktiver Branch: `feature/orchestrator-modernization`
 - Basis: `master` bei `0bd3bad`
 - Freigegebener Implementierungscommit der Revision 9: `76c06c7` (`Bind reviews to orchestrator validation attestations`)
-- Die nachgelagerte Auditprojektion wird separat lokal committed. Ein Upstream ist nicht konfiguriert.
-- Slices 01 bis 07 sowie die Revision-9-Querschnittskorrektur sind lokal committed. Slice 08 ist im Arbeitsbaum additiv implementiert; seine formalen Abschlussdaten werden ausschließlich in der verwalteten Prüfspur der Slice-MD geführt. Gemini-Fallback und Agentenersetzung wurden in Slice 01 entfernt; konfigurierbare Drei-Agenten-Adapter, wurzelgebundene Dateischnappschüsse, die kanonische Branch-Diff-Quelle, der typisierte v3-Contract-/Finding-Kern sowie State v3 mit Work Units und Resume-Persistenz sind implementiert.
+- Slice 08 ist als `b4e8a94` (`Implement Slice 08 audit trail`) lokal committed. Ein Upstream ist nicht konfiguriert.
+- Slices 01 bis 08 sowie die Revision-9-Querschnittskorrektur sind lokal committed. Gemini-Fallback und Agentenersetzung wurden in Slice 01 entfernt; konfigurierbare Drei-Agenten-Adapter, wurzelgebundene Dateischnappschüsse, die kanonische Branch-Diff-Quelle, der typisierte v3-Contract-/Finding-Kern, State v3 mit Work Units und Resume-Persistenz sowie die Auditprojektion sind implementiert.
 - Der aktive Defaultpfad verwendet übergangsweise weiterhin die alte Phase-1-/Phase-2-Steuerung mit Codex und Claude. Der Antigravity-Adapter ist verfügbar, wird aber erst mit der neuen asymmetrischen State-Maschine aus Slice 10 als automatischer Abschlussreviewer verdrahtet.
 - Revision 9 der Validierungsarchitektur ist als vom Nutzer beauftragte Querschnittskorrektur nach Slice 07 committed: ein Orchestratorlauf je kanonischem Diff-Fingerprint, fingerprintgebundene Attestierung für beide Reviewer und mehr Reviewbudget für Implementierungsanalyse statt wiederholter Vollsuiten. Editor-Lockdateien gehören weiterhin nicht zum Scope.
+- Revision 10 bindet Claude verbindlich an Sonnet/High und gezielte Änderungsreviews: Runde 1 sieht nur den Slice-Diff, Folgerunden nur den Korrekturdelta samt Records und neuer Attestierung. Reine Contractfehler werden ohne erneute Implementierungsevidenz repariert. Antigravity behält das einmalige vollständige Abschlussreview.
 - `.orchestrator/state.json` liegt in Version 2 vor und steht auf `phase: done`; er stammt vom 2026-02-23.
 - Verbindliche Validierung: `python3 -m pytest tests/ -v`
 - Ergebnis der lokalen Prüfung für Slice 07 am 2026-08-11: **277 gesammelt, 277 bestanden**; zusätzlich sind 52 fokussierte State-/I/O-Tests, Compile, Diffcheck und der aktive v2-Dry-Run grün. Claude F-001 ist korrigiert, formal geschlossen und mit `PHASE2_APPROVAL: YES` freigegeben. Antigravity prüfte den vollständigen finalen Slice-Diff und erteilte `SLICE_APPROVAL: 07 | YES`; der lokale Commit ist autorisiert.

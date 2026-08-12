@@ -1,7 +1,7 @@
 # Arbeitsplan: Modernisierung des Dual-Agent-Orchestrators
 
-**Status:** Revision-6-/Revision-7-Stand freigegeben; Revision-8-Testausnahme und Revision-9-Validierungsattestierung vom Nutzer verbindlich entschieden
-**Anforderungsbasis:** `requirements-orchestrator-modernization.md`, Revision 9
+**Status:** Revision-6-/Revision-7-Stand freigegeben; Revision-8-Testausnahme, Revision-9-Validierungsattestierung und Revision-10-Claude-Reviewpolitik vom Nutzer verbindlich entschieden
+**Anforderungsbasis:** `requirements-orchestrator-modernization.md`, Revision 10
 **Feature-Branch:** `feature/orchestrator-modernization`
 **Branch-Basis:** `master` bei `0bd3bad`
 **GitHub-Status:** nur lokal; kein Upstream; Veröffentlichung ausstehend und nur nach Nutzerfreigabe
@@ -373,6 +373,8 @@ Die Audit-Komponente aus Slice 8 prüft bei Start eines Slice, dass genau diese 
 
 - Codex erstellt Plan/Slice und implementiert, gibt aber niemals eigene Arbeit frei.
 - Claude wird in jeder Korrekturrunde aufgerufen.
+- Claude verwendet Sonnet mit Effort `high`. Sein erster Aufruf erhält nur den vollständigen Änderungsdiff des aktuellen Slice, keine unveränderten Repositorydateien; Folgerunden erhalten nur den Korrekturdelta seit Claudes zuletzt geprüftem Fingerprint plus Finding-Records und neue Attestierung.
+- Reine Ausgabecontract-/Markerfehler werden aus der abgelehnten Antwort und dem Contract repariert. Sie lösen weder ein neues fachliches Review noch eine erneute Übertragung der Implementierungsevidenz aus.
 - Antigravity wird erst nach Claude-Freigabe und je Anlauf genau einmal aufgerufen.
 - Antigravity erhält dabei immer den vollständigen Diff des aktuellen Slice seit dem persistierten Slice-Start-Commit. Der letzte Korrekturdelta darf hervorgehoben werden, ersetzt aber weder frühere Slice-Dateien noch den vollständigen Fingerprint.
 - Antigravity-Rückgabe führt zu Codex und anschließend wieder zu Claude.

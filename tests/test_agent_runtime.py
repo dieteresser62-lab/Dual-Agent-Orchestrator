@@ -88,10 +88,10 @@ def test_run_agent_checked_retries_with_backoff(monkeypatch, tmp_path: Path) -> 
 
 def test_run_agent_checked_validation_error_backoff(monkeypatch, tmp_path: Path) -> None:
     sleeps: list[int] = []
-    calls: list[int] = []
+    prompts: list[str] = []
 
-    def fake_run_agent(*args, **kwargs):  # type: ignore[no-untyped-def]
-        calls.append(1)
+    def fake_run_agent(_adapter, prompt, **kwargs):  # type: ignore[no-untyped-def]
+        prompts.append(prompt)
         return "CODEX_APPROVAL: YES\nSTATUS: DONE"
 
     monkeypatch.setattr(agent_runtime, "run_agent", fake_run_agent)
@@ -99,11 +99,16 @@ def test_run_agent_checked_validation_error_backoff(monkeypatch, tmp_path: Path)
 
     output = run_agent_checked(
         agent_key="codex",
-        prompt="prompt",
+        prompt=(
+            "SENSITIVE_FULL_REVIEW_EVIDENCE\n\n"
+            "Output format (Markdown):\n"
+            "- Marker line: CODEX_APPROVAL: YES|NO\n"
+            "- Final line: STATUS: DONE"
+        ),
         log_prefix="unit",
         max_retries=1,
         required_flags=[],
-        output_validator=lambda _output: "not valid" if len(calls) == 1 else None,
+        output_validator=lambda _output: "not valid" if len(prompts) == 1 else None,
         config=OrchestratorConfig(dry_run=False),
         agents={"codex": AGENT_REGISTRY["codex"]},
         log_dir=tmp_path,
@@ -114,8 +119,14 @@ def test_run_agent_checked_validation_error_backoff(monkeypatch, tmp_path: Path)
     )
 
     assert "STATUS: DONE" in output
-    assert len(calls) == 2
+    assert len(prompts) == 2
     assert sleeps == [2]
+    assert "SENSITIVE_FULL_REVIEW_EVIDENCE" in prompts[0]
+    assert "SENSITIVE_FULL_REVIEW_EVIDENCE" not in prompts[1]
+    assert "not valid" in prompts[1]
+    assert "Rejected answer to repair" in prompts[1]
+    assert "CODEX_APPROVAL: YES\nSTATUS: DONE" in prompts[1]
+    assert "Output format (Markdown)" in prompts[1]
 
 
 @pytest.mark.parametrize(

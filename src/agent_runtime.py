@@ -583,6 +583,43 @@ def compute_retry_backoff_seconds(error_text: str, attempt: int) -> int:
     return exponential
 
 
+def _contract_repair_excerpt(prompt: str) -> str:
+    """Return contract instructions without resending implementation evidence."""
+    markers = (
+        "STATE-V3 CONTRACT (mandatory",
+        "CONTRACT (mandatory):",
+        "Output format (Markdown):",
+    )
+    for marker in markers:
+        start = prompt.rfind(marker)
+        if start >= 0:
+            return prompt[start:].strip()
+    return (
+        "Preserve all semantic content and finish with the exact final line "
+        "STATUS: DONE."
+    )
+
+
+def build_contract_repair_prompt(
+    *,
+    original_prompt: str,
+    rejected_output: str,
+    validation_error: str,
+) -> str:
+    """Build a format-only retry that cannot trigger a second evidence review."""
+    return (
+        "Your previous answer was rejected only by the output-contract validator.\n"
+        "Repair the answer's formal contract without reviewing the implementation again.\n"
+        "Do not change its semantic verdict, findings, classifications, evidence, or rationale.\n"
+        "Return the complete corrected answer and no commentary about this repair.\n\n"
+        f"Validation error:\n{validation_error}\n\n"
+        "Applicable output contract:\n"
+        f"{_contract_repair_excerpt(original_prompt)}\n\n"
+        "Rejected answer to repair:\n"
+        f"{rejected_output}"
+    )
+
+
 def run_agent_checked(
     *,
     agent_key: str,
@@ -602,6 +639,7 @@ def run_agent_checked(
     """Run the requested agent with retries and contract validation."""
     required_flags = required_flags or []
     errors: list[str] = []
+    rejected_output: str | None = None
 
     def validate_output_contract(output: str) -> str | None:
         if not validate_done_marker(output):
@@ -624,12 +662,17 @@ def run_agent_checked(
     for attempt in range(1, max_retries + 2):
         has_next_attempt = attempt < (max_retries + 1)
         prompt_to_send = prompt
-        if attempt > 1:
-            # Tell the agent exactly why the previous response was rejected.
+        if rejected_output is not None:
+            prompt_to_send = build_contract_repair_prompt(
+                original_prompt=prompt,
+                rejected_output=rejected_output,
+                validation_error=errors[-1],
+            )
+        elif attempt > 1:
+            # A technical failure produced no review result, so the original task remains necessary.
             prompt_to_send = (
                 f"{prompt}\n\n"
-                "Your last response was formally unacceptable. "
-                "Fix only the issues listed below.\n"
+                "The previous invocation failed before producing a usable response.\n"
                 f"Error context:\n{chr(10).join(errors[-2:])}\n"
             )
 
@@ -648,12 +691,14 @@ def run_agent_checked(
             validation_error = validate_output_contract(output)
             if validation_error:
                 errors.append(validation_error)
+                rejected_output = output
             else:
                 return output
         except (AgentCompatibilityError, AgentBudgetError, AgentPermissionError):
             # Capability, budget, and permission policy failures require a decision, not retries.
             raise
         except Exception as exc:
+            rejected_output = None
             error_text = shorten(str(exc), ERROR_TRUNCATION_LIMIT)
             errors.append(error_text)
 

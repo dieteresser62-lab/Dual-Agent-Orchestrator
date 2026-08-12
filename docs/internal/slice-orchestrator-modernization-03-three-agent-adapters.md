@@ -12,7 +12,7 @@ Die Adapterregistry enthält nur noch die drei festen Rollen `codex`, `claude` u
 
 Zusätzlich beginnt mit diesem Slice die ressourcenschonende Reviewpolitik:
 
-- Claude verwendet standardmäßig `sonnet` mit `medium`; Opus bleibt eine explizite Eskalation über Konfiguration.
+- Claude verwendet gemäß Revision 10 standardmäßig `sonnet` mit `high`; Opus bleibt eine explizite Eskalation über Konfiguration.
 - Codex verwendet den konfigurierbaren Default `gpt-5.6-sol` mit `medium`, entsprechend der zum Slice-Start geprüften offiziellen OpenAI-Modellführung.
 - Ein einzelner, exakt erlaubbarer Review-Harness bündelt Vollsuite, Git-/Diffprüfung und negativen Schreibtest in kompakter strukturierter Ausgabe, damit Reviewer keine Varianten abgewiesener Shellbefehle ausprobieren.
 - Claude-JSON-Hüllen werden einschließlich Fehler-, Nutzungs- und Permission-Denial-Metadaten ausgewertet und protokolliert.
@@ -26,7 +26,7 @@ Zusätzlich beginnt mit diesem Slice die ressourcenschonende Reviewpolitik:
 - Unter WSL2 wird ein vorhandenes natives `agy` vor `agy.exe` bevorzugt; `agy.exe` und absolute Pfade bleiben explizit konfigurierbar.
 - Codex erhält `workspace-write`; Claude und Antigravity arbeiten ausschließlich in einer schreibgeschützten Wegwerfkopie des Repositorys. Beschreibbare CLI-Runtimepfade liegen außerhalb dieser Kopie.
 - Claude trennt `--tools` von `--allowedTools`, verwendet keinen interaktiven Planmodus, erlaubt nur `Read` und den exakt benannten Review-Harness und scheitert ohne Freigabedialog an anderen Werkzeugen.
-- Claude wird standardmäßig mit `sonnet`, `--effort medium`, Safe Mode, einem kompakten dedizierten Systemprompt, JSON-Ausgabe und ohne Sessionpersistenz gestartet; Modell, Effort, Timeout und optionales Budget sind überschreibbar.
+- Claude wird gemäß Revision 10 standardmäßig mit `sonnet`, `--effort high`, Safe Mode, einem kompakten dedizierten Systemprompt, JSON-Ausgabe und ohne Sessionpersistenz gestartet; Modell, Effort, Timeout und optionales Budget sind überschreibbar.
 - Antigravity setzt Modell, Effort, JSON, Sandbox, Print-Timeout und Logpfad explizit. Sämtliche Optionen stehen vor dem werttragenden abschließenden `--print <prompt>`.
 - Realistische lange Prompts werden bei Codex über stdin transportiert. Claude und Antigravity erhalten nur einen kurzen Verweis auf eine externe private Promptdatei; der eigentliche Prompt erscheint nicht in der Prozessliste.
 - Der Review-Harness läuft genau einmal, setzt `PYTHONDONTWRITEBYTECODE=1`, deaktiviert den pytest-Cacheprovider, gibt Erfolg kompakt und Fehler begrenzt aus und beweist, dass der Schreibversuch auf eine versionierte Datei scheitert.
@@ -129,7 +129,7 @@ VALIDATION_RESULT: PASS | PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/ -q 
 
 - `src/agent_config.py` löst Binary, Modell, Effort, Timeout und optionales Claude-Budget mit CLI → Umgebung → Default auf; natives `agy` wird bevorzugt.
 - Die Registry enthält exakt Codex, Claude und Antigravity. Alle drei Adapter besitzen geprüfte Versions-/Flagverträge, explizite Modelle und harte Timeouts.
-- Codex nutzt stdin, JSONL, finale Nachrichtendatei und `workspace-write`. Claude nutzt Sonnet/Medium, Safe Mode, kompakten Systemprompt, ein externes Reviewpaket, `Read` plus exakten Harness und ein begrenztes strukturiertes Einzel-JSON. Antigravity nutzt JSON, Sandbox, einen externen privaten Langprompt und abschließendes `--print <prompt>`.
+- Codex nutzt stdin, JSONL, finale Nachrichtendatei und `workspace-write`. Claude nutzt gemäß Revision 10 Sonnet/High, Safe Mode, kompakten Systemprompt, ein externes Reviewpaket, `Read` plus exakten Harness und ein begrenztes strukturiertes Einzel-JSON. Antigravity nutzt JSON, Sandbox, einen externen privaten Langprompt und abschließendes `--print <prompt>`.
 - Reviewer laufen in einer Wegwerfkopie, deren Repository und übergeordneter Container schreibgeschützt sind. `PWD` und Harnesspfad werden an diese Kopie gebunden; Runtime-, Cache-, Prompt- und Logdateien liegen außerhalb.
 - Der Review-Harness führt den konfigurierten Testbefehl einmal aus, unterdrückt Bytecode/pytest-Cache, prüft Diff und Status und führt einen nicht mutierenden negativen Schreibtest aus.
 - Claude-Hüllen protokollieren Nutzungs-, Kosten-, Subtype- und Permission-Denial-Metadaten. Budget- und Berechtigungsgates sind nicht retrybar und enden in beiden aktiven Phasen kontrolliert mit Exitcode 1.
@@ -156,7 +156,7 @@ Die lazy Capability-Prüfung war für die tatsächlich installierten Versionen e
 - Der Feldlauf von Slice 05 mit 34 Claude-Turns, 29.304 Output-Tokens und 2,52 Millionen Cache-Read-Tokens zeigte, dass Safe Mode und Harness allein nicht genügen. Die Nachschärfung entfernt offene Suche, macht das Reviewpaket einmalig lesbar, deaktiviert MCPs und Promptvorschläge und begrenzt Werkzeugzahl sowie Antwortschema.
 - Der erste vollständige Claude-Feldlauf legte eine falsche geerbte `PWD`-Bindung offen: Nach einem nicht erlaubten `find /` wurde der Lauf korrekt verworfen. Die Hülle machte den Kostentreiber messbar (18 Runden, 656.179 Cache-Read-Tokens, 0,8649 USD). `PWD` wird deshalb nun explizit an den Snapshot gebunden und Permission-Denials sind nicht retrybar.
 - Ein anschließender Medium-Lauf wurde planmäßig durch das gesetzte 0,50-USD-Limit vor dem Verdikt beendet. Der Parser erkennt den Budget-Subtype nun ausdrücklich und wiederholt auch diesen Zustand nicht.
-- Der abschließende Claude-Kontrollreview verwendete als dokumentierte Quota-Ausnahme Sonnet/Low; der produktive Default bleibt Sonnet/Medium. Durch eingebetteten Produktdiff, genau zwei Runden und knappe Ausgabe sank der Lauf auf 28.788 Cache-Read-Tokens, 294 Output-Tokens und 0,2107 USD.
+- Der abschließende Claude-Kontrollreview verwendete als dokumentierte Quota-Ausnahme Sonnet/Low; der damalige produktive Default war Sonnet/Medium und wurde mit Revision 10 verbindlich auf Sonnet/High angehoben. Durch eingebetteten Produktdiff, genau zwei Runden und knappe Ausgabe sank der Lauf auf 28.788 Cache-Read-Tokens, 294 Output-Tokens und 0,2107 USD.
 
 ## Offene Risiken
 
