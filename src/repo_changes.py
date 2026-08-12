@@ -3,16 +3,22 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import stat
 import subprocess
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Iterable, Sequence
 
+from audit_trail import AuditTrailError, strip_managed_audit_sections
 from path_policy import PathPolicyError, resolve_path_within_roots
 
 
 UNTRACKED_PREVIEW_LIMIT = 256_000
+_SLICE_AUDIT_MARKDOWN_PATTERN = re.compile(
+    r"^slice-[a-z0-9]+(?:-[a-z0-9]+)*-\d{2}-"
+    r"[a-z0-9]+(?:-[a-z0-9]+)*\.md$"
+)
 
 
 class RepositoryChangeError(RuntimeError):
@@ -90,6 +96,8 @@ class _UntrackedPayload:
     content_type: str
     size: int
     digest: str
+    fingerprint_size: int
+    fingerprint_digest: str
     preview: bytes
     truncated: bool
     mode: int
@@ -138,16 +146,12 @@ def _validated_repository_root(repository_root: Path) -> Path:
     try:
         result = _git(root, ("rev-parse", "--show-toplevel"))
     except RepositoryChangeError as exc:
-        git_metadata = next(
-            (
-                candidate / ".git"
-                for candidate in (root, *root.parents)
-                if (candidate / ".git").exists()
-                or (candidate / ".git").is_symlink()
-            ),
-            None,
-        )
-        if git_metadata is None and exc.__cause__ is None:
+        git_metadata = root / ".git"
+        if (
+            not git_metadata.exists()
+            and not git_metadata.is_symlink()
+            and exc.__cause__ is None
+        ):
             raise NotGitRepositoryError(
                 f"path is not inside a Git worktree: {root}"
             ) from exc
@@ -279,6 +283,8 @@ def _read_path_payload(repository_root: Path, relative_path: str) -> _UntrackedP
             content_type="symlink",
             size=len(target),
             digest=hashlib.sha256(target).hexdigest(),
+            fingerprint_size=len(target),
+            fingerprint_digest=hashlib.sha256(target).hexdigest(),
             preview=target,
             truncated=False,
             mode=0o120000,
@@ -289,6 +295,8 @@ def _read_path_payload(repository_root: Path, relative_path: str) -> _UntrackedP
             content_type="special",
             size=metadata.st_size,
             digest=hashlib.sha256(marker).hexdigest(),
+            fingerprint_size=metadata.st_size,
+            fingerprint_digest=hashlib.sha256(marker).hexdigest(),
             preview=b"",
             truncated=False,
             mode=stat.S_IFMT(metadata.st_mode),
@@ -296,6 +304,7 @@ def _read_path_payload(repository_root: Path, relative_path: str) -> _UntrackedP
 
     digest = hashlib.sha256()
     preview = bytearray()
+    markdown_content = bytearray() if _uses_semantic_markdown_digest(relative_path) else None
     opened_size = metadata.st_size
     normalized_mode = 0o100644
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
@@ -315,6 +324,8 @@ def _read_path_payload(repository_root: Path, relative_path: str) -> _UntrackedP
                 if not block:
                     break
                 digest.update(block)
+                if markdown_content is not None:
+                    markdown_content.extend(block)
                 if len(preview) < UNTRACKED_PREVIEW_LIMIT:
                     remaining = UNTRACKED_PREVIEW_LIMIT - len(preview)
                     preview.extend(block[:remaining])
@@ -326,13 +337,39 @@ def _read_path_payload(repository_root: Path, relative_path: str) -> _UntrackedP
         raise RepositoryChangeError(
             f"could not read untracked path {relative_path!r}: {exc}"
         ) from exc
+    raw_digest = digest.hexdigest()
+    fingerprint_size = opened_size
+    fingerprint_digest = raw_digest
+    if markdown_content is not None:
+        try:
+            semantic = strip_managed_audit_sections(
+                bytes(markdown_content).decode("utf-8")
+            ).encode("utf-8")
+        except (UnicodeError, AuditTrailError) as exc:
+            raise RepositoryChangeError(
+                f"could not canonicalize managed audit sections in {relative_path!r}: {exc}"
+            ) from exc
+        fingerprint_size = len(semantic)
+        fingerprint_digest = hashlib.sha256(semantic).hexdigest()
     return _UntrackedPayload(
         content_type="regular",
         size=opened_size,
-        digest=digest.hexdigest(),
+        digest=raw_digest,
+        fingerprint_size=fingerprint_size,
+        fingerprint_digest=fingerprint_digest,
         preview=bytes(preview),
         truncated=opened_size > len(preview),
         mode=normalized_mode,
+    )
+
+
+def _uses_semantic_markdown_digest(relative_path: str) -> bool:
+    path = PurePosixPath(relative_path)
+    if len(path.parts) != 3 or path.parts[:2] != ("docs", "internal"):
+        return False
+    return (
+        path.name == "orchestrator-modernization-work-plan.md"
+        or _SLICE_AUDIT_MARKDOWN_PATTERN.fullmatch(path.name) is not None
     )
 
 
@@ -443,8 +480,8 @@ def collect_repository_changes(
                 "payload": (
                     {
                         "type": payloads[entry.path].content_type,
-                        "size": payloads[entry.path].size,
-                        "sha256": payloads[entry.path].digest,
+                        "size": payloads[entry.path].fingerprint_size,
+                        "sha256": payloads[entry.path].fingerprint_digest,
                         "mode": payloads[entry.path].mode,
                     }
                     if entry.path in payloads

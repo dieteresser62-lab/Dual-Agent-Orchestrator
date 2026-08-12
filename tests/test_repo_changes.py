@@ -123,6 +123,178 @@ def test_collect_changes_excludes_ignored_untracked_but_keeps_tracked_ignored_fi
     assert "still tracked" in changes.diff_text
 
 
+def test_internal_managed_audit_body_is_visible_but_not_self_invalidating(
+    tmp_path: Path,
+) -> None:
+    repository, base_commit = _new_repository(tmp_path)
+    _git(repository, "switch", "-c", "feature/audit")
+    audit = repository / "docs" / "internal" / "slice-example-08-audit.md"
+    audit.parent.mkdir(parents=True)
+    audit.write_text(
+        "\n".join(
+            (
+                "# Audit",
+                "<!-- audit:claude-review:begin -->",
+                "initial",
+                "<!-- audit:claude-review:end -->",
+                "semantic body",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    _commit_all(repository, "add audit document")
+
+    audit.write_text(
+        audit.read_text(encoding="utf-8").replace("initial", "first projected review"),
+        encoding="utf-8",
+    )
+    first = collect_repository_changes(repository, base_commit)
+    audit.write_text(
+        audit.read_text(encoding="utf-8").replace(
+            "first projected review", "second and much longer projected review"
+        ),
+        encoding="utf-8",
+    )
+    second = collect_repository_changes(repository, base_commit)
+
+    assert first.fingerprint == second.fingerprint
+    assert "first projected review" in first.diff_text
+    assert "second and much longer projected review" in second.diff_text
+
+    audit.write_text(
+        audit.read_text(encoding="utf-8").replace("semantic body", "changed semantic body"),
+        encoding="utf-8",
+    )
+    semantic_change = collect_repository_changes(repository, base_commit)
+    assert semantic_change.fingerprint != second.fingerprint
+
+
+def test_unregistered_internal_markdown_cannot_hide_content_from_fingerprint(
+    tmp_path: Path,
+) -> None:
+    repository, base_commit = _new_repository(tmp_path)
+    _git(repository, "switch", "-c", "feature/internal-doc")
+    document = repository / "docs" / "internal" / "handover-note.md"
+    document.parent.mkdir(parents=True)
+    document.write_text(
+        "\n".join(
+            (
+                "# Handover",
+                "<!-- audit:findings:begin -->",
+                "first substantive body",
+                "<!-- audit:findings:end -->",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    first = collect_repository_changes(repository, base_commit)
+
+    document.write_text(
+        document.read_text(encoding="utf-8").replace(
+            "first substantive body", "changed substantive body"
+        ),
+        encoding="utf-8",
+    )
+    second = collect_repository_changes(repository, base_commit)
+
+    assert first.fingerprint != second.fingerprint
+
+
+def test_malformed_internal_audit_markers_fail_repository_fingerprint_closed(
+    tmp_path: Path,
+) -> None:
+    repository, base_commit = _new_repository(tmp_path)
+    _git(repository, "switch", "-c", "feature/audit")
+    audit = repository / "docs" / "internal" / "slice-example-08-audit.md"
+    audit.parent.mkdir(parents=True)
+    audit.write_text(
+        "# Audit\n<!-- audit:findings:begin -->\nunclosed\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RepositoryChangeError, match="canonicalize managed audit sections"):
+        collect_repository_changes(repository, base_commit)
+
+
+def test_marker_examples_inside_markdown_fence_are_semantic_not_audit_markup(
+    tmp_path: Path,
+) -> None:
+    repository, base_commit = _new_repository(tmp_path)
+    _git(repository, "switch", "-c", "feature/audit-example")
+    example = repository / "docs" / "internal" / "marker-example.md"
+    example.parent.mkdir(parents=True)
+    example.write_text("# Marker example\n", encoding="utf-8")
+    _commit_all(repository, "add marker example")
+
+    example.write_text(
+        "\n".join(
+            (
+                "# Marker example",
+                "````markdown",
+                "```",
+                "<!-- audit:findings:begin -->",
+                "semantic marker example",
+                "<!-- audit:findings:end -->",
+                "````",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    first = collect_repository_changes(repository, base_commit)
+    example.write_text(
+        example.read_text(encoding="utf-8").replace(
+            "semantic marker example",
+            "changed semantic marker example",
+        ),
+        encoding="utf-8",
+    )
+    second = collect_repository_changes(repository, base_commit)
+
+    assert first.fingerprint != second.fingerprint
+    assert "changed semantic marker example" in second.diff_text
+
+
+def test_blockquote_marker_examples_are_semantic_not_managed_sections(
+    tmp_path: Path,
+) -> None:
+    repository, base_commit = _new_repository(tmp_path)
+    _git(repository, "switch", "-c", "feature/blockquote-audit-example")
+    example = repository / "docs" / "internal" / "blockquote-marker-example.md"
+    example.parent.mkdir(parents=True)
+    example.write_text("# Marker example\n", encoding="utf-8")
+    _commit_all(repository, "add blockquote marker example")
+
+    example.write_text(
+        "\n".join(
+            (
+                "# Marker example",
+                "> ```markdown",
+                "> <!-- audit:findings:begin -->",
+                "> semantic blockquote marker example",
+                "> <!-- audit:findings:end -->",
+                "> ```",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    first = collect_repository_changes(repository, base_commit)
+    example.write_text(
+        example.read_text(encoding="utf-8").replace(
+            "semantic blockquote marker example",
+            "changed blockquote marker example",
+        ),
+        encoding="utf-8",
+    )
+    second = collect_repository_changes(repository, base_commit)
+
+    assert first.fingerprint != second.fingerprint
+    assert "changed blockquote marker example" in second.diff_text
+
+
 @pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlinks are unavailable")
 def test_untracked_binary_symlink_and_content_changes_affect_fingerprint(
     tmp_path: Path,
@@ -190,6 +362,18 @@ def test_non_repository_is_distinguished_from_broken_git_metadata(
     with pytest.raises(RepositoryChangeError) as caught:
         resolve_merge_base(broken_repository)
     assert not isinstance(caught.value, NotGitRepositoryError)
+
+
+def test_invalid_foreign_ancestor_metadata_does_not_misclassify_repository_root(
+    tmp_path: Path,
+) -> None:
+    foreign_ancestor = tmp_path / "foreign-ancestor"
+    (foreign_ancestor / ".git").mkdir(parents=True)
+    repository_root = foreign_ancestor / "plain-child"
+    repository_root.mkdir()
+
+    with pytest.raises(NotGitRepositoryError, match="not inside a Git worktree"):
+        resolve_merge_base(repository_root)
 
 
 def test_resolve_merge_base_prefers_remote_default_branch(tmp_path: Path) -> None:

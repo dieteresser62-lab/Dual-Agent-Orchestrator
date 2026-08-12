@@ -137,7 +137,7 @@ Jede Slice-MD wird unmittelbar vor Beginn ihres Slice angelegt und dann aus der 
 | 5 | `docs/internal/slice-orchestrator-modernization-05-canonical-branch-diff.md` |
 | 6 | [`docs/internal/slice-orchestrator-modernization-06-contract-finding-core.md`](slice-orchestrator-modernization-06-contract-finding-core.md) |
 | 7 | [`docs/internal/slice-orchestrator-modernization-07-state-v3-work-units.md`](slice-orchestrator-modernization-07-state-v3-work-units.md) |
-| 8 | `docs/internal/slice-orchestrator-modernization-08-audit-trail.md` |
+| 8 | [`docs/internal/slice-orchestrator-modernization-08-audit-trail.md`](slice-orchestrator-modernization-08-audit-trail.md) |
 | 9 | `docs/internal/slice-orchestrator-modernization-09-branch-commit-transaction.md` |
 | 10 | `docs/internal/slice-orchestrator-modernization-10-asymmetric-review-chain.md` |
 | 11 | `docs/internal/slice-orchestrator-modernization-11-test-change-gate.md` |
@@ -316,11 +316,13 @@ Die Audit-Komponente aus Slice 8 prüft bei Start eines Slice, dass genau diese 
 **Test-Riegel:** ja. **Red-State:** nein.
 **Risiko/Rückfalloption:** Stateverlust ist kritisch; v2-Dateien werden nie überschrieben, bevor die Version erfolgreich validiert ist.
 
-### Slice 8 — Deterministische Plan- und Slice-Prüfspur
+### [Slice 8 — Deterministische Plan- und Slice-Prüfspur](slice-orchestrator-modernization-08-audit-trail.md)
 
 **Zweck:** Strukturierte Laufereignisse ohne doppelte manuelle Pflege in Plan- und Slice-Dokumente projizieren.
 **Anforderungen:** R-17; Teil von R-3 und R-8.
 **Voraussichtlich betroffene Dateien:** `src/audit_trail.py` (neu), `src/contracts.py`, `src/workflow_state.py`, `tests/test_audit_trail.py` (neu), `tests/test_language_consistency.py` nur falls Dateierkennung erweitert werden muss.
+**Tatsächlich betroffene Dateien vor Review:** `src/audit_trail.py` (neu), `src/repo_changes.py`, `tests/test_audit_trail.py` (neu), `tests/test_repo_changes.py`, Arbeitsplan, Übergabe und Slice-MD. Die bestehenden typisierten Contracts und die idempotenten v3-Seiteneffekt-Schlüssel reichen als Eingabe- und Resume-Grenze aus; `src/contracts.py` und `src/workflow_state.py` bleiben deshalb unverändert.
+**Umsetzungsstatus:** additive Auditprojektion implementiert; finale Validierungsattestierung und Reviews werden in der Slice-MD verwaltet.
 
 **Akzeptanzkriterien:**
 
