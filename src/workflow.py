@@ -24,11 +24,23 @@ from contracts import (
     FindingStatus,
     ReadinessMarker,
     StepContract,
+    StopRequest,
     ValidationAttestation,
     validate_codex_response,
     validate_review_response,
 )
-from gates import AnchorChangeEvidence, TestChangeEvidence, detect_anchor_changes
+from gates import (
+    BRANCH_MISMATCH_RULE_ID,
+    BUILTIN_STOP_RULES,
+    UNEXPECTED_PATH_RULE_ID,
+    VALIDATION_UNAVAILABLE_RULE_ID,
+    AnchorChangeEvidence,
+    PathClasses,
+    StopRule,
+    TestChangeEvidence,
+    detect_anchor_changes,
+    evaluate_productive_file_limit,
+)
 from prompts import (
     build_v3_codex_prompt,
     build_v3_review_contract,
@@ -54,6 +66,10 @@ class WorkflowExecutionError(RuntimeError):
 
 class WorkflowContractError(WorkflowExecutionError):
     """Raised after a reviewer response and its compact format repair both fail."""
+
+
+class ValidationExecutionError(WorkflowExecutionError):
+    """Raised by a v3 driver when required validation cannot be executed."""
 
 
 class EvidenceKind(str, Enum):
@@ -88,7 +104,6 @@ class WorkflowChanges:
         """Include historical rename paths when the driver captured them."""
         return self.gate_paths or self.paths
 
-
 @dataclass(frozen=True)
 class WorkflowContext:
     assignment: str
@@ -100,6 +115,10 @@ class WorkflowContext:
     manual_slice_gate: bool = False
     approved_anchors: tuple[AnchorRecord, ...] = ()
     current_anchors: tuple[AnchorRecord, ...] = ()
+    path_classes: PathClasses = PathClasses()
+    stop_rules: tuple[StopRule, ...] = ()
+    max_productive_files: int = 10
+    current_branch: str | None = None
 
     def __post_init__(self) -> None:
         if not self.assignment.strip():
@@ -117,6 +136,20 @@ class WorkflowContext:
             or len(set(self.test_path_patterns)) != len(self.test_path_patterns)
         ):
             raise ValueError("test path patterns must be non-empty and unique")
+        rule_ids = tuple(rule.id for rule in self.stop_rules)
+        builtin_ids = {rule.id for rule in BUILTIN_STOP_RULES}
+        if len(set(rule_ids)) != len(rule_ids):
+            raise ValueError("declared stop rule ids must be unique")
+        if builtin_ids.intersection(rule_ids):
+            raise ValueError("declared stop rules cannot shadow built-in rule ids")
+        if (
+            isinstance(self.max_productive_files, bool)
+            or not isinstance(self.max_productive_files, int)
+            or self.max_productive_files < 1
+        ):
+            raise ValueError("max_productive_files must be a positive integer")
+        if self.current_branch is not None and not self.current_branch.strip():
+            raise ValueError("current_branch must be non-empty when provided")
 
     @property
     def distilled_context(self) -> str:
@@ -126,7 +159,20 @@ class WorkflowContext:
             f"PLAN\n{self.distilled_plan}\n\n"
             f"CURRENT SLICE\n{self.slice_summary}\n\n"
             f"APPROVED PLAN ANCHORS\n{approved}\n\n"
-            f"CURRENT ANCHORS\n{current}"
+            f"CURRENT ANCHORS\n{current}\n\n"
+            f"MACHINE STOP RULES (complete, untruncated)\n{self._render_stop_rules()}"
+        )
+
+    def _render_stop_rules(self) -> str:
+        return "\n".join(
+            f"{rule.id} | {rule.description}"
+            for rule in (*BUILTIN_STOP_RULES, *self.stop_rules)
+        )
+
+    @property
+    def known_stop_rule_ids(self) -> frozenset[str]:
+        return frozenset(
+            rule.id for rule in (*BUILTIN_STOP_RULES, *self.stop_rules)
         )
 
     @staticmethod
@@ -265,6 +311,11 @@ class WorkflowEngine:
         if current.status is not WorkUnitStatus.IN_PROGRESS:
             return WorkflowRunResult(state, active_history)
 
+        state, policy_halted = self._apply_pre_agent_policy_gates(state, context)
+        if policy_halted:
+            self.driver.checkpoint(state, active_history)
+            return WorkflowRunResult(state, active_history)
+
         state, active_history, anchor_halted = self._apply_anchor_gate(
             state, context, active_history
         )
@@ -282,6 +333,8 @@ class WorkflowEngine:
                 state, active_history = self._run_codex(
                     state, context, active_history
                 )
+                if state.current_work_unit.status is not WorkUnitStatus.IN_PROGRESS:
+                    return WorkflowRunResult(state, active_history)
                 continue
             if step in (
                 WorkflowStep.CLAUDE_PLAN_REVIEW,
@@ -379,7 +432,13 @@ class WorkflowEngine:
             result = validate_codex_response(output, contract, history.findings)
         except ContractValidationError as exc:
             raise WorkflowContractError(f"invalid Codex response: {exc}") from exc
-        if result.stopped or result.ready is not True:
+        if result.stopped:
+            if result.stop_request is None:
+                raise WorkflowExecutionError("Codex stop has no structured stop request")
+            state = self._halt_for_stop_request(state, context, result.stop_request)
+            self.driver.checkpoint(state, history)
+            return state, history
+        if result.ready is not True:
             raise WorkflowExecutionError("Codex did not declare the current step ready")
         history = replace(history, findings=result.findings)
         next_step = (
@@ -409,7 +468,18 @@ class WorkflowEngine:
             )
         start_commit = state.current_slice.start_commit or state.branch_base
         changes = self.driver.collect_changes(start_commit)
-        self._validate_change_boundary(state, changes, unit.kind)
+        unexpected = self._validate_change_boundary(state, changes, unit.kind)
+        if unexpected:
+            state = state.await_policy_gate(
+                reason=GateReason.UNEXPECTED_FILE,
+                detail=(
+                    f"{UNEXPECTED_PATH_RULE_ID} | canonical changes contain paths "
+                    f"outside the persisted Slice scope: {', '.join(unexpected)}"
+                ),
+                paths=unexpected,
+            )
+            self.driver.checkpoint(state, history)
+            return state, history
         test_changes_approved = context.test_changes_approved
         if not test_changes_approved:
             test_evidence = self.driver.detect_test_changes(
@@ -446,7 +516,15 @@ class WorkflowEngine:
                 raise WorkflowExecutionError(
                     "Antigravity requires Claude approval for the current fingerprint"
                 )
-        attestation, history = self._attestation(changes, history, unit.slice_id)
+        try:
+            attestation, history = self._attestation(changes, history, unit.slice_id)
+        except ValidationExecutionError as exc:
+            state = state.await_policy_gate(
+                reason=GateReason.STOP_REQUEST,
+                detail=f"{VALIDATION_UNAVAILABLE_RULE_ID} | {exc}",
+            )
+            self.driver.checkpoint(state, history)
+            return state, history
         review_round = (
             1
             + sum(
@@ -507,7 +585,13 @@ class WorkflowEngine:
             findings=history.findings,
         )
         if result.stopped:
-            raise WorkflowExecutionError(f"{reviewer.value} requested a workflow stop")
+            if result.stop_request is None:
+                raise WorkflowExecutionError(
+                    f"{reviewer.value} stop has no structured stop request"
+                )
+            state = self._halt_for_stop_request(state, context, result.stop_request)
+            self.driver.checkpoint(state, history)
+            return state, history
         history = self._record_review(
             history,
             unit.slice_id,
@@ -651,7 +735,20 @@ class WorkflowEngine:
         if start_commit is None:
             raise WorkflowExecutionError("slice commit requires a persisted start commit")
         changes = self.driver.collect_changes(start_commit)
-        self._validate_change_boundary(state, changes, state.current_work_unit.kind)
+        unexpected = self._validate_change_boundary(
+            state, changes, state.current_work_unit.kind
+        )
+        if unexpected:
+            state = state.await_policy_gate(
+                reason=GateReason.UNEXPECTED_FILE,
+                detail=(
+                    f"{UNEXPECTED_PATH_RULE_ID} | canonical changes contain paths "
+                    f"outside the persisted Slice scope: {', '.join(unexpected)}"
+                ),
+                paths=unexpected,
+            )
+            self.driver.checkpoint(state, history)
+            return WorkflowRunResult(state, history)
         attestation = next(
             (
                 item
@@ -751,6 +848,57 @@ class WorkflowEngine:
         self.driver.checkpoint(state, history)
         return state, history, True
 
+    def _apply_pre_agent_policy_gates(
+        self,
+        state: WorkflowState,
+        context: WorkflowContext,
+    ) -> tuple[WorkflowState, bool]:
+        current_branch = context.current_branch or state.branch
+        if current_branch != state.branch:
+            return (
+                state.await_policy_gate(
+                    reason=GateReason.STOP_REQUEST,
+                    detail=(
+                        f"{BRANCH_MISMATCH_RULE_ID} | active branch "
+                        f"{current_branch!r} differs from persisted branch {state.branch!r}"
+                    ),
+                ),
+                True,
+            )
+        scope_paths = state.current_slice.scope_paths
+        if state.current_work_unit.kind is WorkUnitKind.PLAN or not scope_paths:
+            return state, False
+        evidence = evaluate_productive_file_limit(
+            state.current_slice.scope_change_groups,
+            context.path_classes,
+            maximum=context.max_productive_files,
+        )
+        if evidence is None:
+            return state, False
+        return (
+            state.await_policy_gate(
+                reason=GateReason.STOP_REQUEST,
+                detail=evidence.detail,
+                paths=evidence.paths,
+            ),
+            True,
+        )
+
+    @staticmethod
+    def _halt_for_stop_request(
+        state: WorkflowState,
+        context: WorkflowContext,
+        stop_request: StopRequest,
+    ) -> WorkflowState:
+        if stop_request.rule_id not in context.known_stop_rule_ids:
+            raise WorkflowExecutionError(
+                f"STOP_REQUESTED references unknown rule {stop_request.rule_id!r}"
+            )
+        return state.await_policy_gate(
+            reason=GateReason.STOP_REQUEST,
+            detail=f"{stop_request.rule_id} | {stop_request.rationale}",
+        )
+
     @staticmethod
     def _latest_anchor_approval(state: WorkflowState) -> GateDecisionRecord | None:
         return next(
@@ -786,21 +934,16 @@ class WorkflowEngine:
         state: WorkflowState,
         changes: WorkflowChanges,
         kind: WorkUnitKind,
-    ) -> None:
+    ) -> tuple[str, ...]:
         expected_start = state.current_slice.start_commit or state.branch_base
         if changes.start_commit != expected_start:
             raise WorkflowExecutionError("change evidence uses a foreign slice start commit")
         if kind is WorkUnitKind.PLAN:
-            return
+            return ()
         scope = state.current_slice.scope_paths
         if not scope:
             raise WorkflowExecutionError("slice review requires a persisted Git boundary")
-        unexpected = tuple(path for path in changes.paths if path not in scope)
-        if unexpected:
-            raise WorkflowExecutionError(
-                "change evidence contains paths outside the persisted slice scope: "
-                + ", ".join(unexpected)
-            )
+        return tuple(path for path in changes.paths if path not in scope)
 
     @staticmethod
     def _review_evidence(

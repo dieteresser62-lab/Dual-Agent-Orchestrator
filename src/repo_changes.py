@@ -91,6 +91,20 @@ class RepositoryChanges:
         committed = [entry.path for entry in self.entries if not entry.working_tree]
         return tuple([*current, *committed])
 
+    @property
+    def change_groups(self) -> tuple[tuple[str, ...], ...]:
+        """Return one canonical path group per change, retaining both rename sides."""
+        return tuple(
+            tuple(
+                sorted(
+                    path
+                    for path in (entry.old_path, entry.path)
+                    if path is not None
+                )
+            )
+            for entry in self.entries
+        )
+
     def render_snapshot(self, max_diff_chars: int) -> str:
         status_lines = [
             _format_status(entry) for entry in self.entries

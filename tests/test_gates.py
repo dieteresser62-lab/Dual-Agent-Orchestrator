@@ -4,7 +4,14 @@ import subprocess
 from pathlib import Path
 
 from contracts import AnchorRecord
-from gates import detect_anchor_changes, detect_test_changes
+from gates import (
+    PathClass,
+    PathClasses,
+    classify_change_groups,
+    detect_anchor_changes,
+    detect_test_changes,
+    evaluate_productive_file_limit,
+)
 from repo_changes import collect_repository_changes
 
 
@@ -131,3 +138,64 @@ def test_anchor_gate_reports_added_removed_changed_and_stable_current_fingerprin
     assert first.changes.changed == ("A",)
     assert reordered.fingerprint == first.fingerprint
     assert detect_anchor_changes(approved, approved) is None
+
+
+def test_productive_file_limit_allows_ten_and_halts_at_eleven() -> None:
+    classes = PathClasses(productive=("src/**",))
+    ten = tuple((f"src/file_{index}.py",) for index in range(10))
+    eleven = (*ten, ("src/file_10.py",))
+
+    assert evaluate_productive_file_limit(ten, classes) is None
+    evidence = evaluate_productive_file_limit(eleven, classes)
+
+    assert evidence is not None
+    assert evidence.count == 11
+    assert evidence.maximum == 10
+    assert evidence.paths[0] == "src/file_0.py"
+
+
+def test_path_classes_exclude_tests_docs_generated_and_fail_closed_unknown() -> None:
+    classes = PathClasses(
+        productive=("app/**",),
+        tests=("spec/**",),
+        documentation=("notes/**",),
+        generated=("build/**",),
+    )
+    groups = classify_change_groups(
+        (
+            ("spec/check.py",),
+            ("notes/design.md",),
+            ("build/cache.bin",),
+            ("unclassified.payload",),
+        ),
+        classes,
+    )
+
+    assert [group.classifications[0].path_class for group in groups] == [
+        PathClass.TEST,
+        PathClass.DOCUMENTATION,
+        PathClass.GENERATED,
+        PathClass.PRODUCTIVE,
+    ]
+    assert groups[-1].classifications[0].matched_pattern is None
+    assert evaluate_productive_file_limit(
+        (group.paths for group in groups), classes, maximum=1
+    ) is None
+
+
+def test_rename_is_one_change_unit_and_either_side_can_make_it_productive() -> None:
+    classes = PathClasses(
+        productive=("src/**",),
+        documentation=("docs/**",),
+    )
+    rename = (("docs/old.md", "src/new.py"),)
+    evidence = evaluate_productive_file_limit(rename, classes, maximum=1)
+    classified = classify_change_groups(rename, classes)
+
+    assert evidence is None
+    assert len(classified) == 1
+    assert classified[0].productive
+    assert {item.path_class for item in classified[0].classifications} == {
+        PathClass.DOCUMENTATION,
+        PathClass.PRODUCTIVE,
+    }

@@ -333,6 +333,10 @@ manual_slice_gate = true
         ("[paths]\nproductive = [\"src\\\\**\"]\n", "platform-neutral separator"),
         ("[paths]\nproductive = []\n", "must contain at least one path pattern"),
         (
+            "[paths]\nproductive = [\"src/**\", \"src/**\"]\n",
+            "Invalid [paths] configuration: productive path patterns must be unique",
+        ),
+        (
             "[[stop_rules]]\nid = \"S-001\"\ndescription = \"one\"\n"
             "[[stop_rules]]\nid = \"S-001\"\ndescription = \"two\"\n",
             "Duplicate stop rule id: S-001",

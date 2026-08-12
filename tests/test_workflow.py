@@ -12,7 +12,7 @@ from contracts import (
     ValidationRecord,
     ValidationStatus,
 )
-from gates import TestChangeEvidence as GateTestChangeEvidence
+from gates import PathClasses, StopRule, TestChangeEvidence as GateTestChangeEvidence
 from workflow import (
     CodexInvocation,
     ContractRepairInvocation,
@@ -25,6 +25,7 @@ from workflow import (
     WorkflowEngine,
     WorkflowExecutionError,
     WorkflowHistory,
+    ValidationExecutionError,
     authorized_test_changes_from_state,
 )
 from workflow_state import (
@@ -72,6 +73,25 @@ def _codex_ready(*finding_ids: str, plan: bool = False) -> str:
         lines.extend((f"TEST_FILES_TOUCHED: {TEST_FILE}", "IMPLEMENTATION_READY: 01 | YES"))
     lines.append("STATUS: DONE")
     return "\n".join(lines)
+
+
+def _codex_stop(rule_id: str) -> str:
+    return "\n".join(
+        (
+            f"STOP_REQUESTED: {rule_id} | domain semantics require user direction",
+            "STATUS: DONE",
+        )
+    )
+
+
+def _review_stop(role: AgentRole, rule_id: str) -> str:
+    return "\n".join(
+        (
+            f"REVIEWER: {role.value}",
+            f"STOP_REQUESTED: {rule_id} | review cannot resolve the domain choice",
+            "STATUS: DONE",
+        )
+    )
 
 
 def _review_approval(role: AgentRole, *, finding_status: str | None = None) -> str:
@@ -132,6 +152,7 @@ class FakeDriver:
     deltas: dict[tuple[str, str], str] = field(default_factory=dict)
     invalid_attestation: str | None = None
     fail_reviewer_once: bool = False
+    validation_unavailable: str | None = None
     test_evidence_by_fingerprint: dict[str, GateTestChangeEvidence] = field(
         default_factory=dict
     )
@@ -166,6 +187,8 @@ class FakeDriver:
 
     def validate(self, changes: WorkflowChanges) -> ValidationAttestation:
         self.validation_calls.append(changes.fingerprint)
+        if self.validation_unavailable is not None:
+            raise ValidationExecutionError(self.validation_unavailable)
         attestation = _attestation(changes)
         if self.invalid_attestation == "foreign":
             return ValidationAttestation(
@@ -207,7 +230,10 @@ class FakeDriver:
         self.checkpoint_histories.append(history)
 
 
-def _slice_state():
+def _slice_state(
+    scope_paths: tuple[str, ...] = ("src/early.py", "src/latest.py", TEST_FILE),
+    scope_change_groups: tuple[tuple[str, ...], ...] | None = None,
+):
     state = init_workflow_state(
         run_id="run-1",
         task_file="/repo/task.md",
@@ -223,7 +249,8 @@ def _slice_state():
     )
     return state.bind_current_slice_git_boundary(
         start_commit=START_COMMIT,
-        scope_paths=("src/early.py", "src/latest.py", TEST_FILE),
+        scope_paths=scope_paths,
+        scope_change_groups=scope_change_groups,
         start_fingerprint="0" * 64,
     )
 
@@ -503,10 +530,173 @@ def test_scope_foreign_change_stops_before_validation_and_review() -> None:
         reviewer_outputs=[],
     )
 
-    with pytest.raises(WorkflowExecutionError, match="outside"):
+    result = WorkflowEngine(driver).run_current_work_unit(_slice_state(), _context())
+
+    assert result.exit_code == 4
+    assert result.state.current_work_unit.gate.reason is GateReason.UNEXPECTED_FILE
+    assert result.state.current_work_unit.gate.paths == ("src/foreign.py",)
+    assert driver.validation_calls == []
+    assert driver.reviewer_calls == []
+
+
+def test_productive_file_limit_halts_before_first_agent_and_rechecks_on_resume() -> None:
+    scope = tuple(f"src/file_{index}.py" for index in range(11))
+    driver = FakeDriver(snapshots=[], codex_outputs=[], reviewer_outputs=[])
+    engine = WorkflowEngine(driver)
+
+    halted = engine.run_current_work_unit(_slice_state(scope), _context())
+
+    assert halted.exit_code == 4
+    assert halted.state.current_work_unit.gate.reason is GateReason.STOP_REQUEST
+    assert "PRODUCTIVE-FILE-LIMIT" in halted.state.current_work_unit.gate.detail
+    assert "src/file_0.py=productive" in halted.state.current_work_unit.gate.detail
+    assert driver.codex_calls == []
+    resumed = halted.state.resume_after_user_decision()
+    halted_again = engine.run_current_work_unit(resumed, _context(), halted.history)
+    assert halted_again.exit_code == 4
+    assert driver.codex_calls == []
+
+
+def test_productive_file_limit_uses_persisted_rename_groups() -> None:
+    rename_group = ("src/renamed_new.py", "src/renamed_old.py")
+    nine_singletons = tuple((f"src/file_{index}.py",) for index in range(9))
+    ten_groups = tuple(sorted((*nine_singletons, rename_group)))
+    ten_paths = tuple(sorted(path for group in ten_groups for path in group))
+    driver = FakeDriver(
+        snapshots=[],
+        codex_outputs=[_codex_stop("DOMAIN-001")],
+        reviewer_outputs=[],
+    )
+    context = replace(
+        _context(), stop_rules=(StopRule("DOMAIN-001", "stop after limit check"),)
+    )
+
+    allowed = WorkflowEngine(driver).run_current_work_unit(
+        _slice_state(ten_paths, ten_groups), context
+    )
+
+    assert allowed.exit_code == 4
+    assert allowed.state.current_work_unit.gate.detail.startswith("DOMAIN-001 |")
+    assert len(driver.codex_calls) == 1
+
+    eleven_groups = tuple(sorted((*ten_groups, ("src/file_9.py",))))
+    eleven_paths = tuple(sorted(path for group in eleven_groups for path in group))
+    blocked_driver = FakeDriver(snapshots=[], codex_outputs=[], reviewer_outputs=[])
+    blocked = WorkflowEngine(blocked_driver).run_current_work_unit(
+        _slice_state(eleven_paths, eleven_groups), _context()
+    )
+
+    assert blocked.exit_code == 4
+    assert "11 productive change units" in blocked.state.current_work_unit.gate.detail
+    assert "12 productive change units" not in blocked.state.current_work_unit.gate.detail
+    assert blocked_driver.codex_calls == []
+
+
+def test_branch_mismatch_halts_before_first_agent() -> None:
+    driver = FakeDriver(snapshots=[], codex_outputs=[], reviewer_outputs=[])
+    context = replace(_context(), current_branch="feature/other")
+
+    result = WorkflowEngine(driver).run_current_work_unit(_slice_state(), context)
+
+    assert result.exit_code == 4
+    assert "BRANCH-MISMATCH" in result.state.current_work_unit.gate.detail
+    assert driver.codex_calls == []
+
+
+def test_declared_stop_rule_is_untruncated_in_codex_and_reviewer_prompts() -> None:
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    description = "domain invariant " + "x" * 20_000
+    context = replace(
+        _context(), stop_rules=(StopRule("DOMAIN-001", description),)
+    )
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[
+            _review_approval(AgentRole.CLAUDE),
+            _review_approval(AgentRole.ANTIGRAVITY),
+        ],
+    )
+
+    result = WorkflowEngine(driver).run_current_work_unit(_slice_state(), context)
+
+    assert result.completed
+    expected = f"DOMAIN-001 | {description}"
+    assert expected in driver.codex_calls[0].prompt
+    assert expected in driver.reviewer_calls[0].prompt
+    assert expected in driver.reviewer_calls[1].prompt
+
+
+def test_codex_stop_request_halts_same_step_without_retry_or_repair() -> None:
+    driver = FakeDriver(
+        snapshots=[],
+        codex_outputs=[_codex_stop("DOMAIN-001")],
+        reviewer_outputs=[],
+    )
+    context = replace(
+        _context(),
+        stop_rules=(StopRule("DOMAIN-001", "engine semantics changed"),),
+    )
+
+    result = WorkflowEngine(driver).run_current_work_unit(_slice_state(), context)
+
+    assert result.exit_code == 4
+    assert result.state.current_step is WorkflowStep.CODEX_IMPLEMENTATION
+    assert result.state.current_work_unit.gate.detail == (
+        "DOMAIN-001 | domain semantics require user direction"
+    )
+    assert len(driver.codex_calls) == 1
+    assert driver.repair_calls == []
+
+
+def test_reviewer_stop_request_halts_without_contract_repair() -> None:
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[_review_stop(AgentRole.CLAUDE, "DOMAIN-001")],
+    )
+    context = replace(
+        _context(),
+        stop_rules=(StopRule("DOMAIN-001", "engine semantics changed"),),
+    )
+
+    result = WorkflowEngine(driver).run_current_work_unit(_slice_state(), context)
+
+    assert result.exit_code == 4
+    assert result.state.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
+    assert len(driver.reviewer_calls) == 1
+    assert driver.repair_calls == []
+
+
+def test_unknown_stop_rule_is_rejected_instead_of_becoming_a_gate() -> None:
+    driver = FakeDriver(
+        snapshots=[],
+        codex_outputs=[_codex_stop("UNKNOWN-001")],
+        reviewer_outputs=[],
+    )
+
+    with pytest.raises(WorkflowExecutionError, match="unknown rule"):
         WorkflowEngine(driver).run_current_work_unit(_slice_state(), _context())
 
-    assert driver.validation_calls == []
+    assert len(driver.codex_calls) == 1
+    assert driver.repair_calls == []
+
+
+def test_unavailable_validation_uses_policy_gate_before_reviewer() -> None:
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[],
+        validation_unavailable="pytest executable is missing",
+    )
+
+    result = WorkflowEngine(driver).run_current_work_unit(_slice_state(), _context())
+
+    assert result.exit_code == 4
+    assert result.state.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
+    assert "VALIDATION-UNAVAILABLE" in result.state.current_work_unit.gate.detail
     assert driver.reviewer_calls == []
 
 

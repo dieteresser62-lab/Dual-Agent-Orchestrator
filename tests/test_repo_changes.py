@@ -494,3 +494,14 @@ def test_subset_fingerprint_rejects_partial_captured_metadata(
         match="captured fingerprint metadata does not cover the selected change entry",
     ):
         fingerprint_change_subset(partial, ("second.txt",))
+
+
+def test_change_groups_keep_both_rename_sides_in_one_unit(tmp_path: Path) -> None:
+    repository, base_commit = _new_repository(tmp_path)
+    _git(repository, "switch", "-c", "feature/change-groups")
+    (repository / "base.txt").rename(repository / "renamed.txt")
+    _git(repository, "add", "-A")
+
+    changes = collect_repository_changes(repository, base_commit)
+
+    assert changes.change_groups == (("base.txt", "renamed.txt"),)

@@ -14,6 +14,7 @@ from typing import Callable, Mapping, Sequence
 import tomllib
 
 from agent_config import AgentConfigError, add_agent_arguments, resolve_agent_settings
+from gates import PathClasses, STOP_RULE_ID_PATTERN, StopRule
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -24,25 +25,10 @@ DEFAULT_TEST_COMMAND = ""
 DEFAULT_MAX_SHARED_CHARS = 30000
 DEFAULT_WATCH_STREAM_CHANNELS = "stdout"
 WATCH_STREAM_CHANNELS = ("both", "stdout", "stderr")
-STOP_RULE_ID_PATTERN = re.compile(r"^[A-Z][A-Z0-9_-]*$")
 
 
 class ConfigError(ValueError):
     """Raised when declarative or environment configuration is invalid."""
-
-
-@dataclass(frozen=True)
-class PathClasses:
-    productive: tuple[str, ...] = ("src/**/*.py", "run_task", "*.toml")
-    tests: tuple[str, ...] = ("tests/**",)
-    documentation: tuple[str, ...] = ("docs/**", "*.md")
-    generated: tuple[str, ...] = (".orchestrator/**", "**/__pycache__/**", ".pytest_cache/**")
-
-
-@dataclass(frozen=True)
-class StopRule:
-    id: str
-    description: str
 
 
 @dataclass(frozen=True)
@@ -118,20 +104,25 @@ def _load_path_classes(data: object) -> PathClasses:
     allowed = {"productive", "tests", "documentation", "generated"}
     _reject_unknown_keys(table, allowed, "[paths]")
     defaults = PathClasses()
-    return PathClasses(
-        productive=_pattern_list(
-            table["productive"], "paths.productive", allow_empty=False
+    try:
+        return PathClasses(
+            productive=_pattern_list(
+                table["productive"], "paths.productive", allow_empty=False
+            )
+            if "productive" in table
+            else defaults.productive,
+            tests=_pattern_list(table["tests"], "paths.tests")
+            if "tests" in table
+            else defaults.tests,
+            documentation=_pattern_list(table["documentation"], "paths.documentation")
+            if "documentation" in table
+            else defaults.documentation,
+            generated=_pattern_list(table["generated"], "paths.generated")
+            if "generated" in table
+            else defaults.generated,
         )
-        if "productive" in table
-        else defaults.productive,
-        tests=_pattern_list(table["tests"], "paths.tests") if "tests" in table else defaults.tests,
-        documentation=_pattern_list(table["documentation"], "paths.documentation")
-        if "documentation" in table
-        else defaults.documentation,
-        generated=_pattern_list(table["generated"], "paths.generated")
-        if "generated" in table
-        else defaults.generated,
-    )
+    except ValueError as exc:
+        raise ConfigError(f"Invalid [paths] configuration: {exc}") from exc
 
 
 def _load_stop_rules(data: object) -> tuple[StopRule, ...]:

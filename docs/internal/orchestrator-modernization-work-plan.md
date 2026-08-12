@@ -141,7 +141,7 @@ Jede Slice-MD wird unmittelbar vor Beginn ihres Slice angelegt und dann aus der 
 | 9 | [`docs/internal/slice-orchestrator-modernization-09-branch-commit-transaction.md`](slice-orchestrator-modernization-09-branch-commit-transaction.md) |
 | 10 | [`docs/internal/slice-orchestrator-modernization-10-asymmetric-review-chain.md`](slice-orchestrator-modernization-10-asymmetric-review-chain.md) |
 | 11 | [`docs/internal/slice-orchestrator-modernization-11-resumable-user-gates.md`](slice-orchestrator-modernization-11-resumable-user-gates.md) |
-| 12 | `docs/internal/slice-orchestrator-modernization-12-stop-rules-file-limit.md` |
+| 12 | [`docs/internal/slice-orchestrator-modernization-12-stop-rules-file-limit.md`](slice-orchestrator-modernization-12-stop-rules-file-limit.md) |
 | 13 | `docs/internal/slice-orchestrator-modernization-13-path-validation-matrix.md` |
 | 14 | `docs/internal/slice-orchestrator-modernization-14-agent-failures-resume.md` |
 | 15 | `docs/internal/slice-orchestrator-modernization-15-scripted-dry-run.md` |
@@ -419,11 +419,13 @@ Die Audit-Komponente aus Slice 8 prüft bei Start eines Slice, dass genau diese 
 **Test-Riegel:** ja — der Slice testet seinen eigenen Freigabepfad. **Red-State:** nein.
 **Risiko/Rückfalloption:** Selbstreferenzielles Gate; die Testfreigabe für diesen Slice wird vor der Implementierung ausdrücklich dokumentiert.
 
-### Slice 12 — Maschinelle Stop-Regeln und Dateigrenze
+### [Slice 12 — Maschinelle Stop-Regeln und Dateigrenze](slice-orchestrator-modernization-12-stop-rules-file-limit.md)
 
 **Zweck:** Generische und zielrepospezifische Stop-Regeln als echte Zustandsübergänge statt Prompt-Prosa implementieren.
 **Anforderungen:** R-15; Entscheidung §7.3.
 **Voraussichtlich betroffene Dateien:** `src/gates.py`, `src/repo_changes.py`, `src/workflow.py`, `src/cli.py`, optional `orchestrator.toml`, `tests/test_gates.py`, `tests/test_workflow.py`, `tests/test_cli.py`.
+**Tatsächlich betroffene Dateien vor Review:** `src/gates.py`, `src/repo_changes.py`, `src/workflow.py`, `src/workflow_state.py`, `src/cli.py`, `tests/test_gates.py`, `tests/test_workflow.py`, `tests/test_workflow_state.py`, `tests/test_repo_changes.py` sowie Arbeitsplan, Übergabe und Slice-MD. Keine Repo-Konfigurationsdatei ist für die additive API erforderlich.
+**Umsetzungsstatus:** maschinelle produktive Dateigrenze, zentrale Pfadklassifikation, vollständiger Regelprompt sowie resumefähige Policy-Gates für bekannte Agenten-Stopps, Branchabweichung, nicht ausführbare Validierung und unerwartete Pfade sind additiv implementiert. 141 fokussierte Tests und 392 Tests der Vollsuite, Compile, aktiver v2-Dry-Run und Diffcheck sind grün. Claude und Antigravity haben den korrigierten Slice freigegeben; `C-01` ist geschlossen, der lokale Commit ist autorisiert und der aktive v2-Defaultpfad bleibt unverändert.
 
 **Akzeptanzkriterien:**
 

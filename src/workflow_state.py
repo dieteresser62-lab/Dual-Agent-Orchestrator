@@ -121,7 +121,12 @@ class GateRecord:
             and not self.paths
         ):
             raise WorkflowStateValidationError("manual-slice gate requires slice paths")
-        if self.reason in {GateReason.TEST_CHANGE, GateReason.MANUAL_SLICE}:
+        if self.reason in {
+            GateReason.TEST_CHANGE,
+            GateReason.MANUAL_SLICE,
+            GateReason.UNEXPECTED_FILE,
+            GateReason.STOP_REQUEST,
+        }:
             for raw_path in self.paths:
                 path = PurePosixPath(raw_path)
                 if (
@@ -225,7 +230,12 @@ class GateDecisionRecord:
             raise WorkflowStateValidationError(
                 "manual-slice decision requires slice paths"
             )
-        if self.reason in {GateReason.TEST_CHANGE, GateReason.MANUAL_SLICE}:
+        if self.reason in {
+            GateReason.TEST_CHANGE,
+            GateReason.MANUAL_SLICE,
+            GateReason.UNEXPECTED_FILE,
+            GateReason.STOP_REQUEST,
+        }:
             for raw_path in self.paths:
                 path = PurePosixPath(raw_path)
                 if (
@@ -295,6 +305,7 @@ class SliceRecord:
     status: SliceStatus
     start_commit: str | None = None
     scope_paths: tuple[str, ...] = ()
+    scope_change_groups: tuple[tuple[str, ...], ...] = ()
     start_fingerprint: str | None = None
     commit_ref: str | None = None
 
@@ -305,6 +316,14 @@ class SliceRecord:
         if self.status is not SliceStatus.PENDING and self.start_commit is None:
             raise WorkflowStateValidationError("a started slice requires start_commit")
         _require_canonical_scope(self.scope_paths)
+        if self.scope_paths:
+            _require_scope_change_groups(
+                self.scope_change_groups, self.scope_paths
+            )
+        elif self.scope_change_groups:
+            raise WorkflowStateValidationError(
+                "slice scope change groups require scope paths"
+            )
         if (self.start_fingerprint is None) != (not self.scope_paths):
             raise WorkflowStateValidationError(
                 "slice scope_paths and start_fingerprint must be persisted together"
@@ -326,6 +345,7 @@ class SliceRecord:
             "status": self.status.value,
             "start_commit": self.start_commit,
             "scope_paths": list(self.scope_paths),
+            "scope_change_groups": [list(group) for group in self.scope_change_groups],
             "start_fingerprint": self.start_fingerprint,
             "commit_ref": self.commit_ref,
         }
@@ -334,12 +354,27 @@ class SliceRecord:
     def from_dict(cls, raw: Mapping[str, Any]) -> SliceRecord:
         legacy_keys = {"slice_id", "status", "start_commit", "commit_ref"}
         boundary_keys = {*legacy_keys, "scope_paths", "start_fingerprint"}
+        current_keys = {*boundary_keys, "scope_change_groups"}
         if set(raw) == legacy_keys:
             scope_paths: tuple[str, ...] = ()
+            scope_change_groups: tuple[tuple[str, ...], ...] = ()
             start_fingerprint = None
-        else:
-            _require_exact_keys(raw, boundary_keys, "slice")
+        elif set(raw) == boundary_keys:
             scope_paths = _string_tuple(raw["scope_paths"], "slice.scope_paths")
+            scope_change_groups = tuple((path,) for path in scope_paths)
+            start_fingerprint = _optional_string(
+                raw["start_fingerprint"], "slice.start_fingerprint"
+            )
+        else:
+            _require_exact_keys(raw, current_keys, "slice")
+            scope_paths = _string_tuple(raw["scope_paths"], "slice.scope_paths")
+            raw_groups = _list(
+                raw["scope_change_groups"], "slice.scope_change_groups"
+            )
+            scope_change_groups = tuple(
+                _string_tuple(group, f"slice.scope_change_groups[{index}]")
+                for index, group in enumerate(raw_groups)
+            )
             start_fingerprint = _optional_string(
                 raw["start_fingerprint"], "slice.start_fingerprint"
             )
@@ -348,6 +383,7 @@ class SliceRecord:
             status=_enum_value(SliceStatus, raw["status"], "slice.status"),
             start_commit=_optional_string(raw["start_commit"], "slice.start_commit"),
             scope_paths=scope_paths,
+            scope_change_groups=scope_change_groups,
             start_fingerprint=start_fingerprint,
             commit_ref=_optional_string(raw["commit_ref"], "slice.commit_ref"),
         )
@@ -747,12 +783,18 @@ class WorkflowState:
         *,
         start_commit: str,
         scope_paths: tuple[str, ...],
+        scope_change_groups: tuple[tuple[str, ...], ...] | None = None,
         start_fingerprint: str,
         updated_at: str | None = None,
     ) -> WorkflowState:
         """Persist the immutable Git boundary before the first slice edit."""
         _require_non_empty(start_commit, "start_commit")
         normalized_scope = _normalize_scope_paths(scope_paths)
+        normalized_groups = (
+            tuple((path,) for path in normalized_scope)
+            if scope_change_groups is None
+            else _normalize_scope_change_groups(scope_change_groups, normalized_scope)
+        )
         if not SHA256_PATTERN.fullmatch(start_fingerprint):
             raise WorkflowStateValidationError(
                 "start_fingerprint must be a lowercase SHA-256 digest"
@@ -767,6 +809,7 @@ class WorkflowState:
         if current_slice.scope_paths:
             if (
                 current_slice.scope_paths == normalized_scope
+                and current_slice.scope_change_groups == normalized_groups
                 and current_slice.start_fingerprint == start_fingerprint
             ):
                 return self
@@ -774,6 +817,7 @@ class WorkflowState:
         bound = replace(
             current_slice,
             scope_paths=normalized_scope,
+            scope_change_groups=normalized_groups,
             start_fingerprint=start_fingerprint,
         )
         slices = tuple(
@@ -856,6 +900,52 @@ class WorkflowState:
             current,
             status=WorkUnitStatus.AWAITING_USER_DECISION,
             current_step=next_step,
+            gate=gate,
+        )
+        slices = tuple(
+            replace(item, status=SliceStatus.AWAITING_USER_DECISION)
+            if item.slice_id == self.current_slice_id
+            else item
+            for item in self.slices
+        )
+        return self._replace_current_unit(
+            updated_unit, slices=slices, updated_at=updated_at
+        )
+
+    def await_policy_gate(
+        self,
+        *,
+        reason: GateReason,
+        detail: str,
+        paths: tuple[str, ...] = (),
+        updated_at: str | None = None,
+    ) -> WorkflowState:
+        """Persist a machine- or agent-triggered halt that must be resolved, not approved."""
+        if reason not in {GateReason.STOP_REQUEST, GateReason.UNEXPECTED_FILE}:
+            raise WorkflowStateValidationError(
+                "policy gate reason must be stop_request or unexpected_file"
+            )
+        current = self.current_work_unit
+        normalized_paths = tuple(sorted(set(paths)))
+        gate = GateRecord(
+            status=GateStatus.AWAITING_USER_DECISION,
+            reason=reason,
+            detail=detail,
+            paths=normalized_paths,
+        )
+        if current.status is WorkUnitStatus.AWAITING_USER_DECISION:
+            if current.gate == gate:
+                return self
+            raise WorkflowStateValidationError(
+                "cannot replace an unresolved policy gate with different evidence"
+            )
+        if current.status is not WorkUnitStatus.IN_PROGRESS:
+            raise WorkflowStateValidationError(
+                "only an in-progress work unit can enter a policy gate"
+            )
+        updated_unit = replace(
+            current,
+            status=WorkUnitStatus.AWAITING_USER_DECISION,
             gate=gate,
         )
         slices = tuple(
@@ -1156,6 +1246,34 @@ def _normalize_scope_paths(values: tuple[str, ...]) -> tuple[str, ...]:
     normalized = tuple(sorted(set(values)))
     _require_canonical_scope(normalized)
     return normalized
+
+
+def _normalize_scope_change_groups(
+    groups: tuple[tuple[str, ...], ...],
+    scope_paths: tuple[str, ...],
+) -> tuple[tuple[str, ...], ...]:
+    normalized = tuple(tuple(sorted(set(group))) for group in groups)
+    _require_scope_change_groups(normalized, scope_paths)
+    return normalized
+
+
+def _require_scope_change_groups(
+    groups: tuple[tuple[str, ...], ...],
+    scope_paths: tuple[str, ...],
+) -> None:
+    if not groups or any(not group for group in groups):
+        raise WorkflowStateValidationError(
+            "slice scope change groups must be non-empty"
+        )
+    if groups != tuple(sorted(groups)) or len(set(groups)) != len(groups):
+        raise WorkflowStateValidationError(
+            "slice scope change groups must be sorted and unique"
+        )
+    flattened = tuple(path for group in groups for path in group)
+    if len(set(flattened)) != len(flattened) or tuple(sorted(flattened)) != scope_paths:
+        raise WorkflowStateValidationError(
+            "slice scope change groups must partition the exact scope paths"
+        )
 
 
 def _require_canonical_scope(values: tuple[str, ...]) -> None:

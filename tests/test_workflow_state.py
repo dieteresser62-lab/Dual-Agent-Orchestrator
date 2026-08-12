@@ -222,6 +222,10 @@ def test_slice_git_boundary_is_canonical_persisted_and_immutable() -> None:
     loaded = WorkflowState.from_dict(state.to_dict())
 
     assert loaded.current_slice.scope_paths == ("src/one.py", "tests/test_one.py")
+    assert loaded.current_slice.scope_change_groups == (
+        ("src/one.py",),
+        ("tests/test_one.py",),
+    )
     assert loaded.current_slice.start_fingerprint == "1" * 64
     assert loaded.updated_at == "bound"
     assert loaded.bind_current_slice_git_boundary(
@@ -242,6 +246,7 @@ def test_legacy_v3_slice_record_loads_and_serializes_explicit_empty_git_boundary
     raw = make_state().to_dict()
     for slice_record in raw["slices"]:
         del slice_record["scope_paths"]
+        del slice_record["scope_change_groups"]
         del slice_record["start_fingerprint"]
 
     loaded = WorkflowState.from_dict(raw)
@@ -250,7 +255,30 @@ def test_legacy_v3_slice_record_loads_and_serializes_explicit_empty_git_boundary
     assert loaded.current_slice.scope_paths == ()
     assert loaded.current_slice.start_fingerprint is None
     assert migrated["slices"][0]["scope_paths"] == []
+    assert migrated["slices"][0]["scope_change_groups"] == []
     assert migrated["slices"][0]["start_fingerprint"] is None
+
+
+def test_slice_git_boundary_persists_rename_group_and_loads_older_flat_shape() -> None:
+    state = make_state().bind_current_slice_git_boundary(
+        start_commit="a" * 40,
+        scope_paths=("src/new.py", "src/old.py"),
+        scope_change_groups=(("src/new.py", "src/old.py"),),
+        start_fingerprint="1" * 64,
+    )
+    loaded = WorkflowState.from_dict(state.to_dict())
+    assert loaded.current_slice.scope_change_groups == (
+        ("src/new.py", "src/old.py"),
+    )
+
+    early_slice12 = state.to_dict()
+    for slice_record in early_slice12["slices"]:
+        del slice_record["scope_change_groups"]
+    migrated = WorkflowState.from_dict(early_slice12)
+    assert migrated.current_slice.scope_change_groups == (
+        ("src/new.py",),
+        ("src/old.py",),
+    )
 
 
 def test_slice_cannot_complete_before_git_boundary_is_persisted() -> None:
@@ -389,3 +417,36 @@ def test_early_slice11_work_unit_shape_loads_without_active_test_evidence() -> N
     assert loaded.current_work_unit.gate_decisions == ()
     assert loaded.current_work_unit.active_test_fingerprint is None
     assert loaded.current_work_unit.active_test_paths == ()
+
+
+def test_policy_gate_roundtrips_and_resumes_at_same_step() -> None:
+    state = make_state().await_policy_gate(
+        reason=GateReason.STOP_REQUEST,
+        detail="PRODUCTIVE-FILE-LIMIT | eleven productive files",
+        paths=("src/one.py", "src/two.py"),
+        updated_at="halted",
+    )
+
+    loaded = WorkflowState.from_dict(state.to_dict())
+    resumed = loaded.resume_after_user_decision(updated_at="resumed")
+
+    assert loaded.current_work_unit.status is WorkUnitStatus.AWAITING_USER_DECISION
+    assert loaded.current_work_unit.gate.fingerprint is None
+    assert loaded.current_work_unit.gate.paths == ("src/one.py", "src/two.py")
+    assert resumed.current_work_unit.status is WorkUnitStatus.IN_PROGRESS
+    assert resumed.current_step is state.current_step
+    assert resumed.current_work_unit.gate.status is GateStatus.CLEAR
+
+
+def test_policy_gate_rejects_fingerprint_bound_reason_and_unsafe_path() -> None:
+    with pytest.raises(WorkflowStateValidationError, match="policy gate reason"):
+        make_state().await_policy_gate(
+            reason=GateReason.TEST_CHANGE,
+            detail="wrong helper",
+        )
+    with pytest.raises(WorkflowStateValidationError, match="repository-relative"):
+        make_state().await_policy_gate(
+            reason=GateReason.UNEXPECTED_FILE,
+            detail="unsafe path",
+            paths=("../outside",),
+        )
