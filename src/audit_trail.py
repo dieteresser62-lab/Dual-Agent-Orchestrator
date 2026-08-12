@@ -162,8 +162,10 @@ class ReviewAuditEvent:
             raise AuditTrailError("a stopped review cannot carry an approval")
         if not self.result.stopped and self.result.approval is None:
             raise AuditTrailError("a completed review requires an approval decision")
-        if self.result.approval is True and self.result.open_blockers:
-            raise AuditTrailError("an approving review cannot carry open blockers")
+        if self.result.approval is True and self.result.own_open_blockers:
+            raise AuditTrailError(
+                "an approving review cannot carry reviewer-owned open blockers"
+            )
         if (
             self.result.approval is True
             and self.result.validation is not None
@@ -172,8 +174,8 @@ class ReviewAuditEvent:
             raise AuditTrailError(
                 "an approving review requires its validation attestation to pass"
             )
-        if self.result.approval is False and not self.result.open_blockers:
-            raise AuditTrailError("a denied review requires an open blocker")
+        if self.result.approval is False and not self.result.own_open_blockers:
+            raise AuditTrailError("a denied review requires a reviewer-owned open blocker")
 
 
 AuditEvent: TypeAlias = ValidationAuditEvent | ReviewAuditEvent

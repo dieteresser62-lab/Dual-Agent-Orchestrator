@@ -310,6 +310,15 @@ class ContractResult:
             and finding.finding_class is FindingClass.BLOCKER
         )
 
+    @property
+    def own_open_blockers(self) -> tuple[FindingRecord, ...]:
+        """Return blockers that this review role is authorized to resolve."""
+        return tuple(
+            finding
+            for finding in self.open_blockers
+            if finding.origin.reporter is self.reviewer
+        )
+
 
 @dataclass(frozen=True)
 class CodexStepContract:
@@ -672,11 +681,12 @@ def validate_review_response(
             "review requires at least one finding or REVIEW_EVIDENCE record"
         )
 
-    open_blockers = tuple(
+    own_open_blockers = tuple(
         finding
         for finding in findings
         if finding.status is FindingStatus.OPEN
         and finding.finding_class is FindingClass.BLOCKER
+        and finding.origin.reporter is contract.reviewer
     )
     if approval:
         if validation is None:
@@ -699,10 +709,14 @@ def validate_review_response(
             raise ContractValidationError("approval requires PRE_MORTEM")
         if pre_mortem_position > approval_position:
             raise ContractValidationError("PRE_MORTEM must appear before approval")
-        if open_blockers:
-            raise ContractValidationError("approval is invalid while a BLOCKER is open")
-    elif not open_blockers:
-        raise ContractValidationError("negative approval requires an open BLOCKER")
+        if own_open_blockers:
+            raise ContractValidationError(
+                "approval is invalid while a BLOCKER is open for this reviewer"
+            )
+    elif not own_open_blockers:
+        raise ContractValidationError(
+            "negative approval requires an open BLOCKER owned by this reviewer"
+        )
 
     return ContractResult(
         reviewer=reviewer,

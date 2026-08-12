@@ -10,6 +10,10 @@ import git_service
 from contracts import (
     AgentRole,
     ContractResult,
+    FindingClass,
+    FindingOrigin,
+    FindingRecord,
+    FindingStatus,
     ReviewEvidence,
     ValidationAttestation,
     ValidationRecord,
@@ -212,6 +216,39 @@ def test_commit_blocks_stale_or_negative_review_without_mutating_index(
             title="stale",
         )
     assert _git(repository, "diff", "--cached", "--name-only") == ""
+
+
+def test_commit_authorization_blocks_foreign_owned_blocker_in_canonical_findings(
+    tmp_path: Path,
+) -> None:
+    repository, head = _new_repository(tmp_path)
+    boundary, _ = begin_slice(
+        repository_root=repository,
+        slice_id=9,
+        expected_branch="feature/transaction",
+        scope_paths=("allowed.txt",),
+    )
+    (repository / "allowed.txt").write_text("work\n", encoding="utf-8")
+    authorization = _authorization(repository, head)
+    foreign_blocker = FindingRecord(
+        finding_id="A-01",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="Antigravity still requires a correction",
+        acceptance_test="Antigravity closes the corrected finding",
+        origin=FindingOrigin("09", 1, AgentRole.ANTIGRAVITY),
+    )
+
+    with pytest.raises(GitTransactionError, match="globally open blockers"):
+        commit_slice(
+            repository_root=repository,
+            boundary=boundary,
+            authorization=replace(authorization, findings=(foreign_blocker,)),
+            title="blocked globally",
+        )
+
+    assert _git(repository, "diff", "--cached", "--name-only") == ""
+    assert _git(repository, "rev-parse", "HEAD") == head
 
 
 def test_commit_blocks_foreign_paths_and_foreign_index_entries(tmp_path: Path) -> None:

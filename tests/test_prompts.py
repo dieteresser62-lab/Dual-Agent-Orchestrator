@@ -8,6 +8,7 @@ from prompts import (
     build_phase2_codex_implement_prompt,
     build_test_failure_block,
     build_v3_codex_contract,
+    build_v3_codex_prompt,
     build_v3_review_contract,
     build_v3_review_prompt,
 )
@@ -15,6 +16,10 @@ from contracts import (
     AgentRole,
     ApprovalMarker,
     CodexStepContract,
+    FindingClass,
+    FindingOrigin,
+    FindingRecord,
+    FindingStatus,
     ReadinessMarker,
     StepContract,
     ValidationAttestation,
@@ -201,3 +206,32 @@ def test_v3_codex_contract_is_derived_from_explicit_implementation_step() -> Non
     assert "FINDING_RESPONSE: <ID> | ACCEPTED|REJECTED" in rendered
     assert "VALIDATION_RESULT: PASS|FAIL | python3 -m pytest tests/ -v" in rendered
     assert "TEST_FILES_TOUCHED: tests/test_contracts.py" in rendered
+
+
+def test_v3_codex_prompt_keeps_distilled_context_and_complete_finding_records() -> None:
+    contract = CodexStepContract(
+        name="slice-10-correction",
+        readiness_marker=ReadinessMarker.IMPLEMENTATION,
+        slice_id="10",
+        round_number=2,
+    )
+    finding = FindingRecord(
+        finding_id="A-01",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="Antigravity correction required",
+        acceptance_test="Add the missing transition test",
+        origin=FindingOrigin("10", 1, AgentRole.ANTIGRAVITY),
+    )
+
+    rendered = build_v3_codex_prompt(
+        assignment="Correct A-01",
+        distilled_context="Plan decision\nCurrent slice summary",
+        findings=(finding,),
+        contract=contract,
+    )
+
+    assert "<<<CONTEXT_BEGIN>>>\nPlan decision\nCurrent slice summary" in rendered
+    assert "A-01 | BLOCKER | OPEN | reporter=antigravity" in rendered
+    assert "acceptance=Add the missing transition test" in rendered
+    assert "you never approve or review your own work" in rendered

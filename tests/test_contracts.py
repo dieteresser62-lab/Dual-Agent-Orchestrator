@@ -440,6 +440,26 @@ def test_other_reviewer_open_observation_is_carried_without_forced_update() -> N
     assert result.findings == (finding,)
 
 
+def test_other_reviewer_open_blocker_can_be_carried_through_approval() -> None:
+    finding = FindingRecord(
+        finding_id="A-01",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="Antigravity must recheck its correction",
+        acceptance_test="Antigravity closes the finding after Claude approves the fix",
+        origin=FindingOrigin("06", 1, AgentRole.ANTIGRAVITY),
+    )
+    contract = _contract(reviewer=AgentRole.CLAUDE)
+
+    result = validate_review_response(
+        _valid_evidence_output(contract), contract, (finding,)
+    )
+
+    assert result.approval is True
+    assert result.open_blockers == (finding,)
+    assert result.own_open_blockers == ()
+
+
 def test_negative_approval_without_open_blocker_is_invalid() -> None:
     contract = _contract()
     output = _valid_evidence_output(contract, approval="NO", pre_mortem=False)

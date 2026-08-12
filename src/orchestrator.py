@@ -75,6 +75,12 @@ from state_io import (
     write_file,
 )
 from workflow_state import WorkflowState, init_workflow_state
+from workflow import (
+    WorkflowContext,
+    WorkflowEngine,
+    WorkflowHistory,
+    WorkflowRunResult,
+)
 
 ARTIFACT_ROOT_DIR = Path(".orchestrator")
 ARTIFACT_RUNS_DIR = ARTIFACT_ROOT_DIR / "runs"
@@ -115,6 +121,16 @@ def validate_v3_codex_contract(
 ) -> CodexContractResult:
     """Validate one development-mode v3 Codex step without altering the v2 path."""
     return validate_codex_response(output, contract, previous_findings)
+
+
+def run_v3_work_unit(
+    engine: WorkflowEngine,
+    state: WorkflowState,
+    context: WorkflowContext,
+    history: WorkflowHistory | None = None,
+) -> WorkflowRunResult:
+    """Run one additive state-v3 work unit without changing the active v2 CLI path."""
+    return engine.run_current_work_unit(state, context, history)
 
 @dataclass
 class RunContext:

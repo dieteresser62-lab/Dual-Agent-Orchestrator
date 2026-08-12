@@ -5,6 +5,7 @@ import textwrap
 from contracts import (
     ApprovalMarker,
     CodexStepContract,
+    FindingRecord,
     ReadinessMarker,
     StepContract,
 )
@@ -115,6 +116,56 @@ def build_v3_review_prompt(
         {build_v3_review_contract(contract)}
         """
     ).strip()
+
+
+def build_v3_codex_prompt(
+    *,
+    assignment: str,
+    distilled_context: str,
+    findings: tuple[FindingRecord, ...],
+    contract: CodexStepContract,
+) -> str:
+    """Build a bounded implementer prompt from distilled context and typed findings."""
+    finding_lines = tuple(_render_finding_record(finding) for finding in findings)
+    finding_block = "\n".join(finding_lines) if finding_lines else "NONE"
+    return textwrap.dedent(
+        f"""
+        You are Codex, the implementer for {contract.name}. You may plan or edit as
+        required by the named step, but you never approve or review your own work.
+
+        Assignment:
+        ---
+        {_delimit_block("ASSIGNMENT", assignment)}
+        ---
+
+        Distilled plan and current-slice context:
+        ---
+        {_delimit_block("CONTEXT", distilled_context)}
+        ---
+
+        Structured finding history (complete; do not infer status from prose):
+        ---
+        {_delimit_block("FINDINGS", finding_block)}
+        ---
+
+        {build_v3_codex_contract(contract)}
+        """
+    ).strip()
+
+
+def _render_finding_record(finding: FindingRecord) -> str:
+    responses = "; ".join(
+        f"{response.decision.value}: {response.rationale}"
+        for response in finding.responses
+    ) or "NONE"
+    closure = finding.status_rationale or "NONE"
+    return (
+        f"{finding.finding_id} | {finding.finding_class.value} | "
+        f"{finding.status.value} | reporter={finding.origin.reporter.value} | "
+        f"slice={finding.origin.slice_id} | round={finding.origin.round_number} | "
+        f"summary={finding.summary} | acceptance={finding.acceptance_test} | "
+        f"responses={responses} | closure={closure}"
+    )
 
 
 def build_phase1_claude_plan_prompt(

@@ -139,7 +139,7 @@ Jede Slice-MD wird unmittelbar vor Beginn ihres Slice angelegt und dann aus der 
 | 7 | [`docs/internal/slice-orchestrator-modernization-07-state-v3-work-units.md`](slice-orchestrator-modernization-07-state-v3-work-units.md) |
 | 8 | [`docs/internal/slice-orchestrator-modernization-08-audit-trail.md`](slice-orchestrator-modernization-08-audit-trail.md) |
 | 9 | [`docs/internal/slice-orchestrator-modernization-09-branch-commit-transaction.md`](slice-orchestrator-modernization-09-branch-commit-transaction.md) |
-| 10 | `docs/internal/slice-orchestrator-modernization-10-asymmetric-review-chain.md` |
+| 10 | [`docs/internal/slice-orchestrator-modernization-10-asymmetric-review-chain.md`](slice-orchestrator-modernization-10-asymmetric-review-chain.md) |
 | 11 | `docs/internal/slice-orchestrator-modernization-11-test-change-gate.md` |
 | 12 | `docs/internal/slice-orchestrator-modernization-12-stop-rules-file-limit.md` |
 | 13 | `docs/internal/slice-orchestrator-modernization-13-path-validation-matrix.md` |
@@ -365,11 +365,13 @@ Die Audit-Komponente aus Slice 8 prüft bei Start eines Slice, dass genau diese 
 **Test-Riegel:** ja. **Red-State:** nein.
 **Risiko/Rückfalloption:** Fremde lokale Änderungen; der Commitpfad arbeitet ausschließlich mit exakten Pfaden und lässt bei Ablehnung den Arbeitsbaum unverändert.
 
-### Slice 10 — Asymmetrische Plan- und Slice-Reviewkette
+### [Slice 10 — Asymmetrische Plan- und Slice-Reviewkette](slice-orchestrator-modernization-10-asymmetric-review-chain.md)
 
 **Zweck:** Codex→Claude↔Codex→Antigravity als gemeinsame Work-Unit-State-Maschine implementieren.
 **Anforderungen:** R-7; zentrale Teile von R-8.
 **Voraussichtlich betroffene Dateien:** `src/workflow.py` (neu), `src/orchestrator.py`, `src/prompts.py`, `src/contracts.py`, `src/workflow_state.py`, `src/audit_trail.py`, `tests/test_workflow.py` (neu), `tests/test_prompts.py`.
+**Tatsächlich betroffene Dateien vor Review:** `src/workflow.py` (neu), `src/orchestrator.py`, `src/prompts.py`, `src/contracts.py`, `src/audit_trail.py`, `src/git_service.py`, `tests/test_workflow.py` (neu), `tests/test_contracts.py`, `tests/test_prompts.py` sowie Arbeitsplan, Übergabe und Slice-MD. `workflow_state.py` blieb unverändert, weil seine bestehenden Work-Unit-Schritte, Rückgabezähler, Gates und Resume-Cursor die Engine bereits vollständig tragen.
+**Umsetzungsstatus:** additive asymmetrische v3-Engine und deterministische Fake-Treibermatrix implementiert; 202 fokussierte Workflow-/State-/I/O-/Contract-/Prompt-/Audit-/Git-/Parser-Tests sind grün. Wechselnde Vollvalidierungs-, Review- und Commitresultate stehen in der Slice-MD; der aktive v2-Defaultpfad ist unverändert.
 
 **Akzeptanzkriterien:**
 

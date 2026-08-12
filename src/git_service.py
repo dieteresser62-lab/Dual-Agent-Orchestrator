@@ -7,7 +7,14 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Sequence
 
-from contracts import AgentRole, ContractResult, ValidationAttestation
+from contracts import (
+    AgentRole,
+    ContractResult,
+    FindingClass,
+    FindingRecord,
+    FindingStatus,
+    ValidationAttestation,
+)
 from repo_changes import RepositoryChanges, collect_repository_changes
 
 
@@ -71,6 +78,7 @@ class CommitAuthorization:
     attestation: ValidationAttestation
     claude_review: ContractResult
     antigravity_review: ContractResult
+    findings: tuple[FindingRecord, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -313,6 +321,12 @@ def _validate_authorization(
     attestation = authorization.attestation
     if not attestation.passed or attestation.diff_fingerprint != current_fingerprint:
         raise GitTransactionError("commit requires a complete passing current attestation")
+    if any(
+        finding.status is FindingStatus.OPEN
+        and finding.finding_class is FindingClass.BLOCKER
+        for finding in authorization.findings
+    ):
+        raise GitTransactionError("commit requires no globally open blockers")
     for expected_role, result in (
         (AgentRole.CLAUDE, authorization.claude_review),
         (AgentRole.ANTIGRAVITY, authorization.antigravity_review),
@@ -323,7 +337,7 @@ def _validate_authorization(
             result.stopped
             or result.stop_request is not None
             or result.approval is not True
-            or result.open_blockers
+            or result.own_open_blockers
         ):
             raise GitTransactionError(f"commit requires an approving {expected_role.value} review")
         if result.validation != attestation:
