@@ -17,6 +17,7 @@ from agent_adapters import (
 from agent_config import AgentSettings
 from agent_runtime import (
     AgentCompatibilityError,
+    AgentInvocationError,
     OrchestratorConfig,
     QuotaReachedError,
     check_git_clean,
@@ -68,7 +69,7 @@ def test_runtime_executes_structured_validation_request(tmp_path: Path) -> None:
     assert attestation.records[0].output == "matrix-ok"
 
 
-def test_run_agent_checked_retries_with_backoff(monkeypatch, tmp_path: Path) -> None:
+def test_run_agent_checked_does_not_retry_instance_failure(monkeypatch, tmp_path: Path) -> None:
     calls: list[str] = []
     sleeps: list[int] = []
 
@@ -81,25 +82,29 @@ def test_run_agent_checked_retries_with_backoff(monkeypatch, tmp_path: Path) -> 
     monkeypatch.setattr(agent_runtime, "run_agent", fake_run_agent)
     monkeypatch.setattr(agent_runtime.time, "sleep", lambda sec: sleeps.append(sec))
 
-    output = run_agent_checked(
-        agent_key="codex",
-        prompt="prompt",
-        log_prefix="unit",
-        max_retries=1,
-        required_flags=["CODEX_APPROVAL"],
-        output_validator=None,
-        config=OrchestratorConfig(dry_run=False),
-        agents={"codex": AGENT_REGISTRY["codex"]},
-        log_dir=tmp_path,
-        write_file=lambda path, content: path.write_text(content, encoding="utf-8"),
-        shorten=lambda text, limit=1800: (text or "")[:limit],
-        parse_flag=lambda text, key: "YES" if f"{key}: YES" in text else None,
-        validate_done_marker=lambda text: text.strip().endswith("STATUS: DONE"),
-    )
+    with pytest.raises(AgentInvocationError) as exc_info:
+        run_agent_checked(
+            agent_key="codex",
+            prompt="prompt",
+            log_prefix="unit",
+            max_retries=1,
+            required_flags=["CODEX_APPROVAL"],
+            output_validator=None,
+            config=OrchestratorConfig(dry_run=False),
+            agents={"codex": AGENT_REGISTRY["codex"]},
+            log_dir=tmp_path,
+            write_file=lambda path, content: path.write_text(content, encoding="utf-8"),
+            shorten=lambda text, limit=1800: (text or "")[:limit],
+            parse_flag=lambda text, key: "YES" if f"{key}: YES" in text else None,
+            validate_done_marker=lambda text: text.strip().endswith("STATUS: DONE"),
+        )
 
-    assert "STATUS: DONE" in output
-    assert calls == ["codex", "codex"]
-    assert sleeps == [2]
+    assert exc_info.value.kind.value == "network"
+    assert calls == ["codex"]
+    assert sleeps == []
+    failure_logs = tuple(tmp_path.glob("unit.attempt-1.failure.json"))
+    assert len(failure_logs) == 1
+    assert exc_info.value.invocation_id in failure_logs[0].read_text(encoding="utf-8")
 
 
 def test_run_agent_checked_validation_error_backoff(monkeypatch, tmp_path: Path) -> None:
@@ -163,7 +168,7 @@ def test_run_agent_checked_does_not_retry_policy_failure(
 
     monkeypatch.setattr(agent_runtime, "run_agent", fake_run_agent)
 
-    with pytest.raises(type(failure)):
+    with pytest.raises(AgentInvocationError) as exc_info:
         run_agent_checked(
             agent_key="claude",
             prompt="prompt",
@@ -181,6 +186,7 @@ def test_run_agent_checked_does_not_retry_policy_failure(
         )
 
     assert calls == [1]
+    assert exc_info.value.kind.value in {"permission", "runtime"}
 
 
 def test_run_agent_checked_accepts_alternative_required_flags(monkeypatch, tmp_path: Path) -> None:
@@ -715,7 +721,7 @@ def test_unknown_agent_version_is_a_non_retryable_gate(monkeypatch, tmp_path: Pa
     monkeypatch.setattr(agent_runtime, "_resolve_agent_binary", lambda _binary: "/bin/claude")
     monkeypatch.setattr(agent_runtime, "run_local_command", fake_local)
 
-    with pytest.raises(AgentCompatibilityError, match="Unsupported claude CLI version"):
+    with pytest.raises(AgentInvocationError, match="Unsupported claude CLI version") as exc_info:
         run_agent_checked(
             agent_key="claude",
             prompt="prompt",
@@ -733,3 +739,4 @@ def test_unknown_agent_version_is_a_non_retryable_gate(monkeypatch, tmp_path: Pa
         )
 
     assert calls == [["/bin/claude", "--version"]]
+    assert exc_info.value.kind.value == "runtime"

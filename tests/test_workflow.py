@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from datetime import datetime, timedelta, timezone
 
 import pytest
+
+from agent_runtime import AgentInvocationError, QuotaReset, QuotaWaitPolicy
 
 from contracts import (
     AgentRole,
@@ -29,7 +32,9 @@ from workflow import (
     authorized_test_changes_from_state,
 )
 from workflow_state import (
+    AgentFailureKind,
     GateReason,
+    GateStatus,
     WorkflowStep,
     WorkUnitKind,
     WorkUnitStatus,
@@ -149,6 +154,8 @@ class FakeDriver:
     snapshots: list[WorkflowChanges]
     codex_outputs: list[str]
     reviewer_outputs: list[str]
+    codex_failures: list[AgentInvocationError | None] = field(default_factory=list)
+    reviewer_failures: list[AgentInvocationError | None] = field(default_factory=list)
     repair_outputs: list[str] = field(default_factory=list)
     deltas: dict[tuple[str, str], str] = field(default_factory=dict)
     invalid_attestation: str | None = None
@@ -170,6 +177,10 @@ class FakeDriver:
     def invoke_codex(self, invocation: CodexInvocation) -> str:
         self.codex_calls.append(invocation)
         self.snapshot_index += 1
+        if self.codex_failures:
+            failure = self.codex_failures.pop(0)
+            if failure is not None:
+                raise failure
         return self.codex_outputs.pop(0)
 
     def collect_changes(self, start_commit: str) -> WorkflowChanges:
@@ -251,6 +262,10 @@ class FakeDriver:
 
     def invoke_reviewer(self, invocation: ReviewerInvocation) -> str:
         self.reviewer_calls.append(invocation)
+        if self.reviewer_failures:
+            failure = self.reviewer_failures.pop(0)
+            if failure is not None:
+                raise failure
         if self.fail_reviewer_once:
             self.fail_reviewer_once = False
             raise RuntimeError("simulated process interruption")
@@ -301,6 +316,36 @@ def _context() -> WorkflowContext:
         slice_summary="Asymmetric state-v3 workflow engine.",
         expected_test_files=(TEST_FILE,),
         test_changes_approved=True,
+    )
+
+
+def _invocation_failure(
+    role: AgentRole,
+    kind: AgentFailureKind,
+    invocation_id: str,
+    *,
+    received_at: datetime,
+    reset_after_seconds: int | None = None,
+) -> AgentInvocationError:
+    reset = (
+        QuotaReset(
+            received_at + timedelta(seconds=reset_after_seconds),
+            f"{role.value}:structured:retry_after_seconds",
+            "UTC",
+        )
+        if reset_after_seconds is not None
+        else None
+    )
+    return AgentInvocationError(
+        agent_key=role.value,
+        kind=kind,
+        invocation_id=invocation_id,
+        provider_text=(
+            "usage cap reached" if kind is AgentFailureKind.QUOTA else "Execution error"
+        ),
+        received_at=received_at,
+        exit_code=None if kind is AgentFailureKind.QUOTA else 7,
+        quota_reset=reset,
     )
 
 
@@ -552,6 +597,475 @@ def test_explicit_retry_can_replace_cached_incomplete_after_environment_repair()
     assert len(completed.history.attestations) == 2
     assert completed.history.attestations[0].complete is False
     assert completed.history.attestations[1].passed is True
+
+
+def test_quota_wait_checkpoints_then_retries_exact_same_codex_step_once() -> None:
+    now = [datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)]
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    driver = FakeDriver(
+        snapshots=[changes, changes],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[
+            _review_approval(AgentRole.CLAUDE),
+            _review_approval(AgentRole.ANTIGRAVITY),
+        ],
+        codex_failures=[
+            _invocation_failure(
+                AgentRole.CODEX,
+                AgentFailureKind.QUOTA,
+                "codex-quota-1",
+                received_at=now[0],
+                reset_after_seconds=10,
+            ),
+            None,
+        ],
+    )
+    sleeps: list[float] = []
+    heartbeats: list[str] = []
+
+    def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        now[0] += timedelta(seconds=seconds)
+
+    result = WorkflowEngine(
+        driver,
+        now_fn=lambda: now[0],
+        sleep_fn=sleep,
+        heartbeat_fn=heartbeats.append,
+    ).run_current_work_unit(
+        _slice_state(),
+        replace(
+            _context(),
+            quota_wait_policy=QuotaWaitPolicy(
+                safety_margin_seconds=5,
+                maximum_wait_seconds=60,
+                heartbeat_interval_seconds=5,
+            ),
+        ),
+    )
+
+    assert result.completed
+    assert [call.step for call in driver.codex_calls] == [
+        WorkflowStep.CODEX_IMPLEMENTATION,
+        WorkflowStep.CODEX_IMPLEMENTATION,
+    ]
+    assert sleeps == [5.0, 5.0, 5.0]
+    assert heartbeats and all("role=codex" in item for item in heartbeats)
+    quota_checkpoint = next(
+        item
+        for item in driver.checkpoints
+        if item.current_work_unit.status is WorkUnitStatus.WAITING_FOR_QUOTA
+    )
+    failure = quota_checkpoint.current_work_unit.invocation_failures[-1]
+    assert failure.invocation_id == "codex-quota-1"
+    assert failure.auto_resume_count == 1
+    assert failure.automatic_resume is True
+    assert failure.diff_fingerprint == changes.fingerprint
+
+
+def test_second_quota_on_same_step_stops_with_exit_two_without_reviewer() -> None:
+    now = [datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)]
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    driver = FakeDriver(
+        snapshots=[changes, changes],
+        codex_outputs=[],
+        reviewer_outputs=[],
+        codex_failures=[
+            _invocation_failure(
+                AgentRole.CODEX,
+                AgentFailureKind.QUOTA,
+                "quota-first",
+                received_at=now[0],
+                reset_after_seconds=1,
+            ),
+            _invocation_failure(
+                AgentRole.CODEX,
+                AgentFailureKind.QUOTA,
+                "quota-second",
+                received_at=now[0] + timedelta(seconds=1),
+                reset_after_seconds=1,
+            ),
+        ],
+    )
+
+    def sleep(seconds: float) -> None:
+        now[0] += timedelta(seconds=seconds)
+
+    result = WorkflowEngine(
+        driver, now_fn=lambda: now[0], sleep_fn=sleep
+    ).run_current_work_unit(
+        _slice_state(),
+        replace(
+            _context(),
+            quota_wait_policy=QuotaWaitPolicy(
+                safety_margin_seconds=0,
+                maximum_wait_seconds=60,
+                maximum_auto_resumes=1,
+                heartbeat_interval_seconds=1,
+            ),
+        ),
+    )
+
+    assert result.exit_code == 2
+    assert result.state.current_work_unit.status is WorkUnitStatus.AWAITING_RESUME
+    assert result.state.current_work_unit.gate.reason is GateReason.QUOTA
+    assert len(result.state.current_work_unit.invocation_failures) == 2
+    assert result.state.current_work_unit.invocation_failures[-1].automatic_resume is False
+    assert len(driver.codex_calls) == 2
+    assert driver.reviewer_calls == []
+
+
+@pytest.mark.parametrize(
+    ("policy", "reset_after_seconds"),
+    (
+        (QuotaWaitPolicy(automatic=False), 10),
+        (QuotaWaitPolicy(maximum_wait_seconds=5), 10),
+        (QuotaWaitPolicy(), None),
+    ),
+)
+def test_non_terminable_quota_is_manual_exit_two(
+    policy: QuotaWaitPolicy, reset_after_seconds: int | None
+) -> None:
+    received = datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)
+    driver = FakeDriver(
+        snapshots=[_changes("1", "src/early.py", TEST_FILE)],
+        codex_outputs=[],
+        reviewer_outputs=[],
+        codex_failures=[
+            _invocation_failure(
+                AgentRole.CODEX,
+                AgentFailureKind.QUOTA,
+                "quota-manual",
+                received_at=received,
+                reset_after_seconds=reset_after_seconds,
+            )
+        ],
+    )
+
+    result = WorkflowEngine(driver, now_fn=lambda: received).run_current_work_unit(
+        _slice_state(), replace(_context(), quota_wait_policy=policy)
+    )
+
+    assert result.exit_code == 2
+    assert result.state.current_work_unit.status is WorkUnitStatus.AWAITING_RESUME
+    failure = result.state.current_work_unit.invocation_failures[-1]
+    assert failure.automatic_resume is False
+    assert failure.provider_text == "usage cap reached"
+    assert driver.reviewer_calls == []
+
+
+def test_missing_slice_fingerprint_disables_automatic_quota_resume() -> None:
+    received = datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)
+
+    class UnavailableFingerprintDriver(FakeDriver):
+        def collect_changes(self, start_commit: str) -> WorkflowChanges:
+            raise RuntimeError(f"cannot collect changes from {start_commit}")
+
+    driver = UnavailableFingerprintDriver(
+        snapshots=[],
+        codex_outputs=[],
+        reviewer_outputs=[],
+        codex_failures=[
+            _invocation_failure(
+                AgentRole.CODEX,
+                AgentFailureKind.QUOTA,
+                "quota-without-fingerprint",
+                received_at=received,
+                reset_after_seconds=1,
+            )
+        ],
+    )
+    engine = WorkflowEngine(driver, now_fn=lambda: received)
+
+    halted = engine.run_current_work_unit(
+        _slice_state(),
+        replace(
+            _context(),
+            quota_wait_policy=QuotaWaitPolicy(
+                safety_margin_seconds=0,
+                maximum_wait_seconds=60,
+            ),
+        ),
+    )
+
+    assert halted.exit_code == 2
+    failure = halted.state.current_work_unit.invocation_failures[-1]
+    assert failure.diff_fingerprint is None
+    assert failure.automatic_resume is False
+    assert len(driver.codex_calls) == 1
+
+    resumed = engine.run_current_work_unit(
+        halted.state.resume_after_invocation_halt(), _context(), halted.history
+    )
+
+    assert resumed.exit_code == 4
+    assert resumed.state.current_work_unit.gate.reason is GateReason.STOP_REQUEST
+    assert "no persisted Slice fingerprint" in (
+        resumed.state.current_work_unit.gate.detail or ""
+    )
+    assert len(driver.codex_calls) == 1
+
+
+def test_instance_failure_stops_with_exit_three_and_manual_resume_same_step() -> None:
+    received = datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    driver = FakeDriver(
+        snapshots=[changes, changes],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[
+            _review_approval(AgentRole.CLAUDE),
+            _review_approval(AgentRole.ANTIGRAVITY),
+        ],
+        codex_failures=[
+            _invocation_failure(
+                AgentRole.CODEX,
+                AgentFailureKind.PROCESS,
+                "codex-process-1",
+                received_at=received,
+            ),
+            None,
+        ],
+    )
+    engine = WorkflowEngine(driver, now_fn=lambda: received)
+
+    halted = engine.run_current_work_unit(_slice_state(), _context())
+
+    assert halted.exit_code == 3
+    assert halted.state.current_step is WorkflowStep.CODEX_IMPLEMENTATION
+    assert halted.state.current_work_unit.gate.status is GateStatus.AWAITING_RESUME
+    assert driver.reviewer_calls == []
+
+    resumed = halted.state.resume_after_invocation_halt(updated_at="2026-08-12T10:05:00+00:00")
+    completed = engine.run_current_work_unit(resumed, _context(), halted.history)
+
+    assert completed.completed
+    assert len(driver.codex_calls) == 2
+    assert [call.reviewer for call in driver.reviewer_calls] == [
+        AgentRole.CLAUDE,
+        AgentRole.ANTIGRAVITY,
+    ]
+
+
+def test_manual_resume_at_claude_does_not_repeat_codex_or_call_antigravity_early() -> None:
+    received = datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[
+            _review_approval(AgentRole.CLAUDE),
+            _review_approval(AgentRole.ANTIGRAVITY),
+        ],
+        reviewer_failures=[
+            _invocation_failure(
+                AgentRole.CLAUDE,
+                AgentFailureKind.NETWORK,
+                "claude-network-1",
+                received_at=received,
+            ),
+            None,
+        ],
+    )
+    engine = WorkflowEngine(driver, now_fn=lambda: received)
+
+    halted = engine.run_current_work_unit(_slice_state(), _context())
+
+    assert halted.exit_code == 3
+    assert halted.state.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
+    assert [call.reviewer for call in driver.reviewer_calls] == [AgentRole.CLAUDE]
+
+    completed = engine.run_current_work_unit(
+        halted.state.resume_after_invocation_halt(), _context(), halted.history
+    )
+
+    assert completed.completed
+    assert len(driver.codex_calls) == 1
+    assert [call.reviewer for call in driver.reviewer_calls] == [
+        AgentRole.CLAUDE,
+        AgentRole.CLAUDE,
+        AgentRole.ANTIGRAVITY,
+    ]
+
+
+def test_manual_resume_at_antigravity_repeats_neither_codex_nor_claude() -> None:
+    received = datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[
+            _review_approval(AgentRole.CLAUDE),
+            _review_approval(AgentRole.ANTIGRAVITY),
+        ],
+        reviewer_failures=[
+            None,
+            _invocation_failure(
+                AgentRole.ANTIGRAVITY,
+                AgentFailureKind.TIMEOUT,
+                "antigravity-timeout-1",
+                received_at=received,
+            ),
+            None,
+        ],
+    )
+    engine = WorkflowEngine(driver, now_fn=lambda: received)
+
+    halted = engine.run_current_work_unit(_slice_state(), _context())
+
+    assert halted.exit_code == 3
+    assert halted.state.current_step is WorkflowStep.ANTIGRAVITY_SLICE_REVIEW
+    assert [call.reviewer for call in driver.reviewer_calls] == [
+        AgentRole.CLAUDE,
+        AgentRole.ANTIGRAVITY,
+    ]
+
+    completed = engine.run_current_work_unit(
+        halted.state.resume_after_invocation_halt(), _context(), halted.history
+    )
+
+    assert completed.completed
+    assert len(driver.codex_calls) == 1
+    assert [call.reviewer for call in driver.reviewer_calls] == [
+        AgentRole.CLAUDE,
+        AgentRole.ANTIGRAVITY,
+        AgentRole.ANTIGRAVITY,
+    ]
+
+
+def test_changed_fingerprint_during_quota_wait_halts_before_retry() -> None:
+    now = [datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)]
+    first = _changes("1", "src/early.py", TEST_FILE)
+    changed = _changes("2", "src/early.py", TEST_FILE)
+    driver = FakeDriver(
+        snapshots=[first, first],
+        codex_outputs=[],
+        reviewer_outputs=[],
+        codex_failures=[
+            _invocation_failure(
+                AgentRole.CODEX,
+                AgentFailureKind.QUOTA,
+                "quota-mutated",
+                received_at=now[0],
+                reset_after_seconds=1,
+            )
+        ],
+    )
+
+    def sleep(seconds: float) -> None:
+        now[0] += timedelta(seconds=seconds)
+        driver.snapshots[0] = changed
+
+    result = WorkflowEngine(
+        driver, now_fn=lambda: now[0], sleep_fn=sleep
+    ).run_current_work_unit(
+        _slice_state(),
+        replace(
+            _context(),
+            quota_wait_policy=QuotaWaitPolicy(
+                safety_margin_seconds=0,
+                maximum_wait_seconds=60,
+                heartbeat_interval_seconds=1,
+            ),
+        ),
+    )
+
+    assert result.exit_code == 4
+    assert result.state.current_work_unit.gate.reason is GateReason.STOP_REQUEST
+    assert "QUOTA-RESUME-DIFF" in (result.state.current_work_unit.gate.detail or "")
+    assert len(driver.codex_calls) == 1
+
+
+def test_collect_changes_exception_during_resume_becomes_policy_halt() -> None:
+    now = [datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)]
+    changes = _changes("1", "src/early.py", TEST_FILE)
+
+    class RevalidationFailureDriver(FakeDriver):
+        collection_count = 0
+
+        def collect_changes(self, start_commit: str) -> WorkflowChanges:
+            self.collection_count += 1
+            if self.collection_count > 1:
+                raise RuntimeError("simulated git index lock")
+            return super().collect_changes(start_commit)
+
+    driver = RevalidationFailureDriver(
+        snapshots=[changes],
+        codex_outputs=[],
+        reviewer_outputs=[],
+        codex_failures=[
+            _invocation_failure(
+                AgentRole.CODEX,
+                AgentFailureKind.QUOTA,
+                "quota-git-lock",
+                received_at=now[0],
+                reset_after_seconds=1,
+            )
+        ],
+    )
+
+    def sleep(seconds: float) -> None:
+        now[0] += timedelta(seconds=seconds)
+
+    result = WorkflowEngine(
+        driver, now_fn=lambda: now[0], sleep_fn=sleep
+    ).run_current_work_unit(
+        _slice_state(),
+        replace(
+            _context(),
+            quota_wait_policy=QuotaWaitPolicy(
+                safety_margin_seconds=0,
+                maximum_wait_seconds=60,
+                heartbeat_interval_seconds=1,
+            ),
+        ),
+    )
+
+    assert result.exit_code == 4
+    assert result.state.current_work_unit.gate.reason is GateReason.STOP_REQUEST
+    assert "simulated git index lock" in (
+        result.state.current_work_unit.gate.detail or ""
+    )
+    assert driver.checkpoints[-1] == result.state
+    assert len(driver.codex_calls) == 1
+
+
+def test_interrupt_during_quota_wait_leaves_checkpointed_wait_state() -> None:
+    received = datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[],
+        reviewer_outputs=[],
+        codex_failures=[
+            _invocation_failure(
+                AgentRole.CODEX,
+                AgentFailureKind.QUOTA,
+                "quota-interrupted",
+                received_at=received,
+                reset_after_seconds=30,
+            )
+        ],
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        WorkflowEngine(
+            driver,
+            now_fn=lambda: received,
+            sleep_fn=lambda _seconds: (_ for _ in ()).throw(KeyboardInterrupt()),
+        ).run_current_work_unit(
+            _slice_state(),
+            replace(
+                _context(),
+                quota_wait_policy=QuotaWaitPolicy(
+                    safety_margin_seconds=0,
+                    maximum_wait_seconds=60,
+                    heartbeat_interval_seconds=5,
+                ),
+            ),
+        )
+
+    assert driver.checkpoints[-1].current_work_unit.status is WorkUnitStatus.WAITING_FOR_QUOTA
+    assert driver.checkpoints[-1].current_step is WorkflowStep.CODEX_IMPLEMENTATION
 
 
 def test_antigravity_denial_returns_to_codex_then_claude_before_recheck() -> None:

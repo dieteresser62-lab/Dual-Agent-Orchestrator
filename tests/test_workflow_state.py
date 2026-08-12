@@ -5,9 +5,11 @@ from dataclasses import replace
 import pytest
 
 from workflow_state import (
+    AgentFailureKind,
     DEFAULT_MAX_CODEX_RETURNS,
     GateReason,
     GateStatus,
+    InvocationFailureRecord,
     Reviewer,
     SliceStatus,
     WorkflowState,
@@ -120,6 +122,41 @@ def test_fourth_review_denial_enters_user_gate_without_reset() -> None:
     assert state.current_step is WorkflowStep.CODEX_PLAN_REVISION
     assert state.current_slice.status is SliceStatus.AWAITING_USER_DECISION
     assert state.current_slice.commit_ref is None
+
+
+def test_quota_failure_roundtrips_and_resumes_exact_failed_step() -> None:
+    state = make_state()
+    failure = InvocationFailureRecord(
+        invocation_id="inv-quota-1",
+        idempotency_key="run-1:1:codex_plan:codex",
+        role="codex",
+        failure_kind=AgentFailureKind.QUOTA,
+        provider_text="usage cap reached; retry in 60 seconds",
+        received_at="2026-08-12T10:00:00+00:00",
+        step=WorkflowStep.CODEX_PLAN,
+        slice_id=1,
+        work_unit_id=1,
+        diagnostic_exit_code=2,
+        parse_path="codex:text:relative",
+        source_timezone="UTC",
+        reset_at_utc="2026-08-12T10:01:00+00:00",
+        resume_at_utc="2026-08-12T10:01:30+00:00",
+        safety_margin_seconds=30,
+        auto_resume_count=1,
+        automatic_resume=True,
+    )
+
+    waiting = state.record_invocation_failure(failure, wait_automatically=True)
+    loaded = WorkflowState.from_dict(waiting.to_dict())
+
+    assert loaded.current_work_unit.status is WorkUnitStatus.WAITING_FOR_QUOTA
+    assert loaded.current_slice.status is SliceStatus.WAITING_FOR_QUOTA
+    assert loaded.current_work_unit.gate.status is GateStatus.WAITING_FOR_QUOTA
+    assert loaded.current_work_unit.invocation_failures == (failure,)
+    resumed = loaded.resume_after_invocation_halt(updated_at="2026-08-12T10:01:30+00:00")
+    assert resumed.current_step is WorkflowStep.CODEX_PLAN
+    assert resumed.current_work_unit.status is WorkUnitStatus.IN_PROGRESS
+    assert resumed.current_work_unit.invocation_failures == (failure,)
 
 
 def test_resume_after_user_decision_keeps_saved_step_and_review_context() -> None:

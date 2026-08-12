@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import queue
 import re
@@ -11,9 +12,11 @@ import subprocess
 import tempfile
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable, TextIO
+from typing import Callable, Mapping, TextIO
 
 from agent_adapters import (
     AGENT_REGISTRY,
@@ -25,21 +28,153 @@ from path_policy import PathPolicyError, resolve_repository_path
 from repo_changes import RepositoryChanges
 from contracts import ValidationAttestation
 from validation_matrix import ValidationMatrixRunner, ValidationRequest
+from workflow_state import AgentFailureKind
 
 TEST_OUTPUT_LIMIT = 7000
 ERROR_TRUNCATION_LIMIT = 1200
 logger = logging.getLogger(__name__)
 
 
-class QuotaReachedError(RuntimeError):
-    def __init__(self, agent_key: str, detail: str) -> None:
+@dataclass(frozen=True)
+class QuotaReset:
+    reset_at_utc: datetime
+    parse_path: str
+    source_timezone: str
+
+    def __post_init__(self) -> None:
+        if self.reset_at_utc.tzinfo is None or self.reset_at_utc.utcoffset() is None:
+            raise ValueError("quota reset timestamp must be timezone-aware")
+        object.__setattr__(self, "reset_at_utc", self.reset_at_utc.astimezone(timezone.utc))
+        if not self.parse_path.strip() or not self.source_timezone.strip():
+            raise ValueError("quota reset evidence must name parse path and timezone")
+
+
+class AgentInvocationError(RuntimeError):
+    """One classified role invocation failure; never authorizes an internal retry."""
+
+    def __init__(
+        self,
+        *,
+        agent_key: str,
+        kind: AgentFailureKind,
+        invocation_id: str,
+        provider_text: str,
+        received_at: datetime,
+        exit_code: int | None = None,
+        quota_reset: QuotaReset | None = None,
+    ) -> None:
         self.agent_key = agent_key
-        message = f"{agent_key} quota/rate limit reached: {detail}"
-        super().__init__(message)
+        self.kind = kind
+        self.invocation_id = invocation_id
+        self.provider_text = provider_text
+        self.received_at = received_at.astimezone(timezone.utc)
+        self.process_exit_code = exit_code
+        self.quota_reset = quota_reset
+        label = "quota/rate limit reached" if kind is AgentFailureKind.QUOTA else f"{kind.value} failure"
+        super().__init__(
+            f"{agent_key} {label} [invocation {invocation_id}]: {provider_text}"
+        )
+
+
+class QuotaReachedError(AgentInvocationError):
+    def __init__(
+        self,
+        agent_key: str,
+        detail: str,
+        *,
+        invocation_id: str = "legacy-quota",
+        received_at: datetime | None = None,
+        quota_reset: QuotaReset | None = None,
+    ) -> None:
+        super().__init__(
+            agent_key=agent_key,
+            kind=AgentFailureKind.QUOTA,
+            invocation_id=invocation_id,
+            provider_text=detail,
+            received_at=received_at or datetime.now(timezone.utc),
+            quota_reset=quota_reset,
+        )
 
 
 class AgentCompatibilityError(RuntimeError):
     """Raised for missing, unknown, or capability-incompatible CLI versions."""
+
+
+class AgentProcessError(RuntimeError):
+    def __init__(
+        self,
+        provider_text: str,
+        *,
+        exit_code: int | None = None,
+        kind_hint: AgentFailureKind | None = None,
+        provider_data: Mapping[str, object] | None = None,
+    ) -> None:
+        self.provider_text = provider_text
+        self.exit_code = exit_code
+        self.kind_hint = kind_hint
+        self.provider_data = provider_data
+        super().__init__(provider_text)
+
+
+@dataclass(frozen=True)
+class QuotaWaitPolicy:
+    automatic: bool = True
+    safety_margin_seconds: int = 60
+    maximum_wait_seconds: int = 86_400
+    maximum_auto_resumes: int = 1
+    heartbeat_interval_seconds: int = 30
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.automatic, bool):
+            raise ValueError("quota automatic policy must be a boolean")
+        for value, label, allow_zero in (
+            (self.safety_margin_seconds, "quota safety margin", True),
+            (self.maximum_wait_seconds, "quota maximum wait", False),
+            (self.maximum_auto_resumes, "quota maximum auto resumes", True),
+            (self.heartbeat_interval_seconds, "quota heartbeat interval", False),
+        ):
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or value < (0 if allow_zero else 1)
+            ):
+                qualifier = "non-negative" if allow_zero else "positive"
+                raise ValueError(f"{label} must be a {qualifier} integer")
+
+
+def wait_until_quota_resume(
+    *,
+    role: str,
+    task_label: str,
+    work_unit_id: int,
+    resume_at_utc: datetime,
+    heartbeat_interval_seconds: int,
+    now_fn: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    sleep_fn: Callable[[float], None] = time.sleep,
+    heartbeat_fn: Callable[[str], None] = logger.info,
+) -> None:
+    """Wait interruptibly with bounded sleeps and concise local/UTC heartbeats."""
+    if resume_at_utc.tzinfo is None or resume_at_utc.utcoffset() is None:
+        raise ValueError("quota resume timestamp must be timezone-aware")
+    if heartbeat_interval_seconds < 1:
+        raise ValueError("quota heartbeat interval must be positive")
+    target = resume_at_utc.astimezone(timezone.utc)
+    while True:
+        now = now_fn()
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("quota wait clock must return a timezone-aware datetime")
+        now_utc = now.astimezone(timezone.utc)
+        remaining = max(0.0, (target - now_utc).total_seconds())
+        if remaining <= 0:
+            return
+        local_target = target.astimezone()
+        heartbeat_fn(
+            "quota wait: "
+            f"role={role} task={task_label} work_unit={work_unit_id} "
+            f"resume_local={local_target.isoformat()} resume_utc={target.isoformat()} "
+            f"remaining={int(remaining + 0.999)}s"
+        )
+        sleep_fn(min(float(heartbeat_interval_seconds), remaining))
 
 
 @dataclass
@@ -543,13 +678,14 @@ def run_agent(
         adapter.validate_process_output(stderr)
         output = adapter.extract_output(stdout, stderr, extra_files)
         if result.returncode != 0:
-            error_text = shorten(
-                stderr or output or "Unknown CLI error without output.",
-                ERROR_TRUNCATION_LIMIT,
-            )
-            raise RuntimeError(f"{agent_key} failed: {error_text}")
+            error_text = stderr or output or "Unknown CLI error without output."
+            raise AgentProcessError(error_text, exit_code=result.returncode)
         if not output:
-            raise RuntimeError(f"{agent_key} returned empty output.")
+            raise AgentProcessError(
+                f"{agent_key} returned empty output.",
+                exit_code=result.returncode,
+                kind_hint=AgentFailureKind.OUTPUT,
+            )
         if adapter.metadata:
             logger.info(
                 "[AGENT_USAGE] role=%s metadata=%s",
@@ -558,7 +694,10 @@ def run_agent(
             )
         return output
     except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(f"{agent_key} timed out after {timeout_seconds}s.") from exc
+        raise AgentProcessError(
+            f"{agent_key} timed out after {timeout_seconds}s.",
+            kind_hint=AgentFailureKind.TIMEOUT,
+        ) from exc
     finally:
         try:
             adapter.cleanup()
@@ -568,8 +707,144 @@ def run_agent(
             workspace.cleanup()
 
 
+_ISO_TIMESTAMP_PATTERN = re.compile(
+    r"\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})\b"
+)
+_RELATIVE_RESET_PATTERN = re.compile(
+    r"(?i)\b(?:try again|retry|resets?|available again)\s+(?:after|in)\s+"
+    r"(\d+(?:\.\d+)?)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)\b"
+)
+_STRUCTURED_ABSOLUTE_KEYS = frozenset(
+    {"reset_at", "resets_at", "reset_time", "resettime", "retry_at"}
+)
+_STRUCTURED_RELATIVE_KEYS = frozenset(
+    {"retry_after", "retry_after_seconds", "retryafter", "retry_delay_seconds"}
+)
+
+
+def parse_quota_reset(
+    agent_key: str,
+    provider_text: str,
+    *,
+    received_at: datetime,
+    provider_data: Mapping[str, object] | None = None,
+) -> QuotaReset | None:
+    """Parse only unambiguous provider reset evidence, normalized to UTC."""
+    if agent_key not in {"codex", "claude", "antigravity"}:
+        raise ValueError("quota parser requires a known agent role")
+    if received_at.tzinfo is None or received_at.utcoffset() is None:
+        raise ValueError("quota parser received_at must be timezone-aware")
+    received_utc = received_at.astimezone(timezone.utc)
+
+    structured = _structured_reset_candidates(provider_data or {})
+    if structured:
+        distinct = {(item[0], item[2]) for item in structured}
+        if len(distinct) != 1:
+            return None
+        reset_at, parse_path, source_timezone = structured[0]
+        if isinstance(reset_at, timedelta):
+            absolute = received_utc + reset_at
+            source_timezone = received_at.tzname() or str(received_at.tzinfo)
+        else:
+            absolute = reset_at
+        return QuotaReset(absolute, f"{agent_key}:structured:{parse_path}", source_timezone)
+
+    absolute_values: list[datetime] = []
+    for match in _ISO_TIMESTAMP_PATTERN.findall(provider_text or ""):
+        try:
+            parsed = datetime.fromisoformat(match.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if parsed.tzinfo is not None and parsed.utcoffset() is not None:
+            absolute_values.append(parsed)
+    distinct_absolute = {item.astimezone(timezone.utc) for item in absolute_values}
+    if len(distinct_absolute) == 1:
+        parsed = absolute_values[0]
+        return QuotaReset(
+            parsed,
+            f"{agent_key}:text:absolute",
+            parsed.tzname() or str(parsed.tzinfo),
+        )
+    if len(distinct_absolute) > 1:
+        return None
+
+    relative_values: list[timedelta] = []
+    for amount_text, unit in _RELATIVE_RESET_PATTERN.findall(provider_text or ""):
+        amount = float(amount_text)
+        lowered = unit.lower()
+        seconds = amount
+        if lowered.startswith(("min", "minute")):
+            seconds *= 60
+        elif lowered.startswith(("h", "hour")):
+            seconds *= 3600
+        relative_values.append(timedelta(seconds=seconds))
+    distinct_relative = {item.total_seconds() for item in relative_values}
+    if len(distinct_relative) != 1:
+        return None
+    delta = relative_values[0]
+    return QuotaReset(
+        received_utc + delta,
+        f"{agent_key}:text:relative",
+        received_at.tzname() or str(received_at.tzinfo),
+    )
+
+
+def _structured_reset_candidates(
+    data: Mapping[str, object],
+) -> list[tuple[datetime | timedelta, str, str]]:
+    candidates: list[tuple[datetime | timedelta, str, str]] = []
+
+    def visit(value: object, path: str) -> None:
+        if isinstance(value, Mapping):
+            for raw_key, child in value.items():
+                key = str(raw_key).lower()
+                child_path = f"{path}.{raw_key}" if path else str(raw_key)
+                if key in _STRUCTURED_ABSOLUTE_KEYS:
+                    parsed: datetime | None = None
+                    if isinstance(child, str):
+                        try:
+                            parsed = datetime.fromisoformat(child.replace("Z", "+00:00"))
+                        except ValueError:
+                            pass
+                    elif (
+                        isinstance(child, (int, float))
+                        and not isinstance(child, bool)
+                        and math.isfinite(float(child))
+                        and float(child) >= 0
+                    ):
+                        try:
+                            parsed = datetime.fromtimestamp(float(child), tz=timezone.utc)
+                        except (OSError, OverflowError, ValueError):
+                            pass
+                    if (
+                        parsed is not None
+                        and parsed.tzinfo is not None
+                        and parsed.utcoffset() is not None
+                    ):
+                        candidates.append(
+                            (parsed, child_path, parsed.tzname() or str(parsed.tzinfo))
+                        )
+                elif (
+                    key in _STRUCTURED_RELATIVE_KEYS
+                    and isinstance(child, (int, float))
+                    and not isinstance(child, bool)
+                    and math.isfinite(float(child))
+                    and float(child) >= 0
+                ):
+                    candidates.append(
+                        (timedelta(seconds=float(child)), child_path, "relative")
+                    )
+                visit(child, child_path)
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                visit(child, f"{path}[{index}]")
+
+    visit(data, "")
+    return candidates
+
+
 def is_quota_or_rate_limit_error(text: str) -> bool:
-    raw = (text or "").lower()
+    raw = re.sub(r"[_-]+", " ", (text or "").lower())
     markers = (
         "quota",
         "hit your limit",
@@ -584,6 +859,69 @@ def is_quota_or_rate_limit_error(text: str) -> bool:
         "resource exhausted",
     )
     return any(marker in raw for marker in markers)
+
+
+def classify_agent_failure(
+    agent_key: str,
+    exc: BaseException,
+    *,
+    invocation_id: str,
+    received_at: datetime | None = None,
+) -> AgentInvocationError:
+    """Classify one failed invocation without retrying or substituting its role."""
+    stamp = (received_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    provider_text = str(getattr(exc, "provider_text", "") or str(exc) or type(exc).__name__)
+    provider_data = getattr(exc, "provider_data", None)
+    process_exit_code = getattr(exc, "exit_code", None)
+    kind_hint = getattr(exc, "kind_hint", None)
+    lowered = provider_text.lower()
+    structured_text = (
+        json.dumps(provider_data, ensure_ascii=False, sort_keys=True)
+        if isinstance(provider_data, Mapping)
+        else ""
+    )
+    if is_quota_or_rate_limit_error(provider_text) or is_quota_or_rate_limit_error(
+        structured_text
+    ):
+        reset = parse_quota_reset(
+            agent_key,
+            provider_text,
+            received_at=stamp,
+            provider_data=provider_data if isinstance(provider_data, Mapping) else None,
+        )
+        return QuotaReachedError(
+            agent_key,
+            provider_text,
+            invocation_id=invocation_id,
+            received_at=stamp,
+            quota_reset=reset,
+        )
+    if isinstance(kind_hint, AgentFailureKind):
+        kind = kind_hint
+    elif isinstance(exc, subprocess.TimeoutExpired) or "timed out" in lowered or "timeout" in lowered:
+        kind = AgentFailureKind.TIMEOUT
+    elif isinstance(exc, AgentPermissionError) or "permission denied" in lowered or "permission request rejected" in lowered:
+        kind = AgentFailureKind.PERMISSION
+    elif any(marker in lowered for marker in ("unauthorized", "authentication", "invalid api key", "401", "403")):
+        kind = AgentFailureKind.AUTH
+    elif any(marker in lowered for marker in ("dns", "name resolution", "connection", "network", "econn", "socket", "loopback", "egress")):
+        kind = AgentFailureKind.NETWORK
+    elif isinstance(exc, FileNotFoundError) or "no such file" in lowered or "missing cli binary" in lowered:
+        kind = AgentFailureKind.BINARY
+    elif any(marker in lowered for marker in ("empty output", "invalid json", "no non-empty", "unparsable")):
+        kind = AgentFailureKind.OUTPUT
+    elif process_exit_code not in (None, 0) or "execution error" in lowered or "failed:" in lowered:
+        kind = AgentFailureKind.PROCESS
+    else:
+        kind = AgentFailureKind.RUNTIME
+    return AgentInvocationError(
+        agent_key=agent_key,
+        kind=kind,
+        invocation_id=invocation_id,
+        provider_text=provider_text,
+        received_at=stamp,
+        exit_code=process_exit_code if isinstance(process_exit_code, int) else None,
+    )
 
 
 def compute_retry_backoff_seconds(error_text: str, attempt: int) -> int:
@@ -672,6 +1010,7 @@ def run_agent_checked(
 
     for attempt in range(1, max_retries + 2):
         has_next_attempt = attempt < (max_retries + 1)
+        invocation_id = uuid.uuid4().hex
         prompt_to_send = prompt
         if rejected_output is not None:
             prompt_to_send = build_contract_repair_prompt(
@@ -705,16 +1044,43 @@ def run_agent_checked(
                 rejected_output = output
             else:
                 return output
-        except (AgentCompatibilityError, AgentBudgetError, AgentPermissionError):
-            # Capability, budget, and permission policy failures require a decision, not retries.
+        except AgentInvocationError:
             raise
         except Exception as exc:
-            rejected_output = None
-            error_text = shorten(str(exc), ERROR_TRUNCATION_LIMIT)
-            errors.append(error_text)
-
-            if is_quota_or_rate_limit_error(error_text):
-                raise QuotaReachedError(agent_key, error_text) from exc
+            failure = classify_agent_failure(
+                agent_key,
+                exc,
+                invocation_id=invocation_id,
+            )
+            failure_path = log_dir / f"{log_prefix}.attempt-{attempt}.failure.json"
+            write_file(
+                failure_path,
+                json.dumps(
+                    {
+                        "agent": failure.agent_key,
+                        "failure_kind": failure.kind.value,
+                        "invocation_id": failure.invocation_id,
+                        "provider_text": failure.provider_text,
+                        "received_at": failure.received_at.isoformat(),
+                        "process_exit_code": failure.process_exit_code,
+                        "quota_reset_at_utc": (
+                            failure.quota_reset.reset_at_utc.isoformat()
+                            if failure.quota_reset is not None
+                            else None
+                        ),
+                        "quota_parse_path": (
+                            failure.quota_reset.parse_path
+                            if failure.quota_reset is not None
+                            else None
+                        ),
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    indent=2,
+                )
+                + "\n",
+            )
+            raise failure from exc
 
         if has_next_attempt:
             delay_seconds = compute_retry_backoff_seconds(errors[-1], attempt)
@@ -727,9 +1093,16 @@ def run_agent_checked(
             )
             time.sleep(delay_seconds)
 
-    raise RuntimeError(
+    detail = (
         f"{agent_key} did not produce valid output after {max_retries + 1} attempts: "
         f"{shorten(chr(10).join(errors), ERROR_TRUNCATION_LIMIT)}"
+    )
+    raise AgentInvocationError(
+        agent_key=agent_key,
+        kind=AgentFailureKind.OUTPUT,
+        invocation_id=invocation_id,
+        provider_text=detail,
+        received_at=datetime.now(timezone.utc),
     )
 
 

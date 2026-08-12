@@ -42,6 +42,8 @@ class WorkUnitStatus(str, Enum):
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
     AWAITING_USER_DECISION = "awaiting_user_decision"
+    WAITING_FOR_QUOTA = "waiting_for_quota"
+    AWAITING_RESUME = "awaiting_resume"
     COMPLETED = "completed"
 
 
@@ -49,6 +51,8 @@ class SliceStatus(str, Enum):
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
     AWAITING_USER_DECISION = "awaiting_user_decision"
+    WAITING_FOR_QUOTA = "waiting_for_quota"
+    AWAITING_RESUME = "awaiting_resume"
     COMPLETED = "completed"
 
 
@@ -56,6 +60,7 @@ class GateStatus(str, Enum):
     CLEAR = "clear"
     AWAITING_USER_DECISION = "awaiting_user_decision"
     WAITING_FOR_QUOTA = "waiting_for_quota"
+    AWAITING_RESUME = "awaiting_resume"
 
 
 class GateReason(str, Enum):
@@ -67,11 +72,171 @@ class GateReason(str, Enum):
     ANCHOR_CHANGE = "anchor_change"
     MANUAL_SLICE = "manual_slice"
     QUOTA = "quota"
+    INSTANCE_FAILURE = "instance_failure"
+
+
+class AgentFailureKind(str, Enum):
+    QUOTA = "quota"
+    AUTH = "auth"
+    NETWORK = "network"
+    PERMISSION = "permission"
+    TIMEOUT = "timeout"
+    BINARY = "binary"
+    PROCESS = "process"
+    OUTPUT = "output"
+    RUNTIME = "runtime"
 
 
 class Reviewer(str, Enum):
     CLAUDE = "claude"
     ANTIGRAVITY = "antigravity"
+
+
+@dataclass(frozen=True)
+class InvocationFailureRecord:
+    invocation_id: str
+    idempotency_key: str
+    role: str
+    failure_kind: AgentFailureKind
+    provider_text: str
+    received_at: str
+    step: WorkflowStep
+    slice_id: int
+    work_unit_id: int
+    diagnostic_exit_code: int
+    parse_path: str | None = None
+    source_timezone: str | None = None
+    reset_at_utc: str | None = None
+    resume_at_utc: str | None = None
+    safety_margin_seconds: int = 0
+    auto_resume_count: int = 0
+    automatic_resume: bool = False
+    diff_fingerprint: str | None = None
+
+    def __post_init__(self) -> None:
+        for value, label in (
+            (self.invocation_id, "invocation failure invocation_id"),
+            (self.idempotency_key, "invocation failure idempotency_key"),
+            (self.provider_text, "invocation failure provider_text"),
+        ):
+            _require_non_empty(value, label)
+        if self.role not in {"codex", "claude", "antigravity"}:
+            raise WorkflowStateValidationError(
+                "invocation failure role must be codex, claude, or antigravity"
+            )
+        _require_timestamp(self.received_at, "invocation failure received_at")
+        _require_positive_int(self.slice_id, "invocation failure slice_id")
+        _require_positive_int(self.work_unit_id, "invocation failure work_unit_id")
+        if self.failure_kind is AgentFailureKind.QUOTA:
+            if self.diagnostic_exit_code != 2:
+                raise WorkflowStateValidationError("quota failure requires exit code 2")
+        elif self.diagnostic_exit_code != 3:
+            raise WorkflowStateValidationError("instance failure requires exit code 3")
+        for value, label in (
+            (self.safety_margin_seconds, "invocation failure safety margin"),
+            (self.auto_resume_count, "invocation failure auto-resume count"),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise WorkflowStateValidationError(f"{label} must be a non-negative integer")
+        if not isinstance(self.automatic_resume, bool):
+            raise WorkflowStateValidationError(
+                "invocation failure automatic_resume must be a boolean"
+            )
+        timestamp_fields = (
+            (self.reset_at_utc, "invocation failure reset_at_utc"),
+            (self.resume_at_utc, "invocation failure resume_at_utc"),
+        )
+        for value, label in timestamp_fields:
+            if value is not None:
+                _require_timestamp(value, label)
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                if parsed.utcoffset() != timezone.utc.utcoffset(parsed):
+                    raise WorkflowStateValidationError(f"{label} must be normalized to UTC")
+        has_reset = self.reset_at_utc is not None
+        if has_reset != (self.resume_at_utc is not None):
+            raise WorkflowStateValidationError(
+                "invocation failure reset and resume timestamps must be present together"
+            )
+        if self.automatic_resume and (
+            self.failure_kind is not AgentFailureKind.QUOTA or not has_reset
+        ):
+            raise WorkflowStateValidationError(
+                "automatic resume requires a quota failure with a reset timestamp"
+            )
+        if self.failure_kind is not AgentFailureKind.QUOTA and any(
+            value is not None
+            for value in (self.parse_path, self.source_timezone, self.reset_at_utc)
+        ):
+            raise WorkflowStateValidationError(
+                "non-quota failure cannot carry quota reset evidence"
+            )
+        if self.diff_fingerprint is not None and not SHA256_PATTERN.fullmatch(
+            self.diff_fingerprint
+        ):
+            raise WorkflowStateValidationError(
+                "invocation failure diff fingerprint must be a lowercase SHA-256 digest"
+            )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "invocation_id": self.invocation_id,
+            "idempotency_key": self.idempotency_key,
+            "role": self.role,
+            "failure_kind": self.failure_kind.value,
+            "provider_text": self.provider_text,
+            "received_at": self.received_at,
+            "step": self.step.value,
+            "slice_id": self.slice_id,
+            "work_unit_id": self.work_unit_id,
+            "diagnostic_exit_code": self.diagnostic_exit_code,
+            "parse_path": self.parse_path,
+            "source_timezone": self.source_timezone,
+            "reset_at_utc": self.reset_at_utc,
+            "resume_at_utc": self.resume_at_utc,
+            "safety_margin_seconds": self.safety_margin_seconds,
+            "auto_resume_count": self.auto_resume_count,
+            "automatic_resume": self.automatic_resume,
+            "diff_fingerprint": self.diff_fingerprint,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: Mapping[str, Any]) -> InvocationFailureRecord:
+        _require_exact_keys(
+            raw,
+            {
+                "invocation_id", "idempotency_key", "role", "failure_kind",
+                "provider_text", "received_at", "step", "slice_id",
+                "work_unit_id", "diagnostic_exit_code", "parse_path",
+                "source_timezone", "reset_at_utc", "resume_at_utc",
+                "safety_margin_seconds", "auto_resume_count", "automatic_resume",
+                "diff_fingerprint",
+            },
+            "invocation failure",
+        )
+        if not isinstance(raw["automatic_resume"], bool):
+            raise WorkflowStateValidationError(
+                "invocation failure automatic_resume must be a boolean"
+            )
+        return cls(
+            invocation_id=_string(raw["invocation_id"], "invocation failure invocation_id"),
+            idempotency_key=_string(raw["idempotency_key"], "invocation failure idempotency_key"),
+            role=_string(raw["role"], "invocation failure role"),
+            failure_kind=_enum_value(AgentFailureKind, raw["failure_kind"], "invocation failure kind"),
+            provider_text=_string(raw["provider_text"], "invocation failure provider_text"),
+            received_at=_string(raw["received_at"], "invocation failure received_at"),
+            step=_enum_value(WorkflowStep, raw["step"], "invocation failure step"),
+            slice_id=_positive_int(raw["slice_id"], "invocation failure slice_id"),
+            work_unit_id=_positive_int(raw["work_unit_id"], "invocation failure work_unit_id"),
+            diagnostic_exit_code=_positive_int(raw["diagnostic_exit_code"], "invocation failure diagnostic_exit_code"),
+            parse_path=_optional_string(raw["parse_path"], "invocation failure parse_path"),
+            source_timezone=_optional_string(raw["source_timezone"], "invocation failure source_timezone"),
+            reset_at_utc=_optional_string(raw["reset_at_utc"], "invocation failure reset_at_utc"),
+            resume_at_utc=_optional_string(raw["resume_at_utc"], "invocation failure resume_at_utc"),
+            safety_margin_seconds=_non_negative_int(raw["safety_margin_seconds"], "invocation failure safety margin"),
+            auto_resume_count=_non_negative_int(raw["auto_resume_count"], "invocation failure auto-resume count"),
+            automatic_resume=raw["automatic_resume"],
+            diff_fingerprint=_optional_string(raw["diff_fingerprint"], "invocation failure diff fingerprint"),
+        )
 
 
 @dataclass(frozen=True)
@@ -406,6 +571,7 @@ class WorkUnitRecord:
     gate_decisions: tuple[GateDecisionRecord, ...] = ()
     active_test_fingerprint: str | None = None
     active_test_paths: tuple[str, ...] = ()
+    invocation_failures: tuple[InvocationFailureRecord, ...] = ()
 
     def __post_init__(self) -> None:
         _require_positive_int(self.work_unit_id, "work_unit_id")
@@ -420,11 +586,54 @@ class WorkUnitRecord:
             raise WorkflowStateValidationError("round_number exceeds max_codex_returns")
         _require_unique_non_empty(self.open_findings, "open_findings")
         _require_unique_non_empty(self.completed_side_effects, "completed_side_effects")
-        awaiting = self.status is WorkUnitStatus.AWAITING_USER_DECISION
-        if awaiting != (self.gate.status is GateStatus.AWAITING_USER_DECISION):
+        expected_gate_status = {
+            WorkUnitStatus.IN_PROGRESS: GateStatus.CLEAR,
+            WorkUnitStatus.PENDING: GateStatus.CLEAR,
+            WorkUnitStatus.COMPLETED: GateStatus.CLEAR,
+            WorkUnitStatus.AWAITING_USER_DECISION: GateStatus.AWAITING_USER_DECISION,
+            WorkUnitStatus.WAITING_FOR_QUOTA: GateStatus.WAITING_FOR_QUOTA,
+            WorkUnitStatus.AWAITING_RESUME: GateStatus.AWAITING_RESUME,
+        }[self.status]
+        if self.gate.status is not expected_gate_status:
             raise WorkflowStateValidationError(
-                "work-unit status and awaiting-user gate must change together"
+                "work-unit status and gate status must change together"
             )
+        invocation_ids = tuple(item.invocation_id for item in self.invocation_failures)
+        if len(set(invocation_ids)) != len(invocation_ids):
+            raise WorkflowStateValidationError(
+                "invocation failure ids must be unique within a work unit"
+            )
+        if any(
+            item.work_unit_id != self.work_unit_id or item.slice_id != self.slice_id
+            for item in self.invocation_failures
+        ):
+            raise WorkflowStateValidationError(
+                "invocation failures must belong to their containing work unit and slice"
+            )
+        if self.status in {WorkUnitStatus.WAITING_FOR_QUOTA, WorkUnitStatus.AWAITING_RESUME}:
+            if not self.invocation_failures:
+                raise WorkflowStateValidationError(
+                    "an invocation halt requires persisted failure evidence"
+                )
+            latest = self.invocation_failures[-1]
+            if latest.step is not self.current_step:
+                raise WorkflowStateValidationError(
+                    "invocation halt must preserve the failed workflow step"
+                )
+            if self.gate.reason is GateReason.QUOTA:
+                if latest.failure_kind is not AgentFailureKind.QUOTA:
+                    raise WorkflowStateValidationError(
+                        "quota gate requires a quota invocation failure"
+                    )
+            elif self.gate.reason is GateReason.INSTANCE_FAILURE:
+                if latest.failure_kind is AgentFailureKind.QUOTA:
+                    raise WorkflowStateValidationError(
+                        "instance-failure gate cannot carry a quota failure"
+                    )
+            else:
+                raise WorkflowStateValidationError(
+                    "invocation halt requires quota or instance_failure reason"
+                )
         if self.gate.reason is GateReason.ITERATION_LIMIT:
             if self.codex_return_count != self.max_codex_returns:
                 raise WorkflowStateValidationError(
@@ -490,6 +699,7 @@ class WorkUnitRecord:
             "gate_decisions": [item.to_dict() for item in self.gate_decisions],
             "active_test_fingerprint": self.active_test_fingerprint,
             "active_test_paths": list(self.active_test_paths),
+            "invocation_failures": [item.to_dict() for item in self.invocation_failures],
         }
 
     @classmethod
@@ -514,11 +724,14 @@ class WorkUnitRecord:
             "active_test_fingerprint",
             "active_test_paths",
         }
-        if set(raw) == legacy_keys:
+        quota_keys = {*current_keys, "invocation_failures"}
+        invocation_failures: tuple[InvocationFailureRecord, ...] = ()
+        shape_keys = set(raw) - {"invocation_failures"}
+        if shape_keys == legacy_keys:
             gate_decisions: tuple[GateDecisionRecord, ...] = ()
             active_test_fingerprint = None
             active_test_paths: tuple[str, ...] = ()
-        elif set(raw) == decision_keys:
+        elif shape_keys == decision_keys:
             raw_decisions = raw["gate_decisions"]
             if not isinstance(raw_decisions, list):
                 raise WorkflowStateValidationError("work_unit.gate_decisions must be a list")
@@ -530,8 +743,7 @@ class WorkUnitRecord:
             )
             active_test_fingerprint = None
             active_test_paths = ()
-        else:
-            _require_exact_keys(raw, current_keys, "work unit")
+        elif shape_keys == current_keys:
             raw_decisions = raw["gate_decisions"]
             if not isinstance(raw_decisions, list):
                 raise WorkflowStateValidationError("work_unit.gate_decisions must be a list")
@@ -547,6 +759,18 @@ class WorkUnitRecord:
             )
             active_test_paths = _string_tuple(
                 raw["active_test_paths"], "work_unit.active_test_paths"
+            )
+        else:
+            _require_exact_keys(raw, quota_keys, "work unit")
+        if "invocation_failures" in raw:
+            raw_failures = _list(
+                raw["invocation_failures"], "work_unit.invocation_failures"
+            )
+            invocation_failures = tuple(
+                InvocationFailureRecord.from_dict(
+                    _mapping(item, f"work_unit.invocation_failures[{index}]")
+                )
+                for index, item in enumerate(raw_failures)
             )
         reviewer_raw = raw["reviewer"]
         return cls(
@@ -575,6 +799,7 @@ class WorkUnitRecord:
             gate_decisions=gate_decisions,
             active_test_fingerprint=active_test_fingerprint,
             active_test_paths=active_test_paths,
+            invocation_failures=invocation_failures,
         )
 
 
@@ -1064,6 +1289,122 @@ class WorkflowState:
                 for item in self.slices
             )
         return self._replace_current_unit(updated_unit, slices=slices, updated_at=updated_at)
+
+    def record_invocation_failure(
+        self,
+        failure: InvocationFailureRecord,
+        *,
+        wait_automatically: bool,
+        updated_at: str | None = None,
+    ) -> WorkflowState:
+        """Persist one failed role invocation without advancing its logical step."""
+        current = self.current_work_unit
+        if current.status is not WorkUnitStatus.IN_PROGRESS:
+            raise WorkflowStateValidationError(
+                "only an in-progress work unit can record an invocation failure"
+            )
+        if (
+            failure.work_unit_id != current.work_unit_id
+            or failure.slice_id != current.slice_id
+            or failure.step is not current.current_step
+        ):
+            raise WorkflowStateValidationError(
+                "invocation failure does not match the current work-unit identity"
+            )
+        if any(
+            item.invocation_id == failure.invocation_id
+            for item in current.invocation_failures
+        ):
+            raise WorkflowStateValidationError(
+                "invocation failure id was already persisted"
+            )
+        if wait_automatically != failure.automatic_resume:
+            raise WorkflowStateValidationError(
+                "invocation wait mode differs from persisted failure evidence"
+            )
+        if wait_automatically and failure.failure_kind is not AgentFailureKind.QUOTA:
+            raise WorkflowStateValidationError(
+                "only quota failures may wait automatically"
+            )
+        status = (
+            WorkUnitStatus.WAITING_FOR_QUOTA
+            if wait_automatically
+            else WorkUnitStatus.AWAITING_RESUME
+        )
+        slice_status = (
+            SliceStatus.WAITING_FOR_QUOTA
+            if wait_automatically
+            else SliceStatus.AWAITING_RESUME
+        )
+        gate_status = (
+            GateStatus.WAITING_FOR_QUOTA
+            if wait_automatically
+            else GateStatus.AWAITING_RESUME
+        )
+        reason = (
+            GateReason.QUOTA
+            if failure.failure_kind is AgentFailureKind.QUOTA
+            else GateReason.INSTANCE_FAILURE
+        )
+        reset = failure.resume_at_utc or "manual resume required"
+        detail = (
+            f"role={failure.role} step={failure.step.value} "
+            f"invocation={failure.invocation_id} kind={failure.failure_kind.value} "
+            f"resume={reset} auto={str(failure.automatic_resume).lower()} "
+            f"continuations={failure.auto_resume_count} provider={failure.provider_text}"
+        )
+        updated_unit = replace(
+            current,
+            status=status,
+            gate=GateRecord(
+                status=gate_status,
+                reason=reason,
+                detail=detail,
+                fingerprint=failure.diff_fingerprint,
+                resume_step=failure.step,
+            ),
+            invocation_failures=(*current.invocation_failures, failure),
+        )
+        slices = tuple(
+            replace(item, status=slice_status)
+            if item.slice_id == self.current_slice_id
+            else item
+            for item in self.slices
+        )
+        return self._replace_current_unit(
+            updated_unit, slices=slices, updated_at=updated_at
+        )
+
+    def resume_after_invocation_halt(
+        self, *, updated_at: str | None = None
+    ) -> WorkflowState:
+        """Resume exactly the failed role step after an automatic or manual halt."""
+        current = self.current_work_unit
+        if current.status not in {
+            WorkUnitStatus.WAITING_FOR_QUOTA,
+            WorkUnitStatus.AWAITING_RESUME,
+        }:
+            raise WorkflowStateValidationError(
+                "workflow is not halted on an agent invocation"
+            )
+        if current.gate.resume_step is not current.current_step:
+            raise WorkflowStateValidationError(
+                "invocation halt does not preserve the current resume step"
+            )
+        updated_unit = replace(
+            current,
+            status=WorkUnitStatus.IN_PROGRESS,
+            gate=GateRecord(),
+        )
+        slices = tuple(
+            replace(item, status=SliceStatus.IN_PROGRESS)
+            if item.slice_id == self.current_slice_id
+            else item
+            for item in self.slices
+        )
+        return self._replace_current_unit(
+            updated_unit, slices=slices, updated_at=updated_at
+        )
 
     def resume_after_user_decision(self, *, updated_at: str | None = None) -> WorkflowState:
         current = self.current_work_unit

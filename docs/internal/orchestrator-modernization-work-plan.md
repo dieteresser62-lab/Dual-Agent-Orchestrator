@@ -143,7 +143,7 @@ Jede Slice-MD wird unmittelbar vor Beginn ihres Slice angelegt und dann aus der 
 | 11 | [`docs/internal/slice-orchestrator-modernization-11-resumable-user-gates.md`](slice-orchestrator-modernization-11-resumable-user-gates.md) |
 | 12 | [`docs/internal/slice-orchestrator-modernization-12-stop-rules-file-limit.md`](slice-orchestrator-modernization-12-stop-rules-file-limit.md) |
 | 13 | [`docs/internal/slice-orchestrator-modernization-13-path-validation-matrix.md`](slice-orchestrator-modernization-13-path-validation-matrix.md) |
-| 14 | `docs/internal/slice-orchestrator-modernization-14-agent-failures-resume.md` |
+| 14 | [`docs/internal/slice-orchestrator-modernization-14-quota-failure-resume.md`](slice-orchestrator-modernization-14-quota-failure-resume.md) |
 | 15 | `docs/internal/slice-orchestrator-modernization-15-scripted-dry-run.md` |
 | 16 | `docs/internal/slice-orchestrator-modernization-16-branch-final-review.md` |
 | 17 | `docs/internal/slice-orchestrator-modernization-17-watch-mode-pauses.md` |
@@ -466,11 +466,13 @@ Die Audit-Komponente aus Slice 8 prüft bei Start eines Slice, dass genau diese 
 **Test-Riegel:** ja. **Red-State:** nein.
 **Risiko/Rückfalloption:** Befehlsausführung und Plattformquoting; Befehle werden als strukturierte Argumentlisten behandelt, Shellstrings nur als ausdrücklich deklarierte Kompatibilitätsoption.
 
-### Slice 14 — Quota-Wartezustand, definierte Instanzausfälle, Rundenlimit und Resume
+### [Slice 14 — Quota-Wartezustand, definierte Instanzausfälle, Rundenlimit und Resume](slice-orchestrator-modernization-14-quota-failure-resume.md)
 
 **Zweck:** Quota mit Resetzeitpunkt als automatisch fortsetzbare Pause und fehlende Binary, Timeout, Prozessfehler sowie Iterationsgrenze als unterscheidbare, manuell fortsetzbare Haltzustände modellieren.
 **Anforderungen:** R-18; Abschluss von R-8 und Entscheidung §7.4.
 **Voraussichtlich betroffene Dateien:** `src/agent_runtime.py`, `src/workflow.py`, `src/workflow_state.py`, `src/cli.py`, `src/inbox_watcher.py` nur für Zustandsklassifikation, `tests/test_agent_runtime.py`, `tests/test_workflow.py`, `tests/test_orchestrator_quota.py`.
+**Tatsächlich betroffene Dateien vor Review:** `src/agent_adapters.py`, `src/agent_runtime.py`, `src/cli.py`, `src/orchestrator.py`, `src/workflow.py`, `src/workflow_state.py`, `tests/test_agent_runtime.py`, `tests/test_cli.py`, `tests/test_quota_wait.py` (neu), `tests/test_workflow.py`, `tests/test_workflow_state.py` sowie Arbeitsplan, Übergabe und Slice-MD. `tests/test_orchestrator_quota.py` bleibt als unveränderte v2-Kompatibilitätssuite Teil der Validierung; die Watch-Queue-Integration verbleibt in Slice 17.
+**Umsetzungsstatus:** typisierte Resetparser und Fehlerklassen, persistierte Invocation-Failure-Records, begrenztes Fake-Clock-testbares Warten, exaktrolliges Resume mit Branch-/Scope-/Fingerprint-Revalidierung sowie Exitcodes 2/3/4 sind additiv implementiert. 194 fokussierte Tests und 458 Tests der Vollsuite sowie Compile, aktiver v2-Dry-Run, Diffcheck und Dokumentvalidator sind grün. Reviewverlauf, Freigaben und verbleibende Beobachtungen sind ausschließlich in den verwalteten Auditabschnitten der Slice-MD gebunden; der aktive v2-Defaultpfad bleibt bis Slice 18 unverändert.
 
 **Akzeptanzkriterien:**
 

@@ -1,0 +1,235 @@
+from __future__ import annotations
+
+import json
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from agent_adapters import (
+    AgentOutputError,
+    AgentPermissionError,
+    AntigravityAdapter,
+    ClaudeAdapter,
+)
+from agent_runtime import (
+    AgentInvocationError,
+    AgentProcessError,
+    QuotaReachedError,
+    classify_agent_failure,
+    parse_quota_reset,
+    wait_until_quota_resume,
+)
+from workflow_state import AgentFailureKind
+
+
+RECEIVED = datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize("role", ["codex", "claude", "antigravity"])
+def test_absolute_offset_reset_is_normalized_per_role(role: str) -> None:
+    parsed = parse_quota_reset(
+        role,
+        "usage cap; resets at 2026-08-12T14:30:00+02:00",
+        received_at=RECEIVED,
+    )
+
+    assert parsed is not None
+    assert parsed.reset_at_utc == datetime(2026, 8, 12, 12, 30, tzinfo=timezone.utc)
+    assert parsed.parse_path == f"{role}:text:absolute"
+    assert parsed.source_timezone == "UTC+02:00"
+
+
+@pytest.mark.parametrize(
+    ("text", "seconds"),
+    (("try again in 90 seconds", 90), ("rate limit resets in 3 minutes", 180)),
+)
+def test_relative_reset_uses_fixed_received_timestamp(text: str, seconds: int) -> None:
+    parsed = parse_quota_reset("claude", text, received_at=RECEIVED)
+
+    assert parsed is not None
+    assert parsed.reset_at_utc == RECEIVED + timedelta(seconds=seconds)
+    assert parsed.parse_path == "claude:text:relative"
+
+
+def test_nested_structured_provider_reset_precedes_prose() -> None:
+    parsed = parse_quota_reset(
+        "antigravity",
+        "resource exhausted",
+        received_at=RECEIVED,
+        provider_data={"error": {"details": [{"retry_after_seconds": 45}]}},
+    )
+
+    assert parsed is not None
+    assert parsed.reset_at_utc == RECEIVED + timedelta(seconds=45)
+    assert parsed.parse_path.endswith("error.details[0].retry_after_seconds")
+
+
+def test_structured_unix_timestamp_is_normalized_to_utc() -> None:
+    reset = datetime(2026, 8, 12, 10, 5, tzinfo=timezone.utc)
+    parsed = parse_quota_reset(
+        "claude",
+        "usage cap reached",
+        received_at=RECEIVED,
+        provider_data={"reset_at": int(reset.timestamp())},
+    )
+
+    assert parsed is not None
+    assert parsed.reset_at_utc == reset
+    assert parsed.parse_path == "claude:structured:reset_at"
+    assert parsed.source_timezone == "UTC"
+
+
+@pytest.mark.parametrize(
+    ("adapter", "envelope", "role"),
+    (
+        (
+            ClaudeAdapter(),
+            {
+                "is_error": True,
+                "subtype": "rate_limit",
+                "result": "capacity unavailable",
+                "retry_after_seconds": 45,
+            },
+            "claude",
+        ),
+        (
+            AntigravityAdapter(),
+            {
+                "status": "RESOURCE_EXHAUSTED",
+                "response": "capacity unavailable",
+                "retry_after_seconds": 45,
+            },
+            "antigravity",
+        ),
+    ),
+)
+def test_adapter_structured_quota_is_classified_without_prose_marker(
+    adapter: object, envelope: dict[str, object], role: str
+) -> None:
+    with pytest.raises(AgentOutputError) as captured:
+        adapter.extract_output(json.dumps(envelope), "", {})
+
+    failure = classify_agent_failure(
+        role, captured.value, invocation_id="inv-envelope", received_at=RECEIVED
+    )
+
+    assert isinstance(failure, QuotaReachedError)
+    assert failure.provider_text == "capacity unavailable"
+    assert failure.quota_reset is not None
+    assert failure.quota_reset.reset_at_utc == RECEIVED + timedelta(seconds=45)
+
+
+def test_negative_structured_retry_delay_is_not_automatic_evidence() -> None:
+    parsed = parse_quota_reset(
+        "codex",
+        "usage cap reached",
+        received_at=RECEIVED,
+        provider_data={"retry_after_seconds": -1},
+    )
+
+    assert parsed is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        "usage cap reached; check your account later",
+        "retry in 10 minutes or retry in 20 minutes",
+        "resets at 2026-08-12T12:00:00Z or 2026-08-12T13:00:00Z",
+    ),
+)
+def test_unknown_or_ambiguous_reset_fails_safe(text: str) -> None:
+    assert parse_quota_reset("codex", text, received_at=RECEIVED) is None
+
+
+def test_quota_classification_keeps_raw_text_and_invocation_identity() -> None:
+    raw = "usage cap reached; try again in 5 minutes"
+    failure = classify_agent_failure(
+        "claude", RuntimeError(raw), invocation_id="inv-17", received_at=RECEIVED
+    )
+
+    assert isinstance(failure, QuotaReachedError)
+    assert failure.provider_text == raw
+    assert failure.invocation_id == "inv-17"
+    assert failure.quota_reset is not None
+    assert failure.quota_reset.reset_at_utc == RECEIVED + timedelta(minutes=5)
+
+
+@pytest.mark.parametrize(
+    ("error", "kind"),
+    (
+        (FileNotFoundError("No such file: claude"), AgentFailureKind.BINARY),
+        (TimeoutError("request timeout"), AgentFailureKind.TIMEOUT),
+        (AgentPermissionError("permission denied"), AgentFailureKind.PERMISSION),
+        (RuntimeError("401 unauthorized"), AgentFailureKind.AUTH),
+        (RuntimeError("DNS name resolution failed"), AgentFailureKind.NETWORK),
+        (PermissionError("private runtime permission denied"), AgentFailureKind.PERMISSION),
+        (RuntimeError("invalid JSON response"), AgentFailureKind.OUTPUT),
+        (AgentProcessError("Execution error", exit_code=7), AgentFailureKind.PROCESS),
+    ),
+)
+def test_non_quota_failures_are_distinct(error: Exception, kind: AgentFailureKind) -> None:
+    failure = classify_agent_failure(
+        "codex", error, invocation_id="inv-kind", received_at=RECEIVED
+    )
+
+    assert isinstance(failure, AgentInvocationError)
+    assert not isinstance(failure, QuotaReachedError)
+    assert failure.kind is kind
+
+
+def test_wait_uses_bounded_sleeps_and_emits_local_and_utc_heartbeat() -> None:
+    clock = [RECEIVED]
+    sleeps: list[float] = []
+    heartbeats: list[str] = []
+
+    def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        clock[0] += timedelta(seconds=seconds)
+
+    wait_until_quota_resume(
+        role="claude",
+        task_label="task-14",
+        work_unit_id=9,
+        resume_at_utc=RECEIVED + timedelta(seconds=12),
+        heartbeat_interval_seconds=5,
+        now_fn=lambda: clock[0],
+        sleep_fn=sleep,
+        heartbeat_fn=heartbeats.append,
+    )
+
+    assert sleeps == [5.0, 5.0, 2.0]
+    assert len(heartbeats) == 3
+    assert all("role=claude" in item and "work_unit=9" in item for item in heartbeats)
+    assert all("resume_local=" in item and "resume_utc=" in item for item in heartbeats)
+
+
+def test_wait_is_interruptible_without_internal_retry() -> None:
+    with pytest.raises(KeyboardInterrupt):
+        wait_until_quota_resume(
+            role="codex",
+            task_label="task-14",
+            work_unit_id=2,
+            resume_at_utc=RECEIVED + timedelta(minutes=1),
+            heartbeat_interval_seconds=10,
+            now_fn=lambda: RECEIVED,
+            sleep_fn=lambda _seconds: (_ for _ in ()).throw(KeyboardInterrupt()),
+            heartbeat_fn=lambda _message: None,
+        )
+
+
+def test_wait_returns_immediately_when_reset_is_already_reached() -> None:
+    sleeps: list[float] = []
+
+    wait_until_quota_resume(
+        role="antigravity",
+        task_label="task-14",
+        work_unit_id=3,
+        resume_at_utc=RECEIVED - timedelta(seconds=1),
+        heartbeat_interval_seconds=10,
+        now_fn=lambda: RECEIVED,
+        sleep_fn=sleeps.append,
+        heartbeat_fn=lambda _message: None,
+    )
+
+    assert sleeps == []

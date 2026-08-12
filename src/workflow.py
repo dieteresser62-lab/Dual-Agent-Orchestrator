@@ -1,9 +1,18 @@
 from __future__ import annotations
 
 import re
+import logging
+import time
 from dataclasses import dataclass, replace
+from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Protocol
+from typing import Callable, Protocol
+
+from agent_runtime import (
+    AgentInvocationError,
+    QuotaWaitPolicy,
+    wait_until_quota_resume,
+)
 
 from audit_trail import (
     AuditEvent,
@@ -54,8 +63,11 @@ from validation_matrix import (
     select_validation_request,
 )
 from workflow_state import (
+    AgentFailureKind,
     GateDecisionRecord,
     GateReason,
+    GateStatus,
+    InvocationFailureRecord,
     Reviewer,
     WorkflowState,
     WorkflowStep,
@@ -65,6 +77,7 @@ from workflow_state import (
 
 
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+logger = logging.getLogger(__name__)
 DEFAULT_WORKFLOW_VALIDATION_MATRIX = ValidationMatrix(
     default_command=ValidationCommand(
         argv=("python3", "-m", "pytest", "tests/", "-v")
@@ -134,6 +147,7 @@ class WorkflowContext:
     validation_matrix: ValidationMatrix = DEFAULT_WORKFLOW_VALIDATION_MATRIX
     red_state_followup_slice: str | None = None
     retry_incomplete_validation: bool = False
+    quota_wait_policy: QuotaWaitPolicy = QuotaWaitPolicy()
 
     def __post_init__(self) -> None:
         if not self.assignment.strip():
@@ -174,6 +188,8 @@ class WorkflowContext:
             )
         if not isinstance(self.retry_incomplete_validation, bool):
             raise ValueError("retry_incomplete_validation must be a boolean")
+        if not isinstance(self.quota_wait_policy, QuotaWaitPolicy):
+            raise ValueError("quota_wait_policy must be a QuotaWaitPolicy")
 
     @property
     def distilled_context(self) -> str:
@@ -309,6 +325,11 @@ class WorkflowRunResult:
 
     @property
     def exit_code(self) -> int:
+        gate = self.state.current_work_unit.gate
+        if gate.reason is GateReason.QUOTA:
+            return 2
+        if gate.reason is GateReason.INSTANCE_FAILURE:
+            return 3
         return (
             4
             if self.state.current_work_unit.status
@@ -322,8 +343,18 @@ class WorkflowRunResult:
 class WorkflowEngine:
     """Additive state-v3 engine for the asymmetric Codex/Claude/Antigravity chain."""
 
-    def __init__(self, driver: WorkflowDriver) -> None:
+    def __init__(
+        self,
+        driver: WorkflowDriver,
+        *,
+        now_fn: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+        sleep_fn: Callable[[float], None] = time.sleep,
+        heartbeat_fn: Callable[[str], None] = logger.info,
+    ) -> None:
         self.driver = driver
+        self.now_fn = now_fn
+        self.sleep_fn = sleep_fn
+        self.heartbeat_fn = heartbeat_fn
 
     def run_current_work_unit(
         self,
@@ -342,6 +373,22 @@ class WorkflowEngine:
         if policy_halted:
             self.driver.checkpoint(state, active_history)
             return WorkflowRunResult(state, active_history)
+        latest_failure = (
+            state.current_work_unit.invocation_failures[-1]
+            if state.current_work_unit.invocation_failures
+            else None
+        )
+        if (
+            latest_failure is not None
+            and latest_failure.step is state.current_step
+            and state.current_work_unit.gate.status is GateStatus.CLEAR
+        ):
+            state, resume_halted = self._revalidate_waiting_diff(
+                state, latest_failure
+            )
+            if resume_halted:
+                self.driver.checkpoint(state, active_history)
+                return WorkflowRunResult(state, active_history)
 
         state, active_history, anchor_halted = self._apply_anchor_gate(
             state, context, active_history
@@ -452,9 +499,16 @@ class WorkflowEngine:
             findings=history.findings,
             contract=contract,
         )
-        output = self.driver.invoke_codex(
-            CodexInvocation(state.current_step, unit.round_number, prompt)
+        invocation = CodexInvocation(state.current_step, unit.round_number, prompt)
+        state, output = self._invoke_role(
+            state,
+            history,
+            context,
+            AgentRole.CODEX,
+            lambda: self.driver.invoke_codex(invocation),
         )
+        if output is None:
+            return state, history
         try:
             result = validate_codex_response(output, contract, history.findings)
         except ContractValidationError as exc:
@@ -618,7 +672,15 @@ class WorkflowEngine:
             paths=changes.paths,
             prompt=prompt,
         )
-        output = self.driver.invoke_reviewer(invocation)
+        state, output = self._invoke_role(
+            state,
+            history,
+            context,
+            reviewer,
+            lambda: self.driver.invoke_reviewer(invocation),
+        )
+        if output is None:
+            return state, history
         result = self._validate_or_repair_review(
             output=output,
             contract=contract,
@@ -678,6 +740,194 @@ class WorkflowEngine:
             )
         self.driver.checkpoint(state, history)
         return state, history
+
+    def _invoke_role(
+        self,
+        state: WorkflowState,
+        history: WorkflowHistory,
+        context: WorkflowContext,
+        role: AgentRole,
+        invoke: Callable[[], str],
+    ) -> tuple[WorkflowState, str | None]:
+        """Invoke one fixed role, persisting every failure before any optional wait."""
+        while True:
+            try:
+                return state, invoke()
+            except AgentInvocationError as error:
+                state, failure = self._persist_invocation_failure(
+                    state, history, context, role, error
+                )
+                if not failure.automatic_resume:
+                    return state, None
+                assert failure.resume_at_utc is not None
+                wait_until_quota_resume(
+                    role=role.value,
+                    task_label=state.task_file,
+                    work_unit_id=state.current_work_unit_id,
+                    resume_at_utc=datetime.fromisoformat(
+                        failure.resume_at_utc.replace("Z", "+00:00")
+                    ),
+                    heartbeat_interval_seconds=(
+                        context.quota_wait_policy.heartbeat_interval_seconds
+                    ),
+                    now_fn=self.now_fn,
+                    sleep_fn=self.sleep_fn,
+                    heartbeat_fn=self.heartbeat_fn,
+                )
+                state = state.resume_after_invocation_halt()
+                state, halted = self._apply_pre_agent_policy_gates(state, context)
+                if not halted:
+                    state, halted = self._revalidate_waiting_diff(
+                        state, failure
+                    )
+                self.driver.checkpoint(state, history)
+                if halted:
+                    return state, None
+
+    def _persist_invocation_failure(
+        self,
+        state: WorkflowState,
+        history: WorkflowHistory,
+        context: WorkflowContext,
+        role: AgentRole,
+        error: AgentInvocationError,
+    ) -> tuple[WorkflowState, InvocationFailureRecord]:
+        unit = state.current_work_unit
+        if error.agent_key != role.value:
+            raise WorkflowExecutionError(
+                "agent failure role differs from the required workflow role"
+            )
+        fingerprint = self._current_invocation_fingerprint(state)
+        key = (
+            f"{state.run_id}:{unit.work_unit_id}:{state.current_step.value}:"
+            f"{role.value}"
+        )
+        prior_auto_resumes = sum(
+            item.idempotency_key == key
+            and item.failure_kind is AgentFailureKind.QUOTA
+            and item.automatic_resume
+            for item in unit.invocation_failures
+        )
+        policy = context.quota_wait_policy
+        reset_at = error.quota_reset.reset_at_utc if error.quota_reset else None
+        resume_at = (
+            reset_at + timedelta(seconds=policy.safety_margin_seconds)
+            if reset_at is not None
+            else None
+        )
+        now_value = self.now_fn()
+        if now_value.tzinfo is None or now_value.utcoffset() is None:
+            raise WorkflowExecutionError("quota clock must return a timezone-aware datetime")
+        now_utc = now_value.astimezone(timezone.utc)
+        wait_seconds = (
+            max(0.0, (resume_at - now_utc).total_seconds())
+            if resume_at is not None
+            else None
+        )
+        automatic = (
+            error.kind is AgentFailureKind.QUOTA
+            and policy.automatic
+            and reset_at is not None
+            and (
+                unit.kind is WorkUnitKind.PLAN
+                or fingerprint is not None
+            )
+            and wait_seconds is not None
+            and wait_seconds <= policy.maximum_wait_seconds
+            and prior_auto_resumes < policy.maximum_auto_resumes
+        )
+        record = InvocationFailureRecord(
+            invocation_id=error.invocation_id,
+            idempotency_key=key,
+            role=role.value,
+            failure_kind=error.kind,
+            provider_text=error.provider_text,
+            received_at=error.received_at.isoformat(),
+            step=state.current_step,
+            slice_id=state.current_slice_id,
+            work_unit_id=state.current_work_unit_id,
+            diagnostic_exit_code=(
+                2 if error.kind is AgentFailureKind.QUOTA else 3
+            ),
+            parse_path=(
+                error.quota_reset.parse_path if error.quota_reset else None
+            ),
+            source_timezone=(
+                error.quota_reset.source_timezone if error.quota_reset else None
+            ),
+            reset_at_utc=reset_at.isoformat() if reset_at is not None else None,
+            resume_at_utc=resume_at.isoformat() if resume_at is not None else None,
+            safety_margin_seconds=policy.safety_margin_seconds,
+            auto_resume_count=prior_auto_resumes + (1 if automatic else 0),
+            automatic_resume=automatic,
+            diff_fingerprint=fingerprint,
+        )
+        state = state.record_invocation_failure(
+            record, wait_automatically=automatic
+        )
+        self.driver.checkpoint(state, history)
+        return state, record
+
+    def _current_invocation_fingerprint(
+        self, state: WorkflowState
+    ) -> str | None:
+        if state.current_work_unit.kind is WorkUnitKind.PLAN:
+            return None
+        start_commit = state.current_slice.start_commit
+        if start_commit is None:
+            return None
+        try:
+            return self.driver.collect_changes(start_commit).fingerprint
+        except Exception:
+            return None
+
+    def _revalidate_waiting_diff(
+        self,
+        state: WorkflowState,
+        failure: InvocationFailureRecord,
+    ) -> tuple[WorkflowState, bool]:
+        if failure.diff_fingerprint is None:
+            if state.current_work_unit.kind is WorkUnitKind.PLAN:
+                return state, False
+            halted = state.await_policy_gate(
+                reason=GateReason.STOP_REQUEST,
+                detail=(
+                    "QUOTA-RESUME-DIFF | no persisted Slice fingerprint is "
+                    "available for safe resume"
+                ),
+            )
+            return halted, True
+        start_commit = state.current_slice.start_commit
+        if start_commit is None:
+            raise WorkflowExecutionError(
+                "quota resume requires the persisted Slice start commit"
+            )
+        try:
+            changes = self.driver.collect_changes(start_commit)
+        except Exception as exc:
+            halted = state.await_policy_gate(
+                reason=GateReason.STOP_REQUEST,
+                detail=(
+                    "QUOTA-RESUME-DIFF | could not revalidate repository changes: "
+                    f"{type(exc).__name__}: {exc}"
+                ),
+            )
+            return halted, True
+        unexpected = self._validate_change_boundary(
+            state, changes, state.current_work_unit.kind
+        )
+        if unexpected or changes.fingerprint != failure.diff_fingerprint:
+            paths = unexpected or changes.user_gate_paths
+            halted = state.await_policy_gate(
+                reason=GateReason.STOP_REQUEST,
+                detail=(
+                    "QUOTA-RESUME-DIFF | repository changed while the role was waiting; "
+                    f"expected {failure.diff_fingerprint}, got {changes.fingerprint}"
+                ),
+                paths=paths,
+            )
+            return halted, True
+        return state, False
 
     def _validate_or_repair_review(
         self,

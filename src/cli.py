@@ -14,6 +14,7 @@ from typing import Callable, Mapping, Sequence
 import tomllib
 
 from agent_config import AgentConfigError, add_agent_arguments, resolve_agent_settings
+from agent_runtime import QuotaWaitPolicy
 from gates import PathClasses, STOP_RULE_ID_PATTERN, StopRule
 from validation_matrix import (
     DEFAULT_VALIDATION_TIMEOUT_SECONDS,
@@ -484,6 +485,36 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--quota-auto-resume",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Automatically resume one quota-blocked role step when its reset is unambiguous.",
+    )
+    parser.add_argument(
+        "--quota-safety-margin",
+        type=int,
+        default=None,
+        help="Seconds added after a recognized quota reset (default: 60).",
+    )
+    parser.add_argument(
+        "--quota-max-wait",
+        type=int,
+        default=None,
+        help="Maximum automatic quota wait in seconds (default: 86400).",
+    )
+    parser.add_argument(
+        "--quota-max-auto-resumes",
+        type=int,
+        default=None,
+        help="Maximum automatic continuations per blocked role step (default: 1).",
+    )
+    parser.add_argument(
+        "--quota-heartbeat-interval",
+        type=int,
+        default=None,
+        help="Quota-wait heartbeat interval in seconds (default: 30).",
+    )
+    parser.add_argument(
         "--max-shared-chars",
         type=int,
         default=DEFAULT_MAX_SHARED_CHARS,
@@ -603,6 +634,51 @@ def parse_args(
     args.config_file = repo_config.source
     if args.manual_slice_gate is None:
         args.manual_slice_gate = repo_config.workflow.manual_slice_gate
+    quota_defaults = QuotaWaitPolicy()
+    quota_automatic = args.quota_auto_resume
+    if quota_automatic is None:
+        quota_automatic = _parse_env_bool("RUN_TASK_QUOTA_AUTO_RESUME", env)
+    if quota_automatic is None:
+        quota_automatic = quota_defaults.automatic
+    args.quota_auto_resume = quota_automatic
+
+    def quota_int(argument: int | None, environment_name: str, default: int) -> int:
+        if argument is not None:
+            return argument
+        raw = env.get(environment_name)
+        if raw is None or not raw.strip():
+            return default
+        try:
+            return int(raw.strip())
+        except ValueError as exc:
+            raise ConfigError(f"{environment_name} must be an integer") from exc
+
+    try:
+        args.quota_wait_policy = QuotaWaitPolicy(
+            automatic=quota_automatic,
+            safety_margin_seconds=quota_int(
+                args.quota_safety_margin,
+                "RUN_TASK_QUOTA_SAFETY_MARGIN",
+                quota_defaults.safety_margin_seconds,
+            ),
+            maximum_wait_seconds=quota_int(
+                args.quota_max_wait,
+                "RUN_TASK_QUOTA_MAX_WAIT",
+                quota_defaults.maximum_wait_seconds,
+            ),
+            maximum_auto_resumes=quota_int(
+                args.quota_max_auto_resumes,
+                "RUN_TASK_QUOTA_MAX_AUTO_RESUMES",
+                quota_defaults.maximum_auto_resumes,
+            ),
+            heartbeat_interval_seconds=quota_int(
+                args.quota_heartbeat_interval,
+                "RUN_TASK_QUOTA_HEARTBEAT_INTERVAL",
+                quota_defaults.heartbeat_interval_seconds,
+            ),
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
 
     gate_decision = True if args.approve_gate else False if args.reject_gate else None
     if gate_decision is not None:

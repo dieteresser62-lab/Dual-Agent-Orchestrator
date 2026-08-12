@@ -23,6 +23,17 @@ CLAUDE_REVIEW_RESPONSE_MAX_CHARS = 12_000
 class AgentOutputError(RuntimeError):
     """Raised when a CLI returns an invalid or explicitly failed output envelope."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider_text: str | None = None,
+        provider_data: dict[str, object] | None = None,
+    ) -> None:
+        self.provider_text = provider_text or message
+        self.provider_data = provider_data
+        super().__init__(message)
+
 
 class AgentPermissionError(AgentOutputError):
     """Raised when a reviewer attempts a tool call outside its explicit allowlist."""
@@ -51,7 +62,9 @@ def _json_object(text: str, role: str) -> dict[str, object]:
     try:
         value = json.loads(text)
     except json.JSONDecodeError as exc:
-        raise AgentOutputError(f"{role} returned invalid JSON: {exc}") from exc
+        raise AgentOutputError(
+            f"{role} returned invalid JSON: {exc}", provider_text=text or str(exc)
+        ) from exc
     if not isinstance(value, dict):
         raise AgentOutputError(f"{role} JSON envelope must be an object")
     return value
@@ -484,7 +497,11 @@ class ClaudeAdapter(_BaseAdapter):
                 detail = json.dumps(envelope, ensure_ascii=False, sort_keys=True)[:1200]
             if "budget" in subtype.lower():
                 raise AgentBudgetError(f"claude budget guard stopped the call: {detail}")
-            raise AgentOutputError(f"claude returned is_error=true: {detail}")
+            raise AgentOutputError(
+                f"claude returned is_error=true: {detail}",
+                provider_text=str(detail),
+                provider_data=envelope,
+            )
         denials = envelope.get("permission_denials")
         if isinstance(denials, list) and denials:
             denial_detail = json.dumps(denials, ensure_ascii=False, sort_keys=True)
@@ -634,7 +651,11 @@ class AntigravityAdapter(_BaseAdapter):
         }
         if envelope.get("status") != "SUCCESS":
             detail = envelope.get("response") or envelope.get("error") or "unknown JSON error"
-            raise AgentOutputError(f"antigravity returned non-success status: {detail}")
+            raise AgentOutputError(
+                f"antigravity returned non-success status: {detail}",
+                provider_text=str(detail),
+                provider_data=envelope,
+            )
         response = envelope.get("response")
         if not isinstance(response, str) or not response.strip():
             raise AgentOutputError("antigravity JSON envelope has no non-empty response")

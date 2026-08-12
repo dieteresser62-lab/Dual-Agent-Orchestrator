@@ -21,6 +21,7 @@ from cli import (
     parse_args,
     run_cli,
 )
+from agent_runtime import QuotaWaitPolicy
 
 
 def _write_config(repo: Path, text: str) -> Path:
@@ -49,6 +50,11 @@ def _isolate_process_environment(monkeypatch) -> None:
         "RUN_TASK_ANTIGRAVITY_MODEL",
         "RUN_TASK_ANTIGRAVITY_TIMEOUT",
         "RUN_TASK_ANTIGRAVITY_EFFORT",
+        "RUN_TASK_QUOTA_AUTO_RESUME",
+        "RUN_TASK_QUOTA_SAFETY_MARGIN",
+        "RUN_TASK_QUOTA_MAX_WAIT",
+        "RUN_TASK_QUOTA_MAX_AUTO_RESUMES",
+        "RUN_TASK_QUOTA_HEARTBEAT_INTERVAL",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -67,6 +73,79 @@ def test_retry_incomplete_validation_requires_explicit_cli_flag(tmp_path: Path) 
 
     assert default.retry_incomplete_validation is False
     assert requested.retry_incomplete_validation is True
+
+
+def test_quota_wait_policy_defaults_and_explicit_disable(tmp_path: Path) -> None:
+    default = parse_args([], cwd=tmp_path, environ={})
+    disabled = parse_args(
+        [
+            "--no-quota-auto-resume",
+            "--quota-safety-margin",
+            "15",
+            "--quota-max-wait",
+            "120",
+            "--quota-max-auto-resumes",
+            "0",
+            "--quota-heartbeat-interval",
+            "9",
+        ],
+        cwd=tmp_path,
+        environ={},
+    )
+
+    assert default.quota_wait_policy == QuotaWaitPolicy()
+    assert disabled.quota_wait_policy == QuotaWaitPolicy(
+        automatic=False,
+        safety_margin_seconds=15,
+        maximum_wait_seconds=120,
+        maximum_auto_resumes=0,
+        heartbeat_interval_seconds=9,
+    )
+
+
+def test_quota_wait_policy_uses_cli_then_environment_then_defaults(tmp_path: Path) -> None:
+    environment = {
+        "RUN_TASK_QUOTA_AUTO_RESUME": "0",
+        "RUN_TASK_QUOTA_SAFETY_MARGIN": "12",
+        "RUN_TASK_QUOTA_MAX_WAIT": "900",
+        "RUN_TASK_QUOTA_MAX_AUTO_RESUMES": "2",
+        "RUN_TASK_QUOTA_HEARTBEAT_INTERVAL": "7",
+    }
+    from_environment = parse_args([], cwd=tmp_path, environ=environment)
+    overridden = parse_args(
+        ["--quota-auto-resume", "--quota-max-wait", "60"],
+        cwd=tmp_path,
+        environ=environment,
+    )
+
+    assert from_environment.quota_wait_policy == QuotaWaitPolicy(
+        automatic=False,
+        safety_margin_seconds=12,
+        maximum_wait_seconds=900,
+        maximum_auto_resumes=2,
+        heartbeat_interval_seconds=7,
+    )
+    assert overridden.quota_wait_policy.automatic is True
+    assert overridden.quota_wait_policy.maximum_wait_seconds == 60
+    assert overridden.quota_wait_policy.safety_margin_seconds == 12
+
+
+@pytest.mark.parametrize(
+    "args",
+    (
+        ["--quota-safety-margin", "-1"],
+        ["--quota-max-wait", "0"],
+        ["--quota-max-auto-resumes", "-1"],
+        ["--quota-heartbeat-interval", "0"],
+    ),
+)
+def test_invalid_quota_wait_policy_is_rejected(
+    tmp_path: Path, args: list[str], capsys
+) -> None:
+    with pytest.raises(SystemExit):
+        parse_args(args, cwd=tmp_path, environ={})
+
+    assert "quota" in capsys.readouterr().err.lower()
 
 
 def test_task_file_rejects_positional_and_explicit_paths(tmp_path: Path, capsys) -> None:

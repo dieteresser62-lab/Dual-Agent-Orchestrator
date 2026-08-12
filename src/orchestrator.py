@@ -28,6 +28,7 @@ from agent_adapters import (
 )
 from agent_runtime import (
     AgentCompatibilityError,
+    AgentInvocationError,
     OrchestratorConfig,
     QuotaReachedError,
     collect_file_snapshots,
@@ -1087,9 +1088,9 @@ def run_pipeline(task_file: Path, args: argparse.Namespace, force_new: bool = Fa
         except QuotaReachedError as exc:
             freeze_current_phase(state, exc, ctx)
             return 2
-        except (AgentCompatibilityError, AgentBudgetError, AgentPermissionError) as exc:
+        except (AgentInvocationError, AgentCompatibilityError, AgentBudgetError, AgentPermissionError) as exc:
             logger.error("Agent invocation gate: %s", exc)
-            return 1
+            return 3
 
     if state["phase1"].get("status") != "completed":
         logger.error("Phase 1 is not completed. Stopping before implementation.")
@@ -1108,12 +1109,15 @@ def run_pipeline(task_file: Path, args: argparse.Namespace, force_new: bool = Fa
             freeze_current_phase(state, exc, ctx)
             return 2
         except (
+            AgentInvocationError,
             AgentCompatibilityError,
             AgentBudgetError,
             AgentPermissionError,
-            RepositoryChangeError,
         ) as exc:
             logger.error("Agent invocation gate: %s", exc)
+            return 3
+        except RepositoryChangeError as exc:
+            logger.error("Repository change gate: %s", exc)
             return 1
 
     if state["phase2"].get("status") != "completed":
