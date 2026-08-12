@@ -69,6 +69,7 @@ from workflow_state import (
     GateStatus,
     InvocationFailureRecord,
     Reviewer,
+    SliceStatus,
     WorkflowState,
     WorkflowStep,
     WorkUnitKind,
@@ -346,6 +347,16 @@ class WorkflowRunResult:
     @property
     def completed(self) -> bool:
         return self.state.current_work_unit.status is WorkUnitStatus.COMPLETED
+
+    @property
+    def workflow_completed(self) -> bool:
+        """Require committed slices and the terminal branch-wide final review."""
+        return (
+            self.completed
+            and self.state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
+            and self.state.current_step is WorkflowStep.COMPLETED
+            and all(item.status is SliceStatus.COMPLETED for item in self.state.slices)
+        )
 
     @property
     def exit_code(self) -> int:

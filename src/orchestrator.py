@@ -1044,6 +1044,17 @@ def run_pipeline(task_file: Path, args: argparse.Namespace, force_new: bool = Fa
             state = ctx.recover_state_from_checkpoint(state)
             ctx.save_state(state)
         logger.info("Loaded state from %s", ctx.state_file)
+        watch_run_id = getattr(args, "watch_run_id", None)
+        if watch_run_id is not None and (
+            str(state["artifacts"]["run_id"]) != str(watch_run_id)
+            or Path(str(state["task_file"])).resolve() != task_file.resolve()
+        ):
+            logger.error(
+                "Watch resume identity differs from persisted state: run=%s task=%s",
+                watch_run_id,
+                task_file,
+            )
+            return 1
         ctx.configure_artifacts(state["artifacts"])
         write_file(ctx.latest_run_file, str(state["artifacts"]["run_dir"]))
     else:
@@ -1063,7 +1074,9 @@ def run_pipeline(task_file: Path, args: argparse.Namespace, force_new: bool = Fa
             if confirm != "y":
                 logger.info("Use --resume to continue the existing run.")
                 return 0
-        artifacts = ctx.build_artifact_paths(ctx.new_run_id())
+        artifacts = ctx.build_artifact_paths(
+            str(getattr(args, "watch_run_id", "") or ctx.new_run_id())
+        )
         ctx.configure_artifacts(artifacts)
         state = ctx.init_state(task_file, args.phase1_max_cycles, args.phase2_max_cycles, artifacts)
         ctx.save_state(state)

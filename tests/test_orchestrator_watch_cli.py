@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 import subprocess
@@ -67,6 +68,98 @@ def test_watch_mode_forwards_max_retries(monkeypatch, tmp_path: Path) -> None:
     assert captured["max_retries"] == 5
     assert captured["inbox_dir"] == inbox
     assert captured["outbox_dir"] == outbox
+    assert captured["args"].skip_git_check is True
+    assert captured["args"].skip_git_check_source == "watch-default"
+
+
+def test_watch_run_id_becomes_the_persisted_pipeline_run_id(
+    monkeypatch, tmp_path: Path
+) -> None:
+    task_file = tmp_path / "task.md"
+    task_file.write_text("Implement the task", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    args = parse_args(
+        [
+            "--dry-run",
+            "--skip-git-check",
+            "--force-overwrite-state",
+            "--test-command",
+            "",
+            "--agent-output",
+            "none",
+        ]
+    )
+    args.watch_run_id = "watch-stable-run-17"
+
+    assert run_pipeline(task_file, args, force_new=True) == 0
+
+    state = json.loads(
+        (tmp_path / ".orchestrator" / "state.json").read_text(encoding="utf-8")
+    )
+    assert state["artifacts"]["run_id"] == "watch-stable-run-17"
+    assert Path(state["task_file"]).resolve() == task_file.resolve()
+
+
+def test_watch_resume_without_state_safely_recreates_same_run_id(
+    monkeypatch, tmp_path: Path
+) -> None:
+    task_file = tmp_path / "resume-without-state.md"
+    task_file.write_text("Resume after an early interruption", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    args = parse_args(
+        [
+            "--dry-run",
+            "--resume",
+            "--skip-git-check",
+            "--test-command",
+            "",
+            "--agent-output",
+            "none",
+        ]
+    )
+    args.watch_run_id = "watch-interrupted-before-state"
+
+    assert run_pipeline(task_file, args, force_new=False) == 0
+
+    state = json.loads(
+        (tmp_path / ".orchestrator" / "state.json").read_text(encoding="utf-8")
+    )
+    assert state["artifacts"]["run_id"] == "watch-interrupted-before-state"
+    assert Path(state["task_file"]).resolve() == task_file.resolve()
+
+
+def test_watch_resume_rejects_foreign_run_and_task_state(
+    monkeypatch, tmp_path: Path, caplog
+) -> None:
+    original_task = tmp_path / "original.md"
+    foreign_task = tmp_path / "foreign.md"
+    original_task.write_text("Original", encoding="utf-8")
+    foreign_task.write_text("Foreign", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    args = parse_args(
+        [
+            "--dry-run",
+            "--skip-git-check",
+            "--force-overwrite-state",
+            "--test-command",
+            "",
+            "--agent-output",
+            "none",
+        ]
+    )
+    args.watch_run_id = "watch-original"
+    assert run_pipeline(original_task, args, force_new=True) == 0
+
+    args.resume = True
+    args.no_recover = True
+    args.force_overwrite_state = False
+    with caplog.at_level(logging.ERROR):
+        args.watch_run_id = "watch-foreign"
+        assert run_pipeline(original_task, args, force_new=False) == 1
+        args.watch_run_id = "watch-original"
+        assert run_pipeline(foreign_task, args, force_new=False) == 1
+
+    assert caplog.text.count("Watch resume identity differs from persisted state") == 2
 
 
 def test_watch_mode_rejects_legacy_max_retries_flag(monkeypatch) -> None:

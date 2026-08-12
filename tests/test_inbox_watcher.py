@@ -6,7 +6,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
-from inbox_watcher import watch_inbox
+from inbox_watcher import (
+    WatchTaskDisposition,
+    WatchTaskResult,
+    watch_identity_path,
+    watch_inbox,
+)
+from workflow import WorkflowHistory, WorkflowRunResult
+from workflow_state import (
+    GateReason,
+    WorkflowStep,
+    WorkUnitKind,
+    init_workflow_state,
+)
 
 try:
     import fcntl
@@ -35,7 +47,39 @@ def _args() -> Namespace:
         max_shared_chars=1000,
         file_snapshot_max_lines=100,
         file_snapshot_max_files=5,
+        skip_git_check=True,
     )
+
+
+def _workflow_result(run_id: str, *, final: bool) -> WorkflowRunResult:
+    state = init_workflow_state(
+        run_id=run_id,
+        task_file="/repo/task.md",
+        branch="feature/watch",
+        branch_base="a" * 40,
+        slice_count=2,
+        timestamp="2026-08-13T10:00:00+00:00",
+    ).complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    ).bind_current_slice_git_boundary(
+        start_commit="a" * 40,
+        scope_paths=("src/engine.py",),
+        start_fingerprint="0" * 64,
+    ).complete_current_slice(commit_ref="b" * 40).start_work_unit(
+        slice_id=2,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+        slice_start_commit="b" * 40,
+    ).bind_current_slice_git_boundary(
+        start_commit="b" * 40,
+        scope_paths=("src/second.py",),
+        start_fingerprint="1" * 64,
+    ).complete_current_slice(commit_ref="c" * 40)
+    if final:
+        state = state.start_final_review_work_unit().complete_current_work_unit()
+    return WorkflowRunResult(state, WorkflowHistory(state.current_work_unit_id))
 
 
 class _InterruptingSleep:
@@ -535,6 +579,305 @@ def test_stuck_task_safety_net_renames_to_stuck(tmp_path: Path) -> None:
     assert (inbox / "stuck.md.stuck").exists()
     assert not (inbox / "stuck.md.attempts").exists()
     assert not (inbox / "stuck.md.success").exists()
+
+
+def test_workflow_result_requires_commits_and_completed_final_review() -> None:
+    slice_only = WatchTaskResult.from_workflow(
+        _workflow_result("watch-slice-only", final=False)
+    )
+    completed = WatchTaskResult.from_workflow(
+        _workflow_result("watch-final", final=True)
+    )
+    gate_state = init_workflow_state(
+        run_id="watch-gate",
+        task_file="/repo/task.md",
+        branch="feature/watch",
+        branch_base="a" * 40,
+        slice_count=1,
+        timestamp="2026-08-13T10:00:00+00:00",
+    ).await_policy_gate(
+        reason=GateReason.STOP_REQUEST,
+        detail="S-001 | operator decision required",
+    )
+    halted = WatchTaskResult.from_workflow(
+        WorkflowRunResult(gate_state, WorkflowHistory(1))
+    )
+
+    assert slice_only.disposition is WatchTaskDisposition.TECHNICAL_FAILURE
+    assert slice_only.exit_code == 1
+    assert completed.disposition is WatchTaskDisposition.COMPLETED
+    assert completed.exit_code == 0
+    assert halted.disposition is WatchTaskDisposition.RESUMABLE_HALT
+    assert halted.exit_code == 4
+
+
+@pytest.mark.parametrize(
+    ("exit_code", "status", "gate_reason"),
+    (
+        (2, "awaiting_resume", "quota"),
+        (3, "awaiting_resume", "instance_failure"),
+        (4, "awaiting_user_decision", "stop_request"),
+    ),
+)
+def test_resumable_v3_halt_stops_queue_without_retry_or_poison(
+    tmp_path: Path,
+    exit_code: int,
+    status: str,
+    gate_reason: str,
+) -> None:
+    inbox = tmp_path / "inbox"
+    outbox = tmp_path / "outbox"
+    inbox.mkdir()
+    first = inbox / "first.md"
+    second = inbox / "second.md"
+    first.write_text("first", encoding="utf-8")
+    second.write_text("second", encoding="utf-8")
+    first_mtime = first.stat().st_mtime - 10
+    os.utime(first, (first_mtime, first_mtime))
+    calls: list[str] = []
+
+    def process_task(task_file: Path, args: Namespace, force_new: bool) -> WatchTaskResult:
+        calls.append(task_file.name)
+        assert force_new is True
+        assert args.resume is False
+        return WatchTaskResult(
+            exit_code=exit_code,
+            run_id=args.watch_run_id,
+            disposition=WatchTaskDisposition.RESUMABLE_HALT,
+            status=status,
+            step="claude_slice_review",
+            work_unit_id=2,
+            gate_reason=gate_reason,
+        )
+
+    result = watch_inbox(
+        inbox_dir=inbox,
+        outbox_dir=outbox,
+        poll_interval=0.01,
+        args=_args(),
+        process_task=process_task,
+        max_retries=1,
+        time_fn=lambda: 10_000_000_000.0,
+    )
+
+    assert result == exit_code
+    assert calls == ["first.md"]
+    assert first.exists() and second.exists()
+    assert not (inbox / "first.md.attempts").exists()
+    assert watch_identity_path(first).exists()
+    assert list((outbox / "failed").glob("*")) == []
+
+
+def test_watch_restart_resumes_same_run_id_and_moves_only_final_workflow(
+    tmp_path: Path,
+) -> None:
+    inbox = tmp_path / "inbox"
+    outbox = tmp_path / "outbox"
+    inbox.mkdir()
+    task = inbox / "resume.md"
+    task.write_text("resume", encoding="utf-8")
+    run_ids: list[str] = []
+
+    def pause(_task: Path, args: Namespace, force_new: bool) -> WatchTaskResult:
+        run_ids.append(args.watch_run_id)
+        assert force_new is True
+        assert args.resume is False
+        return WatchTaskResult(
+            4,
+            args.watch_run_id,
+            WatchTaskDisposition.RESUMABLE_HALT,
+            "awaiting_user_decision",
+            "codex_implementation",
+            2,
+            "test_change",
+        )
+
+    first = watch_inbox(
+        inbox_dir=inbox,
+        outbox_dir=outbox,
+        poll_interval=0.01,
+        args=_args(),
+        process_task=pause,
+        time_fn=lambda: 10_000_000_000.0,
+    )
+    assert first == 4
+
+    def finish(_task: Path, args: Namespace, force_new: bool) -> WatchTaskResult:
+        run_ids.append(args.watch_run_id)
+        assert force_new is False
+        assert args.resume is True
+        assert args.skip_git_check is True
+        return WatchTaskResult.from_workflow(
+            _workflow_result(args.watch_run_id, final=True)
+        )
+
+    second = watch_inbox(
+        inbox_dir=inbox,
+        outbox_dir=outbox,
+        poll_interval=0.01,
+        args=_args(),
+        process_task=finish,
+        sleep_fn=_InterruptingSleep(interrupt_after=1),
+        time_fn=lambda: 10_000_000_000.0,
+    )
+
+    assert second == 0
+    assert run_ids[0] == run_ids[1]
+    assert not task.exists()
+    assert not watch_identity_path(task).exists()
+    assert len(list((outbox / "done").glob("*.md"))) == 1
+
+
+def test_process_interruption_preserves_identity_for_next_watch_process(
+    tmp_path: Path,
+) -> None:
+    inbox = tmp_path / "inbox"
+    outbox = tmp_path / "outbox"
+    inbox.mkdir()
+    task = inbox / "interrupt.md"
+    task.write_text("interrupt", encoding="utf-8")
+    first_run_id: list[str] = []
+
+    def interrupt(_task: Path, args: Namespace, force_new: bool) -> int:
+        first_run_id.append(args.watch_run_id)
+        assert force_new is True
+        raise KeyboardInterrupt
+
+    assert watch_inbox(
+        inbox_dir=inbox,
+        outbox_dir=outbox,
+        poll_interval=0.01,
+        args=_args(),
+        process_task=interrupt,
+        time_fn=lambda: 10_000_000_000.0,
+    ) == 0
+    assert watch_identity_path(task).exists()
+
+    def resume(_task: Path, args: Namespace, force_new: bool) -> WatchTaskResult:
+        assert args.watch_run_id == first_run_id[0]
+        assert args.resume is True
+        assert force_new is False
+        return WatchTaskResult.from_workflow(
+            _workflow_result(args.watch_run_id, final=True)
+        )
+
+    assert watch_inbox(
+        inbox_dir=inbox,
+        outbox_dir=outbox,
+        poll_interval=0.01,
+        args=_args(),
+        process_task=resume,
+        sleep_fn=_InterruptingSleep(interrupt_after=1),
+        time_fn=lambda: 10_000_000_000.0,
+    ) == 0
+    assert len(list((outbox / "done").glob("*.md"))) == 1
+
+
+def test_technical_retry_uses_stable_run_id_and_resume_context(tmp_path: Path) -> None:
+    inbox = tmp_path / "inbox"
+    outbox = tmp_path / "outbox"
+    inbox.mkdir()
+    task = inbox / "retry.md"
+    task.write_text("retry", encoding="utf-8")
+    calls: list[tuple[str, bool, bool]] = []
+
+    def process(_task: Path, args: Namespace, force_new: bool) -> int:
+        calls.append((args.watch_run_id, args.resume, force_new))
+        return 1 if len(calls) == 1 else 0
+
+    assert watch_inbox(
+        inbox_dir=inbox,
+        outbox_dir=outbox,
+        poll_interval=0.01,
+        args=_args(),
+        process_task=process,
+        max_retries=3,
+        sleep_fn=_InterruptingSleep(interrupt_after=1),
+        time_fn=lambda: 10_000_000_000.0,
+    ) == 0
+
+    assert calls[0][0] == calls[1][0]
+    assert calls[0][1:] == (False, True)
+    assert calls[1][1:] == (True, False)
+    assert not (inbox / "retry.md.attempts").exists()
+
+
+def test_fifo_tasks_receive_distinct_isolated_run_ids(tmp_path: Path) -> None:
+    inbox = tmp_path / "inbox"
+    outbox = tmp_path / "outbox"
+    inbox.mkdir()
+    first = inbox / "first.md"
+    second = inbox / "second.md"
+    first.write_text("first", encoding="utf-8")
+    second.write_text("second", encoding="utf-8")
+    first_mtime = first.stat().st_mtime - 10
+    os.utime(first, (first_mtime, first_mtime))
+    run_ids: list[str] = []
+
+    def process(_task: Path, args: Namespace, force_new: bool) -> int:
+        assert force_new is True
+        run_ids.append(args.watch_run_id)
+        return 0
+
+    assert watch_inbox(
+        inbox_dir=inbox,
+        outbox_dir=outbox,
+        poll_interval=0.01,
+        args=_args(),
+        process_task=process,
+        sleep_fn=_InterruptingSleep(interrupt_after=1),
+        time_fn=lambda: 10_000_000_000.0,
+    ) == 0
+
+    assert len(run_ids) == 2
+    assert run_ids[0] != run_ids[1]
+    assert len(list((outbox / "done").glob("*.md"))) == 2
+
+
+def test_changed_paused_task_halts_without_retry_or_poison(tmp_path: Path) -> None:
+    inbox = tmp_path / "inbox"
+    outbox = tmp_path / "outbox"
+    inbox.mkdir()
+    task = inbox / "changed.md"
+    task.write_text("original", encoding="utf-8")
+
+    def pause(_task: Path, args: Namespace, _force_new: bool) -> WatchTaskResult:
+        return WatchTaskResult(
+            4,
+            args.watch_run_id,
+            WatchTaskDisposition.RESUMABLE_HALT,
+            "awaiting_user_decision",
+            "codex_implementation",
+            2,
+            "test_change",
+        )
+
+    assert watch_inbox(
+        inbox_dir=inbox,
+        outbox_dir=outbox,
+        poll_interval=0.01,
+        args=_args(),
+        process_task=pause,
+        time_fn=lambda: 10_000_000_000.0,
+    ) == 4
+    task.write_text("changed after pause", encoding="utf-8")
+    calls: list[str] = []
+
+    assert watch_inbox(
+        inbox_dir=inbox,
+        outbox_dir=outbox,
+        poll_interval=0.01,
+        args=_args(),
+        process_task=lambda *_: calls.append("called") or 0,
+        max_retries=1,
+        time_fn=lambda: 10_000_000_000.0,
+    ) == 1
+
+    assert calls == []
+    assert task.exists()
+    assert watch_identity_path(task).exists()
+    assert not (inbox / "changed.md.attempts").exists()
+    assert list((outbox / "failed").glob("*")) == []
 
 
 def test_watch_fails_fast_when_lock_already_held(tmp_path: Path) -> None:

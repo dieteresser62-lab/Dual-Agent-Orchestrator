@@ -146,7 +146,7 @@ Jede Slice-MD wird unmittelbar vor Beginn ihres Slice angelegt und dann aus der 
 | 14 | [`docs/internal/slice-orchestrator-modernization-14-quota-failure-resume.md`](slice-orchestrator-modernization-14-quota-failure-resume.md) |
 | 15 | [`docs/internal/slice-orchestrator-modernization-15-scripted-dry-run.md`](slice-orchestrator-modernization-15-scripted-dry-run.md) |
 | 16 | [`docs/internal/slice-orchestrator-modernization-16-branch-final-review.md`](slice-orchestrator-modernization-16-branch-final-review.md) |
-| 17 | `docs/internal/slice-orchestrator-modernization-17-watch-mode-pauses.md` |
+| 17 | [`docs/internal/slice-orchestrator-modernization-17-watch-mode-pauses.md`](slice-orchestrator-modernization-17-watch-mode-pauses.md) |
 | 18 | `docs/internal/slice-orchestrator-modernization-18-default-cutover-contract.md` |
 | 19 | `docs/internal/slice-orchestrator-modernization-19-user-docs-consistency.md` |
 
@@ -542,11 +542,13 @@ Die Audit-Komponente aus Slice 8 prüft bei Start eines Slice, dass genau diese 
 **Test-Riegel:** ja. **Red-State:** nein.
 **Risiko/Rückfalloption:** Endreview-Schleifen können Seiteneffekte wiederholen; Korrektur-Work-Units und Endreview-Anläufe besitzen getrennte Idempotenzschlüssel, die Defaultpipeline bleibt noch unberührt.
 
-### Slice 17 — Watch-Modus und pausierte Läufe
+### [Slice 17 — Watch-Modus und pausierte Läufe](slice-orchestrator-modernization-17-watch-mode-pauses.md)
 
 **Zweck:** Inbox-/Outbox-Verarbeitung mit Slice-Commits, Resume und definierten Nutzer-/Instanzhalts integrieren.
 **Anforderungen:** R-8, R-9, R-10 und R-18 im Watch-Kontext.
 **Voraussichtlich betroffene Dateien:** `src/inbox_watcher.py`, `src/cli.py`, `src/workflow.py`, `src/workflow_state.py`, `tests/test_inbox_watcher.py`, `tests/test_orchestrator_watch_cli.py`, `tests/test_workflow.py`.
+**Tatsächlich betroffene Dateien vor Review:** `src/inbox_watcher.py`, `src/orchestrator.py`, `src/workflow.py`, `tests/test_inbox_watcher.py`, `tests/test_orchestrator_watch_cli.py`, `tests/test_workflow.py` sowie Arbeitsplan, Übergabe und Slice-MD. `src/cli.py` und `src/workflow_state.py` bleiben unverändert, weil der Watcher seinen bestehenden Callback additiv typisiert und der vorhandene v3-State bereits alle benötigten Gate-, Quota-, Resume- und Commitinvarianten trägt.
+**Umsetzungsstatus:** Implementierung und lokale Abschlussmatrix grün; 530 Tests der Vollsuite, 89 fokussierte Tests, Compile, aktiver v2-Dry-Run, Diffcheck und Slice-Dokumentvalidator bestanden. Review-, Freigabe- und Commitstatus werden ausschließlich in der Slice-MD fortgeschrieben.
 
 **Akzeptanzkriterien:**
 

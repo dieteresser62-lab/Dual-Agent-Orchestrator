@@ -16,6 +16,9 @@ from contracts import (
     ValidationStatus,
 )
 from gates import PathClasses, StopRule, TestChangeEvidence as GateTestChangeEvidence
+from inbox_watcher import WatchTaskDisposition, WatchTaskResult
+from orchestrator import run_v3_final_review, run_v3_work_unit
+from validation_matrix import ValidationCommand, ValidationMatrix, ValidationRequest, ValidationRule
 from workflow import (
     CodexInvocation,
     ContractRepairInvocation,
@@ -41,8 +44,6 @@ from workflow_state import (
     WorkUnitStatus,
     init_workflow_state,
 )
-from validation_matrix import ValidationCommand, ValidationMatrix, ValidationRequest, ValidationRule
-from orchestrator import run_v3_final_review, run_v3_work_unit
 
 
 TEST_FILE = "tests/test_workflow.py"
@@ -1978,6 +1979,74 @@ def test_branch_final_review_uses_one_attestation_for_all_three_roles() -> None:
     assert all("SLICE ONE\nSLICE TWO" in call.prompt for call in driver.reviewer_calls)
     assert "SLICE ONE\nSLICE TWO" in driver.codex_calls[0].prompt
     assert driver.commit_calls == []
+
+
+def test_terminable_quota_resumes_same_final_review_for_watch_completion() -> None:
+    received = datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)
+    branch = _changes(
+        "7",
+        "src/early.py",
+        TEST_FILE,
+        full_diff="COMPLETE BRANCH",
+        start_commit=START_COMMIT,
+    )
+    driver = FakeDriver(
+        snapshots=[branch],
+        codex_outputs=[_final_report()],
+        reviewer_outputs=[
+            _final_approval(AgentRole.CLAUDE),
+            _final_approval(AgentRole.ANTIGRAVITY),
+        ],
+        reviewer_failures=[
+            _invocation_failure(
+                AgentRole.CLAUDE,
+                AgentFailureKind.QUOTA,
+                "final-claude-quota",
+                received_at=received,
+                reset_after_seconds=2,
+            ),
+            None,
+        ],
+    )
+    clock = {"now": received}
+    sleeps: list[float] = []
+    heartbeats: list[str] = []
+
+    def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        clock["now"] += timedelta(seconds=seconds)
+
+    result = WorkflowEngine(
+        driver,
+        now_fn=lambda: clock["now"],
+        sleep_fn=sleep,
+        heartbeat_fn=heartbeats.append,
+    ).run_final_review(
+        _completed_single_slice_state(),
+        replace(
+            _context(),
+            quota_wait_policy=QuotaWaitPolicy(
+                automatic=True,
+                safety_margin_seconds=1,
+                maximum_wait_seconds=10,
+                maximum_auto_resumes=1,
+                heartbeat_interval_seconds=1,
+            ),
+        ),
+    )
+    watch_result = WatchTaskResult.from_workflow(result)
+
+    assert result.completed
+    assert watch_result.disposition is WatchTaskDisposition.COMPLETED
+    assert watch_result.exit_code == 0
+    assert [call.step for call in driver.reviewer_calls] == [
+        WorkflowStep.CLAUDE_FINAL_REVIEW,
+        WorkflowStep.CLAUDE_FINAL_REVIEW,
+        WorkflowStep.ANTIGRAVITY_FINAL_REVIEW,
+    ]
+    assert sleeps == [1, 1, 1]
+    assert heartbeats
+    assert any("work_unit=3" in item for item in heartbeats)
 
 
 @pytest.mark.parametrize("denial_role", [AgentRole.CLAUDE, AgentRole.ANTIGRAVITY])

@@ -1,13 +1,22 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import contextlib
+import hashlib
+import json
 import logging
 import shutil
 import time
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 from typing import Callable, TextIO
+
+from state_io import atomic_write_file
+from workflow import WorkflowRunResult
+from workflow_state import WorkUnitStatus
 
 try:
     import fcntl
@@ -16,6 +25,156 @@ except ImportError:  # pragma: no cover - non-Unix fallback
 
 logger = logging.getLogger(__name__)
 STUCK_RETRY_MULTIPLIER = 3
+
+
+class WatchTaskDisposition(str, Enum):
+    COMPLETED = "completed"
+    RESUMABLE_HALT = "resumable_halt"
+    TECHNICAL_FAILURE = "technical_failure"
+
+
+@dataclass(frozen=True)
+class WatchTaskResult:
+    exit_code: int
+    run_id: str
+    disposition: WatchTaskDisposition
+    status: str
+    step: str
+    work_unit_id: int
+    gate_reason: str
+
+    def __post_init__(self) -> None:
+        if self.exit_code < 0:
+            raise ValueError("watch task exit code must be non-negative")
+        if not self.run_id.strip():
+            raise ValueError("watch task result requires a run id")
+        if self.work_unit_id < 1:
+            raise ValueError("watch task result requires a 1-based work unit id")
+        if self.disposition is WatchTaskDisposition.COMPLETED and self.exit_code != 0:
+            raise ValueError("completed watch task result requires exit code zero")
+        if (
+            self.disposition is WatchTaskDisposition.RESUMABLE_HALT
+            and self.exit_code not in {2, 3, 4}
+        ):
+            raise ValueError("resumable watch halt requires exit code 2, 3, or 4")
+
+    @classmethod
+    def from_workflow(cls, result: WorkflowRunResult) -> WatchTaskResult:
+        state = result.state
+        status = state.current_work_unit.status
+        resumable = status in {
+            WorkUnitStatus.AWAITING_USER_DECISION,
+            WorkUnitStatus.WAITING_FOR_QUOTA,
+            WorkUnitStatus.AWAITING_RESUME,
+        }
+        if result.workflow_completed:
+            disposition = WatchTaskDisposition.COMPLETED
+            exit_code = 0
+        elif resumable and result.exit_code in {2, 3, 4}:
+            disposition = WatchTaskDisposition.RESUMABLE_HALT
+            exit_code = result.exit_code
+        else:
+            disposition = WatchTaskDisposition.TECHNICAL_FAILURE
+            exit_code = result.exit_code or 1
+        return cls(
+            exit_code=exit_code,
+            run_id=state.run_id,
+            disposition=disposition,
+            status=status.value,
+            step=state.current_step.value,
+            work_unit_id=state.current_work_unit_id,
+            gate_reason=state.current_work_unit.gate.reason.value,
+        )
+
+
+@dataclass(frozen=True)
+class WatchTaskIdentity:
+    run_id: str
+    task_digest: str
+    started: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.run_id.strip():
+            raise ValueError("watch task identity requires a run id")
+        if len(self.task_digest) != 64 or any(
+            character not in "0123456789abcdef" for character in self.task_digest
+        ):
+            raise ValueError("watch task identity requires a SHA-256 task digest")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "version": 1,
+            "run_id": self.run_id,
+            "task_digest": self.task_digest,
+            "started": self.started,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: object) -> WatchTaskIdentity:
+        if not isinstance(raw, dict) or set(raw) != {
+            "version",
+            "run_id",
+            "task_digest",
+            "started",
+        }:
+            raise ValueError("watch task identity has an invalid schema")
+        if raw["version"] != 1 or not isinstance(raw["started"], bool):
+            raise ValueError("watch task identity has an unsupported version or status")
+        if not isinstance(raw["run_id"], str) or not isinstance(raw["task_digest"], str):
+            raise ValueError("watch task identity fields have invalid types")
+        return cls(raw["run_id"], raw["task_digest"], raw["started"])
+
+
+def watch_identity_path(task_file: Path) -> Path:
+    return task_file.with_name(f".{task_file.name}.watch.json")
+
+
+def _task_digest(task_file: Path) -> str:
+    return hashlib.sha256(task_file.read_bytes()).hexdigest()
+
+
+def _new_watch_run_id(task_file: Path) -> str:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S.%fZ")
+    entropy = hashlib.sha256(
+        f"{task_file.resolve()}:{stamp}".encode("utf-8")
+    ).hexdigest()[:12]
+    return f"watch-{stamp}-{entropy}"
+
+
+def load_or_create_watch_identity(
+    task_file: Path,
+    *,
+    run_id_fn: Callable[[Path], str] = _new_watch_run_id,
+) -> WatchTaskIdentity:
+    path = watch_identity_path(task_file)
+    digest = _task_digest(task_file)
+    if path.exists():
+        try:
+            identity = WatchTaskIdentity.from_dict(
+                json.loads(path.read_text(encoding="utf-8"))
+            )
+        except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+            raise ValueError(f"cannot resume invalid watch identity {path.name}: {exc}") from exc
+        if identity.task_digest != digest:
+            raise ValueError(
+                f"watch task {task_file.name} changed after run {identity.run_id} started"
+            )
+        return identity
+    identity = WatchTaskIdentity(run_id_fn(task_file), digest)
+    atomic_write_file(path, json.dumps(identity.to_dict(), sort_keys=True) + "\n")
+    return identity
+
+
+def save_watch_identity(task_file: Path, identity: WatchTaskIdentity) -> None:
+    atomic_write_file(
+        watch_identity_path(task_file),
+        json.dumps(identity.to_dict(), sort_keys=True) + "\n",
+    )
+
+
+def delete_watch_identity(task_file: Path) -> None:
+    with contextlib.suppress(FileNotFoundError):
+        watch_identity_path(task_file).unlink()
 
 
 def list_inbox_tasks(inbox_dir: Path) -> list[Path]:
@@ -135,7 +294,9 @@ def watch_inbox(
     outbox_dir: Path,
     poll_interval: float,
     args: argparse.Namespace,
-    process_task: Callable[[Path, argparse.Namespace, bool], int],
+    process_task: Callable[
+        [Path, argparse.Namespace, bool], int | WatchTaskResult
+    ],
     min_file_age_seconds: float = 1.0,
     max_retries: int = 3,
     sleep_fn: Callable[[float], None] = time.sleep,
@@ -191,11 +352,13 @@ def watch_inbox(
                         task_file.rename(stuck_destination)
                         delete_attempt_sidecar(task_file)
                         delete_success_marker(task_file)
+                        delete_watch_identity(task_file)
                     except Exception:
                         logger.exception("Failed to rename stuck task %s.", task_file)
                     continue
 
             exit_code: int | None = None
+            task_result: WatchTaskResult | None = None
             failed_with_exception = False
             task_succeeded_already = has_success_marker(task_file)
 
@@ -206,12 +369,78 @@ def watch_inbox(
                 )
             else:
                 try:
-                    exit_code = process_task(task_file, args, True)
+                    identity = load_or_create_watch_identity(task_file)
+                except ValueError as exc:
+                    logger.error(
+                        "Cannot safely start or resume watch task %s: %s",
+                        task_file.name,
+                        exc,
+                    )
+                    return 1
+                task_args = copy.copy(args)
+                task_args.watch_run_id = identity.run_id
+                task_args.resume = identity.started
+                task_args.force_overwrite_state = not identity.started
+                force_new = not identity.started
+                if not identity.started:
+                    identity = replace(identity, started=True)
+                    save_watch_identity(task_file, identity)
+                try:
+                    raw_result = process_task(task_file, task_args, force_new)
+                    if isinstance(raw_result, WatchTaskResult):
+                        task_result = raw_result
+                        if task_result.run_id != identity.run_id:
+                            logger.error(
+                                "Workflow result run id %s differs from persisted watch "
+                                "identity %s for %s.",
+                                task_result.run_id,
+                                identity.run_id,
+                                task_file.name,
+                            )
+                            return 1
+                    else:
+                        exit_code = int(raw_result)
+                        task_result = WatchTaskResult(
+                            exit_code=exit_code,
+                            run_id=identity.run_id,
+                            disposition=(
+                                WatchTaskDisposition.COMPLETED
+                                if exit_code == 0
+                                else WatchTaskDisposition.RESUMABLE_HALT
+                                if exit_code in {2, 3, 4}
+                                else WatchTaskDisposition.TECHNICAL_FAILURE
+                            ),
+                            status="legacy",
+                            step="legacy",
+                            work_unit_id=1,
+                            gate_reason="legacy",
+                        )
                 except Exception:
                     failed_with_exception = True
                     logger.exception("Task processing crashed for %s.", task_file)
 
-            failed = failed_with_exception or (exit_code is not None and exit_code != 0)
+            if (
+                not failed_with_exception
+                and task_result is not None
+                and task_result.disposition is WatchTaskDisposition.RESUMABLE_HALT
+            ):
+                logger.warning(
+                    "Pausing watch queue for resumable task %s: run=%s work-unit=%s "
+                    "step=%s status=%s gate=%s exit=%s",
+                    task_file.name,
+                    task_result.run_id,
+                    task_result.work_unit_id,
+                    task_result.step,
+                    task_result.status,
+                    task_result.gate_reason,
+                    task_result.exit_code,
+                )
+                return task_result.exit_code
+
+            failed = failed_with_exception or (
+                task_result is not None
+                and task_result.disposition is WatchTaskDisposition.TECHNICAL_FAILURE
+            )
             if failed:
                 attempts = read_attempt_count(task_file) + 1
                 write_attempt_count(task_file, attempts)
@@ -222,6 +451,7 @@ def watch_inbox(
                         destination = move_to_outbox(task_file, outbox_failed_dir, source_name=poison_name)
                         delete_attempt_sidecar(task_file)
                         delete_success_marker(task_file)
+                        delete_watch_identity(task_file)
                         logger.warning(
                             "Task marked poison after %s/%s failures and moved to failed outbox: %s",
                             attempts,
@@ -239,8 +469,20 @@ def watch_inbox(
                     )
                 if failed_with_exception:
                     continue
-                logger.info("Task finished with exit code %s: %s", exit_code, task_file.name)
+                assert task_result is not None
+                logger.info(
+                    "Task finished with exit code %s: %s",
+                    task_result.exit_code,
+                    task_file.name,
+                )
                 continue
+
+            if not task_succeeded_already and (
+                task_result is None
+                or task_result.disposition is not WatchTaskDisposition.COMPLETED
+            ):
+                logger.error("Task %s returned no terminal watch result.", task_file.name)
+                return 1
 
             if not task_succeeded_already:
                 try:
@@ -252,6 +494,7 @@ def watch_inbox(
                 destination = move_to_outbox(task_file, outbox_done_dir)
                 delete_attempt_sidecar(task_file)
                 delete_success_marker(task_file)
+                delete_watch_identity(task_file)
                 logger.info("Moved task to done outbox: %s", destination)
             except Exception:
                 # Keep retry accounting symmetrical with processing failures.
@@ -264,6 +507,7 @@ def watch_inbox(
                         destination = move_to_outbox(task_file, outbox_failed_dir, source_name=failed_name)
                         delete_attempt_sidecar(task_file)
                         delete_success_marker(task_file)
+                        delete_watch_identity(task_file)
                         if marker_exists:
                             logger.warning(
                                 "Task SUCCEEDED (exit 0) but move to done/ failed (%s/%s). "
@@ -308,7 +552,12 @@ def watch_inbox(
             if task_succeeded_already:
                 logger.info("Task bookkeeping completed for previously succeeded task: %s", task_file.name)
             else:
-                logger.info("Task finished with exit code %s: %s", exit_code, task_file.name)
+                assert task_result is not None
+                logger.info(
+                    "Task finished with exit code %s: %s",
+                    task_result.exit_code,
+                    task_file.name,
+                )
     except KeyboardInterrupt:
         logger.info("Watch mode stopped.")
         return 0
