@@ -184,6 +184,12 @@ def test_multi_slice_transition_persists_start_and_commit_references() -> None:
         step=WorkflowStep.CODEX_IMPLEMENTATION,
         updated_at="slice-one",
     )
+    slice_one = slice_one.bind_current_slice_git_boundary(
+        start_commit="a" * 40,
+        scope_paths=("src/one.py",),
+        start_fingerprint="1" * 64,
+        updated_at="slice-one-boundary",
+    )
     slice_one_done = slice_one.complete_current_slice(
         commit_ref="b" * 40,
         updated_at="slice-one-done",
@@ -204,6 +210,62 @@ def test_multi_slice_transition_persists_start_and_commit_references() -> None:
     assert resumed.slice_id == 2
     assert resumed.work_unit_id == 3
     assert resumed.step is WorkflowStep.CODEX_IMPLEMENTATION
+
+
+def test_slice_git_boundary_is_canonical_persisted_and_immutable() -> None:
+    state = make_state().bind_current_slice_git_boundary(
+        start_commit="a" * 40,
+        scope_paths=("tests/test_one.py", "src/one.py", "src/one.py"),
+        start_fingerprint="1" * 64,
+        updated_at="bound",
+    )
+    loaded = WorkflowState.from_dict(state.to_dict())
+
+    assert loaded.current_slice.scope_paths == ("src/one.py", "tests/test_one.py")
+    assert loaded.current_slice.start_fingerprint == "1" * 64
+    assert loaded.updated_at == "bound"
+    assert loaded.bind_current_slice_git_boundary(
+        start_commit="a" * 40,
+        scope_paths=("src/one.py", "tests/test_one.py"),
+        start_fingerprint="1" * 64,
+    ) is loaded
+
+    with pytest.raises(WorkflowStateValidationError, match="cannot change"):
+        loaded.bind_current_slice_git_boundary(
+            start_commit="a" * 40,
+            scope_paths=("src/two.py",),
+            start_fingerprint="2" * 64,
+        )
+
+
+def test_legacy_v3_slice_record_loads_and_serializes_explicit_empty_git_boundary() -> None:
+    raw = make_state().to_dict()
+    for slice_record in raw["slices"]:
+        del slice_record["scope_paths"]
+        del slice_record["start_fingerprint"]
+
+    loaded = WorkflowState.from_dict(raw)
+    migrated = loaded.to_dict()
+
+    assert loaded.current_slice.scope_paths == ()
+    assert loaded.current_slice.start_fingerprint is None
+    assert migrated["slices"][0]["scope_paths"] == []
+    assert migrated["slices"][0]["start_fingerprint"] is None
+
+
+def test_slice_cannot_complete_before_git_boundary_is_persisted() -> None:
+    with pytest.raises(WorkflowStateValidationError, match="Git boundary"):
+        make_state().complete_current_slice(commit_ref="b" * 40)
+
+
+@pytest.mark.parametrize("scope", [("../outside",), ("src\\one.py",), ("/tmp/a",)])
+def test_slice_git_boundary_rejects_non_repository_scope(scope: tuple[str, ...]) -> None:
+    with pytest.raises(WorkflowStateValidationError, match="scope_paths"):
+        make_state().bind_current_slice_git_boundary(
+            start_commit="a" * 40,
+            scope_paths=scope,
+            start_fingerprint="1" * 64,
+        )
 
 
 def test_new_slice_cannot_start_without_persisted_start_commit() -> None:

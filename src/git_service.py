@@ -1,0 +1,414 @@
+from __future__ import annotations
+
+import os
+import re
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
+from typing import Sequence
+
+from contracts import AgentRole, ContractResult, ValidationAttestation
+from repo_changes import RepositoryChanges, collect_repository_changes
+
+
+FEATURE_BRANCH_PATTERN = re.compile(r"^(?:feature|codex)/[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+class GitTransactionError(RuntimeError):
+    """Raised before an unsafe or stale Git side effect can be performed."""
+
+
+@dataclass(frozen=True)
+class RepositoryIdentity:
+    repository_root: Path
+    branch: str
+    head: str
+    upstream: str | None
+    ahead: int | None
+    behind: int | None
+
+    @property
+    def remote_status(self) -> str:
+        if self.upstream is None:
+            return "local-only"
+        return f"tracking {self.upstream}; ahead={self.ahead}; behind={self.behind}"
+
+
+@dataclass(frozen=True)
+class SliceGitBoundary:
+    slice_id: int
+    branch: str
+    start_commit: str
+    start_fingerprint: str
+    scope_paths: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.slice_id, bool)
+            or not isinstance(self.slice_id, int)
+            or self.slice_id < 1
+        ):
+            raise GitTransactionError("slice_id must be a 1-based integer")
+        if not FEATURE_BRANCH_PATTERN.fullmatch(self.branch):
+            raise GitTransactionError(
+                "slice boundary requires a feature/<name> or codex/<name> branch"
+            )
+        if not self.start_commit.strip():
+            raise GitTransactionError("slice boundary requires a start commit")
+        if not re.fullmatch(r"[0-9a-f]{64}", self.start_fingerprint):
+            raise GitTransactionError("slice boundary requires a SHA-256 start fingerprint")
+        normalized = _normalize_scope_paths(self.scope_paths)
+        if normalized != self.scope_paths:
+            raise GitTransactionError(
+                "slice boundary scope paths must be sorted and unique"
+            )
+
+
+@dataclass(frozen=True)
+class CommitAuthorization:
+    slice_id: int
+    diff_fingerprint: str
+    attestation: ValidationAttestation
+    claude_review: ContractResult
+    antigravity_review: ContractResult
+
+
+@dataclass(frozen=True)
+class SliceCommitResult:
+    slice_id: int
+    commit_hash: str
+    message: str
+    diff_fingerprint: str
+    committed_paths: tuple[str, ...]
+
+
+def inspect_repository(repository_root: Path) -> RepositoryIdentity:
+    root = Path(repository_root).resolve()
+    reported_root = Path(
+        os.fsdecode(_git(root, "rev-parse", "--show-toplevel").stdout).strip()
+    ).resolve()
+    if reported_root != root:
+        raise GitTransactionError(
+            f"repository root mismatch: expected {root}, git reported {reported_root}"
+        )
+    branch_result = _git(
+        root,
+        "symbolic-ref",
+        "--quiet",
+        "--short",
+        "HEAD",
+        accepted_exit_codes=(0, 1),
+    )
+    if branch_result.returncode != 0:
+        raise GitTransactionError("detached HEAD is not a valid slice branch")
+    branch = os.fsdecode(branch_result.stdout).strip()
+    head = os.fsdecode(_git(root, "rev-parse", "--verify", "HEAD^{commit}").stdout).strip()
+    upstream_result = _git(
+        root,
+        "rev-parse",
+        "--abbrev-ref",
+        "--symbolic-full-name",
+        "@{upstream}",
+        accepted_exit_codes=(0, 128),
+    )
+    upstream = (
+        os.fsdecode(upstream_result.stdout).strip()
+        if upstream_result.returncode == 0
+        else None
+    )
+    ahead: int | None = None
+    behind: int | None = None
+    if upstream is not None:
+        counts = os.fsdecode(
+            _git(
+                root,
+                "rev-list",
+                "--left-right",
+                "--count",
+                f"HEAD...{upstream}",
+            ).stdout
+        ).split()
+        if len(counts) != 2:
+            raise GitTransactionError("could not determine local/upstream divergence")
+        ahead, behind = (int(value) for value in counts)
+    return RepositoryIdentity(root, branch, head, upstream, ahead, behind)
+
+
+def begin_slice(
+    *,
+    repository_root: Path,
+    slice_id: int,
+    expected_branch: str,
+    scope_paths: Sequence[str],
+) -> tuple[SliceGitBoundary, RepositoryIdentity]:
+    normalized_scope = _normalize_scope_paths(scope_paths)
+    identity = _require_expected_feature_branch(repository_root, expected_branch)
+    changes = collect_repository_changes(identity.repository_root, identity.head)
+    if changes.entries:
+        raise GitTransactionError(
+            "a new slice requires a clean non-ignored working tree; found: "
+            + ", ".join(changes.paths)
+        )
+    boundary = SliceGitBoundary(
+        slice_id=slice_id,
+        branch=identity.branch,
+        start_commit=identity.head,
+        start_fingerprint=changes.fingerprint,
+        scope_paths=normalized_scope,
+    )
+    return boundary, identity
+
+
+def resume_slice(
+    *,
+    repository_root: Path,
+    boundary: SliceGitBoundary,
+    paused_fingerprint: str | None = None,
+) -> RepositoryChanges:
+    identity = _require_expected_feature_branch(repository_root, boundary.branch)
+    if identity.head != boundary.start_commit:
+        raise GitTransactionError("slice HEAD changed since its persisted start commit")
+    changes = collect_repository_changes(identity.repository_root, boundary.start_commit)
+    _require_scope(changes, boundary.scope_paths)
+    if not changes.entries and changes.fingerprint != boundary.start_fingerprint:
+        raise GitTransactionError("persisted slice start fingerprint does not match repository")
+    if paused_fingerprint is not None and changes.fingerprint != paused_fingerprint:
+        raise GitTransactionError("repository fingerprint changed since the persisted pause")
+    return changes
+
+
+def commit_slice(
+    *,
+    repository_root: Path,
+    boundary: SliceGitBoundary,
+    authorization: CommitAuthorization,
+    title: str,
+) -> SliceCommitResult:
+    if authorization.slice_id != boundary.slice_id:
+        raise GitTransactionError("commit authorization belongs to a different slice")
+    identity = _require_expected_feature_branch(repository_root, boundary.branch)
+    if identity.head != boundary.start_commit:
+        raise GitTransactionError("slice HEAD changed after its persisted start")
+    changes = collect_repository_changes(identity.repository_root, boundary.start_commit)
+    if not changes.entries:
+        raise GitTransactionError("slice commit requires at least one changed path")
+    staged_before = _staged_paths(identity.repository_root, detect_renames=False)
+    foreign_staged = tuple(
+        path for path in staged_before if path not in boundary.scope_paths
+    )
+    if foreign_staged:
+        raise GitTransactionError(
+            "foreign staged paths block the slice commit: " + ", ".join(foreign_staged)
+        )
+    transaction_paths = _require_scope(changes, boundary.scope_paths)
+    _validate_authorization(authorization, changes.fingerprint)
+    normalized_title = title.strip()
+    if not normalized_title or "\n" in normalized_title or "\r" in normalized_title:
+        raise GitTransactionError("slice commit title must be one non-empty line")
+    message = f"Slice {boundary.slice_id:02d}: {normalized_title}"
+    index_tree_before = os.fsdecode(
+        _git(identity.repository_root, "write-tree").stdout
+    ).strip()
+
+    update_paths = tuple(
+        sorted(
+            {
+                entry.old_path if entry.old_path is not None else entry.path
+                for entry in changes.entries
+                if entry.kind in ("deleted", "renamed")
+                and (
+                    entry.old_path if entry.old_path is not None else entry.path
+                )
+                not in staged_before
+            }
+        )
+    )
+    content_paths = tuple(
+        sorted(entry.path for entry in changes.entries if entry.kind != "deleted")
+    )
+    try:
+        if update_paths:
+            _git(
+                identity.repository_root,
+                "add",
+                "-u",
+                "--",
+                *(f":(top,literal){path}" for path in update_paths),
+            )
+        if content_paths:
+            _git(
+                identity.repository_root,
+                "add",
+                "--",
+                *(f":(top,literal){path}" for path in content_paths),
+            )
+        staged_after = _staged_paths(identity.repository_root)
+        if staged_after != changes.paths:
+            raise GitTransactionError(
+                "staged paths do not exactly match the slice transaction: "
+                + ", ".join(staged_after)
+            )
+        final_changes = collect_repository_changes(
+            identity.repository_root, boundary.start_commit
+        )
+        if final_changes.fingerprint != changes.fingerprint:
+            raise GitTransactionError("slice fingerprint changed during exact staging")
+
+        _git(
+            identity.repository_root,
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            message,
+        )
+    except GitTransactionError:
+        current_head = os.fsdecode(
+            _git(identity.repository_root, "rev-parse", "--verify", "HEAD^{commit}").stdout
+        ).strip()
+        if current_head == boundary.start_commit:
+            _git(identity.repository_root, "read-tree", index_tree_before)
+        raise
+    commit_hash = os.fsdecode(
+        _git(identity.repository_root, "rev-parse", "--verify", "HEAD^{commit}").stdout
+    ).strip()
+    committed_paths = tuple(
+        sorted(
+            field
+            for field in os.fsdecode(
+                _git(
+                    identity.repository_root,
+                    "diff-tree",
+                    "--no-commit-id",
+                    "--name-only",
+                    "-r",
+                    "--find-renames",
+                    "-z",
+                    commit_hash,
+                    "--",
+                ).stdout
+            ).split("\0")
+            if field
+        )
+    )
+    if committed_paths != changes.paths:
+        raise GitTransactionError("created commit path list differs from the reviewed slice")
+    return SliceCommitResult(
+        slice_id=boundary.slice_id,
+        commit_hash=commit_hash,
+        message=message,
+        diff_fingerprint=changes.fingerprint,
+        committed_paths=committed_paths,
+    )
+
+
+def _validate_authorization(
+    authorization: CommitAuthorization,
+    current_fingerprint: str,
+) -> None:
+    if authorization.diff_fingerprint != current_fingerprint:
+        raise GitTransactionError("commit authorization fingerprint is stale")
+    attestation = authorization.attestation
+    if not attestation.passed or attestation.diff_fingerprint != current_fingerprint:
+        raise GitTransactionError("commit requires a complete passing current attestation")
+    for expected_role, result in (
+        (AgentRole.CLAUDE, authorization.claude_review),
+        (AgentRole.ANTIGRAVITY, authorization.antigravity_review),
+    ):
+        if result.reviewer is not expected_role:
+            raise GitTransactionError(f"commit requires the {expected_role.value} review role")
+        if (
+            result.stopped
+            or result.stop_request is not None
+            or result.approval is not True
+            or result.open_blockers
+        ):
+            raise GitTransactionError(f"commit requires an approving {expected_role.value} review")
+        if result.validation != attestation:
+            raise GitTransactionError(
+                f"{expected_role.value} review is not bound to the commit attestation"
+            )
+
+
+def _require_expected_feature_branch(
+    repository_root: Path,
+    expected_branch: str,
+) -> RepositoryIdentity:
+    if not FEATURE_BRANCH_PATTERN.fullmatch(expected_branch):
+        raise GitTransactionError(
+            "expected branch must match feature/<name> or codex/<name>"
+        )
+    identity = inspect_repository(repository_root)
+    if identity.branch != expected_branch:
+        raise GitTransactionError(
+            f"branch mismatch: expected {expected_branch}, got {identity.branch}"
+        )
+    return identity
+
+
+def _require_scope(
+    changes: RepositoryChanges,
+    scope_paths: tuple[str, ...],
+) -> tuple[str, ...]:
+    transaction_paths = tuple(
+        sorted(
+            {
+                path
+                for entry in changes.entries
+                for path in (entry.path, entry.old_path)
+                if path is not None
+            }
+        )
+    )
+    unexpected = tuple(path for path in transaction_paths if path not in scope_paths)
+    if unexpected:
+        raise GitTransactionError(
+            "paths outside the persisted slice scope: " + ", ".join(unexpected)
+        )
+    return transaction_paths
+
+
+def _staged_paths(
+    repository_root: Path, *, detect_renames: bool = True
+) -> tuple[str, ...]:
+    arguments = ["diff", "--cached", "--name-only", "-z"]
+    arguments.append("--find-renames" if detect_renames else "--no-renames")
+    raw = _git(repository_root, *arguments, "--").stdout
+    return tuple(sorted(os.fsdecode(field) for field in raw.split(b"\0") if field))
+
+
+def _normalize_scope_paths(paths: Sequence[str]) -> tuple[str, ...]:
+    normalized = tuple(sorted(set(paths)))
+    if not normalized:
+        raise GitTransactionError("slice scope must contain at least one path")
+    for raw in normalized:
+        if not isinstance(raw, str) or not raw or "\\" in raw:
+            raise GitTransactionError("slice scope paths must be relative POSIX paths")
+        path = PurePosixPath(raw)
+        if path.is_absolute() or any(part in ("", ".", "..") for part in path.parts):
+            raise GitTransactionError("slice scope paths must be relative POSIX paths")
+    return normalized
+
+
+def _git(
+    repository_root: Path,
+    *arguments: str,
+    accepted_exit_codes: tuple[int, ...] = (0,),
+) -> subprocess.CompletedProcess[bytes]:
+    try:
+        result = subprocess.run(
+            ["git", *arguments],
+            cwd=repository_root,
+            capture_output=True,
+            check=False,
+        )
+    except OSError as exc:
+        raise GitTransactionError(f"could not execute git: {exc}") from exc
+    if result.returncode not in accepted_exit_codes:
+        detail = os.fsdecode(result.stderr or result.stdout).strip() or "no diagnostic output"
+        raise GitTransactionError(
+            f"git {' '.join(arguments)} failed with exit code {result.returncode}: {detail}"
+        )
+    return result

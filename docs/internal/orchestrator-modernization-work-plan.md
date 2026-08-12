@@ -138,7 +138,7 @@ Jede Slice-MD wird unmittelbar vor Beginn ihres Slice angelegt und dann aus der 
 | 6 | [`docs/internal/slice-orchestrator-modernization-06-contract-finding-core.md`](slice-orchestrator-modernization-06-contract-finding-core.md) |
 | 7 | [`docs/internal/slice-orchestrator-modernization-07-state-v3-work-units.md`](slice-orchestrator-modernization-07-state-v3-work-units.md) |
 | 8 | [`docs/internal/slice-orchestrator-modernization-08-audit-trail.md`](slice-orchestrator-modernization-08-audit-trail.md) |
-| 9 | `docs/internal/slice-orchestrator-modernization-09-branch-commit-transaction.md` |
+| 9 | [`docs/internal/slice-orchestrator-modernization-09-branch-commit-transaction.md`](slice-orchestrator-modernization-09-branch-commit-transaction.md) |
 | 10 | `docs/internal/slice-orchestrator-modernization-10-asymmetric-review-chain.md` |
 | 11 | `docs/internal/slice-orchestrator-modernization-11-test-change-gate.md` |
 | 12 | `docs/internal/slice-orchestrator-modernization-12-stop-rules-file-limit.md` |
@@ -341,11 +341,13 @@ Die Audit-Komponente aus Slice 8 prüft bei Start eines Slice, dass genau diese 
 **Test-Riegel:** ja. **Red-State:** nein.
 **Risiko/Rückfalloption:** Dokumentverlust; vor jeder Aktualisierung erfolgt atomisches Schreiben, bestehende nicht verwaltete Abschnitte bleiben erhalten.
 
-### Slice 9 — Branch- und Committransaktion
+### [Slice 9 — Branch- und Committransaktion](slice-orchestrator-modernization-09-branch-commit-transaction.md)
 
 **Zweck:** Feature-Branch, Slice-Scope und den von Antigravity autorisierten lokalen Commit sicher und reproduzierbar verwalten.
 **Anforderungen:** R-9; Teil von R-17.
 **Voraussichtlich betroffene Dateien:** `src/repo_changes.py`, `src/workflow_state.py`, optional `src/git_service.py` (neu, falls Trennung nötig), `tests/test_repo_changes.py`, `tests/test_workflow_state.py`.
+**Tatsächlich betroffene Dateien vor Review:** `src/git_service.py` (neu), `src/workflow_state.py`, `tests/test_git_service.py` (neu), `tests/test_workflow_state.py`, Arbeitsplan, Übergabe und Slice-MD. `src/repo_changes.py` bleibt die unveränderte kanonische Diffquelle und wird von der neuen Git-Service-Grenze wiederverwendet.
+**Umsetzungsstatus:** additive Git-Service-Grenze und persistente Slice-Gitbindung implementiert; vier Reviewkorrekturen zur Indexwiederherstellung, Guard-Abdeckung, Fehlerklasse und partiell vorgestagten Renames sind umgesetzt. 70 fokussierte Tests sowie die vollständige Suite mit 334 Tests, Compile, aktiver v2-Dry-Run und Diffcheck sind grün; Findings-Lebenszyklus, Abschlussfreigaben und Commitstatus stehen in der Slice-MD.
 
 **Akzeptanzkriterien:**
 

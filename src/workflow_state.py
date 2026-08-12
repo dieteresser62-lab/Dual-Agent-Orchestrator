@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from enum import Enum
+from pathlib import PurePosixPath
 from typing import Any, Mapping
 
 
 STATE_VERSION = 3
 DEFAULT_MAX_CODEX_RETURNS = 4
+SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
 class WorkflowStateValidationError(ValueError):
@@ -108,6 +111,8 @@ class SliceRecord:
     slice_id: int
     status: SliceStatus
     start_commit: str | None = None
+    scope_paths: tuple[str, ...] = ()
+    start_fingerprint: str | None = None
     commit_ref: str | None = None
 
     def __post_init__(self) -> None:
@@ -116,6 +121,17 @@ class SliceRecord:
             _require_non_empty(self.start_commit, "slice start_commit")
         if self.status is not SliceStatus.PENDING and self.start_commit is None:
             raise WorkflowStateValidationError("a started slice requires start_commit")
+        _require_canonical_scope(self.scope_paths)
+        if (self.start_fingerprint is None) != (not self.scope_paths):
+            raise WorkflowStateValidationError(
+                "slice scope_paths and start_fingerprint must be persisted together"
+            )
+        if self.start_fingerprint is not None and not SHA256_PATTERN.fullmatch(
+            self.start_fingerprint
+        ):
+            raise WorkflowStateValidationError(
+                "slice start_fingerprint must be a lowercase SHA-256 digest"
+            )
         if self.commit_ref is not None:
             _require_non_empty(self.commit_ref, "slice commit_ref")
         if self.status is SliceStatus.COMPLETED and self.commit_ref is None:
@@ -126,16 +142,30 @@ class SliceRecord:
             "slice_id": self.slice_id,
             "status": self.status.value,
             "start_commit": self.start_commit,
+            "scope_paths": list(self.scope_paths),
+            "start_fingerprint": self.start_fingerprint,
             "commit_ref": self.commit_ref,
         }
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> SliceRecord:
-        _require_exact_keys(raw, {"slice_id", "status", "start_commit", "commit_ref"}, "slice")
+        legacy_keys = {"slice_id", "status", "start_commit", "commit_ref"}
+        boundary_keys = {*legacy_keys, "scope_paths", "start_fingerprint"}
+        if set(raw) == legacy_keys:
+            scope_paths: tuple[str, ...] = ()
+            start_fingerprint = None
+        else:
+            _require_exact_keys(raw, boundary_keys, "slice")
+            scope_paths = _string_tuple(raw["scope_paths"], "slice.scope_paths")
+            start_fingerprint = _optional_string(
+                raw["start_fingerprint"], "slice.start_fingerprint"
+            )
         return cls(
             slice_id=_positive_int(raw["slice_id"], "slice.slice_id"),
             status=_enum_value(SliceStatus, raw["status"], "slice.status"),
             start_commit=_optional_string(raw["start_commit"], "slice.start_commit"),
+            scope_paths=scope_paths,
+            start_fingerprint=start_fingerprint,
             commit_ref=_optional_string(raw["commit_ref"], "slice.commit_ref"),
         )
 
@@ -427,6 +457,10 @@ class WorkflowState:
         current = self.current_work_unit
         if current.status is not WorkUnitStatus.IN_PROGRESS:
             raise WorkflowStateValidationError("only an in-progress work unit can complete a slice")
+        if not self.current_slice.scope_paths:
+            raise WorkflowStateValidationError(
+                "cannot complete a slice without a persisted Git boundary"
+            )
         completed_unit = replace(
             current,
             status=WorkUnitStatus.COMPLETED,
@@ -442,6 +476,49 @@ class WorkflowState:
             completed_unit,
             slices=slices,
             updated_at=updated_at,
+        )
+
+    def bind_current_slice_git_boundary(
+        self,
+        *,
+        start_commit: str,
+        scope_paths: tuple[str, ...],
+        start_fingerprint: str,
+        updated_at: str | None = None,
+    ) -> WorkflowState:
+        """Persist the immutable Git boundary before the first slice edit."""
+        _require_non_empty(start_commit, "start_commit")
+        normalized_scope = _normalize_scope_paths(scope_paths)
+        if not SHA256_PATTERN.fullmatch(start_fingerprint):
+            raise WorkflowStateValidationError(
+                "start_fingerprint must be a lowercase SHA-256 digest"
+            )
+        current_slice = self.current_slice
+        if current_slice.status is SliceStatus.COMPLETED:
+            raise WorkflowStateValidationError("cannot bind a completed slice")
+        if current_slice.start_commit != start_commit:
+            raise WorkflowStateValidationError(
+                "Git boundary start_commit must match the persisted slice start commit"
+            )
+        if current_slice.scope_paths:
+            if (
+                current_slice.scope_paths == normalized_scope
+                and current_slice.start_fingerprint == start_fingerprint
+            ):
+                return self
+            raise WorkflowStateValidationError("cannot change a persisted slice Git boundary")
+        bound = replace(
+            current_slice,
+            scope_paths=normalized_scope,
+            start_fingerprint=start_fingerprint,
+        )
+        slices = tuple(
+            bound if item.slice_id == current_slice.slice_id else item for item in self.slices
+        )
+        return replace(
+            self,
+            slices=slices,
+            updated_at=updated_at or _now_iso(),
         )
 
     def mark_side_effect_completed(self, key: str, *, updated_at: str | None = None) -> WorkflowState:
@@ -659,6 +736,33 @@ def _require_unique_non_empty(values: tuple[str, ...], label: str) -> None:
         raise WorkflowStateValidationError(f"{label} entries must be non-empty strings")
     if len(set(values)) != len(values):
         raise WorkflowStateValidationError(f"{label} entries must be unique")
+
+
+def _normalize_scope_paths(values: tuple[str, ...]) -> tuple[str, ...]:
+    if not values:
+        raise WorkflowStateValidationError("slice scope_paths must not be empty")
+    normalized = tuple(sorted(set(values)))
+    _require_canonical_scope(normalized)
+    return normalized
+
+
+def _require_canonical_scope(values: tuple[str, ...]) -> None:
+    if values != tuple(sorted(set(values))):
+        raise WorkflowStateValidationError(
+            "slice scope_paths must be sorted, unique, relative POSIX paths"
+        )
+    for value in values:
+        if not isinstance(value, str) or not value or "\\" in value:
+            raise WorkflowStateValidationError(
+                "slice scope_paths must be sorted, unique, relative POSIX paths"
+            )
+        path = PurePosixPath(value)
+        if path.is_absolute() or not path.parts or any(
+            part in ("", ".", "..") for part in path.parts
+        ):
+            raise WorkflowStateValidationError(
+                "slice scope_paths must be sorted, unique, relative POSIX paths"
+            )
 
 
 def _require_contiguous_ids(values: tuple[int, ...], label: str) -> None:
