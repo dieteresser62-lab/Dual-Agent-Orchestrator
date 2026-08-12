@@ -236,7 +236,12 @@ def test_attestation_derives_completeness_and_status_from_expected_matrix() -> N
     assert incomplete.missing_commands == ("python3 -m compileall -q src",)
     assert incomplete.status is ValidationAttestationStatus.INCOMPLETE
 
-    failed = _attestation(status=ValidationStatus.FAIL, complete=False)
+    incomplete_with_failure = _attestation(
+        status=ValidationStatus.FAIL, complete=False
+    )
+    assert incomplete_with_failure.status is ValidationAttestationStatus.INCOMPLETE
+
+    failed = _attestation(status=ValidationStatus.FAIL, complete=True)
     assert failed.status is ValidationAttestationStatus.FAIL
 
 

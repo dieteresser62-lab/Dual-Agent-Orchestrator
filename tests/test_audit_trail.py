@@ -652,6 +652,59 @@ def test_approving_review_rejects_incomplete_attestation() -> None:
         ReviewAuditEvent(1, 8, 1, _review(validation=incomplete))
 
 
+def test_projection_accepts_only_matching_named_complete_red_state() -> None:
+    green = _attestation()
+    red = replace(
+        green,
+        records=tuple(
+            replace(record, status=ValidationStatus.FAIL, exit_code=1, output="known red")
+            for record in green.records
+        ),
+        summary="known red pending Slice 09",
+    )
+    claude = replace(
+        _review(validation=red), red_state_followup_slice="Slice 09"
+    )
+    antigravity = replace(
+        _review(reviewer=AgentRole.ANTIGRAVITY, validation=red),
+        red_state_followup_slice="Slice 09",
+    )
+    events = (
+        ValidationAuditEvent(1, 8, red),
+        ReviewAuditEvent(2, 8, 1, claude),
+        ReviewAuditEvent(3, 8, 1, antigravity),
+    )
+
+    projection = AuditProjection(
+        slice_id=8,
+        events=events,
+        commit_authorized=True,
+        red_state_followup_slice="Slice 09",
+    )
+
+    assert projection.commit_authorized is True
+    with pytest.raises(AuditTrailError, match="follow-up differs"):
+        AuditProjection(
+            slice_id=8,
+            events=events,
+            commit_authorized=True,
+            red_state_followup_slice="Slice 10",
+        )
+
+    mismatched_claude = replace(claude, red_state_followup_slice="Slice 10")
+    with pytest.raises(AuditTrailError, match="differs from Claude"):
+        AuditProjection(
+            slice_id=8,
+            events=(
+                events[0],
+                ReviewAuditEvent(2, 8, 1, mismatched_claude),
+                events[2],
+            ),
+            commit_authorized=True,
+            red_state_followup_slice="Slice 09",
+        )
+
+
 def test_test_approval_paths_are_normalized_and_root_bound() -> None:
     record = AuthorizedTestChanges(
         approved=True,

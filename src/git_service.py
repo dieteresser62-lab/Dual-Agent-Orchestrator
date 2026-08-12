@@ -79,6 +79,16 @@ class CommitAuthorization:
     claude_review: ContractResult
     antigravity_review: ContractResult
     findings: tuple[FindingRecord, ...] = ()
+    red_state_followup_slice: str | None = None
+
+    def __post_init__(self) -> None:
+        if (
+            self.red_state_followup_slice is not None
+            and not self.red_state_followup_slice.strip()
+        ):
+            raise GitTransactionError(
+                "red-state follow-up slice must be non-empty when provided"
+            )
 
 
 @dataclass(frozen=True)
@@ -319,8 +329,14 @@ def _validate_authorization(
     if authorization.diff_fingerprint != current_fingerprint:
         raise GitTransactionError("commit authorization fingerprint is stale")
     attestation = authorization.attestation
-    if not attestation.passed or attestation.diff_fingerprint != current_fingerprint:
-        raise GitTransactionError("commit requires a complete passing current attestation")
+    validation_authorized = attestation.passed or (
+        attestation.complete
+        and authorization.red_state_followup_slice is not None
+    )
+    if not validation_authorized or attestation.diff_fingerprint != current_fingerprint:
+        raise GitTransactionError(
+            "commit requires a passing current attestation or named complete red-state exception"
+        )
     if any(
         finding.status is FindingStatus.OPEN
         and finding.finding_class is FindingClass.BLOCKER
@@ -340,6 +356,14 @@ def _validate_authorization(
             or result.own_open_blockers
         ):
             raise GitTransactionError(f"commit requires an approving {expected_role.value} review")
+        if (
+            not attestation.passed
+            and result.red_state_followup_slice
+            != authorization.red_state_followup_slice
+        ):
+            raise GitTransactionError(
+                f"{expected_role.value} review is not bound to the named red-state exception"
+            )
         if result.validation != attestation:
             raise GitTransactionError(
                 f"{expected_role.value} review is not bound to the commit attestation"

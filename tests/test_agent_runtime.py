@@ -28,8 +28,10 @@ from agent_runtime import (
     run_agent,
     run_agent_checked,
     run_tests_snapshot,
+    run_validation_matrix,
     verify_agent_capabilities,
 )
+from validation_matrix import ValidationCommand, ValidationRequest
 from repo_changes import ChangedPath, RepositoryChanges
 
 
@@ -50,6 +52,20 @@ def test_orchestrator_config_has_no_agent_substitution_state() -> None:
 
     assert not hasattr(config, "allow_fallback_to_gemini")
     assert not hasattr(config, "claude_quota_reached")
+
+
+def test_runtime_executes_structured_validation_request(tmp_path: Path) -> None:
+    request = ValidationRequest(
+        "a" * 64,
+        (ValidationCommand(argv=("python3", "-c", "print('matrix-ok')")),),
+    )
+
+    attestation = run_validation_matrix(
+        config=OrchestratorConfig(repo_root=tmp_path), request=request
+    )
+
+    assert attestation.passed
+    assert attestation.records[0].output == "matrix-ok"
 
 
 def test_run_agent_checked_retries_with_backoff(monkeypatch, tmp_path: Path) -> None:

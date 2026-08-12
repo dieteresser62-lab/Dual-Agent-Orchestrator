@@ -294,6 +294,20 @@ def evaluate_productive_file_limit(
     return FileLimitEvidence(maximum, classified)
 
 
+def normalize_path_patterns(
+    patterns: Iterable[str], label: str = "validation path"
+) -> tuple[str, ...]:
+    """Validate and normalize repository-relative POSIX glob patterns."""
+    return _normalize_patterns(patterns, label)
+
+
+def matches_path_patterns(path: str, patterns: Iterable[str]) -> bool:
+    """Match one canonical repository path against validated POSIX globs."""
+    normalized_path = _normalize_repository_path(path)
+    normalized_patterns = _normalize_patterns(patterns, "validation path")
+    return _matches_any(normalized_path, normalized_patterns)
+
+
 def _normalize_patterns(
     patterns: Iterable[str], label: str = "test path"
 ) -> tuple[str, ...]:

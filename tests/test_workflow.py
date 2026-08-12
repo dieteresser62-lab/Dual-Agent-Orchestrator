@@ -35,6 +35,7 @@ from workflow_state import (
     WorkUnitStatus,
     init_workflow_state,
 )
+from validation_matrix import ValidationCommand, ValidationMatrix, ValidationRequest, ValidationRule
 from orchestrator import run_v3_work_unit
 
 
@@ -160,6 +161,7 @@ class FakeDriver:
     reviewer_calls: list[ReviewerInvocation] = field(default_factory=list)
     repair_calls: list[ContractRepairInvocation] = field(default_factory=list)
     validation_calls: list[str] = field(default_factory=list)
+    validation_requests: list[ValidationRequest] = field(default_factory=list)
     commit_calls: list[WorkflowCommitRequest] = field(default_factory=list)
     checkpoints: list = field(default_factory=list)
     checkpoint_histories: list = field(default_factory=list)
@@ -185,11 +187,36 @@ class FakeDriver:
         assert patterns
         return self.test_evidence_by_fingerprint.get(changes.fingerprint)
 
-    def validate(self, changes: WorkflowChanges) -> ValidationAttestation:
+    def validate(
+        self, changes: WorkflowChanges, request: ValidationRequest
+    ) -> ValidationAttestation:
         self.validation_calls.append(changes.fingerprint)
+        self.validation_requests.append(request)
         if self.validation_unavailable is not None:
             raise ValidationExecutionError(self.validation_unavailable)
         attestation = _attestation(changes)
+        if request.expected_commands != attestation.expected_commands:
+            records = tuple(
+                ValidationRecord(ValidationStatus.PASS, command, 0)
+                for command in request.expected_commands
+            )
+            attestation = ValidationAttestation(
+                attestation.attestation_id,
+                attestation.diff_fingerprint,
+                request.expected_commands,
+                records,
+                attestation.output_digest,
+                attestation.summary,
+            )
+        if request.attempt_number > 1:
+            attestation = ValidationAttestation(
+                f"{attestation.attestation_id}-retry-{request.attempt_number}",
+                attestation.diff_fingerprint,
+                attestation.expected_commands,
+                attestation.records,
+                attestation.output_digest,
+                attestation.summary,
+            )
         if self.invalid_attestation == "foreign":
             return ValidationAttestation(
                 attestation.attestation_id,
@@ -203,10 +230,22 @@ class FakeDriver:
             return ValidationAttestation(
                 attestation.attestation_id,
                 attestation.diff_fingerprint,
-                ("python3 -m pytest tests/ -v", "python3 -m compileall src"),
-                attestation.records,
+                request.expected_commands,
+                attestation.records[:-1],
                 attestation.output_digest,
                 attestation.summary,
+            )
+        if self.invalid_attestation == "failing":
+            return ValidationAttestation(
+                attestation.attestation_id,
+                attestation.diff_fingerprint,
+                request.expected_commands,
+                tuple(
+                    ValidationRecord(ValidationStatus.FAIL, command, 1, "red")
+                    for command in request.expected_commands
+                ),
+                attestation.output_digest,
+                "validation failed",
             )
         return attestation
 
@@ -352,6 +391,167 @@ def test_two_codex_corrections_call_claude_three_times_and_antigravity_once() ->
     assert "LATEST CORRECTION" in driver.reviewer_calls[3].prompt
     assert driver.validation_calls == [first.fingerprint, second.fingerprint, final.fingerprint]
     assert driver.commit_calls[0].fingerprint == final.fingerprint
+
+
+def test_path_matrix_is_attested_once_and_reused_by_both_reviewers() -> None:
+    changes = _changes("1", "engine/core.py", TEST_FILE)
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[
+            _review_approval(AgentRole.CLAUDE),
+            _review_approval(AgentRole.ANTIGRAVITY),
+        ],
+    )
+    matrix = ValidationMatrix(
+        default_command=ValidationCommand(argv=("npm", "test")),
+        rules=(
+            ValidationRule(
+                ("engine/**",),
+                ValidationCommand(argv=("npm", "run", "build:engine")),
+            ),
+        ),
+    )
+
+    result = WorkflowEngine(driver).run_current_work_unit(
+        _slice_state(scope_paths=("engine/core.py", TEST_FILE)),
+        replace(_context(), validation_matrix=matrix),
+    )
+
+    assert result.completed
+    assert len(driver.validation_requests) == 1
+    assert driver.validation_requests[0].expected_commands == (
+        "npm test",
+        "npm run build:engine",
+    )
+    assert driver.reviewer_calls[0].fingerprint == driver.reviewer_calls[1].fingerprint
+    assert (
+        "npm run build:engine | PASS | exit=0"
+        in driver.reviewer_calls[0].prompt
+    )
+
+
+def test_finding_acceptance_command_enters_next_fingerprint_matrix() -> None:
+    first = _changes("1", "src/early.py", TEST_FILE)
+    corrected = _changes("2", "src/early.py", "src/latest.py", TEST_FILE)
+    denial = "\n".join(
+        (
+            "REVIEWER: claude",
+            f"TEST_FILES_TOUCHED: {TEST_FILE}",
+            'NEW_FINDING: C-01 | BLOCKER | focused regression required | VALIDATE: ["python3","-m","pytest","tests/test_focus.py","-q"]',
+            "SLICE_APPROVAL: 01 | NO",
+            "STATUS: DONE",
+        )
+    )
+    driver = FakeDriver(
+        snapshots=[first, corrected],
+        codex_outputs=[_codex_ready(), _codex_ready("C-01")],
+        reviewer_outputs=[
+            denial,
+            _review_closes(AgentRole.CLAUDE, "C-01"),
+            _review_approval(AgentRole.ANTIGRAVITY),
+        ],
+        deltas={(first.fingerprint, corrected.fingerprint): "focused fix"},
+    )
+
+    result = WorkflowEngine(driver).run_current_work_unit(_slice_state(), _context())
+
+    assert result.completed
+    assert len(driver.validation_requests) == 2
+    assert driver.validation_requests[1].expected_commands == (
+        "python3 -m pytest tests/ -v",
+        "python3 -m pytest tests/test_focus.py -q",
+    )
+
+
+def test_new_validation_requirement_without_new_fingerprint_does_not_rerun() -> None:
+    unchanged = _changes("1", "src/early.py", TEST_FILE)
+    denial = "\n".join(
+        (
+            "REVIEWER: claude",
+            f"TEST_FILES_TOUCHED: {TEST_FILE}",
+            'NEW_FINDING: C-01 | BLOCKER | focused regression required | VALIDATE: ["python3","-m","pytest","tests/test_focus.py","-q"]',
+            "SLICE_APPROVAL: 01 | NO",
+            "STATUS: DONE",
+        )
+    )
+    driver = FakeDriver(
+        snapshots=[unchanged, unchanged],
+        codex_outputs=[_codex_ready(), _codex_ready("C-01")],
+        reviewer_outputs=[denial],
+        deltas={(unchanged.fingerprint, unchanged.fingerprint): "no content change"},
+    )
+
+    with pytest.raises(WorkflowExecutionError, match="requirements changed"):
+        WorkflowEngine(driver).run_current_work_unit(_slice_state(), _context())
+
+    assert len(driver.validation_requests) == 1
+
+
+def test_named_red_state_can_reach_commit_but_incomplete_never_can() -> None:
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    red_driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[
+            _review_approval(AgentRole.CLAUDE),
+            _review_approval(AgentRole.ANTIGRAVITY),
+        ],
+        invalid_attestation="failing",
+    )
+
+    red = WorkflowEngine(red_driver).run_current_work_unit(
+        _slice_state(),
+        replace(_context(), red_state_followup_slice="Slice 14"),
+    )
+
+    assert red.completed
+    assert red_driver.commit_calls[0].red_state_followup_slice == "Slice 14"
+
+    incomplete_driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[],
+        invalid_attestation="incomplete",
+    )
+    with pytest.raises(WorkflowExecutionError, match="incomplete"):
+        WorkflowEngine(incomplete_driver).run_current_work_unit(
+            _slice_state(),
+            replace(_context(), red_state_followup_slice="Slice 14"),
+        )
+    assert incomplete_driver.reviewer_calls == []
+
+
+def test_explicit_retry_can_replace_cached_incomplete_after_environment_repair() -> None:
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[
+            _review_approval(AgentRole.CLAUDE),
+            _review_approval(AgentRole.ANTIGRAVITY),
+        ],
+        invalid_attestation="incomplete",
+    )
+    engine = WorkflowEngine(driver)
+
+    with pytest.raises(WorkflowExecutionError, match="incomplete"):
+        engine.run_current_work_unit(_slice_state(), _context())
+    paused_state = driver.checkpoints[-1]
+    paused_history = driver.checkpoint_histories[-1]
+    driver.invalid_attestation = None
+
+    completed = engine.run_current_work_unit(
+        paused_state,
+        replace(_context(), retry_incomplete_validation=True),
+        paused_history,
+    )
+
+    assert completed.completed
+    assert [request.attempt_number for request in driver.validation_requests] == [1, 2]
+    assert len(completed.history.attestations) == 2
+    assert completed.history.attestations[0].complete is False
+    assert completed.history.attestations[1].passed is True
 
 
 def test_antigravity_denial_returns_to_codex_then_claude_before_recheck() -> None:

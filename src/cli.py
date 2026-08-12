@@ -15,6 +15,13 @@ import tomllib
 
 from agent_config import AgentConfigError, add_agent_arguments, resolve_agent_settings
 from gates import PathClasses, STOP_RULE_ID_PATTERN, StopRule
+from validation_matrix import (
+    DEFAULT_VALIDATION_TIMEOUT_SECONDS,
+    ValidationCommand,
+    ValidationMatrix as ValidationConfig,
+    ValidationMatrixError,
+    ValidationRule,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -32,18 +39,6 @@ class ConfigError(ValueError):
 
 
 @dataclass(frozen=True)
-class ValidationRule:
-    patterns: tuple[str, ...]
-    command: str
-
-
-@dataclass(frozen=True)
-class ValidationConfig:
-    default_command: str | None = None
-    rules: tuple[ValidationRule, ...] = ()
-
-
-@dataclass(frozen=True)
 class WorkflowConfig:
     manual_slice_gate: bool = False
 
@@ -54,6 +49,7 @@ class RepoConfig:
     stop_rules: tuple[StopRule, ...] = ()
     validation: ValidationConfig = field(default_factory=ValidationConfig)
     workflow: WorkflowConfig = field(default_factory=WorkflowConfig)
+    validation_declared: bool = False
     source: Path | None = None
 
 
@@ -155,12 +151,28 @@ def _load_stop_rules(data: object) -> tuple[StopRule, ...]:
 
 def _load_validation(data: object) -> ValidationConfig:
     table = _require_table(data, "[validation]")
-    _reject_unknown_keys(table, {"default_command", "rules"}, "[validation]")
-    default_command: str | None = None
-    if "default_command" in table:
-        if not isinstance(table["default_command"], str):
-            raise ConfigError("validation.default_command must be a string")
-        default_command = table["default_command"]
+    _reject_unknown_keys(
+        table,
+        {
+            "default_command",
+            "default_shell_command",
+            "default_timeout_seconds",
+            "rules",
+        },
+        "[validation]",
+    )
+    default_timeout = _positive_config_int(
+        table.get("default_timeout_seconds", DEFAULT_VALIDATION_TIMEOUT_SECONDS),
+        "validation.default_timeout_seconds",
+    )
+    default_command = _load_validation_command(
+        table,
+        argv_key="default_command",
+        shell_key="default_shell_command",
+        location="validation default",
+        timeout_seconds=default_timeout,
+        required=False,
+    )
 
     raw_rules = table.get("rules", [])
     if not isinstance(raw_rules, list):
@@ -169,18 +181,80 @@ def _load_validation(data: object) -> ValidationConfig:
     for index, raw_rule in enumerate(raw_rules):
         location = f"validation.rules[{index}]"
         rule = _require_table(raw_rule, location)
-        _reject_unknown_keys(rule, {"patterns", "command"}, location)
-        rules.append(
-            ValidationRule(
-                patterns=_pattern_list(
-                    rule.get("patterns"), f"{location}.patterns", allow_empty=False
-                ),
-                command=_require_non_empty_string(
-                    rule.get("command"), f"{location}.command"
-                ),
-            )
+        _reject_unknown_keys(
+            rule, {"patterns", "command", "shell_command", "timeout_seconds"}, location
         )
-    return ValidationConfig(default_command=default_command, rules=tuple(rules))
+        timeout = _positive_config_int(
+            rule.get("timeout_seconds", default_timeout), f"{location}.timeout_seconds"
+        )
+        try:
+            rules.append(
+                ValidationRule(
+                    patterns=_pattern_list(
+                        rule.get("patterns"), f"{location}.patterns", allow_empty=False
+                    ),
+                    command=_load_validation_command(
+                        rule,
+                        argv_key="command",
+                        shell_key="shell_command",
+                        location=location,
+                        timeout_seconds=timeout,
+                        required=True,
+                    ),
+                )
+            )
+        except ValidationMatrixError as exc:
+            raise ConfigError(f"Invalid {location}: {exc}") from exc
+    try:
+        return ValidationConfig(default_command=default_command, rules=tuple(rules))
+    except ValidationMatrixError as exc:
+        raise ConfigError(f"Invalid [validation] configuration: {exc}") from exc
+
+
+def _positive_config_int(value: object, location: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ConfigError(f"{location} must be a positive integer")
+    return value
+
+
+def _load_validation_command(
+    table: Mapping[str, object],
+    *,
+    argv_key: str,
+    shell_key: str,
+    location: str,
+    timeout_seconds: int,
+    required: bool,
+) -> ValidationCommand | None:
+    present = tuple(key for key in (argv_key, shell_key) if key in table)
+    if len(present) > 1:
+        raise ConfigError(
+            f"{location} must declare only one of {argv_key} or {shell_key}"
+        )
+    if not present:
+        if required:
+            raise ConfigError(
+                f"{location} must declare {argv_key} or {shell_key}"
+            )
+        return None
+    try:
+        if present[0] == argv_key:
+            raw_argv = table[argv_key]
+            if not isinstance(raw_argv, list) or not raw_argv:
+                raise ConfigError(f"{location}.{argv_key} must be a non-empty string array")
+            if any(not isinstance(item, str) for item in raw_argv):
+                raise ConfigError(f"{location}.{argv_key} must contain only strings")
+            return ValidationCommand(argv=tuple(raw_argv), timeout_seconds=timeout_seconds)
+        if not required and isinstance(table[shell_key], str) and not table[shell_key].strip():
+            return None
+        return ValidationCommand(
+            shell_command=_require_non_empty_string(
+                table[shell_key], f"{location}.{shell_key}"
+            ),
+            timeout_seconds=timeout_seconds,
+        )
+    except ValidationMatrixError as exc:
+        raise ConfigError(f"Invalid {location}: {exc}") from exc
 
 
 def _load_workflow(data: object) -> WorkflowConfig:
@@ -216,6 +290,7 @@ def load_repo_config(path: Path) -> RepoConfig:
         workflow=_load_workflow(raw["workflow"])
         if "workflow" in raw
         else WorkflowConfig(),
+        validation_declared="validation" in raw,
         source=resolved,
     )
 
@@ -401,6 +476,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Shell command for tests. An explicit empty value skips tests.",
     )
     parser.add_argument(
+        "--retry-incomplete-validation",
+        action="store_true",
+        help=(
+            "Explicitly re-run a cached INCOMPLETE v3 validation for the same diff "
+            "fingerprint after its environment was repaired."
+        ),
+    )
+    parser.add_argument(
         "--max-shared-chars",
         type=int,
         default=DEFAULT_MAX_SHARED_CHARS,
@@ -537,7 +620,14 @@ def parse_args(
         if "RUN_TASK_TEST_CMD" in env:
             args.test_command = env["RUN_TASK_TEST_CMD"]
         elif repo_config.validation.default_command is not None:
-            args.test_command = repo_config.validation.default_command
+            command = repo_config.validation.default_command
+            args.test_command = (
+                command.shell_command
+                if command.shell_command is not None
+                else command.display
+            )
+        elif repo_config.validation_declared:
+            args.test_command = ""
         else:
             args.test_command = detect_test_command(repo_root)
 

@@ -171,9 +171,14 @@ class ReviewAuditEvent:
             and self.result.validation is not None
             and not self.result.validation.passed
         ):
-            raise AuditTrailError(
-                "an approving review requires its validation attestation to pass"
-            )
+            if (
+                not self.result.validation.complete
+                or self.result.red_state_followup_slice is None
+            ):
+                raise AuditTrailError(
+                    "an approving review requires its validation attestation to pass "
+                    "or use a named complete red-state exception"
+                )
         if self.result.approval is False and not self.result.own_open_blockers:
             raise AuditTrailError("a denied review requires a reviewer-owned open blocker")
 
@@ -223,6 +228,7 @@ class AuditProjection:
     test_approval: AuthorizedTestChanges | None = None
     implementation_ready: bool | None = None
     commit_authorized: bool | None = None
+    red_state_followup_slice: str | None = None
 
     def __post_init__(self) -> None:
         _require_positive_int(self.slice_id, "slice_id")
@@ -233,6 +239,13 @@ class AuditProjection:
             )
         if any(event.slice_id != self.slice_id for event in self.events):
             raise AuditTrailError("all audit events must belong to the projection slice")
+        if (
+            self.red_state_followup_slice is not None
+            and not self.red_state_followup_slice.strip()
+        ):
+            raise AuditTrailError(
+                "red-state follow-up slice must be non-empty when provided"
+            )
 
         attestations: dict[str, ValidationAttestation] = {}
         for event in self.events:
@@ -256,6 +269,11 @@ class AuditProjection:
                 )
 
         if self.commit_authorized is True:
+            claude = self.latest_review(AgentRole.CLAUDE)
+            if claude is None or claude.result.approval is not True:
+                raise AuditTrailError(
+                    "commit authorization requires an approving Claude review"
+                )
             antigravity = self.latest_review(AgentRole.ANTIGRAVITY)
             if antigravity is None or antigravity.result.approval is not True:
                 raise AuditTrailError(
@@ -263,11 +281,33 @@ class AuditProjection:
                 )
             if (
                 antigravity.result.validation is None
-                or not antigravity.result.validation.passed
+                or not (
+                    antigravity.result.validation.passed
+                    or (
+                        antigravity.result.validation.complete
+                        and self.red_state_followup_slice is not None
+                    )
+                )
             ):
                 raise AuditTrailError(
                     "commit authorization requires Antigravity to be bound to a passing "
-                    "validation attestation"
+                    "attestation or named complete red-state exception"
+                )
+            if (
+                not antigravity.result.validation.passed
+                and antigravity.result.red_state_followup_slice
+                != self.red_state_followup_slice
+            ):
+                raise AuditTrailError(
+                    "commit authorization red-state follow-up differs from Antigravity review"
+                )
+            if (
+                not antigravity.result.validation.passed
+                and claude.result.red_state_followup_slice
+                != self.red_state_followup_slice
+            ):
+                raise AuditTrailError(
+                    "commit authorization red-state follow-up differs from Claude review"
                 )
 
     def latest_review(self, reviewer: AgentRole) -> ReviewAuditEvent | None:
@@ -787,8 +827,8 @@ def _render_validations(events: tuple[AuditEvent, ...]) -> str:
                 f"- Kurzresultat: {_safe(item.summary)}",
                 f"- Ausgabedigest: `{item.output_digest}`",
                 "",
-                "| Matrixbefehl | Status | Exitcode |",
-                "|---|---|---:|",
+                "| Matrixbefehl | Status | Exitcode | Kompaktausgabe |",
+                "|---|---|---:|---|",
             )
         )
         by_command = {record.command: record for record in item.records}
@@ -796,7 +836,10 @@ def _render_validations(events: tuple[AuditEvent, ...]) -> str:
             record = by_command.get(command)
             status = record.status.value if record is not None else "MISSING"
             exit_code = str(record.exit_code) if record is not None else "–"
-            blocks.append(f"| {_safe(command)} | {status} | {exit_code} |")
+            output = record.output if record is not None else "nicht ausgeführt"
+            blocks.append(
+                f"| {_safe(command)} | {status} | {exit_code} | {_safe(output)} |"
+            )
         blocks.append("")
     return "\n".join(blocks).rstrip()
 
@@ -957,6 +1000,7 @@ def _render_approval_status(projection: AuditProjection) -> str:
             f"- Validierung: `{validation_status}`",
             f"- Claude-Freigabe: `{_review_state(claude)}`",  # allowlist:german
             f"- Antigravity-Freigabe: `{_review_state(antigravity)}`",  # allowlist:german
+            f"- Red-State-Folgeslice: `{_safe(projection.red_state_followup_slice or 'NONE')}`",
             f"- Commit autorisiert: `{_tri_state(projection.commit_authorized)}`",
         )
     )

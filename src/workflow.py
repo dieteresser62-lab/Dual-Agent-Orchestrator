@@ -46,6 +46,13 @@ from prompts import (
     build_v3_review_contract,
     build_v3_review_prompt,
 )
+from validation_matrix import (
+    ValidationCommand,
+    ValidationMatrix,
+    ValidationMatrixError,
+    ValidationRequest,
+    select_validation_request,
+)
 from workflow_state import (
     GateDecisionRecord,
     GateReason,
@@ -58,6 +65,11 @@ from workflow_state import (
 
 
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+DEFAULT_WORKFLOW_VALIDATION_MATRIX = ValidationMatrix(
+    default_command=ValidationCommand(
+        argv=("python3", "-m", "pytest", "tests/", "-v")
+    )
+)
 
 
 class WorkflowExecutionError(RuntimeError):
@@ -119,6 +131,9 @@ class WorkflowContext:
     stop_rules: tuple[StopRule, ...] = ()
     max_productive_files: int = 10
     current_branch: str | None = None
+    validation_matrix: ValidationMatrix = DEFAULT_WORKFLOW_VALIDATION_MATRIX
+    red_state_followup_slice: str | None = None
+    retry_incomplete_validation: bool = False
 
     def __post_init__(self) -> None:
         if not self.assignment.strip():
@@ -150,6 +165,15 @@ class WorkflowContext:
             raise ValueError("max_productive_files must be a positive integer")
         if self.current_branch is not None and not self.current_branch.strip():
             raise ValueError("current_branch must be non-empty when provided")
+        if (
+            self.red_state_followup_slice is not None
+            and not self.red_state_followup_slice.strip()
+        ):
+            raise ValueError(
+                "red_state_followup_slice must be non-empty when provided"
+            )
+        if not isinstance(self.retry_incomplete_validation, bool):
+            raise ValueError("retry_incomplete_validation must be a boolean")
 
     @property
     def distilled_context(self) -> str:
@@ -219,6 +243,7 @@ class WorkflowCommitRequest:
     claude_review: ContractResult
     antigravity_review: ContractResult
     findings: tuple[FindingRecord, ...]
+    red_state_followup_slice: str | None = None
 
 
 class WorkflowDriver(Protocol):
@@ -234,7 +259,9 @@ class WorkflowDriver(Protocol):
         self, changes: WorkflowChanges, patterns: tuple[str, ...]
     ) -> TestChangeEvidence | None: ...
 
-    def validate(self, changes: WorkflowChanges) -> ValidationAttestation: ...
+    def validate(
+        self, changes: WorkflowChanges, request: ValidationRequest
+    ) -> ValidationAttestation: ...
 
     def invoke_reviewer(self, invocation: ReviewerInvocation) -> str: ...
 
@@ -517,7 +544,9 @@ class WorkflowEngine:
                     "Antigravity requires Claude approval for the current fingerprint"
                 )
         try:
-            attestation, history = self._attestation(changes, history, unit.slice_id)
+            attestation, history = self._attestation(
+                changes, history, context, unit.slice_id
+            )
         except ValidationExecutionError as exc:
             state = state.await_policy_gate(
                 reason=GateReason.STOP_REQUEST,
@@ -525,6 +554,16 @@ class WorkflowEngine:
             )
             self.driver.checkpoint(state, history)
             return state, history
+        if not attestation.complete:
+            self.driver.checkpoint(state, history)
+            raise WorkflowExecutionError(
+                "validation attestation is incomplete and cannot be overridden"
+            )
+        if not attestation.passed and context.red_state_followup_slice is None:
+            self.driver.checkpoint(state, history)
+            raise WorkflowExecutionError(
+                "validation attestation is failing without a named red-state follow-up slice"
+            )
         review_round = (
             1
             + sum(
@@ -549,6 +588,7 @@ class WorkflowEngine:
                 context.expected_test_files if not is_plan_review else ()
             ),
             test_changes_approved=test_changes_approved,
+            red_state_followup_slice=context.red_state_followup_slice,
         )
         if reviewer is AgentRole.CLAUDE and history.last_claude_fingerprint is not None:
             evidence_kind = EvidenceKind.CORRECTION_DELTA
@@ -669,18 +709,41 @@ class WorkflowEngine:
         self,
         changes: WorkflowChanges,
         history: WorkflowHistory,
+        context: WorkflowContext,
         slice_id: int,
     ) -> tuple[ValidationAttestation, WorkflowHistory]:
-        for existing in history.attestations:
-            if existing.diff_fingerprint == changes.fingerprint:
-                if not existing.passed:
-                    raise WorkflowExecutionError("cached validation attestation is not passing")
+        try:
+            request = select_validation_request(
+                context.validation_matrix,
+                diff_fingerprint=changes.fingerprint,
+                changed_paths=changes.user_gate_paths,
+                findings=history.findings,
+            )
+        except ValidationMatrixError as exc:
+            raise ValidationExecutionError(str(exc)) from exc
+        matching = tuple(
+            existing
+            for existing in history.attestations
+            if existing.diff_fingerprint == changes.fingerprint
+        )
+        if matching:
+            existing = matching[-1]
+            if existing.complete or not context.retry_incomplete_validation:
+                if not set(request.expected_commands).issubset(
+                    existing.expected_commands
+                ):
+                    raise WorkflowExecutionError(
+                        "validation requirements changed without a new diff fingerprint"
+                    )
                 return existing, history
-        attestation = self.driver.validate(changes)
+            request = replace(request, attempt_number=len(matching) + 1)
+        attestation = self.driver.validate(changes, request)
         if attestation.diff_fingerprint != changes.fingerprint:
             raise WorkflowExecutionError("validation attestation fingerprint is foreign")
-        if not attestation.complete or not attestation.passed:
-            raise WorkflowExecutionError("validation attestation is incomplete or failing")
+        if attestation.expected_commands != request.expected_commands:
+            raise WorkflowExecutionError(
+                "validation attestation does not cover the selected matrix"
+            )
         if any(
             item.attestation_id == attestation.attestation_id
             for item in history.attestations
@@ -752,15 +815,24 @@ class WorkflowEngine:
         attestation = next(
             (
                 item
-                for item in history.attestations
+                for item in reversed(history.attestations)
                 if item.diff_fingerprint == changes.fingerprint
             ),
             None,
         )
         claude = history.latest_claude_review
         antigravity = history.latest_antigravity_review
-        if attestation is None or not attestation.passed:
-            raise WorkflowExecutionError("slice commit requires the current passing attestation")
+        validation_authorized = attestation is not None and (
+            attestation.passed
+            or (
+                attestation.complete
+                and context.red_state_followup_slice is not None
+            )
+        )
+        if not validation_authorized:
+            raise WorkflowExecutionError(
+                "slice commit requires a passing attestation or named complete red-state exception"
+            )
         if claude is None or claude.approval is not True or claude.validation != attestation:
             raise WorkflowExecutionError("slice commit requires current Claude approval")
         if (
@@ -795,6 +867,7 @@ class WorkflowEngine:
                 claude_review=claude,
                 antigravity_review=antigravity,
                 findings=history.findings,
+                red_state_followup_slice=context.red_state_followup_slice,
             )
         )
         if not isinstance(commit_ref, str) or not commit_ref.strip():

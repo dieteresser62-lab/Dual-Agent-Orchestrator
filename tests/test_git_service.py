@@ -482,6 +482,53 @@ def test_commit_rejects_non_passing_or_foreign_review_binding(tmp_path: Path) ->
     assert _git(repository, "diff", "--cached", "--name-only") == ""
 
 
+def test_commit_accepts_complete_red_attestation_only_with_named_followup(
+    tmp_path: Path,
+) -> None:
+    repository, head = _new_repository(tmp_path)
+    boundary, _ = begin_slice(
+        repository_root=repository,
+        slice_id=9,
+        expected_branch="feature/transaction",
+        scope_paths=("allowed.txt",),
+    )
+    (repository / "allowed.txt").write_text("work\n", encoding="utf-8")
+    authorization = _authorization(repository, head)
+    command = authorization.attestation.expected_commands[0]
+    failing = ValidationAttestation(
+        attestation_id="red",
+        diff_fingerprint=authorization.diff_fingerprint,
+        expected_commands=(command,),
+        records=(ValidationRecord(ValidationStatus.FAIL, command, 1, "known red"),),
+        output_digest="b" * 64,
+        summary="red pending Slice 10",
+    )
+    authorized = replace(
+        authorization,
+        attestation=failing,
+        claude_review=replace(
+            authorization.claude_review,
+            validation=failing,
+            red_state_followup_slice="Slice 10",
+        ),
+        antigravity_review=replace(
+            authorization.antigravity_review,
+            validation=failing,
+            red_state_followup_slice="Slice 10",
+        ),
+        red_state_followup_slice="Slice 10",
+    )
+
+    result = commit_slice(
+        repository_root=repository,
+        boundary=boundary,
+        authorization=authorized,
+        title="documented red state",
+    )
+
+    assert result.commit_hash == _git(repository, "rev-parse", "HEAD")
+
+
 def test_repository_identity_rejects_detached_head(tmp_path: Path) -> None:
     repository, head = _new_repository(tmp_path)
     _git(repository, "checkout", "--detach", head)

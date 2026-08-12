@@ -23,6 +23,8 @@ from agent_adapters import (
 )
 from path_policy import PathPolicyError, resolve_repository_path
 from repo_changes import RepositoryChanges
+from contracts import ValidationAttestation
+from validation_matrix import ValidationMatrixRunner, ValidationRequest
 
 TEST_OUTPUT_LIMIT = 7000
 ERROR_TRUNCATION_LIMIT = 1200
@@ -329,6 +331,15 @@ def run_tests_snapshot(
         stderr = str(exc)
     combined = (stdout + "\n" + stderr).strip()
     return rc, f"Exit code: {rc}\n{shorten(combined, TEST_OUTPUT_LIMIT)}"
+
+
+def run_validation_matrix(
+    *,
+    config: OrchestratorConfig,
+    request: ValidationRequest,
+) -> ValidationAttestation:
+    """Execute the selected v3 matrix in the configured repository root."""
+    return ValidationMatrixRunner(config.repo_root).run(request)
 
 
 def build_dry_run_agent_output(agent_key: str, prompt: str) -> str:

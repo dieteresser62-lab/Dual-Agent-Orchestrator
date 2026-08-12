@@ -142,7 +142,7 @@ Jede Slice-MD wird unmittelbar vor Beginn ihres Slice angelegt und dann aus der 
 | 10 | [`docs/internal/slice-orchestrator-modernization-10-asymmetric-review-chain.md`](slice-orchestrator-modernization-10-asymmetric-review-chain.md) |
 | 11 | [`docs/internal/slice-orchestrator-modernization-11-resumable-user-gates.md`](slice-orchestrator-modernization-11-resumable-user-gates.md) |
 | 12 | [`docs/internal/slice-orchestrator-modernization-12-stop-rules-file-limit.md`](slice-orchestrator-modernization-12-stop-rules-file-limit.md) |
-| 13 | `docs/internal/slice-orchestrator-modernization-13-path-validation-matrix.md` |
+| 13 | [`docs/internal/slice-orchestrator-modernization-13-path-validation-matrix.md`](slice-orchestrator-modernization-13-path-validation-matrix.md) |
 | 14 | `docs/internal/slice-orchestrator-modernization-14-agent-failures-resume.md` |
 | 15 | `docs/internal/slice-orchestrator-modernization-15-scripted-dry-run.md` |
 | 16 | `docs/internal/slice-orchestrator-modernization-16-branch-final-review.md` |
@@ -441,11 +441,13 @@ Die Audit-Komponente aus Slice 8 prüft bei Start eines Slice, dass genau diese 
 **Test-Riegel:** ja. **Red-State:** nein.
 **Risiko/Rückfalloption:** Fehlklassifikation; fail-closed-Verhalten und protokollierte Pfadklassen machen die Entscheidung prüfbar.
 
-### Slice 13 — Pfadabhängige Validierungsmatrix und Attestierung
+### [Slice 13 — Pfadabhängige Validierungsmatrix und Attestierung](slice-orchestrator-modernization-13-path-validation-matrix.md)
 
 **Zweck:** Standard- und Zusatzvalidierungen diffabhängig je kanonischem Fingerprint einmal durch den Orchestrator ausführen, attestieren und beweissicher an alle Reviewer binden.
 **Anforderungen:** R-16; Gate-Grundlage aus §2.5.
 **Voraussichtlich betroffene Dateien:** `src/gates.py`, `src/agent_runtime.py`, `src/workflow.py`, `src/contracts.py`, `src/cli.py`, optional `orchestrator.toml`, `tests/test_gates.py`, `tests/test_agent_runtime.py`, `tests/test_workflow.py`.
+**Tatsächlich betroffene Dateien vor Review:** `orchestrator.toml`, `src/validation_matrix.py` (neu), `src/agent_runtime.py`, `src/audit_trail.py`, `src/cli.py`, `src/contracts.py`, `src/gates.py`, `src/git_service.py`, `src/prompts.py`, `src/workflow.py`, `tests/test_validation_matrix.py` (neu), `tests/test_agent_runtime.py`, `tests/test_audit_trail.py`, `tests/test_cli.py`, `tests/test_contracts.py`, `tests/test_git_service.py`, `tests/test_workflow.py` sowie Arbeitsplan, Übergabe und Slice-MD.
+**Umsetzungsstatus:** strukturierte argv-Matrix, explizite Shellkompatibilität, Pfad-/Renameauswahl, kompakte Ergebnisrecords, Digest, `INCOMPLETE`-Vorrang, fingerprintgenaue Wiederverwendung sowie benannte Red-State-Ausnahme sind additiv implementiert. Finding-Akzeptanzbefehle bleiben in konfigurierten argv-Familien, widersprüchliche Timeouts stoppen fail-closed, die Auditprojektion bindet beide Reviewer symmetrisch, und nur ein ausdrücklicher Operator-Request darf eine unvollständige Attestierung desselben Fingerprints mit neuer Audit-ID wiederholen. 226 fokussierte Tests und 414 Tests der Vollsuite sowie Compile, aktiver v2-Dry-Run, Diffcheck und Dokumentvalidator sind grün. Reviewverlauf, Freigaben und verbleibende Beobachtungen sind ausschließlich in den verwalteten Auditabschnitten der Slice-MD gebunden; der aktive v2-Defaultpfad bleibt unverändert.
 
 **Akzeptanzkriterien:**
 

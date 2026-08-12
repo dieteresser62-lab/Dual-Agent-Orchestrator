@@ -59,6 +59,16 @@ def test_task_file_accepts_positional_compatibility_path(tmp_path: Path) -> None
     assert args.task_file == "work.md"
 
 
+def test_retry_incomplete_validation_requires_explicit_cli_flag(tmp_path: Path) -> None:
+    default = parse_args([], cwd=tmp_path, environ={})
+    requested = parse_args(
+        ["--retry-incomplete-validation"], cwd=tmp_path, environ={}
+    )
+
+    assert default.retry_incomplete_validation is False
+    assert requested.retry_incomplete_validation is True
+
+
 def test_task_file_rejects_positional_and_explicit_paths(tmp_path: Path, capsys) -> None:
     with pytest.raises(SystemExit):
         parse_args(["first.md", "--task-file", "second.md"], cwd=tmp_path, environ={})
@@ -69,7 +79,7 @@ def test_task_file_rejects_positional_and_explicit_paths(tmp_path: Path, capsys)
 def test_test_command_precedence_cli_environment_repo_and_detection(tmp_path: Path) -> None:
     _write_config(
         tmp_path,
-        '[validation]\ndefault_command = "from-repo"\n',
+        '[validation]\ndefault_command = ["from-repo"]\n',
     )
 
     cli = parse_args(
@@ -94,8 +104,8 @@ def test_test_command_precedence_cli_environment_repo_and_detection(tmp_path: Pa
 def test_config_path_precedence_cli_over_environment(tmp_path: Path) -> None:
     cli_config = tmp_path / "cli.toml"
     env_config = tmp_path / "env.toml"
-    cli_config.write_text('[validation]\ndefault_command = "from-cli-config"\n', encoding="utf-8")
-    env_config.write_text('[validation]\ndefault_command = "from-env-config"\n', encoding="utf-8")
+    cli_config.write_text('[validation]\ndefault_command = ["from-cli-config"]\n', encoding="utf-8")
+    env_config.write_text('[validation]\ndefault_command = ["from-env-config"]\n', encoding="utf-8")
 
     args = parse_args(
         ["--config", str(cli_config)],
@@ -123,7 +133,7 @@ def test_empty_config_value_falls_through_to_optional_default(
 
 def test_empty_cli_config_value_falls_through_to_environment(tmp_path: Path) -> None:
     env_config = tmp_path / "environment.toml"
-    env_config.write_text('[validation]\ndefault_command = "environment"\n', encoding="utf-8")
+    env_config.write_text('[validation]\ndefault_command = ["environment"]\n', encoding="utf-8")
 
     args = parse_args(
         ["--config", ""],
@@ -279,7 +289,7 @@ def test_explicit_empty_test_commands_are_not_auto_detected(tmp_path: Path) -> N
 
     cli = parse_args(["--test-command", ""], cwd=tmp_path, environ={})
     environment = parse_args([], cwd=tmp_path, environ={"RUN_TASK_TEST_CMD": ""})
-    _write_config(tmp_path, '[validation]\ndefault_command = ""\n')
+    _write_config(tmp_path, '[validation]\ndefault_shell_command = ""\n')
     repository = parse_args([], cwd=tmp_path, environ={})
 
     assert cli.test_command == ""
@@ -302,11 +312,11 @@ id = "DOMAIN-001"
 description = "Stop on invariant changes."
 
 [validation]
-default_command = "pytest"
+default_command = ["pytest"]
 
 [[validation.rules]]
 patterns = ["engine/**"]
-command = "npm run build:engine"
+command = ["npm", "run", "build:engine"]
 
 [workflow]
 manual_slice_gate = true
@@ -318,8 +328,14 @@ manual_slice_gate = true
     assert config.source == path.resolve()
     assert config.paths.productive == ("src/**/*.py",)
     assert config.stop_rules[0].id == "DOMAIN-001"
-    assert config.validation.default_command == "pytest"
+    assert config.validation.default_command is not None
+    assert config.validation.default_command.argv == ("pytest",)
     assert config.validation.rules[0].patterns == ("engine/**",)
+    assert config.validation.rules[0].command.argv == (
+        "npm",
+        "run",
+        "build:engine",
+    )
     assert config.workflow.manual_slice_gate is True
 
 
@@ -340,6 +356,15 @@ manual_slice_gate = true
             "[[stop_rules]]\nid = \"S-001\"\ndescription = \"one\"\n"
             "[[stop_rules]]\nid = \"S-001\"\ndescription = \"two\"\n",
             "Duplicate stop rule id: S-001",
+        ),
+        (
+            '[validation]\ndefault_command = "pytest"\n',
+            "validation default.default_command must be a non-empty string array",
+        ),
+        (
+            '[validation]\ndefault_command = ["pytest"]\n'
+            'default_shell_command = "pytest"\n',
+            "must declare only one",
         ),
     ],
 )

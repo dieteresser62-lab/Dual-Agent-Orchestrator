@@ -26,11 +26,23 @@ def build_v3_review_contract(contract: StepContract) -> str:
     attestation = contract.validation_attestation
     if attestation is None:
         validation = "MISSING"
+        validation_details = "MISSING"
     else:
         validation = (
             f"{attestation.attestation_id} | {attestation.diff_fingerprint} | "
             f"{attestation.status.value} | {attestation.summary}"
         )
+        by_command = {record.command: record for record in attestation.records}
+        validation_details = "\n".join(
+            (
+                f"{command} | MISSING | exit=NONE | output=(not executed)"
+                if (record := by_command.get(command)) is None
+                else f"{command} | {record.status.value} | exit={record.exit_code} | "
+                f"output={record.output or '(no captured output)'}"
+            )
+            for command in attestation.expected_commands
+        )
+        validation_details += f"\noutput_digest={attestation.output_digest}"
     prefix = "C" if contract.reviewer.value == "claude" else "A"
     anchor_rule = ""
     if contract.anchor_origin is not None:
@@ -43,9 +55,11 @@ def build_v3_review_contract(contract: StepContract) -> str:
         STATE-V3 CONTRACT (mandatory for step {contract.name}):
         - First non-empty line: REVIEWER: {contract.reviewer.value}
         - Bound orchestrator validation attestation: {validation}
+        {_delimit_block("VALIDATION_ATTESTATION", validation_details)}
         - Do not rerun the full suite and do not emit VALIDATION_RESULT. Spend the review budget on implementation analysis. If additional focused validation is needed, require it in a finding acceptance test.
         - Test scope: TEST_FILES_TOUCHED: {test_files}
         - New finding: NEW_FINDING: {prefix}-01 | BLOCKER|OBSERVATION | <description> | <acceptance test>
+        - If an acceptance test requires an extra command in the next orchestrator matrix, its entire field must be: VALIDATE: ["executable","arg",...]. Do not use a shell string.
         - Previous finding: FINDING_STATUS: <ID> | OPEN|CLOSED | <rationale>
         - Optional reclassification: FINDING_RECLASSIFIED: <ID> | BLOCKER|OBSERVATION | <rationale>
         - If there is no concrete finding: REVIEW_EVIDENCE: <checked dimensions> | <largest residual risk> | <realistic break condition>

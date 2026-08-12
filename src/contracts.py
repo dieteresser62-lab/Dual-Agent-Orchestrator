@@ -13,6 +13,7 @@ DELIMITED_SECTION_PATTERN = re.compile(
 SOURCE_FINDING_ID_PATTERN = re.compile(r"^(C|A)-(0[1-9]|[1-9][0-9]*)$")
 ANCHOR_ID_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]*$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+VALIDATION_RECORD_OUTPUT_MAX_CHARS = 4_000
 
 
 class ContractValidationError(ValueError):
@@ -134,6 +135,7 @@ class ValidationRecord:
     status: ValidationStatus
     command: str
     exit_code: int
+    output: str = ""
 
     def __post_init__(self) -> None:
         if not self.command.strip():
@@ -142,6 +144,10 @@ class ValidationRecord:
             raise ValueError("PASS validation requires exit code 0")
         if self.status is ValidationStatus.FAIL and self.exit_code == 0:
             raise ValueError("FAIL validation requires a non-zero exit code")
+        if "\x00" in self.output:
+            raise ValueError("validation output must not contain NUL bytes")
+        if len(self.output) > VALIDATION_RECORD_OUTPUT_MAX_CHARS:
+            raise ValueError("validation output must be compact")
 
 
 @dataclass(frozen=True)
@@ -176,6 +182,13 @@ class ValidationAttestation:
                 "validation attestation contains unexpected commands: "
                 + ", ".join(sorted(unexpected))
             )
+        expected_record_order = tuple(
+            command for command in self.expected_commands if command in set(record_commands)
+        )
+        if record_commands != expected_record_order:
+            raise ValueError(
+                "validation attestation records must follow expected command order"
+            )
         if not self.summary.strip():
             raise ValueError("validation attestation requires a summary")
 
@@ -192,10 +205,10 @@ class ValidationAttestation:
 
     @property
     def status(self) -> ValidationAttestationStatus:
-        if any(record.status is ValidationStatus.FAIL for record in self.records):
-            return ValidationAttestationStatus.FAIL
         if not self.complete:
             return ValidationAttestationStatus.INCOMPLETE
+        if any(record.status is ValidationStatus.FAIL for record in self.records):
+            return ValidationAttestationStatus.FAIL
         return ValidationAttestationStatus.PASS
 
     @property
@@ -300,6 +313,16 @@ class ContractResult:
     evidence: ReviewEvidence | None
     findings: tuple[FindingRecord, ...]
     anchors: tuple[AnchorRecord, ...]
+    red_state_followup_slice: str | None = None
+
+    def __post_init__(self) -> None:
+        if (
+            self.red_state_followup_slice is not None
+            and not self.red_state_followup_slice.strip()
+        ):
+            raise ValueError(
+                "review red-state follow-up slice must be non-empty when provided"
+            )
 
     @property
     def open_blockers(self) -> tuple[FindingRecord, ...]:
@@ -655,6 +678,7 @@ def validate_review_response(
             evidence=None,
             findings=tuple(sorted(previous_findings, key=lambda item: item.finding_id)),
             anchors=parse_anchors(text, origin=contract.anchor_origin or ""),
+            red_state_followup_slice=None,
         )
     if stop_position is not None:
         raise ContractValidationError("invalid STOP_REQUESTED marker")
@@ -729,6 +753,7 @@ def validate_review_response(
         evidence=evidence,
         findings=findings,
         anchors=anchors,
+        red_state_followup_slice=contract.red_state_followup_slice,
     )
 
 
