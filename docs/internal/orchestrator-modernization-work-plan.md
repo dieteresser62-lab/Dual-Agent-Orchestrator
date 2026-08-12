@@ -145,7 +145,7 @@ Jede Slice-MD wird unmittelbar vor Beginn ihres Slice angelegt und dann aus der 
 | 13 | [`docs/internal/slice-orchestrator-modernization-13-path-validation-matrix.md`](slice-orchestrator-modernization-13-path-validation-matrix.md) |
 | 14 | [`docs/internal/slice-orchestrator-modernization-14-quota-failure-resume.md`](slice-orchestrator-modernization-14-quota-failure-resume.md) |
 | 15 | [`docs/internal/slice-orchestrator-modernization-15-scripted-dry-run.md`](slice-orchestrator-modernization-15-scripted-dry-run.md) |
-| 16 | `docs/internal/slice-orchestrator-modernization-16-branch-final-review.md` |
+| 16 | [`docs/internal/slice-orchestrator-modernization-16-branch-final-review.md`](slice-orchestrator-modernization-16-branch-final-review.md) |
 | 17 | `docs/internal/slice-orchestrator-modernization-17-watch-mode-pauses.md` |
 | 18 | `docs/internal/slice-orchestrator-modernization-18-default-cutover-contract.md` |
 | 19 | `docs/internal/slice-orchestrator-modernization-19-user-docs-consistency.md` |
@@ -519,11 +519,13 @@ Die Audit-Komponente aus Slice 8 prüft bei Start eines Slice, dass genau diese 
 **Test-Riegel:** ja. **Red-State:** nein.
 **Risiko/Rückfalloption:** Test-Doppelimplementierung; Dry-Run speist dieselbe State-Maschine und ersetzt nur die Agenten-/Command-Backends.
 
-### Slice 16 — Branchweites Endreview
+### [Slice 16 — Branchweites Endreview](slice-orchestrator-modernization-16-branch-final-review.md)
 
 **Zweck:** Das branchweite Endreview und den Rückweg über eine reguläre Korrektur-Work-Unit vollständig in den neuen Entwicklungsworkflow integrieren.
 **Anforderungen:** R-11; Integrationsnachweis für R-7, R-8, R-9, R-10, R-15 und R-16.
 **Voraussichtlich betroffene Dateien:** `src/workflow.py`, `src/prompts.py`, `src/contracts.py`, `src/workflow_state.py`, `src/repo_changes.py`, `tests/test_workflow.py`, `tests/test_prompts.py`, `tests/test_parsing.py`.
+**Tatsächlich betroffene Dateien vor Review:** `src/workflow.py`, `src/workflow_state.py`, `src/contracts.py`, `src/prompts.py`, `src/audit_trail.py`, `src/dry_run_scenarios.py`, `src/orchestrator.py`, `tests/test_workflow.py`, `tests/test_workflow_state.py`, `tests/test_contracts.py`, `tests/test_prompts.py`, `tests/test_audit_trail.py`, `tests/test_dry_run_scenarios.py` sowie Arbeitsplan, Übergabe und Slice-MD. `src/repo_changes.py` bleibt unverändert, weil die vorhandene kanonische Quelle bereits jeden expliziten Basiscommit unterstützt.
+**Umsetzungsstatus:** additive Final-Review- und Correction-Work-Units, vollständige Branch-Evidenz gegen die persistierte Basis, eine geteilte Attestierung für alle drei Rollen, finaler Finding-Rückweg über normale Review-/Commitkette und ein vollständiger Scripted-Sessiontest sind implementiert. 231 fokussierte Tests und alle 517 Tests der Vollsuite sowie Compile, aktiver v2-Dry-Run, Diffcheck und Slice-Dokumentvalidator sind grün; Review- und Freigabestatus stehen in der Slice-MD. Der aktive v2-Default bleibt unverändert.
 
 **Akzeptanzkriterien:**
 

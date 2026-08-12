@@ -23,6 +23,7 @@ from workflow import (
     ReviewerInvocation,
     WorkflowChanges,
     WorkflowCommitRequest,
+    WorkflowCorrectionBoundary,
     WorkflowContext,
     WorkflowContractError,
     WorkflowEngine,
@@ -41,16 +42,21 @@ from workflow_state import (
     init_workflow_state,
 )
 from validation_matrix import ValidationCommand, ValidationMatrix, ValidationRequest, ValidationRule
-from orchestrator import run_v3_work_unit
+from orchestrator import run_v3_final_review, run_v3_work_unit
 
 
 TEST_FILE = "tests/test_workflow.py"
 START_COMMIT = "a" * 40
 
 
-def _changes(token: str, *paths: str, full_diff: str | None = None) -> WorkflowChanges:
+def _changes(
+    token: str,
+    *paths: str,
+    full_diff: str | None = None,
+    start_commit: str = START_COMMIT,
+) -> WorkflowChanges:
     return WorkflowChanges(
-        start_commit=START_COMMIT,
+        start_commit=start_commit,
         fingerprint=token * 64,
         paths=tuple(sorted(paths)),
         full_diff=full_diff or "\n".join(f"diff -- {path}" for path in paths),
@@ -69,14 +75,21 @@ def _attestation(changes: WorkflowChanges) -> ValidationAttestation:
     )
 
 
-def _codex_ready(*finding_ids: str, plan: bool = False) -> str:
+def _codex_ready(
+    *finding_ids: str, plan: bool = False, slice_id: str = "01"
+) -> str:
     lines = [
         *(f"FINDING_RESPONSE: {finding_id} | ACCEPTED | fixed with regression" for finding_id in finding_ids),
     ]
     if plan:
         lines.append("PLAN_READY: YES")
     else:
-        lines.extend((f"TEST_FILES_TOUCHED: {TEST_FILE}", "IMPLEMENTATION_READY: 01 | YES"))
+        lines.extend(
+            (
+                f"TEST_FILES_TOUCHED: {TEST_FILE}",
+                f"IMPLEMENTATION_READY: {slice_id} | YES",
+            )
+        )
     lines.append("STATUS: DONE")
     return "\n".join(lines)
 
@@ -100,7 +113,12 @@ def _review_stop(role: AgentRole, rule_id: str) -> str:
     )
 
 
-def _review_approval(role: AgentRole, *, finding_status: str | None = None) -> str:
+def _review_approval(
+    role: AgentRole,
+    *,
+    finding_status: str | None = None,
+    slice_id: str = "01",
+) -> str:
     lines = [f"REVIEWER: {role.value}", f"TEST_FILES_TOUCHED: {TEST_FILE}"]
     if finding_status is None:
         lines.append(
@@ -111,7 +129,7 @@ def _review_approval(role: AgentRole, *, finding_status: str | None = None) -> s
     lines.extend(
         (
             "PRE_MORTEM: a future transition could bypass the role order",
-            "SLICE_APPROVAL: 01 | YES",
+            f"SLICE_APPROVAL: {slice_id} | YES",
             "STATUS: DONE",
         )
     )
@@ -149,6 +167,47 @@ def _review_closes(role: AgentRole, finding_id: str) -> str:
     )
 
 
+def _final_report(*finding_ids: str) -> str:
+    return "\n".join(
+        (
+            *(
+                f"FINDING_RESPONSE: {finding_id} | ACCEPTED | addressed in correction"
+                for finding_id in finding_ids
+            ),
+            "FINAL_REPORT_READY: YES",
+            "STATUS: DONE",
+        )
+    )
+
+
+def _final_approval(
+    role: AgentRole, *, finding_status: str | None = None
+) -> str:
+    return "\n".join(
+        (
+            f"REVIEWER: {role.value}",
+            f"TEST_FILES_TOUCHED: {TEST_FILE}",
+            finding_status
+            or "REVIEW_EVIDENCE: architecture and R-1..R-18 | provider drift | stale transition",
+            "PRE_MORTEM: a later slice leaves an interface transition dead",
+            "FINAL_APPROVAL: YES",
+            "STATUS: DONE",
+        )
+    )
+
+
+def _final_denial(role: AgentRole, finding_id: str) -> str:
+    return "\n".join(
+        (
+            f"REVIEWER: {role.value}",
+            f"TEST_FILES_TOUCHED: {TEST_FILE}",
+            f"NEW_FINDING: {finding_id} | BLOCKER | branch interface drift | add branch regression",
+            "FINAL_APPROVAL: NO",
+            "STATUS: DONE",
+        )
+    )
+
+
 @dataclass
 class FakeDriver:
     snapshots: list[WorkflowChanges]
@@ -157,6 +216,8 @@ class FakeDriver:
     codex_failures: list[AgentInvocationError | None] = field(default_factory=list)
     reviewer_failures: list[AgentInvocationError | None] = field(default_factory=list)
     repair_outputs: list[str] = field(default_factory=list)
+    correction_boundaries: list[WorkflowCorrectionBoundary] = field(default_factory=list)
+    commit_refs: list[str] = field(default_factory=list)
     deltas: dict[tuple[str, str], str] = field(default_factory=dict)
     invalid_attestation: str | None = None
     fail_reviewer_once: bool = False
@@ -184,8 +245,16 @@ class FakeDriver:
         return self.codex_outputs.pop(0)
 
     def collect_changes(self, start_commit: str) -> WorkflowChanges:
-        assert start_commit == START_COMMIT
-        return self.snapshots[self.snapshot_index]
+        index = max(self.snapshot_index, 0)
+        snapshot = self.snapshots[index]
+        if snapshot.start_commit == start_commit:
+            return snapshot
+        for candidate in self.snapshots[index + 1 :]:
+            if candidate.start_commit == start_commit:
+                return candidate
+        raise AssertionError(
+            f"no snapshot at or after index {index} starts at {start_commit}"
+        )
 
     def collect_correction_delta(
         self, previous_fingerprint: str, current_fingerprint: str
@@ -275,9 +344,15 @@ class FakeDriver:
         self.repair_calls.append(invocation)
         return self.repair_outputs.pop(0) if self.repair_outputs else invocation.rejected_output
 
+    def prepare_correction(
+        self, findings
+    ) -> WorkflowCorrectionBoundary:
+        assert any(item.status.value == "OPEN" for item in findings)
+        return self.correction_boundaries.pop(0)
+
     def commit_slice(self, request: WorkflowCommitRequest) -> str:
         self.commit_calls.append(request)
-        return "b" * 40
+        return self.commit_refs.pop(0) if self.commit_refs else "b" * 40
 
     def checkpoint(self, state, history) -> None:
         self.checkpoints.append(state)
@@ -307,6 +382,25 @@ def _slice_state(
         scope_change_groups=scope_change_groups,
         start_fingerprint="0" * 64,
     )
+
+
+def _completed_single_slice_state():
+    return init_workflow_state(
+        run_id="run-final",
+        task_file="/repo/task.md",
+        branch="feature/workflow",
+        branch_base=START_COMMIT,
+        slice_count=1,
+        timestamp="2026-08-12T10:00:00+00:00",
+    ).complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    ).bind_current_slice_git_boundary(
+        start_commit=START_COMMIT,
+        scope_paths=("src/early.py", TEST_FILE),
+        start_fingerprint="0" * 64,
+    ).complete_current_slice(commit_ref="b" * 40)
 
 
 def _context() -> WorkflowContext:
@@ -1841,3 +1935,170 @@ def test_anchor_change_during_correction_returns_to_correction_after_plan_review
         WorkflowStep.CODEX_PLAN_REVISION,
         WorkflowStep.CODEX_CORRECTION,
     ]
+
+
+def test_branch_final_review_uses_one_attestation_for_all_three_roles() -> None:
+    branch = _changes(
+        "7",
+        "src/early.py",
+        "src/latest.py",
+        TEST_FILE,
+        full_diff="SLICE ONE\nSLICE TWO",
+        start_commit=START_COMMIT,
+    )
+    driver = FakeDriver(
+        snapshots=[branch],
+        codex_outputs=[_final_report()],
+        reviewer_outputs=[
+            _final_approval(AgentRole.CLAUDE),
+            _final_approval(AgentRole.ANTIGRAVITY),
+        ],
+    )
+
+    result = run_v3_final_review(
+        WorkflowEngine(driver), _completed_single_slice_state(), _context()
+    )
+
+    assert result.completed
+    assert result.state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
+    assert result.state.current_step is WorkflowStep.COMPLETED
+    assert driver.validation_calls == [branch.fingerprint]
+    assert [call.step for call in driver.codex_calls] == [
+        WorkflowStep.CODEX_FINAL_REVIEW
+    ]
+    assert [call.step for call in driver.reviewer_calls] == [
+        WorkflowStep.CLAUDE_FINAL_REVIEW,
+        WorkflowStep.ANTIGRAVITY_FINAL_REVIEW,
+    ]
+    assert [call.evidence_kind for call in driver.reviewer_calls] == [
+        EvidenceKind.FULL_BRANCH,
+        EvidenceKind.FULL_BRANCH,
+    ]
+    assert all(call.fingerprint == branch.fingerprint for call in driver.reviewer_calls)
+    assert all("SLICE ONE\nSLICE TWO" in call.prompt for call in driver.reviewer_calls)
+    assert "SLICE ONE\nSLICE TWO" in driver.codex_calls[0].prompt
+    assert driver.commit_calls == []
+
+
+@pytest.mark.parametrize("denial_role", [AgentRole.CLAUDE, AgentRole.ANTIGRAVITY])
+def test_final_blocker_runs_regular_correction_commit_then_restarts_full_review(
+    denial_role: AgentRole,
+) -> None:
+    finding_id = "C-01" if denial_role is AgentRole.CLAUDE else "A-01"
+    first_branch = _changes(
+        "7",
+        "src/early.py",
+        TEST_FILE,
+        full_diff="ORIGINAL BRANCH",
+        start_commit=START_COMMIT,
+    )
+    correction = _changes(
+        "8",
+        "src/fix.py",
+        TEST_FILE,
+        full_diff="CORRECTION ONLY",
+        start_commit="b" * 40,
+    )
+    corrected_branch = _changes(
+        "9",
+        "src/early.py",
+        "src/fix.py",
+        TEST_FILE,
+        full_diff="ORIGINAL BRANCH\nCORRECTION ONLY",
+        start_commit=START_COMMIT,
+    )
+    first_final_reviews = (
+        [_final_denial(AgentRole.CLAUDE, finding_id)]
+        if denial_role is AgentRole.CLAUDE
+        else [
+            _final_approval(AgentRole.CLAUDE),
+            _final_denial(AgentRole.ANTIGRAVITY, finding_id),
+        ]
+    )
+    correction_reviews = (
+        [
+            _review_approval(
+                AgentRole.CLAUDE,
+                finding_status=(
+                    f"FINDING_STATUS: {finding_id} | CLOSED | branch regression proves the fix"
+                ),
+                slice_id="02",
+            ),
+            _review_approval(AgentRole.ANTIGRAVITY, slice_id="02"),
+        ]
+        if denial_role is AgentRole.CLAUDE
+        else [
+            _review_approval(AgentRole.CLAUDE, slice_id="02"),
+            _review_approval(
+                AgentRole.ANTIGRAVITY,
+                finding_status=(
+                    f"FINDING_STATUS: {finding_id} | CLOSED | branch regression proves the fix"
+                ),
+                slice_id="02",
+            ),
+        ]
+    )
+    driver = FakeDriver(
+        snapshots=[first_branch, correction, corrected_branch],
+        codex_outputs=[
+            _final_report(),
+            _codex_ready(finding_id, slice_id="02"),
+            _final_report(),
+        ],
+        reviewer_outputs=[
+            *first_final_reviews,
+            *correction_reviews,
+            _final_approval(AgentRole.CLAUDE),
+            _final_approval(AgentRole.ANTIGRAVITY),
+        ],
+        correction_boundaries=[
+            WorkflowCorrectionBoundary(
+                start_commit="b" * 40,
+                scope_paths=("src/fix.py", TEST_FILE),
+                start_fingerprint="0" * 64,
+            )
+        ],
+        commit_refs=["c" * 40],
+    )
+
+    result = WorkflowEngine(driver).run_final_review(
+        _completed_single_slice_state(), _context()
+    )
+
+    assert result.completed
+    assert [unit.kind for unit in result.state.work_units[-3:]] == [
+        WorkUnitKind.FINAL_REVIEW,
+        WorkUnitKind.CORRECTION,
+        WorkUnitKind.FINAL_REVIEW,
+    ]
+    assert result.state.slices[-1].slice_id == 2
+    assert result.state.slices[-1].commit_ref == "c" * 40
+    assert driver.validation_calls == [
+        first_branch.fingerprint,
+        correction.fingerprint,
+        corrected_branch.fingerprint,
+    ]
+    assert [call.step for call in driver.codex_calls] == [
+        WorkflowStep.CODEX_FINAL_REVIEW,
+        WorkflowStep.CODEX_FINAL_CORRECTION,
+        WorkflowStep.CODEX_FINAL_REVIEW,
+    ]
+    assert [call.work_unit_id for call in driver.codex_calls] == [3, 4, 5]
+    assert len(driver.commit_calls) == 1
+    assert driver.commit_calls[0].slice_id == 2
+    assert driver.commit_calls[0].fingerprint == correction.fingerprint
+    final_calls = [
+        call
+        for call in driver.reviewer_calls
+        if call.evidence_kind is EvidenceKind.FULL_BRANCH
+    ]
+    assert [call.fingerprint for call in final_calls] == [
+        *(
+            [first_branch.fingerprint]
+            if denial_role is AgentRole.CLAUDE
+            else [first_branch.fingerprint, first_branch.fingerprint]
+        ),
+        corrected_branch.fingerprint,
+        corrected_branch.fingerprint,
+    ]
+    assert "ORIGINAL BRANCH\nCORRECTION ONLY" in final_calls[-1].prompt

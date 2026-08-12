@@ -249,6 +249,53 @@ def test_multi_slice_transition_persists_start_and_commit_references() -> None:
     assert resumed.step is WorkflowStep.CODEX_IMPLEMENTATION
 
 
+def test_final_review_references_committed_slice_and_appends_bounded_correction() -> None:
+    state = init_workflow_state(
+        run_id="run-final",
+        task_file="/repo/task.md",
+        branch="feature/state-v3",
+        branch_base="a" * 40,
+        slice_count=1,
+        timestamp="2026-08-11T10:00:00+00:00",
+    ).complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    ).bind_current_slice_git_boundary(
+        start_commit="a" * 40,
+        scope_paths=("src/one.py",),
+        start_fingerprint="1" * 64,
+    ).complete_current_slice(commit_ref="b" * 40)
+
+    final = state.start_final_review_work_unit()
+    halted = final.await_policy_gate(
+        reason=GateReason.STOP_REQUEST,
+        detail="scripted final-review pause",
+    )
+    resumed = halted.resume_after_user_decision().complete_current_work_unit()
+    correction = resumed.start_correction_work_unit(
+        start_commit="b" * 40,
+        scope_paths=("src/fix.py",),
+        start_fingerprint="2" * 64,
+    )
+    loaded = WorkflowState.from_dict(correction.to_dict())
+
+    assert final.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
+    assert final.current_step is WorkflowStep.CODEX_FINAL_REVIEW
+    assert halted.current_slice.status is SliceStatus.COMPLETED
+    assert halted.current_slice.commit_ref == "b" * 40
+    assert loaded.current_work_unit.kind is WorkUnitKind.CORRECTION
+    assert loaded.current_step is WorkflowStep.CODEX_FINAL_CORRECTION
+    assert loaded.current_slice.slice_id == 2
+    assert loaded.current_slice.status is SliceStatus.IN_PROGRESS
+    assert loaded.current_slice.scope_paths == ("src/fix.py",)
+
+
+def test_final_review_requires_all_slices_committed() -> None:
+    with pytest.raises(WorkflowStateValidationError, match="every current slice"):
+        make_state().complete_current_work_unit().start_final_review_work_unit()
+
+
 def test_slice_git_boundary_is_canonical_persisted_and_immutable() -> None:
     state = make_state().bind_current_slice_git_boundary(
         start_commit="a" * 40,

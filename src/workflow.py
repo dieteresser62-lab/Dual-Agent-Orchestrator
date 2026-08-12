@@ -100,6 +100,7 @@ class ValidationExecutionError(WorkflowExecutionError):
 class EvidenceKind(str, Enum):
     FULL_SLICE = "full_slice"
     CORRECTION_DELTA = "correction_delta"
+    FULL_BRANCH = "full_branch"
 
 
 @dataclass(frozen=True)
@@ -128,6 +129,22 @@ class WorkflowChanges:
     def user_gate_paths(self) -> tuple[str, ...]:
         """Include historical rename paths when the driver captured them."""
         return self.gate_paths or self.paths
+
+
+@dataclass(frozen=True)
+class WorkflowCorrectionBoundary:
+    start_commit: str
+    scope_paths: tuple[str, ...]
+    start_fingerprint: str
+    scope_change_groups: tuple[tuple[str, ...], ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.start_commit.strip():
+            raise ValueError("correction boundary requires a start commit")
+        if self.scope_paths != tuple(sorted(set(self.scope_paths))) or not self.scope_paths:
+            raise ValueError("correction boundary paths must be sorted, unique, and non-empty")
+        if not SHA256_PATTERN.fullmatch(self.start_fingerprint):
+            raise ValueError("correction boundary requires a SHA-256 start fingerprint")
 
 @dataclass(frozen=True)
 class WorkflowContext:
@@ -286,6 +303,10 @@ class WorkflowDriver(Protocol):
 
     def repair_review_contract(self, invocation: ContractRepairInvocation) -> str: ...
 
+    def prepare_correction(
+        self, findings: tuple[FindingRecord, ...]
+    ) -> WorkflowCorrectionBoundary: ...
+
     def commit_slice(self, request: WorkflowCommitRequest) -> str: ...
 
     def checkpoint(self, state: WorkflowState, history: WorkflowHistory) -> None: ...
@@ -369,6 +390,7 @@ class WorkflowEngine:
         active_history = history or WorkflowHistory(current.work_unit_id)
         if active_history.work_unit_id != current.work_unit_id:
             raise WorkflowExecutionError("workflow history belongs to a different work unit")
+        self._bind_driver_work_unit(state)
         if current.status is not WorkUnitStatus.IN_PROGRESS:
             return WorkflowRunResult(state, active_history)
 
@@ -406,8 +428,16 @@ class WorkflowEngine:
                 WorkflowStep.CODEX_PLAN_REVISION,
                 WorkflowStep.CODEX_IMPLEMENTATION,
                 WorkflowStep.CODEX_CORRECTION,
+                WorkflowStep.CODEX_FINAL_CORRECTION,
             ):
                 state, active_history = self._run_codex(
+                    state, context, active_history
+                )
+                if state.current_work_unit.status is not WorkUnitStatus.IN_PROGRESS:
+                    return WorkflowRunResult(state, active_history)
+                continue
+            if step is WorkflowStep.CODEX_FINAL_REVIEW:
+                state, active_history = self._run_final_codex_report(
                     state, context, active_history
                 )
                 if state.current_work_unit.status is not WorkUnitStatus.IN_PROGRESS:
@@ -416,6 +446,7 @@ class WorkflowEngine:
             if step in (
                 WorkflowStep.CLAUDE_PLAN_REVIEW,
                 WorkflowStep.CLAUDE_SLICE_REVIEW,
+                WorkflowStep.CLAUDE_FINAL_REVIEW,
             ):
                 state, active_history = self._run_review(
                     state, context, active_history, AgentRole.CLAUDE
@@ -423,7 +454,10 @@ class WorkflowEngine:
                 if state.current_work_unit.status is not WorkUnitStatus.IN_PROGRESS:
                     return WorkflowRunResult(state, active_history)
                 continue
-            if step is WorkflowStep.ANTIGRAVITY_SLICE_REVIEW:
+            if step in (
+                WorkflowStep.ANTIGRAVITY_SLICE_REVIEW,
+                WorkflowStep.ANTIGRAVITY_FINAL_REVIEW,
+            ):
                 state, active_history = self._run_review(
                     state, context, active_history, AgentRole.ANTIGRAVITY
                 )
@@ -431,13 +465,40 @@ class WorkflowEngine:
                     return WorkflowRunResult(state, active_history)
                 continue
             if step is WorkflowStep.SLICE_COMMIT:
-                return self._commit(state, active_history, context)
+                committed = self._commit(state, active_history, context)
+                if (
+                    committed.state.current_work_unit.kind is not WorkUnitKind.CORRECTION
+                    or not committed.completed
+                ):
+                    return committed
+                state = committed.state.start_final_review_work_unit()
+                active_history = WorkflowHistory(
+                    state.current_work_unit_id,
+                    findings=committed.history.findings,
+                )
+                self._bind_driver_work_unit(state)
+                self.driver.checkpoint(state, active_history)
+                continue
             if step is WorkflowStep.COMPLETED:
                 return WorkflowRunResult(state, active_history)
             raise WorkflowExecutionError(
-                f"step {step.value} is outside the Slice-10 development engine"
+                f"step {step.value} is outside the state-v3 development engine"
             )
         raise WorkflowExecutionError("workflow exceeded its deterministic transition bound")
+
+    def run_final_review(
+        self,
+        state: WorkflowState,
+        context: WorkflowContext,
+        history: WorkflowHistory | None = None,
+    ) -> WorkflowRunResult:
+        """Start or resume the branch-wide final review on the production engine."""
+        if state.current_work_unit.kind is not WorkUnitKind.FINAL_REVIEW:
+            state = state.start_final_review_work_unit()
+            history = WorkflowHistory(state.current_work_unit_id)
+            self._bind_driver_work_unit(state)
+            self.driver.checkpoint(state, history)
+        return self.run_current_work_unit(state, context, history)
 
     def decide_current_gate(
         self,
@@ -536,6 +597,96 @@ class WorkflowEngine:
         self.driver.checkpoint(state, history)
         return state, history
 
+    def _run_final_codex_report(
+        self,
+        state: WorkflowState,
+        context: WorkflowContext,
+        history: WorkflowHistory,
+    ) -> tuple[WorkflowState, WorkflowHistory]:
+        changes = self.driver.collect_changes(state.branch_base)
+        unexpected = self._validate_change_boundary(
+            state, changes, WorkUnitKind.FINAL_REVIEW
+        )
+        if unexpected:
+            raise WorkflowExecutionError("branch final review has an invalid boundary")
+        state, test_changes_approved, halted = self._apply_test_change_gate(
+            state, context, changes
+        )
+        if halted:
+            self.driver.checkpoint(state, history)
+            return state, history
+        try:
+            attestation, history = self._attestation(
+                changes, history, context, state.current_slice_id
+            )
+        except ValidationExecutionError as exc:
+            state = state.await_policy_gate(
+                reason=GateReason.STOP_REQUEST,
+                detail=f"{VALIDATION_UNAVAILABLE_RULE_ID} | {exc}",
+            )
+            self.driver.checkpoint(state, history)
+            return state, history
+        if not attestation.complete or not attestation.passed:
+            self.driver.checkpoint(state, history)
+            raise WorkflowExecutionError(
+                "branch final review requires a complete passing attestation"
+            )
+        unit = state.current_work_unit
+        contract = CodexStepContract(
+            name=f"work-unit-{unit.work_unit_id}-{state.current_step.value}",
+            readiness_marker=ReadinessMarker.FINAL_REPORT,
+            slice_id="FINAL",
+            round_number=unit.round_number,
+            review_fingerprint=changes.fingerprint,
+            validation_attestation=attestation,
+            test_changes_approved=test_changes_approved,
+        )
+        branch_context = (
+            f"{context.distilled_context}\n\n"
+            "BRANCH-WIDE FINAL REVIEW\n"
+            f"BASE COMMIT\n{state.branch_base}\n\n"
+            f"BRANCH FINGERPRINT\n{changes.fingerprint}\n\n"
+            f"COMPLETE BRANCH DIFF\n{changes.full_diff}"
+        )
+        prompt = build_v3_codex_prompt(
+            assignment=context.assignment,
+            distilled_context=branch_context,
+            findings=history.findings,
+            contract=contract,
+        )
+        state, output = self._invoke_role(
+            state,
+            history,
+            context,
+            AgentRole.CODEX,
+            lambda: self.driver.invoke_codex(
+                CodexInvocation(
+                    unit.work_unit_id,
+                    state.current_step,
+                    unit.round_number,
+                    prompt,
+                )
+            ),
+        )
+        if output is None:
+            return state, history
+        try:
+            result = validate_codex_response(output, contract, history.findings)
+        except ContractValidationError as exc:
+            raise WorkflowContractError(f"invalid Codex final report: {exc}") from exc
+        if result.stopped:
+            if result.stop_request is None:
+                raise WorkflowExecutionError("Codex final stop has no structured request")
+            state = self._halt_for_stop_request(state, context, result.stop_request)
+            self.driver.checkpoint(state, history)
+            return state, history
+        if result.ready is not True:
+            raise WorkflowExecutionError("Codex did not declare the final report ready")
+        history = replace(history, findings=result.findings)
+        state = state.with_current_step(WorkflowStep.CLAUDE_FINAL_REVIEW)
+        self.driver.checkpoint(state, history)
+        return state, history
+
     def _run_review(
         self,
         state: WorkflowState,
@@ -545,6 +696,10 @@ class WorkflowEngine:
     ) -> tuple[WorkflowState, WorkflowHistory]:
         unit = state.current_work_unit
         is_plan_review = state.current_step is WorkflowStep.CLAUDE_PLAN_REVIEW
+        is_final_review = state.current_step in {
+            WorkflowStep.CLAUDE_FINAL_REVIEW,
+            WorkflowStep.ANTIGRAVITY_FINAL_REVIEW,
+        }
         if reviewer is AgentRole.ANTIGRAVITY and (
             history.latest_claude_review is None
             or history.latest_claude_review.approval is not True
@@ -552,7 +707,9 @@ class WorkflowEngine:
             raise WorkflowExecutionError(
                 "Antigravity cannot run before an approving Claude review"
             )
-        start_commit = state.current_slice.start_commit or state.branch_base
+        start_commit = state.branch_base if is_final_review else (
+            state.current_slice.start_commit or state.branch_base
+        )
         changes = self.driver.collect_changes(start_commit)
         unexpected = self._validate_change_boundary(state, changes, unit.kind)
         if unexpected:
@@ -566,33 +723,12 @@ class WorkflowEngine:
             )
             self.driver.checkpoint(state, history)
             return state, history
-        test_changes_approved = context.test_changes_approved
-        if not test_changes_approved:
-            test_evidence = self.driver.detect_test_changes(
-                changes, context.test_path_patterns
-            )
-            if test_evidence is not None:
-                test_changes_approved = test_changes_approved or unit.has_gate_approval(
-                    GateReason.TEST_CHANGE,
-                    test_evidence.fingerprint,
-                    test_evidence.paths,
-                )
-                if not test_changes_approved:
-                    state = state.await_user_gate(
-                        reason=GateReason.TEST_CHANGE,
-                        detail="test changes require explicit approval before review",
-                        fingerprint=test_evidence.fingerprint,
-                        paths=test_evidence.paths,
-                    )
-                    self.driver.checkpoint(state, history)
-                    return state, history
-                state = state.record_active_test_approval(
-                    test_evidence.fingerprint, test_evidence.paths
-                )
-            else:
-                state = state.record_active_test_approval(None)
-        else:
-            state = state.record_active_test_approval(None)
+        state, test_changes_approved, halted = self._apply_test_change_gate(
+            state, context, changes
+        )
+        if halted:
+            self.driver.checkpoint(state, history)
+            return state, history
         if reviewer is AgentRole.ANTIGRAVITY:
             claude_validation = history.latest_claude_review.validation
             if (
@@ -637,9 +773,11 @@ class WorkflowEngine:
             approval_marker=(
                 ApprovalMarker.PLAN
                 if is_plan_review
+                else ApprovalMarker.FINAL
+                if is_final_review
                 else ApprovalMarker.SLICE
             ),
-            slice_id=f"{unit.slice_id:02d}",
+            slice_id="FINAL" if is_final_review else f"{unit.slice_id:02d}",
             round_number=review_round,
             review_fingerprint=changes.fingerprint,
             validation_attestation=attestation,
@@ -649,7 +787,10 @@ class WorkflowEngine:
             test_changes_approved=test_changes_approved,
             red_state_followup_slice=context.red_state_followup_slice,
         )
-        if reviewer is AgentRole.CLAUDE and history.last_claude_fingerprint is not None:
+        if is_final_review:
+            evidence_kind = EvidenceKind.FULL_BRANCH
+            review_diff = changes.full_diff
+        elif reviewer is AgentRole.CLAUDE and history.last_claude_fingerprint is not None:
             evidence_kind = EvidenceKind.CORRECTION_DELTA
             review_diff = self.driver.collect_correction_delta(
                 history.last_claude_fingerprint, changes.fingerprint
@@ -708,6 +849,11 @@ class WorkflowEngine:
             result,
             changes.fingerprint,
             track_slice_approval=not is_plan_review,
+            allowed_finding_origins=(
+                ("FINAL",)
+                if is_final_review or unit.kind is WorkUnitKind.CORRECTION
+                else ()
+            ),
         )
 
         if result.approval is True:
@@ -723,17 +869,48 @@ class WorkflowEngine:
                     key = f"anchor-plan-reviewed:{decision.fingerprint}"
                     state = state.mark_side_effect_completed(key)
                     state = state.with_current_step(decision.resume_step)
+                elif is_final_review:
+                    state = state.with_current_step(
+                        WorkflowStep.ANTIGRAVITY_FINAL_REVIEW
+                    )
                 else:
                     state = state.with_current_step(
                         WorkflowStep.ANTIGRAVITY_SLICE_REVIEW
                     )
+            elif is_final_review:
+                if any(
+                    finding.status is FindingStatus.OPEN
+                    and finding.finding_class is FindingClass.BLOCKER
+                    for finding in history.findings
+                ):
+                    raise WorkflowExecutionError(
+                        "final review cannot complete with an open blocker"
+                    )
+                state = state.complete_current_work_unit()
             else:
                 state = state.with_current_step(WorkflowStep.SLICE_COMMIT)
         else:
             own_ids = tuple(item.finding_id for item in result.own_open_blockers)
+            if is_final_review:
+                boundary = self.driver.prepare_correction(history.findings)
+                state = state.complete_current_work_unit().start_correction_work_unit(
+                    start_commit=boundary.start_commit,
+                    scope_paths=boundary.scope_paths,
+                    scope_change_groups=boundary.scope_change_groups or None,
+                    start_fingerprint=boundary.start_fingerprint,
+                )
+                history = WorkflowHistory(
+                    state.current_work_unit_id,
+                    findings=history.findings,
+                )
+                self._bind_driver_work_unit(state)
+                self.driver.checkpoint(state, history)
+                return state, history
             return_step = (
                 WorkflowStep.CODEX_PLAN_REVISION
                 if unit.kind is WorkUnitKind.PLAN
+                else WorkflowStep.CODEX_FINAL_CORRECTION
+                if unit.kind is WorkUnitKind.CORRECTION
                 else WorkflowStep.CODEX_CORRECTION
             )
             state = state.record_review_denial(
@@ -880,7 +1057,7 @@ class WorkflowEngine:
     ) -> str | None:
         if state.current_work_unit.kind is WorkUnitKind.PLAN:
             return None
-        start_commit = state.current_slice.start_commit
+        start_commit = self._change_start_commit(state)
         if start_commit is None:
             return None
         try:
@@ -904,7 +1081,7 @@ class WorkflowEngine:
                 ),
             )
             return halted, True
-        start_commit = state.current_slice.start_commit
+        start_commit = self._change_start_commit(state)
         if start_commit is None:
             raise WorkflowExecutionError(
                 "quota resume requires the persisted Slice start commit"
@@ -1026,12 +1203,14 @@ class WorkflowEngine:
         fingerprint: str,
         *,
         track_slice_approval: bool = True,
+        allowed_finding_origins: tuple[str, ...] = (),
     ) -> WorkflowHistory:
         event = ReviewAuditEvent(
             event_id=len(history.events) + 1,
             slice_id=slice_id,
             round_number=round_number,
             result=result,
+            allowed_finding_origins=allowed_finding_origins,
         )
         updates: dict[str, object] = {
             "findings": result.findings,
@@ -1139,7 +1318,10 @@ class WorkflowEngine:
         context: WorkflowContext,
         history: WorkflowHistory,
     ) -> tuple[WorkflowState, WorkflowHistory, bool]:
-        if state.current_work_unit.kind is WorkUnitKind.PLAN:
+        if state.current_work_unit.kind in {
+            WorkUnitKind.PLAN,
+            WorkUnitKind.FINAL_REVIEW,
+        }:
             return state, history, False
         evidence = detect_anchor_changes(
             context.approved_anchors, context.current_anchors
@@ -1164,6 +1346,9 @@ class WorkflowEngine:
             return state, history, False
         original_step = state.current_step
         resume_step = (
+            WorkflowStep.CODEX_FINAL_CORRECTION
+            if original_step is WorkflowStep.CODEX_FINAL_CORRECTION
+            else
             WorkflowStep.CODEX_CORRECTION
             if original_step is WorkflowStep.CODEX_CORRECTION
             else WorkflowStep.CODEX_IMPLEMENTATION
@@ -1196,7 +1381,10 @@ class WorkflowEngine:
                 True,
             )
         scope_paths = state.current_slice.scope_paths
-        if state.current_work_unit.kind is WorkUnitKind.PLAN or not scope_paths:
+        if state.current_work_unit.kind in {
+            WorkUnitKind.PLAN,
+            WorkUnitKind.FINAL_REVIEW,
+        } or not scope_paths:
             return state, False
         evidence = evaluate_productive_file_limit(
             state.current_slice.scope_change_groups,
@@ -1266,6 +1454,12 @@ class WorkflowEngine:
         kind: WorkUnitKind,
     ) -> tuple[str, ...]:
         expected_start = state.current_slice.start_commit or state.branch_base
+        if kind is WorkUnitKind.FINAL_REVIEW:
+            if changes.start_commit != state.branch_base:
+                raise WorkflowExecutionError(
+                    "branch final review must use the persisted branch base"
+                )
+            return ()
         if changes.start_commit != expected_start:
             raise WorkflowExecutionError("change evidence uses a foreign slice start commit")
         if kind is WorkUnitKind.PLAN:
@@ -1274,6 +1468,49 @@ class WorkflowEngine:
         if not scope:
             raise WorkflowExecutionError("slice review requires a persisted Git boundary")
         return tuple(path for path in changes.paths if path not in scope)
+
+    def _apply_test_change_gate(
+        self,
+        state: WorkflowState,
+        context: WorkflowContext,
+        changes: WorkflowChanges,
+    ) -> tuple[WorkflowState, bool, bool]:
+        approved = context.test_changes_approved
+        if approved:
+            return state.record_active_test_approval(None), True, False
+        evidence = self.driver.detect_test_changes(changes, context.test_path_patterns)
+        if evidence is None:
+            return state.record_active_test_approval(None), False, False
+        approved = state.current_work_unit.has_gate_approval(
+            GateReason.TEST_CHANGE, evidence.fingerprint, evidence.paths
+        )
+        if not approved:
+            return (
+                state.await_user_gate(
+                    reason=GateReason.TEST_CHANGE,
+                    detail="test changes require explicit approval before review",
+                    fingerprint=evidence.fingerprint,
+                    paths=evidence.paths,
+                ),
+                False,
+                True,
+            )
+        return (
+            state.record_active_test_approval(evidence.fingerprint, evidence.paths),
+            True,
+            False,
+        )
+
+    @staticmethod
+    def _change_start_commit(state: WorkflowState) -> str | None:
+        if state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW:
+            return state.branch_base
+        return state.current_slice.start_commit
+
+    def _bind_driver_work_unit(self, state: WorkflowState) -> None:
+        binder = getattr(self.driver, "bind_work_unit", None)
+        if binder is not None:
+            binder(state)
 
     @staticmethod
     def _review_evidence(
@@ -1287,13 +1524,25 @@ class WorkflowEngine:
         findings = "\n".join(
             WorkflowEngine._render_finding(item) for item in history.findings
         ) or "NONE"
+        boundary_label = (
+            "BRANCH BASE COMMIT"
+            if evidence_kind is EvidenceKind.FULL_BRANCH
+            else "SLICE START COMMIT"
+        )
+        final_dimensions = (
+            "\n\nMANDATORY FINAL-REVIEW DIMENSIONS\n"
+            "architecture drift | interface consistency | dead transition states | "
+            "documentation synchronization | requirements R-1 through R-18"
+            if evidence_kind is EvidenceKind.FULL_BRANCH
+            else ""
+        )
         return (
             f"DISTILLED CONTEXT\n{context.distilled_context}\n\n"
             f"EVIDENCE KIND\n{evidence_kind.value}\n\n"
-            f"SLICE START COMMIT\n{changes.start_commit}\n\n"
+            f"{boundary_label}\n{changes.start_commit}\n\n"
             f"CURRENT FINGERPRINT\n{changes.fingerprint}\n\n"
             f"STRUCTURED FINDINGS\n{findings}\n\n"
-            f"REVIEW DIFF\n{review_diff}"
+            f"REVIEW DIFF\n{review_diff}{final_dimensions}"
         )
 
     @staticmethod

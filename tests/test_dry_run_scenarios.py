@@ -28,7 +28,7 @@ from dry_run_scenarios import (
     run_dry_run_scenario_file,
     run_scripted_work_unit,
 )
-from workflow import WorkflowContractError, WorkflowExecutionError
+from workflow import EvidenceKind, WorkflowContractError, WorkflowExecutionError
 from workflow_state import (
     AgentFailureKind,
     GateReason,
@@ -88,6 +88,35 @@ def denial(role: AgentRole, finding_id: str, *, previous: bool = False) -> str:
             f"TEST_FILES_TOUCHED: {TEST_FILE}",
             finding,
             "SLICE_APPROVAL: 01 | NO",
+            "STATUS: DONE",
+        )
+    )
+
+
+def final_report() -> str:
+    return "FINAL_REPORT_READY: YES\nSTATUS: DONE"
+
+
+def final_approval(role: AgentRole) -> str:
+    return "\n".join(
+        (
+            f"REVIEWER: {role.value}",
+            f"TEST_FILES_TOUCHED: {TEST_FILE}",
+            "REVIEW_EVIDENCE: architecture through R-18 | interface drift | dead transition",
+            "PRE_MORTEM: a later change desynchronizes docs and runtime",
+            "FINAL_APPROVAL: YES",
+            "STATUS: DONE",
+        )
+    )
+
+
+def final_denial(role: AgentRole, finding_id: str) -> str:
+    return "\n".join(
+        (
+            f"REVIEWER: {role.value}",
+            f"TEST_FILES_TOUCHED: {TEST_FILE}",
+            f"NEW_FINDING: {finding_id} | BLOCKER | branch transition is stale | add branch regression",
+            "FINAL_APPROVAL: NO",
             "STATUS: DONE",
         )
     )
@@ -271,6 +300,194 @@ def test_positive_session_runs_plan_and_multiple_slices(tmp_path: Path) -> None:
     ]
     assert slice2_result.validation_counts == {plan_fp: 1, FP1: 1, slice2_fp: 1}
     assert slice2_result.remaining_agent_events == 0
+
+
+def test_scripted_session_runs_plan_slices_correction_and_repeated_final_review(
+    tmp_path: Path,
+) -> None:
+    plan_fp = "0" * 64
+    slice2_fp = "2" * 64
+    first_final_fp = "4" * 64
+    correction_fp = "5" * 64
+    second_final_fp = "6" * 64
+    commit1 = "b" * 40
+    commit2 = "c" * 40
+    commit3 = "d" * 40
+    plan_approval = "\n".join(
+        (
+            "REVIEWER: claude",
+            "TEST_FILES_TOUCHED: NONE",
+            "REVIEW_EVIDENCE: plan invariants | stale scope | requirement drift",
+            "PRE_MORTEM: a later slice violates the plan",
+            "PLAN_APPROVAL: YES",
+            "STATUS: DONE",
+        )
+    )
+    scenario = DryRunScenario(
+        name="complete-final-correction",
+        agent_events=(
+            ScriptedAgentEvent(
+                AgentRole.CODEX, 1, 1, WorkflowStep.CODEX_PLAN,
+                "PLAN_READY: YES\nSTATUS: DONE",
+            ),
+            ScriptedAgentEvent(
+                AgentRole.CLAUDE, 1, 1, WorkflowStep.CLAUDE_PLAN_REVIEW,
+                plan_approval,
+            ),
+            ScriptedAgentEvent(
+                AgentRole.CODEX, 2, 1, WorkflowStep.CODEX_IMPLEMENTATION,
+                codex_ready(),
+            ),
+            ScriptedAgentEvent(
+                AgentRole.CLAUDE, 2, 1, WorkflowStep.CLAUDE_SLICE_REVIEW,
+                approval(AgentRole.CLAUDE),
+            ),
+            ScriptedAgentEvent(
+                AgentRole.ANTIGRAVITY, 2, 1,
+                WorkflowStep.ANTIGRAVITY_SLICE_REVIEW,
+                approval(AgentRole.ANTIGRAVITY),
+            ),
+            ScriptedAgentEvent(
+                AgentRole.CODEX, 3, 1, WorkflowStep.CODEX_IMPLEMENTATION,
+                codex_ready(slice_id="02"),
+            ),
+            ScriptedAgentEvent(
+                AgentRole.CLAUDE, 3, 1, WorkflowStep.CLAUDE_SLICE_REVIEW,
+                approval(AgentRole.CLAUDE, slice_id="02"),
+            ),
+            ScriptedAgentEvent(
+                AgentRole.ANTIGRAVITY, 3, 1,
+                WorkflowStep.ANTIGRAVITY_SLICE_REVIEW,
+                approval(AgentRole.ANTIGRAVITY, slice_id="02"),
+            ),
+            ScriptedAgentEvent(
+                AgentRole.CODEX, 4, 1, WorkflowStep.CODEX_FINAL_REVIEW,
+                final_report(),
+            ),
+            ScriptedAgentEvent(
+                AgentRole.CLAUDE, 4, 1, WorkflowStep.CLAUDE_FINAL_REVIEW,
+                final_denial(AgentRole.CLAUDE, "C-01"),
+            ),
+            ScriptedAgentEvent(
+                AgentRole.CODEX, 5, 1, WorkflowStep.CODEX_FINAL_CORRECTION,
+                codex_ready("C-01", slice_id="03"),
+            ),
+            ScriptedAgentEvent(
+                AgentRole.CLAUDE, 5, 1, WorkflowStep.CLAUDE_SLICE_REVIEW,
+                approval(
+                    AgentRole.CLAUDE,
+                    finding_status=(
+                        "FINDING_STATUS: C-01 | CLOSED | branch regression proves the fix"
+                    ),
+                    slice_id="03",
+                ),
+            ),
+            ScriptedAgentEvent(
+                AgentRole.ANTIGRAVITY, 5, 1,
+                WorkflowStep.ANTIGRAVITY_SLICE_REVIEW,
+                approval(AgentRole.ANTIGRAVITY, slice_id="03"),
+            ),
+            ScriptedAgentEvent(
+                AgentRole.CODEX, 6, 1, WorkflowStep.CODEX_FINAL_REVIEW,
+                final_report(),
+            ),
+            ScriptedAgentEvent(
+                AgentRole.CLAUDE, 6, 1, WorkflowStep.CLAUDE_FINAL_REVIEW,
+                final_approval(AgentRole.CLAUDE),
+            ),
+            ScriptedAgentEvent(
+                AgentRole.ANTIGRAVITY, 6, 1,
+                WorkflowStep.ANTIGRAVITY_FINAL_REVIEW,
+                final_approval(AgentRole.ANTIGRAVITY),
+            ),
+        ),
+        changes=(
+            ScriptedChange(1, 1, BASE, plan_fp, ("docs/internal/plan.md",), "plan"),
+            ScriptedChange(2, 1, BASE, FP1, PATHS, "slice one"),
+            ScriptedChange(3, 1, commit1, slice2_fp, PATHS, "slice two"),
+            ScriptedChange(
+                4, 1, BASE, first_final_fp, PATHS,
+                "slice one\nslice two",
+            ),
+            ScriptedChange(5, 1, commit2, correction_fp, PATHS, "correction"),
+            ScriptedChange(
+                6, 1, BASE, second_final_fp, PATHS,
+                "slice one\nslice two\ncorrection",
+            ),
+        ),
+        validations=tuple(
+            ScriptedValidation(item, "pass")
+            for item in (
+                plan_fp, FP1, slice2_fp, first_final_fp,
+                correction_fp, second_final_fp,
+            )
+        ),
+        commits=(
+            ScriptedCommit(1, FP1, commit1),
+            ScriptedCommit(2, slice2_fp, commit2),
+            ScriptedCommit(3, correction_fp, commit3),
+        ),
+        clock_start=NOW,
+        initial=ScriptedInitialState(kind=WorkUnitKind.PLAN, slice_count=2),
+        context=ScriptedContext(expected_test_files=(TEST_FILE,)),
+    )
+    state = build_scenario_state(scenario, task_file=tmp_path / "task.md")
+    context = build_scenario_context(scenario)
+    session = ScriptedWorkflowSession(scenario)
+
+    plan = session.run(state, context)
+    slice1_state = plan.result.state.start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    ).bind_current_slice_git_boundary(
+        start_commit=BASE, scope_paths=PATHS, start_fingerprint="a" * 64
+    )
+    slice1 = session.run(slice1_state, context)
+    slice2_state = slice1.result.state.start_work_unit(
+        slice_id=2,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+        slice_start_commit=commit1,
+    ).bind_current_slice_git_boundary(
+        start_commit=commit1, scope_paths=PATHS, start_fingerprint="b" * 64
+    )
+    slice2 = session.run(slice2_state, context)
+    final = session.run(slice2.result.state.start_final_review_work_unit(), context)
+
+    assert final.result.completed
+    assert final.result.state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
+    assert [item.kind for item in final.result.state.work_units] == [
+        WorkUnitKind.PLAN,
+        WorkUnitKind.SLICE,
+        WorkUnitKind.SLICE,
+        WorkUnitKind.FINAL_REVIEW,
+        WorkUnitKind.CORRECTION,
+        WorkUnitKind.FINAL_REVIEW,
+    ]
+    assert [item.commit_ref for item in final.result.state.slices] == [
+        commit1, commit2, commit3,
+    ]
+    assert final.validation_counts == {
+        plan_fp: 1,
+        FP1: 1,
+        slice2_fp: 1,
+        first_final_fp: 1,
+        correction_fp: 1,
+        second_final_fp: 1,
+    }
+    final_reviews = [
+        item
+        for item in session.driver.reviewer_invocations
+        if item.evidence_kind is EvidenceKind.FULL_BRANCH
+    ]
+    assert [item.fingerprint for item in final_reviews] == [
+        first_final_fp,
+        second_final_fp,
+        second_final_fp,
+    ]
+    assert "slice one\nslice two\ncorrection" in final_reviews[-1].prompt
+    assert final.remaining_agent_events == 0
 
 
 @pytest.mark.parametrize(

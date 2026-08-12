@@ -143,18 +143,25 @@ class ReviewAuditEvent:
     slice_id: int
     round_number: int
     result: ContractResult
+    allowed_finding_origins: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _require_event_identity(self.event_id, self.slice_id)
         _require_positive_int(self.round_number, "round_number")
+        if any(origin != "FINAL" for origin in self.allowed_finding_origins):
+            raise AuditTrailError(
+                "review audit events may only opt into the FINAL finding origin"
+            )
         if self.result.reviewer not in (AgentRole.CLAUDE, AgentRole.ANTIGRAVITY):
             raise AuditTrailError("review audit event requires claude or antigravity")
         expected_slice = f"{self.slice_id:02d}"
+        allowed_origins = {expected_slice, *self.allowed_finding_origins}
         for finding in self.result.findings:
-            if finding.origin.slice_id != expected_slice:
+            if finding.origin.slice_id not in allowed_origins:
                 raise AuditTrailError(
                     f"finding {finding.finding_id} belongs to slice "
-                    f"{finding.origin.slice_id}, expected {expected_slice}"
+                    f"{finding.origin.slice_id}, expected one of "
+                    f"{', '.join(sorted(allowed_origins))}"
                 )
         if self.result.stopped != (self.result.stop_request is not None):
             raise AuditTrailError("review stop state and stop request are inconsistent")

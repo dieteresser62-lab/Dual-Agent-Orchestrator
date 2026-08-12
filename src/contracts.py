@@ -35,6 +35,7 @@ class ApprovalMarker(str, Enum):
 class ReadinessMarker(str, Enum):
     PLAN = "PLAN_READY"
     IMPLEMENTATION = "IMPLEMENTATION_READY"
+    FINAL_REPORT = "FINAL_REPORT_READY"
 
 
 class FindingClass(str, Enum):
@@ -355,6 +356,8 @@ class CodexStepContract:
     expected_test_files: tuple[str, ...] = ()
     test_changes_approved: bool = False
     red_state_followup_slice: str | None = None
+    review_fingerprint: str | None = None
+    validation_attestation: ValidationAttestation | None = None
 
     def __post_init__(self) -> None:
         if not self.name.strip():
@@ -369,6 +372,23 @@ class CodexStepContract:
             raise ValueError("expected test files require a TEST_FILES_TOUCHED record")
         if self.red_state_followup_slice is not None and not self.red_state_followup_slice.strip():
             raise ValueError("red-state exception requires a named follow-up slice")
+        if self.review_fingerprint is not None and not SHA256_PATTERN.fullmatch(
+            self.review_fingerprint
+        ):
+            raise ValueError("Codex contract requires a SHA-256 review fingerprint")
+        if self.validation_attestation is not None:
+            if self.readiness_marker is not ReadinessMarker.FINAL_REPORT:
+                raise ValueError(
+                    "orchestrator attestation is reserved for the final Codex report"
+                )
+            if self.review_fingerprint is None:
+                raise ValueError(
+                    "final Codex attestation requires a review fingerprint"
+                )
+            if self.validation_attestation.diff_fingerprint != self.review_fingerprint:
+                raise ValueError(
+                    "final Codex attestation fingerprint does not match review"
+                )
 
 
 @dataclass(frozen=True)
@@ -509,6 +529,10 @@ def validate_codex_response(
         )
 
     validation = _parse_validation(text)
+    if contract.validation_attestation is not None and validation is not None:
+        raise ContractValidationError(
+            "final Codex report cannot emit VALIDATION_RESULT; validation comes from the orchestrator attestation"
+        )
     if contract.require_validation and validation is None:
         raise ContractValidationError("ready response requires VALIDATION_RESULT")
     if validation is not None:
@@ -650,7 +674,7 @@ def validate_review_response(
         raise ContractValidationError(
             "reviewers cannot emit VALIDATION_RESULT; validation must come from the bound orchestrator attestation"
         )
-    if _marker_count(text, "PLAN_READY") or _marker_count(text, "IMPLEMENTATION_READY"):
+    if any(_marker_count(text, marker.value) for marker in ReadinessMarker):
         raise ContractValidationError("review response cannot contain a readiness marker")
     _reject_unknown_contract_markers(text)
     _require_done_marker(text)
@@ -806,6 +830,7 @@ def _reject_unknown_contract_markers(text: str) -> None:
         "PHASE2_APPROVAL",
         "PLAN_APPROVAL",
         "PLAN_READY",
+        "FINAL_REPORT_READY",
         "PRE_MORTEM",
         "REVIEWER",
         "REVIEW_EVIDENCE",
@@ -909,9 +934,14 @@ def _parse_readiness(text: str, contract: CodexStepContract) -> bool | None:
             r"^\s*IMPLEMENTATION_READY\s*:\s*([^|]+?)\s*\|\s*(YES|NO)\s*$",
             re.IGNORECASE | re.MULTILINE,
         )
-    else:
+    elif contract.readiness_marker is ReadinessMarker.PLAN:
         pattern = re.compile(
             r"^\s*PLAN_READY\s*:\s*(YES|NO)\s*$",
+            re.IGNORECASE | re.MULTILINE,
+        )
+    else:
+        pattern = re.compile(
+            r"^\s*FINAL_REPORT_READY\s*:\s*(YES|NO)\s*$",
             re.IGNORECASE | re.MULTILINE,
         )
     matches = list(pattern.finditer(text))

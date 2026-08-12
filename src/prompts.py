@@ -77,13 +77,28 @@ def build_v3_codex_contract(contract: CodexStepContract) -> str:
     """Render the state-v3 records required by one explicit Codex step."""
     if contract.readiness_marker is ReadinessMarker.IMPLEMENTATION:
         readiness = f"IMPLEMENTATION_READY: {contract.slice_id} | YES|NO"
-    else:
+    elif contract.readiness_marker is ReadinessMarker.PLAN:
         readiness = "PLAN_READY: YES|NO"
+    else:
+        readiness = "FINAL_REPORT_READY: YES|NO"
     lines = [
         f"STATE-V3 CONTRACT (mandatory for step {contract.name}):",
         f"- Readiness: {readiness}",
         "- Open finding response: FINDING_RESPONSE: <ID> | ACCEPTED|REJECTED | <rationale>",
     ]
+    if contract.validation_attestation is not None:
+        attestation = contract.validation_attestation
+        lines.extend(
+            (
+                "- This is a read-only completeness/self-check report, never an approval.",
+                "- Review the entire supplied branch diff for architecture drift, interface "
+                "consistency, dead transition states, documentation sync, and requirements R-1 through R-18.",
+                "- Bound orchestrator validation attestation: "
+                f"{attestation.attestation_id} | {attestation.diff_fingerprint} | "
+                f"{attestation.status.value} | {attestation.summary}",
+                "- Do not rerun validation and do not emit VALIDATION_RESULT.",
+            )
+        )
     if contract.require_validation:
         command = contract.expected_validation_command or "<command>"
         lines.append(

@@ -208,6 +208,30 @@ def test_v3_codex_contract_is_derived_from_explicit_implementation_step() -> Non
     assert "TEST_FILES_TOUCHED: tests/test_contracts.py" in rendered
 
 
+def test_v3_codex_final_report_binds_branch_attestation_and_review_dimensions() -> None:
+    fingerprint, attestation = _validation_binding()
+    contract = CodexStepContract(
+        name="branch-final-report",
+        readiness_marker=ReadinessMarker.FINAL_REPORT,
+        slice_id="FINAL",
+        round_number=1,
+        review_fingerprint=fingerprint,
+        validation_attestation=attestation,
+    )
+
+    rendered = build_v3_codex_contract(contract)
+
+    assert "FINAL_REPORT_READY: YES|NO" in rendered
+    assert f"validation-001 | {fingerprint} | PASS" in rendered
+    assert "architecture drift" in rendered
+    assert "interface consistency" in rendered
+    assert "dead transition states" in rendered
+    assert "documentation sync" in rendered
+    assert "R-1 through R-18" in rendered
+    assert "never an approval" in rendered
+    assert "do not emit VALIDATION_RESULT" in rendered
+
+
 def test_v3_codex_prompt_keeps_distilled_context_and_complete_finding_records() -> None:
     contract = CodexStepContract(
         name="slice-10-correction",

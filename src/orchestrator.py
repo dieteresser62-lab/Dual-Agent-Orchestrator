@@ -133,6 +133,16 @@ def run_v3_work_unit(
     """Run one additive state-v3 work unit without changing the active v2 CLI path."""
     return engine.run_current_work_unit(state, context, history)
 
+
+def run_v3_final_review(
+    engine: WorkflowEngine,
+    state: WorkflowState,
+    context: WorkflowContext,
+    history: WorkflowHistory | None = None,
+) -> WorkflowRunResult:
+    """Start or resume the additive branch-wide state-v3 final review."""
+    return engine.run_final_review(state, context, history)
+
 @dataclass
 class RunContext:
     """Dependency-injection wrapper for runtime helpers and artifact paths."""

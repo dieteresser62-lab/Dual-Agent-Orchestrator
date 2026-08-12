@@ -689,6 +689,44 @@ def test_codex_plan_contract_rejects_review_markers_and_wrong_readiness() -> Non
         )
 
 
+def test_codex_final_report_uses_bound_attestation_without_approval_or_self_validation() -> None:
+    fingerprint = "a" * 64
+    attestation = ValidationAttestation(
+        "final-validation",
+        fingerprint,
+        ("python3 -m pytest tests/ -v",),
+        (ValidationRecord(ValidationStatus.PASS, "python3 -m pytest tests/ -v", 0),),
+        "b" * 64,
+        "all tests passed",
+    )
+    contract = CodexStepContract(
+        name="branch-final-report",
+        readiness_marker=ReadinessMarker.FINAL_REPORT,
+        slice_id="FINAL",
+        round_number=1,
+        review_fingerprint=fingerprint,
+        validation_attestation=attestation,
+    )
+
+    result = validate_step_response(
+        "FINAL_REPORT_READY: YES\nSTATUS: DONE", contract
+    )
+
+    assert result.ready is True
+    assert result.validation is None
+    with pytest.raises(ContractValidationError, match="cannot emit VALIDATION_RESULT"):
+        validate_step_response(
+            "VALIDATION_RESULT: PASS | python3 -m pytest tests/ -v | 0\n"
+            "FINAL_REPORT_READY: YES\nSTATUS: DONE",
+            contract,
+        )
+    with pytest.raises(ContractValidationError, match="cannot contain FINAL_APPROVAL"):
+        validate_step_response(
+            "FINAL_APPROVAL: YES\nFINAL_REPORT_READY: YES\nSTATUS: DONE",
+            contract,
+        )
+
+
 def test_codex_stop_request_replaces_readiness() -> None:
     contract = CodexStepContract(
         name="plan-draft",

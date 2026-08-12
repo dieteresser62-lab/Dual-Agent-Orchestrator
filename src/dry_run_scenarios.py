@@ -24,6 +24,7 @@ from workflow import (
     ValidationExecutionError,
     WorkflowChanges,
     WorkflowCommitRequest,
+    WorkflowCorrectionBoundary,
     WorkflowContext,
     WorkflowEngine,
     WorkflowHistory,
@@ -673,6 +674,8 @@ class ScriptedWorkflowDriver:
     checkpoint_histories: list[WorkflowHistory] = field(default_factory=list)
     validation_counts: dict[str, int] = field(default_factory=dict)
     commit_requests: list[WorkflowCommitRequest] = field(default_factory=list)
+    codex_invocations: list[CodexInvocation] = field(default_factory=list)
+    reviewer_invocations: list[ReviewerInvocation] = field(default_factory=list)
     _agent_index: int = 0
     _validation_index: int = 0
     _repair_index: int = 0
@@ -721,6 +724,7 @@ class ScriptedWorkflowDriver:
         return event.output
 
     def invoke_codex(self, invocation: CodexInvocation) -> str:
+        self.codex_invocations.append(invocation)
         return self._consume_agent(
             role=AgentRole.CODEX,
             work_unit_id=invocation.work_unit_id,
@@ -729,6 +733,7 @@ class ScriptedWorkflowDriver:
         )
 
     def invoke_reviewer(self, invocation: ReviewerInvocation) -> str:
+        self.reviewer_invocations.append(invocation)
         return self._consume_agent(
             role=invocation.reviewer,
             work_unit_id=invocation.work_unit_id,
@@ -845,6 +850,37 @@ class ScriptedWorkflowDriver:
         output = self.scenario.repair_outputs[self._repair_index]
         self._repair_index += 1
         return output
+
+    def prepare_correction(
+        self, findings
+    ) -> WorkflowCorrectionBoundary:
+        if not any(item.status.value == "OPEN" for item in findings):
+            raise DryRunScenarioError(
+                "scripted final-review correction requires an open finding"
+            )
+        if self._active_identity is None:
+            raise DryRunScenarioError(
+                "scripted final-review correction has no active work unit"
+            )
+        correction_id = self._active_identity[0] + 1
+        match = next(
+            (
+                item
+                for item in self.scenario.changes
+                if item.work_unit_id == correction_id and item.round_number == 1
+            ),
+            None,
+        )
+        if match is None:
+            raise DryRunScenarioError(
+                f"missing scripted correction boundary for work unit {correction_id}"
+            )
+        self.calls.append(f"prepare-correction:{correction_id}")
+        return WorkflowCorrectionBoundary(
+            start_commit=match.start_commit,
+            scope_paths=match.paths,
+            start_fingerprint="0" * 64,
+        )
 
     def commit_slice(self, request: WorkflowCommitRequest) -> str:
         if self._commit_index >= len(self.scenario.commits):

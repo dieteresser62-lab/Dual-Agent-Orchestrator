@@ -581,6 +581,31 @@ def test_projection_rejects_non_contiguous_events_and_cross_slice_findings() -> 
         ReviewAuditEvent(1, 8, 1, _review(approval=False, findings=(foreign,)))
 
 
+def test_review_event_accepts_explicit_final_finding_origin_for_correction() -> None:
+    final_finding = replace(
+        _finding(), origin=FindingOrigin("FINAL", 1, AgentRole.CLAUDE)
+    )
+
+    event = ReviewAuditEvent(
+        1,
+        8,
+        1,
+        _review(approval=False, findings=(final_finding,)),
+        allowed_finding_origins=("FINAL",),
+    )
+
+    assert event.result.findings == (final_finding,)
+
+    with pytest.raises(AuditTrailError, match="only opt into the FINAL"):
+        ReviewAuditEvent(
+            1,
+            8,
+            1,
+            _review(approval=False, findings=(final_finding,)),
+            allowed_finding_origins=("07",),
+        )
+
+
 def test_projection_rejects_commit_authorization_without_antigravity_approval() -> None:
     with pytest.raises(AuditTrailError, match="Antigravity"):
         AuditProjection(

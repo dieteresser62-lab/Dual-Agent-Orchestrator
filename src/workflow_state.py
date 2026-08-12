@@ -21,6 +21,7 @@ class WorkUnitKind(str, Enum):
     PLAN = "plan"
     SLICE = "slice"
     CORRECTION = "correction"
+    FINAL_REVIEW = "final_review"
 
 
 class WorkflowStep(str, Enum):
@@ -32,6 +33,7 @@ class WorkflowStep(str, Enum):
     CODEX_CORRECTION = "codex_correction"
     ANTIGRAVITY_SLICE_REVIEW = "antigravity_slice_review"
     SLICE_COMMIT = "slice_commit"
+    CODEX_FINAL_REVIEW = "codex_final_review"
     CODEX_FINAL_CORRECTION = "codex_final_correction"
     CLAUDE_FINAL_REVIEW = "claude_final_review"
     ANTIGRAVITY_FINAL_REVIEW = "antigravity_final_review"
@@ -972,6 +974,86 @@ class WorkflowState:
             updated_at=updated_at or _now_iso(),
         )
 
+    def start_final_review_work_unit(
+        self, *, updated_at: str | None = None
+    ) -> WorkflowState:
+        """Start branch-wide final review without reopening a committed slice."""
+        if self.current_work_unit.status is not WorkUnitStatus.COMPLETED:
+            raise WorkflowStateValidationError(
+                "the current work unit must be completed before final review"
+            )
+        if any(item.status is not SliceStatus.COMPLETED for item in self.slices):
+            raise WorkflowStateValidationError(
+                "final review requires every current slice to be committed"
+            )
+        new_unit = WorkUnitRecord(
+            work_unit_id=len(self.work_units) + 1,
+            slice_id=self.current_slice_id,
+            kind=WorkUnitKind.FINAL_REVIEW,
+            status=WorkUnitStatus.IN_PROGRESS,
+            current_step=WorkflowStep.CODEX_FINAL_REVIEW,
+        )
+        return replace(
+            self,
+            current_work_unit_id=new_unit.work_unit_id,
+            current_step=new_unit.current_step,
+            work_units=(*self.work_units, new_unit),
+            updated_at=updated_at or _now_iso(),
+        )
+
+    def start_correction_work_unit(
+        self,
+        *,
+        start_commit: str,
+        scope_paths: tuple[str, ...],
+        scope_change_groups: tuple[tuple[str, ...], ...] | None = None,
+        start_fingerprint: str,
+        updated_at: str | None = None,
+    ) -> WorkflowState:
+        """Append one regular, commit-backed correction after a failed final review."""
+        _require_non_empty(start_commit, "correction start_commit")
+        normalized_scope = _normalize_scope_paths(scope_paths)
+        normalized_groups = (
+            tuple((path,) for path in normalized_scope)
+            if scope_change_groups is None
+            else _normalize_scope_change_groups(scope_change_groups, normalized_scope)
+        )
+        if not SHA256_PATTERN.fullmatch(start_fingerprint):
+            raise WorkflowStateValidationError(
+                "correction start_fingerprint must be a lowercase SHA-256 digest"
+            )
+        if (
+            self.current_work_unit.kind is not WorkUnitKind.FINAL_REVIEW
+            or self.current_work_unit.status is not WorkUnitStatus.COMPLETED
+        ):
+            raise WorkflowStateValidationError(
+                "a correction work unit requires a completed final review attempt"
+            )
+        correction_slice = SliceRecord(
+            slice_id=len(self.slices) + 1,
+            status=SliceStatus.IN_PROGRESS,
+            start_commit=start_commit,
+            scope_paths=normalized_scope,
+            scope_change_groups=normalized_groups,
+            start_fingerprint=start_fingerprint,
+        )
+        correction_unit = WorkUnitRecord(
+            work_unit_id=len(self.work_units) + 1,
+            slice_id=correction_slice.slice_id,
+            kind=WorkUnitKind.CORRECTION,
+            status=WorkUnitStatus.IN_PROGRESS,
+            current_step=WorkflowStep.CODEX_FINAL_CORRECTION,
+        )
+        return replace(
+            self,
+            current_slice_id=correction_slice.slice_id,
+            current_work_unit_id=correction_unit.work_unit_id,
+            current_step=correction_unit.current_step,
+            slices=(*self.slices, correction_slice),
+            work_units=(*self.work_units, correction_unit),
+            updated_at=updated_at or _now_iso(),
+        )
+
     def complete_current_slice(
         self,
         *,
@@ -1127,12 +1209,7 @@ class WorkflowState:
             current_step=next_step,
             gate=gate,
         )
-        slices = tuple(
-            replace(item, status=SliceStatus.AWAITING_USER_DECISION)
-            if item.slice_id == self.current_slice_id
-            else item
-            for item in self.slices
-        )
+        slices = self._slices_with_current_status(SliceStatus.AWAITING_USER_DECISION)
         return self._replace_current_unit(
             updated_unit, slices=slices, updated_at=updated_at
         )
@@ -1173,12 +1250,7 @@ class WorkflowState:
             status=WorkUnitStatus.AWAITING_USER_DECISION,
             gate=gate,
         )
-        slices = tuple(
-            replace(item, status=SliceStatus.AWAITING_USER_DECISION)
-            if item.slice_id == self.current_slice_id
-            else item
-            for item in self.slices
-        )
+        slices = self._slices_with_current_status(SliceStatus.AWAITING_USER_DECISION)
         return self._replace_current_unit(
             updated_unit, slices=slices, updated_at=updated_at
         )
@@ -1229,12 +1301,7 @@ class WorkflowState:
         )
         slices = self.slices
         if approved:
-            slices = tuple(
-                replace(item, status=SliceStatus.IN_PROGRESS)
-                if item.slice_id == self.current_slice_id
-                else item
-                for item in self.slices
-            )
+            slices = self._slices_with_current_status(SliceStatus.IN_PROGRESS)
         return self._replace_current_unit(
             updated_unit,
             slices=slices,
@@ -1282,12 +1349,7 @@ class WorkflowState:
         )
         slices = self.slices
         if limit_reached:
-            slices = tuple(
-                replace(item, status=SliceStatus.AWAITING_USER_DECISION)
-                if item.slice_id == self.current_slice_id
-                else item
-                for item in self.slices
-            )
+            slices = self._slices_with_current_status(SliceStatus.AWAITING_USER_DECISION)
         return self._replace_current_unit(updated_unit, slices=slices, updated_at=updated_at)
 
     def record_invocation_failure(
@@ -1365,12 +1427,7 @@ class WorkflowState:
             ),
             invocation_failures=(*current.invocation_failures, failure),
         )
-        slices = tuple(
-            replace(item, status=slice_status)
-            if item.slice_id == self.current_slice_id
-            else item
-            for item in self.slices
-        )
+        slices = self._slices_with_current_status(slice_status)
         return self._replace_current_unit(
             updated_unit, slices=slices, updated_at=updated_at
         )
@@ -1396,12 +1453,7 @@ class WorkflowState:
             status=WorkUnitStatus.IN_PROGRESS,
             gate=GateRecord(),
         )
-        slices = tuple(
-            replace(item, status=SliceStatus.IN_PROGRESS)
-            if item.slice_id == self.current_slice_id
-            else item
-            for item in self.slices
-        )
+        slices = self._slices_with_current_status(SliceStatus.IN_PROGRESS)
         return self._replace_current_unit(
             updated_unit, slices=slices, updated_at=updated_at
         )
@@ -1419,13 +1471,20 @@ class WorkflowState:
             status=WorkUnitStatus.IN_PROGRESS,
             gate=GateRecord(),
         )
-        slices = tuple(
-            replace(item, status=SliceStatus.IN_PROGRESS)
+        slices = self._slices_with_current_status(SliceStatus.IN_PROGRESS)
+        return self._replace_current_unit(updated_unit, slices=slices, updated_at=updated_at)
+
+    def _slices_with_current_status(
+        self, status: SliceStatus
+    ) -> tuple[SliceRecord, ...]:
+        if self.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW:
+            return self.slices
+        return tuple(
+            replace(item, status=status)
             if item.slice_id == self.current_slice_id
             else item
             for item in self.slices
         )
-        return self._replace_current_unit(updated_unit, slices=slices, updated_at=updated_at)
 
     def _replace_current_unit(
         self,
