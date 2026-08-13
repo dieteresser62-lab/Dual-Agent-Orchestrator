@@ -227,6 +227,7 @@ class WorkflowContext:
     validation_matrix: ValidationMatrix = DEFAULT_WORKFLOW_VALIDATION_MATRIX
     red_state_followup_slice: str | None = None
     retry_incomplete_validation: bool = False
+    retry_failed_validation: bool = False
     quota_wait_policy: QuotaWaitPolicy = QuotaWaitPolicy()
     require_slice_plan: bool = False
     dynamic_test_scope: bool = False
@@ -274,6 +275,8 @@ class WorkflowContext:
             )
         if not isinstance(self.retry_incomplete_validation, bool):
             raise ValueError("retry_incomplete_validation must be a boolean")
+        if not isinstance(self.retry_failed_validation, bool):
+            raise ValueError("retry_failed_validation must be a boolean")
         if not isinstance(self.quota_wait_policy, QuotaWaitPolicy):
             raise ValueError("quota_wait_policy must be a QuotaWaitPolicy")
         if not isinstance(self.require_slice_plan, bool):
@@ -734,6 +737,7 @@ class WorkflowEngine:
         self.now_fn = now_fn
         self.sleep_fn = sleep_fn
         self.heartbeat_fn = heartbeat_fn
+        self._retried_failed_validation_fingerprints: set[str] = set()
 
     def run_current_work_unit(
         self,
@@ -1200,11 +1204,6 @@ class WorkflowEngine:
             raise WorkflowExecutionError(
                 "validation attestation is incomplete and cannot be overridden"
             )
-        if not attestation.passed and context.red_state_followup_slice is None:
-            self.driver.checkpoint(state, history)
-            raise WorkflowExecutionError(
-                "validation attestation is failing without a named red-state follow-up slice"
-            )
         review_round = (
             1
             + sum(
@@ -1664,7 +1663,17 @@ class WorkflowEngine:
         )
         if matching:
             existing = matching[-1]
-            if existing.complete or not context.retry_incomplete_validation:
+            retry_incomplete = (
+                not existing.complete and context.retry_incomplete_validation
+            )
+            retry_failed = (
+                existing.complete
+                and not existing.passed
+                and context.retry_failed_validation
+                and changes.fingerprint
+                not in self._retried_failed_validation_fingerprints
+            )
+            if not retry_incomplete and not retry_failed:
                 if not set(request.expected_commands).issubset(
                     existing.expected_commands
                 ):
@@ -1672,6 +1681,10 @@ class WorkflowEngine:
                         "validation requirements changed without a new diff fingerprint"
                     )
                 return existing, history
+            if retry_failed:
+                self._retried_failed_validation_fingerprints.add(
+                    changes.fingerprint
+                )
             request = replace(request, attempt_number=len(matching) + 1)
         attestation = self.driver.validate(changes, request)
         if attestation.diff_fingerprint != changes.fingerprint:

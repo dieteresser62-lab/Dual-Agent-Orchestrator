@@ -516,6 +516,14 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--retry-failed-validation",
+        action="store_true",
+        help=(
+            "Explicitly re-run a cached FAIL v3 validation once per process for the "
+            "same diff fingerprint after investigating or repairing the failure."
+        ),
+    )
+    parser.add_argument(
         "--quota-auto-resume",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -852,7 +860,11 @@ def main(
         return 1
 
     log_level = logging.DEBUG if args.verbose else logging.WARNING if args.quiet else logging.INFO
-    logging.basicConfig(level=log_level, format="[%(levelname)s] %(message)s")
+    logging.basicConfig(
+        level=log_level,
+        format="[%(asctime)s] [%(levelname)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
     logger = logging.getLogger(__name__)
     for warning in args.configuration_warnings:
         logger.warning("%s", warning)

@@ -5,6 +5,7 @@ import argparse
 import logging
 import hashlib
 import re
+import time
 from dataclasses import replace
 from pathlib import Path
 
@@ -314,7 +315,20 @@ class ProductionWorkflowDriver(WorkflowDriver):
         )
 
     def validate(self, changes: WorkflowChanges, request) -> object:
-        return run_validation_matrix(config=self.config, request=request)
+        started = time.monotonic()
+        logger.info(
+            "Validation matrix starting: commands=%s attempt=%s",
+            len(request.commands),
+            request.attempt_number,
+        )
+        attestation = run_validation_matrix(config=self.config, request=request)
+        logger.info(
+            "Validation matrix finished: status=%s elapsed=%.2fs summary=%s",
+            attestation.status.value,
+            time.monotonic() - started,
+            attestation.summary,
+        )
+        return attestation
 
     def validate_plan(
         self,
@@ -699,6 +713,7 @@ def _context(
         current_branch=inspect_repository(Path.cwd()).branch,
         validation_matrix=validation_matrix,
         retry_incomplete_validation=bool(args.retry_incomplete_validation),
+        retry_failed_validation=bool(args.retry_failed_validation),
         quota_wait_policy=args.quota_wait_policy,
         require_slice_plan=state.current_work_unit.kind is WorkUnitKind.PLAN,
         dynamic_test_scope=True,
@@ -1023,7 +1038,7 @@ def run_production_workflow(
 
         if current.kind is WorkUnitKind.PLAN:
             if state.execution_mode == TaskMode.PLAN_ONLY.value:
-                commit_ref = result.commit_ref
+                commit_ref = state.current_slice.commit_ref
                 if commit_ref is None:
                     raise WorkflowExecutionError(
                         "completed PLAN_ONLY run has no reviewed plan commit"

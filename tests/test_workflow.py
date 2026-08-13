@@ -810,6 +810,47 @@ def test_explicit_retry_can_replace_cached_incomplete_after_environment_repair()
     assert completed.history.attestations[1].passed is True
 
 
+def test_explicit_failed_retry_runs_once_then_reuses_result_for_review_chain() -> None:
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    failed = replace(
+        _attestation(changes),
+        records=(
+            ValidationRecord(
+                ValidationStatus.FAIL,
+                _attestation(changes).expected_commands[0],
+                1,
+                "red",
+            ),
+        ),
+        summary="validation failed",
+    )
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[],
+        reviewer_outputs=[],
+    )
+    engine = WorkflowEngine(driver)
+    history = WorkflowHistory(2, attestations=(failed,))
+
+    retried, retried_history = engine._attestation(
+        changes,
+        history,
+        replace(_context(), retry_failed_validation=True),
+        1,
+    )
+    reused, reused_history = engine._attestation(
+        changes,
+        retried_history,
+        replace(_context(), retry_failed_validation=True),
+        1,
+    )
+
+    assert [request.attempt_number for request in driver.validation_requests] == [2]
+    assert retried.passed is True
+    assert reused is retried
+    assert reused_history is retried_history
+
+
 def test_quota_wait_checkpoints_then_retries_exact_same_codex_step_once() -> None:
     now = [datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)]
     changes = _changes("1", "src/early.py", TEST_FILE)
@@ -1368,6 +1409,25 @@ def test_invalid_attestation_stops_before_any_reviewer(invalid: str) -> None:
         WorkflowEngine(driver).run_current_work_unit(_slice_state(), _context())
 
     assert driver.reviewer_calls == []
+    assert driver.commit_calls == []
+
+
+def test_complete_failing_attestation_reaches_reviewer_without_red_state() -> None:
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[],
+        invalid_attestation="failing",
+        fail_reviewer_once=True,
+    )
+
+    with pytest.raises(RuntimeError, match="interruption"):
+        WorkflowEngine(driver).run_current_work_unit(_slice_state(), _context())
+
+    assert [call.reviewer for call in driver.reviewer_calls] == [AgentRole.CLAUDE]
+    assert "validation failed" in driver.reviewer_calls[0].prompt
+    assert "approval MUST be NO" in driver.reviewer_calls[0].prompt
     assert driver.commit_calls == []
 
 

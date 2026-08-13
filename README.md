@@ -262,6 +262,7 @@ Für deterministische Negativ- und Fortsetzungsszenarien kann ein State-v3-JSON-
 |---|---|---|
 | `--test-command <cmd>` | Umgebung, Repositorymatrix oder Erkennung | Kompatibilitäts-Validierungsbefehl; eine explizite leere Zeichenfolge deaktiviert ihn. |
 | `--retry-incomplete-validation` | aus | Eine zwischengespeicherte `INCOMPLETE`-Matrix für denselben Fingerprint nach Reparatur der Umgebung erneut ausführen. |
+| `--retry-failed-validation` | aus | Eine zwischengespeicherte rote Matrix für denselben Fingerprint pro Prozessaufruf ausdrücklich erneut ausführen. |
 | `--dry-run` | aus | Das integrierte State-v3-Erfolgsszenario ohne API-Aufrufe oder Schreibzugriffe ausführen. |
 | `--dry-run-scenario <path>` | nicht gesetzt | Ein deterministisches JSON-Szenario ausführen. |
 | `--dry-run-report <path>` | nicht gesetzt | Den Auditbericht des skriptgesteuerten Szenarios schreiben. |

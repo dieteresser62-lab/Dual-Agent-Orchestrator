@@ -360,4 +360,8 @@ def _compact_output(stdout: str, stderr: str, limit: int) -> str:
     if len(combined) <= limit:
         return combined
     omitted = len(combined) - limit
-    return f"{combined[:limit]}\n...[{omitted} characters omitted]"
+    head_length = max(1, limit // 2)
+    tail_length = limit - head_length
+    head = combined[:head_length]
+    tail = combined[-tail_length:] if tail_length else ""
+    return f"{head}\n...[{omitted} characters omitted]...\n{tail}"

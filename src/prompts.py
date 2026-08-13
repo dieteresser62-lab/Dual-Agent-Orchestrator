@@ -50,6 +50,17 @@ def build_v3_review_contract(contract: StepContract) -> str:
             "\n- Anchor values: ANCHOR: <id> | <input> | <expected> | <tolerance> "
             f"(origin is bound to {contract.anchor_origin})"
         )
+    red_state_rule = ""
+    if attestation is not None and not attestation.passed:
+        red_state_rule = (
+            "\n- The bound validation is red. Because no named red-state follow-up "
+            "Slice is authorized, approval MUST be NO and you must open a BLOCKER "
+            "that identifies the failed gate and a focused acceptance test."
+            if contract.red_state_followup_slice is None
+            else "\n- The bound validation is red under the explicitly authorized "
+            f"follow-up {contract.red_state_followup_slice}; verify that exact deferral "
+            "before considering approval."
+        )
     return textwrap.dedent(
         f"""
         STATE-V3 CONTRACT (mandatory for step {contract.name}):
@@ -66,6 +77,7 @@ def build_v3_review_contract(contract: StepContract) -> str:
         - Before a positive approval: PRE_MORTEM: <most likely failure cause in three months>
         - Decision: {approval}
         - A stop request replaces the decision: STOP_REQUESTED: <rule id> | <rationale>
+        {red_state_rule}
         {anchor_rule}
         - Final non-empty line: STATUS: DONE
         - Phase and legacy approval markers are invalid in state-v3.

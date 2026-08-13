@@ -512,7 +512,14 @@ def test_red_validation_requires_explicit_red_state_exception(
     if completes:
         assert run(scenario, tmp_path).result.completed
     else:
-        with pytest.raises(WorkflowExecutionError, match="failing without"):
+        scenario = replace(
+            scenario,
+            repair_outputs=(approval(AgentRole.CLAUDE),),
+        )
+        with pytest.raises(
+            WorkflowContractError,
+            match="complete passing validation attestation",
+        ):
             run(scenario, tmp_path)
 
 

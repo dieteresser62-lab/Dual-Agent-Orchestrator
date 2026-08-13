@@ -10,11 +10,13 @@ from prompts import (
 )
 
 
-def _attestation() -> ValidationAttestation:
+def _attestation(
+    status: ValidationStatus = ValidationStatus.PASS,
+) -> ValidationAttestation:
     return ValidationAttestation(
         "validation-001", "a" * 64, ("pytest",),
-        (ValidationRecord(ValidationStatus.PASS, "pytest", 0),),
-        "b" * 64, "all tests passed",
+        (ValidationRecord(status, "pytest", 0 if status is ValidationStatus.PASS else 1),),
+        "b" * 64, "all tests passed" if status is ValidationStatus.PASS else "tests failed",
     )
 
 
@@ -90,6 +92,24 @@ def test_review_contract_binds_attestation_and_forbids_agent_validation() -> Non
     assert "PRE_MORTEM" in rendered
     assert "Never emit FINDING_STATUS with NONE" in rendered
     assert "SLICE_APPROVAL: 18 | YES|NO" in rendered
+
+
+def test_review_contract_routes_unapproved_red_validation_to_blocking_review() -> None:
+    rendered = build_v3_review_contract(
+        StepContract(
+            name="red-slice-review",
+            reviewer=AgentRole.CLAUDE,
+            approval_marker=ApprovalMarker.SLICE,
+            slice_id="18",
+            round_number=1,
+            review_fingerprint="a" * 64,
+            validation_attestation=_attestation(ValidationStatus.FAIL),
+        )
+    )
+
+    assert "validation is red" in rendered
+    assert "approval MUST be NO" in rendered
+    assert "open a BLOCKER" in rendered
 
 
 def test_prompts_delimit_untrusted_content() -> None:

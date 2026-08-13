@@ -65,14 +65,18 @@ def test_task_file_accepts_positional_compatibility_path(tmp_path: Path) -> None
     assert args.task_file == "work.md"
 
 
-def test_retry_incomplete_validation_requires_explicit_cli_flag(tmp_path: Path) -> None:
+def test_validation_retries_require_explicit_cli_flags(tmp_path: Path) -> None:
     default = parse_args([], cwd=tmp_path, environ={})
     requested = parse_args(
-        ["--retry-incomplete-validation"], cwd=tmp_path, environ={}
+        ["--retry-incomplete-validation", "--retry-failed-validation"],
+        cwd=tmp_path,
+        environ={},
     )
 
     assert default.retry_incomplete_validation is False
+    assert default.retry_failed_validation is False
     assert requested.retry_incomplete_validation is True
+    assert requested.retry_failed_validation is True
 
 
 def test_quota_wait_policy_defaults_and_explicit_disable(tmp_path: Path) -> None:
@@ -628,6 +632,11 @@ def test_invalid_stream_environment_warning_uses_configured_log_format(tmp_path:
 
     assert result.returncode == 0
     assert "[WARNING] Invalid RUN_TASK_WATCH_STREAM_CHANNELS='invalid'" in result.stderr
+    assert re.search(
+        r"^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] \[WARNING\] ",
+        result.stderr,
+        re.MULTILINE,
+    )
 
 
 def test_cli_and_runtime_defaults_cannot_drift() -> None:

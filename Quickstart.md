@@ -142,6 +142,16 @@ run_task --resume --task-file task.md \
 
 Die Exitcodes 2 und 3 kennzeichnen einen fortsetzbaren Quota- beziehungsweise Agentenfehler. Behebe die gemeldete Ursache und setze denselben Lauf fort. `.orchestrator/state.json` und Checkpointdateien dürfen niemals manuell bearbeitet werden.
 
+Jede Orchestrator-Logzeile beginnt mit der lokalen Systemzeit. Für die
+Validierungsmatrix werden zusätzlich Start, Ende, Status und Laufzeit
+ausgegeben. Eine vollständige rote Validierung wird den Reviewern als
+gebundener Befund übergeben und nicht vor dem Review als technischer
+Workflowfehler beendet. Soll dieselbe rote Matrix nach einer Umgebungs- oder
+Testreparatur pro Prozessaufruf nochmals laufen, setze beim Resume ausdrücklich
+`--retry-failed-validation`. Der Retry-Zähler ist nicht über Prozessneustarts
+hinweg persistiert; die Option muss bei jedem weiteren Versuch erneut bewusst
+angegeben werden.
+
 ## 8. Abschluss prüfen
 
 Ein abgeschlossener Lauf endet mit Exitcode 0. Prüfe die entstandenen lokalen Commits und den sauberen Status:

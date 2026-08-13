@@ -5,11 +5,15 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
+import orchestrator
+import pytest
 from agent_runtime import AgentInvocationError
 from cli import parse_args
 from contracts import AgentRole
 from orchestrator import ProductionWorkflowDriver, run_pipeline, run_production_workflow
 from workflow import CodexInvocation, ReviewerInvocation
+from workflow import WorkflowExecutionError
+from plan_handoff import PlanHandoffError
 from workflow_state import WorkflowStep
 from workflow_state import AgentFailureKind
 
@@ -426,3 +430,75 @@ def test_generated_implementation_handoff_skips_second_plan_review(
         "Guide.html",
         "docs/internal/slice-guide-01-rewrite-guide.md",
     ]
+
+
+def test_completed_plan_resume_retries_failed_handoff_without_agents(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repository = _repository(tmp_path, "feature/handoff-resume")
+    task = tmp_path / "resume-plan.md"
+    task.write_text(
+        "\n".join(
+            (
+                "ORCHESTRATOR_MODE: PLAN_ONLY",
+                "WORK_PLAN_PATH: docs/internal/resume.md",
+                "TARGET_BRANCH: feature/handoff-resume",
+                "TASK_SCOPE: docs/internal/resume.md",
+                "",
+                "Create the reviewed resume plan.",
+            )
+        ),
+        encoding="utf-8",
+    )
+    agent_steps: list[WorkflowStep] = []
+
+    def codex(driver: ProductionWorkflowDriver, invocation: CodexInvocation) -> str:
+        agent_steps.append(invocation.step)
+        plan = repository / "docs" / "internal" / "resume.md"
+        plan.parent.mkdir(parents=True, exist_ok=True)
+        plan.write_text(
+            "# Resume plan\n\n### Slice 1 – Implement resume\n\n"
+            "**Exakter Änderungspfad**\n\n- `src/resume.py`\n",
+            encoding="utf-8",
+        )
+        output = (
+            "SLICE_PLAN: 1 | create resume plan | docs/internal/resume.md\n"
+            "PLAN_READY: YES\nSTATUS: DONE"
+        )
+        driver.last_codex_output = output
+        return output
+
+    def reviewer(
+        _driver: ProductionWorkflowDriver, invocation: ReviewerInvocation
+    ) -> str:
+        agent_steps.append(invocation.step)
+        return _review(invocation.reviewer, "PLAN_APPROVAL: YES")
+
+    real_handoff = orchestrator.write_implementation_handoff
+    handoff_calls = 0
+
+    def fail_once(**kwargs):
+        nonlocal handoff_calls
+        handoff_calls += 1
+        if handoff_calls == 1:
+            raise PlanHandoffError("simulated post-commit handoff failure")
+        return real_handoff(**kwargs)
+
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_codex", codex)
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_reviewer", reviewer)
+    monkeypatch.setattr(orchestrator, "write_implementation_handoff", fail_once)
+    monkeypatch.chdir(repository)
+
+    with pytest.raises(
+        WorkflowExecutionError,
+        match="could not create IMPLEMENT handoff",
+    ):
+        run_production_workflow(task, _args(repository, task))
+
+    steps_after_commit = tuple(agent_steps)
+    resumed = run_production_workflow(task, _args(repository, task))
+
+    assert resumed.workflow_completed
+    assert tuple(agent_steps) == steps_after_commit
+    assert handoff_calls == 2
+    assert task.with_name("resume-implement.md").is_file()
