@@ -110,6 +110,7 @@ def test_claude_defaults_are_quota_conscious_and_permissions_are_separate() -> N
         allowed = command[command.index("--allowedTools") + 1]
         assert allowed == "Read"
         assert command[command.index("--permission-mode") + 1] == "dontAsk"
+        assert command[command.index("--setting-sources") + 1] == "user"
         assert command[command.index("--disallowedTools") + 1] == (
             "Bash,Edit,Write,NotebookEdit,Grep,Glob"
         )
@@ -190,6 +191,27 @@ def test_claude_json_envelope_tracks_usage_and_rejects_permission_denials() -> N
         }
     )
     assert adapter.extract_output(structured, "", {}).endswith("STATUS: DONE")
+
+    claude_2_1_227_wrapped = json.dumps(
+        {
+            "is_error": False,
+            "result": "",
+            "structured_output": {
+                "response": (
+                    "REVIEWER: claude\n"
+                    "REVIEW_EVIDENCE: scope | risk | break\n"
+                    "PRE_MORTEM: drift\n"
+                    "PLAN_APPROVAL: YES\n"
+                    "STATUS: DONE</response>\n</invoke>\n"
+                )
+            },
+            "permission_denials": [],
+        }
+    )
+    normalized = adapter.extract_output(claude_2_1_227_wrapped, "", {})
+    assert normalized.endswith("STATUS: DONE")
+    assert "</response>" not in normalized
+    assert "</invoke>" not in normalized
 
     encoded_result = json.dumps(
         {

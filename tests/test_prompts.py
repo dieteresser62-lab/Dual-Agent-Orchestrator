@@ -88,6 +88,7 @@ def test_review_contract_binds_attestation_and_forbids_agent_validation() -> Non
     assert "do not emit VALIDATION_RESULT" in rendered
     assert "REVIEW_EVIDENCE" in rendered
     assert "PRE_MORTEM" in rendered
+    assert "Never emit FINDING_STATUS with NONE" in rendered
     assert "SLICE_APPROVAL: 18 | YES|NO" in rendered
 
 

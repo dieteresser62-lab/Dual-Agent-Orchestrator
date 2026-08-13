@@ -53,9 +53,16 @@ class CapabilitySpec:
 
 def _trim_after_done_marker(text: str) -> str:
     matches = list(re.finditer(r"(?m)^STATUS: DONE[ \t]*\r?$", text))
-    if not matches:
-        return text.strip()
-    return text[: matches[-1].end()].strip()
+    if matches:
+        return text[: matches[-1].end()].strip()
+    # Claude Code 2.1.227 can leak its internal closing wrapper into the
+    # structured `response` field. Normalize only that exact terminal shape;
+    # arbitrary text after STATUS: DONE must continue to fail closed.
+    wrapped = re.search(
+        r"(?m)^STATUS: DONE(?=</response>[ \t]*(?:\r?\n</invoke>)?[ \t]*(?:\r?\n)?\Z)",
+        text,
+    )
+    return text[: wrapped.end()].strip() if wrapped else text.strip()
 
 
 def _json_object(text: str, role: str) -> dict[str, object]:
@@ -309,6 +316,7 @@ class ClaudeAdapter(_BaseAdapter):
             "--permission-mode",
             "--output-format",
             "--no-session-persistence",
+            "--setting-sources",
             "--safe-mode",
             "--strict-mcp-config",
             "--system-prompt",
@@ -411,6 +419,8 @@ class ClaudeAdapter(_BaseAdapter):
             "Bash,Edit,Write,NotebookEdit,Grep,Glob",
             "--permission-mode",
             "dontAsk",
+            "--setting-sources",
+            "user",
             "--safe-mode",
             "--strict-mcp-config",
             "--prompt-suggestions",
