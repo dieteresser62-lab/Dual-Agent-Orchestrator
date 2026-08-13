@@ -15,7 +15,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Callable, Mapping, TextIO
 
 from agent_adapters import (
@@ -33,6 +33,22 @@ from workflow_state import AgentFailureKind
 TEST_OUTPUT_LIMIT = 7000
 ERROR_TRUNCATION_LIMIT = 1200
 logger = logging.getLogger(__name__)
+REVIEW_SNAPSHOT_EXCLUDED_ROOTS = frozenset(
+    {
+        ".git",
+        ".orchestrator",
+        ".pytest_cache",
+        ".tmp",
+        "__pycache__",
+        "build",
+        "coverage",
+        "dist",
+        "node_modules",
+        "release-archive",
+        "scratch",
+        "tmp",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -220,18 +236,84 @@ class ReviewerWorkspace:
         shutil.rmtree(self.container, ignore_errors=True)
 
 
+def _review_snapshot_paths(source: Path) -> tuple[PurePosixPath, ...] | None:
+    """Return tracked and non-ignored untracked paths, or None outside Git."""
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "ls-files",
+                "--cached",
+                "--others",
+                "--exclude-standard",
+                "-z",
+                "--",
+            ],
+            cwd=source,
+            capture_output=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0 or not isinstance(result.stdout, bytes):
+        return None
+    paths: list[PurePosixPath] = []
+    for field in result.stdout.split(b"\0"):
+        if not field:
+            continue
+        raw = os.fsdecode(field)
+        path = PurePosixPath(raw)
+        if path.is_absolute() or not path.parts or ".." in path.parts:
+            raise RuntimeError(f"git returned unsafe reviewer snapshot path: {raw!r}")
+        if path.parts[0] in REVIEW_SNAPSHOT_EXCLUDED_ROOTS:
+            continue
+        paths.append(path)
+    return tuple(sorted(set(paths), key=lambda item: item.as_posix()))
+
+
+def _copy_review_snapshot(source: Path, destination: Path) -> int:
+    paths = _review_snapshot_paths(source)
+    if paths is None:
+        # Unit tests and explicit diagnostics may use a non-Git fixture. Keep that
+        # compatibility path bounded by excluding generated and dependency trees.
+        def ignore_generated(_directory: str, names: list[str]) -> set[str]:
+            return {name for name in names if name in REVIEW_SNAPSHOT_EXCLUDED_ROOTS}
+
+        shutil.copytree(source, destination, symlinks=True, ignore=ignore_generated)
+        return sum(1 for path in destination.rglob("*") if path.is_file())
+
+    destination.mkdir()
+    copied = 0
+    for relative in paths:
+        source_path = source.joinpath(*relative.parts)
+        destination_path = destination.joinpath(*relative.parts)
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+        metadata = source_path.lstat()
+        if source_path.is_symlink():
+            destination_path.symlink_to(os.readlink(source_path))
+        elif source_path.is_file():
+            shutil.copy2(source_path, destination_path, follow_symlinks=False)
+            copied += 1
+        elif source_path.is_dir():
+            # Gitlinks/submodules are represented as directories but are not copied
+            # recursively; their content is outside the canonical repository evidence.
+            destination_path.mkdir(exist_ok=True)
+        else:
+            raise RuntimeError(
+                f"unsupported reviewer snapshot path type: {relative.as_posix()}"
+            )
+    return copied
+
+
 def create_read_only_reviewer_workspace(repo_root: Path) -> ReviewerWorkspace:
-    """Copy the current repository state and remove write bits without following symlinks."""
+    """Copy canonical repository files and remove write bits without following links."""
     source = repo_root.resolve()
     container = Path(tempfile.mkdtemp(prefix="dao-review-workspace-"))
     destination = container / "repo"
-
-    def ignore_generated(_directory: str, names: list[str]) -> set[str]:
-        ignored = {".orchestrator", ".pytest_cache", "__pycache__"}
-        return {name for name in names if name in ignored}
-
+    started = time.monotonic()
+    logger.info("Preparing selective read-only reviewer snapshot.")
     try:
-        shutil.copytree(source, destination, symlinks=True, ignore=ignore_generated)
+        copied = _copy_review_snapshot(source, destination)
         paths = sorted(destination.rglob("*"), key=lambda item: len(item.parts), reverse=True)
         for path in paths:
             if path.is_symlink():
@@ -243,10 +325,25 @@ def create_read_only_reviewer_workspace(repo_root: Path) -> ReviewerWorkspace:
                 path.chmod(0o555 if executable else 0o444)
         destination.chmod(0o555)
         container.chmod(0o555)
+        logger.info(
+            "Reviewer snapshot ready: files=%s elapsed=%.2fs path=%s",
+            copied,
+            time.monotonic() - started,
+            destination,
+        )
         return ReviewerWorkspace(root=destination, container=container)
     except Exception:
         ReviewerWorkspace(root=destination, container=container).cleanup()
         raise
+
+
+def create_empty_reviewer_workspace() -> ReviewerWorkspace:
+    """Create a private read-only cwd for contract-only reviewer repairs."""
+    container = Path(tempfile.mkdtemp(prefix="dao-review-contract-"))
+    destination = container / "empty"
+    destination.mkdir(mode=0o555)
+    container.chmod(0o555)
+    return ReviewerWorkspace(root=destination, container=container)
 
 
 def can_resolve_host(hostname: str) -> bool:
@@ -534,6 +631,7 @@ def run_agent(
     *,
     config: OrchestratorConfig,
     shorten: Callable[[str | None, int], str],
+    reviewer_repository_required: bool = True,
 ) -> str:
     """Run an adapter command once, with optional live streaming and strict output checks."""
     agent_key = adapter.name
@@ -548,7 +646,11 @@ def run_agent(
 
     try:
         if adapter.reviewer:
-            workspace = create_read_only_reviewer_workspace(execution_root)
+            workspace = (
+                create_read_only_reviewer_workspace(execution_root)
+                if reviewer_repository_required
+                else create_empty_reviewer_workspace()
+            )
             source_root = execution_root
             execution_root = workspace.root
             adapter.bind_reviewer_workspace(source_root, execution_root)
@@ -989,6 +1091,7 @@ def run_agent_checked(
     shorten: Callable[[str | None, int], str],
     parse_flag: Callable[[str, str], str | None],
     validate_done_marker: Callable[[str], bool],
+    reviewer_repository_required: bool = True,
 ) -> str:
     """Run the requested agent with retries and contract validation."""
     required_flags = required_flags or []
@@ -1037,6 +1140,7 @@ def run_agent_checked(
                 prompt_to_send,
                 config=config,
                 shorten=shorten,
+                reviewer_repository_required=reviewer_repository_required,
             )
             log_path = log_dir / f"{log_prefix}.attempt-{attempt}.log"
             write_file(log_path, output)

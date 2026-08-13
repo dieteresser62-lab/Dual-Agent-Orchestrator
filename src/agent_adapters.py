@@ -52,6 +52,15 @@ class CapabilitySpec:
 
 
 def _trim_after_done_marker(text: str) -> str:
+    stripped = text.strip()
+    fenced = re.fullmatch(
+        r"Here is the corrected output complying with the STATE-V3 CONTRACT:\s*"
+        r"```(?:text)?\s*\n(?P<body>REVIEWER:[\s\S]*?STATUS: DONE)\s*```",
+        stripped,
+        re.IGNORECASE,
+    )
+    if fenced is not None:
+        text = fenced.group("body")
     matches = list(re.finditer(r"(?m)^STATUS: DONE[ \t]*\r?$", text))
     if matches:
         return text[: matches[-1].end()].strip()

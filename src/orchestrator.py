@@ -16,7 +16,8 @@ from audit_trail import (
     project_slice_audit,
     project_work_plan_audit,
     validate_slice_document,
-    validate_work_plan_document,
+    prepare_managed_work_plan_document,
+    validate_managed_work_plan_document,
 )
 from cli import DEFAULT_AGENTS_FILE, DEFAULT_TASK_FILE
 from contracts import (
@@ -183,7 +184,14 @@ class ProductionWorkflowDriver(WorkflowDriver):
             if artifact.is_file():
                 self.last_codex_output = artifact.read_text(encoding="utf-8").strip()
 
-    def _agent(self, role: AgentRole, prompt: str, label: str) -> str:
+    def _agent(
+        self,
+        role: AgentRole,
+        prompt: str,
+        label: str,
+        *,
+        reviewer_repository_required: bool = True,
+    ) -> str:
         output = run_agent_checked(
             agent_key=role.value,
             prompt=prompt,
@@ -198,6 +206,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
             shorten=_shorten,
             parse_flag=_parse_flag,
             validate_done_marker=_has_done,
+            reviewer_repository_required=reviewer_repository_required,
         )
         return output
 
@@ -231,10 +240,26 @@ class ProductionWorkflowDriver(WorkflowDriver):
             f"Contract:\n{invocation.contract}\n\n"
             f"Rejected output:\n{invocation.rejected_output}"
         )
-        return self._agent(invocation.reviewer, prompt, "review-contract-repair")
+        return self._agent(
+            invocation.reviewer,
+            prompt,
+            "review-contract-repair",
+            reviewer_repository_required=False,
+        )
 
     def collect_changes(self, start_commit: str) -> WorkflowChanges:
-        changes = collect_repository_changes(self.root, start_commit)
+        semantic_paths = (
+            (self.active_state.work_plan_path,)
+            if self.active_state is not None
+            and self.active_state.work_plan_path is not None
+            else ()
+        )
+        changes = collect_repository_changes(
+            self.root,
+            start_commit,
+            semantic_markdown_paths=semantic_paths,
+            excluded_paths=_bound_task_control_paths(self.root, self.active_state),
+        )
         if changes.entries:
             rendered = WorkflowChanges(
                 start_commit=start_commit,
@@ -424,7 +449,11 @@ class ProductionWorkflowDriver(WorkflowDriver):
         )
         if not scope:
             raise WorkflowExecutionError("final correction has no persisted planned scope")
-        start = collect_repository_changes(self.root, identity.head)
+        start = collect_repository_changes(
+            self.root,
+            identity.head,
+            excluded_paths=_bound_task_control_paths(self.root, self.active_state),
+        )
         return WorkflowCorrectionBoundary(identity.head, scope, start.fingerprint)
 
     def commit_slice(self, request: WorkflowCommitRequest) -> str:
@@ -440,6 +469,13 @@ class ProductionWorkflowDriver(WorkflowDriver):
             start_commit=current.start_commit,
             start_fingerprint=current.start_fingerprint,
             scope_paths=current.scope_paths,
+            semantic_markdown_paths=(
+                (state.work_plan_path,)
+                if state.work_plan_path is not None
+                and state.work_plan_path in current.scope_paths
+                else ()
+            ),
+            excluded_control_paths=_bound_task_control_paths(self.root, state),
         )
         summary = next(
             (
@@ -481,8 +517,6 @@ class ProductionWorkflowDriver(WorkflowDriver):
 
     def _project_audit(self, state: WorkflowState, history: WorkflowHistory) -> None:
         """Write only managed audit blocks when the persisted plan names a target."""
-        if not history.events:
-            return
         unit = state.current_work_unit
         if unit.kind is WorkUnitKind.FINAL_REVIEW:
             # Final-review evidence remains in state/checkpoints. Reusing the last Slice
@@ -526,6 +560,20 @@ class ProductionWorkflowDriver(WorkflowDriver):
             ),
         )
         if unit.kind is WorkUnitKind.PLAN:
+            if state.work_plan_path is not None:
+                try:
+                    document = prepare_managed_work_plan_document(
+                        repository_root=self.root,
+                        work_plan_path=state.work_plan_path,
+                    )
+                except ValueError as exc:
+                    logger.debug("Work-plan audit target is not ready: %s", exc)
+                else:
+                    if history.events:
+                        project_work_plan_audit(document, projection)
+                    return
+            if not history.events:
+                return
             candidates = [Path(state.task_file)]
             if state.work_plan_path is not None:
                 candidates.append(self.root / state.work_plan_path)
@@ -537,7 +585,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
             )
             for candidate in candidates:
                 try:
-                    document = validate_work_plan_document(
+                    document = validate_managed_work_plan_document(
                         repository_root=self.root, work_plan_path=candidate
                     )
                 except ValueError:
@@ -666,6 +714,28 @@ def _history(state: WorkflowState) -> WorkflowHistory:
     if history.work_unit_id != state.current_work_unit_id:
         return WorkflowHistory(state.current_work_unit_id)
     return history
+
+
+def _bound_task_control_paths(
+    repository_root: Path,
+    state: WorkflowState | None,
+) -> tuple[str, ...]:
+    """Exclude an unchanged in-repository task file from product evidence."""
+    if state is None or state.task_digest is None:
+        return ()
+    root = repository_root.resolve()
+    task = Path(state.task_file).resolve()
+    if not task.is_relative_to(root):
+        return ()
+    try:
+        digest = hashlib.sha256(task.read_bytes()).hexdigest()
+    except OSError as exc:
+        raise WorkflowExecutionError(f"bound task file is unreadable: {exc}") from exc
+    if digest != state.task_digest:
+        raise WorkflowExecutionError(
+            "bound task file changed during execution; start a new run with a new task digest"
+        )
+    return (task.relative_to(root).as_posix(),)
 
 
 def _history_payload(
@@ -865,7 +935,11 @@ def run_production_workflow(
                 driver.checkpoint(state, history)
                 return WorkflowRunResult(state, history)
             planned = state.planned_slices[state.current_slice_id - 1]
-            start = collect_repository_changes(root, expected_head)
+            start = collect_repository_changes(
+                root,
+                expected_head,
+                excluded_paths=_bound_task_control_paths(root, state),
+            )
             state = state.bind_current_slice_git_boundary(
                 start_commit=expected_head,
                 scope_paths=planned.scope_paths,
@@ -1065,6 +1139,22 @@ def run_pipeline(
 
     if getattr(args, "watch_run_id", None) is not None:
         return WatchTaskResult.from_workflow(result)
+    if result.exit_code != 0:
+        unit = result.state.current_work_unit
+        gate = unit.gate
+        logger.warning(
+            "Workflow stopped: exit=%s status=%s step=%s reason=%s detail=%s paths=%s",
+            result.exit_code,
+            unit.status.value,
+            unit.current_step.value,
+            gate.reason.value,
+            gate.detail or "(none)",
+            ", ".join(gate.paths) or "(none)",
+        )
+        logger.info(
+            "Continue this persisted run with --resume and the unchanged --task-file; "
+            "use an explicit gate decision only when reason and fingerprint were reviewed."
+        )
     return result.exit_code
 
 

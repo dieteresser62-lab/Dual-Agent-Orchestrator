@@ -48,6 +48,8 @@ class SliceGitBoundary:
     start_commit: str
     start_fingerprint: str
     scope_paths: tuple[str, ...]
+    semantic_markdown_paths: tuple[str, ...] = ()
+    excluded_control_paths: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if (
@@ -69,6 +71,20 @@ class SliceGitBoundary:
             raise GitTransactionError(
                 "slice boundary scope paths must be sorted and unique"
             )
+        semantic = _normalize_optional_scope_paths(self.semantic_markdown_paths)
+        if semantic != self.semantic_markdown_paths:
+            raise GitTransactionError(
+                "semantic Markdown paths must be sorted and unique"
+            )
+        if any(path not in self.scope_paths for path in semantic):
+            raise GitTransactionError(
+                "semantic Markdown paths must belong to the Slice scope"
+            )
+        excluded = _normalize_optional_scope_paths(self.excluded_control_paths)
+        if excluded != self.excluded_control_paths:
+            raise GitTransactionError("excluded control paths must be sorted and unique")
+        if any(path in self.scope_paths for path in excluded):
+            raise GitTransactionError("a control path cannot also belong to Slice scope")
 
 
 @dataclass(frozen=True)
@@ -186,7 +202,7 @@ def resume_slice(
     identity = _require_expected_feature_branch(repository_root, boundary.branch)
     if identity.head != boundary.start_commit:
         raise GitTransactionError("slice HEAD changed since its persisted start commit")
-    changes = collect_repository_changes(identity.repository_root, boundary.start_commit)
+    changes = _collect_boundary_changes(identity.repository_root, boundary)
     _require_scope(changes, boundary.scope_paths)
     if not changes.entries and changes.fingerprint != boundary.start_fingerprint:
         raise GitTransactionError("persisted slice start fingerprint does not match repository")
@@ -207,7 +223,7 @@ def commit_slice(
     identity = _require_expected_feature_branch(repository_root, boundary.branch)
     if identity.head != boundary.start_commit:
         raise GitTransactionError("slice HEAD changed after its persisted start")
-    changes = collect_repository_changes(identity.repository_root, boundary.start_commit)
+    changes = _collect_boundary_changes(identity.repository_root, boundary)
     if not changes.entries:
         raise GitTransactionError("slice commit requires at least one changed path")
     staged_before = _staged_paths(identity.repository_root, detect_renames=False)
@@ -260,15 +276,24 @@ def commit_slice(
                 "--",
                 *(f":(top,literal){path}" for path in content_paths),
             )
+        markdown_paths = tuple(
+            path for path in content_paths if path.lower().endswith(".md")
+        )
+        if markdown_paths:
+            _git(
+                identity.repository_root,
+                "add",
+                "--chmod=-x",
+                "--",
+                *(f":(top,literal){path}" for path in markdown_paths),
+            )
         staged_after = _staged_paths(identity.repository_root)
         if staged_after != changes.paths:
             raise GitTransactionError(
                 "staged paths do not exactly match the slice transaction: "
                 + ", ".join(staged_after)
             )
-        final_changes = collect_repository_changes(
-            identity.repository_root, boundary.start_commit
-        )
+        final_changes = _collect_boundary_changes(identity.repository_root, boundary)
         if final_changes.fingerprint != changes.fingerprint:
             raise GitTransactionError("slice fingerprint changed during exact staging")
 
@@ -370,6 +395,20 @@ def _validate_authorization(
             )
 
 
+def _collect_boundary_changes(
+    repository_root: Path,
+    boundary: SliceGitBoundary,
+) -> RepositoryChanges:
+    if boundary.semantic_markdown_paths or boundary.excluded_control_paths:
+        return collect_repository_changes(
+            repository_root,
+            boundary.start_commit,
+            semantic_markdown_paths=boundary.semantic_markdown_paths,
+            excluded_paths=boundary.excluded_control_paths,
+        )
+    return collect_repository_changes(repository_root, boundary.start_commit)
+
+
 def _require_expected_feature_branch(
     repository_root: Path,
     expected_branch: str,
@@ -428,6 +467,12 @@ def _normalize_scope_paths(paths: Sequence[str]) -> tuple[str, ...]:
         if path.is_absolute() or any(part in ("", ".", "..") for part in path.parts):
             raise GitTransactionError("slice scope paths must be relative POSIX paths")
     return normalized
+
+
+def _normalize_optional_scope_paths(paths: Sequence[str]) -> tuple[str, ...]:
+    if not paths:
+        return ()
+    return _normalize_scope_paths(paths)
 
 
 def _git(

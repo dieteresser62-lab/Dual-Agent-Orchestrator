@@ -156,6 +156,8 @@ Die wichtigsten Gates sind:
 
 Ein freigebender Review erfordert eine vollständige erfolgreiche Attestierung für denselben Fingerprint, autorisierte Teständerungen, keinen reviewer-eigenen offenen Blocker, Reviewevidenz oder konkrete Findings sowie ein Pre-Mortem. Nur der Reviewer, der ein Finding gemeldet hat, darf es schließen oder neu klassifizieren.
 
+Reviewer arbeiten in einem temporären schreibgeschützten Snapshot. Dieser enthält nur Git-sichtbare Quell- und Dokumentationsdateien; Metadaten, Abhängigkeiten und generierte Schwergewichte wie `.git`, `.orchestrator`, `node_modules`, `dist` und Releasearchive werden nicht kopiert. Reine Ausgabevertragskorrekturen erhalten ein leeres schreibgeschütztes Arbeitsverzeichnis. Eindeutig gebundene Formalmarker werden lokal ergänzt, ohne einen zweiten Modellreview auszulösen.
+
 Die Quotabehandlung erfolgt rollenspezifisch. Bei aktivierter automatischer Quotafortsetzung wird ein eindeutiger Reset innerhalb der konfigurierten Wartegrenze persistiert, unter Ausgabe von Heartbeats abgewartet und am exakt fehlgeschlagenen Schritt einmal fortgesetzt. Andernfalls endet der Prozess mit Exitcode 2 und bleibt fortsetzbar. Es gibt keine Ersatzrolle.
 
 ## Lokale Commits und externe Git-Aktionen

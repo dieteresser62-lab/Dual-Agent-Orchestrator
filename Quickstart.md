@@ -88,6 +88,8 @@ run_task --resume --task-file task.md \
 
 Nach dieser Freigabe wird ausschließlich das Arbeitsplanartefakt reviewed und lokal commitet. Prüfe den Commit, bevor du eine zweite Aufgabe im Modus `IMPLEMENT` erstellst.
 
+Claude- und Antigravity-Ergebnisse werden in einem automatisch verwalteten Prüfprotokoll am Ende des deklarierten Arbeitsplans dokumentiert. Der Orchestrator hält diese Blöcke aus dem fachlichen Fingerprint heraus und speichert Markdown beim Commit mit Git-Modus `100644`.
+
 ## 6. Implementierung starten
 
 Rufe den Starter aus dem Zielrepository über seinen absoluten Pfad oder einen konfigurierten globalen Symlink auf:

@@ -119,6 +119,9 @@ class WorkPlanDocument:
     markdown: str
 
 
+GENERIC_WORK_PLAN_AUDIT_HEADING = "Orchestrator-Prüfprotokoll"
+
+
 @dataclass(frozen=True)
 class _ManagedMarker:
     key: str
@@ -414,6 +417,87 @@ def validate_work_plan_document(
     )
 
 
+def validate_managed_work_plan_document(
+    *,
+    repository_root: Path,
+    work_plan_path: str | Path,
+) -> WorkPlanDocument:
+    """Validate any root-bound docs/internal work plan with complete managed blocks."""
+    root = Path(repository_root).resolve()
+    if not root.is_dir():
+        raise AuditTrailError("repository root must be an existing directory")
+    lexical_path = Path(work_plan_path)
+    if not lexical_path.is_absolute():
+        lexical_path = root / lexical_path
+    if lexical_path.is_symlink():
+        raise AuditTrailError("work plan must not be a symbolic link")
+    plan_path = _resolve_inside_repository(lexical_path, root, "work plan")
+    docs_root = (root / "docs" / "internal").resolve()
+    if not plan_path.is_relative_to(docs_root):
+        raise AuditTrailError("work plan must be below docs/internal")
+    if not plan_path.is_file():
+        raise AuditTrailError("work plan does not exist or is not a regular file")
+    try:
+        markdown = plan_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise AuditTrailError(f"work plan could not be read: {exc}") from exc
+    _lines_outside_code_fences(markdown)
+    _managed_ranges(markdown, require_all=True)
+    return WorkPlanDocument(root, plan_path, markdown)
+
+
+def prepare_managed_work_plan_document(
+    *,
+    repository_root: Path,
+    work_plan_path: str | Path,
+) -> WorkPlanDocument:
+    """Append an empty managed audit appendix to an arbitrary work plan once."""
+    root = Path(repository_root).resolve()
+    lexical_path = Path(work_plan_path)
+    if not lexical_path.is_absolute():
+        lexical_path = root / lexical_path
+    if lexical_path.is_symlink():
+        raise AuditTrailError("work plan must not be a symbolic link")
+    plan_path = _resolve_inside_repository(lexical_path, root, "work plan")
+    docs_root = (root / "docs" / "internal").resolve()
+    if not plan_path.is_relative_to(docs_root):
+        raise AuditTrailError("work plan must be below docs/internal")
+    if not plan_path.is_file():
+        raise AuditTrailError("work plan does not exist or is not a regular file")
+    try:
+        markdown = plan_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise AuditTrailError(f"work plan could not be read: {exc}") from exc
+    existing = _managed_ranges(markdown, require_all=False)
+    if existing:
+        if set(existing) != set(MANAGED_SECTION_KEYS):
+            missing = sorted(set(MANAGED_SECTION_KEYS) - set(existing))
+            raise AuditTrailError(
+                f"work plan has a partial managed audit appendix: {missing}"
+            )
+        return validate_managed_work_plan_document(
+            repository_root=root, work_plan_path=plan_path
+        )
+    appendix_lines = ["", f"## {GENERIC_WORK_PLAN_AUDIT_HEADING}", ""]
+    for key in MANAGED_SECTION_KEYS:
+        heading = SLICE_MANAGED_SECTION_HEADINGS[key]
+        appendix_lines.extend(
+            (
+                f"### {heading}",
+                "",
+                f"<!-- audit:{key}:begin -->",
+                f"<!-- audit:{key}:end -->",
+                "",
+            )
+        )
+    separator = "" if markdown.endswith(("\n", "\r")) else "\n"
+    rendered = markdown + separator + "\n".join(appendix_lines).rstrip() + "\n"
+    atomic_write_file(plan_path, rendered)
+    return validate_managed_work_plan_document(
+        repository_root=root, work_plan_path=plan_path
+    )
+
+
 def project_slice_audit(
     document: SliceDocument,
     projection: AuditProjection,
@@ -447,7 +531,7 @@ def project_work_plan_audit(
     projection: AuditProjection,
 ) -> str:
     """Project planning-work-unit events into one prepared work-plan audit target."""
-    current = validate_work_plan_document(
+    current = validate_managed_work_plan_document(
         repository_root=document.repository_root,
         work_plan_path=document.work_plan_path,
     )
@@ -471,6 +555,28 @@ def strip_managed_audit_sections(markdown: str) -> str:
         )
         stripped = stripped[:start] + replacement + stripped[end:]
     return stripped
+
+
+def strip_managed_work_plan_audit_appendix(markdown: str) -> str:
+    """Remove the generic orchestrator appendix while preserving plan semantics."""
+    visible = _lines_outside_code_fences(markdown)
+    heading = f"## {GENERIC_WORK_PLAN_AUDIT_HEADING}"
+    if heading not in visible:
+        return strip_managed_audit_sections(markdown).rstrip("\r\n") + "\n"
+    if visible.count(heading) != 1:
+        raise AuditTrailError("work plan contains duplicate managed audit appendices")
+    _managed_ranges(markdown, require_all=True)
+    match = re.search(
+        rf"(?m)^## {re.escape(GENERIC_WORK_PLAN_AUDIT_HEADING)}[ \t]*\r?$",
+        markdown,
+    )
+    if match is None:
+        raise AuditTrailError("managed work-plan appendix heading is not top-level")
+    if any(start < match.start() for start, _end in _managed_ranges(
+        markdown, require_all=True
+    ).values()):
+        raise AuditTrailError("managed work-plan blocks must stay inside the appendix")
+    return markdown[: match.start()].rstrip("\r\n") + "\n"
 
 
 def semantic_audit_fingerprint(markdown: str) -> str:

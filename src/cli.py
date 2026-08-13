@@ -784,7 +784,8 @@ def run_cli(
         logger.info("Existing unfinished state detected; resuming current run.")
     if args.state_was_frozen:
         logger.warning(
-            "Previous run was frozen due to API quota. Ensure quota is available before resuming."
+            "Previous run was interrupted. Resuming from its persisted workflow step; "
+            "the exact prior reason remains recorded in .orchestrator/state.json."
         )
     if args.completed_state_replaced:
         logger.info("Existing state is completed (phase=done); starting a new run.")

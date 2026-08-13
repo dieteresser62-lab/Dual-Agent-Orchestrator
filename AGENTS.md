@@ -45,8 +45,8 @@ Reviewers:
 
 - First non-empty line: `REVIEWER: claude|antigravity`
 - `NEW_FINDING: <C-01|A-01> | BLOCKER|OBSERVATION | <description> | <acceptance test>`
-- `FINDING_STATUS: <id> | OPEN|CLOSED | <rationale>`
-- Optional: `FINDING_RECLASSIFIED: <id> | BLOCKER|OBSERVATION | <rationale>`
+- `FINDING_STATUS: <id> | OPEN|CLOSED | <rationale>` only for findings originally reported by the current reviewer
+- Optional: `FINDING_RECLASSIFIED: <id> | BLOCKER|OBSERVATION | <rationale>` only for findings originally reported by the current reviewer
 - If no concrete finding: `REVIEW_EVIDENCE: <dimensions> | <largest residual risk> | <break condition>`
 - Before approval: `PRE_MORTEM: <most likely failure cause in three months>`
 - `PLAN_APPROVAL: YES|NO`, `SLICE_APPROVAL: <slice id> | YES|NO`, or `FINAL_APPROVAL: YES|NO`

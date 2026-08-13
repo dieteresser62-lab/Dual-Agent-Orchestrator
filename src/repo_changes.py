@@ -10,7 +10,11 @@ from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Iterable, Mapping, Sequence
 
-from audit_trail import AuditTrailError, strip_managed_audit_sections
+from audit_trail import (
+    AuditTrailError,
+    strip_managed_audit_sections,
+    strip_managed_work_plan_audit_appendix,
+)
 from path_policy import PathPolicyError, resolve_path_within_roots
 
 
@@ -310,7 +314,12 @@ def _safe_untracked_candidate(repository_root: Path, relative_path: str) -> Path
     return candidate
 
 
-def _read_path_payload(repository_root: Path, relative_path: str) -> _UntrackedPayload:
+def _read_path_payload(
+    repository_root: Path,
+    relative_path: str,
+    *,
+    semantic_markdown_paths: frozenset[str] = frozenset(),
+) -> _UntrackedPayload:
     candidate = _safe_untracked_candidate(repository_root, relative_path)
     try:
         metadata = candidate.lstat()
@@ -346,7 +355,14 @@ def _read_path_payload(repository_root: Path, relative_path: str) -> _UntrackedP
 
     digest = hashlib.sha256()
     preview = bytearray()
-    markdown_content = bytearray() if _uses_semantic_markdown_digest(relative_path) else None
+    markdown_content = (
+        bytearray()
+        if (
+            relative_path in semantic_markdown_paths
+            or _uses_semantic_markdown_digest(relative_path)
+        )
+        else None
+    )
     opened_size = metadata.st_size
     normalized_mode = 0o100644
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
@@ -359,7 +375,7 @@ def _read_path_payload(repository_root: Path, relative_path: str) -> _UntrackedP
                     f"untracked path changed type while reading: {relative_path!r}"
                 )
             opened_size = opened_metadata.st_size
-            if opened_metadata.st_mode & 0o111:
+            if opened_metadata.st_mode & 0o111 and not relative_path.lower().endswith(".md"):
                 normalized_mode = 0o100755
             while True:
                 block = os.read(descriptor, 64 * 1024)
@@ -384,8 +400,11 @@ def _read_path_payload(repository_root: Path, relative_path: str) -> _UntrackedP
     fingerprint_digest = raw_digest
     if markdown_content is not None:
         try:
-            semantic = strip_managed_audit_sections(
-                bytes(markdown_content).decode("utf-8")
+            decoded = bytes(markdown_content).decode("utf-8")
+            semantic = (
+                strip_managed_work_plan_audit_appendix(decoded)
+                if relative_path in semantic_markdown_paths
+                else strip_managed_audit_sections(decoded)
             ).encode("utf-8")
         except (UnicodeError, AuditTrailError) as exc:
             raise RepositoryChangeError(
@@ -455,6 +474,9 @@ def _render_untracked_diff(path: str, payload: _UntrackedPayload) -> str:
 def collect_repository_changes(
     repository_root: Path,
     merge_base: str,
+    *,
+    semantic_markdown_paths: Iterable[str] = (),
+    excluded_paths: Iterable[str] = (),
 ) -> RepositoryChanges:
     """Collect all tracked and non-ignored untracked changes since an explicit merge-base."""
     root = _validated_repository_root(repository_root)
@@ -467,10 +489,6 @@ def collect_repository_changes(
         root,
         ("diff", "--name-status", "-z", "--find-renames", canonical_merge_base, "--"),
     ).stdout
-    tracked_diff = _git(
-        root,
-        ("diff", "--binary", "--full-index", "--find-renames", canonical_merge_base, "--"),
-    ).stdout
     untracked_raw = _git(
         root,
         ("ls-files", "--others", "--exclude-standard", "-z", "--"),
@@ -480,9 +498,19 @@ def collect_repository_changes(
         ("diff", "--name-only", "-z", "--find-renames", "HEAD", "--"),
     ).stdout
 
-    entries = _parse_name_status(name_status)
+    semantic_paths = frozenset(
+        _normalize_selected_path(path) for path in semantic_markdown_paths
+    )
+    exclusions = frozenset(_normalize_selected_path(path) for path in excluded_paths)
+    entries = [
+        entry
+        for entry in _parse_name_status(name_status)
+        if entry.path not in exclusions and entry.old_path not in exclusions
+    ]
     untracked_paths = sorted(
-        os.fsdecode(field) for field in untracked_raw.split(b"\0") if field
+        path
+        for field in untracked_raw.split(b"\0")
+        if field and (path := os.fsdecode(field)) not in exclusions
     )
     existing_paths = {entry.path for entry in entries}
     payloads: dict[str, _UntrackedPayload] = {}
@@ -507,10 +535,42 @@ def collect_repository_changes(
         for entry in entries
     ]
 
+    tracked_paths = tuple(
+        sorted(
+            {
+                path
+                for entry in entries
+                if entry.tracked
+                for path in (entry.path, entry.old_path)
+                if path is not None
+            }
+        )
+    )
+    tracked_diff = (
+        _git(
+            root,
+            (
+                "diff",
+                "--binary",
+                "--full-index",
+                "--find-renames",
+                canonical_merge_base,
+                "--",
+                *(f":(top,literal){path}" for path in tracked_paths),
+            ),
+        ).stdout
+        if tracked_paths
+        else b""
+    )
+
     entries.sort(key=lambda item: (item.path, item.old_path or "", item.raw_status))
     for entry in entries:
         if entry.kind != "deleted":
-            payloads[entry.path] = _read_path_payload(root, entry.path)
+            payloads[entry.path] = _read_path_payload(
+                root,
+                entry.path,
+                semantic_markdown_paths=semantic_paths,
+            )
     fingerprint_entries = tuple(
         _change_fingerprint_entry(entry, payloads) for entry in entries
     )

@@ -60,8 +60,8 @@ def build_v3_review_contract(contract: StepContract) -> str:
         - Test scope: TEST_FILES_TOUCHED: {test_files}
         - New finding: NEW_FINDING: {prefix}-01 | BLOCKER|OBSERVATION | <description> | <acceptance test>
         - If an acceptance test requires an extra command in the next orchestrator matrix, its entire field must be: VALIDATE: ["executable","arg",...]. Do not use a shell string.
-        - Previous finding, only when an actual prior finding exists: FINDING_STATUS: <ID> | OPEN|CLOSED | <rationale>. Never emit FINDING_STATUS with NONE or prose in place of <ID>.
-        - Optional reclassification: FINDING_RECLASSIFIED: <ID> | BLOCKER|OBSERVATION | <rationale>
+        - Previous finding, only when it was originally reported by you: FINDING_STATUS: <ID> | OPEN|CLOSED | <rationale>. Never emit FINDING_STATUS with NONE or prose in place of <ID>, and never emit it for the other reviewer's finding.
+        - Optional reclassification, again only for your own finding: FINDING_RECLASSIFIED: <ID> | BLOCKER|OBSERVATION | <rationale>
         - If there is no concrete finding: REVIEW_EVIDENCE: <checked dimensions> | <largest residual risk> | <realistic break condition>
         - Before a positive approval: PRE_MORTEM: <most likely failure cause in three months>
         - Decision: {approval}

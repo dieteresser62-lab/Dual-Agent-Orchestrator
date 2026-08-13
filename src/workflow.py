@@ -105,6 +105,57 @@ class WorkflowContractError(WorkflowExecutionError):
     """Raised after a reviewer response and its compact format repair both fail."""
 
 
+def normalize_review_contract_output(
+    output: str,
+    contract: StepContract,
+    previous_findings: tuple[FindingRecord, ...],
+) -> str:
+    """Apply only contract-owned, semantically neutral reviewer normalizations."""
+    text = output.strip()
+    changed = False
+    finding_owners = {
+        finding.finding_id: finding.origin.reporter for finding in previous_findings
+    }
+    kept: list[str] = []
+    foreign_pattern = re.compile(
+        r"^\s*(?:FINDING_STATUS|FINDING_RECLASSIFIED)\s*:\s*([^|]+?)\s*\|",
+        re.IGNORECASE,
+    )
+    for line in text.splitlines():
+        match = foreign_pattern.match(line)
+        if match is not None:
+            finding_id = match.group(1).strip().upper()
+            owner = finding_owners.get(finding_id)
+            if owner is not None and owner is not contract.reviewer:
+                # A foreign status line cannot legally mutate the finding. Removing it
+                # preserves the already-persisted lifecycle exactly.
+                changed = True
+                continue
+        kept.append(line)
+    text = "\n".join(kept).strip()
+
+    if not re.search(
+        r"^\s*TEST_FILES_TOUCHED\s*:", text, re.IGNORECASE | re.MULTILINE
+    ):
+        lines = text.splitlines()
+        if lines and re.fullmatch(
+            rf"\s*REVIEWER\s*:\s*{re.escape(contract.reviewer.value)}\s*",
+            lines[0],
+            re.IGNORECASE,
+        ):
+            expected = ",".join(contract.expected_test_files) or "NONE"
+            lines.insert(1, f"TEST_FILES_TOUCHED: {expected}")
+            text = "\n".join(lines)
+            changed = True
+    if changed:
+        logger.info(
+            "Normalized contract-owned reviewer markers locally: role=%s step=%s",
+            contract.reviewer.value,
+            contract.name,
+        )
+    return text
+
+
 class ValidationExecutionError(WorkflowExecutionError):
     """Raised by a v3 driver when required validation cannot be executed."""
 
@@ -1528,18 +1579,22 @@ class WorkflowEngine:
         contract: StepContract,
         findings: tuple[FindingRecord, ...],
     ) -> ContractResult:
+        normalized = normalize_review_contract_output(output, contract, findings)
         try:
-            return validate_review_response(output, contract, findings)
+            return validate_review_response(normalized, contract, findings)
         except ContractValidationError as first_error:
             repaired = self.driver.repair_review_contract(
                 ContractRepairInvocation(
                     reviewer=contract.reviewer,
-                    rejected_output=output,
+                    rejected_output=normalized,
                     validation_error=str(first_error),
                     contract=build_v3_review_contract(contract),
                 )
             )
             try:
+                repaired = normalize_review_contract_output(
+                    repaired, contract, findings
+                )
                 return validate_review_response(repaired, contract, findings)
             except ContractValidationError as second_error:
                 raise WorkflowContractError(
