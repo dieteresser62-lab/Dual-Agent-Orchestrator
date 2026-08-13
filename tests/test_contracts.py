@@ -745,6 +745,12 @@ def test_codex_final_report_uses_bound_attestation_without_approval_or_self_vali
             "FINAL_APPROVAL: YES\nFINAL_REPORT_READY: YES\nSTATUS: DONE",
             contract,
         )
+    with pytest.raises(ContractValidationError, match="cannot contain NEW_FINDING"):
+        validate_step_response(
+            "NEW_FINDING: C-01 | BLOCKER | forged | reject\n"
+            "FINAL_REPORT_READY: YES\nSTATUS: DONE",
+            contract,
+        )
 
 
 def test_codex_stop_request_replaces_readiness() -> None:

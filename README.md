@@ -19,7 +19,9 @@ Der normale Ablauf ist:
    - Claude prüft in der ersten Runde nur die Slice-Änderungen und in späteren Runden nur das Korrekturdelta.
    - Antigravity prüft den vollständigen freigegebenen Slice-Diff einmal, nachdem Claude denselben Fingerprint freigegeben hat.
    - Der Orchestrator staged ausschließlich die geprüften Pfade, erstellt einen lokalen Commit `Slice NN: ...` und verifiziert ihn.
-5. Einen branchweiten Vollständigkeitsbericht sowie den abschließenden Claude-/Antigravity-Review gegen die Branchbasis ausführen.
+5. Codex einen branchweiten Vollständigkeitsbericht gegen die Branchbasis erstellen
+   lassen und diesen Bericht zusammen mit dem vollständigen Branch-Diff an Claude und
+   Antigravity für die Abschlussentscheidung übergeben.
 6. Findet der Abschlussreview einen Blocker, wird er als weiterer begrenzter Korrekturslice bearbeitet und commitet; anschließend wird der vollständige Abschlussreview wiederholt.
 
 Keine Rolle ersetzt eine andere. Codex gibt die eigene Arbeit niemals frei und commitet sie nicht selbst. Reviewer können weder den Quell-Worktree bearbeiten noch Validierungsergebnisse für sich beanspruchen.
