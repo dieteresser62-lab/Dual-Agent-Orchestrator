@@ -45,6 +45,8 @@ The runtime checks each binary and its required capabilities lazily immediately 
 
 ## Quick Start
 
+For a short end-to-end walkthrough, follow [Quickstart.md](Quickstart.md).
+
 Create a bounded task from [example-task.md](example-task.md), save it as `task.md` in the target repository, and run:
 
 ```bash

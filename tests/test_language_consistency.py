@@ -10,11 +10,21 @@ from cli import build_parser, parse_args
 ROOT = Path(__file__).resolve().parents[1]
 THIS_FILE = Path(__file__).resolve()
 SOURCE_DIRS = (ROOT / "src", ROOT / "tests")
-ROOT_FILES = (ROOT / "run_task", ROOT / "README.md", ROOT / "example-task.md")
+ROOT_FILES = (
+    ROOT / "run_task",
+    ROOT / "README.md",
+    ROOT / "Quickstart.md",
+    ROOT / "example-task.md",
+)
 ROLE_FILES = (
     ROOT / "AGENTS.md", ROOT / "CLAUDE.md", ROOT / "CODEX.md", ROOT / "ANTIGRAVITY.md"
 )
-USER_DOC_FILES = (ROOT / "README.md", ROOT / "workflow.puml", ROOT / "example-task.md")
+USER_DOC_FILES = (
+    ROOT / "README.md",
+    ROOT / "Quickstart.md",
+    ROOT / "workflow.puml",
+    ROOT / "example-task.md",
+)
 ALLOWLIST_FILENAME_PATTERNS: tuple[str, ...] = ()
 GERMAN_TOKENS = [  # allowlist:german
     "Aufgabe",
@@ -252,6 +262,43 @@ def test_readme_local_links_exist_and_help_examples_start() -> None:
         )
         assert result.returncode == 0, result.stderr
         assert "state-v3 slice workflow" in result.stdout
+
+
+def test_quickstart_is_linked_and_declares_the_safe_first_run() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    quickstart_path = ROOT / "Quickstart.md"
+    quickstart = quickstart_path.read_text(encoding="utf-8")
+
+    assert "[Quickstart.md](Quickstart.md)" in readme
+    for heading in (
+        "Check the prerequisites",
+        "Prepare the target repository",
+        "Write a bounded task",
+        "Run a smoke test",
+        "Start the real run",
+        "Resume a stopped run",
+        "Verify completion",
+    ):
+        assert re.search(rf"^## \d+\. {re.escape(heading)}$", quickstart, re.MULTILINE)
+
+    for required in (
+        "--dry-run",
+        "--task-file task.md",
+        "--resume",
+        "--approve-gate",
+        "Claude Sonnet with effort `high`",
+        "never pushes, merges, force-pushes, or rewrites history",
+        "Never edit `.orchestrator/state.json` or checkpoint files manually",
+    ):
+        assert required in quickstart
+
+    local_targets = []
+    for target in re.findall(r"!?\[[^]]*\]\(([^)]+)\)", quickstart):
+        if target.startswith(("http://", "https://", "#")):
+            continue
+        local_targets.append((quickstart_path.parent / target).resolve())
+    assert local_targets
+    assert all(path.is_file() for path in local_targets), local_targets
 
 
 def test_readme_markers_match_the_active_root_contract() -> None:
