@@ -728,8 +728,12 @@ def _bound_task_control_paths(
     if not task.is_relative_to(root):
         return ()
     try:
-        digest = hashlib.sha256(task.read_bytes()).hexdigest()
-    except OSError as exc:
+        # The persisted task contract is built from ``Path.read_text()``.  Use
+        # the same universal-newline decoding here so a CRLF task file does
+        # not look modified merely because its text digest contains LF.
+        task_text = task.read_text(encoding="utf-8")
+        digest = hashlib.sha256(task_text.encode("utf-8")).hexdigest()
+    except (OSError, UnicodeError) as exc:
         raise WorkflowExecutionError(f"bound task file is unreadable: {exc}") from exc
     if digest != state.task_digest:
         raise WorkflowExecutionError(

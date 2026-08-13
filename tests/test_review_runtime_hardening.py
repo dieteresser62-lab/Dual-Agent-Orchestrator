@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from agent_adapters import AntigravityAdapter
 from agent_config import AgentSettings
@@ -17,8 +21,9 @@ from contracts import (
     FindingStatus,
     StepContract,
 )
-from workflow import normalize_review_contract_output
+from orchestrator import _bound_task_control_paths
 from repo_changes import collect_repository_changes
+from workflow import WorkflowExecutionError, normalize_review_contract_output
 
 
 def _git(repository: Path, *args: str) -> None:
@@ -213,3 +218,23 @@ def test_bound_task_control_file_can_be_excluded_from_product_changes(tmp_path: 
 
     assert changes.paths == ("product.txt",)
     assert "Task.md" not in changes.diff_text
+
+
+def test_bound_task_digest_uses_same_newline_normalization_as_task_contract(
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "repo"
+    task = repository / "Inbox" / "task.md"
+    task.parent.mkdir(parents=True)
+    task.write_bytes(b"# Task\r\n\r\nTARGET_BRANCH: feature/test\r\n")
+    normalized_text = task.read_text(encoding="utf-8")
+    state = SimpleNamespace(
+        task_file=str(task),
+        task_digest=hashlib.sha256(normalized_text.encode("utf-8")).hexdigest(),
+    )
+
+    assert _bound_task_control_paths(repository, state) == ("Inbox/task.md",)
+
+    task.write_text(normalized_text + "changed\n", encoding="utf-8")
+    with pytest.raises(WorkflowExecutionError, match="bound task file changed"):
+        _bound_task_control_paths(repository, state)
