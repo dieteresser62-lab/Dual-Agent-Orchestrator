@@ -26,6 +26,7 @@ from git_service import (
     begin_slice,
     commit_slice,
     inspect_repository,
+    require_committed_file_at_head,
     resume_slice,
 )
 from repo_changes import collect_repository_changes
@@ -95,6 +96,78 @@ def _authorization(
         claude_review=review(AgentRole.CLAUDE, claude_approval),
         antigravity_review=review(AgentRole.ANTIGRAVITY, True),
     )
+
+
+def test_approved_plan_handoff_allows_unrelated_descendant_commit(tmp_path: Path) -> None:
+    repository, _ = _new_repository(tmp_path)
+    plan = repository / "docs" / "internal" / "plan.md"
+    plan.parent.mkdir(parents=True)
+    plan.write_text("approved plan\n", encoding="utf-8")
+    _git(repository, "add", "docs/internal/plan.md")
+    _git(repository, "commit", "-m", "approve plan")
+    approved_commit = _git(repository, "rev-parse", "HEAD")
+    (repository / "tests.txt").write_text("platform fix\n", encoding="utf-8")
+    _git(repository, "add", "tests.txt")
+    _git(repository, "commit", "-m", "platform fix")
+
+    require_committed_file_at_head(
+        repository,
+        expected_commit=approved_commit,
+        relative_path="docs/internal/plan.md",
+    )
+
+
+def test_approved_plan_handoff_rejects_changed_plan_or_foreign_history(
+    tmp_path: Path,
+) -> None:
+    repository, base = _new_repository(tmp_path)
+    plan = repository / "docs" / "internal" / "plan.md"
+    plan.parent.mkdir(parents=True)
+    plan.write_text("approved plan\n", encoding="utf-8")
+    _git(repository, "add", "docs/internal/plan.md")
+    _git(repository, "commit", "-m", "approve plan")
+    approved_commit = _git(repository, "rev-parse", "HEAD")
+
+    plan.write_text("changed plan\n", encoding="utf-8")
+    with pytest.raises(GitTransactionError, match="working tree"):
+        require_committed_file_at_head(
+            repository,
+            expected_commit=approved_commit,
+            relative_path="docs/internal/plan.md",
+        )
+
+    _git(repository, "add", "docs/internal/plan.md")
+    plan.write_text("approved plan\n", encoding="utf-8")
+    with pytest.raises(GitTransactionError, match="index"):
+        require_committed_file_at_head(
+            repository,
+            expected_commit=approved_commit,
+            relative_path="docs/internal/plan.md",
+        )
+
+    _git(repository, "commit", "-m", "change plan")
+    plan.write_text("changed plan\n", encoding="utf-8")
+    with pytest.raises(GitTransactionError, match="HEAD"):
+        require_committed_file_at_head(
+            repository,
+            expected_commit=approved_commit,
+            relative_path="docs/internal/plan.md",
+        )
+
+    plan.write_text("approved plan\n", encoding="utf-8")
+    _git(repository, "add", "docs/internal/plan.md")
+    _git(repository, "commit", "-m", "restore plan")
+    _git(repository, "switch", "-c", "feature/sibling", base)
+    plan.parent.mkdir(parents=True, exist_ok=True)
+    plan.write_text("approved plan\n", encoding="utf-8")
+    _git(repository, "add", "docs/internal/plan.md")
+    _git(repository, "commit", "-m", "sibling plan")
+    with pytest.raises(GitTransactionError, match="ancestor"):
+        require_committed_file_at_head(
+            repository,
+            expected_commit=approved_commit,
+            relative_path="docs/internal/plan.md",
+        )
 
 
 def test_begin_slice_requires_expected_feature_branch_and_clean_tree(tmp_path: Path) -> None:

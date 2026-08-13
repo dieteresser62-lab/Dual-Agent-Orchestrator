@@ -174,11 +174,19 @@ def require_committed_file_at_head(
     expected_commit: str,
     relative_path: str,
 ) -> None:
-    """Verify an approved handoff references the exact current committed plan."""
+    """Verify HEAD descends from the approved commit and still contains its plan."""
     identity = inspect_repository(repository_root)
-    if identity.head != expected_commit:
+    ancestry = _git(
+        identity.repository_root,
+        "merge-base",
+        "--is-ancestor",
+        expected_commit,
+        identity.head,
+        accepted_exit_codes=(0, 1, 128),
+    )
+    if ancestry.returncode != 0:
         raise GitTransactionError(
-            "approved-plan handoff requires HEAD to equal APPROVED_PLAN_COMMIT"
+            "approved-plan handoff requires APPROVED_PLAN_COMMIT to be an ancestor of HEAD"
         )
     normalized = _normalize_scope_paths((relative_path,))[0]
     exists = _git(
@@ -190,7 +198,31 @@ def require_committed_file_at_head(
     )
     if exists.returncode != 0:
         raise GitTransactionError("approved work plan is not present in its commit")
-    unchanged = _git(
+    committed_unchanged = _git(
+        identity.repository_root,
+        "diff",
+        "--quiet",
+        expected_commit,
+        identity.head,
+        "--",
+        f":(top,literal){normalized}",
+        accepted_exit_codes=(0, 1),
+    )
+    if committed_unchanged.returncode != 0:
+        raise GitTransactionError("approved work plan differs in HEAD")
+    staged_unchanged = _git(
+        identity.repository_root,
+        "diff",
+        "--cached",
+        "--quiet",
+        expected_commit,
+        "--",
+        f":(top,literal){normalized}",
+        accepted_exit_codes=(0, 1),
+    )
+    if staged_unchanged.returncode != 0:
+        raise GitTransactionError("approved work plan differs in the index")
+    working_unchanged = _git(
         identity.repository_root,
         "diff",
         "--quiet",
@@ -199,8 +231,8 @@ def require_committed_file_at_head(
         f":(top,literal){normalized}",
         accepted_exit_codes=(0, 1),
     )
-    if unchanged.returncode != 0:
-        raise GitTransactionError("approved work plan differs from its committed version")
+    if working_unchanged.returncode != 0:
+        raise GitTransactionError("approved work plan differs in the working tree")
 
 
 def begin_slice(

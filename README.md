@@ -120,6 +120,9 @@ oder Abschlussreview des Planartefakts. Anschließend erzeugt der Orchestrator
 eine `-implement.md`-Handoff-Aufgabe neben der Planaufgabe. Sie bindet den
 exakten Plan-Commit über `APPROVED_PLAN_COMMIT`, enthält die übernommenen
 `SLICE_PLAN`-Grenzen und startet als neuer `IMPLEMENT`-Lauf direkt mit Slice 1.
+Nachgelagerte Commits auf demselben Branch sind zulässig, sofern der gebundene
+Plan-Commit ein Vorfahr von `HEAD` ist und die Plandatei seit der Freigabe
+unverändert blieb.
 Die zugehörigen Slice-Auditdateien werden aus diesen Grenzen vorbereitet und
 mit dem jeweiligen Slice geprüft und commitet.
 
