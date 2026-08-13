@@ -178,6 +178,13 @@ Inhalte lokal und verlustfrei in das Vertragsformat. Mehrdeutige oder bereits
 Pipe-haltige Varianten bleiben unverändert und durchlaufen die normale formale
 Reparatur; Präambeln werden nicht abgeschnitten.
 
+Umschließt ein Provider die vollständige Vertragsantwort ausschließlich mit
+einem Markdown-Codezaun (wahlweise mit Sprachangabe `text`), entfernt der
+Adapter nur diesen äußeren Zaun. Das gilt ausschließlich, wenn der Inhalt mit
+`REVIEWER:` beginnt und mit `STATUS: DONE` endet; Text vor oder nach dem Zaun
+verhindert das Entpacken und scheitert weiterhin an der strikten
+Vertragsprüfung.
+
 Die Quotabehandlung erfolgt rollenspezifisch. Bei aktivierter automatischer Quotafortsetzung wird ein eindeutiger Reset innerhalb der konfigurierten Wartegrenze persistiert, unter Ausgabe von Heartbeats abgewartet und am exakt fehlgeschlagenen Schritt einmal fortgesetzt. Andernfalls endet der Prozess mit Exitcode 2 und bleibt fortsetzbar. Es gibt keine Ersatzrolle.
 
 ## Lokale Commits und externe Git-Aktionen

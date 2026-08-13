@@ -401,12 +401,135 @@ def test_antigravity_json_envelope_requires_success_and_trims_chatter() -> None:
     assert "extra" not in output
     assert adapter.metadata["num_turns"] == 1
 
+    for opening_fence in ("```text", "```"):
+        fenced = adapter.extract_output(
+            json.dumps(
+                {
+                    "status": "SUCCESS",
+                    "response": (
+                        f"{opening_fence}\n"
+                        "REVIEWER: antigravity\n"
+                        "TEST_FILES_TOUCHED: NONE\n"
+                        "REVIEW_EVIDENCE: scope | risk | break\n"
+                        "PRE_MORTEM: drift\n"
+                        "SLICE_APPROVAL: 04 | YES\n"
+                        "STATUS: DONE\n"
+                        "```"
+                    ),
+                }
+            ),
+            "",
+            {},
+        )
+        assert fenced.startswith("REVIEWER: antigravity")
+        assert fenced.endswith("STATUS: DONE")
+        assert "```" not in fenced
+
+    prefixed_fence = adapter.extract_output(
+        json.dumps(
+            {
+                "status": "SUCCESS",
+                "response": (
+                    "Unexpected preamble\n"
+                    "```text\n"
+                    "REVIEWER: antigravity\n"
+                    "STATUS: DONE\n"
+                    "```"
+                ),
+            }
+        ),
+        "",
+        {},
+    )
+    assert prefixed_fence.startswith("Unexpected preamble\n```text")
+
     with pytest.raises(AgentOutputError, match="non-success"):
         adapter.extract_output(
             json.dumps({"status": "ERROR", "response": "permission denied"}),
             "",
             {},
         )
+
+
+@pytest.mark.parametrize(
+    ("response", "preserved"),
+    (
+        (
+            "Here is the corrected output complying with the STATE-V3 CONTRACT:\n"
+            "```text\nREVIEWER: antigravity\nSTATUS: DONE\n```",
+            "REVIEWER: antigravity",
+        ),
+        (
+            "```text\r\n"
+            "REVIEWER: antigravity\r\n"
+            "REVIEW_EVIDENCE: scope | risk | break\r\n"
+            "PRE_MORTEM: drift\r\n"
+            "SLICE_APPROVAL: 04 | YES\r\n"
+            "STATUS: DONE\r\n"
+            "```",
+            "REVIEW_EVIDENCE: scope | risk | break",
+        ),
+        (
+            "```text\nREVIEWER: antigravity\nSTATUS: DONE   \n```",
+            "REVIEWER: antigravity",
+        ),
+        (
+            "```text\nREVIEWER: antigravity\nSTATUS: DONE\n\n```",
+            "REVIEWER: antigravity",
+        ),
+        (
+            "```TEXT\nreviewer: antigravity\nstatus: done\n```",
+            "reviewer: antigravity",
+        ),
+        (
+            "```text\n"
+            "REVIEWER: antigravity\n"
+            "REVIEW_EVIDENCE: discussed a literal marker\n"
+            "STATUS: DONE\n"
+            "PRE_MORTEM: the decoy marker must not truncate this line\n"
+            "SLICE_APPROVAL: 04 | YES\n"
+            "STATUS: DONE\n"
+            "```",
+            "PRE_MORTEM: the decoy marker must not truncate this line",
+        ),
+    ),
+)
+def test_antigravity_unwraps_only_complete_contract_fences(
+    response: str,
+    preserved: str,
+) -> None:
+    adapter = AntigravityAdapter(_settings("antigravity", binary="agy"))
+
+    output = adapter.extract_output(
+        json.dumps({"status": "SUCCESS", "response": response}),
+        "",
+        {},
+    )
+
+    assert output.upper().startswith("REVIEWER: ANTIGRAVITY")
+    assert output.upper().endswith("STATUS: DONE")
+    assert preserved in output
+    assert "```" not in output
+    assert "\r" not in output
+
+
+def test_antigravity_does_not_unwrap_malformed_closing_fence() -> None:
+    adapter = AntigravityAdapter(_settings("antigravity", binary="agy"))
+    response = (
+        "```text\n"
+        "REVIEWER: antigravity\n"
+        "STATUS: DONE\n"
+        "```text"
+    )
+
+    output = adapter.extract_output(
+        json.dumps({"status": "SUCCESS", "response": response}),
+        "",
+        {},
+    )
+
+    assert output.startswith("```text\nREVIEWER: antigravity")
+    assert "```text" in output
 
 
 @pytest.mark.parametrize(
