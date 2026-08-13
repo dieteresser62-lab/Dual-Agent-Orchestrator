@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import re
+import subprocess
+import sys
 from pathlib import Path
+
+from cli import build_parser, parse_args
 
 ROOT = Path(__file__).resolve().parents[1]
 THIS_FILE = Path(__file__).resolve()
@@ -10,6 +14,7 @@ ROOT_FILES = (ROOT / "run_task", ROOT / "README.md", ROOT / "example-task.md")
 ROLE_FILES = (
     ROOT / "AGENTS.md", ROOT / "CLAUDE.md", ROOT / "CODEX.md", ROOT / "ANTIGRAVITY.md"
 )
+USER_DOC_FILES = (ROOT / "README.md", ROOT / "workflow.puml", ROOT / "example-task.md")
 ALLOWLIST_FILENAME_PATTERNS: tuple[str, ...] = ()
 GERMAN_TOKENS = [  # allowlist:german
     "Aufgabe",
@@ -157,3 +162,137 @@ def test_claude_profile_is_persistently_sonnet_high() -> None:
     agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
     assert "Sonnet" in claude and "`high`" in claude
     assert "Sonnet" in agents and "`high`" in agents
+
+
+def test_active_user_docs_use_only_the_state_v3_role_model() -> None:
+    forbidden = (
+        "two-phase", "phase 1", "phase 2", "phase1", "phase2",
+        "GEMINI.md", "OPEN_FINDINGS", "allow-fallback-to-gemini", "--from-phase",
+        "--manual-gate", "--phase1-max-cycles", "--phase2-max-cycles",
+        "--max-agent-retries", "--max-shared-chars", "--file-snapshot-max-lines",
+        "--file-snapshot-max-files", "--no-recover",
+    )
+    hits = []
+    for path in USER_DOC_FILES:
+        text = path.read_text(encoding="utf-8").lower()
+        hits.extend(
+            f"{path.name}: {term}"
+            for term in forbidden
+            if term.lower() in text
+        )
+    assert not hits, "Legacy user-document terms found:\n" + "\n".join(hits)
+
+
+def test_readme_documents_exactly_the_public_long_cli_options() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    documented = set(re.findall(r"(?<![A-Za-z0-9_])--[a-z][a-z0-9-]+", readme))
+    public = {
+        option
+        for action in build_parser()._actions
+        for option in action.option_strings
+        if option.startswith("--")
+    }
+    assert documented == public, (
+        f"README-only options: {sorted(documented - public)}; "
+        f"undocumented parser options: {sorted(public - documented)}"
+    )
+
+
+def test_readme_defaults_and_environment_names_match_runtime(tmp_path: Path) -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    args = parse_args([], cwd=tmp_path, environ={})
+    expected_fragments = (
+        f"| `--poll-interval <seconds>` | `{args.poll_interval}` |",
+        f"| `--watch-max-retries <count>` | `{args.watch_max_retries}` |",
+        f"| `--agent-output-max-chars <count>` | `{args.agent_output_max_chars}` |",
+        f"| `--quota-safety-margin <seconds>` | `{args.quota_wait_policy.safety_margin_seconds}` |",
+        f"| `--quota-max-wait <seconds>` | `{args.quota_wait_policy.maximum_wait_seconds}` |",
+        f"| `--quota-max-auto-resumes <count>` | `{args.quota_wait_policy.maximum_auto_resumes}` |",
+        f"| `--quota-heartbeat-interval <seconds>` | `{args.quota_wait_policy.heartbeat_interval_seconds}` |",
+        "`claude`, `sonnet`, 1800s, `high`",
+        "`codex`, `gpt-5.6-sol`, 1800s, `medium`",
+        "detected `agy`, `gemini-3.1-pro-high`, 1800s, `high`",
+    )
+    for fragment in expected_fragments:
+        assert fragment in readme
+
+    documented_names = set(re.findall(r"\bRUN_TASK_[A-Z][A-Z0-9_]*\b", readme))
+    runtime_sources = "\n".join(
+        (ROOT / path).read_text(encoding="utf-8")
+        for path in ("src/cli.py", "src/agent_config.py")
+    )
+    dynamic_role_names = {
+        f"RUN_TASK_{role.upper()}_{field.upper()}"
+        for role in ("codex", "claude", "antigravity")
+        for field in ("binary", "model", "timeout", "effort")
+    }
+    consumed_names = dynamic_role_names | {
+        name for name in documented_names if name in runtime_sources
+    }
+    assert documented_names <= consumed_names, sorted(documented_names - consumed_names)
+
+
+def test_readme_local_links_exist_and_help_examples_start() -> None:
+    readme_path = ROOT / "README.md"
+    readme = readme_path.read_text(encoding="utf-8")
+    local_targets = []
+    for target in re.findall(r"!?\[[^]]*\]\(([^)]+)\)", readme):
+        if target.startswith(("http://", "https://", "#")):
+            continue
+        local_targets.append((readme_path.parent / target).resolve())
+    assert local_targets
+    assert all(path.is_file() for path in local_targets), local_targets
+
+    for command in (
+        [str(ROOT / "run_task"), "--help"],
+        [sys.executable, str(ROOT / "src" / "cli.py"), "--help"],
+    ):
+        result = subprocess.run(
+            command, cwd=ROOT, capture_output=True, text=True, check=False
+        )
+        assert result.returncode == 0, result.stderr
+        assert "state-v3 slice workflow" in result.stdout
+
+
+def test_readme_markers_match_the_active_root_contract() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    active_markers = (
+        "SLICE_PLAN", "PLAN_READY", "IMPLEMENTATION_READY", "FINAL_REPORT_READY",
+        "REVIEWER", "PLAN_APPROVAL", "SLICE_APPROVAL", "FINAL_APPROVAL",
+        "NEW_FINDING", "FINDING_STATUS", "FINDING_RECLASSIFIED",
+        "FINDING_RESPONSE", "REVIEW_EVIDENCE", "PRE_MORTEM",
+        "STOP_REQUESTED", "STATUS: DONE",
+    )
+    for marker in active_markers:
+        assert marker in readme
+        assert marker in agents
+
+
+def test_workflow_diagram_has_balanced_state_v3_topology() -> None:
+    diagram = (ROOT / "workflow.puml").read_text(encoding="utf-8")
+    assert diagram.count("@startuml") == diagram.count("@enduml") == 1
+    assert diagram.count("partition ") == diagram.count("}") - 1
+    assert len(re.findall(r"^\s*while\s*\(", diagram, re.MULTILINE)) == len(
+        re.findall(r"^\s*endwhile\b", diagram, re.MULTILINE)
+    )
+    assert len(re.findall(r"^\s*if\s*\(", diagram, re.MULTILINE)) == len(
+        re.findall(r"^\s*endif\b", diagram, re.MULTILINE)
+    )
+    for term in (
+        "SLICE_PLAN", "PLAN_APPROVAL", "Codex", "Claude", "Antigravity",
+        "canonical diff", "validation", "local Slice NN commit",
+        "Branch-wide final review", "correction work unit", "STATUS: DONE",
+    ):
+        assert term in diagram
+
+
+def test_example_task_declares_every_required_boundary() -> None:
+    example = (ROOT / "example-task.md").read_text(encoding="utf-8")
+    for heading in (
+        "Context", "Goal", "Allowed Scope", "Requirements", "Acceptance Criteria",
+        "Validation", "Non-Scope", "Stop Conditions",
+    ):
+        assert f"## {heading}" in example
+    assert "Do not edit files outside this list" in example
+    assert "No push, merge, release, or deployment" in example

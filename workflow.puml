@@ -1,54 +1,90 @@
 @startuml
 skinparam DefaultFontName Arial
 skinparam BackgroundColor transparent
+skinparam activity {
+  BackgroundColor White
+  BorderColor #334155
+  DiamondBackgroundColor #E2E8F0
+  DiamondBorderColor #334155
+}
 
-title Dual-Agent Orchestrator Workflow
+title Resumable State-v3 Slice Workflow
 
 start
+:Read task, repository policy, Git identity,\nand .orchestrator/state.json;
 
-:<b>./run_task</b> liest task.md;
-
-if (Ist .orchestrator/state.json vorhanden?) then (ja)
-  :Resume (letzten Stand fortsetzen);
-else (nein)
-  :Preflight Check
-  (Git-Tree sauber?);
+if (Unfinished State-v3 run?) then (yes)
+  :Resume the persisted work unit,\nslice, round, and exact role step;
+else (no)
+  :Create State-v3 plan work unit;
 endif
 
-partition "Phase 1: Planning" {
-  repeat
-    :<b>Agent 1 (z.B. Claude)</b>
-    Erstellt/Verfeinert Implementierungsplan;
-    
-    :<b>Agent 2 (z.B. Codex)</b>
-    Prüft den Plan;
-    
-  repeat while (Freigabe?) is (PHASE1_APPROVAL: NO)
-  -> PHASE1_APPROVAL: YES;
+partition "Plan" {
+  :Codex produces ordered SLICE_PLAN records;
+  :Orchestrator binds the plan fingerprint\nand validation attestation;
+  :Claude reviews the plan;
+  while (PLAN_APPROVAL is NO?) is (yes)
+    :Codex revises the plan and answers findings;
+    :Orchestrator refreshes bound evidence;
+    :Claude reviews the plan correction;
+  endwhile (no)
 }
 
-partition "Phase 2: Implementation" {
-  repeat
-    :<b>Agent 2 (z.B. Codex)</b>
-    Setzt den Code um;
-    
-    :<b>Agent 1 (z.B. Claude)</b>
-    Prüft den Code;
-    
-    if (Code OK? (OPEN_FINDINGS: NONE)) then (ja)
-      :<b>Test Command</b>
-      (falls konfiguriert);
-      if (Tests erfolgreich?) then (ja)
-        break
-      else (nein)
-      endif
-    else (nein)
+while (A planned slice remains?) is (yes)
+  partition "Bounded slice" {
+    :Persist slice start commit and exact path scope;
+    :Codex implements within the scope;
+    :Orchestrator collects canonical diff\nand runs validation once per fingerprint;
+    :Claude reviews changed paths and hunks;
+
+    while (Claude has an open blocker?) is (yes)
+      :Codex corrects and answers findings;
+      :Orchestrator validates the new fingerprint;
+      :Claude reviews only the correction delta;
+    endwhile (no)
+
+    :Antigravity reviews the complete slice diff;
+    while (Antigravity has an open blocker?) is (yes)
+      :Codex corrects and answers findings;
+      :Orchestrator validates the new fingerprint;
+      :Claude reviews the correction delta;
+      :Antigravity rechecks its findings;
+    endwhile (no)
+
+    if (User or policy gate?) then (yes)
+      :Persist awaiting_user_decision;
+      :Return exit 4 without changing the reviewed worktree;
+      :User repairs or decides the gate and runs --resume;
+      :Revalidate the persisted boundary and fingerprint;
+    else (no gate)
     endif
-    -> Fehler/Findings beheben;
-    
-  repeat while (Zyklus)
+    :Orchestrator stages exact reviewed paths;
+    :Create and verify local Slice NN commit;
+  }
+endwhile (no)
+
+partition "Branch-wide final review" {
+  :Codex checks completeness against the full branch diff;
+  :Orchestrator validates and attests the branch fingerprint;
+  :Claude reviews the complete branch;
+  :Antigravity reviews the same complete branch;
+
+  while (A final blocker remains?) is (yes)
+    :Create a bounded correction work unit;
+    :Codex corrects, validation runs,\nand both slice reviewers approve;
+    :Orchestrator creates a local correction commit;
+    :Repeat the complete branch review;
+  endwhile (no)
 }
 
-:<b>STATUS: DONE</b>;
+:Persist completed State v3;
+:STATUS: DONE;
 stop
+
+legend right
+  Exit 2 = quota halt
+  Exit 3 = agent-instance halt
+  Exit 4 = user or policy gate
+  Every halt is checkpointed before return.
+endlegend
 @enduml

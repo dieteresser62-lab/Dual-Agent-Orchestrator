@@ -148,7 +148,7 @@ Jede Slice-MD wird unmittelbar vor Beginn ihres Slice angelegt und dann aus der 
 | 16 | [`docs/internal/slice-orchestrator-modernization-16-branch-final-review.md`](slice-orchestrator-modernization-16-branch-final-review.md) |
 | 17 | [`docs/internal/slice-orchestrator-modernization-17-watch-mode-pauses.md`](slice-orchestrator-modernization-17-watch-mode-pauses.md) |
 | 18 | [`docs/internal/slice-orchestrator-modernization-18-default-cutover-contract.md`](slice-orchestrator-modernization-18-default-cutover-contract.md) |
-| 19 | `docs/internal/slice-orchestrator-modernization-19-user-docs-consistency.md` |
+| 19 | [`docs/internal/slice-orchestrator-modernization-19-user-docs-consistency.md`](slice-orchestrator-modernization-19-user-docs-consistency.md) |
 
 Die Audit-Komponente aus Slice 8 prüft bei Start eines Slice, dass genau diese Datei existiert, vom Arbeitsplan verlinkt wird und die Pflichtabschnitte aus §9.2 der Anforderungen enthält.
 
@@ -587,11 +587,12 @@ Die Audit-Komponente aus Slice 8 prüft bei Start eines Slice, dass genau diese 
 **Test-Riegel:** ja. **Red-State:** nein.
 **Risiko/Rückfalloption:** atomarer Verhaltens- und Contract-Cutover; Aktivierung erfolgt erst nach allen Komponenten-, Gate-, Endreview- und Watch-Szenarien. Der letzte Commit aus Slice 17 bleibt der klare Rückfallpunkt.
 
-### Slice 19 — Nutzerdokumentation, Diagramm und Konsistenzabschluss
+### [Slice 19 — Nutzerdokumentation, Diagramm und Konsistenzabschluss](slice-orchestrator-modernization-19-user-docs-consistency.md)
 
 **Zweck:** Die bereits aktive, getestete Pipeline für Nutzer vollständig dokumentieren und Diagramm sowie Beispieltask an den tatsächlichen Defaultstand angleichen.
 **Anforderungen:** R-13, R-14 und R-17; Dokumentationsabschluss ohne weitere Workflowänderung.
 **Voraussichtlich betroffene Dateien:** `README.md`, `workflow.puml`, `example-task.md`, optional `pyproject.toml` nur für eine vorhandene Dokument-/PlantUML-Prüfung, `tests/test_language_consistency.py` und optional ein fokussierter Dokumentkonsistenztest.
+**Tatsächlich betroffene Dateien vor Review:** `README.md`, `workflow.puml`, `example-task.md`, `tests/test_language_consistency.py` sowie Arbeitsplan- und Slice-19-Prüfspur; keine produktive Programm-, Wrapper- oder Konfigurationsdatei.
 
 **Akzeptanzkriterien:**
 

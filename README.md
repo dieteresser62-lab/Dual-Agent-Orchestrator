@@ -1,178 +1,260 @@
 # Dual-Agent Task Orchestrator
 
-A CLI tool that automates complex coding work with a two-phase agent workflow: planning and implementation.
+A resumable CLI for bounded coding work with Codex as implementer, Claude as the primary reviewer, and Antigravity as the independent closing reviewer.
 
 ## Overview
 
-The orchestrator reads a Markdown task description, creates/revises an implementation plan in Phase 1, and executes/fixes in Phase 2. State and artifacts are stored in `.orchestrator/`.
+The orchestrator turns one Markdown task into an ordered State-v3 slice plan. Every slice has an exact path allowlist, deterministic validation, asymmetric reviews, and a verified local Git commit. After the final slice, all three roles inspect the complete branch change before the run is complete.
 
-![Workflow](https://www.plantuml.com/plantuml/proxy?cache=no&src=https://raw.githubusercontent.com/dieteresser62-lab/Dual-Agent-Orchestrator/master/workflow.puml)
+![State-v3 workflow](https://www.plantuml.com/plantuml/proxy?cache=no&src=https://raw.githubusercontent.com/dieteresser62-lab/Dual-Agent-Orchestrator/master/workflow.puml)
 
-## Key Features
+The normal workflow is:
 
-- Two-phase workflow: planning and implementation are separated.
-- Stateful resume: continue from `.orchestrator/state.json`.
-- Live streaming: follow agent output in compact or full mode.
-- Test integration: run a configurable test command in Phase 2.
-- Fail-fast agent handling: freezes the run when an agent hits its API quota; another agent is never substituted.
-- Git safety preflight: blocks execution on dirty repositories by default.
+1. Inspect the repository, branch, task, configuration, and existing state.
+2. Ask Codex for ordered `SLICE_PLAN` records and have Claude review the plan.
+3. For each planned slice:
+   - Codex edits only the persisted path scope.
+   - The orchestrator collects the canonical diff and runs the configured validation matrix once for that fingerprint.
+   - Claude reviews only the slice changes on the first round and only the correction delta on later rounds.
+   - Antigravity reviews the complete approved slice diff once after Claude approves the same fingerprint.
+   - The orchestrator stages only the reviewed paths, creates a local `Slice NN: ...` commit, and verifies it.
+4. Run a branch-wide completeness report and final Claude/Antigravity review against the branch base.
+5. If the final review finds a blocker, process it as another bounded correction slice, commit it, and repeat the complete final review.
 
-## Requirements
+No role substitutes for another. Codex never approves or commits its own work. Reviewers cannot edit the source worktree or claim validation results.
 
-Supported platforms are Linux, macOS, and WSL2. Native Windows is not yet supported because the complete CLI pipeline has not been verified there. Python 3.11 or newer is required; TOML parsing uses the standard library and needs no third-party package.
+## Requirements and Supported Platforms
 
-Install all three role CLIs and make sure they are in `$PATH` (or configure an explicit path):
+Python 3.11 or newer is required. TOML parsing uses the Python standard library; the project has no runtime Python package dependencies.
+
+The supported execution environments are:
+
+- Linux
+- macOS
+- WSL2
+
+Native Windows is not currently supported because the complete workflow has not been verified there. Under WSL2, use the native `agy` command when available or explicitly configure `agy.exe`.
+
+Install and authenticate all three role CLIs, then place them in `PATH` or configure explicit binary paths:
 
 - `codex`
 - `claude`
-- `agy` (preferred under Linux/WSL2) or explicitly configured `agy.exe`
+- `agy` or `agy.exe`
 
-## Optional Global Command
-
-Create a symlink to run `run_task` from any project:
-
-```bash
-mkdir -p ~/.local/bin
-ln -s /absolute/path/to/Dual-Agent-Orchestrator/run_task ~/.local/bin/run_task
-chmod +x /absolute/path/to/Dual-Agent-Orchestrator/run_task
-```
+The runtime checks each binary and its required capabilities lazily immediately before that role's first invocation.
 
 ## Quick Start
 
-Create `task.md` and run:
+Create a bounded task from [example-task.md](example-task.md), save it as `task.md` in the target repository, and run:
 
 ```bash
 ./run_task
 ```
 
-If `.orchestrator/state.json` exists and is not `done`, execution resumes automatically.
+The positional form is equivalent:
 
-`task.md` is gitignored by default, so each user creates it locally per task.
+```bash
+./run_task path/to/my-task.md
+```
 
-## Watch Mode (Inbox/Outbox)
+Use either the positional path or `--task-file`, not both:
 
-You can run the orchestrator as a queue worker that watches an inbox directory for new Markdown tasks:
+```bash
+./run_task --task-file path/to/my-task.md
+```
+
+An unfinished `.orchestrator/state.json` is resumed automatically in single-task mode. A completed State-v3 run starts a new run. Use explicit `--resume` when resolving a gate or resuming after a process restart.
+
+## Task Boundaries
+
+A good task names the intended outcome, allowed paths, non-scope, acceptance criteria, validation commands, and conditions that require a user decision. Codex converts that request into one or more persisted slices. Each `SLICE_PLAN` record contains:
+
+```text
+SLICE_PLAN: <1-based id> | <summary> | <comma-separated repository-relative paths>
+```
+
+The listed paths are exact commit allowlists. A slice may contain at most ten productive file groups according to the configured path classes. Tests and documentation can be classified separately; an unclassified path is treated conservatively as productive.
+
+Unexpected paths, a changed branch, a changed slice-start commit, or a fingerprint that differs after review blocks the commit.
+
+## State, Checkpoints, Logs, and Audit Documents
+
+Runtime data is stored below `.orchestrator/`:
+
+| Path | Purpose |
+|---|---|
+| `.orchestrator/state.json` | Atomic, machine-readable State-v3 source for the active run. |
+| `.orchestrator/checkpoints/work-unit-####-slice-####-round-####.json` | Resume checkpoints with one-based work-unit, slice, and round identities. |
+| `.orchestrator/logs/` | Raw ephemeral agent invocation and diagnostic logs. |
+| `.orchestrator/runs/<run_id>/work-unit-####-codex.md` | Persisted Codex output used to resume plan or implementation context. |
+
+Do not edit state or checkpoints manually.
+
+Human-readable plan and slice audit Markdown files belong in the target repository, normally below `docs/internal/`, and are committed with their slice. They must exist before the run, be linked from the work plan, contain the required managed audit sections, and appear in the corresponding `SLICE_PLAN` scope. The orchestrator projects structured findings, reviews, validation attestations, and authorization status only into those managed sections. Git is the historical source of truth after each local slice commit.
+
+Active or frozen version-2 state is rejected without mutation. A completed version-2 state remains recognizable as historical completion but is not resumed or silently migrated to State v3.
+
+## Validation and Review Isolation
+
+Only the orchestrator runs deterministic validation. The validation matrix is selected from the canonical changed paths and open finding acceptance commands, then cached by diff fingerprint. Both reviewers receive the same complete, fingerprint-bound attestation.
+
+Codex runs with workspace-write access. Claude and Antigravity receive disposable read-only repository copies while their private runtime, prompt, cache, and log paths remain writable. Normal reviews do not expose the validation harness and cannot modify the target worktree.
+
+Claude uses Sonnet with effort `high` by default. Its first slice review receives the slice's changed paths and hunks, acceptance criteria, structured findings, and bound attestation. A correction review receives only the delta since Claude's last reviewed fingerprint. A format-only contract repair receives the rejected response and marker contract, not the implementation evidence again.
+
+Antigravity runs only after Claude approves the same fingerprint. It does not review plans and receives the complete current slice or branch diff for its closing review.
+
+The explicit review-harness command builders are diagnostics for installation, CLI-version changes, or troubleshooting. They prove test execution and tracked-file write denial in the isolated copy; they are not part of a normal review.
+
+## Gates, Findings, and Resume
+
+The workflow persists before returning from a resumable halt. Resolve the underlying condition, then continue with `--resume`. A gate with a fingerprint requires an explicit recorded decision:
+
+```bash
+./run_task --resume --approve-gate \
+  --gate-actor "Dieter" \
+  --gate-rationale "Reviewed the exact persisted fingerprint and approved continuation"
+```
+
+Use `--reject-gate` with the same actor and rationale requirements to record a rejection.
+
+The principal gates are:
+
+- changed tests without prior authorization;
+- an optional manual gate before each slice commit;
+- more than ten productive change groups;
+- a repository-defined stop rule or agent `STOP_REQUESTED` record;
+- paths outside the persisted slice scope;
+- branch, HEAD, diff-fingerprint, or validation-attestation drift;
+- missing or unavailable validation;
+- changed structured anchor values;
+- four implementer returns in one work unit;
+- missing implementation changes;
+- malformed, missing, or inconsistent review verdicts;
+- quota, authentication, binary, permission, network, process, or timeout failures.
+
+An approving review requires a complete passing attestation for the same fingerprint, authorized test changes, no reviewer-owned open blocker, review evidence or concrete findings, and a pre-mortem. Only the reviewer that reported a finding may close or reclassify it.
+
+Quota handling is role-local. With automatic quota resume enabled, an unambiguous reset within the configured wait limit is persisted, waited for with heartbeats, and resumed once at the exact failed step. Otherwise the process exits with code 2 and remains resumable. There is no fallback role.
+
+## Local Commits and External Git Actions
+
+After Claude and Antigravity approve the same slice fingerprint, the orchestrator:
+
+1. re-collects repository status and the canonical diff;
+2. verifies branch, slice boundary, allowed paths, reviews, findings, and validation attestation;
+3. stages only the exact reviewed paths;
+4. creates a local `Slice NN: <planned summary>` commit with hooks and signing disabled for the mechanical transaction;
+5. verifies the commit path list and resulting commit hash.
+
+The orchestrator never pushes, merges, force-pushes, or rewrites history. Those actions remain explicit user operations outside this workflow.
+
+## Watch Mode
+
+Run the orchestrator as a FIFO queue worker:
 
 ```bash
 ./run_task --watch
 ```
 
-Default behavior in watch mode:
+Watch mode:
 
-- Monitor `inbox/` for `*.md` files.
-- Process files in FIFO order (oldest modified first).
-- Skip very new files until they are stable (minimum age: 1 second).
-- Enable `--skip-git-check` automatically (so local WIP changes do not block queue processing).
-- Stream only `stdout` live by default (reduces noisy internal CLI traces from `stderr`).
-- Move every processed task file to `outbox/` with a timestamp prefix, even if the run fails.
-- Keep waiting for the next task until you stop with `Ctrl+C`.
+- monitors stable `*.md` files in `inbox/`, oldest first;
+- holds a single-process `inbox/.lock` where `fcntl` is available;
+- assigns each task a persisted run ID and task-content digest;
+- enables `--skip-git-check` by default because reviewed slice commits intentionally change the worktree;
+- streams `stdout` by default;
+- moves completed tasks to `outbox/done/` with a UTC timestamp;
+- retries technical failures and moves exhausted tasks to `outbox/failed/` as poison tasks;
+- stops the queue on exit 2, 3, or 4 so the first resumable task keeps FIFO ownership;
+- does not re-execute a successfully completed task when only its move to the outbox needs retrying.
 
-Custom directories and poll interval:
+Override directories, polling, or technical retry count:
 
 ```bash
-./run_task --watch --inbox-dir /path/to/inbox --outbox-dir /path/to/outbox --poll-interval 2
+./run_task --watch \
+  --inbox-dir /path/to/inbox \
+  --outbox-dir /path/to/outbox \
+  --poll-interval 2 \
+  --watch-max-retries 3
 ```
 
-Single-file mode is unchanged and still works:
+After resolving a paused watch task, restart the watcher. Its task identity sidecar resumes the same run and work unit.
+
+## Dry Runs
+
+The built-in dry run exercises plan approval, two slice commits, and final review without agent/API calls or repository writes:
 
 ```bash
-./run_task my-task.md
+./run_task --dry-run --task-file example-task.md --quiet
 ```
 
-## Artifact Layout
-
-Run artifacts are written to `.orchestrator/runs/<run_id>/`:
-
-- `00_task.md`: snapshot of the input task
-- `10_phase1_plan.md`: Phase 1 planning and review history
-- `20_phase2_implementation.md`: Phase 2 implementation and review history
-
-`.orchestrator/LATEST_RUN.txt` stores the latest run directory path.
-
-## Usage
-
-Use a custom task file:
+For deterministic negative and resume scenarios, supply a State-v3 JSON scenario and optionally write its audit report:
 
 ```bash
-./run_task my-task.md
-```
-
-Run with tests:
-
-```bash
-python3 src/cli.py --task-file my-task.md --test-command "pytest -x"
-python3 src/cli.py --task-file my-task.md --test-command "npm test"
-python3 src/cli.py --task-file my-task.md --test-command ""
-```
-
-Dry run (simulates agent responses to validate workflow wiring):
-
-```bash
-python3 src/cli.py --dry-run --task-file example-task.md --test-command ""
-```
-
-Help:
-
-```bash
-./run_task --help
-python3 src/cli.py --help
+./run_task \
+  --dry-run-scenario path/to/scenario.json \
+  --dry-run-report path/to/report.json \
+  --task-file example-task.md
 ```
 
 ## CLI Reference
 
-### Core Options
+`src/cli.py` is the argument-parsing source of truth. `run_task` is a compatibility launcher that locates it and forwards all arguments.
+
+### Core and State Options
 
 | Flag | Default | Description |
 |---|---|---|
 | `[task-file]` | `task.md` | Positional compatibility shorthand for the task file. |
-| `--task-file <path>` | `task.md` | Explicit task-file path; cannot be combined with the positional shorthand. |
-| `--config <path>` | `RUN_TASK_CONFIG` or `./orchestrator.toml` | Optional repository configuration. |
-| `--agents-file <path>` | `Dual-Agent-Orchestrator/AGENTS.md` | AGENTS instructions prepended to every agent prompt. |
-| `--resume` / `--no-resume` | auto | Unfinished state resumes automatically; either flag overrides that decision. |
-| `--force-overwrite-state` | auto for completed state | Overwrite existing state without confirmation; completed state enables it automatically. |
-| `--from-phase <phase1\|phase2>` | auto | Force the starting phase (overrides state). |
-| `--dry-run` | off | Simulate agent responses and tests to validate wiring. |
-| `--manual-gate` | off | Require manual confirmation before starting Phase 2. |
-| `--watch` | off | Watch inbox directory for `.md` tasks and process continuously. |
-| `--inbox-dir <path>` | `inbox` | Inbox directory used by watch mode. |
-| `--outbox-dir <path>` | `outbox` | Outbox directory used by watch mode. |
-| `--poll-interval <seconds>` | `5.0` | Poll interval for watch mode. |
+| `--task-file <path>` | `task.md` | Explicit task path; cannot be combined with the positional form. |
+| `--config <path>` | `RUN_TASK_CONFIG` or `./orchestrator.toml` | Repository policy configuration. |
+| `--agents-file <path>` | repository `AGENTS.md` | Shared agent instructions injected into prompts. |
+| `--resume` / `--no-resume` | auto | Automatically resume unfinished single-task state; explicitly override when needed. |
+| `--force-overwrite-state` | auto for completed state | Start a new run despite existing state; explicit use bypasses the normal state guard. |
+| `--strict-preflight` | off | Treat provider DNS preflight failure as fatal. |
+| `--skip-git-check` / `--no-skip-git-check` | off; on in watch mode | Override repository-cleanliness checking. |
+| `--manual-slice-gate` / `--no-manual-slice-gate` | repository config or off | Require explicit approval before every slice commit. |
+| `--approve-gate` / `--reject-gate` | unset | With explicit `--resume`, decide the exact persisted user gate. |
+| `--gate-actor <name>` | unset | Required identity for an explicit gate decision. |
+| `--gate-rationale <text>` | unset | Required rationale for an explicit gate decision. |
 
-### Cycle Limits
-
-| Flag | Default | Description |
-|---|---|---|
-| `--phase1-max-cycles` | `4` | Maximum planning cycles in Phase 1. |
-| `--phase2-max-cycles` | `6` | Maximum implementation/review cycles in Phase 2. |
-| `--max-agent-retries` | `1` | Retries per agent call after first failure. |
-
-### Test Integration
+### Validation, Dry Run, and Quota
 
 | Flag | Default | Description |
 |---|---|---|
-| `--test-command <cmd>` | env → repo config → detection | Shell command for Phase 2; an explicitly empty value skips tests. |
+| `--test-command <cmd>` | environment, repository matrix, or detection | Compatibility validation command; an explicit empty string disables it. |
+| `--retry-incomplete-validation` | off | Re-run a cached `INCOMPLETE` matrix for the same fingerprint after repairing its environment. |
+| `--dry-run` | off | Run the built-in State-v3 success scenario without API calls or writes. |
+| `--dry-run-scenario <path>` | unset | Run a deterministic JSON scenario. |
+| `--dry-run-report <path>` | unset | Write the scripted scenario audit report. |
+| `--quota-auto-resume` / `--no-quota-auto-resume` | on | Enable one automatic continuation for an unambiguous reset. |
+| `--quota-safety-margin <seconds>` | `60` | Delay added after a recognized reset. |
+| `--quota-max-wait <seconds>` | `86400` | Maximum automatic wait. |
+| `--quota-max-auto-resumes <count>` | `1` | Automatic continuations per blocked role step. |
+| `--quota-heartbeat-interval <seconds>` | `30` | Heartbeat interval during quota waiting. |
 
-### Agent Output
+### Agent Output and Role Configuration
 
 | Flag | Default | Description |
 |---|---|---|
-| `--agent-output <none\|summary\|full>` | `none` | How much of completed agent replies to show. |
-| `--agent-output-max-chars` | `1800` | Max characters shown per reply in `summary` mode. |
-| `--agent-live-stream` / `--no-agent-live-stream` | on | Enable or disable live agent stdout/stderr. |
-| `--agent-live-stream-mode <compact\|full>` | `compact` | Verbosity for live stream output. |
-| `--agent-live-stream-channels <both\|stdout\|stderr>` | env or `stdout` | Which output channels to print in live stream. |
+| `--agent-output <none\|summary\|full>` | `none` | Amount of each completed agent response to print. |
+| `--agent-output-max-chars <count>` | `1800` | Maximum completed-response characters in summary mode. |
+| `--agent-live-stream` / `--no-agent-live-stream` | on | Enable or disable live process output. |
+| `--agent-live-stream-mode <compact\|full>` | `compact` | Live-stream verbosity. |
+| `--agent-live-stream-channels <both\|stdout\|stderr>` | environment or `stdout` | Live channels to print. |
 
-### Agent Commands and Models
+Role settings use CLI, then `RUN_TASK_<ROLE>_*`, then these persistent defaults:
 
-Agent-local values use CLI → `RUN_TASK_*` environment → role default. They are intentionally not read from repository `orchestrator.toml`.
+| Role | CLI options | Defaults |
+|---|---|---|
+| Codex | `--codex-binary`, `--codex-model`, `--codex-timeout`, `--codex-effort` | `codex`, `gpt-5.6-sol`, 1800s, `medium` |
+| Claude | `--claude-binary`, `--claude-model`, `--claude-timeout`, `--claude-effort` | `claude`, `sonnet`, 1800s, `high` |
+| Antigravity | `--antigravity-binary`, `--antigravity-model`, `--antigravity-timeout`, `--antigravity-effort` | detected `agy`, `gemini-3.1-pro-high`, 1800s, `high` |
 
-| Role | CLI options | Environment prefix | Defaults |
-|---|---|---|---|
-| Codex | `--codex-binary`, `--codex-model`, `--codex-timeout`, `--codex-effort` | `RUN_TASK_CODEX_*` | `codex`, `gpt-5.6-sol`, 1800s, `medium` |
-| Claude | `--claude-binary`, `--claude-model`, `--claude-timeout`, `--claude-effort` | `RUN_TASK_CLAUDE_*` | `claude`, `sonnet`, 1800s, `high` |
-| Antigravity | `--antigravity-binary`, `--antigravity-model`, `--antigravity-timeout`, `--antigravity-effort` | `RUN_TASK_ANTIGRAVITY_*` | native `agy` detection, `gemini-3.1-pro-high`, 1800s, `high` |
+`--claude-max-budget-usd` or `RUN_TASK_CLAUDE_MAX_BUDGET_USD` adds an optional print-mode budget ceiling. Opus is not the default; use `--claude-model opus` only for an explicit escalation.
 
-`--claude-max-budget-usd` or `RUN_TASK_CLAUDE_MAX_BUDGET_USD` adds an optional print-mode safety ceiling. Opus is not the default; select it explicitly with `--claude-model opus` only for a justified escalation.
+Examples:
 
 ```bash
 ./run_task --claude-model sonnet --claude-effort high
@@ -180,172 +262,135 @@ RUN_TASK_ANTIGRAVITY_BINARY=agy.exe ./run_task
 ./run_task --codex-binary /opt/codex/bin/codex --codex-timeout 2400
 ```
 
-### Context Limits
+### Watch and Logging Options
 
 | Flag | Default | Description |
 |---|---|---|
-| `--max-shared-chars` | `30000` | Max characters from shared history included in prompts. |
-| `--file-snapshot-max-lines` | `500` | Max lines per changed file snapshot for Claude review. |
-| `--file-snapshot-max-files` | `10` | Max number of changed files included in snapshot. |
-
-The orchestrator truncates shared history (`--max-shared-chars`) and changed-file snapshots to prevent prompt/context blowups. Keep each `task.md` narrowly scoped (explicitly name allowed files) so agents do not drift into unrelated areas.
-
-### Recovery & Preflight
-
-| Flag | Default | Description |
-|---|---|---|
-| `--no-recover` | off | Disable automatic rollback to last cycle checkpoint after crashes. |
-| `--strict-preflight` | off | Fail preflight if DNS resolution fails for provider hosts. |
-| `--skip-git-check` / `--no-skip-git-check` | off; on in watch mode | Override the environment and the watch-mode default. |
-
-Quota and rate-limit errors freeze the current run and identify the agent that failed. Resume later with `--resume`; the orchestrator never invokes another agent as a substitute.
-
-The former `--allow-fallback-to-gemini` option has been removed. Existing aliases, scheduled jobs, and wrapper scripts must drop this flag; agent failures now stop the run instead of selecting a substitute.
-
-### Log Level
-
-| Flag | Description |
-|---|---|
-| `--verbose` | Enable debug logging. |
-| `--quiet` | Show warnings and errors only. |
+| `--watch` | off | Continuously process Markdown tasks from the inbox. |
+| `--inbox-dir <path>` | `inbox` | Watch input directory. |
+| `--outbox-dir <path>` | `outbox` | Watch completion/failure root. |
+| `--poll-interval <seconds>` | `5.0` | Inbox polling interval. |
+| `--watch-max-retries <count>` | `3` | Technical failures before poison handling. |
+| `--verbose` | off | Enable debug logging. |
+| `--quiet` | off | Show warnings and errors only. |
 
 `--verbose` and `--quiet` are mutually exclusive.
 
-## Python Entrypoint and Configuration
+## Configuration
 
-`src/cli.py` is the single source of truth for argument parsing, environment overrides, test detection, automatic resume, and watch defaults. `run_task` is only a compatibility launcher that locates this Python file and forwards every argument unchanged.
+Configuration precedence is:
 
-Configuration values use this precedence:
+1. explicit CLI value;
+2. matching `RUN_TASK_*` environment value;
+3. repository `orchestrator.toml` value;
+4. built-in default or test-command auto-detection.
 
-1. Explicit CLI option
-2. `RUN_TASK_*` environment variable
-3. Repository `orchestrator.toml`
-4. Built-in default or test-command auto-detection
+Agent binary, model, effort, timeout, and Claude budget values deliberately bypass repository TOML and use only CLI, environment, and role defaults.
 
-An explicitly empty test command is meaningful and disables tests; it is never replaced by auto-detection:
+An explicitly empty test command disables validation-command detection:
 
 ```bash
-python3 src/cli.py --test-command ""
+./run_task --test-command ""
 RUN_TASK_TEST_CMD="" ./run_task
 ```
 
-When no test command is configured, Python detects the first matching project layout:
+Without a declared validation command, detection checks `pyproject.toml` with pytest configuration, a `package.json` test script, then a Makefile `test` target.
 
-1. If `pyproject.toml` contains pytest tool configuration → `python3 -m pytest tests/ -v`
-2. If `package.json` exists and contains a `"test"` script → `npm test`
-3. If `Makefile` exists and contains a `test:` target → `make test`
-4. Otherwise → empty (tests skipped)
-
-Override auto-detection with the `RUN_TASK_TEST_CMD` environment variable:
-
-```bash
-RUN_TASK_TEST_CMD="py -m pytest" ./run_task        # custom command
-RUN_TASK_TEST_CMD="" ./run_task                     # explicitly skip tests
-```
-
-If you want to control this behavior manually, set:
-
-```bash
-RUN_TASK_SKIP_GIT_CHECK=0 ./run_task --watch     # enforce clean-tree check even in watch mode
-RUN_TASK_SKIP_GIT_CHECK=1 ./run_task my-task.md  # skip check in single-file mode
-RUN_TASK_WATCH_STREAM_CHANNELS=stdout ./run_task --watch  # override watch live stream channels
-RUN_TASK_WATCH_STREAM_CHANNELS=both ./run_task --watch    # stream both channels in watch mode
-```
-
-An explicit `--skip-git-check` or `--no-skip-git-check` overrides the environment and watch default.
-`RUN_TASK_WATCH_STREAM_CHANNELS` accepts `stdout` (default), `stderr`, or `both`; invalid values fall back to `stdout`.
-
-### Repository TOML Schema
-
-The optional `orchestrator.toml` contains only portable repository policy: path classes, named stop rules, validation commands, and the future manual slice-gate default. Unknown keys and invalid types or path patterns stop before workflow state is written.
+The repository TOML schema contains portable policy only:
 
 ```toml
 [paths]
 productive = ["src/**/*.py", "run_task", "*.toml"]
 tests = ["tests/**"]
 documentation = ["docs/**", "*.md"]
-generated = [".orchestrator/**", "**/__pycache__/**"]
+generated = [".orchestrator/**", "**/__pycache__/**", ".pytest_cache/**"]
 
 [[stop_rules]]
 id = "DOMAIN-001"
-description = "Stop when the domain invariant changes."
+description = "Stop when the named domain invariant changes."
 
 [validation]
-default_command = "python3 -m pytest tests/ -v"
+default_command = ["python3", "-m", "pytest", "tests/", "-v"]
+default_timeout_seconds = 1800
 
 [[validation.rules]]
-patterns = ["engine/**"]
-command = "npm run build:engine"
+patterns = ["frontend/**"]
+command = ["npm", "test"]
+timeout_seconds = 1200
 
 [workflow]
 manual_slice_gate = false
 ```
 
-Patterns use `/`, are relative to the repository root, and may not contain `..`. The productive pattern list may not be empty; later scope consumers conservatively treat paths that match no configured class as productive. Agent binary paths, models, and timeouts deliberately do not belong in this versioned file; their role-specific configuration is introduced with the agent adapters.
+Use `default_shell_command` or a rule-local `shell_command` only when shell semantics are required. A validation entry must not declare both an argv command and a shell command. Patterns are repository-relative, use `/`, and cannot escape with `..`.
 
-### Role-bound execution profiles
+Useful environment overrides include:
 
-Agent binaries and capabilities are checked lazily immediately before the first real use of that role. The runtime logs the resolved executable, version, model, effort, timeout, and rights profile. A missing binary therefore blocks only its own step; an unknown version or missing required flag stops with a compatibility error until its live-smoke matrix has been approved.
+```bash
+RUN_TASK_TEST_CMD="python3 -m pytest tests/ -v" ./run_task
+RUN_TASK_SKIP_GIT_CHECK=0 ./run_task --watch
+RUN_TASK_WATCH_STREAM_CHANNELS=both ./run_task --watch
+RUN_TASK_QUOTA_AUTO_RESUME=0 ./run_task
+```
 
-Codex is the implementation role and runs with `workspace-write`. Claude and Antigravity are reviewer roles: each receives a disposable read-only repository copy while its private temp, cache, prompt, and log files remain writable outside that copy; reviewer processes retain `PYTHONDONTWRITEBYTECODE=1`. Claude starts in safe mode with a compact dedicated system prompt and one external review package. A manifest lists bounded, numbered chunks; the normal review exposes only `Read` and grants exactly enough calls to read the manifest and every chunk once. The supplied orchestrator evidence is the existing test snapshot on the active v2 path and the fingerprint-bound attestation on state v3. The 12,000-character schema-bound response directs the reasoning budget to implementation correctness, invariants, failure paths, security boundaries, resume/idempotency risks, and test gaps. MCP configuration, prompt suggestions, skills, plugins, and session persistence are disabled. Antigravity uses its terminal sandbox; `--mode plan` is not treated as a security boundary.
+## Agent Instruction and Output Contract
 
-The state-v3 target workflow runs the resolved validation matrix once in Python for each canonical diff fingerprint and supplies the resulting attestation to both reviewers. Reviewers do not rerun the full suite and state-v3 rejects agent-authored `VALIDATION_RESULT` claims. The harness `src/review_harness.py` remains a bounded adapter/version diagnostic: explicit opt-in command builders for Claude and Antigravity can run it with repository caches disabled and prove that tracked-file writes are denied after installation, a CLI version change, or explicit troubleshooting. It is never exposed by the normal review command. Claude JSON metadata such as turn count, usage, estimated cost, and rejected tool attempts is retained in the runtime log.
+The active repository instruction files are:
 
-Claude's first review of a slice receives only that slice's changed paths and hunks, together with its acceptance criteria, finding records, and fingerprint-bound validation attestation; it never receives unrelated repository content. After an implementation correction, Claude receives only the correction delta since its last reviewed fingerprint plus the updated records and attestation. A response rejected solely for missing or malformed contract markers is repaired from the rejected answer and the output contract without resending implementation evidence. Antigravity alone receives the complete final slice diff once for its closing review.
+| File | Responsibility |
+|---|---|
+| `AGENTS.md` | Shared execution, safety, review, and marker contract. |
+| `CODEX.md` | Implementer role and readiness records. |
+| `CLAUDE.md` | Primary targeted reviewer; persistent Sonnet/High profile. |
+| `ANTIGRAVITY.md` | Independent closing reviewer. |
 
-## Agent Instruction Files
+All agent responses end with `STATUS: DONE`. State-v3 records are:
 
-The dual-agent orchestration contract is defined through repository-local instruction files:
+| Producer or step | Required record |
+|---|---|
+| Codex plan | `SLICE_PLAN: <id> \| <summary> \| <paths>` and `PLAN_READY: YES\|NO` |
+| Codex implementation | `TEST_FILES_TOUCHED: NONE\|<paths>` and `IMPLEMENTATION_READY: <slice-id> \| YES\|NO` |
+| Codex final report | `FINAL_REPORT_READY: YES\|NO` |
+| Any reviewer, first line | `REVIEWER: claude\|antigravity` |
+| Claude plan review | `PLAN_APPROVAL: YES\|NO` |
+| Slice review | `SLICE_APPROVAL: <slice-id> \| YES\|NO` |
+| Branch-wide final review | `FINAL_APPROVAL: YES\|NO` |
+| New finding | `NEW_FINDING: C-01\|A-01 \| BLOCKER\|OBSERVATION \| <description> \| <acceptance test>` |
+| Finding owner update | `FINDING_STATUS: <id> \| OPEN\|CLOSED \| <rationale>` |
+| Optional owner reclassification | `FINDING_RECLASSIFIED: <id> \| BLOCKER\|OBSERVATION \| <rationale>` |
+| Codex finding response | `FINDING_RESPONSE: <id> \| ACCEPTED\|REJECTED \| <rationale>` |
+| Review with no concrete weakness | `REVIEW_EVIDENCE: <dimensions> \| <largest residual risk> \| <break condition>` |
+| Positive review prerequisite | `PRE_MORTEM: <most likely failure cause in three months>` |
+| Any role stop | `STOP_REQUESTED: <rule-id> \| <rationale>` instead of readiness or approval |
 
-| File | Location | Required | Primary role |
-|---|---|---|---|
-| `AGENTS.md` | Orchestrator repo root | Yes | Global runtime policy and machine-parseable marker contract consumed by `src/orchestrator.py`. |
-| `CLAUDE.md` | Project root | Yes | Claude role profile (Phase 1 final confirmation, Phase 2 review). |
-| `CODEX.md` | Project root | Yes | Codex role profile (Phase 1 plan review, Phase 2 implementation). |
-| `GEMINI.md` | Project root | Transitional | Legacy backend profile retained until the planned Antigravity adapter migration; the current runtime does not invoke it as a substitute. |
-
-`AGENTS.md` is intentionally the single source of truth for shared execution policy, safety, validation, and output markers.  
-`CLAUDE.md`, `CODEX.md`, and `GEMINI.md` should stay lean and role-specific, and should not duplicate global policy text.
-
-### Contract Markers (must stay synchronized)
-
-The parser in `src/orchestrator.py` and prompts in `src/prompts.py` expect stable markers:
-
-- Final line in orchestrated outputs: `STATUS: DONE`
-- Approval markers by step:
-  - `PHASE1_APPROVAL: YES|NO` (Phase 1 review + confirm)
-  - `PHASE2_APPROVAL: YES|NO` (Phase 2 review)
-  - `IMPLEMENTATION_READY: YES|NO` (Phase 2 implementation report)
-- Legacy compatibility approvals accepted by parser:
-  - `CODEX_APPROVAL: YES|NO`
-  - `CLAUDE_APPROVAL: YES|NO`
-- Findings lifecycle markers for review steps:
-  - `OPEN_FINDINGS: NONE` or `OPEN_FINDINGS: F-001,F-002,...`
-  - `FINDING_STATUS: <ID> | OPEN|CLOSED | <rationale>`
-  - `NEW_FINDING: <ID> | <description> | <acceptance test>`
-- Finding IDs must use `F-001` format.
-
-Decision consistency rule:
-- `*_APPROVAL: YES` only with `OPEN_FINDINGS: NONE`
-- `*_APPROVAL: NO` only when findings remain open
-
-Maintenance flow:
-1. Update `AGENTS.md` when runtime/output-contract policy changes.
-2. Keep `CLAUDE.md`, `CODEX.md`, and `GEMINI.md` aligned, role-specific, and non-contradictory.
-3. If marker semantics change, update `src/prompts.py` and `src/orchestrator.py` in the same change.
-
-Target-repository guidance:
-- In external target repositories, keep `AGENTS.md` focused on orchestration/runtime contract.
-- Put project/domain constraints (architecture, stack rules, coding conventions, folder ownership) in that target repo's `CLAUDE.md` / `CODEX.md` / `GEMINI.md`.
-
-Verification:
-- `./run_task --help` shows the default `--agents-file` path.
-- Run `python3 -m pytest tests/ -v` after contract/parser/orchestration changes.
+The orchestrator owns validation attestations; agents must not emit `VALIDATION_RESULT`. State-v2 approval and aggregate-finding markers are invalid.
 
 ## Exit Codes
 
 | Code | Meaning |
-|---|---|
-| `0` | Pipeline completed successfully. |
-| `1` | Pipeline failed (preflight, max cycles, or phase not completed). |
-| `2` | Run frozen due to API quota/rate limit. Resume later with `--resume`. |
+|---:|---|
+| `0` | The complete workflow, including all slice commits and branch-wide final review, finished successfully. |
+| `1` | Technical, configuration, state-schema, repository, or internal workflow failure. |
+| `2` | Quota cannot be resumed automatically or the configured quota-wait policy is exhausted. |
+| `3` | A required agent instance failed, timed out, or is unavailable. |
+| `4` | A user decision or policy gate is required. |
+
+Codes 2, 3, and 4 preserve resumable state. Inspect the logged gate reason, repair or decide it, and continue the same run with `--resume`.
+
+## Optional Global Command
+
+To call the launcher from other repositories:
+
+```bash
+mkdir -p ~/.local/bin
+ln -s /absolute/path/to/Dual-Agent-Orchestrator/run_task ~/.local/bin/run_task
+chmod +x /absolute/path/to/Dual-Agent-Orchestrator/run_task
+```
+
+## Verification
+
+```bash
+./run_task --help
+./run_task --dry-run --task-file example-task.md --quiet
+python3 -m pytest tests/ -v
+```
