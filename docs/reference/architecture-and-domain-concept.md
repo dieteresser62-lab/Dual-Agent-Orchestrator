@@ -11,8 +11,8 @@
 Der Dual-Agent Task Orchestrator ist eine lokale Steuerungsebene für begrenzte Softwareänderungen. Er ersetzt keinen Coding-Agenten und stellt kein eigenes Modell bereit. Stattdessen koordiniert er drei unabhängig konfigurierte Agenten-CLIs rund um ein Git-Repository:
 
 - Codex plant und implementiert.
-- Claude prüft den Plan und führt gezielte Slice-Reviews aus.
-- Antigravity übernimmt den unabhängigen Abschlussreview jedes freigegebenen Slice und des vollständigen Branches.
+- Claude prüft Plan, Slice-Deltas und den vollständigen Branch.
+- Antigravity übernimmt nach Claudes jeweiliger Freigabe den unabhängigen vollständigen Plan-, Slice- und Branchreview.
 
 Das System überführt einen informellen Markdown-Auftrag in eine persistierte Folge kleiner, prüfbarer, validierter und lokal commiteter Änderungen. Sein zentrales Entwurfsziel ist nicht maximale Autonomie, sondern kontrollierte Autonomie mit Evidenz, die einem exakten Repositoryzustand zugeordnet bleibt.
 
@@ -58,7 +58,7 @@ Der Orchestrator bildet diese Bedingungen als expliziten Zustand, Verträge und 
 | Betreiber | Definiert Aufgabe und Richtlinien, löst Gates auf, stellt Zugangsdaten bereit und entscheidet über externe Git-Aktionen. | Agentenurteile oder synthetische Validierungsbehauptungen. |
 | Codex | Erstellt den Slice-Plan, bearbeitet den erlaubten Scope, beantwortet Findings und erstellt den branchweiten Implementierungsbericht. | Freigabe, deterministische Validierung oder Git-Commit-Autorisierung. |
 | Claude | Prüft Plan, ersten vollständigen Slice-Diff und spätere Korrekturdeltas. Besitzt den Lebenszyklus eigener Findings. | Quelländerungen, Validierungsausführung, Commits oder Antigravitys Urteil. |
-| Antigravity | Prüft den vollständigen, von Claude freigegebenen Slice einmal und schließt den Branchreview unabhängig ab. Besitzt die eigenen Findings. | Planreview, Quelländerungen, Validierungsausführung oder Commits. |
+| Antigravity | Prüft den vollständigen, von Claude freigegebenen Plan, Slice und Branchfingerprint jeweils einmal. Besitzt die eigenen Findings. | Quelländerungen, Validierungsausführung oder Commits. |
 | Orchestrator | Besitzt Zustandsübergänge, kanonische Evidenz, Validierung, Isolation, Richtlinien-Gates, Auditprojektion und exakte lokale Committransaktionen. | Produktanforderungen oder menschliche Risikoakzeptanz. |
 | Git-Repository | Liefert Branchidentität, Merge-Basis, Worktreezustand, Diffs und dauerhafte Commit-Historie. | Workflowrichtlinien. |
 
@@ -73,7 +73,7 @@ Der Orchestrator bildet diese Bedingungen als expliziten Zustand, Verträge und 
 | Slice-Grenze | Persistierter Branch, Startcommit, Startfingerprint, erlaubte Pfade und Änderungsgruppen. |
 | Kanonische Änderungen | Von Git abgeleitete, nachverfolgte und nicht ignorierte unversionierte Änderungen ab einem expliziten Basiscommit. |
 | Diff-Fingerprint | SHA-256-Identität der kanonischen Änderungsmenge einschließlich relevanter Inhalte und Metadaten. |
-| Validierungsmatrix | Deterministische Befehlsmenge, ausgewählt aus geänderten Pfaden und Abnahmebefehlen von Findings. |
+| Validierungsmatrix | Deterministische Befehlsmenge für Implementierungsevidenz, ausgewählt aus geänderten Pfaden und Abnahmebefehlen von Findings. Planläufe verwenden stattdessen die interne Planvertragsprüfung. |
 | Attestierung | Vom Orchestrator erzeugte Validierungsdatensätze, gebunden an einen Diff-Fingerprint. |
 | Finding | Reviewer-eigener Blocker oder Hinweis mit stabiler Identität, Beschreibung, Abnahmetest und Lebenszyklus. |
 | Gate | Persistierter Halt, der Richtlinienreparatur, explizite Benutzeraktion, Quota-Reset oder Agentenwiederherstellung erfordert. |
@@ -99,7 +99,7 @@ Claude sieht in der ersten Runde die vollständige Slice-Evidenz und in spätere
 
 ### 6.5 Validierung besitzt genau einen Eigentümer
 
-Nur der Orchestrator führt die ausgewählte Validierungsmatrix aus. Das Ergebnis wird für einen Fingerprint zwischengespeichert und von beiden Reviewern wiederverwendet. Reviewer dürfen die Attestierung prüfen, aber keinen eigenen Validierungsergebnis-Marker ausgeben.
+Nur der Orchestrator führt Validierungen aus. Für Planreviews prüft er intern Task-Scope, Arbeitsplanpfad und 1-basierte zukünftige Slice-Struktur, ohne die Produkttestsuite aufzurufen. Für Implementierungen führt er die ausgewählte Validierungsmatrix aus. Das Ergebnis wird für einen Fingerprint zwischengespeichert und von beiden Reviewern wiederverwendet. Reviewer dürfen die Attestierung prüfen, aber keinen eigenen Validierungsergebnis-Marker ausgeben.
 
 ### 6.6 Persistierung erfolgt vor fortsetzbarem Exit
 
@@ -161,10 +161,11 @@ Die Workflowengine ist bewusst von der Prozessausführung getrennt. Sie kommuniz
 
 ### 9.1 Planung
 
-1. Die Laufzeit ermittelt Repository, aktiven Branch, Merge-Basis, Aufgabendigest, Konfiguration und vorhandenen Zustand.
-2. Codex liefert geordnete `SLICE_PLAN`-Datensätze mit exakten Pfad-Allowlists.
-3. Claude prüft den Plan. Eine Ablehnung führt zur Planüberarbeitung durch Codex; Antigravity ist an der Planung nicht beteiligt.
-4. Der freigegebene Plan wird persistiert, bevor der erste Implementierungsslice beginnt.
+1. Die Laufzeit liest Modus, exakten Task-Scope, Zielbranch, optionalen Arbeitsplanpfad und Aufgabendigest. Ein abweichender aktiver Branch blockiert vor dem ersten Agentenaufruf.
+2. Codex liefert geordnete `SLICE_PLAN`-Datensätze mit exakten Pfad-Allowlists. Jeder Pfad wird gegen den Task-Scope geprüft.
+3. Claude prüft den Planfingerprint. Nach seiner Freigabe prüft Antigravity denselben vollständigen Planfingerprint. Eine Ablehnung führt zur Planüberarbeitung durch Codex.
+4. Der doppelt freigegebene Plan wartet standardmäßig an einem fingerprintgebundenen Benutzergate. Erst die protokollierte Freigabe erlaubt den Übergang.
+5. Im Modus `PLAN_ONLY` ist genau ein ausführbarer Dokumentationsslice zulässig; spätere Produktslices stehen ausschließlich im Arbeitsplan-MD und benötigen eine neue `IMPLEMENT`-Aufgabe. Im Modus `IMPLEMENT` beginnt nach dem Gate der erste Implementierungsslice.
 
 ### 9.2 Slice-Implementierung und Review
 
@@ -255,7 +256,7 @@ Explizite Benutzergates verlangen Akteur, Begründung und den exakten persistier
 
 `.orchestrator/state.json` ist die maschinenlesbare Quelle des aktiven Laufs. Arbeitsblock-Checkpoints kodieren einsbasierte Arbeitsblock-, Slice- und Rundenkoordinaten. Persistierte Agentenausgaben ermöglichen die Wiederherstellung von Planungs- oder Implementierungskontext, ohne bereits abgeschlossene Seiteneffekte zu wiederholen.
 
-Bei der Fortsetzung werden Aufgabenidentität, gegebenenfalls Laufidentität, Branch, Schritt und Evidenz geprüft. Ein geänderter Fingerprint während des Quotawartens oder nach dem Review führt zu einem Halt, statt eine veraltete Freigabe wiederzugeben. Commitabschluss und Erfolgsmarker des Watch-Modus werden persistiert, damit ein Neustart weder erfolgreichen Commit noch abgeschlossene Aufgabe wiederholt.
+Bei der Fortsetzung werden Aufgabenpfad und -digest, Laufidentität, Modus, Task-Scope, Arbeitsplanpfad, Zielbranch, Schritt und Evidenz geprüft. Ein geänderter Taskinhalt, Branch oder Fingerprint führt zu einem Halt, statt eine veraltete Freigabe wiederzugeben. Commitabschluss und Erfolgsmarker des Watch-Modus werden persistiert, damit ein Neustart weder erfolgreichen Commit noch abgeschlossene Aufgabe wiederholt.
 
 State-v2-Daten sind ausschließlich historisch. Ein aktiver oder eingefrorener State-v2-Lauf wird unverändert abgelehnt und nicht in das State-v3-Modell hineingeraten.
 

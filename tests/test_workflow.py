@@ -330,6 +330,23 @@ class FakeDriver:
             )
         return attestation
 
+    def validate_plan(
+        self,
+        changes: WorkflowChanges,
+        *,
+        work_plan_path: str | None,
+        scope_patterns: tuple[str, ...],
+        plan_only: bool,
+    ) -> ValidationAttestation:
+        _ = (work_plan_path, scope_patterns, plan_only)
+        return self.validate(
+            changes,
+            ValidationRequest(
+                diff_fingerprint=changes.fingerprint,
+                commands=(ValidationCommand(argv=("internal:plan-contract",)),),
+            ),
+        )
+
     def invoke_reviewer(self, invocation: ReviewerInvocation) -> str:
         self.reviewer_calls.append(invocation)
         if self.reviewer_failures:
@@ -444,7 +461,7 @@ def _invocation_failure(
     )
 
 
-def test_plan_chain_uses_codex_then_claude_and_never_antigravity() -> None:
+def test_plan_chain_uses_codex_then_claude_then_antigravity() -> None:
     state = init_workflow_state(
         run_id="run-plan",
         task_file="/repo/task.md",
@@ -467,7 +484,17 @@ def test_plan_chain_uses_codex_then_claude_and_never_antigravity() -> None:
                     "PLAN_APPROVAL: YES",
                     "STATUS: DONE",
                 )
-            )
+            ),
+            "\n".join(
+                (
+                    "REVIEWER: antigravity",
+                    "TEST_FILES_TOUCHED: NONE",
+                    "REVIEW_EVIDENCE: plan boundaries | scope drift | stale plan",
+                    "PRE_MORTEM: a future Slice escapes the reviewed scope",
+                    "PLAN_APPROVAL: YES",
+                    "STATUS: DONE",
+                )
+            ),
         ],
     )
 
@@ -475,8 +502,97 @@ def test_plan_chain_uses_codex_then_claude_and_never_antigravity() -> None:
 
     assert result.completed
     assert [call.step for call in driver.codex_calls] == [WorkflowStep.CODEX_PLAN]
-    assert [call.reviewer for call in driver.reviewer_calls] == [AgentRole.CLAUDE]
+    assert [call.reviewer for call in driver.reviewer_calls] == [
+        AgentRole.CLAUDE,
+        AgentRole.ANTIGRAVITY,
+    ]
     assert driver.commit_calls == []
+
+
+def test_approved_plan_waits_at_fingerprint_bound_user_gate() -> None:
+    state = init_workflow_state(
+        run_id="run-plan-gate",
+        task_file="/repo/task.md",
+        branch="feature/workflow",
+        branch_base=START_COMMIT,
+        slice_count=1,
+        timestamp="2026-08-12T10:00:00+00:00",
+    )
+    changes = _changes("1", "docs/internal/plan.md")
+    plan_review = lambda role: "\n".join(
+        (
+            f"REVIEWER: {role.value}",
+            "TEST_FILES_TOUCHED: NONE",
+            "REVIEW_EVIDENCE: plan scope | stale boundary | unreviewed path",
+            "PRE_MORTEM: a future Slice escapes the approved scope",
+            "PLAN_APPROVAL: YES",
+            "STATUS: DONE",
+        )
+    )
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[_codex_ready(plan=True)],
+        reviewer_outputs=[
+            plan_review(AgentRole.CLAUDE),
+            plan_review(AgentRole.ANTIGRAVITY),
+        ],
+    )
+    engine = WorkflowEngine(driver)
+
+    halted = run_v3_work_unit(
+        engine,
+        state,
+        replace(_context(), plan_gate=True),
+    )
+
+    assert halted.exit_code == 4
+    assert halted.state.current_work_unit.gate.reason is GateReason.PLAN_APPROVAL
+    assert halted.state.current_work_unit.gate.fingerprint == changes.fingerprint
+    assert halted.state.current_work_unit.gate.paths == changes.paths
+    approved = engine.decide_current_gate(
+        halted.state,
+        halted.history,
+        approved=True,
+        decided_by="owner",
+        decided_at="2026-08-12T11:00:00+00:00",
+        rationale="reviewed plan may proceed",
+    )
+    completed = engine.run_current_work_unit(
+        approved.state,
+        replace(_context(), plan_gate=True),
+        approved.history,
+    )
+    assert completed.completed
+
+
+def test_plan_only_rejects_future_product_slices_as_executable_records() -> None:
+    state = init_workflow_state(
+        run_id="run-plan-only",
+        task_file="/repo/task.md",
+        branch="feature/workflow",
+        branch_base=START_COMMIT,
+        slice_count=1,
+        timestamp="2026-08-12T10:00:00+00:00",
+    )
+    output = "\n".join(
+        (
+            "SLICE_PLAN: 1 | write plan | docs/internal/plan.md",
+            "SLICE_PLAN: 2 | implement product | src/app.py",
+            "PLAN_READY: YES",
+            "STATUS: DONE",
+        )
+    )
+    driver = FakeDriver(snapshots=[], codex_outputs=[output], reviewer_outputs=[])
+    context = replace(
+        _context(),
+        require_slice_plan=True,
+        plan_only=True,
+        task_scope_patterns=("docs/internal/plan.md",),
+        work_plan_path="docs/internal/plan.md",
+    )
+
+    with pytest.raises(WorkflowExecutionError, match="TASK-SCOPE"):
+        run_v3_work_unit(WorkflowEngine(driver), state, context)
 
 
 def test_two_codex_corrections_call_claude_three_times_and_antigravity_once() -> None:

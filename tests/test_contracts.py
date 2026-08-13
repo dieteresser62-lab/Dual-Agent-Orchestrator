@@ -689,6 +689,26 @@ def test_codex_plan_contract_rejects_review_markers_and_wrong_readiness() -> Non
         )
 
 
+def test_plan_artifact_path_requires_a_canonical_plan_contract() -> None:
+    with pytest.raises(ValueError, match="canonical plan-step"):
+        CodexStepContract(
+            name="implementation",
+            readiness_marker=ReadinessMarker.IMPLEMENTATION,
+            slice_id="06",
+            round_number=1,
+            plan_artifact_path="docs/internal/work-plan.md",
+        )
+    with pytest.raises(ValueError, match="canonical plan-step"):
+        CodexStepContract(
+            name="plan",
+            readiness_marker=ReadinessMarker.PLAN,
+            slice_id="06",
+            round_number=1,
+            require_slice_plan=True,
+            plan_artifact_path="../work-plan.md",
+        )
+
+
 def test_codex_final_report_uses_bound_attestation_without_approval_or_self_validation() -> None:
     fingerprint = "a" * 64
     attestation = ValidationAttestation(

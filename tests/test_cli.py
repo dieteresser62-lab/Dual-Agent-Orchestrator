@@ -292,6 +292,29 @@ def test_manual_slice_gate_cli_overrides_repository_default(tmp_path: Path) -> N
     assert overridden.manual_slice_gate is False
 
 
+def test_plan_controls_default_safe_and_allow_explicit_overrides(tmp_path: Path) -> None:
+    default = parse_args([], cwd=tmp_path, environ={})
+    overridden = parse_args(
+        [
+            "--no-plan-gate",
+            "--plan-only",
+            "--work-plan",
+            "docs/internal/plan.md",
+            "--target-branch",
+            "feature/plan",
+        ],
+        cwd=tmp_path,
+        environ={},
+    )
+
+    assert default.plan_gate is True
+    assert default.plan_only is None
+    assert overridden.plan_gate is False
+    assert overridden.plan_only is True
+    assert overridden.work_plan == "docs/internal/plan.md"
+    assert overridden.target_branch == "feature/plan"
+
+
 @pytest.mark.parametrize(
     "arguments",
     [
@@ -399,6 +422,7 @@ command = ["npm", "run", "build:engine"]
 
 [workflow]
 manual_slice_gate = true
+plan_gate = false
 """.strip(),
     )
 
@@ -416,6 +440,7 @@ manual_slice_gate = true
         "build:engine",
     )
     assert config.workflow.manual_slice_gate is True
+    assert config.workflow.plan_gate is False
 
 
 @pytest.mark.parametrize(
@@ -423,6 +448,7 @@ manual_slice_gate = true
     [
         ("unknown = true\n", "Unknown key(s) in root: unknown"),
         ("[workflow]\nmanual_slice_gate = \"yes\"\n", "must be a boolean"),
+        ("[workflow]\nplan_gate = \"yes\"\n", "must be a boolean"),
         ("[paths]\nproductive = [\"../outside/**\"]\n", "must not escape"),
         ("[paths]\nproductive = [\"C:/outside/**\"]\n", "must be relative"),
         ("[paths]\nproductive = [\"src\\\\**\"]\n", "platform-neutral separator"),

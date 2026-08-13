@@ -22,6 +22,7 @@ USER_MARKDOWN_FILES = (
     ROOT / "README.md",
     ROOT / "Quickstart.md",
     ROOT / "example-task.md",
+    ROOT / "example-plan-task.md",
     *REFERENCE_DOC_FILES,
 )
 USER_DOC_FILES = (*USER_MARKDOWN_FILES, ROOT / "workflow.puml")
@@ -197,6 +198,10 @@ def test_active_markdown_user_documentation_is_german() -> None:
     expected_german = {
         ROOT / "README.md": ("## Überblick", "## Voraussetzungen und unterstützte Plattformen"),
         ROOT / "Quickstart.md": ("# Schnellstart", "## 1. Voraussetzungen prüfen"),
+        ROOT / "example-plan-task.md": (
+            "# Arbeitsplan für einen begrenzten Gap erstellen",
+            "## Akzeptanzkriterien",
+        ),
         ROOT / "example-task.md": ("## Kontext", "## Akzeptanzkriterien"),
         REFERENCE_DOC_FILES[0]: ("# Architektur- und Fachkonzept", "## 2. Fachliches Problem"),
         REFERENCE_DOC_FILES[1]: ("# Marktvergleich", "## 1. Zusammenfassung"),
@@ -297,10 +302,11 @@ def test_quickstart_is_linked_and_declares_the_safe_first_run() -> None:
     assert "[Quickstart.md](Quickstart.md)" in readme
     for heading in (
         "Voraussetzungen prüfen",
-        "Zielrepository vorbereiten",
+        "Zielrepository und Branch vorbereiten",
         "Begrenzte Aufgabe formulieren",
         "Probelauf ausführen",
-        "Produktiven Lauf starten",
+        "Arbeitsplan separat erstellen",
+        "Implementierung starten",
         "Angehaltenen Lauf fortsetzen",
         "Abschluss prüfen",
     ):
@@ -311,6 +317,10 @@ def test_quickstart_is_linked_and_declares_the_safe_first_run() -> None:
         "--task-file task.md",
         "--resume",
         "--approve-gate",
+        "ORCHESTRATOR_MODE: PLAN_ONLY",
+        "ORCHESTRATOR_MODE: IMPLEMENT",
+        "TARGET_BRANCH:",
+        "TASK_SCOPE:",
         "Claude Sonnet mit Effort `high`",
         "pusht, mergt oder force-pusht niemals und schreibt die Historie nicht um",
         "`.orchestrator/state.json` und Checkpointdateien dürfen niemals manuell bearbeitet werden",

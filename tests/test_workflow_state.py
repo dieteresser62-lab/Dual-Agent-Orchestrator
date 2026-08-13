@@ -53,6 +53,28 @@ def test_init_workflow_state_uses_v3_and_one_based_ids() -> None:
     assert state.slices[1].start_commit is None
 
 
+def test_hardened_task_contract_roundtrips_in_state() -> None:
+    state = init_workflow_state(
+        run_id="run-contract",
+        task_file="/repo/task.md",
+        branch="feature/plan",
+        branch_base="a" * 40,
+        slice_count=1,
+        task_digest="b" * 64,
+        execution_mode="PLAN_ONLY",
+        task_scope_patterns=("docs/internal/plan.md",),
+        work_plan_path="docs/internal/plan.md",
+        target_branch="feature/plan",
+        timestamp="2026-08-12T10:00:00+00:00",
+    )
+
+    restored = WorkflowState.from_dict(state.to_dict())
+
+    assert restored == state
+    assert restored.execution_mode == "PLAN_ONLY"
+    assert restored.task_digest == "b" * 64
+
+
 @pytest.mark.parametrize("slice_count", [0, -1, True])
 def test_init_rejects_non_one_based_slice_count(slice_count: int) -> None:
     with pytest.raises(WorkflowStateValidationError, match="slice_count"):

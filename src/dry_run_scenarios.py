@@ -16,7 +16,7 @@ from agent_runtime import (
 from audit_trail import ReviewAuditEvent, ValidationAuditEvent
 from contracts import AgentRole, ValidationAttestation, ValidationRecord, ValidationStatus
 from gates import TestChangeEvidence
-from validation_matrix import ValidationRequest
+from validation_matrix import ValidationCommand, ValidationRequest
 from workflow import (
     CodexInvocation,
     ContractRepairInvocation,
@@ -839,6 +839,23 @@ class ScriptedWorkflowDriver:
             records=records,
             output_digest=hashlib.sha256(digest_payload.encode()).hexdigest(),
             summary=f"scripted validation {event.status}",
+        )
+
+    def validate_plan(
+        self,
+        changes: WorkflowChanges,
+        *,
+        work_plan_path: str | None,
+        scope_patterns: tuple[str, ...],
+        plan_only: bool,
+    ) -> ValidationAttestation:
+        _ = (work_plan_path, scope_patterns, plan_only)
+        return self.validate(
+            changes,
+            ValidationRequest(
+                diff_fingerprint=changes.fingerprint,
+                commands=(ValidationCommand(argv=("internal:plan-contract",)),),
+            ),
         )
 
     def repair_review_contract(self, invocation: ContractRepairInvocation) -> str:

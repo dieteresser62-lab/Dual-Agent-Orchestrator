@@ -41,6 +41,7 @@ class ConfigError(ValueError):
 @dataclass(frozen=True)
 class WorkflowConfig:
     manual_slice_gate: bool = False
+    plan_gate: bool = True
 
 
 @dataclass(frozen=True)
@@ -259,11 +260,17 @@ def _load_validation_command(
 
 def _load_workflow(data: object) -> WorkflowConfig:
     table = _require_table(data, "[workflow]")
-    _reject_unknown_keys(table, {"manual_slice_gate"}, "[workflow]")
-    value = table.get("manual_slice_gate", False)
-    if not isinstance(value, bool):
+    _reject_unknown_keys(table, {"manual_slice_gate", "plan_gate"}, "[workflow]")
+    manual_slice_gate = table.get("manual_slice_gate", False)
+    plan_gate = table.get("plan_gate", True)
+    if not isinstance(manual_slice_gate, bool):
         raise ConfigError("workflow.manual_slice_gate must be a boolean")
-    return WorkflowConfig(manual_slice_gate=value)
+    if not isinstance(plan_gate, bool):
+        raise ConfigError("workflow.plan_gate must be a boolean")
+    return WorkflowConfig(
+        manual_slice_gate=manual_slice_gate,
+        plan_gate=plan_gate,
+    )
 
 
 def load_repo_config(path: Path) -> RepoConfig:
@@ -436,6 +443,32 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=None,
         help="Require a resumable explicit user approval before each v3 slice commit.",
+    )
+    parser.add_argument(
+        "--plan-gate",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Require explicit fingerprint-bound approval after Claude and Antigravity "
+            "approve the plan (default: on)."
+        ),
+    )
+    parser.add_argument(
+        "--plan-only",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Create, review, and commit only the declared work-plan artifact; future "
+            "implementation Slices stay inside that document."
+        ),
+    )
+    parser.add_argument(
+        "--work-plan",
+        help="Repository-relative WORK_PLAN_PATH override for a PLAN_ONLY task.",
+    )
+    parser.add_argument(
+        "--target-branch",
+        help="Exact feature/<name> or codex/<name> branch required by the task.",
     )
     gate_group = parser.add_mutually_exclusive_group()
     gate_group.add_argument(
@@ -614,6 +647,8 @@ def parse_args(
     args.config_file = repo_config.source
     if args.manual_slice_gate is None:
         args.manual_slice_gate = repo_config.workflow.manual_slice_gate
+    if args.plan_gate is None:
+        args.plan_gate = repo_config.workflow.plan_gate
     quota_defaults = QuotaWaitPolicy()
     quota_automatic = args.quota_auto_resume
     if quota_automatic is None:

@@ -16,7 +16,7 @@ agy --version
 
 Der Orchestrator läuft unter Linux, macOS oder WSL2. Natives Windows wird derzeit nicht unterstützt. Unter WSL2 muss `agy.exe` explizit konfiguriert werden, falls der native Befehl `agy` nicht verfügbar ist.
 
-## 2. Zielrepository vorbereiten
+## 2. Zielrepository und Branch vorbereiten
 
 Checke den Branch aus, auf dem der Orchestrator lokale Slice-Commits erstellen darf. Beginne mit einem sauberen Worktree, sofern der Lauf nicht bewusst für vorhandene Änderungen konfiguriert wurde:
 
@@ -28,6 +28,12 @@ git status --short
 
 Der Orchestrator erstellt ausschließlich lokale Commits. Er pusht, mergt oder force-pusht niemals und schreibt die Historie nicht um.
 
+Lege den Zielbranch vor dem Lauf selbst an. Agenten dürfen keine Branchoperationen ausführen:
+
+```bash
+git switch -c feature/mein-vorhaben
+```
+
 ## 3. Begrenzte Aufgabe formulieren
 
 Kopiere [example-task.md](example-task.md) als `task.md` in das Zielrepository und ersetze den Beispielinhalt. Lege mindestens Folgendes fest:
@@ -37,6 +43,14 @@ Kopiere [example-task.md](example-task.md) als `task.md` in das Zielrepository u
 - Akzeptanzkriterien und Validierungsbefehle;
 - einen expliziten Nicht-Scope;
 - Bedingungen, die eine Benutzerentscheidung erfordern.
+
+Jede Aufgabe benötigt diese Marker:
+
+```text
+ORCHESTRATOR_MODE: IMPLEMENT
+TARGET_BRANCH: feature/mein-vorhaben
+TASK_SCOPE: src/example.py, tests/test_example.py, docs/internal/example-work-plan.md
+```
 
 Arbeitsplan und vorbereitete Slice-Auditdokumente müssen innerhalb des deklarierten Pfadumfangs liegen. Geheimnisse oder Zugangsdaten gehören nicht in die Aufgabendatei.
 
@@ -50,7 +64,31 @@ Prüfe die Installation aus diesem Orchestrator-Repository, ohne Agenten aufzuru
 
 Ein erfolgreicher Probelauf endet mit Exitcode 0.
 
-## 5. Produktiven Lauf starten
+## 5. Arbeitsplan separat erstellen
+
+Für den bewährten Zweischrittprozess kopierst du [example-plan-task.md](example-plan-task.md) oder beginnst die erste Aufgabe so:
+
+```text
+ORCHESTRATOR_MODE: PLAN_ONLY
+WORK_PLAN_PATH: docs/internal/mein-vorhaben-work-plan.md
+TARGET_BRANCH: feature/mein-vorhaben
+TASK_SCOPE: docs/internal/mein-vorhaben-work-plan.md
+```
+
+Starte den Lauf. Codex erstellt nur das Arbeitsplan-MD. Claude und Antigravity prüfen denselben Planfingerprint; die Produkttestsuite wird dabei nicht ausgeführt. Danach endet der Prozess mit Exitcode 4 am Plangate:
+
+```bash
+run_task --task-file task.md
+
+run_task --resume --task-file task.md \
+  --approve-gate \
+  --gate-actor "Ihr Name" \
+  --gate-rationale "Arbeitsplan und persistierten Fingerprint geprüft"
+```
+
+Nach dieser Freigabe wird ausschließlich das Arbeitsplanartefakt reviewed und lokal commitet. Prüfe den Commit, bevor du eine zweite Aufgabe im Modus `IMPLEMENT` erstellst.
+
+## 6. Implementierung starten
 
 Rufe den Starter aus dem Zielrepository über seinen absoluten Pfad oder einen konfigurierten globalen Symlink auf:
 
@@ -64,9 +102,9 @@ Liegt `run_task` in `PATH`, genügt die Kurzform:
 run_task --task-file task.md
 ```
 
-Der Orchestrator lässt Codex begrenzte Slices planen und implementieren. Claude Sonnet mit Effort `high` prüft den Plan und gezielt die Slice-Änderungen. Antigravity prüft jeden vollständigen, von Claude freigegebenen Slice. Erfolgreiche Slices werden lokal commitet; anschließend folgt ein branchweiter Abschlussreview.
+Die Implementierungsaufgabe verwendet `ORCHESTRATOR_MODE: IMPLEMENT`, denselben `TARGET_BRANCH`, verweist auf den freigegebenen Arbeitsplan und deklariert alle erlaubten Umsetzungs-, Test- und Auditpfade in `TASK_SCOPE`. Claude Sonnet mit Effort `high` und Antigravity prüfen zuerst den ausführbaren Plan. Erst nach dem expliziten Plangate beginnt Slice 1. Erfolgreiche Slices werden lokal commitet; anschließend folgt ein branchweiter Abschlussreview.
 
-## 6. Angehaltenen Lauf fortsetzen
+## 7. Angehaltenen Lauf fortsetzen
 
 Ein nicht abgeschlossener Einzelaufgabenlauf wird automatisch fortgesetzt, wenn derselbe Befehl wiederholt wird. Nach Auflösung eines protokollierten Gates oder einem Prozessneustart wird explizit fortgesetzt:
 
@@ -85,7 +123,7 @@ run_task --resume --task-file task.md \
 
 Die Exitcodes 2 und 3 kennzeichnen einen fortsetzbaren Quota- beziehungsweise Agentenfehler. Behebe die gemeldete Ursache und setze denselben Lauf fort. `.orchestrator/state.json` und Checkpointdateien dürfen niemals manuell bearbeitet werden.
 
-## 7. Abschluss prüfen
+## 8. Abschluss prüfen
 
 Ein abgeschlossener Lauf endet mit Exitcode 0. Prüfe die entstandenen lokalen Commits und den sauberen Status:
 

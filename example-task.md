@@ -1,5 +1,9 @@
 # JSON-Statusausgabe zum Statusbefehl hinzufügen
 
+ORCHESTRATOR_MODE: IMPLEMENT
+TARGET_BRANCH: feature/status-json
+TASK_SCOPE: src/status_cli.py, tests/test_status_cli.py, README.md, docs/internal/orchestrator-work-plan.md, docs/internal/slice-status-json.md
+
 ## Kontext
 
 Das Projekt besitzt bereits einen reinen Textbefehl `status`. Automatisierungen benötigen eine stabile JSON-Darstellung, ohne die bestehende Textausgabe zu verändern.

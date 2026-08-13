@@ -26,10 +26,13 @@ from contracts import (
     ContractResult,
     FindingRecord,
     StepContract,
+    ValidationAttestation,
+    ValidationRecord,
+    ValidationStatus,
     validate_codex_response,
     validate_review_response,
 )
-from gates import TestChangeEvidence, detect_test_changes
+from gates import TestChangeEvidence, detect_test_changes, matches_path_patterns
 from git_service import (
     CommitAuthorization,
     SliceGitBoundary,
@@ -53,6 +56,7 @@ from state_io import (
     write_file,
     write_workflow_checkpoint,
 )
+from task_contract import TaskContract, TaskMode, parse_task_contract
 from workflow import (
     CodexInvocation,
     ContractRepairInvocation,
@@ -285,6 +289,124 @@ class ProductionWorkflowDriver(WorkflowDriver):
     def validate(self, changes: WorkflowChanges, request) -> object:
         return run_validation_matrix(config=self.config, request=request)
 
+    def validate_plan(
+        self,
+        changes: WorkflowChanges,
+        *,
+        work_plan_path: str | None,
+        scope_patterns: tuple[str, ...],
+        plan_only: bool,
+    ) -> ValidationAttestation:
+        if self.active_state is None or not self.active_state.planned_slices:
+            raise WorkflowExecutionError(
+                "internal plan validation requires a persisted SLICE_PLAN"
+            )
+        planned_paths = tuple(
+            sorted(
+                {
+                    path
+                    for planned in self.active_state.planned_slices
+                    for path in planned.scope_paths
+                }
+            )
+        )
+        unexpected_planned = tuple(
+            path
+            for path in planned_paths
+            if scope_patterns and not matches_path_patterns(path, scope_patterns)
+        )
+        if unexpected_planned:
+            raise WorkflowExecutionError(
+                "internal plan validation found out-of-scope SLICE_PLAN paths: "
+                + ", ".join(unexpected_planned)
+            )
+        actual_paths = tuple(
+            path
+            for path in changes.paths
+            if path != ".orchestrator/plan-output.md"
+        )
+        unexpected_actual = tuple(
+            path
+            for path in actual_paths
+            if scope_patterns and not matches_path_patterns(path, scope_patterns)
+        )
+        if unexpected_actual:
+            raise WorkflowExecutionError(
+                "internal plan validation found out-of-scope planning changes: "
+                + ", ".join(unexpected_actual)
+            )
+
+        command = "internal:slice-plan-contract"
+        detail = (
+            f"slices={len(self.active_state.planned_slices)}; "
+            f"planned_paths={len(planned_paths)}; changed_paths={len(actual_paths)}"
+        )
+        if plan_only:
+            command = "internal:work-plan-contract"
+            if len(self.active_state.planned_slices) != 1:
+                raise WorkflowExecutionError(
+                    "PLAN_ONLY requires exactly one executable plan-artifact Slice"
+                )
+            if work_plan_path is None or work_plan_path not in planned_paths:
+                raise WorkflowExecutionError(
+                    "PLAN_ONLY plan does not include WORK_PLAN_PATH"
+                )
+            if work_plan_path not in actual_paths:
+                raise WorkflowExecutionError(
+                    "PLAN_ONLY Codex planning must create or update WORK_PLAN_PATH"
+                )
+            candidate = self.root / work_plan_path
+            try:
+                resolved_candidate = candidate.resolve()
+            except (OSError, RuntimeError, ValueError) as exc:
+                raise WorkflowExecutionError(
+                    f"WORK_PLAN_PATH cannot be resolved safely: {exc}"
+                ) from exc
+            if (
+                not resolved_candidate.is_relative_to(self.root)
+                or resolved_candidate != candidate.absolute()
+                or candidate.is_symlink()
+                or not candidate.is_file()
+            ):
+                raise WorkflowExecutionError(
+                    "WORK_PLAN_PATH must be a regular non-symlink file"
+                )
+            try:
+                content = candidate.read_text(encoding="utf-8")
+            except (OSError, UnicodeError) as exc:
+                raise WorkflowExecutionError(
+                    f"WORK_PLAN_PATH is not readable UTF-8: {exc}"
+                ) from exc
+            if not content.strip():
+                raise WorkflowExecutionError("WORK_PLAN_PATH must not be empty")
+            future_slice_ids = tuple(
+                int(match.group(1))
+                for match in re.finditer(
+                    r"^#{2,6}[ \t]+Slice[ \t]+([0-9]+)(?:\b|:)",
+                    content,
+                    re.MULTILINE | re.IGNORECASE,
+                )
+            )
+            if not future_slice_ids:
+                raise WorkflowExecutionError(
+                    "WORK_PLAN_PATH must contain at least one future Slice heading"
+                )
+            if future_slice_ids != tuple(range(1, len(future_slice_ids) + 1)):
+                raise WorkflowExecutionError(
+                    "WORK_PLAN_PATH future Slice headings must be contiguous and 1-based"
+                )
+            detail += f"; future_slices={len(future_slice_ids)}; work_plan={work_plan_path}"
+
+        digest = hashlib.sha256(detail.encode("utf-8")).hexdigest()
+        return ValidationAttestation(
+            attestation_id=f"plan-validation-{changes.fingerprint[:12]}",
+            diff_fingerprint=changes.fingerprint,
+            expected_commands=(command,),
+            records=(ValidationRecord(ValidationStatus.PASS, command, 0, detail),),
+            output_digest=digest,
+            summary="internal plan contract passed",
+        )
+
     def prepare_correction(
         self, findings: tuple[FindingRecord, ...]
     ) -> WorkflowCorrectionBoundary:
@@ -405,6 +527,8 @@ class ProductionWorkflowDriver(WorkflowDriver):
         )
         if unit.kind is WorkUnitKind.PLAN:
             candidates = [Path(state.task_file)]
+            if state.work_plan_path is not None:
+                candidates.append(self.root / state.work_plan_path)
             candidates.extend(
                 self.root / path
                 for planned in state.planned_slices
@@ -444,8 +568,11 @@ class ProductionWorkflowDriver(WorkflowDriver):
                             value
                             for item in state.planned_slices
                             for value in item.scope_paths
-                            if value.startswith("docs/internal/")
-                            and value.endswith("work-plan.md")
+                            if value == state.work_plan_path
+                            or (
+                                value.startswith("docs/internal/")
+                                and value.endswith("work-plan.md")
+                            )
                         ),
                         "docs/internal/orchestrator-modernization-work-plan.md",
                     ),
@@ -483,6 +610,25 @@ def _context(
         effective_assignment += (
             "\n\nRepository agent instructions (authoritative):\n" + shared_instructions
         )
+    effective_assignment += (
+        "\n\nOrchestrator execution boundary (authoritative):\n"
+        f"- Mode: {state.execution_mode}\n"
+        f"- Persisted target branch: {state.target_branch or state.branch}\n"
+        "- Do not create, switch, rename, delete, merge, or publish branches.\n"
+        "- Do not stage or commit. Git branch and commit transactions belong only to "
+        "the orchestrator and the user.\n"
+        "- Every emitted SLICE_PLAN path and every workspace change must remain within "
+        f"the declared task scope: {', '.join(state.task_scope_patterns) or 'LEGACY'}"
+    )
+    if state.execution_mode == TaskMode.PLAN_ONLY.value:
+        effective_assignment += (
+            "\n- PLAN_ONLY: emit exactly one executable SLICE_PLAN record for creating "
+            f"or updating {state.work_plan_path}.\n"
+            "- Future product implementation Slices belong only as human-readable "
+            "sections inside the work-plan document; do not emit them as executable "
+            "SLICE_PLAN records in this run.\n"
+            "- Do not modify product code, tests, configuration, or generated artifacts."
+        )
     return WorkflowContext(
         assignment=effective_assignment,
         distilled_plan=(
@@ -493,12 +639,16 @@ def _context(
         manual_slice_gate=bool(args.manual_slice_gate),
         path_classes=args.repo_config.paths,
         stop_rules=args.repo_config.stop_rules,
-        current_branch=state.branch,
+        current_branch=inspect_repository(Path.cwd()).branch,
         validation_matrix=validation_matrix,
         retry_incomplete_validation=bool(args.retry_incomplete_validation),
         quota_wait_policy=args.quota_wait_policy,
         require_slice_plan=state.current_work_unit.kind is WorkUnitKind.PLAN,
         dynamic_test_scope=True,
+        plan_gate=bool(getattr(args, "plan_gate", True)),
+        plan_only=state.execution_mode == TaskMode.PLAN_ONLY.value,
+        task_scope_patterns=state.task_scope_patterns,
+        work_plan_path=state.work_plan_path,
     )
 
 
@@ -544,9 +694,19 @@ def _history_payload(
 
 
 def _fresh_state(
-    *, task_file: Path, run_id: str, repository_root: Path
+    *,
+    task_file: Path,
+    run_id: str,
+    repository_root: Path,
+    task_contract: TaskContract,
 ) -> WorkflowState:
     identity = inspect_repository(repository_root)
+    if identity.branch != task_contract.target_branch:
+        raise StateSchemaError(
+            "TARGET_BRANCH mismatch: task requires "
+            f"{task_contract.target_branch!r}, active branch is {identity.branch!r}; "
+            "create/switch the branch before starting the orchestrator"
+        )
     merge_base = resolve_merge_base(repository_root)
     return init_workflow_state(
         run_id=run_id,
@@ -555,6 +715,11 @@ def _fresh_state(
         branch_base=merge_base.commit,
         first_slice_start_commit=identity.head,
         slice_count=1,
+        task_digest=task_contract.digest,
+        execution_mode=task_contract.mode.value,
+        task_scope_patterns=task_contract.scope_patterns,
+        work_plan_path=task_contract.work_plan_path,
+        target_branch=task_contract.target_branch,
     )
 
 
@@ -567,6 +732,13 @@ def run_production_workflow(
     root = Path.cwd().resolve()
     state_file = root / ".orchestrator" / "state.json"
     task_file = task_file.resolve()
+    assignment = task_file.read_text(encoding="utf-8")
+    task_contract = parse_task_contract(
+        assignment,
+        mode_override=getattr(args, "plan_only", None),
+        work_plan_override=getattr(args, "work_plan", None),
+        target_branch_override=getattr(args, "target_branch", None),
+    )
     allowed_roots = tuple(dict.fromkeys((root, task_file.parent.resolve())))
     run_id = str(getattr(args, "watch_run_id", "") or new_run_id())
 
@@ -589,6 +761,22 @@ def run_production_workflow(
         state = loaded
         if state.task_file != str(task_file):
             raise StateSchemaError("persisted task identity differs from --resume task")
+        if state.task_digest is None:
+            raise StateSchemaError(
+                "persisted state predates the hardened task contract; start a new run "
+                "with --no-resume --force-overwrite-state"
+            )
+        if state.task_digest != task_contract.digest:
+            raise StateSchemaError(
+                "task content changed since the persisted run was created"
+            )
+        if (
+            state.execution_mode != task_contract.mode.value
+            or state.task_scope_patterns != task_contract.scope_patterns
+            or state.work_plan_path != task_contract.work_plan_path
+            or state.target_branch != task_contract.target_branch
+        ):
+            raise StateSchemaError("persisted task contract differs from --resume task")
         if getattr(args, "watch_run_id", None) and state.run_id != args.watch_run_id:
             raise StateSchemaError("persisted watch run identity differs from inbox task")
     else:
@@ -596,9 +784,12 @@ def run_production_workflow(
             raise StateSchemaError(
                 "existing state requires --resume or --force-overwrite-state"
             )
-        state = _fresh_state(task_file=task_file, run_id=run_id, repository_root=root)
-
-    assignment = task_file.read_text(encoding="utf-8")
+        state = _fresh_state(
+            task_file=task_file,
+            run_id=run_id,
+            repository_root=root,
+            task_contract=task_contract,
+        )
     config = OrchestratorConfig(
         dry_run=False,
         agent_output_mode=args.agent_output,
@@ -778,6 +969,13 @@ def run_default_dry_run(task_file: Path, *, run_id: str | None = None):
                                "PLAN_READY: YES\nSTATUS: DONE"),
             ScriptedAgentEvent(AgentRole.CLAUDE, 1, 1, WorkflowStep.CLAUDE_PLAN_REVIEW,
                                review(AgentRole.CLAUDE, "PLAN_APPROVAL")),
+            ScriptedAgentEvent(
+                AgentRole.ANTIGRAVITY,
+                1,
+                1,
+                WorkflowStep.ANTIGRAVITY_PLAN_REVIEW,
+                review(AgentRole.ANTIGRAVITY, "PLAN_APPROVAL"),
+            ),
             ScriptedAgentEvent(AgentRole.CODEX, 2, 1, WorkflowStep.CODEX_IMPLEMENTATION,
                                "TEST_FILES_TOUCHED: NONE\nIMPLEMENTATION_READY: 01 | YES\nSTATUS: DONE"),
             ScriptedAgentEvent(AgentRole.CLAUDE, 2, 1, WorkflowStep.CLAUDE_SLICE_REVIEW,

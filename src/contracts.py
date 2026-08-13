@@ -391,6 +391,7 @@ class CodexStepContract:
     review_fingerprint: str | None = None
     validation_attestation: ValidationAttestation | None = None
     require_slice_plan: bool = False
+    plan_artifact_path: str | None = None
     enforce_expected_test_files: bool = True
 
     def __post_init__(self) -> None:
@@ -425,6 +426,19 @@ class CodexStepContract:
                 )
         if self.require_slice_plan and self.readiness_marker is not ReadinessMarker.PLAN:
             raise ValueError("slice planning records are reserved for Codex plan steps")
+        if self.plan_artifact_path is not None:
+            path = PurePosixPath(self.plan_artifact_path)
+            if (
+                not self.require_slice_plan
+                or not self.plan_artifact_path.strip()
+                or path.is_absolute()
+                or "\\" in self.plan_artifact_path
+                or ".." in path.parts
+                or self.plan_artifact_path != path.as_posix()
+            ):
+                raise ValueError(
+                    "plan artifact path requires a canonical plan-step SLICE_PLAN"
+                )
         if not isinstance(self.enforce_expected_test_files, bool):
             raise ValueError("test-file enforcement flag must be a boolean")
 

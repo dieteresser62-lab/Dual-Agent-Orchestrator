@@ -55,6 +55,7 @@ from gates import (
     TestChangeEvidence,
     detect_anchor_changes,
     evaluate_productive_file_limit,
+    matches_path_patterns,
 )
 from prompts import (
     build_v3_codex_prompt,
@@ -178,6 +179,10 @@ class WorkflowContext:
     quota_wait_policy: QuotaWaitPolicy = QuotaWaitPolicy()
     require_slice_plan: bool = False
     dynamic_test_scope: bool = False
+    plan_gate: bool = False
+    plan_only: bool = False
+    task_scope_patterns: tuple[str, ...] = ()
+    work_plan_path: str | None = None
 
     def __post_init__(self) -> None:
         if not self.assignment.strip():
@@ -224,6 +229,16 @@ class WorkflowContext:
             raise ValueError("require_slice_plan must be a boolean")
         if not isinstance(self.dynamic_test_scope, bool):
             raise ValueError("dynamic_test_scope must be a boolean")
+        if not isinstance(self.plan_gate, bool):
+            raise ValueError("plan_gate must be a boolean")
+        if not isinstance(self.plan_only, bool):
+            raise ValueError("plan_only must be a boolean")
+        if self.plan_only and (
+            self.work_plan_path is None or not self.task_scope_patterns
+        ):
+            raise ValueError(
+                "plan-only context requires work_plan_path and task scope patterns"
+            )
 
     @property
     def distilled_context(self) -> str:
@@ -314,6 +329,15 @@ class WorkflowDriver(Protocol):
 
     def validate(
         self, changes: WorkflowChanges, request: ValidationRequest
+    ) -> ValidationAttestation: ...
+
+    def validate_plan(
+        self,
+        changes: WorkflowChanges,
+        *,
+        work_plan_path: str | None,
+        scope_patterns: tuple[str, ...],
+        plan_only: bool,
     ) -> ValidationAttestation: ...
 
     def invoke_reviewer(self, invocation: ReviewerInvocation) -> str: ...
@@ -732,6 +756,7 @@ class WorkflowEngine:
                     return WorkflowRunResult(state, active_history)
                 continue
             if step in (
+                WorkflowStep.ANTIGRAVITY_PLAN_REVIEW,
                 WorkflowStep.ANTIGRAVITY_SLICE_REVIEW,
                 WorkflowStep.ANTIGRAVITY_FINAL_REVIEW,
             ):
@@ -757,6 +782,12 @@ class WorkflowEngine:
                 self.driver.checkpoint(state, active_history)
                 continue
             if step is WorkflowStep.COMPLETED:
+                if (
+                    state.current_work_unit.kind is WorkUnitKind.PLAN
+                    and state.current_work_unit.status is WorkUnitStatus.IN_PROGRESS
+                ):
+                    state = state.complete_current_work_unit()
+                    self.driver.checkpoint(state, active_history)
                 return WorkflowRunResult(state, active_history)
             raise WorkflowExecutionError(
                 f"step {step.value} is outside the state-v3 development engine"
@@ -834,6 +865,9 @@ class WorkflowEngine:
             # able to report test paths before a user approval exists.
             test_changes_approved=True,
             require_slice_plan=is_plan and context.require_slice_plan,
+            plan_artifact_path=(
+                context.work_plan_path if is_plan and context.plan_only else None
+            ),
             enforce_expected_test_files=not context.dynamic_test_scope,
         )
         prompt = build_v3_codex_prompt(
@@ -867,6 +901,32 @@ class WorkflowEngine:
         if result.ready is not True:
             raise WorkflowExecutionError("Codex did not declare the current step ready")
         if is_plan and result.slice_plan:
+            unexpected_plan_paths = tuple(
+                sorted(
+                    {
+                        path
+                        for planned in result.slice_plan
+                        for path in planned.scope_paths
+                        if context.task_scope_patterns
+                        and not matches_path_patterns(path, context.task_scope_patterns)
+                    }
+                )
+            )
+            if unexpected_plan_paths:
+                raise WorkflowExecutionError(
+                    "TASK-SCOPE | SLICE_PLAN contains paths outside the declared task "
+                    f"scope: {', '.join(unexpected_plan_paths)}"
+                )
+            if context.plan_only:
+                if len(result.slice_plan) != 1:
+                    raise WorkflowExecutionError(
+                        "PLAN_ONLY requires exactly one executable Slice for the plan artifact"
+                    )
+                assert context.work_plan_path is not None
+                if context.work_plan_path not in result.slice_plan[0].scope_paths:
+                    raise WorkflowExecutionError(
+                        "PLAN_ONLY Slice must include the declared WORK_PLAN_PATH"
+                    )
             state = state.bind_slice_plan(
                 result.slice_plan,
                 first_start_commit=state.current_slice.start_commit or state.branch_base,
@@ -913,7 +973,11 @@ class WorkflowEngine:
         )
         try:
             attestation, history = self._attestation(
-                changes, history, context, state.current_slice_id
+                changes,
+                history,
+                context,
+                state.current_slice_id,
+                plan_contract=context.plan_only,
             )
         except ValidationExecutionError as exc:
             state = state.await_policy_gate(
@@ -991,7 +1055,10 @@ class WorkflowEngine:
         reviewer: AgentRole,
     ) -> tuple[WorkflowState, WorkflowHistory]:
         unit = state.current_work_unit
-        is_plan_review = state.current_step is WorkflowStep.CLAUDE_PLAN_REVIEW
+        is_plan_review = state.current_step in {
+            WorkflowStep.CLAUDE_PLAN_REVIEW,
+            WorkflowStep.ANTIGRAVITY_PLAN_REVIEW,
+        }
         is_final_review = state.current_step in {
             WorkflowStep.CLAUDE_FINAL_REVIEW,
             WorkflowStep.ANTIGRAVITY_FINAL_REVIEW,
@@ -1015,7 +1082,9 @@ class WorkflowEngine:
             )
             self.driver.checkpoint(state, history)
             return state, history
-        unexpected = self._validate_change_boundary(state, changes, unit.kind)
+        unexpected = self._validate_change_boundary(
+            state, changes, unit.kind, context=context
+        )
         if unexpected:
             state = state.await_policy_gate(
                 reason=GateReason.UNEXPECTED_FILE,
@@ -1056,7 +1125,14 @@ class WorkflowEngine:
                 )
         try:
             attestation, history = self._attestation(
-                changes, history, context, unit.slice_id
+                changes,
+                history,
+                context,
+                unit.slice_id,
+                plan_contract=(
+                    (is_plan_review and unit.kind is WorkUnitKind.PLAN)
+                    or context.plan_only
+                ),
             )
         except ValidationExecutionError as exc:
             state = state.await_policy_gate(
@@ -1162,7 +1238,9 @@ class WorkflowEngine:
             review_round,
             result,
             changes.fingerprint,
-            track_slice_approval=not is_plan_review,
+            track_slice_approval=(
+                not is_plan_review or unit.kind is WorkUnitKind.PLAN
+            ),
             allowed_finding_origins=(
                 ("FINAL",)
                 if is_final_review or unit.kind is WorkUnitKind.CORRECTION
@@ -1173,7 +1251,9 @@ class WorkflowEngine:
         if result.approval is True:
             if reviewer is AgentRole.CLAUDE:
                 if is_plan_review and unit.kind is WorkUnitKind.PLAN:
-                    state = state.complete_current_work_unit()
+                    state = state.with_current_step(
+                        WorkflowStep.ANTIGRAVITY_PLAN_REVIEW
+                    )
                 elif is_plan_review:
                     decision = self._latest_anchor_approval(state)
                     if decision is None or decision.resume_step is None:
@@ -1191,6 +1271,20 @@ class WorkflowEngine:
                     state = state.with_current_step(
                         WorkflowStep.ANTIGRAVITY_SLICE_REVIEW
                     )
+            elif is_plan_review and unit.kind is WorkUnitKind.PLAN:
+                if context.plan_gate:
+                    state = state.await_user_gate(
+                        reason=GateReason.PLAN_APPROVAL,
+                        detail=(
+                            "PLAN-APPROVAL | Claude and Antigravity approved the bound "
+                            "plan; explicit user approval is required before execution"
+                        ),
+                        fingerprint=changes.fingerprint,
+                        paths=changes.user_gate_paths,
+                        gate_step=WorkflowStep.COMPLETED,
+                    )
+                else:
+                    state = state.complete_current_work_unit()
             elif is_final_review:
                 if any(
                     finding.status is FindingStatus.OPEN
@@ -1459,7 +1553,37 @@ class WorkflowEngine:
         history: WorkflowHistory,
         context: WorkflowContext,
         slice_id: int,
+        *,
+        plan_contract: bool = False,
     ) -> tuple[ValidationAttestation, WorkflowHistory]:
+        if plan_contract:
+            matching = tuple(
+                existing
+                for existing in history.attestations
+                if existing.diff_fingerprint == changes.fingerprint
+            )
+            if matching:
+                return matching[-1], history
+            attestation = self.driver.validate_plan(
+                changes,
+                work_plan_path=context.work_plan_path,
+                scope_patterns=context.task_scope_patterns,
+                plan_only=context.plan_only,
+            )
+            if attestation.diff_fingerprint != changes.fingerprint:
+                raise WorkflowExecutionError(
+                    "plan validation attestation fingerprint is foreign"
+                )
+            event = ValidationAuditEvent(
+                event_id=len(history.events) + 1,
+                slice_id=slice_id,
+                attestation=attestation,
+            )
+            return attestation, replace(
+                history,
+                attestations=(*history.attestations, attestation),
+                events=(*history.events, event),
+            )
         try:
             request = select_validation_request(
                 context.validation_matrix,
@@ -1766,6 +1890,8 @@ class WorkflowEngine:
         state: WorkflowState,
         changes: WorkflowChanges,
         kind: WorkUnitKind,
+        *,
+        context: WorkflowContext | None = None,
     ) -> tuple[str, ...]:
         expected_start = state.current_slice.start_commit or state.branch_base
         if kind is WorkUnitKind.FINAL_REVIEW:
@@ -1777,7 +1903,18 @@ class WorkflowEngine:
         if changes.start_commit != expected_start:
             raise WorkflowExecutionError("change evidence uses a foreign slice start commit")
         if kind is WorkUnitKind.PLAN:
-            return ()
+            if context is None or not context.task_scope_patterns:
+                return ()
+            if (
+                not context.plan_only
+                and changes.paths == (".orchestrator/plan-output.md",)
+            ):
+                return ()
+            return tuple(
+                path
+                for path in changes.paths
+                if not matches_path_patterns(path, context.task_scope_patterns)
+            )
         scope = state.current_slice.scope_paths
         if not scope:
             raise WorkflowExecutionError("slice review requires a persisted Git boundary")

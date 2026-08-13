@@ -87,15 +87,28 @@ def build_v3_codex_contract(contract: CodexStepContract) -> str:
         "- Open finding response: FINDING_RESPONSE: <ID> | ACCEPTED|REJECTED | <rationale>",
     ]
     if contract.require_slice_plan:
-        lines.extend(
-            (
-                "- Ordered implementation boundary (one or more records): "
-                "SLICE_PLAN: <1-based id> | <concise summary> | <comma-separated repository-relative paths>",
-                "- Slice ids must be contiguous from 1. Paths are exact commit allowlists; "
-                "include every source, test, configuration, and audit document the slice may change.",
-                "- Keep each slice within the configured productive-file limit.",
+        if contract.plan_artifact_path is not None:
+            lines.extend(
+                (
+                    "- PLAN_ONLY executable boundary (exactly one record): "
+                    "SLICE_PLAN: 1 | <concise plan-artifact summary> | "
+                    f"{contract.plan_artifact_path}",
+                    "- This record authorizes only the work-plan artifact. Describe future "
+                    "product implementation Slices as Markdown sections inside that artifact; "
+                    "do not emit them as additional SLICE_PLAN records.",
+                    "- Do not modify product code, tests, configuration, or generated artifacts.",
+                )
             )
-        )
+        else:
+            lines.extend(
+                (
+                    "- Ordered implementation boundary (one or more records): "
+                    "SLICE_PLAN: <1-based id> | <concise summary> | <comma-separated repository-relative paths>",
+                    "- Slice ids must be contiguous from 1. Paths are exact commit allowlists; "
+                    "include every source, test, configuration, and audit document the slice may change.",
+                    "- Keep each slice within the configured productive-file limit.",
+                )
+            )
     if contract.validation_attestation is not None:
         attestation = contract.validation_attestation
         lines.extend(
@@ -138,13 +151,22 @@ def build_v3_review_prompt(
     contract: StepContract,
 ) -> str:
     """Build a bounded state-v3 review prompt from explicit evidence."""
+    review_focus = (
+        "Concentrate on plan completeness, scope discipline, executable Slice ordering, "
+        "acceptance criteria, validation strategy, dependencies, and realistic failure "
+        "paths. Verify that the plan stays within the assignment and that each future "
+        "Slice is independently implementable and reviewable."
+        if contract.approval_marker is ApprovalMarker.PLAN
+        else
+        "Concentrate on implementation correctness, invariants, failure paths, security "
+        "boundaries, resume/idempotency behavior, and missing tests."
+    )
     return textwrap.dedent(
         f"""
         You are the {contract.reviewer.value} reviewer for {contract.name}.
 
-        Concentrate on implementation correctness, invariants, failure paths, security
-        boundaries, resume/idempotency behavior, and missing tests. Deterministic validation
-        has already been executed by the orchestrator for the bound fingerprint.
+        {review_focus} Deterministic validation has already been executed by the
+        orchestrator for the bound fingerprint.
 
         Assignment:
         ---

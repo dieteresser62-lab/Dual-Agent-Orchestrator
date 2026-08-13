@@ -11,15 +11,16 @@ Der Orchestrator überführt eine Markdown-Aufgabe in einen geordneten State-v3-
 Der normale Ablauf ist:
 
 1. Repository, Branch, Aufgabe, Konfiguration und vorhandenen Zustand prüfen.
-2. Codex geordnete `SLICE_PLAN`-Datensätze erstellen und Claude den Plan prüfen lassen.
-3. Für jeden geplanten Slice:
+2. Codex geordnete `SLICE_PLAN`-Datensätze erstellen und Claude sowie Antigravity denselben Planfingerprint prüfen lassen.
+3. Vor der Ausführung des freigegebenen Plans eine explizite, fingerprintgebundene Benutzerfreigabe verlangen.
+4. Für jeden geplanten Slice:
    - Codex bearbeitet ausschließlich den persistierten Pfadumfang.
    - Der Orchestrator ermittelt den kanonischen Diff und führt die konfigurierte Validierungsmatrix einmal für diesen Fingerprint aus.
    - Claude prüft in der ersten Runde nur die Slice-Änderungen und in späteren Runden nur das Korrekturdelta.
    - Antigravity prüft den vollständigen freigegebenen Slice-Diff einmal, nachdem Claude denselben Fingerprint freigegeben hat.
    - Der Orchestrator staged ausschließlich die geprüften Pfade, erstellt einen lokalen Commit `Slice NN: ...` und verifiziert ihn.
-4. Einen branchweiten Vollständigkeitsbericht sowie den abschließenden Claude-/Antigravity-Review gegen die Branchbasis ausführen.
-5. Findet der Abschlussreview einen Blocker, wird er als weiterer begrenzter Korrekturslice bearbeitet und commitet; anschließend wird der vollständige Abschlussreview wiederholt.
+5. Einen branchweiten Vollständigkeitsbericht sowie den abschließenden Claude-/Antigravity-Review gegen die Branchbasis ausführen.
+6. Findet der Abschlussreview einen Blocker, wird er als weiterer begrenzter Korrekturslice bearbeitet und commitet; anschließend wird der vollständige Abschlussreview wiederholt.
 
 Keine Rolle ersetzt eine andere. Codex gibt die eigene Arbeit niemals frei und commitet sie nicht selbst. Reviewer können weder den Quell-Worktree bearbeiten noch Validierungsergebnisse für sich beanspruchen.
 
@@ -72,9 +73,22 @@ Verwende entweder den Positionspfad oder `--task-file`, nicht beides:
 
 Eine nicht abgeschlossene `.orchestrator/state.json` wird im Einzelaufgabenmodus automatisch fortgesetzt. Nach einem abgeschlossenen State-v3-Lauf beginnt ein neuer Lauf. Verwende `--resume` explizit, wenn ein Gate aufgelöst oder nach einem Prozessneustart fortgesetzt wird.
 
-## Aufgabengrenzen
+## Aufgabengrenzen und Zweischrittbetrieb
 
-Eine gute Aufgabe benennt Ziel, erlaubte Pfade, Nicht-Scope, Akzeptanzkriterien, Validierungsbefehle und Bedingungen für eine Benutzerentscheidung. Codex überführt diesen Auftrag in einen oder mehrere persistierte Slices. Jeder `SLICE_PLAN`-Datensatz enthält:
+Jede produktive Aufgabe deklariert zusätzlich zu Ziel, Nicht-Scope und Akzeptanzkriterien diese maschinenlesbare Grenze:
+
+```text
+ORCHESTRATOR_MODE: PLAN_ONLY|IMPLEMENT
+WORK_PLAN_PATH: docs/internal/<thema>-work-plan.md
+TARGET_BRANCH: feature/<name>|codex/<name>
+TASK_SCOPE: <comma-separated repository-relative paths or globs>
+```
+
+`WORK_PLAN_PATH` ist nur bei `PLAN_ONLY` erforderlich. Alternativ zu `TASK_SCOPE` wird ein Abschnitt `## Erlaubter Scope` oder `## Allowed Scope` mit Aufzählung akzeptiert. Der angegebene Zielbranch muss vor dem Start existieren und aktiv sein; Codex darf Branches weder erstellen noch wechseln.
+
+`PLAN_ONLY` bildet den ersten Schritt des manuellen Prozesses ab; [example-plan-task.md](example-plan-task.md) ist eine direkt anpassbare Vorlage. Codex erstellt ausschließlich das deklarierte Arbeitsplan-MD. Die späteren Umsetzungsslices stehen als Überschriften im Dokument, während der ausführbare `SLICE_PLAN` dieses Laufs genau einen Dokumentationsslice enthält. Claude und Antigravity prüfen den Plan, danach wartet der Lauf am expliziten Plangate. Nach Freigabe wird ausschließlich das Arbeitsplandokument lokal commitet. Die Umsetzung startet später mit einer neuen Aufgabe im Modus `IMPLEMENT`, die auf den freigegebenen Arbeitsplan verweist.
+
+Im Modus `IMPLEMENT` überführt Codex den Auftrag in einen oder mehrere persistierte Slices. Jeder ausführbare `SLICE_PLAN`-Datensatz enthält:
 
 ```text
 SLICE_PLAN: <1-based id> | <summary> | <comma-separated repository-relative paths>
@@ -82,7 +96,7 @@ SLICE_PLAN: <1-based id> | <summary> | <comma-separated repository-relative path
 
 Die aufgeführten Pfade bilden exakte Commit-Allowlists. Ein Slice darf gemäß den konfigurierten Pfadklassen höchstens zehn produktive Dateigruppen enthalten. Tests und Dokumentation können separat klassifiziert werden; ein nicht klassifizierter Pfad gilt vorsichtshalber als produktiv.
 
-Unerwartete Pfade, ein geänderter Branch, ein geänderter Slice-Startcommit oder ein nach dem Review abweichender Fingerprint blockieren den Commit.
+Bereits bei der Planung werden alle `SLICE_PLAN`-Pfade gegen den Task-Scope geprüft. Unerwartete Pfade, ein geänderter Branch, ein geänderter Taskinhalt, ein geänderter Slice-Startcommit oder ein nach dem Review abweichender Fingerprint blockieren den Lauf.
 
 ## Zustand, Checkpoints, Logs und Auditdokumente
 
@@ -103,13 +117,13 @@ Aktive oder eingefrorene Zustände der Version 2 werden unverändert abgelehnt. 
 
 ## Validierung und Reviewisolation
 
-Nur der Orchestrator führt deterministische Validierungen aus. Die Validierungsmatrix wird aus den kanonisch geänderten Pfaden und den Abnahmebefehlen offener Findings ausgewählt und anschließend anhand des Diff-Fingerprints zwischengespeichert. Beide Reviewer erhalten dieselbe vollständige, an den Fingerprint gebundene Attestierung.
+Nur der Orchestrator führt deterministische Validierungen aus. Planreviews verwenden eine interne Vertragsprüfung für Scope, Arbeitsplanpfad und 1-basierte zukünftige Slice-Überschriften; sie führen nicht die Produkttestsuite aus. Implementierungsreviews verwenden die aus kanonisch geänderten Pfaden und offenen Findings ausgewählte Validierungsmatrix. Attestierungen werden anhand des Diff-Fingerprints zwischengespeichert, und beide Reviewer erhalten dieselbe gebundene Evidenz.
 
 Codex arbeitet mit Schreibzugriff auf den Workspace. Claude und Antigravity erhalten temporäre schreibgeschützte Repositorykopien, während ihre privaten Laufzeit-, Prompt-, Cache- und Logpfade beschreibbar bleiben. Normale Reviews legen das Validierungssystem nicht offen und können den Ziel-Worktree nicht verändern.
 
 Claude verwendet standardmäßig Sonnet mit Effort `high`. Der erste Slice-Review erhält die geänderten Pfade und Hunks des Slice, Akzeptanzkriterien, strukturierte Findings und die gebundene Attestierung. Ein Korrekturreview erhält ausschließlich das Delta seit Claudes zuletzt geprüftem Fingerprint. Eine rein formale Vertragsreparatur erhält die abgelehnte Antwort und den Marker-Vertrag, nicht erneut die Implementierungsevidenz.
 
-Antigravity wird erst ausgeführt, nachdem Claude denselben Fingerprint freigegeben hat. Antigravity prüft keine Pläne und erhält für seinen Abschlussreview den vollständigen aktuellen Slice- oder Branch-Diff.
+Antigravity wird erst ausgeführt, nachdem Claude denselben Fingerprint freigegeben hat. Das gilt für Plan, Slice und Abschlussreview. Antigravity erhält jeweils den vollständigen aktuellen Plan-, Slice- oder Branch-Diff.
 
 Die expliziten Befehlsbuilder des Review-Harness dienen der Diagnose bei Installation, CLI-Versionswechseln oder Fehlersuche. Sie weisen Testausführung und Schreibschutz nachverfolgter Dateien in der isolierten Kopie nach; sie sind nicht Teil eines normalen Reviews.
 
@@ -222,6 +236,10 @@ Für deterministische Negativ- und Fortsetzungsszenarien kann ein State-v3-JSON-
 | `--strict-preflight` | aus | Einen Fehler der Provider-DNS-Vorabprüfung als fatal behandeln. |
 | `--skip-git-check` / `--no-skip-git-check` | aus; im Watch-Modus an | Prüfung auf einen sauberen Repositoryzustand überschreiben. |
 | `--manual-slice-gate` / `--no-manual-slice-gate` | Repositorykonfiguration oder aus | Vor jedem Slice-Commit eine explizite Freigabe verlangen. |
+| `--plan-gate` / `--no-plan-gate` | Repositorykonfiguration oder an | Nach Claude-/Antigravity-Planfreigabe eine explizite fingerprintgebundene Benutzerfreigabe verlangen. |
+| `--plan-only` / `--no-plan-only` | Aufgabenmarker oder nicht gesetzt | Den Lauf auf das deklarierte Arbeitsplanartefakt begrenzen beziehungsweise explizit als Implementierung ausführen. |
+| `--work-plan <path>` | Aufgabenmarker | Exakter repositoryrelativer `WORK_PLAN_PATH` für `PLAN_ONLY`; darf dem Marker nicht widersprechen. |
+| `--target-branch <branch>` | Aufgabenmarker | Exakter erforderlicher Feature-Branch; darf dem Marker nicht widersprechen. |
 | `--approve-gate` / `--reject-gate` | nicht gesetzt | Zusammen mit explizitem `--resume` über das exakt persistierte Benutzergate entscheiden. |
 | `--gate-actor <name>` | nicht gesetzt | Erforderliche Identität für eine explizite Gate-Entscheidung. |
 | `--gate-rationale <text>` | nicht gesetzt | Erforderliche Begründung für eine explizite Gate-Entscheidung. |
@@ -327,6 +345,7 @@ timeout_seconds = 1200
 
 [workflow]
 manual_slice_gate = false
+plan_gate = true
 ```
 
 `default_shell_command` oder ein regelbezogener `shell_command` sollten nur verwendet werden, wenn Shell-Semantik erforderlich ist. Ein Validierungseintrag darf nicht sowohl einen Argumentvektorbefehl als auch einen Shell-Befehl enthalten. Muster sind repositoryrelativ, verwenden `/` und dürfen nicht mit `..` ausbrechen.
@@ -349,7 +368,7 @@ Die aktiven Anweisungsdateien des Repositorys sind:
 | `AGENTS.md` | Gemeinsamer Ausführungs-, Sicherheits-, Review- und Marker-Vertrag. |
 | `CODEX.md` | Implementiererrolle und Bereitschaftsdatensätze. |
 | `CLAUDE.md` | Primärer gezielter Reviewer mit persistentem Sonnet-/High-Profil. |
-| `ANTIGRAVITY.md` | Unabhängiger Abschlussreviewer. |
+| `ANTIGRAVITY.md` | Unabhängiger zweiter Plan-, Slice- und Abschlussreviewer. |
 
 Alle Agentenantworten enden mit `STATUS: DONE`. State-v3-Datensätze sind:
 
@@ -359,7 +378,7 @@ Alle Agentenantworten enden mit `STATUS: DONE`. State-v3-Datensätze sind:
 | Codex-Implementierung | `TEST_FILES_TOUCHED: NONE\|<paths>` und `IMPLEMENTATION_READY: <slice-id> \| YES\|NO` |
 | Codex-Abschlussbericht | `FINAL_REPORT_READY: YES\|NO` |
 | Jeder Reviewer, erste Zeile | `REVIEWER: claude\|antigravity` |
-| Claude-Planreview | `PLAN_APPROVAL: YES\|NO` |
+| Claude-/Antigravity-Planreview | `PLAN_APPROVAL: YES\|NO` |
 | Slice-Review | `SLICE_APPROVAL: <slice-id> \| YES\|NO` |
 | Branchweiter Abschlussreview | `FINAL_APPROVAL: YES\|NO` |
 | Neues Finding | `NEW_FINDING: C-01\|A-01 \| BLOCKER\|OBSERVATION \| <description> \| <acceptance test>` |

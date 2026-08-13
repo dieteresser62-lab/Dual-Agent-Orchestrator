@@ -42,9 +42,25 @@ def _args(repository: Path, task: Path):
             "--test-command", "python3 -c 'print(\"ok\")'",
             "--agent-output", "none",
             "--no-agent-live-stream",
+            "--no-plan-gate",
         ],
         cwd=repository,
         environ={},
+    )
+
+
+def _write_task(path: Path, branch: str, *scope: str) -> None:
+    path.write_text(
+        "\n".join(
+            (
+                "ORCHESTRATOR_MODE: IMPLEMENT",
+                f"TARGET_BRANCH: {branch}",
+                "TASK_SCOPE: " + ", ".join(scope),
+                "",
+                "Implement the bounded task.",
+            )
+        ),
+        encoding="utf-8",
     )
 
 
@@ -67,7 +83,7 @@ def test_production_session_plans_commits_two_slices_and_persists_final_state(
 ) -> None:
     repository = _repository(tmp_path, "feature/runtime-test")
     task = tmp_path / "task.md"
-    task.write_text("Implement two bounded files", encoding="utf-8")
+    _write_task(task, "feature/runtime-test", "src/first.py", "src/second.py")
     interrupt_once = {"value": True}
 
     def codex(driver: ProductionWorkflowDriver, invocation: CodexInvocation) -> str:
@@ -111,7 +127,10 @@ def test_production_session_plans_commits_two_slices_and_persists_final_state(
                 provider_text="temporary provider outage",
                 received_at=datetime.now(timezone.utc),
             )
-        if invocation.step is WorkflowStep.CLAUDE_PLAN_REVIEW:
+        if invocation.step in {
+            WorkflowStep.CLAUDE_PLAN_REVIEW,
+            WorkflowStep.ANTIGRAVITY_PLAN_REVIEW,
+        }:
             marker = "PLAN_APPROVAL: YES"
         elif invocation.step in {
             WorkflowStep.CLAUDE_FINAL_REVIEW,
@@ -155,7 +174,7 @@ def test_head_drift_after_plan_becomes_typed_persisted_halt(
 ) -> None:
     repository = _repository(tmp_path, "feature/head-drift")
     task = tmp_path / "task.md"
-    task.write_text("Implement one bounded file", encoding="utf-8")
+    _write_task(task, "feature/head-drift", "src/one.py")
 
     def codex(driver: ProductionWorkflowDriver, invocation: CodexInvocation) -> str:
         _git(repository, "commit", "--allow-empty", "-m", "external drift")
@@ -191,7 +210,7 @@ def test_empty_implementation_is_a_typed_halt_not_cli_crash(
 ) -> None:
     repository = _repository(tmp_path, "feature/empty-slice")
     task = tmp_path / "task.md"
-    task.write_text("Implement one bounded file", encoding="utf-8")
+    _write_task(task, "feature/empty-slice", "src/one.py")
 
     def codex(driver: ProductionWorkflowDriver, invocation: CodexInvocation) -> str:
         if invocation.step is WorkflowStep.CODEX_PLAN:
@@ -225,3 +244,85 @@ def test_empty_implementation_is_a_typed_halt_not_cli_crash(
     args.force_overwrite_state = True
     args.resume = False
     assert run_pipeline(task, args, force_new=True) == 4
+
+
+def test_plan_only_uses_internal_plan_validation_and_commits_no_product_code(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repository = _repository(tmp_path, "feature/plan-only")
+    task = tmp_path / "task.md"
+    task.write_text(
+        "\n".join(
+            (
+                "ORCHESTRATOR_MODE: PLAN_ONLY",
+                "WORK_PLAN_PATH: docs/internal/work-plan.md",
+                "TARGET_BRANCH: feature/plan-only",
+                "TASK_SCOPE: docs/internal/work-plan.md",
+                "",
+                "Create only the reviewed work plan.",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    def codex(driver: ProductionWorkflowDriver, invocation: CodexInvocation) -> str:
+        if invocation.step is WorkflowStep.CODEX_PLAN:
+            plan = repository / "docs" / "internal" / "work-plan.md"
+            plan.parent.mkdir(parents=True)
+            plan.write_text(
+                "# Work plan\n\n### Slice 1: Future implementation\n\n"
+                "Change `src/future.py` in a later IMPLEMENT task.\n",
+                encoding="utf-8",
+            )
+            output = (
+                "SLICE_PLAN: 1 | create reviewed work plan | docs/internal/work-plan.md\n"
+                "PLAN_READY: YES\nSTATUS: DONE"
+            )
+        elif invocation.step is WorkflowStep.CODEX_IMPLEMENTATION:
+            output = (
+                "TEST_FILES_TOUCHED: NONE\n"
+                "IMPLEMENTATION_READY: 01 | YES\nSTATUS: DONE"
+            )
+        else:
+            output = "FINAL_REPORT_READY: YES\nSTATUS: DONE"
+        driver.last_codex_output = output
+        return output
+
+    def reviewer(
+        _driver: ProductionWorkflowDriver, invocation: ReviewerInvocation
+    ) -> str:
+        if invocation.step in {
+            WorkflowStep.CLAUDE_PLAN_REVIEW,
+            WorkflowStep.ANTIGRAVITY_PLAN_REVIEW,
+        }:
+            marker = "PLAN_APPROVAL: YES"
+        elif invocation.step in {
+            WorkflowStep.CLAUDE_FINAL_REVIEW,
+            WorkflowStep.ANTIGRAVITY_FINAL_REVIEW,
+        }:
+            marker = "FINAL_APPROVAL: YES"
+        else:
+            marker = "SLICE_APPROVAL: 01 | YES"
+        return _review(invocation.reviewer, marker)
+
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_codex", codex)
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_reviewer", reviewer)
+    monkeypatch.chdir(repository)
+
+    result = run_production_workflow(task, _args(repository, task))
+
+    assert result.workflow_completed
+    assert _git(repository, "show", "--pretty=", "--name-only", "HEAD") == (
+        "docs/internal/work-plan.md"
+    )
+    attestations = [
+        event["attestation"]
+        for history in result.state.runtime_history["archive"]
+        for event in history.get("events", [])
+        if event.get("kind") == "validation"
+    ]
+    assert attestations
+    assert all(
+        item["expected_commands"] == ["internal:work-plan-contract"]
+        for item in attestations
+    )

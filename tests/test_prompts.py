@@ -29,6 +29,41 @@ def test_plan_prompt_requires_persistable_slice_records() -> None:
     assert "PLAN_READY: YES|NO" in rendered
 
 
+def test_plan_only_prompt_allows_only_the_work_plan_artifact() -> None:
+    contract = CodexStepContract(
+        name="plan-only",
+        readiness_marker=ReadinessMarker.PLAN,
+        slice_id="01",
+        round_number=1,
+        require_slice_plan=True,
+        plan_artifact_path="docs/internal/work-plan.md",
+    )
+
+    rendered = build_v3_codex_contract(contract)
+
+    assert "PLAN_ONLY executable boundary (exactly one record)" in rendered
+    assert "SLICE_PLAN: 1" in rendered
+    assert "docs/internal/work-plan.md" in rendered
+    assert "do not emit them as additional SLICE_PLAN records" in rendered
+
+
+def test_plan_review_prompt_focuses_on_plan_quality() -> None:
+    rendered = build_v3_review_prompt(
+        assignment="Create a plan",
+        evidence="diff",
+        contract=StepContract(
+            name="plan-review",
+            reviewer=AgentRole.CLAUDE,
+            approval_marker=ApprovalMarker.PLAN,
+            slice_id="01",
+            round_number=1,
+        ),
+    )
+
+    assert "plan completeness" in rendered
+    assert "future Slice is independently implementable and reviewable" in rendered
+
+
 def test_dynamic_implementation_prompt_requests_actual_test_paths() -> None:
     rendered = build_v3_codex_contract(
         CodexStepContract(

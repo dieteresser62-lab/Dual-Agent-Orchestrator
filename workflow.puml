@@ -21,14 +21,22 @@ endif
 
 partition "Plan" {
   :Codex produces ordered SLICE_PLAN records;
-  :Orchestrator binds the plan fingerprint\nand validation attestation;
+  :Orchestrator validates task scope and\nthe internal plan contract;
   :Claude reviews the plan;
+  :Antigravity reviews the same plan fingerprint;
   while (PLAN_APPROVAL is NO?) is (yes)
     :Codex revises the plan and answers findings;
     :Orchestrator refreshes bound evidence;
-    :Claude reviews the plan correction;
+    :Claude and Antigravity review the plan correction;
   endwhile (no)
+  :Persist fingerprint-bound plan gate;
+  :User reviews and resumes with --approve-gate;
 }
+
+if (PLAN_ONLY mode?) then (yes)
+  :Execute only the declared work-plan artifact Slice;
+else (no)
+endif
 
 while (A planned slice remains?) is (yes)
   partition "Bounded slice" {

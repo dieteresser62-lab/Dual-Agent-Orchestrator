@@ -29,6 +29,7 @@ class WorkUnitKind(str, Enum):
 class WorkflowStep(str, Enum):
     CODEX_PLAN = "codex_plan"
     CLAUDE_PLAN_REVIEW = "claude_plan_review"
+    ANTIGRAVITY_PLAN_REVIEW = "antigravity_plan_review"
     CODEX_PLAN_REVISION = "codex_plan_revision"
     CODEX_IMPLEMENTATION = "codex_implementation"
     CLAUDE_SLICE_REVIEW = "claude_slice_review"
@@ -75,6 +76,7 @@ class GateReason(str, Enum):
     UNEXPECTED_FILE = "unexpected_file"
     ANCHOR_CHANGE = "anchor_change"
     MANUAL_SLICE = "manual_slice"
+    PLAN_APPROVAL = "plan_approval"
     QUOTA = "quota"
     INSTANCE_FAILURE = "instance_failure"
 
@@ -286,13 +288,16 @@ class GateRecord:
             raise WorkflowStateValidationError("test-change gate requires changed test paths")
         if (
             self.fingerprint is not None
-            and self.reason is GateReason.MANUAL_SLICE
+            and self.reason in {GateReason.MANUAL_SLICE, GateReason.PLAN_APPROVAL}
             and not self.paths
         ):
-            raise WorkflowStateValidationError("manual-slice gate requires slice paths")
+            raise WorkflowStateValidationError(
+                "manual-slice and plan-approval gates require bound paths"
+            )
         if self.reason in {
             GateReason.TEST_CHANGE,
             GateReason.MANUAL_SLICE,
+            GateReason.PLAN_APPROVAL,
             GateReason.UNEXPECTED_FILE,
             GateReason.STOP_REQUEST,
         }:
@@ -370,6 +375,7 @@ class GateDecisionRecord:
             GateReason.TEST_CHANGE,
             GateReason.ANCHOR_CHANGE,
             GateReason.MANUAL_SLICE,
+            GateReason.PLAN_APPROVAL,
         }:
             raise WorkflowStateValidationError(
                 "a fingerprint-bound decision requires a user-gate reason"
@@ -395,13 +401,14 @@ class GateDecisionRecord:
             raise WorkflowStateValidationError(
                 "test-change decision requires changed test paths"
             )
-        if self.reason is GateReason.MANUAL_SLICE and not self.paths:
+        if self.reason in {GateReason.MANUAL_SLICE, GateReason.PLAN_APPROVAL} and not self.paths:
             raise WorkflowStateValidationError(
-                "manual-slice decision requires slice paths"
+                "manual-slice and plan-approval decisions require bound paths"
             )
         if self.reason in {
             GateReason.TEST_CHANGE,
             GateReason.MANUAL_SLICE,
+            GateReason.PLAN_APPROVAL,
             GateReason.UNEXPECTED_FILE,
             GateReason.STOP_REQUEST,
         }:
@@ -836,6 +843,11 @@ class WorkflowState:
     work_units: tuple[WorkUnitRecord, ...]
     planned_slices: tuple[PlannedSlice, ...] = ()
     runtime_history: Mapping[str, Any] | None = None
+    task_digest: str | None = None
+    execution_mode: str = "IMPLEMENT"
+    task_scope_patterns: tuple[str, ...] = ()
+    work_plan_path: str | None = None
+    target_branch: str | None = None
 
     def __post_init__(self) -> None:
         if self.version != STATE_VERSION:
@@ -903,6 +915,27 @@ class WorkflowState:
             self.runtime_history, Mapping
         ):
             raise WorkflowStateValidationError("runtime_history must be an object")
+        if self.execution_mode not in {"IMPLEMENT", "PLAN_ONLY"}:
+            raise WorkflowStateValidationError(
+                "execution_mode must be IMPLEMENT or PLAN_ONLY"
+            )
+        if self.task_digest is not None:
+            if not SHA256_PATTERN.fullmatch(self.task_digest):
+                raise WorkflowStateValidationError(
+                    "task_digest must be a lowercase SHA-256 digest"
+                )
+            if not self.task_scope_patterns:
+                raise WorkflowStateValidationError(
+                    "a bound task contract requires task_scope_patterns"
+                )
+            if self.target_branch != self.branch:
+                raise WorkflowStateValidationError(
+                    "target_branch must match the persisted workflow branch"
+                )
+            if self.execution_mode == "PLAN_ONLY" and self.work_plan_path is None:
+                raise WorkflowStateValidationError(
+                    "PLAN_ONLY state requires work_plan_path"
+                )
 
     @property
     def current_work_unit(self) -> WorkUnitRecord:
@@ -1594,6 +1627,11 @@ class WorkflowState:
                 for item in self.planned_slices
             ],
             "runtime_history": self.runtime_history,
+            "task_digest": self.task_digest,
+            "execution_mode": self.execution_mode,
+            "task_scope_patterns": list(self.task_scope_patterns),
+            "work_plan_path": self.work_plan_path,
+            "target_branch": self.target_branch,
         }
 
     @classmethod
@@ -1612,12 +1650,27 @@ class WorkflowState:
                 "slices",
                 "work_units",
             }
-        current_keys = {*legacy_keys, "planned_slices", "runtime_history"}
+        previous_keys = {*legacy_keys, "planned_slices", "runtime_history"}
+        current_keys = {
+            *previous_keys,
+            "task_digest",
+            "execution_mode",
+            "task_scope_patterns",
+            "work_plan_path",
+            "target_branch",
+        }
         if set(raw) == legacy_keys:
             planned_slices: tuple[PlannedSlice, ...] = ()
             runtime_history = None
+            task_digest = None
+            execution_mode = "IMPLEMENT"
+            task_scope_patterns: tuple[str, ...] = ()
+            work_plan_path = None
+            target_branch = None
         else:
-            _require_exact_keys(raw, current_keys, "workflow state")
+            raw_keys = frozenset(raw)
+            if raw_keys not in {frozenset(previous_keys), frozenset(current_keys)}:
+                _require_exact_keys(raw, current_keys, "workflow state")
             raw_plan = _list(raw["planned_slices"], "planned_slices")
             planned: list[PlannedSlice] = []
             for index, item in enumerate(raw_plan):
@@ -1649,6 +1702,22 @@ class WorkflowState:
             runtime_history = (
                 None if history_raw is None else _mapping(history_raw, "runtime_history")
             )
+            if raw_keys == frozenset(previous_keys):
+                task_digest = None
+                execution_mode = "IMPLEMENT"
+                task_scope_patterns = ()
+                work_plan_path = None
+                target_branch = None
+            else:
+                task_digest = _optional_string(raw["task_digest"], "task_digest")
+                execution_mode = _string(raw["execution_mode"], "execution_mode")
+                task_scope_patterns = _string_tuple(
+                    raw["task_scope_patterns"], "task_scope_patterns"
+                )
+                work_plan_path = _optional_string(
+                    raw["work_plan_path"], "work_plan_path"
+                )
+                target_branch = _optional_string(raw["target_branch"], "target_branch")
         slices_raw = _list(raw["slices"], "slices")
         units_raw = _list(raw["work_units"], "work_units")
         return cls(
@@ -1670,6 +1739,11 @@ class WorkflowState:
             ),
             planned_slices=planned_slices,
             runtime_history=runtime_history,
+            task_digest=task_digest,
+            execution_mode=execution_mode,
+            task_scope_patterns=task_scope_patterns,
+            work_plan_path=work_plan_path,
+            target_branch=target_branch,
         )
 
 
@@ -1681,6 +1755,11 @@ def init_workflow_state(
     branch_base: str,
     slice_count: int,
     first_slice_start_commit: str | None = None,
+    task_digest: str | None = None,
+    execution_mode: str = "IMPLEMENT",
+    task_scope_patterns: tuple[str, ...] = (),
+    work_plan_path: str | None = None,
+    target_branch: str | None = None,
     timestamp: str | None = None,
 ) -> WorkflowState:
     _require_positive_int(slice_count, "slice_count")
@@ -1713,6 +1792,11 @@ def init_workflow_state(
         current_step=work_unit.current_step,
         slices=slices,
         work_units=(work_unit,),
+        task_digest=task_digest,
+        execution_mode=execution_mode,
+        task_scope_patterns=task_scope_patterns,
+        work_plan_path=work_plan_path,
+        target_branch=target_branch,
     )
 
 

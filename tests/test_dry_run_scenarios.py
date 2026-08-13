@@ -211,6 +211,13 @@ def test_positive_session_runs_plan_and_multiple_slices(tmp_path: Path) -> None:
                 WorkflowStep.CLAUDE_PLAN_REVIEW,
                 plan_approval,
             ),
+            ScriptedAgentEvent(
+                AgentRole.ANTIGRAVITY,
+                1,
+                1,
+                WorkflowStep.ANTIGRAVITY_PLAN_REVIEW,
+                plan_approval.replace("REVIEWER: claude", "REVIEWER: antigravity"),
+            ),
             event(AgentRole.CODEX, WorkflowStep.CODEX_IMPLEMENTATION, codex_ready()),
             event(
                 AgentRole.CLAUDE,
@@ -333,6 +340,11 @@ def test_scripted_session_runs_plan_slices_correction_and_repeated_final_review(
             ScriptedAgentEvent(
                 AgentRole.CLAUDE, 1, 1, WorkflowStep.CLAUDE_PLAN_REVIEW,
                 plan_approval,
+            ),
+            ScriptedAgentEvent(
+                AgentRole.ANTIGRAVITY, 1, 1,
+                WorkflowStep.ANTIGRAVITY_PLAN_REVIEW,
+                plan_approval.replace("REVIEWER: claude", "REVIEWER: antigravity"),
             ),
             ScriptedAgentEvent(
                 AgentRole.CODEX, 2, 1, WorkflowStep.CODEX_IMPLEMENTATION,
