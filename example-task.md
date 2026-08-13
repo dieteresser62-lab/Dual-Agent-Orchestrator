@@ -1,14 +1,14 @@
-# Add JSON health output to the status command
+# JSON-Statusausgabe zum Statusbefehl hinzufügen
 
-## Context
+## Kontext
 
-The project already has a text-only `status` command. Automation needs a stable JSON representation without changing the existing text output.
+Das Projekt besitzt bereits einen reinen Textbefehl `status`. Automatisierungen benötigen eine stabile JSON-Darstellung, ohne die bestehende Textausgabe zu verändern.
 
-## Goal
+## Ziel
 
-Add `--json` to the status command. With this option, print one JSON object containing `status`, `version`, and `checked_at_utc`. Without it, preserve the current text output exactly.
+Ergänze den Statusbefehl um `--json`. Mit dieser Option wird genau ein JSON-Objekt mit `status`, `version` und `checked_at_utc` ausgegeben. Ohne die Option muss die bisherige Textausgabe exakt erhalten bleiben.
 
-## Allowed Scope
+## Erlaubter Scope
 
 - `src/status_cli.py`
 - `tests/test_status_cli.py`
@@ -16,40 +16,40 @@ Add `--json` to the status command. With this option, print one JSON object cont
 - `docs/internal/orchestrator-work-plan.md`
 - `docs/internal/slice-status-json.md`
 
-Do not edit files outside this list. If another path is required, stop and request a scope decision.
+Dateien außerhalb dieser Liste dürfen nicht bearbeitet werden. Wird ein weiterer Pfad benötigt, ist anzuhalten und eine Scope-Entscheidung anzufordern.
 
-## Requirements
+## Anforderungen
 
-1. Parse `--json` with the command's existing argument parser.
-2. Serialize valid UTF-8 JSON with deterministic field names.
-3. Format `checked_at_utc` as an ISO 8601 UTC timestamp ending in `Z`.
-4. Keep the existing text-mode exit code and output byte-for-byte compatible.
-5. Add focused tests for JSON mode, text-mode compatibility, and an invalid option.
-6. Update the README command example and the prepared Slice audit document.
+1. `--json` mit dem vorhandenen Argument-Parser des Befehls verarbeiten.
+2. Gültiges UTF-8-JSON mit deterministischen Feldnamen serialisieren.
+3. `checked_at_utc` als ISO-8601-UTC-Zeitstempel mit abschließendem `Z` formatieren.
+4. Exitcode und Ausgabe des vorhandenen Textmodus bytegenau kompatibel halten.
+5. Fokussierte Tests für JSON-Modus, Textmoduskompatibilität und eine ungültige Option ergänzen.
+6. Das Befehlsbeispiel in der README und das vorbereitete Slice-Auditdokument aktualisieren.
 
-## Acceptance Criteria
+## Akzeptanzkriterien
 
-- `status --json` exits with code 0 and emits exactly one JSON object.
-- The object has exactly the keys `checked_at_utc`, `status`, and `version`.
-- The existing command without `--json` passes its current snapshot test unchanged.
-- Invalid options still return the parser's non-zero usage error.
-- The configured validation matrix passes for the reviewed diff fingerprint.
-- No file outside the allowed scope is changed or committed.
+- `status --json` endet mit Code 0 und gibt genau ein JSON-Objekt aus.
+- Das Objekt besitzt exakt die Schlüssel `checked_at_utc`, `status` und `version`.
+- Der vorhandene Befehl ohne `--json` besteht unverändert seinen Snapshot-Test.
+- Ungültige Optionen liefern weiterhin den von Argument-Parser erzeugten Usage-Fehler mit einem von null verschiedenen Exitcode.
+- Die konfigurierte Validierungsmatrix ist für den geprüften Diff-Fingerprint erfolgreich.
+- Keine Datei außerhalb des erlaubten Scope wird geändert oder commitet.
 
-## Validation
+## Validierung
 
 - `python3 -m pytest tests/test_status_cli.py -v`
 - `python3 -m pytest tests/ -v`
 
-## Non-Scope
+## Nicht-Scope
 
-- No network health probe.
-- No new dependency.
-- No change to version discovery.
-- No push, merge, release, or deployment.
+- Keine Netzwerkzustandsprüfung.
+- Keine neue Abhängigkeit.
+- Keine Änderung der Versionsermittlung.
+- Kein Push, Merge, Release oder Deployment.
 
-## Stop Conditions
+## Stopbedingungen
 
-- Stop if the JSON schema requires a field not listed above.
-- Stop if preserving text output requires an architecture change outside the allowed scope.
-- Stop if tests reveal a platform-specific timestamp contract that is not documented.
+- Anhalten, falls das JSON-Schema ein oben nicht aufgeführtes Feld benötigt.
+- Anhalten, falls die Beibehaltung der Textausgabe eine Architekturänderung außerhalb des erlaubten Scope erfordert.
+- Anhalten, falls Tests einen plattformspezifischen Zeitstempelvertrag zeigen, der nicht dokumentiert ist.

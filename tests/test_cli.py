@@ -624,13 +624,13 @@ def test_readme_cli_defaults_match_resolved_parser_contract() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     readme = (repo_root / "README.md").read_text(encoding="utf-8")
 
-    assert "| `--resume` / `--no-resume` | auto |" in readme
+    assert "| `--resume` / `--no-resume` | automatisch |" in readme
     assert "| `--agent-output <none\\|summary\\|full>` | `none` |" in readme
-    assert "| `--agent-live-stream` / `--no-agent-live-stream` | on |" in readme
-    assert "| `--skip-git-check` / `--no-skip-git-check` | off; on in watch mode |" in readme
+    assert "| `--agent-live-stream` / `--no-agent-live-stream` | an |" in readme
+    assert "| `--skip-git-check` / `--no-skip-git-check` | aus; im Watch-Modus an |" in readme
     assert "| Claude | `--claude-binary`, `--claude-model`" in readme
     assert "`claude`, `sonnet`, 1800s, `high`" in readme
-    assert "Opus is not the default" in readme
+    assert "Opus ist nicht der Standard" in readme
     assert "`gpt-5.6-sol`" in readme
     assert build_parser().get_default("agent_output") == "none"
     assert build_parser().get_default("agent_live_stream") is True

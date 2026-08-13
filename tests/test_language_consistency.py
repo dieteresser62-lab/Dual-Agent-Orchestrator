@@ -10,12 +10,7 @@ from cli import build_parser, parse_args
 ROOT = Path(__file__).resolve().parents[1]
 THIS_FILE = Path(__file__).resolve()
 SOURCE_DIRS = (ROOT / "src", ROOT / "tests")
-ROOT_FILES = (
-    ROOT / "run_task",
-    ROOT / "README.md",
-    ROOT / "Quickstart.md",
-    ROOT / "example-task.md",
-)
+ROOT_FILES = (ROOT / "run_task",)
 ROLE_FILES = (
     ROOT / "AGENTS.md", ROOT / "CLAUDE.md", ROOT / "CODEX.md", ROOT / "ANTIGRAVITY.md"
 )
@@ -23,13 +18,13 @@ REFERENCE_DOC_FILES = (
     ROOT / "docs" / "reference" / "architecture-and-domain-concept.md",
     ROOT / "docs" / "reference" / "market-comparison.md",
 )
-USER_DOC_FILES = (
+USER_MARKDOWN_FILES = (
     ROOT / "README.md",
     ROOT / "Quickstart.md",
-    ROOT / "workflow.puml",
     ROOT / "example-task.md",
     *REFERENCE_DOC_FILES,
 )
+USER_DOC_FILES = (*USER_MARKDOWN_FILES, ROOT / "workflow.puml")
 ALLOWLIST_FILENAME_PATTERNS: tuple[str, ...] = ()
 GERMAN_TOKENS = [  # allowlist:german
     "Aufgabe",
@@ -145,7 +140,7 @@ def _collect_filename_hits() -> list[str]:
     return hits
 
 
-def test_no_german_terms_in_content() -> None:
+def test_no_german_terms_in_runtime_content() -> None:
     hits = _collect_content_hits()
     assert not hits, "German tokens found in content:\n" + "\n".join(hits)
 
@@ -198,6 +193,31 @@ def test_active_user_docs_use_only_the_state_v3_role_model() -> None:
     assert not hits, "Legacy user-document terms found:\n" + "\n".join(hits)
 
 
+def test_active_markdown_user_documentation_is_german() -> None:
+    expected_german = {
+        ROOT / "README.md": ("## Überblick", "## Voraussetzungen und unterstützte Plattformen"),
+        ROOT / "Quickstart.md": ("# Schnellstart", "## 1. Voraussetzungen prüfen"),
+        ROOT / "example-task.md": ("## Kontext", "## Akzeptanzkriterien"),
+        REFERENCE_DOC_FILES[0]: ("# Architektur- und Fachkonzept", "## 2. Fachliches Problem"),
+        REFERENCE_DOC_FILES[1]: ("# Marktvergleich", "## 1. Zusammenfassung"),
+    }
+    forbidden_english_headings = (
+        "## Overview",
+        "## Requirements and Supported Platforms",
+        "## Quick Start",
+        "## Context",
+        "## Acceptance Criteria",
+        "## Purpose",
+        "## Domain Problem",
+        "## Executive Summary",
+    )
+    assert set(expected_german) == set(USER_MARKDOWN_FILES)
+    for path, required_fragments in expected_german.items():
+        text = path.read_text(encoding="utf-8")
+        assert all(fragment in text for fragment in required_fragments), path.name
+        assert not any(heading in text for heading in forbidden_english_headings), path.name
+
+
 def test_readme_documents_exactly_the_public_long_cli_options() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     documented = set(re.findall(r"(?<![A-Za-z0-9_])--[a-z][a-z0-9-]+", readme))
@@ -226,7 +246,7 @@ def test_readme_defaults_and_environment_names_match_runtime(tmp_path: Path) -> 
         f"| `--quota-heartbeat-interval <seconds>` | `{args.quota_wait_policy.heartbeat_interval_seconds}` |",
         "`claude`, `sonnet`, 1800s, `high`",
         "`codex`, `gpt-5.6-sol`, 1800s, `medium`",
-        "detected `agy`, `gemini-3.1-pro-high`, 1800s, `high`",
+        "erkanntes `agy`, `gemini-3.1-pro-high`, 1800s, `high`",
     )
     for fragment in expected_fragments:
         assert fragment in readme
@@ -276,13 +296,13 @@ def test_quickstart_is_linked_and_declares_the_safe_first_run() -> None:
 
     assert "[Quickstart.md](Quickstart.md)" in readme
     for heading in (
-        "Check the prerequisites",
-        "Prepare the target repository",
-        "Write a bounded task",
-        "Run a smoke test",
-        "Start the real run",
-        "Resume a stopped run",
-        "Verify completion",
+        "Voraussetzungen prüfen",
+        "Zielrepository vorbereiten",
+        "Begrenzte Aufgabe formulieren",
+        "Probelauf ausführen",
+        "Produktiven Lauf starten",
+        "Angehaltenen Lauf fortsetzen",
+        "Abschluss prüfen",
     ):
         assert re.search(rf"^## \d+\. {re.escape(heading)}$", quickstart, re.MULTILINE)
 
@@ -291,9 +311,9 @@ def test_quickstart_is_linked_and_declares_the_safe_first_run() -> None:
         "--task-file task.md",
         "--resume",
         "--approve-gate",
-        "Claude Sonnet with effort `high`",
-        "never pushes, merges, force-pushes, or rewrites history",
-        "Never edit `.orchestrator/state.json` or checkpoint files manually",
+        "Claude Sonnet mit Effort `high`",
+        "pusht, mergt oder force-pusht niemals und schreibt die Historie nicht um",
+        "`.orchestrator/state.json` und Checkpointdateien dürfen niemals manuell bearbeitet werden",
     ):
         assert required in quickstart
 
@@ -317,30 +337,30 @@ def test_reference_documents_are_linked_current_and_locally_resolvable() -> None
         assert "2026-08-13" in path.read_text(encoding="utf-8")
 
     for heading in (
-        "Purpose",
-        "Domain Problem",
-        "Actors and Responsibilities",
-        "Architectural Principles and Invariants",
-        "Logical Architecture",
-        "End-to-End Workflow",
-        "Safety and Trust Boundaries",
-        "Persistence, Resume, and Idempotency",
-        "Known Limitations",
+        "Zweck",
+        "Fachliches Problem",
+        "Akteure und Verantwortlichkeiten",
+        "Architekturprinzipien und Invarianten",
+        "Logische Architektur",
+        "Vollständiger Workflow",
+        "Sicherheits- und Vertrauensgrenzen",
+        "Persistierung, Fortsetzung und Idempotenz",
+        "Bekannte Grenzen",
     ):
         assert re.search(rf"^## \d+\. {re.escape(heading)}$", architecture, re.MULTILINE)
 
     for product in (
         "OpenAI Codex",
-        "Claude Code agent teams",
+        "Claude Code Agent Teams",
         "Google Antigravity 2.0",
-        "GitHub Copilot cloud agent",
+        "GitHub Copilot Cloud Agent",
         "Cursor Cloud Agents",
         "OpenHands",
         "aider",
     ):
         assert product in comparison
-    assert "official product pages and documentation only" in comparison
-    assert "not evidenced in the reviewed official sources" in comparison.lower()
+    assert "ausschließlich offizielle Produktseiten und Dokumentationen" in comparison
+    assert "in den geprüften offiziellen quellen nicht nachgewiesen" in comparison.lower()
 
     unresolved = []
     for document in REFERENCE_DOC_FILES:
@@ -390,9 +410,9 @@ def test_workflow_diagram_has_balanced_state_v3_topology() -> None:
 def test_example_task_declares_every_required_boundary() -> None:
     example = (ROOT / "example-task.md").read_text(encoding="utf-8")
     for heading in (
-        "Context", "Goal", "Allowed Scope", "Requirements", "Acceptance Criteria",
-        "Validation", "Non-Scope", "Stop Conditions",
+        "Kontext", "Ziel", "Erlaubter Scope", "Anforderungen", "Akzeptanzkriterien",
+        "Validierung", "Nicht-Scope", "Stopbedingungen",
     ):
         assert f"## {heading}" in example
-    assert "Do not edit files outside this list" in example
-    assert "No push, merge, release, or deployment" in example
+    assert "Dateien außerhalb dieser Liste dürfen nicht bearbeitet werden" in example
+    assert "Kein Push, Merge, Release oder Deployment" in example

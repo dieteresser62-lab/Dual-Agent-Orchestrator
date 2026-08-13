@@ -1,327 +1,327 @@
-# Architecture and Domain Concept
+# Architektur- und Fachkonzept
 
-**Document status:** Reference documentation for the State-v3 implementation
+**Dokumentstatus:** Referenzdokumentation der State-v3-Implementierung
 
-**Last verified:** 2026-08-13
+**Zuletzt verifiziert:** 2026-08-13
 
-**Audience:** maintainers, operators, reviewers, and teams evaluating the orchestrator
+**Zielgruppe:** Maintainer, Betreiber, Reviewer und Teams, die den Orchestrator evaluieren
 
-## 1. Purpose
+## 1. Zweck
 
-The Dual-Agent Task Orchestrator is a local control plane for bounded software changes. It does not replace a coding agent or provide its own model. It coordinates three independently configured agent CLIs around one Git repository:
+Der Dual-Agent Task Orchestrator ist eine lokale Steuerungsebene für begrenzte Softwareänderungen. Er ersetzt keinen Coding-Agenten und stellt kein eigenes Modell bereit. Stattdessen koordiniert er drei unabhängig konfigurierte Agenten-CLIs rund um ein Git-Repository:
 
-- Codex plans and implements.
-- Claude reviews the plan and performs targeted slice reviews.
-- Antigravity performs an independent closing review of each approved slice and of the complete branch.
+- Codex plant und implementiert.
+- Claude prüft den Plan und führt gezielte Slice-Reviews aus.
+- Antigravity übernimmt den unabhängigen Abschlussreview jedes freigegebenen Slice und des vollständigen Branches.
 
-The system turns an informal Markdown assignment into a persisted sequence of small, reviewable, validated, and locally committed changes. Its central design goal is not maximum autonomy. It is controlled autonomy with evidence that remains attributable to an exact repository state.
+Das System überführt einen informellen Markdown-Auftrag in eine persistierte Folge kleiner, prüfbarer, validierter und lokal commiteter Änderungen. Sein zentrales Entwurfsziel ist nicht maximale Autonomie, sondern kontrollierte Autonomie mit Evidenz, die einem exakten Repositoryzustand zugeordnet bleibt.
 
-## 2. Domain Problem
+## 2. Fachliches Problem
 
-Long-running coding-agent sessions commonly fail in ways that are difficult to distinguish after the fact:
+Langlaufende Coding-Agenten-Sitzungen können auf Arten scheitern, die im Nachhinein schwer unterscheidbar sind:
 
-- the implementation exceeds the intended file scope;
-- a reviewer sees stale or incomplete changes;
-- tests are rerun against a different diff than the reviewed one;
-- the same agent implements, validates, approves, and commits its own work;
-- a quota or process failure loses the exact continuation point;
-- a broad agent commit absorbs unrelated worktree changes;
-- an approval is remembered as prose but is not bound to concrete evidence.
+- Die Implementierung überschreitet den beabsichtigten Dateiumfang.
+- Ein Reviewer sieht veraltete oder unvollständige Änderungen.
+- Tests werden gegen einen anderen Diff als den geprüften erneut ausgeführt.
+- Derselbe Agent implementiert, validiert, genehmigt und commitet seine eigene Arbeit.
+- Ein Quota- oder Prozessfehler verliert den exakten Fortsetzungspunkt.
+- Ein breiter Agenten-Commit nimmt fremde Worktree-Änderungen auf.
+- Eine Freigabe bleibt nur als Prosa erhalten und ist nicht an konkrete Evidenz gebunden.
 
-The orchestrator models those conditions as explicit state, contracts, and gates. A successful result therefore means more than “an agent reported success”: the expected validation matrix passed for the reviewed fingerprint, both required reviewers approved it in order, no blocking finding remained open, and the local commit contained exactly the authorized paths.
+Der Orchestrator bildet diese Bedingungen als expliziten Zustand, Verträge und Gates ab. Ein erfolgreiches Ergebnis bedeutet daher mehr als „ein Agent meldet Erfolg“: Die erwartete Validierungsmatrix war für den geprüften Fingerprint erfolgreich, beide erforderlichen Reviewer haben ihn in der vorgeschriebenen Reihenfolge freigegeben, kein blockierendes Finding blieb offen und der lokale Commit enthielt exakt die autorisierten Pfade.
 
-## 3. Scope and System Boundary
+## 3. Scope und Systemgrenze
 
-### In scope
+### Im Scope
 
-- one Git worktree and feature branch per active run;
-- one Markdown task, converted into one or more ordered slices;
-- local invocation of Codex, Claude, and Antigravity CLIs;
-- canonical Git change collection and SHA-256 fingerprints;
-- path classification, stop rules, validation, findings, gates, checkpoints, audit projection, and local commits;
-- single-task and FIFO watch operation;
-- deterministic scripted dry runs for workflow verification.
+- ein Git-Worktree und Feature-Branch je aktivem Lauf;
+- eine Markdown-Aufgabe, überführt in einen oder mehrere geordnete Slices;
+- lokale Aufrufe der Codex-, Claude- und Antigravity-CLIs;
+- kanonische Ermittlung von Git-Änderungen und SHA-256-Fingerprints;
+- Pfadklassifizierung, Stopregeln, Validierung, Findings, Gates, Checkpoints, Auditprojektion und lokale Commits;
+- Einzelaufgaben- und FIFO-Watch-Betrieb;
+- deterministische skriptgesteuerte Probeläufe zur Workflowverifikation.
 
-### Outside the boundary
+### Außerhalb der Systemgrenze
 
-- model hosting and provider authentication;
-- source hosting, pull-request creation, merge, release, and deployment;
-- organization-wide scheduling or distributed job execution;
-- semantic proof that generated code is correct beyond configured validation and reviews;
-- automatic migration of active State-v2 runs;
-- native Windows support.
+- Modellhosting und Providerauthentifizierung;
+- Quellcodehosting, Pull-Request-Erstellung, Merge, Release und Deployment;
+- organisationsweite Zeitplanung oder verteilte Jobausführung;
+- ein semantischer Korrektheitsbeweis für generierten Code jenseits konfigurierter Validierungen und Reviews;
+- automatische Migration aktiver State-v2-Läufe;
+- native Windows-Unterstützung.
 
-## 4. Actors and Responsibilities
+## 4. Akteure und Verantwortlichkeiten
 
-| Actor | Responsibility | Explicitly does not own |
+| Akteur | Verantwortung | Besitzt ausdrücklich nicht |
 |---|---|---|
-| Operator | Defines the task and policy, resolves gates, supplies credentials, and decides external Git actions. | Agent verdicts or synthetic validation claims. |
-| Codex | Produces the slice plan, edits within the allowed scope, answers findings, and prepares the branch-wide implementation report. | Approval, deterministic validation, or Git commit authorization. |
-| Claude | Reviews the plan, the first complete slice diff, and later correction deltas. Owns the lifecycle of findings it reports. | Source edits, validation execution, commits, or Antigravity's verdict. |
-| Antigravity | Reviews the complete Claude-approved slice once and independently closes the branch review. Owns its findings. | Plan review, source edits, validation execution, or commits. |
-| Orchestrator | Owns state transitions, canonical evidence, validation, isolation, policy gates, audit projection, and exact local commit transactions. | Product requirements or human risk acceptance. |
-| Git repository | Supplies branch identity, merge base, worktree state, diffs, and durable commit history. | Workflow policy. |
+| Betreiber | Definiert Aufgabe und Richtlinien, löst Gates auf, stellt Zugangsdaten bereit und entscheidet über externe Git-Aktionen. | Agentenurteile oder synthetische Validierungsbehauptungen. |
+| Codex | Erstellt den Slice-Plan, bearbeitet den erlaubten Scope, beantwortet Findings und erstellt den branchweiten Implementierungsbericht. | Freigabe, deterministische Validierung oder Git-Commit-Autorisierung. |
+| Claude | Prüft Plan, ersten vollständigen Slice-Diff und spätere Korrekturdeltas. Besitzt den Lebenszyklus eigener Findings. | Quelländerungen, Validierungsausführung, Commits oder Antigravitys Urteil. |
+| Antigravity | Prüft den vollständigen, von Claude freigegebenen Slice einmal und schließt den Branchreview unabhängig ab. Besitzt die eigenen Findings. | Planreview, Quelländerungen, Validierungsausführung oder Commits. |
+| Orchestrator | Besitzt Zustandsübergänge, kanonische Evidenz, Validierung, Isolation, Richtlinien-Gates, Auditprojektion und exakte lokale Committransaktionen. | Produktanforderungen oder menschliche Risikoakzeptanz. |
+| Git-Repository | Liefert Branchidentität, Merge-Basis, Worktreezustand, Diffs und dauerhafte Commit-Historie. | Workflowrichtlinien. |
 
-## 5. Core Domain Language
+## 5. Zentrale Fachbegriffe
 
-| Term | Meaning |
+| Begriff | Bedeutung |
 |---|---|
-| Run | One persisted execution of one task on one repository branch and branch base. |
-| Planned slice | A one-based unit with a summary and an exact repository-relative path allowlist. |
-| Work unit | A resumable execution context for planning, a slice, a correction, or final review. |
-| Step | The exact next role or orchestrator action within a work unit. |
-| Slice boundary | The persisted branch, starting commit, starting fingerprint, allowed paths, and change groups. |
-| Canonical changes | Git-derived tracked and non-ignored untracked changes collected from an explicit base commit. |
-| Diff fingerprint | A SHA-256 identity for the canonical change set, including relevant content and metadata. |
-| Validation matrix | The deterministic set of commands selected from changed paths and finding acceptance commands. |
-| Attestation | Orchestrator-owned validation records bound to one diff fingerprint. |
-| Finding | A reviewer-owned blocker or observation with stable identity, description, acceptance test, and lifecycle. |
-| Gate | A persisted halt that requires policy repair, explicit user action, quota reset, or agent recovery. |
-| Audit projection | Human-readable Markdown generated from structured workflow events into protected sections. |
+| Lauf | Eine persistierte Ausführung einer Aufgabe auf einem Repositorybranch und seiner Branchbasis. |
+| Geplanter Slice | Einsbasierte Einheit mit Zusammenfassung und exakter repositoryrelativer Pfad-Allowlist. |
+| Arbeitsblock | Fortsetzbarer Ausführungskontext für Planung, Slice, Korrektur oder Abschlussreview. |
+| Schritt | Exakt nächste Rollen- oder Orchestratoraktion innerhalb eines Arbeitsblocks. |
+| Slice-Grenze | Persistierter Branch, Startcommit, Startfingerprint, erlaubte Pfade und Änderungsgruppen. |
+| Kanonische Änderungen | Von Git abgeleitete, nachverfolgte und nicht ignorierte unversionierte Änderungen ab einem expliziten Basiscommit. |
+| Diff-Fingerprint | SHA-256-Identität der kanonischen Änderungsmenge einschließlich relevanter Inhalte und Metadaten. |
+| Validierungsmatrix | Deterministische Befehlsmenge, ausgewählt aus geänderten Pfaden und Abnahmebefehlen von Findings. |
+| Attestierung | Vom Orchestrator erzeugte Validierungsdatensätze, gebunden an einen Diff-Fingerprint. |
+| Finding | Reviewer-eigener Blocker oder Hinweis mit stabiler Identität, Beschreibung, Abnahmetest und Lebenszyklus. |
+| Gate | Persistierter Halt, der Richtlinienreparatur, explizite Benutzeraktion, Quota-Reset oder Agentenwiederherstellung erfordert. |
+| Auditprojektion | Menschenlesbares Markdown, das aus strukturierten Workflowereignissen in geschützte Abschnitte geschrieben wird. |
 
-## 6. Architectural Principles and Invariants
+## 6. Architekturprinzipien und Invarianten
 
-### 6.1 Separation of duties
+### 6.1 Funktionstrennung
 
-Implementation, validation, review, and commit authorization are distinct responsibilities. No agent can approve its own work, reviewers cannot manufacture validation evidence, and the orchestrator cannot reinterpret a negative verdict as approval.
+Implementierung, Validierung, Review und Commit-Autorisierung sind getrennte Verantwortlichkeiten. Kein Agent darf die eigene Arbeit freigeben, Reviewer dürfen keine Validierungsevidenz erfinden und der Orchestrator darf ein negatives Urteil nicht als Freigabe interpretieren.
 
-### 6.2 Git is the change authority
+### 6.2 Git ist die Änderungsautorität
 
-Agent-reported file lists are additive hints only. Canonical paths and diffs come from Git, including renames, deletions, binary metadata, tracked changes, and non-ignored untracked files. An unexpected path fails closed.
+Von Agenten gemeldete Dateilisten sind nur additive Hinweise. Kanonische Pfade und Diffs stammen aus Git und berücksichtigen Umbenennungen, Löschungen, Binärmetadaten, nachverfolgte Änderungen sowie nicht ignorierte unversionierte Dateien. Ein unerwarteter Pfad führt zu einem geschlossenen Fehlerzustand.
 
-### 6.3 Evidence is fingerprint-bound
+### 6.3 Evidenz ist an Fingerprints gebunden
 
-Validation and reviews refer to one exact diff fingerprint. Any semantic change invalidates the prior evidence. Managed audit-body updates are excluded from the semantic Markdown fingerprint so deterministic projection does not invalidate the review that authorized it.
+Validierung und Reviews beziehen sich auf genau einen Diff-Fingerprint. Jede semantische Änderung entwertet die vorherige Evidenz. Inhalte verwalteter Auditabschnitte sind vom semantischen Markdown-Fingerprint ausgenommen, damit die deterministische Projektion nicht den Review ungültig macht, der sie autorisiert hat.
 
-### 6.4 Reviews are asymmetric
+### 6.4 Reviews sind asymmetrisch
 
-Claude sees the complete slice evidence in its first round and only the relevant correction delta on later rounds. Antigravity runs after Claude approves the current fingerprint and receives the complete current slice. This limits repeated reviewer context while preserving an independent closing check.
+Claude sieht in der ersten Runde die vollständige Slice-Evidenz und in späteren Runden nur das relevante Korrekturdelta. Antigravity wird nach Claudes Freigabe des aktuellen Fingerprints ausgeführt und erhält den vollständigen aktuellen Slice. Dadurch bleibt wiederholter Reviewkontext klein, ohne auf eine unabhängige Abschlussprüfung zu verzichten.
 
-### 6.5 Validation has one owner
+### 6.5 Validierung besitzt genau einen Eigentümer
 
-Only the orchestrator executes the selected validation matrix. The result is cached for a fingerprint and reused by both reviewers. Reviewers may inspect the attestation but may not emit their own validation result marker.
+Nur der Orchestrator führt die ausgewählte Validierungsmatrix aus. Das Ergebnis wird für einen Fingerprint zwischengespeichert und von beiden Reviewern wiederverwendet. Reviewer dürfen die Attestierung prüfen, aber keinen eigenen Validierungsergebnis-Marker ausgeben.
 
-### 6.6 Persistence precedes resumable exit
+### 6.6 Persistierung erfolgt vor fortsetzbarem Exit
 
-The state and a coordinate-specific checkpoint are written before a user gate, quota wait, or resumable agent failure returns control. Resume continues at the persisted step and revalidates relevant repository evidence.
+Zustand und koordinatenspezifischer Checkpoint werden geschrieben, bevor ein Benutzergate, Quotawarten oder fortsetzbarer Agentenfehler die Kontrolle zurückgibt. Die Fortsetzung beginnt am persistierten Schritt und prüft relevante Repositoryevidenz erneut.
 
-### 6.7 Commits are exact transactions
+### 6.7 Commits sind exakte Transaktionen
 
-The commit service rechecks authorization, stages only reviewed paths, creates a local slice commit, and verifies its path list and hash. Push, merge, force-push, and history rewriting remain outside the product boundary.
+Der Commitdienst prüft die Autorisierung erneut, staged nur geprüfte Pfade, erstellt einen lokalen Slice-Commit und verifiziert Pfadliste und Hash. Push, Merge, Force-Push und Umschreiben der Historie bleiben außerhalb der Produktgrenze.
 
-## 7. Logical Architecture
+## 7. Logische Architektur
 
 ```mermaid
 flowchart LR
-    User[Operator and task.md] --> CLI[CLI and configuration]
-    Watch[FIFO watch mode] --> CLI
-    CLI --> Runtime[Production runtime]
-    Runtime --> Engine[State-v3 workflow engine]
+    User[Betreiber und task.md] --> CLI[CLI und Konfiguration]
+    Watch[FIFO-Watch-Modus] --> CLI
+    CLI --> Runtime[Produktive Laufzeit]
+    Runtime --> Engine[State-v3-Workflowengine]
 
-    Engine --> Contracts[Prompt and response contracts]
-    Engine --> Policy[Path policy, stop rules, and gates]
-    Engine --> Changes[Canonical Git change collector]
-    Engine --> Validation[Validation matrix runner]
-    Engine --> State[Atomic state and checkpoints]
-    Engine --> Audit[Managed Markdown audit projection]
-    Engine --> Commit[Exact local commit service]
+    Engine --> Contracts[Prompt- und Antwortverträge]
+    Engine --> Policy[Pfadrichtlinien, Stopregeln und Gates]
+    Engine --> Changes[Kanonische Git-Änderungsermittlung]
+    Engine --> Validation[Runner der Validierungsmatrix]
+    Engine --> State[Atomarer Zustand und Checkpoints]
+    Engine --> Audit[Verwaltete Markdown-Auditprojektion]
+    Engine --> Commit[Exakter lokaler Commitdienst]
 
-    Engine --> Adapters[Role adapters]
-    Adapters --> Codex[Codex CLI: writable]
-    Adapters --> Claude[Claude CLI: read-only review copy]
-    Adapters --> Anti[Antigravity CLI: read-only review copy]
+    Engine --> Adapters[Rollenadapter]
+    Adapters --> Codex[Codex-CLI: schreibend]
+    Adapters --> Claude[Claude-CLI: schreibgeschützte Reviewkopie]
+    Adapters --> Anti[Antigravity-CLI: schreibgeschützte Reviewkopie]
 
-    Changes --> Repo[(Target Git worktree)]
+    Changes --> Repo[(Ziel-Git-Worktree)]
     Validation --> Repo
-    State --> RuntimeData[(.orchestrator runtime data)]
+    State --> RuntimeData[(.orchestrator-Laufzeitdaten)]
     Audit --> Repo
     Commit --> Repo
 ```
 
-The workflow engine is deliberately independent of process execution. It talks to a driver protocol. The production driver binds that protocol to real CLIs, Git, validation, state storage, and audit files; scripted scenarios bind it to deterministic test doubles.
+Die Workflowengine ist bewusst von der Prozessausführung getrennt. Sie kommuniziert über ein Driver-Protokoll. Der produktive Driver bindet dieses Protokoll an reale CLIs, Git, Validierung, Zustandsspeicherung und Auditdateien; skriptgesteuerte Szenarien binden es an deterministische Test-Doubles.
 
-## 8. Component Model
+## 8. Komponentenmodell
 
-| Component | Primary modules | Responsibility |
+| Komponente | Primäre Module | Verantwortung |
 |---|---|---|
-| CLI and configuration | [`src/cli.py`](../../src/cli.py), [`src/agent_config.py`](../../src/agent_config.py) | Parse CLI/environment/TOML precedence, role settings, logging, and dispatch. |
-| Production composition | [`src/orchestrator.py`](../../src/orchestrator.py) | Build runtime dependencies, load or create state, bind the production driver, and execute the run. |
-| Workflow engine | [`src/workflow.py`](../../src/workflow.py) | Enforce transitions, reviewer order, evidence freshness, corrections, final review, and exit semantics. |
-| State model | [`src/workflow_state.py`](../../src/workflow_state.py) | Define immutable State-v3 records, work units, steps, slices, gates, failures, and transition invariants. |
-| Response contracts | [`src/contracts.py`](../../src/contracts.py), [`src/prompts.py`](../../src/prompts.py) | Build role-specific prompts and fail-closed parsing for readiness, approvals, findings, evidence, and stop requests. |
-| Agent boundary | [`src/agent_adapters.py`](../../src/agent_adapters.py), [`src/agent_runtime.py`](../../src/agent_runtime.py) | Construct provider commands, stream output, classify failures and quota resets, and isolate reviewers. |
-| Repository evidence | [`src/repo_changes.py`](../../src/repo_changes.py), [`src/path_policy.py`](../../src/path_policy.py) | Resolve repository paths, collect canonical changes, and compute full/subset fingerprints. |
-| Policy and validation | [`src/gates.py`](../../src/gates.py), [`src/validation_matrix.py`](../../src/validation_matrix.py) | Classify paths, detect test/anchor changes, enforce limits and stop rules, select and run validation. |
-| Git transaction | [`src/git_service.py`](../../src/git_service.py) | Persist slice boundaries, verify authorization, stage exact paths, commit locally, and verify the result. |
-| Persistence and audit | [`src/state_io.py`](../../src/state_io.py), [`src/audit_trail.py`](../../src/audit_trail.py) | Perform atomic state/checkpoint writes and safe, idempotent audit projection. |
-| Queue operation | [`src/inbox_watcher.py`](../../src/inbox_watcher.py) | Own the FIFO lock, task identity, stable-file detection, retries, resumable pauses, and outbox movement. |
-| Deterministic simulation | [`src/dry_run_scenarios.py`](../../src/dry_run_scenarios.py) | Exercise production transitions without agent calls or repository writes. |
+| CLI und Konfiguration | [`src/cli.py`](../../src/cli.py), [`src/agent_config.py`](../../src/agent_config.py) | CLI-/Umgebungs-/TOML-Präzedenz, Rolleneinstellungen, Logging und Dispatch. |
+| Produktive Komposition | [`src/orchestrator.py`](../../src/orchestrator.py) | Laufzeitabhängigkeiten aufbauen, Zustand laden oder erzeugen, produktiven Driver binden und Lauf ausführen. |
+| Workflowengine | [`src/workflow.py`](../../src/workflow.py) | Übergänge, Reviewerreihenfolge, Evidenzaktualität, Korrekturen, Abschlussreview und Exitsemantik durchsetzen. |
+| Zustandsmodell | [`src/workflow_state.py`](../../src/workflow_state.py) | Unveränderliche State-v3-Datensätze, Arbeitsblöcke, Schritte, Slices, Gates, Fehler und Übergangsinvarianten definieren. |
+| Antwortverträge | [`src/contracts.py`](../../src/contracts.py), [`src/prompts.py`](../../src/prompts.py) | Rollenspezifische Prompts und geschlossen fehlschlagendes Parsing für Bereitschaft, Freigaben, Findings, Evidenz und Stopanforderungen. |
+| Agentengrenze | [`src/agent_adapters.py`](../../src/agent_adapters.py), [`src/agent_runtime.py`](../../src/agent_runtime.py) | Providerbefehle bauen, Ausgabe streamen, Fehler und Quota-Resets klassifizieren sowie Reviewer isolieren. |
+| Repositoryevidenz | [`src/repo_changes.py`](../../src/repo_changes.py), [`src/path_policy.py`](../../src/path_policy.py) | Repositorypfade auflösen, kanonische Änderungen erfassen und vollständige beziehungsweise Teil-Fingerprints berechnen. |
+| Richtlinien und Validierung | [`src/gates.py`](../../src/gates.py), [`src/validation_matrix.py`](../../src/validation_matrix.py) | Pfade klassifizieren, Test-/Ankeränderungen erkennen, Grenzwerte und Stopregeln durchsetzen sowie Validierung auswählen und ausführen. |
+| Git-Transaktion | [`src/git_service.py`](../../src/git_service.py) | Slice-Grenzen persistieren, Autorisierung prüfen, exakte Pfade stagen, lokal committen und Ergebnis verifizieren. |
+| Persistierung und Audit | [`src/state_io.py`](../../src/state_io.py), [`src/audit_trail.py`](../../src/audit_trail.py) | Atomare State-/Checkpoint-Schreibvorgänge und sichere, idempotente Auditprojektion. |
+| Warteschlangenbetrieb | [`src/inbox_watcher.py`](../../src/inbox_watcher.py) | FIFO-Sperre, Aufgabenidentität, Stabilitätsprüfung, Wiederholungen, fortsetzbare Pausen und Outbox-Verschiebung verwalten. |
+| Deterministische Simulation | [`src/dry_run_scenarios.py`](../../src/dry_run_scenarios.py) | Produktive Übergänge ohne Agentenaufrufe oder Repositoryschreibzugriffe durchlaufen. |
 
-## 9. End-to-End Workflow
+## 9. Vollständiger Workflow
 
-### 9.1 Planning
+### 9.1 Planung
 
-1. The runtime identifies the repository, active branch, merge base, task digest, configuration, and existing state.
-2. Codex returns ordered `SLICE_PLAN` records with exact path allowlists.
-3. Claude reviews the plan. A denial returns to Codex for plan revision; Antigravity is not involved in planning.
-4. The approved plan is persisted before the first implementation slice starts.
+1. Die Laufzeit ermittelt Repository, aktiven Branch, Merge-Basis, Aufgabendigest, Konfiguration und vorhandenen Zustand.
+2. Codex liefert geordnete `SLICE_PLAN`-Datensätze mit exakten Pfad-Allowlists.
+3. Claude prüft den Plan. Eine Ablehnung führt zur Planüberarbeitung durch Codex; Antigravity ist an der Planung nicht beteiligt.
+4. Der freigegebene Plan wird persistiert, bevor der erste Implementierungsslice beginnt.
 
-### 9.2 Slice implementation and review
+### 9.2 Slice-Implementierung und Review
 
 ```mermaid
 sequenceDiagram
     participant C as Codex
     participant O as Orchestrator
-    participant V as Validation
+    participant V as Validierung
     participant CL as Claude
     participant A as Antigravity
     participant G as Git
 
-    C->>O: implementation readiness and changed-test record
-    O->>G: collect canonical slice diff
-    O->>O: enforce scope, branch, limits, stops, and test gate
-    O->>V: run selected matrix for fingerprint
-    V-->>O: bound attestation
-    O->>CL: complete first-round slice evidence
-    alt Claude reports a blocker
-        CL-->>O: finding and denial
-        O->>C: correction request
-        C->>O: finding response and correction
-        O->>V: validate new fingerprint
-        O->>CL: correction delta and current attestation
+    C->>O: Implementierungsbereitschaft und Datensatz geänderter Tests
+    O->>G: kanonischen Slice-Diff ermitteln
+    O->>O: Scope, Branch, Grenzen, Stopps und Testgate prüfen
+    O->>V: ausgewählte Matrix für Fingerprint ausführen
+    V-->>O: gebundene Attestierung
+    O->>CL: vollständige Slice-Evidenz der ersten Runde
+    alt Claude meldet einen Blocker
+        CL-->>O: Finding und Ablehnung
+        O->>C: Korrekturanforderung
+        C->>O: Finding-Antwort und Korrektur
+        O->>V: neuen Fingerprint validieren
+        O->>CL: Korrekturdelta und aktuelle Attestierung
     end
-    CL-->>O: approval for current fingerprint
-    O->>A: complete current slice and same attestation
-    A-->>O: approval or finding
-    O->>G: stage exact reviewed paths and commit locally
-    G-->>O: verified commit hash and path list
+    CL-->>O: Freigabe des aktuellen Fingerprints
+    O->>A: vollständiger aktueller Slice und dieselbe Attestierung
+    A-->>O: Freigabe oder Finding
+    O->>G: exakt geprüfte Pfade stagen und lokal committen
+    G-->>O: verifizierter Commit-Hash und Pfadliste
 ```
 
-If Antigravity denies a slice, the correction returns through Codex and Claude before Antigravity can review the new fingerprint. A format-only response repair receives the rejected response and marker contract, not the implementation evidence again.
+Lehnt Antigravity einen Slice ab, läuft die Korrektur über Codex und Claude zurück, bevor Antigravity den neuen Fingerprint prüfen darf. Eine rein formale Antwortreparatur erhält die abgelehnte Antwort und den Marker-Vertrag, nicht erneut die Implementierungsevidenz.
 
-### 9.3 Branch-wide completion
+### 9.3 Branchweiter Abschluss
 
-After all planned slices are committed:
+Nachdem alle geplanten Slices commitet sind:
 
-1. the complete branch diff is collected from the persisted branch base;
-2. the orchestrator validates that branch fingerprint;
-3. Codex produces a final implementation report;
-4. Claude and Antigravity independently review the full branch;
-5. a blocking final finding creates a bounded correction work unit and local correction commit;
-6. the full branch validation and three-role final review repeat;
-7. only the terminal approved state exits successfully.
+1. wird der vollständige Branch-Diff ab der persistierten Branchbasis ermittelt;
+2. validiert der Orchestrator diesen Branch-Fingerprint;
+3. erstellt Codex einen abschließenden Implementierungsbericht;
+4. prüfen Claude und Antigravity unabhängig den vollständigen Branch;
+5. erzeugt ein blockierendes Abschlussfinding einen begrenzten Korrekturarbeitsblock und lokalen Korrekturcommit;
+6. werden vollständige Branchvalidierung und Abschlussreview aller drei Rollen wiederholt;
+7. endet nur der terminal freigegebene Zustand erfolgreich.
 
-## 10. Findings and Decision Model
+## 10. Finding- und Entscheidungsmodell
 
-A finding belongs permanently to the reviewer that created it. Claude IDs start with `C-`; Antigravity IDs start with `A-`. A finding contains:
+Ein Finding gehört dauerhaft dem Reviewer, der es erstellt hat. Claude-IDs beginnen mit `C-`, Antigravity-IDs mit `A-`. Ein Finding enthält:
 
-- a stable ID and origin;
-- `BLOCKER` or `OBSERVATION` classification;
-- an immutable description and acceptance test;
-- `OPEN` or `CLOSED` owner-controlled status;
-- Codex's explicit `ACCEPTED` or `REJECTED` response.
+- stabile ID und Herkunft;
+- Klassifizierung als `BLOCKER` oder `OBSERVATION`;
+- unveränderliche Beschreibung und Abnahmetest;
+- Eigentümer-gesteuerten Status `OPEN` oder `CLOSED`;
+- explizite Codex-Antwort `ACCEPTED` oder `REJECTED`.
 
-An open blocker prevents positive approval. An observation remains visible but does not automatically block. One reviewer cannot close or silently reclassify another reviewer's finding. This preserves attribution across correction rounds and resume boundaries.
+Ein offener Blocker verhindert eine positive Freigabe. Eine Observation bleibt sichtbar, blockiert aber nicht automatisch. Ein Reviewer darf das Finding eines anderen Reviewers weder schließen noch stillschweigend neu klassifizieren. Dadurch bleibt die Zuordnung über Korrekturrunden und Fortsetzungsgrenzen hinweg erhalten.
 
-## 11. Validation and Evidence Model
+## 11. Validierungs- und Evidenzmodell
 
-The repository TOML classifies productive, test, documentation, and generated paths. The validation selector combines:
+Das Repository-TOML klassifiziert produktive, Test-, Dokumentations- und generierte Pfade. Die Validierungsauswahl kombiniert:
 
-- the default repository command;
-- every rule whose path patterns match the canonical change set;
-- structured acceptance commands from open findings, provided they remain in an allowed validation family.
+- den Standardbefehl des Repositorys;
+- jede Regel, deren Pfadmuster auf die kanonische Änderungsmenge passt;
+- strukturierte Abnahmebefehle offener Findings, sofern sie innerhalb einer erlaubten Validierungsfamilie bleiben.
 
-Commands are deduplicated and executed with bounded timeouts. The attestation records the expected matrix, command status, exit code, compact output, and digest. `INCOMPLETE` is distinct from a completed failing command: missing tools or unavailable execution cannot be approved silently. A deliberate red-state exception requires a named follow-up slice; incomplete evidence has no such override.
+Befehle werden dedupliziert und mit begrenzten Timeouts ausgeführt. Die Attestierung protokolliert erwartete Matrix, Befehlsstatus, Exitcode, kompakte Ausgabe und Digest. `INCOMPLETE` unterscheidet sich von einem vollständig ausgeführten fehlgeschlagenen Befehl: Fehlende Werkzeuge oder nicht verfügbare Ausführung dürfen nicht stillschweigend freigegeben werden. Eine bewusste Red-State-Ausnahme erfordert einen benannten Folgeslice; für unvollständige Evidenz existiert keine solche Ausnahme.
 
-## 12. Safety and Trust Boundaries
+## 12. Sicherheits- und Vertrauensgrenzen
 
-### Filesystem and process isolation
+### Dateisystem- und Prozessisolation
 
-Codex runs with write access to the target worktree. Each reviewer runs in a disposable repository copy whose tracked content is read-only, while provider-specific runtime, prompt, cache, and log locations remain writable. This prevents ordinary review prompts from altering the source evidence they assess.
+Codex arbeitet mit Schreibzugriff auf den Ziel-Worktree. Jeder Reviewer läuft in einer temporären Repositorykopie, deren nachverfolgter Inhalt schreibgeschützt ist, während providerspezifische Laufzeit-, Prompt-, Cache- und Logpfade beschreibbar bleiben. Dadurch können gewöhnliche Reviewprompts die zu bewertende Quellevidenz nicht verändern.
 
-### Repository containment
+### Repositorybegrenzung
 
-Repository-relative paths are normalized, parent traversal and foreign absolute paths are rejected, and symlink escapes are checked. Rename groups retain both old and new paths for scope, gate, and commit reasoning.
+Repositoryrelative Pfade werden normalisiert, Parent-Traversal und fremde absolute Pfade abgelehnt sowie Symlink-Ausbrüche geprüft. Umbenennungsgruppen behalten für Scope-, Gate- und Commitentscheidungen sowohl alten als auch neuen Pfad.
 
-### Untrusted text
+### Nicht vertrauenswürdiger Text
 
-Task content, diffs, agent responses, and audit prose are treated as data. Prompt sections are delimited; response markers are parsed only under strict step contracts; duplicate, missing, legacy, or forged verdict markers fail closed.
+Aufgabeninhalt, Diffs, Agentenantworten und Auditprosa werden als Daten behandelt. Promptabschnitte sind abgegrenzt; Antwortmarker werden ausschließlich unter strikten Schrittverträgen geparst. Doppelte, fehlende, veraltete oder gefälschte Urteilsmarker führen zu einem geschlossenen Fehlerzustand.
 
-### Human authority
+### Menschliche Autorität
 
-Explicit user gates require actor, rationale, and the exact persisted fingerprint. The decision is recorded before the workflow continues. Destructive external Git actions are never inferred from a successful local run.
+Explizite Benutzergates verlangen Akteur, Begründung und den exakten persistierten Fingerprint. Die Entscheidung wird protokolliert, bevor der Workflow fortfährt. Destruktive externe Git-Aktionen werden niemals aus einem erfolgreichen lokalen Lauf abgeleitet.
 
-## 13. Persistence, Resume, and Idempotency
+## 13. Persistierung, Fortsetzung und Idempotenz
 
-`.orchestrator/state.json` is the machine-readable source for the active run. Work-unit checkpoints encode one-based work-unit, slice, and round coordinates. Persisted agent outputs allow planning or implementation context to be restored without repeating already completed side effects.
+`.orchestrator/state.json` ist die maschinenlesbare Quelle des aktiven Laufs. Arbeitsblock-Checkpoints kodieren einsbasierte Arbeitsblock-, Slice- und Rundenkoordinaten. Persistierte Agentenausgaben ermöglichen die Wiederherstellung von Planungs- oder Implementierungskontext, ohne bereits abgeschlossene Seiteneffekte zu wiederholen.
 
-Resume verifies task identity, run identity where applicable, branch, step, and evidence. A changed fingerprint during quota waiting or after review halts rather than replaying a stale approval. Commit completion and watch-mode success markers are persisted so a restart does not repeat a successful commit or completed task.
+Bei der Fortsetzung werden Aufgabenidentität, gegebenenfalls Laufidentität, Branch, Schritt und Evidenz geprüft. Ein geänderter Fingerprint während des Quotawartens oder nach dem Review führt zu einem Halt, statt eine veraltete Freigabe wiederzugeben. Commitabschluss und Erfolgsmarker des Watch-Modus werden persistiert, damit ein Neustart weder erfolgreichen Commit noch abgeschlossene Aufgabe wiederholt.
 
-State-v2 data is historical only. An active or frozen State-v2 run is rejected without mutation; it is not guessed into the State-v3 model.
+State-v2-Daten sind ausschließlich historisch. Ein aktiver oder eingefrorener State-v2-Lauf wird unverändert abgelehnt und nicht in das State-v3-Modell hineingeraten.
 
-## 14. Gates and Failure Semantics
+## 14. Gates und Fehlersemantik
 
-The CLI exposes stable exit categories:
+Die CLI stellt stabile Exitkategorien bereit:
 
-| Exit | Meaning | Resume behavior |
+| Exit | Bedeutung | Fortsetzungsverhalten |
 |---:|---|---|
-| 0 | Complete workflow including final reviews. | No continuation required. |
-| 1 | Technical, configuration, schema, repository, validation, or internal workflow failure. | Repair according to the diagnostic; resumability depends on persisted state. |
-| 2 | Quota wait cannot be completed automatically. | Resume the same role step after quota recovery. |
-| 3 | Required agent instance failed or is unavailable. | Repair the provider/binary condition and resume the same step. |
-| 4 | Explicit user or policy decision is required. | Record the fingerprint-bound gate decision and resume. |
+| 0 | Vollständiger Workflow einschließlich Abschlussreviews. | Keine Fortsetzung erforderlich. |
+| 1 | Technischer, Konfigurations-, Schema-, Repository-, Validierungs- oder interner Workflowfehler. | Gemäß Diagnose reparieren; Fortsetzbarkeit hängt vom persistierten Zustand ab. |
+| 2 | Quotawarten kann nicht automatisch abgeschlossen werden. | Nach Quotawiederherstellung denselben Rollenschritt fortsetzen. |
+| 3 | Erforderliche Agenteninstanz ist fehlgeschlagen oder nicht verfügbar. | Provider-/Binärprogrammursache beheben und denselben Schritt fortsetzen. |
+| 4 | Explizite Benutzer- oder Richtlinienentscheidung ist erforderlich. | An Fingerprint gebundene Gate-Entscheidung protokollieren und fortsetzen. |
 
-Automatic quota continuation occurs only for an unambiguous reset within policy limits, with a safety margin and heartbeats. There is no fallback role because substitution would invalidate the intended separation of duties.
+Eine automatische Quotafortsetzung erfolgt nur bei einem eindeutigen Reset innerhalb der Richtliniengrenzen, mit Sicherheitsmarge und Heartbeats. Es gibt keine Ersatzrolle, weil eine Substitution die beabsichtigte Funktionstrennung ungültig machen würde.
 
-## 15. Watch-Mode Architecture
+## 15. Architektur des Watch-Modus
 
-Watch mode is a local, single-process FIFO worker rather than a distributed queue:
+Der Watch-Modus ist ein lokaler Einzelprozess-FIFO-Worker und keine verteilte Warteschlange:
 
-- stable Markdown tasks are selected oldest first;
-- `inbox/.lock` prevents concurrent workers where `fcntl` is available;
-- a sidecar binds task content to a run ID;
-- resumable exits 2, 3, and 4 preserve FIFO ownership and stop the queue;
-- technical failures use bounded retries and poison-task handling;
-- a success marker prevents re-execution when only outbox movement failed.
+- stabile Markdown-Aufgaben werden älteste zuerst ausgewählt;
+- `inbox/.lock` verhindert konkurrierende Worker, sofern `fcntl` verfügbar ist;
+- eine Sidecar-Datei bindet den Aufgabeninhalt an eine Lauf-ID;
+- fortsetzbare Exitcodes 2, 3 und 4 erhalten die FIFO-Zuständigkeit und halten die Warteschlange an;
+- technische Fehler verwenden begrenzte Wiederholungen und Poison-Task-Behandlung;
+- ein Erfolgsmarker verhindert die erneute Ausführung, wenn nur die Outbox-Verschiebung fehlschlug.
 
-This design optimizes deterministic local operation. Horizontal scaling, remote workers, and shared locking are intentionally outside the current architecture.
+Dieser Entwurf optimiert einen deterministischen lokalen Betrieb. Horizontale Skalierung, entfernte Worker und gemeinsame Sperren liegen bewusst außerhalb der aktuellen Architektur.
 
-## 16. Configuration and Deployment View
+## 16. Konfigurations- und Bereitstellungssicht
 
-The launcher runs against the current working directory as the target repository. Policy precedence is CLI, environment, repository TOML, then built-in or detected defaults. Agent binary, model, timeout, effort, and Claude budget settings deliberately bypass repository TOML so provider credentials and machine-specific paths remain operator concerns.
+Der Starter verwendet das aktuelle Arbeitsverzeichnis als Zielrepository. Die Richtlinienpräzedenz lautet CLI, Umgebung, Repository-TOML und schließlich integrierte oder erkannte Standards. Einstellungen für Agentenprogramm, Modell, Timeout, Effort und Claude-Budget umgehen bewusst das Repository-TOML, damit Providerzugangsdaten und maschinenspezifische Pfade in der Verantwortung des Betreibers bleiben.
 
-The runtime requires Python 3.11 or newer and supports Linux, macOS, and WSL2. It has no runtime Python package dependencies beyond the standard library. The external role CLIs and Git are operational dependencies and are checked lazily before first use.
+Die Laufzeit benötigt Python 3.11 oder neuer und unterstützt Linux, macOS und WSL2. Sie besitzt neben der Standardbibliothek keine Python-Laufzeitabhängigkeiten. Die externen Rollen-CLIs und Git sind betriebliche Abhängigkeiten und werden verzögert vor ihrer ersten Verwendung geprüft.
 
-## 17. Quality Attributes
+## 17. Qualitätsmerkmale
 
-| Attribute | Architectural response |
+| Merkmal | Architektonische Antwort |
 |---|---|
-| Auditability | Structured events, fingerprint-bound attestations, protected Markdown projection, and verified commits. |
-| Recoverability | Atomic state writes, coordinate-specific checkpoints, exact-step resume, and idempotent side effects. |
-| Safety | Exact path scopes, read-only reviewers, fail-closed contracts, user gates, and no external Git mutations. |
-| Determinism | Canonical Git evidence, stable fingerprints, ordered slices, validation caching, and scripted scenarios. |
-| Cost control | Targeted Claude correction deltas, format-only repair prompts, role-local quota policy, and no reviewer reruns for unchanged fingerprints. |
-| Portability | Standard-library Python and TOML policy with platform-neutral repository patterns. |
-| Extensibility | Driver protocol, role adapters, validation rules, stop rules, path classes, and deterministic scenario fixtures. |
+| Auditierbarkeit | Strukturierte Ereignisse, Fingerprint-gebundene Attestierungen, geschützte Markdown-Projektion und verifizierte Commits. |
+| Wiederherstellbarkeit | Atomare Zustandswrites, koordinatenspezifische Checkpoints, exakte Schrittfortsetzung und idempotente Seiteneffekte. |
+| Sicherheit | Exakte Pfadumfänge, schreibgeschützte Reviewer, geschlossen fehlschlagende Verträge, Benutzergates und keine externen Git-Mutationen. |
+| Determinismus | Kanonische Git-Evidenz, stabile Fingerprints, geordnete Slices, Validierungscache und skriptgesteuerte Szenarien. |
+| Kostenkontrolle | Gezielte Claude-Korrekturdeltas, rein formale Reparaturprompts, rollenspezifische Quotarichtlinie und keine Reviewer-Wiederholung für unveränderte Fingerprints. |
+| Portabilität | Standardbibliotheks-Python und TOML-Richtlinien mit plattformneutralen Repositorymustern. |
+| Erweiterbarkeit | Driver-Protokoll, Rollenadapter, Validierungsregeln, Stopregeln, Pfadklassen und deterministische Szenariofixtures. |
 
-## 18. Known Limitations
+## 18. Bekannte Grenzen
 
-- Slice execution is intentionally sequential; the system does not parallelize implementation slices.
-- The fixed production topology requires Codex, Claude, and Antigravity rather than selecting an arbitrary agent graph.
-- Review confidence is qualitative and model-dependent even when evidence transport is deterministic.
-- Review isolation uses disposable local copies, not a hardened remote security boundary.
-- The product creates local commits but provides no pull-request, issue-tracker, deployment, or organization policy service.
-- Watch mode is host-local and depends on Unix locking semantics for exclusive ownership.
-- The orchestrator proves process integrity, not complete functional correctness of the changed software.
+- Slices werden bewusst nacheinander ausgeführt; das System parallelisiert keine Implementierungsslices.
+- Die feste Produktionstopologie verlangt Codex, Claude und Antigravity, statt einen beliebigen Agentengraphen auszuwählen.
+- Reviewvertrauen bleibt qualitativ und modellabhängig, auch wenn der Evidenztransport deterministisch ist.
+- Reviewisolation verwendet temporäre lokale Kopien und keine gehärtete entfernte Sicherheitsgrenze.
+- Das Produkt erstellt lokale Commits, bietet aber keinen Pull-Request-, Issue-Tracker-, Deployment- oder Organisationsrichtliniendienst.
+- Der Watch-Modus ist hostlokal und hängt für exklusive Zuständigkeit von Unix-Sperrsemantik ab.
+- Der Orchestrator weist Prozessintegrität nach, nicht die vollständige funktionale Korrektheit der geänderten Software.
 
-## 19. Source-of-Truth Map
+## 19. Quellen-der-Wahrheit-Zuordnung
 
-Use the following order when documentation and behavior appear to disagree:
+Wenn Dokumentation und Verhalten voneinander abzuweichen scheinen, gilt folgende Reihenfolge:
 
-1. [`src/orchestrator.py`](../../src/orchestrator.py), [`src/workflow.py`](../../src/workflow.py), [`src/workflow_state.py`](../../src/workflow_state.py), and [`src/state_io.py`](../../src/state_io.py) for runtime behavior and persistence;
-2. [`src/prompts.py`](../../src/prompts.py) and [`src/contracts.py`](../../src/contracts.py) for agent output contracts;
-3. [`AGENTS.md`](../../AGENTS.md) and role files for repository execution policy;
-4. [`README.md`](../../README.md) for the public operational reference;
-5. this document for architectural rationale and domain interpretation.
+1. [`src/orchestrator.py`](../../src/orchestrator.py), [`src/workflow.py`](../../src/workflow.py), [`src/workflow_state.py`](../../src/workflow_state.py) und [`src/state_io.py`](../../src/state_io.py) für Laufzeitverhalten und Persistierung;
+2. [`src/prompts.py`](../../src/prompts.py) und [`src/contracts.py`](../../src/contracts.py) für Agentenausgabeverträge;
+3. [`AGENTS.md`](../../AGENTS.md) und Rollendateien für Repository-Ausführungsrichtlinien;
+4. [`README.md`](../../README.md) als öffentliche Betriebsreferenz;
+5. dieses Dokument für Architekturbegründung und fachliche Interpretation.
 
-Changes to workflow semantics, contracts, gates, validation, Git transactions, or state handling must update this document when they invalidate an architectural statement.
+Änderungen an Workflowsemantik, Verträgen, Gates, Validierung, Git-Transaktionen oder Zustandsbehandlung müssen dieses Dokument aktualisieren, sobald eine Architekturaussage dadurch ungültig wird.

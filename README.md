@@ -1,182 +1,182 @@
 # Dual-Agent Task Orchestrator
 
-A resumable CLI for bounded coding work with Codex as implementer, Claude as the primary reviewer, and Antigravity as the independent closing reviewer.
+Eine fortsetzbare CLI für klar abgegrenzte Entwicklungsaufgaben mit Codex als Implementierer, Claude als primärem Reviewer und Antigravity als unabhängigem Abschlussreviewer.
 
-## Overview
+## Überblick
 
-The orchestrator turns one Markdown task into an ordered State-v3 slice plan. Every slice has an exact path allowlist, deterministic validation, asymmetric reviews, and a verified local Git commit. After the final slice, all three roles inspect the complete branch change before the run is complete.
+Der Orchestrator überführt eine Markdown-Aufgabe in einen geordneten State-v3-Slice-Plan. Jeder Slice besitzt eine exakte Pfad-Allowlist, eine deterministische Validierung, asymmetrische Reviews und einen verifizierten lokalen Git-Commit. Nach dem letzten Slice prüfen alle drei Rollen die vollständige Branchänderung, bevor der Lauf abgeschlossen ist.
 
-![State-v3 workflow](https://www.plantuml.com/plantuml/proxy?cache=no&src=https://raw.githubusercontent.com/dieteresser62-lab/Dual-Agent-Orchestrator/master/workflow.puml)
+![State-v3-Workflow](https://www.plantuml.com/plantuml/proxy?cache=no&src=https://raw.githubusercontent.com/dieteresser62-lab/Dual-Agent-Orchestrator/master/workflow.puml)
 
-The normal workflow is:
+Der normale Ablauf ist:
 
-1. Inspect the repository, branch, task, configuration, and existing state.
-2. Ask Codex for ordered `SLICE_PLAN` records and have Claude review the plan.
-3. For each planned slice:
-   - Codex edits only the persisted path scope.
-   - The orchestrator collects the canonical diff and runs the configured validation matrix once for that fingerprint.
-   - Claude reviews only the slice changes on the first round and only the correction delta on later rounds.
-   - Antigravity reviews the complete approved slice diff once after Claude approves the same fingerprint.
-   - The orchestrator stages only the reviewed paths, creates a local `Slice NN: ...` commit, and verifies it.
-4. Run a branch-wide completeness report and final Claude/Antigravity review against the branch base.
-5. If the final review finds a blocker, process it as another bounded correction slice, commit it, and repeat the complete final review.
+1. Repository, Branch, Aufgabe, Konfiguration und vorhandenen Zustand prüfen.
+2. Codex geordnete `SLICE_PLAN`-Datensätze erstellen und Claude den Plan prüfen lassen.
+3. Für jeden geplanten Slice:
+   - Codex bearbeitet ausschließlich den persistierten Pfadumfang.
+   - Der Orchestrator ermittelt den kanonischen Diff und führt die konfigurierte Validierungsmatrix einmal für diesen Fingerprint aus.
+   - Claude prüft in der ersten Runde nur die Slice-Änderungen und in späteren Runden nur das Korrekturdelta.
+   - Antigravity prüft den vollständigen freigegebenen Slice-Diff einmal, nachdem Claude denselben Fingerprint freigegeben hat.
+   - Der Orchestrator staged ausschließlich die geprüften Pfade, erstellt einen lokalen Commit `Slice NN: ...` und verifiziert ihn.
+4. Einen branchweiten Vollständigkeitsbericht sowie den abschließenden Claude-/Antigravity-Review gegen die Branchbasis ausführen.
+5. Findet der Abschlussreview einen Blocker, wird er als weiterer begrenzter Korrekturslice bearbeitet und commitet; anschließend wird der vollständige Abschlussreview wiederholt.
 
-No role substitutes for another. Codex never approves or commits its own work. Reviewers cannot edit the source worktree or claim validation results.
+Keine Rolle ersetzt eine andere. Codex gibt die eigene Arbeit niemals frei und commitet sie nicht selbst. Reviewer können weder den Quell-Worktree bearbeiten noch Validierungsergebnisse für sich beanspruchen.
 
-## Reference Documentation
+## Referenzdokumentation
 
-- [Architecture and Domain Concept](docs/reference/architecture-and-domain-concept.md) explains the system boundary, domain model, invariants, components, state machine, trust boundaries, and operational qualities.
-- [Market Comparison](docs/reference/market-comparison.md) positions the orchestrator against representative coding agents and agent platforms using current official product documentation.
+- [Architektur- und Fachkonzept](docs/reference/architecture-and-domain-concept.md) beschreibt Systemgrenze, Domänenmodell, Invarianten, Komponenten, Zustandsmaschine, Vertrauensgrenzen und betriebliche Eigenschaften.
+- [Marktvergleich](docs/reference/market-comparison.md) ordnet den Orchestrator anhand aktueller offizieller Produktdokumentation gegenüber repräsentativen Coding-Agenten und Agentenplattformen ein.
 
-## Requirements and Supported Platforms
+## Voraussetzungen und unterstützte Plattformen
 
-Python 3.11 or newer is required. TOML parsing uses the Python standard library; the project has no runtime Python package dependencies.
+Erforderlich ist Python 3.11 oder neuer. Für das TOML-Parsing wird die Python-Standardbibliothek verwendet; das Projekt besitzt keine Python-Laufzeitabhängigkeiten.
 
-The supported execution environments are:
+Unterstützte Ausführungsumgebungen sind:
 
 - Linux
 - macOS
 - WSL2
 
-Native Windows is not currently supported because the complete workflow has not been verified there. Under WSL2, use the native `agy` command when available or explicitly configure `agy.exe`.
+Natives Windows wird derzeit nicht unterstützt, weil der vollständige Workflow dort noch nicht verifiziert wurde. Unter WSL2 sollte nach Möglichkeit der native Befehl `agy` verwendet oder `agy.exe` explizit konfiguriert werden.
 
-Install and authenticate all three role CLIs, then place them in `PATH` or configure explicit binary paths:
+Alle drei Rollen-CLIs müssen installiert und authentifiziert sein. Anschließend müssen sie in `PATH` liegen oder über explizite Binärpfade konfiguriert werden:
 
 - `codex`
 - `claude`
-- `agy` or `agy.exe`
+- `agy` oder `agy.exe`
 
-The runtime checks each binary and its required capabilities lazily immediately before that role's first invocation.
+Die Laufzeit prüft jedes Programm und seine erforderlichen Fähigkeiten verzögert unmittelbar vor dem ersten Aufruf der jeweiligen Rolle.
 
-## Quick Start
+## Schnellstart
 
-For a short end-to-end walkthrough, follow [Quickstart.md](Quickstart.md).
+Eine kurze vollständige Anleitung enthält [Quickstart.md](Quickstart.md).
 
-Create a bounded task from [example-task.md](example-task.md), save it as `task.md` in the target repository, and run:
+Erstelle anhand von [example-task.md](example-task.md) eine begrenzte Aufgabe, speichere sie im Zielrepository als `task.md` und führe Folgendes aus:
 
 ```bash
 ./run_task
 ```
 
-The positional form is equivalent:
+Die Positionsschreibweise ist gleichwertig:
 
 ```bash
 ./run_task path/to/my-task.md
 ```
 
-Use either the positional path or `--task-file`, not both:
+Verwende entweder den Positionspfad oder `--task-file`, nicht beides:
 
 ```bash
 ./run_task --task-file path/to/my-task.md
 ```
 
-An unfinished `.orchestrator/state.json` is resumed automatically in single-task mode. A completed State-v3 run starts a new run. Use explicit `--resume` when resolving a gate or resuming after a process restart.
+Eine nicht abgeschlossene `.orchestrator/state.json` wird im Einzelaufgabenmodus automatisch fortgesetzt. Nach einem abgeschlossenen State-v3-Lauf beginnt ein neuer Lauf. Verwende `--resume` explizit, wenn ein Gate aufgelöst oder nach einem Prozessneustart fortgesetzt wird.
 
-## Task Boundaries
+## Aufgabengrenzen
 
-A good task names the intended outcome, allowed paths, non-scope, acceptance criteria, validation commands, and conditions that require a user decision. Codex converts that request into one or more persisted slices. Each `SLICE_PLAN` record contains:
+Eine gute Aufgabe benennt Ziel, erlaubte Pfade, Nicht-Scope, Akzeptanzkriterien, Validierungsbefehle und Bedingungen für eine Benutzerentscheidung. Codex überführt diesen Auftrag in einen oder mehrere persistierte Slices. Jeder `SLICE_PLAN`-Datensatz enthält:
 
 ```text
 SLICE_PLAN: <1-based id> | <summary> | <comma-separated repository-relative paths>
 ```
 
-The listed paths are exact commit allowlists. A slice may contain at most ten productive file groups according to the configured path classes. Tests and documentation can be classified separately; an unclassified path is treated conservatively as productive.
+Die aufgeführten Pfade bilden exakte Commit-Allowlists. Ein Slice darf gemäß den konfigurierten Pfadklassen höchstens zehn produktive Dateigruppen enthalten. Tests und Dokumentation können separat klassifiziert werden; ein nicht klassifizierter Pfad gilt vorsichtshalber als produktiv.
 
-Unexpected paths, a changed branch, a changed slice-start commit, or a fingerprint that differs after review blocks the commit.
+Unerwartete Pfade, ein geänderter Branch, ein geänderter Slice-Startcommit oder ein nach dem Review abweichender Fingerprint blockieren den Commit.
 
-## State, Checkpoints, Logs, and Audit Documents
+## Zustand, Checkpoints, Logs und Auditdokumente
 
-Runtime data is stored below `.orchestrator/`:
+Laufzeitdaten werden unterhalb von `.orchestrator/` gespeichert:
 
-| Path | Purpose |
+| Pfad | Zweck |
 |---|---|
-| `.orchestrator/state.json` | Atomic, machine-readable State-v3 source for the active run. |
-| `.orchestrator/checkpoints/work-unit-####-slice-####-round-####.json` | Resume checkpoints with one-based work-unit, slice, and round identities. |
-| `.orchestrator/logs/` | Raw ephemeral agent invocation and diagnostic logs. |
-| `.orchestrator/runs/<run_id>/work-unit-####-codex.md` | Persisted Codex output used to resume plan or implementation context. |
+| `.orchestrator/state.json` | Atomare, maschinenlesbare State-v3-Quelle des aktiven Laufs. |
+| `.orchestrator/checkpoints/work-unit-####-slice-####-round-####.json` | Fortsetzungs-Checkpoints mit einsbasierten Arbeitsblock-, Slice- und Rundenidentitäten. |
+| `.orchestrator/logs/` | Rohe temporäre Agentenaufruf- und Diagnoselogs. |
+| `.orchestrator/runs/<run_id>/work-unit-####-codex.md` | Persistierte Codex-Ausgabe zur Wiederherstellung des Planungs- oder Implementierungskontexts. |
 
-Do not edit state or checkpoints manually.
+State und Checkpoints dürfen nicht manuell bearbeitet werden.
 
-Human-readable plan and slice audit Markdown files belong in the target repository, normally below `docs/internal/`, and are committed with their slice. They must exist before the run, be linked from the work plan, contain the required managed audit sections, and appear in the corresponding `SLICE_PLAN` scope. The orchestrator projects structured findings, reviews, validation attestations, and authorization status only into those managed sections. Git is the historical source of truth after each local slice commit.
+Menschenlesbare Plan- und Slice-Auditdateien im Markdown-Format gehören in das Zielrepository, üblicherweise unter `docs/internal/`, und werden mit ihrem Slice commitet. Sie müssen vor dem Lauf vorhanden, aus dem Arbeitsplan verlinkt, mit den erforderlichen verwalteten Auditabschnitten versehen und im Umfang des zugehörigen `SLICE_PLAN` enthalten sein. Der Orchestrator projiziert strukturierte Findings, Reviews, Validierungsattestierungen und Autorisierungsstatus ausschließlich in diese verwalteten Abschnitte. Nach jedem lokalen Slice-Commit ist Git die historische Quelle der Wahrheit.
 
-Active or frozen version-2 state is rejected without mutation. A completed version-2 state remains recognizable as historical completion but is not resumed or silently migrated to State v3.
+Aktive oder eingefrorene Zustände der Version 2 werden unverändert abgelehnt. Ein abgeschlossener Zustand der Version 2 bleibt als historischer Abschluss erkennbar, wird aber weder fortgesetzt noch stillschweigend nach State v3 migriert.
 
-## Validation and Review Isolation
+## Validierung und Reviewisolation
 
-Only the orchestrator runs deterministic validation. The validation matrix is selected from the canonical changed paths and open finding acceptance commands, then cached by diff fingerprint. Both reviewers receive the same complete, fingerprint-bound attestation.
+Nur der Orchestrator führt deterministische Validierungen aus. Die Validierungsmatrix wird aus den kanonisch geänderten Pfaden und den Abnahmebefehlen offener Findings ausgewählt und anschließend anhand des Diff-Fingerprints zwischengespeichert. Beide Reviewer erhalten dieselbe vollständige, an den Fingerprint gebundene Attestierung.
 
-Codex runs with workspace-write access. Claude and Antigravity receive disposable read-only repository copies while their private runtime, prompt, cache, and log paths remain writable. Normal reviews do not expose the validation harness and cannot modify the target worktree.
+Codex arbeitet mit Schreibzugriff auf den Workspace. Claude und Antigravity erhalten temporäre schreibgeschützte Repositorykopien, während ihre privaten Laufzeit-, Prompt-, Cache- und Logpfade beschreibbar bleiben. Normale Reviews legen das Validierungssystem nicht offen und können den Ziel-Worktree nicht verändern.
 
-Claude uses Sonnet with effort `high` by default. Its first slice review receives the slice's changed paths and hunks, acceptance criteria, structured findings, and bound attestation. A correction review receives only the delta since Claude's last reviewed fingerprint. A format-only contract repair receives the rejected response and marker contract, not the implementation evidence again.
+Claude verwendet standardmäßig Sonnet mit Effort `high`. Der erste Slice-Review erhält die geänderten Pfade und Hunks des Slice, Akzeptanzkriterien, strukturierte Findings und die gebundene Attestierung. Ein Korrekturreview erhält ausschließlich das Delta seit Claudes zuletzt geprüftem Fingerprint. Eine rein formale Vertragsreparatur erhält die abgelehnte Antwort und den Marker-Vertrag, nicht erneut die Implementierungsevidenz.
 
-Antigravity runs only after Claude approves the same fingerprint. It does not review plans and receives the complete current slice or branch diff for its closing review.
+Antigravity wird erst ausgeführt, nachdem Claude denselben Fingerprint freigegeben hat. Antigravity prüft keine Pläne und erhält für seinen Abschlussreview den vollständigen aktuellen Slice- oder Branch-Diff.
 
-The explicit review-harness command builders are diagnostics for installation, CLI-version changes, or troubleshooting. They prove test execution and tracked-file write denial in the isolated copy; they are not part of a normal review.
+Die expliziten Befehlsbuilder des Review-Harness dienen der Diagnose bei Installation, CLI-Versionswechseln oder Fehlersuche. Sie weisen Testausführung und Schreibschutz nachverfolgter Dateien in der isolierten Kopie nach; sie sind nicht Teil eines normalen Reviews.
 
-## Gates, Findings, and Resume
+## Gates, Findings und Fortsetzung
 
-The workflow persists before returning from a resumable halt. Resolve the underlying condition, then continue with `--resume`. A gate with a fingerprint requires an explicit recorded decision:
+Der Workflow persistiert seinen Zustand, bevor er aus einem fortsetzbaren Halt zurückkehrt. Behebe die zugrunde liegende Ursache und fahre dann mit `--resume` fort. Ein Gate mit Fingerprint erfordert eine explizit protokollierte Entscheidung:
 
 ```bash
 ./run_task --resume --approve-gate \
   --gate-actor "Dieter" \
-  --gate-rationale "Reviewed the exact persisted fingerprint and approved continuation"
+  --gate-rationale "Exakten persistierten Fingerprint geprüft und Fortsetzung freigegeben"
 ```
 
-Use `--reject-gate` with the same actor and rationale requirements to record a rejection.
+Mit `--reject-gate` und denselben Anforderungen an Akteur und Begründung wird eine Ablehnung protokolliert.
 
-The principal gates are:
+Die wichtigsten Gates sind:
 
-- changed tests without prior authorization;
-- an optional manual gate before each slice commit;
-- more than ten productive change groups;
-- a repository-defined stop rule or agent `STOP_REQUESTED` record;
-- paths outside the persisted slice scope;
-- branch, HEAD, diff-fingerprint, or validation-attestation drift;
-- missing or unavailable validation;
-- changed structured anchor values;
-- four implementer returns in one work unit;
-- missing implementation changes;
-- malformed, missing, or inconsistent review verdicts;
-- quota, authentication, binary, permission, network, process, or timeout failures.
+- geänderte Tests ohne vorherige Autorisierung;
+- ein optionales manuelles Gate vor jedem Slice-Commit;
+- mehr als zehn produktive Änderungsgruppen;
+- eine repositorydefinierte Stopregel oder ein Agentendatensatz `STOP_REQUESTED`;
+- Pfade außerhalb des persistierten Slice-Umfangs;
+- Abweichungen bei Branch, HEAD, Diff-Fingerprint oder Validierungsattestierung;
+- fehlende oder nicht verfügbare Validierung;
+- geänderte strukturierte Ankerwerte;
+- vier Rückgaben des Implementierers in einem Arbeitsblock;
+- fehlende Implementierungsänderungen;
+- fehlerhafte, fehlende oder widersprüchliche Reviewurteile;
+- Quota-, Authentifizierungs-, Binärprogramm-, Berechtigungs-, Netzwerk-, Prozess- oder Timeoutfehler.
 
-An approving review requires a complete passing attestation for the same fingerprint, authorized test changes, no reviewer-owned open blocker, review evidence or concrete findings, and a pre-mortem. Only the reviewer that reported a finding may close or reclassify it.
+Ein freigebender Review erfordert eine vollständige erfolgreiche Attestierung für denselben Fingerprint, autorisierte Teständerungen, keinen reviewer-eigenen offenen Blocker, Reviewevidenz oder konkrete Findings sowie ein Pre-Mortem. Nur der Reviewer, der ein Finding gemeldet hat, darf es schließen oder neu klassifizieren.
 
-Quota handling is role-local. With automatic quota resume enabled, an unambiguous reset within the configured wait limit is persisted, waited for with heartbeats, and resumed once at the exact failed step. Otherwise the process exits with code 2 and remains resumable. There is no fallback role.
+Die Quotabehandlung erfolgt rollenspezifisch. Bei aktivierter automatischer Quotafortsetzung wird ein eindeutiger Reset innerhalb der konfigurierten Wartegrenze persistiert, unter Ausgabe von Heartbeats abgewartet und am exakt fehlgeschlagenen Schritt einmal fortgesetzt. Andernfalls endet der Prozess mit Exitcode 2 und bleibt fortsetzbar. Es gibt keine Ersatzrolle.
 
-## Local Commits and External Git Actions
+## Lokale Commits und externe Git-Aktionen
 
-After Claude and Antigravity approve the same slice fingerprint, the orchestrator:
+Nachdem Claude und Antigravity denselben Slice-Fingerprint freigegeben haben, führt der Orchestrator folgende Schritte aus:
 
-1. re-collects repository status and the canonical diff;
-2. verifies branch, slice boundary, allowed paths, reviews, findings, and validation attestation;
-3. stages only the exact reviewed paths;
-4. creates a local `Slice NN: <planned summary>` commit with hooks and signing disabled for the mechanical transaction;
-5. verifies the commit path list and resulting commit hash.
+1. Repositorystatus und kanonischen Diff erneut ermitteln;
+2. Branch, Slice-Grenze, erlaubte Pfade, Reviews, Findings und Validierungsattestierung prüfen;
+3. ausschließlich die exakt geprüften Pfade stagen;
+4. einen lokalen Commit `Slice NN: <planned summary>` erstellen, wobei Hooks und Signierung für die mechanische Transaktion deaktiviert sind;
+5. Pfadliste und resultierenden Commit-Hash verifizieren.
 
-The orchestrator never pushes, merges, force-pushes, or rewrites history. Those actions remain explicit user operations outside this workflow.
+Der Orchestrator pusht, mergt oder force-pusht niemals und schreibt die Historie nicht um. Diese Aktionen bleiben explizite Benutzervorgänge außerhalb des Workflows.
 
-## Watch Mode
+## Watch-Modus
 
-Run the orchestrator as a FIFO queue worker:
+Der Orchestrator kann als FIFO-Warteschlangenworker ausgeführt werden:
 
 ```bash
 ./run_task --watch
 ```
 
-Watch mode:
+Der Watch-Modus:
 
-- monitors stable `*.md` files in `inbox/`, oldest first;
-- holds a single-process `inbox/.lock` where `fcntl` is available;
-- assigns each task a persisted run ID and task-content digest;
-- enables `--skip-git-check` by default because reviewed slice commits intentionally change the worktree;
-- streams `stdout` by default;
-- moves completed tasks to `outbox/done/` with a UTC timestamp;
-- retries technical failures and moves exhausted tasks to `outbox/failed/` as poison tasks;
-- stops the queue on exit 2, 3, or 4 so the first resumable task keeps FIFO ownership;
-- does not re-execute a successfully completed task when only its move to the outbox needs retrying.
+- überwacht stabile `*.md`-Dateien in `inbox/`, älteste zuerst;
+- hält eine Einzelprozesssperre `inbox/.lock`, sofern `fcntl` verfügbar ist;
+- weist jeder Aufgabe eine persistierte Lauf-ID und einen Digest des Aufgabeninhalts zu;
+- aktiviert standardmäßig `--skip-git-check`, weil geprüfte Slice-Commits den Worktree absichtlich verändern;
+- streamt standardmäßig `stdout`;
+- verschiebt abgeschlossene Aufgaben mit UTC-Zeitstempel nach `outbox/done/`;
+- wiederholt technische Fehler und verschiebt ausgeschöpfte Aufgaben als Poison Tasks nach `outbox/failed/`;
+- hält die Warteschlange bei Exitcode 2, 3 oder 4 an, damit die erste fortsetzbare Aufgabe ihre FIFO-Zuständigkeit behält;
+- führt eine erfolgreich abgeschlossene Aufgabe nicht erneut aus, wenn nur das Verschieben in die Outbox wiederholt werden muss.
 
-Override directories, polling, or technical retry count:
+Verzeichnisse, Abfrageintervall oder Anzahl technischer Wiederholungen können überschrieben werden:
 
 ```bash
 ./run_task --watch \
@@ -186,17 +186,17 @@ Override directories, polling, or technical retry count:
   --watch-max-retries 3
 ```
 
-After resolving a paused watch task, restart the watcher. Its task identity sidecar resumes the same run and work unit.
+Nach Behebung einer angehaltenen Watch-Aufgabe wird der Watcher neu gestartet. Die Identitäts-Sidecar-Datei der Aufgabe setzt denselben Lauf und Arbeitsblock fort.
 
-## Dry Runs
+## Probeläufe
 
-The built-in dry run exercises plan approval, two slice commits, and final review without agent/API calls or repository writes:
+Der integrierte Probelauf durchläuft Planfreigabe, zwei Slice-Commits und Abschlussreview ohne Agenten-/API-Aufrufe oder Repositoryschreibzugriffe:
 
 ```bash
 ./run_task --dry-run --task-file example-task.md --quiet
 ```
 
-For deterministic negative and resume scenarios, supply a State-v3 JSON scenario and optionally write its audit report:
+Für deterministische Negativ- und Fortsetzungsszenarien kann ein State-v3-JSON-Szenario übergeben und optional dessen Auditbericht geschrieben werden:
 
 ```bash
 ./run_task \
@@ -205,63 +205,63 @@ For deterministic negative and resume scenarios, supply a State-v3 JSON scenario
   --task-file example-task.md
 ```
 
-## CLI Reference
+## CLI-Referenz
 
-`src/cli.py` is the argument-parsing source of truth. `run_task` is a compatibility launcher that locates it and forwards all arguments.
+`src/cli.py` ist die Quelle der Wahrheit für das Argument-Parsing. `run_task` ist ein Kompatibilitätsstarter, der diese Datei findet und alle Argumente weiterleitet.
 
-### Core and State Options
+### Kern- und Zustandsoptionen
 
-| Flag | Default | Description |
+| Schalter | Standard | Beschreibung |
 |---|---|---|
-| `[task-file]` | `task.md` | Positional compatibility shorthand for the task file. |
-| `--task-file <path>` | `task.md` | Explicit task path; cannot be combined with the positional form. |
-| `--config <path>` | `RUN_TASK_CONFIG` or `./orchestrator.toml` | Repository policy configuration. |
-| `--agents-file <path>` | repository `AGENTS.md` | Shared agent instructions injected into prompts. |
-| `--resume` / `--no-resume` | auto | Automatically resume unfinished single-task state; explicitly override when needed. |
-| `--force-overwrite-state` | auto for completed state | Start a new run despite existing state; explicit use bypasses the normal state guard. |
-| `--strict-preflight` | off | Treat provider DNS preflight failure as fatal. |
-| `--skip-git-check` / `--no-skip-git-check` | off; on in watch mode | Override repository-cleanliness checking. |
-| `--manual-slice-gate` / `--no-manual-slice-gate` | repository config or off | Require explicit approval before every slice commit. |
-| `--approve-gate` / `--reject-gate` | unset | With explicit `--resume`, decide the exact persisted user gate. |
-| `--gate-actor <name>` | unset | Required identity for an explicit gate decision. |
-| `--gate-rationale <text>` | unset | Required rationale for an explicit gate decision. |
+| `[task-file]` | `task.md` | Kompatible Positionskurzform für die Aufgabendatei. |
+| `--task-file <path>` | `task.md` | Expliziter Aufgabenpfad; nicht mit der Positionsform kombinierbar. |
+| `--config <path>` | `RUN_TASK_CONFIG` oder `./orchestrator.toml` | Repositoryrichtlinien-Konfiguration. |
+| `--agents-file <path>` | `AGENTS.md` des Repositorys | Gemeinsame Agentenanweisungen, die in Prompts eingefügt werden. |
+| `--resume` / `--no-resume` | automatisch | Nicht abgeschlossenen Einzelaufgabenzustand automatisch fortsetzen; bei Bedarf explizit überschreiben. |
+| `--force-overwrite-state` | automatisch bei abgeschlossenem Zustand | Trotz vorhandenen Zustands einen neuen Lauf beginnen; explizite Verwendung umgeht den normalen Zustandsschutz. |
+| `--strict-preflight` | aus | Einen Fehler der Provider-DNS-Vorabprüfung als fatal behandeln. |
+| `--skip-git-check` / `--no-skip-git-check` | aus; im Watch-Modus an | Prüfung auf einen sauberen Repositoryzustand überschreiben. |
+| `--manual-slice-gate` / `--no-manual-slice-gate` | Repositorykonfiguration oder aus | Vor jedem Slice-Commit eine explizite Freigabe verlangen. |
+| `--approve-gate` / `--reject-gate` | nicht gesetzt | Zusammen mit explizitem `--resume` über das exakt persistierte Benutzergate entscheiden. |
+| `--gate-actor <name>` | nicht gesetzt | Erforderliche Identität für eine explizite Gate-Entscheidung. |
+| `--gate-rationale <text>` | nicht gesetzt | Erforderliche Begründung für eine explizite Gate-Entscheidung. |
 
-### Validation, Dry Run, and Quota
+### Validierung, Probelauf und Quota
 
-| Flag | Default | Description |
+| Schalter | Standard | Beschreibung |
 |---|---|---|
-| `--test-command <cmd>` | environment, repository matrix, or detection | Compatibility validation command; an explicit empty string disables it. |
-| `--retry-incomplete-validation` | off | Re-run a cached `INCOMPLETE` matrix for the same fingerprint after repairing its environment. |
-| `--dry-run` | off | Run the built-in State-v3 success scenario without API calls or writes. |
-| `--dry-run-scenario <path>` | unset | Run a deterministic JSON scenario. |
-| `--dry-run-report <path>` | unset | Write the scripted scenario audit report. |
-| `--quota-auto-resume` / `--no-quota-auto-resume` | on | Enable one automatic continuation for an unambiguous reset. |
-| `--quota-safety-margin <seconds>` | `60` | Delay added after a recognized reset. |
-| `--quota-max-wait <seconds>` | `86400` | Maximum automatic wait. |
-| `--quota-max-auto-resumes <count>` | `1` | Automatic continuations per blocked role step. |
-| `--quota-heartbeat-interval <seconds>` | `30` | Heartbeat interval during quota waiting. |
+| `--test-command <cmd>` | Umgebung, Repositorymatrix oder Erkennung | Kompatibilitäts-Validierungsbefehl; eine explizite leere Zeichenfolge deaktiviert ihn. |
+| `--retry-incomplete-validation` | aus | Eine zwischengespeicherte `INCOMPLETE`-Matrix für denselben Fingerprint nach Reparatur der Umgebung erneut ausführen. |
+| `--dry-run` | aus | Das integrierte State-v3-Erfolgsszenario ohne API-Aufrufe oder Schreibzugriffe ausführen. |
+| `--dry-run-scenario <path>` | nicht gesetzt | Ein deterministisches JSON-Szenario ausführen. |
+| `--dry-run-report <path>` | nicht gesetzt | Den Auditbericht des skriptgesteuerten Szenarios schreiben. |
+| `--quota-auto-resume` / `--no-quota-auto-resume` | an | Eine automatische Fortsetzung bei eindeutigem Reset aktivieren. |
+| `--quota-safety-margin <seconds>` | `60` | Nach einem erkannten Reset zusätzlich zu wartende Zeit. |
+| `--quota-max-wait <seconds>` | `86400` | Maximale automatische Wartezeit. |
+| `--quota-max-auto-resumes <count>` | `1` | Automatische Fortsetzungen je blockiertem Rollenschritt. |
+| `--quota-heartbeat-interval <seconds>` | `30` | Heartbeat-Intervall während des Quotawartens. |
 
-### Agent Output and Role Configuration
+### Agentenausgabe und Rollenkonfiguration
 
-| Flag | Default | Description |
+| Schalter | Standard | Beschreibung |
 |---|---|---|
-| `--agent-output <none\|summary\|full>` | `none` | Amount of each completed agent response to print. |
-| `--agent-output-max-chars <count>` | `1800` | Maximum completed-response characters in summary mode. |
-| `--agent-live-stream` / `--no-agent-live-stream` | on | Enable or disable live process output. |
-| `--agent-live-stream-mode <compact\|full>` | `compact` | Live-stream verbosity. |
-| `--agent-live-stream-channels <both\|stdout\|stderr>` | environment or `stdout` | Live channels to print. |
+| `--agent-output <none\|summary\|full>` | `none` | Umfang der auszugebenden abgeschlossenen Agentenantworten. |
+| `--agent-output-max-chars <count>` | `1800` | Maximale Zeichenanzahl abgeschlossener Antworten im Zusammenfassungsmodus. |
+| `--agent-live-stream` / `--no-agent-live-stream` | an | Live-Prozessausgabe aktivieren oder deaktivieren. |
+| `--agent-live-stream-mode <compact\|full>` | `compact` | Ausführlichkeit des Livestreams. |
+| `--agent-live-stream-channels <both\|stdout\|stderr>` | Umgebung oder `stdout` | Auszugebende Live-Kanäle. |
 
-Role settings use CLI, then `RUN_TASK_<ROLE>_*`, then these persistent defaults:
+Rolleneinstellungen verwenden zuerst CLI-Werte, dann `RUN_TASK_<ROLE>_*` und anschließend diese persistenten Standards:
 
-| Role | CLI options | Defaults |
+| Rolle | CLI-Optionen | Standards |
 |---|---|---|
 | Codex | `--codex-binary`, `--codex-model`, `--codex-timeout`, `--codex-effort` | `codex`, `gpt-5.6-sol`, 1800s, `medium` |
 | Claude | `--claude-binary`, `--claude-model`, `--claude-timeout`, `--claude-effort` | `claude`, `sonnet`, 1800s, `high` |
-| Antigravity | `--antigravity-binary`, `--antigravity-model`, `--antigravity-timeout`, `--antigravity-effort` | detected `agy`, `gemini-3.1-pro-high`, 1800s, `high` |
+| Antigravity | `--antigravity-binary`, `--antigravity-model`, `--antigravity-timeout`, `--antigravity-effort` | erkanntes `agy`, `gemini-3.1-pro-high`, 1800s, `high` |
 
-`--claude-max-budget-usd` or `RUN_TASK_CLAUDE_MAX_BUDGET_USD` adds an optional print-mode budget ceiling. Opus is not the default; use `--claude-model opus` only for an explicit escalation.
+`--claude-max-budget-usd` oder `RUN_TASK_CLAUDE_MAX_BUDGET_USD` ergänzt eine optionale Budgetobergrenze für den Print-Modus. Opus ist nicht der Standard; `--claude-model opus` dient ausschließlich einer expliziten Eskalation.
 
-Examples:
+Beispiele:
 
 ```bash
 ./run_task --claude-model sonnet --claude-effort high
@@ -269,41 +269,41 @@ RUN_TASK_ANTIGRAVITY_BINARY=agy.exe ./run_task
 ./run_task --codex-binary /opt/codex/bin/codex --codex-timeout 2400
 ```
 
-### Watch and Logging Options
+### Watch- und Loggingoptionen
 
-| Flag | Default | Description |
+| Schalter | Standard | Beschreibung |
 |---|---|---|
-| `--watch` | off | Continuously process Markdown tasks from the inbox. |
-| `--inbox-dir <path>` | `inbox` | Watch input directory. |
-| `--outbox-dir <path>` | `outbox` | Watch completion/failure root. |
-| `--poll-interval <seconds>` | `5.0` | Inbox polling interval. |
-| `--watch-max-retries <count>` | `3` | Technical failures before poison handling. |
-| `--verbose` | off | Enable debug logging. |
-| `--quiet` | off | Show warnings and errors only. |
+| `--watch` | aus | Markdown-Aufgaben aus der Inbox fortlaufend verarbeiten. |
+| `--inbox-dir <path>` | `inbox` | Eingabeverzeichnis des Watch-Modus. |
+| `--outbox-dir <path>` | `outbox` | Stammverzeichnis für abgeschlossene und fehlgeschlagene Aufgaben. |
+| `--poll-interval <seconds>` | `5.0` | Abfrageintervall der Inbox. |
+| `--watch-max-retries <count>` | `3` | Anzahl technischer Fehler vor der Poison-Task-Behandlung. |
+| `--verbose` | aus | Debug-Logging aktivieren. |
+| `--quiet` | aus | Nur Warnungen und Fehler anzeigen. |
 
-`--verbose` and `--quiet` are mutually exclusive.
+`--verbose` und `--quiet` schließen einander aus.
 
-## Configuration
+## Konfiguration
 
-Configuration precedence is:
+Die Konfigurationspräzedenz lautet:
 
-1. explicit CLI value;
-2. matching `RUN_TASK_*` environment value;
-3. repository `orchestrator.toml` value;
-4. built-in default or test-command auto-detection.
+1. expliziter CLI-Wert;
+2. passende Umgebungsvariable `RUN_TASK_*`;
+3. Wert aus `orchestrator.toml` des Repositorys;
+4. integrierter Standard oder automatische Erkennung des Testbefehls.
 
-Agent binary, model, effort, timeout, and Claude budget values deliberately bypass repository TOML and use only CLI, environment, and role defaults.
+Werte für Agentenprogramm, Modell, Effort, Timeout und Claude-Budget umgehen bewusst das Repository-TOML und verwenden ausschließlich CLI, Umgebung und Rollenstandards.
 
-An explicitly empty test command disables validation-command detection:
+Ein explizit leerer Testbefehl deaktiviert die Erkennung eines Validierungsbefehls:
 
 ```bash
 ./run_task --test-command ""
 RUN_TASK_TEST_CMD="" ./run_task
 ```
 
-Without a declared validation command, detection checks `pyproject.toml` with pytest configuration, a `package.json` test script, then a Makefile `test` target.
+Ohne deklarierten Validierungsbefehl prüft die Erkennung zunächst `pyproject.toml` mit pytest-Konfiguration, danach ein `package.json`-Testskript und schließlich ein `test`-Target im Makefile.
 
-The repository TOML schema contains portable policy only:
+Das TOML-Schema des Repositorys enthält ausschließlich portable Richtlinien:
 
 ```toml
 [paths]
@@ -329,9 +329,9 @@ timeout_seconds = 1200
 manual_slice_gate = false
 ```
 
-Use `default_shell_command` or a rule-local `shell_command` only when shell semantics are required. A validation entry must not declare both an argv command and a shell command. Patterns are repository-relative, use `/`, and cannot escape with `..`.
+`default_shell_command` oder ein regelbezogener `shell_command` sollten nur verwendet werden, wenn Shell-Semantik erforderlich ist. Ein Validierungseintrag darf nicht sowohl einen Argumentvektorbefehl als auch einen Shell-Befehl enthalten. Muster sind repositoryrelativ, verwenden `/` und dürfen nicht mit `..` ausbrechen.
 
-Useful environment overrides include:
+Nützliche Umgebungsüberschreibungen sind:
 
 ```bash
 RUN_TASK_TEST_CMD="python3 -m pytest tests/ -v" ./run_task
@@ -340,53 +340,53 @@ RUN_TASK_WATCH_STREAM_CHANNELS=both ./run_task --watch
 RUN_TASK_QUOTA_AUTO_RESUME=0 ./run_task
 ```
 
-## Agent Instruction and Output Contract
+## Agentenanweisungen und Ausgabevertrag
 
-The active repository instruction files are:
+Die aktiven Anweisungsdateien des Repositorys sind:
 
-| File | Responsibility |
+| Datei | Verantwortung |
 |---|---|
-| `AGENTS.md` | Shared execution, safety, review, and marker contract. |
-| `CODEX.md` | Implementer role and readiness records. |
-| `CLAUDE.md` | Primary targeted reviewer; persistent Sonnet/High profile. |
-| `ANTIGRAVITY.md` | Independent closing reviewer. |
+| `AGENTS.md` | Gemeinsamer Ausführungs-, Sicherheits-, Review- und Marker-Vertrag. |
+| `CODEX.md` | Implementiererrolle und Bereitschaftsdatensätze. |
+| `CLAUDE.md` | Primärer gezielter Reviewer mit persistentem Sonnet-/High-Profil. |
+| `ANTIGRAVITY.md` | Unabhängiger Abschlussreviewer. |
 
-All agent responses end with `STATUS: DONE`. State-v3 records are:
+Alle Agentenantworten enden mit `STATUS: DONE`. State-v3-Datensätze sind:
 
-| Producer or step | Required record |
+| Erzeuger oder Schritt | Erforderlicher Datensatz |
 |---|---|
-| Codex plan | `SLICE_PLAN: <id> \| <summary> \| <paths>` and `PLAN_READY: YES\|NO` |
-| Codex implementation | `TEST_FILES_TOUCHED: NONE\|<paths>` and `IMPLEMENTATION_READY: <slice-id> \| YES\|NO` |
-| Codex final report | `FINAL_REPORT_READY: YES\|NO` |
-| Any reviewer, first line | `REVIEWER: claude\|antigravity` |
-| Claude plan review | `PLAN_APPROVAL: YES\|NO` |
-| Slice review | `SLICE_APPROVAL: <slice-id> \| YES\|NO` |
-| Branch-wide final review | `FINAL_APPROVAL: YES\|NO` |
-| New finding | `NEW_FINDING: C-01\|A-01 \| BLOCKER\|OBSERVATION \| <description> \| <acceptance test>` |
-| Finding owner update | `FINDING_STATUS: <id> \| OPEN\|CLOSED \| <rationale>` |
-| Optional owner reclassification | `FINDING_RECLASSIFIED: <id> \| BLOCKER\|OBSERVATION \| <rationale>` |
-| Codex finding response | `FINDING_RESPONSE: <id> \| ACCEPTED\|REJECTED \| <rationale>` |
-| Review with no concrete weakness | `REVIEW_EVIDENCE: <dimensions> \| <largest residual risk> \| <break condition>` |
-| Positive review prerequisite | `PRE_MORTEM: <most likely failure cause in three months>` |
-| Any role stop | `STOP_REQUESTED: <rule-id> \| <rationale>` instead of readiness or approval |
+| Codex-Plan | `SLICE_PLAN: <id> \| <summary> \| <paths>` und `PLAN_READY: YES\|NO` |
+| Codex-Implementierung | `TEST_FILES_TOUCHED: NONE\|<paths>` und `IMPLEMENTATION_READY: <slice-id> \| YES\|NO` |
+| Codex-Abschlussbericht | `FINAL_REPORT_READY: YES\|NO` |
+| Jeder Reviewer, erste Zeile | `REVIEWER: claude\|antigravity` |
+| Claude-Planreview | `PLAN_APPROVAL: YES\|NO` |
+| Slice-Review | `SLICE_APPROVAL: <slice-id> \| YES\|NO` |
+| Branchweiter Abschlussreview | `FINAL_APPROVAL: YES\|NO` |
+| Neues Finding | `NEW_FINDING: C-01\|A-01 \| BLOCKER\|OBSERVATION \| <description> \| <acceptance test>` |
+| Aktualisierung durch Finding-Eigentümer | `FINDING_STATUS: <id> \| OPEN\|CLOSED \| <rationale>` |
+| Optionale Neuklassifizierung durch Eigentümer | `FINDING_RECLASSIFIED: <id> \| BLOCKER\|OBSERVATION \| <rationale>` |
+| Finding-Antwort von Codex | `FINDING_RESPONSE: <id> \| ACCEPTED\|REJECTED \| <rationale>` |
+| Review ohne konkrete Schwachstelle | `REVIEW_EVIDENCE: <dimensions> \| <largest residual risk> \| <break condition>` |
+| Voraussetzung einer positiven Freigabe | `PRE_MORTEM: <most likely failure cause in three months>` |
+| Stopp durch beliebige Rolle | `STOP_REQUESTED: <rule-id> \| <rationale>` anstelle von Bereitschaft oder Freigabe |
 
-The orchestrator owns validation attestations; agents must not emit `VALIDATION_RESULT`. State-v2 approval and aggregate-finding markers are invalid.
+Der Orchestrator besitzt die Validierungsattestierungen; Agenten dürfen `VALIDATION_RESULT` nicht ausgeben. State-v2-Freigabe- und aggregierte Finding-Marker sind ungültig.
 
-## Exit Codes
+## Exitcodes
 
-| Code | Meaning |
+| Code | Bedeutung |
 |---:|---|
-| `0` | The complete workflow, including all slice commits and branch-wide final review, finished successfully. |
-| `1` | Technical, configuration, state-schema, repository, or internal workflow failure. |
-| `2` | Quota cannot be resumed automatically or the configured quota-wait policy is exhausted. |
-| `3` | A required agent instance failed, timed out, or is unavailable. |
-| `4` | A user decision or policy gate is required. |
+| `0` | Der vollständige Workflow einschließlich aller Slice-Commits und des branchweiten Abschlussreviews wurde erfolgreich abgeschlossen. |
+| `1` | Technischer, Konfigurations-, Zustandsschema-, Repository- oder interner Workflowfehler. |
+| `2` | Die Quota kann nicht automatisch fortgesetzt werden oder die konfigurierte Wartepolitik ist ausgeschöpft. |
+| `3` | Eine erforderliche Agenteninstanz ist fehlgeschlagen, hat ihr Timeout erreicht oder ist nicht verfügbar. |
+| `4` | Eine Benutzerentscheidung oder ein Richtlinien-Gate ist erforderlich. |
 
-Codes 2, 3, and 4 preserve resumable state. Inspect the logged gate reason, repair or decide it, and continue the same run with `--resume`.
+Die Codes 2, 3 und 4 erhalten einen fortsetzbaren Zustand. Prüfe den protokollierten Gate-Grund, behebe oder entscheide ihn und setze denselben Lauf mit `--resume` fort.
 
-## Optional Global Command
+## Optionaler globaler Befehl
 
-To call the launcher from other repositories:
+Damit der Starter aus anderen Repositorys aufgerufen werden kann:
 
 ```bash
 mkdir -p ~/.local/bin
@@ -394,7 +394,7 @@ ln -s /absolute/path/to/Dual-Agent-Orchestrator/run_task ~/.local/bin/run_task
 chmod +x /absolute/path/to/Dual-Agent-Orchestrator/run_task
 ```
 
-## Verification
+## Verifikation
 
 ```bash
 ./run_task --help
