@@ -168,6 +168,41 @@ def inspect_repository(repository_root: Path) -> RepositoryIdentity:
     return RepositoryIdentity(root, branch, head, upstream, ahead, behind)
 
 
+def require_committed_file_at_head(
+    repository_root: Path,
+    *,
+    expected_commit: str,
+    relative_path: str,
+) -> None:
+    """Verify an approved handoff references the exact current committed plan."""
+    identity = inspect_repository(repository_root)
+    if identity.head != expected_commit:
+        raise GitTransactionError(
+            "approved-plan handoff requires HEAD to equal APPROVED_PLAN_COMMIT"
+        )
+    normalized = _normalize_scope_paths((relative_path,))[0]
+    exists = _git(
+        identity.repository_root,
+        "cat-file",
+        "-e",
+        f"{expected_commit}:{normalized}",
+        accepted_exit_codes=(0, 128),
+    )
+    if exists.returncode != 0:
+        raise GitTransactionError("approved work plan is not present in its commit")
+    unchanged = _git(
+        identity.repository_root,
+        "diff",
+        "--quiet",
+        expected_commit,
+        "--",
+        f":(top,literal){normalized}",
+        accepted_exit_codes=(0, 1),
+    )
+    if unchanged.returncode != 0:
+        raise GitTransactionError("approved work plan differs from its committed version")
+
+
 def begin_slice(
     *,
     repository_root: Path,

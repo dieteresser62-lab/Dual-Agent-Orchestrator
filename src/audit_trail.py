@@ -498,6 +498,99 @@ def prepare_managed_work_plan_document(
     )
 
 
+def prepare_managed_slice_document(
+    *,
+    repository_root: Path,
+    work_plan_path: str | Path,
+    slice_id: int,
+    slice_path: str,
+    title: str,
+    scope_paths: tuple[str, ...],
+    branch: str,
+) -> SliceDocument:
+    """Create one generic Slice report with all managed audit sections."""
+    _require_positive_int(slice_id, "slice_id")
+    root = Path(repository_root).resolve()
+    relative = _validate_expected_relative_path(slice_path, slice_id)
+    target = root / PurePosixPath(relative)
+    if target.exists():
+        return validate_managed_slice_document(
+            repository_root=root,
+            work_plan_path=work_plan_path,
+            slice_id=slice_id,
+            expected_relative_path=relative,
+        )
+    scope = ", ".join(f"`{path}`" for path in scope_paths)
+    managed_by_heading = {
+        heading: key for key, heading in SLICE_MANAGED_SECTION_HEADINGS.items()
+    }
+    lines = [
+        f"# Slice {slice_id:02d} – {title}",
+        "",
+        f"**Feature-Branch:** `{branch}`",
+        "**GitHub-Status:** nur lokal",
+        "",
+    ]
+    default_bodies = {
+        "Ziel des Slice": title,
+        "Akzeptanzkriterien": "Siehe freigegebenen Arbeitsplan.",  # allowlist:german
+        "Scope und Nicht-Scope": f"Erlaubter Scope: {scope}",
+        "Diff-Risiko inklusive Branch- und Statuscheck": "Vor Umsetzung zu prüfen.",
+        "Geplante Tests": "Gemäß Arbeitsplan und Orchestrator-Validierungsmatrix.",
+        "Durchgeführte Änderungen": "Wird während der Umsetzung ergänzt.",
+        "Ausgeführte Validierung mit Ergebnis": "Wird durch den Orchestrator projiziert.",  # allowlist:german
+        "Abweichungen vom Plan": "Keine erfasst.",
+        "Offene Risiken": "Siehe Findings-Lebenszyklus.",  # allowlist:german
+        "Rückdokumentation in die Arbeitsplan-MD": (
+            f"Arbeitsplan: `{PurePosixPath(str(work_plan_path)).as_posix()}`"
+        ),
+    }
+    for heading in REQUIRED_SLICE_HEADINGS:
+        lines.extend((f"## {heading}", ""))
+        key = managed_by_heading.get(heading)
+        if key is not None:
+            lines.extend(
+                (
+                    f"<!-- audit:{key}:begin -->",
+                    f"<!-- audit:{key}:end -->",
+                    "",
+                )
+            )
+        else:
+            lines.extend((default_bodies.get(heading, "Wird ergänzt."), ""))
+    atomic_write_file(target, "\n".join(lines).rstrip() + "\n")
+    return validate_managed_slice_document(
+        repository_root=root,
+        work_plan_path=work_plan_path,
+        slice_id=slice_id,
+        expected_relative_path=relative,
+    )
+
+
+def validate_managed_slice_document(
+    *,
+    repository_root: Path,
+    work_plan_path: str | Path,
+    slice_id: int,
+    expected_relative_path: str,
+) -> SliceDocument:
+    """Validate a generic generated Slice report without legacy plan-link rules."""
+    root = Path(repository_root).resolve()
+    relative = _validate_expected_relative_path(expected_relative_path, slice_id)
+    target = _resolve_inside_repository(root / PurePosixPath(relative), root, "slice document")
+    plan = _resolve_inside_repository(work_plan_path, root, "work plan")
+    if not target.is_file() or not plan.is_file():
+        raise AuditTrailError("managed Slice report or work plan is missing")
+    try:
+        markdown = target.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise AuditTrailError(f"slice document could not be read: {exc}") from exc
+    _validate_slice_structure(markdown)
+    _managed_ranges(markdown, require_all=True)
+    _validate_marker_ownership(markdown, SLICE_MANAGED_SECTION_HEADINGS)
+    return SliceDocument(slice_id, root, plan, target, relative, markdown)
+
+
 def project_slice_audit(
     document: SliceDocument,
     projection: AuditProjection,
@@ -515,6 +608,25 @@ def project_slice_audit(
                 "an approving slice review requires a bound validation attestation"
             )
     current = validate_slice_document(
+        repository_root=document.repository_root,
+        work_plan_path=document.work_plan_path,
+        slice_id=document.slice_id,
+        expected_relative_path=document.relative_path,
+    )
+    rendered = _render_projection(current.markdown, projection)
+    if rendered != current.markdown:
+        atomic_write_file(current.slice_path, rendered)
+    return rendered
+
+
+def project_managed_slice_audit(
+    document: SliceDocument,
+    projection: AuditProjection,
+) -> str:
+    """Project evidence into a generic generated Slice report."""
+    if projection.slice_id != document.slice_id:
+        raise AuditTrailError("projection slice does not match the managed Slice report")
+    current = validate_managed_slice_document(
         repository_root=document.repository_root,
         work_plan_path=document.work_plan_path,
         slice_id=document.slice_id,

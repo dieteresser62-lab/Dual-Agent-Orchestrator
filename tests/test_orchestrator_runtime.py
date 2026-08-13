@@ -265,13 +265,16 @@ def test_plan_only_uses_internal_plan_validation_and_commits_no_product_code(
         encoding="utf-8",
     )
 
+    codex_steps: list[WorkflowStep] = []
+
     def codex(driver: ProductionWorkflowDriver, invocation: CodexInvocation) -> str:
+        codex_steps.append(invocation.step)
         if invocation.step is WorkflowStep.CODEX_PLAN:
             plan = repository / "docs" / "internal" / "work-plan.md"
             plan.parent.mkdir(parents=True)
             plan.write_text(
-                "# Work plan\n\n### Slice 1: Future implementation\n\n"
-                "Change `src/future.py` in a later IMPLEMENT task.\n",
+                "# Work plan\n\n### Slice 1 – Future implementation\n\n"
+                "**Exakter Änderungspfad**\n\n- `src/future.py`\n",
                 encoding="utf-8",
             )
             output = (
@@ -312,12 +315,26 @@ def test_plan_only_uses_internal_plan_validation_and_commits_no_product_code(
     result = run_production_workflow(task, _args(repository, task))
 
     assert result.workflow_completed
+    assert codex_steps == [WorkflowStep.CODEX_PLAN]
+    assert [item.kind.value for item in result.state.work_units] == ["plan"]
     assert _git(repository, "show", "--pretty=", "--name-only", "HEAD") == (
         "docs/internal/work-plan.md"
     )
+    handoff = task.with_name("task-implement.md")
+    assert handoff.is_file()
+    handoff_text = handoff.read_text(encoding="utf-8")
+    assert "ORCHESTRATOR_MODE: IMPLEMENT" in handoff_text
+    assert f"APPROVED_PLAN_COMMIT: {result.commit_ref}" in handoff_text
+    assert "SLICE_PLAN: 1 | Future implementation |" in handoff_text
+    assert "src/future.py" in handoff_text
+    assert "docs/internal/slice-work-plan-01-future-implementation.md" in handoff_text
+    histories = [
+        result.state.runtime_history["current"],
+        *result.state.runtime_history["archive"],
+    ]
     attestations = [
         event["attestation"]
-        for history in result.state.runtime_history["archive"]
+        for history in histories
         for event in history.get("events", [])
         if event.get("kind") == "validation"
     ]
@@ -326,3 +343,86 @@ def test_plan_only_uses_internal_plan_validation_and_commits_no_product_code(
         item["expected_commands"] == ["internal:work-plan-contract"]
         for item in attestations
     )
+
+
+def test_generated_implementation_handoff_skips_second_plan_review(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repository = _repository(tmp_path, "feature/handoff")
+    task = tmp_path / "guide-plan.md"
+    task.write_text(
+        "\n".join(
+            (
+                "ORCHESTRATOR_MODE: PLAN_ONLY",
+                "WORK_PLAN_PATH: docs/internal/guide.md",
+                "TARGET_BRANCH: feature/handoff",
+                "TASK_SCOPE: docs/internal/guide.md",
+                "",
+                "Create the reviewed guide plan.",
+            )
+        ),
+        encoding="utf-8",
+    )
+    steps: list[WorkflowStep] = []
+
+    def codex(driver: ProductionWorkflowDriver, invocation: CodexInvocation) -> str:
+        steps.append(invocation.step)
+        if invocation.step is WorkflowStep.CODEX_PLAN:
+            plan = repository / "docs" / "internal" / "guide.md"
+            plan.parent.mkdir(parents=True)
+            plan.write_text(
+                "# Guide plan\n\n### Slice 1 – Rewrite guide\n\n"
+                "**Exakter Änderungspfad**\n\n- `Guide.html`\n",
+                encoding="utf-8",
+            )
+            output = (
+                "SLICE_PLAN: 1 | create guide plan | docs/internal/guide.md\n"
+                "PLAN_READY: YES\nSTATUS: DONE"
+            )
+        elif invocation.step is WorkflowStep.CODEX_IMPLEMENTATION:
+            (repository / "Guide.html").write_text("<h1>Guide</h1>\n", encoding="utf-8")
+            output = "TEST_FILES_TOUCHED: NONE\nIMPLEMENTATION_READY: 01 | YES\nSTATUS: DONE"
+        else:
+            output = "FINAL_REPORT_READY: YES\nSTATUS: DONE"
+        driver.last_codex_output = output
+        return output
+
+    def reviewer(
+        _driver: ProductionWorkflowDriver, invocation: ReviewerInvocation
+    ) -> str:
+        if invocation.step in {
+            WorkflowStep.CLAUDE_PLAN_REVIEW,
+            WorkflowStep.ANTIGRAVITY_PLAN_REVIEW,
+        }:
+            marker = "PLAN_APPROVAL: YES"
+        elif invocation.step in {
+            WorkflowStep.CLAUDE_FINAL_REVIEW,
+            WorkflowStep.ANTIGRAVITY_FINAL_REVIEW,
+        }:
+            marker = "FINAL_APPROVAL: YES"
+        else:
+            marker = "SLICE_APPROVAL: 01 | YES"
+        return _review(invocation.reviewer, marker)
+
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_codex", codex)
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_reviewer", reviewer)
+    monkeypatch.chdir(repository)
+
+    plan_result = run_production_workflow(task, _args(repository, task))
+    assert plan_result.workflow_completed
+    handoff = task.with_name("guide-implement.md")
+    assert handoff.is_file()
+
+    implementation_args = _args(repository, handoff)
+    implementation_args.resume = False
+    implementation_args.force_overwrite_state = True
+    implementation = run_production_workflow(handoff, implementation_args)
+
+    assert implementation.workflow_completed
+    assert steps.count(WorkflowStep.CODEX_PLAN) == 1
+    assert steps.count(WorkflowStep.CODEX_IMPLEMENTATION) == 1
+    assert (repository / "docs/internal/slice-guide-01-rewrite-guide.md").is_file()
+    assert _git(repository, "show", "--pretty=", "--name-only", "HEAD").splitlines() == [
+        "Guide.html",
+        "docs/internal/slice-guide-01-rewrite-guide.md",
+    ]

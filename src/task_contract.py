@@ -6,12 +6,13 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import PurePosixPath
 
+from contracts import PlannedSlice
 from gates import matches_path_patterns, normalize_path_patterns
 
 
 FEATURE_BRANCH_PATTERN = re.compile(r"^(?:feature|codex)/[A-Za-z0-9._-]+$")
 MARKER_PATTERN = re.compile(
-    r"^[ \t]*(ORCHESTRATOR_MODE|WORK_PLAN_PATH|TARGET_BRANCH|TASK_SCOPE)"
+    r"^[ \t]*(ORCHESTRATOR_MODE|WORK_PLAN_PATH|APPROVED_PLAN_COMMIT|TARGET_BRANCH|TASK_SCOPE)"
     r"[ \t]*:[ \t]*(.+?)[ \t]*$",
     re.MULTILINE | re.IGNORECASE,
 )
@@ -37,6 +38,8 @@ class TaskContract:
     scope_patterns: tuple[str, ...]
     target_branch: str
     work_plan_path: str | None = None
+    approved_plan_commit: str | None = None
+    approved_slices: tuple[PlannedSlice, ...] = ()
 
     def __post_init__(self) -> None:
         if re.fullmatch(r"[0-9a-f]{64}", self.digest) is None:
@@ -54,6 +57,34 @@ class TaskContract:
                 raise TaskContractError(
                     "WORK_PLAN_PATH must be covered by the declared task scope"
                 )
+            if self.approved_plan_commit is not None or self.approved_slices:
+                raise TaskContractError("PLAN_ONLY cannot consume an approved-plan handoff")
+        if self.approved_plan_commit is not None:
+            if self.mode is not TaskMode.IMPLEMENT or self.work_plan_path is None:
+                raise TaskContractError(
+                    "APPROVED_PLAN_COMMIT requires IMPLEMENT and WORK_PLAN_PATH"
+                )
+            if re.fullmatch(r"[0-9a-f]{40,64}", self.approved_plan_commit) is None:
+                raise TaskContractError("APPROVED_PLAN_COMMIT must be a Git object id")
+            if not self.approved_slices:
+                raise TaskContractError(
+                    "APPROVED_PLAN_COMMIT requires embedded SLICE_PLAN records"
+                )
+            unexpected = tuple(
+                path
+                for item in self.approved_slices
+                for path in item.scope_paths
+                if not matches_path_patterns(path, self.scope_patterns)
+            )
+            if unexpected:
+                raise TaskContractError(
+                    "approved Slice paths are outside TASK_SCOPE: "
+                    + ", ".join(sorted(set(unexpected)))
+                )
+        elif self.approved_slices:
+            raise TaskContractError(
+                "embedded SLICE_PLAN records require APPROVED_PLAN_COMMIT"
+            )
 
 
 def _clean_scope_entry(raw: str) -> str:
@@ -178,10 +209,46 @@ def parse_task_contract(
             "task requires TARGET_BRANCH or the --target-branch option"
         )
 
+    approved_plan_commit = _single_marker(markers, "APPROVED_PLAN_COMMIT")
+    approved_slices = _parse_embedded_slice_plan(text)
+
     return TaskContract(
         digest=hashlib.sha256(text.encode("utf-8")).hexdigest(),
         mode=mode,
         scope_patterns=scope_patterns,
         target_branch=target_branch,
         work_plan_path=work_plan_path,
+        approved_plan_commit=approved_plan_commit,
+        approved_slices=approved_slices,
     )
+
+
+def _parse_embedded_slice_plan(text: str) -> tuple[PlannedSlice, ...]:
+    records: list[PlannedSlice] = []
+    pattern = re.compile(
+        r"^[ \t]*SLICE_PLAN[ \t]*:[ \t]*(\d+)[ \t]*\|[ \t]*(.+?)[ \t]*\|[ \t]*(.+?)[ \t]*$",
+        re.MULTILINE | re.IGNORECASE,
+    )
+    for match in pattern.finditer(text):
+        try:
+            records.append(
+                PlannedSlice(
+                    slice_id=int(match.group(1)),
+                    summary=match.group(2).strip(),
+                    scope_paths=tuple(
+                        sorted(
+                            set(
+                                part.strip()
+                                for part in match.group(3).split(",")
+                                if part.strip()
+                            )
+                        )
+                    ),
+                )
+            )
+        except ValueError as exc:
+            raise TaskContractError(str(exc)) from exc
+    ids = tuple(item.slice_id for item in records)
+    if ids and ids != tuple(range(1, len(ids) + 1)):
+        raise TaskContractError("embedded Slice ids must be contiguous and 1-based")
+    return tuple(records)

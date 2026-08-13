@@ -80,11 +80,12 @@ Jede produktive Aufgabe deklariert zusätzlich zu Ziel, Nicht-Scope und Akzeptan
 ```text
 ORCHESTRATOR_MODE: PLAN_ONLY|IMPLEMENT
 WORK_PLAN_PATH: docs/internal/<thema>-work-plan.md
+APPROVED_PLAN_COMMIT: <automatisch erzeugter Git-Commit; nur im Handoff>
 TARGET_BRANCH: feature/<name>|codex/<name>
 TASK_SCOPE: <comma-separated repository-relative paths or globs>
 ```
 
-`WORK_PLAN_PATH` ist nur bei `PLAN_ONLY` erforderlich. Alternativ zu `TASK_SCOPE` wird ein Abschnitt `## Erlaubter Scope` oder `## Allowed Scope` mit Aufzählung akzeptiert. Der angegebene Zielbranch muss vor dem Start existieren und aktiv sein; Codex darf Branches weder erstellen noch wechseln.
+`WORK_PLAN_PATH` ist bei `PLAN_ONLY` und im automatisch erzeugten Implementierungs-Handoff erforderlich. `APPROVED_PLAN_COMMIT` wird ausschließlich vom Handoff-Erzeuger zusammen mit den übernommenen `SLICE_PLAN`-Datensätzen geschrieben. Alternativ zu `TASK_SCOPE` wird ein Abschnitt `## Erlaubter Scope` oder `## Allowed Scope` mit Aufzählung akzeptiert. Der angegebene Zielbranch muss vor dem Start existieren und aktiv sein; Codex darf Branches weder erstellen noch wechseln.
 
 `PLAN_ONLY` bildet den ersten Schritt des manuellen Prozesses ab; [example-plan-task.md](example-plan-task.md) ist eine direkt anpassbare Vorlage. Codex erstellt ausschließlich das deklarierte Arbeitsplan-MD. Die späteren Umsetzungsslices stehen als Überschriften im Dokument, während der ausführbare `SLICE_PLAN` dieses Laufs genau einen Dokumentationsslice enthält. Claude und Antigravity prüfen den Plan, danach wartet der Lauf am expliziten Plangate. Nach Freigabe wird ausschließlich das Arbeitsplandokument lokal commitet. Die Umsetzung startet später mit einer neuen Aufgabe im Modus `IMPLEMENT`, die auf den freigegebenen Arbeitsplan verweist.
 
@@ -111,7 +112,16 @@ Laufzeitdaten werden unterhalb von `.orchestrator/` gespeichert:
 
 State und Checkpoints dürfen nicht manuell bearbeitet werden.
 
-Menschenlesbare Plan- und Slice-Auditdateien im Markdown-Format gehören in das Zielrepository, üblicherweise unter `docs/internal/`, und werden mit ihrem Slice commitet. Sie müssen vor dem Lauf vorhanden, aus dem Arbeitsplan verlinkt, mit den erforderlichen verwalteten Auditabschnitten versehen und im Umfang des zugehörigen `SLICE_PLAN` enthalten sein. Der Orchestrator projiziert strukturierte Findings, Reviews, Validierungsattestierungen und Autorisierungsstatus ausschließlich in diese verwalteten Abschnitte. Nach jedem lokalen Slice-Commit ist Git die historische Quelle der Wahrheit.
+Menschenlesbare Plan- und Slice-Auditdateien im Markdown-Format gehören in das Zielrepository, üblicherweise unter `docs/internal/`, und werden mit ihrem Slice commitet. Bei einem regulär manuell definierten Lauf müssen sie vorbereitet, aus dem Arbeitsplan verlinkt, mit den erforderlichen verwalteten Auditabschnitten versehen und im Umfang des zugehörigen `SLICE_PLAN` enthalten sein. Ein commitgebundener Handoff erzeugt seine deklarierten Slice-Auditdateien dagegen automatisch vor dem jeweiligen Slice. Der Orchestrator projiziert strukturierte Findings, Reviews, Validierungsattestierungen und Autorisierungsstatus ausschließlich in diese verwalteten Abschnitte. Nach jedem lokalen Slice-Commit ist Git die historische Quelle der Wahrheit.
+
+Im Zweischrittprozess commitet eine freigegebene `PLAN_ONLY`-Aufgabe den bereits
+geprüften Arbeitsplan unmittelbar; es folgt kein künstlicher Implementierungs-
+oder Abschlussreview des Planartefakts. Anschließend erzeugt der Orchestrator
+eine `-implement.md`-Handoff-Aufgabe neben der Planaufgabe. Sie bindet den
+exakten Plan-Commit über `APPROVED_PLAN_COMMIT`, enthält die übernommenen
+`SLICE_PLAN`-Grenzen und startet als neuer `IMPLEMENT`-Lauf direkt mit Slice 1.
+Die zugehörigen Slice-Auditdateien werden aus diesen Grenzen vorbereitet und
+mit dem jeweiligen Slice geprüft und commitet.
 
 Aktive oder eingefrorene Zustände der Version 2 werden unverändert abgelehnt. Ein abgeschlossener Zustand der Version 2 bleibt als historischer Abschluss erkennbar, wird aber weder fortgesetzt noch stillschweigend nach State v3 migriert.
 

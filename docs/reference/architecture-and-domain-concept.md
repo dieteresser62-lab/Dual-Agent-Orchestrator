@@ -165,7 +165,11 @@ Die Workflowengine ist bewusst von der Prozessausführung getrennt. Sie kommuniz
 2. Codex liefert geordnete `SLICE_PLAN`-Datensätze mit exakten Pfad-Allowlists. Jeder Pfad wird gegen den Task-Scope geprüft.
 3. Claude prüft den Planfingerprint. Nach seiner Freigabe prüft Antigravity denselben vollständigen Planfingerprint. Eine Ablehnung führt zur Planüberarbeitung durch Codex.
 4. Der doppelt freigegebene Plan wartet standardmäßig an einem fingerprintgebundenen Benutzergate. Erst die protokollierte Freigabe erlaubt den Übergang.
-5. Im Modus `PLAN_ONLY` ist genau ein ausführbarer Dokumentationsslice zulässig; spätere Produktslices stehen ausschließlich im Arbeitsplan-MD und benötigen eine neue `IMPLEMENT`-Aufgabe. Im Modus `IMPLEMENT` beginnt nach dem Gate der erste Implementierungsslice.
+5. Im Modus `PLAN_ONLY` ist genau ein ausführbarer Dokumentationsslice zulässig.
+   Nach dem Plangate wird sein bereits geprüfter Fingerprint direkt commitet.
+   Daraus entsteht eine commitgebundene `IMPLEMENT`-Handoff-Aufgabe; sie
+   übernimmt die späteren Produktslices und beginnt ohne erneute Planprüfung
+   direkt mit Slice 1.
 
 ### 9.2 Slice-Implementierung und Review
 

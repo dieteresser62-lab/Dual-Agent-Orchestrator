@@ -45,6 +45,27 @@ TASK_SCOPE: src/app.py, tests/test_app.py, docs/internal/plan.md
     )
 
 
+def test_approved_plan_handoff_binds_embedded_slices() -> None:
+    contract = parse_task_contract(
+        """
+ORCHESTRATOR_MODE: IMPLEMENT
+WORK_PLAN_PATH: docs/internal/plan.md
+APPROVED_PLAN_COMMIT: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+TARGET_BRANCH: feature/example
+TASK_SCOPE: src/app.py, docs/internal/slice-plan-01-app.md
+
+SLICE_PLAN: 1 | App umsetzen | src/app.py, docs/internal/slice-plan-01-app.md
+"""
+    )
+
+    assert contract.approved_plan_commit == "a" * 40
+    assert len(contract.approved_slices) == 1
+    assert contract.approved_slices[0].scope_paths == (
+        "docs/internal/slice-plan-01-app.md",
+        "src/app.py",
+    )
+
+
 @pytest.mark.parametrize(
     ("text", "message"),
     (

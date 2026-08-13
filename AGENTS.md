@@ -16,7 +16,7 @@
 - Claude reviews every plan, every implementation round, and the full branch. Use Sonnet with effort `high`.
 - Antigravity reviews each plan, each slice, and the final branch exactly once after Claude approves the same fingerprint; it never replaces Claude.
 - A reviewed plan requires an explicit fingerprint-bound user gate before any executable Slice begins.
-- `PLAN_ONLY` runs emit exactly one executable Slice for the declared work-plan artifact. Future implementation Slices are document content only and require a later `IMPLEMENT` task.
+- `PLAN_ONLY` runs emit exactly one executable Slice for the declared work-plan artifact. After user approval, commit that reviewed artifact directly and create an `APPROVED_PLAN_COMMIT`-bound `IMPLEMENT` handoff; do not plan or review the committed plan a second time.
 - Every task declares an exact target feature branch and path scope. The orchestrator rejects branch drift, out-of-scope planning changes, and out-of-scope `SLICE_PLAN` records.
 - Only the orchestrator runs deterministic validation and creates fingerprint-bound attestations.
 - Agents must not run the full validation matrix or emit `VALIDATION_RESULT`.

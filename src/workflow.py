@@ -691,12 +691,15 @@ class WorkflowRunResult:
 
     @property
     def workflow_completed(self) -> bool:
-        """Require committed slices and the terminal branch-wide final review."""
+        """Require the terminal review, or a directly committed PLAN_ONLY artifact."""
         return (
             self.completed
-            and self.state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
             and self.state.current_step is WorkflowStep.COMPLETED
             and all(item.status is SliceStatus.COMPLETED for item in self.state.slices)
+            and (
+                self.state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
+                or self.state.execution_mode == "PLAN_ONLY"
+            )
         )
 
     @property
@@ -1332,8 +1335,14 @@ class WorkflowEngine:
                         ),
                         fingerprint=changes.fingerprint,
                         paths=changes.user_gate_paths,
-                        gate_step=WorkflowStep.COMPLETED,
+                        gate_step=(
+                            WorkflowStep.SLICE_COMMIT
+                            if context.plan_only
+                            else WorkflowStep.COMPLETED
+                        ),
                     )
+                elif context.plan_only:
+                    state = state.with_current_step(WorkflowStep.SLICE_COMMIT)
                 else:
                     state = state.complete_current_work_unit()
             elif is_final_review:
@@ -1726,6 +1735,31 @@ class WorkflowEngine:
         start_commit = state.current_slice.start_commit
         if start_commit is None:
             raise WorkflowExecutionError("slice commit requires a persisted start commit")
+        if (
+            context.plan_only
+            and state.current_work_unit.kind is WorkUnitKind.PLAN
+            and not state.current_slice.scope_paths
+        ):
+            planned = next(
+                (
+                    item
+                    for item in state.planned_slices
+                    if item.slice_id == state.current_slice_id
+                ),
+                None,
+            )
+            if planned is None:
+                raise WorkflowExecutionError(
+                    "PLAN_ONLY commit requires the persisted plan-artifact Slice"
+                )
+            boundary_changes = self.driver.collect_changes(start_commit)
+            state = state.bind_current_slice_git_boundary(
+                start_commit=start_commit,
+                scope_paths=planned.scope_paths,
+                start_fingerprint=boundary_changes.fingerprint,
+            )
+            self._bind_driver_work_unit(state)
+            self.driver.checkpoint(state, history)
         changes = self.driver.collect_changes(start_commit)
         unexpected = self._validate_change_boundary(
             state, changes, state.current_work_unit.kind
@@ -1777,8 +1811,12 @@ class WorkflowEngine:
         ):
             raise WorkflowExecutionError("slice commit requires no open blockers")
         gate_paths = changes.user_gate_paths
-        if context.manual_slice_gate and not state.current_work_unit.has_gate_approval(
+        if (
+            context.manual_slice_gate
+            and not context.plan_only
+            and not state.current_work_unit.has_gate_approval(
             GateReason.MANUAL_SLICE, changes.fingerprint, gate_paths
+            )
         ):
             state = state.await_user_gate(
                 reason=GateReason.MANUAL_SLICE,

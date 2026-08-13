@@ -13,9 +13,9 @@ from agent_runtime import OrchestratorConfig, run_agent_checked, run_validation_
 from audit_trail import (
     AuditProjection,
     AuthorizedTestChanges,
-    project_slice_audit,
+    project_managed_slice_audit,
     project_work_plan_audit,
-    validate_slice_document,
+    prepare_managed_slice_document,
     prepare_managed_work_plan_document,
     validate_managed_work_plan_document,
 )
@@ -39,8 +39,10 @@ from git_service import (
     SliceGitBoundary,
     commit_slice,
     inspect_repository,
+    require_committed_file_at_head,
     GitTransactionError,
 )
+from plan_handoff import PlanHandoffError, write_implementation_handoff
 from repo_changes import (
     RepositoryChangeError,
     RepositoryChanges,
@@ -624,27 +626,27 @@ class ProductionWorkflowDriver(WorkflowDriver):
         )
         for path in candidates:
             try:
-                document = validate_slice_document(
-                    repository_root=self.root,
-                    work_plan_path=next(
-                        (
-                            value
-                            for item in state.planned_slices
-                            for value in item.scope_paths
-                            if value == state.work_plan_path
-                            or (
-                                value.startswith("docs/internal/")
-                                and value.endswith("work-plan.md")
-                            )
-                        ),
-                        "docs/internal/orchestrator-modernization-work-plan.md",
+                summary = next(
+                    (
+                        item.summary
+                        for item in state.planned_slices
+                        if item.slice_id == state.current_slice_id
                     ),
+                    f"Slice {state.current_slice_id}",
+                )
+                document = prepare_managed_slice_document(
+                    repository_root=self.root,
+                    work_plan_path=state.work_plan_path
+                    or "docs/internal/orchestrator-modernization-work-plan.md",
                     slice_id=state.current_slice_id,
-                    expected_relative_path=path,
+                    slice_path=path,
+                    title=summary,
+                    scope_paths=planned.scope_paths,
+                    branch=state.branch,
                 )
             except ValueError:
                 continue
-            project_slice_audit(document, projection)
+            project_managed_slice_audit(document, projection)
             return
         logger.debug("No prepared Slice audit target is present for Slice %s.", state.current_slice_id)
 
@@ -815,11 +817,16 @@ def _fresh_state(
             "create/switch the branch before starting the orchestrator"
         )
     merge_base = resolve_merge_base(repository_root)
-    return init_workflow_state(
+    branch_base = (
+        identity.head
+        if task_contract.approved_plan_commit is not None
+        else merge_base.commit
+    )
+    state = init_workflow_state(
         run_id=run_id,
         task_file=str(task_file.resolve()),
         branch=identity.branch,
-        branch_base=merge_base.commit,
+        branch_base=branch_base,
         first_slice_start_commit=identity.head,
         slice_count=1,
         task_digest=task_contract.digest,
@@ -828,6 +835,23 @@ def _fresh_state(
         work_plan_path=task_contract.work_plan_path,
         target_branch=task_contract.target_branch,
     )
+    if task_contract.approved_plan_commit is not None:
+        assert task_contract.work_plan_path is not None
+        require_committed_file_at_head(
+            repository_root,
+            expected_commit=task_contract.approved_plan_commit,
+            relative_path=task_contract.work_plan_path,
+        )
+        state = state.bind_slice_plan(
+            task_contract.approved_slices,
+            first_start_commit=identity.head,
+        ).complete_current_work_unit()
+        state = state.start_work_unit(
+            slice_id=1,
+            kind=WorkUnitKind.SLICE,
+            step=WorkflowStep.CODEX_IMPLEMENTATION,
+        )
+    return state
 
 
 def run_production_workflow(
@@ -897,6 +921,7 @@ def run_production_workflow(
             repository_root=root,
             task_contract=task_contract,
         )
+    state = _recover_legacy_plan_only_post_gate(state)
     config = OrchestratorConfig(
         dry_run=False,
         agent_output_mode=args.agent_output,
@@ -997,6 +1022,26 @@ def run_production_workflow(
             return WorkflowRunResult(state, _history(state))
 
         if current.kind is WorkUnitKind.PLAN:
+            if state.execution_mode == TaskMode.PLAN_ONLY.value:
+                commit_ref = result.commit_ref
+                if commit_ref is None:
+                    raise WorkflowExecutionError(
+                        "completed PLAN_ONLY run has no reviewed plan commit"
+                    )
+                try:
+                    handoff = write_implementation_handoff(
+                        plan_task_path=task_file,
+                        repository_root=root,
+                        work_plan_path=state.work_plan_path or "",
+                        target_branch=state.target_branch or state.branch,
+                        approved_plan_commit=commit_ref,
+                    )
+                except PlanHandoffError as exc:
+                    raise WorkflowExecutionError(
+                        f"could not create IMPLEMENT handoff: {exc}"
+                    ) from exc
+                logger.info("Implementation handoff ready: %s", handoff)
+                return WorkflowRunResult(state, _history(state), commit_ref)
             if not state.planned_slices:
                 raise WorkflowExecutionError("completed plan has no persisted SLICE_PLAN")
             state = state.start_work_unit(
@@ -1025,6 +1070,62 @@ def run_production_workflow(
         driver.checkpoint(state, WorkflowHistory(state.current_work_unit_id))
 
     raise WorkflowExecutionError("workflow session exceeded its deterministic transition bound")
+
+
+def _recover_legacy_plan_only_post_gate(state: WorkflowState) -> WorkflowState:
+    """Collapse the obsolete post-gate plan-artifact Slice without editing state files."""
+    if (
+        state.execution_mode != TaskMode.PLAN_ONLY.value
+        or state.current_work_unit.kind is not WorkUnitKind.SLICE
+        or state.current_step is not WorkflowStep.CODEX_IMPLEMENTATION
+        or state.current_work_unit_id != 2
+        or len(state.work_units) != 2
+    ):
+        return state
+    plan_unit = state.work_units[0]
+    if (
+        plan_unit.kind is not WorkUnitKind.PLAN
+        or plan_unit.status is not WorkUnitStatus.COMPLETED
+        or not any(
+            decision.approved and decision.reason is GateReason.PLAN_APPROVAL
+            for decision in plan_unit.gate_decisions
+        )
+    ):
+        return state
+    runtime = state.runtime_history
+    if not isinstance(runtime, dict):
+        return state
+    archive = runtime.get("archive")
+    if not isinstance(archive, list):
+        return state
+    plan_history = next(
+        (
+            item
+            for item in archive
+            if isinstance(item, dict) and item.get("work_unit_id") == 1
+        ),
+        None,
+    )
+    current_history = runtime.get("current")
+    if plan_history is None or not isinstance(current_history, dict):
+        return state
+    if current_history.get("events") or current_history.get("findings"):
+        return state
+    restored_unit = replace(
+        plan_unit,
+        status=WorkUnitStatus.IN_PROGRESS,
+        current_step=WorkflowStep.SLICE_COMMIT,
+    )
+    logger.info(
+        "Recovering legacy PLAN_ONLY post-gate state; committing the already reviewed plan directly."
+    )
+    return replace(
+        state,
+        current_work_unit_id=1,
+        current_step=WorkflowStep.SLICE_COMMIT,
+        work_units=(restored_unit,),
+        runtime_history={"current": plan_history, "archive": []},
+    )
 
 
 def run_default_dry_run(task_file: Path, *, run_id: str | None = None):

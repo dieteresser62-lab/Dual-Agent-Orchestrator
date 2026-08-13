@@ -86,7 +86,11 @@ run_task --resume --task-file task.md \
   --gate-rationale "Arbeitsplan und persistierten Fingerprint geprüft"
 ```
 
-Nach dieser Freigabe wird ausschließlich das Arbeitsplanartefakt reviewed und lokal commitet. Prüfe den Commit, bevor du eine zweite Aufgabe im Modus `IMPLEMENT` erstellst.
+Nach dieser Freigabe wird der bereits geprüfte Arbeitsplan ohne weiteren Codex-,
+Claude- oder Antigravity-Aufruf direkt lokal commitet. Der Orchestrator erzeugt
+daneben automatisch eine zweite Inbox-Aufgabe mit dem Suffix `-implement.md`.
+Sie bindet den Plan-Commit, übernimmt dessen Slices und ergänzt je Slice ein
+eigenes Auditdokument.
 
 Claude- und Antigravity-Ergebnisse werden in einem automatisch verwalteten Prüfprotokoll am Ende des deklarierten Arbeitsplans dokumentiert. Der Orchestrator hält diese Blöcke aus dem fachlichen Fingerprint heraus und speichert Markdown beim Commit mit Git-Modus `100644`.
 
@@ -104,7 +108,20 @@ Liegt `run_task` in `PATH`, genügt die Kurzform:
 run_task --task-file task.md
 ```
 
-Die Implementierungsaufgabe verwendet `ORCHESTRATOR_MODE: IMPLEMENT`, denselben `TARGET_BRANCH`, verweist auf den freigegebenen Arbeitsplan und deklariert alle erlaubten Umsetzungs-, Test- und Auditpfade in `TASK_SCOPE`. Claude Sonnet mit Effort `high` und Antigravity prüfen zuerst den ausführbaren Plan. Erst nach dem expliziten Plangate beginnt Slice 1. Erfolgreiche Slices werden lokal commitet; anschließend folgt ein branchweiter Abschlussreview.
+Starte die automatisch erzeugte Aufgabe als neuen Lauf:
+
+```bash
+run_task --no-resume --force-overwrite-state \
+  --task-file Inbox/mein-vorhaben-implement.md
+```
+
+Die Implementierungsaufgabe verwendet `ORCHESTRATOR_MODE: IMPLEMENT`, denselben
+`TARGET_BRANCH`, den unveränderten Plan-Commit und alle erlaubten Umsetzungs-
+und Auditpfade. Weil der Plan bereits doppelt geprüft und vom Benutzer
+freigegeben wurde, beginnt dieser Handoff ohne zweite Planungs-/Reviewrunde
+direkt mit Slice 1. Erfolgreiche Slices werden lokal commitet; anschließend
+folgt ein branchweiter Abschlussreview. Claude Sonnet mit Effort `high` und
+Antigravity prüfen dabei jeden Implementierungsslice.
 
 ## 7. Angehaltenen Lauf fortsetzen
 

@@ -19,12 +19,22 @@ from contracts import (
     FindingOrigin,
     FindingRecord,
     FindingStatus,
+    PlannedSlice,
     StepContract,
 )
-from orchestrator import _bound_task_control_paths, _plan_only_step_boundary
+from orchestrator import (
+    _bound_task_control_paths,
+    _plan_only_step_boundary,
+    _recover_legacy_plan_only_post_gate,
+)
 from repo_changes import collect_repository_changes
 from workflow import WorkflowExecutionError, normalize_review_contract_output
-from workflow_state import WorkUnitKind
+from workflow_state import (
+    GateReason,
+    WorkflowStep,
+    WorkUnitKind,
+    init_workflow_state,
+)
 
 
 def _git(repository: Path, *args: str) -> None:
@@ -261,3 +271,57 @@ def test_plan_only_boundary_requires_slice_plan_only_during_planning() -> None:
     assert "do not emit a SLICE_PLAN record" in implementation
     assert "persisted artifact scope: docs/internal/plan.md" in implementation
     assert "emit exactly one executable SLICE_PLAN" not in implementation
+
+
+def test_legacy_plan_only_post_gate_is_collapsed_back_to_direct_commit() -> None:
+    state = init_workflow_state(
+        run_id="run",
+        task_file="/tmp/task.md",
+        branch="feature/plan",
+        branch_base="a" * 40,
+        first_slice_start_commit="a" * 40,
+        slice_count=1,
+        task_digest="b" * 64,
+        execution_mode="PLAN_ONLY",
+        task_scope_patterns=("docs/internal/plan.md",),
+        work_plan_path="docs/internal/plan.md",
+        target_branch="feature/plan",
+    ).bind_slice_plan(
+        (PlannedSlice(1, "Plan", ("docs/internal/plan.md",)),),
+        first_start_commit="a" * 40,
+    )
+    state = state.await_user_gate(
+        reason=GateReason.PLAN_APPROVAL,
+        detail="approved",
+        fingerprint="c" * 64,
+        paths=("docs/internal/plan.md",),
+        gate_step=WorkflowStep.COMPLETED,
+    ).record_user_gate_decision(
+        approved=True,
+        fingerprint="c" * 64,
+        paths=("docs/internal/plan.md",),
+        decided_by="user",
+        decided_at=state.updated_at,
+        rationale="approved",
+    ).complete_current_work_unit()
+    state = state.start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    )
+    state = state.__class__(
+        **{
+            **state.__dict__,
+            "runtime_history": {
+                "current": {"work_unit_id": 2, "events": [], "findings": []},
+                "archive": [{"work_unit_id": 1, "events": ["reviewed"]}],
+            },
+        }
+    )
+
+    recovered = _recover_legacy_plan_only_post_gate(state)
+
+    assert recovered.current_work_unit_id == 1
+    assert recovered.current_step is WorkflowStep.SLICE_COMMIT
+    assert len(recovered.work_units) == 1
+    assert recovered.runtime_history["current"]["work_unit_id"] == 1
