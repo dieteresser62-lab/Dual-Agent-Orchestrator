@@ -23,6 +23,11 @@ The normal workflow is:
 
 No role substitutes for another. Codex never approves or commits its own work. Reviewers cannot edit the source worktree or claim validation results.
 
+## Reference Documentation
+
+- [Architecture and Domain Concept](docs/reference/architecture-and-domain-concept.md) explains the system boundary, domain model, invariants, components, state machine, trust boundaries, and operational qualities.
+- [Market Comparison](docs/reference/market-comparison.md) positions the orchestrator against representative coding agents and agent platforms using current official product documentation.
+
 ## Requirements and Supported Platforms
 
 Python 3.11 or newer is required. TOML parsing uses the Python standard library; the project has no runtime Python package dependencies.

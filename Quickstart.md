@@ -1,6 +1,6 @@
 # Quickstart
 
-This guide takes you from a prepared repository to one completed State-v3 run. See [README.md](README.md) for the complete workflow, configuration, and CLI reference.
+This guide takes you from a prepared repository to one completed State-v3 run. See [README.md](README.md) for the complete workflow, configuration, and CLI reference. For design context, read the [Architecture and Domain Concept](docs/reference/architecture-and-domain-concept.md); for product positioning, read the [Market Comparison](docs/reference/market-comparison.md).
 
 ## 1. Check the prerequisites
 

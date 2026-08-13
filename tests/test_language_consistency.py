@@ -19,11 +19,16 @@ ROOT_FILES = (
 ROLE_FILES = (
     ROOT / "AGENTS.md", ROOT / "CLAUDE.md", ROOT / "CODEX.md", ROOT / "ANTIGRAVITY.md"
 )
+REFERENCE_DOC_FILES = (
+    ROOT / "docs" / "reference" / "architecture-and-domain-concept.md",
+    ROOT / "docs" / "reference" / "market-comparison.md",
+)
 USER_DOC_FILES = (
     ROOT / "README.md",
     ROOT / "Quickstart.md",
     ROOT / "workflow.puml",
     ROOT / "example-task.md",
+    *REFERENCE_DOC_FILES,
 )
 ALLOWLIST_FILENAME_PATTERNS: tuple[str, ...] = ()
 GERMAN_TOKENS = [  # allowlist:german
@@ -299,6 +304,54 @@ def test_quickstart_is_linked_and_declares_the_safe_first_run() -> None:
         local_targets.append((quickstart_path.parent / target).resolve())
     assert local_targets
     assert all(path.is_file() for path in local_targets), local_targets
+
+
+def test_reference_documents_are_linked_current_and_locally_resolvable() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    architecture = REFERENCE_DOC_FILES[0].read_text(encoding="utf-8")
+    comparison = REFERENCE_DOC_FILES[1].read_text(encoding="utf-8")
+
+    for path in REFERENCE_DOC_FILES:
+        relative = path.relative_to(ROOT).as_posix()
+        assert f"]({relative})" in readme
+        assert "2026-08-13" in path.read_text(encoding="utf-8")
+
+    for heading in (
+        "Purpose",
+        "Domain Problem",
+        "Actors and Responsibilities",
+        "Architectural Principles and Invariants",
+        "Logical Architecture",
+        "End-to-End Workflow",
+        "Safety and Trust Boundaries",
+        "Persistence, Resume, and Idempotency",
+        "Known Limitations",
+    ):
+        assert re.search(rf"^## \d+\. {re.escape(heading)}$", architecture, re.MULTILINE)
+
+    for product in (
+        "OpenAI Codex",
+        "Claude Code agent teams",
+        "Google Antigravity 2.0",
+        "GitHub Copilot cloud agent",
+        "Cursor Cloud Agents",
+        "OpenHands",
+        "aider",
+    ):
+        assert product in comparison
+    assert "official product pages and documentation only" in comparison
+    assert "not evidenced in the reviewed official sources" in comparison.lower()
+
+    unresolved = []
+    for document in REFERENCE_DOC_FILES:
+        text = document.read_text(encoding="utf-8")
+        for target in re.findall(r"!?\[[^]]*\]\(([^)]+)\)", text):
+            if target.startswith(("http://", "https://", "#")):
+                continue
+            resolved = (document.parent / target).resolve()
+            if not resolved.is_file():
+                unresolved.append(f"{document.name}: {target}")
+    assert not unresolved, "Broken local reference links:\n" + "\n".join(unresolved)
 
 
 def test_readme_markers_match_the_active_root_contract() -> None:
