@@ -279,7 +279,7 @@ Für deterministische Negativ- und Fortsetzungsszenarien kann ein State-v3-JSON-
 | `--agent-output <none\|summary\|full>` | `none` | Umfang der auszugebenden abgeschlossenen Agentenantworten. |
 | `--agent-output-max-chars <count>` | `1800` | Maximale Zeichenanzahl abgeschlossener Antworten im Zusammenfassungsmodus. |
 | `--agent-live-stream` / `--no-agent-live-stream` | an | Live-Prozessausgabe aktivieren oder deaktivieren. |
-| `--agent-live-stream-mode <compact\|full>` | `compact` | Ausführlichkeit des Livestreams. |
+| `--agent-live-stream-mode <compact\|full>` | `compact` | `compact` zeigt lesbaren Codex-Fortschritt sowie Findings, Entscheidungen, Laufzeit und eine kurze Nutzungssumme ohne Provider-JSON; `full` zeigt die unveränderte Provider-Ausgabe. |
 | `--agent-live-stream-channels <both\|stdout\|stderr>` | Umgebung oder `stdout` | Auszugebende Live-Kanäle. |
 
 Rolleneinstellungen verwenden zuerst CLI-Werte, dann `RUN_TASK_<ROLE>_*` und anschließend diese persistenten Standards:

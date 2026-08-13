@@ -31,6 +31,9 @@ from agent_runtime import (
     run_tests_snapshot,
     run_validation_matrix,
     verify_agent_capabilities,
+    _compact_result_lines,
+    _compact_stream_text,
+    _compact_usage_metadata,
 )
 from validation_matrix import ValidationCommand, ValidationRequest
 from repo_changes import ChangedPath, RepositoryChanges
@@ -53,6 +56,66 @@ def test_orchestrator_config_has_no_agent_substitution_state() -> None:
 
     assert not hasattr(config, "allow_fallback_to_gemini")
     assert not hasattr(config, "claude_quota_reached")
+
+
+def test_compact_live_output_extracts_codex_text_and_hides_reviewer_envelopes() -> None:
+    state: dict[str, str | bool] = {}
+    codex_line = (
+        '{"type":"item.completed","item":{"type":"agent_message",'
+        '"text":"Slice geprüft und bereit."}}'
+    )
+
+    assert _compact_stream_text(AGENT_REGISTRY["codex"], "stdout", codex_line, state) == (
+        "Slice geprüft und bereit."
+    )
+    assert _compact_stream_text(
+        AGENT_REGISTRY["claude"],
+        "stdout",
+        '{"usage":{"output_tokens":9000},"result":"very large"}',
+        {},
+    ) is None
+    assert _compact_stream_text(
+        AGENT_REGISTRY["antigravity"],
+        "stdout",
+        '{"usage":{"total_tokens":48000},"response":"very large"}',
+        {},
+    ) is None
+
+    warning = "same important warning"
+    assert _compact_stream_text(AGENT_REGISTRY["codex"], "stderr", warning, state) == warning
+    assert _compact_stream_text(AGENT_REGISTRY["codex"], "stdout", warning, state) == warning
+
+
+def test_compact_result_and_usage_keep_decisions_without_nested_json() -> None:
+    output = "\n".join(
+        (
+            "REVIEWER: claude",
+            "Long evidence paragraph that stays in the log only.",
+            "NEW_FINDING: C-01 | BLOCKER | gate is red | npm test",
+            "SLICE_APPROVAL: 01 | NO",
+            "STATUS: DONE",
+        )
+    )
+
+    assert _compact_result_lines(output) == (
+        "REVIEWER: claude",
+        "NEW_FINDING: C-01 | BLOCKER | gate is red | npm test",
+        "SLICE_APPROVAL: 01 | NO",
+        "STATUS: DONE",
+    )
+    summary = _compact_usage_metadata(
+        {
+            "duration_api_ms": 64202,
+            "num_turns": 5,
+            "total_cost_usd": 0.211611,
+            "usage": {"input_tokens": 6, "output_tokens": 5726},
+            "modelUsage": {"large": {"nested": "payload"}},
+        }
+    )
+    assert summary == (
+        "duration=64.20s turns=5 cost_usd=0.2116 input_tokens=6 output_tokens=5726"
+    )
+    assert "modelUsage" not in summary
 
 
 def test_v3_agent_level_dry_run_never_invents_an_approval() -> None:
@@ -441,6 +504,10 @@ def test_collect_file_snapshots_truncates_limits_and_handles_missing(tmp_path: P
     assert "<<<FILES_END>>>" in output
 
 
+from conftest import can_symlink
+
+
+@pytest.mark.skipif(not can_symlink(), reason="symlinks are unavailable")
 def test_collect_file_snapshots_rejects_paths_outside_repository(
     caplog: pytest.LogCaptureFixture,
     tmp_path: Path,
@@ -642,10 +709,11 @@ def test_read_only_reviewer_workspace_blocks_writes_and_preserves_source(tmp_pat
             copied.write_text("changed\n", encoding="utf-8")
         assert copied.read_text(encoding="utf-8") == "original\n"
         assert tracked.read_text(encoding="utf-8") == "original\n"
-        with pytest.raises(PermissionError):
-            (workspace.container / "outside-repo.txt").write_text(
-                "unexpected\n", encoding="utf-8"
-            )
+        if os.name != "nt":
+            with pytest.raises(PermissionError):
+                (workspace.container / "outside-repo.txt").write_text(
+                    "unexpected\n", encoding="utf-8"
+                )
     finally:
         workspace.cleanup()
 

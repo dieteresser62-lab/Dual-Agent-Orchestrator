@@ -250,6 +250,77 @@ def test_empty_implementation_is_a_typed_halt_not_cli_crash(
     assert run_pipeline(task, args, force_new=True) == 4
 
 
+def test_not_ready_gate_resumes_with_plain_resume_without_explicit_approval(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repository = _repository(tmp_path, "feature/not-ready-resume")
+    task = tmp_path / "task.md"
+    _write_task(task, "feature/not-ready-resume", "src/one.py")
+    implementation_attempts = {"count": 0}
+
+    def codex(driver: ProductionWorkflowDriver, invocation: CodexInvocation) -> str:
+        if invocation.step is WorkflowStep.CODEX_PLAN:
+            output = (
+                "SLICE_PLAN: 1 | add file | src/one.py\n"
+                "PLAN_READY: YES\nSTATUS: DONE"
+            )
+        elif invocation.step is WorkflowStep.CODEX_IMPLEMENTATION:
+            implementation_attempts["count"] += 1
+            if implementation_attempts["count"] == 1:
+                output = (
+                    "TEST_FILES_TOUCHED: NONE\n"
+                    "IMPLEMENTATION_READY: 01 | NO\nSTATUS: DONE"
+                )
+            else:
+                source = repository / "src"
+                source.mkdir(exist_ok=True)
+                (source / "one.py").write_text("VALUE = 1\n", encoding="utf-8")
+                output = (
+                    "TEST_FILES_TOUCHED: NONE\n"
+                    "IMPLEMENTATION_READY: 01 | YES\nSTATUS: DONE"
+                )
+        else:
+            output = "FINAL_REPORT_READY: YES\nSTATUS: DONE"
+        driver.last_codex_output = output
+        return output
+
+    def reviewer(
+        _driver: ProductionWorkflowDriver, invocation: ReviewerInvocation
+    ) -> str:
+        if invocation.step in {
+            WorkflowStep.CLAUDE_PLAN_REVIEW,
+            WorkflowStep.ANTIGRAVITY_PLAN_REVIEW,
+        }:
+            marker = "PLAN_APPROVAL: YES"
+        elif invocation.step in {
+            WorkflowStep.CLAUDE_FINAL_REVIEW,
+            WorkflowStep.ANTIGRAVITY_FINAL_REVIEW,
+        }:
+            marker = "FINAL_APPROVAL: YES"
+        else:
+            marker = "SLICE_APPROVAL: 01 | YES"
+        return _review(invocation.reviewer, marker)
+
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_codex", codex)
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_reviewer", reviewer)
+    monkeypatch.chdir(repository)
+    args = _args(repository, task)
+
+    halted = run_production_workflow(task, args)
+
+    assert halted.exit_code == 4
+    assert halted.state.current_step is WorkflowStep.CODEX_IMPLEMENTATION
+    assert halted.state.current_work_unit.gate.reason.value == "stop_request"
+    assert halted.state.current_work_unit.gate.fingerprint is None
+
+    args.resume = True
+    args.auto_resume = False
+    resumed = run_production_workflow(task, args)
+
+    assert resumed.workflow_completed
+    assert implementation_attempts["count"] == 2
+
+
 def test_plan_only_uses_internal_plan_validation_and_commits_no_product_code(
     tmp_path: Path, monkeypatch
 ) -> None:

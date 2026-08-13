@@ -142,6 +142,11 @@ run_task --resume --task-file task.md \
 
 Die Exitcodes 2 und 3 kennzeichnen einen fortsetzbaren Quota- beziehungsweise Agentenfehler. Behebe die gemeldete Ursache und setze denselben Lauf fort. `.orchestrator/state.json` und Checkpointdateien dürfen niemals manuell bearbeitet werden.
 
+Meldet Codex `IMPLEMENTATION_READY: <Slice> | NO`, speichert der Orchestrator
+die Finding-Antworten und hält mit Exitcode 4 am selben Codex-Schritt. Das ist
+kein Parser- oder Prozessfehler: Behebe den protokollierten Blocker außerhalb
+des angehaltenen Laufs und setze anschließend mit `--resume` fort.
+
 Jede Orchestrator-Logzeile beginnt mit der lokalen Systemzeit. Für die
 Validierungsmatrix werden zusätzlich Start, Ende, Status und Laufzeit
 ausgegeben. Eine vollständige rote Validierung wird den Reviewern als
@@ -151,6 +156,14 @@ Testreparatur pro Prozessaufruf nochmals laufen, setze beim Resume ausdrücklich
 `--retry-failed-validation`. Der Retry-Zähler ist nicht über Prozessneustarts
 hinweg persistiert; die Option muss bei jedem weiteren Versuch erneut bewusst
 angegeben werden.
+
+Im Standardmodus `--agent-live-stream-mode compact` erscheinen von Codex nur
+die lesbaren Fortschrittsmeldungen statt der JSON-Hülle. Bei Claude und
+Antigravity werden nach Abschluss nur Findings, Freigaben und Statusmarker
+angezeigt. Die vollständige Agentenantwort bleibt in der angegebenen
+Logdatei; verschachtelte Provider-Metadaten werden im Compact-Modus nur als
+kurze Nutzungssumme dargestellt. `--agent-live-stream-mode full` zeigt
+weiterhin die unveränderte Provider-Ausgabe zur Diagnose.
 
 ## 8. Abschluss prüfen
 

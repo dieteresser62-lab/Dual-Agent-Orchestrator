@@ -950,6 +950,7 @@ class WorkflowEngine:
             result = validate_codex_response(output, contract, history.findings)
         except ContractValidationError as exc:
             raise WorkflowContractError(f"invalid Codex response: {exc}") from exc
+        history = replace(history, findings=result.findings)
         if result.stopped:
             if result.stop_request is None:
                 raise WorkflowExecutionError("Codex stop has no structured stop request")
@@ -957,7 +958,15 @@ class WorkflowEngine:
             self.driver.checkpoint(state, history)
             return state, history
         if result.ready is not True:
-            raise WorkflowExecutionError("Codex did not declare the current step ready")
+            state = state.await_policy_gate(
+                reason=GateReason.STOP_REQUEST,
+                detail=(
+                    "CODEX-NOT-READY | Codex reported the current step as not ready; "
+                    "resolve the documented blocker before resuming the same step"
+                ),
+            )
+            self.driver.checkpoint(state, history)
+            return state, history
         if is_plan and result.slice_plan:
             unexpected_plan_paths = tuple(
                 sorted(
@@ -989,7 +998,6 @@ class WorkflowEngine:
                 result.slice_plan,
                 first_start_commit=state.current_slice.start_commit or state.branch_base,
             )
-        history = replace(history, findings=result.findings)
         next_step = (
             WorkflowStep.CLAUDE_PLAN_REVIEW
             if is_plan

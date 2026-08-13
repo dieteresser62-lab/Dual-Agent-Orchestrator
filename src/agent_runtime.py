@@ -236,6 +236,114 @@ class ReviewerWorkspace:
         shutil.rmtree(self.container, ignore_errors=True)
 
 
+_COMPACT_RESULT_MARKERS = (
+    "REVIEWER:",
+    "SLICE_PLAN:",
+    "NEW_FINDING:",
+    "FINDING_STATUS:",
+    "FINDING_RESPONSE:",
+    "OPEN_FINDINGS:",
+    "PLAN_APPROVAL:",
+    "SLICE_APPROVAL:",
+    "FINAL_APPROVAL:",
+    "PHASE1_APPROVAL:",
+    "PHASE2_APPROVAL:",
+    "IMPLEMENTATION_READY:",
+    "PLAN_READY:",
+    "TEST_FILES_TOUCHED:",
+    "STOP_REQUESTED:",
+    "STATUS:",
+)
+
+
+def _compact_text(text: str, *, max_chars: int = 900) -> str:
+    compact = " ".join(text.split())
+    if len(compact) <= max_chars:
+        return compact
+    return compact[: max_chars - 14].rstrip() + " …[gekürzt]"
+
+
+def _compact_stream_text(
+    adapter: AgentAdapter,
+    channel: str,
+    line: str,
+    state: dict[str, str | bool],
+) -> str | None:
+    """Render useful live progress without leaking provider JSON envelopes."""
+    text = line.strip()
+    if not text:
+        return None
+
+    if channel == "stdout" and adapter.name == "codex" and text.startswith("{"):
+        try:
+            event = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(event, dict):
+            return None
+        candidate: object = event.get("message")
+        item = event.get("item")
+        if isinstance(item, dict):
+            candidate = item.get("text") or item.get("content") or candidate
+        if not isinstance(candidate, str) or not candidate.strip():
+            return None
+        text = candidate.strip()
+    elif channel == "stdout" and adapter.reviewer:
+        # Claude and Antigravity emit their complete result and usage metadata as
+        # one JSON line. The extracted contract summary is logged after parsing.
+        return None
+    # Non-JSON diagnostics (normally stderr warnings) remain visible. Compact
+    # mode owns its channel-aware deduplication instead of the adapters' legacy
+    # cross-channel boolean filter.
+
+    rendered = _compact_text(text)
+    dedup_key = f"last_compact_text_{channel}"
+    if rendered == state.get(dedup_key):
+        return None
+    state[dedup_key] = rendered
+    return rendered
+
+
+def _compact_result_lines(output: str) -> tuple[str, ...]:
+    """Select contract decisions and findings from a completed agent response."""
+    selected: list[str] = []
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        if line.upper().startswith(_COMPACT_RESULT_MARKERS):
+            selected.append(_compact_text(line, max_chars=480))
+    return tuple(selected)
+
+
+def _compact_usage_metadata(metadata: Mapping[str, object]) -> str:
+    """Summarize provider usage without printing nested token/accounting JSON."""
+    parts: list[str] = []
+    duration_ms = metadata.get("duration_api_ms")
+    duration_seconds = metadata.get("duration_seconds")
+    if isinstance(duration_ms, (int, float)):
+        parts.append(f"duration={float(duration_ms) / 1000:.2f}s")
+    elif isinstance(duration_seconds, (int, float)):
+        parts.append(f"duration={float(duration_seconds):.2f}s")
+    turns = metadata.get("num_turns")
+    if isinstance(turns, int):
+        parts.append(f"turns={turns}")
+    cost = metadata.get("total_cost_usd")
+    if isinstance(cost, (int, float)):
+        parts.append(f"cost_usd={float(cost):.4f}")
+    usage = metadata.get("usage")
+    if isinstance(usage, Mapping):
+        total_tokens = usage.get("total_tokens")
+        if isinstance(total_tokens, int):
+            parts.append(f"tokens={total_tokens}")
+        else:
+            input_tokens = usage.get("input_tokens")
+            output_tokens = usage.get("output_tokens")
+            if isinstance(input_tokens, int):
+                parts.append(f"input_tokens={input_tokens}")
+            if isinstance(output_tokens, int):
+                parts.append(f"output_tokens={output_tokens}")
+    return " ".join(parts) or "available"
+
+
 def _review_snapshot_paths(source: Path) -> tuple[PurePosixPath, ...] | None:
     """Return tracked and non-ignored untracked paths, or None outside Git."""
     try:
@@ -756,10 +864,12 @@ def run_agent(
                     continue
                 if config.agent_live_stream_channels == "stderr" and channel != "stderr":
                     continue
-                if config.agent_live_stream_mode == "full" or adapter.stream_filter(
-                    channel, line, stream_state
-                ):
+                if config.agent_live_stream_mode == "full":
                     logger.info("[%s:%s] %s", agent_key, channel, line.rstrip())
+                else:
+                    rendered = _compact_stream_text(adapter, channel, line, stream_state)
+                    if rendered is not None:
+                        logger.info("[%s:%s] %s", agent_key, channel, rendered)
 
             for thread in threads:
                 thread.join(timeout=1)
@@ -794,12 +904,26 @@ def run_agent(
                 exit_code=result.returncode,
                 kind_hint=AgentFailureKind.OUTPUT,
             )
+        if config.agent_live_stream and config.agent_live_stream_mode == "compact":
+            summary_lines = _compact_result_lines(output)
+            if summary_lines:
+                for summary_line in summary_lines:
+                    logger.info("[AGENT_RESULT] role=%s %s", agent_key, summary_line)
+            else:
+                logger.info("[AGENT_RESULT] role=%s completed", agent_key)
         if adapter.metadata:
-            logger.info(
-                "[AGENT_USAGE] role=%s metadata=%s",
-                agent_key,
-                json.dumps(adapter.metadata, ensure_ascii=False, sort_keys=True),
-            )
+            if config.agent_live_stream_mode == "full" or config.agent_output_mode == "full":
+                logger.info(
+                    "[AGENT_USAGE] role=%s metadata=%s",
+                    agent_key,
+                    json.dumps(adapter.metadata, ensure_ascii=False, sort_keys=True),
+                )
+            else:
+                logger.info(
+                    "[AGENT_USAGE] role=%s %s",
+                    agent_key,
+                    _compact_usage_metadata(adapter.metadata),
+                )
         return output
     except subprocess.TimeoutExpired as exc:
         raise AgentProcessError(

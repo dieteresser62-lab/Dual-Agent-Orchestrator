@@ -11,6 +11,11 @@ from contracts import (
     AgentRole,
     AnchorRecord,
     ContractValidationError,
+    FindingClass,
+    FindingOrigin,
+    FindingRecord,
+    FindingResponseDecision,
+    FindingStatus,
     ValidationAttestation,
     ValidationRecord,
     ValidationStatus,
@@ -102,6 +107,28 @@ def _codex_stop(rule_id: str) -> str:
             "STATUS: DONE",
         )
     )
+
+
+def _codex_not_ready(
+    *finding_ids: str, plan: bool = False, slice_id: str = "01"
+) -> str:
+    lines = [
+        *(
+            f"FINDING_RESPONSE: {finding_id} | ACCEPTED | blocker remains unresolved"
+            for finding_id in finding_ids
+        ),
+    ]
+    if plan:
+        lines.append("PLAN_READY: NO")
+    else:
+        lines.extend(
+            (
+                f"TEST_FILES_TOUCHED: {TEST_FILE}",
+                f"IMPLEMENTATION_READY: {slice_id} | NO",
+            )
+        )
+    lines.append("STATUS: DONE")
+    return "\n".join(lines)
 
 
 def _review_stop(role: AgentRole, rule_id: str) -> str:
@@ -1613,6 +1640,14 @@ def test_declared_stop_rule_is_untruncated_in_codex_and_reviewer_prompts() -> No
 
 
 def test_codex_stop_request_halts_same_step_without_retry_or_repair() -> None:
+    finding = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.OBSERVATION,
+        status=FindingStatus.OPEN,
+        summary="domain choice remains unresolved",
+        acceptance_test="user selects one policy",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
     driver = FakeDriver(
         snapshots=[],
         codex_outputs=[_codex_stop("DOMAIN-001")],
@@ -1623,7 +1658,9 @@ def test_codex_stop_request_halts_same_step_without_retry_or_repair() -> None:
         stop_rules=(StopRule("DOMAIN-001", "engine semantics changed"),),
     )
 
-    result = WorkflowEngine(driver).run_current_work_unit(_slice_state(), context)
+    state = _slice_state()
+    history = WorkflowHistory(state.current_work_unit_id, findings=(finding,))
+    result = WorkflowEngine(driver).run_current_work_unit(state, context, history)
 
     assert result.exit_code == 4
     assert result.state.current_step is WorkflowStep.CODEX_IMPLEMENTATION
@@ -1632,6 +1669,71 @@ def test_codex_stop_request_halts_same_step_without_retry_or_repair() -> None:
     )
     assert len(driver.codex_calls) == 1
     assert driver.repair_calls == []
+    assert result.history.findings == (finding,)
+    assert driver.checkpoint_histories[-1].findings == (finding,)
+
+
+def test_codex_not_ready_persists_gate_and_resumes_same_step() -> None:
+    finding = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="required validation remains red",
+        acceptance_test="npm test",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
+    driver = FakeDriver(
+        snapshots=[],
+        codex_outputs=[_codex_not_ready("C-01")],
+        reviewer_outputs=[],
+    )
+    state = _slice_state()
+    history = WorkflowHistory(state.current_work_unit_id, findings=(finding,))
+
+    result = WorkflowEngine(driver).run_current_work_unit(state, _context(), history)
+
+    assert result.exit_code == 4
+    assert result.state.current_step is WorkflowStep.CODEX_IMPLEMENTATION
+    assert result.state.current_work_unit.status is WorkUnitStatus.AWAITING_USER_DECISION
+    assert result.state.current_work_unit.gate.reason is GateReason.STOP_REQUEST
+    assert result.state.current_work_unit.gate.detail == (
+        "CODEX-NOT-READY | Codex reported the current step as not ready; "
+        "resolve the documented blocker before resuming the same step"
+    )
+    assert driver.reviewer_calls == []
+    assert driver.repair_calls == []
+    assert result.history.findings[0].responses[0].decision is FindingResponseDecision.ACCEPTED
+    assert driver.checkpoint_histories[-1].findings == result.history.findings
+
+    resumed = result.state.resume_after_user_decision()
+    assert resumed.current_step is WorkflowStep.CODEX_IMPLEMENTATION
+    assert resumed.current_work_unit.status is WorkUnitStatus.IN_PROGRESS
+
+
+def test_plan_not_ready_persists_gate_and_resumes_plan_step() -> None:
+    state = init_workflow_state(
+        run_id="run-plan-not-ready",
+        task_file="/repo/task.md",
+        branch="feature/workflow",
+        branch_base=START_COMMIT,
+        slice_count=1,
+        timestamp="2026-08-12T10:00:00+00:00",
+    )
+    driver = FakeDriver(
+        snapshots=[],
+        codex_outputs=[_codex_not_ready(plan=True)],
+        reviewer_outputs=[],
+    )
+
+    result = WorkflowEngine(driver).run_current_work_unit(state, _context())
+
+    assert result.exit_code == 4
+    assert result.state.current_step is WorkflowStep.CODEX_PLAN
+    assert result.state.current_work_unit.status is WorkUnitStatus.AWAITING_USER_DECISION
+    assert result.state.current_work_unit.gate.reason is GateReason.STOP_REQUEST
+    resumed = result.state.resume_after_user_decision()
+    assert resumed.current_step is WorkflowStep.CODEX_PLAN
+    assert resumed.current_work_unit.status is WorkUnitStatus.IN_PROGRESS
 
 
 def test_reviewer_stop_request_halts_without_contract_repair() -> None:
