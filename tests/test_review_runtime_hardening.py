@@ -21,9 +21,10 @@ from contracts import (
     FindingStatus,
     StepContract,
 )
-from orchestrator import _bound_task_control_paths
+from orchestrator import _bound_task_control_paths, _plan_only_step_boundary
 from repo_changes import collect_repository_changes
 from workflow import WorkflowExecutionError, normalize_review_contract_output
+from workflow_state import WorkUnitKind
 
 
 def _git(repository: Path, *args: str) -> None:
@@ -238,3 +239,25 @@ def test_bound_task_digest_uses_same_newline_normalization_as_task_contract(
     task.write_text(normalized_text + "changed\n", encoding="utf-8")
     with pytest.raises(WorkflowExecutionError, match="bound task file changed"):
         _bound_task_control_paths(repository, state)
+
+
+def test_plan_only_boundary_requires_slice_plan_only_during_planning() -> None:
+    plan_state = SimpleNamespace(
+        execution_mode="PLAN_ONLY",
+        work_plan_path="docs/internal/plan.md",
+        current_work_unit=SimpleNamespace(kind=WorkUnitKind.PLAN),
+    )
+    implementation_state = SimpleNamespace(
+        execution_mode="PLAN_ONLY",
+        work_plan_path="docs/internal/plan.md",
+        current_work_unit=SimpleNamespace(kind=WorkUnitKind.SLICE),
+        current_slice=SimpleNamespace(scope_paths=("docs/internal/plan.md",)),
+    )
+
+    planning = _plan_only_step_boundary(plan_state)
+    implementation = _plan_only_step_boundary(implementation_state)
+
+    assert "emit exactly one executable SLICE_PLAN" in planning
+    assert "do not emit a SLICE_PLAN record" in implementation
+    assert "persisted artifact scope: docs/internal/plan.md" in implementation
+    assert "emit exactly one executable SLICE_PLAN" not in implementation

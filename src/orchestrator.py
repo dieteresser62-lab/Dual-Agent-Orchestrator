@@ -559,6 +559,21 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 or state.current_slice.status is SliceStatus.COMPLETED
             ),
         )
+        if (
+            state.execution_mode == TaskMode.PLAN_ONLY.value
+            and state.work_plan_path is not None
+        ):
+            try:
+                document = prepare_managed_work_plan_document(
+                    repository_root=self.root,
+                    work_plan_path=state.work_plan_path,
+                )
+            except ValueError as exc:
+                logger.debug("Work-plan audit target is not ready: %s", exc)
+            else:
+                if history.events:
+                    project_work_plan_audit(document, projection)
+                return
         if unit.kind is WorkUnitKind.PLAN:
             if state.work_plan_path is not None:
                 try:
@@ -668,15 +683,7 @@ def _context(
         "- Every emitted SLICE_PLAN path and every workspace change must remain within "
         f"the declared task scope: {', '.join(state.task_scope_patterns) or 'LEGACY'}"
     )
-    if state.execution_mode == TaskMode.PLAN_ONLY.value:
-        effective_assignment += (
-            "\n- PLAN_ONLY: emit exactly one executable SLICE_PLAN record for creating "
-            f"or updating {state.work_plan_path}.\n"
-            "- Future product implementation Slices belong only as human-readable "
-            "sections inside the work-plan document; do not emit them as executable "
-            "SLICE_PLAN records in this run.\n"
-            "- Do not modify product code, tests, configuration, or generated artifacts."
-        )
+    effective_assignment += _plan_only_step_boundary(state)
     return WorkflowContext(
         assignment=effective_assignment,
         distilled_plan=(
@@ -697,6 +704,32 @@ def _context(
         plan_only=state.execution_mode == TaskMode.PLAN_ONLY.value,
         task_scope_patterns=state.task_scope_patterns,
         work_plan_path=state.work_plan_path,
+    )
+
+
+def _plan_only_step_boundary(state: WorkflowState) -> str:
+    """Render PLAN_ONLY instructions that agree with the current step contract."""
+    if state.execution_mode != TaskMode.PLAN_ONLY.value:
+        return ""
+    if state.current_work_unit.kind is WorkUnitKind.PLAN:
+        step_rule = (
+            "- PLAN_ONLY planning step: emit exactly one executable SLICE_PLAN record "
+            f"for creating or updating {state.work_plan_path}.\n"
+        )
+    else:
+        scope = ", ".join(state.current_slice.scope_paths)
+        step_rule = (
+            "- PLAN_ONLY implementation step: do not emit a SLICE_PLAN record. The "
+            "executable Slice is already persisted.\n"
+            f"- Modify only its persisted artifact scope: {scope}.\n"
+        )
+    return (
+        "\n"
+        + step_rule
+        + "- Future product implementation Slices belong only as human-readable "
+        "sections inside the work-plan document; do not emit them as executable "
+        "SLICE_PLAN records in this run.\n"
+        "- Do not modify product code, tests, configuration, or generated artifacts."
     )
 
 
