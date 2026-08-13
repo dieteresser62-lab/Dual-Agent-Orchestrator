@@ -1253,7 +1253,6 @@ def test_json_loader_is_strict_and_cli_routes_without_v2_pipeline(
     )
     args = parse_args(
         [
-            "--development-mode",
             "--dry-run",
             "--dry-run-scenario",
             str(scenario_path),
@@ -1299,7 +1298,6 @@ def test_cli_reports_engine_contract_errors_without_traceback(
     scenario_path.write_text("{}\n", encoding="utf-8")
     args = parse_args(
         [
-            "--development-mode",
             "--dry-run",
             "--dry-run-scenario",
             str(scenario_path),
@@ -1333,7 +1331,6 @@ def test_cli_reports_engine_contract_errors_without_traceback(
     "argv",
     (
         ("--development-mode", "--dry-run-scenario", "scenario.json"),
-        ("--dry-run", "--dry-run-scenario", "scenario.json"),
         ("--dry-run-report", "report.json"),
     ),
 )

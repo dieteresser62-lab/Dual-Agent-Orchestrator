@@ -7,6 +7,9 @@ ROOT = Path(__file__).resolve().parents[1]
 THIS_FILE = Path(__file__).resolve()
 SOURCE_DIRS = (ROOT / "src", ROOT / "tests")
 ROOT_FILES = (ROOT / "run_task", ROOT / "README.md", ROOT / "example-task.md")
+ROLE_FILES = (
+    ROOT / "AGENTS.md", ROOT / "CLAUDE.md", ROOT / "CODEX.md", ROOT / "ANTIGRAVITY.md"
+)
 ALLOWLIST_FILENAME_PATTERNS: tuple[str, ...] = ()
 GERMAN_TOKENS = [  # allowlist:german
     "Aufgabe",
@@ -130,3 +133,27 @@ def test_no_german_terms_in_content() -> None:
 def test_no_german_terms_in_filenames() -> None:
     hits = _collect_filename_hits()
     assert not hits, "German tokens found in filenames:\n" + "\n".join(hits)
+
+
+def test_root_roles_share_the_state_v3_contract_and_gemini_role_is_gone() -> None:
+    assert not (ROOT / "GEMINI.md").exists()
+    for path in ROLE_FILES:
+        assert path.is_file(), f"missing role contract: {path.name}"
+        text = path.read_text(encoding="utf-8")
+        assert "AGENTS.md" in text or path.name == "AGENTS.md"
+        assert "VALIDATION_RESULT" in text
+    shared = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    for marker in (
+        "PLAN_READY", "SLICE_PLAN", "IMPLEMENTATION_READY", "FINAL_REPORT_READY",
+        "PLAN_APPROVAL", "SLICE_APPROVAL", "FINAL_APPROVAL", "NEW_FINDING",
+        "FINDING_STATUS", "FINDING_RESPONSE", "REVIEW_EVIDENCE", "PRE_MORTEM",
+        "STOP_REQUESTED", "STATUS: DONE",
+    ):
+        assert marker in shared
+
+
+def test_claude_profile_is_persistently_sonnet_high() -> None:
+    claude = (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+    agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    assert "Sonnet" in claude and "`high`" in claude
+    assert "Sonnet" in agents and "`high`" in agents

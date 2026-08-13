@@ -4,6 +4,8 @@ from dataclasses import replace
 
 import pytest
 
+from contracts import PlannedSlice
+
 from workflow_state import (
     AgentFailureKind,
     DEFAULT_MAX_CODEX_RETURNS,
@@ -533,4 +535,46 @@ def test_policy_gate_rejects_fingerprint_bound_reason_and_unsafe_path() -> None:
             reason=GateReason.UNEXPECTED_FILE,
             detail="unsafe path",
             paths=("../outside",),
+        )
+
+
+def test_plan_time_slice_one_start_commit_cannot_be_rebound_after_resume() -> None:
+    original_head = "a" * 40
+    advanced_head = "b" * 40
+    state = init_workflow_state(
+        run_id="resume-boundary",
+        task_file="/repo/task.md",
+        branch="feature/resume-boundary",
+        branch_base="0" * 40,
+        first_slice_start_commit=original_head,
+        slice_count=1,
+    ).bind_slice_plan(
+        (PlannedSlice(1, "bounded slice", ("src/one.py",)),),
+        first_start_commit=original_head,
+    ).complete_current_work_unit()
+    state = state.start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    )
+
+    with pytest.raises(WorkflowStateValidationError, match="must match"):
+        state.bind_current_slice_git_boundary(
+            start_commit=advanced_head,
+            scope_paths=("src/one.py",),
+            start_fingerprint="1" * 64,
+        )
+
+
+def test_state_scope_rejects_orchestrator_internal_paths() -> None:
+    state = make_state().complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    )
+    with pytest.raises(WorkflowStateValidationError, match="outside .orchestrator"):
+        state.bind_current_slice_git_boundary(
+            start_commit="a" * 40,
+            scope_paths=(".orchestrator/state.json",),
+            start_fingerprint="1" * 64,
         )

@@ -30,11 +30,17 @@ from contracts import (
     ContractValidationError,
     FindingRecord,
     FindingClass,
+    FindingOrigin,
+    FindingResponse,
+    FindingResponseDecision,
     FindingStatus,
     ReadinessMarker,
     StepContract,
     StopRequest,
+    ReviewEvidence,
     ValidationAttestation,
+    ValidationRecord,
+    ValidationStatus,
     validate_codex_response,
     validate_review_response,
 )
@@ -88,6 +94,10 @@ DEFAULT_WORKFLOW_VALIDATION_MATRIX = ValidationMatrix(
 
 class WorkflowExecutionError(RuntimeError):
     """Raised when the development workflow must stop without advancing a step."""
+
+
+class NoWorkflowChangesError(WorkflowExecutionError):
+    """Raised when an implementation reports readiness without repository changes."""
 
 
 class WorkflowContractError(WorkflowExecutionError):
@@ -166,6 +176,8 @@ class WorkflowContext:
     red_state_followup_slice: str | None = None
     retry_incomplete_validation: bool = False
     quota_wait_policy: QuotaWaitPolicy = QuotaWaitPolicy()
+    require_slice_plan: bool = False
+    dynamic_test_scope: bool = False
 
     def __post_init__(self) -> None:
         if not self.assignment.strip():
@@ -208,6 +220,10 @@ class WorkflowContext:
             raise ValueError("retry_incomplete_validation must be a boolean")
         if not isinstance(self.quota_wait_policy, QuotaWaitPolicy):
             raise ValueError("quota_wait_policy must be a QuotaWaitPolicy")
+        if not isinstance(self.require_slice_plan, bool):
+            raise ValueError("require_slice_plan must be a boolean")
+        if not isinstance(self.dynamic_test_scope, bool):
+            raise ValueError("dynamic_test_scope must be a boolean")
 
     @property
     def distilled_context(self) -> str:
@@ -336,6 +352,256 @@ class WorkflowHistory:
         event_ids = tuple(event.event_id for event in self.events)
         if event_ids != tuple(range(1, len(event_ids) + 1)):
             raise ValueError("workflow history event ids must be contiguous and 1-based")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "work_unit_id": self.work_unit_id,
+            "findings": [_finding_to_dict(item) for item in self.findings],
+            "events": [_event_to_dict(item) for item in self.events],
+            "attestations": [_attestation_to_dict(item) for item in self.attestations],
+            "last_claude_fingerprint": self.last_claude_fingerprint,
+            "latest_claude_review": _review_to_dict(self.latest_claude_review),
+            "latest_antigravity_review": _review_to_dict(self.latest_antigravity_review),
+        }
+
+    @classmethod
+    def from_dict(cls, raw: object) -> WorkflowHistory:
+        if not isinstance(raw, dict):
+            raise ValueError("workflow history must be an object")
+        expected = {
+            "work_unit_id", "findings", "events", "attestations",
+            "last_claude_fingerprint", "latest_claude_review",
+            "latest_antigravity_review",
+        }
+        if set(raw) != expected:
+            raise ValueError("workflow history has unknown or missing fields")
+        return cls(
+            work_unit_id=int(raw["work_unit_id"]),
+            findings=tuple(_finding_from_dict(item) for item in _json_list(raw["findings"])),
+            events=tuple(_event_from_dict(item) for item in _json_list(raw["events"])),
+            attestations=tuple(
+                _attestation_from_dict(item) for item in _json_list(raw["attestations"])
+            ),
+            last_claude_fingerprint=(
+                None if raw["last_claude_fingerprint"] is None
+                else str(raw["last_claude_fingerprint"])
+            ),
+            latest_claude_review=_review_from_dict(raw["latest_claude_review"]),
+            latest_antigravity_review=_review_from_dict(raw["latest_antigravity_review"]),
+        )
+
+
+def _json_list(raw: object) -> list[object]:
+    if not isinstance(raw, list):
+        raise ValueError("workflow history collection must be a list")
+    return raw
+
+
+def _finding_to_dict(item: FindingRecord) -> dict[str, object]:
+    return {
+        "finding_id": item.finding_id,
+        "finding_class": item.finding_class.value,
+        "status": item.status.value,
+        "summary": item.summary,
+        "acceptance_test": item.acceptance_test,
+        "origin": {
+            "slice_id": item.origin.slice_id,
+            "round_number": item.origin.round_number,
+            "reporter": item.origin.reporter.value,
+        },
+        "responses": [
+            {"decision": response.decision.value, "rationale": response.rationale}
+            for response in item.responses
+        ],
+        "status_rationale": item.status_rationale,
+        "class_history": [value.value for value in item.class_history],
+    }
+
+
+def _finding_from_dict(raw: object) -> FindingRecord:
+    if not isinstance(raw, dict) or not isinstance(raw.get("origin"), dict):
+        raise ValueError("invalid persisted finding")
+    origin = raw["origin"]
+    return FindingRecord(
+        finding_id=str(raw["finding_id"]),
+        finding_class=FindingClass(str(raw["finding_class"])),
+        status=FindingStatus(str(raw["status"])),
+        summary=str(raw["summary"]),
+        acceptance_test=str(raw["acceptance_test"]),
+        origin=FindingOrigin(
+            slice_id=str(origin["slice_id"]),
+            round_number=int(origin["round_number"]),
+            reporter=AgentRole(str(origin["reporter"])),
+        ),
+        responses=tuple(
+            FindingResponse(
+                decision=FindingResponseDecision(str(item["decision"])),
+                rationale=str(item["rationale"]),
+            )
+            for item in _json_list(raw.get("responses", []))
+            if isinstance(item, dict)
+        ),
+        status_rationale=(
+            None if raw.get("status_rationale") is None else str(raw["status_rationale"])
+        ),
+        class_history=tuple(
+            FindingClass(str(value)) for value in _json_list(raw.get("class_history", []))
+        ),
+    )
+
+
+def _attestation_to_dict(item: ValidationAttestation) -> dict[str, object]:
+    return {
+        "attestation_id": item.attestation_id,
+        "diff_fingerprint": item.diff_fingerprint,
+        "expected_commands": list(item.expected_commands),
+        "records": [
+            {
+                "status": record.status.value,
+                "command": record.command,
+                "exit_code": record.exit_code,
+                "output": record.output,
+            }
+            for record in item.records
+        ],
+        "output_digest": item.output_digest,
+        "summary": item.summary,
+    }
+
+
+def _attestation_from_dict(raw: object) -> ValidationAttestation:
+    if not isinstance(raw, dict):
+        raise ValueError("invalid persisted validation attestation")
+    return ValidationAttestation(
+        attestation_id=str(raw["attestation_id"]),
+        diff_fingerprint=str(raw["diff_fingerprint"]),
+        expected_commands=tuple(str(item) for item in _json_list(raw["expected_commands"])),
+        records=tuple(
+            ValidationRecord(
+                status=ValidationStatus(str(item["status"])),
+                command=str(item["command"]),
+                exit_code=int(item["exit_code"]),
+                output=str(item.get("output", "")),
+            )
+            for item in _json_list(raw["records"])
+            if isinstance(item, dict)
+        ),
+        output_digest=str(raw["output_digest"]),
+        summary=str(raw["summary"]),
+    )
+
+
+def _review_to_dict(item: ContractResult | None) -> dict[str, object] | None:
+    if item is None:
+        return None
+    return {
+        "reviewer": item.reviewer.value,
+        "approval": item.approval,
+        "stopped": item.stopped,
+        "stop_request": (
+            None if item.stop_request is None
+            else {"rule_id": item.stop_request.rule_id, "rationale": item.stop_request.rationale}
+        ),
+        "validation": (
+            None if item.validation is None else _attestation_to_dict(item.validation)
+        ),
+        "test_files": list(item.test_files),
+        "pre_mortem": item.pre_mortem,
+        "evidence": (
+            None if item.evidence is None else {
+                "dimensions": item.evidence.dimensions,
+                "largest_residual_risk": item.evidence.largest_residual_risk,
+                "break_condition": item.evidence.break_condition,
+            }
+        ),
+        "findings": [_finding_to_dict(value) for value in item.findings],
+        "anchors": [
+            {
+                "anchor_id": value.anchor_id, "origin": value.origin,
+                "input_fixture": value.input_fixture, "expected": value.expected,
+                "tolerance": value.tolerance,
+            }
+            for value in item.anchors
+        ],
+        "red_state_followup_slice": item.red_state_followup_slice,
+    }
+
+
+def _review_from_dict(raw: object) -> ContractResult | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("invalid persisted review")
+    stop_raw = raw.get("stop_request")
+    evidence_raw = raw.get("evidence")
+    return ContractResult(
+        reviewer=AgentRole(str(raw["reviewer"])),
+        approval=raw.get("approval") if isinstance(raw.get("approval"), bool) else None,
+        stopped=bool(raw["stopped"]),
+        stop_request=(
+            None if stop_raw is None else StopRequest(str(stop_raw["rule_id"]), str(stop_raw["rationale"]))
+        ),
+        validation=(
+            None if raw.get("validation") is None
+            else _attestation_from_dict(raw["validation"])
+        ),
+        test_files=tuple(str(item) for item in _json_list(raw["test_files"])),
+        pre_mortem=None if raw.get("pre_mortem") is None else str(raw["pre_mortem"]),
+        evidence=(
+            None if evidence_raw is None else ReviewEvidence(
+                str(evidence_raw["dimensions"]),
+                str(evidence_raw["largest_residual_risk"]),
+                str(evidence_raw["break_condition"]),
+            )
+        ),
+        findings=tuple(_finding_from_dict(item) for item in _json_list(raw["findings"])),
+        anchors=tuple(
+            AnchorRecord(
+                anchor_id=str(item["anchor_id"]), origin=str(item["origin"]),
+                input_fixture=str(item["input_fixture"]), expected=str(item["expected"]),
+                tolerance=str(item["tolerance"]),
+            )
+            for item in _json_list(raw["anchors"])
+            if isinstance(item, dict)
+        ),
+        red_state_followup_slice=(
+            None if raw.get("red_state_followup_slice") is None
+            else str(raw["red_state_followup_slice"])
+        ),
+    )
+
+
+def _event_to_dict(item: AuditEvent) -> dict[str, object]:
+    if isinstance(item, ValidationAuditEvent):
+        return {
+            "kind": "validation", "event_id": item.event_id,
+            "slice_id": item.slice_id, "attestation": _attestation_to_dict(item.attestation),
+        }
+    return {
+        "kind": "review", "event_id": item.event_id, "slice_id": item.slice_id,
+        "round_number": item.round_number, "result": _review_to_dict(item.result),
+        "allowed_finding_origins": list(item.allowed_finding_origins),
+    }
+
+
+def _event_from_dict(raw: object) -> AuditEvent:
+    if not isinstance(raw, dict):
+        raise ValueError("invalid persisted audit event")
+    if raw.get("kind") == "validation":
+        return ValidationAuditEvent(
+            int(raw["event_id"]), int(raw["slice_id"]),
+            _attestation_from_dict(raw["attestation"]),
+        )
+    if raw.get("kind") == "review":
+        result = _review_from_dict(raw["result"])
+        if result is None:
+            raise ValueError("persisted review event is missing its result")
+        return ReviewAuditEvent(
+            int(raw["event_id"]), int(raw["slice_id"]), int(raw["round_number"]),
+            result,
+            tuple(str(item) for item in _json_list(raw["allowed_finding_origins"])),
+        )
+    raise ValueError("unknown persisted audit event kind")
 
 
 @dataclass(frozen=True)
@@ -567,6 +833,8 @@ class WorkflowEngine:
             # R-10 gates after implementation readiness and before review. Codex must be
             # able to report test paths before a user approval exists.
             test_changes_approved=True,
+            require_slice_plan=is_plan and context.require_slice_plan,
+            enforce_expected_test_files=not context.dynamic_test_scope,
         )
         prompt = build_v3_codex_prompt(
             assignment=context.assignment,
@@ -598,6 +866,11 @@ class WorkflowEngine:
             return state, history
         if result.ready is not True:
             raise WorkflowExecutionError("Codex did not declare the current step ready")
+        if is_plan and result.slice_plan:
+            state = state.bind_slice_plan(
+                result.slice_plan,
+                first_start_commit=state.current_slice.start_commit or state.branch_base,
+            )
         history = replace(history, findings=result.findings)
         next_step = (
             WorkflowStep.CLAUDE_PLAN_REVIEW
@@ -626,6 +899,18 @@ class WorkflowEngine:
         if halted:
             self.driver.checkpoint(state, history)
             return state, history
+        detected_test_changes = (
+            self.driver.detect_test_changes(changes, context.test_path_patterns)
+            if context.dynamic_test_scope
+            else None
+        )
+        expected_test_files = (
+            detected_test_changes.paths
+            if detected_test_changes is not None
+            else ()
+            if context.dynamic_test_scope
+            else context.expected_test_files
+        )
         try:
             attestation, history = self._attestation(
                 changes, history, context, state.current_slice_id
@@ -721,7 +1006,15 @@ class WorkflowEngine:
         start_commit = state.branch_base if is_final_review else (
             state.current_slice.start_commit or state.branch_base
         )
-        changes = self.driver.collect_changes(start_commit)
+        try:
+            changes = self.driver.collect_changes(start_commit)
+        except NoWorkflowChangesError as exc:
+            state = state.await_policy_gate(
+                reason=GateReason.STOP_REQUEST,
+                detail=f"NO-IMPLEMENTATION-CHANGES | {exc}",
+            )
+            self.driver.checkpoint(state, history)
+            return state, history
         unexpected = self._validate_change_boundary(state, changes, unit.kind)
         if unexpected:
             state = state.await_policy_gate(
@@ -740,6 +1033,18 @@ class WorkflowEngine:
         if halted:
             self.driver.checkpoint(state, history)
             return state, history
+        detected_test_changes = (
+            self.driver.detect_test_changes(changes, context.test_path_patterns)
+            if context.dynamic_test_scope
+            else None
+        )
+        expected_test_files = (
+            detected_test_changes.paths
+            if detected_test_changes is not None
+            else ()
+            if context.dynamic_test_scope
+            else context.expected_test_files
+        )
         if reviewer is AgentRole.ANTIGRAVITY:
             claude_validation = history.latest_claude_review.validation
             if (
@@ -792,9 +1097,7 @@ class WorkflowEngine:
             round_number=review_round,
             review_fingerprint=changes.fingerprint,
             validation_attestation=attestation,
-            expected_test_files=(
-                context.expected_test_files if not is_plan_review else ()
-            ),
+            expected_test_files=(expected_test_files if not is_plan_review else ()),
             test_changes_approved=test_changes_approved,
             red_state_followup_slice=context.red_state_followup_slice,
         )

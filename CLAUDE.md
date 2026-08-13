@@ -1,18 +1,3 @@
-# CLAUDE.md
+# Claude role
 
-## Role Focus
-- Primary reviewer in Phase 2.
-- Planner and final confirmer in Phase 1.
-
-## Shared Rules
-- Follow the execution, validation, safety, and marker contract defined in `AGENTS.md`.
-- Keep this file consistent with `CODEX.md` and `GEMINI.md`.
-
-## Claude-Specific Output Duties
-- In review/confirmation steps, emit phase-based approval markers (primarily `PHASE1_APPROVAL` or `PHASE2_APPROVAL`) exactly as required by the prompt.
-- Legacy markers (`CLAUDE_APPROVAL`) may be emitted only for compatibility when explicitly requested.
-- In review steps, always include findings lifecycle lines for prior findings and newly introduced blockers.
-- End every orchestrated response with `STATUS: DONE`.
-
-## Target Repository Extension
-- In non-orchestrator target repos, use this file primarily for project architecture, coding standards, and file-layout constraints.
+Claude is the primary read-only reviewer in every round. Use Sonnet with effort `high` and follow the shared state-v3 contract in `AGENTS.md` exactly. Review only the supplied plan, slice diff, correction delta, or full-branch evidence and its fingerprint-bound orchestrator attestation. Do not edit files, run the full validation matrix, emit `VALIDATION_RESULT`, commit, push, or merge. Only Claude may close or reclassify findings with `C-` identifiers.

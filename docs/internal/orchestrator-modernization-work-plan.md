@@ -147,7 +147,7 @@ Jede Slice-MD wird unmittelbar vor Beginn ihres Slice angelegt und dann aus der 
 | 15 | [`docs/internal/slice-orchestrator-modernization-15-scripted-dry-run.md`](slice-orchestrator-modernization-15-scripted-dry-run.md) |
 | 16 | [`docs/internal/slice-orchestrator-modernization-16-branch-final-review.md`](slice-orchestrator-modernization-16-branch-final-review.md) |
 | 17 | [`docs/internal/slice-orchestrator-modernization-17-watch-mode-pauses.md`](slice-orchestrator-modernization-17-watch-mode-pauses.md) |
-| 18 | `docs/internal/slice-orchestrator-modernization-18-default-cutover-contract.md` |
+| 18 | [`docs/internal/slice-orchestrator-modernization-18-default-cutover-contract.md`](slice-orchestrator-modernization-18-default-cutover-contract.md) |
 | 19 | `docs/internal/slice-orchestrator-modernization-19-user-docs-consistency.md` |
 
 Die Audit-Komponente aus Slice 8 prüft bei Start eines Slice, dass genau diese Datei existiert, vom Arbeitsplan verlinkt wird und die Pflichtabschnitte aus §9.2 der Anforderungen enthält.
@@ -565,7 +565,7 @@ Die Audit-Komponente aus Slice 8 prüft bei Start eines Slice, dass genau diese 
 **Test-Riegel:** ja. **Red-State:** nein.
 **Risiko/Rückfalloption:** Queue-Stau durch Gate; der Halt nennt Task und Run-ID eindeutig und verarbeitet keine Folgetasks still weiter.
 
-### Slice 18 — Defaultaktivierung, Altpfadentfernung und Instruktionsvertrag
+### [Slice 18 — Defaultaktivierung, Altpfadentfernung und Instruktionsvertrag](slice-orchestrator-modernization-18-default-cutover-contract.md)
 
 **Zweck:** Den vollständig integrierten Slice-Workflow zusammen mit seinem neuen Marker- und Rollenvertrag als einzigen Default aktivieren und den alten Zwei-Phasen-Pfad entfernen.
 **Anforderungen:** Abschluss von R-1, R-7 bis R-11 sowie R-14 bis R-16; gemeinsamer Cutover gemäß §6.6 der Anforderungen.

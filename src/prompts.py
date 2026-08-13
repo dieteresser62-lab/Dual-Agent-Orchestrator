@@ -86,6 +86,16 @@ def build_v3_codex_contract(contract: CodexStepContract) -> str:
         f"- Readiness: {readiness}",
         "- Open finding response: FINDING_RESPONSE: <ID> | ACCEPTED|REJECTED | <rationale>",
     ]
+    if contract.require_slice_plan:
+        lines.extend(
+            (
+                "- Ordered implementation boundary (one or more records): "
+                "SLICE_PLAN: <1-based id> | <concise summary> | <comma-separated repository-relative paths>",
+                "- Slice ids must be contiguous from 1. Paths are exact commit allowlists; "
+                "include every source, test, configuration, and audit document the slice may change.",
+                "- Keep each slice within the configured productive-file limit.",
+            )
+        )
     if contract.validation_attestation is not None:
         attestation = contract.validation_attestation
         lines.extend(
@@ -105,7 +115,11 @@ def build_v3_codex_contract(contract: CodexStepContract) -> str:
             f"- Validation: VALIDATION_RESULT: PASS|FAIL | {command} | <exit code>"
         )
     if contract.require_test_files_record:
-        test_files = ",".join(contract.expected_test_files) or "NONE"
+        test_files = (
+            ",".join(contract.expected_test_files) or "NONE"
+            if contract.enforce_expected_test_files
+            else "<actual comma-separated changed test paths or NONE>"
+        )
         lines.append(f"- Test scope: TEST_FILES_TOUCHED: {test_files}")
     lines.extend(
         (
@@ -123,7 +137,7 @@ def build_v3_review_prompt(
     evidence: str,
     contract: StepContract,
 ) -> str:
-    """Build a bounded additive v3 review prompt without changing legacy builders."""
+    """Build a bounded state-v3 review prompt from explicit evidence."""
     return textwrap.dedent(
         f"""
         You are the {contract.reviewer.value} reviewer for {contract.name}.
@@ -195,294 +209,3 @@ def _render_finding_record(finding: FindingRecord) -> str:
         f"summary={finding.summary} | acceptance={finding.acceptance_test} | "
         f"responses={responses} | closure={closure}"
     )
-
-
-def build_phase1_claude_plan_prompt(
-    task_text: str,
-    shared_text: str,
-    cycle: int,
-    open_block: str,
-) -> str:
-    return textwrap.dedent(
-        f"""
-        You are Claude Code. We are in PHASE 1 (planning), cycle {cycle}.
-
-        Task:
-        ---
-        {_delimit_block("TASK", task_text)}
-        ---
-
-        Shared planning file (history so far):
-        ---
-        {_delimit_block("SHARED", shared_text or '(empty)')}
-        ---
-
-        Open findings from the previous Codex review:
-        ---
-        {open_block}
-        ---
-
-        Goal:
-        - Create or revise the implementation plan so all open findings are closed.
-        - Do not add side work that is not necessary for closing findings or completing the task.
-        - PLANNING ONLY: do not execute commands, do not read/edit files, do not call tools, and do not start implementation.
-
-        Output format (Markdown):
-        - Sections: Plan Status, Work Packages, Acceptance Criteria, Risks, Test Strategy, Open Questions
-        - Marker line: ADDRESSED_FINDINGS: <ID1,ID2,...> or NONE
-        - Marker line: PHASE1_APPROVAL: YES or PHASE1_APPROVAL: NO
-        - Legacy compatibility marker (optional): CLAUDE_APPROVAL: YES or CLAUDE_APPROVAL: NO
-        - The final line MUST be exactly: STATUS: DONE
-        """
-    ).strip()
-
-
-def build_phase1_codex_review_prompt(
-    task_text: str,
-    shared_text: str,
-    cycle: int,
-    previous_open_block: str,
-) -> str:
-    # Contract lines are intentionally rigid so the orchestrator can parse results deterministically.
-    return textwrap.dedent(
-        f"""
-        You are Codex Reviewer. We are in PHASE 1 (plan review), cycle {cycle}.
-
-        Task:
-        ---
-        {_delimit_block("TASK", task_text)}
-        ---
-
-        Shared planning file (Claude + historical context):
-        ---
-        {_delimit_block("SHARED", shared_text)}
-        ---
-
-        Open findings from the PREVIOUS cycle:
-        ---
-        {previous_open_block}
-        ---
-
-        Tasks:
-        1) Review the plan for gaps, implementability, and testability.
-        2) Explicitly close previous findings or keep them open, with concise reasoning.
-        3) Add new findings ONLY if they are blocker-level.
-        4) Provide a clear approval decision according to the CONTRACT.
-        5) REVIEW ONLY: do not execute commands, do not read/edit files, do not call tools, and do not start implementation.
-
-        CONTRACT (mandatory):
-        - For EACH previously open finding, one line:
-          FINDING_STATUS: <ID> | OPEN|CLOSED | <short rationale>
-        - For each NEW open finding:
-          NEW_FINDING: <ID> | <short description> | <acceptance test>
-        - Summary:
-          OPEN_FINDINGS: NONE
-          or
-          OPEN_FINDINGS: <ID1,ID2,...>
-        - Decision rule:
-          PHASE1_APPROVAL: YES only when OPEN_FINDINGS: NONE
-          PHASE1_APPROVAL: NO only when OPEN_FINDINGS is not empty
-        - Legacy compatibility marker (optional):
-          CODEX_APPROVAL: YES|NO
-        - Mandatory ID format: F-001, F-002, ...
-
-        Output format (Markdown):
-        - Sections: Findings, Required Adjustments, Consolidated Plan
-        - CONTRACT lines as defined above
-        - Marker line: PHASE1_APPROVAL: YES or PHASE1_APPROVAL: NO
-        - Legacy compatibility marker (optional): CODEX_APPROVAL: YES or CODEX_APPROVAL: NO
-        - The final line MUST be exactly: STATUS: DONE
-        """
-    ).strip()
-
-
-def build_phase1_claude_confirm_prompt(
-    task_text: str,
-    shared_text: str,
-    cycle: int,
-    open_block: str,
-    codex_approval: str,
-) -> str:
-    return textwrap.dedent(
-        f"""
-        You are Claude Code. Final confirmation for PHASE 1, cycle {cycle}.
-
-        Task:
-        ---
-        {_delimit_block("TASK", task_text)}
-        ---
-
-        Shared planning file including the current Codex review:
-        ---
-        {_delimit_block("SHARED", shared_text)}
-        ---
-
-        Codex contract in this cycle:
-        - PHASE1_APPROVAL: {codex_approval}
-        - OPEN_FINDINGS: {open_block}
-
-        Tasks:
-        1) Determine whether the current plan is implementation-ready.
-        2) If not, list concise mandatory adjustments for the next cycle.
-        3) If PHASE1_APPROVAL=NO or OPEN_FINDINGS is not empty, PHASE1_APPROVAL must be NO.
-        4) CONFIRMATION ONLY: do not execute commands, do not read/edit files, do not call tools, and do not start implementation.
-
-        Output format (Markdown):
-        - Sections: Decision, Justification, Next Mandatory Adjustments
-        - Marker line: PHASE1_APPROVAL: YES or PHASE1_APPROVAL: NO
-        - Legacy compatibility marker (optional): CLAUDE_APPROVAL: YES or CLAUDE_APPROVAL: NO
-        - The final line MUST be exactly: STATUS: DONE
-        """
-    ).strip()
-
-
-def build_phase2_codex_implement_prompt(
-    task_text: str,
-    plan_text: str,
-    shared_text: str,
-    cycle: int,
-    open_block: str,
-    test_failure_context: str = "",
-) -> str:
-    test_failure_section = f"\n\n{test_failure_context.strip()}\n" if test_failure_context.strip() else ""
-    return textwrap.dedent(
-        f"""
-        You are Codex Implementer in this repository. We are in PHASE 2, cycle {cycle}.
-
-        Task:
-        ---
-        {_delimit_block("TASK", task_text)}
-        ---
-
-        Final aligned plan from PHASE 1:
-        ---
-        {_delimit_block("PLAN", plan_text)}
-        ---
-
-        Shared implementation file (history so far including Claude findings):
-        ---
-        {_delimit_block("SHARED", shared_text or '(empty)')}
-        ---
-
-        Open Claude findings from the PREVIOUS cycle:
-        ---
-        {open_block}
-        ---
-        {test_failure_section}
-
-        Assignment:
-        1) Implement/fix in the repository according to the plan and previous findings.
-        2) Explicitly address all open Claude objections.
-        3) Summarize implemented changes concisely.
-        4) The repository can already contain unrelated local changes. Do NOT stop because of a dirty git worktree.
-           Ignore unrelated diffs, edit only files relevant to this task, and do not request confirmation just for pre-existing changes.
-
-        Output format (Markdown):
-        - Sections: Summary, Changed Files, Implemented Fixes, Remaining Items
-        - Marker line: IMPLEMENTATION_READY: YES or IMPLEMENTATION_READY: NO
-        - The final line MUST be exactly: STATUS: DONE
-        """
-    ).strip()
-
-
-def build_phase2_claude_review_prompt(
-    task_text: str,
-    plan_text: str,
-    shared_text: str,
-    file_snapshots: str,
-    test_snapshot: str,
-    cycle: int,
-    previous_open_block: str,
-    snapshot: str,
-) -> str:
-    # This prompt mirrors phase-1 contract semantics so finding lifecycle stays machine-checkable.
-    return textwrap.dedent(
-        f"""
-        You are Claude Code Reviewer. We are in PHASE 2 review, cycle {cycle}.
-
-        Task:
-        ---
-        {_delimit_block("TASK", task_text)}
-        ---
-
-        Aligned plan from PHASE 1:
-        ---
-        {_delimit_block("PLAN", plan_text)}
-        ---
-
-        Shared implementation file:
-        ---
-        {_delimit_block("SHARED", shared_text)}
-        ---
-
-        Changed file snapshots:
-        ---
-        {file_snapshots or _delimit_block("FILES", "(empty)")}
-        ---
-
-        Local test snapshot (configured test command):
-        ---
-        {_delimit_block("TEST_SNAPSHOT", test_snapshot)}
-        ---
-
-        Repository snapshot:
-        ---
-        {_delimit_block("SNAPSHOT", snapshot)}
-        ---
-
-        Open findings from the PREVIOUS cycle:
-        ---
-        {previous_open_block}
-        ---
-
-        Tasks:
-        1) Verify task fulfillment and plan compliance.
-        2) Find bugs, regressions, security/maintenance risks, and test gaps.
-        3) If not approvable, provide concrete mandatory fixes for the next cycle.
-        4) Treat this review packet as the complete evidence set. Do not explore unrelated repository files.
-        5) REVIEW ONLY: do not edit files or implement code. Do not rerun the supplied validation; inspect its snapshot and spend the tool budget on implementation analysis.
-        6) Read the supplied manifest and every numbered packet chunk exactly once; use no other tools and keep the response below 12000 characters.
-
-        CONTRACT (mandatory):
-        - For EACH previously open finding, one line:
-          FINDING_STATUS: <ID> | OPEN|CLOSED | <short rationale>
-        - For each NEW open finding:
-          NEW_FINDING: <ID> | <short description> | <acceptance test>
-        - Summary:
-          OPEN_FINDINGS: NONE
-          or
-          OPEN_FINDINGS: <ID1,ID2,...>
-        - Decision rule:
-          PHASE2_APPROVAL: YES only when OPEN_FINDINGS: NONE
-          PHASE2_APPROVAL: NO only when OPEN_FINDINGS is not empty
-        - Legacy compatibility marker (optional):
-          CLAUDE_APPROVAL: YES|NO
-        - Mandatory ID format: F-001, F-002, ...
-
-        Output format (Markdown):
-        - Sections: Findings, Mandatory Fixes, Approval
-        - CONTRACT lines as defined above
-        - Marker line: PHASE2_APPROVAL: YES or PHASE2_APPROVAL: NO
-        - Legacy compatibility marker (optional): CLAUDE_APPROVAL: YES or CLAUDE_APPROVAL: NO
-        - The final line MUST be exactly: STATUS: DONE
-        """
-    ).strip()
-
-
-def build_test_failure_block(test_snapshot: str, test_command: str, max_chars: int = 3000) -> str:
-    snapshot = (test_snapshot or "").strip()
-    if len(snapshot) > max_chars:
-        # Keep prompts bounded so repeated failures do not bloat context windows.
-        snapshot = snapshot[:max_chars] + "\n...[truncated]"
-    command = (test_command or "").strip() or "(unset)"
-    return textwrap.dedent(
-        f"""
-        <<<TEST_FAILURE_PRIORITY_BEGIN>>>
-        Fix the failing tests before any other work.
-        Re-run locally with: {command}
-
-        Latest failing test output:
-        {snapshot or "(empty)"}
-        <<<TEST_FAILURE_PRIORITY_END>>>
-        """
-    ).strip()

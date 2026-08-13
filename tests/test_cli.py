@@ -607,7 +607,8 @@ def test_invalid_stream_environment_warning_uses_configured_log_format(tmp_path:
 def test_cli_and_runtime_defaults_cannot_drift() -> None:
     assert cli.DEFAULT_TASK_FILE == orchestrator.DEFAULT_TASK_FILE
     assert cli.DEFAULT_AGENTS_FILE == orchestrator.DEFAULT_AGENTS_FILE
-    assert build_parser().get_default("max_shared_chars") == orchestrator.MAX_SHARED_CHARS
+    assert "--development-mode" not in build_parser().format_help()
+    assert "--from-phase" not in build_parser().format_help()
 
 
 def test_declared_python_floor_matches_standard_library_toml_requirement() -> None:

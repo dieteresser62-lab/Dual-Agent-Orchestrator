@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, replace
 from enum import Enum
+from pathlib import PurePosixPath
 from typing import Iterable
 
 
@@ -345,6 +346,37 @@ class ContractResult:
 
 
 @dataclass(frozen=True)
+class PlannedSlice:
+    """One ordered, repository-relative implementation boundary from Codex planning."""
+
+    slice_id: int
+    summary: str
+    scope_paths: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if self.slice_id < 1:
+            raise ValueError("planned slice id must be 1-based")
+        if not self.summary.strip():
+            raise ValueError("planned slice summary must not be empty")
+        normalized = tuple(sorted(set(self.scope_paths)))
+        if not normalized or normalized != self.scope_paths:
+            raise ValueError("planned slice paths must be sorted, unique, and non-empty")
+        for raw_path in normalized:
+            path = PurePosixPath(raw_path)
+            if (
+                not raw_path.strip()
+                or path.is_absolute()
+                or "\\" in raw_path
+                or ".." in path.parts
+                or raw_path != path.as_posix()
+                or path.parts[0] == ".orchestrator"
+            ):
+                raise ValueError(
+                    "planned slice paths must be canonical repository-relative POSIX paths outside .orchestrator"
+                )
+
+
+@dataclass(frozen=True)
 class CodexStepContract:
     name: str
     readiness_marker: ReadinessMarker
@@ -358,6 +390,8 @@ class CodexStepContract:
     red_state_followup_slice: str | None = None
     review_fingerprint: str | None = None
     validation_attestation: ValidationAttestation | None = None
+    require_slice_plan: bool = False
+    enforce_expected_test_files: bool = True
 
     def __post_init__(self) -> None:
         if not self.name.strip():
@@ -389,6 +423,10 @@ class CodexStepContract:
                 raise ValueError(
                     "final Codex attestation fingerprint does not match review"
                 )
+        if self.require_slice_plan and self.readiness_marker is not ReadinessMarker.PLAN:
+            raise ValueError("slice planning records are reserved for Codex plan steps")
+        if not isinstance(self.enforce_expected_test_files, bool):
+            raise ValueError("test-file enforcement flag must be a boolean")
 
 
 @dataclass(frozen=True)
@@ -399,6 +437,7 @@ class CodexContractResult:
     validation: ValidationRecord | None
     test_files: tuple[str, ...]
     findings: tuple[FindingRecord, ...]
+    slice_plan: tuple[PlannedSlice, ...] = ()
 
 
 def strip_delimited_sections(text: str) -> str:
@@ -522,6 +561,7 @@ def validate_codex_response(
             validation=None,
             test_files=(),
             findings=tuple(sorted(previous_findings, key=lambda item: item.finding_id)),
+            slice_plan=(),
         )
     if ready is None:
         raise ContractValidationError(
@@ -552,7 +592,7 @@ def validate_codex_response(
 
     if contract.require_test_files_record:
         test_files = _parse_test_files(text)
-        if test_files != contract.expected_test_files:
+        if contract.enforce_expected_test_files and test_files != contract.expected_test_files:
             raise ContractValidationError(
                 "TEST_FILES_TOUCHED does not match the step contract"
             )
@@ -585,6 +625,11 @@ def validate_codex_response(
             f"FINDING_RESPONSE references non-open finding {unexpected[0]}"
         )
     findings = apply_finding_responses(prior, text)
+    slice_plan = _parse_slice_plan(text)
+    if contract.require_slice_plan and not slice_plan:
+        raise ContractValidationError("ready plan requires at least one SLICE_PLAN record")
+    if not contract.require_slice_plan and slice_plan:
+        raise ContractValidationError("unexpected SLICE_PLAN for this Codex step")
     return CodexContractResult(
         ready=ready,
         stopped=False,
@@ -592,6 +637,7 @@ def validate_codex_response(
         validation=validation,
         test_files=test_files,
         findings=findings,
+        slice_plan=slice_plan,
     )
 
 
@@ -835,6 +881,7 @@ def _reject_unknown_contract_markers(text: str) -> None:
         "REVIEWER",
         "REVIEW_EVIDENCE",
         "SLICE_APPROVAL",
+        "SLICE_PLAN",
         "STATUS",
         "STOP_REQUESTED",
         "TEST_FILES_TOUCHED",
@@ -1015,6 +1062,38 @@ def _parse_validation(text: str) -> ValidationRecord | None:
     except (ValueError, TypeError) as exc:
         raise ContractValidationError(f"invalid VALIDATION_RESULT: {exc}") from exc
     return record
+
+
+def _parse_slice_plan(text: str) -> tuple[PlannedSlice, ...]:
+    pattern = re.compile(
+        r"^\s*SLICE_PLAN\s*:\s*(\d+)\s*\|\s*(.+?)\s*\|\s*(.+?)\s*$",
+        re.IGNORECASE | re.MULTILINE,
+    )
+    records: list[PlannedSlice] = []
+    for match in pattern.finditer(text):
+        raw_paths = tuple(
+            sorted(set(part.strip() for part in match.group(3).split(",") if part.strip()))
+        )
+        try:
+            records.append(
+                PlannedSlice(
+                    slice_id=int(match.group(1)),
+                    summary=match.group(2).strip(),
+                    scope_paths=raw_paths,
+                )
+            )
+        except ValueError as exc:
+            raise ContractValidationError(str(exc)) from exc
+    if len(records) != _marker_count(text, "SLICE_PLAN"):
+        raise ContractValidationError(
+            "SLICE_PLAN requires <1-based id> | <summary> | <comma-separated paths>"
+        )
+    ids = tuple(record.slice_id for record in records)
+    if ids and ids != tuple(range(1, len(ids) + 1)):
+        raise ContractValidationError(
+            "SLICE_PLAN ids must be contiguous, ordered, and 1-based"
+        )
+    return tuple(records)
 
 
 def _parse_test_files(text: str) -> tuple[str, ...]:

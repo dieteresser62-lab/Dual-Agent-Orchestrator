@@ -2,15 +2,25 @@
 from __future__ import annotations
 
 import argparse
-import functools
 import logging
+import hashlib
 import re
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import replace
 from pathlib import Path
 
-from cli import DEFAULT_AGENTS_FILE, DEFAULT_MAX_SHARED_CHARS, DEFAULT_TASK_FILE
+from agent_adapters import AgentAdapter, build_agent_registry
+from agent_runtime import OrchestratorConfig, run_agent_checked, run_validation_matrix
+from audit_trail import (
+    AuditProjection,
+    AuthorizedTestChanges,
+    project_slice_audit,
+    project_work_plan_audit,
+    validate_slice_document,
+    validate_work_plan_document,
+)
+from cli import DEFAULT_AGENTS_FILE, DEFAULT_TASK_FILE
 from contracts import (
+    AgentRole,
     CodexContractResult,
     CodexStepContract,
     ContractResult,
@@ -19,90 +29,58 @@ from contracts import (
     validate_codex_response,
     validate_review_response,
 )
-from agent_adapters import (
-    AGENT_REGISTRY,
-    AgentAdapter,
-    AgentBudgetError,
-    AgentPermissionError,
-    build_agent_registry,
-)
-from agent_runtime import (
-    AgentCompatibilityError,
-    AgentInvocationError,
-    OrchestratorConfig,
-    QuotaReachedError,
-    collect_file_snapshots,
-    preflight as runtime_preflight,
-    repo_snapshot as runtime_repo_snapshot,
-    run_agent_checked as runtime_run_agent_checked,
-    run_tests_snapshot as runtime_run_tests_snapshot,
-)
-from inbox_watcher import watch_inbox
-from prompts import (
-    build_phase1_claude_confirm_prompt,
-    build_phase1_claude_plan_prompt,
-    build_phase1_codex_review_prompt,
-    build_phase2_claude_review_prompt,
-    build_phase2_codex_implement_prompt,
-    build_test_failure_block,
+from gates import TestChangeEvidence, detect_test_changes
+from git_service import (
+    CommitAuthorization,
+    SliceGitBoundary,
+    commit_slice,
+    inspect_repository,
+    GitTransactionError,
 )
 from repo_changes import (
-    NotGitRepositoryError,
-    RepositoryChanges,
     RepositoryChangeError,
+    RepositoryChanges,
     collect_repository_changes,
-    merge_reported_paths,
     resolve_merge_base,
 )
 from state_io import (
+    ActiveV2StateError,
     CompletedV2State,
-    FINDING_ID_PATTERN,
     StateSchemaError,
-    append_markdown,
-    build_artifact_paths as state_build_artifact_paths,
-    checkpoint_path as state_checkpoint_path,
-    ensure_state_shape as state_ensure_state_shape,
-    init_state as state_init_state,
-    load_cycle_checkpoint as state_load_cycle_checkpoint,
-    load_workflow_state as state_load_workflow_state,
-    load_state as state_load_state,
-    new_run_id as state_new_run_id,
-    now_iso as state_now_iso,
-    read_file,
-    save_state as state_save_state,
-    save_workflow_state as state_save_workflow_state,
-    write_cycle_checkpoint as state_write_cycle_checkpoint,
-    write_workflow_checkpoint as state_write_workflow_checkpoint,
+    load_workflow_state,
+    new_run_id,
+    save_workflow_state,
     write_file,
+    write_workflow_checkpoint,
 )
-from workflow_state import WorkflowState, init_workflow_state
 from workflow import (
+    CodexInvocation,
+    ContractRepairInvocation,
+    ReviewerInvocation,
+    NoWorkflowChangesError,
+    WorkflowChanges,
+    WorkflowCommitRequest,
     WorkflowContext,
+    WorkflowCorrectionBoundary,
+    WorkflowDriver,
     WorkflowEngine,
+    WorkflowExecutionError,
     WorkflowHistory,
     WorkflowRunResult,
 )
-
-ARTIFACT_ROOT_DIR = Path(".orchestrator")
-ARTIFACT_RUNS_DIR = ARTIFACT_ROOT_DIR / "runs"
-LATEST_RUN_FILE = ARTIFACT_ROOT_DIR / "LATEST_RUN.txt"
-STATE_DIR = Path(".orchestrator")
-STATE_FILE = STATE_DIR / "state.json"
-LOG_DIR = STATE_DIR / "logs"
-CHECKPOINT_DIR = STATE_DIR / "checkpoints"
-MAX_ERROR_CHARS = 1800
-MIN_AGENT_OUTPUT_MAX_CHARS = 200
-# Keep repo snapshots useful but bounded when embedded into prompts/artifacts.
-MAX_DIFF_CHARS = 14000
-TEST_TIMEOUT_SECONDS = 300
-# Cap how much historical shared markdown is sent back to agents each cycle.
-MAX_SHARED_CHARS = DEFAULT_MAX_SHARED_CHARS
-MAX_AGENTS_INSTRUCTIONS_CHARS = 12000
-# Delimited blocks are the machine-readable envelope shared across prompt + parser helpers.
-DELIMITED_SECTION_PATTERN = re.compile(
-    r"<<<\s*([A-Z_]+)_BEGIN\s*>>>.*?<<<\s*\1_END\s*>>>",
-    re.IGNORECASE | re.DOTALL,
+from workflow_state import (
+    GateReason,
+    SliceStatus,
+    WorkflowState,
+    WorkflowStep,
+    WorkUnitKind,
+    WorkUnitStatus,
+    init_workflow_state,
 )
+from validation_matrix import ValidationCommand, ValidationMatrix
+from inbox_watcher import WatchTaskResult, watch_inbox
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -111,7 +89,6 @@ def validate_v3_review_contract(
     contract: StepContract,
     previous_findings: tuple[FindingRecord, ...] = (),
 ) -> ContractResult:
-    """Validate one development-mode v3 review without altering the active v2 path."""
     return validate_review_response(output, contract, previous_findings)
 
 
@@ -120,7 +97,6 @@ def validate_v3_codex_contract(
     contract: CodexStepContract,
     previous_findings: tuple[FindingRecord, ...] = (),
 ) -> CodexContractResult:
-    """Validate one development-mode v3 Codex step without altering the v2 path."""
     return validate_codex_response(output, contract, previous_findings)
 
 
@@ -130,7 +106,6 @@ def run_v3_work_unit(
     context: WorkflowContext,
     history: WorkflowHistory | None = None,
 ) -> WorkflowRunResult:
-    """Run one additive state-v3 work unit without changing the active v2 CLI path."""
     return engine.run_current_work_unit(state, context, history)
 
 
@@ -140,1026 +115,762 @@ def run_v3_final_review(
     context: WorkflowContext,
     history: WorkflowHistory | None = None,
 ) -> WorkflowRunResult:
-    """Start or resume the additive branch-wide state-v3 final review."""
     return engine.run_final_review(state, context, history)
-
-@dataclass
-class RunContext:
-    """Dependency-injection wrapper for runtime helpers and artifact paths."""
-
-    config: OrchestratorConfig
-    test_command: str = ""
-    agents_instructions: str = ""
-    agents: dict[str, AgentAdapter] = field(default_factory=lambda: dict(AGENT_REGISTRY))
-    artifact_root_dir: Path = ARTIFACT_ROOT_DIR
-    artifact_runs_dir: Path = ARTIFACT_RUNS_DIR
-    latest_run_file: Path = LATEST_RUN_FILE
-    state_dir: Path = STATE_DIR
-    state_file: Path = STATE_FILE
-    log_dir: Path = LOG_DIR
-    checkpoint_dir: Path = CHECKPOINT_DIR
-    run_artifact_dir: Path = field(init=False)
-    task_snapshot_file: Path = field(init=False)
-    phase1_shared_file: Path = field(init=False)
-    phase2_shared_file: Path = field(init=False)
-
-    def __post_init__(self) -> None:
-        self.run_artifact_dir = self.artifact_root_dir
-        self.task_snapshot_file = self.run_artifact_dir / "00_task.md"
-        self.phase1_shared_file = self.run_artifact_dir / "10_phase1_plan.md"
-        self.phase2_shared_file = self.run_artifact_dir / "20_phase2_implementation.md"
-
-    def init_dirs(self) -> None:
-        self.artifact_root_dir.mkdir(parents=True, exist_ok=True)
-        self.artifact_runs_dir.mkdir(parents=True, exist_ok=True)
-        self.log_dir.mkdir(parents=True, exist_ok=True)
-        self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
-
-    def configure_artifacts(self, artifacts: dict[str, str | Path]) -> None:
-        self.run_artifact_dir = Path(artifacts["run_dir"])
-        self.task_snapshot_file = Path(artifacts["task"])
-        self.phase1_shared_file = Path(artifacts["phase1_shared"])
-        self.phase2_shared_file = Path(artifacts["phase2_shared"])
-
-    def build_artifact_paths(self, run_id: str) -> dict[str, str | Path]:
-        return state_build_artifact_paths(run_id, self.artifact_runs_dir)
-
-    def new_run_id(self) -> str:
-        return state_new_run_id()
-
-    def load_state(self) -> dict:
-        return state_load_state(self.state_file)
-
-    def save_state(self, state: dict) -> None:
-        state_save_state(self.state_file, state)
-
-    def init_state(
-        self,
-        task_file: Path,
-        phase1_max_cycles: int,
-        phase2_max_cycles: int,
-        artifacts: dict[str, str | Path],
-    ) -> dict:
-        return state_init_state(task_file, phase1_max_cycles, phase2_max_cycles, artifacts)
-
-    def ensure_state_shape(self, state: dict, task_file: Path, args: argparse.Namespace) -> dict:
-        return state_ensure_state_shape(
-            state,
-            task_file,
-            args.phase1_max_cycles,
-            args.phase2_max_cycles,
-            self.artifact_runs_dir,
-        )
-
-    def run_tests_snapshot(self) -> tuple[int, str]:
-        return runtime_run_tests_snapshot(
-            config=self.config,
-            test_command=self.test_command,
-            test_timeout_seconds=TEST_TIMEOUT_SECONDS,
-            shorten=shorten,
-        )
-
-    def repo_snapshot(self, changes: RepositoryChanges) -> str:
-        return runtime_repo_snapshot(changes, MAX_DIFF_CHARS)
-
-    def run_agent_checked(
-        self,
-        *,
-        agent_key: str,
-        prompt: str,
-        log_prefix: str,
-        max_retries: int,
-        required_flags: list[str] | None = None,
-        output_validator=None,
-    ) -> str:
-        prompt_to_send = prompt
-        if self.agents_instructions.strip():
-            # Keep project instructions explicit and stable for all backend agents.
-            prompt_to_send = (
-                "Project execution instructions (from AGENTS.md):\n"
-                "<<<AGENTS_MD_BEGIN>>>\n"
-                f"{self.agents_instructions.strip()}\n"
-                "<<<AGENTS_MD_END>>>\n\n"
-                f"{prompt}"
-            )
-        return runtime_run_agent_checked(
-            agent_key=agent_key,
-            prompt=prompt_to_send,
-            log_prefix=log_prefix,
-            max_retries=max_retries,
-            required_flags=required_flags,
-            output_validator=output_validator,
-            config=self.config,
-            agents=self.agents,
-            log_dir=self.log_dir,
-            write_file=write_file,
-            shorten=shorten,
-            parse_flag=parse_flag,
-            validate_done_marker=validate_done_marker,
-        )
-
-    def preflight(self, required_agents: list[str], strict: bool, *, skip_git_check: bool = False) -> bool:
-        return runtime_preflight(
-            required_agents,
-            strict,
-            self.agents,
-            skip_git_check=skip_git_check,
-        )
-
-    def checkpoint_cycle_state(self, phase: str, cycle: int, state: dict) -> None:
-        path = state_write_cycle_checkpoint(self.checkpoint_dir, phase, cycle, state)
-        logger.info("[CHECKPOINT] saved %s", path)
-
-    def recover_state_from_checkpoint(self, state: dict) -> dict:
-        phase = str(state.get("phase", "phase1"))
-        if phase not in ("phase1", "phase2"):
-            return state
-        phase_state = state.get(phase, {})
-        # Recover only when a phase was interrupted mid-run.
-        if phase_state.get("status") not in ("running", "frozen"):
-            return state
-
-        cycle = int(phase_state.get("cycle", 0))
-        if cycle <= 0:
-            return state
-
-        recovered = state_load_cycle_checkpoint(self.checkpoint_dir, phase, cycle)
-        if recovered is None:
-            path = state_checkpoint_path(self.checkpoint_dir, phase, cycle)
-            logger.warning("[RECOVERY] no checkpoint found at %s; continuing without rollback.", path)
-            return state
-
-        logger.info("[RECOVERY] restored checkpoint for %s cycle=%s.", phase, cycle)
-        return recovered
-
-    def init_v3_workflow_state(
-        self,
-        *,
-        run_id: str,
-        task_file: Path,
-        branch: str,
-        branch_base: str,
-        slice_count: int,
-    ) -> WorkflowState:
-        """Create development-mode v3 state without changing the active v2 path."""
-        return init_workflow_state(
-            run_id=run_id,
-            task_file=str(task_file.resolve()),
-            branch=branch,
-            branch_base=branch_base,
-            slice_count=slice_count,
-        )
-
-    def load_v3_workflow_state(self) -> WorkflowState | CompletedV2State | None:
-        """Load/classify state through the additive fail-closed v3 boundary."""
-        return state_load_workflow_state(
-            self.state_file,
-            allowed_roots=(self.config.repo_root,),
-        )
-
-    def save_v3_workflow_state(self, state: WorkflowState) -> None:
-        """Persist development-mode v3 state atomically and root-bound."""
-        state_save_workflow_state(
-            self.state_file,
-            state,
-            allowed_roots=(self.config.repo_root,),
-        )
-
-    def checkpoint_v3_workflow_state(self, state: WorkflowState) -> Path:
-        """Persist a v3 checkpoint whose identity is encoded in its filename."""
-        path = state_write_workflow_checkpoint(
-            self.checkpoint_dir,
-            state,
-            allowed_roots=(self.config.repo_root,),
-        )
-        logger.info("[CHECKPOINT] saved %s", path)
-        return path
-
-
-def format_duration(total_seconds: float) -> str:
-    seconds = max(0, int(total_seconds))
-    hours, rem = divmod(seconds, 3600)
-    minutes, secs = divmod(rem, 60)
-    if hours > 0:
-        return f"{hours}h {minutes}m {secs}s"
-    if minutes > 0:
-        return f"{minutes}m {secs}s"
-    return f"{secs}s"
-
-
-def shorten(text: str | None, limit: int = MAX_ERROR_CHARS) -> str:
-    raw = (text or "").strip()
-    if len(raw) <= limit:
-        return raw
-    return f"{raw[:limit]} ...[truncated]"
-
-
-def truncate_shared(text: str, limit: int) -> str:
-    if limit <= 0:
-        return "...[earlier history truncated]"
-    if len(text) <= limit:
-        return text
-    return "...[earlier history truncated]\n\n" + text[-limit:]
-
-
-def load_agents_instructions(agents_file: Path) -> str:
-    if not agents_file.exists():
-        logger.info("AGENTS instructions file not found: %s", agents_file)
-        return ""
-    text = read_file(agents_file).strip()
-    if not text:
-        logger.info("AGENTS instructions file is empty: %s", agents_file)
-        return ""
-    if len(text) > MAX_AGENTS_INSTRUCTIONS_CHARS:
-        # Bound prompt growth when AGENTS.md contains large reference sections.
-        truncated = text[:MAX_AGENTS_INSTRUCTIONS_CHARS]
-        logger.warning(
-            "AGENTS instructions truncated to %s chars: %s",
-            MAX_AGENTS_INSTRUCTIONS_CHARS,
-            agents_file,
-        )
-        return f"{truncated}\n...[truncated]"
-    logger.info("Loaded AGENTS instructions from %s", agents_file)
-    return text
-
-
-def parse_changed_files_from_impl_report(impl_report: str) -> list[str]:
-    # Consume only the "Changed Files" block to avoid false positives from prose text.
-    lines = (impl_report or "").splitlines()
-    changed: list[str] = []
-    in_section = False
-
-    for raw_line in lines:
-        line = raw_line.rstrip()
-        stripped = line.strip()
-
-        if not in_section:
-            if re.match(r"^#+\s*Changed Files\s*$", stripped, re.IGNORECASE):
-                in_section = True
-            continue
-
-        if not stripped:
-            if changed:
-                break
-            continue
-        if re.match(r"^#+\s+", stripped):
-            break
-        if stripped.startswith("IMPLEMENTATION_READY:") or stripped.startswith("STATUS:"):
-            break
-
-        match = re.match(r"^[-*]\s+(`?)([^`]+)\1\s*$", stripped)
-        if match:
-            candidate = match.group(2).strip()
-            if candidate and re.match(r"^[^\s|:][^|:\s]*$", candidate):
-                changed.append(candidate)
-    return changed
-
-
-def print_summary_report(state: dict) -> None:
-    started_raw = str(state.get("started_at", "")).strip()
-    started_at = None
-    try:
-        if started_raw:
-            started_at = datetime.fromisoformat(started_raw)
-    except ValueError:
-        started_at = None
-
-    ended_at = datetime.now(timezone.utc)
-    duration = "unknown"
-    if started_at is not None:
-        if started_at.tzinfo is None:
-            started_at = started_at.replace(tzinfo=timezone.utc)
-        duration = format_duration((ended_at - started_at).total_seconds())
-
-    p1 = state.get("phase1", {})
-    p2 = state.get("phase2", {})
-    p1_cycles = int(p1.get("cycle", 0))
-    p2_cycles = int(p2.get("cycle", 0))
-
-    closed_ids: set[str] = set()
-    open_ids: set[str] = set()
-    for phase_key in ("phase1", "phase2"):
-        phase_state = state.get(phase_key, {})
-        for fid, value in dict(phase_state.get("finding_history", {})).items():
-            fid_up = str(fid).upper()
-            if not FINDING_ID_PATTERN.match(fid_up):
-                continue
-            status = str(value).upper()
-            if status == "CLOSED":
-                closed_ids.add(fid_up)
-            elif status == "OPEN":
-                open_ids.add(fid_up)
-        for fid in phase_state.get("open_findings", []):
-            fid_up = str(fid).upper()
-            if FINDING_ID_PATTERN.match(fid_up):
-                open_ids.add(fid_up)
-
-    # If an ID is both open and closed over time, current open state wins.
-    closed_ids -= open_ids
-
-    logger.info("Run Summary:")
-    logger.info("  - duration: %s", duration)
-    logger.info("  - phase1 cycles: %s", p1_cycles)
-    logger.info("  - phase2 cycles: %s", p2_cycles)
-    logger.info("  - closed findings: %s", len(closed_ids))
-    logger.info("  - open findings: %s", len(open_ids))
 
 
 def find_task_file(explicit_path: str | None) -> Path:
-    if explicit_path:
-        path = Path(explicit_path)
-        if path.exists():
-            return path
-        raise FileNotFoundError(f"Task file not found: {path}")
-
-    path = Path(DEFAULT_TASK_FILE)
-    if path.exists():
+    path = Path(explicit_path or DEFAULT_TASK_FILE)
+    if path.is_file():
         return path
-    raise FileNotFoundError(
-        f"Task file missing. Expected: {DEFAULT_TASK_FILE}"
-    )
-
-
-def validate_done_marker(text: str) -> bool:
-    # Check marker outside delimited snapshots (those blocks can contain arbitrary text).
-    lines = [line.strip() for line in strip_delimited_sections(text).splitlines() if line.strip()]
-    if not lines:
-        return False
-    return lines[-1] == "STATUS: DONE"
-
-
-def strip_delimited_sections(text: str) -> str:
-    return DELIMITED_SECTION_PATTERN.sub("", text or "")
-
-
-def parse_flag(text: str, key: str) -> str | None:
-    contract_text = strip_delimited_sections(text)
-    pattern = re.compile(rf"^\s*{re.escape(key)}\s*:\s*(YES|NO)\s*$", re.IGNORECASE | re.MULTILINE)
-    matches = list(pattern.finditer(contract_text))
-    if not matches:
-        return None
-    return matches[-1].group(1).upper()
-
-
-def parse_first_flag(text: str, keys: list[str] | tuple[str, ...]) -> str | None:
-    for key in keys:
-        value = parse_flag(text, key)
-        if value in ("YES", "NO"):
-            return value
-    return None
-
-
-def format_findings_list(finding_ids: list[str]) -> str:
-    if not finding_ids:
-        return "NONE"
-    return ", ".join(finding_ids)
-
-
-def parse_open_findings(text: str) -> list[str] | None:
-    contract_text = strip_delimited_sections(text)
-    pattern = re.compile(r"^\s*OPEN_FINDINGS\s*:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
-    matches = list(pattern.finditer(contract_text))
-    if not matches:
-        return None
-    raw = matches[-1].group(1).strip()
-    if raw.upper() == "NONE":
-        return []
-    finding_ids = [part.strip().upper() for part in raw.split(",") if part.strip()]
-    return finding_ids
-
-
-def parse_finding_status_map(text: str) -> dict[str, str]:
-    contract_text = strip_delimited_sections(text)
-    pattern = re.compile(
-        r"^\s*FINDING_STATUS\s*:\s*([A-Za-z0-9_-]+)\s*\|\s*(OPEN|CLOSED)\s*\|.+$",
-        re.IGNORECASE | re.MULTILINE,
-    )
-    status_map: dict[str, str] = {}
-    for match in pattern.finditer(contract_text):
-        finding_id = match.group(1).strip().upper()
-        status = match.group(2).strip().upper()
-        status_map[finding_id] = status
-    return status_map
-
-
-def parse_new_findings(text: str) -> dict[str, str]:
-    contract_text = strip_delimited_sections(text)
-    pattern = re.compile(
-        r"^\s*NEW_FINDING\s*:\s*([A-Za-z0-9_-]+)\s*\|\s*(.+?)\s*\|\s*(.+?)\s*$",
-        re.IGNORECASE | re.MULTILINE,
-    )
-    found: dict[str, str] = {}
-    for match in pattern.finditer(contract_text):
-        finding_id = match.group(1).strip().upper()
-        summary = match.group(2).strip()
-        acceptance = match.group(3).strip()
-        found[finding_id] = f"{summary} | {acceptance}"
-    return found
-
-
-def validate_agent_contract(
-    output: str,
-    previous_open_findings: list[str],
-    approval_keys: str | list[str] | tuple[str, ...],
-) -> tuple[str | None, list[str] | None]:
-    # This contract keeps review outcomes deterministic and machine-checkable.
-    if isinstance(approval_keys, str):
-        keys = [approval_keys]
-    else:
-        keys = list(approval_keys)
-    if not keys:
-        return "missing approval key configuration", None
-
-    canonical_key = keys[0]
-    approval = parse_first_flag(output, keys)
-    if approval not in ("YES", "NO"):
-        return f"missing or invalid {canonical_key} marker", None
-
-    open_findings = parse_open_findings(output)
-    if open_findings is None:
-        return "missing OPEN_FINDINGS marker", None
-
-    for finding_id in open_findings:
-        if not FINDING_ID_PATTERN.match(finding_id):
-            return f"invalid finding id '{finding_id}' (expected format F-001)", None
-    if len(open_findings) != len(set(open_findings)):
-        return "OPEN_FINDINGS contains duplicate finding ids", None
-
-    if approval == "YES" and open_findings:
-        return f"{canonical_key}: YES is only allowed when OPEN_FINDINGS: NONE", None
-    if approval == "NO" and not open_findings:
-        return f"{canonical_key}: NO requires at least one open finding", None
-
-    status_map = parse_finding_status_map(output)
-    # Every previously open finding must receive an explicit OPEN/CLOSED decision each cycle.
-    for finding_id in status_map:
-        if not FINDING_ID_PATTERN.match(finding_id):
-            return (
-                f"invalid finding id '{finding_id}' in FINDING_STATUS (expected format F-001)",
-                None,
-            )
-    for finding_id in previous_open_findings:
-        if finding_id not in status_map:
-            return f"missing FINDING_STATUS line for previous open finding {finding_id}", None
-
-    new_findings = parse_new_findings(output)
-    for finding_id in new_findings:
-        if not FINDING_ID_PATTERN.match(finding_id):
-            return (
-                f"invalid finding id '{finding_id}' in NEW_FINDING (expected format F-001)",
-                None,
-            )
-    for finding_id in open_findings:
-        if finding_id not in previous_open_findings and finding_id not in new_findings:
-            return (
-                f"new open finding {finding_id} requires NEW_FINDING: {finding_id} | <summary> | <acceptance>",
-                None,
-            )
-
-    return None, open_findings
-
-
-def validate_codex_phase1_contract(output: str, previous_open_findings: list[str]) -> tuple[str | None, list[str] | None]:
-    return validate_agent_contract(output, previous_open_findings, ["PHASE1_APPROVAL", "CODEX_APPROVAL"])
-
-
-def validate_claude_phase2_contract(output: str, previous_open_findings: list[str]) -> tuple[str | None, list[str] | None]:
-    return validate_agent_contract(output, previous_open_findings, ["PHASE2_APPROVAL", "CLAUDE_APPROVAL"])
-
-
-def validate_codex_phase1_contract_error(output: str, previous_open_findings: list[str]) -> str | None:
-    return validate_codex_phase1_contract(output, previous_open_findings)[0]
-
-
-def validate_claude_phase2_contract_error(output: str, previous_open_findings: list[str]) -> str | None:
-    return validate_claude_phase2_contract(output, previous_open_findings)[0]
-
-
-def validate_phase1_planning_only_output(output: str) -> str | None:
-    contract_text = strip_delimited_sections(output)
-    suspicious_patterns = [
-        r"(?im)^\s*i will now\b",
-        r"(?im)^\s*i'll now\b",
-        r"(?im)\bcli_help\b",
-        r"(?im)\brun_shell_command\b",
-        r"(?im)^\s*i will (begin|start) by (searching|reading|checking|examining|inspecting)\b",
-    ]
-    for pattern in suspicious_patterns:
-        if re.search(pattern, contract_text):
-            return (
-                "phase1 output contains tool/implementation narration; "
-                "planning/review/confirmation must be reasoning-only with no command execution behavior"
-            )
-    return None
-
-
-def validate_phase2_review_only_output(output: str) -> str | None:
-    contract_text = strip_delimited_sections(output)
-    suspicious_patterns = [
-        r"(?im)^\s*i will now\b",
-        r"(?im)^\s*i'll now\b",
-        r"(?im)\bcli_help\b",
-        r"(?im)\brun_shell_command\b",
-        r"(?im)^\s*i will (begin|start) by (searching|reading|checking|examining|inspecting)\b",
-    ]
-    for pattern in suspicious_patterns:
-        if re.search(pattern, contract_text):
-            return (
-                "phase2 review output contains tool/implementation narration; "
-                "review must be reasoning-only with no command execution behavior"
-            )
-    return None
-
-
-def chain_validators(*validators):
-    def _validate(output: str) -> str | None:
-        for validator in validators:
-            if validator is None:
-                continue
-            err = validator(output)
-            if err:
-                return err
-        return None
-
-    return _validate
-
-
-def approval_gate(message: str) -> bool:
-    print(f"\n{'=' * 60}")
-    print(message)
-    print(f"{'=' * 60}")
-    try:
-        response = input("Continue? [y/N] ").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        print("\nAborted.")
-        return False
-    return response == "y"
-
-
-def freeze_current_phase(state: dict, error: QuotaReachedError, ctx: RunContext) -> None:
-    phase_key = str(state.get("phase", "phase1"))
-    if phase_key not in ("phase1", "phase2"):
-        phase_key = "phase1"
-    phase_state = state.get(phase_key, {})
-    cycle = int(phase_state.get("cycle", 0))
-    if cycle > 0:
-        # Retry the same logical cycle after resume because it never finished cleanly.
-        phase_state["cycle"] = cycle - 1
-    phase_state["status"] = "frozen"
-    phase_state["error"] = str(error)
-    state["phase"] = phase_key
-    state["updated_at"] = state_now_iso()
-    ctx.save_state(state)
-
-    logger.error("Run frozen due to quota/rate limit on %s.", error.agent_key)
-    logger.error("%s", error)
-    logger.info("Resume later with --resume after quota/rate-limit resets.")
-
-
-def run_phase1(task_text: str, state: dict, args: argparse.Namespace, ctx: RunContext) -> None:
-    phase1 = state["phase1"]
-    phase1["status"] = "running"
-    state["phase"] = "phase1"
-    state["updated_at"] = state_now_iso()
-    ctx.save_state(state)
-
-    start_cycle = int(phase1.get("cycle", 0)) + 1
-    max_cycles = int(phase1.get("max_cycles", args.phase1_max_cycles))
-
-    for cycle in range(start_cycle, max_cycles + 1):
-        # Cycle order is strict: Claude plan -> Codex contract review -> Claude confirmation.
-        # Save a rollback point before each cycle mutates state and artifacts.
-        ctx.checkpoint_cycle_state("phase1", cycle, state)
-        phase1["cycle"] = cycle
-        phase1["error"] = None
-        state["updated_at"] = state_now_iso()
-        ctx.save_state(state)
-
-        logger.info("=== PHASE 1 | cycle %s/%s: Claude plan ===", cycle, max_cycles)
-        shared = truncate_shared(read_file(ctx.phase1_shared_file), args.max_shared_chars)
-        previous_open_findings = [str(item).upper() for item in phase1.get("open_findings", [])]
-        claude_plan = ctx.run_agent_checked(
-            agent_key="claude",
-            prompt=build_phase1_claude_plan_prompt(
-                task_text=task_text,
-                shared_text=shared,
-                cycle=cycle,
-                open_block=format_findings_list(previous_open_findings),
-            ),
-            log_prefix=f"phase1-cycle{cycle}-claude-plan",
-            max_retries=max(args.max_agent_retries, 0),
-            required_flags=["PHASE1_APPROVAL|CLAUDE_APPROVAL"],
-            output_validator=validate_phase1_planning_only_output,
-        )
-        append_markdown(ctx.phase1_shared_file, f"Phase 1 / Cycle {cycle} / Claude Plan", claude_plan)
-
-        logger.info("=== PHASE 1 | cycle %s/%s: Codex review ===", cycle, max_cycles)
-        shared = truncate_shared(read_file(ctx.phase1_shared_file), args.max_shared_chars)
-        codex_review = ctx.run_agent_checked(
-            agent_key="codex",
-            prompt=build_phase1_codex_review_prompt(
-                task_text=task_text,
-                shared_text=shared,
-                cycle=cycle,
-                previous_open_block=format_findings_list(previous_open_findings),
-            ),
-            log_prefix=f"phase1-cycle{cycle}-codex-review",
-            max_retries=max(args.max_agent_retries, 0),
-            required_flags=["PHASE1_APPROVAL|CODEX_APPROVAL"],
-            output_validator=chain_validators(
-                validate_phase1_planning_only_output,
-                functools.partial(
-                    validate_codex_phase1_contract_error,
-                    previous_open_findings=list(previous_open_findings),
-                ),
-            ),
-        )
-        append_markdown(ctx.phase1_shared_file, f"Phase 1 / Cycle {cycle} / Codex Review", codex_review)
-
-        codex_approval = parse_first_flag(codex_review, ["PHASE1_APPROVAL", "CODEX_APPROVAL"]) or "NO"
-        parsed_open_findings = parse_open_findings(codex_review) or []
-        phase1["open_findings"] = parsed_open_findings
-
-        status_map = parse_finding_status_map(codex_review)
-        new_finding_map = parse_new_findings(codex_review)
-        finding_history = dict(phase1.get("finding_history", {}))
-        # Keep cumulative finding history so later cycles can close prior findings explicitly.
-        for finding_id, value in status_map.items():
-            finding_history[finding_id] = value
-        for finding_id, value in new_finding_map.items():
-            finding_history[finding_id] = value
-        phase1["finding_history"] = finding_history
-
-        logger.info("=== PHASE 1 | cycle %s/%s: Claude confirmation ===", cycle, max_cycles)
-        shared = truncate_shared(read_file(ctx.phase1_shared_file), args.max_shared_chars)
-        claude_confirm = ctx.run_agent_checked(
-            agent_key="claude",
-            prompt=build_phase1_claude_confirm_prompt(
-                task_text=task_text,
-                shared_text=shared,
-                cycle=cycle,
-                open_block=format_findings_list(parsed_open_findings),
-                codex_approval=codex_approval,
-            ),
-            log_prefix=f"phase1-cycle{cycle}-claude-confirm",
-            max_retries=max(args.max_agent_retries, 0),
-            required_flags=["PHASE1_APPROVAL|CLAUDE_APPROVAL"],
-            output_validator=validate_phase1_planning_only_output,
-        )
-        append_markdown(ctx.phase1_shared_file, f"Phase 1 / Cycle {cycle} / Claude Confirm", claude_confirm)
-
-        claude_approval = parse_first_flag(claude_confirm, ["PHASE1_APPROVAL", "CLAUDE_APPROVAL"]) or "NO"
-        if codex_approval == "NO" and claude_approval == "YES":
-            # Prevent contradictory approvals within the same cycle.
-            logger.warning("Claude approval overridden to NO because Codex has open findings.")
-            claude_approval = "NO"
-
-        phase1["codex_approval"] = codex_approval
-        phase1["claude_approval"] = claude_approval
-        state["updated_at"] = state_now_iso()
-        ctx.save_state(state)
-
-        # Phase 1 completes only on dual-approval with no open findings implied by contract.
-        if codex_approval == "YES" and claude_approval == "YES":
-            phase1["status"] = "completed"
-            phase1["completed_at"] = state_now_iso()
-            state["phase"] = "phase2"
-            state["updated_at"] = state_now_iso()
-            ctx.save_state(state)
-            logger.info("[OK] PHASE 1 completed: both Claude and Codex approved the plan.")
-            return
-
-        logger.info(
-            "PHASE 1 not approved yet. CODEX_APPROVAL=%s, CLAUDE_APPROVAL=%s, OPEN_FINDINGS=%s.",
-            codex_approval,
-            claude_approval,
-            format_findings_list(parsed_open_findings),
-        )
-
-    phase1["status"] = "failed"
-    phase1["error"] = "Phase 1 reached max cycles without dual approval."
-    state["updated_at"] = state_now_iso()
-    ctx.save_state(state)
-    raise RuntimeError(phase1["error"])
-
-
-def run_phase2(task_text: str, plan_text: str, state: dict, args: argparse.Namespace, ctx: RunContext) -> None:
-    phase2 = state["phase2"]
-    phase2["status"] = "running"
-    state["phase"] = "phase2"
-    state["updated_at"] = state_now_iso()
-    ctx.save_state(state)
-
-    start_cycle = int(phase2.get("cycle", 0)) + 1
-    max_cycles = int(phase2.get("max_cycles", args.phase2_max_cycles))
-
-    for cycle in range(start_cycle, max_cycles + 1):
-        # Cycle order is strict: Codex implementation -> local tests -> Claude review.
-        # Save a rollback point before implementation and local test execution.
-        ctx.checkpoint_cycle_state("phase2", cycle, state)
-        phase2["cycle"] = cycle
-        phase2["error"] = None
-        state["updated_at"] = state_now_iso()
-        ctx.save_state(state)
-
-        logger.info("=== PHASE 2 | cycle %s/%s: Codex implementation ===", cycle, max_cycles)
-        shared = truncate_shared(read_file(ctx.phase2_shared_file), args.max_shared_chars)
-        previous_open_findings = [str(item).upper() for item in phase2.get("open_findings", [])]
-        last_test_exit = phase2.get("last_test_exit")
-        last_test_snapshot = str(phase2.get("last_test_snapshot", "") or "")
-        test_failure_context = ""
-        if isinstance(last_test_exit, int) and last_test_exit != 0 and last_test_snapshot.strip():
-            # Push failing-test context into the prompt to prioritize red tests first.
-            test_failure_context = build_test_failure_block(last_test_snapshot, ctx.test_command)
-        impl_report = ctx.run_agent_checked(
-            agent_key="codex",
-            prompt=build_phase2_codex_implement_prompt(
-                task_text,
-                plan_text,
-                shared,
-                cycle,
-                format_findings_list(previous_open_findings),
-                test_failure_context=test_failure_context,
-            ),
-            log_prefix=f"phase2-cycle{cycle}-codex-implement",
-            max_retries=max(args.max_agent_retries, 0),
-            required_flags=["IMPLEMENTATION_READY"],
-        )
-        append_markdown(ctx.phase2_shared_file, f"Phase 2 / Cycle {cycle} / Codex Implement", impl_report)
-
-        logger.info("=== PHASE 2 | cycle %s/%s: local test snapshot ===", cycle, max_cycles)
-        test_exit, test_snapshot = ctx.run_tests_snapshot()
-        phase2["last_test_exit"] = test_exit
-        phase2["last_test_snapshot"] = test_snapshot
-        append_markdown(
-            ctx.phase2_shared_file,
-            f"Phase 2 / Cycle {cycle} / Orchestrator Tests",
-            test_snapshot,
-        )
-
-        logger.info("=== PHASE 2 | cycle %s/%s: Claude review ===", cycle, max_cycles)
-        shared = truncate_shared(read_file(ctx.phase2_shared_file), args.max_shared_chars)
-        try:
-            merge_base = resolve_merge_base(ctx.config.repo_root)
-            base_ref = merge_base.base_ref
-            base_commit = merge_base.commit
-            repository_changes = collect_repository_changes(
-                ctx.config.repo_root,
-                base_commit,
-            )
-        except NotGitRepositoryError as exc:
-            if not ctx.config.dry_run:
-                raise
-            base_ref = "dry-run-no-git"
-            base_commit = "DRY-RUN-NO-GIT"
-            logger.warning(
-                "Dry-run repository changes unavailable; using an empty simulation: %s",
-                exc,
-            )
-            repository_changes = RepositoryChanges(
-                repository_root=ctx.config.repo_root.resolve(),
-                merge_base=base_commit,
-                entries=(),
-                diff_text="",
-                fingerprint="0" * 64,
-            )
-        reported_files = parse_changed_files_from_impl_report(impl_report)
-        changed_files = merge_reported_paths(repository_changes, reported_files)
-        logger.info(
-            "Canonical repository changes: base_ref=%s merge_base=%s files=%s fingerprint=%s",
-            base_ref,
-            base_commit,
-            len(repository_changes.entries),
-            repository_changes.fingerprint,
-        )
-        file_snapshots = collect_file_snapshots(
-            changed_files=changed_files,
-            max_lines=args.file_snapshot_max_lines,
-            max_files=args.file_snapshot_max_files,
-            repository_root=ctx.config.repo_root,
-        )
-        claude_review = ctx.run_agent_checked(
-            agent_key="claude",
-            prompt=build_phase2_claude_review_prompt(
-                task_text=task_text,
-                plan_text=plan_text,
-                shared_text=shared,
-                file_snapshots=file_snapshots,
-                test_snapshot=test_snapshot,
-                cycle=cycle,
-                previous_open_block=format_findings_list(previous_open_findings),
-                snapshot=ctx.repo_snapshot(repository_changes),
-            ),
-            log_prefix=f"phase2-cycle{cycle}-claude-review",
-            max_retries=max(args.max_agent_retries, 0),
-            required_flags=["PHASE2_APPROVAL|CLAUDE_APPROVAL"],
-            output_validator=chain_validators(
-                validate_phase2_review_only_output,
-                functools.partial(
-                    validate_claude_phase2_contract_error,
-                    previous_open_findings=list(previous_open_findings),
-                ),
-            ),
-        )
-        append_markdown(ctx.phase2_shared_file, f"Phase 2 / Cycle {cycle} / Claude Review", claude_review)
-
-        implementation_ready = parse_flag(impl_report, "IMPLEMENTATION_READY") or "NO"
-        claude_approval = parse_first_flag(claude_review, ["PHASE2_APPROVAL", "CLAUDE_APPROVAL"]) or "NO"
-        parsed_open_findings = parse_open_findings(claude_review) or []
-        phase2["open_findings"] = parsed_open_findings
-        status_map = parse_finding_status_map(claude_review)
-        new_finding_map = parse_new_findings(claude_review)
-        finding_history = dict(phase2.get("finding_history", {}))
-        # Preserve per-cycle review decisions for traceability across retries.
-        for finding_id, value in status_map.items():
-            finding_history[finding_id] = value
-        for finding_id, value in new_finding_map.items():
-            finding_history[finding_id] = value
-        phase2["finding_history"] = finding_history
-        phase2["implementation_ready"] = implementation_ready
-        phase2["claude_approval"] = claude_approval
-        state["updated_at"] = state_now_iso()
-        ctx.save_state(state)
-
-        # Require all three gates to pass in the same cycle before marking phase complete.
-        if implementation_ready == "YES" and test_exit == 0 and claude_approval == "YES":
-            phase2["status"] = "completed"
-            phase2["completed_at"] = state_now_iso()
-            state["phase"] = "done"
-            state["updated_at"] = state_now_iso()
-            ctx.save_state(state)
-            logger.info("[OK] PHASE 2 completed: implementation approved and tests passed.")
-            return
-
-        logger.info(
-            "PHASE 2 not approved yet. IMPLEMENTATION_READY=%s, test_exit=%s, CLAUDE_APPROVAL=%s, OPEN_FINDINGS=%s.",
-            implementation_ready,
-            test_exit,
-            claude_approval,
-            format_findings_list(parsed_open_findings),
-        )
-
-    phase2["status"] = "failed"
-    phase2["error"] = "Phase 2 reached max cycles without approval/pass condition."
-    state["updated_at"] = state_now_iso()
-    ctx.save_state(state)
-    raise RuntimeError(phase2["error"])
+    raise FileNotFoundError(f"Task file not found: {path}")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    """Compatibility import for callers that still import from orchestrator."""
     from cli import parse_args as parse_cli_args
 
     return parse_cli_args(argv)
 
-def run_pipeline(task_file: Path, args: argparse.Namespace, force_new: bool = False) -> int:
+def _shorten(value: str | None, maximum: int) -> str:
+    text = value or ""
+    return text if len(text) <= maximum else text[: max(0, maximum - 3)] + "..."
+
+
+def _parse_flag(text: str, marker: str) -> str | None:
+    match = re.search(rf"^\s*{re.escape(marker)}\s*:\s*(.+?)\s*$", text, re.MULTILINE)
+    return match.group(1).strip() if match else None
+
+
+def _has_done(text: str) -> bool:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return bool(lines and lines[-1] == "STATUS: DONE")
+
+
+class ProductionWorkflowDriver(WorkflowDriver):
+    """Bind the deterministic v3 engine to real agents, Git, validation, and state."""
+
+    def __init__(
+        self,
+        *,
+        repository_root: Path,
+        state_file: Path,
+        agents: dict[str, AgentAdapter],
+        config: OrchestratorConfig,
+        allowed_roots: tuple[Path, ...],
+    ) -> None:
+        self.root = repository_root.resolve()
+        self.state_file = state_file.resolve()
+        self.agents = agents
+        self.config = config
+        self.allowed_roots = allowed_roots
+        self.log_dir = self.root / ".orchestrator" / "logs"
+        self.checkpoint_dir = self.root / ".orchestrator" / "checkpoints"
+        self.active_state: WorkflowState | None = None
+        self.last_codex_output = ""
+        self._repository_changes: dict[str, RepositoryChanges] = {}
+        self._rendered_changes: dict[str, WorkflowChanges] = {}
+
+    def bind_work_unit(self, state: WorkflowState) -> None:
+        self.active_state = state
+        if state.current_work_unit.kind is WorkUnitKind.PLAN and not self.last_codex_output:
+            artifact = (
+                self.root / ".orchestrator" / "runs" / state.run_id
+                / f"work-unit-{state.current_work_unit_id:04d}-codex.md"
+            )
+            if artifact.is_file():
+                self.last_codex_output = artifact.read_text(encoding="utf-8").strip()
+
+    def _agent(self, role: AgentRole, prompt: str, label: str) -> str:
+        output = run_agent_checked(
+            agent_key=role.value,
+            prompt=prompt,
+            log_prefix=label,
+            max_retries=0,
+            required_flags=[],
+            output_validator=None,
+            config=self.config,
+            agents=self.agents,
+            log_dir=self.log_dir,
+            write_file=write_file,
+            shorten=_shorten,
+            parse_flag=_parse_flag,
+            validate_done_marker=_has_done,
+        )
+        return output
+
+    def invoke_codex(self, invocation: CodexInvocation) -> str:
+        output = self._agent(
+            AgentRole.CODEX,
+            invocation.prompt,
+            f"work-unit-{invocation.work_unit_id:04d}-{invocation.step.value}",
+        )
+        self.last_codex_output = output
+        if self.active_state is not None:
+            run_dir = self.root / ".orchestrator" / "runs" / self.active_state.run_id
+            write_file(
+                run_dir / f"work-unit-{invocation.work_unit_id:04d}-codex.md",
+                output,
+            )
+        return output
+
+    def invoke_reviewer(self, invocation: ReviewerInvocation) -> str:
+        return self._agent(
+            invocation.reviewer,
+            invocation.prompt,
+            f"work-unit-{invocation.work_unit_id:04d}-{invocation.step.value}",
+        )
+
+    def repair_review_contract(self, invocation: ContractRepairInvocation) -> str:
+        prompt = (
+            "Repair only the formal output contract of the rejected review. Preserve its "
+            "verdict, findings, evidence, and rationale. Return the complete corrected answer.\n\n"
+            f"Validation error:\n{invocation.validation_error}\n\n"
+            f"Contract:\n{invocation.contract}\n\n"
+            f"Rejected output:\n{invocation.rejected_output}"
+        )
+        return self._agent(invocation.reviewer, prompt, "review-contract-repair")
+
+    def collect_changes(self, start_commit: str) -> WorkflowChanges:
+        changes = collect_repository_changes(self.root, start_commit)
+        if changes.entries:
+            rendered = WorkflowChanges(
+                start_commit=start_commit,
+                fingerprint=changes.fingerprint,
+                paths=changes.paths,
+                full_diff=changes.diff_text or "(binary or metadata-only repository change)",
+                gate_paths=changes.review_paths,
+            )
+            self._repository_changes[changes.fingerprint] = changes
+        elif (
+            self.active_state is not None
+            and self.active_state.current_work_unit.kind is WorkUnitKind.PLAN
+            and self.last_codex_output
+        ):
+            fingerprint = hashlib.sha256(
+                (start_commit + "\0" + self.last_codex_output).encode("utf-8")
+            ).hexdigest()
+            rendered = WorkflowChanges(
+                start_commit=start_commit,
+                fingerprint=fingerprint,
+                paths=(".orchestrator/plan-output.md",),
+                full_diff="Persisted Codex plan response:\n" + self.last_codex_output,
+            )
+        else:
+            raise NoWorkflowChangesError(
+                "the current review boundary contains no repository changes"
+            )
+        self._rendered_changes[rendered.fingerprint] = rendered
+        return rendered
+
+    def collect_correction_delta(
+        self, previous_fingerprint: str, current_fingerprint: str
+    ) -> str:
+        current = self._rendered_changes.get(current_fingerprint)
+        if current is None:
+            raise WorkflowExecutionError("current correction fingerprint was not collected")
+        return (
+            f"Correction delta since {previous_fingerprint}:\n"
+            f"{current.full_diff}"
+        )
+
+    def detect_test_changes(
+        self, changes: WorkflowChanges, patterns: tuple[str, ...]
+    ) -> TestChangeEvidence | None:
+        repository_changes = self._repository_changes.get(changes.fingerprint)
+        return (
+            None
+            if repository_changes is None
+            else detect_test_changes(repository_changes, patterns)
+        )
+
+    def validate(self, changes: WorkflowChanges, request) -> object:
+        return run_validation_matrix(config=self.config, request=request)
+
+    def prepare_correction(
+        self, findings: tuple[FindingRecord, ...]
+    ) -> WorkflowCorrectionBoundary:
+        if self.active_state is None:
+            raise WorkflowExecutionError("correction preparation has no active state")
+        identity = inspect_repository(self.root)
+        scope = tuple(
+            sorted(
+                {
+                    path
+                    for planned in self.active_state.planned_slices
+                    for path in planned.scope_paths
+                }
+            )
+        )
+        if not scope:
+            raise WorkflowExecutionError("final correction has no persisted planned scope")
+        start = collect_repository_changes(self.root, identity.head)
+        return WorkflowCorrectionBoundary(identity.head, scope, start.fingerprint)
+
+    def commit_slice(self, request: WorkflowCommitRequest) -> str:
+        if self.active_state is None:
+            raise WorkflowExecutionError("slice commit has no active state")
+        state = self.active_state
+        current = state.current_slice
+        if current.start_commit is None or current.start_fingerprint is None:
+            raise WorkflowExecutionError("slice commit has no persisted Git boundary")
+        boundary = SliceGitBoundary(
+            slice_id=current.slice_id,
+            branch=state.branch,
+            start_commit=current.start_commit,
+            start_fingerprint=current.start_fingerprint,
+            scope_paths=current.scope_paths,
+        )
+        summary = next(
+            (
+                item.summary
+                for item in state.planned_slices
+                if item.slice_id == current.slice_id
+            ),
+            "apply approved correction",
+        )
+        result = commit_slice(
+            repository_root=self.root,
+            boundary=boundary,
+            authorization=CommitAuthorization(
+                slice_id=request.slice_id,
+                diff_fingerprint=request.fingerprint,
+                attestation=request.attestation,
+                claude_review=request.claude_review,
+                antigravity_review=request.antigravity_review,
+                findings=request.findings,
+                red_state_followup_slice=request.red_state_followup_slice,
+            ),
+            title=summary,
+        )
+        return result.commit_hash
+
+    def checkpoint(self, state: WorkflowState, history: WorkflowHistory) -> None:
+        self._project_audit(state, history)
+        persisted = replace(
+            state,
+            runtime_history=_history_payload(state.runtime_history, history),
+        )
+        save_workflow_state(
+            self.state_file, persisted, allowed_roots=self.allowed_roots
+        )
+        write_workflow_checkpoint(
+            self.checkpoint_dir, persisted, allowed_roots=self.allowed_roots
+        )
+        self.active_state = persisted
+
+    def _project_audit(self, state: WorkflowState, history: WorkflowHistory) -> None:
+        """Write only managed audit blocks when the persisted plan names a target."""
+        if not history.events:
+            return
+        unit = state.current_work_unit
+        if unit.kind is WorkUnitKind.FINAL_REVIEW:
+            # Final-review evidence remains in state/checkpoints. Reusing the last Slice
+            # target would overwrite that Slice's own complete review lifecycle.
+            return
+        approval: AuthorizedTestChanges | None = None
+        if unit.active_test_fingerprint is not None:
+            decision = next(
+                (
+                    item for item in reversed(unit.gate_decisions)
+                    if item.approved
+                    and item.fingerprint == unit.active_test_fingerprint
+                    and item.paths == unit.active_test_paths
+                ),
+                None,
+            )
+            if decision is not None:
+                approval = AuthorizedTestChanges(
+                    approved=True,
+                    paths=decision.paths,
+                    approved_by=decision.decided_by,
+                    rationale=decision.rationale,
+                    approved_at=decision.decided_at,
+                    diff_fingerprint=decision.fingerprint,
+                )
+        projection = AuditProjection(
+            slice_id=state.current_slice_id,
+            events=history.events,
+            test_approval=approval,
+            implementation_ready=(
+                unit.kind is not WorkUnitKind.PLAN
+                and state.current_step not in {
+                    WorkflowStep.CODEX_IMPLEMENTATION,
+                    WorkflowStep.CODEX_CORRECTION,
+                    WorkflowStep.CODEX_FINAL_CORRECTION,
+                }
+            ),
+            commit_authorized=(
+                state.current_step is WorkflowStep.SLICE_COMMIT
+                or state.current_slice.status is SliceStatus.COMPLETED
+            ),
+        )
+        if unit.kind is WorkUnitKind.PLAN:
+            candidates = [Path(state.task_file)]
+            candidates.extend(
+                self.root / path
+                for planned in state.planned_slices
+                for path in planned.scope_paths
+                if path.startswith("docs/internal/") and path.endswith("work-plan.md")
+            )
+            for candidate in candidates:
+                try:
+                    document = validate_work_plan_document(
+                        repository_root=self.root, work_plan_path=candidate
+                    )
+                except ValueError:
+                    continue
+                project_work_plan_audit(document, projection)
+                return
+            logger.debug("No prepared work-plan audit target is present in the Slice plan.")
+            return
+        planned = next(
+            (item for item in state.planned_slices if item.slice_id == state.current_slice_id),
+            None,
+        )
+        if planned is None:
+            return
+        candidates = tuple(
+            path
+            for path in planned.scope_paths
+            if path.startswith("docs/internal/")
+            and f"-{state.current_slice_id:02d}-" in Path(path).name
+            and Path(path).suffix == ".md"
+        )
+        for path in candidates:
+            try:
+                document = validate_slice_document(
+                    repository_root=self.root,
+                    work_plan_path=next(
+                        (
+                            value
+                            for item in state.planned_slices
+                            for value in item.scope_paths
+                            if value.startswith("docs/internal/")
+                            and value.endswith("work-plan.md")
+                        ),
+                        "docs/internal/orchestrator-modernization-work-plan.md",
+                    ),
+                    slice_id=state.current_slice_id,
+                    expected_relative_path=path,
+                )
+            except ValueError:
+                continue
+            project_slice_audit(document, projection)
+            return
+        logger.debug("No prepared Slice audit target is present for Slice %s.", state.current_slice_id)
+
+
+def _context(
+    *, args: argparse.Namespace, assignment: str, state: WorkflowState
+) -> WorkflowContext:
+    planned = next(
+        (item for item in state.planned_slices if item.slice_id == state.current_slice_id),
+        None,
+    )
+    validation_matrix = args.repo_config.validation
+    if validation_matrix.default_command is None and str(args.test_command or "").strip():
+        validation_matrix = ValidationMatrix(
+            default_command=ValidationCommand(shell_command=str(args.test_command).strip()),
+            rules=validation_matrix.rules,
+        )
+    agents_path = Path(str(args.agents_file)).expanduser().resolve()
+    shared_instructions = (
+        agents_path.read_text(encoding="utf-8")[:12_000]
+        if agents_path.is_file()
+        else ""
+    )
+    effective_assignment = assignment
+    if shared_instructions:
+        effective_assignment += (
+            "\n\nRepository agent instructions (authoritative):\n" + shared_instructions
+        )
+    return WorkflowContext(
+        assignment=effective_assignment,
+        distilled_plan=(
+            "Follow the ordered, persisted slice plan and exact path allowlists."
+        ),
+        slice_summary=(planned.summary if planned is not None else "Plan the requested work."),
+        test_changes_approved=False,
+        manual_slice_gate=bool(args.manual_slice_gate),
+        path_classes=args.repo_config.paths,
+        stop_rules=args.repo_config.stop_rules,
+        current_branch=state.branch,
+        validation_matrix=validation_matrix,
+        retry_incomplete_validation=bool(args.retry_incomplete_validation),
+        quota_wait_policy=args.quota_wait_policy,
+        require_slice_plan=state.current_work_unit.kind is WorkUnitKind.PLAN,
+        dynamic_test_scope=True,
+    )
+
+
+def _history(state: WorkflowState) -> WorkflowHistory:
+    if state.runtime_history is None:
+        return WorkflowHistory(state.current_work_unit_id)
+    try:
+        raw = dict(state.runtime_history)
+        current = raw.get("current") if set(raw) == {"current", "archive"} else raw
+        history = WorkflowHistory.from_dict(current)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise WorkflowExecutionError(
+            f"persisted workflow history is invalid: {exc}"
+        ) from exc
+    if history.work_unit_id != state.current_work_unit_id:
+        return WorkflowHistory(state.current_work_unit_id)
+    return history
+
+
+def _history_payload(
+    existing: object, current: WorkflowHistory
+) -> dict[str, object]:
+    archive: list[object] = []
+    previous: object | None = None
+    if isinstance(existing, dict):
+        if set(existing) == {"current", "archive"}:
+            raw_archive = existing.get("archive")
+            if isinstance(raw_archive, list):
+                archive = list(raw_archive)
+            previous = existing.get("current")
+        else:
+            previous = existing
+    if isinstance(previous, dict):
+        previous_id = previous.get("work_unit_id")
+        archived_ids = {
+            item.get("work_unit_id")
+            for item in archive
+            if isinstance(item, dict)
+        }
+        if previous_id != current.work_unit_id and previous_id not in archived_ids:
+            archive.append(previous)
+    return {"current": current.to_dict(), "archive": archive}
+
+
+def _fresh_state(
+    *, task_file: Path, run_id: str, repository_root: Path
+) -> WorkflowState:
+    identity = inspect_repository(repository_root)
+    merge_base = resolve_merge_base(repository_root)
+    return init_workflow_state(
+        run_id=run_id,
+        task_file=str(task_file.resolve()),
+        branch=identity.branch,
+        branch_base=merge_base.commit,
+        first_slice_start_commit=identity.head,
+        slice_count=1,
+    )
+
+
+def run_production_workflow(
+    task_file: Path,
+    args: argparse.Namespace,
+    *,
+    force_new: bool = False,
+) -> WorkflowRunResult:
+    root = Path.cwd().resolve()
+    state_file = root / ".orchestrator" / "state.json"
+    task_file = task_file.resolve()
+    allowed_roots = tuple(dict.fromkeys((root, task_file.parent.resolve())))
+    run_id = str(getattr(args, "watch_run_id", "") or new_run_id())
+
+    loaded: WorkflowState | CompletedV2State | None = None
+    if state_file.exists() and not force_new:
+        try:
+            loaded = load_workflow_state(state_file, allowed_roots=allowed_roots)
+        except ActiveV2StateError:
+            if args.force_overwrite_state:
+                loaded = None
+            else:
+                raise
+    if args.resume:
+        if isinstance(loaded, CompletedV2State):
+            raise StateSchemaError(
+                "completed version-2 state cannot be resumed; start a new v3 run"
+            )
+        if loaded is None:
+            raise StateSchemaError("--resume requested but no version-3 state exists")
+        state = loaded
+        if state.task_file != str(task_file):
+            raise StateSchemaError("persisted task identity differs from --resume task")
+        if getattr(args, "watch_run_id", None) and state.run_id != args.watch_run_id:
+            raise StateSchemaError("persisted watch run identity differs from inbox task")
+    else:
+        if loaded is not None and not args.force_overwrite_state and not force_new:
+            raise StateSchemaError(
+                "existing state requires --resume or --force-overwrite-state"
+            )
+        state = _fresh_state(task_file=task_file, run_id=run_id, repository_root=root)
+
+    assignment = task_file.read_text(encoding="utf-8")
     config = OrchestratorConfig(
-        dry_run=bool(args.dry_run),
+        dry_run=False,
         agent_output_mode=args.agent_output,
-        agent_output_max_chars=max(MIN_AGENT_OUTPUT_MAX_CHARS, int(args.agent_output_max_chars)),
+        agent_output_max_chars=args.agent_output_max_chars,
         agent_live_stream=bool(args.agent_live_stream),
         agent_live_stream_mode=args.agent_live_stream_mode,
         agent_live_stream_channels=args.agent_live_stream_channels,
-        repo_root=Path.cwd().resolve(),
+        repo_root=root,
         strict_preflight=bool(args.strict_preflight),
     )
-    agents_file = Path(str(args.agents_file)).expanduser().resolve()
-    ctx = RunContext(
-        config=config,
-        test_command=str(args.test_command or ""),
-        agents_instructions=load_agents_instructions(agents_file),
+    driver = ProductionWorkflowDriver(
+        repository_root=root,
+        state_file=state_file,
         agents=build_agent_registry(args.agent_settings),
+        config=config,
+        allowed_roots=allowed_roots,
+    )
+    engine = WorkflowEngine(driver)
+    driver.checkpoint(state, _history(state))
+
+    for _ in range(100):
+        history = _history(state)
+        current = state.current_work_unit
+        if current.status in {WorkUnitStatus.WAITING_FOR_QUOTA, WorkUnitStatus.AWAITING_RESUME}:
+            if not args.resume:
+                return WorkflowRunResult(state, history)
+            state = state.resume_after_invocation_halt()
+            driver.checkpoint(state, history)
+        elif current.status is WorkUnitStatus.AWAITING_USER_DECISION:
+            if args.gate_decision is not None:
+                decided = engine.decide_current_gate(
+                    state,
+                    history,
+                    approved=args.gate_decision,
+                    decided_by=args.gate_actor,
+                    decided_at=state.updated_at,
+                    rationale=args.gate_rationale,
+                )
+                state, history = decided.state, decided.history
+                if not args.gate_decision:
+                    return decided
+            elif (
+                args.resume
+                and not args.auto_resume
+                and current.gate.fingerprint is None
+            ):
+                state = state.resume_after_user_decision()
+                driver.checkpoint(state, history)
+            else:
+                return WorkflowRunResult(state, history)
+
+        current = state.current_work_unit
+        if (
+            current.status is WorkUnitStatus.IN_PROGRESS
+            and current.kind is WorkUnitKind.SLICE
+            and not state.current_slice.scope_paths
+        ):
+            identity = inspect_repository(root)
+            expected_head = state.current_slice.start_commit
+            if expected_head is None:
+                raise WorkflowExecutionError(
+                    "unbound Slice has no persisted start commit"
+                )
+            if identity.head != expected_head:
+                state = state.await_policy_gate(
+                    reason=GateReason.UNEXPECTED_FILE,
+                    detail=(
+                        "SLICE-HEAD-DRIFT | repository HEAD changed after the "
+                        f"Slice boundary was planned: expected {expected_head}, "
+                        f"found {identity.head}"
+                    ),
+                )
+                driver.checkpoint(state, history)
+                return WorkflowRunResult(state, history)
+            planned = state.planned_slices[state.current_slice_id - 1]
+            start = collect_repository_changes(root, expected_head)
+            state = state.bind_current_slice_git_boundary(
+                start_commit=expected_head,
+                scope_paths=planned.scope_paths,
+                start_fingerprint=start.fingerprint,
+            )
+            driver.checkpoint(state, history)
+            current = state.current_work_unit
+        if current.status is WorkUnitStatus.IN_PROGRESS:
+            result = engine.run_current_work_unit(
+                state, _context(args=args, assignment=assignment, state=state), history
+            )
+            state = driver.active_state or result.state
+            if not result.completed:
+                return WorkflowRunResult(state, result.history, result.commit_ref)
+            current = state.current_work_unit
+
+        if current.kind is WorkUnitKind.FINAL_REVIEW:
+            return WorkflowRunResult(state, _history(state))
+
+        if current.kind is WorkUnitKind.PLAN:
+            if not state.planned_slices:
+                raise WorkflowExecutionError("completed plan has no persisted SLICE_PLAN")
+            state = state.start_work_unit(
+                slice_id=1,
+                kind=WorkUnitKind.SLICE,
+                step=WorkflowStep.CODEX_IMPLEMENTATION,
+            )
+            driver.checkpoint(state, WorkflowHistory(state.current_work_unit_id))
+            continue
+
+        pending = next(
+            (item for item in state.slices if item.status is SliceStatus.PENDING), None
+        )
+        if pending is not None:
+            identity = inspect_repository(root)
+            state = state.start_work_unit(
+                slice_id=pending.slice_id,
+                kind=WorkUnitKind.SLICE,
+                step=WorkflowStep.CODEX_IMPLEMENTATION,
+                slice_start_commit=identity.head,
+            )
+            driver.checkpoint(state, WorkflowHistory(state.current_work_unit_id))
+            continue
+
+        state = state.start_final_review_work_unit()
+        driver.checkpoint(state, WorkflowHistory(state.current_work_unit_id))
+
+    raise WorkflowExecutionError("workflow session exceeded its deterministic transition bound")
+
+
+def run_default_dry_run(task_file: Path, *, run_id: str | None = None):
+    """Exercise plan, two commits, and final review without agents or repository writes."""
+    from dry_run_scenarios import (
+        DryRunScenario,
+        ScriptedAgentEvent,
+        ScriptedChange,
+        ScriptedCommit,
+        ScriptedInitialState,
+        ScriptedValidation,
+        ScriptedWorkflowSession,
+        build_scenario_context,
+        build_scenario_state,
     )
 
-    ctx.init_dirs()
+    base = "a" * 40
+    commit1 = "b" * 40
+    commit2 = "c" * 40
+    plan_fp, first_fp, second_fp, final_fp = (value * 64 for value in "1234")
 
-    if args.resume and ctx.state_file.exists() and not force_new:
-        try:
-            state = ctx.ensure_state_shape(ctx.load_state(), task_file, args)
-        except StateSchemaError as exc:
-            logger.error("Cannot resume persisted state: %s", exc)
-            return 1
-        if not args.no_recover:
-            # Restore last checkpoint to avoid continuing from a partially updated state.
-            state = ctx.recover_state_from_checkpoint(state)
-            ctx.save_state(state)
-        logger.info("Loaded state from %s", ctx.state_file)
-        watch_run_id = getattr(args, "watch_run_id", None)
-        if watch_run_id is not None and (
-            str(state["artifacts"]["run_id"]) != str(watch_run_id)
-            or Path(str(state["task_file"])).resolve() != task_file.resolve()
-        ):
-            logger.error(
-                "Watch resume identity differs from persisted state: run=%s task=%s",
-                watch_run_id,
-                task_file,
+    def review(role: AgentRole, marker: str) -> str:
+        return "\n".join(
+            (
+                f"REVIEWER: {role.value}",
+                "TEST_FILES_TOUCHED: NONE",
+                "REVIEW_EVIDENCE: correctness, contracts, failure paths, security, resume | "
+                "runtime drift | a provider changes its output envelope",
+                "PRE_MORTEM: a resumed invocation uses stale evidence",
+                f"{marker}: YES",
+                "STATUS: DONE",
             )
-            return 1
-        ctx.configure_artifacts(state["artifacts"])
-        write_file(ctx.latest_run_file, str(state["artifacts"]["run_dir"]))
-    else:
-        # Start a fresh run unless explicit resume is requested and available.
-        if (
-            ctx.state_file.exists()
-            and not args.resume
-            and not args.force_overwrite_state
-            and not force_new
-        ):
-            logger.warning("Existing state at %s will be overwritten.", ctx.state_file)
-            try:
-                confirm = input("Continue and overwrite? [y/N] ").strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                logger.info("Aborted.")
-                return 1
-            if confirm != "y":
-                logger.info("Use --resume to continue the existing run.")
-                return 0
-        artifacts = ctx.build_artifact_paths(
-            str(getattr(args, "watch_run_id", "") or ctx.new_run_id())
         )
-        ctx.configure_artifacts(artifacts)
-        state = ctx.init_state(task_file, args.phase1_max_cycles, args.phase2_max_cycles, artifacts)
-        ctx.save_state(state)
-        logger.info("Initialized new state at %s", ctx.state_file)
-        write_file(ctx.latest_run_file, str(artifacts["run_dir"]))
 
-    ctx.run_artifact_dir.mkdir(parents=True, exist_ok=True)
+    def slice_approval(role: AgentRole, slice_id: str) -> str:
+        return "\n".join(
+            (
+                f"REVIEWER: {role.value}",
+                "TEST_FILES_TOUCHED: NONE",
+                "REVIEW_EVIDENCE: correctness, contracts, failure paths, security, resume | "
+                "runtime drift | a provider changes its output envelope",
+                "PRE_MORTEM: a resumed invocation uses stale evidence",
+                f"SLICE_APPROVAL: {slice_id} | YES",
+                "STATUS: DONE",
+            )
+        )
 
-    task_text = read_file(task_file)
-    write_file(ctx.task_snapshot_file, task_text)
+    scenario = DryRunScenario(
+        name="default-v3-cutover",
+        initial=ScriptedInitialState(kind=WorkUnitKind.PLAN, slice_count=2),
+        agent_events=(
+            ScriptedAgentEvent(AgentRole.CODEX, 1, 1, WorkflowStep.CODEX_PLAN,
+                               "PLAN_READY: YES\nSTATUS: DONE"),
+            ScriptedAgentEvent(AgentRole.CLAUDE, 1, 1, WorkflowStep.CLAUDE_PLAN_REVIEW,
+                               review(AgentRole.CLAUDE, "PLAN_APPROVAL")),
+            ScriptedAgentEvent(AgentRole.CODEX, 2, 1, WorkflowStep.CODEX_IMPLEMENTATION,
+                               "TEST_FILES_TOUCHED: NONE\nIMPLEMENTATION_READY: 01 | YES\nSTATUS: DONE"),
+            ScriptedAgentEvent(AgentRole.CLAUDE, 2, 1, WorkflowStep.CLAUDE_SLICE_REVIEW,
+                               slice_approval(AgentRole.CLAUDE, "01")),
+            ScriptedAgentEvent(AgentRole.ANTIGRAVITY, 2, 1, WorkflowStep.ANTIGRAVITY_SLICE_REVIEW,
+                               slice_approval(AgentRole.ANTIGRAVITY, "01")),
+            ScriptedAgentEvent(AgentRole.CODEX, 3, 1, WorkflowStep.CODEX_IMPLEMENTATION,
+                               "TEST_FILES_TOUCHED: NONE\nIMPLEMENTATION_READY: 02 | YES\nSTATUS: DONE"),
+            ScriptedAgentEvent(AgentRole.CLAUDE, 3, 1, WorkflowStep.CLAUDE_SLICE_REVIEW,
+                               slice_approval(AgentRole.CLAUDE, "02")),
+            ScriptedAgentEvent(AgentRole.ANTIGRAVITY, 3, 1, WorkflowStep.ANTIGRAVITY_SLICE_REVIEW,
+                               slice_approval(AgentRole.ANTIGRAVITY, "02")),
+            ScriptedAgentEvent(AgentRole.CODEX, 4, 1, WorkflowStep.CODEX_FINAL_REVIEW,
+                               "FINAL_REPORT_READY: YES\nSTATUS: DONE"),
+            ScriptedAgentEvent(AgentRole.CLAUDE, 4, 1, WorkflowStep.CLAUDE_FINAL_REVIEW,
+                               review(AgentRole.CLAUDE, "FINAL_APPROVAL")),
+            ScriptedAgentEvent(AgentRole.ANTIGRAVITY, 4, 1, WorkflowStep.ANTIGRAVITY_FINAL_REVIEW,
+                               review(AgentRole.ANTIGRAVITY, "FINAL_APPROVAL")),
+        ),
+        changes=(
+            ScriptedChange(1, 1, base, plan_fp, ("docs/internal/plan.md",), "plan diff"),
+            ScriptedChange(2, 1, base, first_fp, ("src/first.py",), "first slice diff"),
+            ScriptedChange(3, 1, commit1, second_fp, ("src/second.py",), "second slice diff"),
+            ScriptedChange(4, 1, base, final_fp,
+                           ("src/first.py", "src/second.py"), "full branch diff"),
+        ),
+        validations=tuple(
+            ScriptedValidation(fingerprint, "pass")
+            for fingerprint in (plan_fp, first_fp, second_fp, final_fp)
+        ),
+        commits=(
+            ScriptedCommit(1, first_fp, commit1),
+            ScriptedCommit(2, second_fp, commit2),
+        ),
+    )
+    session = ScriptedWorkflowSession(scenario)
+    context = build_scenario_context(scenario)
+    state = build_scenario_state(scenario, task_file=task_file)
+    if run_id is not None:
+        state = replace(state, run_id=run_id)
+    plan = session.run(state, context)
+    state = plan.result.state.start_work_unit(
+        slice_id=1, kind=WorkUnitKind.SLICE, step=WorkflowStep.CODEX_IMPLEMENTATION
+    ).bind_current_slice_git_boundary(
+        start_commit=base, scope_paths=("src/first.py",), start_fingerprint="0" * 64
+    )
+    first = session.run(state, context)
+    state = first.result.state.start_work_unit(
+        slice_id=2, kind=WorkUnitKind.SLICE, step=WorkflowStep.CODEX_IMPLEMENTATION,
+        slice_start_commit=commit1,
+    ).bind_current_slice_git_boundary(
+        start_commit=commit1, scope_paths=("src/second.py",), start_fingerprint="0" * 64
+    )
+    second = session.run(state, context)
+    final = session.engine.run_final_review(second.result.state, context)
+    return final, tuple(session.driver.calls), dict(session.driver.validation_counts)
 
-    if args.from_phase:
-        # Expert override for restarting directly from a specific phase.
-        state["phase"] = args.from_phase
-        state["updated_at"] = state_now_iso()
-        ctx.save_state(state)
 
-    required_agents = ["claude", "codex"]
-    if not ctx.preflight(
-        required_agents,
-        strict=args.strict_preflight,
-        skip_git_check=bool(args.skip_git_check),
-    ):
+def run_pipeline(
+    task_file: Path,
+    args: argparse.Namespace,
+    force_new: bool = False,
+) -> int | WatchTaskResult:
+    try:
+        if args.dry_run:
+            result, calls, validations = run_default_dry_run(
+                task_file, run_id=getattr(args, "watch_run_id", None)
+            )
+            logger.info(
+                "Default state-v3 dry-run completed: work_units=%s commits=%s validations=%s",
+                result.state.current_work_unit_id,
+                sum(call.startswith("commit:") for call in calls),
+                sum(validations.values()),
+            )
+        else:
+            result = run_production_workflow(task_file, args, force_new=force_new)
+    except (
+        OSError,
+        GitTransactionError,
+        RepositoryChangeError,
+        StateSchemaError,
+        WorkflowExecutionError,
+        ValueError,
+    ) as exc:
+        logger.error("State-v3 workflow failed: %s", exc)
         return 1
 
-    current_phase = state.get("phase", "phase1")
-
-    # Resume logic: run phase 1 unless already completed in persisted state.
-    if current_phase in ("phase1", "phase2") and state["phase1"].get("status") != "completed":
-        try:
-            run_phase1(task_text, state, args, ctx)
-        except QuotaReachedError as exc:
-            freeze_current_phase(state, exc, ctx)
-            return 2
-        except (AgentInvocationError, AgentCompatibilityError, AgentBudgetError, AgentPermissionError) as exc:
-            logger.error("Agent invocation gate: %s", exc)
-            return 3
-
-    if state["phase1"].get("status") != "completed":
-        logger.error("Phase 1 is not completed. Stopping before implementation.")
-        return 1
-
-    if args.manual_gate and state["phase2"].get("status") != "completed":
-        if not approval_gate("PHASE 1 completed. Start PHASE 2 (implementation)?"):
-            logger.info("Pipeline aborted at phase transition gate.")
-            return 1
-
-    if state["phase2"].get("status") != "completed":
-        plan_text = read_file(ctx.phase1_shared_file)
-        try:
-            run_phase2(task_text, plan_text, state, args, ctx)
-        except QuotaReachedError as exc:
-            freeze_current_phase(state, exc, ctx)
-            return 2
-        except (
-            AgentInvocationError,
-            AgentCompatibilityError,
-            AgentBudgetError,
-            AgentPermissionError,
-        ) as exc:
-            logger.error("Agent invocation gate: %s", exc)
-            return 3
-        except RepositoryChangeError as exc:
-            logger.error("Repository change gate: %s", exc)
-            return 1
-
-    if state["phase2"].get("status") != "completed":
-        logger.error("Phase 2 did not complete successfully.")
-        return 1
-
-    logger.info("Pipeline completed successfully.")
-    logger.info("Artifacts:")
-    logger.info("  - %s", ctx.task_snapshot_file)
-    logger.info("  - %s", ctx.phase1_shared_file)
-    logger.info("  - %s", ctx.phase2_shared_file)
-    logger.info("  - latest pointer: %s", ctx.latest_run_file)
-    logger.info("State: %s", ctx.state_file)
-    print_summary_report(state)
-    return 0
+    if getattr(args, "watch_run_id", None) is not None:
+        return WatchTaskResult.from_workflow(result)
+    return result.exit_code
 
 
 def main() -> int:
-    """Delegate the executable interface to the Python CLI module."""
     from cli import main as cli_main
 
     return cli_main(
@@ -1167,6 +878,7 @@ def main() -> int:
         watch_inbox_fn=watch_inbox,
         find_task_file_fn=find_task_file,
     )
+
 
 if __name__ == "__main__":
     raise SystemExit(main())

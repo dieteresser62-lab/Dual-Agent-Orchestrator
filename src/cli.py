@@ -30,7 +30,6 @@ DEFAULT_AGENTS_FILE = (PROJECT_ROOT / "AGENTS.md").resolve()
 DEFAULT_CONFIG_NAME = "orchestrator.toml"
 DEFAULT_TASK_FILE = "task.md"
 DEFAULT_TEST_COMMAND = ""
-DEFAULT_MAX_SHARED_CHARS = 30000
 DEFAULT_WATCH_STREAM_CHANNELS = "stdout"
 WATCH_STREAM_CHANNELS = ("both", "stdout", "stderr")
 
@@ -357,19 +356,39 @@ def _read_state_for_auto_resume(state_file: Path) -> tuple[bool, bool, bool]:
         return True, False, False
     if not isinstance(data, dict):
         return True, False, False
-    completed = str(data.get("phase", "")).strip().lower() == "done"
-    frozen = any(
-        str((data.get(phase) or {}).get("status", "")).strip().lower() == "frozen"
-        for phase in ("phase1", "phase2")
-        if isinstance(data.get(phase), dict)
-    )
+    if data.get("version") == 3:
+        units = data.get("work_units")
+        slices = data.get("slices")
+        current_id = data.get("current_work_unit_id")
+        current = next(
+            (
+                item for item in units
+                if isinstance(item, dict) and item.get("work_unit_id") == current_id
+            ),
+            {},
+        ) if isinstance(units, list) else {}
+        completed = (
+            current.get("kind") == "final_review"
+            and current.get("status") == "completed"
+            and isinstance(slices, list)
+            and bool(slices)
+            and all(isinstance(item, dict) and item.get("status") == "completed" for item in slices)
+        )
+        frozen = current.get("status") in {"waiting_for_quota", "awaiting_resume"}
+    else:
+        completed = str(data.get("phase", "")).strip().lower() == "done"
+        frozen = any(
+            str((data.get(phase) or {}).get("status", "")).strip().lower() == "frozen"
+            for phase in ("phase1", "phase2")
+            if isinstance(data.get(phase), dict)
+        )
     return True, completed, frozen
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Orchestrates a dual-agent workflow with two phases and shared Markdown artifacts. "
+            "Orchestrates the resumable state-v3 slice workflow with bounded reviews. "
             "Agent failures stop the run; agents are never substituted."
         )
     )
@@ -402,29 +421,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Overwrite existing orchestrator state without confirmation prompt.",
     )
     parser.add_argument(
-        "--from-phase",
-        choices=["phase1", "phase2"],
-        help="Force the starting phase instead of using persisted state.",
-    )
-    parser.add_argument(
-        "--max-agent-retries",
-        type=int,
-        default=1,
-        help="Retries per agent call after the first failure (default: 1).",
-    )
-    parser.add_argument(
-        "--phase1-max-cycles",
-        type=int,
-        default=4,
-        help="Maximum planning cycles in phase 1 (default: 4).",
-    )
-    parser.add_argument(
-        "--phase2-max-cycles",
-        type=int,
-        default=6,
-        help="Maximum implementation/review cycles in phase 2 (default: 6).",
-    )
-    parser.add_argument(
         "--strict-preflight",
         action="store_true",
         help="Fail preflight when provider DNS resolution fails.",
@@ -434,12 +430,6 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=None,
         help="Skip git cleanliness checks; enabled by default only in watch mode.",
-    )
-    parser.add_argument("--auto", action="store_true", default=True, help=argparse.SUPPRESS)
-    parser.add_argument(
-        "--manual-gate",
-        action="store_true",
-        help="Require confirmation before starting phase 2.",
     )
     parser.add_argument(
         "--manual-slice-gate",
@@ -470,11 +460,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="Simulate agent responses and tests to validate workflow wiring.",
-    )
-    parser.add_argument(
-        "--development-mode",
-        action="store_true",
-        help="Enable the additive state-v3 development workflow until the Slice-18 cutover.",
     )
     parser.add_argument(
         "--dry-run-scenario",
@@ -526,29 +511,6 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="Quota-wait heartbeat interval in seconds (default: 30).",
-    )
-    parser.add_argument(
-        "--max-shared-chars",
-        type=int,
-        default=DEFAULT_MAX_SHARED_CHARS,
-        help=f"Maximum shared-history characters in prompts (default: {DEFAULT_MAX_SHARED_CHARS}).",
-    )
-    parser.add_argument(
-        "--file-snapshot-max-lines",
-        type=int,
-        default=500,
-        help="Maximum lines per changed-file review snapshot (default: 500).",
-    )
-    parser.add_argument(
-        "--file-snapshot-max-files",
-        type=int,
-        default=10,
-        help="Maximum changed files included in a review snapshot (default: 10).",
-    )
-    parser.add_argument(
-        "--no-recover",
-        action="store_true",
-        help="Disable recovery from the latest cycle checkpoint.",
     )
     parser.add_argument(
         "--agent-output",
@@ -636,8 +598,6 @@ def parse_args(
 
     if args.dry_run_scenario and not args.dry_run:
         parser.error("--dry-run-scenario requires --dry-run")
-    if args.dry_run_scenario and not args.development_mode:
-        parser.error("--dry-run-scenario requires --development-mode")
     if args.dry_run_report and not args.dry_run_scenario:
         parser.error("--dry-run-report requires --dry-run-scenario")
 

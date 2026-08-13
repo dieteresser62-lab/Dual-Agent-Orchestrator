@@ -7,6 +7,8 @@ from enum import Enum
 from pathlib import PurePosixPath
 from typing import Any, Mapping
 
+from contracts import PlannedSlice
+
 
 STATE_VERSION = 3
 DEFAULT_MAX_CODEX_RETURNS = 4
@@ -832,6 +834,8 @@ class WorkflowState:
     current_step: WorkflowStep
     slices: tuple[SliceRecord, ...]
     work_units: tuple[WorkUnitRecord, ...]
+    planned_slices: tuple[PlannedSlice, ...] = ()
+    runtime_history: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if self.version != STATE_VERSION:
@@ -875,6 +879,30 @@ class WorkflowState:
             raise WorkflowStateValidationError(
                 "top-level current_step must match the current work unit"
             )
+        if self.planned_slices:
+            plan_ids = tuple(item.slice_id for item in self.planned_slices)
+            if plan_ids != tuple(range(1, len(plan_ids) + 1)):
+                raise WorkflowStateValidationError(
+                    "planned slice ids must be contiguous and 1-based"
+                )
+            if len(self.planned_slices) > len(self.slices):
+                raise WorkflowStateValidationError(
+                    "planned slice count cannot exceed persisted slices"
+                )
+            extra_slice_ids = {
+                item.slice_id for item in self.slices[len(self.planned_slices):]
+            }
+            if any(
+                unit.slice_id in extra_slice_ids and unit.kind is not WorkUnitKind.CORRECTION
+                for unit in self.work_units
+            ):
+                raise WorkflowStateValidationError(
+                    "only correction work units may extend the persisted Slice plan"
+                )
+        if self.runtime_history is not None and not isinstance(
+            self.runtime_history, Mapping
+        ):
+            raise WorkflowStateValidationError("runtime_history must be an object")
 
     @property
     def current_work_unit(self) -> WorkUnitRecord:
@@ -908,6 +936,44 @@ class WorkflowState:
         return self._replace_current_unit(
             replace(current, current_step=step),
             updated_at=updated_at,
+        )
+
+    def bind_slice_plan(
+        self,
+        planned_slices: tuple[PlannedSlice, ...],
+        *,
+        first_start_commit: str,
+        updated_at: str | None = None,
+    ) -> WorkflowState:
+        """Persist Codex's ordered allowlists before any implementation step."""
+        if self.current_work_unit.kind is not WorkUnitKind.PLAN:
+            raise WorkflowStateValidationError("slice plan can only be bound during planning")
+        if not planned_slices:
+            raise WorkflowStateValidationError("slice plan must not be empty")
+        _require_non_empty(first_start_commit, "first_start_commit")
+        expected_ids = tuple(range(1, len(planned_slices) + 1))
+        if tuple(item.slice_id for item in planned_slices) != expected_ids:
+            raise WorkflowStateValidationError(
+                "planned slice ids must be contiguous and 1-based"
+            )
+        if self.planned_slices and self.planned_slices != planned_slices:
+            if any(item.status is SliceStatus.COMPLETED for item in self.slices):
+                raise WorkflowStateValidationError(
+                    "cannot revise the slice plan after implementation commits"
+                )
+        slices = tuple(
+            SliceRecord(
+                slice_id=item.slice_id,
+                status=(SliceStatus.IN_PROGRESS if item.slice_id == 1 else SliceStatus.PENDING),
+                start_commit=(first_start_commit if item.slice_id == 1 else None),
+            )
+            for item in planned_slices
+        )
+        return replace(
+            self,
+            slices=slices,
+            planned_slices=planned_slices,
+            updated_at=updated_at or _now_iso(),
         )
 
     def complete_current_work_unit(self, *, updated_at: str | None = None) -> WorkflowState:
@@ -1519,13 +1585,20 @@ class WorkflowState:
             "current_step": self.current_step.value,
             "slices": [item.to_dict() for item in self.slices],
             "work_units": [item.to_dict() for item in self.work_units],
+            "planned_slices": [
+                {
+                    "slice_id": item.slice_id,
+                    "summary": item.summary,
+                    "scope_paths": list(item.scope_paths),
+                }
+                for item in self.planned_slices
+            ],
+            "runtime_history": self.runtime_history,
         }
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> WorkflowState:
-        _require_exact_keys(
-            raw,
-            {
+        legacy_keys = {
                 "version",
                 "run_id",
                 "task_file",
@@ -1538,9 +1611,44 @@ class WorkflowState:
                 "current_step",
                 "slices",
                 "work_units",
-            },
-            "workflow state",
-        )
+            }
+        current_keys = {*legacy_keys, "planned_slices", "runtime_history"}
+        if set(raw) == legacy_keys:
+            planned_slices: tuple[PlannedSlice, ...] = ()
+            runtime_history = None
+        else:
+            _require_exact_keys(raw, current_keys, "workflow state")
+            raw_plan = _list(raw["planned_slices"], "planned_slices")
+            planned: list[PlannedSlice] = []
+            for index, item in enumerate(raw_plan):
+                plan_item = _mapping(item, f"planned_slices[{index}]")
+                _require_exact_keys(
+                    plan_item,
+                    {"slice_id", "summary", "scope_paths"},
+                    f"planned_slices[{index}]",
+                )
+                try:
+                    planned.append(
+                        PlannedSlice(
+                            slice_id=_positive_int(
+                                plan_item["slice_id"], f"planned_slices[{index}].slice_id"
+                            ),
+                            summary=_string(
+                                plan_item["summary"], f"planned_slices[{index}].summary"
+                            ),
+                            scope_paths=_string_tuple(
+                                plan_item["scope_paths"],
+                                f"planned_slices[{index}].scope_paths",
+                            ),
+                        )
+                    )
+                except ValueError as exc:
+                    raise WorkflowStateValidationError(str(exc)) from exc
+            planned_slices = tuple(planned)
+            history_raw = raw["runtime_history"]
+            runtime_history = (
+                None if history_raw is None else _mapping(history_raw, "runtime_history")
+            )
         slices_raw = _list(raw["slices"], "slices")
         units_raw = _list(raw["work_units"], "work_units")
         return cls(
@@ -1560,6 +1668,8 @@ class WorkflowState:
             work_units=tuple(
                 WorkUnitRecord.from_dict(_mapping(item, "work unit")) for item in units_raw
             ),
+            planned_slices=planned_slices,
+            runtime_history=runtime_history,
         )
 
 
@@ -1570,6 +1680,7 @@ def init_workflow_state(
     branch: str,
     branch_base: str,
     slice_count: int,
+    first_slice_start_commit: str | None = None,
     timestamp: str | None = None,
 ) -> WorkflowState:
     _require_positive_int(slice_count, "slice_count")
@@ -1578,7 +1689,7 @@ def init_workflow_state(
         SliceRecord(
             slice_id=slice_id,
             status=SliceStatus.IN_PROGRESS if slice_id == 1 else SliceStatus.PENDING,
-            start_commit=branch_base if slice_id == 1 else None,
+            start_commit=(first_slice_start_commit or branch_base) if slice_id == 1 else None,
         )
         for slice_id in range(1, slice_count + 1)
     )
@@ -1689,9 +1800,9 @@ def _require_canonical_scope(values: tuple[str, ...]) -> None:
         path = PurePosixPath(value)
         if path.is_absolute() or not path.parts or any(
             part in ("", ".", "..") for part in path.parts
-        ):
+        ) or path.parts[0] == ".orchestrator":
             raise WorkflowStateValidationError(
-                "slice scope_paths must be sorted, unique, relative POSIX paths"
+                "slice scope_paths must be sorted, unique, relative POSIX paths outside .orchestrator"
             )
 
 

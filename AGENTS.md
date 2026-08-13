@@ -1,60 +1,53 @@
-## Purpose
-- Runtime policy for all orchestrated agents used by `run_task`.
-- Defines stable output markers consumed by `src/orchestrator.py`.
-- Must stay aligned with prompt contracts in `src/prompts.py`.
-- Is the single source of truth for shared execution, safety, validation, and output-contract rules.
-- Project-specific architecture and coding conventions belong in the target repository's local agent files.
+# Orchestrated Agent Contract
 
-## Execution Policy
-- Start implementation/review immediately for actionable tasks.
-- Ask clarifying questions only when:
-  - requirements are technically ambiguous,
-  - there are multiple valid directions with materially different trade-offs,
-  - permissions/secrets/external approvals are required,
-  - a destructive operation is being considered.
-- After edits, run relevant validation and report:
-  - what changed,
-  - test/lint results,
-  - remaining risks.
+## Runtime policy
 
-## Repository Rules
-- Source of truth for orchestration behavior:
-  - `src/orchestrator.py`
-  - `src/prompts.py`
-  - `src/state_io.py`
-- Do not manually edit `.orchestrator/state.json` or checkpoint files.
-- Orchestrated runs may execute in a dirty worktree. Treat unrelated existing changes as pre-existing context, not as a stop condition.
-- Keep instruction files synchronized and non-contradictory:
-  - `AGENTS.md`
-  - `CLAUDE.md`
-  - `CODEX.md`
-  - `GEMINI.md`
+- Start actionable planning, implementation, or review immediately.
+- Ask only for material ambiguity, missing authority, secrets, or destructive action.
+- Treat unrelated dirty-worktree changes as pre-existing context and never overwrite them.
+- Do not edit `.orchestrator/state.json` or checkpoints manually.
+- After orchestration, prompt, parser, watch, or state changes run `python3 -m pytest tests/ -v`.
+- Keep `AGENTS.md`, `CLAUDE.md`, `CODEX.md`, and `ANTIGRAVITY.md` synchronized.
+- Never push, merge, force-push, rewrite history, or run destructive cleanup without explicit approval.
 
-## Validation Command
-- Default: `python3 -m pytest tests/ -v`
-- Mandatory after changes to orchestration flow, prompt contracts, parsing, fallback logic, watch mode, or state handling.
+## State-v3 workflow
 
-## Safety
-- No destructive commands (for example `rm -rf`, hard reset, history rewrite, force push) without explicit approval.
-- Never commit secrets, tokens, credentials, or sensitive local paths.
-- Keep scope limited to the assigned task.
+- Codex plans and implements. It never approves its own work.
+- Claude reviews every plan, every implementation round, and the full branch. Use Sonnet with effort `high`.
+- Antigravity reviews each slice and the final branch exactly once after Claude approves the same fingerprint; it does not review plans and never replaces Claude.
+- Only the orchestrator runs deterministic validation and creates fingerprint-bound attestations.
+- Agents must not run the full validation matrix or emit `VALIDATION_RESULT`.
+- Review the supplied change evidence adversarially across correctness, contracts, failure paths, security boundaries, and resume/idempotency behavior.
+- A positive review requires either concrete finding records or `REVIEW_EVIDENCE` containing checked dimensions, largest residual risk, and a realistic break condition.
+- A positive review also requires `PRE_MORTEM`, a complete authorized attestation for the same fingerprint, and no reviewer-owned open blocker.
+- Only the reporting reviewer may close or reclassify its finding. Codex may answer it with `FINDING_RESPONSE`; rejection does not close it.
+- Missing, inconsistent, or unparsable verdicts are denials. A stop request replaces readiness or approval.
 
-## Dual-Agent Contract
-- Review/planning outputs must end with `STATUS: DONE` as the final non-empty line.
-- Approval markers by phase:
-  - Phase 1 review/confirmation: `PHASE1_APPROVAL: YES|NO`
-  - Phase 2 review: `PHASE2_APPROVAL: YES|NO`
-  - Phase 2 implementation report (Codex): `IMPLEMENTATION_READY: YES|NO`
-- Legacy compatibility markers still accepted by parser:
-  - `CODEX_APPROVAL: YES|NO`
-  - `CLAUDE_APPROVAL: YES|NO`
-- Findings lifecycle markers for review steps:
-  - `OPEN_FINDINGS: NONE` or `OPEN_FINDINGS: F-001,F-002,...`
-  - `FINDING_STATUS: <ID> | OPEN|CLOSED | <rationale>`
-  - `NEW_FINDING: <ID> | <description> | <acceptance test>`
-- Finding IDs must match `F-001` format.
-- Decision consistency:
-  - `*_APPROVAL: YES` only when `OPEN_FINDINGS: NONE`
-  - `*_APPROVAL: NO` only when at least one finding is open
-- Planning step should include:
-  - `ADDRESSED_FINDINGS: <IDs...>` or `ADDRESSED_FINDINGS: NONE`
+## Output records
+
+Codex planning:
+
+- `SLICE_PLAN: <1-based id> | <summary> | <comma-separated repository-relative paths>`
+- `PLAN_READY: YES|NO`
+
+Codex implementation/final report:
+
+- `FINDING_RESPONSE: <C-01|A-01> | ACCEPTED|REJECTED | <rationale>` for every open finding
+- `TEST_FILES_TOUCHED: NONE|<comma-separated paths>` for implementation
+- `IMPLEMENTATION_READY: <slice id> | YES|NO` or `FINAL_REPORT_READY: YES|NO`
+
+Reviewers:
+
+- First non-empty line: `REVIEWER: claude|antigravity`
+- `NEW_FINDING: <C-01|A-01> | BLOCKER|OBSERVATION | <description> | <acceptance test>`
+- `FINDING_STATUS: <id> | OPEN|CLOSED | <rationale>`
+- Optional: `FINDING_RECLASSIFIED: <id> | BLOCKER|OBSERVATION | <rationale>`
+- If no concrete finding: `REVIEW_EVIDENCE: <dimensions> | <largest residual risk> | <break condition>`
+- Before approval: `PRE_MORTEM: <most likely failure cause in three months>`
+- `PLAN_APPROVAL: YES|NO`, `SLICE_APPROVAL: <slice id> | YES|NO`, or `FINAL_APPROVAL: YES|NO`
+
+All roles:
+
+- Optional stop: `STOP_REQUESTED: <rule id> | <rationale>`; no readiness or approval marker may accompany it.
+- The final non-empty line is exactly `STATUS: DONE`.
+- Phase markers, legacy approval markers, `OPEN_FINDINGS`, and `VALIDATION_RESULT` are invalid.
