@@ -1396,6 +1396,34 @@ def test_contract_only_repair_receives_no_implementation_evidence() -> None:
     assert len(driver.reviewer_calls) == 2
 
 
+def test_labeled_review_evidence_is_normalized_without_contract_repair() -> None:
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    labeled = _review_approval(AgentRole.CLAUDE).replace(
+        "REVIEW_EVIDENCE: reviewed invariants | residual concurrency risk | "
+        "parallel mutation",
+        "REVIEW_EVIDENCE: reviewed invariants. Largest residual risk: residual "
+        "concurrency risk. Break condition: parallel mutation",
+    )
+    assert "Largest residual risk:" in labeled
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[
+            labeled,
+            _review_approval(AgentRole.ANTIGRAVITY),
+        ],
+    )
+
+    result = WorkflowEngine(driver).run_current_work_unit(_slice_state(), _context())
+
+    assert result.completed
+    assert driver.repair_calls == []
+    assert [call.reviewer for call in driver.reviewer_calls] == [
+        AgentRole.CLAUDE,
+        AgentRole.ANTIGRAVITY,
+    ]
+
+
 def test_missing_verdict_after_compact_repair_stops_at_claude_without_antigravity() -> None:
     changes = _changes("1", "src/early.py", TEST_FILE)
     missing = "\n".join(

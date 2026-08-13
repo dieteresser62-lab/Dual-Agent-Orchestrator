@@ -171,6 +171,13 @@ Ein freigebender Review erfordert eine vollständige erfolgreiche Attestierung f
 
 Reviewer arbeiten in einem temporären schreibgeschützten Snapshot. Dieser enthält nur Git-sichtbare Quell- und Dokumentationsdateien; Metadaten, Abhängigkeiten und generierte Schwergewichte wie `.git`, `.orchestrator`, `node_modules`, `dist` und Releasearchive werden nicht kopiert. Reine Ausgabevertragskorrekturen erhalten ein leeres schreibgeschütztes Arbeitsverzeichnis. Eindeutig gebundene Formalmarker werden lokal ergänzt, ohne einen zweiten Modellreview auszulösen.
 
+Formuliert ein Reviewer `REVIEW_EVIDENCE` mit den eindeutigen Bezeichnungen
+`Largest residual risk:` und `Break condition:` statt mit den vorgeschriebenen
+Pipe-Trennzeichen, überführt der Orchestrator genau diese vorhandenen drei
+Inhalte lokal und verlustfrei in das Vertragsformat. Mehrdeutige oder bereits
+Pipe-haltige Varianten bleiben unverändert und durchlaufen die normale formale
+Reparatur; Präambeln werden nicht abgeschnitten.
+
 Die Quotabehandlung erfolgt rollenspezifisch. Bei aktivierter automatischer Quotafortsetzung wird ein eindeutiger Reset innerhalb der konfigurierten Wartegrenze persistiert, unter Ausgabe von Heartbeats abgewartet und am exakt fehlgeschlagenen Schritt einmal fortgesetzt. Andernfalls endet der Prozess mit Exitcode 2 und bleibt fortsetzbar. Es gibt keine Ersatzrolle.
 
 ## Lokale Commits und externe Git-Aktionen

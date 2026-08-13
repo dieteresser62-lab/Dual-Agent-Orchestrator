@@ -134,6 +134,44 @@ def normalize_review_contract_output(
         kept.append(line)
     text = "\n".join(kept).strip()
 
+    evidence_lines = text.splitlines()
+    evidence_prefix = re.compile(
+        r"^(?P<label>[ \t]*REVIEW_EVIDENCE[ \t]*:[ \t]*)(?P<body>.*)$",
+        re.IGNORECASE,
+    )
+    evidence_matches = [
+        (index, match)
+        for index, line in enumerate(evidence_lines)
+        if (match := evidence_prefix.fullmatch(line)) is not None
+    ]
+    if len(evidence_matches) == 1:
+        evidence_index, evidence_match = evidence_matches[0]
+        evidence_line = evidence_lines[evidence_index]
+        body = evidence_match.group("body")
+        risk_label = "Largest residual risk:"
+        break_label = "Break condition:"
+        risk_start = body.find(risk_label)
+        break_start = body.find(break_label, risk_start + len(risk_label))
+        labels_are_unique = (
+            risk_start > 0
+            and break_start > 0
+            and body[risk_start - 1].isspace()
+            and body[break_start - 1].isspace()
+            and body.count(risk_label) == 1
+            and body.count(break_label) == 1
+        )
+        if labels_are_unique and "|" not in evidence_line:
+            dimensions = body[:risk_start].strip()
+            risk = body[risk_start + len(risk_label) : break_start].strip()
+            break_condition = body[break_start + len(break_label) :].strip()
+            if dimensions and risk and break_condition:
+                evidence_lines[evidence_index] = (
+                    f"{evidence_match.group('label')}{dimensions} | {risk} | "
+                    f"{break_condition}"
+                )
+                text = "\n".join(evidence_lines)
+                changed = True
+
     if not re.search(
         r"^\s*TEST_FILES_TOUCHED\s*:", text, re.IGNORECASE | re.MULTILINE
     ):

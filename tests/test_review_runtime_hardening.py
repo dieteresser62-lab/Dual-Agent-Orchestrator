@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -125,6 +126,169 @@ def test_local_review_normalization_adds_bound_test_marker_and_drops_foreign_sta
     assert normalized.splitlines()[1] == "TEST_FILES_TOUCHED: NONE"
     assert "FINDING_STATUS: C-01" not in normalized
     assert "NEW_FINDING: A-01" in normalized
+
+
+def test_review_normalization_converts_labeled_evidence_without_model_repair() -> None:
+    contract = StepContract(
+        name="slice-review",
+        reviewer=AgentRole.CLAUDE,
+        approval_marker=ApprovalMarker.SLICE,
+        slice_id="04",
+        round_number=1,
+    )
+    output = "\n".join(
+        (
+            "REVIEWER: claude",
+            "TEST_FILES_TOUCHED: NONE",
+            "REVIEW_EVIDENCE: checked scope and anchors. "
+            "Largest residual risk: documentation drift. "
+            "Break condition: an anchor disappears.",
+            "PRE_MORTEM: documentation drifts",
+            "SLICE_APPROVAL: 04 | YES",
+            "STATUS: DONE",
+        )
+    )
+
+    normalized = normalize_review_contract_output(output, contract, ())
+    assert (
+        "REVIEW_EVIDENCE: checked scope and anchors. | documentation drift. | "
+        "an anchor disappears."
+    ) in normalized
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    (
+        "REVIEW_EVIDENCE: scope | already piped. Largest residual risk: risk. "
+        "Break condition: break.",
+        "REVIEW_EVIDENCE: Largest residual risk: risk. Break condition: break.",
+        "REVIEW_EVIDENCE: scope. Largest residual risk: risk. Break condition: ",
+        "REVIEW_EVIDENCE: scope. Break condition: break. "
+        "Largest residual risk: risk.",
+        "REVIEW_EVIDENCE: scope. Largest residual risk: first. "
+        "Largest residual risk: second. Break condition: break.",
+        "REVIEW_EVIDENCE: consideredLargest residual risk: risk. "
+        "Break condition: break.",
+    ),
+)
+def test_review_normalization_leaves_ambiguous_evidence_for_strict_repair(
+    evidence: str,
+) -> None:
+    contract = StepContract(
+        name="slice-review",
+        reviewer=AgentRole.CLAUDE,
+        approval_marker=ApprovalMarker.SLICE,
+        slice_id="04",
+        round_number=1,
+    )
+    output = "\n".join(
+        (
+            "REVIEWER: claude",
+            "TEST_FILES_TOUCHED: NONE",
+            evidence,
+            "PRE_MORTEM: documentation drifts",
+            "SLICE_APPROVAL: 04 | YES",
+            "STATUS: DONE",
+        )
+    )
+
+    assert normalize_review_contract_output(output, contract, ()) == output
+
+
+def test_review_normalization_does_not_flatten_multiline_evidence() -> None:
+    contract = StepContract(
+        name="slice-review",
+        reviewer=AgentRole.CLAUDE,
+        approval_marker=ApprovalMarker.SLICE,
+        slice_id="04",
+        round_number=1,
+    )
+    output = "\n".join(
+        (
+            "REVIEWER: claude",
+            "TEST_FILES_TOUCHED: NONE",
+            "REVIEW_EVIDENCE: checked scope",
+            "Largest residual risk: documentation drift",
+            "Break condition: an anchor disappears",
+            "PRE_MORTEM: documentation drifts",
+            "SLICE_APPROVAL: 04 | YES",
+            "STATUS: DONE",
+        )
+    )
+
+    assert normalize_review_contract_output(output, contract, ()) == output
+
+
+def test_review_normalization_preserves_unicode_offsets() -> None:
+    contract = StepContract(
+        name="slice-review",
+        reviewer=AgentRole.CLAUDE,
+        approval_marker=ApprovalMarker.SLICE,
+        slice_id="04",
+        round_number=1,
+    )
+    output = "\n".join(
+        (
+            "REVIEWER: claude",
+            "TEST_FILES_TOUCHED: NONE",
+            "REVIEW_EVIDENCE: prüfte die Straße. Largest residual risk: "
+            "größere Abweichung. Break condition: Übergabe scheitert.",
+            "PRE_MORTEM: documentation drifts",
+            "SLICE_APPROVAL: 04 | YES",
+            "STATUS: DONE",
+        )
+    )
+
+    normalized = normalize_review_contract_output(output, contract, ())
+
+    assert (
+        "REVIEW_EVIDENCE: prüfte die Straße. | größere Abweichung. | "
+        "Übergabe scheitert."
+    ) in normalized
+
+
+def test_review_normalization_rejects_multiple_evidence_lines() -> None:
+    contract = StepContract(
+        name="slice-review",
+        reviewer=AgentRole.CLAUDE,
+        approval_marker=ApprovalMarker.SLICE,
+        slice_id="04",
+        round_number=1,
+    )
+    evidence = (
+        "REVIEW_EVIDENCE: scope. Largest residual risk: risk. "
+        "Break condition: break."
+    )
+    output = "\n".join(
+        (
+            "REVIEWER: claude",
+            "TEST_FILES_TOUCHED: NONE",
+            evidence,
+            evidence,
+            "PRE_MORTEM: documentation drifts",
+            "SLICE_APPROVAL: 04 | YES",
+            "STATUS: DONE",
+        )
+    )
+
+    assert normalize_review_contract_output(output, contract, ()) == output
+
+
+def test_review_normalization_handles_long_nonmatching_line_in_linear_time() -> None:
+    contract = StepContract(
+        name="slice-review",
+        reviewer=AgentRole.CLAUDE,
+        approval_marker=ApprovalMarker.SLICE,
+        slice_id="04",
+        round_number=1,
+    )
+    output = "REVIEW_EVIDENCE: " + (" " * 100_000)
+
+    started = time.monotonic()
+    normalized = normalize_review_contract_output(output, contract, ())
+
+    assert normalized == output.strip()
+    assert time.monotonic() - started < 0.5
 
 
 def test_generic_work_plan_audit_is_prepared_and_fingerprint_neutral(tmp_path: Path) -> None:
