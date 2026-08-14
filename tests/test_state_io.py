@@ -408,6 +408,10 @@ def test_workflow_checkpoint_roundtrip_and_missing(tmp_path: Path) -> None:
     assert missing is None
 
 
+from conftest import can_symlink
+
+
+@pytest.mark.skipif(not can_symlink(), reason="symlinks are unavailable")
 def test_workflow_state_rejects_symlinked_storage_escape(tmp_path: Path) -> None:
     repository = tmp_path / "repo"
     outside = tmp_path / "outside"

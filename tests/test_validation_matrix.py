@@ -184,7 +184,10 @@ def test_runner_captures_pass_failure_compact_output_and_digest(tmp_path: Path) 
             argv=(sys.executable, "-c", "import sys; print('red'); sys.exit(3)"),
             timeout_seconds=5,
         ),
-        ValidationCommand(shell_command="printf shell-ok", timeout_seconds=5),
+        ValidationCommand(
+            shell_command=f"{sys.executable} -c \"print('shell-ok', end='')\"",
+            timeout_seconds=5,
+        ),
     )
 
     attestation = ValidationMatrixRunner(tmp_path, output_limit=20).run(

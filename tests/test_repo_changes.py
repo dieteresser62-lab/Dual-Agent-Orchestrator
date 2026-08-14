@@ -297,7 +297,10 @@ def test_blockquote_marker_examples_are_semantic_not_managed_sections(
     assert "changed blockquote marker example" in second.diff_text
 
 
-@pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlinks are unavailable")
+from conftest import can_symlink
+
+
+@pytest.mark.skipif(not can_symlink(), reason="symlinks are unavailable")
 def test_untracked_binary_symlink_and_content_changes_affect_fingerprint(
     tmp_path: Path,
 ) -> None:

@@ -42,8 +42,7 @@ def resolve_repository_path(
     if not path_text or "\x00" in path_text:
         raise PathPolicyError("path is empty or contains a NUL byte")
 
-    windows_path = PureWindowsPath(path_text)
-    if windows_path.drive or path_text.startswith(("\\\\", "//")):
+    if path_text.startswith(("\\\\", "//")):
         raise PathPolicyError("drive-qualified and UNC paths are not supported")
 
     normalized = path_text.replace("\\", "/")
@@ -51,7 +50,20 @@ def resolve_repository_path(
     if ".." in parsed.parts:
         raise PathPolicyError("parent traversal is not allowed")
 
-    candidate = Path(normalized)
-    if not candidate.is_absolute():
-        candidate = repository_root.resolve() / candidate
+    candidate = Path(path_text)
+    if candidate.is_absolute():
+        repo_resolved = repository_root.resolve()
+        try:
+            cand_resolved = candidate.resolve()
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise PathPolicyError("path could not be resolved safely") from exc
+        if not cand_resolved.is_relative_to(repo_resolved):
+            raise PathPolicyError("path resolves outside allowed roots")
+        return cand_resolved
+
+    windows_path = PureWindowsPath(path_text)
+    if windows_path.drive:
+        raise PathPolicyError("drive-qualified and UNC paths are not supported")
+
+    candidate = repository_root.resolve() / PurePosixPath(normalized)
     return resolve_path_within_roots(candidate, (repository_root,))

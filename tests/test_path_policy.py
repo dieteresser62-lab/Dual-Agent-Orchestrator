@@ -63,6 +63,10 @@ def test_resolve_repository_path_rejects_foreign_absolute_paths(
         resolve_repository_path(reported_path, repository)
 
 
+from conftest import can_symlink
+
+
+@pytest.mark.skipif(not can_symlink(), reason="symlinks are unavailable")
 def test_resolve_repository_path_rejects_existing_and_broken_symlink_escapes(
     tmp_path: Path,
 ) -> None:

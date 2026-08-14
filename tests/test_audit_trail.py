@@ -302,6 +302,10 @@ def test_validate_slice_document_rejects_missing_or_reordered_required_heading(
         )
 
 
+from conftest import can_symlink
+
+
+@pytest.mark.skipif(not can_symlink(), reason="symlinks are unavailable")
 def test_validate_slice_document_rejects_symlink_target(tmp_path: Path) -> None:
     plan, target = _write_repository(tmp_path)
     real = target.with_name("slice-orchestrator-modernization-08-real.md")
