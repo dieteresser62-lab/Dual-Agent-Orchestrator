@@ -14,6 +14,8 @@ from orchestrator import ProductionWorkflowDriver, run_pipeline, run_production_
 from workflow import CodexInvocation, ReviewerInvocation
 from workflow import WorkflowExecutionError
 from plan_handoff import PlanHandoffError
+from state_io import StateSchemaError, save_workflow_state
+from task_contract import parse_task_contract
 from workflow_state import WorkflowStep
 from workflow_state import AgentFailureKind
 
@@ -80,6 +82,274 @@ def _review(role: AgentRole, marker: str) -> str:
             "STATUS: DONE",
         )
     )
+
+
+def test_new_watch_task_switches_to_existing_target_and_uses_its_head_as_baseline(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repository = _repository(tmp_path, "feature/inbox-target")
+    (repository / "prior.txt").write_text("prior target work\n", encoding="utf-8")
+    _git(repository, "add", "prior.txt")
+    _git(repository, "commit", "-m", "prior target work")
+    target_head = _git(repository, "rev-parse", "HEAD")
+    _git(repository, "switch", "master")
+    task = tmp_path / "inbox-task.md"
+    _write_task(task, "feature/inbox-target", "src/new.py")
+    args = _args(repository, task)
+    args.watch_run_id = "watch-existing-target"
+    captured: dict[str, object] = {}
+    real_fresh_state = orchestrator._fresh_state
+
+    class StateCaptured(RuntimeError):
+        pass
+
+    def capture_state(**kwargs):
+        state = real_fresh_state(**kwargs)
+        captured["state"] = state
+        raise StateCaptured
+
+    monkeypatch.setattr(orchestrator, "_fresh_state", capture_state)
+    monkeypatch.chdir(repository)
+
+    with pytest.raises(StateCaptured):
+        run_production_workflow(task, args, force_new=True)
+
+    state = captured["state"]
+    assert state.branch == "feature/inbox-target"
+    assert state.branch_base == target_head
+    assert state.current_slice.start_commit == target_head
+    assert _git(repository, "branch", "--show-current") == "feature/inbox-target"
+
+
+def test_new_watch_task_does_not_require_a_conventional_base_branch(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repository = tmp_path / "trunk-repository"
+    repository.mkdir()
+    _git(repository, "init", "-b", "trunk")
+    _git(repository, "config", "user.name", "Slice Test")
+    _git(repository, "config", "user.email", "slice@example.invalid")
+    (repository / "seed.txt").write_text("seed\n", encoding="utf-8")
+    (repository / ".gitignore").write_text(".orchestrator/\n", encoding="utf-8")
+    _git(repository, "add", "seed.txt", ".gitignore")
+    _git(repository, "commit", "-m", "seed")
+    task = tmp_path / "trunk-task.md"
+    _write_task(task, "feature/from-trunk", "src/new.py")
+    args = _args(repository, task)
+    args.watch_run_id = "watch-from-trunk"
+    captured = {}
+    real_fresh_state = orchestrator._fresh_state
+
+    class StateCaptured(RuntimeError):
+        pass
+
+    def capture_state(**kwargs):
+        captured["state"] = real_fresh_state(**kwargs)
+        raise StateCaptured
+
+    monkeypatch.setattr(orchestrator, "_fresh_state", capture_state)
+    monkeypatch.chdir(repository)
+
+    with pytest.raises(StateCaptured):
+        run_production_workflow(task, args, force_new=True)
+
+    assert captured["state"].branch == "feature/from-trunk"
+    assert captured["state"].branch_base == _git(repository, "rev-parse", "HEAD")
+
+
+def test_watch_retry_before_first_state_is_treated_as_new_task(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repository = _repository(tmp_path, "feature/source")
+    _git(repository, "switch", "master")
+    task = tmp_path / "inbox-retry.md"
+    _write_task(task, "feature/retried", "src/new.py")
+    args = _args(repository, task)
+    args.watch_run_id = "watch-retry-without-state"
+    captured_states = []
+
+    class StateCaptured(RuntimeError):
+        pass
+
+    real_fresh_state = orchestrator._fresh_state
+
+    def capture_state(**kwargs):
+        state = real_fresh_state(**kwargs)
+        assert state.run_id == "watch-retry-without-state"
+        captured_states.append(state)
+        raise StateCaptured
+
+    monkeypatch.setattr(orchestrator, "_fresh_state", capture_state)
+    monkeypatch.chdir(repository)
+
+    with pytest.raises(StateCaptured):
+        run_production_workflow(task, args, force_new=True)
+
+    created_head = _git(repository, "rev-parse", "HEAD")
+    args.resume = True
+    with pytest.raises(StateCaptured):
+        run_production_workflow(task, args, force_new=False)
+
+    assert _git(repository, "branch", "--show-current") == "feature/retried"
+    assert len(captured_states) == 2
+    assert captured_states[1].branch_base == created_head
+
+
+def test_new_watch_task_can_switch_with_unignored_in_repository_control_files(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repository = _repository(tmp_path, "feature/inbox-control-target")
+    _git(repository, "switch", "master")
+    inbox = repository / "CustomInbox"
+    inbox.mkdir()
+    task = inbox / "bug.md"
+    _write_task(task, "feature/inbox-control-target", "src/new.py")
+    (inbox / ".bug.md.watch.json").write_text("identity\n", encoding="utf-8")
+    args = _args(repository, task)
+    args.watch_run_id = "watch-control-files"
+
+    class StateCaptured(RuntimeError):
+        pass
+
+    real_fresh_state = orchestrator._fresh_state
+
+    def capture_state(**kwargs):
+        real_fresh_state(**kwargs)
+        raise StateCaptured
+
+    monkeypatch.setattr(orchestrator, "_fresh_state", capture_state)
+    monkeypatch.chdir(repository)
+
+    with pytest.raises(StateCaptured):
+        run_production_workflow(task, args, force_new=True)
+
+    assert _git(repository, "branch", "--show-current") == (
+        "feature/inbox-control-target"
+    )
+    assert task.is_file()
+    assert (inbox / ".bug.md.watch.json").is_file()
+
+
+def test_watch_resume_does_not_switch_back_after_branch_drift(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repository = _repository(tmp_path, "feature/persisted-target")
+    task = tmp_path / "persisted-task.md"
+    _write_task(task, "feature/persisted-target", "src/new.py")
+    contract = parse_task_contract(task.read_text(encoding="utf-8"))
+    state = orchestrator._fresh_state(
+        task_file=task,
+        run_id="watch-persisted-run",
+        repository_root=repository,
+        task_contract=contract,
+    )
+    state_file = repository / ".orchestrator" / "state.json"
+    save_workflow_state(
+        state_file,
+        state,
+        allowed_roots=(repository, task.parent.resolve()),
+    )
+    _git(repository, "switch", "master")
+    args = _args(repository, task)
+    args.watch_run_id = "watch-persisted-run"
+    args.resume = True
+
+    def unexpected_prepare(*_args, **_kwargs):
+        raise AssertionError("resume must not prepare or switch branches")
+
+    monkeypatch.setattr(
+        orchestrator,
+        "prepare_new_watch_task_branch",
+        unexpected_prepare,
+    )
+    monkeypatch.chdir(repository)
+
+    result = run_production_workflow(task, args)
+
+    assert result.exit_code == 4
+    assert "BRANCH-MISMATCH" in result.state.current_work_unit.gate.detail
+    assert _git(repository, "branch", "--show-current") == "master"
+
+
+def test_prepared_watch_head_change_is_rejected_before_state_initialization(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/head-race")
+    task = tmp_path / "head-race.md"
+    _write_task(task, "feature/head-race", "src/new.py")
+    contract = parse_task_contract(task.read_text(encoding="utf-8"))
+    prepared_head = _git(repository, "rev-parse", "HEAD")
+    _git(repository, "commit", "--allow-empty", "-m", "concurrent head move")
+
+    with pytest.raises(StateSchemaError, match="HEAD changed"):
+        orchestrator._fresh_state(
+            task_file=task,
+            run_id="watch-head-race",
+            repository_root=repository,
+            task_contract=contract,
+            branch_base_override=prepared_head,
+        )
+
+
+def test_force_new_watch_task_intentionally_replaces_unrelated_existing_state(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repository = _repository(tmp_path, "feature/old-watch-target")
+    old_task = tmp_path / "old-task.md"
+    _write_task(old_task, "feature/old-watch-target", "src/old.py")
+    old_contract = parse_task_contract(old_task.read_text(encoding="utf-8"))
+    old_state = orchestrator._fresh_state(
+        task_file=old_task,
+        run_id="old-watch-run",
+        repository_root=repository,
+        task_contract=old_contract,
+    )
+    save_workflow_state(
+        repository / ".orchestrator" / "state.json",
+        old_state,
+        allowed_roots=(repository, old_task.parent.resolve()),
+    )
+    _git(repository, "switch", "master")
+    new_task = tmp_path / "new-task.md"
+    _write_task(new_task, "feature/new-watch-target", "src/new.py")
+    args = _args(repository, new_task)
+    args.watch_run_id = "new-watch-run"
+    captured = {}
+    real_fresh_state = orchestrator._fresh_state
+
+    class StateCaptured(RuntimeError):
+        pass
+
+    def capture_state(**kwargs):
+        captured["state"] = real_fresh_state(**kwargs)
+        raise StateCaptured
+
+    monkeypatch.setattr(orchestrator, "_fresh_state", capture_state)
+    monkeypatch.chdir(repository)
+
+    with pytest.raises(StateCaptured):
+        run_production_workflow(new_task, args, force_new=True)
+
+    assert captured["state"].run_id == "new-watch-run"
+    assert captured["state"].branch == "feature/new-watch-target"
+    assert _git(repository, "branch", "--show-current") == (
+        "feature/new-watch-target"
+    )
+
+
+def test_direct_task_still_requires_target_branch_to_be_active(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repository = _repository(tmp_path, "feature/inactive-target")
+    _git(repository, "switch", "master")
+    task = tmp_path / "direct-task.md"
+    _write_task(task, "feature/inactive-target", "src/new.py")
+    monkeypatch.chdir(repository)
+
+    with pytest.raises(StateSchemaError, match="TARGET_BRANCH mismatch"):
+        run_production_workflow(task, _args(repository, task))
+
+    assert _git(repository, "branch", "--show-current") == "master"
 
 
 def test_production_session_plans_commits_two_slices_and_persists_final_state(

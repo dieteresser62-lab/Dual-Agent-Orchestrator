@@ -5,7 +5,7 @@ import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Sequence
+from typing import Literal, Sequence
 
 from contracts import (
     AgentRole,
@@ -39,6 +39,13 @@ class RepositoryIdentity:
         if self.upstream is None:
             return "local-only"
         return f"tracking {self.upstream}; ahead={self.ahead}; behind={self.behind}"
+
+
+@dataclass(frozen=True)
+class TaskBranchPreparation:
+    identity: RepositoryIdentity
+    previous_branch: str
+    action: Literal["already-active", "created", "switched"]
 
 
 @dataclass(frozen=True)
@@ -166,6 +173,80 @@ def inspect_repository(repository_root: Path) -> RepositoryIdentity:
             raise GitTransactionError("could not determine local/upstream divergence")
         ahead, behind = (int(value) for value in counts)
     return RepositoryIdentity(root, branch, head, upstream, ahead, behind)
+
+
+def prepare_new_watch_task_branch(
+    repository_root: Path,
+    *,
+    target_branch: str,
+    excluded_control_paths: Sequence[str] = (),
+) -> TaskBranchPreparation:
+    """Create or activate a target branch for a new Inbox/Watch task.
+
+    This operation is intentionally limited to new tasks. Callers must never use it
+    to repair branch drift for a persisted workflow. Switching is refused when the
+    current branch has non-ignored working-tree or index changes; no files are
+    stashed, cleaned, or otherwise adopted automatically.
+    """
+    if not FEATURE_BRANCH_PATTERN.fullmatch(target_branch):
+        raise GitTransactionError(
+            "automatic task branch preparation requires a feature/<name> or "
+            "codex/<name> target branch"
+        )
+    current = inspect_repository(repository_root)
+    excluded = _normalize_optional_scope_paths(excluded_control_paths)
+    for path in excluded:
+        tracked = _git(
+            current.repository_root,
+            "ls-files",
+            "--error-unmatch",
+            "--",
+            path,
+            accepted_exit_codes=(0, 1),
+        )
+        if tracked.returncode == 0:
+            raise GitTransactionError(
+                "automatic target-branch switch requires Inbox task control files "
+                f"to be untracked; active branch remains {current.branch!r}; "
+                f"tracked control path: {path}"
+            )
+    if current.branch == target_branch:
+        return TaskBranchPreparation(current, current.branch, "already-active")
+
+    changes = collect_repository_changes(
+        current.repository_root,
+        current.head,
+        excluded_paths=excluded,
+    )
+    if changes.entries:
+        raise GitTransactionError(
+            "automatic target-branch switch requires a clean non-ignored working "
+            "tree; active branch remains "
+            f"{current.branch!r}; found: {', '.join(changes.paths)}"
+        )
+
+    exists = _git(
+        current.repository_root,
+        "show-ref",
+        "--verify",
+        "--quiet",
+        f"refs/heads/{target_branch}",
+        accepted_exit_codes=(0, 1),
+    )
+    if exists.returncode == 0:
+        _git(current.repository_root, "switch", target_branch)
+        action: Literal["created", "switched"] = "switched"
+    else:
+        _git(current.repository_root, "switch", "-c", target_branch)
+        action = "created"
+
+    prepared = inspect_repository(current.repository_root)
+    if prepared.branch != target_branch:
+        raise GitTransactionError(
+            "automatic target-branch preparation did not activate the requested "
+            f"branch {target_branch!r}"
+        )
+    return TaskBranchPreparation(prepared, current.branch, action)
 
 
 def require_committed_file_at_head(

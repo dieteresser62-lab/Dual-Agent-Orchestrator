@@ -26,6 +26,7 @@ from git_service import (
     begin_slice,
     commit_slice,
     inspect_repository,
+    prepare_new_watch_task_branch,
     require_committed_file_at_head,
     resume_slice,
 )
@@ -96,6 +97,172 @@ def _authorization(
         claude_review=review(AgentRole.CLAUDE, claude_approval),
         antigravity_review=review(AgentRole.ANTIGRAVITY, True),
     )
+
+
+def test_new_watch_task_creates_missing_target_branch(tmp_path: Path) -> None:
+    repository, base = _new_repository(tmp_path)
+    _git(repository, "switch", "master")
+
+    prepared = prepare_new_watch_task_branch(
+        repository,
+        target_branch="feature/inbox-created",
+    )
+
+    assert prepared.action == "created"
+    assert prepared.previous_branch == "master"
+    assert prepared.identity.branch == "feature/inbox-created"
+    assert prepared.identity.head == base
+    assert _git(repository, "branch", "--show-current") == "feature/inbox-created"
+
+
+def test_new_watch_task_switches_to_existing_target_and_extends_its_head(
+    tmp_path: Path,
+) -> None:
+    repository, _ = _new_repository(tmp_path)
+    (repository / "prior.txt").write_text("prior branch work\n", encoding="utf-8")
+    _git(repository, "add", "prior.txt")
+    _git(repository, "commit", "-m", "prior target work")
+    target_head = _git(repository, "rev-parse", "HEAD")
+    _git(repository, "switch", "master")
+
+    prepared = prepare_new_watch_task_branch(
+        repository,
+        target_branch="feature/transaction",
+    )
+
+    assert prepared.action == "switched"
+    assert prepared.previous_branch == "master"
+    assert prepared.identity.branch == "feature/transaction"
+    assert prepared.identity.head == target_head
+
+
+def test_new_watch_task_keeps_active_target_with_existing_changes(
+    tmp_path: Path,
+) -> None:
+    repository, _ = _new_repository(tmp_path)
+    (repository / "prior.txt").write_text("prior branch work\n", encoding="utf-8")
+    _git(repository, "add", "prior.txt")
+    _git(repository, "commit", "-m", "prior target work")
+    target_head = _git(repository, "rev-parse", "HEAD")
+
+    prepared = prepare_new_watch_task_branch(
+        repository,
+        target_branch="feature/transaction",
+    )
+
+    assert prepared.action == "already-active"
+    assert prepared.previous_branch == "feature/transaction"
+    assert prepared.identity.head == target_head
+
+
+def test_new_watch_task_refuses_switch_with_foreign_worktree_changes(
+    tmp_path: Path,
+) -> None:
+    repository, _ = _new_repository(tmp_path)
+    _git(repository, "switch", "master")
+    (repository / "foreign.txt").write_text("do not move\n", encoding="utf-8")
+
+    with pytest.raises(GitTransactionError, match="requires a clean"):
+        prepare_new_watch_task_branch(
+            repository,
+            target_branch="feature/transaction",
+        )
+
+    assert _git(repository, "branch", "--show-current") == "master"
+    assert (repository / "foreign.txt").read_text(encoding="utf-8") == "do not move\n"
+
+
+def test_new_watch_task_preserves_only_untracked_task_control_paths(
+    tmp_path: Path,
+) -> None:
+    repository, _ = _new_repository(tmp_path)
+    _git(repository, "switch", "master")
+    inbox = repository / "CustomInbox"
+    inbox.mkdir()
+    task = inbox / "bug.md"
+    identity = inbox / ".bug.md.watch.json"
+    task.write_text("task\n", encoding="utf-8")
+    identity.write_text("identity\n", encoding="utf-8")
+
+    prepared = prepare_new_watch_task_branch(
+        repository,
+        target_branch="feature/transaction",
+        excluded_control_paths=(
+            "CustomInbox/.bug.md.watch.json",
+            "CustomInbox/bug.md",
+        ),
+    )
+
+    assert prepared.action == "switched"
+    assert task.read_text(encoding="utf-8") == "task\n"
+    assert identity.read_text(encoding="utf-8") == "identity\n"
+
+
+def test_new_watch_task_refuses_to_exclude_tracked_task_control_path(
+    tmp_path: Path,
+) -> None:
+    repository, _ = _new_repository(tmp_path)
+    _git(repository, "switch", "master")
+    task = repository / "tracked-task.md"
+    task.write_text("tracked task\n", encoding="utf-8")
+    _git(repository, "add", "tracked-task.md")
+    _git(repository, "commit", "-m", "track task")
+
+    with pytest.raises(GitTransactionError, match="to be untracked"):
+        prepare_new_watch_task_branch(
+            repository,
+            target_branch="feature/transaction",
+            excluded_control_paths=("tracked-task.md",),
+        )
+
+    assert _git(repository, "branch", "--show-current") == "master"
+
+
+def test_new_watch_task_reports_target_branch_control_path_collision(
+    tmp_path: Path,
+) -> None:
+    repository, _ = _new_repository(tmp_path)
+    target_task = repository / "CustomInbox" / "bug.md"
+    target_task.parent.mkdir()
+    target_task.write_text("target version\n", encoding="utf-8")
+    _git(repository, "add", "CustomInbox/bug.md")
+    _git(repository, "commit", "-m", "track task on target")
+    _git(repository, "switch", "master")
+    target_task.parent.mkdir(exist_ok=True)
+    target_task.write_text("new inbox task\n", encoding="utf-8")
+
+    with pytest.raises(GitTransactionError, match="git switch.*failed"):
+        prepare_new_watch_task_branch(
+            repository,
+            target_branch="feature/transaction",
+            excluded_control_paths=("CustomInbox/bug.md",),
+        )
+
+    assert _git(repository, "branch", "--show-current") == "master"
+    assert target_task.read_text(encoding="utf-8") == "new inbox task\n"
+
+
+def test_new_watch_task_reports_target_checked_out_in_another_worktree(
+    tmp_path: Path,
+) -> None:
+    repository, _ = _new_repository(tmp_path)
+    _git(repository, "switch", "master")
+    other_worktree = tmp_path / "other-worktree"
+    _git(
+        repository,
+        "worktree",
+        "add",
+        str(other_worktree),
+        "feature/transaction",
+    )
+
+    with pytest.raises(GitTransactionError, match="git switch.*failed"):
+        prepare_new_watch_task_branch(
+            repository,
+            target_branch="feature/transaction",
+        )
+
+    assert _git(repository, "branch", "--show-current") == "master"
 
 
 def test_approved_plan_handoff_allows_unrelated_descendant_commit(tmp_path: Path) -> None:

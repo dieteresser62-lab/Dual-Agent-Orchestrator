@@ -87,7 +87,7 @@ TARGET_BRANCH: feature/<name>|codex/<name>
 TASK_SCOPE: <comma-separated repository-relative paths or globs>
 ```
 
-`WORK_PLAN_PATH` ist bei `PLAN_ONLY` und im automatisch erzeugten Implementierungs-Handoff erforderlich. `APPROVED_PLAN_COMMIT` wird ausschließlich vom Handoff-Erzeuger zusammen mit den übernommenen `SLICE_PLAN`-Datensätzen geschrieben. Alternativ zu `TASK_SCOPE` wird ein Abschnitt `## Erlaubter Scope` oder `## Allowed Scope` mit Aufzählung akzeptiert. Der angegebene Zielbranch muss vor dem Start existieren und aktiv sein; Codex darf Branches weder erstellen noch wechseln.
+`WORK_PLAN_PATH` ist bei `PLAN_ONLY` und im automatisch erzeugten Implementierungs-Handoff erforderlich. `APPROVED_PLAN_COMMIT` wird ausschließlich vom Handoff-Erzeuger zusammen mit den übernommenen `SLICE_PLAN`-Datensätzen geschrieben. Alternativ zu `TASK_SCOPE` wird ein Abschnitt `## Erlaubter Scope` oder `## Allowed Scope` mit Aufzählung akzeptiert. Im Einzelaufgabenmodus muss der angegebene Zielbranch vor dem Start existieren und aktiv sein. Im Watch-Modus bereitet der Orchestrator den Zielbranch beim ersten Start einer neuen Inbox-Aufgabe automatisch vor; die Agenten selbst dürfen Branches weiterhin weder erstellen noch wechseln.
 
 `PLAN_ONLY` bildet den ersten Schritt des manuellen Prozesses ab; [example-plan-task.md](example-plan-task.md) ist eine direkt anpassbare Vorlage. Codex erstellt ausschließlich das deklarierte Arbeitsplan-MD. Die späteren Umsetzungsslices stehen als Überschriften im Dokument, während der ausführbare `SLICE_PLAN` dieses Laufs genau einen Dokumentationsslice enthält. Claude und Antigravity prüfen den Plan, danach wartet der Lauf am expliziten Plangate. Nach Freigabe wird ausschließlich das Arbeitsplandokument lokal commitet. Die Umsetzung startet später mit einer neuen Aufgabe im Modus `IMPLEMENT`, die auf den freigegebenen Arbeitsplan verweist.
 
@@ -212,6 +212,10 @@ Der Orchestrator kann als FIFO-Warteschlangenworker ausgeführt werden:
 Der Watch-Modus:
 
 - überwacht stabile `*.md`-Dateien in `inbox/`, älteste zuerst;
+- liest `TARGET_BRANCH` aus der Aufgabe und legt diesen Branch beim ersten Start an oder wechselt auf einen bereits vorhandenen Branch;
+- erweitert einen bereits aktiven Zielbranch ab dessen aktuellem `HEAD`, sodass frühere Branch-Commits nicht erneut zum Diff der neuen Aufgabe gehören;
+- verweigert einen erforderlichen Branchwechsel bei nicht ignorierten Arbeitsbaum- oder Indexänderungen, ohne Dateien zu stashen, zu bereinigen oder zu übernehmen;
+- wechselt bei einem Resume mit vorhandenem Workflow-State niemals automatisch den Branch; weicht der aktive Branch vom persistierten Zielbranch ab, stoppt der bestehende `BRANCH-MISMATCH`-Gate;
 - hält eine Einzelprozesssperre `inbox/.lock`, sofern `fcntl` verfügbar ist;
 - weist jeder Aufgabe eine persistierte Lauf-ID und einen Digest des Aufgabeninhalts zu;
 - aktiviert standardmäßig `--skip-git-check`, weil geprüfte Slice-Commits den Worktree absichtlich verändern;
@@ -220,6 +224,10 @@ Der Watch-Modus:
 - wiederholt technische Fehler und verschiebt ausgeschöpfte Aufgaben als Poison Tasks nach `outbox/failed/`;
 - hält die Warteschlange bei Exitcode 2, 3 oder 4 an, damit die erste fortsetzbare Aufgabe ihre FIFO-Zuständigkeit behält;
 - führt eine erfolgreich abgeschlossene Aufgabe nicht erneut aus, wenn nur das Verschieben in die Outbox wiederholt werden muss.
+
+Die standardmäßig ignorierte `inbox/` ist damit der vorgesehene Ablageort für neue Aufgaben: Die Task-Datei und ihre ungetrackten Watch-Sidecars bleiben bei einem Branchwechsel erhalten. Auch ein benutzerdefiniertes, nicht ignoriertes Inbox-Verzeichnis funktioniert, solange diese Kontrollpfade ungetrackt sind. Getrackte Task-Kontrollpfade sowie sonstige vorbestehende Änderungen auf einem anderen Branch werden nie automatisch mitgenommen; sie müssen vor einem erforderlichen Wechsel vom Benutzer geklärt werden.
+
+Es darf immer nur ein Watcher auf demselben Repository arbeiten. Wo `fcntl` nicht verfügbar ist, kann der Orchestrator die Einzelprozesssperre nicht selbst erzwingen; konkurrierende Git-Operationen brechen dann zwar sicher als Git-Fehler ab, werden aber nicht automatisch wiederholt.
 
 Verzeichnisse, Abfrageintervall oder Anzahl technischer Wiederholungen können überschrieben werden:
 

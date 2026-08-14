@@ -40,6 +40,7 @@ from git_service import (
     SliceGitBoundary,
     commit_slice,
     inspect_repository,
+    prepare_new_watch_task_branch,
     require_committed_file_at_head,
     GitTransactionError,
 )
@@ -86,7 +87,13 @@ from workflow_state import (
     init_workflow_state,
 )
 from validation_matrix import ValidationCommand, ValidationMatrix
-from inbox_watcher import WatchTaskResult, watch_inbox
+from inbox_watcher import (
+    WatchTaskResult,
+    attempt_sidecar_path,
+    success_marker_path,
+    watch_identity_path,
+    watch_inbox,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -792,6 +799,27 @@ def _bound_task_control_paths(
     return (task.relative_to(root).as_posix(),)
 
 
+def _new_watch_task_control_paths(
+    repository_root: Path,
+    task_file: Path,
+) -> tuple[str, ...]:
+    """Return unpersisted Watch control paths that must survive branch setup."""
+    root = repository_root.resolve()
+    candidates = (
+        task_file.resolve(),
+        watch_identity_path(task_file).resolve(),
+        attempt_sidecar_path(task_file).resolve(),
+        success_marker_path(task_file).resolve(),
+    )
+    return tuple(
+        sorted(
+            path.relative_to(root).as_posix()
+            for path in candidates
+            if path.is_relative_to(root)
+        )
+    )
+
+
 def _history_payload(
     existing: object, current: WorkflowHistory
 ) -> dict[str, object]:
@@ -823,6 +851,7 @@ def _fresh_state(
     run_id: str,
     repository_root: Path,
     task_contract: TaskContract,
+    branch_base_override: str | None = None,
 ) -> WorkflowState:
     identity = inspect_repository(repository_root)
     if identity.branch != task_contract.target_branch:
@@ -831,12 +860,16 @@ def _fresh_state(
             f"{task_contract.target_branch!r}, active branch is {identity.branch!r}; "
             "create/switch the branch before starting the orchestrator"
         )
-    merge_base = resolve_merge_base(repository_root)
-    branch_base = (
-        identity.head
-        if task_contract.approved_plan_commit is not None
-        else merge_base.commit
-    )
+    if branch_base_override is not None and branch_base_override != identity.head:
+        raise StateSchemaError(
+            "prepared watch-task branch HEAD changed before state initialization"
+        )
+    if branch_base_override is not None:
+        branch_base = branch_base_override
+    elif task_contract.approved_plan_commit is not None:
+        branch_base = identity.head
+    else:
+        branch_base = resolve_merge_base(repository_root).commit
     state = init_workflow_state(
         run_id=run_id,
         task_file=str(task_file.resolve()),
@@ -888,6 +921,24 @@ def run_production_workflow(
     allowed_roots = tuple(dict.fromkeys((root, task_file.parent.resolve())))
     run_id = str(getattr(args, "watch_run_id", "") or new_run_id())
 
+    watch_run = bool(getattr(args, "watch_run_id", None))
+    new_watch_task = watch_run and (force_new or not state_file.exists())
+    prepared_branch_base: str | None = None
+    if new_watch_task:
+        prepared = prepare_new_watch_task_branch(
+            root,
+            target_branch=task_contract.target_branch,
+            excluded_control_paths=_new_watch_task_control_paths(root, task_file),
+        )
+        prepared_branch_base = prepared.identity.head
+        logger.info(
+            "Watch target branch ready: action=%s previous=%s target=%s head=%s",
+            prepared.action,
+            prepared.previous_branch,
+            prepared.identity.branch,
+            prepared.identity.head[:12],
+        )
+
     loaded: WorkflowState | CompletedV2State | None = None
     if state_file.exists() and not force_new:
         try:
@@ -897,7 +948,8 @@ def run_production_workflow(
                 loaded = None
             else:
                 raise
-    if args.resume:
+    effective_resume = bool(args.resume and not new_watch_task)
+    if effective_resume:
         if isinstance(loaded, CompletedV2State):
             raise StateSchemaError(
                 "completed version-2 state cannot be resumed; start a new v3 run"
@@ -935,6 +987,7 @@ def run_production_workflow(
             run_id=run_id,
             repository_root=root,
             task_contract=task_contract,
+            branch_base_override=prepared_branch_base,
         )
     state = _recover_legacy_plan_only_post_gate(state)
     config = OrchestratorConfig(
@@ -961,7 +1014,7 @@ def run_production_workflow(
         history = _history(state)
         current = state.current_work_unit
         if current.status in {WorkUnitStatus.WAITING_FOR_QUOTA, WorkUnitStatus.AWAITING_RESUME}:
-            if not args.resume:
+            if not effective_resume:
                 return WorkflowRunResult(state, history)
             state = state.resume_after_invocation_halt()
             driver.checkpoint(state, history)
@@ -979,7 +1032,7 @@ def run_production_workflow(
                 if not args.gate_decision:
                     return decided
             elif (
-                args.resume
+                effective_resume
                 and not args.auto_resume
                 and current.gate.fingerprint is None
             ):
