@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -283,10 +284,21 @@ def test_readme_local_links_exist_and_help_examples_start() -> None:
     assert local_targets
     assert all(path.is_file() for path in local_targets), local_targets
 
-    for command in (
-        [str(ROOT / "run_task"), "--help"],
-        [sys.executable, str(ROOT / "src" / "cli.py"), "--help"],
-    ):
+    run_task_cmd: list[str] | None = [str(ROOT / "run_task"), "--help"]
+    if sys.platform == "win32":
+        bash_bin = shutil.which("bash") or shutil.which("sh")
+        run_task_cmd = [bash_bin, "./run_task", "--help"] if bash_bin else None
+
+    commands = [
+        cmd
+        for cmd in (
+            run_task_cmd,
+            [sys.executable, str(ROOT / "src" / "cli.py"), "--help"],
+        )
+        if cmd is not None
+    ]
+
+    for command in commands:
         result = subprocess.run(
             command, cwd=ROOT, capture_output=True, text=True, check=False
         )
