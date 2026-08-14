@@ -10,6 +10,7 @@ from agent_adapters import (
     AGENT_REGISTRY,
     AgentBudgetError,
     AgentPermissionError,
+    AntigravityAdapter,
     CapabilitySpec,
     ClaudeAdapter,
     CodexAdapter,
@@ -481,6 +482,83 @@ def test_agent_capability_check_is_lazy_and_cached(monkeypatch) -> None:
         ["/bin/codex", "--version"],
         ["/bin/codex", "exec", "--help"],
     ]
+
+
+@pytest.mark.parametrize(
+    ("adapter", "version_text"),
+    [
+        (
+            CodexAdapter(AgentSettings("codex", "codex", "model", 1800, "medium")),
+            "codex-cli 0.147.99",
+        ),
+        (
+            ClaudeAdapter(AgentSettings("claude", "claude", "model", 1800, "high")),
+            "2.1.999 (Claude Code)",
+        ),
+        (
+            AntigravityAdapter(
+                AgentSettings("antigravity", "agy", "model", 1800, "high")
+            ),
+            "1.1.999",
+        ),
+    ],
+)
+def test_agent_capability_check_accepts_patch_updates(
+    monkeypatch, adapter, version_text: str
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_local(args, timeout=20):  # type: ignore[no-untyped-def]
+        _ = timeout
+        calls.append(args)
+        if args[-1] == "--version":
+            return 0, f"{version_text}\n", ""
+        return 0, " ".join(adapter.capability.required_help_flags), ""
+
+    monkeypatch.setattr(
+        agent_runtime, "_resolve_agent_binary", lambda _binary: f"/bin/{adapter.name}"
+    )
+    monkeypatch.setattr(agent_runtime, "run_local_command", fake_local)
+
+    verify_agent_capabilities(adapter)
+
+    assert adapter.capability_verified is True
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize(
+    ("adapter", "version_text"),
+    [
+        (
+            CodexAdapter(AgentSettings("codex", "codex", "model", 1800, "medium")),
+            "codex-cli 0.148.0",
+        ),
+        (
+            ClaudeAdapter(AgentSettings("claude", "claude", "model", 1800, "high")),
+            "2.2.0 (Claude Code)",
+        ),
+        (
+            AntigravityAdapter(
+                AgentSettings("antigravity", "agy", "model", 1800, "high")
+            ),
+            "1.2.0",
+        ),
+    ],
+)
+def test_agent_capability_check_rejects_minor_updates(
+    monkeypatch, adapter, version_text: str
+) -> None:
+    monkeypatch.setattr(
+        agent_runtime, "_resolve_agent_binary", lambda _binary: f"/bin/{adapter.name}"
+    )
+    monkeypatch.setattr(
+        agent_runtime,
+        "run_local_command",
+        lambda _args, timeout=20: (0, f"{version_text}\n", ""),
+    )
+
+    with pytest.raises(AgentCompatibilityError, match="Unsupported .* CLI version"):
+        verify_agent_capabilities(adapter)
 
 
 def test_collect_file_snapshots_truncates_limits_and_handles_missing(tmp_path: Path) -> None:

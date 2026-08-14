@@ -24,6 +24,7 @@ from git_service import (
     GitTransactionError,
     SliceGitBoundary,
     begin_slice,
+    commit_managed_audit_report,
     commit_slice,
     inspect_repository,
     prepare_new_watch_task_branch,
@@ -767,6 +768,43 @@ def test_commit_accepts_complete_red_attestation_only_with_named_followup(
     )
 
     assert result.commit_hash == _git(repository, "rev-parse", "HEAD")
+
+
+def test_final_audit_commit_restores_index_after_unexpected_staging_error(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repository, head = _new_repository(tmp_path)
+    audit_path = "docs/internal/task-review-12345678.md"
+    audit = repository / audit_path
+    audit.parent.mkdir(parents=True)
+    audit.write_text("# Overall audit\n\nInitial state.\n", encoding="utf-8")
+    _git(repository, "add", audit_path)
+    _git(repository, "commit", "-m", "add audit")
+    start_head = _git(repository, "rev-parse", "HEAD")
+    audit.write_text("# Overall audit\n\nFinal state.\n", encoding="utf-8")
+    real_staged_paths = git_service._staged_paths
+    calls = 0
+
+    def fail_after_staging(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("simulated unexpected staging check failure")
+        return real_staged_paths(*args, **kwargs)
+
+    monkeypatch.setattr(git_service, "_staged_paths", fail_after_staging)
+
+    with pytest.raises(RuntimeError, match="unexpected staging check"):
+        commit_managed_audit_report(
+            repository_root=repository,
+            branch="feature/transaction",
+            audit_path=audit_path,
+        )
+
+    assert start_head != head
+    assert _git(repository, "rev-parse", "HEAD") == start_head
+    assert _git(repository, "diff", "--cached", "--name-only") == ""
+    assert _git(repository, "diff", "--name-only") == audit_path
 
 
 def test_repository_identity_rejects_detached_head(tmp_path: Path) -> None:

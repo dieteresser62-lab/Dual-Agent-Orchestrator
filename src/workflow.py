@@ -19,6 +19,7 @@ from audit_trail import (
     AuthorizedTestChanges,
     ReviewAuditEvent,
     ValidationAuditEvent,
+    managed_slice_document_path,
 )
 from contracts import (
     AgentRole,
@@ -34,6 +35,7 @@ from contracts import (
     FindingResponse,
     FindingResponseDecision,
     FindingStatus,
+    PlannedSlice,
     ReadinessMarker,
     StepContract,
     StopRequest,
@@ -298,6 +300,7 @@ class WorkflowContext:
     plan_only: bool = False
     task_scope_patterns: tuple[str, ...] = ()
     work_plan_path: str | None = None
+    audit_report_path: str | None = None
 
     def __post_init__(self) -> None:
         if not self.assignment.strip():
@@ -356,6 +359,10 @@ class WorkflowContext:
             raise ValueError(
                 "plan-only context requires work_plan_path and task scope patterns"
             )
+        if self.audit_report_path is not None and not self.audit_report_path.startswith(
+            "docs/internal/"
+        ):
+            raise ValueError("audit_report_path must be below docs/internal")
 
     @property
     def distilled_context(self) -> str:
@@ -822,6 +829,17 @@ class WorkflowEngine:
         if active_history.work_unit_id != current.work_unit_id:
             raise WorkflowExecutionError("workflow history belongs to a different work unit")
         self._bind_driver_work_unit(state)
+        if (
+            current.status is WorkUnitStatus.AWAITING_USER_DECISION
+            and current.gate.reason is GateReason.TEST_CHANGE
+            and current.gate.fingerprint is not None
+        ):
+            state = state.inherit_prior_test_approval(
+                current.gate.fingerprint,
+                current.gate.paths,
+            )
+            current = state.current_work_unit
+            self._bind_driver_work_unit(state)
         if current.status is not WorkUnitStatus.IN_PROGRESS:
             return WorkflowRunResult(state, active_history)
 
@@ -1067,8 +1085,30 @@ class WorkflowEngine:
                     raise WorkflowExecutionError(
                         "PLAN_ONLY Slice must include the declared WORK_PLAN_PATH"
                     )
+            planned_slices = result.slice_plan
+            if context.audit_report_path is not None and not context.plan_only:
+                planned_slices = tuple(
+                    PlannedSlice(
+                        slice_id=planned.slice_id,
+                        summary=planned.summary,
+                        scope_paths=tuple(
+                            sorted(
+                                {
+                                    *planned.scope_paths,
+                                    context.audit_report_path,
+                                    managed_slice_document_path(
+                                        context.audit_report_path,
+                                        planned.slice_id,
+                                        planned.summary,
+                                    ),
+                                }
+                            )
+                        ),
+                    )
+                    for planned in result.slice_plan
+                )
             state = state.bind_slice_plan(
-                result.slice_plan,
+                planned_slices,
                 first_start_commit=state.current_slice.start_commit or state.branch_base,
             )
         next_step = (
@@ -2148,6 +2188,10 @@ class WorkflowEngine:
         evidence = self.driver.detect_test_changes(changes, context.test_path_patterns)
         if evidence is None:
             return state.record_active_test_approval(None), False, False
+        state = state.inherit_prior_test_approval(
+            evidence.fingerprint,
+            evidence.paths,
+        )
         approved = state.current_work_unit.has_gate_approval(
             GateReason.TEST_CHANGE, evidence.fingerprint, evidence.paths
         )

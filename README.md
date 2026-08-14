@@ -49,7 +49,7 @@ Alle drei Rollen-CLIs müssen installiert und authentifiziert sein. Anschließen
 - `claude`
 - `agy` oder `agy.exe`
 
-Die Laufzeit prüft jedes Programm und seine erforderlichen Fähigkeiten verzögert unmittelbar vor dem ersten Aufruf der jeweiligen Rolle.
+Die Laufzeit prüft jedes Programm und seine erforderlichen Fähigkeiten verzögert unmittelbar vor dem ersten Aufruf der jeweiligen Rolle. Freigegebene Major-/Minor-Linien akzeptieren numerische Patchupdates automatisch; ein Major- oder Minor-Wechsel bleibt bis zu einer erneuten Capability-Freigabe gesperrt. Unabhängig von der Patchversion müssen alle erforderlichen CLI-Flags vorhanden sein.
 
 ## Schnellstart
 
@@ -114,7 +114,9 @@ Laufzeitdaten werden unterhalb von `.orchestrator/` gespeichert:
 
 State und Checkpoints dürfen nicht manuell bearbeitet werden.
 
-Menschenlesbare Plan- und Slice-Auditdateien im Markdown-Format gehören in das Zielrepository, üblicherweise unter `docs/internal/`, und werden mit ihrem Slice commitet. Bei einem regulär manuell definierten Lauf müssen sie vorbereitet, aus dem Arbeitsplan verlinkt, mit den erforderlichen verwalteten Auditabschnitten versehen und im Umfang des zugehörigen `SLICE_PLAN` enthalten sein. Ein commitgebundener Handoff erzeugt seine deklarierten Slice-Auditdateien dagegen automatisch vor dem jeweiligen Slice. Der Orchestrator projiziert strukturierte Findings, Reviews, Validierungsattestierungen und Autorisierungsstatus ausschließlich in diese verwalteten Abschnitte. Nach jedem lokalen Slice-Commit ist Git die historische Quelle der Wahrheit.
+Menschenlesbare Plan- und Slice-Auditdateien im Markdown-Format gehören in das Zielrepository, üblicherweise unter `docs/internal/`, und werden mit ihrem Slice commitet. Für Aufgaben aus `inbox/` erzeugt der Orchestrator beim Taskstart automatisch ein digestgebundenes Gesamtdokument. Es sammelt Plan, Scope, Claude-/Antigravity-Reviews, Findings, Validierungen, Slice-Entscheidungen und das abschließende Gesamtreview. Die zukünftigen Slice-Dokumentpfade werden nach der Planung automatisch in die persistierten Slice-Allowlists aufgenommen; die Dateien selbst entstehen jedoch erst beim tatsächlichen Beginn des jeweiligen Implementierungs- oder Korrekturslices. Eine abgelehnte oder vor Implementierungsbeginn abgebrochene Planung hinterlässt daher keine leeren Slice-Dokumente. Resume verwendet dieselben digestgebundenen Pfade idempotent weiter.
+
+Bei einem regulär manuell definierten Lauf außerhalb von `inbox/` müssen Auditdateien weiterhin vorbereitet, aus dem Arbeitsplan verlinkt, mit den erforderlichen verwalteten Auditabschnitten versehen und im Umfang des zugehörigen `SLICE_PLAN` enthalten sein. Ein commitgebundener Handoff erzeugt seine deklarierten Slice-Auditdateien ebenfalls automatisch vor dem jeweiligen Slice. Der Orchestrator projiziert strukturierte Findings, Reviews, Validierungsattestierungen und Autorisierungsstatus ausschließlich in die verwalteten Abschnitte. Nach jedem lokalen Slice-Commit ist Git die historische Quelle der Wahrheit; nach der dreifachen branchweiten Gesamtabnahme wird die abschließende Gesamtprojektion path-genau commitet.
 
 Im Zweischrittprozess commitet eine freigegebene `PLAN_ONLY`-Aufgabe den bereits
 geprüften Arbeitsplan unmittelbar; es folgt kein künstlicher Implementierungs-
@@ -219,6 +221,7 @@ Der Watch-Modus:
 - hält eine Einzelprozesssperre `inbox/.lock`, sofern `fcntl` verfügbar ist;
 - weist jeder Aufgabe eine persistierte Lauf-ID und einen Digest des Aufgabeninhalts zu;
 - aktiviert standardmäßig `--skip-git-check`, weil geprüfte Slice-Commits den Worktree absichtlich verändern;
+- deaktiviert standardmäßig das menschliche Planfreigabe-Gate, damit Inbox-Aufgaben nach den beiden positiven KI-Planreviews selbstständig in die Implementierung wechseln; `--plan-gate` oder `workflow.plan_gate = true` aktiviert es ausdrücklich;
 - streamt standardmäßig `stdout`;
 - verschiebt abgeschlossene Aufgaben mit UTC-Zeitstempel nach `outbox/done/`;
 - wiederholt technische Fehler und verschiebt ausgeschöpfte Aufgaben als Poison Tasks nach `outbox/failed/`;
@@ -275,7 +278,7 @@ Für deterministische Negativ- und Fortsetzungsszenarien kann ein State-v3-JSON-
 | `--strict-preflight` | aus | Einen Fehler der Provider-DNS-Vorabprüfung als fatal behandeln. |
 | `--skip-git-check` / `--no-skip-git-check` | aus; im Watch-Modus an | Prüfung auf einen sauberen Repositoryzustand überschreiben. |
 | `--manual-slice-gate` / `--no-manual-slice-gate` | Repositorykonfiguration oder aus | Vor jedem Slice-Commit eine explizite Freigabe verlangen. |
-| `--plan-gate` / `--no-plan-gate` | Repositorykonfiguration oder an | Nach Claude-/Antigravity-Planfreigabe eine explizite fingerprintgebundene Benutzerfreigabe verlangen. |
+| `--plan-gate` / `--no-plan-gate` | Einzelmodus: Repositorykonfiguration oder an; Watch-Modus: aus | Nach Claude-/Antigravity-Planfreigabe eine explizite fingerprintgebundene Benutzerfreigabe verlangen. Im Watch-Modus aktivieren `--plan-gate` oder ein ausdrücklich gesetztes `workflow.plan_gate = true` das Gate. |
 | `--plan-only` / `--no-plan-only` | Aufgabenmarker oder nicht gesetzt | Den Lauf auf das deklarierte Arbeitsplanartefakt begrenzen beziehungsweise explizit als Implementierung ausführen. |
 | `--work-plan <path>` | Aufgabenmarker | Exakter repositoryrelativer `WORK_PLAN_PATH` für `PLAN_ONLY`; darf dem Marker nicht widersprechen. |
 | `--target-branch <branch>` | Aufgabenmarker | Exakter erforderlicher Feature-Branch; darf dem Marker nicht widersprechen. |

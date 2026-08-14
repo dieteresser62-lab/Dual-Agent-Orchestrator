@@ -539,6 +539,45 @@ def test_plan_chain_uses_codex_then_claude_then_antigravity() -> None:
     assert driver.commit_calls == []
 
 
+def test_managed_audit_paths_are_added_after_codex_plan_only() -> None:
+    state = init_workflow_state(
+        run_id="run-managed-audit",
+        task_file="/repo/inbox/Bug.md",
+        branch="feature/workflow",
+        branch_base=START_COMMIT,
+        slice_count=1,
+        timestamp="2026-08-12T10:00:00+00:00",
+    )
+    output = "\n".join(
+        (
+            "SLICE_PLAN: 1 | Fix rounding behavior | src/rounding.py",
+            "PLAN_READY: YES",
+            "STATUS: DONE",
+        )
+    )
+    driver = FakeDriver(snapshots=[], codex_outputs=[output], reviewer_outputs=[])
+    context = replace(
+        _context(),
+        require_slice_plan=True,
+        task_scope_patterns=(
+            "docs/internal/bug-review-12345678.md",
+            "docs/internal/slice-bug-*.md",
+            "src/rounding.py",
+        ),
+        audit_report_path="docs/internal/bug-review-12345678.md",
+    )
+
+    planned_state, _history = WorkflowEngine(driver)._run_codex(
+        state, context, WorkflowHistory(1)
+    )
+
+    assert planned_state.planned_slices[0].scope_paths == (
+        "docs/internal/bug-review-12345678.md",
+        "docs/internal/slice-bug-01-fix-rounding-behavior.md",
+        "src/rounding.py",
+    )
+
+
 def test_approved_plan_waits_at_fingerprint_bound_user_gate() -> None:
     state = init_workflow_state(
         run_id="run-plan-gate",
@@ -1998,6 +2037,80 @@ def test_changed_test_fingerprint_expires_previous_gate_approval() -> None:
     assert expired.exit_code == 4
     assert expired.state.current_work_unit.gate.fingerprint == changed_evidence.fingerprint
     assert driver.reviewer_calls == []
+
+
+def test_final_review_resumes_redundant_gate_from_exact_prior_test_approval() -> None:
+    branch = _changes("7", "src/early.py", TEST_FILE, full_diff="COMPLETE BRANCH")
+    evidence = GateTestChangeEvidence((TEST_FILE,), "9" * 64)
+    state = init_workflow_state(
+        run_id="run-final-test-inheritance",
+        task_file="/repo/task.md",
+        branch="feature/workflow",
+        branch_base=START_COMMIT,
+        slice_count=1,
+        timestamp="2026-08-12T10:00:00+00:00",
+    ).complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    ).bind_current_slice_git_boundary(
+        start_commit=START_COMMIT,
+        scope_paths=("src/early.py", TEST_FILE),
+        start_fingerprint="0" * 64,
+    ).await_user_gate(
+        reason=GateReason.TEST_CHANGE,
+        detail="test approval required",
+        fingerprint=evidence.fingerprint,
+        paths=evidence.paths,
+    ).record_user_gate_decision(
+        approved=True,
+        fingerprint=evidence.fingerprint,
+        paths=evidence.paths,
+        decided_by="user",
+        decided_at="2026-08-12T12:00:00+00:00",
+        rationale="exact Slice test diff reviewed",
+    ).record_active_test_approval(
+        evidence.fingerprint,
+        evidence.paths,
+    ).complete_current_slice(
+        commit_ref="b" * 40,
+    ).start_final_review_work_unit().await_user_gate(
+        reason=GateReason.TEST_CHANGE,
+        detail="test changes require explicit approval before review",
+        fingerprint=evidence.fingerprint,
+        paths=evidence.paths,
+    )
+    driver = FakeDriver(
+        snapshots=[branch],
+        codex_outputs=[_final_report()],
+        reviewer_outputs=[
+            _final_approval(AgentRole.CLAUDE),
+            _final_approval(AgentRole.ANTIGRAVITY),
+        ],
+        test_evidence_by_fingerprint={branch.fingerprint: evidence},
+    )
+    context = replace(
+        _context(),
+        test_changes_approved=False,
+        dynamic_test_scope=True,
+    )
+
+    result = run_v3_final_review(
+        WorkflowEngine(driver),
+        state,
+        context,
+        WorkflowHistory(state.current_work_unit_id),
+    )
+
+    assert result.completed
+    assert result.state.current_work_unit.gate.reason is GateReason.NONE
+    assert result.state.current_work_unit.active_test_fingerprint == evidence.fingerprint
+    assert result.state.current_work_unit.active_test_paths == evidence.paths
+    inherited = result.state.current_work_unit.gate_decisions
+    assert len(inherited) == 1
+    assert inherited[0].decided_by == "user"
+    assert len(driver.codex_calls) == 1
+    assert len(driver.reviewer_calls) == 2
 
 
 def test_manual_slice_gate_halts_before_commit_and_resumes_without_repeating_reviews() -> None:

@@ -9,12 +9,15 @@ from audit_trail import (
     REQUIRED_SLICE_HEADINGS,
     AuditTrailError,
     AuditProjection,
+    OverallAuditEntry,
     ReviewAuditEvent,
     REQUIRED_WORK_PLAN_HEADINGS,
     AuthorizedTestChanges,
     ValidationAuditEvent,
     project_slice_audit,
+    project_overall_audit,
     project_work_plan_audit,
+    prepare_managed_overall_document,
     semantic_audit_fingerprint,
     strip_managed_audit_sections,
     validate_slice_document,
@@ -386,6 +389,42 @@ def test_work_plan_uses_same_safe_projection_without_parallel_raw_log(tmp_path: 
     assert "### Ereignis 1: Runde 1" in rendered
     assert "alter Planinhalt" not in rendered
     assert project_work_plan_audit(document, projection) == rendered
+
+
+def test_overall_audit_aggregates_plan_and_slice_reviews(tmp_path: Path) -> None:
+    document = prepare_managed_overall_document(
+        repository_root=tmp_path,
+        audit_path="docs/internal/bug-review-12345678.md",
+        task_name="Bug",
+        task_file="inbox/Bug.md",
+        run_id="watch-1",
+        branch="codex/bug",
+        task_scope=("src/bug.py",),
+    )
+    entries = (
+        OverallAuditEntry(
+            label="Work Unit 01 – Planung",
+            summary="Plan erstellen",
+            scope_paths=("src/bug.py",),
+            projection=AuditProjection(
+                slice_id=1,
+                events=(ReviewAuditEvent(1, 1, 1, _review()),),
+            ),
+        ),
+        OverallAuditEntry(
+            label="Work Unit 02 – Slice 01",
+            summary="Bug beheben",
+            scope_paths=("src/bug.py",),
+            projection=AuditProjection(slice_id=1),
+        ),
+    )
+
+    rendered = project_overall_audit(document, entries)
+
+    assert "Work Unit 01 – Planung" in rendered
+    assert "Work Unit 02 – Slice 01" in rendered
+    assert "### Ereignis 1: Runde 1" in rendered
+    assert project_overall_audit(document, entries) == rendered
 
 
 def test_projection_escapes_markdown_table_and_section_injection(tmp_path: Path) -> None:

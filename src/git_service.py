@@ -123,6 +123,78 @@ class SliceCommitResult:
     committed_paths: tuple[str, ...]
 
 
+def commit_managed_audit_report(
+    *,
+    repository_root: Path,
+    branch: str,
+    audit_path: str,
+    excluded_control_paths: Sequence[str] = (),
+) -> str:
+    """Commit only the deterministic final audit projection, idempotently."""
+    identity = _require_expected_feature_branch(repository_root, branch)
+    normalized_audit = _normalize_scope_paths((audit_path,))[0]
+    changes = collect_repository_changes(
+        identity.repository_root,
+        identity.head,
+        semantic_markdown_paths=(normalized_audit,),
+        excluded_paths=_normalize_optional_scope_paths(excluded_control_paths),
+    )
+    if not changes.entries:
+        return identity.head
+    transaction_paths = tuple(
+        sorted(
+            {
+                path
+                for entry in changes.entries
+                for path in (entry.path, entry.old_path)
+                if path is not None
+            }
+        )
+    )
+    if transaction_paths != (normalized_audit,):
+        raise GitTransactionError(
+            "final audit commit found foreign paths: " + ", ".join(transaction_paths)
+        )
+    staged_before = _staged_paths(identity.repository_root, detect_renames=False)
+    if staged_before and staged_before != (normalized_audit,):
+        raise GitTransactionError(
+            "foreign staged paths block final audit commit: " + ", ".join(staged_before)
+        )
+    index_tree_before = os.fsdecode(
+        _git(identity.repository_root, "write-tree").stdout
+    ).strip()
+    try:
+        _git(
+            identity.repository_root,
+            "add",
+            "--chmod=-x",
+            "--",
+            f":(top,literal){normalized_audit}",
+        )
+        if _staged_paths(identity.repository_root) != (normalized_audit,):
+            raise GitTransactionError("final audit staging did not remain path-exact")
+        _git(
+            identity.repository_root,
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "docs: finalize orchestrator audit",
+        )
+    except Exception:
+        current_head = os.fsdecode(
+            _git(identity.repository_root, "rev-parse", "--verify", "HEAD^{commit}").stdout
+        ).strip()
+        if current_head == identity.head:
+            _git(identity.repository_root, "read-tree", index_tree_before)
+        raise
+    return os.fsdecode(
+        _git(identity.repository_root, "rev-parse", "--verify", "HEAD^{commit}").stdout
+    ).strip()
+
+
 def inspect_repository(repository_root: Path) -> RepositoryIdentity:
     root = Path(repository_root).resolve()
     reported_root = Path(

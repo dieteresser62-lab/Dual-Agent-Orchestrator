@@ -546,6 +546,19 @@ def test_policy_gate_roundtrips_and_resumes_at_same_step() -> None:
     assert resumed.current_work_unit.gate.status is GateStatus.CLEAR
 
 
+def test_managed_audit_path_roundtrips_and_rejects_unsafe_locations() -> None:
+    state = replace(
+        make_state(),
+        audit_report_path="docs/internal/bug-review-12345678.md",
+    )
+
+    assert WorkflowState.from_dict(state.to_dict()).audit_report_path == (
+        "docs/internal/bug-review-12345678.md"
+    )
+    with pytest.raises(WorkflowStateValidationError, match="audit_report_path"):
+        replace(state, audit_report_path="../audit.md")
+
+
 def test_policy_gate_rejects_fingerprint_bound_reason_and_unsafe_path() -> None:
     with pytest.raises(WorkflowStateValidationError, match="policy gate reason"):
         make_state().await_policy_gate(

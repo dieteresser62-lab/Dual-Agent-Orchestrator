@@ -9,14 +9,14 @@ import orchestrator
 import pytest
 from agent_runtime import AgentInvocationError
 from cli import parse_args
-from contracts import AgentRole
+from contracts import AgentRole, PlannedSlice
 from orchestrator import ProductionWorkflowDriver, run_pipeline, run_production_workflow
 from workflow import CodexInvocation, ReviewerInvocation
 from workflow import WorkflowExecutionError
 from plan_handoff import PlanHandoffError
 from state_io import StateSchemaError, save_workflow_state
 from task_contract import parse_task_contract
-from workflow_state import WorkflowStep
+from workflow_state import GateReason, WorkflowStep, WorkUnitKind, WorkUnitStatus
 from workflow_state import AgentFailureKind
 
 
@@ -119,6 +119,176 @@ def test_new_watch_task_switches_to_existing_target_and_uses_its_head_as_baselin
     assert state.branch_base == target_head
     assert state.current_slice.start_commit == target_head
     assert _git(repository, "branch", "--show-current") == "feature/inbox-target"
+
+
+def test_new_inbox_watch_task_persists_deterministic_audit_report_path(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repository = _repository(tmp_path, "feature/inbox-audit")
+    inbox = repository / "inbox"
+    inbox.mkdir()
+    task = inbox / "RundungsDiff.md"
+    _write_task(task, "feature/inbox-audit", "src/new.py")
+    args = _args(repository, task)
+    args.watch_run_id = "watch-inbox-audit"
+    captured: dict[str, object] = {}
+    real_fresh_state = orchestrator._fresh_state
+
+    class StateCaptured(RuntimeError):
+        pass
+
+    def capture_state(**kwargs):
+        state = real_fresh_state(**kwargs)
+        captured["state"] = state
+        raise StateCaptured
+
+    monkeypatch.setattr(orchestrator, "_fresh_state", capture_state)
+    monkeypatch.chdir(repository)
+
+    with pytest.raises(StateCaptured):
+        run_production_workflow(task, args, force_new=True)
+
+    state = captured["state"]
+    assert state.audit_report_path.startswith(
+        "docs/internal/rundungsdiff-review-"
+    )
+    assert not list((repository / "docs" / "internal").glob("slice-*.md"))
+    assert _git(repository, "branch", "--show-current") == "feature/inbox-audit"
+
+
+def test_legacy_approved_inbox_plan_gets_deferred_audit_paths_before_slice_start() -> None:
+    state = orchestrator.init_workflow_state(
+        run_id="legacy-inbox-plan",
+        task_file="/repo/inbox/RundungsDiff.md",
+        branch="codex/rounding",
+        branch_base="a" * 40,
+        slice_count=1,
+        audit_report_path="docs/internal/rundungsdiff-review-12345678.md",
+    ).bind_slice_plan(
+        (PlannedSlice(1, "round values", ("src/rounding.py",)),),
+        first_start_commit="a" * 40,
+    )
+
+    migrated = orchestrator._attach_managed_audit_paths(state)
+
+    assert migrated.planned_slices[0].scope_paths == (
+        "docs/internal/rundungsdiff-review-12345678.md",
+        "docs/internal/slice-rundungsdiff-01-round-values.md",
+        "src/rounding.py",
+    )
+    assert not migrated.current_slice.scope_paths
+
+
+def test_legacy_approved_inbox_plan_cannot_retrofit_after_slice_boundary() -> None:
+    state = orchestrator.init_workflow_state(
+        run_id="legacy-inbox-bound",
+        task_file="/repo/inbox/RundungsDiff.md",
+        branch="codex/rounding",
+        branch_base="a" * 40,
+        slice_count=1,
+        audit_report_path="docs/internal/rundungsdiff-review-12345678.md",
+    ).bind_slice_plan(
+        (PlannedSlice(1, "round values", ("src/rounding.py",)),),
+        first_start_commit="a" * 40,
+    ).bind_current_slice_git_boundary(
+        start_commit="a" * 40,
+        scope_paths=("src/rounding.py",),
+        start_fingerprint="b" * 64,
+    )
+
+    with pytest.raises(WorkflowExecutionError, match="cannot retrofit"):
+        orchestrator._attach_managed_audit_paths(state)
+
+
+def test_final_correction_rejects_audit_only_persisted_scope(tmp_path: Path) -> None:
+    repository = _repository(tmp_path, "feature/audit-only-correction")
+    task = repository / "inbox" / "audit-only.md"
+    task.parent.mkdir()
+    _write_task(task, "feature/audit-only-correction", "src/rounding.py")
+    audit_path = "docs/internal/audit-only-review-12345678.md"
+    state = orchestrator.init_workflow_state(
+        run_id="audit-only-correction",
+        task_file=str(task),
+        branch="feature/audit-only-correction",
+        branch_base=_git(repository, "rev-parse", "HEAD"),
+        slice_count=1,
+        audit_report_path=audit_path,
+    ).bind_slice_plan(
+        (
+            PlannedSlice(
+                1,
+                "managed records only",
+                (
+                    audit_path,
+                    "docs/internal/slice-audit-only-01-managed-records-only.md",
+                ),
+            ),
+        ),
+        first_start_commit=_git(repository, "rev-parse", "HEAD"),
+    )
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    driver.active_state = state
+
+    with pytest.raises(
+        WorkflowExecutionError,
+        match="final correction has no persisted remediation scope",
+    ):
+        driver.prepare_correction(())
+
+
+def test_runtime_inherits_exact_prior_test_gate_before_early_resume_return() -> None:
+    test_path = "tests/rounding.test.mjs"
+    fingerprint = "c" * 64
+    state = orchestrator.init_workflow_state(
+        run_id="resume-repeated-test-gate",
+        task_file="/repo/inbox/rounding.md",
+        branch="feature/rounding",
+        branch_base="a" * 40,
+        slice_count=1,
+    ).complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    ).bind_current_slice_git_boundary(
+        start_commit="a" * 40,
+        scope_paths=(test_path,),
+        start_fingerprint="b" * 64,
+    ).await_user_gate(
+        reason=GateReason.TEST_CHANGE,
+        detail="test approval required",
+        fingerprint=fingerprint,
+        paths=(test_path,),
+    ).record_user_gate_decision(
+        approved=True,
+        fingerprint=fingerprint,
+        paths=(test_path,),
+        decided_by="dieter",
+        decided_at="2026-08-14T17:11:21+00:00",
+        rationale="planned regression test reviewed",
+    ).record_active_test_approval(
+        fingerprint,
+        (test_path,),
+    ).complete_current_slice(
+        commit_ref="d" * 40,
+    ).start_final_review_work_unit().await_user_gate(
+        reason=GateReason.TEST_CHANGE,
+        detail="test changes require explicit approval before review",
+        fingerprint=fingerprint,
+        paths=(test_path,),
+    )
+
+    resumed = orchestrator._inherit_redundant_test_gate(state)
+
+    assert resumed.current_work_unit.status is WorkUnitStatus.IN_PROGRESS
+    assert resumed.current_work_unit.gate.reason is GateReason.NONE
+    assert resumed.current_work_unit.active_test_fingerprint == fingerprint
+    assert resumed.current_work_unit.active_test_paths == (test_path,)
 
 
 def test_new_watch_task_does_not_require_a_conventional_base_branch(
@@ -350,6 +520,83 @@ def test_direct_task_still_requires_target_branch_to_be_active(
         run_production_workflow(task, _args(repository, task))
 
     assert _git(repository, "branch", "--show-current") == "master"
+
+
+def test_inbox_workflow_creates_slice_audit_at_implementation_start_and_finalizes_overall(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repository = _repository(tmp_path, "feature/inbox-lifecycle")
+    inbox = repository / "inbox"
+    inbox.mkdir()
+    task = inbox / "AuditLifecycle.md"
+    _write_task(task, "feature/inbox-lifecycle", "app/result.py")
+    observations = {"plan_without_slice": False, "implementation_with_slice": False}
+
+    def codex(driver: ProductionWorkflowDriver, invocation: CodexInvocation) -> str:
+        slice_docs = list((repository / "docs" / "internal").glob("slice-*.md"))
+        if invocation.step is WorkflowStep.CODEX_PLAN:
+            assert slice_docs == []
+            output = "\n".join(
+                (
+                    "SLICE_PLAN: 1 | implement result | app/result.py",
+                    "PLAN_READY: YES",
+                    "STATUS: DONE",
+                )
+            )
+        elif invocation.step is WorkflowStep.CODEX_IMPLEMENTATION:
+            observations["implementation_with_slice"] = len(slice_docs) == 1
+            (repository / "app").mkdir(exist_ok=True)
+            (repository / "app" / "result.py").write_text("VALUE = 1\n", encoding="utf-8")
+            output = "TEST_FILES_TOUCHED: NONE\nIMPLEMENTATION_READY: 01 | YES\nSTATUS: DONE"
+        else:
+            output = "FINAL_REPORT_READY: YES\nSTATUS: DONE"
+        driver.last_codex_output = output
+        return output
+
+    def reviewer(
+        _driver: ProductionWorkflowDriver, invocation: ReviewerInvocation
+    ) -> str:
+        if invocation.step in {
+            WorkflowStep.CLAUDE_PLAN_REVIEW,
+            WorkflowStep.ANTIGRAVITY_PLAN_REVIEW,
+        }:
+            observations["plan_without_slice"] = not list(
+                (repository / "docs" / "internal").glob("slice-*.md")
+            )
+            marker = "PLAN_APPROVAL: YES"
+        elif invocation.step in {
+            WorkflowStep.CLAUDE_FINAL_REVIEW,
+            WorkflowStep.ANTIGRAVITY_FINAL_REVIEW,
+        }:
+            marker = "FINAL_APPROVAL: YES"
+        else:
+            marker = "SLICE_APPROVAL: 01 | YES"
+        return _review(invocation.reviewer, marker)
+
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_codex", codex)
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_reviewer", reviewer)
+    monkeypatch.chdir(repository)
+
+    result = run_production_workflow(task, _args(repository, task), force_new=True)
+
+    assert result.workflow_completed
+    assert observations == {
+        "plan_without_slice": True,
+        "implementation_with_slice": True,
+    }
+    docs = sorted((repository / "docs" / "internal").glob("*.md"))
+    assert len(docs) == 2
+    overall = next(path for path in docs if "-review-" in path.name)
+    slice_doc = next(path for path in docs if path.name.startswith("slice-"))
+    overall_text = overall.read_text(encoding="utf-8")
+    assert "Work Unit 01 – Planung" in overall_text
+    assert "Work Unit 02 – Slice 01" in overall_text
+    assert "Work Unit 03 – Gesamtreview" in overall_text
+    assert "Review-Feedback von Claude" in slice_doc.read_text(encoding="utf-8")
+    assert len(_git(repository, "log", "--format=%s", "master..HEAD").splitlines()) == 2
+    assert _git(repository, "status", "--short", "--untracked-files=all") == (
+        "?? inbox/AuditLifecycle.md"
+    )
 
 
 def test_production_session_plans_commits_two_slices_and_persists_final_state(

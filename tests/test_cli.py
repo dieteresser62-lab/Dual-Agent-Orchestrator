@@ -565,6 +565,19 @@ def test_watch_defaults_do_not_auto_resume_and_skip_git_check(tmp_path: Path) ->
     assert args.resume is False
     assert args.auto_resume is False
     assert args.skip_git_check is True
+    assert args.plan_gate is False
+    assert args.plan_gate_source == "watch-default"
+
+
+def test_watch_plan_gate_can_be_enabled_explicitly(tmp_path: Path) -> None:
+    cli_enabled = parse_args(["--watch", "--plan-gate"], cwd=tmp_path, environ={})
+    _write_config(tmp_path, "[workflow]\nplan_gate = true\n")
+    config_enabled = parse_args(["--watch"], cwd=tmp_path, environ={})
+
+    assert cli_enabled.plan_gate is True
+    assert cli_enabled.plan_gate_source == "cli"
+    assert config_enabled.plan_gate is True
+    assert config_enabled.plan_gate_source == "repository-default"
 
 
 def test_cli_overrides_watch_environment_defaults(tmp_path: Path) -> None:
@@ -603,6 +616,8 @@ def test_watch_default_logs_git_check_and_stream_configuration(
     assert "live stream channels = stdout" in caplog.text
     assert "enabling --skip-git-check by default" in caplog.text
     assert "RUN_TASK_SKIP_GIT_CHECK" in caplog.text
+    assert "disabling --plan-gate by default" in caplog.text
+    assert "workflow.plan_gate=true" in caplog.text
 
 
 def test_invalid_stream_environment_warning_uses_configured_log_format(tmp_path: Path) -> None:

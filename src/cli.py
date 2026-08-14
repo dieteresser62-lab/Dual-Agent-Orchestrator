@@ -42,6 +42,7 @@ class ConfigError(ValueError):
 class WorkflowConfig:
     manual_slice_gate: bool = False
     plan_gate: bool = True
+    plan_gate_declared: bool = False
 
 
 @dataclass(frozen=True)
@@ -270,6 +271,7 @@ def _load_workflow(data: object) -> WorkflowConfig:
     return WorkflowConfig(
         manual_slice_gate=manual_slice_gate,
         plan_gate=plan_gate,
+        plan_gate_declared="plan_gate" in table,
     )
 
 
@@ -656,7 +658,14 @@ def parse_args(
     if args.manual_slice_gate is None:
         args.manual_slice_gate = repo_config.workflow.manual_slice_gate
     if args.plan_gate is None:
-        args.plan_gate = repo_config.workflow.plan_gate
+        if args.watch and not repo_config.workflow.plan_gate_declared:
+            args.plan_gate = False
+            args.plan_gate_source = "watch-default"
+        else:
+            args.plan_gate = repo_config.workflow.plan_gate
+            args.plan_gate_source = "repository-default"
+    else:
+        args.plan_gate_source = "cli"
     quota_defaults = QuotaWaitPolicy()
     quota_automatic = args.quota_auto_resume
     if quota_automatic is None:
@@ -829,6 +838,11 @@ def run_cli(
             logger.info(
                 "Watch mode: enabling --skip-git-check by default "
                 "(override with RUN_TASK_SKIP_GIT_CHECK=0 or --no-skip-git-check)."
+            )
+        if args.plan_gate_source == "watch-default":
+            logger.info(
+                "Watch mode: disabling --plan-gate by default "
+                "(override with --plan-gate or workflow.plan_gate=true)."
             )
         if args.task_file != DEFAULT_TASK_FILE:
             logger.warning("Task file is ignored in --watch mode.")

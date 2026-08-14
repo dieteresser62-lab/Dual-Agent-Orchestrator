@@ -14,10 +14,14 @@ from agent_runtime import OrchestratorConfig, run_agent_checked, run_validation_
 from audit_trail import (
     AuditProjection,
     AuthorizedTestChanges,
+    OverallAuditEntry,
     project_managed_slice_audit,
+    project_overall_audit,
     project_work_plan_audit,
+    prepare_managed_overall_document,
     prepare_managed_slice_document,
     prepare_managed_work_plan_document,
+    managed_slice_document_path,
     validate_managed_work_plan_document,
 )
 from cli import DEFAULT_AGENTS_FILE, DEFAULT_TASK_FILE
@@ -27,6 +31,7 @@ from contracts import (
     CodexStepContract,
     ContractResult,
     FindingRecord,
+    PlannedSlice,
     StepContract,
     ValidationAttestation,
     ValidationRecord,
@@ -38,6 +43,7 @@ from gates import TestChangeEvidence, detect_test_changes, matches_path_patterns
 from git_service import (
     CommitAuthorization,
     SliceGitBoundary,
+    commit_managed_audit_report,
     commit_slice,
     inspect_repository,
     prepare_new_watch_task_branch,
@@ -82,6 +88,7 @@ from workflow_state import (
     SliceStatus,
     WorkflowState,
     WorkflowStep,
+    WorkUnitRecord,
     WorkUnitKind,
     WorkUnitStatus,
     init_workflow_state,
@@ -258,12 +265,20 @@ class ProductionWorkflowDriver(WorkflowDriver):
         )
 
     def collect_changes(self, start_commit: str) -> WorkflowChanges:
-        semantic_paths = (
-            (self.active_state.work_plan_path,)
-            if self.active_state is not None
-            and self.active_state.work_plan_path is not None
-            else ()
-        )
+        semantic_paths: tuple[str, ...] = ()
+        if self.active_state is not None:
+            candidates = {
+                path
+                for path in (
+                    self.active_state.work_plan_path,
+                    self.active_state.audit_report_path,
+                    *self.active_state.current_slice.scope_paths,
+                )
+                if path is not None
+                and path.startswith("docs/internal/")
+                and path.endswith(".md")
+            }
+            semantic_paths = tuple(sorted(candidates))
         changes = collect_repository_changes(
             self.root,
             start_commit,
@@ -276,7 +291,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 fingerprint=changes.fingerprint,
                 paths=changes.paths,
                 full_diff=changes.diff_text or "(binary or metadata-only repository change)",
-                gate_paths=changes.review_paths,
+                gate_paths=tuple(sorted(set(changes.review_paths))),
             )
             self._repository_changes[changes.fingerprint] = changes
         elif (
@@ -461,17 +476,33 @@ class ProductionWorkflowDriver(WorkflowDriver):
         if self.active_state is None:
             raise WorkflowExecutionError("correction preparation has no active state")
         identity = inspect_repository(self.root)
-        scope = tuple(
+        remediation_scope = tuple(
             sorted(
                 {
                     path
                     for planned in self.active_state.planned_slices
                     for path in planned.scope_paths
+                    if not _is_managed_audit_path(self.active_state, path)
                 }
             )
         )
-        if not scope:
-            raise WorkflowExecutionError("final correction has no persisted planned scope")
+        if not remediation_scope:
+            raise WorkflowExecutionError("final correction has no persisted remediation scope")
+        scope = remediation_scope
+        correction_slice_id = len(self.active_state.slices) + 1
+        if self.active_state.audit_report_path is not None:
+            correction_doc = _managed_correction_slice_path(
+                self.active_state.audit_report_path, correction_slice_id
+            )
+            scope = tuple(
+                sorted(
+                    {
+                        *scope,
+                        self.active_state.audit_report_path,
+                        correction_doc,
+                    }
+                )
+            )
         start = collect_repository_changes(
             self.root,
             identity.head,
@@ -492,11 +523,12 @@ class ProductionWorkflowDriver(WorkflowDriver):
             start_commit=current.start_commit,
             start_fingerprint=current.start_fingerprint,
             scope_paths=current.scope_paths,
-            semantic_markdown_paths=(
-                (state.work_plan_path,)
-                if state.work_plan_path is not None
-                and state.work_plan_path in current.scope_paths
-                else ()
+            semantic_markdown_paths=tuple(
+                sorted(
+                    path
+                    for path in current.scope_paths
+                    if path.startswith("docs/internal/") and path.endswith(".md")
+                )
             ),
             excluded_control_paths=_bound_task_control_paths(self.root, state),
         )
@@ -524,12 +556,22 @@ class ProductionWorkflowDriver(WorkflowDriver):
         )
         return result.commit_hash
 
+    def finalize_audit(self, state: WorkflowState) -> str | None:
+        if state.audit_report_path is None:
+            return None
+        return commit_managed_audit_report(
+            repository_root=self.root,
+            branch=state.branch,
+            audit_path=state.audit_report_path,
+            excluded_control_paths=_bound_task_control_paths(self.root, state),
+        )
+
     def checkpoint(self, state: WorkflowState, history: WorkflowHistory) -> None:
-        self._project_audit(state, history)
         persisted = replace(
             state,
             runtime_history=_history_payload(state.runtime_history, history),
         )
+        self._project_audit(persisted, history)
         save_workflow_state(
             self.state_file, persisted, allowed_roots=self.allowed_roots
         )
@@ -541,9 +583,25 @@ class ProductionWorkflowDriver(WorkflowDriver):
     def _project_audit(self, state: WorkflowState, history: WorkflowHistory) -> None:
         """Write only managed audit blocks when the persisted plan names a target."""
         unit = state.current_work_unit
+        if state.audit_report_path is not None:
+            task = Path(state.task_file)
+            try:
+                task_label = task.resolve().relative_to(self.root).as_posix()
+            except ValueError:
+                task_label = task.name
+            document = prepare_managed_overall_document(
+                repository_root=self.root,
+                audit_path=state.audit_report_path,
+                task_name=task.stem,
+                task_file=task_label,
+                run_id=state.run_id,
+                branch=state.branch,
+                task_scope=state.task_scope_patterns,
+            )
+            entries = _overall_audit_entries(state)
+            if entries:
+                project_overall_audit(document, entries)
         if unit.kind is WorkUnitKind.FINAL_REVIEW:
-            # Final-review evidence remains in state/checkpoints. Reusing the last Slice
-            # target would overwrite that Slice's own complete review lifecycle.
             return
         approval: AuthorizedTestChanges | None = None
         if unit.active_test_fingerprint is not None:
@@ -565,23 +623,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
                     approved_at=decision.decided_at,
                     diff_fingerprint=decision.fingerprint,
                 )
-        projection = AuditProjection(
-            slice_id=state.current_slice_id,
-            events=history.events,
-            test_approval=approval,
-            implementation_ready=(
-                unit.kind is not WorkUnitKind.PLAN
-                and state.current_step not in {
-                    WorkflowStep.CODEX_IMPLEMENTATION,
-                    WorkflowStep.CODEX_CORRECTION,
-                    WorkflowStep.CODEX_FINAL_CORRECTION,
-                }
-            ),
-            commit_authorized=(
-                state.current_step is WorkflowStep.SLICE_COMMIT
-                or state.current_slice.status is SliceStatus.COMPLETED
-            ),
-        )
+        projection = _audit_projection(state, unit, history, approval)
         if (
             state.execution_mode == TaskMode.PLAN_ONLY.value
             and state.work_plan_path is not None
@@ -636,33 +678,28 @@ class ProductionWorkflowDriver(WorkflowDriver):
             (item for item in state.planned_slices if item.slice_id == state.current_slice_id),
             None,
         )
-        if planned is None:
-            return
+        scope_paths = (
+            planned.scope_paths if planned is not None else state.current_slice.scope_paths
+        )
+        summary = planned.summary if planned is not None else "Abschlusskorrektur"
         candidates = tuple(
             path
-            for path in planned.scope_paths
+            for path in scope_paths
             if path.startswith("docs/internal/")
             and f"-{state.current_slice_id:02d}-" in Path(path).name
             and Path(path).suffix == ".md"
         )
         for path in candidates:
             try:
-                summary = next(
-                    (
-                        item.summary
-                        for item in state.planned_slices
-                        if item.slice_id == state.current_slice_id
-                    ),
-                    f"Slice {state.current_slice_id}",
-                )
                 document = prepare_managed_slice_document(
                     repository_root=self.root,
-                    work_plan_path=state.work_plan_path
+                    work_plan_path=state.audit_report_path
+                    or state.work_plan_path
                     or "docs/internal/orchestrator-modernization-work-plan.md",
                     slice_id=state.current_slice_id,
                     slice_path=path,
                     title=summary,
-                    scope_paths=planned.scope_paths,
+                    scope_paths=scope_paths,
                     branch=state.branch,
                 )
             except ValueError:
@@ -670,6 +707,138 @@ class ProductionWorkflowDriver(WorkflowDriver):
             project_managed_slice_audit(document, projection)
             return
         logger.debug("No prepared Slice audit target is present for Slice %s.", state.current_slice_id)
+
+
+def _authorized_test_approval(unit: WorkUnitRecord) -> AuthorizedTestChanges | None:
+    if unit.active_test_fingerprint is None:
+        return None
+    decision = next(
+        (
+            item
+            for item in reversed(unit.gate_decisions)
+            if item.approved
+            and item.fingerprint == unit.active_test_fingerprint
+            and item.paths == unit.active_test_paths
+        ),
+        None,
+    )
+    if decision is None:
+        return None
+    return AuthorizedTestChanges(
+        approved=True,
+        paths=decision.paths,
+        approved_by=decision.decided_by,
+        rationale=decision.rationale,
+        approved_at=decision.decided_at,
+        diff_fingerprint=decision.fingerprint,
+    )
+
+
+def _audit_projection(
+    state: WorkflowState,
+    unit: WorkUnitRecord,
+    history: WorkflowHistory,
+    approval: AuthorizedTestChanges | None = None,
+) -> AuditProjection:
+    slice_record = next(item for item in state.slices if item.slice_id == unit.slice_id)
+    implementation_ready = (
+        None
+        if unit.kind is WorkUnitKind.PLAN
+        else unit.current_step not in {
+            WorkflowStep.CODEX_IMPLEMENTATION,
+            WorkflowStep.CODEX_CORRECTION,
+            WorkflowStep.CODEX_FINAL_CORRECTION,
+        }
+    )
+    commit_authorized = (
+        unit.kind in {WorkUnitKind.SLICE, WorkUnitKind.CORRECTION}
+        and (
+            unit.current_step is WorkflowStep.SLICE_COMMIT
+            or slice_record.status is SliceStatus.COMPLETED
+        )
+    )
+    return AuditProjection(
+        slice_id=unit.slice_id,
+        events=history.events,
+        test_approval=approval or _authorized_test_approval(unit),
+        implementation_ready=implementation_ready,
+        commit_authorized=commit_authorized,
+    )
+
+
+def _persisted_histories(state: WorkflowState) -> dict[int, WorkflowHistory]:
+    raw = state.runtime_history
+    if not isinstance(raw, dict):
+        return {}
+    candidates: list[object] = []
+    if set(raw) == {"current", "archive"}:
+        archive = raw.get("archive")
+        if isinstance(archive, list):
+            candidates.extend(archive)
+        candidates.append(raw.get("current"))
+    else:
+        candidates.append(raw)
+    histories: dict[int, WorkflowHistory] = {}
+    for candidate in candidates:
+        try:
+            parsed = WorkflowHistory.from_dict(candidate)
+        except (TypeError, ValueError):
+            continue
+        histories[parsed.work_unit_id] = parsed
+    return histories
+
+
+def _overall_audit_entries(state: WorkflowState) -> tuple[OverallAuditEntry, ...]:
+    histories = _persisted_histories(state)
+    entries: list[OverallAuditEntry] = []
+    for unit in state.work_units:
+        history = histories.get(unit.work_unit_id, WorkflowHistory(unit.work_unit_id))
+        planned = next(
+            (item for item in state.planned_slices if item.slice_id == unit.slice_id),
+            None,
+        )
+        if unit.kind is WorkUnitKind.PLAN:
+            label = "Work Unit %02d – Planung" % unit.work_unit_id
+            summary = "Planung und Review der geordneten Implementierungsslices"
+            scope = tuple(
+                sorted(
+                    {
+                        *state.task_scope_patterns,
+                        *((state.audit_report_path,) if state.audit_report_path else ()),
+                        *(
+                            path
+                            for item in state.planned_slices
+                            for path in item.scope_paths
+                        ),
+                    }
+                )
+            )
+        elif unit.kind is WorkUnitKind.FINAL_REVIEW:
+            label = "Work Unit %02d – Gesamtreview" % unit.work_unit_id
+            summary = "Branchweite Gesamtabnahme durch Codex, Claude und Antigravity"
+            scope = tuple(
+                sorted({path for item in state.planned_slices for path in item.scope_paths})
+            )
+        else:
+            label = "Work Unit %02d – Slice %02d" % (
+                unit.work_unit_id,
+                unit.slice_id,
+            )
+            summary = planned.summary if planned is not None else "Abschlusskorrektur"
+            scope = (
+                planned.scope_paths
+                if planned is not None
+                else next(item for item in state.slices if item.slice_id == unit.slice_id).scope_paths
+            )
+        entries.append(
+            OverallAuditEntry(
+                label=label,
+                summary=summary,
+                scope_paths=scope,
+                projection=_audit_projection(state, unit, history),
+            )
+        )
+    return tuple(entries)
 
 
 def _context(
@@ -706,6 +875,22 @@ def _context(
         "- Every emitted SLICE_PLAN path and every workspace change must remain within "
         f"the declared task scope: {', '.join(state.task_scope_patterns) or 'LEGACY'}"
     )
+    effective_scope = state.task_scope_patterns
+    if state.audit_report_path is not None:
+        effective_scope = tuple(
+            sorted(
+                {
+                    *effective_scope,
+                    state.audit_report_path,
+                    _managed_slice_scope_pattern(state.audit_report_path),
+                }
+            )
+        )
+        effective_assignment += (
+            "\n- The orchestrator owns the consolidated audit report and managed audit "
+            "blocks below docs/internal. Do not edit managed audit blocks. A Slice report "
+            "may be updated only after the orchestrator creates it at implementation start."
+        )
     effective_assignment += _plan_only_step_boundary(state)
     return WorkflowContext(
         assignment=effective_assignment,
@@ -726,8 +911,9 @@ def _context(
         dynamic_test_scope=True,
         plan_gate=bool(getattr(args, "plan_gate", True)),
         plan_only=state.execution_mode == TaskMode.PLAN_ONLY.value,
-        task_scope_patterns=state.task_scope_patterns,
+        task_scope_patterns=effective_scope,
         work_plan_path=state.work_plan_path,
+        audit_report_path=state.audit_report_path,
     )
 
 
@@ -820,6 +1006,71 @@ def _new_watch_task_control_paths(
     )
 
 
+def _managed_audit_path(task_file: Path, task_digest: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", task_file.stem.lower()).strip("-") or "task"
+    return f"docs/internal/{slug}-review-{task_digest[:8]}.md"
+
+
+def _managed_slice_scope_pattern(audit_report_path: str) -> str:
+    stem = Path(audit_report_path).stem
+    stem = re.sub(  # allowlist:german
+        r"-(?:gesamtpruefung|review)-[0-9a-f]{8}$", "", stem  # allowlist:german
+    )
+    slug = re.sub(r"[^a-z0-9]+", "-", stem.lower()).strip("-") or "task"
+    return f"docs/internal/slice-{slug}-*.md"
+
+
+def _managed_correction_slice_path(audit_report_path: str, slice_id: int) -> str:
+    pattern = _managed_slice_scope_pattern(audit_report_path)
+    prefix = pattern.removesuffix("*.md")
+    return f"{prefix}{slice_id:02d}-abschlusskorrektur.md"
+
+
+def _is_managed_audit_path(state: WorkflowState, path: str) -> bool:
+    return path == state.audit_report_path or (
+        state.audit_report_path is not None
+        and matches_path_patterns(path, (_managed_slice_scope_pattern(state.audit_report_path),))
+    )
+
+
+def _attach_managed_audit_paths(state: WorkflowState) -> WorkflowState:
+    """Backfill pre-feature Inbox plans before their first implementation Slice."""
+    if state.audit_report_path is None or not state.planned_slices:
+        return state
+    if any(item.status is SliceStatus.COMPLETED for item in state.slices):
+        return state
+    updated = tuple(
+        PlannedSlice(
+            slice_id=item.slice_id,
+            summary=item.summary,
+            scope_paths=tuple(
+                sorted(
+                    {
+                        *item.scope_paths,
+                        state.audit_report_path,
+                        managed_slice_document_path(
+                            state.audit_report_path,
+                            item.slice_id,
+                            item.summary,
+                        ),
+                    }
+                )
+            ),
+        )
+        for item in state.planned_slices
+    )
+    if updated == state.planned_slices:
+        return state
+    if any(item.scope_paths for item in state.slices):
+        raise WorkflowExecutionError(
+            "cannot retrofit managed audit paths after a Slice Git boundary was bound"
+        )
+    logger.info(
+        "Backfilled consolidated audit and deferred Slice document paths into the approved plan."
+    )
+    return replace(state, planned_slices=updated)
+
+
 def _history_payload(
     existing: object, current: WorkflowHistory
 ) -> dict[str, object]:
@@ -852,6 +1103,7 @@ def _fresh_state(
     repository_root: Path,
     task_contract: TaskContract,
     branch_base_override: str | None = None,
+    audit_report_path: str | None = None,
 ) -> WorkflowState:
     identity = inspect_repository(repository_root)
     if identity.branch != task_contract.target_branch:
@@ -881,6 +1133,7 @@ def _fresh_state(
         execution_mode=task_contract.mode.value,
         task_scope_patterns=task_contract.scope_patterns,
         work_plan_path=task_contract.work_plan_path,
+        audit_report_path=audit_report_path,
         target_branch=task_contract.target_branch,
     )
     if task_contract.approved_plan_commit is not None:
@@ -920,6 +1173,12 @@ def run_production_workflow(
     )
     allowed_roots = tuple(dict.fromkeys((root, task_file.parent.resolve())))
     run_id = str(getattr(args, "watch_run_id", "") or new_run_id())
+    managed_audit_path = (
+        _managed_audit_path(task_file, task_contract.digest)
+        if task_contract.mode is TaskMode.IMPLEMENT
+        and task_file.parent.name.casefold() == "inbox"
+        else None
+    )
 
     watch_run = bool(getattr(args, "watch_run_id", None))
     new_watch_task = watch_run and (force_new or not state_file.exists())
@@ -977,6 +1236,8 @@ def run_production_workflow(
             raise StateSchemaError("persisted task contract differs from --resume task")
         if getattr(args, "watch_run_id", None) and state.run_id != args.watch_run_id:
             raise StateSchemaError("persisted watch run identity differs from inbox task")
+        if state.audit_report_path is None and managed_audit_path is not None:
+            state = replace(state, audit_report_path=managed_audit_path)
     else:
         if loaded is not None and not args.force_overwrite_state and not force_new:
             raise StateSchemaError(
@@ -988,7 +1249,9 @@ def run_production_workflow(
             repository_root=root,
             task_contract=task_contract,
             branch_base_override=prepared_branch_base,
+            audit_report_path=managed_audit_path,
         )
+    state = _attach_managed_audit_paths(state)
     state = _recover_legacy_plan_only_post_gate(state)
     config = OrchestratorConfig(
         dry_run=False,
@@ -1019,7 +1282,11 @@ def run_production_workflow(
             state = state.resume_after_invocation_halt()
             driver.checkpoint(state, history)
         elif current.status is WorkUnitStatus.AWAITING_USER_DECISION:
-            if args.gate_decision is not None:
+            inherited = _inherit_redundant_test_gate(state)
+            if inherited != state:
+                state = inherited
+                driver.checkpoint(state, history)
+            elif args.gate_decision is not None:
                 decided = engine.decide_current_gate(
                     state,
                     history,
@@ -1087,7 +1354,8 @@ def run_production_workflow(
             current = state.current_work_unit
 
         if current.kind is WorkUnitKind.FINAL_REVIEW:
-            return WorkflowRunResult(state, _history(state))
+            audit_commit = driver.finalize_audit(state)
+            return WorkflowRunResult(state, _history(state), audit_commit)
 
         if current.kind is WorkUnitKind.PLAN:
             if state.execution_mode == TaskMode.PLAN_ONLY.value:
@@ -1138,6 +1406,19 @@ def run_production_workflow(
         driver.checkpoint(state, WorkflowHistory(state.current_work_unit_id))
 
     raise WorkflowExecutionError("workflow session exceeded its deterministic transition bound")
+
+
+def _inherit_redundant_test_gate(state: WorkflowState) -> WorkflowState:
+    """Clear a repeated exact test gate before the production loop returns early."""
+    current = state.current_work_unit
+    gate = current.gate
+    if (
+        current.status is not WorkUnitStatus.AWAITING_USER_DECISION
+        or gate.reason is not GateReason.TEST_CHANGE
+        or gate.fingerprint is None
+    ):
+        return state
+    return state.inherit_prior_test_approval(gate.fingerprint, gate.paths)
 
 
 def _recover_legacy_plan_only_post_gate(state: WorkflowState) -> WorkflowState:

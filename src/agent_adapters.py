@@ -214,7 +214,7 @@ class CodexAdapter(_BaseAdapter):
     capability = CapabilitySpec(
         version_args=("--version",),
         help_args=("exec", "--help"),
-        supported_version_patterns=(r"^codex-cli 0\.147\.0$",),
+        supported_version_patterns=(r"^codex-cli 0\.147\.\d+$",),
         required_help_flags=(
             "--model",
             "--sandbox",
@@ -314,9 +314,7 @@ class ClaudeAdapter(_BaseAdapter):
     capability = CapabilitySpec(
         version_args=("--version",),
         help_args=("--help",),
-        supported_version_patterns=(
-            r"^2\.1\.227 \(Claude Code\)$",
-        ),
+        supported_version_patterns=(r"^2\.1\.\d+ \(Claude Code\)$",),
         required_help_flags=(
             "--add-dir",
             "--json-schema",
@@ -563,7 +561,7 @@ class AntigravityAdapter(_BaseAdapter):
     capability = CapabilitySpec(
         version_args=("--version",),
         help_args=("--help",),
-        supported_version_patterns=(r"^1\.1\.11$", r"^1\.1\.12$"),
+        supported_version_patterns=(r"^1\.1\.\d+$",),
         required_help_flags=(
             "--model",
             "--effort",

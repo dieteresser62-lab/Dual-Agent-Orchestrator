@@ -102,6 +102,22 @@ _MARKER_PATTERN = re.compile(
 )
 
 
+def managed_slice_document_path(
+    audit_path: str, slice_id: int, summary: str
+) -> str:
+    """Derive the stable per-Slice audit path without creating the file."""
+    _require_positive_int(slice_id, "slice_id")
+    task_slug = re.sub(
+        r"-(?:gesamtpruefung|review)-[0-9a-f]{8}$",  # allowlist:german
+        "",
+        PurePosixPath(audit_path).stem.lower(),
+    )
+    task_slug = re.sub(r"[^a-z0-9]+", "-", task_slug).strip("-") or "task"
+    summary_slug = re.sub(r"[^a-z0-9]+", "-", summary.lower()).strip("-")
+    summary_slug = summary_slug[:48].rstrip("-") or "umsetzung"
+    return f"docs/internal/slice-{task_slug}-{slice_id:02d}-{summary_slug}.md"
+
+
 @dataclass(frozen=True)
 class SliceDocument:
     slice_id: int
@@ -117,6 +133,22 @@ class WorkPlanDocument:
     repository_root: Path
     work_plan_path: Path
     markdown: str
+
+
+@dataclass(frozen=True)
+class OverallAuditEntry:
+    """One work-unit projection in the consolidated task audit."""
+
+    label: str
+    summary: str
+    scope_paths: tuple[str, ...]
+    projection: AuditProjection
+
+    def __post_init__(self) -> None:
+        if not self.label.strip() or not self.summary.strip():
+            raise AuditTrailError("overall audit entries require label and summary")
+        if self.scope_paths != tuple(sorted(set(self.scope_paths))):
+            raise AuditTrailError("overall audit entry scope must be sorted and unique")
 
 
 GENERIC_WORK_PLAN_AUDIT_HEADING = "Orchestrator-Prüfprotokoll"
@@ -498,6 +530,54 @@ def prepare_managed_work_plan_document(
     )
 
 
+def prepare_managed_overall_document(
+    *,
+    repository_root: Path,
+    audit_path: str | Path,
+    task_name: str,
+    task_file: str,
+    run_id: str,
+    branch: str,
+    task_scope: tuple[str, ...],
+) -> WorkPlanDocument:
+    """Create the consolidated task audit before planning starts, once."""
+    root = Path(repository_root).resolve()
+    lexical_path = Path(audit_path)
+    if not lexical_path.is_absolute():
+        lexical_path = root / lexical_path
+    if lexical_path.is_symlink():
+        raise AuditTrailError("overall audit document must not be a symbolic link")
+    target = _resolve_inside_repository(lexical_path, root, "overall audit")
+    docs_root = (root / "docs" / "internal").resolve()
+    if not target.is_relative_to(docs_root) or target.parent != docs_root:
+        raise AuditTrailError("overall audit must be directly below docs/internal")
+    if target.suffix.lower() != ".md":
+        raise AuditTrailError("overall audit must be a Markdown document")
+    if target.exists():
+        return validate_managed_work_plan_document(
+            repository_root=root, work_plan_path=target
+        )
+    scope = ", ".join(f"`{item}`" for item in task_scope)
+    markdown = "\n".join(
+        (
+            f"# Overall audit – {task_name}",
+            "",
+            "Dieses Dokument wird vom Orchestrator geführt. Slice-Dokumente entstehen "
+            "erst beim tatsächlichen Beginn ihrer Implementierung.",
+            "",
+            f"- Task-Datei: `{task_file}`",
+            f"- Run-ID: `{run_id}`",
+            f"- Zielbranch: `{branch}`",
+            f"- Deklarierter Produktscope: {scope}",
+            "",
+        )
+    )
+    atomic_write_file(target, markdown)
+    return prepare_managed_work_plan_document(
+        repository_root=root, work_plan_path=target
+    )
+
+
 def prepare_managed_slice_document(
     *,
     repository_root: Path,
@@ -651,6 +731,37 @@ def project_work_plan_audit(
     if rendered != current.markdown:
         atomic_write_file(current.work_plan_path, rendered)
     return rendered
+
+
+def project_overall_audit(
+    document: WorkPlanDocument,
+    entries: tuple[OverallAuditEntry, ...],
+) -> str:
+    """Project every persisted work unit into one consolidated task document."""
+    current = validate_managed_work_plan_document(
+        repository_root=document.repository_root,
+        work_plan_path=document.work_plan_path,
+    )
+    section_parts = {key: [] for key in MANAGED_SECTION_KEYS}
+    for entry in entries:
+        rendered = _render_managed_sections(entry.projection)
+        scope = ", ".join(f"`{_safe(path)}`" for path in entry.scope_paths) or "–"
+        header = (
+            f"#### {_safe(entry.label)}\n\n"
+            f"- Auftrag: {_safe(entry.summary)}\n"
+            f"- Scope: {scope}\n"
+        )
+        for key in MANAGED_SECTION_KEYS:
+            section_parts[key].append(f"{header}\n{rendered[key]}")
+    rendered_markdown = current.markdown
+    for key in MANAGED_SECTION_KEYS:
+        body = "\n\n".join(section_parts[key])
+        if not body:
+            body = "Noch kein persistiertes Orchestratorereignis."
+        rendered_markdown = _replace_managed_body(rendered_markdown, key, body)
+    if rendered_markdown != current.markdown:
+        atomic_write_file(current.work_plan_path, rendered_markdown)
+    return rendered_markdown
 
 
 def strip_managed_audit_sections(markdown: str) -> str:

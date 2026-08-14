@@ -847,6 +847,7 @@ class WorkflowState:
     execution_mode: str = "IMPLEMENT"
     task_scope_patterns: tuple[str, ...] = ()
     work_plan_path: str | None = None
+    audit_report_path: str | None = None
     target_branch: str | None = None
 
     def __post_init__(self) -> None:
@@ -935,6 +936,19 @@ class WorkflowState:
             if self.execution_mode == "PLAN_ONLY" and self.work_plan_path is None:
                 raise WorkflowStateValidationError(
                     "PLAN_ONLY state requires work_plan_path"
+                )
+        if self.audit_report_path is not None:
+            path = PurePosixPath(self.audit_report_path)
+            if (
+                path.is_absolute()
+                or ".." in path.parts
+                or path.parts[:2] != ("docs", "internal")
+                or len(path.parts) != 3
+                or path.suffix.lower() != ".md"
+                or path.as_posix() != self.audit_report_path
+            ):
+                raise WorkflowStateValidationError(
+                    "audit_report_path must be a canonical Markdown path directly below docs/internal"
                 )
 
     @property
@@ -1269,6 +1283,59 @@ class WorkflowState:
             active_test_paths=normalized_paths,
         )
         return self._replace_current_unit(updated_unit, updated_at=updated_at)
+
+    def inherit_prior_test_approval(
+        self,
+        fingerprint: str,
+        paths: tuple[str, ...],
+        *,
+        updated_at: str | None = None,
+    ) -> WorkflowState:
+        """Reuse an exact earlier test decision without weakening changed-test gates."""
+        normalized_paths = tuple(sorted(set(paths)))
+        prior_decision = next(
+            (
+                decision
+                for unit in reversed(self.work_units)
+                if unit.work_unit_id != self.current_work_unit_id
+                for decision in reversed(unit.gate_decisions)
+                if decision.approved
+                and decision.reason is GateReason.TEST_CHANGE
+                and decision.fingerprint == fingerprint
+                and decision.paths == normalized_paths
+            ),
+            None,
+        )
+        if prior_decision is None:
+            return self
+        current = self.current_work_unit
+        if current.status is WorkUnitStatus.AWAITING_USER_DECISION:
+            gate = current.gate
+            if (
+                gate.reason is not GateReason.TEST_CHANGE
+                or gate.fingerprint != fingerprint
+                or gate.paths != normalized_paths
+            ):
+                return self
+        elif current.status is not WorkUnitStatus.IN_PROGRESS:
+            return self
+        decisions = current.gate_decisions
+        if prior_decision not in decisions:
+            decisions = (*decisions, prior_decision)
+        updated_unit = replace(
+            current,
+            status=WorkUnitStatus.IN_PROGRESS,
+            gate=GateRecord(),
+            gate_decisions=decisions,
+            active_test_fingerprint=fingerprint,
+            active_test_paths=normalized_paths,
+        )
+        slices = self._slices_with_current_status(SliceStatus.IN_PROGRESS)
+        return self._replace_current_unit(
+            updated_unit,
+            slices=slices,
+            updated_at=updated_at,
+        )
 
     def await_user_gate(
         self,
@@ -1631,6 +1698,7 @@ class WorkflowState:
             "execution_mode": self.execution_mode,
             "task_scope_patterns": list(self.task_scope_patterns),
             "work_plan_path": self.work_plan_path,
+            "audit_report_path": self.audit_report_path,
             "target_branch": self.target_branch,
         }
 
@@ -1659,6 +1727,7 @@ class WorkflowState:
             "work_plan_path",
             "target_branch",
         }
+        audit_keys = {*current_keys, "audit_report_path"}
         if set(raw) == legacy_keys:
             planned_slices: tuple[PlannedSlice, ...] = ()
             runtime_history = None
@@ -1666,11 +1735,16 @@ class WorkflowState:
             execution_mode = "IMPLEMENT"
             task_scope_patterns: tuple[str, ...] = ()
             work_plan_path = None
+            audit_report_path = None
             target_branch = None
         else:
             raw_keys = frozenset(raw)
-            if raw_keys not in {frozenset(previous_keys), frozenset(current_keys)}:
-                _require_exact_keys(raw, current_keys, "workflow state")
+            if raw_keys not in {
+                frozenset(previous_keys),
+                frozenset(current_keys),
+                frozenset(audit_keys),
+            }:
+                _require_exact_keys(raw, audit_keys, "workflow state")
             raw_plan = _list(raw["planned_slices"], "planned_slices")
             planned: list[PlannedSlice] = []
             for index, item in enumerate(raw_plan):
@@ -1707,6 +1781,7 @@ class WorkflowState:
                 execution_mode = "IMPLEMENT"
                 task_scope_patterns = ()
                 work_plan_path = None
+                audit_report_path = None
                 target_branch = None
             else:
                 task_digest = _optional_string(raw["task_digest"], "task_digest")
@@ -1716,6 +1791,11 @@ class WorkflowState:
                 )
                 work_plan_path = _optional_string(
                     raw["work_plan_path"], "work_plan_path"
+                )
+                audit_report_path = (
+                    _optional_string(raw["audit_report_path"], "audit_report_path")
+                    if raw_keys == frozenset(audit_keys)
+                    else None
                 )
                 target_branch = _optional_string(raw["target_branch"], "target_branch")
         slices_raw = _list(raw["slices"], "slices")
@@ -1743,6 +1823,7 @@ class WorkflowState:
             execution_mode=execution_mode,
             task_scope_patterns=task_scope_patterns,
             work_plan_path=work_plan_path,
+            audit_report_path=audit_report_path,
             target_branch=target_branch,
         )
 
@@ -1759,6 +1840,7 @@ def init_workflow_state(
     execution_mode: str = "IMPLEMENT",
     task_scope_patterns: tuple[str, ...] = (),
     work_plan_path: str | None = None,
+    audit_report_path: str | None = None,
     target_branch: str | None = None,
     timestamp: str | None = None,
 ) -> WorkflowState:
@@ -1796,6 +1878,7 @@ def init_workflow_state(
         execution_mode=execution_mode,
         task_scope_patterns=task_scope_patterns,
         work_plan_path=work_plan_path,
+        audit_report_path=audit_report_path,
         target_branch=target_branch,
     )
 
