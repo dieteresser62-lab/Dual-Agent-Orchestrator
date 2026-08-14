@@ -282,7 +282,7 @@ def test_quota_conscious_reviewer_defaults_are_explicit(tmp_path: Path) -> None:
     assert args.agent_settings["claude"].effort == "high"
     assert args.agent_settings["claude"].timeout_seconds == 1800
     assert args.agent_settings["claude"].max_budget_usd is None
-    assert args.agent_settings["antigravity"].model == "gemini-3.1-pro-high"
+    assert args.agent_settings["antigravity"].model == "gemini-3.7-flash-high"
     assert args.agent_settings["antigravity"].effort == "high"
 
 

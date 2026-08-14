@@ -27,7 +27,7 @@ class AgentSettings:
 _DEFAULT_MODELS = {
     "codex": "gpt-5.6-sol",
     "claude": "sonnet",
-    "antigravity": "gemini-3.1-pro-high",
+    "antigravity": "gemini-3.7-flash-high",
 }
 
 _DEFAULT_EFFORTS = {

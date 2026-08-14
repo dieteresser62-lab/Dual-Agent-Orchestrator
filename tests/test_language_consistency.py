@@ -251,7 +251,7 @@ def test_readme_defaults_and_environment_names_match_runtime(tmp_path: Path) -> 
         f"| `--quota-heartbeat-interval <seconds>` | `{args.quota_wait_policy.heartbeat_interval_seconds}` |",
         "`claude`, `sonnet`, 1800s, `high`",
         "`codex`, `gpt-5.6-sol`, 1800s, `medium`",
-        "erkanntes `agy`, `gemini-3.1-pro-high`, 1800s, `high`",
+        "erkanntes `agy`, `gemini-3.7-flash-high`, 1800s, `high`",
     )
     for fragment in expected_fragments:
         assert fragment in readme
