@@ -6,9 +6,11 @@ from pathlib import Path
 
 import pytest
 
+import orchestrator
 from cli import parse_args
 from inbox_watcher import WatchTaskDisposition, WatchTaskResult
 from orchestrator import run_pipeline
+from workflow import WorkflowExecutionError
 
 
 @pytest.mark.parametrize(
@@ -45,6 +47,28 @@ def test_watch_dry_run_returns_typed_terminal_result(tmp_path: Path, monkeypatch
     assert isinstance(result, WatchTaskResult)
     assert result.disposition is WatchTaskDisposition.COMPLETED
     assert result.run_id == "watch-slice-18"
+
+
+def test_watch_pipeline_failure_returns_diagnostic_typed_result(
+    tmp_path: Path, monkeypatch
+) -> None:
+    task = tmp_path / "task.md"
+    task.write_text("Implement the bounded task", encoding="utf-8")
+    args = parse_args(["--task-file", str(task)], cwd=tmp_path, environ={})
+    args.watch_run_id = "watch-failure"
+
+    def fail(*_args, **_kwargs):
+        raise WorkflowExecutionError("plan parser rejected heading")
+
+    monkeypatch.setattr(orchestrator, "run_production_workflow", fail)
+
+    result = run_pipeline(task, args)
+
+    assert isinstance(result, WatchTaskResult)
+    assert result.disposition is WatchTaskDisposition.TECHNICAL_FAILURE
+    assert result.failure_detail == (
+        "WorkflowExecutionError: plan parser rejected heading"
+    )
 
 
 def test_help_contains_only_slice_v3_vocabulary() -> None:

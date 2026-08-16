@@ -93,6 +93,7 @@ def test_compact_result_and_usage_keep_decisions_without_nested_json() -> None:
             "REVIEWER: claude",
             "Long evidence paragraph that stays in the log only.",
             "NEW_FINDING: C-01 | BLOCKER | gate is red | npm test",
+            "REMEDIATION_PATHS: src/prior.py, tests/prior.py",
             "SLICE_APPROVAL: 01 | NO",
             "STATUS: DONE",
         )
@@ -101,6 +102,7 @@ def test_compact_result_and_usage_keep_decisions_without_nested_json() -> None:
     assert _compact_result_lines(output) == (
         "REVIEWER: claude",
         "NEW_FINDING: C-01 | BLOCKER | gate is red | npm test",
+        "REMEDIATION_PATHS: src/prior.py, tests/prior.py",
         "SLICE_APPROVAL: 01 | NO",
         "STATUS: DONE",
     )

@@ -8,41 +8,64 @@ skinparam activity {
   DiamondBorderColor #334155
 }
 
-title Resumable State-v3 Slice Workflow
+title Resumable State-v3 Inbox-to-Commit Workflow
 
 start
-:Read task, repository policy, Git identity,\nand .orchestrator/state.json;
+:Watch inbox for stable Markdown task;
+:Read task, repository policy, Git identity, and persisted state;
 
-if (Unfinished State-v3 run?) then (yes)
-  :Resume the persisted work unit,\nslice, round, and exact role step;
-else (no)
-  :Create State-v3 plan work unit;
+if (New watch task?) then (yes)
+  :Create, switch to, or extend TARGET_BRANCH under safe worktree rules;
+else (formal single task)
+  :Require the declared active target branch;
 endif
 
-partition "Plan" {
-  :Codex produces ordered SLICE_PLAN records;
-  :Orchestrator validates task scope and\nthe internal plan contract;
-  :Claude reviews the plan;
-  :Antigravity reviews the same plan fingerprint;
-  while (PLAN_APPROVAL is NO?) is (yes)
-    :Codex revises the plan and answers findings;
-    :Orchestrator refreshes bound evidence;
-    :Claude and Antigravity review the plan correction;
-  endwhile (no)
-  :Persist fingerprint-bound plan gate;
-  :User reviews and resumes with --approve-gate;
-}
+if (Only prose plus TARGET_BRANCH?) then (yes)
+  :Derive PLAN_ONLY and exact docs/internal slug work-plan scope;
+else (formal contract)
+  :Validate every declared contract marker fail-closed;
+endif
 
-if (PLAN_ONLY mode?) then (yes)
-  :Execute only the declared work-plan artifact Slice;
+if (Unfinished State-v3 run?) then (yes)
+  :Resume the persisted work unit, slice, round, and exact role step;
 else (no)
+  :Create State-v3 work unit;
+endif
+
+if (Approved IMPLEMENT handoff?) then (yes)
+  :Verify APPROVED_PLAN_COMMIT and imported slices;
+else (plan required)
+  partition "Plan" {
+    :Codex produces one plan-artifact SLICE_PLAN and documents future slices;
+    :Orchestrator validates task scope and the internal plan/handoff contract;
+    :Claude reviews the plan;
+    :Antigravity reviews the same plan fingerprint;
+    while (PLAN_APPROVAL is NO?) is (yes)
+      :Codex revises the plan and answers findings;
+      :Orchestrator refreshes bound evidence;
+      :Claude and Antigravity review the plan correction;
+    endwhile (no)
+    if (Manual plan gate enabled?) then (yes)
+      :Persist fingerprint-bound plan gate;
+      :User reviews and resumes with --approve-gate;
+    else (automatic default)
+    endif
+    :Create and verify local plan commit;
+    :Generate IMPLEMENT handoff and queue it next;
+  }
 endif
 
 while (A planned slice remains?) is (yes)
   partition "Bounded slice" {
+    :Create Slice audit document;
     :Persist slice start commit and exact path scope;
     :Codex implements within the scope;
-    :Orchestrator collects canonical diff\nand runs validation once per fingerprint;
+    if (Agent sandbox blocks port/browser validation?) then (yes)
+      :Re-prompt Codex once for normal readiness;
+      :Leave the full matrix to the orchestrator;
+    else (no)
+    endif
+    :Orchestrator collects canonical diff and runs validation once per fingerprint;
     :Claude reviews changed paths and hunks;
 
     while (Claude has an open blocker?) is (yes)
@@ -59,12 +82,12 @@ while (A planned slice remains?) is (yes)
       :Antigravity rechecks its findings;
     endwhile (no)
 
-    if (User or policy gate?) then (yes)
+    if (Enabled manual gate or true policy stop?) then (yes)
       :Persist awaiting_user_decision;
       :Return exit 4 without changing the reviewed worktree;
       :User repairs or decides the gate and runs --resume;
       :Revalidate the persisted boundary and fingerprint;
-    else (no gate)
+    else (automatic default)
     endif
     :Orchestrator stages exact reviewed paths;
     :Create and verify local Slice NN commit;
@@ -79,13 +102,14 @@ partition "Branch-wide final review" {
 
   while (A final blocker remains?) is (yes)
     :Create a bounded correction work unit;
-    :Codex corrects, validation runs,\nand both slice reviewers approve;
+    :Codex corrects, validation runs, and both slice reviewers approve;
     :Orchestrator creates a local correction commit;
     :Repeat the complete branch review;
   endwhile (no)
 }
 
 :Persist completed State v3;
+:Move original task to outbox/done;
 :STATUS: DONE;
 stop
 

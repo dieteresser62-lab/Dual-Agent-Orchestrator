@@ -601,6 +601,32 @@ def test_plan_time_slice_one_start_commit_cannot_be_rebound_after_resume() -> No
         )
 
 
+def test_in_progress_slice_can_extend_exact_remediation_scope() -> None:
+    state = make_state().complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    ).bind_current_slice_git_boundary(
+        start_commit="a" * 40,
+        scope_paths=("src/current.py", "tests/current.test.py"),
+        start_fingerprint="1" * 64,
+    )
+
+    expanded = state.extend_current_slice_scope(
+        ("src/prior.py", "tests/prior.test.py")
+    )
+
+    assert expanded.current_slice.scope_paths == (
+        "src/current.py",
+        "src/prior.py",
+        "tests/current.test.py",
+        "tests/prior.test.py",
+    )
+    assert expanded.current_slice.start_commit == state.current_slice.start_commit
+    assert expanded.current_slice.start_fingerprint == state.current_slice.start_fingerprint
+    assert WorkflowState.from_dict(expanded.to_dict()) == expanded
+
+
 def test_state_scope_rejects_orchestrator_internal_paths() -> None:
     state = make_state().complete_current_work_unit().start_work_unit(
         slice_id=1,

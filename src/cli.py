@@ -41,8 +41,8 @@ class ConfigError(ValueError):
 @dataclass(frozen=True)
 class WorkflowConfig:
     manual_slice_gate: bool = False
-    plan_gate: bool = True
-    plan_gate_declared: bool = False
+    plan_gate: bool = False
+    test_change_gate: bool = False
 
 
 @dataclass(frozen=True)
@@ -261,17 +261,24 @@ def _load_validation_command(
 
 def _load_workflow(data: object) -> WorkflowConfig:
     table = _require_table(data, "[workflow]")
-    _reject_unknown_keys(table, {"manual_slice_gate", "plan_gate"}, "[workflow]")
+    _reject_unknown_keys(
+        table,
+        {"manual_slice_gate", "plan_gate", "test_change_gate"},
+        "[workflow]",
+    )
     manual_slice_gate = table.get("manual_slice_gate", False)
-    plan_gate = table.get("plan_gate", True)
+    plan_gate = table.get("plan_gate", False)
+    test_change_gate = table.get("test_change_gate", False)
     if not isinstance(manual_slice_gate, bool):
         raise ConfigError("workflow.manual_slice_gate must be a boolean")
     if not isinstance(plan_gate, bool):
         raise ConfigError("workflow.plan_gate must be a boolean")
+    if not isinstance(test_change_gate, bool):
+        raise ConfigError("workflow.test_change_gate must be a boolean")
     return WorkflowConfig(
         manual_slice_gate=manual_slice_gate,
         plan_gate=plan_gate,
-        plan_gate_declared="plan_gate" in table,
+        test_change_gate=test_change_gate,
     )
 
 
@@ -452,7 +459,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Require explicit fingerprint-bound approval after Claude and Antigravity "
-            "approve the plan (default: on)."
+            "approve the plan (default: off)."
+        ),
+    )
+    parser.add_argument(
+        "--test-change-gate",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Require explicit fingerprint-bound approval for planned test-file changes "
+            "before review (default: off)."
         ),
     )
     parser.add_argument(
@@ -657,13 +673,11 @@ def parse_args(
     args.config_file = repo_config.source
     if args.manual_slice_gate is None:
         args.manual_slice_gate = repo_config.workflow.manual_slice_gate
+    if args.test_change_gate is None:
+        args.test_change_gate = repo_config.workflow.test_change_gate
     if args.plan_gate is None:
-        if args.watch and not repo_config.workflow.plan_gate_declared:
-            args.plan_gate = False
-            args.plan_gate_source = "watch-default"
-        else:
-            args.plan_gate = repo_config.workflow.plan_gate
-            args.plan_gate_source = "repository-default"
+        args.plan_gate = repo_config.workflow.plan_gate
+        args.plan_gate_source = "repository-default"
     else:
         args.plan_gate_source = "cli"
     quota_defaults = QuotaWaitPolicy()
@@ -838,11 +852,6 @@ def run_cli(
             logger.info(
                 "Watch mode: enabling --skip-git-check by default "
                 "(override with RUN_TASK_SKIP_GIT_CHECK=0 or --no-skip-git-check)."
-            )
-        if args.plan_gate_source == "watch-default":
-            logger.info(
-                "Watch mode: disabling --plan-gate by default "
-                "(override with --plan-gate or workflow.plan_gate=true)."
             )
         if args.task_file != DEFAULT_TASK_FILE:
             logger.warning("Task file is ignored in --watch mode.")

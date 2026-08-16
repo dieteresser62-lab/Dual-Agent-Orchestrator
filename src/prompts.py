@@ -75,7 +75,8 @@ def build_v3_review_contract(contract: StepContract) -> str:
         - Do not rerun the full suite and do not emit VALIDATION_RESULT. Spend the review budget on implementation analysis. If additional focused validation is needed, require it in a finding acceptance test.
         - Test scope: TEST_FILES_TOUCHED: {test_files}
         - New finding: NEW_FINDING: {prefix}-01 | BLOCKER|OBSERVATION | <description> | <acceptance test>
-        - If an acceptance test requires an extra command in the next orchestrator matrix, its entire field must be: VALIDATE: ["executable","arg",...]. Do not use a shell string.
+        - Only a BLOCKER may request an extra command in the next orchestrator matrix. Its entire acceptance-test field must be: VALIDATE: ["executable","arg",...], using the same configured validation-command family shown in the bound attestation. Do not use a shell string.
+        - An OBSERVATION is non-blocking. Give it a prose acceptance test and never prefix that field with VALIDATE; observations cannot extend or stop the validation matrix.
         - Previous finding, only when it was originally reported by you: FINDING_STATUS: <ID> | OPEN|CLOSED | <rationale>. Never emit FINDING_STATUS with NONE or prose in place of <ID>, and never emit it for the other reviewer's finding.
         - Optional reclassification, again only for your own finding: FINDING_RECLASSIFIED: <ID> | BLOCKER|OBSERVATION | <rationale>
         - If there is no concrete finding: REVIEW_EVIDENCE: <checked dimensions> | <largest residual risk> | <realistic break condition>
@@ -113,6 +114,11 @@ def build_v3_codex_contract(contract: CodexStepContract) -> str:
                     "- This record authorizes only the work-plan artifact. Describe future "
                     "product implementation Slices as Markdown sections inside that artifact; "
                     "do not emit them as additional SLICE_PLAN records.",
+                    "- Every future Slice section must contain the standalone heading "
+                    "**Exakter Änderungspfad** followed only by bullet-listed exact "
+                    "repository-relative paths. The parser also accepts the plural heading "
+                    "**Exakte Änderungspfade:** for compatibility, but emit the canonical "
+                    "singular heading.",
                     "- Do not modify product code, tests, configuration, or generated artifacts.",
                 )
             )
@@ -159,7 +165,19 @@ def build_v3_codex_contract(contract: CodexStepContract) -> str:
         lines.append(f"- Test scope: TEST_FILES_TOUCHED: {test_files}")
     lines.extend(
         (
+            "- Do not run the repository's configured full validation matrix inside the "
+            "agent process. Run only focused checks needed while implementing; the "
+            "orchestrator executes the authoritative matrix after readiness.",
+            "- Do not emit VALIDATION-UNAVAILABLE merely because the full matrix cannot "
+            "bind a port, launch a browser, or otherwise run inside the agent sandbox. "
+            "Report that limitation in prose and hand the completed implementation back "
+            "with the normal readiness marker.",
             "- A stop request replaces readiness: STOP_REQUESTED: <rule id> | <rationale>",
+            "- If VALIDATION-UNAVAILABLE is caused solely by a required correction "
+            "outside the current Slice but inside an already approved earlier Slice, "
+            "also emit the smallest exact allowlist: REMEDIATION_PATHS: "
+            "<comma-separated repository-relative paths>. Do not emit this marker for "
+            "a product decision, an unknown path, or a genuinely unavailable tool.",
             "- Final non-empty line: STATUS: DONE",
             "- Review approvals and phase/legacy markers are invalid for this Codex step.",
         )

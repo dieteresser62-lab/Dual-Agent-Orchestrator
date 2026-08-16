@@ -17,6 +17,7 @@ from contracts import (
     FindingRecord,
     FindingResponseDecision,
     FindingStatus,
+    PlannedSlice,
     ReadinessMarker,
     ValidationAttestation,
     ValidationRecord,
@@ -787,6 +788,48 @@ def test_finding_acceptance_command_enters_next_fingerprint_matrix() -> None:
         "python3 -m pytest tests/ -v",
         "python3 -m pytest tests/test_focus.py -q",
     )
+
+
+def test_persisted_observation_with_foreign_validate_does_not_block_resume() -> None:
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    finding = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.OBSERVATION,
+        status=FindingStatus.OPEN,
+        summary="browser evidence would be useful",
+        acceptance_test=(
+            'VALIDATE: ["node","tests/run-tests.mjs","--only",'
+            '"browser-smoke.test.mjs"]'
+        ),
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[_codex_ready("C-01")],
+        reviewer_outputs=[
+            _review_closes(AgentRole.CLAUDE, "C-01"),
+            _review_approval(AgentRole.ANTIGRAVITY),
+        ],
+    )
+    state = _slice_state()
+    history = WorkflowHistory(
+        state.current_work_unit_id,
+        findings=(finding,),
+        attestations=(_attestation(changes),),
+    )
+
+    result = WorkflowEngine(driver).run_current_work_unit(
+        state,
+        _context(),
+        history,
+    )
+
+    assert result.completed
+    assert driver.validation_requests == []
+    assert [call.reviewer for call in driver.reviewer_calls] == [
+        AgentRole.CLAUDE,
+        AgentRole.ANTIGRAVITY,
+    ]
 
 
 def test_new_validation_requirement_without_new_fingerprint_does_not_rerun() -> None:
@@ -1741,6 +1784,267 @@ def test_codex_stop_request_halts_same_step_without_retry_or_repair() -> None:
     assert driver.repair_calls == []
     assert result.history.findings == (finding,)
     assert driver.checkpoint_histories[-1].findings == (finding,)
+
+
+def test_codex_agent_sandbox_validation_stop_is_handed_back_automatically() -> None:
+    driver = FakeDriver(
+        snapshots=[],
+        codex_outputs=[
+            "TEST_FILES_TOUCHED: tests/test_workflow.py\n"
+            "STOP_REQUESTED: VALIDATION-UNAVAILABLE | npm run test:browser "
+            "scheitert vor Browserstart beim Binden des lokalen Testservers mit "
+            "listen EPERM auf 127.0.0.1\n"
+            "STATUS: DONE",
+            _codex_ready(),
+        ],
+        reviewer_outputs=[],
+    )
+    state = _slice_state()
+
+    advanced, _ = WorkflowEngine(driver)._run_codex(
+        state, _context(), WorkflowHistory(state.current_work_unit_id)
+    )
+
+    assert advanced.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
+    assert len(driver.codex_calls) == 2
+    assert "AUTOMATIC ORCHESTRATOR VALIDATION HANDOFF" in driver.codex_calls[1].prompt
+    assert "Do not rerun the configured full validation matrix" in driver.codex_calls[1].prompt
+    assert advanced.current_work_unit.has_completed_side_effect(
+        "agent-sandbox-validation-handoff"
+    )
+
+
+def test_repeated_agent_sandbox_validation_stop_still_fails_closed() -> None:
+    stop = (
+        "STOP_REQUESTED: VALIDATION-UNAVAILABLE | local test server listen EACCES\n"
+        "STATUS: DONE"
+    )
+    driver = FakeDriver(
+        snapshots=[],
+        codex_outputs=[stop, stop],
+        reviewer_outputs=[],
+    )
+    state = _slice_state()
+
+    halted, _ = WorkflowEngine(driver)._run_codex(
+        state, _context(), WorkflowHistory(state.current_work_unit_id)
+    )
+
+    assert len(driver.codex_calls) == 2
+    assert halted.current_work_unit.gate.reason is GateReason.STOP_REQUEST
+
+
+def test_codex_validation_stop_auto_extends_scope_from_completed_approved_slice() -> None:
+    state = init_workflow_state(
+        run_id="run-auto-remediation",
+        task_file="/repo/task.md",
+        branch="feature/workflow",
+        branch_base=START_COMMIT,
+        slice_count=2,
+        timestamp="2026-08-12T10:00:00+00:00",
+    ).bind_slice_plan(
+        (
+            PlannedSlice(1, "source adapter", ("src/prior.py", "tests/prior.py")),
+            PlannedSlice(2, "consumer", ("src/current.py", "tests/current.py")),
+        ),
+        first_start_commit=START_COMMIT,
+    ).complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    ).bind_current_slice_git_boundary(
+        start_commit=START_COMMIT,
+        scope_paths=("src/prior.py", "tests/prior.py"),
+        start_fingerprint="0" * 64,
+    ).complete_current_slice(
+        commit_ref="b" * 40,
+    ).start_work_unit(
+        slice_id=2,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+        slice_start_commit="b" * 40,
+    ).bind_current_slice_git_boundary(
+        start_commit="b" * 40,
+        scope_paths=("src/current.py", "tests/current.py"),
+        start_fingerprint="1" * 64,
+    )
+    driver = FakeDriver(
+        snapshots=[],
+        codex_outputs=[
+            "STOP_REQUESTED: VALIDATION-UNAVAILABLE | prior adapter needs normalization\n"
+            "REMEDIATION_PATHS: src/prior.py, tests/prior.py\n"
+            "STATUS: DONE",
+            "TEST_FILES_TOUCHED: tests/current.py,tests/prior.py\n"
+            "IMPLEMENTATION_READY: 02 | YES\n"
+            "STATUS: DONE",
+        ],
+        reviewer_outputs=[],
+    )
+    context = replace(
+        _context(),
+        expected_test_files=("tests/current.py", "tests/prior.py"),
+        current_scope_paths=state.current_slice.scope_paths,
+    )
+
+    advanced, _ = WorkflowEngine(driver)._run_codex(
+        state, context, WorkflowHistory(state.current_work_unit_id)
+    )
+
+    assert advanced.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
+    assert advanced.current_slice.scope_paths == (
+        "src/current.py",
+        "src/prior.py",
+        "tests/current.py",
+        "tests/prior.py",
+    )
+    assert len(driver.codex_calls) == 2
+    assert "AUTOMATIC PRIOR-SLICE REMEDIATION" in driver.codex_calls[1].prompt
+    assert "src/prior.py" in driver.codex_calls[1].prompt
+
+
+def test_codex_reprompts_once_when_remediation_path_is_already_authorized() -> None:
+    state = init_workflow_state(
+        run_id="run-existing-remediation",
+        task_file="/repo/task.md",
+        branch="feature/workflow",
+        branch_base=START_COMMIT,
+        slice_count=2,
+        timestamp="2026-08-12T10:00:00+00:00",
+    ).bind_slice_plan(
+        (
+            PlannedSlice(1, "source adapter", ("src/prior.py", "tests/prior.py")),
+            PlannedSlice(2, "consumer", ("src/current.py", "tests/current.py")),
+        ),
+        first_start_commit=START_COMMIT,
+    ).complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    ).bind_current_slice_git_boundary(
+        start_commit=START_COMMIT,
+        scope_paths=("src/prior.py", "tests/prior.py"),
+        start_fingerprint="0" * 64,
+    ).complete_current_slice(
+        commit_ref="b" * 40,
+    ).start_work_unit(
+        slice_id=2,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+        slice_start_commit="b" * 40,
+    ).bind_current_slice_git_boundary(
+        start_commit="b" * 40,
+        scope_paths=(
+            "src/current.py",
+            "src/prior.py",
+            "tests/current.py",
+            "tests/prior.py",
+        ),
+        start_fingerprint="1" * 64,
+    )
+    driver = FakeDriver(
+        snapshots=[],
+        codex_outputs=[
+            "STOP_REQUESTED: VALIDATION-UNAVAILABLE | prior test is allegedly out of scope\n"
+            "REMEDIATION_PATHS: tests/prior.py\n"
+            "STATUS: DONE",
+            "TEST_FILES_TOUCHED: tests/current.py,tests/prior.py\n"
+            "IMPLEMENTATION_READY: 02 | YES\n"
+            "STATUS: DONE",
+        ],
+        reviewer_outputs=[],
+    )
+    context = replace(
+        _context(),
+        expected_test_files=("tests/current.py", "tests/prior.py"),
+        current_scope_paths=state.current_slice.scope_paths,
+    )
+
+    advanced, _ = WorkflowEngine(driver)._run_codex(
+        state, context, WorkflowHistory(state.current_work_unit_id)
+    )
+
+    assert advanced.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
+    assert len(driver.codex_calls) == 2
+    assert "ALREADY AUTHORIZED" in driver.codex_calls[1].prompt
+    assert "Do not emit STOP_REQUESTED" in driver.codex_calls[1].prompt
+    assert any(
+        key.startswith("authorized-remediation-reprompt:")
+        for key in advanced.current_work_unit.completed_side_effects
+    )
+
+
+def test_codex_repeated_already_authorized_remediation_still_halts() -> None:
+    state = init_workflow_state(
+        run_id="run-repeated-remediation",
+        task_file="/repo/task.md",
+        branch="feature/workflow",
+        branch_base=START_COMMIT,
+        slice_count=2,
+        timestamp="2026-08-12T10:00:00+00:00",
+    ).bind_slice_plan(
+        (
+            PlannedSlice(1, "source adapter", ("tests/prior.py",)),
+            PlannedSlice(2, "consumer", ("src/current.py",)),
+        ),
+        first_start_commit=START_COMMIT,
+    ).complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    ).bind_current_slice_git_boundary(
+        start_commit=START_COMMIT,
+        scope_paths=("tests/prior.py",),
+        start_fingerprint="0" * 64,
+    ).complete_current_slice(
+        commit_ref="b" * 40,
+    ).start_work_unit(
+        slice_id=2,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+        slice_start_commit="b" * 40,
+    ).bind_current_slice_git_boundary(
+        start_commit="b" * 40,
+        scope_paths=("src/current.py", "tests/prior.py"),
+        start_fingerprint="1" * 64,
+    )
+    repeated_stop = (
+        "STOP_REQUESTED: VALIDATION-UNAVAILABLE | still claims prior test is out of scope\n"
+        "REMEDIATION_PATHS: tests/prior.py\n"
+        "STATUS: DONE"
+    )
+    driver = FakeDriver(
+        snapshots=[],
+        codex_outputs=[repeated_stop, repeated_stop],
+        reviewer_outputs=[],
+    )
+    context = replace(_context(), current_scope_paths=state.current_slice.scope_paths)
+
+    halted, _ = WorkflowEngine(driver)._run_codex(
+        state, context, WorkflowHistory(state.current_work_unit_id)
+    )
+
+    assert len(driver.codex_calls) == 2
+    assert halted.current_work_unit.gate.reason is GateReason.STOP_REQUEST
+
+
+def test_codex_remediation_outside_completed_plan_still_halts() -> None:
+    driver = FakeDriver(
+        snapshots=[],
+        codex_outputs=[
+            "STOP_REQUESTED: VALIDATION-UNAVAILABLE | future path would be required\n"
+            "REMEDIATION_PATHS: src/future.py\n"
+            "STATUS: DONE"
+        ],
+        reviewer_outputs=[],
+    )
+
+    result = WorkflowEngine(driver).run_current_work_unit(
+        _slice_state(), _context()
+    )
+
+    assert result.exit_code == 4
+    assert result.state.current_work_unit.gate.reason is GateReason.STOP_REQUEST
+    assert len(driver.codex_calls) == 1
 
 
 def test_codex_not_ready_persists_gate_and_resumes_same_step() -> None:

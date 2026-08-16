@@ -1,6 +1,6 @@
 # Schnellstart
 
-Diese Anleitung führt von einem vorbereiteten Repository zu einem abgeschlossenen State-v3-Lauf. [README.md](README.md) enthält den vollständigen Workflow, die Konfiguration und die CLI-Referenz. Hintergründe zum Entwurf stehen im [Architektur- und Fachkonzept](docs/reference/architecture-and-domain-concept.md); die Produktpositionierung erläutert der [Marktvergleich](docs/reference/market-comparison.md).
+Diese Anleitung beschreibt den normalen, vollständig automatischen Inbox-Ablauf. [README.md](README.md) enthält Konfiguration und CLI-Referenz. Hintergründe stehen im [Architektur- und Fachkonzept](docs/reference/architecture-and-domain-concept.md); die Produktpositionierung erläutert der [Marktvergleich](docs/reference/market-comparison.md).
 
 ## 1. Voraussetzungen prüfen
 
@@ -14,164 +14,153 @@ claude --version
 agy --version
 ```
 
-Der Orchestrator läuft unter Linux, macOS oder WSL2. Natives Windows wird derzeit nicht unterstützt. Unter WSL2 muss `agy.exe` explizit konfiguriert werden, falls der native Befehl `agy` nicht verfügbar ist.
+Der Orchestrator läuft unter Linux, macOS oder WSL2. Natives Windows wird derzeit nicht unterstützt. Unter WSL2 sollte der native Befehl `agy` verwendet oder `agy.exe` explizit konfiguriert werden.
 
-## 2. Zielrepository und Branch vorbereiten
+## 2. Zielrepository prüfen
 
-Checke den Branch aus, auf dem der Orchestrator lokale Slice-Commits erstellen darf. Beginne mit einem sauberen Worktree, sofern der Lauf nicht bewusst für vorhandene Änderungen konfiguriert wurde:
+Wechsle in das Repository, in dem die Änderung entstehen soll:
 
 ```bash
 cd /path/to/target-repository
-git branch --show-current
 git status --short
+mkdir -p inbox
 ```
 
-Der Orchestrator erstellt ausschließlich lokale Commits. Er pusht, mergt oder force-pusht niemals und schreibt die Historie nicht um.
+Den Zielbranch musst du im Watch-Modus weder vorher anlegen noch auschecken. Der Orchestrator liest ihn aus der Inbox-Datei und verhält sich beim ersten Start so:
 
-Lege den Zielbranch vor dem Lauf selbst an. Agenten dürfen keine Branchoperationen ausführen:
+- Fehlt der Zielbranch, wird er vom aktuellen `HEAD` angelegt und aktiviert.
+- Existiert er, ist aber nicht aktiv, wird zu ihm gewechselt, sofern der Arbeitsbaum sicher wechselbar ist.
+- Ist er bereits aktiv, wird die Aufgabe ab seinem aktuellen `HEAD` fortgeführt; vorhandene Branch-Commits bleiben erhalten.
+- Erfordert die Aufgabe einen Branchwechsel, während nicht ignorierte Arbeitsbaum- oder Indexänderungen vorliegen, stoppt der Orchestrator ohne Stash, Bereinigung oder Übernahme dieser Änderungen.
+- Bei einem Resume bleibt der persistierte Zielbranch bindend; ein abweichender aktiver Branch führt zum `BRANCH-MISMATCH`-Gate.
+
+Agenten selbst führen keine Branchoperationen aus. Der Orchestrator erstellt ausschließlich lokale, pfadgenau geprüfte Commits. Er pusht, mergt oder force-pusht niemals und schreibt die Historie nicht um.
+
+## 3. Eine Idee in die Inbox legen
+
+Erstelle eine beschreibend benannte Markdown-Datei, beispielsweise:
 
 ```bash
-git switch -c feature/mein-vorhaben
+nano inbox/meine-idee.md
 ```
 
-## 3. Begrenzte Aufgabe formulieren
+Für den normalen Ablauf genügen eine menschlich formulierte Idee und der Zielbranch:
 
-Kopiere [example-task.md](example-task.md) als `task.md` in das Zielrepository und ersetze den Beispielinhalt. Lege mindestens Folgendes fest:
+```markdown
+# Meine Idee
 
-- das beabsichtigte Ergebnis;
-- die exakt erlaubten Pfade;
-- Akzeptanzkriterien und Validierungsbefehle;
-- einen expliziten Nicht-Scope;
-- Bedingungen, die eine Benutzerentscheidung erfordern.
-
-Jede Aufgabe benötigt diese Marker:
-
-```text
-ORCHESTRATOR_MODE: IMPLEMENT
 TARGET_BRANCH: feature/mein-vorhaben
-TASK_SCOPE: src/example.py, tests/test_example.py, docs/internal/example-work-plan.md
+
+Ich möchte zwei Varianten verständlich miteinander vergleichen können.
+Bitte untersuche zuerst die bestehende Anwendung. Frage nur nach, wenn eine
+echte Produktentscheidung zu unterschiedlichen Ergebnissen führen würde.
 ```
 
-Arbeitsplan und vorbereitete Slice-Auditdokumente müssen innerhalb des deklarierten Pfadumfangs liegen. Geheimnisse oder Zugangsdaten gehören nicht in die Aufgabendatei.
+Du musst keine Pfade, Slices, Akzeptanzkriterien, Risiken oder Tests vorgeben. Fehlen formale Ausführungsmarker und ein Scope-Abschnitt, leitet der Orchestrator sicher einen `PLAN_ONLY`-Auftrag ab. Aus `meine-idee.md` entsteht der Arbeitsplan `docs/internal/meine-idee-arbeitsplan.md`; zunächst ist nur dieser Planpfad beschreibbar. Codex übersetzt die Idee anhand des Repositorys in einen konkreten, von Claude und Antigravity geprüften Arbeitsplan. Direkter Implementierungsscope wird niemals aus freier Prosa geraten.
 
-## 4. Probelauf ausführen
+Verwende pro Idee einen eindeutigen Dateinamen. Teilweise formale Mischformen werden fail-closed abgelehnt: Sobald beispielsweise `ORCHESTRATOR_MODE`, `WORK_PLAN_PATH`, `APPROVED_PLAN_COMMIT`, `TASK_SCOPE` oder ein Scope-Abschnitt vorkommt, muss der vollständige formale Vertrag stimmen. Geheimnisse oder Zugangsdaten gehören nicht in die Aufgabendatei.
 
-Prüfe die Installation aus diesem Orchestrator-Repository, ohne Agenten aufzurufen oder ein Repository zu verändern:
+## 4. Optionalen Probelauf ausführen
+
+Die Installation lässt sich aus dem Orchestrator-Repository ohne Agentenaufrufe und ohne Repositoryänderung prüfen:
 
 ```bash
 ./run_task --dry-run --task-file example-task.md --quiet
 ```
 
-Ein erfolgreicher Probelauf endet mit Exitcode 0.
+Ein erfolgreicher Probelauf endet mit Exitcode 0. Für den normalen Inbox-Einsatz ist dieser Schritt nicht bei jeder Aufgabe erforderlich.
 
-## 5. Arbeitsplan separat erstellen
+## 5. Automatischen Ablauf starten
 
-Für den bewährten Zweischrittprozess kopierst du [example-plan-task.md](example-plan-task.md) oder beginnst die erste Aufgabe so:
+Starte im Zielrepository genau diesen Befehl:
 
-```text
-ORCHESTRATOR_MODE: PLAN_ONLY
-WORK_PLAN_PATH: docs/internal/mein-vorhaben-work-plan.md
-TARGET_BRANCH: feature/mein-vorhaben
-TASK_SCOPE: docs/internal/mein-vorhaben-work-plan.md
+```bash
+run_task --watch
 ```
 
-Starte den Lauf. Codex erstellt nur das Arbeitsplan-MD. Claude und Antigravity prüfen denselben Planfingerprint; die Produkttestsuite wird dabei nicht ausgeführt. Danach endet der Prozess mit Exitcode 4 am Plangate:
+Der Standardablauf benötigt keine Zwischenfreigabe:
+
+1. Der Watcher übernimmt die älteste stabile Markdown-Datei aus `inbox/` und bereitet ihren Zielbranch vor.
+2. Der informelle Intake erzeugt einen eng begrenzten `PLAN_ONLY`-Vertrag und ein digestgebundenes Gesamtaudit unter `docs/internal/`.
+3. Codex erstellt den Arbeitsplan. Der Orchestrator prüft dessen Slice-/Pfadvertrag noch vor den Reviewern und gibt eine reparierbare Strukturabweichung automatisch genau einmal an Codex zurück. Erst der handoff-fähige Planfingerprint geht an Claude und Antigravity.
+4. Nach beiden Planfreigaben commitet der Orchestrator den Plan lokal und erzeugt automatisch die zugehörige `-implement.md`-Aufgabe.
+5. Derselbe Watch-Prozess übernimmt den Handoff unmittelbar und beginnt ohne zweite Planungsrunde mit Slice 1.
+6. Zu Beginn jedes Slices entsteht dessen Auditdokument. Codex implementiert, der Orchestrator validiert, Claude und Antigravity reviewen und der Orchestrator erstellt den lokalen Slice-Commit.
+7. Technische Korrekturen an bereits freigegebenen Vorgängerslices können über eine eng geprüfte `REMEDIATION_PATHS`-Erweiterung automatisch in den laufenden Slice aufgenommen werden.
+8. Nach dem letzten Slice prüfen Codex, Claude und Antigravity den vollständigen Branch. Blockierende Abschlussfindings erzeugen automatisch begrenzte Korrekturslices und einen erneuten Gesamtcheck.
+9. Erst nach erfolgreichem Abschlussreview endet der Lauf mit Exitcode 0 und die ursprüngliche Aufgabe wird nach `outbox/done/` verschoben.
+
+Plan-, Teständerungs- und Slice-Commit-Gates sind standardmäßig aus. Echte Produktentscheidungen, unbekannte Pfade, Scopeverletzungen, nicht verfügbare Pflichtwerkzeuge, rote Pflichtvalidierungen und Provider-/Quota-Probleme können weiterhin sicher anhalten.
+
+Claude läuft standardmäßig mit Sonnet und Effort `high`; Antigravity verwendet das konfigurierte Flash-Modell als unabhängiger zweiter Reviewer. Die Modelle ändern nichts an der Rollen- und Freigabereihenfolge.
+
+Jede Logzeile trägt einen lokalen Zeitstempel. Während längerer Agentenaufrufe erscheint regelmäßig `<rolle> still running (elapsed: …)`; im Compact-Modus werden am Ende nur Findings, Entscheidungen, Status und eine kurze Nutzungssumme hervorgehoben.
+
+## 6. Optionale manuelle und formale Betriebsarten
+
+Eine menschliche Planabnahme ist opt-in:
+
+```bash
+run_task --watch --plan-gate
+```
+
+Entsprechend aktivieren `--test-change-gate` eine zusätzliche Abnahme für Teständerungen und `--manual-slice-gate` eine Abnahme vor jedem Slice-Commit. Ohne diese Optionen bleiben Validierung sowie Claude- und Antigravity-Reviews vollständig verpflichtend; nur der zusätzliche menschliche Halt entfällt.
+
+Für bereits ausgearbeitete, maschinell erzeugte oder bewusst getrennt ausgeführte Aufträge bleiben formale Dateien unterstützt. [example-plan-task.md](example-plan-task.md) zeigt `ORCHESTRATOR_MODE: PLAN_ONLY`; [example-task.md](example-task.md) zeigt `ORCHESTRATOR_MODE: IMPLEMENT`, `TARGET_BRANCH`, `TASK_SCOPE`, Akzeptanzkriterien und Stopbedingungen.
+
+Ein formaler Einzelauftrag kann so gestartet werden:
 
 ```bash
 run_task --task-file task.md
-
-run_task --resume --task-file task.md \
-  --approve-gate \
-  --gate-actor "Ihr Name" \
-  --gate-rationale "Arbeitsplan und persistierten Fingerprint geprüft"
 ```
 
-Nach dieser Freigabe wird der bereits geprüfte Arbeitsplan ohne weiteren Codex-,
-Claude- oder Antigravity-Aufruf direkt lokal commitet. Der Orchestrator erzeugt
-daneben automatisch eine zweite Inbox-Aufgabe mit dem Suffix `-implement.md`.
-Sie bindet den Plan-Commit, übernimmt dessen Slices und ergänzt je Slice ein
-eigenes Auditdokument.
-
-Claude- und Antigravity-Ergebnisse werden in einem automatisch verwalteten Prüfprotokoll am Ende des deklarierten Arbeitsplans dokumentiert. Der Orchestrator hält diese Blöcke aus dem fachlichen Fingerprint heraus und speichert Markdown beim Commit mit Git-Modus `100644`.
-
-## 6. Implementierung starten
-
-Rufe den Starter aus dem Zielrepository über seinen absoluten Pfad oder einen konfigurierten globalen Symlink auf:
-
-```bash
-/absolute/path/to/Dual-Agent-Orchestrator/run_task --task-file task.md
-```
-
-Liegt `run_task` in `PATH`, genügt die Kurzform:
-
-```bash
-run_task --task-file task.md
-```
-
-Starte die automatisch erzeugte Aufgabe als neuen Lauf:
+Ein außerhalb des Watchers bewusst getrennt gestarteter Implementierungs-Handoff verwendet beispielsweise:
 
 ```bash
 run_task --no-resume --force-overwrite-state \
-  --task-file Inbox/mein-vorhaben-implement.md
+  --task-file inbox/mein-vorhaben-implement.md
 ```
 
-Die Implementierungsaufgabe verwendet `ORCHESTRATOR_MODE: IMPLEMENT`, denselben
-`TARGET_BRANCH`, den unveränderten Plan-Commit und alle erlaubten Umsetzungs-
-und Auditpfade. Weil der Plan bereits doppelt geprüft und vom Benutzer
-freigegeben wurde, beginnt dieser Handoff ohne zweite Planungs-/Reviewrunde
-direkt mit Slice 1. Erfolgreiche Slices werden lokal commitet; anschließend
-folgt ein branchweiter Abschlussreview. Claude Sonnet mit Effort `high` und
-Antigravity prüfen dabei jeden Implementierungsslice.
+Im normalen Watch-Modus ist keiner dieser zusätzlichen Starts erforderlich.
 
 ## 7. Angehaltenen Lauf fortsetzen
 
-Ein nicht abgeschlossener Einzelaufgabenlauf wird automatisch fortgesetzt, wenn derselbe Befehl wiederholt wird. Nach Auflösung eines protokollierten Gates oder einem Prozessneustart wird explizit fortgesetzt:
+Nach einem Prozessneustart oder der Behebung eines technischen Problems genügt für eine Watch-Aufgabe erneut:
+
+```bash
+run_task --watch
+```
+
+Die Aufgabenidentität, `.orchestrator/state.json` und Checkpoints führen denselben Lauf am exakt persistierten Rollen- und Sliceschritt fort. Diese Dateien dürfen niemals manuell bearbeitet werden.
+
+Einen formalen Einzelauftrag setzt du explizit fort:
 
 ```bash
 run_task --resume --task-file task.md
 ```
 
-Falls Exitcode 4 eine explizite Gate-Entscheidung verlangt, muss vor der Freigabe des exakten Fingerprints der persistierte Grund geprüft werden:
+Nur wenn der protokollierte Exitcode 4 tatsächlich eine menschliche Gate-Entscheidung verlangt, wird diese mit Akteur und Begründung erteilt:
 
 ```bash
-run_task --resume --task-file task.md \
+run_task --watch --resume \
   --approve-gate \
   --gate-actor "Ihr Name" \
-  --gate-rationale "Persistiertes Gate geprüft und Fortsetzung freigegeben"
+  --gate-rationale "Persistierten Gate-Grund und Fingerprint geprüft"
 ```
 
-Die Exitcodes 2 und 3 kennzeichnen einen fortsetzbaren Quota- beziehungsweise Agentenfehler. Behebe die gemeldete Ursache und setze denselben Lauf fort. `.orchestrator/state.json` und Checkpointdateien dürfen niemals manuell bearbeitet werden.
+Ein agentenlokaler Port-Bind- oder Browser-Sandboxfehler wird einmal automatisch an die Orchestrator-Validierung übergeben. Ein `VALIDATE:`-Befehl an einer nicht blockierenden `OBSERVATION` erzeugt höchstens eine Warnung und keinen Benutzerhalt. Nur offene `BLOCKER` dürfen innerhalb einer konfigurierten Befehlsfamilie zusätzliche Validierung anfordern.
 
-Meldet Codex `IMPLEMENTATION_READY: <Slice> | NO`, speichert der Orchestrator
-die Finding-Antworten und hält mit Exitcode 4 am selben Codex-Schritt. Das ist
-kein Parser- oder Prozessfehler: Behebe den protokollierten Blocker außerhalb
-des angehaltenen Laufs und setze anschließend mit `--resume` fort.
+Die Exitcodes 2 und 3 kennzeichnen Quota- beziehungsweise Agentenfehler. Nach Wiederherstellung des Providers oder Programms wird derselbe Schritt fortgesetzt; eine andere Rolle wird nicht als Ersatz verwendet. Eine bereits vollständig ausgeführte rote Matrix wird nur mit `--retry-failed-validation` erneut ausgeführt.
 
-Jede Orchestrator-Logzeile beginnt mit der lokalen Systemzeit. Für die
-Validierungsmatrix werden zusätzlich Start, Ende, Status und Laufzeit
-ausgegeben. Eine vollständige rote Validierung wird den Reviewern als
-gebundener Befund übergeben und nicht vor dem Review als technischer
-Workflowfehler beendet. Soll dieselbe rote Matrix nach einer Umgebungs- oder
-Testreparatur pro Prozessaufruf nochmals laufen, setze beim Resume ausdrücklich
-`--retry-failed-validation`. Der Retry-Zähler ist nicht über Prozessneustarts
-hinweg persistiert; die Option muss bei jedem weiteren Versuch erneut bewusst
-angegeben werden.
-
-Im Standardmodus `--agent-live-stream-mode compact` erscheinen von Codex nur
-die lesbaren Fortschrittsmeldungen statt der JSON-Hülle. Bei Claude und
-Antigravity werden nach Abschluss nur Findings, Freigaben und Statusmarker
-angezeigt. Die vollständige Agentenantwort bleibt in der angegebenen
-Logdatei; verschachtelte Provider-Metadaten werden im Compact-Modus nur als
-kurze Nutzungssumme dargestellt. `--agent-live-stream-mode full` zeigt
-weiterhin die unveränderte Provider-Ausgabe zur Diagnose.
+Nicht fortsetzbare technische Fehler werden begrenzt wiederholt. Ist das Retry-Limit ausgeschöpft, liegt die Aufgabe als `.poison` unter `outbox/failed/`; die benachbarte Datei `.poison.error.json` hält Lauf-ID, letzten Step und die konkrete technische Ursache für Diagnose und Korrektur fest.
 
 ## 8. Abschluss prüfen
 
-Ein abgeschlossener Lauf endet mit Exitcode 0. Prüfe die entstandenen lokalen Commits und den sauberen Status:
+Ein vollständiger Erfolg endet mit Exitcode 0. Prüfe anschließend die lokalen Commits und den Arbeitsbaum:
 
 ```bash
-git log --oneline --decorate -n 10
+git log --oneline --decorate -n 15
 git status --short
 ```
 
-Laufzeitstatus, Checkpoints, Logs und persistierte Agentenausgaben liegen unterhalb von `.orchestrator/`. Menschenlesbare Arbeitspläne und Slice-Auditdokumente verbleiben in den von der Aufgabe deklarierten Pfaden.
+Der Zielbranch enthält einen lokalen Plancommit, die freigegebenen Slice- und gegebenenfalls Korrekturcommits sowie die abschließende Auditprojektion. Arbeitsplan, Slice-Auditdokumente und Gesamtreview liegen unter den erzeugten Pfaden in `docs/internal/`. Die abgearbeitete Inbox-Datei liegt mit UTC-Zeitstempel unter `outbox/done/`. Push, Pull Request, Merge, Release und Deployment bleiben bewusste nachgelagerte Benutzeraktionen.

@@ -1249,6 +1249,58 @@ class WorkflowState:
             updated_at=updated_at or _now_iso(),
         )
 
+    def extend_current_slice_scope(
+        self,
+        additions: tuple[str, ...],
+        *,
+        updated_at: str | None = None,
+    ) -> WorkflowState:
+        """Extend an in-progress Slice with a minimal approved remediation allowlist."""
+        current = self.current_work_unit
+        current_slice = self.current_slice
+        if (
+            current.kind is not WorkUnitKind.SLICE
+            or current.status is not WorkUnitStatus.IN_PROGRESS
+            or current_slice.status is not SliceStatus.IN_PROGRESS
+        ):
+            raise WorkflowStateValidationError(
+                "only an in-progress regular Slice can extend its remediation scope"
+            )
+        if not current_slice.scope_paths or current_slice.start_fingerprint is None:
+            raise WorkflowStateValidationError(
+                "remediation scope extension requires a persisted Git boundary"
+            )
+        normalized_additions = _normalize_scope_paths(additions)
+        if set(normalized_additions).intersection(current_slice.scope_paths):
+            raise WorkflowStateValidationError(
+                "remediation additions must not repeat current Slice paths"
+            )
+        expanded_scope = tuple(
+            sorted({*current_slice.scope_paths, *normalized_additions})
+        )
+        expanded_groups = tuple(
+            sorted(
+                {
+                    *current_slice.scope_change_groups,
+                    *((path,) for path in normalized_additions),
+                }
+            )
+        )
+        expanded_slice = replace(
+            current_slice,
+            scope_paths=expanded_scope,
+            scope_change_groups=expanded_groups,
+        )
+        slices = tuple(
+            expanded_slice if item.slice_id == current_slice.slice_id else item
+            for item in self.slices
+        )
+        return replace(
+            self,
+            slices=slices,
+            updated_at=updated_at or _now_iso(),
+        )
+
     def mark_side_effect_completed(self, key: str, *, updated_at: str | None = None) -> WorkflowState:
         _require_non_empty(key, "side-effect key")
         current = self.current_work_unit

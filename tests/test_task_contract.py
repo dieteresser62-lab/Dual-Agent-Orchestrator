@@ -45,6 +45,64 @@ TASK_SCOPE: src/app.py, tests/test_app.py, docs/internal/plan.md
     )
 
 
+def test_informal_task_derives_safe_plan_only_contract_from_file_name() -> None:
+    contract = parse_task_contract(
+        """
+# Neue Idee: Strategien vergleichen
+
+TARGET_BRANCH: codex/strategie-vergleich
+
+Ich möchte zwei Strategien verständlich miteinander vergleichen können.
+Bitte frage nur bei echten fachlichen Alternativen nach.
+""",
+        source_name="Strategie Vergleich.md",
+    )
+
+    assert contract.mode is TaskMode.PLAN_ONLY
+    assert contract.work_plan_path == (
+        "docs/internal/strategie-vergleich-arbeitsplan.md"
+    )
+    assert contract.scope_patterns == (
+        "docs/internal/strategie-vergleich-arbeitsplan.md",
+    )
+    assert contract.target_branch == "codex/strategie-vergleich"
+    assert contract.informal_intake is True
+
+
+def test_informal_task_slug_is_ascii_and_has_digest_fallback() -> None:
+    umlaut = parse_task_contract(
+        "# Idee\nTARGET_BRANCH: feature/idee\n",
+        source_name="Überblick für März.md",
+    )
+    fallback = parse_task_contract(
+        "# Idee\nTARGET_BRANCH: feature/symbol\n",
+        source_name="🎯.md",
+    )
+
+    assert umlaut.work_plan_path == "docs/internal/uberblick-fur-marz-arbeitsplan.md"
+    assert fallback.work_plan_path is not None
+    assert fallback.work_plan_path.startswith("docs/internal/task-")
+    assert fallback.work_plan_path.endswith("-arbeitsplan.md")
+
+
+def test_partially_formal_task_still_fails_closed() -> None:
+    with pytest.raises(TaskContractError, match="WORK_PLAN_PATH"):
+        parse_task_contract(
+            "ORCHESTRATOR_MODE: PLAN_ONLY\nTARGET_BRANCH: feature/x\n"
+            "TASK_SCOPE: docs/internal/x.md\n",
+            source_name="idea.md",
+        )
+
+
+def test_informal_task_cannot_be_forced_directly_to_implement() -> None:
+    with pytest.raises(TaskContractError, match="informal task is planning input"):
+        parse_task_contract(
+            "# Idee\nTARGET_BRANCH: feature/x\n",
+            source_name="idea.md",
+            mode_override=False,
+        )
+
+
 def test_approved_plan_handoff_binds_embedded_slices() -> None:
     contract = parse_task_contract(
         """

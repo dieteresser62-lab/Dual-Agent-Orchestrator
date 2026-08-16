@@ -296,11 +296,14 @@ def test_manual_slice_gate_cli_overrides_repository_default(tmp_path: Path) -> N
     assert overridden.manual_slice_gate is False
 
 
-def test_plan_controls_default_safe_and_allow_explicit_overrides(tmp_path: Path) -> None:
+def test_workflow_gates_default_to_automatic_and_allow_explicit_overrides(
+    tmp_path: Path,
+) -> None:
     default = parse_args([], cwd=tmp_path, environ={})
     overridden = parse_args(
         [
-            "--no-plan-gate",
+            "--plan-gate",
+            "--test-change-gate",
             "--plan-only",
             "--work-plan",
             "docs/internal/plan.md",
@@ -311,9 +314,11 @@ def test_plan_controls_default_safe_and_allow_explicit_overrides(tmp_path: Path)
         environ={},
     )
 
-    assert default.plan_gate is True
+    assert default.plan_gate is False
+    assert default.test_change_gate is False
     assert default.plan_only is None
-    assert overridden.plan_gate is False
+    assert overridden.plan_gate is True
+    assert overridden.test_change_gate is True
     assert overridden.plan_only is True
     assert overridden.work_plan == "docs/internal/plan.md"
     assert overridden.target_branch == "feature/plan"
@@ -427,6 +432,7 @@ command = ["npm", "run", "build:engine"]
 [workflow]
 manual_slice_gate = true
 plan_gate = false
+test_change_gate = true
 """.strip(),
     )
 
@@ -445,6 +451,7 @@ plan_gate = false
     )
     assert config.workflow.manual_slice_gate is True
     assert config.workflow.plan_gate is False
+    assert config.workflow.test_change_gate is True
 
 
 @pytest.mark.parametrize(
@@ -453,6 +460,7 @@ plan_gate = false
         ("unknown = true\n", "Unknown key(s) in root: unknown"),
         ("[workflow]\nmanual_slice_gate = \"yes\"\n", "must be a boolean"),
         ("[workflow]\nplan_gate = \"yes\"\n", "must be a boolean"),
+        ("[workflow]\ntest_change_gate = \"yes\"\n", "must be a boolean"),
         ("[paths]\nproductive = [\"../outside/**\"]\n", "must not escape"),
         ("[paths]\nproductive = [\"C:/outside/**\"]\n", "must be relative"),
         ("[paths]\nproductive = [\"src\\\\**\"]\n", "platform-neutral separator"),
@@ -566,7 +574,8 @@ def test_watch_defaults_do_not_auto_resume_and_skip_git_check(tmp_path: Path) ->
     assert args.auto_resume is False
     assert args.skip_git_check is True
     assert args.plan_gate is False
-    assert args.plan_gate_source == "watch-default"
+    assert args.plan_gate_source == "repository-default"
+    assert args.test_change_gate is False
 
 
 def test_watch_plan_gate_can_be_enabled_explicitly(tmp_path: Path) -> None:
@@ -616,8 +625,7 @@ def test_watch_default_logs_git_check_and_stream_configuration(
     assert "live stream channels = stdout" in caplog.text
     assert "enabling --skip-git-check by default" in caplog.text
     assert "RUN_TASK_SKIP_GIT_CHECK" in caplog.text
-    assert "disabling --plan-gate by default" in caplog.text
-    assert "workflow.plan_gate=true" in caplog.text
+    assert "disabling --plan-gate by default" not in caplog.text
 
 
 def test_invalid_stream_environment_warning_uses_configured_log_format(tmp_path: Path) -> None:

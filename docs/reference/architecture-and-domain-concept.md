@@ -2,7 +2,7 @@
 
 **Dokumentstatus:** Referenzdokumentation der State-v3-Implementierung
 
-**Zuletzt verifiziert:** 2026-08-13
+**Zuletzt verifiziert:** 2026-08-16
 
 **Zielgruppe:** Maintainer, Betreiber, Reviewer und Teams, die den Orchestrator evaluieren
 
@@ -67,13 +67,15 @@ Der Orchestrator bildet diese Bedingungen als expliziten Zustand, Verträge und 
 | Begriff | Bedeutung |
 |---|---|
 | Lauf | Eine persistierte Ausführung einer Aufgabe auf einem Repositorybranch und seiner Branchbasis. |
+| Informeller Intake | Menschliche Ideenbeschreibung mit Zielbranch, aus der der Orchestrator ausschließlich einen eng begrenzten `PLAN_ONLY`-Vertrag und einen deterministischen Arbeitsplanpfad ableitet. |
 | Geplanter Slice | Einsbasierte Einheit mit Zusammenfassung und exakter repositoryrelativer Pfad-Allowlist. |
 | Arbeitsblock | Fortsetzbarer Ausführungskontext für Planung, Slice, Korrektur oder Abschlussreview. |
 | Schritt | Exakt nächste Rollen- oder Orchestratoraktion innerhalb eines Arbeitsblocks. |
 | Slice-Grenze | Persistierter Branch, Startcommit, Startfingerprint, erlaubte Pfade und Änderungsgruppen. |
+| Remediation-Erweiterung | Minimale, persistierte Erweiterung eines laufenden Slice um exakte Pfade eines bereits abgeschlossenen und planfreigegebenen Vorgängerslice. |
 | Kanonische Änderungen | Von Git abgeleitete, nachverfolgte und nicht ignorierte unversionierte Änderungen ab einem expliziten Basiscommit. |
 | Diff-Fingerprint | SHA-256-Identität der kanonischen Änderungsmenge einschließlich relevanter Inhalte und Metadaten. |
-| Validierungsmatrix | Deterministische Befehlsmenge für Implementierungsevidenz, ausgewählt aus geänderten Pfaden und Abnahmebefehlen von Findings. Planläufe verwenden stattdessen die interne Planvertragsprüfung. |
+| Validierungsmatrix | Deterministische Befehlsmenge für Implementierungsevidenz, ausgewählt aus geänderten Pfaden und erlaubten Abnahmebefehlen offener Blocker. Planläufe verwenden stattdessen die interne Planvertragsprüfung. |
 | Attestierung | Vom Orchestrator erzeugte Validierungsdatensätze, gebunden an einen Diff-Fingerprint. |
 | Finding | Reviewer-eigener Blocker oder Hinweis mit stabiler Identität, Beschreibung, Abnahmetest und Lebenszyklus. |
 | Gate | Persistierter Halt, der Richtlinienreparatur, explizite Benutzeraktion, Quota-Reset oder Agentenwiederherstellung erfordert. |
@@ -101,11 +103,17 @@ Claude sieht in der ersten Runde die vollständige Slice-Evidenz und in spätere
 
 Nur der Orchestrator führt Validierungen aus. Für Planreviews prüft er intern Task-Scope, Arbeitsplanpfad und 1-basierte zukünftige Slice-Struktur, ohne die Produkttestsuite aufzurufen. Für Implementierungen führt er die ausgewählte Validierungsmatrix aus. Das Ergebnis wird für einen Fingerprint zwischengespeichert und von beiden Reviewern wiederverwendet. Reviewer dürfen die Attestierung prüfen, aber keinen eigenen Validierungsergebnis-Marker ausgeben.
 
-### 6.6 Persistierung erfolgt vor fortsetzbarem Exit
+Kann Codex die konfigurierte Vollmatrix nur wegen einer agentenlokalen Port-Bind- oder Browser-Sandboxgrenze nicht starten, ist das keine Produktentscheidung. Die Engine fordert Codex einmal automatisch auf, die fertiggestellte Implementierung mit normaler Readiness zurückzugeben, und führt danach die Matrix selbst aus. Wiederholte oder nicht eindeutig umgebungsbedingte Stops bleiben fail-closed.
+
+### 6.6 Informelle Ideen werden nicht zu Implementierungsscope geraten
+
+Eine freie Ideenbeschreibung darf keine versteckte Direktimplementierung auslösen. Fehlen formale Ausführungsmarker, leitet der Intake ausschließlich `PLAN_ONLY`, einen deterministischen Markdown-Arbeitsplan unter `docs/internal/` und genau diesen Planpfad als Schreibscope ab. Der Zielbranch bleibt eine explizite menschliche Angabe. Teilweise formale Verträge werden abgelehnt, damit Sicherheitsgrenzen nicht aus widersprüchlichen Mischformen geraten werden.
+
+### 6.7 Persistierung erfolgt vor fortsetzbarem Exit
 
 Zustand und koordinatenspezifischer Checkpoint werden geschrieben, bevor ein Benutzergate, Quotawarten oder fortsetzbarer Agentenfehler die Kontrolle zurückgibt. Die Fortsetzung beginnt am persistierten Schritt und prüft relevante Repositoryevidenz erneut.
 
-### 6.7 Commits sind exakte Transaktionen
+### 6.8 Commits sind exakte Transaktionen
 
 Der Commitdienst prüft die Autorisierung erneut, staged nur geprüfte Pfade, erstellt einen lokalen Slice-Commit und verifiziert Pfadliste und Hash. Push, Merge, Force-Push und Umschreiben der Historie bleiben außerhalb der Produktgrenze.
 
@@ -113,8 +121,9 @@ Der Commitdienst prüft die Autorisierung erneut, staged nur geprüfte Pfade, er
 
 ```mermaid
 flowchart LR
-    User[Betreiber und task.md] --> CLI[CLI und Konfiguration]
-    Watch[FIFO-Watch-Modus] --> CLI
+    User[Betreiber und informelle inbox/*.md] --> Watch[FIFO-Watch-Modus]
+    Formal[Formaler Einzelauftrag] --> CLI[CLI und Konfiguration]
+    Watch --> CLI
     CLI --> Runtime[Produktive Laufzeit]
     Runtime --> Engine[State-v3-Workflowengine]
 
@@ -145,6 +154,7 @@ Die Workflowengine ist bewusst von der Prozessausführung getrennt. Sie kommuniz
 | Komponente | Primäre Module | Verantwortung |
 |---|---|---|
 | CLI und Konfiguration | [`src/cli.py`](../../src/cli.py), [`src/agent_config.py`](../../src/agent_config.py) | CLI-/Umgebungs-/TOML-Präzedenz, Rolleneinstellungen, Logging und Dispatch. |
+| Aufgabenintake und Handoff | [`src/task_contract.py`](../../src/task_contract.py), [`src/plan_handoff.py`](../../src/plan_handoff.py) | Informelle Ideen sicher in begrenzte Planverträge überführen, formale Verträge validieren und freigegebene Pläne commitgebunden in Implementierungsaufträge übersetzen. |
 | Produktive Komposition | [`src/orchestrator.py`](../../src/orchestrator.py) | Laufzeitabhängigkeiten aufbauen, Zustand laden oder erzeugen, produktiven Driver binden und Lauf ausführen. |
 | Workflowengine | [`src/workflow.py`](../../src/workflow.py) | Übergänge, Reviewerreihenfolge, Evidenzaktualität, Korrekturen, Abschlussreview und Exitsemantik durchsetzen. |
 | Zustandsmodell | [`src/workflow_state.py`](../../src/workflow_state.py) | Unveränderliche State-v3-Datensätze, Arbeitsblöcke, Schritte, Slices, Gates, Fehler und Übergangsinvarianten definieren. |
@@ -161,15 +171,16 @@ Die Workflowengine ist bewusst von der Prozessausführung getrennt. Sie kommuniz
 
 ### 9.1 Planung
 
-1. Die Laufzeit liest Modus, exakten Task-Scope, Zielbranch, optionalen Arbeitsplanpfad und Aufgabendigest. Ein abweichender aktiver Branch blockiert vor dem ersten Agentenaufruf.
-2. Codex liefert geordnete `SLICE_PLAN`-Datensätze mit exakten Pfad-Allowlists. Jeder Pfad wird gegen den Task-Scope geprüft.
-3. Claude prüft den Planfingerprint. Nach seiner Freigabe prüft Antigravity denselben vollständigen Planfingerprint. Eine Ablehnung führt zur Planüberarbeitung durch Codex.
-4. Der doppelt freigegebene Plan wartet standardmäßig an einem fingerprintgebundenen Benutzergate. Erst die protokollierte Freigabe erlaubt den Übergang.
-5. Im Modus `PLAN_ONLY` ist genau ein ausführbarer Dokumentationsslice zulässig.
-   Nach dem Plangate wird sein bereits geprüfter Fingerprint direkt commitet.
+1. Im Watch-Modus liest die Laufzeit `TARGET_BRANCH` aus der stabilen Inbox-Datei. Sie legt einen fehlenden Branch vom aktuellen `HEAD` an, wechselt bei sicherem Arbeitsbaum auf einen vorhandenen oder erweitert einen bereits aktiven Zielbranch ab dessen aktuellem `HEAD`. Bei einem Resume ist stattdessen ausschließlich der persistierte Branch zulässig.
+2. Eine informelle Aufgabe ohne Ausführungsmarker oder Scope wird ausschließlich in `PLAN_ONLY`, einen deterministischen Arbeitsplanpfad unter `docs/internal/` und genau diesen initialen Schreibscope überführt. Ein formaler Auftrag muss Modus, Scope und gegebenenfalls Arbeitsplan- beziehungsweise Handoff-Bindung vollständig deklarieren.
+3. Codex erstellt im Arbeitsplan geordnete zukünftige Slices mit exakten Pfad-Allowlists. Der Planlauf selbst liefert genau einen ausführbaren Dokumentationsslice; jeder spätere Pfad wird vor dem Review auf einen gültigen Handoff geprüft. Die kanonische Pfadüberschrift lautet `**Exakter Änderungspfad**`; die sichere kompatible Pluralform wird ebenfalls gelesen. Eine reparierbare Vertragsabweichung geht vor dem ersten Reviewer automatisch genau einmal als begrenzte Planrevision an Codex zurück. Bleibt sie bestehen, wird ein fortsetzbares `PLAN-CONTRACT-INVALID`-Gate statt eines technischen Watch-Fehlers erzeugt.
+4. Claude prüft den Planfingerprint. Nach seiner Freigabe prüft Antigravity denselben vollständigen Planfingerprint. Eine Ablehnung führt zur Planüberarbeitung durch Codex.
+5. Der doppelt freigegebene Plan geht standardmäßig direkt in den lokalen Plancommit über. Ein fingerprintgebundenes Benutzergate ist als opt-in Richtlinie über `--plan-gate` beziehungsweise `workflow.plan_gate = true` verfügbar.
+6. Im Modus `PLAN_ONLY` ist genau ein ausführbarer Dokumentationsslice zulässig.
+   Nach den beiden Planreviews (und einem optional aktivierten Plangate) wird sein bereits geprüfter Fingerprint direkt commitet.
    Daraus entsteht eine commitgebundene `IMPLEMENT`-Handoff-Aufgabe; sie
-   übernimmt die späteren Produktslices und beginnt ohne erneute Planprüfung
-   direkt mit Slice 1.
+   übernimmt die späteren Produktslices. Derselbe Watch-Prozess verarbeitet sie
+   als nächste Aufgabe und beginnt ohne erneute Planprüfung direkt mit Slice 1.
 
 ### 9.2 Slice-Implementierung und Review
 
@@ -184,7 +195,7 @@ sequenceDiagram
 
     C->>O: Implementierungsbereitschaft und Datensatz geänderter Tests
     O->>G: kanonischen Slice-Diff ermitteln
-    O->>O: Scope, Branch, Grenzen, Stopps und Testgate prüfen
+    O->>O: Scope, Branch, Grenzen, Stopps und optionales Testgate prüfen
     O->>V: ausgewählte Matrix für Fingerprint ausführen
     V-->>O: gebundene Attestierung
     O->>CL: vollständige Slice-Evidenz der ersten Runde
@@ -226,7 +237,7 @@ Ein Finding gehört dauerhaft dem Reviewer, der es erstellt hat. Claude-IDs begi
 - Eigentümer-gesteuerten Status `OPEN` oder `CLOSED`;
 - explizite Codex-Antwort `ACCEPTED` oder `REJECTED`.
 
-Ein offener Blocker verhindert eine positive Freigabe. Eine Observation bleibt sichtbar, blockiert aber nicht automatisch. Ein Reviewer darf das Finding eines anderen Reviewers weder schließen noch stillschweigend neu klassifizieren. Dadurch bleibt die Zuordnung über Korrekturrunden und Fortsetzungsgrenzen hinweg erhalten.
+Ein offener Blocker verhindert eine positive Freigabe. Eine Observation bleibt sichtbar, blockiert aber nicht automatisch. Nur ein offener Blocker darf mit einem strukturierten `VALIDATE`-Akzeptanztest die Orchestrator-Matrix innerhalb einer konfigurierten Befehlsfamilie erweitern. Ein entsprechender Marker an einer Observation wird protokolliert, aber für die Matrix ignoriert; dadurch kann ein nicht blockierender Hinweis keinen Benutzerhalt wegen eines fremden Befehls auslösen. Ein Reviewer darf das Finding eines anderen Reviewers weder schließen noch stillschweigend neu klassifizieren. Dadurch bleibt die Zuordnung über Korrekturrunden und Fortsetzungsgrenzen hinweg erhalten.
 
 ## 11. Validierungs- und Evidenzmodell
 
@@ -234,7 +245,7 @@ Das Repository-TOML klassifiziert produktive, Test-, Dokumentations- und generie
 
 - den Standardbefehl des Repositorys;
 - jede Regel, deren Pfadmuster auf die kanonische Änderungsmenge passt;
-- strukturierte Abnahmebefehle offener Findings, sofern sie innerhalb einer erlaubten Validierungsfamilie bleiben.
+- strukturierte Abnahmebefehle offener Blocker, sofern sie innerhalb einer erlaubten Validierungsfamilie bleiben.
 
 Befehle werden dedupliziert und mit begrenzten Timeouts ausgeführt. Die Attestierung protokolliert erwartete Matrix, Befehlsstatus, Exitcode, kompakte Ausgabe und Digest. `INCOMPLETE` unterscheidet sich von einem vollständig ausgeführten fehlgeschlagenen Befehl: Fehlende Werkzeuge oder nicht verfügbare Ausführung dürfen nicht stillschweigend freigegeben werden. Eine bewusste Red-State-Ausnahme erfordert einen benannten Folgeslice; für unvollständige Evidenz existiert keine solche Ausnahme.
 
@@ -254,7 +265,7 @@ Aufgabeninhalt, Diffs, Agentenantworten und Auditprosa werden als Daten behandel
 
 ### Menschliche Autorität
 
-Explizite Benutzergates verlangen Akteur, Begründung und den exakten persistierten Fingerprint. Die Entscheidung wird protokolliert, bevor der Workflow fortfährt. Destruktive externe Git-Aktionen werden niemals aus einem erfolgreichen lokalen Lauf abgeleitet.
+Plan-, Teständerungs- und Slice-Commit-Gates sind im automatischen Standardpfad deaktiviert und können als Repository- oder CLI-Richtlinie zugeschaltet werden. Jedes dann explizite Benutzergate verlangt Akteur, Begründung und den exakten persistierten Fingerprint. Echte Produktentscheidungen und Sicherheitsgrenzen dürfen unabhängig davon weiterhin anhalten. Die Entscheidung wird protokolliert, bevor der Workflow fortfährt. Destruktive externe Git-Aktionen werden niemals aus einem erfolgreichen lokalen Lauf abgeleitet.
 
 ## 13. Persistierung, Fortsetzung und Idempotenz
 
@@ -283,10 +294,14 @@ Eine automatische Quotafortsetzung erfolgt nur bei einem eindeutigen Reset inner
 Der Watch-Modus ist ein lokaler Einzelprozess-FIFO-Worker und keine verteilte Warteschlange:
 
 - stabile Markdown-Aufgaben werden älteste zuerst ausgewählt;
+- informelle Aufgaben benötigen nur eine Ideenbeschreibung und `TARGET_BRANCH`; der formale Planvertrag wird sicher abgeleitet;
+- der Zielbranch wird für neue Aufgaben gemäß sicherem Worktreezustand angelegt, gewechselt oder am aktuellen `HEAD` erweitert;
 - `inbox/.lock` verhindert konkurrierende Worker, sofern `fcntl` verfügbar ist;
 - eine Sidecar-Datei bindet den Aufgabeninhalt an eine Lauf-ID;
+- Planreviews, Plancommit, Implementierungs-Handoff, Slice-Commits und Abschlussreview laufen ohne menschliche Zwischengates, sofern diese nicht ausdrücklich aktiviert wurden;
+- Slice-Auditdateien entstehen erst am Beginn ihres tatsächlichen Implementierungs- oder Korrekturslices;
 - fortsetzbare Exitcodes 2, 3 und 4 erhalten die FIFO-Zuständigkeit und halten die Warteschlange an;
-- technische Fehler verwenden begrenzte Wiederholungen und Poison-Task-Behandlung;
+- technische Fehler verwenden begrenzte Wiederholungen und Poison-Task-Behandlung; eine benachbarte `.poison.error.json` bewahrt die letzte strukturierte Fehlerursache;
 - ein Erfolgsmarker verhindert die erneute Ausführung, wenn nur die Outbox-Verschiebung fehlschlug.
 
 Dieser Entwurf optimiert einen deterministischen lokalen Betrieb. Horizontale Skalierung, entfernte Worker und gemeinsame Sperren liegen bewusst außerhalb der aktuellen Architektur.

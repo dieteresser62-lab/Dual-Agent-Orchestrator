@@ -222,12 +222,30 @@ class ValidationAttestation:
 class StopRequest:
     rule_id: str
     rationale: str
+    remediation_paths: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.rule_id.strip():
             raise ValueError("stop request requires a rule id")
         if not self.rationale.strip():
             raise ValueError("stop request requires a rationale")
+        normalized = tuple(sorted(set(self.remediation_paths)))
+        if normalized != self.remediation_paths:
+            raise ValueError("remediation paths must be sorted and unique")
+        for raw_path in normalized:
+            path = PurePosixPath(raw_path)
+            if (
+                not raw_path.strip()
+                or path.is_absolute()
+                or "\\" in raw_path
+                or ".." in path.parts
+                or raw_path != path.as_posix()
+                or path.parts[0] == ".orchestrator"
+            ):
+                raise ValueError(
+                    "remediation paths must be canonical repository-relative POSIX paths "
+                    "outside .orchestrator"
+                )
 
 
 @dataclass(frozen=True)
@@ -894,6 +912,7 @@ def _reject_unknown_contract_markers(text: str) -> None:
         "PRE_MORTEM",
         "REVIEWER",
         "REVIEW_EVIDENCE",
+        "REMEDIATION_PATHS",
         "SLICE_APPROVAL",
         "SLICE_PLAN",
         "STATUS",
@@ -1026,15 +1045,35 @@ def _parse_readiness(text: str, contract: CodexStepContract) -> bool | None:
 
 def _parse_stop_request(text: str) -> tuple[StopRequest | None, int | None]:
     raw, position = _parse_optional_single_value(text, "STOP_REQUESTED")
+    remediation_raw, _ = _parse_optional_single_value(text, "REMEDIATION_PATHS")
     if raw is None:
+        if remediation_raw is not None:
+            raise ContractValidationError(
+                "REMEDIATION_PATHS requires STOP_REQUESTED"
+            )
         return None, position
     parts = [part.strip() for part in raw.split("|", 1)]
     if len(parts) != 2:
         raise ContractValidationError(
             "STOP_REQUESTED requires <rule id> | <rationale>"
         )
+    remediation_paths: tuple[str, ...] = ()
+    if remediation_raw is not None:
+        remediation_paths = tuple(
+            sorted(
+                {
+                    item.strip()
+                    for item in remediation_raw.split(",")
+                    if item.strip()
+                }
+            )
+        )
+        if not remediation_paths:
+            raise ContractValidationError(
+                "REMEDIATION_PATHS must list at least one path"
+            )
     try:
-        return StopRequest(*parts), position
+        return StopRequest(parts[0], parts[1], remediation_paths), position
     except ValueError as exc:
         raise ContractValidationError(str(exc)) from exc
 

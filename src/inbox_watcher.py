@@ -42,6 +42,7 @@ class WatchTaskResult:
     step: str
     work_unit_id: int
     gate_reason: str
+    failure_detail: str | None = None
 
     def __post_init__(self) -> None:
         if self.exit_code < 0:
@@ -84,6 +85,11 @@ class WatchTaskResult:
             step=state.current_step.value,
             work_unit_id=state.current_work_unit_id,
             gate_reason=state.current_work_unit.gate.reason.value,
+            failure_detail=(
+                None
+                if disposition is not WatchTaskDisposition.TECHNICAL_FAILURE
+                else "workflow returned a non-resumable, non-terminal result"
+            ),
         )
 
 
@@ -261,6 +267,38 @@ def delete_attempt_sidecar(task_file: Path) -> None:
         attempt_sidecar_path(task_file).unlink()
 
 
+def write_poison_failure_report(
+    destination: Path,
+    *,
+    attempts: int,
+    task_result: WatchTaskResult | None,
+    exception_detail: str | None,
+) -> Path:
+    """Persist the final technical cause next to a poison task."""
+    report_path = destination.with_name(destination.name + ".error.json")
+    payload = {
+        "version": 1,
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+        "poison_task": destination.name,
+        "attempts": attempts,
+        "exit_code": None if task_result is None else task_result.exit_code,
+        "run_id": None if task_result is None else task_result.run_id,
+        "status": None if task_result is None else task_result.status,
+        "step": None if task_result is None else task_result.step,
+        "work_unit_id": None if task_result is None else task_result.work_unit_id,
+        "gate_reason": None if task_result is None else task_result.gate_reason,
+        "failure_detail": (
+            exception_detail
+            if exception_detail is not None
+            else None
+            if task_result is None
+            else task_result.failure_detail
+        ),
+    }
+    atomic_write_file(report_path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    return report_path
+
+
 def acquire_inbox_lock(inbox_dir: Path) -> TextIO | None:
     lock_path = inbox_dir / ".lock"
     # Open in a+ so the lock file is created if missing without truncating existing content.
@@ -360,6 +398,7 @@ def watch_inbox(
             exit_code: int | None = None
             task_result: WatchTaskResult | None = None
             failed_with_exception = False
+            exception_detail: str | None = None
             task_succeeded_already = has_success_marker(task_file)
 
             if task_succeeded_already:
@@ -414,9 +453,13 @@ def watch_inbox(
                             step="legacy",
                             work_unit_id=1,
                             gate_reason="legacy",
+                            failure_detail=(
+                                None if exit_code == 0 else f"legacy exit code {exit_code}"
+                            ),
                         )
-                except Exception:
+                except Exception as exc:
                     failed_with_exception = True
+                    exception_detail = f"{type(exc).__name__}: {exc}"
                     logger.exception("Task processing crashed for %s.", task_file)
 
             if (
@@ -449,6 +492,19 @@ def watch_inbox(
                     poison_name = f"{task_file.name}.poison"
                     try:
                         destination = move_to_outbox(task_file, outbox_failed_dir, source_name=poison_name)
+                        report: Path | None = None
+                        try:
+                            report = write_poison_failure_report(
+                                destination,
+                                attempts=attempts,
+                                task_result=task_result,
+                                exception_detail=exception_detail,
+                            )
+                        except Exception:
+                            logger.exception(
+                                "Failed to write poison failure report for %s.",
+                                destination,
+                            )
                         delete_attempt_sidecar(task_file)
                         delete_success_marker(task_file)
                         delete_watch_identity(task_file)
@@ -458,6 +514,8 @@ def watch_inbox(
                             max_retries,
                             destination,
                         )
+                        if report is not None:
+                            logger.warning("Poison failure report written: %s", report)
                     except Exception:
                         logger.exception("Failed to move poison task %s to outbox.", task_file)
                 else:

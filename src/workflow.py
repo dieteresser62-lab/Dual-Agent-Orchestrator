@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import re
+import hashlib
 import logging
+import re
 import time
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
@@ -93,6 +94,13 @@ DEFAULT_WORKFLOW_VALIDATION_MATRIX = ValidationMatrix(
     default_command=ValidationCommand(
         argv=("python3", "-m", "pytest", "tests/", "-v")
     )
+)
+AGENT_SANDBOX_VALIDATION_PATTERN = re.compile(
+    r"(?:listen|bind(?:ing|en)?|testserver|test server|browserstart|browser start)"
+    r".{0,200}(?:eperm|eacces|eaddrinuse|operation not permitted|permission denied)"
+    r"|(?:eperm|eacces|eaddrinuse|operation not permitted|permission denied)"
+    r".{0,200}(?:listen|bind(?:ing|en)?|testserver|test server|browserstart|browser start)",
+    re.IGNORECASE | re.DOTALL,
 )
 
 
@@ -301,6 +309,7 @@ class WorkflowContext:
     task_scope_patterns: tuple[str, ...] = ()
     work_plan_path: str | None = None
     audit_report_path: str | None = None
+    current_scope_paths: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.assignment.strip():
@@ -363,6 +372,8 @@ class WorkflowContext:
             "docs/internal/"
         ):
             raise ValueError("audit_report_path must be below docs/internal")
+        if self.current_scope_paths != tuple(sorted(set(self.current_scope_paths))):
+            raise ValueError("current scope paths must be sorted and unique")
 
     @property
     def distilled_context(self) -> str:
@@ -371,10 +382,15 @@ class WorkflowContext:
         return (
             f"PLAN\n{self.distilled_plan}\n\n"
             f"CURRENT SLICE\n{self.slice_summary}\n\n"
+            "EXACT CURRENT SLICE ALLOWLIST\n"
+            f"{self._render_current_scope()}\n\n"
             f"APPROVED PLAN ANCHORS\n{approved}\n\n"
             f"CURRENT ANCHORS\n{current}\n\n"
             f"MACHINE STOP RULES (complete, untruncated)\n{self._render_stop_rules()}"
         )
+
+    def _render_current_scope(self) -> str:
+        return "\n".join(self.current_scope_paths) or "PLAN STEP: not bound yet"
 
     def _render_stop_rules(self) -> str:
         return "\n".join(
@@ -657,7 +673,11 @@ def _review_to_dict(item: ContractResult | None) -> dict[str, object] | None:
         "stopped": item.stopped,
         "stop_request": (
             None if item.stop_request is None
-            else {"rule_id": item.stop_request.rule_id, "rationale": item.stop_request.rationale}
+            else {
+                "rule_id": item.stop_request.rule_id,
+                "rationale": item.stop_request.rationale,
+                "remediation_paths": list(item.stop_request.remediation_paths),
+            }
         ),
         "validation": (
             None if item.validation is None else _attestation_to_dict(item.validation)
@@ -696,7 +716,13 @@ def _review_from_dict(raw: object) -> ContractResult | None:
         approval=raw.get("approval") if isinstance(raw.get("approval"), bool) else None,
         stopped=bool(raw["stopped"]),
         stop_request=(
-            None if stop_raw is None else StopRequest(str(stop_raw["rule_id"]), str(stop_raw["rationale"]))
+            None
+            if stop_raw is None
+            else StopRequest(
+                str(stop_raw["rule_id"]),
+                str(stop_raw["rationale"]),
+                tuple(str(path) for path in stop_raw.get("remediation_paths", ())),
+            )
         ),
         validation=(
             None if raw.get("validation") is None
@@ -1045,6 +1071,83 @@ class WorkflowEngine:
         if result.stopped:
             if result.stop_request is None:
                 raise WorkflowExecutionError("Codex stop has no structured stop request")
+            expanded = self._expand_approved_remediation_scope(
+                state, context, result.stop_request
+            )
+            if expanded is not None:
+                self.driver.checkpoint(expanded, history)
+                self._bind_driver_work_unit(expanded)
+                remediation = ", ".join(result.stop_request.remediation_paths)
+                added_paths = tuple(
+                    sorted(
+                        set(expanded.current_slice.scope_paths).difference(
+                            state.current_slice.scope_paths
+                        )
+                    )
+                )
+                if added_paths:
+                    logger.info(
+                        "Automatically extending Slice %02d with approved remediation paths: %s",
+                        expanded.current_slice_id,
+                        remediation,
+                    )
+                    remediation_heading = "AUTOMATIC PRIOR-SLICE REMEDIATION"
+                    remediation_instruction = (
+                        "Repair these approved paths before completing the current Slice: "
+                        f"{remediation}"
+                    )
+                else:
+                    logger.info(
+                        "Remediation paths are already authorized for Slice %02d; "
+                        "re-prompting Codex once instead of requesting user approval: %s",
+                        expanded.current_slice_id,
+                        remediation,
+                    )
+                    remediation_heading = (
+                        "REMEDIATION PATHS ALREADY AUTHORIZED — DO NOT REQUEST AGAIN"
+                    )
+                    remediation_instruction = (
+                        f"The exact current allowlist already contains: {remediation}. "
+                        "Implement and validate the required correction now. Do not emit "
+                        "STOP_REQUESTED or REMEDIATION_PATHS for these paths again."
+                    )
+                expanded_context = replace(
+                    context,
+                    current_scope_paths=expanded.current_slice.scope_paths,
+                    slice_summary=(
+                        f"{context.slice_summary}\n\n"
+                        f"{remediation_heading}\n"
+                        f"Cause: {result.stop_request.rationale}\n"
+                        f"{remediation_instruction}"
+                    ),
+                )
+                return self._run_codex(expanded, expanded_context, history)
+            validation_handoff = self._handoff_agent_sandbox_validation(
+                state, result.stop_request
+            )
+            if validation_handoff is not None:
+                self.driver.checkpoint(validation_handoff, history)
+                self._bind_driver_work_unit(validation_handoff)
+                logger.info(
+                    "Agent-local validation was blocked by its sandbox; handing the "
+                    "authoritative matrix back to the orchestrator for Slice %02d.",
+                    validation_handoff.current_slice_id,
+                )
+                handoff_context = replace(
+                    context,
+                    slice_summary=(
+                        f"{context.slice_summary}\n\n"
+                        "AUTOMATIC ORCHESTRATOR VALIDATION HANDOFF\n"
+                        f"Agent-local failure: {result.stop_request.rationale}\n"
+                        "The implementation itself is not blocked. Do not rerun the "
+                        "configured full validation matrix inside the agent sandbox. "
+                        "Complete any remaining implementation bookkeeping and emit the "
+                        "normal readiness record; the orchestrator will execute the "
+                        "authoritative matrix immediately afterward. Request a stop only "
+                        "for a genuine implementation blocker or product decision."
+                    ),
+                )
+                return self._run_codex(validation_handoff, handoff_context, history)
             state = self._halt_for_stop_request(state, context, result.stop_request)
             self.driver.checkpoint(state, history)
             return state, history
@@ -1111,6 +1214,12 @@ class WorkflowEngine:
                 planned_slices,
                 first_start_commit=state.current_slice.start_commit or state.branch_base,
             )
+        if is_plan and context.plan_only:
+            state, history, halted = self._validate_plan_before_review(
+                state, context, history
+            )
+            if halted:
+                return state, history
         next_step = (
             WorkflowStep.CLAUDE_PLAN_REVIEW
             if is_plan
@@ -1119,6 +1228,70 @@ class WorkflowEngine:
         state = state.with_current_step(next_step)
         self.driver.checkpoint(state, history)
         return state, history
+
+    def _validate_plan_before_review(
+        self,
+        state: WorkflowState,
+        context: WorkflowContext,
+        history: WorkflowHistory,
+    ) -> tuple[WorkflowState, WorkflowHistory, bool]:
+        """Validate a PLAN_ONLY handoff before spending either reviewer budget."""
+        self._bind_driver_work_unit(state)
+        start_commit = state.current_slice.start_commit or state.branch_base
+        try:
+            changes = self.driver.collect_changes(start_commit)
+            _, history = self._attestation(
+                changes,
+                history,
+                context,
+                state.current_slice_id,
+                plan_contract=True,
+            )
+        except WorkflowExecutionError as exc:
+            detail = str(exc)
+            repairable = detail.startswith(
+                "WORK_PLAN_PATH cannot produce an IMPLEMENT handoff:"
+            )
+            repair_key = "automatic-plan-contract-repair"
+            if repairable and not state.current_work_unit.has_completed_side_effect(
+                repair_key
+            ):
+                logger.warning(
+                    "Plan contract is not handoff-ready; returning it to Codex once "
+                    "before reviewer invocation: %s",
+                    detail,
+                )
+                state = state.mark_side_effect_completed(repair_key)
+                state = state.with_current_step(WorkflowStep.CODEX_PLAN_REVISION)
+                self.driver.checkpoint(state, history)
+                repair_context = replace(
+                    context,
+                    slice_summary=(
+                        f"{context.slice_summary}\n\n"
+                        "AUTOMATIC PLAN CONTRACT REPAIR\n"
+                        f"Validator error: {detail}\n"
+                        "Repair only the declared work-plan artifact so it can produce "
+                        "the IMPLEMENT handoff. Keep the approved task scope unchanged, "
+                        "use contiguous `### Slice N - title` sections, and put the "
+                        "standalone heading `**Exakter Änderungspfad**` before bullet-listed "
+                        "exact paths in every future Slice. Emit the normal PLAN_READY and "
+                        "single PLAN_ONLY SLICE_PLAN records; do not request user input."
+                    ),
+                )
+                repaired_state, repaired_history = self._run_codex(
+                    state, repair_context, history
+                )
+                return repaired_state, repaired_history, True
+            state = state.await_policy_gate(
+                reason=GateReason.STOP_REQUEST,
+                detail=(
+                    "PLAN-CONTRACT-INVALID | The work plan is not safe to hand to "
+                    f"reviewers or implementation: {detail}"
+                ),
+            )
+            self.driver.checkpoint(state, history)
+            return state, history, True
+        return state, history, False
 
     def _run_final_codex_report(
         self,
@@ -2110,6 +2283,67 @@ class WorkflowEngine:
             reason=GateReason.STOP_REQUEST,
             detail=f"{stop_request.rule_id} | {stop_request.rationale}",
         )
+
+    @staticmethod
+    def _expand_approved_remediation_scope(
+        state: WorkflowState,
+        context: WorkflowContext,
+        stop_request: StopRequest,
+    ) -> WorkflowState | None:
+        """Add only exact paths from completed approved Slices to the active Slice."""
+        if (
+            stop_request.rule_id != VALIDATION_UNAVAILABLE_RULE_ID
+            or not stop_request.remediation_paths
+            or state.current_work_unit.kind is not WorkUnitKind.SLICE
+        ):
+            return None
+        completed_ids = {
+            item.slice_id
+            for item in state.slices
+            if item.status is SliceStatus.COMPLETED
+        }
+        eligible = {
+            path
+            for planned in state.planned_slices
+            if planned.slice_id in completed_ids
+            for path in planned.scope_paths
+        }
+        requested = set(stop_request.remediation_paths)
+        if not requested.issubset(eligible):
+            return None
+        additions = tuple(sorted(requested.difference(state.current_slice.scope_paths)))
+        if not additions:
+            digest = hashlib.sha256("\0".join(sorted(requested)).encode("utf-8")).hexdigest()
+            retry_key = f"authorized-remediation-reprompt:{digest}"
+            if state.current_work_unit.has_completed_side_effect(retry_key):
+                return None
+            return state.mark_side_effect_completed(retry_key)
+        expanded = state.extend_current_slice_scope(additions)
+        if evaluate_productive_file_limit(
+            expanded.current_slice.scope_change_groups,
+            context.path_classes,
+            maximum=context.max_productive_files,
+        ) is not None:
+            return None
+        return expanded
+
+    @staticmethod
+    def _handoff_agent_sandbox_validation(
+        state: WorkflowState,
+        stop_request: StopRequest,
+    ) -> WorkflowState | None:
+        """Re-prompt once when only the agent sandbox blocked orchestrator-owned tests."""
+        if (
+            stop_request.rule_id != VALIDATION_UNAVAILABLE_RULE_ID
+            or stop_request.remediation_paths
+            or state.current_work_unit.kind is not WorkUnitKind.SLICE
+            or AGENT_SANDBOX_VALIDATION_PATTERN.search(stop_request.rationale) is None
+        ):
+            return None
+        retry_key = "agent-sandbox-validation-handoff"
+        if state.current_work_unit.has_completed_side_effect(retry_key):
+            return None
+        return state.mark_side_effect_completed(retry_key)
 
     @staticmethod
     def _latest_anchor_approval(state: WorkflowState) -> GateDecisionRecord | None:

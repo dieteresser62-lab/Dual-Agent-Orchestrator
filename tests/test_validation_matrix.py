@@ -125,6 +125,38 @@ def test_open_finding_can_add_structured_acceptance_command() -> None:
 
 
 @pytest.mark.parametrize(
+    "acceptance_test",
+    (
+        'VALIDATE: ["node","tests/run-tests.mjs","--only","browser-smoke.test.mjs"]',
+        'VALIDATE: ["npm","run","lint:links"]',
+        "VALIDATE: not-json",
+    ),
+)
+def test_observation_validate_directive_never_extends_or_blocks_matrix(
+    acceptance_test: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    finding = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.OBSERVATION,
+        status=FindingStatus.OPEN,
+        summary="non-blocking follow-up",
+        acceptance_test=acceptance_test,
+        origin=FindingOrigin("13", 1, AgentRole.CLAUDE),
+    )
+
+    request = select_validation_request(
+        _matrix(),
+        diff_fingerprint=FINGERPRINT,
+        changed_paths=("src/app.py",),
+        findings=(finding,),
+    )
+
+    assert request.expected_commands == ("npm test",)
+    assert "Ignoring VALIDATE directive from non-blocking finding C-01" in caplog.text
+
+
+@pytest.mark.parametrize(
     "argv",
     (
         '["/bin/sh","-c","echo pwned"]',

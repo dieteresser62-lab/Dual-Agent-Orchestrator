@@ -47,6 +47,8 @@ def test_plan_only_prompt_allows_only_the_work_plan_artifact() -> None:
     assert "SLICE_PLAN: 1" in rendered
     assert "docs/internal/work-plan.md" in rendered
     assert "do not emit them as additional SLICE_PLAN records" in rendered
+    assert "**Exakter Änderungspfad**" in rendered
+    assert "canonical singular heading" in rendered
 
 
 def test_plan_review_prompt_focuses_on_plan_quality() -> None:

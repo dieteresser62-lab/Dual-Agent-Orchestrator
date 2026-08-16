@@ -1,5 +1,7 @@
 # JSON-Statusausgabe zum Statusbefehl hinzufügen
 
+> Formales Expertenbeispiel für einen bereits freigegebenen Implementierungsauftrag. Für den normalen Inbox-Ablauf genügen eine freie Ideenbeschreibung und `TARGET_BRANCH`; der Orchestrator erstellt Planung, Handoff und Slices automatisch.
+
 ORCHESTRATOR_MODE: IMPLEMENT
 TARGET_BRANCH: feature/status-json
 TASK_SCOPE: src/status_cli.py, tests/test_status_cli.py, README.md, docs/internal/orchestrator-work-plan.md, docs/internal/slice-status-json.md

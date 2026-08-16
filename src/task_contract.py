@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import unicodedata
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import PurePosixPath
@@ -40,6 +41,7 @@ class TaskContract:
     work_plan_path: str | None = None
     approved_plan_commit: str | None = None
     approved_slices: tuple[PlannedSlice, ...] = ()
+    informal_intake: bool = False
 
     def __post_init__(self) -> None:
         if re.fullmatch(r"[0-9a-f]{64}", self.digest) is None:
@@ -50,6 +52,10 @@ class TaskContract:
             raise TaskContractError(
                 "TARGET_BRANCH must use feature/<name> or codex/<name>"
             )
+        if not isinstance(self.informal_intake, bool):
+            raise TaskContractError("informal_intake must be a boolean")
+        if self.informal_intake and self.mode is not TaskMode.PLAN_ONLY:
+            raise TaskContractError("informal intake must be bound to PLAN_ONLY")
         if self.mode is TaskMode.PLAN_ONLY:
             if self.work_plan_path is None:
                 raise TaskContractError("PLAN_ONLY requires WORK_PLAN_PATH")
@@ -85,6 +91,29 @@ class TaskContract:
             raise TaskContractError(
                 "embedded SLICE_PLAN records require APPROVED_PLAN_COMMIT"
             )
+
+
+def _informal_plan_slug(source_name: str, digest: str) -> str:
+    stem = PurePosixPath(source_name.replace("\\", "/")).stem
+    normalized = unicodedata.normalize("NFKD", stem).encode("ascii", "ignore").decode()
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", normalized).strip("-").lower()
+    if not slug:
+        slug = f"task-{digest[:12]}"
+    return slug
+
+
+def _is_informal_intake(
+    markers: dict[str, list[str]], text: str, *, source_name: str | None
+) -> bool:
+    if source_name is None:
+        return False
+    formal_markers = {
+        "ORCHESTRATOR_MODE",
+        "WORK_PLAN_PATH",
+        "APPROVED_PLAN_COMMIT",
+        "TASK_SCOPE",
+    }
+    return not formal_markers.intersection(markers) and not _scope_from_heading(text)
 
 
 def _clean_scope_entry(raw: str) -> str:
@@ -148,6 +177,7 @@ def parse_task_contract(
     mode_override: bool | None = None,
     work_plan_override: str | None = None,
     target_branch_override: str | None = None,
+    source_name: str | None = None,
 ) -> TaskContract:
     """Parse and validate the safety-critical task metadata and scope."""
     if not text.strip():
@@ -155,6 +185,14 @@ def parse_task_contract(
     markers: dict[str, list[str]] = {}
     for match in MARKER_PATTERN.finditer(text):
         markers.setdefault(match.group(1).upper(), []).append(match.group(2).strip())
+
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    informal_intake = _is_informal_intake(markers, text, source_name=source_name)
+    if informal_intake and mode_override is False:
+        raise TaskContractError(
+            "an informal task is planning input; --no-plan-only requires a formal "
+            "IMPLEMENT contract"
+        )
 
     raw_mode = _single_marker(markers, "ORCHESTRATOR_MODE")
     try:
@@ -172,14 +210,26 @@ def parse_task_contract(
         raise TaskContractError(
             "CLI plan mode conflicts with ORCHESTRATOR_MODE in the task"
         )
-    mode = override_mode or declared_mode or TaskMode.IMPLEMENT
+    mode = (
+        override_mode
+        or declared_mode
+        or (TaskMode.PLAN_ONLY if informal_intake else TaskMode.IMPLEMENT)
+    )
 
     marker_scope = _single_marker(markers, "TASK_SCOPE")
-    raw_scope = (
-        tuple(part.strip() for part in marker_scope.split(",") if part.strip())
-        if marker_scope is not None
-        else _scope_from_heading(text)
+    derived_plan = (
+        f"docs/internal/{_informal_plan_slug(source_name or '', digest)}-arbeitsplan.md"
+        if informal_intake
+        else None
     )
+    if marker_scope is not None:
+        raw_scope = tuple(
+            part.strip() for part in marker_scope.split(",") if part.strip()
+        )
+    elif informal_intake:
+        raw_scope = (work_plan_override or derived_plan,)
+    else:
+        raw_scope = _scope_from_heading(text)
     try:
         scope_patterns = normalize_path_patterns(raw_scope, "task scope")
     except ValueError as exc:
@@ -195,7 +245,9 @@ def parse_task_contract(
             raise TaskContractError(
                 "--work-plan conflicts with WORK_PLAN_PATH in the task"
             )
-    work_plan_path = _normalize_work_plan_path(work_plan_override or declared_plan)
+    work_plan_path = _normalize_work_plan_path(
+        work_plan_override or declared_plan or derived_plan
+    )
 
     declared_branch = _single_marker(markers, "TARGET_BRANCH")
     if declared_branch is not None and target_branch_override is not None:
@@ -213,13 +265,14 @@ def parse_task_contract(
     approved_slices = _parse_embedded_slice_plan(text)
 
     return TaskContract(
-        digest=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        digest=digest,
         mode=mode,
         scope_patterns=scope_patterns,
         target_branch=target_branch,
         work_plan_path=work_plan_path,
         approved_plan_commit=approved_plan_commit,
         approved_slices=approved_slices,
+        informal_intake=informal_intake,
     )
 
 

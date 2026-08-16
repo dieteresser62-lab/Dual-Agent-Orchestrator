@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from argparse import Namespace
 from datetime import datetime, timezone
@@ -354,6 +355,12 @@ def test_failure_retries_then_poison(tmp_path: Path) -> None:
     assert calls == ["bad.md", "bad.md", "bad.md"]
     failed = list((outbox / "failed").glob("*.poison"))
     assert len(failed) == 1
+    report = Path(str(failed[0]) + ".error.json")
+    assert report.is_file()
+    report_data = json.loads(report.read_text(encoding="utf-8"))
+    assert report_data["attempts"] == 3
+    assert report_data["exit_code"] == 1
+    assert report_data["failure_detail"] == "legacy exit code 1"
     assert not task.exists()
     assert not (inbox / "bad.md.attempts").exists()
 
@@ -410,6 +417,50 @@ def test_retry_count_survives_restart(tmp_path: Path) -> None:
     assert not task.exists()
     assert len(list((outbox / "failed").glob("*.poison"))) == 1
     assert not (inbox / "restart.md.attempts").exists()
+
+
+def test_typed_technical_failure_detail_is_preserved_in_poison_report(
+    tmp_path: Path,
+) -> None:
+    inbox = tmp_path / "inbox"
+    outbox = tmp_path / "outbox"
+    inbox.mkdir()
+    task = inbox / "diagnostic.md"
+    task.write_text("x", encoding="utf-8")
+
+    def process_task(
+        _task: Path, args: Namespace, _force_new: bool
+    ) -> WatchTaskResult:
+        return WatchTaskResult(
+            exit_code=1,
+            run_id=args.watch_run_id,
+            disposition=WatchTaskDisposition.TECHNICAL_FAILURE,
+            status="technical_failure",
+            step="claude_plan_review",
+            work_unit_id=1,
+            gate_reason="technical_failure",
+            failure_detail="WorkflowExecutionError: invalid plan contract",
+        )
+
+    result = watch_inbox(
+        inbox_dir=inbox,
+        outbox_dir=outbox,
+        poll_interval=0.01,
+        args=_args(),
+        process_task=process_task,
+        max_retries=1,
+        sleep_fn=_InterruptingSleep(interrupt_after=1),
+        time_fn=lambda: 10_000_000_000.0,
+    )
+
+    assert result == 0
+    report = next((outbox / "failed").glob("*.poison.error.json"))
+    data = json.loads(report.read_text(encoding="utf-8"))
+    assert data["run_id"]
+    assert data["step"] == "claude_plan_review"
+    assert data["failure_detail"] == (
+        "WorkflowExecutionError: invalid plan contract"
+    )
 
 
 def test_attempt_sidecar_is_removed_after_success(tmp_path: Path) -> None:
@@ -726,6 +777,41 @@ def test_watch_restart_resumes_same_run_id_and_moves_only_final_workflow(
     assert not task.exists()
     assert not watch_identity_path(task).exists()
     assert len(list((outbox / "done").glob("*.md"))) == 1
+
+
+def test_watch_processes_generated_implementation_handoff_without_restart(
+    tmp_path: Path,
+) -> None:
+    inbox = tmp_path / "inbox"
+    outbox = tmp_path / "outbox"
+    inbox.mkdir()
+    plan = inbox / "feature-plan.md"
+    plan.write_text("plan", encoding="utf-8")
+    calls: list[str] = []
+
+    def process(task: Path, args: Namespace, force_new: bool) -> WatchTaskResult:
+        calls.append(task.name)
+        if task.name == "feature-plan.md":
+            (inbox / "feature-implement.md").write_text(
+                "implementation handoff", encoding="utf-8"
+            )
+        return WatchTaskResult.from_workflow(
+            _workflow_result(args.watch_run_id, final=True)
+        )
+
+    result = watch_inbox(
+        inbox_dir=inbox,
+        outbox_dir=outbox,
+        poll_interval=0.01,
+        args=_args(),
+        process_task=process,
+        sleep_fn=_InterruptingSleep(interrupt_after=1),
+        time_fn=lambda: 10_000_000_000.0,
+    )
+
+    assert result == 0
+    assert calls == ["feature-plan.md", "feature-implement.md"]
+    assert len(list((outbox / "done").glob("*.md"))) == 2
 
 
 def test_process_interruption_preserves_identity_for_next_watch_process(

@@ -314,11 +314,11 @@ def test_quickstart_is_linked_and_declares_the_safe_first_run() -> None:
     assert "[Quickstart.md](Quickstart.md)" in readme
     for heading in (
         "Voraussetzungen prüfen",
-        "Zielrepository und Branch vorbereiten",
-        "Begrenzte Aufgabe formulieren",
-        "Probelauf ausführen",
-        "Arbeitsplan separat erstellen",
-        "Implementierung starten",
+        "Zielrepository prüfen",
+        "Eine Idee in die Inbox legen",
+        "Optionalen Probelauf ausführen",
+        "Automatischen Ablauf starten",
+        "Optionale manuelle und formale Betriebsarten",
         "Angehaltenen Lauf fortsetzen",
         "Abschluss prüfen",
     ):
@@ -332,12 +332,17 @@ def test_quickstart_is_linked_and_declares_the_safe_first_run() -> None:
         "ORCHESTRATOR_MODE: PLAN_ONLY",
         "ORCHESTRATOR_MODE: IMPLEMENT",
         "TARGET_BRANCH:",
-        "TASK_SCOPE:",
-        "Claude Sonnet mit Effort `high`",
+        "TASK_SCOPE",
+        "Claude läuft standardmäßig mit Sonnet und Effort `high`",
+        "nano inbox/meine-idee.md",
+        "run_task --watch",
         "pusht, mergt oder force-pusht niemals und schreibt die Historie nicht um",
-        "`.orchestrator/state.json` und Checkpointdateien dürfen niemals manuell bearbeitet werden",
+        "`.orchestrator/state.json` und Checkpoints führen denselben Lauf",
     ):
         assert required in quickstart
+
+    assert "Lege den Zielbranch vor dem Lauf selbst an" not in quickstart
+    assert "--task-file Inbox/" not in quickstart
 
     local_targets = []
     for target in re.findall(r"!?\[[^]]*\]\(([^)]+)\)", quickstart):
@@ -356,7 +361,10 @@ def test_reference_documents_are_linked_current_and_locally_resolvable() -> None
     for path in REFERENCE_DOC_FILES:
         relative = path.relative_to(ROOT).as_posix()
         assert f"]({relative})" in readme
-        assert "2026-08-13" in path.read_text(encoding="utf-8")
+
+    assert "**Zuletzt verifiziert:** 2026-08-16" in architecture
+    assert "**Recherchestand:** 2026-08-13" in comparison
+    assert "**Orchestrator-Funktionsstand:** 2026-08-16" in comparison
 
     for heading in (
         "Zweck",

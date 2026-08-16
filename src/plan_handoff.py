@@ -17,7 +17,7 @@ _SLICE_HEADING = re.compile(
     re.MULTILINE,
 )
 _EXACT_PATH_HEADING = re.compile(
-    r"^\*\*Exakter Änderungspfad\*\*\s*$",
+    r"^\*\*(?:Exakter Änderungspfad|Exakte Änderungspfade):?\*\*\s*$",
     re.MULTILINE,
 )
 _BULLET_PATH = re.compile(r"^[ \t]*[-*][ \t]+`([^`]+)`[ \t]*$", re.MULTILINE)
@@ -98,8 +98,9 @@ def render_implementation_task(
         f"TARGET_BRANCH: {target_branch}\n"
         f"TASK_SCOPE: {', '.join(scope)}\n\n"
         "Der Arbeitsplan ist bereits von Claude und Antigravity geprüft und vom "
-        "Benutzer freigegeben. Plane oder reviewe ihn nicht erneut. Verwende ihn "
-        "als schreibgeschützte fachliche Quelle.\n\n"
+        "Orchestrator lokal commitgebunden freigegeben. Ein konfiguriertes manuelles "
+        "Plangate ist gegebenenfalls bereits abgeschlossen. Plane oder reviewe ihn "  # allowlist:german
+        "nicht erneut. Verwende ihn als schreibgeschützte fachliche Quelle.\n\n"
         "Jeder Slice ändert ausschließlich seine persistierten Pfade. Das zugehörige "
         "Slice-MD dokumentiert Umsetzung, Validierung, Findings und Freigabe.\n\n"  # allowlist:german
         f"{records}\n"

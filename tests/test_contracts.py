@@ -765,3 +765,40 @@ def test_codex_stop_request_replaces_readiness() -> None:
     )
     assert result.stopped is True
     assert result.ready is None
+
+
+def test_codex_stop_request_accepts_canonical_remediation_paths() -> None:
+    contract = CodexStepContract(
+        name="slice-implementation",
+        readiness_marker=ReadinessMarker.IMPLEMENTATION,
+        slice_id="03",
+        round_number=1,
+    )
+    result = validate_step_response(
+        "STOP_REQUESTED: VALIDATION-UNAVAILABLE | prior Slice adapter is incompatible\n"
+        "REMEDIATION_PATHS: tests/prior.test.mjs, app/prior.js\n"
+        "STATUS: DONE",
+        contract,
+    )
+
+    assert result.stop_request is not None
+    assert result.stop_request.remediation_paths == (
+        "app/prior.js",
+        "tests/prior.test.mjs",
+    )
+
+
+def test_remediation_paths_require_stop_request() -> None:
+    contract = CodexStepContract(
+        name="slice-implementation",
+        readiness_marker=ReadinessMarker.IMPLEMENTATION,
+        slice_id="03",
+        round_number=1,
+    )
+    with pytest.raises(ContractValidationError, match="requires STOP_REQUESTED"):
+        validate_step_response(
+            "REMEDIATION_PATHS: app/prior.js\n"
+            "IMPLEMENTATION_READY: 03 | YES\n"
+            "STATUS: DONE",
+            contract,
+        )

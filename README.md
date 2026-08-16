@@ -12,7 +12,7 @@ Der normale Ablauf ist:
 
 1. Repository, Branch, Aufgabe, Konfiguration und vorhandenen Zustand prüfen.
 2. Codex geordnete `SLICE_PLAN`-Datensätze erstellen und Claude sowie Antigravity denselben Planfingerprint prüfen lassen.
-3. Vor der Ausführung des freigegebenen Plans eine explizite, fingerprintgebundene Benutzerfreigabe verlangen.
+3. Den doppelt freigegebenen Plan lokal committen und im Inbox-Watchbetrieb den erzeugten Implementierungs-Handoff automatisch übernehmen. Eine fingerprintgebundene Benutzerfreigabe ist mit `--plan-gate` optional zuschaltbar.
 4. Für jeden geplanten Slice:
    - Codex bearbeitet ausschließlich den persistierten Pfadumfang.
    - Der Orchestrator ermittelt den kanonischen Diff und führt die konfigurierte Validierungsmatrix einmal für diesen Fingerprint aus.
@@ -23,6 +23,13 @@ Der normale Ablauf ist:
    lassen und diesen Bericht zusammen mit dem vollständigen Branch-Diff an Claude und
    Antigravity für die Abschlussentscheidung übergeben.
 6. Findet der Abschlussreview einen Blocker, wird er als weiterer begrenzter Korrekturslice bearbeitet und commitet; anschließend wird der vollständige Abschlussreview wiederholt.
+
+Erkennt Codex während eines Slices einen konkreten Defekt in einem bereits
+abgeschlossenen Vorgängerslice, kann es mit `REMEDIATION_PATHS` die kleinste
+notwendige Pfadmenge melden. Der Orchestrator erweitert den laufenden Slice nur
+dann automatisch, wenn alle Pfade bereits zum freigegebenen Vorgängerslice
+gehörten und das produktive Dateilimit weiter gilt. Unbekannte oder zukünftige
+Pfade sowie echte Produktentscheidungen bleiben ein Gate.
 
 Keine Rolle ersetzt eine andere. Codex gibt die eigene Arbeit niemals frei und commitet sie nicht selbst. Reviewer können weder den Quell-Worktree bearbeiten noch Validierungsergebnisse für sich beanspruchen.
 
@@ -55,29 +62,43 @@ Die Laufzeit prüft jedes Programm und seine erforderlichen Fähigkeiten verzög
 
 Eine kurze vollständige Anleitung enthält [Quickstart.md](Quickstart.md).
 
-Erstelle anhand von [example-task.md](example-task.md) eine begrenzte Aufgabe, speichere sie im Zielrepository als `task.md` und führe Folgendes aus:
+Im normalen Betrieb genügt im Zielrepository eine informelle Datei wie `inbox/meine-idee.md`:
 
-```bash
-./run_task
+```markdown
+# Meine Idee
+
+TARGET_BRANCH: feature/mein-vorhaben
+
+Beschreibe hier in eigenen Worten, was verbessert oder untersucht werden soll.
 ```
 
-Die Positionsschreibweise ist gleichwertig:
+Danach startet ein einziger Befehl Planung, Planreviews, lokalen Plancommit, Implementierungs-Handoff, alle validierten und reviewten Slice-Commits sowie das branchweite Abschlussreview:
 
 ```bash
-./run_task path/to/my-task.md
+run_task --watch
 ```
 
-Verwende entweder den Positionspfad oder `--task-file`, nicht beides:
+Der Watcher legt einen fehlenden Zielbranch an oder wechselt sicher auf einen vorhandenen. Bei einem notwendigen Branchwechsel mit nicht ignorierten Arbeitsbaum- oder Indexänderungen hält er an, statt Änderungen zu stashen oder mitzunehmen. Auf einem bereits aktiven Zielbranch beginnt die neue Aufgabe am aktuellen `HEAD`.
+
+Formale Einzelaufgaben bleiben für fortgeschrittene und maschinell erzeugte Aufträge verfügbar. [example-plan-task.md](example-plan-task.md) zeigt einen formalen Planauftrag, [example-task.md](example-task.md) einen formalen Implementierungsauftrag:
 
 ```bash
 ./run_task --task-file path/to/my-task.md
 ```
 
+Die kompatible Positionsschreibweise ist gleichwertig; verwende nicht beide Formen zugleich:
+
+```bash
+./run_task path/to/my-task.md
+```
+
 Eine nicht abgeschlossene `.orchestrator/state.json` wird im Einzelaufgabenmodus automatisch fortgesetzt. Nach einem abgeschlossenen State-v3-Lauf beginnt ein neuer Lauf. Verwende `--resume` explizit, wenn ein Gate aufgelöst oder nach einem Prozessneustart fortgesetzt wird.
 
-## Aufgabengrenzen und Zweischrittbetrieb
+## Informeller Inbox- und formaler Aufgabenbetrieb
 
-Jede produktive Aufgabe deklariert zusätzlich zu Ziel, Nicht-Scope und Akzeptanzkriterien diese maschinenlesbare Grenze:
+Im normalen Inbox-Betrieb darf die menschliche Aufgabe bewusst informell bleiben. Freier Markdown-Text plus `TARGET_BRANCH: feature/<name>` oder `TARGET_BRANCH: codex/<name>` genügt. Wenn keine formalen Ausführungsmarker und kein Scope-Abschnitt vorhanden sind, erzeugt der Orchestrator deterministisch einen `PLAN_ONLY`-Vertrag: Der Dateiname wird zu einem ASCII-Slug normalisiert, der Arbeitsplan liegt unter `docs/internal/<slug>-arbeitsplan.md`, und nur dieser Planpfad ist im ersten Lauf beschreibbar. Codex übersetzt die Idee anhand des Repositorys in Slices, Pfade, Akzeptanzkriterien, Risiken und Validierung. Direkter Implementierungsscope wird niemals aus freier Prosa abgeleitet.
+
+Sobald einer der formalen Marker `ORCHESTRATOR_MODE`, `WORK_PLAN_PATH`, `APPROVED_PLAN_COMMIT` oder `TASK_SCOPE` vorkommt, gilt die Datei als formaler Vertrag und muss vollständig sein. Eine formale produktive Aufgabe deklariert zusätzlich zu Ziel, Nicht-Scope und Akzeptanzkriterien diese maschinenlesbare Grenze:
 
 ```text
 ORCHESTRATOR_MODE: PLAN_ONLY|IMPLEMENT
@@ -89,7 +110,7 @@ TASK_SCOPE: <comma-separated repository-relative paths or globs>
 
 `WORK_PLAN_PATH` ist bei `PLAN_ONLY` und im automatisch erzeugten Implementierungs-Handoff erforderlich. `APPROVED_PLAN_COMMIT` wird ausschließlich vom Handoff-Erzeuger zusammen mit den übernommenen `SLICE_PLAN`-Datensätzen geschrieben. Alternativ zu `TASK_SCOPE` wird ein Abschnitt `## Erlaubter Scope` oder `## Allowed Scope` mit Aufzählung akzeptiert. Im Einzelaufgabenmodus muss der angegebene Zielbranch vor dem Start existieren und aktiv sein. Im Watch-Modus bereitet der Orchestrator den Zielbranch beim ersten Start einer neuen Inbox-Aufgabe automatisch vor; die Agenten selbst dürfen Branches weiterhin weder erstellen noch wechseln.
 
-`PLAN_ONLY` bildet den ersten Schritt des manuellen Prozesses ab; [example-plan-task.md](example-plan-task.md) ist eine direkt anpassbare Vorlage. Codex erstellt ausschließlich das deklarierte Arbeitsplan-MD. Die späteren Umsetzungsslices stehen als Überschriften im Dokument, während der ausführbare `SLICE_PLAN` dieses Laufs genau einen Dokumentationsslice enthält. Claude und Antigravity prüfen den Plan, danach wartet der Lauf am expliziten Plangate. Nach Freigabe wird ausschließlich das Arbeitsplandokument lokal commitet. Die Umsetzung startet später mit einer neuen Aufgabe im Modus `IMPLEMENT`, die auf den freigegebenen Arbeitsplan verweist.
+`PLAN_ONLY` bildet intern den Planungsteil des automatischen Ablaufs ab; [example-plan-task.md](example-plan-task.md) ist nur für bewusst formale Planaufträge erforderlich. Codex erstellt ausschließlich das deklarierte Arbeitsplan-MD. Die späteren Umsetzungsslices stehen als Überschriften im Dokument, während der ausführbare `SLICE_PLAN` dieses Laufs genau einen Dokumentationsslice enthält. Vor den Planreviews prüft der Orchestrator bereits, ob jede Slice-Überschrift und jeder Abschnitt `**Exakter Änderungspfad**` einen gültigen Implementierungs-Handoff ergeben. Die kompatible Schreibweise `**Exakte Änderungspfade:**` wird ebenfalls gelesen. Scheitert dieser Vertrag, erhält Codex vor Claude automatisch genau einen gezielten Reparaturdurchlauf; ein weiterhin ungültiger Plan hält anschließend als nachvollziehbares, fortsetzbares Gate an. Claude und Antigravity prüfen den Plan; im automatischen Standardpfad wird er danach lokal commitet und die `IMPLEMENT`-Aufgabe erzeugt. Im Watch-Modus wird diese neue Inbox-Aufgabe unmittelbar als Nächstes verarbeitet. `--plan-gate` schaltet eine zusätzliche menschliche Abnahme vor dem Plancommit ein.
 
 Im Modus `IMPLEMENT` überführt Codex den Auftrag in einen oder mehrere persistierte Slices. Jeder ausführbare `SLICE_PLAN`-Datensatz enthält:
 
@@ -118,7 +139,7 @@ Menschenlesbare Plan- und Slice-Auditdateien im Markdown-Format gehören in das 
 
 Bei einem regulär manuell definierten Lauf außerhalb von `inbox/` müssen Auditdateien weiterhin vorbereitet, aus dem Arbeitsplan verlinkt, mit den erforderlichen verwalteten Auditabschnitten versehen und im Umfang des zugehörigen `SLICE_PLAN` enthalten sein. Ein commitgebundener Handoff erzeugt seine deklarierten Slice-Auditdateien ebenfalls automatisch vor dem jeweiligen Slice. Der Orchestrator projiziert strukturierte Findings, Reviews, Validierungsattestierungen und Autorisierungsstatus ausschließlich in die verwalteten Abschnitte. Nach jedem lokalen Slice-Commit ist Git die historische Quelle der Wahrheit; nach der dreifachen branchweiten Gesamtabnahme wird die abschließende Gesamtprojektion path-genau commitet.
 
-Im Zweischrittprozess commitet eine freigegebene `PLAN_ONLY`-Aufgabe den bereits
+Beim automatischen Plan-/Implementierungs-Handoff commitet eine freigegebene `PLAN_ONLY`-Aufgabe den bereits
 geprüften Arbeitsplan unmittelbar; es folgt kein künstlicher Implementierungs-
 oder Abschlussreview des Planartefakts. Anschließend erzeugt der Orchestrator
 eine `-implement.md`-Handoff-Aufgabe neben der Planaufgabe. Sie bindet den
@@ -134,7 +155,7 @@ Aktive oder eingefrorene Zustände der Version 2 werden unverändert abgelehnt. 
 
 ## Validierung und Reviewisolation
 
-Nur der Orchestrator führt deterministische Validierungen aus. Planreviews verwenden eine interne Vertragsprüfung für Scope, Arbeitsplanpfad und 1-basierte zukünftige Slice-Überschriften; sie führen nicht die Produkttestsuite aus. Implementierungsreviews verwenden die aus kanonisch geänderten Pfaden und offenen Findings ausgewählte Validierungsmatrix. Attestierungen werden anhand des Diff-Fingerprints zwischengespeichert, und beide Reviewer erhalten dieselbe gebundene Evidenz.
+Nur der Orchestrator führt deterministische Validierungen aus. Planreviews verwenden eine interne Vertragsprüfung für Scope, Arbeitsplanpfad und 1-basierte zukünftige Slice-Überschriften; sie führen nicht die Produkttestsuite aus. Implementierungsreviews verwenden die aus kanonisch geänderten Pfaden und offenen Blockern ausgewählte Validierungsmatrix. Nur ein offener `BLOCKER` darf sie mit einem strukturierten `VALIDATE`-Befehl aus einer bereits konfigurierten Befehlsfamilie erweitern. Eine `OBSERVATION` bleibt als Hinweis und Abnahmetext erhalten, erweitert die Matrix aber nicht und kann den Lauf deshalb auch nicht wegen eines fremden Befehls anhalten. Attestierungen werden anhand des Diff-Fingerprints zwischengespeichert, und beide Reviewer erhalten dieselbe gebundene Evidenz.
 
 Codex arbeitet mit Schreibzugriff auf den Workspace. Claude und Antigravity erhalten temporäre schreibgeschützte Repositorykopien, während ihre privaten Laufzeit-, Prompt-, Cache- und Logpfade beschreibbar bleiben. Normale Reviews legen das Validierungssystem nicht offen und können den Ziel-Worktree nicht verändern.
 
@@ -146,7 +167,7 @@ Die expliziten Befehlsbuilder des Review-Harness dienen der Diagnose bei Install
 
 ## Gates, Findings und Fortsetzung
 
-Der Workflow persistiert seinen Zustand, bevor er aus einem fortsetzbaren Halt zurückkehrt. Behebe die zugrunde liegende Ursache und fahre dann mit `--resume` fort. Ein Gate mit Fingerprint erfordert eine explizit protokollierte Entscheidung:
+Der Workflow persistiert seinen Zustand, bevor er aus einem fortsetzbaren Halt zurückkehrt. Technische Ursachen werden behoben und anschließend fortgesetzt; nur ein tatsächlich entscheidungspflichtiges, fingerprintgebundenes Benutzergate wird ausdrücklich angenommen oder abgelehnt:
 
 ```bash
 ./run_task --resume --approve-gate \
@@ -171,7 +192,7 @@ Die wichtigsten Gates sind:
 - fehlerhafte, fehlende oder widersprüchliche Reviewurteile;
 - Quota-, Authentifizierungs-, Binärprogramm-, Berechtigungs-, Netzwerk-, Prozess- oder Timeoutfehler.
 
-Ein freigebender Review erfordert eine vollständige erfolgreiche Attestierung für denselben Fingerprint, autorisierte Teständerungen, keinen reviewer-eigenen offenen Blocker, Reviewevidenz oder konkrete Findings sowie ein Pre-Mortem. Nur der Reviewer, der ein Finding gemeldet hat, darf es schließen oder neu klassifizieren.
+Ein freigebender Review erfordert eine vollständige erfolgreiche Attestierung für denselben Fingerprint, scopegerechte Teständerungen, keinen reviewer-eigenen offenen Blocker, Reviewevidenz oder konkrete Findings sowie ein Pre-Mortem. Testdateien werden weiterhin im Slice-Report ausgewiesen, vollständig validiert und von beiden Reviewern geprüft; ein zusätzliches menschliches Teständerungs-Gate ist nur mit `--test-change-gate` aktiv. Nur der Reviewer, der ein Finding gemeldet hat, darf es schließen oder neu klassifizieren. Ein versehentlich mit `VALIDATE:` beginnender Abnahmetest einer Observation wird mit Warnung ignoriert; bei einem Blocker bleiben fehlerhafte oder nicht konfigurierte Befehle fail-closed.
 
 Reviewer arbeiten in einem temporären schreibgeschützten Snapshot. Dieser enthält nur Git-sichtbare Quell- und Dokumentationsdateien; Metadaten, Abhängigkeiten und generierte Schwergewichte wie `.git`, `.orchestrator`, `node_modules`, `dist` und Releasearchive werden nicht kopiert. Reine Ausgabevertragskorrekturen erhalten ein leeres schreibgeschütztes Arbeitsverzeichnis. Eindeutig gebundene Formalmarker werden lokal ergänzt, ohne einen zweiten Modellreview auszulösen.
 
@@ -214,6 +235,7 @@ Der Orchestrator kann als FIFO-Warteschlangenworker ausgeführt werden:
 Der Watch-Modus:
 
 - überwacht stabile `*.md`-Dateien in `inbox/`, älteste zuerst;
+- akzeptiert informelle Ideen mit `TARGET_BRANCH` und leitet daraus automatisch einen eng begrenzten `PLAN_ONLY`-Auftrag ab;
 - liest `TARGET_BRANCH` aus der Aufgabe und legt diesen Branch beim ersten Start an oder wechselt auf einen bereits vorhandenen Branch;
 - erweitert einen bereits aktiven Zielbranch ab dessen aktuellem `HEAD`, sodass frühere Branch-Commits nicht erneut zum Diff der neuen Aufgabe gehören;
 - verweigert einen erforderlichen Branchwechsel bei nicht ignorierten Arbeitsbaum- oder Indexänderungen, ohne Dateien zu stashen, zu bereinigen oder zu übernehmen;
@@ -221,10 +243,13 @@ Der Watch-Modus:
 - hält eine Einzelprozesssperre `inbox/.lock`, sofern `fcntl` verfügbar ist;
 - weist jeder Aufgabe eine persistierte Lauf-ID und einen Digest des Aufgabeninhalts zu;
 - aktiviert standardmäßig `--skip-git-check`, weil geprüfte Slice-Commits den Worktree absichtlich verändern;
-- deaktiviert standardmäßig das menschliche Planfreigabe-Gate, damit Inbox-Aufgaben nach den beiden positiven KI-Planreviews selbstständig in die Implementierung wechseln; `--plan-gate` oder `workflow.plan_gate = true` aktiviert es ausdrücklich;
+- verwendet den vollständig automatischen Workflowstandard: Plan-, Teständerungs- und Slice-Commit-Gates sind aus, während echte Stopregeln, Scopeverletzungen, unauflösbare Vertragsfragen und fehlgeschlagene Pflichtvalidierungen weiterhin anhalten;
+- behandelt einen von Codex gemeldeten agentenlokalen `listen`-/Port-Bind-Fehler einmal automatisch als Sandboxgrenze, fordert die normale Readiness erneut an und lässt anschließend die autoritative Validierungsmatrix im Orchestrator laufen;
+- verarbeitet nach dem automatisch geprüften und lokal committeten Plan dessen neu erzeugte `-implement.md` als nächste Inbox-Aufgabe und arbeitet alle Slices bis zum dreifachen Abschlussreview ab;
+- legt die einzelnen Slice-Auditdokumente erst beim tatsächlichen Beginn des jeweiligen Slices an und sammelt alle Plan-, Review-, Finding-, Validierungs- und Abschlussdaten zusätzlich im digestgebundenen Gesamtaudit;
 - streamt standardmäßig `stdout`;
 - verschiebt abgeschlossene Aufgaben mit UTC-Zeitstempel nach `outbox/done/`;
-- wiederholt technische Fehler und verschiebt ausgeschöpfte Aufgaben als Poison Tasks nach `outbox/failed/`;
+- wiederholt technische Fehler und verschiebt ausgeschöpfte Aufgaben als Poison Tasks nach `outbox/failed/`; daneben bleibt eine gleichnamige `.error.json` mit Lauf-ID, Step und letzter technischer Ursache erhalten;
 - hält die Warteschlange bei Exitcode 2, 3 oder 4 an, damit die erste fortsetzbare Aufgabe ihre FIFO-Zuständigkeit behält;
 - führt eine erfolgreich abgeschlossene Aufgabe nicht erneut aus, wenn nur das Verschieben in die Outbox wiederholt werden muss.
 
@@ -278,7 +303,8 @@ Für deterministische Negativ- und Fortsetzungsszenarien kann ein State-v3-JSON-
 | `--strict-preflight` | aus | Einen Fehler der Provider-DNS-Vorabprüfung als fatal behandeln. |
 | `--skip-git-check` / `--no-skip-git-check` | aus; im Watch-Modus an | Prüfung auf einen sauberen Repositoryzustand überschreiben. |
 | `--manual-slice-gate` / `--no-manual-slice-gate` | Repositorykonfiguration oder aus | Vor jedem Slice-Commit eine explizite Freigabe verlangen. |
-| `--plan-gate` / `--no-plan-gate` | Einzelmodus: Repositorykonfiguration oder an; Watch-Modus: aus | Nach Claude-/Antigravity-Planfreigabe eine explizite fingerprintgebundene Benutzerfreigabe verlangen. Im Watch-Modus aktivieren `--plan-gate` oder ein ausdrücklich gesetztes `workflow.plan_gate = true` das Gate. |
+| `--plan-gate` / `--no-plan-gate` | Repositorykonfiguration oder aus | Nach Claude-/Antigravity-Planfreigabe eine explizite fingerprintgebundene Benutzerfreigabe vor dem Plancommit verlangen. |
+| `--test-change-gate` / `--no-test-change-gate` | Repositorykonfiguration oder aus | Vor Review und Commit eines Slices mit Testdateiänderungen eine zusätzliche fingerprintgebundene Benutzerfreigabe verlangen. Ohne Gate bleiben Scopeprüfung, Tests und beide KI-Reviews verpflichtend. |
 | `--plan-only` / `--no-plan-only` | Aufgabenmarker oder nicht gesetzt | Den Lauf auf das deklarierte Arbeitsplanartefakt begrenzen beziehungsweise explizit als Implementierung ausführen. |
 | `--work-plan <path>` | Aufgabenmarker | Exakter repositoryrelativer `WORK_PLAN_PATH` für `PLAN_ONLY`; darf dem Marker nicht widersprechen. |
 | `--target-branch <branch>` | Aufgabenmarker | Exakter erforderlicher Feature-Branch; darf dem Marker nicht widersprechen. |
@@ -388,7 +414,8 @@ timeout_seconds = 1200
 
 [workflow]
 manual_slice_gate = false
-plan_gate = true
+plan_gate = false
+test_change_gate = false
 ```
 
 `default_shell_command` oder ein regelbezogener `shell_command` sollten nur verwendet werden, wenn Shell-Semantik erforderlich ist. Ein Validierungseintrag darf nicht sowohl einen Argumentvektorbefehl als auch einen Shell-Befehl enthalten. Muster sind repositoryrelativ, verwenden `/` und dürfen nicht mit `..` ausbrechen.
@@ -431,6 +458,7 @@ Alle Agentenantworten enden mit `STATUS: DONE`. State-v3-Datensätze sind:
 | Review ohne konkrete Schwachstelle | `REVIEW_EVIDENCE: <dimensions> \| <largest residual risk> \| <break condition>` |
 | Voraussetzung einer positiven Freigabe | `PRE_MORTEM: <most likely failure cause in three months>` |
 | Stopp durch beliebige Rolle | `STOP_REQUESTED: <rule-id> \| <rationale>` anstelle von Bereitschaft oder Freigabe |
+| Automatische Vorgängerslice-Reparatur durch Codex | zusätzlich `REMEDIATION_PATHS: <comma-separated exact paths>` bei einem rein technischen, bereits planfreigegebenen Scope-Rückläufer |
 
 Der Orchestrator besitzt die Validierungsattestierungen; Agenten dürfen `VALIDATION_RESULT` nicht ausgeben. State-v2-Freigabe- und aggregierte Finding-Marker sind ungültig.
 

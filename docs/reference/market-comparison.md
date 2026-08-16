@@ -4,6 +4,8 @@
 
 **Recherchestand:** 2026-08-13
 
+**Orchestrator-Funktionsstand:** 2026-08-16
+
 **Evidenzrichtlinie:** ausschließlich offizielle Produktseiten und Dokumentationen
 
 ## 1. Zusammenfassung
@@ -17,7 +19,9 @@ Sein stärkstes Alleinstellungsmerkmal ist die Kombination aus:
 - Orchestrator-eigener Validierung, die von den Reviewern wiederverwendet wird;
 - schreibgeschützten Reviewer-Workspaces;
 - persistierter Finding-Zuständigkeit und exakter Schrittfortsetzung;
-- pfadbegrenzten, lokal verifizierten Slice-Commits ohne Push- oder Merge-Berechtigung.
+- pfadbegrenzten, lokal verifizierten Plan-, Slice- und Korrekturcommits ohne Push- oder Merge-Berechtigung;
+- einem menschenfreundlichen Inbox-Intake, der freie Prosa plus Zielbranch zunächst in einen unabhängig geprüften Arbeitsplan überführt;
+- einem vollständig automatischen Standardpfad vom Plan über alle Slices bis zum dreifachen Abschlussreview, während echte Produkt- und Richtlinienentscheidungen weiterhin sicher anhalten.
 
 Diese Kontrolle bringt bewusste Nachteile mit sich. Der Orchestrator besitzt keine IDE, keine gehostete Ausführungsflotte, keinen Browseragenten, keine Pull-Request-Oberfläche, keinen Modellmarktplatz, keine verteilte Warteschlange und keine parallele Slice-Ausführung. Mehrere Marktprodukte sind in diesen Bereichen deutlich stärker.
 

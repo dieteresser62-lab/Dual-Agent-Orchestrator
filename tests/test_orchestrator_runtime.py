@@ -121,6 +121,39 @@ def test_new_watch_task_switches_to_existing_target_and_uses_its_head_as_baselin
     assert _git(repository, "branch", "--show-current") == "feature/inbox-target"
 
 
+def test_runtime_context_auto_authorizes_scoped_test_changes_unless_gate_enabled(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repository = _repository(tmp_path, "feature/automatic-tests")
+    task = tmp_path / "task.md"
+    _write_task(task, "feature/automatic-tests", "tests/regression.test.py")
+    state = orchestrator.init_workflow_state(
+        run_id="automatic-tests",
+        task_file=str(task),
+        branch="feature/automatic-tests",
+        branch_base=_git(repository, "rev-parse", "HEAD"),
+        slice_count=1,
+    )
+    monkeypatch.chdir(repository)
+    automatic_args = _args(repository, task)
+    gated_args = _args(repository, task)
+    gated_args.test_change_gate = True
+
+    automatic = orchestrator._context(
+        args=automatic_args,
+        assignment="Add regression coverage.",
+        state=state,
+    )
+    gated = orchestrator._context(
+        args=gated_args,
+        assignment="Add regression coverage.",
+        state=state,
+    )
+
+    assert automatic.test_changes_approved is True
+    assert gated.test_changes_approved is False
+
+
 def test_new_inbox_watch_task_persists_deterministic_audit_report_path(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -156,6 +189,51 @@ def test_new_inbox_watch_task_persists_deterministic_audit_report_path(
     assert _git(repository, "branch", "--show-current") == "feature/inbox-audit"
 
 
+def test_new_watch_task_derives_plan_contract_from_informal_idea(
+    tmp_path: Path, monkeypatch, caplog
+) -> None:
+    repository = _repository(tmp_path, "feature/informal-idea")
+    inbox = repository / "inbox"
+    inbox.mkdir()
+    task = inbox / "Neue Strategie.md"
+    task.write_text(
+        """# Neue Strategie
+
+TARGET_BRANCH: feature/informal-idea
+
+Ich möchte zwei Strategien verständlich vergleichen können. Bitte untersuche
+zuerst die bestehende Anwendung und frage nur bei echten Produktalternativen.
+""",
+        encoding="utf-8",
+    )
+    args = _args(repository, task)
+    args.watch_run_id = "watch-informal-idea"
+    captured: dict[str, object] = {}
+    real_fresh_state = orchestrator._fresh_state
+
+    class StateCaptured(RuntimeError):
+        pass
+
+    def capture_state(**kwargs):
+        state = real_fresh_state(**kwargs)
+        captured["state"] = state
+        raise StateCaptured
+
+    monkeypatch.setattr(orchestrator, "_fresh_state", capture_state)
+    monkeypatch.chdir(repository)
+
+    with caplog.at_level("INFO"), pytest.raises(StateCaptured):
+        run_production_workflow(task, args, force_new=True)
+
+    state = captured["state"]
+    assert state.execution_mode == "PLAN_ONLY"
+    assert state.work_plan_path == "docs/internal/neue-strategie-arbeitsplan.md"
+    assert state.task_scope_patterns == (
+        "docs/internal/neue-strategie-arbeitsplan.md",
+    )
+    assert "Informal inbox intake" in caplog.text
+
+
 def test_legacy_approved_inbox_plan_gets_deferred_audit_paths_before_slice_start() -> None:
     state = orchestrator.init_workflow_state(
         run_id="legacy-inbox-plan",
@@ -177,6 +255,39 @@ def test_legacy_approved_inbox_plan_gets_deferred_audit_paths_before_slice_start
         "src/rounding.py",
     )
     assert not migrated.current_slice.scope_paths
+
+
+def test_handoff_slice_document_is_reused_instead_of_adding_a_second_one() -> None:
+    existing_slice_doc = (
+        "docs/internal/slice-stress-pfad-replay-arbeitsplan-01-contracts.md"
+    )
+    state = orchestrator.init_workflow_state(
+        run_id="handoff-inbox-plan",
+        task_file="/repo/inbox/Stress_Replay-implement.md",
+        branch="codex/stress-replay",
+        branch_base="a" * 40,
+        slice_count=1,
+        audit_report_path="docs/internal/stress-replay-implement-review-12345678.md",
+    ).bind_slice_plan(
+        (
+            PlannedSlice(
+                1,
+                "contracts",
+                (existing_slice_doc, "src/contracts.js"),
+            ),
+        ),
+        first_start_commit="a" * 40,
+    )
+
+    migrated = orchestrator._attach_managed_audit_paths(state)
+
+    slice_docs = tuple(
+        path
+        for path in migrated.planned_slices[0].scope_paths
+        if path.startswith("docs/internal/slice-")
+    )
+    assert slice_docs == (existing_slice_doc,)
+    assert migrated.audit_report_path in migrated.planned_slices[0].scope_paths
 
 
 def test_legacy_approved_inbox_plan_cannot_retrofit_after_slice_boundary() -> None:
@@ -935,6 +1046,123 @@ def test_plan_only_uses_internal_plan_validation_and_commits_no_product_code(
         item["expected_commands"] == ["internal:work-plan-contract"]
         for item in attestations
     )
+
+
+def test_plan_only_retries_non_handoff_plan_once_then_halts_before_review(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repository = _repository(tmp_path, "feature/invalid-plan")
+    task = tmp_path / "task.md"
+    task.write_text(
+        "\n".join(
+            (
+                "ORCHESTRATOR_MODE: PLAN_ONLY",
+                "WORK_PLAN_PATH: docs/internal/work-plan.md",
+                "TARGET_BRANCH: feature/invalid-plan",
+                "TASK_SCOPE: docs/internal/work-plan.md",
+            )
+        ),
+        encoding="utf-8",
+    )
+    reviewer_steps: list[WorkflowStep] = []
+    codex_steps: list[WorkflowStep] = []
+
+    def codex(driver: ProductionWorkflowDriver, invocation: CodexInvocation) -> str:
+        codex_steps.append(invocation.step)
+        plan = repository / "docs" / "internal" / "work-plan.md"
+        plan.parent.mkdir(parents=True, exist_ok=True)
+        plan.write_text(
+            "# Work plan\n\n### Slice 1 - Future implementation\n\n"
+            "No exact path section.\n",
+            encoding="utf-8",
+        )
+        output = (
+            "SLICE_PLAN: 1 | create reviewed work plan | docs/internal/work-plan.md\n"
+            "PLAN_READY: YES\nSTATUS: DONE"
+        )
+        driver.last_codex_output = output
+        return output
+
+    def reviewer(
+        _driver: ProductionWorkflowDriver, invocation: ReviewerInvocation
+    ) -> str:
+        reviewer_steps.append(invocation.step)
+        return _review(invocation.reviewer, "PLAN_APPROVAL: YES")
+
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_codex", codex)
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_reviewer", reviewer)
+    monkeypatch.chdir(repository)
+
+    result = run_production_workflow(task, _args(repository, task))
+
+    assert result.exit_code == 4
+    assert result.state.current_work_unit.status is WorkUnitStatus.AWAITING_USER_DECISION
+    assert result.state.current_work_unit.gate.reason is GateReason.STOP_REQUEST
+    assert "PLAN-CONTRACT-INVALID" in result.state.current_work_unit.gate.detail
+    assert codex_steps == [WorkflowStep.CODEX_PLAN, WorkflowStep.CODEX_PLAN_REVISION]
+    assert reviewer_steps == []
+    assert _git(repository, "status", "--short") == "?? docs/"
+
+
+def test_plan_only_repairs_handoff_contract_before_review(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repository = _repository(tmp_path, "feature/repaired-plan")
+    task = tmp_path / "task.md"
+    task.write_text(
+        "\n".join(
+            (
+                "ORCHESTRATOR_MODE: PLAN_ONLY",
+                "WORK_PLAN_PATH: docs/internal/work-plan.md",
+                "TARGET_BRANCH: feature/repaired-plan",
+                "TASK_SCOPE: docs/internal/work-plan.md",
+            )
+        ),
+        encoding="utf-8",
+    )
+    codex_steps: list[WorkflowStep] = []
+    reviewer_steps: list[WorkflowStep] = []
+
+    def codex(driver: ProductionWorkflowDriver, invocation: CodexInvocation) -> str:
+        codex_steps.append(invocation.step)
+        plan = repository / "docs" / "internal" / "work-plan.md"
+        plan.parent.mkdir(parents=True, exist_ok=True)
+        if invocation.step is WorkflowStep.CODEX_PLAN:
+            body = "No exact path section.\n"
+        else:
+            assert "AUTOMATIC PLAN CONTRACT REPAIR" in invocation.prompt
+            assert "Slice 1 has no exact change-path section" in invocation.prompt
+            body = "**Exakter Änderungspfad**\n\n- `src/future.py`\n"
+        plan.write_text(
+            "# Work plan\n\n### Slice 1 - Future implementation\n\n" + body,
+            encoding="utf-8",
+        )
+        output = (
+            "SLICE_PLAN: 1 | create reviewed work plan | docs/internal/work-plan.md\n"
+            "PLAN_READY: YES\nSTATUS: DONE"
+        )
+        driver.last_codex_output = output
+        return output
+
+    def reviewer(
+        _driver: ProductionWorkflowDriver, invocation: ReviewerInvocation
+    ) -> str:
+        reviewer_steps.append(invocation.step)
+        return _review(invocation.reviewer, "PLAN_APPROVAL: YES")
+
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_codex", codex)
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_reviewer", reviewer)
+    monkeypatch.chdir(repository)
+
+    result = run_production_workflow(task, _args(repository, task))
+
+    assert result.workflow_completed
+    assert codex_steps == [WorkflowStep.CODEX_PLAN, WorkflowStep.CODEX_PLAN_REVISION]
+    assert reviewer_steps == [
+        WorkflowStep.CLAUDE_PLAN_REVIEW,
+        WorkflowStep.ANTIGRAVITY_PLAN_REVIEW,
+    ]
+    assert task.with_name("task-implement.md").is_file()
 
 
 def test_generated_implementation_handoff_skips_second_plan_review(

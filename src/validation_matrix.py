@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import shlex
 import subprocess
 from dataclasses import dataclass
@@ -9,6 +10,7 @@ from pathlib import Path
 from typing import Iterable
 
 from contracts import (
+    FindingClass,
     FindingRecord,
     FindingStatus,
     SHA256_PATTERN,
@@ -22,6 +24,7 @@ from gates import matches_path_patterns, normalize_path_patterns
 DEFAULT_VALIDATION_TIMEOUT_SECONDS = 300
 VALIDATION_OUTPUT_LIMIT = 2_000
 FINDING_COMMAND_PREFIX = "VALIDATE:"
+LOGGER = logging.getLogger(__name__)
 
 
 class ValidationMatrixError(ValueError):
@@ -207,6 +210,13 @@ def _finding_validation_commands(
             continue
         acceptance = finding.acceptance_test.strip()
         if not acceptance.startswith(FINDING_COMMAND_PREFIX):
+            continue
+        if finding.finding_class is not FindingClass.BLOCKER:
+            LOGGER.warning(
+                "Ignoring VALIDATE directive from non-blocking finding %s; "
+                "only BLOCKER findings may extend the validation matrix",
+                finding.finding_id,
+            )
             continue
         payload = acceptance[len(FINDING_COMMAND_PREFIX) :].strip()
         try:

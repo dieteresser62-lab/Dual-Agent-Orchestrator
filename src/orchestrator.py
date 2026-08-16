@@ -7,7 +7,7 @@ import hashlib
 import re
 import time
 from dataclasses import replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from agent_adapters import AgentAdapter, build_agent_registry
 from agent_runtime import OrchestratorConfig, run_agent_checked, run_validation_matrix
@@ -50,7 +50,11 @@ from git_service import (
     require_committed_file_at_head,
     GitTransactionError,
 )
-from plan_handoff import PlanHandoffError, write_implementation_handoff
+from plan_handoff import (
+    PlanHandoffError,
+    extract_implementation_slices,
+    write_implementation_handoff,
+)
 from repo_changes import (
     RepositoryChangeError,
     RepositoryChanges,
@@ -95,6 +99,7 @@ from workflow_state import (
 )
 from validation_matrix import ValidationCommand, ValidationMatrix
 from inbox_watcher import (
+    WatchTaskDisposition,
     WatchTaskResult,
     attempt_sidecar_path,
     success_marker_path,
@@ -442,23 +447,16 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 ) from exc
             if not content.strip():
                 raise WorkflowExecutionError("WORK_PLAN_PATH must not be empty")
-            future_slice_ids = tuple(
-                int(match.group(1))
-                for match in re.finditer(
-                    r"^#{2,6}[ \t]+Slice[ \t]+([0-9]+)(?:\b|:)",
+            try:
+                future_slices = extract_implementation_slices(
                     content,
-                    re.MULTILINE | re.IGNORECASE,
+                    plan_stem=Path(work_plan_path).stem,
                 )
-            )
-            if not future_slice_ids:
+            except PlanHandoffError as exc:
                 raise WorkflowExecutionError(
-                    "WORK_PLAN_PATH must contain at least one future Slice heading"
-                )
-            if future_slice_ids != tuple(range(1, len(future_slice_ids) + 1)):
-                raise WorkflowExecutionError(
-                    "WORK_PLAN_PATH future Slice headings must be contiguous and 1-based"
-                )
-            detail += f"; future_slices={len(future_slice_ids)}; work_plan={work_plan_path}"
+                    f"WORK_PLAN_PATH cannot produce an IMPLEMENT handoff: {exc}"
+                ) from exc
+            detail += f"; future_slices={len(future_slices)}; work_plan={work_plan_path}"
 
         digest = hashlib.sha256(detail.encode("utf-8")).hexdigest()
         return ValidationAttestation(
@@ -892,13 +890,35 @@ def _context(
             "may be updated only after the orchestrator creates it at implementation start."
         )
     effective_assignment += _plan_only_step_boundary(state)
+    planned_scope = set(planned.scope_paths) if planned is not None else set()
+    active_remediation_paths = tuple(
+        sorted(set(state.current_slice.scope_paths).difference(planned_scope))
+    )
+    slice_summary = planned.summary if planned is not None else "Plan the requested work."
+    if active_remediation_paths:
+        rendered_remediation_paths = ", ".join(active_remediation_paths)
+        effective_assignment += (
+            "\n\nACTIVE REMEDIATION SCOPE (authoritative):\n"
+            f"- These paths are already authorized for the current Slice: "
+            f"{rendered_remediation_paths}\n"
+            "- They were added by the orchestrator from a completed, approved prior "
+            "Slice. Treat them as part of the exact current allowlist.\n"
+            "- Do not emit STOP_REQUESTED or REMEDIATION_PATHS merely because these "
+            "paths were absent from the original plan. Implement the required repair "
+            "within them."
+        )
+        slice_summary += (
+            "\n\nACTIVE REMEDIATION SCOPE — ALREADY AUTHORIZED\n"
+            f"{rendered_remediation_paths}\n"
+            "Use these paths when needed; do not request them again."
+        )
     return WorkflowContext(
         assignment=effective_assignment,
         distilled_plan=(
             "Follow the ordered, persisted slice plan and exact path allowlists."
         ),
-        slice_summary=(planned.summary if planned is not None else "Plan the requested work."),
-        test_changes_approved=False,
+        slice_summary=slice_summary,
+        test_changes_approved=not bool(getattr(args, "test_change_gate", False)),
         manual_slice_gate=bool(args.manual_slice_gate),
         path_classes=args.repo_config.paths,
         stop_rules=args.repo_config.stop_rules,
@@ -909,11 +929,12 @@ def _context(
         quota_wait_policy=args.quota_wait_policy,
         require_slice_plan=state.current_work_unit.kind is WorkUnitKind.PLAN,
         dynamic_test_scope=True,
-        plan_gate=bool(getattr(args, "plan_gate", True)),
+        plan_gate=bool(getattr(args, "plan_gate", False)),
         plan_only=state.execution_mode == TaskMode.PLAN_ONLY.value,
         task_scope_patterns=effective_scope,
         work_plan_path=state.work_plan_path,
         audit_report_path=state.audit_report_path,
+        current_scope_paths=state.current_slice.scope_paths,
     )
 
 
@@ -1027,9 +1048,27 @@ def _managed_correction_slice_path(audit_report_path: str, slice_id: int) -> str
 
 
 def _is_managed_audit_path(state: WorkflowState, path: str) -> bool:
-    return path == state.audit_report_path or (
-        state.audit_report_path is not None
-        and matches_path_patterns(path, (_managed_slice_scope_pattern(state.audit_report_path),))
+    return (
+        path == state.audit_report_path
+        or _is_planned_slice_document(state, path)
+        or (
+            state.audit_report_path is not None
+            and matches_path_patterns(
+                path,
+                (_managed_slice_scope_pattern(state.audit_report_path),),
+            )
+        )
+    )
+
+
+def _is_planned_slice_document(state: WorkflowState, path: str) -> bool:
+    candidate = PurePosixPath(path)
+    if not path.startswith("docs/internal/slice-") or candidate.suffix != ".md":
+        return False
+    return any(
+        path in planned.scope_paths
+        and f"-{planned.slice_id:02d}-" in candidate.name
+        for planned in state.planned_slices
     )
 
 
@@ -1048,10 +1087,19 @@ def _attach_managed_audit_paths(state: WorkflowState) -> WorkflowState:
                     {
                         *item.scope_paths,
                         state.audit_report_path,
-                        managed_slice_document_path(
-                            state.audit_report_path,
-                            item.slice_id,
-                            item.summary,
+                        next(
+                            (
+                                path
+                                for path in item.scope_paths
+                                if path.startswith("docs/internal/slice-")
+                                and path.endswith(".md")
+                                and f"-{item.slice_id:02d}-" in Path(path).name
+                            ),
+                            managed_slice_document_path(
+                                state.audit_report_path,
+                                item.slice_id,
+                                item.summary,
+                            ),
                         ),
                     }
                 )
@@ -1170,7 +1218,26 @@ def run_production_workflow(
         mode_override=getattr(args, "plan_only", None),
         work_plan_override=getattr(args, "work_plan", None),
         target_branch_override=getattr(args, "target_branch", None),
+        source_name=task_file.name,
     )
+    if task_contract.informal_intake:
+        logger.info(
+            "Informal inbox intake: derived mode=PLAN_ONLY work_plan=%s scope=%s",
+            task_contract.work_plan_path,
+            ",".join(task_contract.scope_patterns),
+        )
+        assignment += (
+            "\n\nINFORMAL INTAKE (orchestrator-derived, authoritative):\n"
+            "- The text above is the user's idea, not a detailed implementation contract.\n"
+            "- Translate it into a repository-grounded executable work plan. Do not ask "
+            "the user to supply paths, Slices, acceptance criteria, risks, or validation "
+            "bookkeeping that can be determined from the repository.\n"
+            f"- Derived mode: PLAN_ONLY\n"
+            f"- Derived work-plan artifact: {task_contract.work_plan_path}\n"
+            f"- Derived exact planning scope: {', '.join(task_contract.scope_patterns)}\n"
+            "- Stop only for a genuine product choice with materially different outcomes, "
+            "missing authority, secrets, or destructive action."
+        )
     allowed_roots = tuple(dict.fromkeys((root, task_file.parent.resolve())))
     run_id = str(getattr(args, "watch_run_id", "") or new_run_id())
     managed_audit_path = (
@@ -1622,6 +1689,18 @@ def run_pipeline(
         ValueError,
     ) as exc:
         logger.error("State-v3 workflow failed: %s", exc)
+        watch_run_id = getattr(args, "watch_run_id", None)
+        if watch_run_id is not None:
+            return WatchTaskResult(
+                exit_code=1,
+                run_id=watch_run_id,
+                disposition=WatchTaskDisposition.TECHNICAL_FAILURE,
+                status="technical_failure",
+                step="pipeline",
+                work_unit_id=1,
+                gate_reason="technical_failure",
+                failure_detail=f"{type(exc).__name__}: {exc}",
+            )
         return 1
 
     if getattr(args, "watch_run_id", None) is not None:
