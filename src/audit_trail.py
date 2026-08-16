@@ -183,9 +183,12 @@ class ReviewAuditEvent:
     def __post_init__(self) -> None:
         _require_event_identity(self.event_id, self.slice_id)
         _require_positive_int(self.round_number, "round_number")
-        if any(origin != "FINAL" for origin in self.allowed_finding_origins):
+        if any(
+            origin != "FINAL" and not re.fullmatch(r"0*[1-9][0-9]*", origin)
+            for origin in self.allowed_finding_origins
+        ):
             raise AuditTrailError(
-                "review audit events may only opt into the FINAL finding origin"
+                "review audit finding origins must be FINAL or 1-based Slice ids"
             )
         if self.result.reviewer not in (AgentRole.CLAUDE, AgentRole.ANTIGRAVITY):
             raise AuditTrailError("review audit event requires claude or antigravity")

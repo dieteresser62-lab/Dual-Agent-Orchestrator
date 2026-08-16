@@ -293,6 +293,7 @@ class StepContract:
     test_changes_approved: bool = False
     red_state_followup_slice: str | None = None
     anchor_origin: str | None = None
+    existing_finding_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.name.strip():
@@ -319,6 +320,12 @@ class StepContract:
             raise ValueError("red-state exception requires a named follow-up slice")
         if self.anchor_origin is not None and not self.anchor_origin.strip():
             raise ValueError("anchor origin must be a stable non-empty identity")
+        normalized_finding_ids = tuple(sorted(set(self.existing_finding_ids)))
+        if normalized_finding_ids != self.existing_finding_ids:
+            raise ValueError("existing finding ids must be sorted and unique")
+        for finding_id in self.existing_finding_ids:
+            if not SOURCE_FINDING_ID_PATTERN.fullmatch(finding_id):
+                raise ValueError(f"invalid existing finding id {finding_id}")
 
 
 @dataclass(frozen=True)
@@ -359,6 +366,23 @@ class ContractResult:
         return tuple(
             finding
             for finding in self.open_blockers
+            if finding.origin.reporter is self.reviewer
+        )
+
+    @property
+    def open_findings(self) -> tuple[FindingRecord, ...]:
+        return tuple(
+            finding
+            for finding in self.findings
+            if finding.status is FindingStatus.OPEN
+        )
+
+    @property
+    def own_open_findings(self) -> tuple[FindingRecord, ...]:
+        """Return every open finding owned by the current review role."""
+        return tuple(
+            finding
+            for finding in self.open_findings
             if finding.origin.reporter is self.reviewer
         )
 
@@ -798,6 +822,8 @@ def validate_review_response(
     evidence = _parse_review_evidence(text)
     pre_mortem, pre_mortem_position = _parse_optional_single_value(text, "PRE_MORTEM")
     anchors = parse_anchors(text, origin=contract.anchor_origin or "")
+    previous_findings = tuple(previous_findings)
+    previous_finding_ids = {finding.finding_id for finding in previous_findings}
     findings, has_finding_record = _merge_review_findings(
         text, contract, previous_findings
     )
@@ -814,6 +840,18 @@ def validate_review_response(
         and finding.finding_class is FindingClass.BLOCKER
         and finding.origin.reporter is contract.reviewer
     )
+    if contract.approval_marker is ApprovalMarker.FINAL:
+        new_final_observations = tuple(
+            finding
+            for finding in findings
+            if finding.finding_id not in previous_finding_ids
+            and finding.finding_class is FindingClass.OBSERVATION
+        )
+        if new_final_observations:
+            raise ContractValidationError(
+                "final review cannot introduce a new OBSERVATION; record non-actionable "
+                "residual risk in REVIEW_EVIDENCE or report an actionable BLOCKER"
+            )
     if approval:
         if validation is None:
             raise ContractValidationError(
@@ -839,6 +877,27 @@ def validate_review_response(
             raise ContractValidationError(
                 "approval is invalid while a BLOCKER is open for this reviewer"
             )
+        if contract.approval_marker is ApprovalMarker.FINAL:
+            own_open_findings = tuple(
+                finding
+                for finding in findings
+                if finding.status is FindingStatus.OPEN
+                and finding.origin.reporter is contract.reviewer
+            )
+            if own_open_findings:
+                raise ContractValidationError(
+                    "final approval is invalid while a finding is open for this reviewer"
+                )
+            if contract.reviewer is AgentRole.ANTIGRAVITY:
+                open_findings = tuple(
+                    finding
+                    for finding in findings
+                    if finding.status is FindingStatus.OPEN
+                )
+                if open_findings:
+                    raise ContractValidationError(
+                        "Antigravity final approval requires zero open findings"
+                    )
     elif not own_open_blockers:
         raise ContractValidationError(
             "negative approval requires an open BLOCKER owned by this reviewer"

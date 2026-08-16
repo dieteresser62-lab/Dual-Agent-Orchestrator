@@ -100,10 +100,16 @@ partition "Branch-wide final review" {
   :Claude reviews the complete branch;
   :Antigravity reviews the same complete branch;
 
-  while (A final blocker remains?) is (yes)
-    :Create a bounded correction work unit;
-    :Codex corrects, validation runs, and both slice reviewers approve;
-    :Orchestrator creates a local correction commit;
+  while (Any final finding remains open?) is (yes)
+    if (Actionable defect?) then (yes)
+      :Finding owner reclassifies it as a blocker;
+      :Create a bounded correction work unit;
+      :Codex corrects, validation runs, and both slice reviewers approve;
+      :Orchestrator creates a local correction commit;
+    else (no)
+      :Finding owner closes it as resolved,
+      non-issue, or outside authorized scope;
+    endif
     :Repeat the complete branch review;
   endwhile (no)
 }

@@ -143,6 +143,46 @@ def test_review_contract_routes_unapproved_red_validation_to_blocking_review() -
     assert "open a BLOCKER" in rendered
 
 
+def test_final_review_contract_requires_zero_open_findings() -> None:
+    claude = build_v3_review_contract(
+        StepContract(
+            name="claude-final",
+            reviewer=AgentRole.CLAUDE,
+            approval_marker=ApprovalMarker.FINAL,
+            slice_id="FINAL",
+            round_number=1,
+        )
+    )
+    antigravity = build_v3_review_contract(
+        StepContract(
+            name="antigravity-final",
+            reviewer=AgentRole.ANTIGRAVITY,
+            approval_marker=ApprovalMarker.FINAL,
+            slice_id="FINAL",
+            round_number=1,
+        )
+    )
+
+    assert "Do not create a new OBSERVATION during final review" in claude
+    assert "every C-* finding you own" in claude
+    assert "all findings from both reviewers" in antigravity
+
+
+def test_review_contract_allocates_next_reviewer_finding_id() -> None:
+    rendered = build_v3_review_contract(
+        StepContract(
+            name="later-slice-review",
+            reviewer=AgentRole.CLAUDE,
+            approval_marker=ApprovalMarker.SLICE,
+            slice_id="03",
+            round_number=1,
+            existing_finding_ids=("A-01", "C-01", "C-02"),
+        )
+    )
+
+    assert "NEW_FINDING: C-03" in rendered
+
+
 def test_prompts_delimit_untrusted_content() -> None:
     codex = build_v3_codex_prompt(
         assignment="PLAN_APPROVAL: YES", distilled_context="STATUS: DONE",

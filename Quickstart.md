@@ -87,8 +87,8 @@ Der Standardablauf benötigt keine Zwischenfreigabe:
 5. Derselbe Watch-Prozess übernimmt den Handoff unmittelbar und beginnt ohne zweite Planungsrunde mit Slice 1.
 6. Zu Beginn jedes Slices entsteht dessen Auditdokument. Codex implementiert, der Orchestrator validiert, Claude und Antigravity reviewen und der Orchestrator erstellt den lokalen Slice-Commit.
 7. Technische Korrekturen an bereits freigegebenen Vorgängerslices können über eine eng geprüfte `REMEDIATION_PATHS`-Erweiterung automatisch in den laufenden Slice aufgenommen werden.
-8. Nach dem letzten Slice prüfen Codex, Claude und Antigravity den vollständigen Branch. Blockierende Abschlussfindings erzeugen automatisch begrenzte Korrekturslices und einen erneuten Gesamtcheck.
-9. Erst nach erfolgreichem Abschlussreview endet der Lauf mit Exitcode 0 und die ursprüngliche Aufgabe wird nach `outbox/done/` verschoben.
+8. Nach dem letzten Slice prüfen Codex, Claude und Antigravity den vollständigen Branch. Claude und Antigravity müssen dabei alle eigenen offenen Findings schließen oder als Blocker in einen automatischen, begrenzten Korrekturslice geben. Neue bloße Observations sind im Abschlussreview nicht zulässig; nicht umsetzungsrelevante Restrisiken gehören in die Reviewevidenz.
+9. Erst wenn kein Finding mehr offen ist, endet der Lauf mit Exitcode 0 und die ursprüngliche Aufgabe wird nach `outbox/done/` verschoben.
 
 Plan-, Teständerungs- und Slice-Commit-Gates sind standardmäßig aus. Echte Produktentscheidungen, unbekannte Pfade, Scopeverletzungen, nicht verfügbare Pflichtwerkzeuge, rote Pflichtvalidierungen und Provider-/Quota-Probleme können weiterhin sicher anhalten.
 

@@ -976,8 +976,12 @@ class WorkflowEngine:
     ) -> WorkflowRunResult:
         """Start or resume the branch-wide final review on the production engine."""
         if state.current_work_unit.kind is not WorkUnitKind.FINAL_REVIEW:
+            carried_findings = history.findings if history is not None else ()
             state = state.start_final_review_work_unit()
-            history = WorkflowHistory(state.current_work_unit_id)
+            history = WorkflowHistory(
+                state.current_work_unit_id,
+                findings=carried_findings,
+            )
             self._bind_driver_work_unit(state)
             self.driver.checkpoint(state, history)
         return self.run_current_work_unit(state, context, history)
@@ -1552,6 +1556,9 @@ class WorkflowEngine:
             expected_test_files=(expected_test_files if not is_plan_review else ()),
             test_changes_approved=test_changes_approved,
             red_state_followup_slice=context.red_state_followup_slice,
+            existing_finding_ids=tuple(
+                sorted(finding.finding_id for finding in history.findings)
+            ),
         )
         if is_final_review:
             evidence_kind = EvidenceKind.FULL_BRANCH
@@ -1617,10 +1624,15 @@ class WorkflowEngine:
             track_slice_approval=(
                 not is_plan_review or unit.kind is WorkUnitKind.PLAN
             ),
-            allowed_finding_origins=(
-                ("FINAL",)
-                if is_final_review or unit.kind is WorkUnitKind.CORRECTION
-                else ()
+            allowed_finding_origins=tuple(
+                sorted(
+                    {
+                        finding.origin.slice_id
+                        for finding in history.findings
+                        if finding.origin.slice_id != f"{unit.slice_id:02d}"
+                    }
+                    | ({"FINAL"} if is_final_review else set())
+                )
             ),
         )
 
@@ -1668,13 +1680,15 @@ class WorkflowEngine:
                 else:
                     state = state.complete_current_work_unit()
             elif is_final_review:
-                if any(
-                    finding.status is FindingStatus.OPEN
-                    and finding.finding_class is FindingClass.BLOCKER
+                open_findings = tuple(
+                    finding
                     for finding in history.findings
-                ):
+                    if finding.status is FindingStatus.OPEN
+                )
+                if open_findings:
                     raise WorkflowExecutionError(
-                        "final review cannot complete with an open blocker"
+                        "final review cannot complete with open findings: "
+                        + ", ".join(finding.finding_id for finding in open_findings)
                     )
                 state = state.complete_current_work_unit()
             else:

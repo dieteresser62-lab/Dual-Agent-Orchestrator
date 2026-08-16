@@ -138,6 +138,105 @@ def test_open_observation_remains_visible_without_blocking_approval() -> None:
     assert result.findings[0].finding_class is FindingClass.OBSERVATION
 
 
+def test_final_review_cannot_introduce_observation() -> None:
+    contract = _contract(marker=ApprovalMarker.FINAL)
+    output = _valid_evidence_output(
+        contract,
+        extra="NEW_FINDING: C-01 | OBSERVATION | Later hardening idea | Track separately",
+    )
+
+    with pytest.raises(
+        ContractValidationError, match="cannot introduce a new OBSERVATION"
+    ):
+        validate_review_response(output, contract)
+
+
+def test_claude_final_approval_requires_own_observation_closed() -> None:
+    finding = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.OBSERVATION,
+        status=FindingStatus.OPEN,
+        summary="Residual gap",
+        acceptance_test="Close or escalate at final review",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
+    contract = _contract(marker=ApprovalMarker.FINAL)
+    output = _valid_evidence_output(
+        contract,
+        extra="FINDING_STATUS: C-01 | OPEN | gap still exists",
+    )
+
+    with pytest.raises(
+        ContractValidationError, match="finding is open for this reviewer"
+    ):
+        validate_review_response(output, contract, (finding,))
+
+
+def test_claude_final_approval_may_carry_antigravity_observation() -> None:
+    finding = FindingRecord(
+        finding_id="A-01",
+        finding_class=FindingClass.OBSERVATION,
+        status=FindingStatus.OPEN,
+        summary="Antigravity residual gap",
+        acceptance_test="Antigravity dispositions it",
+        origin=FindingOrigin("01", 1, AgentRole.ANTIGRAVITY),
+    )
+    contract = _contract(reviewer=AgentRole.CLAUDE, marker=ApprovalMarker.FINAL)
+
+    result = validate_review_response(
+        _valid_evidence_output(contract), contract, (finding,)
+    )
+
+    assert result.approval is True
+    assert result.open_findings == (finding,)
+
+
+def test_antigravity_final_approval_requires_zero_open_findings() -> None:
+    finding = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.OBSERVATION,
+        status=FindingStatus.OPEN,
+        summary="Claude residual gap",
+        acceptance_test="Claude must close it",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
+    contract = _contract(
+        reviewer=AgentRole.ANTIGRAVITY, marker=ApprovalMarker.FINAL
+    )
+
+    with pytest.raises(
+        ContractValidationError, match="requires zero open findings"
+    ):
+        validate_review_response(
+            _valid_evidence_output(contract), contract, (finding,)
+        )
+
+
+def test_final_observation_can_be_escalated_to_blocker_and_denied() -> None:
+    finding = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.OBSERVATION,
+        status=FindingStatus.OPEN,
+        summary="Residual gap became actionable",
+        acceptance_test="Add the missing regression",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
+    contract = _contract(marker=ApprovalMarker.FINAL)
+    output = _valid_evidence_output(
+        contract,
+        approval="NO",
+        pre_mortem=False,
+        extra=(
+            "FINDING_RECLASSIFIED: C-01 | BLOCKER | must be corrected before completion"
+        ),
+    )
+
+    result = validate_review_response(output, contract, (finding,))
+
+    assert result.approval is False
+    assert result.own_open_blockers[0].finding_id == "C-01"
+
+
 def test_open_blocker_requires_negative_approval() -> None:
     contract = _contract()
     output = _valid_evidence_output(

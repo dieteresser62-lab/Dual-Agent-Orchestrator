@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -9,14 +10,27 @@ import orchestrator
 import pytest
 from agent_runtime import AgentInvocationError
 from cli import parse_args
-from contracts import AgentRole, PlannedSlice
+from contracts import (
+    AgentRole,
+    FindingClass,
+    FindingOrigin,
+    FindingRecord,
+    FindingStatus,
+    PlannedSlice,
+)
 from orchestrator import ProductionWorkflowDriver, run_pipeline, run_production_workflow
-from workflow import CodexInvocation, ReviewerInvocation
+from workflow import CodexInvocation, ReviewerInvocation, WorkflowHistory
 from workflow import WorkflowExecutionError
 from plan_handoff import PlanHandoffError
 from state_io import StateSchemaError, save_workflow_state
 from task_contract import parse_task_contract
-from workflow_state import GateReason, WorkflowStep, WorkUnitKind, WorkUnitStatus
+from workflow_state import (
+    GateReason,
+    WorkflowStep,
+    WorkUnitKind,
+    WorkUnitStatus,
+    init_workflow_state,
+)
 from workflow_state import AgentFailureKind
 
 
@@ -152,6 +166,53 @@ def test_runtime_context_auto_authorizes_scoped_test_changes_unless_gate_enabled
 
     assert automatic.test_changes_approved is True
     assert gated.test_changes_approved is False
+
+
+def test_carry_forward_findings_migrates_reused_legacy_ids_stably() -> None:
+    first = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.OBSERVATION,
+        status=FindingStatus.OPEN,
+        summary="first slice observation",
+        acceptance_test="disposition first observation",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
+    second = replace(
+        first,
+        summary="second slice observation",
+        acceptance_test="disposition second observation",
+        origin=FindingOrigin("02", 1, AgentRole.CLAUDE),
+    )
+    first_history = WorkflowHistory(1, findings=(first,))
+    second_history = WorkflowHistory(2, findings=(second,))
+    state = init_workflow_state(
+        run_id="legacy-findings",
+        task_file="task.md",
+        branch="feature/findings",
+        branch_base="a" * 40,
+        slice_count=1,
+        timestamp="2026-08-16T12:00:00+00:00",
+    )
+    state = replace(
+        state,
+        runtime_history={
+            "archive": [first_history.to_dict()],
+            "current": second_history.to_dict(),
+        },
+    )
+
+    migrated = orchestrator._carry_forward_findings(state, second_history)
+
+    assert [finding.finding_id for finding in migrated] == ["C-01", "C-02"]
+    carried_history = WorkflowHistory(3, findings=migrated)
+    state = replace(
+        state,
+        runtime_history={
+            "archive": [first_history.to_dict(), second_history.to_dict()],
+            "current": carried_history.to_dict(),
+        },
+    )
+    assert orchestrator._carry_forward_findings(state, carried_history) == migrated
 
 
 def test_new_inbox_watch_task_persists_deterministic_audit_report_path(
@@ -735,12 +796,22 @@ def test_production_session_plans_commits_two_slices_and_persists_final_state(
             (source / ("first.py" if slice_id == 1 else "second.py")).write_text(
                 f"VALUE = {slice_id}\n", encoding="utf-8"
             )
+            finding_response = (
+                "FINDING_RESPONSE: C-01 | ACCEPTED | retained for final disposition\n"
+                if slice_id == 2
+                else ""
+            )
             output = (
+                finding_response
+                +
                 f"TEST_FILES_TOUCHED: NONE\n"
                 f"IMPLEMENTATION_READY: {slice_id:02d} | YES\nSTATUS: DONE"
             )
         else:
-            output = "FINAL_REPORT_READY: YES\nSTATUS: DONE"
+            output = (
+                "FINDING_RESPONSE: C-01 | ACCEPTED | full branch evidence resolves it\n"
+                "FINAL_REPORT_READY: YES\nSTATUS: DONE"
+            )
         driver.last_codex_output = output
         return output
 
@@ -769,8 +840,31 @@ def test_production_session_plans_commits_two_slices_and_persists_final_state(
             WorkflowStep.ANTIGRAVITY_FINAL_REVIEW,
         }:
             marker = "FINAL_APPROVAL: YES"
+            rendered = _review(invocation.reviewer, marker)
+            if invocation.reviewer is AgentRole.CLAUDE:
+                rendered = rendered.replace(
+                    "PRE_MORTEM:",
+                    "FINDING_STATUS: C-01 | CLOSED | full branch evidence resolves it\n"
+                    "PRE_MORTEM:",
+                )
+            return rendered
         else:
-            marker = f"SLICE_APPROVAL: {invocation.paths[0].split('/')[-1] == 'first.py' and '01' or '02'} | YES"
+            slice_id = invocation.paths[0].split("/")[-1] == "first.py" and "01" or "02"
+            marker = f"SLICE_APPROVAL: {slice_id} | YES"
+            rendered = _review(invocation.reviewer, marker)
+            if invocation.reviewer is AgentRole.CLAUDE and slice_id == "01":
+                rendered = rendered.replace(
+                    "PRE_MORTEM:",
+                    "NEW_FINDING: C-01 | OBSERVATION | cross-slice risk | "
+                    "disposition during final review\nPRE_MORTEM:",
+                )
+            elif invocation.reviewer is AgentRole.CLAUDE and slice_id == "02":
+                rendered = rendered.replace(
+                    "PRE_MORTEM:",
+                    "FINDING_STATUS: C-01 | OPEN | keep until full branch review\n"
+                    "PRE_MORTEM:",
+                )
+            return rendered
         return _review(invocation.reviewer, marker)
 
     monkeypatch.setattr(ProductionWorkflowDriver, "invoke_codex", codex)
@@ -799,6 +893,9 @@ def test_production_session_plans_commits_two_slices_and_persists_final_state(
     assert [item["work_unit_id"] for item in state["runtime_history"]["archive"]] == [1, 2, 3]
     assert state["runtime_history"]["current"]["work_unit_id"] == 4
     assert state["runtime_history"]["current"]["events"]
+    assert state["runtime_history"]["current"]["findings"][0]["status"] == "CLOSED"
+    slice_two_history = state["runtime_history"]["archive"][2]
+    assert slice_two_history["findings"][0]["status"] == "OPEN"
 
 
 def test_head_drift_after_plan_becomes_typed_persisted_halt(

@@ -639,13 +639,25 @@ def test_review_event_accepts_explicit_final_finding_origin_for_correction() -> 
 
     assert event.result.findings == (final_finding,)
 
-    with pytest.raises(AuditTrailError, match="only opt into the FINAL"):
+    prior_finding = replace(
+        _finding(), origin=FindingOrigin("07", 1, AgentRole.CLAUDE)
+    )
+    prior_event = ReviewAuditEvent(
+        1,
+        8,
+        1,
+        _review(approval=False, findings=(prior_finding,)),
+        allowed_finding_origins=("07",),
+    )
+    assert prior_event.result.findings == (prior_finding,)
+
+    with pytest.raises(AuditTrailError, match="1-based Slice ids"):
         ReviewAuditEvent(
             1,
             8,
             1,
             _review(approval=False, findings=(final_finding,)),
-            allowed_finding_origins=("07",),
+            allowed_finding_origins=("slice-07",),
         )
 
 

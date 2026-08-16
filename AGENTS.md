@@ -26,6 +26,8 @@
 - Review the supplied change evidence adversarially across correctness, contracts, failure paths, security boundaries, and resume/idempotency behavior.
 - A positive review requires either concrete finding records or `REVIEW_EVIDENCE` containing checked dimensions, largest residual risk, and a realistic break condition.
 - A positive review also requires `PRE_MORTEM`, a complete authorized attestation for the same fingerprint, and no reviewer-owned open blocker.
+- Slice reviews may approve with reviewer-owned open `OBSERVATION` records so later Slices can address cross-cutting follow-up work. The branch-wide final review is stricter: Claude must close or escalate every open `C-*` finding before approving, Antigravity must close or escalate every open `A-*` finding, and Antigravity may approve only when no finding from either reviewer remains open.
+- A final reviewer must not create a new `OBSERVATION`. Record non-actionable future ideas and residual risks in `REVIEW_EVIDENCE`; report any defect that still requires work as a `BLOCKER` with `FINAL_APPROVAL: NO` so the orchestrator creates a bounded correction work unit.
 - Only the reporting reviewer may close or reclassify its finding. Codex may answer it with `FINDING_RESPONSE`; rejection does not close it.
 - Only an open `BLOCKER` may extend the orchestrator validation matrix with an exact `VALIDATE: ["executable",...]` acceptance test from a configured command family. An `OBSERVATION` uses a prose acceptance test; any `VALIDATE` directive on an observation is retained as finding text but ignored for matrix selection and cannot pause the workflow.
 - Missing, inconsistent, or unparsable verdicts are denials. A stop request replaces readiness or approval.

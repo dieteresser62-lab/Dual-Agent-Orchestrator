@@ -786,6 +786,66 @@ def _persisted_histories(state: WorkflowState) -> dict[int, WorkflowHistory]:
     return histories
 
 
+def _carry_forward_findings(
+    state: WorkflowState,
+    current_history: WorkflowHistory,
+) -> tuple[FindingRecord, ...]:
+    """Build a stable cross-work-unit ledger, including pre-upgrade archives.
+
+    Older runs allowed each work unit to reuse IDs such as C-01. When such a run is
+    resumed, distinct historical records are deterministically assigned the next free
+    reviewer ID while their origin, content, responses, and status remain unchanged.
+    Subsequent work units then preserve those assigned IDs through the same identity.
+    """
+    histories = _persisted_histories(state)
+    histories[current_history.work_unit_id] = current_history
+    latest_by_identity: dict[tuple[object, ...], FindingRecord] = {}
+    identity_order: list[tuple[object, ...]] = []
+    all_ids: list[str] = []
+    for history in (histories[unit_id] for unit_id in sorted(histories)):
+        for finding in history.findings:
+            identity = (
+                finding.origin.reporter,
+                finding.origin.slice_id,
+                finding.origin.round_number,
+                finding.summary,
+                finding.acceptance_test,
+            )
+            if identity not in latest_by_identity:
+                identity_order.append(identity)
+            latest_by_identity[identity] = finding
+            all_ids.append(finding.finding_id)
+
+    next_number = {
+        prefix: max(
+            (
+                int(finding_id.split("-", 1)[1])
+                for finding_id in all_ids
+                if finding_id.startswith(prefix + "-")
+            ),
+            default=0,
+        )
+        + 1
+        for prefix in ("C", "A")
+    }
+    used_ids: set[str] = set()
+    carried: list[FindingRecord] = []
+    for identity in identity_order:
+        finding = latest_by_identity[identity]
+        finding_id = finding.finding_id
+        if finding_id in used_ids:
+            prefix = "C" if finding.origin.reporter is AgentRole.CLAUDE else "A"
+            while True:
+                finding_id = f"{prefix}-{next_number[prefix]:02d}"
+                next_number[prefix] += 1
+                if finding_id not in used_ids:
+                    break
+            finding = replace(finding, finding_id=finding_id)
+        used_ids.add(finding_id)
+        carried.append(finding)
+    return tuple(sorted(carried, key=lambda finding: finding.finding_id))
+
+
 def _overall_audit_entries(state: WorkflowState) -> tuple[OverallAuditEntry, ...]:
     histories = _persisted_histories(state)
     entries: list[OverallAuditEntry] = []
@@ -1418,6 +1478,7 @@ def run_production_workflow(
             state = driver.active_state or result.state
             if not result.completed:
                 return WorkflowRunResult(state, result.history, result.commit_ref)
+            history = result.history
             current = state.current_work_unit
 
         if current.kind is WorkUnitKind.FINAL_REVIEW:
@@ -1447,12 +1508,20 @@ def run_production_workflow(
                 return WorkflowRunResult(state, _history(state), commit_ref)
             if not state.planned_slices:
                 raise WorkflowExecutionError("completed plan has no persisted SLICE_PLAN")
+            carried_findings = _carry_forward_findings(state, history)
             state = state.start_work_unit(
                 slice_id=1,
                 kind=WorkUnitKind.SLICE,
                 step=WorkflowStep.CODEX_IMPLEMENTATION,
             )
-            driver.checkpoint(state, WorkflowHistory(state.current_work_unit_id))
+            driver.checkpoint(
+                state,
+                WorkflowHistory(
+                    state.current_work_unit_id,
+                    findings=carried_findings,
+                ),
+            )
+            state = driver.active_state or state
             continue
 
         pending = next(
@@ -1460,17 +1529,33 @@ def run_production_workflow(
         )
         if pending is not None:
             identity = inspect_repository(root)
+            carried_findings = _carry_forward_findings(state, history)
             state = state.start_work_unit(
                 slice_id=pending.slice_id,
                 kind=WorkUnitKind.SLICE,
                 step=WorkflowStep.CODEX_IMPLEMENTATION,
                 slice_start_commit=identity.head,
             )
-            driver.checkpoint(state, WorkflowHistory(state.current_work_unit_id))
+            driver.checkpoint(
+                state,
+                WorkflowHistory(
+                    state.current_work_unit_id,
+                    findings=carried_findings,
+                ),
+            )
+            state = driver.active_state or state
             continue
 
+        carried_findings = _carry_forward_findings(state, history)
         state = state.start_final_review_work_unit()
-        driver.checkpoint(state, WorkflowHistory(state.current_work_unit_id))
+        driver.checkpoint(
+            state,
+            WorkflowHistory(
+                state.current_work_unit_id,
+                findings=carried_findings,
+            ),
+        )
+        state = driver.active_state or state
 
     raise WorkflowExecutionError("workflow session exceeded its deterministic transition bound")
 

@@ -49,6 +49,15 @@ def build_v3_review_contract(contract: StepContract) -> str:
         )
         validation_details += f"\noutput_digest={attestation.output_digest}"
     prefix = "C" if contract.reviewer.value == "claude" else "A"
+    next_finding_number = max(
+        (
+            int(finding_id.split("-", 1)[1])
+            for finding_id in contract.existing_finding_ids
+            if finding_id.startswith(prefix + "-")
+        ),
+        default=0,
+    ) + 1
+    next_finding_id = f"{prefix}-{next_finding_number:02d}"
     anchor_rule = ""
     if contract.anchor_origin is not None:
         anchor_rule = (
@@ -66,6 +75,23 @@ def build_v3_review_contract(contract: StepContract) -> str:
             f"follow-up {contract.red_state_followup_slice}; verify that exact deferral "
             "before considering approval."
         )
+    final_convergence_rules = ""
+    if contract.approval_marker is ApprovalMarker.FINAL:
+        reviewer_scope = (
+            "all findings from both reviewers"
+            if contract.reviewer.value == "antigravity"
+            else "every C-* finding you own"
+        )
+        final_convergence_rules = (
+            "\n- Final convergence: explicitly disposition every previous open finding "
+            "you own. Close it as fixed, non-issue, or outside the authorized scope; "
+            "otherwise reclassify it to BLOCKER and deny approval so the orchestrator "
+            "creates a correction work unit."
+            "\n- Do not create a new OBSERVATION during final review. Put non-actionable "
+            "future ideas or residual risks in REVIEW_EVIDENCE. Any actionable defect "
+            "must be a BLOCKER with FINAL_APPROVAL: NO."
+            f"\n- FINAL_APPROVAL: YES is valid only after {reviewer_scope} are CLOSED."
+        )
     return textwrap.dedent(
         f"""
         STATE-V3 CONTRACT (mandatory for step {contract.name}):
@@ -74,7 +100,7 @@ def build_v3_review_contract(contract: StepContract) -> str:
         {delimit_block("VALIDATION_ATTESTATION", validation_details)}
         - Do not rerun the full suite and do not emit VALIDATION_RESULT. Spend the review budget on implementation analysis. If additional focused validation is needed, require it in a finding acceptance test.
         - Test scope: TEST_FILES_TOUCHED: {test_files}
-        - New finding: NEW_FINDING: {prefix}-01 | BLOCKER|OBSERVATION | <description> | <acceptance test>
+        - New finding: NEW_FINDING: {next_finding_id} | BLOCKER|OBSERVATION | <description> | <acceptance test>
         - Only a BLOCKER may request an extra command in the next orchestrator matrix. Its entire acceptance-test field must be: VALIDATE: ["executable","arg",...], using the same configured validation-command family shown in the bound attestation. Do not use a shell string.
         - An OBSERVATION is non-blocking. Give it a prose acceptance test and never prefix that field with VALIDATE; observations cannot extend or stop the validation matrix.
         - Previous finding, only when it was originally reported by you: FINDING_STATUS: <ID> | OPEN|CLOSED | <rationale>. Never emit FINDING_STATUS with NONE or prose in place of <ID>, and never emit it for the other reviewer's finding.
@@ -84,6 +110,7 @@ def build_v3_review_contract(contract: StepContract) -> str:
         - Decision: {approval}
         - A stop request replaces the decision: STOP_REQUESTED: <rule id> | <rationale>
         {red_state_rule}
+        {final_convergence_rules}
         {anchor_rule}
         - Final non-empty line: STATUS: DONE
         - Phase and legacy approval markers are invalid in state-v3.

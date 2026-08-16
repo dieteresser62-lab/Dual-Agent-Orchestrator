@@ -223,9 +223,10 @@ Nachdem alle geplanten Slices commitet sind:
 2. validiert der Orchestrator diesen Branch-Fingerprint;
 3. erstellt Codex einen abschließenden Implementierungsbericht;
 4. prüfen Claude und Antigravity unabhängig den vollständigen Branch;
-5. erzeugt ein blockierendes Abschlussfinding einen begrenzten Korrekturarbeitsblock und lokalen Korrekturcommit;
-6. werden vollständige Branchvalidierung und Abschlussreview aller drei Rollen wiederholt;
-7. endet nur der terminal freigegebene Zustand erfolgreich.
+5. schließen Claude und Antigravity im Abschlussreview jedes eigene Finding oder stufen es als korrekturbedürftigen Blocker ein;
+6. erzeugt ein blockierendes Abschlussfinding einen begrenzten Korrekturarbeitsblock und lokalen Korrekturcommit;
+7. werden vollständige Branchvalidierung und Abschlussreview aller drei Rollen wiederholt;
+8. endet nur ein terminal freigegebener Zustand ohne offene Findings erfolgreich.
 
 ## 10. Finding- und Entscheidungsmodell
 
@@ -237,7 +238,7 @@ Ein Finding gehört dauerhaft dem Reviewer, der es erstellt hat. Claude-IDs begi
 - Eigentümer-gesteuerten Status `OPEN` oder `CLOSED`;
 - explizite Codex-Antwort `ACCEPTED` oder `REJECTED`.
 
-Ein offener Blocker verhindert eine positive Freigabe. Eine Observation bleibt sichtbar, blockiert aber nicht automatisch. Nur ein offener Blocker darf mit einem strukturierten `VALIDATE`-Akzeptanztest die Orchestrator-Matrix innerhalb einer konfigurierten Befehlsfamilie erweitern. Ein entsprechender Marker an einer Observation wird protokolliert, aber für die Matrix ignoriert; dadurch kann ein nicht blockierender Hinweis keinen Benutzerhalt wegen eines fremden Befehls auslösen. Ein Reviewer darf das Finding eines anderen Reviewers weder schließen noch stillschweigend neu klassifizieren. Dadurch bleibt die Zuordnung über Korrekturrunden und Fortsetzungsgrenzen hinweg erhalten.
+Ein offener Blocker verhindert eine positive Freigabe. Eine Observation bleibt während Plan- und Slice-Reviews sichtbar, blockiert dort aber nicht automatisch. Findings werden mit Herkunft, Status und Antworten über jeden folgenden Arbeitsblock hinweg fortgeschrieben. Beim Fortsetzen älterer States normalisiert eine deterministische Kompatibilitätsschicht mehrfach vergebene historische IDs auf freie `C-*`- beziehungsweise `A-*`-IDs und behält diese Zuordnung anschließend stabil bei. Im branchweiten Abschlussreview muss der Eigentümer jedes offene Finding als behoben, nicht zutreffend oder außerhalb des autorisierten Scopes schließen oder zum Blocker hochstufen und die Freigabe verweigern. Neue Observations sind im Abschlussreview nicht erlaubt; nicht handlungsbedürftige Restrisiken werden als `REVIEW_EVIDENCE` dokumentiert. Antigravitys positive Abschlussfreigabe und der terminale Workflowzustand erfordern global null offene Findings. Nur ein offener Blocker darf mit einem strukturierten `VALIDATE`-Akzeptanztest die Orchestrator-Matrix innerhalb einer konfigurierten Befehlsfamilie erweitern. Ein entsprechender Marker an einer Observation wird protokolliert, aber für die Matrix ignoriert; dadurch kann ein nicht blockierender Hinweis keinen Benutzerhalt wegen eines fremden Befehls auslösen. Ein Reviewer darf das Finding eines anderen Reviewers weder schließen noch stillschweigend neu klassifizieren. Dadurch bleibt die Zuordnung über Korrekturrunden und Fortsetzungsgrenzen hinweg erhalten.
 
 ## 11. Validierungs- und Evidenzmodell
 

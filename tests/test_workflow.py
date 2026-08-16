@@ -2776,7 +2776,7 @@ def test_codex_final_report_appends_response_to_open_observation() -> None:
             _final_approval(
                 AgentRole.CLAUDE,
                 finding_status=(
-                    "FINDING_STATUS: C-01 | OPEN | manual check remains useful"
+                    "FINDING_STATUS: C-01 | CLOSED | branch review resolves the risk"
                 ),
             ),
             _final_approval(AgentRole.ANTIGRAVITY),
@@ -2799,10 +2799,49 @@ def test_codex_final_report_appends_response_to_open_observation() -> None:
     updated = result.history.findings[0]
     assert len(updated.responses) == 1
     assert updated.responses[0].decision is FindingResponseDecision.ACCEPTED
+    assert updated.status is FindingStatus.CLOSED
     assert all(
         "responses=ACCEPTED: addressed in correction" in call.prompt
         for call in driver.reviewer_calls
     )
+
+
+def test_final_review_entry_carries_previous_slice_observation() -> None:
+    branch = _changes(
+        "8",
+        "src/early.py",
+        full_diff="COMPLETE BRANCH",
+        start_commit=START_COMMIT,
+    )
+    finding = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.OBSERVATION,
+        status=FindingStatus.OPEN,
+        summary="slice observation requires final disposition",
+        acceptance_test="close or escalate it during final review",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
+    driver = FakeDriver(
+        snapshots=[branch],
+        codex_outputs=[_final_report("C-01")],
+        reviewer_outputs=[
+            _final_approval(
+                AgentRole.CLAUDE,
+                finding_status=(
+                    "FINDING_STATUS: C-01 | CLOSED | full branch evidence resolves it"
+                ),
+            ),
+            _final_approval(AgentRole.ANTIGRAVITY),
+        ],
+    )
+    state = _completed_single_slice_state()
+    history = WorkflowHistory(state.current_work_unit_id, findings=(finding,))
+
+    result = WorkflowEngine(driver).run_final_review(state, _context(), history)
+
+    assert result.completed
+    assert result.history.findings[0].status is FindingStatus.CLOSED
+    assert "C-01" in driver.codex_calls[0].prompt
 
 
 def test_codex_final_marker_normalization_is_exact_and_final_only() -> None:
