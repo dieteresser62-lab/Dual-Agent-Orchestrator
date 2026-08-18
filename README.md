@@ -128,16 +128,24 @@ Laufzeitdaten werden unterhalb von `.orchestrator/` gespeichert:
 
 | Pfad | Zweck |
 |---|---|
-| `.orchestrator/state.json` | Atomare, maschinenlesbare State-v3-Quelle des aktiven Laufs. |
+| `.orchestrator/artifacts/<run-id>/records/ar1-<sha256>.json` | Autoritative, append-only Einzelrecords eines `structured-v1`-Laufs. |
+| `.orchestrator/artifacts/<run-id>/head.json` | Aus den Records rekonstruierbarer Beschleunigungscache; keine Wahrheitsquelle. |
+| `.orchestrator/state.json` | Atomarer State-v3-Betriebszustand; bei `structured-v1` ein gegen die Recordkette geprüfter Spiegel. |
 | `.orchestrator/checkpoints/work-unit-####-slice-####-round-####.json` | Fortsetzungs-Checkpoints mit einsbasierten Arbeitsblock-, Slice- und Rundenidentitäten. |
 | `.orchestrator/logs/` | Rohe temporäre Agentenaufruf- und Diagnoselogs. |
 | `.orchestrator/runs/<run_id>/work-unit-####-codex.md` | Persistierte Codex-Ausgabe zur Wiederherstellung des Planungs- oder Implementierungskontexts. |
 
 State und Checkpoints dürfen nicht manuell bearbeitet werden.
 
+Neue Workflows werden bei der Initialisierung unveränderlich an den Protokollmodus `structured-v1` gebunden. Die Textmarker der Agentenantworten bleiben der strikt validierte Eingangsadapter. Erst nach Parserprüfung, persistiertem Record und semantischem Gleichheitsnachweis zum State-v3-Spiegel darf der Inhalt eine Entscheidung steuern. Für alle in Records abgebildeten Fakten ist die validierte Recordkette die technische Source of Truth. Sie besteht aus kanonischen, digestgeprüften JSON-Einzeldateien und ist weder JSONL noch SQLite.
+
+Historische State-v3-Läufe ohne Protokollbindung verbleiben dauerhaft im Modus `legacy-state-v3` und lesen weiterhin ihren bisherigen Zustand und Markdown-Fallback. Es gibt keine stille Migration und keinen modusübergreifenden Fallback: Ein bereits gebundener `structured-v1`-Lauf darf nie als Legacy-Lauf weitergeführt werden.
+
+Beim Resume scannt der Orchestrator die vollständige Recordkette, rekonstruiert bei Bedarf `head.json` und vergleicht die spiegelbaren Fakten symmetrisch mit State-v3. Fehlende, unbekannte, beschädigte oder widersprüchliche Records sowie ein vorausgeeilter Spiegel stoppen fail-closed mit Record-ID beziehungsweise Lauf-ID und Reparaturhinweis. Zur Diagnose dienen die konkrete Fehlermeldung, `.orchestrator/logs/`, der betroffene Recordpfad und der State-Spiegel. Repariert wird durch Wiederherstellen der zusammengehörigen Recordkette oder des passenden Spiegels aus einer vertrauenswürdigen Sicherung – niemals durch manuelles Erfinden von Records, Freigaben oder Finding-Übergängen.
+
 Menschenlesbare Plan- und Slice-Auditdateien im Markdown-Format gehören in das Zielrepository, üblicherweise unter `docs/internal/`, und werden mit ihrem Slice commitet. Für Aufgaben aus `inbox/` erzeugt der Orchestrator beim Taskstart automatisch ein digestgebundenes Gesamtdokument. Es sammelt Plan, Scope, Claude-/Antigravity-Reviews, Findings, Validierungen, Slice-Entscheidungen und das abschließende Gesamtreview. Die zukünftigen Slice-Dokumentpfade werden nach der Planung automatisch in die persistierten Slice-Allowlists aufgenommen; die Dateien selbst entstehen jedoch erst beim tatsächlichen Beginn des jeweiligen Implementierungs- oder Korrekturslices. Eine abgelehnte oder vor Implementierungsbeginn abgebrochene Planung hinterlässt daher keine leeren Slice-Dokumente. Resume verwendet dieselben digestgebundenen Pfade idempotent weiter.
 
-Bei einem regulär manuell definierten Lauf außerhalb von `inbox/` müssen Auditdateien weiterhin vorbereitet, aus dem Arbeitsplan verlinkt, mit den erforderlichen verwalteten Auditabschnitten versehen und im Umfang des zugehörigen `SLICE_PLAN` enthalten sein. Ein commitgebundener Handoff erzeugt seine deklarierten Slice-Auditdateien ebenfalls automatisch vor dem jeweiligen Slice. Der Orchestrator projiziert strukturierte Findings, Reviews, Validierungsattestierungen und Autorisierungsstatus ausschließlich in die verwalteten Abschnitte. Nach jedem lokalen Slice-Commit ist Git die historische Quelle der Wahrheit; nach der dreifachen branchweiten Gesamtabnahme wird die abschließende Gesamtprojektion path-genau commitet.
+Bei einem regulär manuell definierten Lauf außerhalb von `inbox/` müssen Auditdateien weiterhin vorbereitet, aus dem Arbeitsplan verlinkt, mit den erforderlichen verwalteten Auditabschnitten versehen und im Umfang des zugehörigen `SLICE_PLAN` enthalten sein. Ein commitgebundener Handoff erzeugt seine deklarierten Slice-Auditdateien ebenfalls automatisch vor dem jeweiligen Slice. Der Orchestrator projiziert strukturierte Findings, Reviews, Validierungsattestierungen und Autorisierungsstatus ausschließlich in die verwalteten Abschnitte. Diese Markdown-Dateien sind deterministische, menschenlesbare Auditansichten der Records und keine Resume- oder Reparaturquelle. Nach jedem lokalen Slice-Commit ist Git die historische Quelle der Wahrheit für den eingecheckten Repositorystand; nach der dreifachen branchweiten Gesamtabnahme wird die abschließende Gesamtprojektion path-genau commitet.
 
 Beim automatischen Plan-/Implementierungs-Handoff commitet eine freigegebene `PLAN_ONLY`-Aufgabe den bereits
 geprüften Arbeitsplan unmittelbar; es folgt kein künstlicher Implementierungs-

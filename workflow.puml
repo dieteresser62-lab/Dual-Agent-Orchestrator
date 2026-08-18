@@ -27,9 +27,20 @@ else (formal contract)
 endif
 
 if (Unfinished State-v3 run?) then (yes)
-  :Resume the persisted work unit, slice, round, and exact role step;
+  if (Persisted protocol is structured-v1?) then (yes)
+    :Scan authoritative append-only records and rebuild head cache;
+    :Compare record facts with the State-v3 operational mirror;
+    if (Chain missing, corrupt, unknown, or divergent?) then (yes)
+      :Halt fail-closed with run/record diagnosis and restoration guidance;
+      stop
+    else (consistent)
+      :Resume the persisted work unit, slice, round, and exact role step;
+    endif
+  else (legacy-state-v3)
+    :Resume historical State-v3 and Markdown fallback without migration;
+  endif
 else (no)
-  :Create State-v3 work unit;
+  :Create State-v3 work unit and bind structured-v1 immutably;
 endif
 
 if (Approved IMPLEMENT handoff?) then (yes)
@@ -60,6 +71,9 @@ while (A planned slice remains?) is (yes)
     :Create Slice audit document;
     :Persist slice start commit and exact path scope;
     :Codex implements within the scope;
+    :Parse agent text markers through the strict ingress adapter;
+    :Append validated records before any workflow decision;
+    :Dual-write the State-v3 mirror and prove semantic equality;
     if (Agent sandbox blocks port/browser validation?) then (yes)
       :Re-prompt Codex once for normal readiness;
       :Leave the full matrix to the orchestrator;

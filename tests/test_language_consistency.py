@@ -169,6 +169,27 @@ def test_root_roles_share_the_state_v3_contract_and_gemini_role_is_gone() -> Non
         assert marker in shared
 
 
+def test_root_roles_share_structured_artifact_authority_contract() -> None:
+    required = (
+        "## Structured artifact authority",
+        "Agent text markers are ingress-adapter input only",
+        ".orchestrator/artifacts/<run-id>/records/",
+        "technical source of truth",
+        "operational mirrors",
+        "human audit view rather than a repair source",
+        "legacy-state-v3",
+        "not silently migrated",
+        "Resume is fail-closed",
+    )
+    sections = []
+    for path in ROLE_FILES:
+        text = path.read_text(encoding="utf-8")
+        assert all(fragment in text for fragment in required), path.name
+        section = text.split(required[0], 1)[1].split("\n## ", 1)[0].strip()
+        sections.append(section)
+    assert len(set(sections)) == 1
+
+
 def test_claude_profile_is_persistently_sonnet_high() -> None:
     claude = (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
     agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
@@ -435,6 +456,42 @@ def test_workflow_diagram_has_balanced_state_v3_topology() -> None:
         "Branch-wide final review", "correction work unit", "STATUS: DONE",
     ):
         assert term in diagram
+
+
+def test_user_docs_and_diagram_explain_structured_artifact_operations() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    quickstart = (ROOT / "Quickstart.md").read_text(encoding="utf-8")
+    diagram = (ROOT / "workflow.puml").read_text(encoding="utf-8")
+
+    common = (
+        ".orchestrator/artifacts/<run-id>/records/",
+        "structured-v1",
+        "legacy-state-v3",
+        "state.json",
+        "head.json",
+        "Auditansicht",
+        "fail-closed",
+    )
+    for text in (readme, quickstart):
+        assert all(fragment in text for fragment in common)
+    assert "stille Migration" in readme
+    assert "still migriert" in quickstart
+
+    for fragment in (
+        "authoritative append-only records",
+        "State-v3 operational mirror",
+        "Markdown fallback without migration",
+        "Append validated records before any workflow decision",
+        "prove semantic equality",
+    ):
+        assert fragment in diagram
+
+    authority_sections = "\n".join(
+        path.read_text(encoding="utf-8").split("## Structured artifact authority", 1)[1]
+        for path in ROLE_FILES
+    )
+    for forbidden_claim in ("SQLite", "JSONL", "push", "merge", "external publication"):
+        assert forbidden_claim not in authority_sections
 
 
 def test_example_task_declares_every_required_boundary() -> None:

@@ -34,6 +34,13 @@
 - Missing, inconsistent, or unparsable verdicts are denials. A stop request replaces readiness or approval.
 - Exhausted watch retries move a task to `outbox/failed/*.poison` and persist the final technical diagnosis beside it as `*.poison.error.json`.
 
+## Structured artifact authority
+
+- New workflows are immutably bound to `structured-v1`. Agent text markers are ingress-adapter input only; after parsing and semantic dual-write comparison, the validated append-only records are the technical source of truth for every fact they represent.
+- The authoritative record chain lives in `.orchestrator/artifacts/<run-id>/records/`. `.orchestrator/state.json` and checkpoints are operational mirrors, `head.json` is a reconstructable cache, and projected Markdown is a human audit view rather than a repair source.
+- Historical states without a protocol binding remain on `legacy-state-v3`; they are not silently migrated. A persisted protocol binding never falls back to another mode.
+- Resume is fail-closed. Missing, corrupt, unknown, or mirror-divergent structured records require restoring the matching chain or mirror before continuation; agents must never invent records, approvals, or migration facts.
+
 ## Output records
 
 Codex planning:

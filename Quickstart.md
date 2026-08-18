@@ -133,6 +133,10 @@ run_task --watch
 
 Die Aufgabenidentität, `.orchestrator/state.json` und Checkpoints führen denselben Lauf am exakt persistierten Rollen- und Sliceschritt fort. Diese Dateien dürfen niemals manuell bearbeitet werden.
 
+Für neu gestartete Workflows liegt die technische Wahrheit der abgebildeten Entscheidungen unter `.orchestrator/artifacts/<run-id>/records/`. `state.json` und Checkpoints sind der geprüfte Betriebsspiegel, `head.json` ist nur ein rekonstruierbarer Cache, und die Markdown-Dateien unter `docs/internal/` sind menschenlesbare Auditansichten. Agentenmarker werden weiterhin als Eingabe geparst, steuern aber erst nach validierter Record-Persistenz und semantischem Vergleich eine Entscheidung.
+
+Alte Läufe ohne Protokollbindung bleiben im Modus `legacy-state-v3`; sie werden weder still migriert noch benötigen sie nachträglich Records. Ein `structured-v1`-Lauf fällt dagegen niemals auf Legacy oder Markdown zurück. Meldet Resume eine fehlende, beschädigte oder zum Spiegel widersprüchliche Recordkette, notiere Lauf- und Record-ID, prüfe `.orchestrator/logs/` und stelle die zusammengehörigen Records oder den passenden Spiegel aus einer vertrauenswürdigen Sicherung wieder her. Bearbeite weder Records noch `state.json` manuell und erfinde keine Freigabe zur Umgehung des fail-closed Halts.
+
 Einen formalen Einzelauftrag setzt du explizit fort:
 
 ```bash
