@@ -690,18 +690,63 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 and path.endswith(".md")
             }
             semantic_paths = tuple(sorted(candidates))
+        excluded_control_paths = _bound_task_control_paths(
+            self.root, self.active_state
+        )
         changes = collect_repository_changes(
             self.root,
             start_commit,
             semantic_markdown_paths=semantic_paths,
-            excluded_paths=_bound_task_control_paths(self.root, self.active_state),
+            excluded_paths=excluded_control_paths,
         )
         if changes.entries:
+            review_diff = changes.diff_text or (
+                "(binary or metadata-only repository change)"
+            )
+            if (
+                self.active_state is not None
+                and self.active_state.current_work_unit.kind
+                is WorkUnitKind.FINAL_REVIEW
+                and self.active_state.audit_report_path is not None
+                and self.active_state.audit_report_path in changes.paths
+            ):
+                audit_path = self.active_state.audit_report_path
+                compacted = collect_repository_changes(
+                    self.root,
+                    start_commit,
+                    semantic_markdown_paths=semantic_paths,
+                    excluded_paths=tuple(
+                        sorted({*excluded_control_paths, audit_path})
+                    ),
+                )
+                summary = _final_review_audit_evidence_summary(
+                    changes,
+                    audit_path=audit_path,
+                    omitted_diff_chars=max(
+                        0, len(changes.diff_text) - len(compacted.diff_text)
+                    ),
+                )
+                review_diff = "\n\n".join(
+                    part
+                    for part in (
+                        compacted.diff_text.strip(),
+                        summary,
+                    )
+                    if part
+                )
+                logger.info(
+                    "Final review evidence compacted: audit=%s original_chars=%s "
+                    "evidence_chars=%s fingerprint=%s",
+                    audit_path,
+                    len(changes.diff_text),
+                    len(review_diff),
+                    changes.fingerprint,
+                )
             rendered = WorkflowChanges(
                 start_commit=start_commit,
                 fingerprint=changes.fingerprint,
                 paths=changes.paths,
-                full_diff=changes.diff_text or "(binary or metadata-only repository change)",
+                full_diff=review_diff,
                 gate_paths=tuple(sorted(set(changes.review_paths))),
             )
             self._repository_changes[changes.fingerprint] = changes
@@ -1581,6 +1626,46 @@ def _bound_task_control_paths(
             "bound task file changed during execution; start a new run with a new task digest"
         )
     return (task.relative_to(root).as_posix(),)
+
+
+def _final_review_audit_evidence_summary(
+    changes: RepositoryChanges,
+    *,
+    audit_path: str,
+    omitted_diff_chars: int,
+) -> str:
+    """Bind a generated audit projection without repeating its full diff.
+
+    The canonical ``RepositoryChanges`` object remains the source for the complete
+    branch fingerprint, path boundary, test detection, and validation attestation.
+    Only the agent-facing evidence substitutes this deterministic projection with
+    its already-captured semantic payload metadata.
+    """
+    entries = tuple(
+        entry for entry in changes.fingerprint_entries if entry.path == audit_path
+    )
+    if len(entries) != 1:
+        raise WorkflowExecutionError(
+            "final review audit compaction requires exactly one fingerprint entry "
+            f"for {audit_path!r}"
+        )
+    entry = entries[0]
+    return "\n".join(
+        (
+            "=== DETERMINISTIC AUDIT PROJECTION (COMPACT EVIDENCE) ===",
+            f"path: {audit_path}",
+            f"change_kind: {entry.kind}",
+            f"semantic_payload_type: {entry.payload_type or 'none'}",
+            f"semantic_payload_size: {entry.payload_size if entry.payload_size is not None else 'none'}",
+            f"semantic_payload_sha256: {entry.payload_digest or 'none'}",
+            f"omitted_full_diff_chars: {omitted_diff_chars}",
+            "reason: The full managed audit projection is deterministic and repeats "
+            "structured findings, approvals, and validation attestations supplied "
+            "separately. Its canonical semantic payload remains bound to the complete "
+            "branch fingerprint and validation boundary.",
+            "=== END COMPACT AUDIT EVIDENCE ===",
+        )
+    )
 
 
 def _new_watch_task_control_paths(

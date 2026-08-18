@@ -280,6 +280,84 @@ def test_bind_work_unit_preserves_latest_driver_owned_runtime_history(
     assert driver.active_state.runtime_history == persisted.runtime_history
 
 
+def test_final_review_compacts_generated_audit_without_weakening_fingerprint(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/final-review-evidence")
+    head = _git(repository, "rev-parse", "HEAD")
+    audit_path = "docs/internal/final-review-evidence-review-12345678.md"
+    source_path = "src/runtime.py"
+    (repository / "docs/internal").mkdir(parents=True)
+    (repository / "src").mkdir()
+    audit_sentinel = "FULL AUDIT BODY MUST NOT REACH THE FINAL AGENT\n"
+    (repository / audit_path).write_text(
+        audit_sentinel * 12_000,
+        encoding="utf-8",
+    )
+    (repository / source_path).write_text("VALUE = 1\n", encoding="utf-8")
+    _git(repository, "add", audit_path, source_path)
+    state = init_workflow_state(
+        run_id="final-review-evidence",
+        task_file=str(tmp_path / "task.md"),
+        branch="feature/final-review-evidence",
+        branch_base=head,
+        slice_count=1,
+        task_scope_patterns=(audit_path, source_path),
+        audit_report_path=audit_path,
+    ).bind_current_slice_git_boundary(
+        start_commit=head,
+        scope_paths=(audit_path, source_path),
+        start_fingerprint="a" * 64,
+    )
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+
+    driver.active_state = state
+    ordinary = driver.collect_changes(head)
+    assert audit_sentinel in ordinary.full_diff
+
+    driver.active_state = state.complete_current_slice(
+        commit_ref="b" * 40
+    ).start_final_review_work_unit()
+    compacted = driver.collect_changes(head)
+
+    assert compacted.fingerprint == ordinary.fingerprint
+    assert compacted.paths == ordinary.paths
+    assert compacted.gate_paths == ordinary.gate_paths
+    assert "VALUE = 1" in compacted.full_diff
+    assert audit_sentinel not in compacted.full_diff
+    assert "DETERMINISTIC AUDIT PROJECTION (COMPACT EVIDENCE)" in compacted.full_diff
+    assert f"path: {audit_path}" in compacted.full_diff
+    audit_entry = next(
+        entry
+        for entry in driver._repository_changes[compacted.fingerprint].fingerprint_entries
+        if entry.path == audit_path
+    )
+    assert (
+        f"semantic_payload_sha256: {audit_entry.payload_digest}"
+        in compacted.full_diff
+    )
+    assert len(compacted.full_diff) < 10_000
+
+    first_fingerprint = compacted.fingerprint
+    first_summary = compacted.full_diff
+    (repository / audit_path).write_text(
+        audit_sentinel * 12_000 + "semantic audit change\n",
+        encoding="utf-8",
+    )
+    _git(repository, "add", audit_path)
+    changed = driver.collect_changes(head)
+
+    assert changed.fingerprint != first_fingerprint
+    assert changed.full_diff != first_summary
+    assert audit_sentinel not in changed.full_diff
+
+
 def test_structured_bind_persists_contract_and_active_work_unit_once(
     tmp_path: Path,
 ) -> None:
