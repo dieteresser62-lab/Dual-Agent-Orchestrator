@@ -7,9 +7,19 @@ from pathlib import Path
 import pytest
 
 import orchestrator
-from artifact_bridge import ArtifactBridge
+from audit_trail import ReviewAuditEvent, ValidationAuditEvent
+from artifact_bridge import ArtifactBridge, attestation_payload
 from artifact_models import RecordType, ReviewPayload, Role
 from artifact_store import ArtifactStore
+from contracts import (
+    AgentRole,
+    ContractResult,
+    StopRequest,
+    ValidationAttestation,
+    ValidationCommandSpec,
+    ValidationRecord,
+    ValidationStatus,
+)
 from orchestrator import ProductionWorkflowDriver
 from workflow import WorkflowExecutionError, WorkflowHistory
 from workflow_state import (
@@ -118,6 +128,78 @@ def test_external_side_effect_guard_rejects_review_record_ahead_of_mirror(
 
     with pytest.raises(WorkflowExecutionError, match="reviewer decisions differ"):
         driver.assert_structured_decision_context()
+
+
+def test_structured_resume_accepts_mirrored_stopped_review(tmp_path: Path) -> None:
+    repository = _repository(tmp_path, "feature/structured-regression")
+    state = _state(repository, "structured-stopped-review")
+    driver = _driver(repository)
+    driver.checkpoint(state, WorkflowHistory(1))
+    attestation = ValidationAttestation(
+        attestation_id="validation-stop",
+        diff_fingerprint="b" * 64,
+        expected_commands=("python3 -m pytest tests/ -v",),
+        records=(
+            ValidationRecord(
+                ValidationStatus.PASS,
+                "python3 -m pytest tests/ -v",
+                0,
+            ),
+        ),
+        output_digest="c" * 64,
+        summary="validation completed before reviewer stop",
+        command_specs=(
+            ValidationCommandSpec(
+                argv=("python3", "-m", "pytest", "tests/", "-v")
+            ),
+        ),
+    )
+    stopped = ContractResult(
+        reviewer=AgentRole.CLAUDE,
+        approval=None,
+        stopped=True,
+        stop_request=StopRequest("CONTRACT-UNCLEAR", "owner decision required"),
+        validation=attestation,
+        test_files=(),
+        pre_mortem=None,
+        evidence=None,
+        findings=(),
+        anchors=(),
+    )
+    bridge = ArtifactBridge(ArtifactStore(repository, state.run_id))
+    bridge.append(
+        attestation_payload(attestation),
+        logical_id=attestation.attestation_id,
+        idempotency_key="attestation:validation-stop",
+        fingerprint_sha256=attestation.diff_fingerprint,
+    )
+    bridge.append(
+        ReviewPayload(
+            reviewer=Role.CLAUDE,
+            work_unit_id="1",
+            verdict="stop",
+            finding_ids=(),
+            evidence="owner decision required",
+        ),
+        logical_id="review-claude-1-1",
+        idempotency_key="review-stop",
+        fingerprint_sha256=attestation.diff_fingerprint,
+    )
+    history = WorkflowHistory(
+        1,
+        events=(
+            ValidationAuditEvent(1, 1, attestation),
+            ReviewAuditEvent(2, 1, 1, stopped),
+        ),
+        attestations=(attestation,),
+    )
+    assert driver.active_state is not None
+    driver.checkpoint(driver.active_state, history)
+
+    resumed = _driver(repository)
+    assert driver.active_state is not None
+    resumed.bind_work_unit(driver.active_state)
+    resumed.assert_structured_decision_context()
 
 
 def test_unbound_historical_state_keeps_legacy_resume_mode(tmp_path: Path) -> None:

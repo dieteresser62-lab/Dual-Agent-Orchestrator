@@ -2146,6 +2146,11 @@ def test_reviewer_stop_request_halts_without_contract_repair() -> None:
     assert result.state.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
     assert len(driver.reviewer_calls) == 1
     assert driver.repair_calls == []
+    assert len(result.history.events) == 2
+    stopped_review = result.history.events[-1]
+    assert stopped_review.result.stopped is True
+    assert stopped_review.result.validation == result.history.attestations[-1]
+    assert driver.checkpoint_histories[-1] == result.history
 
 
 def test_unknown_stop_rule_is_rejected_instead_of_becoming_a_gate() -> None:

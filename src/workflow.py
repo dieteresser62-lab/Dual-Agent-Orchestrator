@@ -1764,14 +1764,9 @@ class WorkflowEngine:
             "persist_review_contract", result, output, changes.fingerprint,
             review_round, history.findings
         )
-        if result.stopped:
-            if result.stop_request is None:
-                raise WorkflowExecutionError(
-                    f"{reviewer.value} stop has no structured stop request"
-                )
-            state = self._halt_for_stop_request(state, context, result.stop_request)
-            self.driver.checkpoint(state, history)
-            return state, history
+        # The structured ReviewPayload is already durable at this point. Mirror every
+        # parsed verdict, including STOP_REQUESTED, before checkpointing so a resumed
+        # structured-v1 run cannot observe a chain-ahead reviewer decision.
         history = self._record_review(
             history,
             unit.slice_id,
@@ -1792,6 +1787,14 @@ class WorkflowEngine:
                 )
             ),
         )
+        if result.stopped:
+            if result.stop_request is None:
+                raise WorkflowExecutionError(
+                    f"{reviewer.value} stop has no structured stop request"
+                )
+            state = self._halt_for_stop_request(state, context, result.stop_request)
+            self.driver.checkpoint(state, history)
+            return state, history
 
         if result.approval is True:
             if reviewer is AgentRole.CLAUDE:
