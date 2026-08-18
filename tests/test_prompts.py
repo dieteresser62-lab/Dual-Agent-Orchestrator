@@ -96,6 +96,27 @@ def test_final_report_contract_distinguishes_report_readiness_from_approval() ->
     assert "does not assert that the branch is defect-free" in rendered
     assert "Claude and Antigravity own the approval decision" in rendered
     assert "must not emit TEST_FILES_TOUCHED" in rendered
+    assert "managed correction document" in rendered
+    assert "Persisted allowlists are upper bounds" in rendered
+    assert "requirements R-1 through R-18" not in rendered
+
+
+def test_correction_review_contract_forbids_observation_tail() -> None:
+    rendered = build_v3_review_contract(
+        StepContract(
+            name="correction-review",
+            reviewer=AgentRole.CLAUDE,
+            approval_marker=ApprovalMarker.SLICE,
+            slice_id="02",
+            round_number=1,
+            allow_new_observations=False,
+        )
+    )
+
+    assert "NEW_FINDING: C-01 | BLOCKER |" in rendered
+    assert "Correction convergence: do not create a new OBSERVATION" in rendered
+    assert "NEW_FINDING: C-01 | BLOCKER|OBSERVATION" not in rendered
+    assert "FINDING_RECLASSIFIED: <ID> | BLOCKER|OBSERVATION" not in rendered
 
 
 def test_delimited_untrusted_block_escapes_its_own_boundary_tokens() -> None:

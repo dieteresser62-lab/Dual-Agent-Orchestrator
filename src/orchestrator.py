@@ -103,6 +103,7 @@ from inbox_watcher import (
     WatchTaskDisposition,
     WatchTaskResult,
     attempt_sidecar_path,
+    move_to_outbox,
     success_marker_path,
     watch_identity_path,
     watch_inbox,
@@ -1127,6 +1128,67 @@ def _managed_audit_path(task_file: Path, task_digest: str) -> str:
     return f"docs/internal/{slug}-review-{task_digest[:8]}.md"
 
 
+def _archive_stale_untracked_audit_reports(
+    repository_root: Path,
+    *,
+    current_audit_path: str,
+    outbox_failed_dir: Path,
+) -> tuple[Path, ...]:
+    """Archive abandoned audit reports from an older digest of the same task.
+
+    A regenerated Inbox handoff keeps its filename but receives a new content
+    digest and therefore a new managed audit path.  An audit report left
+    untracked by the abandoned run must not contaminate the next Slice diff.
+    Only exact, untracked sibling reports are moved; tracked history and all
+    unrelated documents remain untouched.
+    """
+    current = PurePosixPath(current_audit_path)
+    match = re.fullmatch(r"(?P<prefix>.+-review-)[0-9a-f]{8}\.md", current.name)
+    if current.parent.as_posix() != "docs/internal" or match is None:
+        raise WorkflowExecutionError(
+            "managed audit path cannot identify stale sibling reports"
+        )
+    identity = inspect_repository(repository_root)
+    changes = collect_repository_changes(repository_root, identity.head)
+    untracked = {
+        entry.path
+        for entry in changes.entries
+        if not entry.tracked and entry.path != current_audit_path
+    }
+    sibling_pattern = re.compile(
+        rf"{re.escape(match.group('prefix'))}[0-9a-f]{{8}}\.md"
+    )
+    candidates = tuple(
+        sorted(
+            path
+            for path in untracked
+            if PurePosixPath(path).parent == current.parent
+            and sibling_pattern.fullmatch(PurePosixPath(path).name)
+        )
+    )
+    if not candidates:
+        return ()
+    outbox_failed_dir.mkdir(parents=True, exist_ok=True)
+    archived: list[Path] = []
+    for relative_path in candidates:
+        source = repository_root.joinpath(*PurePosixPath(relative_path).parts)
+        if source.is_symlink() or not source.is_file():
+            raise WorkflowExecutionError(
+                f"stale managed audit candidate is not a regular file: {relative_path}"
+            )
+        destination = move_to_outbox(
+            source,
+            outbox_failed_dir,
+            source_name=f"{source.name}.stale-audit",
+        )
+        archived.append(destination)
+        logger.info(
+            "Archived stale untracked managed audit from an abandoned watch run: %s",
+            destination,
+        )
+    return tuple(archived)
+
+
 def _managed_slice_scope_pattern(audit_report_path: str) -> str:
     stem = Path(audit_report_path).stem
     stem = re.sub(  # allowlist:german
@@ -1375,6 +1437,15 @@ def run_production_workflow(
     new_watch_task = watch_run and (force_new or not state_file.exists())
     prepared_branch_base: str | None = None
     if new_watch_task:
+        if managed_audit_path is not None:
+            configured_outbox = Path(getattr(args, "outbox_dir", "outbox"))
+            if not configured_outbox.is_absolute():
+                configured_outbox = root / configured_outbox
+            _archive_stale_untracked_audit_reports(
+                root,
+                current_audit_path=managed_audit_path,
+                outbox_failed_dir=configured_outbox / "failed",
+            )
         prepared = prepare_new_watch_task_branch(
             root,
             target_branch=task_contract.target_branch,

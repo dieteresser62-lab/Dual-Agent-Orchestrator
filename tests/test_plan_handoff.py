@@ -43,3 +43,30 @@ def test_extract_implementation_slices_still_rejects_free_form_path_heading() ->
 
     with pytest.raises(PlanHandoffError, match="no exact change-path section"):
         extract_implementation_slices(markdown, plan_stem="work-plan")
+
+
+def test_exact_path_section_stops_before_level_four_validation_heading() -> None:
+    markdown = "\n".join(
+        (
+            "### Slice 1 - UI contract",
+            "",
+            "**Exakter Änderungspfad**",
+            "",
+            "- `Simulator.html`",
+            "- `tests/browser-smoke.test.mjs`",
+            "",
+            "#### Fokussierte Validierung",
+            "",
+            "- `git diff --check`",
+            "- `npm test`",
+            "- `npm run test:browser`",
+        )
+    )
+
+    slices = extract_implementation_slices(markdown, plan_stem="work-plan")
+
+    assert slices[0].scope_paths == (
+        "Simulator.html",
+        "docs/internal/slice-work-plan-01-ui-contract.md",
+        "tests/browser-smoke.test.mjs",
+    )

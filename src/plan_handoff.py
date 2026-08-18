@@ -44,7 +44,13 @@ def extract_implementation_slices(
         if path_heading is None:
             raise PlanHandoffError(f"Slice {slice_id} has no exact change-path section")
         path_section = body[path_heading.end() :]
-        next_section = re.search(r"^(?:\*\*|###?\s+)", path_section, re.MULTILINE)
+        # The exact-path list ends at the next Markdown section regardless of
+        # heading depth.  Plans commonly use level-four headings for work steps
+        # and validation; treating their bullet lists as repository paths can
+        # turn commands such as `npm test` into bogus productive files.
+        next_section = re.search(
+            r"^(?:\*\*|#{1,6}[ \t]+)", path_section, re.MULTILINE
+        )
         if next_section is not None:
             path_section = path_section[: next_section.start()]
         product_paths = tuple(

@@ -660,6 +660,7 @@ def test_workflow_result_requires_commits_and_completed_final_review() -> None:
     assert completed.exit_code == 0
     assert halted.disposition is WatchTaskDisposition.RESUMABLE_HALT
     assert halted.exit_code == 4
+    assert halted.failure_detail == "S-001 | operator decision required"
 
 
 @pytest.mark.parametrize(

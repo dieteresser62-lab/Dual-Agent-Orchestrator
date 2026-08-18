@@ -345,6 +345,42 @@ def test_new_inbox_watch_task_persists_deterministic_audit_report_path(
     assert _git(repository, "branch", "--show-current") == "feature/inbox-audit"
 
 
+def test_new_watch_task_archives_only_stale_untracked_audit_siblings(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/inbox-audit")
+    internal = repository / "docs" / "internal"
+    internal.mkdir(parents=True)
+    tracked = internal / "fix-implement-review-11111111.md"
+    tracked.write_text("tracked history\n", encoding="utf-8")
+    _git(repository, "add", tracked.relative_to(repository).as_posix())
+    _git(repository, "commit", "-m", "add tracked audit history")
+    stale = internal / "fix-implement-review-22222222.md"
+    stale.write_text("abandoned run\n", encoding="utf-8")
+    current = internal / "fix-implement-review-33333333.md"
+    current.write_text("current run\n", encoding="utf-8")
+    unrelated = internal / "other-implement-review-44444444.md"
+    unrelated.write_text("other task\n", encoding="utf-8")
+    failed = repository / "outbox" / "failed"
+
+    archived = orchestrator._archive_stale_untracked_audit_reports(
+        repository,
+        current_audit_path=current.relative_to(repository).as_posix(),
+        outbox_failed_dir=failed,
+    )
+
+    assert len(archived) == 1
+    assert archived[0].parent == failed
+    assert archived[0].name.endswith(
+        "fix-implement-review-22222222.md.stale-audit"
+    )
+    assert archived[0].read_text(encoding="utf-8") == "abandoned run\n"
+    assert not stale.exists()
+    assert tracked.read_text(encoding="utf-8") == "tracked history\n"
+    assert current.read_text(encoding="utf-8") == "current run\n"
+    assert unrelated.read_text(encoding="utf-8") == "other task\n"
+
+
 def test_new_watch_task_derives_plan_contract_from_informal_idea(
     tmp_path: Path, monkeypatch, caplog
 ) -> None:

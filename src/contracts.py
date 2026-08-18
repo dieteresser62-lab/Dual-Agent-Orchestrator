@@ -294,6 +294,7 @@ class StepContract:
     red_state_followup_slice: str | None = None
     anchor_origin: str | None = None
     existing_finding_ids: tuple[str, ...] = ()
+    allow_new_observations: bool = True
 
     def __post_init__(self) -> None:
         if not self.name.strip():
@@ -326,6 +327,8 @@ class StepContract:
         for finding_id in self.existing_finding_ids:
             if not SOURCE_FINDING_ID_PATTERN.fullmatch(finding_id):
                 raise ValueError(f"invalid existing finding id {finding_id}")
+        if not isinstance(self.allow_new_observations, bool):
+            raise ValueError("new-observation policy must be boolean")
 
 
 @dataclass(frozen=True)
@@ -823,6 +826,9 @@ def validate_review_response(
     pre_mortem, pre_mortem_position = _parse_optional_single_value(text, "PRE_MORTEM")
     anchors = parse_anchors(text, origin=contract.anchor_origin or "")
     previous_findings = tuple(previous_findings)
+    previous_by_id = {
+        finding.finding_id: finding for finding in previous_findings
+    }
     previous_finding_ids = {finding.finding_id for finding in previous_findings}
     findings, has_finding_record = _merge_review_findings(
         text, contract, previous_findings
@@ -840,17 +846,34 @@ def validate_review_response(
         and finding.finding_class is FindingClass.BLOCKER
         and finding.origin.reporter is contract.reviewer
     )
-    if contract.approval_marker is ApprovalMarker.FINAL:
-        new_final_observations = tuple(
+    if (
+        contract.approval_marker is ApprovalMarker.FINAL
+        or not contract.allow_new_observations
+    ):
+        new_disallowed_observations = tuple(
             finding
             for finding in findings
-            if finding.finding_id not in previous_finding_ids
-            and finding.finding_class is FindingClass.OBSERVATION
+            if finding.finding_class is FindingClass.OBSERVATION
+            and (
+                finding.finding_id not in previous_finding_ids
+                or (
+                    not contract.allow_new_observations
+                    and previous_by_id[finding.finding_id].finding_class
+                    is not FindingClass.OBSERVATION
+                )
+            )
         )
-        if new_final_observations:
+        if new_disallowed_observations:
+            finding_policy = (
+                "final review cannot introduce a new OBSERVATION"
+                if contract.approval_marker is ApprovalMarker.FINAL
+                else "correction convergence review cannot introduce or reclassify "
+                "to a new OBSERVATION"
+            )
             raise ContractValidationError(
-                "final review cannot introduce a new OBSERVATION; record non-actionable "
-                "residual risk in REVIEW_EVIDENCE or report an actionable BLOCKER"
+                f"{finding_policy}; record "
+                "non-actionable residual risk in REVIEW_EVIDENCE or report an "
+                "actionable BLOCKER"
             )
     if approval:
         if validation is None:

@@ -3092,3 +3092,17 @@ def test_final_blocker_runs_regular_correction_commit_then_restarts_full_review(
         corrected_branch.fingerprint,
     ]
     assert "ORIGINAL BRANCH\nCORRECTION ONLY" in final_calls[-1].prompt
+    correction_review_calls = [
+        call
+        for call in driver.reviewer_calls
+        if call.work_unit_id == 4
+    ]
+    assert correction_review_calls
+    assert all(
+        "Correction convergence: do not create a new OBSERVATION" in call.prompt
+        for call in correction_review_calls
+    )
+    final_codex_prompt = driver.codex_calls[-1].prompt
+    assert "ORCHESTRATOR-AUTHORIZED COMPLETED SLICE PATHS" in final_codex_prompt
+    assert "src/fix.py" in final_codex_prompt
+    assert "Their presence is not an UNEXPECTED-PATH condition" in final_codex_prompt

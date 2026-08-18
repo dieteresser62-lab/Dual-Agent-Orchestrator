@@ -58,6 +58,21 @@ def build_v3_review_contract(contract: StepContract) -> str:
         default=0,
     ) + 1
     next_finding_id = f"{prefix}-{next_finding_number:02d}"
+    new_finding_classes = (
+        "BLOCKER|OBSERVATION" if contract.allow_new_observations else "BLOCKER"
+    )
+    reclassification_classes = (
+        "BLOCKER|OBSERVATION" if contract.allow_new_observations else "BLOCKER"
+    )
+    observation_rule = (
+        "- An OBSERVATION is non-blocking. Give it a prose acceptance test and never "
+        "prefix that field with VALIDATE; observations cannot extend or stop the "
+        "validation matrix."
+        if contract.allow_new_observations
+        else "- Correction convergence: do not create a new OBSERVATION. Put "
+        "non-actionable future ideas and residual risks in REVIEW_EVIDENCE. A newly "
+        "discovered actionable defect must be a BLOCKER and requires a negative decision."
+    )
     anchor_rule = ""
     if contract.anchor_origin is not None:
         anchor_rule = (
@@ -100,11 +115,11 @@ def build_v3_review_contract(contract: StepContract) -> str:
         {delimit_block("VALIDATION_ATTESTATION", validation_details)}
         - Do not rerun the full suite and do not emit VALIDATION_RESULT. Spend the review budget on implementation analysis. If additional focused validation is needed, require it in a finding acceptance test.
         - Test scope: TEST_FILES_TOUCHED: {test_files}
-        - New finding: NEW_FINDING: {next_finding_id} | BLOCKER|OBSERVATION | <description> | <acceptance test>
+        - New finding: NEW_FINDING: {next_finding_id} | {new_finding_classes} | <description> | <acceptance test>
         - Only a BLOCKER may request an extra command in the next orchestrator matrix. Its entire acceptance-test field must be: VALIDATE: ["executable","arg",...], using the same configured validation-command family shown in the bound attestation. Do not use a shell string.
-        - An OBSERVATION is non-blocking. Give it a prose acceptance test and never prefix that field with VALIDATE; observations cannot extend or stop the validation matrix.
+        {observation_rule}
         - Previous finding, only when it was originally reported by you: FINDING_STATUS: <ID> | OPEN|CLOSED | <rationale>. Never emit FINDING_STATUS with NONE or prose in place of <ID>, and never emit it for the other reviewer's finding.
-        - Optional reclassification, again only for your own finding: FINDING_RECLASSIFIED: <ID> | BLOCKER|OBSERVATION | <rationale>
+        - Optional reclassification, again only for your own finding: FINDING_RECLASSIFIED: <ID> | {reclassification_classes} | <rationale>
         - If there is no concrete finding: REVIEW_EVIDENCE: <checked dimensions> | <largest residual risk> | <realistic break condition>
         - Before a positive approval: PRE_MORTEM: <most likely failure cause in three months>
         - Decision: {approval}
@@ -170,7 +185,14 @@ def build_v3_codex_contract(contract: CodexStepContract) -> str:
                 "risk in prose, then emit FINAL_REPORT_READY: YES when the report itself is "
                 "complete. Claude and Antigravity own the approval decision and findings.",
                 "- Review the entire supplied branch diff for architecture drift, interface "
-                "consistency, dead transition states, documentation sync, and requirements R-1 through R-18.",
+                "consistency, dead transition states, documentation sync, and every "
+                "requirement and acceptance criterion declared by the task and approved plan.",
+                "- Scope enforcement is orchestrator-owned. Every path in the supplied "
+                "complete branch diff has already passed an approved Slice or correction "
+                "boundary. Do not emit STOP_REQUESTED: UNEXPECTED-PATH merely because a "
+                "managed correction document is absent from the original TASK_SCOPE.",
+                "- Persisted allowlists are upper bounds, not mandatory touch lists. An "
+                "authorized path that was not created or changed is not a defect by itself.",
                 "- Bound orchestrator validation attestation: "
                 f"{attestation.attestation_id} | {attestation.diff_fingerprint} | "
                 f"{attestation.status.value} | {attestation.summary}",

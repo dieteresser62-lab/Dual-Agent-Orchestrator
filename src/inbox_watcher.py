@@ -89,9 +89,11 @@ class WatchTaskResult:
             work_unit_id=state.current_work_unit_id,
             gate_reason=state.current_work_unit.gate.reason.value,
             failure_detail=(
-                None
-                if disposition is not WatchTaskDisposition.TECHNICAL_FAILURE
+                state.current_work_unit.gate.detail
+                if disposition is WatchTaskDisposition.RESUMABLE_HALT
                 else "workflow returned a non-resumable, non-terminal result"
+                if disposition is WatchTaskDisposition.TECHNICAL_FAILURE
+                else None
             ),
         )
 
@@ -479,13 +481,14 @@ def watch_inbox(
             ):
                 logger.warning(
                     "Pausing watch queue for resumable task %s: run=%s work-unit=%s "
-                    "step=%s status=%s gate=%s exit=%s",
+                    "step=%s status=%s gate=%s detail=%s exit=%s",
                     task_file.name,
                     task_result.run_id,
                     task_result.work_unit_id,
                     task_result.step,
                     task_result.status,
                     task_result.gate_reason,
+                    task_result.failure_detail or "(none)",
                     task_result.exit_code,
                 )
                 return task_result.exit_code

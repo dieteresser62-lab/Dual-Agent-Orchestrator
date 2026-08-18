@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from contracts import (
@@ -149,6 +151,53 @@ def test_final_review_cannot_introduce_observation() -> None:
         ContractValidationError, match="cannot introduce a new OBSERVATION"
     ):
         validate_review_response(output, contract)
+
+
+def test_correction_convergence_review_cannot_introduce_observation() -> None:
+    contract = replace(
+        _contract(marker=ApprovalMarker.SLICE),
+        allow_new_observations=False,
+    )
+    output = _valid_evidence_output(
+        contract,
+        extra=(
+            "NEW_FINDING: C-01 | OBSERVATION | Future fixture fragility | "
+            "Document it later"
+        ),
+    )
+
+    with pytest.raises(
+        ContractValidationError, match="correction convergence review cannot"
+    ):
+        validate_review_response(output, contract)
+
+
+def test_correction_convergence_review_cannot_downgrade_blocker_to_observation() -> None:
+    finding = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="Correction needed",
+        acceptance_test="Prove the regression",
+        origin=FindingOrigin("FINAL", 1, AgentRole.CLAUDE),
+    )
+    contract = replace(
+        _contract(marker=ApprovalMarker.SLICE),
+        allow_new_observations=False,
+        existing_finding_ids=("C-01",),
+    )
+    output = _valid_evidence_output(
+        contract,
+        extra=(
+            "FINDING_RECLASSIFIED: C-01 | OBSERVATION | Treat as future risk\n"
+            "FINDING_STATUS: C-01 | OPEN | Deferred"
+        ),
+    )
+
+    with pytest.raises(
+        ContractValidationError, match="cannot introduce or reclassify"
+    ):
+        validate_review_response(output, contract, (finding,))
 
 
 def test_claude_final_approval_requires_own_observation_closed() -> None:
