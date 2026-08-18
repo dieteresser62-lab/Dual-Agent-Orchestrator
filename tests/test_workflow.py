@@ -3111,3 +3111,149 @@ def test_final_blocker_runs_regular_correction_commit_then_restarts_full_review(
     assert "ORCHESTRATOR-AUTHORIZED COMPLETED SLICE PATHS" in final_codex_prompt
     assert "src/fix.py" in final_codex_prompt
     assert "Their presence is not an UNEXPECTED-PATH condition" in final_codex_prompt
+
+
+def test_correction_resume_applies_file_limit_to_actual_diff_not_broad_allowlist() -> None:
+    received = datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)
+    first_branch = _changes(
+        "7",
+        "src/early.py",
+        TEST_FILE,
+        full_diff="ORIGINAL BRANCH",
+        start_commit=START_COMMIT,
+    )
+    correction = _changes(
+        "8",
+        "src/fix.py",
+        TEST_FILE,
+        full_diff="SMALL CORRECTION",
+        start_commit="b" * 40,
+    )
+    corrected_branch = _changes(
+        "9",
+        "src/early.py",
+        "src/fix.py",
+        TEST_FILE,
+        full_diff="ORIGINAL BRANCH\nSMALL CORRECTION",
+        start_commit=START_COMMIT,
+    )
+    broad_scope = tuple(
+        sorted(
+            {
+                "src/fix.py",
+                TEST_FILE,
+                *(f"src/authorized_{index}.py" for index in range(10)),
+            }
+        )
+    )
+    driver = FakeDriver(
+        snapshots=[first_branch, correction, corrected_branch],
+        codex_outputs=[
+            _final_report(),
+            _codex_ready("C-01", slice_id="02"),
+            _final_report(),
+        ],
+        reviewer_outputs=[
+            _final_denial(AgentRole.CLAUDE, "C-01"),
+            _review_approval(
+                AgentRole.CLAUDE,
+                finding_status=(
+                    "FINDING_STATUS: C-01 | CLOSED | correction regression proves the fix"
+                ),
+                slice_id="02",
+            ),
+            _review_approval(AgentRole.ANTIGRAVITY, slice_id="02"),
+            _final_approval(AgentRole.CLAUDE),
+            _final_approval(AgentRole.ANTIGRAVITY),
+        ],
+        reviewer_failures=[
+            None,
+            _invocation_failure(
+                AgentRole.CLAUDE,
+                AgentFailureKind.NETWORK,
+                "correction-claude-overloaded",
+                received_at=received,
+            ),
+            None,
+            None,
+            None,
+            None,
+        ],
+        correction_boundaries=[
+            WorkflowCorrectionBoundary(
+                start_commit="b" * 40,
+                scope_paths=broad_scope,
+                start_fingerprint="0" * 64,
+            )
+        ],
+        commit_refs=["c" * 40],
+    )
+    engine = WorkflowEngine(driver, now_fn=lambda: received)
+
+    halted = engine.run_final_review(_completed_single_slice_state(), _context())
+
+    assert halted.exit_code == 3
+    assert halted.state.current_work_unit.kind is WorkUnitKind.CORRECTION
+    assert halted.state.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
+    assert "PRODUCTIVE-FILE-LIMIT" not in (halted.state.current_work_unit.gate.detail or "")
+
+    completed = engine.run_current_work_unit(
+        halted.state.resume_after_invocation_halt(), _context(), halted.history
+    )
+
+    assert completed.completed
+    assert len(driver.commit_calls) == 1
+    assert [call.reviewer for call in driver.reviewer_calls] == [
+        AgentRole.CLAUDE,
+        AgentRole.CLAUDE,
+        AgentRole.CLAUDE,
+        AgentRole.ANTIGRAVITY,
+        AgentRole.CLAUDE,
+        AgentRole.ANTIGRAVITY,
+    ]
+
+
+def test_correction_actual_diff_still_enforces_productive_file_limit() -> None:
+    first_branch = _changes(
+        "7",
+        "src/early.py",
+        TEST_FILE,
+        full_diff="ORIGINAL BRANCH",
+        start_commit=START_COMMIT,
+    )
+    productive_paths = tuple(f"src/fix_{index}.py" for index in range(11))
+    correction = _changes(
+        "8",
+        *productive_paths,
+        TEST_FILE,
+        full_diff="LARGE CORRECTION",
+        start_commit="b" * 40,
+    )
+    broad_scope = tuple(sorted((*productive_paths, TEST_FILE)))
+    driver = FakeDriver(
+        snapshots=[first_branch, correction],
+        codex_outputs=[
+            _final_report(),
+            _codex_ready("C-01", slice_id="02"),
+        ],
+        reviewer_outputs=[_final_denial(AgentRole.CLAUDE, "C-01")],
+        correction_boundaries=[
+            WorkflowCorrectionBoundary(
+                start_commit="b" * 40,
+                scope_paths=broad_scope,
+                start_fingerprint="0" * 64,
+            )
+        ],
+    )
+
+    halted = WorkflowEngine(driver).run_final_review(
+        _completed_single_slice_state(), _context()
+    )
+
+    assert halted.exit_code == 4
+    assert halted.state.current_work_unit.kind is WorkUnitKind.CORRECTION
+    assert halted.state.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
+    assert halted.state.current_work_unit.gate.reason is GateReason.STOP_REQUEST
+    assert "PRODUCTIVE-FILE-LIMIT" in halted.state.current_work_unit.gate.detail
+    assert driver.validation_calls == [first_branch.fingerprint]
+    assert [call.reviewer for call in driver.reviewer_calls] == [AgentRole.CLAUDE]

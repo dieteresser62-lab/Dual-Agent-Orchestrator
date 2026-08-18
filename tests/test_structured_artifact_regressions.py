@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -9,7 +10,7 @@ import pytest
 import orchestrator
 from audit_trail import ReviewAuditEvent, ValidationAuditEvent
 from artifact_bridge import ArtifactBridge, attestation_payload
-from artifact_models import RecordType, ReviewPayload, Role
+from artifact_models import QuotaPausePayload, RecordType, ReviewPayload, Role
 from artifact_store import ArtifactStore
 from contracts import (
     AgentRole,
@@ -23,8 +24,12 @@ from contracts import (
 from orchestrator import ProductionWorkflowDriver
 from workflow import WorkflowExecutionError, WorkflowHistory
 from workflow_state import (
+    AgentFailureKind,
+    InvocationFailureRecord,
     ProtocolBinding,
     ProtocolMode,
+    WorkflowStep,
+    WorkUnitKind,
     init_workflow_state,
 )
 
@@ -128,6 +133,75 @@ def test_external_side_effect_guard_rejects_review_record_ahead_of_mirror(
 
     with pytest.raises(WorkflowExecutionError, match="reviewer decisions differ"):
         driver.assert_structured_decision_context()
+
+
+def test_automatic_quota_pause_persists_matching_chain_record_and_resumes(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/structured-regression")
+    state = _state(repository, "structured-quota-resume")
+    head = _git(repository, "rev-parse", "HEAD")
+    state = state.complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    ).bind_current_slice_git_boundary(
+        start_commit=head,
+        scope_paths=("src/runtime.py",),
+        start_fingerprint="b" * 64,
+    )
+    failure = InvocationFailureRecord(
+        invocation_id="quota-pause-1",
+        idempotency_key=(
+            f"{state.run_id}:{state.current_work_unit_id}:"
+            f"{state.current_step.value}:codex"
+        ),
+        role="codex",
+        failure_kind=AgentFailureKind.QUOTA,
+        provider_text="usage cap reached",
+        received_at=datetime(2026, 8, 18, 10, 0, tzinfo=timezone.utc).isoformat(),
+        step=state.current_step,
+        slice_id=state.current_slice_id,
+        work_unit_id=state.current_work_unit_id,
+        diagnostic_exit_code=2,
+        parse_path="codex:text:relative",
+        source_timezone="UTC",
+        reset_at_utc=datetime(2026, 8, 18, 10, 1, tzinfo=timezone.utc).isoformat(),
+        resume_at_utc=datetime(2026, 8, 18, 10, 1, 5, tzinfo=timezone.utc).isoformat(),
+        safety_margin_seconds=5,
+        auto_resume_count=1,
+        automatic_resume=True,
+        diff_fingerprint="c" * 64,
+    )
+    paused = state.record_invocation_failure(failure, wait_automatically=True)
+    driver = _driver(repository)
+
+    driver.checkpoint(paused, WorkflowHistory(paused.current_work_unit_id))
+
+    chain = ArtifactStore(repository, paused.run_id).load_chain()
+    quota_records = tuple(
+        record for record in chain if isinstance(record.payload, QuotaPausePayload)
+    )
+    assert len(quota_records) == 1
+    assert quota_records[0].payload == QuotaPausePayload(
+        role=Role.CODEX,
+        repository_fingerprint="c" * 64,
+        retry_at=failure.resume_at_utc,
+    )
+
+    assert driver.active_state is not None
+    resumed_state = driver.active_state.resume_after_invocation_halt()
+    driver.checkpoint(
+        resumed_state, WorkflowHistory(resumed_state.current_work_unit_id)
+    )
+    driver.assert_structured_decision_context()
+    assert len(
+        tuple(
+            record
+            for record in ArtifactStore(repository, paused.run_id).load_chain()
+            if isinstance(record.payload, QuotaPausePayload)
+        )
+    ) == 1
 
 
 def test_structured_resume_accepts_mirrored_stopped_review(tmp_path: Path) -> None:

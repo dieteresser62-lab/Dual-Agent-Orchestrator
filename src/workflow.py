@@ -1633,6 +1633,20 @@ class WorkflowEngine:
             )
             self.driver.checkpoint(state, history)
             return state, history
+        if unit.kind is WorkUnitKind.CORRECTION:
+            evidence = evaluate_productive_file_limit(
+                tuple((path,) for path in changes.paths),
+                context.path_classes,
+                maximum=context.max_productive_files,
+            )
+            if evidence is not None:
+                state = state.await_policy_gate(
+                    reason=GateReason.STOP_REQUEST,
+                    detail=evidence.detail,
+                    paths=evidence.paths,
+                )
+                self.driver.checkpoint(state, history)
+                return state, history
         state, test_changes_approved, halted = self._apply_test_change_gate(
             state, context, changes
         )
@@ -1862,6 +1876,11 @@ class WorkflowEngine:
                     scope_paths=boundary.scope_paths,
                     scope_change_groups=boundary.scope_change_groups or None,
                     start_fingerprint=boundary.start_fingerprint,
+                    finding_ids=tuple(
+                        finding.finding_id
+                        for finding in history.findings
+                        if finding.status is FindingStatus.OPEN
+                    ),
                 )
                 history = WorkflowHistory(
                     state.current_work_unit_id,
@@ -2448,6 +2467,7 @@ class WorkflowEngine:
         scope_paths = state.current_slice.scope_paths
         if state.current_work_unit.kind in {
             WorkUnitKind.PLAN,
+            WorkUnitKind.CORRECTION,
             WorkUnitKind.FINAL_REVIEW,
         } or not scope_paths:
             return state, False

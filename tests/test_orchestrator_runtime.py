@@ -9,7 +9,7 @@ from pathlib import Path
 import orchestrator
 import pytest
 from agent_runtime import AgentInvocationError
-from artifact_models import RecordType
+from artifact_models import CorrectionWorkUnitPayload, RecordType
 from artifact_store import ArtifactStore
 from cli import parse_args
 from contracts import (
@@ -453,6 +453,59 @@ def test_structured_bind_survives_round_number_increase_within_same_work_unit(
     assert tuple(item.revision for item in work_units) == (1, 2)
     assert tuple(item.payload.round_number for item in work_units) == (1, 2)
     assert len({item.idempotency_key for item in work_units}) == 2
+
+
+def test_correction_work_unit_persists_correction_work_unit_payload_with_finding_ids(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/structured-correction")
+    task = repository / "task.md"
+    _write_task(task, "feature/structured-correction", "src/runtime.py")
+    head = _git(repository, "rev-parse", "HEAD")
+    state = init_workflow_state(
+        run_id="structured-correction",
+        task_file=str(task),
+        branch="feature/structured-correction",
+        branch_base=head,
+        slice_count=1,
+        task_digest="a" * 64,
+        task_scope_patterns=("src/runtime.py",),
+        target_branch="feature/structured-correction",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V1, "1"),
+    ).complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    ).bind_current_slice_git_boundary(
+        start_commit=head,
+        scope_paths=("src/runtime.py",),
+        start_fingerprint="b" * 64,
+    ).complete_current_slice(
+        commit_ref=head,
+    ).start_final_review_work_unit().complete_current_work_unit().start_correction_work_unit(
+        start_commit=head,
+        scope_paths=("src/runtime.py",),
+        start_fingerprint="c" * 64,
+        finding_ids=("C-14", "C-15"),
+    )
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+
+    driver.bind_work_unit(state)
+
+    correction_records = tuple(
+        record
+        for record in ArtifactStore(repository, state.run_id).load_chain()
+        if isinstance(record.payload, CorrectionWorkUnitPayload)
+    )
+    assert len(correction_records) == 1
+    assert correction_records[0].payload.finding_ids == ("C-14", "C-15")
+    assert correction_records[0].payload.paths == ("src/runtime.py",)
 
 
 def test_structured_checkpoint_projects_record_chain_into_slice_and_overall_audits(

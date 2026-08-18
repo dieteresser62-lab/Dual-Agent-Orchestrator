@@ -1186,6 +1186,7 @@ class WorkflowState:
         scope_paths: tuple[str, ...],
         scope_change_groups: tuple[tuple[str, ...], ...] | None = None,
         start_fingerprint: str,
+        finding_ids: tuple[str, ...],
         updated_at: str | None = None,
     ) -> WorkflowState:
         """Append one regular, commit-backed correction after a failed final review."""
@@ -1199,6 +1200,11 @@ class WorkflowState:
         if not SHA256_PATTERN.fullmatch(start_fingerprint):
             raise WorkflowStateValidationError(
                 "correction start_fingerprint must be a lowercase SHA-256 digest"
+            )
+        _require_unique_non_empty(finding_ids, "correction finding_ids")
+        if not finding_ids:
+            raise WorkflowStateValidationError(
+                "a correction work unit requires at least one open finding"
             )
         if (
             self.current_work_unit.kind is not WorkUnitKind.FINAL_REVIEW
@@ -1221,6 +1227,7 @@ class WorkflowState:
             kind=WorkUnitKind.CORRECTION,
             status=WorkUnitStatus.IN_PROGRESS,
             current_step=WorkflowStep.CODEX_FINAL_CORRECTION,
+            open_findings=finding_ids,
         )
         return replace(
             self,

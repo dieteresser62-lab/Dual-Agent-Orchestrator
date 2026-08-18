@@ -8,6 +8,7 @@ from pathlib import Path
 from artifact_models import (
     BindingPayload,
     ArtifactRecord,
+    CorrectionWorkUnitPayload,
     FindingTransitionPayload,
     GatePayload,
     PlanPayload,
@@ -80,10 +81,14 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
 
     unit_by_id = {str(item.work_unit_id): item for item in state.work_units}
     slice_by_id = {str(item.slice_id): item for item in state.slices}
-    work_records = [item for item in chain if item.record_type is RecordType.WORK_UNIT]
+    work_records = [
+        item
+        for item in chain
+        if item.record_type in {RecordType.WORK_UNIT, RecordType.CORRECTION_WORK_UNIT}
+    ]
     for record in work_records:
         payload = record.payload
-        assert isinstance(payload, WorkUnitPayload)
+        assert isinstance(payload, (WorkUnitPayload, CorrectionWorkUnitPayload))
         unit_id = record.logical_id.removeprefix("work-unit-")
         unit = unit_by_id.get(unit_id)
         slice_record = slice_by_id.get(payload.slice_id)
@@ -95,6 +100,14 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
             or payload.paths != slice_record.scope_paths
         ):
             raise mismatch("work-unit round, slice, or path allowlist differs", record.record_id)
+        if isinstance(payload, CorrectionWorkUnitPayload) and (
+            unit.kind is not WorkUnitKind.CORRECTION
+            or payload.finding_ids != unit.open_findings
+        ):
+            raise mismatch(
+                "correction work-unit finding attribution differs from state-v3",
+                record.record_id,
+            )
 
     current = state.current_work_unit
     if current.kind is not WorkUnitKind.PLAN and state.current_slice.scope_paths:
@@ -107,7 +120,7 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
             raise mismatch("current work unit has no structured record")
         latest = current_records[-1]
         payload = latest.payload
-        assert isinstance(payload, WorkUnitPayload)
+        assert isinstance(payload, (WorkUnitPayload, CorrectionWorkUnitPayload))
         if payload.round_number != current.round_number:
             raise mismatch("current work-unit round differs from the record chain", latest.record_id)
 

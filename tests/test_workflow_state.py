@@ -396,6 +396,7 @@ def test_final_review_references_committed_slice_and_appends_bounded_correction(
         start_commit="b" * 40,
         scope_paths=("src/fix.py",),
         start_fingerprint="2" * 64,
+        finding_ids=("C-01",),
     )
     loaded = WorkflowState.from_dict(correction.to_dict())
     repeated_final = loaded.complete_current_slice(
@@ -412,6 +413,7 @@ def test_final_review_references_committed_slice_and_appends_bounded_correction(
     assert loaded.current_slice.slice_id == 2
     assert loaded.current_slice.status is SliceStatus.IN_PROGRESS
     assert loaded.current_slice.scope_paths == ("src/fix.py",)
+    assert loaded.current_work_unit.open_findings == ("C-01",)
     assert repeated_final_loaded.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
     assert repeated_final_loaded.current_slice.slice_id == 2
     assert repeated_final_loaded.current_slice.status is SliceStatus.COMPLETED

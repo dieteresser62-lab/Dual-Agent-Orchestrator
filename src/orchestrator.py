@@ -21,8 +21,9 @@ from artifact_bridge import (
 from artifact_migration import ArtifactResumeError, resolve_resume_state
 from artifact_projection import ArtifactAuditProjection
 from artifact_models import (
-    BindingPayload, FingerprintKind, GatePayload, ReviewPayload, Role,
-    TaskPayload, WorkUnitPayload, WorkflowCompletionPayload,
+    BindingPayload, CorrectionWorkUnitPayload, FingerprintKind, GatePayload,
+    QuotaPausePayload, ReviewPayload, Role, TaskPayload, WorkUnitPayload,
+    WorkflowCompletionPayload,
 )
 from artifact_store import ArtifactStore
 from audit_trail import (
@@ -339,19 +340,48 @@ class ProductionWorkflowDriver(WorkflowDriver):
             )
         unit = state.current_work_unit
         if unit.kind is not WorkUnitKind.PLAN and state.current_slice.scope_paths:
-            bridge.append(
-                WorkUnitPayload(
+            work_unit_payload = (
+                CorrectionWorkUnitPayload(
                     slice_id=str(unit.slice_id),
                     round_number=unit.round_number,
                     paths=state.current_slice.scope_paths,
-                ),
+                    finding_ids=unit.open_findings,
+                )
+                if unit.kind is WorkUnitKind.CORRECTION
+                else WorkUnitPayload(
+                    slice_id=str(unit.slice_id),
+                    round_number=unit.round_number,
+                    paths=state.current_slice.scope_paths,
+                )
+            )
+            bridge.append(
+                work_unit_payload,
                 logical_id=f"work-unit-{unit.work_unit_id}",
                 idempotency_key=(
+                    f"{'correction-' if unit.kind is WorkUnitKind.CORRECTION else ''}"
                     f"work-unit:{unit.work_unit_id}:round:{unit.round_number}"
                 ),
                 fingerprint_sha256=contract_fingerprint,
                 fingerprint_kind=FingerprintKind.CONTRACT,
             )
+        for persisted_unit in state.work_units:
+            for failure in persisted_unit.invocation_failures:
+                if (
+                    failure.diff_fingerprint is None
+                    or failure.resume_at_utc is None
+                ):
+                    continue
+                bridge.append(
+                    QuotaPausePayload(
+                        role=Role(failure.role),
+                        repository_fingerprint=failure.diff_fingerprint,
+                        retry_at=failure.resume_at_utc,
+                    ),
+                    logical_id=f"quota-pause-{failure.invocation_id}",
+                    idempotency_key=f"quota-pause:{failure.invocation_id}",
+                    fingerprint_sha256=failure.diff_fingerprint,
+                    fingerprint_kind=FingerprintKind.IMPLEMENTATION,
+                )
         if (
             state.work_plan_path is not None
             and state.planned_slices
