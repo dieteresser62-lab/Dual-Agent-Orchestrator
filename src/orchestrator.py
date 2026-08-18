@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import argparse
-import logging
 import hashlib
+import json
+import logging
 import re
 import time
 from dataclasses import replace
@@ -197,6 +198,20 @@ class ProductionWorkflowDriver(WorkflowDriver):
         self._rendered_changes: dict[str, WorkflowChanges] = {}
 
     def bind_work_unit(self, state: WorkflowState) -> None:
+        # Runtime history is written by checkpoint(), not by the pure workflow-state
+        # transitions.  A transition that starts the next work unit in the same engine
+        # invocation can therefore carry an older runtime_history snapshot.  Preserve
+        # the driver's last persisted ledger so the subsequent checkpoint can archive
+        # the just-completed work unit instead of silently dropping its reviews.
+        if (
+            self.active_state is not None
+            and self.active_state.run_id == state.run_id
+            and self.active_state.runtime_history is not None
+        ):
+            state = replace(
+                state,
+                runtime_history=self.active_state.runtime_history,
+            )
         self.active_state = state
         if state.current_work_unit.kind is WorkUnitKind.PLAN and not self.last_codex_output:
             artifact = (
@@ -257,7 +272,12 @@ class ProductionWorkflowDriver(WorkflowDriver):
     def repair_review_contract(self, invocation: ContractRepairInvocation) -> str:
         prompt = (
             "Repair only the formal output contract of the rejected review. Preserve its "
-            "verdict, findings, evidence, and rationale. Return the complete corrected answer.\n\n"
+            "verdict, findings, evidence, and rationale. Return only the complete corrected "
+            "answer without commentary, introduction, or Markdown fences. The first non-empty "
+            f"line must be exactly REVIEWER: {invocation.reviewer.value}. Correct every formal "
+            "contract violation, including a FINDING_STATUS record for every previous open "
+            "finding owned by this reviewer, even when the validation error names only the "
+            "first missing record.\n\n"
             f"Validation error:\n{invocation.validation_error}\n\n"
             f"Contract:\n{invocation.contract}\n\n"
             f"Rejected output:\n{invocation.rejected_output}"
@@ -565,6 +585,21 @@ class ProductionWorkflowDriver(WorkflowDriver):
         )
 
     def checkpoint(self, state: WorkflowState, history: WorkflowHistory) -> None:
+        # Pure workflow transitions return a new state without the runtime ledger
+        # that checkpoint() persisted on the preceding step.  In particular, a
+        # correction commit can start the next final-review work unit in the same
+        # engine invocation.  Merge the driver-owned ledger before archiving the
+        # completed unit, otherwise the audit can bind the new commit to an older
+        # (possibly denying) reviewer result.
+        if (
+            self.active_state is not None
+            and self.active_state.run_id == state.run_id
+            and self.active_state.runtime_history is not None
+        ):
+            state = replace(
+                state,
+                runtime_history=self.active_state.runtime_history,
+            )
         persisted = replace(
             state,
             runtime_history=_history_payload(state.runtime_history, history),
@@ -1121,6 +1156,35 @@ def _is_managed_audit_path(state: WorkflowState, path: str) -> bool:
     )
 
 
+def _new_watch_task_preserved_paths(
+    repository_root: Path,
+    task_contract: TaskContract,
+) -> tuple[str, ...]:
+    """Carry an existing untracked PLAN_ONLY artifact onto its target branch."""
+    if (
+        task_contract.mode is not TaskMode.PLAN_ONLY
+        or task_contract.work_plan_path is None
+    ):
+        return ()
+    candidate = repository_root / task_contract.work_plan_path
+    if not candidate.exists() and not candidate.is_symlink():
+        return ()
+    return (task_contract.work_plan_path,)
+
+
+def _watch_run_has_persisted_state(task_file: Path, run_id: str) -> bool:
+    """Return whether a failed Watch invocation created resumable state for this run."""
+    state_file = Path.cwd().resolve() / ".orchestrator" / "state.json"
+    try:
+        raw = json.loads(state_file.read_text(encoding="utf-8"))
+        persisted_task = Path(raw["task_file"]).resolve()
+    except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+        return False
+    return raw.get("version") == 3 and raw.get("run_id") == run_id and (
+        persisted_task == task_file.resolve()
+    )
+
+
 def _is_planned_slice_document(state: WorkflowState, path: str) -> bool:
     candidate = PurePosixPath(path)
     if not path.startswith("docs/internal/slice-") or candidate.suffix != ".md":
@@ -1315,6 +1379,7 @@ def run_production_workflow(
             root,
             target_branch=task_contract.target_branch,
             excluded_control_paths=_new_watch_task_control_paths(root, task_file),
+            preserved_task_paths=_new_watch_task_preserved_paths(root, task_contract),
         )
         prepared_branch_base = prepared.identity.head
         logger.info(
@@ -1785,6 +1850,9 @@ def run_pipeline(
                 work_unit_id=1,
                 gate_reason="technical_failure",
                 failure_detail=f"{type(exc).__name__}: {exc}",
+                resume_available=_watch_run_has_persisted_state(
+                    task_file, watch_run_id
+                ),
             )
         return 1
 

@@ -18,6 +18,7 @@ from contracts import (
     FindingStatus,
     PlannedSlice,
 )
+from inbox_watcher import WatchTaskDisposition, WatchTaskResult
 from orchestrator import ProductionWorkflowDriver, run_pipeline, run_production_workflow
 from workflow import CodexInvocation, ReviewerInvocation, WorkflowHistory
 from workflow import WorkflowExecutionError
@@ -213,6 +214,100 @@ def test_carry_forward_findings_migrates_reused_legacy_ids_stably() -> None:
         },
     )
     assert orchestrator._carry_forward_findings(state, carried_history) == migrated
+
+
+def test_bind_work_unit_preserves_latest_driver_owned_runtime_history(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/runtime-history")
+    task = repository / "inbox" / "runtime-history.md"
+    task.parent.mkdir()
+    _write_task(task, "feature/runtime-history", "src/runtime.py")
+    base = init_workflow_state(
+        run_id="runtime-history-transition",
+        task_file=str(task),
+        branch="feature/runtime-history",
+        branch_base=_git(repository, "rev-parse", "HEAD"),
+        slice_count=1,
+    )
+    old_history = WorkflowHistory(1).to_dict()
+    latest_history = WorkflowHistory(
+        1,
+        codex_final_report="latest persisted review evidence",
+    ).to_dict()
+    persisted = replace(
+        base,
+        runtime_history={"archive": [], "current": latest_history},
+    )
+    stale_transition = replace(
+        base,
+        runtime_history={"archive": [], "current": old_history},
+    )
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    driver.active_state = persisted
+
+    driver.bind_work_unit(stale_transition)
+
+    assert driver.active_state is not None
+    assert driver.active_state.runtime_history == persisted.runtime_history
+
+
+def test_checkpoint_archives_latest_driver_history_across_work_unit_transition(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/runtime-history-checkpoint")
+    task = repository / "inbox" / "runtime-history-checkpoint.md"
+    task.parent.mkdir()
+    _write_task(task, "feature/runtime-history-checkpoint", "src/runtime.py")
+    head = _git(repository, "rev-parse", "HEAD")
+    base = init_workflow_state(
+        run_id="runtime-history-checkpoint-transition",
+        task_file=str(task),
+        branch="feature/runtime-history-checkpoint",
+        branch_base=head,
+        slice_count=1,
+    ).bind_current_slice_git_boundary(
+        start_commit=head,
+        scope_paths=("src/runtime.py",),
+        start_fingerprint="a" * 64,
+    )
+    completed = base.complete_current_slice(commit_ref="b" * 40)
+    latest_history = WorkflowHistory(
+        1,
+        codex_final_report="latest approving review evidence",
+    ).to_dict()
+    old_history = WorkflowHistory(
+        1,
+        codex_final_report="stale denying review evidence",
+    ).to_dict()
+    persisted = replace(
+        completed,
+        runtime_history={"archive": [], "current": latest_history},
+    )
+    stale_transition = replace(
+        completed,
+        runtime_history={"archive": [], "current": old_history},
+    ).start_final_review_work_unit()
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    driver.active_state = persisted
+
+    driver.checkpoint(stale_transition, WorkflowHistory(2))
+
+    saved = json.loads(driver.state_file.read_text(encoding="utf-8"))
+    assert saved["runtime_history"]["archive"] == [latest_history]
+    assert saved["runtime_history"]["current"]["work_unit_id"] == 2
 
 
 def test_new_inbox_watch_task_persists_deterministic_audit_report_path(
@@ -570,6 +665,77 @@ def test_new_watch_task_can_switch_with_unignored_in_repository_control_files(
     )
     assert task.is_file()
     assert (inbox / ".bug.md.watch.json").is_file()
+
+
+def test_new_plan_watch_task_carries_existing_untracked_bound_plan(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repository = _repository(tmp_path, "feature/existing-plan-target")
+    _git(repository, "switch", "master")
+    plan = repository / "docs" / "internal" / "existing-plan.md"
+    plan.parent.mkdir(parents=True)
+    plan.write_text("# Existing plan\n", encoding="utf-8")
+    inbox = repository / "inbox"
+    inbox.mkdir()
+    task = inbox / "existing-plan.md"
+    task.write_text(
+        "\n".join(
+            (
+                "ORCHESTRATOR_MODE: PLAN_ONLY",
+                "WORK_PLAN_PATH: docs/internal/existing-plan.md",
+                "TARGET_BRANCH: feature/existing-plan-target",
+                "TASK_SCOPE: docs/internal/existing-plan.md",
+            )
+        ),
+        encoding="utf-8",
+    )
+    args = _args(repository, task)
+    args.watch_run_id = "watch-existing-plan"
+    captured: dict[str, object] = {}
+    real_fresh_state = orchestrator._fresh_state
+
+    class StateCaptured(RuntimeError):
+        pass
+
+    def capture_state(**kwargs):
+        state = real_fresh_state(**kwargs)
+        captured["state"] = state
+        raise StateCaptured
+
+    monkeypatch.setattr(orchestrator, "_fresh_state", capture_state)
+    monkeypatch.chdir(repository)
+
+    with pytest.raises(StateCaptured):
+        run_production_workflow(task, args, force_new=True)
+
+    state = captured["state"]
+    assert state.execution_mode == "PLAN_ONLY"
+    assert state.work_plan_path == "docs/internal/existing-plan.md"
+    assert _git(repository, "branch", "--show-current") == (
+        "feature/existing-plan-target"
+    )
+    assert plan.read_text(encoding="utf-8") == "# Existing plan\n"
+
+
+def test_watch_pipeline_failure_before_state_disables_resume(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repository = _repository(tmp_path, "feature/preflight-target")
+    _git(repository, "switch", "master")
+    (repository / "foreign.txt").write_text("blocks switch\n", encoding="utf-8")
+    task = tmp_path / "preflight-task.md"
+    _write_task(task, "feature/preflight-target", "src/new.py")
+    args = _args(repository, task)
+    args.watch_run_id = "watch-preflight-failure"
+    monkeypatch.chdir(repository)
+
+    result = run_pipeline(task, args, force_new=True)
+
+    assert isinstance(result, WatchTaskResult)
+    assert result.disposition is WatchTaskDisposition.TECHNICAL_FAILURE
+    assert result.step == "pipeline"
+    assert result.resume_available is False
+    assert not (repository / ".orchestrator" / "state.json").exists()
 
 
 def test_watch_resume_does_not_switch_back_after_branch_drift(

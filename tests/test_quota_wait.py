@@ -51,6 +51,38 @@ def test_relative_reset_uses_fixed_received_timestamp(text: str, seconds: int) -
     assert parsed.parse_path == "claude:text:relative"
 
 
+def test_claude_local_clock_reset_with_iana_timezone_is_automatic_evidence() -> None:
+    received = datetime(2026, 8, 17, 16, 47, 33, tzinfo=timezone.utc)
+
+    parsed = parse_quota_reset(
+        "claude",
+        "You've hit your session limit · resets 8:10pm (Europe/Berlin)",
+        received_at=received,
+    )
+
+    assert parsed is not None
+    assert parsed.reset_at_utc == datetime(
+        2026, 8, 17, 18, 10, tzinfo=timezone.utc
+    )
+    assert parsed.parse_path == "claude:text:local-clock"
+    assert parsed.source_timezone == "Europe/Berlin"
+
+
+def test_local_clock_reset_rolls_forward_to_next_day() -> None:
+    received = datetime(2026, 8, 17, 19, 0, tzinfo=timezone.utc)
+
+    parsed = parse_quota_reset(
+        "claude",
+        "session limit; resets 8:10pm (Europe/Berlin)",
+        received_at=received,
+    )
+
+    assert parsed is not None
+    assert parsed.reset_at_utc == datetime(
+        2026, 8, 18, 18, 10, tzinfo=timezone.utc
+    )
+
+
 def test_nested_structured_provider_reset_precedes_prose() -> None:
     parsed = parse_quota_reset(
         "antigravity",

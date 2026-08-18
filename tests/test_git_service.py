@@ -199,6 +199,50 @@ def test_new_watch_task_preserves_only_untracked_task_control_paths(
     assert identity.read_text(encoding="utf-8") == "identity\n"
 
 
+def test_new_watch_task_carries_exact_untracked_plan_to_created_branch(
+    tmp_path: Path,
+) -> None:
+    repository, _ = _new_repository(tmp_path)
+    _git(repository, "switch", "master")
+    plan = repository / "docs" / "internal" / "existing-plan.md"
+    plan.parent.mkdir(parents=True)
+    plan.write_text("# Existing plan\n", encoding="utf-8")
+
+    prepared = prepare_new_watch_task_branch(
+        repository,
+        target_branch="feature/existing-plan",
+        preserved_task_paths=("docs/internal/existing-plan.md",),
+    )
+
+    assert prepared.action == "created"
+    assert prepared.previous_branch == "master"
+    assert prepared.identity.branch == "feature/existing-plan"
+    assert plan.read_text(encoding="utf-8") == "# Existing plan\n"
+    assert _git(repository, "ls-files", "--others", "--exclude-standard") == (
+        "docs/internal/existing-plan.md"
+    )
+
+
+def test_new_watch_task_refuses_tracked_plan_as_preserved_task_path(
+    tmp_path: Path,
+) -> None:
+    repository, _ = _new_repository(tmp_path)
+    plan = repository / "docs" / "internal" / "tracked-plan.md"
+    plan.parent.mkdir(parents=True)
+    plan.write_text("# Tracked plan\n", encoding="utf-8")
+    _git(repository, "add", "docs/internal/tracked-plan.md")
+    _git(repository, "commit", "-m", "track plan")
+
+    with pytest.raises(GitTransactionError, match="only untracked task artifacts"):
+        prepare_new_watch_task_branch(
+            repository,
+            target_branch="feature/transaction",
+            preserved_task_paths=("docs/internal/tracked-plan.md",),
+        )
+
+    assert _git(repository, "branch", "--show-current") == "feature/transaction"
+
+
 def test_new_watch_task_refuses_to_exclude_tracked_task_control_path(
     tmp_path: Path,
 ) -> None:

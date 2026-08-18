@@ -252,13 +252,15 @@ def prepare_new_watch_task_branch(
     *,
     target_branch: str,
     excluded_control_paths: Sequence[str] = (),
+    preserved_task_paths: Sequence[str] = (),
 ) -> TaskBranchPreparation:
     """Create or activate a target branch for a new Inbox/Watch task.
 
     This operation is intentionally limited to new tasks. Callers must never use it
     to repair branch drift for a persisted workflow. Switching is refused when the
-    current branch has non-ignored working-tree or index changes; no files are
-    stashed, cleaned, or otherwise adopted automatically.
+    current branch has non-ignored working-tree or index changes. Exact untracked
+    task artifacts may be carried when ``preserved_task_paths`` names them; no
+    files are stashed, cleaned, or otherwise adopted automatically.
     """
     if not FEATURE_BRANCH_PATTERN.fullmatch(target_branch):
         raise GitTransactionError(
@@ -267,6 +269,11 @@ def prepare_new_watch_task_branch(
         )
     current = inspect_repository(repository_root)
     excluded = _normalize_optional_scope_paths(excluded_control_paths)
+    preserved = _normalize_optional_scope_paths(preserved_task_paths)
+    if set(excluded).intersection(preserved):
+        raise GitTransactionError(
+            "task control paths and preserved task paths must be disjoint"
+        )
     for path in excluded:
         tracked = _git(
             current.repository_root,
@@ -282,13 +289,50 @@ def prepare_new_watch_task_branch(
                 f"to be untracked; active branch remains {current.branch!r}; "
                 f"tracked control path: {path}"
             )
+    for path in preserved:
+        tracked = _git(
+            current.repository_root,
+            "ls-files",
+            "--error-unmatch",
+            "--",
+            path,
+            accepted_exit_codes=(0, 1),
+        )
+        if tracked.returncode == 0:
+            raise GitTransactionError(
+                "automatic target-branch switch may preserve only untracked task "
+                f"artifacts; active branch remains {current.branch!r}; "
+                f"tracked task path: {path}"
+            )
+        candidate = current.repository_root.joinpath(*PurePosixPath(path).parts)
+        if candidate.is_symlink() or not candidate.is_file():
+            raise GitTransactionError(
+                "automatic target-branch switch may preserve only regular untracked "
+                f"task files; active branch remains {current.branch!r}; path: {path}"
+            )
+        untracked = os.fsdecode(
+            _git(
+                current.repository_root,
+                "ls-files",
+                "--others",
+                "--exclude-standard",
+                "-z",
+                "--",
+                path,
+            ).stdout
+        ).split("\0")
+        if path not in untracked:
+            raise GitTransactionError(
+                "automatic target-branch switch may preserve only visible untracked "
+                f"task files; active branch remains {current.branch!r}; path: {path}"
+            )
     if current.branch == target_branch:
         return TaskBranchPreparation(current, current.branch, "already-active")
 
     changes = collect_repository_changes(
         current.repository_root,
         current.head,
-        excluded_paths=excluded,
+        excluded_paths=(*excluded, *preserved),
     )
     if changes.entries:
         raise GitTransactionError(

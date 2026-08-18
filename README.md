@@ -78,7 +78,7 @@ Danach startet ein einziger Befehl Planung, Planreviews, lokalen Plancommit, Imp
 run_task --watch
 ```
 
-Der Watcher legt einen fehlenden Zielbranch an oder wechselt sicher auf einen vorhandenen. Bei einem notwendigen Branchwechsel mit nicht ignorierten Arbeitsbaum- oder Indexänderungen hält er an, statt Änderungen zu stashen oder mitzunehmen. Auf einem bereits aktiven Zielbranch beginnt die neue Aufgabe am aktuellen `HEAD`.
+Der Watcher legt einen fehlenden Zielbranch an oder wechselt sicher auf einen vorhandenen. Bei einem notwendigen Branchwechsel mit nicht ignorierten Arbeitsbaum- oder Indexänderungen hält er an, statt Änderungen zu stashen oder mitzunehmen. Die einzige enge Ausnahme ist ein bereits vorhandener, regulärer und noch unversionierter `PLAN_ONLY`-Arbeitsplan, der im Auftrag exakt als `WORK_PLAN_PATH` gebunden ist; diesen nimmt der Branchwechsel als Aufgabenartefakt mit. Andere Änderungen oder ein bereits getrackter Plan bleiben ein Stopgrund. Auf einem bereits aktiven Zielbranch beginnt die neue Aufgabe am aktuellen `HEAD`.
 
 Formale Einzelaufgaben bleiben für fortgeschrittene und maschinell erzeugte Aufträge verfügbar. [example-plan-task.md](example-plan-task.md) zeigt einen formalen Planauftrag, [example-task.md](example-task.md) einen formalen Implementierungsauftrag:
 
@@ -326,7 +326,7 @@ Für deterministische Negativ- und Fortsetzungsszenarien kann ein State-v3-JSON-
 | `--quota-safety-margin <seconds>` | `60` | Nach einem erkannten Reset zusätzlich zu wartende Zeit. |
 | `--quota-max-wait <seconds>` | `86400` | Maximale automatische Wartezeit. |
 | `--quota-max-auto-resumes <count>` | `1` | Automatische Fortsetzungen je blockiertem Rollenschritt. |
-| `--quota-heartbeat-interval <seconds>` | `30` | Heartbeat-Intervall während des Quotawartens. |
+| `--quota-heartbeat-interval <seconds>` | `300` | Heartbeat-Intervall während des Quotawartens. |
 
 ### Agentenausgabe und Rollenkonfiguration
 

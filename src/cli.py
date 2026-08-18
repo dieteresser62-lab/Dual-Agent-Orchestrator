@@ -569,7 +569,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--quota-heartbeat-interval",
         type=int,
         default=None,
-        help="Quota-wait heartbeat interval in seconds (default: 30).",
+        help="Quota-wait heartbeat interval in seconds (default: 300).",
     )
     parser.add_argument(
         "--agent-output",

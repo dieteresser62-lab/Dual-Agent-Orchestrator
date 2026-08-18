@@ -13,6 +13,15 @@ from contracts import PlannedSlice
 STATE_VERSION = 3
 DEFAULT_MAX_CODEX_RETURNS = 4
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+QUOTA_RESUME_DIFF_PATTERN = re.compile(
+    r"^QUOTA-RESUME-DIFF \| .*\bgot ([0-9a-f]{64})$"
+)
+
+
+def quota_resume_diff_acknowledgement(
+    invocation_id: str, fingerprint: str
+) -> str:
+    return f"quota-resume-diff:{invocation_id}:{fingerprint}"
 
 
 class WorkflowStateValidationError(ValueError):
@@ -905,12 +914,18 @@ class WorkflowState:
             extra_slice_ids = {
                 item.slice_id for item in self.slices[len(self.planned_slices):]
             }
+            allowed_extra_slice_work_units = {
+                WorkUnitKind.CORRECTION,
+                WorkUnitKind.FINAL_REVIEW,
+            }
             if any(
-                unit.slice_id in extra_slice_ids and unit.kind is not WorkUnitKind.CORRECTION
+                unit.slice_id in extra_slice_ids
+                and unit.kind not in allowed_extra_slice_work_units
                 for unit in self.work_units
             ):
                 raise WorkflowStateValidationError(
-                    "only correction work units may extend the persisted Slice plan"
+                    "only correction and subsequent final-review work units may "
+                    "extend the persisted Slice plan"
                 )
         if self.runtime_history is not None and not isinstance(
             self.runtime_history, Mapping
@@ -1540,7 +1555,28 @@ class WorkflowState:
         current = self.current_work_unit
         next_count = current.codex_return_count + 1
         if next_count > current.max_codex_returns:
-            raise WorkflowStateValidationError("Codex return limit was already reached")
+            # State files produced before iteration-limit continuation extended the
+            # budget could have a cleared gate while still carrying an exhausted
+            # counter.  The user already acknowledged that limit by resuming, so
+            # recover into the next bounded block without replaying a round number
+            # or counting the same Codex return twice.
+            extended_unit = replace(
+                current,
+                status=WorkUnitStatus.IN_PROGRESS,
+                current_step=return_step,
+                round_number=current.round_number + 1,
+                max_codex_returns=(
+                    current.max_codex_returns + DEFAULT_MAX_CODEX_RETURNS
+                ),
+                gate=GateRecord(),
+                reviewer=reviewer,
+                open_findings=open_findings,
+            )
+            return self._replace_current_unit(
+                extended_unit,
+                slices=self._slices_with_current_status(SliceStatus.IN_PROGRESS),
+                updated_at=updated_at,
+            )
         limit_reached = next_count == current.max_codex_returns
         gate = (
             GateRecord(
@@ -1684,9 +1720,38 @@ class WorkflowState:
             raise WorkflowStateValidationError(
                 "fingerprint-bound gate requires an explicit recorded user decision"
             )
+        continuing_iteration_limit = current.gate.reason is GateReason.ITERATION_LIMIT
+        completed_side_effects = current.completed_side_effects
+        if (
+            current.gate.reason is GateReason.STOP_REQUEST
+            and current.gate.detail is not None
+            and current.invocation_failures
+        ):
+            match = QUOTA_RESUME_DIFF_PATTERN.fullmatch(current.gate.detail)
+            if match is not None:
+                acknowledgement = quota_resume_diff_acknowledgement(
+                    current.invocation_failures[-1].invocation_id,
+                    match.group(1),
+                )
+                if acknowledgement not in completed_side_effects:
+                    completed_side_effects = (
+                        *completed_side_effects,
+                        acknowledgement,
+                    )
         updated_unit = replace(
             current,
             status=WorkUnitStatus.IN_PROGRESS,
+            round_number=(
+                current.round_number + 1
+                if continuing_iteration_limit
+                else current.round_number
+            ),
+            max_codex_returns=(
+                current.max_codex_returns + DEFAULT_MAX_CODEX_RETURNS
+                if continuing_iteration_limit
+                else current.max_codex_returns
+            ),
+            completed_side_effects=completed_side_effects,
             gate=GateRecord(),
         )
         slices = self._slices_with_current_status(SliceStatus.IN_PROGRESS)

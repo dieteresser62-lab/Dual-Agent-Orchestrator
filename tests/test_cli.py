@@ -98,6 +98,7 @@ def test_quota_wait_policy_defaults_and_explicit_disable(tmp_path: Path) -> None
     )
 
     assert default.quota_wait_policy == QuotaWaitPolicy()
+    assert default.quota_wait_policy.heartbeat_interval_seconds == 300
     assert disabled.quota_wait_policy == QuotaWaitPolicy(
         automatic=False,
         safety_margin_seconds=15,

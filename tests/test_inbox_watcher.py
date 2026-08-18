@@ -888,6 +888,53 @@ def test_technical_retry_uses_stable_run_id_and_resume_context(tmp_path: Path) -
     assert not (inbox / "retry.md.attempts").exists()
 
 
+def test_pre_state_technical_retry_restarts_fresh_with_same_run_id(
+    tmp_path: Path,
+) -> None:
+    inbox = tmp_path / "inbox"
+    outbox = tmp_path / "outbox"
+    inbox.mkdir()
+    task = inbox / "preflight-retry.md"
+    task.write_text("retry", encoding="utf-8")
+    calls: list[tuple[str, bool, bool]] = []
+
+    def process(
+        _task: Path, args: Namespace, force_new: bool
+    ) -> WatchTaskResult:
+        calls.append((args.watch_run_id, args.resume, force_new))
+        if len(calls) == 1:
+            return WatchTaskResult(
+                exit_code=1,
+                run_id=args.watch_run_id,
+                disposition=WatchTaskDisposition.TECHNICAL_FAILURE,
+                status="technical_failure",
+                step="pipeline",
+                work_unit_id=1,
+                gate_reason="technical_failure",
+                failure_detail="GitTransactionError: preflight failed",
+                resume_available=False,
+            )
+        return WatchTaskResult.from_workflow(
+            _workflow_result(args.watch_run_id, final=True)
+        )
+
+    assert watch_inbox(
+        inbox_dir=inbox,
+        outbox_dir=outbox,
+        poll_interval=0.01,
+        args=_args(),
+        process_task=process,
+        max_retries=3,
+        sleep_fn=_InterruptingSleep(interrupt_after=1),
+        time_fn=lambda: 10_000_000_000.0,
+    ) == 0
+
+    assert calls[0][0] == calls[1][0]
+    assert calls[0][1:] == (False, True)
+    assert calls[1][1:] == (False, True)
+    assert len(list((outbox / "done").glob("*.md"))) == 1
+
+
 def test_fifo_tasks_receive_distinct_isolated_run_ids(tmp_path: Path) -> None:
     inbox = tmp_path / "inbox"
     outbox = tmp_path / "outbox"

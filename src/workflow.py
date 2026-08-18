@@ -85,6 +85,7 @@ from workflow_state import (
     WorkflowStep,
     WorkUnitKind,
     WorkUnitStatus,
+    quota_resume_diff_acknowledgement,
 )
 
 
@@ -169,6 +170,50 @@ def normalize_review_contract_output(
         kept.append(line)
     text = "\n".join(kept).strip()
 
+    existing_update_ids: set[str] = set()
+    update_pattern = re.compile(
+        r"^\s*(?:FINDING_STATUS|FINDING_RECLASSIFIED)\s*:\s*([^|]+?)\s*\|",
+        re.IGNORECASE | re.MULTILINE,
+    )
+    for match in update_pattern.finditer(text):
+        existing_update_ids.add(match.group(1).strip().upper())
+    missing_owned_open = tuple(
+        finding.finding_id
+        for finding in sorted(previous_findings, key=lambda item: item.finding_id)
+        if finding.status is FindingStatus.OPEN
+        and finding.origin.reporter is contract.reviewer
+        and finding.finding_id not in existing_update_ids
+    )
+    if missing_owned_open:
+        lines = text.splitlines()
+        insertion_marker = re.compile(
+            r"^[ \t]*(?:REVIEW_EVIDENCE|PRE_MORTEM|PLAN_APPROVAL|SLICE_APPROVAL|"
+            r"FINAL_APPROVAL|STATUS)[ \t]*:",
+            re.IGNORECASE,
+        )
+        insertion_index = next(
+            (
+                index
+                for index, line in enumerate(lines)
+                if insertion_marker.match(line) is not None
+            ),
+            len(lines),
+        )
+        carry_forward = [
+            f"FINDING_STATUS: {finding_id} | OPEN | Carried forward unchanged; "
+            "the current review supplied no explicit status update."
+            for finding_id in missing_owned_open
+        ]
+        lines[insertion_index:insertion_index] = carry_forward
+        text = "\n".join(lines).strip()
+        changed = True
+        logger.info(
+            "Carried forward omitted reviewer-owned open findings: role=%s step=%s ids=%s",
+            contract.reviewer.value,
+            contract.name,
+            ",".join(missing_owned_open),
+        )
+
     evidence_lines = text.splitlines()
     evidence_prefix = re.compile(
         r"^(?P<label>[ \t]*REVIEW_EVIDENCE[ \t]*:[ \t]*)(?P<body>.*)$",
@@ -227,6 +272,54 @@ def normalize_review_contract_output(
             contract.name,
         )
     return text
+
+
+_REVIEW_CONTRACT_MARKER_LINE = re.compile(
+    r"^[ \t]*(?:REVIEWER|TEST_FILES_TOUCHED|NEW_FINDING|FINDING_STATUS|"
+    r"FINDING_RECLASSIFIED|REVIEW_EVIDENCE|PRE_MORTEM|PLAN_APPROVAL|"
+    r"SLICE_APPROVAL|FINAL_APPROVAL|STOP_REQUESTED|STATUS)[ \t]*:",
+    re.IGNORECASE,
+)
+
+
+def normalize_repaired_review_contract_output(
+    output: str,
+    contract: StepContract,
+    previous_findings: tuple[FindingRecord, ...],
+) -> str:
+    """Extract one unambiguous repaired contract block before normalizing it."""
+    text = output.strip()
+    lines = text.splitlines()
+    reviewer_pattern = re.compile(
+        rf"^[ \t]*REVIEWER[ \t]*:[ \t]*{re.escape(contract.reviewer.value)}[ \t]*$",
+        re.IGNORECASE,
+    )
+    reviewer_indexes = [
+        index for index, line in enumerate(lines) if reviewer_pattern.fullmatch(line)
+    ]
+    if len(reviewer_indexes) == 1 and reviewer_indexes[0] > 0:
+        reviewer_index = reviewer_indexes[0]
+        prefix = lines[:reviewer_index]
+        candidate = lines[reviewer_index:]
+        non_empty_candidate = [line.strip() for line in candidate if line.strip()]
+        prefix_has_contract_marker = any(
+            _REVIEW_CONTRACT_MARKER_LINE.match(line) is not None for line in prefix
+        )
+        candidate_has_single_done = (
+            bool(non_empty_candidate)
+            and non_empty_candidate[-1] == "STATUS: DONE"
+            and sum(line == "STATUS: DONE" for line in non_empty_candidate) == 1
+        )
+        if not prefix_has_contract_marker and candidate_has_single_done:
+            text = "\n".join(candidate).strip()
+            logger.info(
+                "Removed non-contract preamble from repaired reviewer output: "
+                "role=%s step=%s lines=%d",
+                contract.reviewer.value,
+                contract.name,
+                reviewer_index,
+            )
+    return normalize_review_contract_output(text, contract, previous_findings)
 
 
 class ValidationExecutionError(WorkflowExecutionError):
@@ -1904,7 +1997,12 @@ class WorkflowEngine:
         unexpected = self._validate_change_boundary(
             state, changes, state.current_work_unit.kind
         )
-        if unexpected or changes.fingerprint != failure.diff_fingerprint:
+        acknowledged = quota_resume_diff_acknowledgement(
+            failure.invocation_id, changes.fingerprint
+        ) in state.current_work_unit.completed_side_effects
+        if unexpected or (
+            changes.fingerprint != failure.diff_fingerprint and not acknowledged
+        ):
             paths = unexpected or changes.user_gate_paths
             halted = state.await_policy_gate(
                 reason=GateReason.STOP_REQUEST,
@@ -1937,7 +2035,7 @@ class WorkflowEngine:
                 )
             )
             try:
-                repaired = normalize_review_contract_output(
+                repaired = normalize_repaired_review_contract_output(
                     repaired, contract, findings
                 )
                 return validate_review_response(repaired, contract, findings)

@@ -9,6 +9,7 @@ from contracts import PlannedSlice
 from workflow_state import (
     AgentFailureKind,
     DEFAULT_MAX_CODEX_RETURNS,
+    GateRecord,
     GateReason,
     GateStatus,
     InvocationFailureRecord,
@@ -198,9 +199,69 @@ def test_resume_after_user_decision_keeps_saved_step_and_review_context() -> Non
     assert resumed.current_work_unit.status is WorkUnitStatus.IN_PROGRESS
     assert resumed.current_work_unit.gate.status is GateStatus.CLEAR
     assert resumed.current_work_unit.codex_return_count == DEFAULT_MAX_CODEX_RETURNS
+    assert resumed.current_work_unit.round_number == DEFAULT_MAX_CODEX_RETURNS + 1
+    assert resumed.current_work_unit.max_codex_returns == DEFAULT_MAX_CODEX_RETURNS * 2
     assert resumed.current_work_unit.reviewer is Reviewer.ANTIGRAVITY
     assert resumed.current_work_unit.open_findings == ("A-01",)
     assert resumed.current_slice.status is SliceStatus.IN_PROGRESS
+
+    for expected_count in range(
+        DEFAULT_MAX_CODEX_RETURNS + 1,
+        DEFAULT_MAX_CODEX_RETURNS * 2 + 1,
+    ):
+        resumed = resumed.record_review_denial(
+            reviewer=Reviewer.ANTIGRAVITY,
+            open_findings=("A-01",),
+            return_step=WorkflowStep.CODEX_CORRECTION,
+        )
+        assert resumed.current_work_unit.codex_return_count == expected_count
+
+    assert resumed.current_work_unit.status is WorkUnitStatus.AWAITING_USER_DECISION
+    assert resumed.current_work_unit.gate.reason is GateReason.ITERATION_LIMIT
+    assert resumed.current_work_unit.round_number == DEFAULT_MAX_CODEX_RETURNS * 2
+
+
+def test_review_denial_recovers_state_cleared_by_legacy_iteration_resume() -> None:
+    state = make_state()
+    for _ in range(DEFAULT_MAX_CODEX_RETURNS):
+        state = state.record_review_denial(
+            reviewer=Reviewer.CLAUDE,
+            open_findings=("C-01",),
+            return_step=WorkflowStep.CODEX_CORRECTION,
+        )
+
+    legacy_resumed = replace(
+        state,
+        work_units=tuple(
+            replace(
+                unit,
+                status=WorkUnitStatus.IN_PROGRESS,
+                gate=GateRecord(),
+            )
+            if unit.work_unit_id == state.current_work_unit_id
+            else unit
+            for unit in state.work_units
+        ),
+        slices=tuple(
+            replace(item, status=SliceStatus.IN_PROGRESS)
+            if item.slice_id == state.current_slice_id
+            else item
+            for item in state.slices
+        ),
+    )
+
+    recovered = legacy_resumed.record_review_denial(
+        reviewer=Reviewer.CLAUDE,
+        open_findings=("C-02",),
+        return_step=WorkflowStep.CODEX_CORRECTION,
+    )
+
+    assert recovered.current_work_unit.status is WorkUnitStatus.IN_PROGRESS
+    assert recovered.current_work_unit.gate.status is GateStatus.CLEAR
+    assert recovered.current_work_unit.codex_return_count == DEFAULT_MAX_CODEX_RETURNS
+    assert recovered.current_work_unit.round_number == DEFAULT_MAX_CODEX_RETURNS + 1
+    assert recovered.current_work_unit.max_codex_returns == DEFAULT_MAX_CODEX_RETURNS * 2
+    assert recovered.current_work_unit.open_findings == ("C-02",)
 
 
 def test_review_denial_requires_findings_and_unique_records() -> None:
@@ -281,6 +342,9 @@ def test_final_review_references_committed_slice_and_appends_bounded_correction(
         branch_base="a" * 40,
         slice_count=1,
         timestamp="2026-08-11T10:00:00+00:00",
+    ).bind_slice_plan(
+        (PlannedSlice(1, "initial implementation", ("src/one.py",)),),
+        first_start_commit="a" * 40,
     ).complete_current_work_unit().start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
@@ -303,6 +367,10 @@ def test_final_review_references_committed_slice_and_appends_bounded_correction(
         start_fingerprint="2" * 64,
     )
     loaded = WorkflowState.from_dict(correction.to_dict())
+    repeated_final = loaded.complete_current_slice(
+        commit_ref="c" * 40,
+    ).start_final_review_work_unit()
+    repeated_final_loaded = WorkflowState.from_dict(repeated_final.to_dict())
 
     assert final.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
     assert final.current_step is WorkflowStep.CODEX_FINAL_REVIEW
@@ -313,6 +381,10 @@ def test_final_review_references_committed_slice_and_appends_bounded_correction(
     assert loaded.current_slice.slice_id == 2
     assert loaded.current_slice.status is SliceStatus.IN_PROGRESS
     assert loaded.current_slice.scope_paths == ("src/fix.py",)
+    assert repeated_final_loaded.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
+    assert repeated_final_loaded.current_slice.slice_id == 2
+    assert repeated_final_loaded.current_slice.status is SliceStatus.COMPLETED
+    assert repeated_final_loaded.current_slice.commit_ref == "c" * 40
 
 
 def test_final_review_requires_all_slices_committed() -> None:

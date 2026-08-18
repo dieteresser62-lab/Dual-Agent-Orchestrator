@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Callable, Mapping, TextIO
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from agent_adapters import (
     AGENT_REGISTRY,
@@ -138,7 +139,7 @@ class QuotaWaitPolicy:
     safety_margin_seconds: int = 60
     maximum_wait_seconds: int = 86_400
     maximum_auto_resumes: int = 1
-    heartbeat_interval_seconds: int = 30
+    heartbeat_interval_seconds: int = 300
 
     def __post_init__(self) -> None:
         if not isinstance(self.automatic, bool):
@@ -947,6 +948,10 @@ _RELATIVE_RESET_PATTERN = re.compile(
     r"(?i)\b(?:try again|retry|resets?|available again)\s+(?:after|in)\s+"
     r"(\d+(?:\.\d+)?)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)\b"
 )
+_LOCAL_CLOCK_RESET_PATTERN = re.compile(
+    r"(?i)\bresets?(?:\s+at)?\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)"
+    r"\s*\(\s*([A-Za-z0-9._+-]+(?:/[A-Za-z0-9._+-]+)+)\s*\)"
+)
 _STRUCTURED_ABSOLUTE_KEYS = frozenset(
     {"reset_at", "resets_at", "reset_time", "resettime", "retry_at"}
 )
@@ -1001,6 +1006,47 @@ def parse_quota_reset(
     if len(distinct_absolute) > 1:
         return None
 
+    local_clock_values: list[tuple[datetime, str]] = []
+    for hour_text, minute_text, meridiem, timezone_name in (
+        _LOCAL_CLOCK_RESET_PATTERN.findall(provider_text or "")
+    ):
+        hour = int(hour_text)
+        minute = int(minute_text or "0")
+        if not 1 <= hour <= 12 or not 0 <= minute <= 59:
+            continue
+        try:
+            source_zone = ZoneInfo(timezone_name)
+        except (ZoneInfoNotFoundError, ValueError):
+            continue
+        hour_24 = hour % 12 + (12 if meridiem.lower() == "pm" else 0)
+        received_local = received_utc.astimezone(source_zone)
+        local_naive = datetime.combine(
+            received_local.date(),
+            datetime.min.time().replace(hour=hour_24, minute=minute),
+        )
+        candidate = _unambiguous_local_datetime(local_naive, source_zone)
+        if candidate is None:
+            continue
+        if candidate.astimezone(timezone.utc) <= received_utc:
+            local_naive += timedelta(days=1)
+            candidate = _unambiguous_local_datetime(local_naive, source_zone)
+            if candidate is None:
+                continue
+        local_clock_values.append((candidate, timezone_name))
+    distinct_local_clocks = {
+        (item.astimezone(timezone.utc), timezone_name)
+        for item, timezone_name in local_clock_values
+    }
+    if len(distinct_local_clocks) == 1:
+        parsed, timezone_name = local_clock_values[0]
+        return QuotaReset(
+            parsed,
+            f"{agent_key}:text:local-clock",
+            timezone_name,
+        )
+    if len(distinct_local_clocks) > 1:
+        return None
+
     relative_values: list[timedelta] = []
     for amount_text, unit in _RELATIVE_RESET_PATTERN.findall(provider_text or ""):
         amount = float(amount_text)
@@ -1020,6 +1066,20 @@ def parse_quota_reset(
         f"{agent_key}:text:relative",
         received_at.tzname() or str(received_at.tzinfo),
     )
+
+
+def _unambiguous_local_datetime(
+    local_naive: datetime, source_zone: ZoneInfo
+) -> datetime | None:
+    """Attach an IANA zone only when the local wall clock identifies one instant."""
+    first = local_naive.replace(tzinfo=source_zone, fold=0)
+    second = local_naive.replace(tzinfo=source_zone, fold=1)
+    if first.utcoffset() != second.utcoffset():
+        return None
+    roundtrip = first.astimezone(timezone.utc).astimezone(source_zone)
+    if roundtrip.replace(tzinfo=None) != local_naive:
+        return None
+    return first
 
 
 def _structured_reset_candidates(

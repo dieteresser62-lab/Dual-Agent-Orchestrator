@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -122,6 +123,175 @@ def test_open_finding_can_add_structured_acceptance_command() -> None:
     assert request.expected_commands[-1] == (
         "python3 -m pytest tests/test_engine.py -q"
     )
+
+
+def test_simple_shell_default_authorizes_equivalent_finding_argv_once() -> None:
+    finding = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="full validation must pass after correction",
+        acceptance_test='VALIDATE: ["npm","test"]',
+        origin=FindingOrigin("13", 1, AgentRole.CLAUDE),
+    )
+
+    request = select_validation_request(
+        ValidationMatrix(
+            default_command=ValidationCommand(shell_command="npm test")
+        ),
+        diff_fingerprint=FINGERPRINT,
+        changed_paths=("src/app.js",),
+        findings=(finding,),
+    )
+
+    assert request.expected_commands == ("shell: npm test",)
+
+
+def test_legacy_shell_marker_from_reviewer_is_normalized_and_deduplicated() -> None:
+    finding = FindingRecord(
+        finding_id="C-05",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="full validation must pass after correction",
+        acceptance_test='VALIDATE: ["shell","npm test"]',
+        origin=FindingOrigin("04", 1, AgentRole.CLAUDE),
+    )
+
+    request = select_validation_request(
+        ValidationMatrix(
+            default_command=ValidationCommand(shell_command="npm test")
+        ),
+        diff_fingerprint=FINGERPRINT,
+        changed_paths=("src/app.js",),
+        findings=(finding,),
+    )
+
+    assert request.expected_commands == ("shell: npm test",)
+
+
+def test_npm_test_family_allows_focused_test_script_from_legacy_shell_marker() -> None:
+    finding = FindingRecord(
+        finding_id="C-08",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="browser gate must be attested",
+        acceptance_test='VALIDATE: ["shell","npm run test:browser"]',
+        origin=FindingOrigin("FINAL", 1, AgentRole.CLAUDE),
+    )
+
+    request = select_validation_request(
+        ValidationMatrix(
+            default_command=ValidationCommand(shell_command="npm test")
+        ),
+        diff_fingerprint=FINGERPRINT,
+        changed_paths=("src/app.js",),
+        findings=(finding,),
+    )
+
+    assert request.expected_commands == (
+        "shell: npm test",
+        "npm run test:browser",
+    )
+
+
+@pytest.mark.parametrize(
+    "argv",
+    (
+        '["npm","run","build"]',
+        '["npm","run","test:browser","--","--update"]',
+        '["npm","exec","playwright","test"]',
+    ),
+)
+def test_npm_test_family_rejects_non_test_scripts_and_extra_arguments(
+    argv: str,
+) -> None:
+    finding = FindingRecord(
+        finding_id="C-08",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="untrusted npm extension",
+        acceptance_test=f"VALIDATE: {argv}",
+        origin=FindingOrigin("FINAL", 1, AgentRole.CLAUDE),
+    )
+
+    with pytest.raises(ValidationMatrixError, match="outside configured"):
+        select_validation_request(
+            ValidationMatrix(
+                default_command=ValidationCommand(shell_command="npm test")
+            ),
+            diff_fingerprint=FINGERPRINT,
+            changed_paths=("src/app.js",),
+            findings=(finding,),
+        )
+
+
+@pytest.mark.parametrize(
+    "shell_command",
+    (
+        "npm test && echo unsafe",
+        "npm test > result.log",
+        "npm test $EXTRA_ARGS",
+    ),
+)
+def test_legacy_shell_marker_rejects_shell_syntax(shell_command: str) -> None:
+    finding = FindingRecord(
+        finding_id="C-05",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="untrusted shell extension",
+        acceptance_test=f"VALIDATE: {json.dumps(['shell', shell_command])}",
+        origin=FindingOrigin("04", 1, AgentRole.CLAUDE),
+    )
+
+    with pytest.raises(
+        ValidationMatrixError,
+        match="simple command without shell syntax",
+    ):
+        select_validation_request(
+            ValidationMatrix(
+                default_command=ValidationCommand(shell_command="npm test")
+            ),
+            diff_fingerprint=FINGERPRINT,
+            changed_paths=("src/app.js",),
+            findings=(finding,),
+        )
+
+
+@pytest.mark.parametrize(
+    "shell_command",
+    (
+        "npm test && echo unsafe",
+        "npm test > result.log",
+        "VALIDATION_MODE=full npm test",
+        "npm test $EXTRA_ARGS",
+        "npm test # ignore the remainder",
+        "npm test ~/fixture",
+    ),
+)
+def test_shell_syntax_does_not_authorize_finding_commands(
+    shell_command: str,
+) -> None:
+    finding = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="untrusted extension",
+        acceptance_test='VALIDATE: ["npm","test"]',
+        origin=FindingOrigin("13", 1, AgentRole.CLAUDE),
+    )
+
+    with pytest.raises(
+        ValidationMatrixError,
+        match="outside configured validation families: NONE",
+    ):
+        select_validation_request(
+            ValidationMatrix(
+                default_command=ValidationCommand(shell_command=shell_command)
+            ),
+            diff_fingerprint=FINGERPRINT,
+            changed_paths=("src/app.js",),
+            findings=(finding,),
+        )
 
 
 @pytest.mark.parametrize(

@@ -1055,9 +1055,8 @@ def test_second_quota_on_same_step_stops_with_exit_two_without_reviewer() -> Non
     def sleep(seconds: float) -> None:
         now[0] += timedelta(seconds=seconds)
 
-    result = WorkflowEngine(
-        driver, now_fn=lambda: now[0], sleep_fn=sleep
-    ).run_current_work_unit(
+    engine = WorkflowEngine(driver, now_fn=lambda: now[0], sleep_fn=sleep)
+    result = engine.run_current_work_unit(
         _slice_state(),
         replace(
             _context(),
@@ -1319,9 +1318,8 @@ def test_changed_fingerprint_during_quota_wait_halts_before_retry() -> None:
         now[0] += timedelta(seconds=seconds)
         driver.snapshots[0] = changed
 
-    result = WorkflowEngine(
-        driver, now_fn=lambda: now[0], sleep_fn=sleep
-    ).run_current_work_unit(
+    engine = WorkflowEngine(driver, now_fn=lambda: now[0], sleep_fn=sleep)
+    result = engine.run_current_work_unit(
         _slice_state(),
         replace(
             _context(),
@@ -1337,6 +1335,21 @@ def test_changed_fingerprint_during_quota_wait_halts_before_retry() -> None:
     assert result.state.current_work_unit.gate.reason is GateReason.STOP_REQUEST
     assert "QUOTA-RESUME-DIFF" in (result.state.current_work_unit.gate.detail or "")
     assert len(driver.codex_calls) == 1
+
+    acknowledged = result.state.resume_after_user_decision()
+    failure = acknowledged.current_work_unit.invocation_failures[-1]
+    revalidated, halted = engine._revalidate_waiting_diff(acknowledged, failure)
+
+    assert halted is False
+    assert revalidated.current_work_unit.status is WorkUnitStatus.IN_PROGRESS
+
+    changed_again = _changes("3", "src/early.py", TEST_FILE)
+    driver.snapshots[0] = changed_again
+    halted_again, halted = engine._revalidate_waiting_diff(acknowledged, failure)
+
+    assert halted is True
+    assert halted_again.current_work_unit.gate.reason is GateReason.STOP_REQUEST
+    assert changed_again.fingerprint in (halted_again.current_work_unit.gate.detail or "")
 
 
 def test_collect_changes_exception_during_resume_becomes_policy_halt() -> None:
@@ -1464,11 +1477,16 @@ def test_antigravity_denial_returns_to_codex_then_claude_before_recheck() -> Non
 def test_contract_only_repair_receives_no_implementation_evidence() -> None:
     changes = _changes("1", "src/early.py", TEST_FILE)
     valid = _review_approval(AgentRole.CLAUDE)
+    wrapped_repair = (
+        "The rejected review was correct in substance.\n\n"
+        "Corrected, complete answer:\n\n"
+        + valid
+    )
     driver = FakeDriver(
         snapshots=[changes],
         codex_outputs=[_codex_ready()],
         reviewer_outputs=[valid.removesuffix("\nSTATUS: DONE"), _review_approval(AgentRole.ANTIGRAVITY)],
-        repair_outputs=[valid],
+        repair_outputs=[wrapped_repair],
     )
 
     result = WorkflowEngine(driver).run_current_work_unit(_slice_state(), _context())

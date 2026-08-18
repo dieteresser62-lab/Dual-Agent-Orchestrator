@@ -43,6 +43,7 @@ class WatchTaskResult:
     work_unit_id: int
     gate_reason: str
     failure_detail: str | None = None
+    resume_available: bool = True
 
     def __post_init__(self) -> None:
         if self.exit_code < 0:
@@ -51,6 +52,8 @@ class WatchTaskResult:
             raise ValueError("watch task result requires a run id")
         if self.work_unit_id < 1:
             raise ValueError("watch task result requires a 1-based work unit id")
+        if not isinstance(self.resume_available, bool):
+            raise ValueError("watch task resume availability must be boolean")
         if self.disposition is WatchTaskDisposition.COMPLETED and self.exit_code != 0:
             raise ValueError("completed watch task result requires exit code zero")
         if (
@@ -437,6 +440,13 @@ def watch_inbox(
                                 task_file.name,
                             )
                             return 1
+                        if (
+                            task_result.disposition
+                            is WatchTaskDisposition.TECHNICAL_FAILURE
+                            and not task_result.resume_available
+                        ):
+                            identity = replace(identity, started=False)
+                            save_watch_identity(task_file, identity)
                     else:
                         exit_code = int(raw_result)
                         task_result = WatchTaskResult(

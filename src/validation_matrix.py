@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import shlex
 import subprocess
 from dataclasses import dataclass
@@ -25,6 +26,61 @@ DEFAULT_VALIDATION_TIMEOUT_SECONDS = 300
 VALIDATION_OUTPUT_LIMIT = 2_000
 FINDING_COMMAND_PREFIX = "VALIDATE:"
 LOGGER = logging.getLogger(__name__)
+SHELL_META_CHARACTERS = frozenset(";&|<>`$(){}[]*?!#~")
+NPM_TEST_SCRIPT_PATTERN = re.compile(r"test(?::[A-Za-z0-9._-]+)*")
+
+
+def _simple_shell_argv(command: str) -> tuple[str, ...] | None:
+    """Return argv only when a shell command has no shell semantics."""
+    try:
+        argv = tuple(shlex.split(command, posix=True))
+    except ValueError:
+        return None
+    if not argv:
+        return None
+    if "=" in argv[0] or any(
+        any(character in SHELL_META_CHARACTERS for character in argument)
+        for argument in argv
+    ):
+        return None
+    return argv
+
+
+def _canonical_argv(command: "ValidationCommand") -> tuple[str, ...] | None:
+    if command.argv:
+        return command.argv
+    assert command.shell_command is not None
+    return _simple_shell_argv(command.shell_command)
+
+
+def _finding_validation_command(value: list[str]) -> "ValidationCommand":
+    """Normalize reviewer JSON, including the legacy ["shell", "..."] form."""
+    if len(value) == 2 and value[0] == "shell":
+        argv = _simple_shell_argv(value[1])
+        if argv is None:
+            raise ValidationMatrixError(
+                "finding VALIDATE shell command must be a simple command without "
+                "shell syntax"
+            )
+        return ValidationCommand(argv=argv)
+    return ValidationCommand(argv=tuple(value))
+
+
+def _matches_validation_family(
+    argv: tuple[str, ...], prefix: tuple[str, ...]
+) -> bool:
+    if argv[: len(prefix)] == prefix:
+        return True
+    # `npm test` is npm's canonical test family entry point. Permit one exact,
+    # argument-free `npm run test:*` package script as a focused extension. This
+    # intentionally excludes build/release scripts, npm exec, CLI arguments, and
+    # every command that would require shell interpretation.
+    return (
+        prefix == ("npm", "test")
+        and len(argv) == 3
+        and argv[:2] == ("npm", "run")
+        and NPM_TEST_SCRIPT_PATTERN.fullmatch(argv[2]) is not None
+    )
 
 
 class ValidationMatrixError(ValueError):
@@ -127,12 +183,13 @@ class ValidationMatrix:
             *(rule.command for rule in self.rules),
         )
         for command in commands:
-            if not command.argv:
+            argv = _canonical_argv(command)
+            if argv is None:
                 continue
-            if len(command.argv) >= 3 and command.argv[1] in ("-m", "run"):
-                prefix = command.argv[:3]
+            if len(argv) >= 3 and argv[1] in ("-m", "run"):
+                prefix = argv[:3]
             else:
-                prefix = command.argv[: min(2, len(command.argv))]
+                prefix = argv[: min(2, len(argv))]
             if prefix not in prefixes:
                 prefixes.append(prefix)
         return tuple(prefixes)
@@ -193,9 +250,11 @@ def select_validation_request(
             findings, allowed_prefixes=matrix.finding_command_prefixes
         )
     )
-    unique: dict[str, ValidationCommand] = {}
+    unique: dict[tuple[str, ...], ValidationCommand] = {}
     for command in commands:
-        unique.setdefault(command.display, command)
+        canonical_argv = _canonical_argv(command)
+        key = canonical_argv or ("shell", command.display)
+        unique.setdefault(key, command)
     return ValidationRequest(diff_fingerprint, tuple(unique.values()))
 
 
@@ -231,9 +290,14 @@ def _finding_validation_commands(
             raise ValidationMatrixError(
                 f"finding {finding.finding_id} VALIDATE command must be a non-empty JSON string array"
             )
-        command = ValidationCommand(argv=tuple(value))
+        try:
+            command = _finding_validation_command(value)
+        except ValidationMatrixError as exc:
+            raise ValidationMatrixError(
+                f"finding {finding.finding_id} has invalid VALIDATE command: {exc}"
+            ) from exc
         if not any(
-            command.argv[: len(prefix)] == prefix
+            _matches_validation_family(command.argv, prefix)
             for prefix in allowed_prefixes
         ):
             allowed = ", ".join(shlex.join(prefix) for prefix in allowed_prefixes)

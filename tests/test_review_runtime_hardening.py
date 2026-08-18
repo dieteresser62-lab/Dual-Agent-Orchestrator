@@ -16,12 +16,17 @@ from audit_trail import MANAGED_SECTION_KEYS, prepare_managed_work_plan_document
 from contracts import (
     AgentRole,
     ApprovalMarker,
+    ContractValidationError,
     FindingClass,
     FindingOrigin,
     FindingRecord,
     FindingStatus,
     PlannedSlice,
     StepContract,
+    ValidationAttestation,
+    ValidationRecord,
+    ValidationStatus,
+    validate_review_response,
 )
 from orchestrator import (
     _bound_task_control_paths,
@@ -29,7 +34,11 @@ from orchestrator import (
     _recover_legacy_plan_only_post_gate,
 )
 from repo_changes import collect_repository_changes
-from workflow import WorkflowExecutionError, normalize_review_contract_output
+from workflow import (
+    WorkflowExecutionError,
+    normalize_repaired_review_contract_output,
+    normalize_review_contract_output,
+)
 from workflow_state import (
     GateReason,
     WorkflowStep,
@@ -128,6 +137,91 @@ def test_local_review_normalization_adds_bound_test_marker_and_drops_foreign_sta
     assert "NEW_FINDING: A-01" in normalized
 
 
+def test_review_normalization_carries_omitted_owned_findings_open() -> None:
+    fingerprint = "a" * 64
+    contract = StepContract(
+        name="slice-review",
+        reviewer=AgentRole.CLAUDE,
+        approval_marker=ApprovalMarker.SLICE,
+        slice_id="02",
+        round_number=1,
+        review_fingerprint=fingerprint,
+        validation_attestation=ValidationAttestation(
+            attestation_id="validation-review-normalization",
+            diff_fingerprint=fingerprint,
+            expected_commands=("npm test",),
+            records=(ValidationRecord(ValidationStatus.PASS, "npm test", 0),),
+            output_digest="b" * 64,
+            summary="1 passed",
+        ),
+    )
+    findings = tuple(
+        FindingRecord(
+            finding_id=f"C-0{index}",
+            finding_class=FindingClass.OBSERVATION,
+            status=FindingStatus.OPEN,
+            summary=f"deferred item {index}",
+            acceptance_test="verify in the next slice",
+            origin=FindingOrigin("01", index, AgentRole.CLAUDE),
+        )
+        for index in (2, 3)
+    )
+    output = "\n".join(
+        (
+            "REVIEWER: claude",
+            "TEST_FILES_TOUCHED: NONE",
+            "FINDING_STATUS: C-02 | OPEN | explicitly deferred",
+            "REVIEW_EVIDENCE: scope | risk | break",
+            "PRE_MORTEM: deferred work is forgotten",
+            "SLICE_APPROVAL: 02 | YES",
+            "STATUS: DONE",
+        )
+    )
+
+    normalized = normalize_review_contract_output(output, contract, findings)
+    result = validate_review_response(normalized, contract, findings)
+
+    assert "FINDING_STATUS: C-02 | OPEN | explicitly deferred" in normalized
+    assert (
+        "FINDING_STATUS: C-03 | OPEN | Carried forward unchanged; "
+        "the current review supplied no explicit status update."
+    ) in normalized
+    assert result.approval is True
+    assert tuple(item.finding_id for item in result.open_findings) == ("C-02", "C-03")
+
+
+def test_review_normalization_never_carries_foreign_finding_as_owned_update() -> None:
+    contract = StepContract(
+        name="slice-review",
+        reviewer=AgentRole.ANTIGRAVITY,
+        approval_marker=ApprovalMarker.SLICE,
+        slice_id="02",
+        round_number=1,
+    )
+    finding = FindingRecord(
+        finding_id="C-03",
+        finding_class=FindingClass.OBSERVATION,
+        status=FindingStatus.OPEN,
+        summary="Claude follow-up",
+        acceptance_test="Claude verifies it later",
+        origin=FindingOrigin("01", 2, AgentRole.CLAUDE),
+    )
+    output = "\n".join(
+        (
+            "REVIEWER: antigravity",
+            "TEST_FILES_TOUCHED: NONE",
+            "REVIEW_EVIDENCE: scope | risk | break",
+            "PRE_MORTEM: deferred work is forgotten",
+            "SLICE_APPROVAL: 02 | YES",
+            "STATUS: DONE",
+        )
+    )
+
+    normalized = normalize_review_contract_output(output, contract, (finding,))
+
+    assert "FINDING_STATUS: C-03" not in normalized
+
+
 def test_review_normalization_converts_labeled_evidence_without_model_repair() -> None:
     contract = StepContract(
         name="slice-review",
@@ -154,6 +248,60 @@ def test_review_normalization_converts_labeled_evidence_without_model_repair() -
         "REVIEW_EVIDENCE: checked scope and anchors. | documentation drift. | "
         "an anchor disappears."
     ) in normalized
+
+
+def test_repaired_review_normalization_removes_one_non_contract_preamble() -> None:
+    contract = StepContract(
+        name="slice-review",
+        reviewer=AgentRole.CLAUDE,
+        approval_marker=ApprovalMarker.SLICE,
+        slice_id="02",
+        round_number=1,
+    )
+    output = "\n".join(
+        (
+            "Evidence retained; the following answer is complete.",
+            "Corrected answer:",
+            "",
+            "REVIEWER: claude",
+            "TEST_FILES_TOUCHED: NONE",
+            "REVIEW_EVIDENCE: scope | risk | break",
+            "PRE_MORTEM: contract drift",
+            "SLICE_APPROVAL: 02 | YES",
+            "STATUS: DONE",
+        )
+    )
+
+    normalized = normalize_repaired_review_contract_output(output, contract, ())
+
+    assert normalized.startswith("REVIEWER: claude\n")
+    assert "Corrected answer" not in normalized
+    assert normalized.endswith("STATUS: DONE")
+
+
+@pytest.mark.parametrize(
+    "output",
+    (
+        "SLICE_APPROVAL: NO\nREVIEWER: claude\nSTATUS: DONE",
+        "REVIEWER: claude\nSTATUS: DONE\nREVIEWER: claude\nSTATUS: DONE",
+        "Explanation\nREVIEWER: claude\nSTATUS: DONE\ntrailing prose",
+    ),
+)
+def test_repaired_review_normalization_keeps_ambiguous_wrappers_invalid(
+    output: str,
+) -> None:
+    contract = StepContract(
+        name="slice-review",
+        reviewer=AgentRole.CLAUDE,
+        approval_marker=ApprovalMarker.SLICE,
+        slice_id="02",
+        round_number=1,
+    )
+
+    normalized = normalize_repaired_review_contract_output(output, contract, ())
+
+    with pytest.raises(ContractValidationError):
+        validate_review_response(normalized, contract, ())
 
 
 @pytest.mark.parametrize(

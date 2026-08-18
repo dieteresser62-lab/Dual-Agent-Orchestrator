@@ -28,7 +28,7 @@ Langlaufende Coding-Agenten-Sitzungen können auf Arten scheitern, die im Nachhi
 - Ein breiter Agenten-Commit nimmt fremde Worktree-Änderungen auf.
 - Eine Freigabe bleibt nur als Prosa erhalten und ist nicht an konkrete Evidenz gebunden.
 
-Der Orchestrator bildet diese Bedingungen als expliziten Zustand, Verträge und Gates ab. Ein erfolgreiches Ergebnis bedeutet daher mehr als „ein Agent meldet Erfolg“: Die erwartete Validierungsmatrix war für den geprüften Fingerprint erfolgreich, beide erforderlichen Reviewer haben ihn in der vorgeschriebenen Reihenfolge freigegeben, kein blockierendes Finding blieb offen und der lokale Commit enthielt exakt die autorisierten Pfade.
+Der Orchestrator bildet diese Bedingungen als expliziten Zustand, Verträge und Gates ab. Ein erfolgreiches Ergebnis bedeutet daher mehr als „ein Agent meldet Erfolg“: Die erwartete Validierungsmatrix war für den geprüften Fingerprint erfolgreich, beide erforderlichen Reviewer haben ihn in der vorgeschriebenen Reihenfolge freigegeben, kein Finding blieb offen und der lokale Commit enthielt exakt die autorisierten Pfade.
 
 ## 3. Scope und Systemgrenze
 
@@ -171,7 +171,7 @@ Die Workflowengine ist bewusst von der Prozessausführung getrennt. Sie kommuniz
 
 ### 9.1 Planung
 
-1. Im Watch-Modus liest die Laufzeit `TARGET_BRANCH` aus der stabilen Inbox-Datei. Sie legt einen fehlenden Branch vom aktuellen `HEAD` an, wechselt bei sicherem Arbeitsbaum auf einen vorhandenen oder erweitert einen bereits aktiven Zielbranch ab dessen aktuellem `HEAD`. Bei einem Resume ist stattdessen ausschließlich der persistierte Branch zulässig.
+1. Im Watch-Modus liest die Laufzeit `TARGET_BRANCH` aus der stabilen Inbox-Datei. Sie legt einen fehlenden Branch vom aktuellen `HEAD` an, wechselt bei sicherem Arbeitsbaum auf einen vorhandenen oder erweitert einen bereits aktiven Zielbranch ab dessen aktuellem `HEAD`. Beim ersten Branchwechsel darf ausschließlich ein regulärer, unversionierter und exakt als `WORK_PLAN_PATH` gebundener `PLAN_ONLY`-Plan als Aufgabenartefakt mitgenommen werden; andere Arbeitsbaum- oder Indexänderungen bleiben ein Stopgrund. Bei einem Resume ist ausschließlich der persistierte Branch zulässig. Ein technischer Fehler vor Anlage eines zum Watch-Run passenden Workflow-States wird beim nächsten Versuch erneut als frischer Start behandelt und nicht gegen einen fremden älteren State resumed.
 2. Eine informelle Aufgabe ohne Ausführungsmarker oder Scope wird ausschließlich in `PLAN_ONLY`, einen deterministischen Arbeitsplanpfad unter `docs/internal/` und genau diesen initialen Schreibscope überführt. Ein formaler Auftrag muss Modus, Scope und gegebenenfalls Arbeitsplan- beziehungsweise Handoff-Bindung vollständig deklarieren.
 3. Codex erstellt im Arbeitsplan geordnete zukünftige Slices mit exakten Pfad-Allowlists. Der Planlauf selbst liefert genau einen ausführbaren Dokumentationsslice; jeder spätere Pfad wird vor dem Review auf einen gültigen Handoff geprüft. Die kanonische Pfadüberschrift lautet `**Exakter Änderungspfad**`; die sichere kompatible Pluralform wird ebenfalls gelesen. Eine reparierbare Vertragsabweichung geht vor dem ersten Reviewer automatisch genau einmal als begrenzte Planrevision an Codex zurück. Bleibt sie bestehen, wird ein fortsetzbares `PLAN-CONTRACT-INVALID`-Gate statt eines technischen Watch-Fehlers erzeugt.
 4. Claude prüft den Planfingerprint. Nach seiner Freigabe prüft Antigravity denselben vollständigen Planfingerprint. Eine Ablehnung führt zur Planüberarbeitung durch Codex.
