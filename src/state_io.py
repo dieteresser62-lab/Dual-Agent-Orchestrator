@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Mapping
 
 from path_policy import PathPolicyError, resolve_path_within_roots
+from artifact_migration import ResumeResolution, resolve_resume_state
 from workflow_state import ProtocolBinding, WorkflowState, WorkflowStateValidationError
 
 # Canonical finding identifiers exchanged by both agents, e.g. F-001.
@@ -329,6 +330,20 @@ def load_workflow_state(
     raise UnknownStateVersionError(
         f"unsupported state version {version!r}; state was left unchanged"
     )
+
+
+def load_resumable_workflow_state(
+    state_file: Path,
+    *,
+    repository_root: Path,
+    allowed_roots: tuple[Path, ...],
+) -> WorkflowState | CompletedV2State | None:
+    """Load state and verify the immutable protocol-specific resume source."""
+    loaded = load_workflow_state(state_file, allowed_roots=allowed_roots)
+    if isinstance(loaded, WorkflowState):
+        resolution: ResumeResolution = resolve_resume_state(repository_root, loaded)
+        return resolution.state
+    return loaded
 
 
 def save_workflow_state(

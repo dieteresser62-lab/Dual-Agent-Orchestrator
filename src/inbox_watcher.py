@@ -44,6 +44,7 @@ class WatchTaskResult:
     gate_reason: str
     failure_detail: str | None = None
     resume_available: bool = True
+    protocol_mode: str | None = None
 
     def __post_init__(self) -> None:
         if self.exit_code < 0:
@@ -54,6 +55,8 @@ class WatchTaskResult:
             raise ValueError("watch task result requires a 1-based work unit id")
         if not isinstance(self.resume_available, bool):
             raise ValueError("watch task resume availability must be boolean")
+        if self.protocol_mode not in {None, "legacy-state-v3", "structured-v1"}:
+            raise ValueError("watch task protocol mode is invalid")
         if self.disposition is WatchTaskDisposition.COMPLETED and self.exit_code != 0:
             raise ValueError("completed watch task result requires exit code zero")
         if (
@@ -95,6 +98,7 @@ class WatchTaskResult:
                 if disposition is WatchTaskDisposition.TECHNICAL_FAILURE
                 else None
             ),
+            protocol_mode=state.effective_protocol_mode.value,
         )
 
 
@@ -103,6 +107,8 @@ class WatchTaskIdentity:
     run_id: str
     task_digest: str
     started: bool = False
+    protocol_mode: str | None = None
+    sidecar_version: int = 2
 
     def __post_init__(self) -> None:
         if not self.run_id.strip():
@@ -111,29 +117,43 @@ class WatchTaskIdentity:
             character not in "0123456789abcdef" for character in self.task_digest
         ):
             raise ValueError("watch task identity requires a SHA-256 task digest")
+        if self.protocol_mode not in {None, "legacy-state-v3", "structured-v1"}:
+            raise ValueError("watch task identity protocol mode is invalid")
+        if self.sidecar_version not in {1, 2}:
+            raise ValueError("watch task identity sidecar version is invalid")
+        if self.sidecar_version == 1 and self.protocol_mode is not None:
+            raise ValueError("legacy watch identity cannot carry a protocol mode")
 
     def to_dict(self) -> dict[str, object]:
-        return {
-            "version": 1,
+        document: dict[str, object] = {
+            "version": self.sidecar_version,
             "run_id": self.run_id,
             "task_digest": self.task_digest,
             "started": self.started,
         }
+        if self.sidecar_version == 2:
+            document["protocol_mode"] = self.protocol_mode
+        return document
 
     @classmethod
     def from_dict(cls, raw: object) -> WatchTaskIdentity:
-        if not isinstance(raw, dict) or set(raw) != {
-            "version",
-            "run_id",
-            "task_digest",
-            "started",
-        }:
+        if not isinstance(raw, dict):
             raise ValueError("watch task identity has an invalid schema")
-        if raw["version"] != 1 or not isinstance(raw["started"], bool):
+        version = raw.get("version")
+        expected = {
+            "version", "run_id", "task_digest", "started",
+            *({"protocol_mode"} if version == 2 else set()),
+        }
+        if set(raw) != expected or version not in {1, 2} or not isinstance(raw["started"], bool):
             raise ValueError("watch task identity has an unsupported version or status")
         if not isinstance(raw["run_id"], str) or not isinstance(raw["task_digest"], str):
             raise ValueError("watch task identity fields have invalid types")
-        return cls(raw["run_id"], raw["task_digest"], raw["started"])
+        protocol_mode = raw.get("protocol_mode")
+        if protocol_mode is not None and not isinstance(protocol_mode, str):
+            raise ValueError("watch task identity protocol mode has an invalid type")
+        return cls(
+            raw["run_id"], raw["task_digest"], raw["started"], protocol_mode, version
+        )
 
 
 def watch_identity_path(task_file: Path) -> Path:
@@ -171,7 +191,7 @@ def load_or_create_watch_identity(
                 f"watch task {task_file.name} changed after run {identity.run_id} started"
             )
         return identity
-    identity = WatchTaskIdentity(run_id_fn(task_file), digest)
+    identity = WatchTaskIdentity(run_id_fn(task_file), digest, sidecar_version=2)
     atomic_write_file(path, json.dumps(identity.to_dict(), sort_keys=True) + "\n")
     return identity
 
@@ -292,6 +312,7 @@ def write_poison_failure_report(
         "step": None if task_result is None else task_result.step,
         "work_unit_id": None if task_result is None else task_result.work_unit_id,
         "gate_reason": None if task_result is None else task_result.gate_reason,
+        "protocol_mode": None if task_result is None else task_result.protocol_mode,
         "failure_detail": (
             exception_detail
             if exception_detail is not None
@@ -442,6 +463,26 @@ def watch_inbox(
                                 task_file.name,
                             )
                             return 1
+                        if (
+                            identity.protocol_mode is not None
+                            and task_result.protocol_mode is not None
+                            and task_result.protocol_mode != identity.protocol_mode
+                        ):
+                            logger.error(
+                                "Workflow protocol mode %s differs from persisted watch "
+                                "identity %s for %s.",
+                                task_result.protocol_mode,
+                                identity.protocol_mode,
+                                task_file.name,
+                            )
+                            return 1
+                        if (
+                            identity.sidecar_version == 2
+                            and identity.protocol_mode is None
+                            and task_result.protocol_mode is not None
+                        ):
+                            identity = replace(identity, protocol_mode=task_result.protocol_mode)
+                            save_watch_identity(task_file, identity)
                         if (
                             task_result.disposition
                             is WatchTaskDisposition.TECHNICAL_FAILURE

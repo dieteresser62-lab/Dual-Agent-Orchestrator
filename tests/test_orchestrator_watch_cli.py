@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 import orchestrator
+from artifact_migration import ArtifactResumeError
 from cli import parse_args
 from inbox_watcher import WatchTaskDisposition, WatchTaskResult
 from orchestrator import run_pipeline
@@ -69,6 +70,28 @@ def test_watch_pipeline_failure_returns_diagnostic_typed_result(
     assert result.failure_detail == (
         "WorkflowExecutionError: plan parser rejected heading"
     )
+
+
+def test_structured_resume_mismatch_is_resumable_and_not_a_technical_retry(
+    tmp_path: Path, monkeypatch
+) -> None:
+    task = tmp_path / "task.md"
+    task.write_text("Implement the bounded task", encoding="utf-8")
+    args = parse_args(["--task-file", str(task)], cwd=tmp_path, environ={})
+    args.watch_run_id = "watch-structured-resume"
+
+    def fail(*_args, **_kwargs):
+        raise ArtifactResumeError("record ar1-deadbeef differs; repair the mirror")
+
+    monkeypatch.setattr(orchestrator, "run_production_workflow", fail)
+
+    result = run_pipeline(task, args)
+
+    assert isinstance(result, WatchTaskResult)
+    assert result.disposition is WatchTaskDisposition.RESUMABLE_HALT
+    assert result.exit_code == 4
+    assert result.protocol_mode == "structured-v1"
+    assert result.gate_reason == "record_mismatch"
 
 
 def test_help_contains_only_slice_v3_vocabulary() -> None:

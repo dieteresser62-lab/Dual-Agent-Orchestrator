@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from inbox_watcher import (
     WatchTaskDisposition,
+    WatchTaskIdentity,
     WatchTaskResult,
     watch_identity_path,
     watch_inbox,
@@ -461,6 +462,30 @@ def test_typed_technical_failure_detail_is_preserved_in_poison_report(
     assert data["failure_detail"] == (
         "WorkflowExecutionError: invalid plan contract"
     )
+
+
+def test_legacy_watch_identity_roundtrip_does_not_add_protocol_binding() -> None:
+    raw = {
+        "version": 1,
+        "run_id": "watch-old",
+        "task_digest": "a" * 64,
+        "started": True,
+    }
+
+    identity = WatchTaskIdentity.from_dict(raw)
+
+    assert identity.protocol_mode is None
+    assert identity.sidecar_version == 1
+    assert identity.to_dict() == raw
+
+
+def test_structured_watch_identity_roundtrip_binds_protocol_mode() -> None:
+    identity = WatchTaskIdentity(
+        "watch-new", "a" * 64, True, "structured-v1"
+    )
+
+    assert WatchTaskIdentity.from_dict(identity.to_dict()) == identity
+    assert identity.to_dict()["version"] == 2
 
 
 def test_attempt_sidecar_is_removed_after_success(tmp_path: Path) -> None:

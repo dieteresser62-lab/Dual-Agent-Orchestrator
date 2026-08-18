@@ -17,6 +17,7 @@ from state_io import (
     ensure_state_shape,
     init_state,
     load_cycle_checkpoint,
+    load_resumable_workflow_state,
     load_workflow_checkpoint,
     load_workflow_state,
     new_run_id,
@@ -444,6 +445,21 @@ def test_bound_state_and_checkpoint_require_exact_resume_protocol(tmp_path: Path
                 ProtocolMode.LEGACY_STATE_V3, "3"
             ),
         )
+
+
+def test_resumable_loader_keeps_unbound_v3_state_on_legacy_path(tmp_path: Path) -> None:
+    state = make_v3_state(tmp_path)
+    state_file = tmp_path / "state.json"
+    save_workflow_state(state_file, state, allowed_roots=(tmp_path,))
+
+    loaded = load_resumable_workflow_state(
+        state_file,
+        repository_root=tmp_path,
+        allowed_roots=(tmp_path,),
+    )
+
+    assert loaded == state
+    assert not (tmp_path / ".orchestrator" / "artifacts").exists()
 
 
 def test_existing_state_protocol_binding_cannot_be_added_or_switched(tmp_path: Path) -> None:

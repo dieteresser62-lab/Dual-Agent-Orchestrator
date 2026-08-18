@@ -16,6 +16,7 @@ from artifact_bridge import (
     ArtifactBridge, agent_result_payload, attestation_payload, finding_payload,
     plan_payload, review_payload, validation_request_payload,
 )
+from artifact_migration import ArtifactResumeError
 from artifact_models import (
     BindingPayload, FingerprintKind, GatePayload, ReviewPayload, Role,
     TaskPayload, WorkUnitPayload,
@@ -76,6 +77,7 @@ from state_io import (
     ActiveV2StateError,
     CompletedV2State,
     StateSchemaError,
+    load_resumable_workflow_state,
     load_workflow_state,
     new_run_id,
     save_workflow_state,
@@ -1728,7 +1730,11 @@ def run_production_workflow(
     loaded: WorkflowState | CompletedV2State | None = None
     if state_file.exists() and not force_new:
         try:
-            loaded = load_workflow_state(state_file, allowed_roots=allowed_roots)
+            loaded = load_resumable_workflow_state(
+                state_file,
+                repository_root=root,
+                allowed_roots=allowed_roots,
+            )
         except ActiveV2StateError:
             if args.force_overwrite_state:
                 loaded = None
@@ -2165,6 +2171,23 @@ def run_pipeline(
             )
         else:
             result = run_production_workflow(task_file, args, force_new=force_new)
+    except ArtifactResumeError as exc:
+        logger.error("Structured resume halted: %s", exc)
+        watch_run_id = getattr(args, "watch_run_id", None)
+        if watch_run_id is not None:
+            return WatchTaskResult(
+                exit_code=4,
+                run_id=watch_run_id,
+                disposition=WatchTaskDisposition.RESUMABLE_HALT,
+                status="awaiting_resume",
+                step="resume_reader",
+                work_unit_id=1,
+                gate_reason="record_mismatch",
+                failure_detail=f"ArtifactResumeError: {exc}",
+                resume_available=True,
+                protocol_mode="structured-v1",
+            )
+        return 1
     except (
         OSError,
         GitTransactionError,
