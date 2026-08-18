@@ -107,6 +107,43 @@ class Reviewer(str, Enum):
     ANTIGRAVITY = "antigravity"
 
 
+class ProtocolMode(str, Enum):
+    LEGACY_STATE_V3 = "legacy-state-v3"
+    STRUCTURED_V1 = "structured-v1"
+
+
+@dataclass(frozen=True)
+class ProtocolBinding:
+    """Immutable selection of the persistence protocol for one workflow."""
+
+    mode: ProtocolMode
+    schema_version: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.mode, ProtocolMode):
+            raise WorkflowStateValidationError("protocol mode is invalid")
+        _require_non_empty(self.schema_version, "protocol schema_version")
+        expected = {
+            ProtocolMode.LEGACY_STATE_V3: "3",
+            ProtocolMode.STRUCTURED_V1: "1",
+        }[self.mode]
+        if self.schema_version != expected:
+            raise WorkflowStateValidationError(
+                f"protocol mode {self.mode.value} requires schema_version {expected}"
+            )
+
+    def to_dict(self) -> dict[str, str]:
+        return {"mode": self.mode.value, "schema_version": self.schema_version}
+
+    @classmethod
+    def from_dict(cls, raw: Mapping[str, Any]) -> ProtocolBinding:
+        _require_exact_keys(raw, {"mode", "schema_version"}, "protocol binding")
+        return cls(
+            mode=_enum_value(ProtocolMode, raw["mode"], "protocol mode"),
+            schema_version=_string(raw["schema_version"], "protocol schema_version"),
+        )
+
+
 @dataclass(frozen=True)
 class InvocationFailureRecord:
     invocation_id: str
@@ -858,6 +895,7 @@ class WorkflowState:
     work_plan_path: str | None = None
     audit_report_path: str | None = None
     target_branch: str | None = None
+    protocol_binding: ProtocolBinding | None = None
 
     def __post_init__(self) -> None:
         if self.version != STATE_VERSION:
@@ -975,6 +1013,18 @@ class WorkflowState:
     @property
     def current_slice(self) -> SliceRecord:
         return next(item for item in self.slices if item.slice_id == self.current_slice_id)
+
+    @property
+    def effective_protocol_mode(self) -> ProtocolMode:
+        """Return the resume mode; missing bindings identify historical v3 state."""
+        if self.protocol_binding is None:
+            return ProtocolMode.LEGACY_STATE_V3
+        return self.protocol_binding.mode
+
+    @property
+    def protocol_mode(self) -> ProtocolMode:
+        """Compatibility-friendly name for the effective persisted mode."""
+        return self.effective_protocol_mode
 
     def resume_cursor(self) -> ResumeCursor:
         current = self.current_work_unit
@@ -1817,6 +1867,9 @@ class WorkflowState:
             "work_plan_path": self.work_plan_path,
             "audit_report_path": self.audit_report_path,
             "target_branch": self.target_branch,
+            "protocol_binding": (
+                None if self.protocol_binding is None else self.protocol_binding.to_dict()
+            ),
         }
 
     @classmethod
@@ -1845,6 +1898,7 @@ class WorkflowState:
             "target_branch",
         }
         audit_keys = {*current_keys, "audit_report_path"}
+        protocol_keys = {*audit_keys, "protocol_binding"}
         if set(raw) == legacy_keys:
             planned_slices: tuple[PlannedSlice, ...] = ()
             runtime_history = None
@@ -1854,6 +1908,7 @@ class WorkflowState:
             work_plan_path = None
             audit_report_path = None
             target_branch = None
+            protocol_binding = None
         else:
             raw_keys = frozenset(raw)
             if raw_keys not in {
@@ -1861,7 +1916,8 @@ class WorkflowState:
                 frozenset(current_keys),
                 frozenset(audit_keys),
             }:
-                _require_exact_keys(raw, audit_keys, "workflow state")
+                if raw_keys != frozenset(protocol_keys):
+                    _require_exact_keys(raw, protocol_keys, "workflow state")
             raw_plan = _list(raw["planned_slices"], "planned_slices")
             planned: list[PlannedSlice] = []
             for index, item in enumerate(raw_plan):
@@ -1911,10 +1967,18 @@ class WorkflowState:
                 )
                 audit_report_path = (
                     _optional_string(raw["audit_report_path"], "audit_report_path")
-                    if raw_keys == frozenset(audit_keys)
+                    if raw_keys in {frozenset(audit_keys), frozenset(protocol_keys)}
                     else None
                 )
                 target_branch = _optional_string(raw["target_branch"], "target_branch")
+            binding_raw = raw.get("protocol_binding")
+            protocol_binding = (
+                None
+                if binding_raw is None
+                else ProtocolBinding.from_dict(
+                    _mapping(binding_raw, "protocol_binding")
+                )
+            )
         slices_raw = _list(raw["slices"], "slices")
         units_raw = _list(raw["work_units"], "work_units")
         return cls(
@@ -1942,6 +2006,7 @@ class WorkflowState:
             work_plan_path=work_plan_path,
             audit_report_path=audit_report_path,
             target_branch=target_branch,
+            protocol_binding=protocol_binding,
         )
 
 
@@ -1959,6 +2024,7 @@ def init_workflow_state(
     work_plan_path: str | None = None,
     audit_report_path: str | None = None,
     target_branch: str | None = None,
+    protocol_binding: ProtocolBinding | None = None,
     timestamp: str | None = None,
 ) -> WorkflowState:
     _require_positive_int(slice_count, "slice_count")
@@ -1997,6 +2063,7 @@ def init_workflow_state(
         work_plan_path=work_plan_path,
         audit_report_path=audit_report_path,
         target_branch=target_branch,
+        protocol_binding=protocol_binding,
     )
 
 

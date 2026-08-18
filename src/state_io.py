@@ -11,11 +11,12 @@ from pathlib import Path
 from typing import Mapping
 
 from path_policy import PathPolicyError, resolve_path_within_roots
-from workflow_state import WorkflowState, WorkflowStateValidationError
+from workflow_state import ProtocolBinding, WorkflowState, WorkflowStateValidationError
 
 # Canonical finding identifiers exchanged by both agents, e.g. F-001.
 FINDING_ID_PATTERN = re.compile(r"^F-\d{3}$")
 logger = logging.getLogger(__name__)
+_UNSPECIFIED_PROTOCOL = object()
 
 
 class StateSchemaError(ValueError):
@@ -285,6 +286,7 @@ def load_workflow_state(
     state_file: Path,
     *,
     allowed_roots: tuple[Path, ...],
+    expected_protocol_binding: ProtocolBinding | None | object = _UNSPECIFIED_PROTOCOL,
 ) -> WorkflowState | CompletedV2State | None:
     """Load v3 state or classify a completed v2 state without modifying either."""
     path = _resolve_state_storage_path(state_file, allowed_roots)
@@ -296,6 +298,13 @@ def load_workflow_state(
         try:
             state = WorkflowState.from_dict(raw)
             resolve_path_within_roots(state.task_file, allowed_roots)
+            if (
+                expected_protocol_binding is not _UNSPECIFIED_PROTOCOL
+                and state.protocol_binding != expected_protocol_binding
+            ):
+                raise WorkflowStateValidationError(
+                    "persisted protocol binding does not match the resume binding"
+                )
         except (WorkflowStateValidationError, PathPolicyError) as exc:
             raise StateSchemaError(f"invalid version-3 workflow state: {exc}") from exc
         return state
@@ -335,6 +344,19 @@ def save_workflow_state(
         validated = WorkflowState.from_dict(state.to_dict())
     except (PathPolicyError, WorkflowStateValidationError) as exc:
         raise StateSchemaError(f"refusing to save invalid version-3 state: {exc}") from exc
+    if path.exists():
+        raw_existing = _read_json_object(path, "existing workflow state")
+        if raw_existing.get("version") == 3:
+            try:
+                existing = WorkflowState.from_dict(raw_existing)
+            except WorkflowStateValidationError as exc:
+                raise StateSchemaError(
+                    f"refusing to overwrite invalid version-3 state: {exc}"
+                ) from exc
+            if existing.protocol_binding != validated.protocol_binding:
+                raise StateSchemaError(
+                    "refusing to add or change an existing workflow protocol binding"
+                )
     atomic_write_file(path, json.dumps(validated.to_dict(), indent=2, ensure_ascii=True) + "\n")
 
 
@@ -382,6 +404,7 @@ def load_workflow_checkpoint(
     slice_id: int,
     round_number: int,
     allowed_roots: tuple[Path, ...],
+    expected_protocol_binding: ProtocolBinding | None | object = _UNSPECIFIED_PROTOCOL,
 ) -> WorkflowState | None:
     path = workflow_checkpoint_path(
         checkpoint_dir,
@@ -389,7 +412,11 @@ def load_workflow_checkpoint(
         slice_id=slice_id,
         round_number=round_number,
     )
-    loaded = load_workflow_state(path, allowed_roots=allowed_roots)
+    loaded = load_workflow_state(
+        path,
+        allowed_roots=allowed_roots,
+        expected_protocol_binding=expected_protocol_binding,
+    )
     if loaded is None:
         return None
     if isinstance(loaded, CompletedV2State):

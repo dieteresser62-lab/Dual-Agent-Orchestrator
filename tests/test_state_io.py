@@ -26,7 +26,13 @@ from state_io import (
     write_cycle_checkpoint,
     write_workflow_checkpoint,
 )
-from workflow_state import WorkflowState, WorkflowStep, init_workflow_state
+from workflow_state import (
+    ProtocolBinding,
+    ProtocolMode,
+    WorkflowState,
+    WorkflowStep,
+    init_workflow_state,
+)
 
 
 def test_init_state_has_expected_defaults(tmp_path: Path) -> None:
@@ -406,6 +412,68 @@ def test_workflow_checkpoint_roundtrip_and_missing(tmp_path: Path) -> None:
     assert path.name == "work-unit-0001-slice-0001-round-0001.json"
     assert loaded == state
     assert missing is None
+
+
+def test_bound_state_and_checkpoint_require_exact_resume_protocol(tmp_path: Path) -> None:
+    binding = ProtocolBinding(ProtocolMode.STRUCTURED_V1, "1")
+    state = replace(make_v3_state(tmp_path), protocol_binding=binding)
+    state_file = tmp_path / "state.json"
+    checkpoint_dir = tmp_path / "checkpoints"
+    save_workflow_state(state_file, state, allowed_roots=(tmp_path,))
+    write_workflow_checkpoint(checkpoint_dir, state, allowed_roots=(tmp_path,))
+
+    assert load_workflow_state(
+        state_file,
+        allowed_roots=(tmp_path,),
+        expected_protocol_binding=binding,
+    ) == state
+    with pytest.raises(StateSchemaError, match="does not match"):
+        load_workflow_state(
+            state_file,
+            allowed_roots=(tmp_path,),
+            expected_protocol_binding=None,
+        )
+    with pytest.raises(StateSchemaError, match="does not match"):
+        load_workflow_checkpoint(
+            checkpoint_dir,
+            work_unit_id=1,
+            slice_id=1,
+            round_number=1,
+            allowed_roots=(tmp_path,),
+            expected_protocol_binding=ProtocolBinding(
+                ProtocolMode.LEGACY_STATE_V3, "3"
+            ),
+        )
+
+
+def test_existing_state_protocol_binding_cannot_be_added_or_switched(tmp_path: Path) -> None:
+    state_file = tmp_path / "state.json"
+    legacy = make_v3_state(tmp_path)
+    save_workflow_state(state_file, legacy, allowed_roots=(tmp_path,))
+    with pytest.raises(StateSchemaError, match="add or change"):
+        save_workflow_state(
+            state_file,
+            replace(
+                legacy,
+                protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V1, "1"),
+            ),
+            allowed_roots=(tmp_path,),
+        )
+
+    state_file.unlink()
+    structured = replace(
+        legacy, protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V1, "1")
+    )
+    save_workflow_state(state_file, structured, allowed_roots=(tmp_path,))
+    with pytest.raises(StateSchemaError, match="add or change"):
+        save_workflow_state(
+            state_file,
+            replace(
+                structured,
+                protocol_binding=ProtocolBinding(ProtocolMode.LEGACY_STATE_V3, "3"),
+            ),
+            allowed_roots=(tmp_path,),
+        )
 
 
 from conftest import can_symlink

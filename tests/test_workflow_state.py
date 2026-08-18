@@ -13,6 +13,8 @@ from workflow_state import (
     GateReason,
     GateStatus,
     InvocationFailureRecord,
+    ProtocolBinding,
+    ProtocolMode,
     Reviewer,
     SliceStatus,
     WorkflowState,
@@ -74,6 +76,35 @@ def test_hardened_task_contract_roundtrips_in_state() -> None:
     assert restored == state
     assert restored.execution_mode == "PLAN_ONLY"
     assert restored.task_digest == "b" * 64
+
+
+def test_protocol_binding_roundtrips_and_missing_binding_is_legacy() -> None:
+    historical = make_state()
+    assert historical.protocol_binding is None
+    assert historical.effective_protocol_mode is ProtocolMode.LEGACY_STATE_V3
+    old_document = historical.to_dict()
+    old_document.pop("protocol_binding")
+    restored_historical = WorkflowState.from_dict(old_document)
+    assert restored_historical.protocol_binding is None
+    assert restored_historical.protocol_mode is ProtocolMode.LEGACY_STATE_V3
+
+    structured = replace(
+        historical,
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V1, "1"),
+    )
+    assert WorkflowState.from_dict(structured.to_dict()) == structured
+    assert structured.effective_protocol_mode is ProtocolMode.STRUCTURED_V1
+
+
+@pytest.mark.parametrize(
+    ("mode", "schema_version"),
+    [(ProtocolMode.STRUCTURED_V1, "3"), (ProtocolMode.LEGACY_STATE_V3, "1")],
+)
+def test_protocol_binding_rejects_mode_schema_mismatch(
+    mode: ProtocolMode, schema_version: str
+) -> None:
+    with pytest.raises(WorkflowStateValidationError, match="requires schema_version"):
+        ProtocolBinding(mode, schema_version)
 
 
 @pytest.mark.parametrize("slice_count", [0, -1, True])
