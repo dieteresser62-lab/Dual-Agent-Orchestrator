@@ -9,6 +9,8 @@ from pathlib import Path
 import orchestrator
 import pytest
 from agent_runtime import AgentInvocationError
+from artifact_models import RecordType
+from artifact_store import ArtifactStore
 from cli import parse_args
 from contracts import (
     AgentRole,
@@ -27,6 +29,9 @@ from state_io import StateSchemaError, save_workflow_state
 from task_contract import parse_task_contract
 from workflow_state import (
     GateReason,
+    ProtocolBinding,
+    ProtocolMode,
+    Reviewer,
     WorkflowStep,
     WorkUnitKind,
     WorkUnitStatus,
@@ -256,6 +261,103 @@ def test_bind_work_unit_preserves_latest_driver_owned_runtime_history(
 
     assert driver.active_state is not None
     assert driver.active_state.runtime_history == persisted.runtime_history
+
+
+def test_structured_bind_persists_contract_and_active_work_unit_once(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/structured-bind")
+    task = repository / "task.md"
+    _write_task(task, "feature/structured-bind", "src/runtime.py")
+    head = _git(repository, "rev-parse", "HEAD")
+    state = init_workflow_state(
+        run_id="structured-bind",
+        task_file=str(task),
+        branch="feature/structured-bind",
+        branch_base=head,
+        slice_count=1,
+        task_digest="a" * 64,
+        task_scope_patterns=("src/runtime.py",),
+        target_branch="feature/structured-bind",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V1, "1"),
+    ).complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    ).bind_current_slice_git_boundary(
+        start_commit=head,
+        scope_paths=("src/runtime.py",),
+        start_fingerprint="b" * 64,
+    )
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+
+    driver.bind_work_unit(state)
+    driver.bind_work_unit(state)
+
+    chain = ArtifactStore(repository, state.run_id).load_chain()
+    assert tuple(item.record_type for item in chain) == (
+        RecordType.TASK,
+        RecordType.WORK_UNIT,
+    )
+
+
+def test_structured_bind_survives_round_number_increase_within_same_work_unit(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/structured-round-transition")
+    task = repository / "task.md"
+    _write_task(task, "feature/structured-round-transition", "src/runtime.py")
+    head = _git(repository, "rev-parse", "HEAD")
+    state = init_workflow_state(
+        run_id="structured-round-transition",
+        task_file=str(task),
+        branch="feature/structured-round-transition",
+        branch_base=head,
+        slice_count=1,
+        task_digest="a" * 64,
+        task_scope_patterns=("src/runtime.py",),
+        target_branch="feature/structured-round-transition",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V1, "1"),
+    ).complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    ).bind_current_slice_git_boundary(
+        start_commit=head,
+        scope_paths=("src/runtime.py",),
+        start_fingerprint="b" * 64,
+    )
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+
+    driver.bind_work_unit(state)
+    round_two = state.record_review_denial(
+        reviewer=Reviewer.CLAUDE,
+        open_findings=("C-04",),
+        return_step=WorkflowStep.CODEX_IMPLEMENTATION,
+    )
+    driver.bind_work_unit(round_two)
+    driver.bind_work_unit(round_two)
+
+    work_units = tuple(
+        item
+        for item in ArtifactStore(repository, state.run_id).load_chain()
+        if item.record_type is RecordType.WORK_UNIT
+    )
+    assert tuple(item.revision for item in work_units) == (1, 2)
+    assert tuple(item.payload.round_number for item in work_units) == (1, 2)
+    assert len({item.idempotency_key for item in work_units}) == 2
 
 
 def test_checkpoint_archives_latest_driver_history_across_work_unit_transition(

@@ -16,6 +16,7 @@ from contracts import (
     FindingStatus,
     SHA256_PATTERN,
     ValidationAttestation,
+    ValidationCommandSpec,
     ValidationRecord,
     ValidationStatus,
 )
@@ -135,6 +136,15 @@ class ValidationCommand:
             return shlex.join(self.argv)
         assert self.shell_command is not None
         return f"shell: {self.shell_command.strip()}"
+
+    @property
+    def command_spec(self) -> ValidationCommandSpec:
+        if self.argv:
+            return ValidationCommandSpec(argv=self.argv)
+        assert self.shell_command is not None
+        # The display prefix is presentation only; the persisted legacy value
+        # stays opaque and is never reconstructed with shlex.
+        return ValidationCommandSpec(legacy_shell=self.display)
 
 
 @dataclass(frozen=True)
@@ -415,6 +425,7 @@ class ValidationMatrixRunner:
             records=tuple(records),
             output_digest=hashlib.sha256(digest_payload).hexdigest(),
             summary=summary,
+            command_specs=tuple(command.command_spec for command in request.commands),
         )
 
 

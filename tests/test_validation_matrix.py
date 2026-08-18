@@ -413,6 +413,9 @@ def test_runner_captures_pass_failure_compact_output_and_digest(tmp_path: Path) 
     assert "characters omitted" in attestation.records[0].output
     assert attestation.records[1].exit_code == 3
     assert attestation.records[2].output == "shell-ok"
+    assert attestation.command_specs[0].argv == commands[0].argv
+    assert attestation.command_specs[1].argv == commands[1].argv
+    assert attestation.command_specs[2].legacy_shell == commands[2].display
     assert len(attestation.output_digest) == 64
 
 

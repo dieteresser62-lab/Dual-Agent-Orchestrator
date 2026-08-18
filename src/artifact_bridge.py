@@ -1,0 +1,296 @@
+"""Lossless adapters between state-v3 domain objects and artifact records.
+
+The bridge is intentionally a write-through comparator, not a second workflow
+engine.  State-v3 remains authoritative until the explicit cutover.  Every
+successful write is reloaded from the append-only store and compared with the
+typed source object before the caller may act on it.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timezone
+import hashlib
+from typing import Callable, Iterable
+
+from artifact_models import (
+    AgentResultPayload,
+    ArtifactPayload,
+    ArtifactRecord,
+    BindingPayload,
+    CommandSpec,
+    DiagnosticPayload,
+    Fingerprint,
+    FingerprintKind,
+    FindingSeverity,
+    FindingTransitionPayload,
+    GatePayload,
+    PlanPayload,
+    ReviewPayload,
+    Role,
+    SliceSpec,
+    TaskPayload,
+    ValidationAttestationPayload,
+    ValidationRequestPayload,
+    ValidationResult,
+    WorkUnitPayload,
+    canonical_json,
+)
+from artifact_store import ArtifactStore
+from contracts import (
+    AgentRole,
+    CodexContractResult,
+    ContractResult,
+    FindingRecord,
+    PlannedSlice,
+    ValidationAttestation,
+    ValidationCommandSpec,
+)
+from task_contract import TaskContract
+from validation_matrix import ValidationRequest
+
+
+class ArtifactBridgeError(RuntimeError):
+    """Raised when structured and state-v3 meanings are not identical."""
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _role(role: AgentRole) -> Role:
+    return Role(role.value)
+
+
+def _digest(value: object) -> str:
+    return hashlib.sha256(canonical_json(value)).hexdigest()
+
+
+def command_payload(spec: ValidationCommandSpec) -> CommandSpec:
+    """Map a command without parsing its presentation string."""
+    if spec.argv:
+        return CommandSpec(family="validation", argv=spec.argv)
+    assert spec.legacy_shell is not None
+    return CommandSpec(
+        family="legacy-validation",
+        argv=(spec.legacy_shell,),
+        mode="legacy_shell",
+    )
+
+
+def task_payload(contract: TaskContract) -> TaskPayload:
+    return TaskPayload(
+        target_branch=contract.target_branch,
+        scope_paths=contract.scope_patterns,
+        assignment_sha256=contract.digest,
+    )
+
+
+def plan_payload(
+    *, work_plan_path: str, approved_plan_commit: str, slices: Iterable[PlannedSlice]
+) -> PlanPayload:
+    return PlanPayload(
+        work_plan_path=work_plan_path,
+        approved_plan_commit=approved_plan_commit,
+        slices=tuple(
+            SliceSpec(str(item.slice_id), item.summary, item.scope_paths)
+            for item in slices
+        ),
+    )
+
+
+def agent_result_payload(
+    result: CodexContractResult, *, role: AgentRole, work_unit_id: int | str
+) -> AgentResultPayload:
+    outcome = "stopped" if result.stopped else "ready" if result.ready else "not_ready"
+    return AgentResultPayload(
+        role=_role(role),
+        work_unit_id=str(work_unit_id),
+        outcome=outcome,
+        test_files=result.test_files,
+    )
+
+
+def review_payload(result: ContractResult, *, work_unit_id: int | str) -> ReviewPayload:
+    verdict = "stop" if result.stopped else "approved" if result.approval else "denied"
+    evidence = None
+    if result.evidence is not None:
+        evidence = " | ".join(
+            (
+                result.evidence.dimensions,
+                result.evidence.largest_residual_risk,
+                result.evidence.break_condition,
+            )
+        )
+    return ReviewPayload(
+        reviewer=_role(result.reviewer),
+        work_unit_id=str(work_unit_id),
+        verdict=verdict,
+        finding_ids=tuple(item.finding_id for item in result.findings),
+        evidence=evidence,
+    )
+
+
+def finding_payload(
+    finding: FindingRecord,
+    *,
+    actor: AgentRole | None = None,
+    action: str = "opened",
+    rationale: str | None = None,
+) -> FindingTransitionPayload:
+    reporter = _role(finding.origin.reporter)
+    return FindingTransitionPayload(
+        finding_id=finding.finding_id,
+        reporter=reporter,
+        actor=_role(actor) if actor is not None else reporter,
+        action=action,
+        severity=FindingSeverity(finding.finding_class.value),
+        finding_status=finding.status.value.lower(),
+        rationale=rationale or finding.status_rationale or finding.summary,
+    )
+
+
+def attestation_payload(attestation: ValidationAttestation) -> ValidationAttestationPayload:
+    records_by_display = {record.command: record for record in attestation.records}
+    results = tuple(
+        ValidationResult(
+            command=command_payload(spec),
+            outcome=(
+                records_by_display[spec.display].status.value.lower()
+                if spec.display in records_by_display
+                else "unavailable"
+            ),
+            exit_code=(
+                records_by_display[spec.display].exit_code
+                if spec.display in records_by_display
+                else -1
+            ),
+            output_sha256=hashlib.sha256(
+                (
+                    records_by_display[spec.display].output
+                    if spec.display in records_by_display
+                    else ""
+                ).encode("utf-8")
+            ).hexdigest(),
+        )
+        for spec in attestation.command_specs
+    )
+    return ValidationAttestationPayload(results=results, attested_by=Role.ORCHESTRATOR)
+
+
+def validation_request_payload(request: ValidationRequest) -> ValidationRequestPayload:
+    return ValidationRequestPayload(
+        commands=tuple(command_payload(command.command_spec) for command in request.commands),
+        requested_by=Role.ORCHESTRATOR,
+    )
+
+
+@dataclass(slots=True)
+class ArtifactBridge:
+    """Idempotently persist and re-read typed domain statements."""
+
+    store: ArtifactStore
+    now: Callable[[], str] = _now
+
+    def append(
+        self,
+        payload: ArtifactPayload,
+        *,
+        logical_id: str,
+        idempotency_key: str,
+        fingerprint_sha256: str,
+        fingerprint_kind: FingerprintKind = FingerprintKind.IMPLEMENTATION,
+    ) -> ArtifactRecord:
+        fingerprint = Fingerprint(fingerprint_kind, fingerprint_sha256)
+        chain = self.store.load_chain()
+        existing = next(
+            (item for item in chain if item.idempotency_key == idempotency_key), None
+        )
+        if existing is not None:
+            self._assert_equal(existing, payload, logical_id, fingerprint)
+            return existing
+        revisions = [
+            item.revision
+            for item in chain
+            if item.record_type is payload.record_type and item.logical_id == logical_id
+        ]
+        record = ArtifactRecord.create(
+            run_id=self.store.run_id,
+            logical_id=logical_id,
+            revision=max(revisions, default=0) + 1,
+            fingerprint=fingerprint,
+            predecessor_ids=((chain[-1].record_id,) if chain else ()),
+            created_at=self.now(),
+            idempotency_key=idempotency_key,
+            payload=payload,
+        )
+        try:
+            persisted = self.store.put(record)
+        except Exception:
+            # put() documents durable-but-reported-failed publication.  Resolve
+            # that state before propagating the original failure.
+            recovered = next(
+                (
+                    item
+                    for item in self.store.load_chain()
+                    if item.idempotency_key == idempotency_key
+                ),
+                None,
+            )
+            if recovered is None:
+                raise
+            persisted = recovered
+        self._assert_equal(persisted, payload, logical_id, fingerprint)
+        return persisted
+
+    @staticmethod
+    def _assert_equal(
+        record: ArtifactRecord,
+        payload: ArtifactPayload,
+        logical_id: str,
+        fingerprint: Fingerprint,
+    ) -> None:
+        if (
+            record.logical_id != logical_id
+            or record.fingerprint != fingerprint
+            or _digest(record.payload) != _digest(payload)
+        ):
+            raise ArtifactBridgeError(
+                "structured artifact differs semantically from the state-v3 statement"
+            )
+
+    def diagnostic(
+        self,
+        *,
+        role: AgentRole,
+        work_unit_id: int | str,
+        attempt: int,
+        output: str,
+        reason: str,
+        fingerprint_sha256: str,
+    ) -> ArtifactRecord:
+        payload = DiagnosticPayload(
+            role=_role(role),
+            work_unit_id=str(work_unit_id),
+            attempt=attempt,
+            output_sha256=hashlib.sha256(output.encode("utf-8")).hexdigest(),
+            reason=reason,
+        )
+        return self.append(
+            payload,
+            logical_id=f"diagnostic-{role.value}-{work_unit_id}-{attempt}",
+            idempotency_key=(
+                f"diagnostic:{role.value}:{work_unit_id}:{attempt}:"
+                f"{payload.output_sha256}"
+            ),
+            fingerprint_sha256=fingerprint_sha256,
+        )
+
+
+__all__ = [
+    "ArtifactBridge", "ArtifactBridgeError", "agent_result_payload",
+    "attestation_payload", "command_payload", "finding_payload", "plan_payload",
+    "review_payload", "task_payload", "validation_request_payload",
+    "BindingPayload", "GatePayload",
+    "WorkUnitPayload",
+]

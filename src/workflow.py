@@ -42,6 +42,7 @@ from contracts import (
     StopRequest,
     ReviewEvidence,
     ValidationAttestation,
+    ValidationCommandSpec,
     ValidationRecord,
     ValidationStatus,
     validate_codex_response,
@@ -732,12 +733,17 @@ def _attestation_to_dict(item: ValidationAttestation) -> dict[str, object]:
         ],
         "output_digest": item.output_digest,
         "summary": item.summary,
+        "command_specs": [
+            {"mode": spec.mode, "argv": list(spec.argv), "legacy_shell": spec.legacy_shell}
+            for spec in item.command_specs
+        ],
     }
 
 
 def _attestation_from_dict(raw: object) -> ValidationAttestation:
     if not isinstance(raw, dict):
         raise ValueError("invalid persisted validation attestation")
+    specs_raw = raw.get("command_specs", [])
     return ValidationAttestation(
         attestation_id=str(raw["attestation_id"]),
         diff_fingerprint=str(raw["diff_fingerprint"]),
@@ -754,6 +760,17 @@ def _attestation_from_dict(raw: object) -> ValidationAttestation:
         ),
         output_digest=str(raw["output_digest"]),
         summary=str(raw["summary"]),
+        command_specs=tuple(
+            ValidationCommandSpec(
+                argv=tuple(str(part) for part in _json_list(item.get("argv", []))),
+                legacy_shell=(
+                    None if item.get("legacy_shell") is None
+                    else str(item["legacy_shell"])
+                ),
+            )
+            for item in _json_list(specs_raw)
+            if isinstance(item, dict)
+        ),
     )
 
 
@@ -937,6 +954,18 @@ class WorkflowEngine:
         self.heartbeat_fn = heartbeat_fn
         self._retried_failed_validation_fingerprints: set[str] = set()
 
+    def _persist_structured(self, method_name: str, *args: object) -> None:
+        """Invoke an optional driver sink and fail closed on divergence."""
+        sink = getattr(self.driver, method_name, None)
+        if sink is None:
+            return
+        try:
+            sink(*args)
+        except Exception as exc:
+            raise WorkflowExecutionError(
+                f"structured dual-write failed before workflow decision: {exc}"
+            ) from exc
+
     def run_current_work_unit(
         self,
         state: WorkflowState,
@@ -1110,6 +1139,9 @@ class WorkflowEngine:
             )
         except ValueError as exc:
             raise WorkflowExecutionError(f"invalid user gate decision: {exc}") from exc
+        self._persist_structured(
+            "persist_gate_decision", updated.current_work_unit.gate_decisions[-1]
+        )
         self.driver.checkpoint(updated, history)
         return WorkflowRunResult(updated, history)
 
@@ -1163,7 +1195,13 @@ class WorkflowEngine:
         try:
             result = validate_codex_response(output, contract, history.findings)
         except ContractValidationError as exc:
+            self._persist_structured(
+                "persist_contract_diagnostic", AgentRole.CODEX, output, str(exc), 1
+            )
             raise WorkflowContractError(f"invalid Codex response: {exc}") from exc
+        self._persist_structured(
+            "persist_codex_contract", result, output, history.findings
+        )
         history = replace(history, findings=result.findings)
         if result.stopped:
             if result.stop_request is None:
@@ -1498,7 +1536,13 @@ class WorkflowEngine:
         try:
             result = validate_codex_response(output, contract, history.findings)
         except ContractValidationError as exc:
+            self._persist_structured(
+                "persist_contract_diagnostic", AgentRole.CODEX, output, str(exc), 1
+            )
             raise WorkflowContractError(f"invalid Codex final report: {exc}") from exc
+        self._persist_structured(
+            "persist_codex_contract", result, output, history.findings
+        )
         if result.stopped:
             if result.stop_request is None:
                 raise WorkflowExecutionError("Codex final stop has no structured request")
@@ -1715,6 +1759,10 @@ class WorkflowEngine:
             output=output,
             contract=contract,
             findings=history.findings,
+        )
+        self._persist_structured(
+            "persist_review_contract", result, output, changes.fingerprint,
+            review_round, history.findings
         )
         if result.stopped:
             if result.stop_request is None:
@@ -2042,6 +2090,13 @@ class WorkflowEngine:
         try:
             return validate_review_response(normalized, contract, findings)
         except ContractValidationError as first_error:
+            self._persist_structured(
+                "persist_contract_diagnostic",
+                contract.reviewer,
+                normalized,
+                str(first_error),
+                1,
+            )
             repaired = self.driver.repair_review_contract(
                 ContractRepairInvocation(
                     reviewer=contract.reviewer,
@@ -2056,6 +2111,13 @@ class WorkflowEngine:
                 )
                 return validate_review_response(repaired, contract, findings)
             except ContractValidationError as second_error:
+                self._persist_structured(
+                    "persist_contract_diagnostic",
+                    contract.reviewer,
+                    repaired,
+                    str(second_error),
+                    2,
+                )
                 raise WorkflowContractError(
                     f"invalid {contract.reviewer.value} verdict after compact repair: "
                     f"{second_error}"
@@ -2088,6 +2150,9 @@ class WorkflowEngine:
                 raise WorkflowExecutionError(
                     "plan validation attestation fingerprint is foreign"
                 )
+            self._persist_structured(
+                "persist_validation_attestation", attestation
+            )
             event = ValidationAuditEvent(
                 event_id=len(history.events) + 1,
                 slice_id=slice_id,
@@ -2137,6 +2202,7 @@ class WorkflowEngine:
                     changes.fingerprint
                 )
             request = replace(request, attempt_number=len(matching) + 1)
+        self._persist_structured("persist_validation_request", request)
         attestation = self.driver.validate(changes, request)
         if attestation.diff_fingerprint != changes.fingerprint:
             raise WorkflowExecutionError("validation attestation fingerprint is foreign")
@@ -2149,6 +2215,7 @@ class WorkflowEngine:
             for item in history.attestations
         ):
             raise WorkflowExecutionError("validation attestation id was reused")
+        self._persist_structured("persist_validation_attestation", attestation)
         event = ValidationAuditEvent(
             event_id=len(history.events) + 1,
             slice_id=slice_id,

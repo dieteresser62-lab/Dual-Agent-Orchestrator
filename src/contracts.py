@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import shlex
 from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import PurePosixPath
@@ -63,6 +64,45 @@ class ValidationAttestationStatus(str, Enum):
     PASS = "PASS"
     FAIL = "FAIL"
     INCOMPLETE = "INCOMPLETE"
+
+
+@dataclass(frozen=True)
+class ValidationCommandSpec:
+    """Lossless validation command identity used by persisted attestations.
+
+    ``legacy_shell`` is deliberately opaque.  It exists only for state written
+    before argv was persisted and is never split or promoted to argv.
+    """
+
+    argv: tuple[str, ...] = ()
+    legacy_shell: str | None = None
+
+    def __post_init__(self) -> None:
+        if bool(self.argv) == (self.legacy_shell is not None):
+            raise ValueError("validation command spec requires argv or legacy_shell")
+        if self.argv and any(
+            not isinstance(part, str)
+            or not part
+            or any(character in part for character in ("\x00", "\r", "\n"))
+            for part in self.argv
+        ):
+            raise ValueError("validation argv entries must be non-empty safe strings")
+        if self.legacy_shell is not None and (
+            not self.legacy_shell.strip()
+            or any(character in self.legacy_shell for character in ("\x00", "\r", "\n"))
+        ):
+            raise ValueError("legacy shell command must be one non-empty line")
+
+    @property
+    def mode(self) -> str:
+        return "argv" if self.argv else "legacy_shell"
+
+    @property
+    def display(self) -> str:
+        if self.argv:
+            return shlex.join(self.argv)
+        assert self.legacy_shell is not None
+        return self.legacy_shell
 
 
 @dataclass(frozen=True)
@@ -162,6 +202,7 @@ class ValidationAttestation:
     records: tuple[ValidationRecord, ...]
     output_digest: str
     summary: str
+    command_specs: tuple[ValidationCommandSpec, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.attestation_id.strip():
@@ -193,6 +234,15 @@ class ValidationAttestation:
             )
         if not self.summary.strip():
             raise ValueError("validation attestation requires a summary")
+        specs = self.command_specs or tuple(
+            ValidationCommandSpec(legacy_shell=command)
+            for command in self.expected_commands
+        )
+        if tuple(spec.display for spec in specs) != self.expected_commands:
+            raise ValueError(
+                "validation command specs must losslessly match expected command order"
+            )
+        object.__setattr__(self, "command_specs", specs)
 
     @property
     def missing_commands(self) -> tuple[str, ...]:

@@ -12,6 +12,15 @@ from pathlib import Path, PurePosixPath
 
 from agent_adapters import AgentAdapter, build_agent_registry
 from agent_runtime import OrchestratorConfig, run_agent_checked, run_validation_matrix
+from artifact_bridge import (
+    ArtifactBridge, agent_result_payload, attestation_payload, finding_payload,
+    plan_payload, review_payload, validation_request_payload,
+)
+from artifact_models import (
+    BindingPayload, FingerprintKind, GatePayload, ReviewPayload, Role,
+    TaskPayload, WorkUnitPayload,
+)
+from artifact_store import ArtifactStore
 from audit_trail import (
     AuditProjection,
     AuthorizedTestChanges,
@@ -35,6 +44,7 @@ from contracts import (
     PlannedSlice,
     StepContract,
     ValidationAttestation,
+    ValidationCommandSpec,
     ValidationRecord,
     ValidationStatus,
     validate_codex_response,
@@ -90,7 +100,9 @@ from workflow import (
 )
 from workflow_state import (
     GateReason,
+    GateDecisionRecord,
     SliceStatus,
+    ProtocolMode,
     WorkflowState,
     WorkflowStep,
     WorkUnitRecord,
@@ -197,6 +209,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
         self.last_codex_output = ""
         self._repository_changes: dict[str, RepositoryChanges] = {}
         self._rendered_changes: dict[str, WorkflowChanges] = {}
+        self._artifact_bridge: ArtifactBridge | None = None
 
     def bind_work_unit(self, state: WorkflowState) -> None:
         # Runtime history is written by checkpoint(), not by the pure workflow-state
@@ -214,6 +227,13 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 runtime_history=self.active_state.runtime_history,
             )
         self.active_state = state
+        self._artifact_bridge = (
+            ArtifactBridge(ArtifactStore(self.root, state.run_id))
+            if state.protocol_binding is not None
+            and state.protocol_binding.mode is ProtocolMode.STRUCTURED_V1
+            else None
+        )
+        self._persist_structured_baseline(state)
         if state.current_work_unit.kind is WorkUnitKind.PLAN and not self.last_codex_output:
             artifact = (
                 self.root / ".orchestrator" / "runs" / state.run_id
@@ -221,6 +241,56 @@ class ProductionWorkflowDriver(WorkflowDriver):
             )
             if artifact.is_file():
                 self.last_codex_output = artifact.read_text(encoding="utf-8").strip()
+
+    def _persist_structured_baseline(self, state: WorkflowState) -> None:
+        bridge = self._artifact_bridge
+        if bridge is None or state.task_digest is None:
+            return
+        contract_fingerprint = state.task_digest
+        if state.task_scope_patterns:
+            bridge.append(
+                TaskPayload(
+                    target_branch=state.target_branch or state.branch,
+                    scope_paths=state.task_scope_patterns,
+                    assignment_sha256=state.task_digest,
+                ),
+                logical_id="task-contract",
+                idempotency_key="task-contract",
+                fingerprint_sha256=contract_fingerprint,
+                fingerprint_kind=FingerprintKind.CONTRACT,
+            )
+        unit = state.current_work_unit
+        if unit.kind is not WorkUnitKind.PLAN and state.current_slice.scope_paths:
+            bridge.append(
+                WorkUnitPayload(
+                    slice_id=str(unit.slice_id),
+                    round_number=unit.round_number,
+                    paths=state.current_slice.scope_paths,
+                ),
+                logical_id=f"work-unit-{unit.work_unit_id}",
+                idempotency_key=(
+                    f"work-unit:{unit.work_unit_id}:round:{unit.round_number}"
+                ),
+                fingerprint_sha256=contract_fingerprint,
+                fingerprint_kind=FingerprintKind.CONTRACT,
+            )
+        if (
+            unit.kind is not WorkUnitKind.PLAN
+            and state.work_plan_path is not None
+            and state.planned_slices
+            and state.current_slice.start_commit is not None
+        ):
+            bridge.append(
+                plan_payload(
+                    work_plan_path=state.work_plan_path,
+                    approved_plan_commit=state.current_slice.start_commit,
+                    slices=state.planned_slices,
+                ),
+                logical_id="approved-plan",
+                idempotency_key=f"approved-plan:{state.current_slice.start_commit}",
+                fingerprint_sha256=contract_fingerprint,
+                fingerprint_kind=FingerprintKind.CONTRACT,
+            )
 
     def _agent(
         self,
@@ -268,6 +338,167 @@ class ProductionWorkflowDriver(WorkflowDriver):
             invocation.reviewer,
             invocation.prompt,
             f"work-unit-{invocation.work_unit_id:04d}-{invocation.step.value}",
+        )
+
+    def _artifact_fingerprint(self) -> str:
+        if self.active_state is None:
+            raise WorkflowExecutionError("structured persistence has no active state")
+        state = self.active_state
+        if state.current_work_unit.kind is WorkUnitKind.PLAN:
+            if state.task_digest is None:
+                raise WorkflowExecutionError("plan artifact requires a task fingerprint")
+            return state.task_digest
+        return self.collect_changes(
+            state.current_slice.start_commit or state.branch_base
+        ).fingerprint
+
+    def persist_codex_contract(
+        self,
+        result: CodexContractResult,
+        output: str,
+        previous_findings: tuple[FindingRecord, ...],
+    ) -> None:
+        if self._artifact_bridge is None or self.active_state is None:
+            return
+        state = self.active_state
+        unit = state.current_work_unit
+        fingerprint = self._artifact_fingerprint()
+        logical = f"agent-{unit.work_unit_id}-{state.current_step.value}-{unit.round_number}"
+        self._artifact_bridge.append(
+            agent_result_payload(result, role=AgentRole.CODEX, work_unit_id=unit.work_unit_id),
+            logical_id=logical,
+            idempotency_key=f"parsed:{logical}:{hashlib.sha256(output.encode('utf-8')).hexdigest()}",
+            fingerprint_sha256=fingerprint,
+            fingerprint_kind=(
+                FingerprintKind.CONTRACT
+                if unit.kind is WorkUnitKind.PLAN
+                else FingerprintKind.IMPLEMENTATION
+            ),
+        )
+        previous_by_id = {item.finding_id: item for item in previous_findings}
+        for finding in result.findings:
+            prior_count = len(previous_by_id.get(finding.finding_id, finding).responses)
+            if finding.finding_id not in previous_by_id:
+                prior_count = 0
+            for index, response in enumerate(
+                finding.responses[prior_count:], start=prior_count + 1
+            ):
+                self._artifact_bridge.append(
+                    finding_payload(
+                        finding,
+                        actor=AgentRole.CODEX,
+                        action="responded",
+                        rationale=f"{response.decision.value}: {response.rationale}",
+                    ),
+                    logical_id=f"finding-{finding.finding_id}",
+                    idempotency_key=f"finding-response:{finding.finding_id}:{index}",
+                    fingerprint_sha256=fingerprint,
+                )
+
+    def persist_review_contract(
+        self,
+        result: ContractResult,
+        output: str,
+        fingerprint: str,
+        round_number: int,
+        previous_findings: tuple[FindingRecord, ...],
+    ) -> None:
+        if self._artifact_bridge is None or self.active_state is None:
+            return
+        unit = self.active_state.current_work_unit
+        logical = f"review-{result.reviewer.value}-{unit.work_unit_id}-{round_number}"
+        self._artifact_bridge.append(
+            review_payload(result, work_unit_id=unit.work_unit_id),
+            logical_id=logical,
+            idempotency_key=f"parsed:{logical}:{hashlib.sha256(output.encode('utf-8')).hexdigest()}",
+            fingerprint_sha256=fingerprint,
+        )
+        previous_by_id = {item.finding_id: item for item in previous_findings}
+        for finding in result.findings:
+            previous = previous_by_id.get(finding.finding_id)
+            transitions: list[tuple[str, str]] = []
+            if previous is None:
+                transitions.append(("opened", finding.summary))
+            else:
+                if previous.finding_class is not finding.finding_class:
+                    transitions.append(
+                        ("reclassified", finding.status_rationale or finding.summary)
+                    )
+                if previous.status is not finding.status:
+                    transitions.append(
+                        ("status_changed", finding.status_rationale or finding.summary)
+                    )
+            for action, rationale in transitions:
+                self._artifact_bridge.append(
+                    finding_payload(finding, action=action, rationale=rationale),
+                    logical_id=f"finding-{finding.finding_id}",
+                    idempotency_key=(
+                        f"finding:{finding.finding_id}:{action}:{round_number}:"
+                        f"{result.reviewer.value}"
+                    ),
+                    fingerprint_sha256=fingerprint,
+                )
+
+    def persist_contract_diagnostic(
+        self, role: AgentRole, output: str, reason: str, attempt: int
+    ) -> None:
+        if self._artifact_bridge is None or self.active_state is None:
+            return
+        self._artifact_bridge.diagnostic(
+            role=role,
+            work_unit_id=self.active_state.current_work_unit_id,
+            attempt=attempt,
+            output=output,
+            reason=reason,
+            fingerprint_sha256=self._artifact_fingerprint(),
+        )
+
+    def persist_validation_attestation(
+        self, attestation: ValidationAttestation
+    ) -> None:
+        if self._artifact_bridge is None:
+            return
+        if any(not spec.argv for spec in attestation.command_specs):
+            raise WorkflowExecutionError(
+                "structured-v1 validation accepts only matrix-provided argv commands"
+            )
+        self._artifact_bridge.append(
+            attestation_payload(attestation),
+            logical_id=attestation.attestation_id,
+            idempotency_key=f"attestation:{attestation.attestation_id}",
+            fingerprint_sha256=attestation.diff_fingerprint,
+        )
+
+    def persist_validation_request(self, request) -> None:  # type: ignore[no-untyped-def]
+        if self._artifact_bridge is None:
+            return
+        if any(not command.argv for command in request.commands):
+            raise WorkflowExecutionError(
+                "structured-v1 validation accepts only matrix-provided argv commands"
+            )
+        self._artifact_bridge.append(
+            validation_request_payload(request),
+            logical_id=f"validation-request-{request.diff_fingerprint[:12]}",
+            idempotency_key=(
+                f"validation-request:{request.diff_fingerprint}:{request.attempt_number}"
+            ),
+            fingerprint_sha256=request.diff_fingerprint,
+        )
+
+    def persist_gate_decision(self, decision: GateDecisionRecord) -> None:
+        if self._artifact_bridge is None:
+            return
+        logical = f"gate-{decision.reason.value}-{decision.fingerprint[:12]}"
+        self._artifact_bridge.append(
+            GatePayload(
+                gate_kind=decision.reason.value.replace("_", "-"),
+                decision="approved" if decision.approved else "rejected",
+                authority=Role.USER,
+                rationale=decision.rationale,
+            ),
+            logical_id=logical,
+            idempotency_key=f"gate:{logical}:{decision.approved}",
+            fingerprint_sha256=decision.fingerprint,
         )
 
     def repair_review_contract(self, invocation: ContractRepairInvocation) -> str:
@@ -487,6 +718,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
             records=(ValidationRecord(ValidationStatus.PASS, command, 0, detail),),
             output_digest=digest,
             summary="internal plan contract passed",
+            command_specs=(ValidationCommandSpec(argv=(command,)),),
         )
 
     def prepare_correction(
@@ -573,6 +805,38 @@ class ProductionWorkflowDriver(WorkflowDriver):
             ),
             title=summary,
         )
+        if self._artifact_bridge is not None:
+            chain = self._artifact_bridge.store.load_chain()
+            attestation = next(
+                (
+                    item for item in reversed(chain)
+                    if item.record_type.value == "validation_attestation"
+                    and item.fingerprint.sha256 == request.fingerprint
+                ),
+                None,
+            )
+            approvals = tuple(
+                item.record_id
+                for item in chain
+                if isinstance(item.payload, ReviewPayload)
+                and item.payload.verdict == "approved"
+                and item.fingerprint.sha256 == request.fingerprint
+            )
+            if attestation is None or not approvals:
+                raise WorkflowExecutionError(
+                    "structured commit binding requires persisted attestation and approvals"
+                )
+            self._artifact_bridge.append(
+                BindingPayload(
+                    binding_kind="commit",
+                    target=result.commit_hash,
+                    attestation_id=attestation.record_id,
+                    approval_ids=approvals,
+                ),
+                logical_id=f"commit-{request.slice_id}-{result.commit_hash[:12]}",
+                idempotency_key=f"commit:{request.slice_id}:{request.fingerprint}",
+                fingerprint_sha256=request.fingerprint,
+            )
         return result.commit_hash
 
     def finalize_audit(self, state: WorkflowState) -> str | None:

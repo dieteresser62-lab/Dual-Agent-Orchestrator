@@ -58,7 +58,14 @@ class ArtifactStore:
         self.head_path = self._confined(self.run_dir / "head.json")
 
     def put(self, record: ArtifactRecord) -> ArtifactRecord:
-        """Append ``record`` or return the matching idempotent prior write."""
+        """Append ``record`` or return the matching idempotent prior write.
+
+        An exception does not prove that nothing was written.  Once the bytes
+        have been atomically published in ``records_dir``, a later verification
+        scan or head-cache refresh can still fail.  Callers must therefore treat
+        every exception as *possibly already persisted* and may safely retry the
+        identical logical call (same idempotency key and semantic content).
+        """
         if record.run_id != self.run_id:
             raise ArtifactConflictError(
                 f"record run_id {record.run_id!r} does not match store {self.run_id!r}"

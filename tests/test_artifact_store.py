@@ -183,6 +183,21 @@ def test_store_rejects_non_success_completion_with_binding(
         store.put(record)
 
 
+@pytest.mark.parametrize("outcome", ["failed", "stopped"])
+def test_scan_rejects_persisted_non_success_completion_with_binding(
+    tmp_path: Path, outcome: str
+) -> None:
+    """Exercise the persisted invariant without passing through put()."""
+    store = ArtifactStore(tmp_path, "run-1")
+    record = make_record(
+        "completion", WorkflowCompletionPayload(outcome, "binding-final")
+    )
+    write_envelope(store.records_dir / f"{record.record_id}.json", record)
+
+    with pytest.raises(ArtifactCorruptionError, match="cannot carry final_binding_id"):
+        store.load_chain()
+
+
 @pytest.mark.parametrize("run_id", ["../escape", "/absolute", "bad/name", ""])
 def test_store_rejects_run_id_path_escape(tmp_path: Path, run_id: str) -> None:
     with pytest.raises(ArtifactStoreError, match="safe artifact path"):
