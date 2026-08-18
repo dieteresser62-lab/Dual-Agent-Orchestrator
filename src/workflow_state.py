@@ -893,6 +893,7 @@ class WorkflowState:
     execution_mode: str = "IMPLEMENT"
     task_scope_patterns: tuple[str, ...] = ()
     work_plan_path: str | None = None
+    approved_plan_commit: str | None = None
     audit_report_path: str | None = None
     target_branch: str | None = None
     protocol_binding: ProtocolBinding | None = None
@@ -989,6 +990,15 @@ class WorkflowState:
             if self.execution_mode == "PLAN_ONLY" and self.work_plan_path is None:
                 raise WorkflowStateValidationError(
                     "PLAN_ONLY state requires work_plan_path"
+                )
+        if self.approved_plan_commit is not None:
+            if not re.fullmatch(r"[0-9a-f]{40}", self.approved_plan_commit):
+                raise WorkflowStateValidationError(
+                    "approved_plan_commit must be a lowercase 40-character Git SHA"
+                )
+            if self.work_plan_path is None:
+                raise WorkflowStateValidationError(
+                    "approved_plan_commit requires work_plan_path"
                 )
         if self.audit_report_path is not None:
             path = PurePosixPath(self.audit_report_path)
@@ -1872,6 +1882,7 @@ class WorkflowState:
             "execution_mode": self.execution_mode,
             "task_scope_patterns": list(self.task_scope_patterns),
             "work_plan_path": self.work_plan_path,
+            "approved_plan_commit": self.approved_plan_commit,
             "audit_report_path": self.audit_report_path,
             "target_branch": self.target_branch,
             "protocol_binding": (
@@ -1906,6 +1917,8 @@ class WorkflowState:
         }
         audit_keys = {*current_keys, "audit_report_path"}
         protocol_keys = {*audit_keys, "protocol_binding"}
+        plan_commit_keys = {*audit_keys, "approved_plan_commit"}
+        plan_binding_keys = {*plan_commit_keys, "protocol_binding"}
         if set(raw) == legacy_keys:
             planned_slices: tuple[PlannedSlice, ...] = ()
             runtime_history = None
@@ -1913,6 +1926,7 @@ class WorkflowState:
             execution_mode = "IMPLEMENT"
             task_scope_patterns: tuple[str, ...] = ()
             work_plan_path = None
+            approved_plan_commit = None
             audit_report_path = None
             target_branch = None
             protocol_binding = None
@@ -1923,8 +1937,12 @@ class WorkflowState:
                 frozenset(current_keys),
                 frozenset(audit_keys),
             }:
-                if raw_keys != frozenset(protocol_keys):
-                    _require_exact_keys(raw, protocol_keys, "workflow state")
+                if raw_keys not in {
+                    frozenset(protocol_keys),
+                    frozenset(plan_commit_keys),
+                    frozenset(plan_binding_keys),
+                }:
+                    _require_exact_keys(raw, plan_binding_keys, "workflow state")
             raw_plan = _list(raw["planned_slices"], "planned_slices")
             planned: list[PlannedSlice] = []
             for index, item in enumerate(raw_plan):
@@ -1961,6 +1979,7 @@ class WorkflowState:
                 execution_mode = "IMPLEMENT"
                 task_scope_patterns = ()
                 work_plan_path = None
+                approved_plan_commit = None
                 audit_report_path = None
                 target_branch = None
             else:
@@ -1974,10 +1993,18 @@ class WorkflowState:
                 )
                 audit_report_path = (
                     _optional_string(raw["audit_report_path"], "audit_report_path")
-                    if raw_keys in {frozenset(audit_keys), frozenset(protocol_keys)}
+                    if raw_keys in {
+                        frozenset(audit_keys),
+                        frozenset(protocol_keys),
+                        frozenset(plan_commit_keys),
+                        frozenset(plan_binding_keys),
+                    }
                     else None
                 )
                 target_branch = _optional_string(raw["target_branch"], "target_branch")
+                approved_plan_commit = _optional_string(
+                    raw.get("approved_plan_commit"), "approved_plan_commit"
+                )
             binding_raw = raw.get("protocol_binding")
             protocol_binding = (
                 None
@@ -2011,6 +2038,7 @@ class WorkflowState:
             execution_mode=execution_mode,
             task_scope_patterns=task_scope_patterns,
             work_plan_path=work_plan_path,
+            approved_plan_commit=approved_plan_commit,
             audit_report_path=audit_report_path,
             target_branch=target_branch,
             protocol_binding=protocol_binding,
@@ -2029,6 +2057,7 @@ def init_workflow_state(
     execution_mode: str = "IMPLEMENT",
     task_scope_patterns: tuple[str, ...] = (),
     work_plan_path: str | None = None,
+    approved_plan_commit: str | None = None,
     audit_report_path: str | None = None,
     target_branch: str | None = None,
     protocol_binding: ProtocolBinding | None = None,
@@ -2068,6 +2097,7 @@ def init_workflow_state(
         execution_mode=execution_mode,
         task_scope_patterns=task_scope_patterns,
         work_plan_path=work_plan_path,
+        approved_plan_commit=approved_plan_commit,
         audit_report_path=audit_report_path,
         target_branch=target_branch,
         protocol_binding=protocol_binding,

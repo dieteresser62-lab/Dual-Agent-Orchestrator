@@ -9,7 +9,7 @@ from pathlib import Path
 import orchestrator
 import pytest
 from agent_runtime import AgentInvocationError
-from artifact_models import CorrectionWorkUnitPayload, RecordType
+from artifact_models import CorrectionWorkUnitPayload, PlanPayload, RecordType
 from artifact_store import ArtifactStore
 from cli import parse_args
 from contracts import (
@@ -453,6 +453,81 @@ def test_structured_bind_survives_round_number_increase_within_same_work_unit(
     assert tuple(item.revision for item in work_units) == (1, 2)
     assert tuple(item.payload.round_number for item in work_units) == (1, 2)
     assert len({item.idempotency_key for item in work_units}) == 2
+
+
+def test_multi_slice_plan_binding_pins_original_approved_commit_not_slice_start(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/structured-plan-binding")
+    task = repository / "task.md"
+    _write_task(
+        task,
+        "feature/structured-plan-binding",
+        "src/one.py",
+        "src/two.py",
+    )
+    approved_plan_commit = _git(repository, "rev-parse", "HEAD")
+    second_slice_start = "b" * 40
+    planned_slices = (
+        PlannedSlice(1, "first", ("src/one.py",)),
+        PlannedSlice(2, "second", ("src/two.py",)),
+    )
+    state = init_workflow_state(
+        run_id="structured-plan-binding",
+        task_file=str(task),
+        branch="feature/structured-plan-binding",
+        branch_base=approved_plan_commit,
+        first_slice_start_commit=approved_plan_commit,
+        slice_count=2,
+        task_digest="a" * 64,
+        task_scope_patterns=("src/one.py", "src/two.py"),
+        work_plan_path="docs/internal/approved-plan.md",
+        approved_plan_commit=approved_plan_commit,
+        target_branch="feature/structured-plan-binding",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V1, "1"),
+    ).bind_slice_plan(
+        planned_slices,
+        first_start_commit=approved_plan_commit,
+    ).complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    ).bind_current_slice_git_boundary(
+        start_commit=approved_plan_commit,
+        scope_paths=("src/one.py",),
+        start_fingerprint="c" * 64,
+    )
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+
+    driver.bind_work_unit(state)
+    slice_two = state.complete_current_slice(
+        commit_ref=second_slice_start,
+    ).start_work_unit(
+        slice_id=2,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+        slice_start_commit=second_slice_start,
+    ).bind_current_slice_git_boundary(
+        start_commit=second_slice_start,
+        scope_paths=("src/two.py",),
+        start_fingerprint="d" * 64,
+    )
+    driver.bind_work_unit(slice_two)
+
+    plan_records = tuple(
+        record
+        for record in ArtifactStore(repository, state.run_id).load_chain()
+        if isinstance(record.payload, PlanPayload)
+    )
+    assert len(plan_records) == 1
+    assert plan_records[0].payload.approved_plan_commit == approved_plan_commit
+    assert plan_records[0].idempotency_key == f"approved-plan:{approved_plan_commit}"
 
 
 def test_correction_work_unit_persists_correction_work_unit_payload_with_finding_ids(

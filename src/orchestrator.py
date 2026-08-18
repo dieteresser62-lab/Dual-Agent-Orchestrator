@@ -385,16 +385,16 @@ class ProductionWorkflowDriver(WorkflowDriver):
         if (
             state.work_plan_path is not None
             and state.planned_slices
-            and state.current_slice.start_commit is not None
+            and state.approved_plan_commit is not None
         ):
             bridge.append(
                 plan_payload(
                     work_plan_path=state.work_plan_path,
-                    approved_plan_commit=state.current_slice.start_commit,
+                    approved_plan_commit=state.approved_plan_commit,
                     slices=state.planned_slices,
                 ),
                 logical_id="approved-plan",
-                idempotency_key=f"approved-plan:{state.current_slice.start_commit}",
+                idempotency_key=f"approved-plan:{state.approved_plan_commit}",
                 fingerprint_sha256=contract_fingerprint,
                 fingerprint_kind=FingerprintKind.CONTRACT,
             )
@@ -1963,6 +1963,7 @@ def _fresh_state(
         execution_mode=task_contract.mode.value,
         task_scope_patterns=task_contract.scope_patterns,
         work_plan_path=task_contract.work_plan_path,
+        approved_plan_commit=task_contract.approved_plan_commit,
         audit_report_path=audit_report_path,
         target_branch=task_contract.target_branch,
         protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V1, "1"),

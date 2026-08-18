@@ -67,6 +67,7 @@ def test_hardened_task_contract_roundtrips_in_state() -> None:
         execution_mode="PLAN_ONLY",
         task_scope_patterns=("docs/internal/plan.md",),
         work_plan_path="docs/internal/plan.md",
+        approved_plan_commit="c" * 40,
         target_branch="feature/plan",
         timestamp="2026-08-12T10:00:00+00:00",
     )
@@ -76,6 +77,7 @@ def test_hardened_task_contract_roundtrips_in_state() -> None:
     assert restored == state
     assert restored.execution_mode == "PLAN_ONLY"
     assert restored.task_digest == "b" * 64
+    assert restored.approved_plan_commit == "c" * 40
 
 
 def test_protocol_binding_roundtrips_and_missing_binding_is_legacy() -> None:

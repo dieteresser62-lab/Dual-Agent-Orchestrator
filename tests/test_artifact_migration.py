@@ -7,14 +7,22 @@ import pytest
 
 from artifact_bridge import ArtifactBridge
 from artifact_migration import ArtifactResumeError, resolve_resume_state
-from artifact_models import FingerprintKind, TaskPayload, WorkUnitPayload
+from artifact_models import (
+    FingerprintKind,
+    PlanPayload,
+    SliceSpec,
+    TaskPayload,
+    WorkUnitPayload,
+)
 from artifact_store import ArtifactStore
+from contracts import PlannedSlice
 from workflow_state import (
     AgentFailureKind,
     GateReason,
     InvocationFailureRecord,
     ProtocolBinding,
     ProtocolMode,
+    WorkflowState,
     WorkflowStep,
     WorkUnitKind,
     init_workflow_state,
@@ -103,6 +111,39 @@ def test_structured_state_rejects_a_stale_round_with_record_id(tmp_path: Path) -
 
     with pytest.raises(ArtifactResumeError, match=r"record ar1-[0-9a-f]{64}.*round"):
         resolve_resume_state(tmp_path, stale)
+
+
+def test_structured_resume_halts_when_legacy_state_missing_approved_plan_commit_but_chain_has_multiple_plan_records(
+    tmp_path: Path,
+) -> None:
+    planned_slices = (PlannedSlice(1, "resume", ("src/resume.py",)),)
+    state = replace(
+        _state(tmp_path),
+        planned_slices=planned_slices,
+        work_plan_path="docs/internal/approved-plan.md",
+        approved_plan_commit="b" * 40,
+    )
+    legacy_document = state.to_dict()
+    legacy_document.pop("approved_plan_commit")
+    legacy_state = WorkflowState.from_dict(legacy_document)
+    assert legacy_state.approved_plan_commit is None
+    _records(tmp_path, legacy_state)
+    bridge = ArtifactBridge(ArtifactStore(tmp_path, legacy_state.run_id))
+    slices = (SliceSpec("1", "resume", ("src/resume.py",)),)
+    for commit in ("b" * 40, "c" * 40):
+        bridge.append(
+            PlanPayload("docs/internal/approved-plan.md", commit, slices),
+            logical_id="approved-plan",
+            idempotency_key=f"approved-plan:{commit}",
+            fingerprint_sha256=commit + "0" * 24,
+            fingerprint_kind=FingerprintKind.CONTRACT,
+        )
+
+    with pytest.raises(
+        ArtifactResumeError,
+        match="expected exactly one immutable approved-plan record, found 2",
+    ):
+        resolve_resume_state(tmp_path, legacy_state)
 
 
 def test_structured_resume_halts_when_mirror_gate_decision_has_no_chain_record(

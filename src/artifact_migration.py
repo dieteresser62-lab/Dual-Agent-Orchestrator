@@ -125,9 +125,19 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
             raise mismatch("current work-unit round differs from the record chain", latest.record_id)
 
     plans = [item for item in chain if item.record_type is RecordType.PLAN]
-    if state.planned_slices and state.work_plan_path and state.current_slice.start_commit:
+    if (
+        state.execution_mode == "IMPLEMENT"
+        and state.planned_slices
+        and state.work_plan_path
+    ):
         if not plans:
             raise mismatch("approved plan has no structured record")
+        if len(plans) != 1:
+            raise mismatch(
+                f"expected exactly one immutable approved-plan record, found {len(plans)}"
+            )
+        if state.approved_plan_commit is None:
+            raise mismatch("state-v3 mirror is missing its approved-plan commit binding")
         payload = plans[-1].payload
         assert isinstance(payload, PlanPayload)
         expected_slices = tuple(
@@ -139,7 +149,7 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
         )
         if (
             payload.work_plan_path != state.work_plan_path
-            or payload.approved_plan_commit != state.current_slice.start_commit
+            or payload.approved_plan_commit != state.approved_plan_commit
             or actual_slices != expected_slices
         ):
             raise mismatch("approved-plan binding differs from state-v3", plans[-1].record_id)
