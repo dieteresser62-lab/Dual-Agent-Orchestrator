@@ -33,6 +33,8 @@ from workflow import (
 from workflow_state import (
     AgentFailureKind,
     GateReason,
+    ProtocolBinding,
+    ProtocolMode,
     WorkUnitKind,
     WorkflowState,
     WorkflowStep,
@@ -1040,6 +1042,7 @@ def build_scenario_state(
         branch=scenario.initial.branch,
         branch_base=first.start_commit,
         slice_count=scenario.initial.slice_count,
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V1, "1"),
         timestamp=scenario.clock_start.isoformat(),
     )
     if scenario.initial.kind is WorkUnitKind.PLAN:

@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import hashlib
 import json
 import logging
 import re
+import shlex
 import time
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
@@ -20,13 +22,14 @@ from artifact_migration import ArtifactResumeError, resolve_resume_state
 from artifact_projection import ArtifactAuditProjection
 from artifact_models import (
     BindingPayload, FingerprintKind, GatePayload, ReviewPayload, Role,
-    TaskPayload, WorkUnitPayload,
+    TaskPayload, WorkUnitPayload, WorkflowCompletionPayload,
 )
 from artifact_store import ArtifactStore
 from audit_trail import (
     AuditProjection,
     AuthorizedTestChanges,
     OverallAuditEntry,
+    ReviewAuditEvent,
     project_managed_slice_audit,
     project_overall_audit,
     project_structured_slice_audit,
@@ -107,6 +110,7 @@ from workflow_state import (
     GateReason,
     GateDecisionRecord,
     SliceStatus,
+    ProtocolBinding,
     ProtocolMode,
     WorkflowState,
     WorkflowStep,
@@ -232,12 +236,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 runtime_history=self.active_state.runtime_history,
             )
         self.active_state = state
-        self._artifact_bridge = (
-            ArtifactBridge(ArtifactStore(self.root, state.run_id))
-            if state.protocol_binding is not None
-            and state.protocol_binding.mode is ProtocolMode.STRUCTURED_V1
-            else None
-        )
+        self._bind_artifact_store(state)
         self._persist_structured_baseline(state)
         if state.current_work_unit.kind is WorkUnitKind.PLAN and not self.last_codex_output:
             artifact = (
@@ -246,6 +245,80 @@ class ProductionWorkflowDriver(WorkflowDriver):
             )
             if artifact.is_file():
                 self.last_codex_output = artifact.read_text(encoding="utf-8").strip()
+
+    def _bind_artifact_store(self, state: WorkflowState) -> None:
+        """Select the immutable persistence backend without changing workflow state."""
+        if (
+            state.protocol_binding is not None
+            and state.protocol_binding.mode is ProtocolMode.STRUCTURED_V1
+        ):
+            if (
+                self._artifact_bridge is None
+                or self._artifact_bridge.store.run_id != state.run_id
+            ):
+                self._artifact_bridge = ArtifactBridge(
+                    ArtifactStore(self.root, state.run_id)
+                )
+        else:
+            self._artifact_bridge = None
+
+    def assert_structured_decision_context(self) -> None:
+        """Reload authoritative records before an external workflow side effect."""
+        state = self.active_state
+        if state is None or state.effective_protocol_mode is ProtocolMode.LEGACY_STATE_V3:
+            return
+        try:
+            resolution = resolve_resume_state(self.root, state)
+        except (ArtifactResumeError, ValueError) as exc:
+            raise WorkflowExecutionError(
+                f"structured decision context is not resumable: {exc}"
+            ) from exc
+        if resolution.record_head_id is None:
+            raise WorkflowExecutionError(
+                "structured decision context has no authoritative record head"
+            )
+        assert self._artifact_bridge is not None
+        chain = self._artifact_bridge.store.load_chain()
+        record_reviews = Counter(
+            (
+                item.payload.work_unit_id,
+                item.payload.reviewer.value,
+                item.fingerprint.sha256,
+                item.payload.verdict,
+                item.payload.finding_ids,
+            )
+            for item in chain
+            if isinstance(item.payload, ReviewPayload)
+        )
+        mirror_reviews: Counter[tuple[object, ...]] = Counter()
+        for work_unit_id, history in _persisted_histories(state).items():
+            for event in history.events:
+                if not isinstance(event, ReviewAuditEvent):
+                    continue
+                result = event.result
+                if result.validation is None:
+                    raise WorkflowExecutionError(
+                        "structured review mirror is missing its validation binding"
+                    )
+                mirror_reviews[
+                    (
+                        str(work_unit_id),
+                        result.reviewer.value,
+                        result.validation.diff_fingerprint,
+                        (
+                            "stop"
+                            if result.stopped
+                            else "approved"
+                            if result.approval is True
+                            else "denied"
+                        ),
+                        tuple(item.finding_id for item in result.findings),
+                    )
+                ] += 1
+        if record_reviews != mirror_reviews:
+            raise WorkflowExecutionError(
+                "structured reviewer decisions differ from the state-v3 mirror"
+            )
 
     def _persist_structured_baseline(self, state: WorkflowState) -> None:
         bridge = self._artifact_bridge
@@ -280,8 +353,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 fingerprint_kind=FingerprintKind.CONTRACT,
             )
         if (
-            unit.kind is not WorkUnitKind.PLAN
-            and state.work_plan_path is not None
+            state.work_plan_path is not None
             and state.planned_slices
             and state.current_slice.start_commit is not None
         ):
@@ -296,6 +368,39 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 fingerprint_sha256=contract_fingerprint,
                 fingerprint_kind=FingerprintKind.CONTRACT,
             )
+        if (
+            state.current_step is WorkflowStep.COMPLETED
+            and all(item.commit_ref is not None for item in state.slices)
+            and (
+                state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
+                or (
+                    state.execution_mode == TaskMode.PLAN_ONLY.value
+                    and state.current_work_unit.kind is WorkUnitKind.PLAN
+                )
+            )
+        ):
+            chain = bridge.store.load_chain()
+            final_binding = next(
+                (
+                    item
+                    for item in reversed(chain)
+                    if isinstance(item.payload, BindingPayload)
+                    and item.payload.binding_kind in {"commit", "plan_commit"}
+                ),
+                None,
+            )
+            if final_binding is None:
+                raise WorkflowExecutionError(
+                    "structured completion requires a reviewed commit binding"
+                )
+            bridge.append(
+                WorkflowCompletionPayload(
+                    outcome="completed", final_binding_id=final_binding.record_id
+                ),
+                logical_id="workflow-completion",
+                idempotency_key="workflow-completion:completed",
+                fingerprint_sha256=final_binding.fingerprint.sha256,
+            )
 
     def _agent(
         self,
@@ -305,6 +410,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
         *,
         reviewer_repository_required: bool = True,
     ) -> str:
+        self.assert_structured_decision_context()
         output = run_agent_checked(
             agent_key=role.value,
             prompt=prompt,
@@ -353,9 +459,17 @@ class ProductionWorkflowDriver(WorkflowDriver):
             if state.task_digest is None:
                 raise WorkflowExecutionError("plan artifact requires a task fingerprint")
             return state.task_digest
-        return self.collect_changes(
-            state.current_slice.start_commit or state.branch_base
-        ).fingerprint
+        try:
+            return self.collect_changes(
+                state.current_slice.start_commit or state.branch_base
+            ).fingerprint
+        except NoWorkflowChangesError:
+            # A not-ready or empty Codex result is still a decision record.  Bind
+            # it to the persisted empty Slice boundary instead of losing the
+            # diagnostic before the typed halt is recorded.
+            if state.current_slice.start_fingerprint is not None:
+                return state.current_slice.start_fingerprint
+            raise
 
     def persist_codex_contract(
         self,
@@ -506,6 +620,41 @@ class ProductionWorkflowDriver(WorkflowDriver):
             fingerprint_sha256=decision.fingerprint,
         )
 
+    def persist_implementation_handoff(
+        self, handoff_path: Path, approved_plan_commit: str
+    ) -> None:
+        """Bind an idempotent IMPLEMENT handoff to its reviewed plan commit."""
+        if self._artifact_bridge is None:
+            return
+        chain = self._artifact_bridge.store.load_chain()
+        commit_binding = next(
+            (
+                item
+                for item in reversed(chain)
+                if isinstance(item.payload, BindingPayload)
+                and item.payload.binding_kind == "commit"
+                and item.payload.target == approved_plan_commit
+            ),
+            None,
+        )
+        if commit_binding is None:
+            raise WorkflowExecutionError(
+                "structured implementation handoff requires a bound reviewed plan commit"
+            )
+        payload = commit_binding.payload
+        assert isinstance(payload, BindingPayload)
+        self._artifact_bridge.append(
+            BindingPayload(
+                binding_kind="implementation_handoff",
+                target=str(handoff_path.resolve()),
+                attestation_id=payload.attestation_id,
+                approval_ids=payload.approval_ids,
+            ),
+            logical_id=f"implementation-handoff-{approved_plan_commit[:12]}",
+            idempotency_key=f"implementation-handoff:{approved_plan_commit}",
+            fingerprint_sha256=commit_binding.fingerprint.sha256,
+        )
+
     def repair_review_contract(self, invocation: ContractRepairInvocation) -> str:
         prompt = (
             "Repair only the formal output contract of the rejected review. Preserve its "
@@ -599,6 +748,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
         )
 
     def validate(self, changes: WorkflowChanges, request) -> object:
+        self.assert_structured_decision_context()
         started = time.monotonic()
         logger.info(
             "Validation matrix starting: commands=%s attempt=%s",
@@ -769,6 +919,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
     def commit_slice(self, request: WorkflowCommitRequest) -> str:
         if self.active_state is None:
             raise WorkflowExecutionError("slice commit has no active state")
+        self.assert_structured_decision_context()
         state = self.active_state
         current = state.current_slice
         if current.start_commit is None or current.start_fingerprint is None:
@@ -847,6 +998,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
     def finalize_audit(self, state: WorkflowState) -> str | None:
         if state.audit_report_path is None:
             return None
+        self.assert_structured_decision_context()
         return commit_managed_audit_report(
             repository_root=self.root,
             branch=state.branch,
@@ -874,7 +1026,16 @@ class ProductionWorkflowDriver(WorkflowDriver):
             state,
             runtime_history=_history_payload(state.runtime_history, history),
         )
-        self._project_audit(persisted, history)
+        try:
+            self._bind_artifact_store(persisted)
+            self._persist_structured_baseline(persisted)
+            self._project_audit(persisted, history)
+        except Exception as exc:
+            if persisted.effective_protocol_mode is ProtocolMode.STRUCTURED_V1:
+                raise WorkflowExecutionError(
+                    f"structured audit dual-write mismatch: {exc}"
+                ) from exc
+            raise
         save_workflow_state(
             self.state_file, persisted, allowed_roots=self.allowed_roots
         )
@@ -922,6 +1083,12 @@ class ProductionWorkflowDriver(WorkflowDriver):
                     )
         if unit.kind is WorkUnitKind.FINAL_REVIEW:
             return
+        # The Slice audit is part of the authorized Slice commit.  Commit and
+        # subsequent workflow-binding records are projected into the overall
+        # audit only; rewriting the already committed Slice document would leave
+        # a foreign dirty path for the final audit transaction.
+        if state.current_slice.commit_ref is not None:
+            return
         approval: AuthorizedTestChanges | None = None
         if unit.active_test_fingerprint is not None:
             decision = next(
@@ -947,6 +1114,11 @@ class ProductionWorkflowDriver(WorkflowDriver):
             state.execution_mode == TaskMode.PLAN_ONLY.value
             and state.work_plan_path is not None
         ):
+            # Once the reviewed plan has been committed it is immutable input to
+            # the generated IMPLEMENT handoff.  Later commit/binding records stay
+            # in the consolidated record projection and must not dirty the plan.
+            if state.current_slice.commit_ref is not None:
+                return
             try:
                 document = prepare_managed_work_plan_document(
                     repository_root=self.root,
@@ -1248,8 +1420,13 @@ def _context(
     )
     validation_matrix = args.repo_config.validation
     if validation_matrix.default_command is None and str(args.test_command or "").strip():
+        raw_command = str(args.test_command).strip()
         validation_matrix = ValidationMatrix(
-            default_command=ValidationCommand(shell_command=str(args.test_command).strip()),
+            default_command=(
+                ValidationCommand(argv=tuple(shlex.split(raw_command)))
+                if state.effective_protocol_mode is ProtocolMode.STRUCTURED_V1
+                else ValidationCommand(shell_command=raw_command)
+            ),
             rules=validation_matrix.rules,
         )
     agents_path = Path(str(args.agents_file)).expanduser().resolve()
@@ -1673,6 +1850,7 @@ def _fresh_state(
         work_plan_path=task_contract.work_plan_path,
         audit_report_path=audit_report_path,
         target_branch=task_contract.target_branch,
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V1, "1"),
     )
     if task_contract.approved_plan_commit is not None:
         assert task_contract.work_plan_path is not None
@@ -1691,6 +1869,19 @@ def _fresh_state(
             step=WorkflowStep.CODEX_IMPLEMENTATION,
         )
     return state
+
+
+def _unused_run_id(repository_root: Path, proposed: str) -> str:
+    """Avoid cross-task record reuse when two runs start in the same second."""
+    control_root = repository_root / ".orchestrator"
+    for suffix in range(1000):
+        candidate = proposed if suffix == 0 else f"{proposed}-{suffix:03d}"
+        if not any(
+            (control_root / area / candidate).exists()
+            for area in ("artifacts", "runs", "logs", "checkpoints")
+        ):
+            return candidate
+    raise WorkflowExecutionError("could not allocate a unique structured run id")
 
 
 def run_production_workflow(
@@ -1729,7 +1920,8 @@ def run_production_workflow(
             "missing authority, secrets, or destructive action."
         )
     allowed_roots = tuple(dict.fromkeys((root, task_file.parent.resolve())))
-    run_id = str(getattr(args, "watch_run_id", "") or new_run_id())
+    requested_run_id = str(getattr(args, "watch_run_id", ""))
+    run_id = requested_run_id or _unused_run_id(root, new_run_id())
     managed_audit_path = (
         _managed_audit_path(task_file, task_contract.digest)
         if task_contract.mode is TaskMode.IMPLEMENT
@@ -1936,6 +2128,7 @@ def run_production_workflow(
                     raise WorkflowExecutionError(
                         "completed PLAN_ONLY run has no reviewed plan commit"
                     )
+                driver.assert_structured_decision_context()
                 try:
                     handoff = write_implementation_handoff(
                         plan_task_path=task_file,
@@ -1948,6 +2141,7 @@ def run_production_workflow(
                     raise WorkflowExecutionError(
                         f"could not create IMPLEMENT handoff: {exc}"
                     ) from exc
+                driver.persist_implementation_handoff(handoff, commit_ref)
                 logger.info("Implementation handoff ready: %s", handoff)
                 return WorkflowRunResult(state, _history(state), commit_ref)
             if not state.planned_slices:

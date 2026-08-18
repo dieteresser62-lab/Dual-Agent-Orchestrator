@@ -141,6 +141,23 @@ def test_new_watch_task_switches_to_existing_target_and_uses_its_head_as_baselin
     assert _git(repository, "branch", "--show-current") == "feature/inbox-target"
 
 
+def test_fresh_workflow_is_immutably_bound_to_structured_v1(tmp_path: Path) -> None:
+    repository = _repository(tmp_path, "feature/structured-cutover")
+    task = tmp_path / "structured-cutover.md"
+    _write_task(task, "feature/structured-cutover", "src/new.py")
+
+    state = orchestrator._fresh_state(
+        task_file=task,
+        run_id="structured-cutover",
+        repository_root=repository,
+        task_contract=parse_task_contract(task.read_text(encoding="utf-8")),
+    )
+
+    assert state.protocol_binding == ProtocolBinding(
+        ProtocolMode.STRUCTURED_V1, "1"
+    )
+
+
 def test_runtime_context_auto_authorizes_scoped_test_changes_unless_gate_enabled(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -967,11 +984,14 @@ def test_watch_resume_does_not_switch_back_after_branch_drift(
     task = tmp_path / "persisted-task.md"
     _write_task(task, "feature/persisted-target", "src/new.py")
     contract = parse_task_contract(task.read_text(encoding="utf-8"))
-    state = orchestrator._fresh_state(
-        task_file=task,
-        run_id="watch-persisted-run",
-        repository_root=repository,
-        task_contract=contract,
+    state = replace(
+        orchestrator._fresh_state(
+            task_file=task,
+            run_id="watch-persisted-run",
+            repository_root=repository,
+            task_contract=contract,
+        ),
+        protocol_binding=None,
     )
     state_file = repository / ".orchestrator" / "state.json"
     save_workflow_state(
@@ -1717,6 +1737,18 @@ def test_generated_implementation_handoff_skips_second_plan_review(
     assert plan_result.workflow_completed
     handoff = task.with_name("guide-implement.md")
     assert handoff.is_file()
+    plan_chain = ArtifactStore(repository, plan_result.state.run_id).load_chain()
+    assert any(
+        item.record_type is RecordType.BINDING
+        and item.payload.binding_kind == "implementation_handoff"
+        and item.payload.target == str(handoff.resolve())
+        for item in plan_chain
+    )
+    assert any(
+        item.record_type is RecordType.WORKFLOW_COMPLETION
+        and item.payload.outcome == "completed"
+        for item in plan_chain
+    )
 
     implementation_args = _args(repository, handoff)
     implementation_args.resume = False
