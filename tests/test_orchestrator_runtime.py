@@ -360,6 +360,90 @@ def test_structured_bind_survives_round_number_increase_within_same_work_unit(
     assert len({item.idempotency_key for item in work_units}) == 2
 
 
+def test_structured_checkpoint_projects_record_chain_into_slice_and_overall_audits(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/structured-audit")
+    task = repository / "task.md"
+    _write_task(task, "feature/structured-audit", "src/runtime.py")
+    head = _git(repository, "rev-parse", "HEAD")
+    slice_path = "docs/internal/slice-structured-audit-01-runtime.md"
+    state = init_workflow_state(
+        run_id="structured-audit",
+        task_file=str(task),
+        branch="feature/structured-audit",
+        branch_base=head,
+        slice_count=1,
+        task_digest="a" * 64,
+        task_scope_patterns=(slice_path, "src/runtime.py"),
+        audit_report_path="docs/internal/structured-audit-review-12345678.md",
+        target_branch="feature/structured-audit",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V1, "1"),
+    ).bind_slice_plan(
+        (PlannedSlice(1, "Runtime", (slice_path, "src/runtime.py")),),
+        first_start_commit=head,
+    ).complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    ).bind_current_slice_git_boundary(
+        start_commit=head,
+        scope_paths=(slice_path, "src/runtime.py"),
+        start_fingerprint="b" * 64,
+    )
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    driver.bind_work_unit(state)
+
+    driver.checkpoint(state, WorkflowHistory(state.current_work_unit_id))
+
+    overall = repository / "docs/internal/structured-audit-review-12345678.md"
+    slice_audit = repository / slice_path
+    assert "<!-- artifact-records:approval-status:begin -->" in overall.read_text(
+        encoding="utf-8"
+    )
+    rendered = slice_audit.read_text(encoding="utf-8")
+    assert "Semantischer Record-Digest" in rendered
+    assert "`src/runtime.py`" in rendered
+
+
+def test_structured_checkpoint_stops_before_audit_on_mirror_mismatch(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/structured-audit-mismatch")
+    task = repository / "task.md"
+    _write_task(task, "feature/structured-audit-mismatch", "src/runtime.py")
+    head = _git(repository, "rev-parse", "HEAD")
+    state = init_workflow_state(
+        run_id="structured-audit-mismatch",
+        task_file=str(task),
+        branch="feature/structured-audit-mismatch",
+        branch_base=head,
+        slice_count=1,
+        task_digest="a" * 64,
+        task_scope_patterns=("src/runtime.py",),
+        target_branch="feature/structured-audit-mismatch",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V1, "1"),
+    )
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    driver.bind_work_unit(state)
+    mismatched = replace(state, task_scope_patterns=("src/other.py",))
+
+    with pytest.raises(WorkflowExecutionError, match="audit dual-write mismatch"):
+        driver.checkpoint(mismatched, WorkflowHistory(1))
+
+
 def test_checkpoint_archives_latest_driver_history_across_work_unit_transition(
     tmp_path: Path,
 ) -> None:

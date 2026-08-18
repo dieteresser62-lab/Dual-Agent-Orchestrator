@@ -16,7 +16,8 @@ from artifact_bridge import (
     ArtifactBridge, agent_result_payload, attestation_payload, finding_payload,
     plan_payload, review_payload, validation_request_payload,
 )
-from artifact_migration import ArtifactResumeError
+from artifact_migration import ArtifactResumeError, resolve_resume_state
+from artifact_projection import ArtifactAuditProjection
 from artifact_models import (
     BindingPayload, FingerprintKind, GatePayload, ReviewPayload, Role,
     TaskPayload, WorkUnitPayload,
@@ -28,6 +29,8 @@ from audit_trail import (
     OverallAuditEntry,
     project_managed_slice_audit,
     project_overall_audit,
+    project_structured_slice_audit,
+    project_structured_work_plan_audit,
     project_work_plan_audit,
     prepare_managed_overall_document,
     prepare_managed_slice_document,
@@ -883,6 +886,18 @@ class ProductionWorkflowDriver(WorkflowDriver):
     def _project_audit(self, state: WorkflowState, history: WorkflowHistory) -> None:
         """Write only managed audit blocks when the persisted plan names a target."""
         unit = state.current_work_unit
+        structured_chain = None
+        if (
+            state.protocol_binding is not None
+            and state.protocol_binding.mode is ProtocolMode.STRUCTURED_V1
+        ):
+            try:
+                resolve_resume_state(self.root, state)
+                structured_chain = ArtifactStore(self.root, state.run_id).load_chain()
+            except (ArtifactResumeError, ValueError) as exc:
+                raise WorkflowExecutionError(
+                    f"structured audit dual-write mismatch: {exc}"
+                ) from exc
         if state.audit_report_path is not None:
             task = Path(state.task_file)
             try:
@@ -901,6 +916,10 @@ class ProductionWorkflowDriver(WorkflowDriver):
             entries = _overall_audit_entries(state)
             if entries:
                 project_overall_audit(document, entries)
+                if structured_chain is not None:
+                    project_structured_work_plan_audit(
+                        document, ArtifactAuditProjection(structured_chain)
+                    )
         if unit.kind is WorkUnitKind.FINAL_REVIEW:
             return
         approval: AuthorizedTestChanges | None = None
@@ -938,6 +957,10 @@ class ProductionWorkflowDriver(WorkflowDriver):
             else:
                 if history.events:
                     project_work_plan_audit(document, projection)
+                    if structured_chain is not None:
+                        project_structured_work_plan_audit(
+                            document, ArtifactAuditProjection(structured_chain)
+                        )
                 return
         if unit.kind is WorkUnitKind.PLAN:
             if state.work_plan_path is not None:
@@ -951,6 +974,10 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 else:
                     if history.events:
                         project_work_plan_audit(document, projection)
+                        if structured_chain is not None:
+                            project_structured_work_plan_audit(
+                                document, ArtifactAuditProjection(structured_chain)
+                            )
                     return
             if not history.events:
                 return
@@ -971,6 +998,10 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 except ValueError:
                     continue
                 project_work_plan_audit(document, projection)
+                if structured_chain is not None:
+                    project_structured_work_plan_audit(
+                        document, ArtifactAuditProjection(structured_chain)
+                    )
                 return
             logger.debug("No prepared work-plan audit target is present in the Slice plan.")
             return
@@ -1005,6 +1036,13 @@ class ProductionWorkflowDriver(WorkflowDriver):
             except ValueError:
                 continue
             project_managed_slice_audit(document, projection)
+            if structured_chain is not None:
+                project_structured_slice_audit(
+                    document,
+                    ArtifactAuditProjection(
+                        structured_chain, slice_id=str(state.current_slice_id)
+                    ),
+                )
             return
         logger.debug("No prepared Slice audit target is present for Slice %s.", state.current_slice_id)
 

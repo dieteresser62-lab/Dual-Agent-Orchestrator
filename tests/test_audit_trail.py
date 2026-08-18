@@ -17,6 +17,7 @@ from audit_trail import (
     project_slice_audit,
     project_overall_audit,
     project_work_plan_audit,
+    merge_structured_record_sections,
     prepare_managed_overall_document,
     semantic_audit_fingerprint,
     strip_managed_audit_sections,
@@ -534,6 +535,44 @@ def test_semantic_fingerprint_ignores_only_managed_projection_bodies(tmp_path: P
         "Fachlich geänderter Zielinhalt.",
     )
     assert semantic_audit_fingerprint(changed) != before
+
+
+def test_structured_record_blocks_are_idempotent_and_cosmetic_for_fingerprint() -> None:
+    markdown = _slice_markdown()
+    sections = {
+        key: f"Record view for {key}"
+        for key in (
+            "claude-review", "antigravity-review", "codex-responses",
+            "validation-attestation", "test-approval-premortem", "findings",
+            "decision-table", "approval-status",
+        )
+    }
+    before = semantic_audit_fingerprint(markdown)
+
+    rendered = merge_structured_record_sections(markdown, sections)
+    repeated = merge_structured_record_sections(rendered, sections)
+
+    assert repeated == rendered
+    assert semantic_audit_fingerprint(rendered) == before
+    assert rendered.count("<!-- artifact-records:findings:begin -->") == 1
+
+
+def test_structured_record_blocks_diagnose_partial_manual_marker_edit() -> None:
+    markdown = _slice_markdown().replace(
+        "alter Inhalt findings",
+        "alter Inhalt findings\n<!-- artifact-records:findings:begin -->",
+    )
+    sections = {
+        key: "record view"
+        for key in (
+            "claude-review", "antigravity-review", "codex-responses",
+            "validation-attestation", "test-approval-premortem", "findings",
+            "decision-table", "approval-status",
+        )
+    }
+
+    with pytest.raises(AuditTrailError, match="incomplete for findings"):
+        merge_structured_record_sections(markdown, sections)
 
 
 def test_longer_fence_is_not_closed_by_shorter_backtick_run() -> None:

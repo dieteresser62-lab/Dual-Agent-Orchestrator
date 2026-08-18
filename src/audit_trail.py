@@ -5,7 +5,9 @@ import html
 import re
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import TypeAlias
+from typing import Mapping, TypeAlias
+
+from artifact_projection import ArtifactAuditProjection, SECTION_KEYS
 
 from contracts import (
     AgentRole,
@@ -765,6 +767,90 @@ def project_overall_audit(
     if rendered_markdown != current.markdown:
         atomic_write_file(current.work_plan_path, rendered_markdown)
     return rendered_markdown
+
+
+def project_structured_slice_audit(
+    document: SliceDocument,
+    projection: ArtifactAuditProjection,
+) -> str:
+    """Append the record-native view to a validated Slice audit atomically."""
+    if projection.slice_id is not None and int(projection.slice_id) != document.slice_id:
+        raise AuditTrailError("structured projection slice does not match its document")
+    current = validate_managed_slice_document(
+        repository_root=document.repository_root,
+        work_plan_path=document.work_plan_path,
+        slice_id=document.slice_id,
+        expected_relative_path=document.relative_path,
+    )
+    rendered = merge_structured_record_sections(
+        current.markdown, projection.render_sections()
+    )
+    if rendered != current.markdown:
+        atomic_write_file(current.slice_path, rendered)
+    return rendered
+
+
+def project_structured_work_plan_audit(
+    document: WorkPlanDocument,
+    projection: ArtifactAuditProjection,
+) -> str:
+    """Append the record-native view to a work-plan or overall audit."""
+    current = validate_managed_work_plan_document(
+        repository_root=document.repository_root,
+        work_plan_path=document.work_plan_path,
+    )
+    rendered = merge_structured_record_sections(
+        current.markdown, projection.render_sections()
+    )
+    if rendered != current.markdown:
+        atomic_write_file(current.work_plan_path, rendered)
+    return rendered
+
+
+def merge_structured_record_sections(
+    markdown: str,
+    sections: Mapping[str, str],
+) -> str:
+    """Replace only the nested record projection inside every managed block.
+
+    The surrounding State-v3 projection remains present during dual-write.  A
+    complete prior record block is overwritten, while partial/duplicate marker
+    edits are diagnosed instead of being interpreted as workflow facts.
+    """
+    if set(sections) != set(SECTION_KEYS):
+        raise AuditTrailError("structured projection does not cover every managed section")
+    rendered = markdown
+    for key in MANAGED_SECTION_KEYS:
+        ranges = _managed_ranges(rendered, require_all=True)
+        start, end = ranges[key]
+        begin = f"<!-- audit:{key}:begin -->"
+        finish = f"<!-- audit:{key}:end -->"
+        block = rendered[start:end]
+        body_start = block.index(begin) + len(begin)
+        body_end = block.rindex(finish)
+        body = block[body_start:body_end].strip("\r\n")
+        record_begin = f"<!-- artifact-records:{key}:begin -->"
+        record_end = f"<!-- artifact-records:{key}:end -->"
+        begin_count = body.count(record_begin)
+        end_count = body.count(record_end)
+        if begin_count != end_count or begin_count > 1:
+            raise AuditTrailError(
+                f"structured record projection markers are incomplete for {key}"
+            )
+        if begin_count:
+            first = body.index(record_begin)
+            last = body.index(record_end, first) + len(record_end)
+            body = (body[:first] + body[last:]).strip("\r\n")
+        projected = "\n".join(
+            (
+                record_begin,
+                str(sections[key]).rstrip("\r\n"),
+                record_end,
+            )
+        )
+        replacement = "\n\n".join(part for part in (body, projected) if part)
+        rendered = _replace_managed_body(rendered, key, replacement)
+    return rendered
 
 
 def strip_managed_audit_sections(markdown: str) -> str:
