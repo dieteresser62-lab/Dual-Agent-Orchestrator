@@ -1487,8 +1487,11 @@ class WorkflowEngine:
             )
             self.driver.checkpoint(state, history)
             return state, history
+        # The structured attestation record is written inside _attestation().
+        # Mirror the returned history before the next external side effect so
+        # the provider-start guard never observes a record-ahead state.
+        self.driver.checkpoint(state, history)
         if not attestation.complete or not attestation.passed:
-            self.driver.checkpoint(state, history)
             raise WorkflowExecutionError(
                 "branch final review requires a complete passing attestation"
             )
@@ -1706,8 +1709,11 @@ class WorkflowEngine:
             )
             self.driver.checkpoint(state, history)
             return state, history
+        # Persist the state-v3 mirror of a newly appended attestation before
+        # invoking either reviewer.  Antigravity reuses the same attestation,
+        # and the idempotent checkpoint keeps both transitions symmetric.
+        self.driver.checkpoint(state, history)
         if not attestation.complete:
-            self.driver.checkpoint(state, history)
             raise WorkflowExecutionError(
                 "validation attestation is incomplete and cannot be overridden"
             )

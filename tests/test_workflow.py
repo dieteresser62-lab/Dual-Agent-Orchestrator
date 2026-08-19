@@ -270,9 +270,23 @@ class FakeDriver:
     commit_calls: list[WorkflowCommitRequest] = field(default_factory=list)
     checkpoints: list = field(default_factory=list)
     checkpoint_histories: list = field(default_factory=list)
+    require_checkpointed_attestation: bool = False
     snapshot_index: int = -1
 
+    def _assert_checkpointed_attestation(self, fingerprint: str) -> None:
+        if not self.require_checkpointed_attestation:
+            return
+        assert self.checkpoint_histories
+        assert any(
+            item.diff_fingerprint == fingerprint
+            for item in self.checkpoint_histories[-1].attestations
+        )
+
     def invoke_codex(self, invocation: CodexInvocation) -> str:
+        if invocation.step is WorkflowStep.CODEX_FINAL_REVIEW:
+            self._assert_checkpointed_attestation(
+                self.snapshots[max(self.snapshot_index, 0)].fingerprint
+            )
         self.codex_calls.append(invocation)
         self.snapshot_index += 1
         if self.codex_failures:
@@ -384,6 +398,7 @@ class FakeDriver:
         )
 
     def invoke_reviewer(self, invocation: ReviewerInvocation) -> str:
+        self._assert_checkpointed_attestation(invocation.fingerprint)
         self.reviewer_calls.append(invocation)
         if self.reviewer_failures:
             failure = self.reviewer_failures.pop(0)
@@ -1271,6 +1286,7 @@ def test_transient_network_failure_retries_same_step_after_persisted_wait() -> N
             _review_approval(AgentRole.CLAUDE),
             _review_approval(AgentRole.ANTIGRAVITY),
         ],
+        require_checkpointed_attestation=True,
         reviewer_failures=[
             _invocation_failure(
                 AgentRole.CLAUDE,
@@ -2829,6 +2845,7 @@ def test_branch_final_review_uses_one_attestation_for_all_three_roles() -> None:
             _final_approval(AgentRole.CLAUDE),
             _final_approval(AgentRole.ANTIGRAVITY),
         ],
+        require_checkpointed_attestation=True,
     )
 
     result = run_v3_final_review(
