@@ -253,11 +253,21 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
     if missing_bindings:
         raise mismatch("completed slice is missing a structured commit binding")
 
-    completions = [item for item in chain if isinstance(item.payload, WorkflowCompletionPayload)]
-    if completions:
-        completed = state.current_step is WorkflowStep.COMPLETED and all(
-            item.commit_ref is not None for item in state.slices
+    completed = (
+        state.current_step is WorkflowStep.COMPLETED
+        and all(item.commit_ref is not None for item in state.slices)
+        and (
+            state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
+            or (
+                state.execution_mode == "PLAN_ONLY"
+                and state.current_work_unit.kind is WorkUnitKind.PLAN
+            )
         )
+    )
+    completions = [item for item in chain if isinstance(item.payload, WorkflowCompletionPayload)]
+    if completed and not completions:
+        raise mismatch("state-v3 mirror reports workflow completion without a structured record")
+    if completions:
         expected_outcome = "completed" if completed else None
         if completions[-1].payload.outcome != expected_outcome:
             raise mismatch("workflow completion differs from state-v3", completions[-1].record_id)

@@ -13,7 +13,12 @@ from dataclasses import replace
 from pathlib import Path, PurePosixPath
 
 from agent_adapters import AgentAdapter, build_agent_registry
-from agent_runtime import OrchestratorConfig, run_agent_checked, run_validation_matrix
+from agent_runtime import (
+    AgentInvocationError,
+    OrchestratorConfig,
+    run_agent_checked,
+    run_validation_matrix,
+)
 from artifact_bridge import (
     ArtifactBridge, agent_result_payload, attestation_payload, finding_payload,
     plan_payload, review_payload, validation_request_payload,
@@ -108,6 +113,7 @@ from workflow import (
     WorkflowRunResult,
 )
 from workflow_state import (
+    AgentFailureKind,
     GateReason,
     GateDecisionRecord,
     SliceStatus,
@@ -133,6 +139,24 @@ from inbox_watcher import (
 
 
 logger = logging.getLogger(__name__)
+
+
+def _recover_completed_reviewer_contract(
+    reviewer: AgentRole,
+    error: AgentInvocationError,
+) -> str | None:
+    """Recover only a complete role-bound contract from a false auth classification."""
+    if error.kind is not AgentFailureKind.AUTH:
+        return None
+    text = error.provider_text.strip()
+    lines = tuple(line.strip() for line in text.splitlines() if line.strip())
+    if (
+        not lines
+        or lines[0] != f"REVIEWER: {reviewer.value}"
+        or lines[-1] != "STATUS: DONE"
+    ):
+        return None
+    return text
 
 
 def validate_v3_review_contract(
@@ -475,11 +499,25 @@ class ProductionWorkflowDriver(WorkflowDriver):
         return output
 
     def invoke_reviewer(self, invocation: ReviewerInvocation) -> str:
-        return self._agent(
-            invocation.reviewer,
-            invocation.prompt,
-            f"work-unit-{invocation.work_unit_id:04d}-{invocation.step.value}",
-        )
+        try:
+            return self._agent(
+                invocation.reviewer,
+                invocation.prompt,
+                f"work-unit-{invocation.work_unit_id:04d}-{invocation.step.value}",
+            )
+        except AgentInvocationError as exc:
+            recovered = _recover_completed_reviewer_contract(
+                invocation.reviewer, exc
+            )
+            if recovered is None:
+                raise
+            logger.warning(
+                "Recovered complete %s reviewer contract from a falsely classified "
+                "authentication failure: invocation=%s",
+                invocation.reviewer.value,
+                exc.invocation_id,
+            )
+            return recovered
 
     def _artifact_fingerprint(self) -> str:
         if self.active_state is None:

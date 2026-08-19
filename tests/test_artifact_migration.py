@@ -8,6 +8,7 @@ import pytest
 from artifact_bridge import ArtifactBridge
 from artifact_migration import ArtifactResumeError, resolve_resume_state
 from artifact_models import (
+    BindingPayload,
     FingerprintKind,
     PlanPayload,
     SliceSpec,
@@ -222,4 +223,41 @@ def test_structured_resume_halts_when_mirror_quota_pause_has_no_chain_record(
     ).resume_after_invocation_halt(updated_at="2026-08-18T12:05:30+00:00")
 
     with pytest.raises(ArtifactResumeError, match="quota pauses differ from state-v3"):
+        resolve_resume_state(tmp_path, state)
+
+
+def test_structured_resume_halts_when_state_mirror_reports_completion_without_chain_record(
+    tmp_path: Path,
+) -> None:
+    state = (
+        _state(tmp_path)
+        .complete_current_slice(commit_ref="d" * 40)
+        .start_final_review_work_unit()
+        .complete_current_work_unit()
+    )
+    _records(tmp_path, state)
+    bridge = ArtifactBridge(ArtifactStore(tmp_path, state.run_id))
+    bridge.append(
+        WorkUnitPayload("1", 1, ("src/resume.py",)),
+        logical_id="work-unit-3",
+        idempotency_key="work-unit:3:round:1",
+        fingerprint_sha256="d" * 64,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    bridge.append(
+        BindingPayload(
+            binding_kind="commit",
+            target="d" * 40,
+            attestation_id="attestation-final",
+            approval_ids=("review-final",),
+        ),
+        logical_id="commit-1",
+        idempotency_key="commit:1",
+        fingerprint_sha256="d" * 64,
+    )
+
+    with pytest.raises(
+        ArtifactResumeError,
+        match="state-v3 mirror reports workflow completion without a structured record",
+    ):
         resolve_resume_state(tmp_path, state)

@@ -22,7 +22,7 @@ from contracts import (
 )
 from inbox_watcher import WatchTaskDisposition, WatchTaskResult
 from orchestrator import ProductionWorkflowDriver, run_pipeline, run_production_workflow
-from workflow import CodexInvocation, ReviewerInvocation, WorkflowHistory
+from workflow import CodexInvocation, EvidenceKind, ReviewerInvocation, WorkflowHistory
 from workflow import WorkflowExecutionError
 from plan_handoff import PlanHandoffError
 from state_io import StateSchemaError, save_workflow_state
@@ -152,10 +152,105 @@ def test_fresh_workflow_is_immutably_bound_to_structured_v1(tmp_path: Path) -> N
         repository_root=repository,
         task_contract=parse_task_contract(task.read_text(encoding="utf-8")),
     )
-
     assert state.protocol_binding == ProtocolBinding(
         ProtocolMode.STRUCTURED_V1, "1"
     )
+
+
+def test_reviewer_recovers_complete_contract_from_false_401_auth_classification(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    repository = _repository(tmp_path, "feature/reviewer-auth-recovery")
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    response = "\n".join(
+        (
+            "REVIEWER: antigravity",
+            "REVIEW_EVIDENCE: checked src/orchestrator.py#L401-L433 | risk | break",
+            "PRE_MORTEM: a future lifecycle step drifts",
+            "SLICE_APPROVAL: 11 | YES",
+            "STATUS: DONE",
+        )
+    )
+    failure = AgentInvocationError(
+        agent_key="antigravity",
+        kind=AgentFailureKind.AUTH,
+        invocation_id="false-401-link",
+        provider_text=response,
+        received_at=datetime(2026, 8, 19, tzinfo=timezone.utc),
+    )
+
+    def fail_agent(*args, **kwargs):
+        _ = (args, kwargs)
+        raise failure
+
+    monkeypatch.setattr(driver, "_agent", fail_agent)
+    invocation = ReviewerInvocation(
+        work_unit_id=16,
+        step=WorkflowStep.ANTIGRAVITY_SLICE_REVIEW,
+        reviewer=AgentRole.ANTIGRAVITY,
+        round_number=2,
+        evidence_kind=EvidenceKind.CORRECTION_DELTA,
+        fingerprint="a" * 64,
+        paths=("src/orchestrator.py",),
+        prompt="review",
+    )
+
+    assert driver.invoke_reviewer(invocation) == response
+
+
+@pytest.mark.parametrize(
+    "provider_text",
+    (
+        "401 unauthorized",
+        "REVIEWER: antigravity\nSTATUS: incomplete",
+        "REVIEWER: claude\nSTATUS: DONE",
+    ),
+)
+def test_reviewer_does_not_recover_incomplete_or_foreign_auth_output(
+    tmp_path: Path, monkeypatch, provider_text: str,
+) -> None:
+    repository = _repository(tmp_path, "feature/reviewer-auth-rejection")
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    failure = AgentInvocationError(
+        agent_key="antigravity",
+        kind=AgentFailureKind.AUTH,
+        invocation_id="real-auth",
+        provider_text=provider_text,
+        received_at=datetime(2026, 8, 19, tzinfo=timezone.utc),
+    )
+
+    def fail_agent(*args, **kwargs):
+        _ = (args, kwargs)
+        raise failure
+
+    monkeypatch.setattr(driver, "_agent", fail_agent)
+    invocation = ReviewerInvocation(
+        work_unit_id=16,
+        step=WorkflowStep.ANTIGRAVITY_SLICE_REVIEW,
+        reviewer=AgentRole.ANTIGRAVITY,
+        round_number=2,
+        evidence_kind=EvidenceKind.CORRECTION_DELTA,
+        fingerprint="a" * 64,
+        paths=("src/orchestrator.py",),
+        prompt="review",
+    )
+
+    with pytest.raises(AgentInvocationError) as caught:
+        driver.invoke_reviewer(invocation)
+
+    assert caught.value is failure
 
 
 def test_runtime_context_auto_authorizes_scoped_test_changes_unless_gate_enabled(

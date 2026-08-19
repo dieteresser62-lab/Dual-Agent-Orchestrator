@@ -1005,12 +1005,21 @@ class WorkflowEngine:
             and latest_failure.step is state.current_step
             and state.current_work_unit.gate.status is GateStatus.CLEAR
         ):
+            resume_step = state.current_step
             state, resume_halted = self._revalidate_waiting_diff(
                 state, latest_failure
             )
             if resume_halted:
                 self.driver.checkpoint(state, active_history)
                 return WorkflowRunResult(state, active_history)
+            if state.current_step is not resume_step:
+                active_history = replace(
+                    active_history,
+                    last_claude_fingerprint=None,
+                    latest_claude_review=None,
+                    latest_antigravity_review=None,
+                )
+                self.driver.checkpoint(state, active_history)
 
         state, active_history, anchor_halted = self._apply_anchor_gate(
             state, context, active_history
@@ -2086,9 +2095,8 @@ class WorkflowEngine:
         acknowledged = quota_resume_diff_acknowledgement(
             failure.invocation_id, changes.fingerprint
         ) in state.current_work_unit.completed_side_effects
-        if unexpected or (
-            changes.fingerprint != failure.diff_fingerprint and not acknowledged
-        ):
+        fingerprint_changed = changes.fingerprint != failure.diff_fingerprint
+        if unexpected or (fingerprint_changed and not acknowledged):
             paths = unexpected or changes.user_gate_paths
             halted = state.await_policy_gate(
                 reason=GateReason.STOP_REQUEST,
@@ -2099,6 +2107,14 @@ class WorkflowEngine:
                 paths=paths,
             )
             return halted, True
+        if fingerprint_changed:
+            claude_step = {
+                WorkflowStep.ANTIGRAVITY_PLAN_REVIEW: WorkflowStep.CLAUDE_PLAN_REVIEW,
+                WorkflowStep.ANTIGRAVITY_SLICE_REVIEW: WorkflowStep.CLAUDE_SLICE_REVIEW,
+                WorkflowStep.ANTIGRAVITY_FINAL_REVIEW: WorkflowStep.CLAUDE_FINAL_REVIEW,
+            }.get(failure.step)
+            if claude_step is not None:
+                state = state.with_current_step(claude_step)
         return state, False
 
     def _validate_or_repair_review(

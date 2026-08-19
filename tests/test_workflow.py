@@ -1295,6 +1295,70 @@ def test_manual_resume_at_antigravity_repeats_neither_codex_nor_claude() -> None
     ]
 
 
+def test_acknowledged_resume_diff_at_antigravity_restarts_claude_review() -> None:
+    received = datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)
+    original = _changes("1", "src/early.py", TEST_FILE)
+    changed = _changes("2", "src/early.py", TEST_FILE)
+    driver = FakeDriver(
+        snapshots=[original],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[
+            _review_approval(AgentRole.CLAUDE),
+            _review_approval(AgentRole.CLAUDE),
+            _review_approval(AgentRole.ANTIGRAVITY),
+        ],
+        reviewer_failures=[
+            None,
+            _invocation_failure(
+                AgentRole.ANTIGRAVITY,
+                AgentFailureKind.TIMEOUT,
+                "antigravity-mutated-timeout",
+                received_at=received,
+            ),
+        ],
+    )
+    engine = WorkflowEngine(driver, now_fn=lambda: received)
+
+    invocation_halt = engine.run_current_work_unit(_slice_state(), _context())
+
+    assert invocation_halt.exit_code == 3
+    assert invocation_halt.state.current_step is WorkflowStep.ANTIGRAVITY_SLICE_REVIEW
+    driver.snapshots[0] = changed
+
+    diff_halt = engine.run_current_work_unit(
+        invocation_halt.state.resume_after_invocation_halt(),
+        _context(),
+        invocation_halt.history,
+    )
+
+    assert diff_halt.exit_code == 4
+    assert "QUOTA-RESUME-DIFF" in (
+        diff_halt.state.current_work_unit.gate.detail or ""
+    )
+
+    completed = engine.run_current_work_unit(
+        diff_halt.state.resume_after_user_decision(),
+        _context(),
+        diff_halt.history,
+    )
+
+    assert completed.completed
+    assert len(driver.codex_calls) == 1
+    assert [call.reviewer for call in driver.reviewer_calls] == [
+        AgentRole.CLAUDE,
+        AgentRole.ANTIGRAVITY,
+        AgentRole.CLAUDE,
+        AgentRole.ANTIGRAVITY,
+    ]
+    assert driver.validation_calls == [original.fingerprint, changed.fingerprint]
+    assert completed.history.latest_claude_review is not None
+    assert completed.history.latest_claude_review.validation is not None
+    assert (
+        completed.history.latest_claude_review.validation.diff_fingerprint
+        == changed.fingerprint
+    )
+
+
 def test_changed_fingerprint_during_quota_wait_halts_before_retry() -> None:
     now = [datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)]
     first = _changes("1", "src/early.py", TEST_FILE)
