@@ -14,8 +14,10 @@ from artifact_models import (
     PlanPayload,
     QuotaPausePayload,
     RecordType,
+    ReviewPayload,
     ResumeCheckPayload,
     TaskPayload,
+    ValidationAttestationPayload,
     WorkUnitPayload,
     WorkflowCompletionPayload,
 )
@@ -241,6 +243,36 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
             predecessor = record.predecessor_ids[0] if record.predecessor_ids else None
             if record.payload.expected_head_id != predecessor:
                 raise mismatch("resume check is not bound to its prior record head", record.record_id)
+
+    records_by_id = {record.record_id: record for record in chain}
+    for record in chain:
+        payload = record.payload
+        if not isinstance(payload, BindingPayload):
+            continue
+        attestation = records_by_id.get(payload.attestation_id)
+        if (
+            attestation is None
+            or not isinstance(attestation.payload, ValidationAttestationPayload)
+            or attestation.fingerprint != record.fingerprint
+        ):
+            raise mismatch(
+                "binding references an unknown, invalid, or fingerprint-mismatched "
+                "validation attestation",
+                record.record_id,
+            )
+        for approval_id in payload.approval_ids:
+            approval = records_by_id.get(approval_id)
+            if (
+                approval is None
+                or not isinstance(approval.payload, ReviewPayload)
+                or approval.payload.verdict != "approved"
+                or approval.fingerprint != record.fingerprint
+            ):
+                raise mismatch(
+                    "binding references an unknown, unapproved, or "
+                    "fingerprint-mismatched review",
+                    record.record_id,
+                )
 
     commit_targets = {item.commit_ref for item in state.slices if item.commit_ref is not None}
     bound_commit_targets: set[str] = set()

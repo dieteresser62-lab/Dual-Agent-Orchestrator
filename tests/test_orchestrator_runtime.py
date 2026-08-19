@@ -1,15 +1,22 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import orchestrator
 import pytest
-from agent_runtime import AgentInvocationError
-from artifact_models import CorrectionWorkUnitPayload, PlanPayload, RecordType
+from agent_runtime import AgentInvocationError, QuotaReset, QuotaWaitPolicy
+from artifact_models import (
+    CorrectionWorkUnitPayload,
+    PlanPayload,
+    QuotaPausePayload,
+    RecordType,
+    Role,
+)
 from artifact_store import ArtifactStore
 from cli import parse_args
 from contracts import (
@@ -22,7 +29,14 @@ from contracts import (
 )
 from inbox_watcher import WatchTaskDisposition, WatchTaskResult
 from orchestrator import ProductionWorkflowDriver, run_pipeline, run_production_workflow
-from workflow import CodexInvocation, EvidenceKind, ReviewerInvocation, WorkflowHistory
+from workflow import (
+    CodexInvocation,
+    EvidenceKind,
+    ReviewerInvocation,
+    WorkflowContext,
+    WorkflowEngine,
+    WorkflowHistory,
+)
 from workflow import WorkflowExecutionError
 from plan_handoff import PlanHandoffError
 from state_io import StateSchemaError, save_workflow_state
@@ -205,15 +219,27 @@ def test_reviewer_recovers_complete_contract_from_false_401_auth_classification(
 
 
 @pytest.mark.parametrize(
-    "provider_text",
+    ("failure_kind", "provider_text"),
     (
-        "401 unauthorized",
-        "REVIEWER: antigravity\nSTATUS: incomplete",
-        "REVIEWER: claude\nSTATUS: DONE",
+        (AgentFailureKind.AUTH, "401 unauthorized"),
+        (AgentFailureKind.QUOTA, "quota exceeded"),
+        (
+            AgentFailureKind.QUOTA,
+            "REVIEWER: antigravity\n"
+            "REVIEW_EVIDENCE: complete output | risk | break\n"
+            "PRE_MORTEM: a quota response is mistaken for success\n"
+            "SLICE_APPROVAL: 11 | YES\n"
+            "STATUS: DONE",
+        ),
+        (AgentFailureKind.AUTH, "REVIEWER: antigravity\nSTATUS: incomplete"),
+        (AgentFailureKind.AUTH, "REVIEWER: claude\nSTATUS: DONE"),
     ),
 )
-def test_reviewer_does_not_recover_incomplete_or_foreign_auth_output(
-    tmp_path: Path, monkeypatch, provider_text: str,
+def test_reviewer_does_not_recover_real_incomplete_or_foreign_failure(
+    tmp_path: Path,
+    monkeypatch,
+    failure_kind: AgentFailureKind,
+    provider_text: str,
 ) -> None:
     repository = _repository(tmp_path, "feature/reviewer-auth-rejection")
     driver = ProductionWorkflowDriver(
@@ -225,8 +251,8 @@ def test_reviewer_does_not_recover_incomplete_or_foreign_auth_output(
     )
     failure = AgentInvocationError(
         agent_key="antigravity",
-        kind=AgentFailureKind.AUTH,
-        invocation_id="real-auth",
+        kind=failure_kind,
+        invocation_id="real-failure",
         provider_text=provider_text,
         received_at=datetime(2026, 8, 19, tzinfo=timezone.utc),
     )
@@ -251,6 +277,132 @@ def test_reviewer_does_not_recover_incomplete_or_foreign_auth_output(
         driver.invoke_reviewer(invocation)
 
     assert caught.value is failure
+
+
+def test_quota_classified_recoverable_contract_still_persists_matching_quota_pause_record(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    repository = _repository(tmp_path, "feature/reviewer-quota-pause")
+    head = _git(repository, "rev-parse", "HEAD")
+    (repository / "src").mkdir()
+    (repository / "src" / "orchestrator.py").write_text(
+        "QUOTA_RECOVERY_GUARD = True\n", encoding="utf-8"
+    )
+    _git(repository, "add", "src/orchestrator.py")
+    task = repository / "task.md"
+    task.write_text("Review quota recovery.\n", encoding="utf-8")
+    state = init_workflow_state(
+        run_id="reviewer-quota-pause",
+        task_file=str(task),
+        branch="feature/reviewer-quota-pause",
+        branch_base=head,
+        slice_count=1,
+        task_digest=hashlib.sha256(task.read_bytes()).hexdigest(),
+        task_scope_patterns=("src/orchestrator.py",),
+        target_branch="feature/reviewer-quota-pause",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V1, "1"),
+    ).complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.ANTIGRAVITY_SLICE_REVIEW,
+    ).bind_current_slice_git_boundary(
+        start_commit=head,
+        scope_paths=("src/orchestrator.py",),
+        start_fingerprint="0" * 64,
+    )
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    driver.bind_work_unit(state)
+    changes = driver.collect_changes(head)
+    monkeypatch.setattr(driver, "collect_changes", lambda _start_commit: changes)
+    response = "\n".join(
+        (
+            "REVIEWER: antigravity",
+            "REVIEW_EVIDENCE: complete output | risk | break",
+            "PRE_MORTEM: a quota response is mistaken for success",
+            "SLICE_APPROVAL: 12 | YES",
+            "STATUS: DONE",
+        )
+    )
+    now = [datetime(2026, 8, 19, 10, 0, tzinfo=timezone.utc)]
+    quota = AgentInvocationError(
+        agent_key="antigravity",
+        kind=AgentFailureKind.QUOTA,
+        invocation_id="quota-with-complete-contract",
+        provider_text=response,
+        received_at=now[0],
+        quota_reset=QuotaReset(
+            now[0] + timedelta(seconds=1),
+            "antigravity:structured:retry_after_seconds",
+            "UTC",
+        ),
+    )
+    calls = 0
+
+    def invoke_agent(*args, **kwargs):
+        nonlocal calls
+        _ = (args, kwargs)
+        calls += 1
+        if calls == 1:
+            raise quota
+        return response
+
+    def sleep(seconds: float) -> None:
+        now[0] += timedelta(seconds=seconds)
+
+    monkeypatch.setattr(driver, "_agent", invoke_agent)
+    invocation = ReviewerInvocation(
+        work_unit_id=state.current_work_unit_id,
+        step=WorkflowStep.ANTIGRAVITY_SLICE_REVIEW,
+        reviewer=AgentRole.ANTIGRAVITY,
+        round_number=state.current_work_unit.round_number,
+        evidence_kind=EvidenceKind.CORRECTION_DELTA,
+        fingerprint="b" * 64,
+        paths=("src/orchestrator.py",),
+        prompt="review",
+    )
+    engine = WorkflowEngine(
+        driver,
+        now_fn=lambda: now[0],
+        sleep_fn=sleep,
+        heartbeat_fn=lambda _message: None,
+    )
+    context = WorkflowContext(
+        assignment="Review the correction",
+        distilled_plan="Persist quota failures before retrying the same role.",
+        slice_summary="Final correction",
+        quota_wait_policy=QuotaWaitPolicy(
+            safety_margin_seconds=0,
+            maximum_wait_seconds=60,
+            heartbeat_interval_seconds=1,
+        ),
+    )
+
+    resumed, output = engine._invoke_role(
+        state,
+        WorkflowHistory(state.current_work_unit_id),
+        context,
+        AgentRole.ANTIGRAVITY,
+        lambda: driver.invoke_reviewer(invocation),
+    )
+
+    assert resumed.current_work_unit.invocation_failures[-1].automatic_resume is True
+    assert output == response
+    assert calls == 2
+    assert resumed.current_work_unit.invocation_failures[-1].failure_kind is AgentFailureKind.QUOTA
+    quota_records = tuple(
+        record
+        for record in ArtifactStore(repository, state.run_id).load_chain()
+        if isinstance(record.payload, QuotaPausePayload)
+    )
+    assert len(quota_records) == 1
+    assert quota_records[0].payload.role is Role.ANTIGRAVITY
+    assert quota_records[0].payload.retry_at == quota.quota_reset.reset_at_utc.isoformat()
 
 
 def test_runtime_context_auto_authorizes_scoped_test_changes_unless_gate_enabled(

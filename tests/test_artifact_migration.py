@@ -9,10 +9,15 @@ from artifact_bridge import ArtifactBridge
 from artifact_migration import ArtifactResumeError, resolve_resume_state
 from artifact_models import (
     BindingPayload,
+    CommandSpec,
     FingerprintKind,
     PlanPayload,
+    ReviewPayload,
+    Role,
     SliceSpec,
     TaskPayload,
+    ValidationAttestationPayload,
+    ValidationResult,
     WorkUnitPayload,
 )
 from artifact_store import ArtifactStore
@@ -73,6 +78,46 @@ def _records(repository: Path, state) -> None:
         fingerprint_sha256="a" * 64,
         fingerprint_kind=FingerprintKind.CONTRACT,
     )
+
+
+def _authorization_records(
+    repository: Path,
+    state: WorkflowState,
+    *,
+    attestation_fingerprint: str,
+    review_fingerprint: str,
+    review_verdict: str = "approved",
+):
+    bridge = ArtifactBridge(ArtifactStore(repository, state.run_id))
+    attestation = bridge.append(
+        ValidationAttestationPayload(
+            results=(
+                ValidationResult(
+                    command=CommandSpec("pytest", ("python3", "-m", "pytest")),
+                    outcome="pass",
+                    exit_code=0,
+                    output_sha256="e" * 64,
+                ),
+            ),
+            attested_by=Role.ORCHESTRATOR,
+        ),
+        logical_id="validation-resume",
+        idempotency_key=f"validation-resume:{attestation_fingerprint}",
+        fingerprint_sha256=attestation_fingerprint,
+    )
+    review = bridge.append(
+        ReviewPayload(
+            reviewer=Role.CLAUDE,
+            work_unit_id="2",
+            verdict=review_verdict,
+            finding_ids=(),
+            evidence="resume authorization reviewed",
+        ),
+        logical_id="review-resume",
+        idempotency_key=f"review-resume:{review_fingerprint}:{review_verdict}",
+        fingerprint_sha256=review_fingerprint,
+    )
+    return attestation, review
 
 
 def test_legacy_state_without_records_remains_on_legacy_path(tmp_path: Path) -> None:
@@ -237,6 +282,23 @@ def test_structured_resume_halts_when_state_mirror_reports_completion_without_ch
     )
     _records(tmp_path, state)
     bridge = ArtifactBridge(ArtifactStore(tmp_path, state.run_id))
+    attestation, review = _authorization_records(
+        tmp_path,
+        state,
+        attestation_fingerprint="d" * 64,
+        review_fingerprint="d" * 64,
+    )
+    state = replace(
+        state,
+        runtime_history={
+            "attestations": [
+                {
+                    "attestation_id": attestation.logical_id,
+                    "diff_fingerprint": attestation.fingerprint.sha256,
+                }
+            ]
+        },
+    )
     bridge.append(
         WorkUnitPayload("1", 1, ("src/resume.py",)),
         logical_id="work-unit-3",
@@ -248,8 +310,8 @@ def test_structured_resume_halts_when_state_mirror_reports_completion_without_ch
         BindingPayload(
             binding_kind="commit",
             target="d" * 40,
-            attestation_id="attestation-final",
-            approval_ids=("review-final",),
+            attestation_id=attestation.record_id,
+            approval_ids=(review.record_id,),
         ),
         logical_id="commit-1",
         idempotency_key="commit:1",
@@ -260,4 +322,73 @@ def test_structured_resume_halts_when_state_mirror_reports_completion_without_ch
         ArtifactResumeError,
         match="state-v3 mirror reports workflow completion without a structured record",
     ):
+        resolve_resume_state(tmp_path, state)
+
+
+@pytest.mark.parametrize(
+    ("attestation_mode", "approval_mode", "review_verdict", "message"),
+    (
+        ("unknown", "valid", "approved", "unknown, invalid, or fingerprint-mismatched"),
+        ("mismatched", "valid", "approved", "unknown, invalid, or fingerprint-mismatched"),
+        ("valid", "unknown", "approved", "unknown, unapproved, or fingerprint-mismatched"),
+        ("valid", "mismatched", "approved", "unknown, unapproved, or fingerprint-mismatched"),
+        ("valid", "valid", "denied", "unknown, unapproved, or fingerprint-mismatched"),
+    ),
+)
+def test_structured_resume_halts_when_commit_binding_references_unknown_or_mismatched_attestation_or_approval(
+    tmp_path: Path,
+    attestation_mode: str,
+    approval_mode: str,
+    review_verdict: str,
+    message: str,
+) -> None:
+    binding_fingerprint = "d" * 64
+    attestation_fingerprint = (
+        "e" * 64 if attestation_mode == "mismatched" else binding_fingerprint
+    )
+    review_fingerprint = (
+        "e" * 64 if approval_mode == "mismatched" else binding_fingerprint
+    )
+    state = _state(tmp_path).complete_current_slice(commit_ref="d" * 40)
+    _records(tmp_path, state)
+    attestation, review = _authorization_records(
+        tmp_path,
+        state,
+        attestation_fingerprint=attestation_fingerprint,
+        review_fingerprint=review_fingerprint,
+        review_verdict=review_verdict,
+    )
+    state = replace(
+        state,
+        runtime_history={
+            "attestations": [
+                {
+                    "attestation_id": attestation.logical_id,
+                    "diff_fingerprint": attestation.fingerprint.sha256,
+                }
+            ]
+        },
+    )
+    bridge = ArtifactBridge(ArtifactStore(tmp_path, state.run_id))
+    bridge.append(
+        BindingPayload(
+            binding_kind="commit",
+            target="d" * 40,
+            attestation_id=(
+                "ar1-" + "f" * 64
+                if attestation_mode == "unknown"
+                else attestation.record_id
+            ),
+            approval_ids=(
+                "ar1-" + "f" * 64
+                if approval_mode == "unknown"
+                else review.record_id,
+            ),
+        ),
+        logical_id="commit-1",
+        idempotency_key="commit:1",
+        fingerprint_sha256=binding_fingerprint,
+    )
+
+    with pytest.raises(ArtifactResumeError, match=message):
         resolve_resume_state(tmp_path, state)
