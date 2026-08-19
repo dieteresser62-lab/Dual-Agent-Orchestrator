@@ -1633,13 +1633,13 @@ def test_contract_only_repair_receives_no_implementation_evidence() -> None:
     assert len(driver.reviewer_calls) == 2
 
 
-def test_labeled_review_evidence_is_normalized_without_contract_repair() -> None:
+def test_realistic_break_condition_is_normalized_without_contract_repair() -> None:
     changes = _changes("1", "src/early.py", TEST_FILE)
     labeled = _review_approval(AgentRole.CLAUDE).replace(
         "REVIEW_EVIDENCE: reviewed invariants | residual concurrency risk | "
         "parallel mutation",
         "REVIEW_EVIDENCE: reviewed invariants. Largest residual risk: residual "
-        "concurrency risk. Break condition: parallel mutation",
+        "concurrency risk. Realistic break condition: parallel mutation",
     )
     assert "Largest residual risk:" in labeled
     driver = FakeDriver(

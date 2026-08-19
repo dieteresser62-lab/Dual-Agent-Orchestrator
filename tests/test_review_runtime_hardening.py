@@ -250,6 +250,35 @@ def test_review_normalization_converts_labeled_evidence_without_model_repair() -
     ) in normalized
 
 
+def test_review_normalization_accepts_realistic_break_condition_label() -> None:
+    contract = StepContract(
+        name="slice-review",
+        reviewer=AgentRole.CLAUDE,
+        approval_marker=ApprovalMarker.SLICE,
+        slice_id="01",
+        round_number=1,
+    )
+    output = "\n".join(
+        (
+            "REVIEWER: claude",
+            "TEST_FILES_TOUCHED: NONE",
+            "REVIEW_EVIDENCE: Checked dimensions — cleanup and failure paths. "
+            "Largest residual risk: private runtime files survive. "
+            "Realistic break condition: capability validation raises after preparation.",
+            "PRE_MORTEM: capability validation leaks a prepared review packet",
+            "SLICE_APPROVAL: 01 | YES",
+            "STATUS: DONE",
+        )
+    )
+
+    normalized = normalize_review_contract_output(output, contract, ())
+
+    assert (
+        "REVIEW_EVIDENCE: Checked dimensions — cleanup and failure paths. | "
+        "private runtime files survive. | capability validation raises after preparation."
+    ) in normalized
+
+
 def test_repaired_review_normalization_removes_one_non_contract_preamble() -> None:
     contract = StepContract(
         name="slice-review",
@@ -317,6 +346,8 @@ def test_repaired_review_normalization_keeps_ambiguous_wrappers_invalid(
         "Largest residual risk: second. Break condition: break.",
         "REVIEW_EVIDENCE: consideredLargest residual risk: risk. "
         "Break condition: break.",
+        "REVIEW_EVIDENCE: scope. Largest residual risk: risk. "
+        "Break condition: first. Realistic break condition: second.",
     ),
 )
 def test_review_normalization_leaves_ambiguous_evidence_for_strict_repair(

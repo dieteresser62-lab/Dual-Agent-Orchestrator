@@ -232,18 +232,28 @@ def normalize_review_contract_output(
         evidence_line = evidence_lines[evidence_index]
         body = evidence_match.group("body")
         risk_label = "Largest residual risk:"
-        break_label = "Break condition:"
         risk_start = body.find(risk_label)
-        break_start = body.find(break_label, risk_start + len(risk_label))
+        break_labels = ("Break condition:", "Realistic break condition:")
+        break_occurrences = sum(body.count(label) for label in break_labels)
+        break_label = next(
+            (label for label in break_labels if body.count(label) == 1),
+            None,
+        )
+        break_start = (
+            body.find(break_label, risk_start + len(risk_label))
+            if break_label is not None
+            else -1
+        )
         labels_are_unique = (
             risk_start > 0
             and break_start > 0
             and body[risk_start - 1].isspace()
             and body[break_start - 1].isspace()
             and body.count(risk_label) == 1
-            and body.count(break_label) == 1
+            and break_occurrences == 1
         )
         if labels_are_unique and "|" not in evidence_line:
+            assert break_label is not None
             dimensions = body[:risk_start].strip()
             risk = body[risk_start + len(risk_label) : break_start].strip()
             break_condition = body[break_start + len(break_label) :].strip()
