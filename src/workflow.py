@@ -1808,11 +1808,29 @@ class WorkflowEngine:
         )
         if output is None:
             return state, history
-        result = self._validate_or_repair_review(
-            output=output,
-            contract=contract,
-            findings=history.findings,
-        )
+        try:
+            result = self._validate_or_repair_review(
+                output=output,
+                contract=contract,
+                findings=history.findings,
+            )
+        except WorkflowContractError as exc:
+            failure_ordinal = len(unit.invocation_failures) + 1
+            failure = AgentInvocationError(
+                agent_key=reviewer.value,
+                kind=AgentFailureKind.OUTPUT,
+                invocation_id=(
+                    f"contract-{unit.work_unit_id}-{state.current_step.value}-"
+                    f"{failure_ordinal}"
+                ),
+                provider_text=str(exc),
+                technical_text=str(exc),
+                received_at=self.now_fn(),
+            )
+            state, _ = self._persist_invocation_failure(
+                state, history, context, reviewer, failure
+            )
+            return state, history
         self._persist_structured(
             "persist_review_contract", result, output, changes.fingerprint,
             review_round, history.findings

@@ -1672,19 +1672,44 @@ def test_missing_verdict_after_compact_repair_stops_at_claude_without_antigravit
         )
     )
     driver = FakeDriver(
-        snapshots=[changes],
+        snapshots=[changes, changes],
         codex_outputs=[_codex_ready()],
-        reviewer_outputs=[missing],
+        reviewer_outputs=[
+            missing,
+            _review_approval(AgentRole.CLAUDE),
+            _review_approval(AgentRole.ANTIGRAVITY),
+        ],
         repair_outputs=[missing],
     )
+    engine = WorkflowEngine(driver)
 
-    with pytest.raises(WorkflowContractError, match="verdict|SLICE_APPROVAL"):
-        WorkflowEngine(driver).run_current_work_unit(_slice_state(), _context())
+    halted = engine.run_current_work_unit(_slice_state(), _context())
 
+    assert halted.exit_code == 3
+    assert halted.state.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
+    assert halted.state.current_work_unit.gate.reason is GateReason.INSTANCE_FAILURE
+    assert (
+        halted.state.current_work_unit.invocation_failures[-1].failure_kind
+        is AgentFailureKind.OUTPUT
+    )
     assert [call.reviewer for call in driver.reviewer_calls] == [AgentRole.CLAUDE]
     assert len(driver.repair_calls) == 1
     assert driver.commit_calls == []
     assert driver.checkpoints[-1].current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
+
+    completed = engine.run_current_work_unit(
+        halted.state.resume_after_invocation_halt(),
+        _context(),
+        halted.history,
+    )
+
+    assert completed.completed
+    assert [call.reviewer for call in driver.reviewer_calls] == [
+        AgentRole.CLAUDE,
+        AgentRole.CLAUDE,
+        AgentRole.ANTIGRAVITY,
+    ]
+    assert len(driver.commit_calls) == 1
 
 
 @pytest.mark.parametrize("invalid", ["foreign", "incomplete"])

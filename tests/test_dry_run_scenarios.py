@@ -517,11 +517,12 @@ def test_red_validation_requires_explicit_red_state_exception(
             scenario,
             repair_outputs=(approval(AgentRole.CLAUDE),),
         )
-        with pytest.raises(
-            WorkflowContractError,
-            match="complete passing validation attestation",
-        ):
-            run(scenario, tmp_path)
+        report = run(scenario, tmp_path)
+        assert report.result.exit_code == 3
+        assert report.result.state.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
+        failure = report.result.state.current_work_unit.invocation_failures[-1]
+        assert failure.failure_kind is AgentFailureKind.OUTPUT
+        assert "complete passing validation attestation" in failure.provider_text
 
 
 @pytest.mark.parametrize("status", ["missing", "incomplete"])
@@ -613,8 +614,12 @@ def test_contract_gates_are_negative_scenarios(
         repair_outputs=(bad_review,),
         commits=(),
     )
-    with pytest.raises(WorkflowContractError, match=error):
-        run(scenario, tmp_path)
+    report = run(scenario, tmp_path)
+    assert report.result.exit_code == 3
+    assert report.result.state.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
+    failure = report.result.state.current_work_unit.invocation_failures[-1]
+    assert failure.failure_kind is AgentFailureKind.OUTPUT
+    assert error in failure.provider_text
 
 
 def test_antigravity_contract_gate_rejects_a_missing_verdict(tmp_path: Path) -> None:
@@ -639,8 +644,12 @@ def test_antigravity_contract_gate_rejects_a_missing_verdict(tmp_path: Path) -> 
         commits=(),
     )
 
-    with pytest.raises(WorkflowContractError, match="SLICE_APPROVAL"):
-        run(broken, tmp_path)
+    report = run(broken, tmp_path)
+    assert report.result.exit_code == 3
+    assert report.result.state.current_step is WorkflowStep.ANTIGRAVITY_SLICE_REVIEW
+    failure = report.result.state.current_work_unit.invocation_failures[-1]
+    assert failure.failure_kind is AgentFailureKind.OUTPUT
+    assert "SLICE_APPROVAL" in failure.provider_text
 
 
 def test_scripted_contract_repair_can_supply_the_only_valid_verdict(
