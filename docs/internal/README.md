@@ -10,6 +10,10 @@ unter `docs/internal/`. Nach dem fachlichen Abschluss werden die Dokumente eines
 Vorhabens gemeinsam in einen eindeutig benannten Unterordner von `archive/`
 verschoben.
 
+Derzeit aktiv:
+
+- [Roadmap für Phase 2 und spätere Folgephasen](ORCHESTRATOR_ROADMAP_PHASE_2_PLUS.md)
+
 Während eines aktiven Orchestratorlaufs dürfen gebundene Arbeitsplan-, Slice-
 und Auditpfade nicht manuell verschoben werden. Die Archivierung erfolgt erst,
 wenn der Lauf abgeschlossen oder sein manueller Abschluss dokumentiert ist.
