@@ -351,6 +351,7 @@ def save_workflow_state(
     state: WorkflowState,
     *,
     allowed_roots: tuple[Path, ...],
+    replace_existing_run_id: str | None = None,
 ) -> None:
     """Atomically persist validated v3 state below an explicit root."""
     path = _resolve_state_storage_path(state_file, allowed_roots)
@@ -368,7 +369,13 @@ def save_workflow_state(
                 raise StateSchemaError(
                     f"refusing to overwrite invalid version-3 state: {exc}"
                 ) from exc
-            if existing.protocol_binding != validated.protocol_binding:
+            if existing.run_id != validated.run_id:
+                if replace_existing_run_id != existing.run_id:
+                    raise StateSchemaError(
+                        "refusing to replace an existing workflow run without "
+                        "matching authorization"
+                    )
+            elif existing.protocol_binding != validated.protocol_binding:
                 raise StateSchemaError(
                     "refusing to add or change an existing workflow protocol binding"
                 )

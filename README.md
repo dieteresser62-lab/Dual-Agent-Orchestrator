@@ -131,7 +131,7 @@ Laufzeitdaten werden unterhalb von `.orchestrator/` gespeichert:
 | `.orchestrator/artifacts/<run-id>/records/ar1-<sha256>.json` | Autoritative, append-only Einzelrecords eines `structured-v1`-Laufs. |
 | `.orchestrator/artifacts/<run-id>/head.json` | Aus den Records rekonstruierbarer Beschleunigungscache; keine Wahrheitsquelle. |
 | `.orchestrator/state.json` | Atomarer State-v3-Betriebszustand; bei `structured-v1` ein gegen die Recordkette geprüfter Spiegel. |
-| `.orchestrator/checkpoints/work-unit-####-slice-####-round-####.json` | Fortsetzungs-Checkpoints mit einsbasierten Arbeitsblock-, Slice- und Rundenidentitäten. |
+| `.orchestrator/checkpoints/<run-id>/work-unit-####-slice-####-round-####.json` | Laufgebundene Fortsetzungs-Checkpoints mit einsbasierten Arbeitsblock-, Slice- und Rundenidentitäten. |
 | `.orchestrator/logs/` | Rohe temporäre Agentenaufruf- und Diagnoselogs. |
 | `.orchestrator/runs/<run_id>/work-unit-####-codex.md` | Persistierte Codex-Ausgabe zur Wiederherstellung des Planungs- oder Implementierungskontexts. |
 

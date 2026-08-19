@@ -520,6 +520,9 @@ def watch_inbox(
                 and task_result is not None
                 and task_result.disposition is WatchTaskDisposition.RESUMABLE_HALT
             ):
+                if not task_result.resume_available:
+                    identity = replace(identity, started=False)
+                    save_watch_identity(task_file, identity)
                 logger.warning(
                     "Pausing watch queue for resumable task %s: run=%s work-unit=%s "
                     "step=%s status=%s gate=%s detail=%s exit=%s",

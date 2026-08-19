@@ -39,7 +39,7 @@ from workflow import (
 )
 from workflow import WorkflowExecutionError
 from plan_handoff import PlanHandoffError
-from state_io import StateSchemaError, save_workflow_state
+from state_io import StateSchemaError, save_workflow_state, write_workflow_checkpoint
 from task_contract import parse_task_contract
 from workflow_state import (
     GateReason,
@@ -1565,22 +1565,29 @@ def test_force_new_watch_task_intentionally_replaces_unrelated_existing_state(
         old_state,
         allowed_roots=(repository, old_task.parent.resolve()),
     )
+    old_checkpoint = write_workflow_checkpoint(
+        repository / ".orchestrator" / "checkpoints",
+        old_state,
+        allowed_roots=(repository, old_task.parent.resolve()),
+    )
     _git(repository, "switch", "master")
     new_task = tmp_path / "new-task.md"
     _write_task(new_task, "feature/new-watch-target", "src/new.py")
     args = _args(repository, new_task)
     args.watch_run_id = "new-watch-run"
     captured = {}
-    real_fresh_state = orchestrator._fresh_state
 
     class StateCaptured(RuntimeError):
         pass
 
-    def capture_state(**kwargs):
-        captured["state"] = real_fresh_state(**kwargs)
+    def capture_state(_engine, state, _context, _history):
+        captured["state"] = orchestrator.load_workflow_state(
+            repository / ".orchestrator" / "state.json",
+            allowed_roots=(repository, new_task.parent.resolve()),
+        )
         raise StateCaptured
 
-    monkeypatch.setattr(orchestrator, "_fresh_state", capture_state)
+    monkeypatch.setattr(WorkflowEngine, "run_current_work_unit", capture_state)
     monkeypatch.chdir(repository)
 
     with pytest.raises(StateCaptured):
@@ -1588,8 +1595,51 @@ def test_force_new_watch_task_intentionally_replaces_unrelated_existing_state(
 
     assert captured["state"].run_id == "new-watch-run"
     assert captured["state"].branch == "feature/new-watch-target"
+    assert captured["state"].protocol_binding == ProtocolBinding(
+        ProtocolMode.STRUCTURED_V1, "1"
+    )
+    assert orchestrator.load_workflow_state(
+        old_checkpoint,
+        allowed_roots=(repository, new_task.parent.resolve()),
+    ).run_id == "old-watch-run"
+    new_checkpoint = write_workflow_checkpoint(
+        repository / ".orchestrator" / "checkpoints" / "new-watch-run",
+        captured["state"],
+        allowed_roots=(repository, new_task.parent.resolve()),
+    )
+    assert new_checkpoint.parent.name == "new-watch-run"
+    assert orchestrator.load_workflow_state(
+        new_checkpoint,
+        allowed_roots=(repository, new_task.parent.resolve()),
+    ).run_id == "new-watch-run"
     assert _git(repository, "branch", "--show-current") == (
         "feature/new-watch-target"
+    )
+
+
+def test_watch_state_schema_error_is_a_single_non_retryable_policy_halt(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repository = _repository(tmp_path, "feature/state-error")
+    task = tmp_path / "state-error.md"
+    _write_task(task, "feature/state-error", "src/new.py")
+    args = _args(repository, task)
+    args.watch_run_id = "watch-state-error"
+
+    def fail(*_args, **_kwargs):
+        raise StateSchemaError("deterministic state conflict")
+
+    monkeypatch.setattr(orchestrator, "run_production_workflow", fail)
+
+    result = run_pipeline(task, args, force_new=True)
+
+    assert isinstance(result, WatchTaskResult)
+    assert result.exit_code == 4
+    assert result.disposition is WatchTaskDisposition.RESUMABLE_HALT
+    assert result.gate_reason == "state_contract"
+    assert result.resume_available is False
+    assert result.failure_detail == (
+        "StateSchemaError: deterministic state conflict"
     )
 
 

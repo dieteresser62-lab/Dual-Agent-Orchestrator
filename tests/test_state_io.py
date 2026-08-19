@@ -492,6 +492,61 @@ def test_existing_state_protocol_binding_cannot_be_added_or_switched(tmp_path: P
         )
 
 
+def test_existing_workflow_run_requires_exact_replacement_authorization(
+    tmp_path: Path,
+) -> None:
+    state_file = tmp_path / "state.json"
+    existing = make_v3_state(tmp_path)
+    replacement = replace(
+        existing,
+        run_id="replacement-run",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V1, "1"),
+    )
+    save_workflow_state(state_file, existing, allowed_roots=(tmp_path,))
+
+    with pytest.raises(StateSchemaError, match="matching authorization"):
+        save_workflow_state(
+            state_file,
+            replacement,
+            allowed_roots=(tmp_path,),
+        )
+    with pytest.raises(StateSchemaError, match="matching authorization"):
+        save_workflow_state(
+            state_file,
+            replacement,
+            allowed_roots=(tmp_path,),
+            replace_existing_run_id="wrong-run",
+        )
+
+    save_workflow_state(
+        state_file,
+        replacement,
+        allowed_roots=(tmp_path,),
+        replace_existing_run_id=existing.run_id,
+    )
+
+    assert load_workflow_state(state_file, allowed_roots=(tmp_path,)) == replacement
+
+
+def test_replacement_authorization_never_rebinds_protocol_within_same_run(
+    tmp_path: Path,
+) -> None:
+    state_file = tmp_path / "state.json"
+    existing = make_v3_state(tmp_path)
+    save_workflow_state(state_file, existing, allowed_roots=(tmp_path,))
+
+    with pytest.raises(StateSchemaError, match="add or change"):
+        save_workflow_state(
+            state_file,
+            replace(
+                existing,
+                protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V1, "1"),
+            ),
+            allowed_roots=(tmp_path,),
+            replace_existing_run_id=existing.run_id,
+        )
+
+
 from conftest import can_symlink
 
 

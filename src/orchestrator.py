@@ -232,6 +232,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
         agents: dict[str, AgentAdapter],
         config: OrchestratorConfig,
         allowed_roots: tuple[Path, ...],
+        replace_existing_run_id: str | None = None,
     ) -> None:
         self.root = repository_root.resolve()
         self.state_file = state_file.resolve()
@@ -245,6 +246,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
         self._repository_changes: dict[str, RepositoryChanges] = {}
         self._rendered_changes: dict[str, WorkflowChanges] = {}
         self._artifact_bridge: ArtifactBridge | None = None
+        self._replace_existing_run_id = replace_existing_run_id
 
     def bind_work_unit(self, state: WorkflowState) -> None:
         # Runtime history is written by checkpoint(), not by the pure workflow-state
@@ -1150,12 +1152,19 @@ class ProductionWorkflowDriver(WorkflowDriver):
                     f"structured audit dual-write mismatch: {exc}"
                 ) from exc
             raise
+        replacement_run_id = self._replace_existing_run_id
         save_workflow_state(
-            self.state_file, persisted, allowed_roots=self.allowed_roots
+            self.state_file,
+            persisted,
+            allowed_roots=self.allowed_roots,
+            replace_existing_run_id=replacement_run_id,
         )
         write_workflow_checkpoint(
-            self.checkpoint_dir, persisted, allowed_roots=self.allowed_roots
+            self.checkpoint_dir / persisted.run_id,
+            persisted,
+            allowed_roots=self.allowed_roots,
         )
+        self._replace_existing_run_id = None
         self.active_state = persisted
 
     def _project_audit(self, state: WorkflowState, history: WorkflowHistory) -> None:
@@ -2107,7 +2116,15 @@ def run_production_workflow(
         )
 
     loaded: WorkflowState | CompletedV2State | None = None
-    if state_file.exists() and not force_new:
+    replacement_run_id: str | None = None
+    replacement_requested = force_new or (
+        bool(args.force_overwrite_state) and not bool(args.resume)
+    )
+    if state_file.exists() and replacement_requested:
+        existing = load_workflow_state(state_file, allowed_roots=allowed_roots)
+        if isinstance(existing, WorkflowState):
+            replacement_run_id = existing.run_id
+    elif state_file.exists():
         try:
             loaded = load_resumable_workflow_state(
                 state_file,
@@ -2181,6 +2198,7 @@ def run_production_workflow(
         agents=build_agent_registry(args.agent_settings),
         config=config,
         allowed_roots=allowed_roots,
+        replace_existing_run_id=replacement_run_id,
     )
     engine = WorkflowEngine(driver)
     driver.checkpoint(state, _history(state))
@@ -2569,11 +2587,28 @@ def run_pipeline(
                 protocol_mode="structured-v1",
             )
         return 1
+    except StateSchemaError as exc:
+        logger.error("State-v3 workflow failed: %s", exc)
+        watch_run_id = getattr(args, "watch_run_id", None)
+        if watch_run_id is not None:
+            return WatchTaskResult(
+                exit_code=4,
+                run_id=watch_run_id,
+                disposition=WatchTaskDisposition.RESUMABLE_HALT,
+                status="awaiting_user_decision",
+                step="pipeline",
+                work_unit_id=1,
+                gate_reason="state_contract",
+                failure_detail=f"StateSchemaError: {exc}",
+                resume_available=_watch_run_has_persisted_state(
+                    task_file, watch_run_id
+                ),
+            )
+        return 1
     except (
         OSError,
         GitTransactionError,
         RepositoryChangeError,
-        StateSchemaError,
         WorkflowExecutionError,
         ValueError,
     ) as exc:

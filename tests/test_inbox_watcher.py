@@ -805,6 +805,51 @@ def test_watch_restart_resumes_same_run_id_and_moves_only_final_workflow(
     assert len(list((outbox / "done").glob("*.md"))) == 1
 
 
+def test_non_resumable_policy_halt_stops_once_without_retry_or_poison(
+    tmp_path: Path,
+) -> None:
+    inbox = tmp_path / "inbox"
+    outbox = tmp_path / "outbox"
+    inbox.mkdir()
+    task = inbox / "state-contract.md"
+    task.write_text("state conflict", encoding="utf-8")
+    calls: list[tuple[bool, bool]] = []
+
+    def halt(_task: Path, args: Namespace, force_new: bool) -> WatchTaskResult:
+        calls.append((args.resume, force_new))
+        return WatchTaskResult(
+            exit_code=4,
+            run_id=args.watch_run_id,
+            disposition=WatchTaskDisposition.RESUMABLE_HALT,
+            status="awaiting_user_decision",
+            step="pipeline",
+            work_unit_id=1,
+            gate_reason="state_contract",
+            failure_detail="StateSchemaError: deterministic conflict",
+            resume_available=False,
+        )
+
+    result = watch_inbox(
+        inbox_dir=inbox,
+        outbox_dir=outbox,
+        poll_interval=0.01,
+        args=_args(),
+        process_task=halt,
+        max_retries=3,
+        time_fn=lambda: 10_000_000_000.0,
+    )
+
+    assert result == 4
+    assert calls == [(False, True)]
+    assert task.exists()
+    assert not (inbox / "state-contract.md.attempts").exists()
+    assert list((outbox / "failed").glob("*")) == []
+    identity = WatchTaskIdentity.from_dict(
+        json.loads(watch_identity_path(task).read_text(encoding="utf-8"))
+    )
+    assert identity.started is False
+
+
 def test_watch_processes_generated_implementation_handoff_without_restart(
     tmp_path: Path,
 ) -> None:
