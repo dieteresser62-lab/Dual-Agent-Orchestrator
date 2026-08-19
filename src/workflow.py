@@ -244,6 +244,8 @@ def normalize_review_contract_output(
             if break_label is not None
             else -1
         )
+        embedded_pipe_count = len(re.findall(r"(?<=\S)\|(?=\S)", body))
+        has_only_embedded_pipes = body.count("|") == embedded_pipe_count
         labels_are_unique = (
             risk_start > 0
             and break_start > 0
@@ -251,12 +253,19 @@ def normalize_review_contract_output(
             and body[break_start - 1].isspace()
             and body.count(risk_label) == 1
             and break_occurrences == 1
+            and has_only_embedded_pipes
         )
-        if labels_are_unique and "|" not in evidence_line:
+        if labels_are_unique:
             assert break_label is not None
-            dimensions = body[:risk_start].strip()
-            risk = body[risk_start + len(risk_label) : break_start].strip()
-            break_condition = body[break_start + len(break_label) :].strip()
+            dimensions = body[:risk_start].strip().replace("|", "∣")
+            risk = (
+                body[risk_start + len(risk_label) : break_start]
+                .strip()
+                .replace("|", "∣")
+            )
+            break_condition = (
+                body[break_start + len(break_label) :].strip().replace("|", "∣")
+            )
             if dimensions and risk and break_condition:
                 evidence_lines[evidence_index] = (
                     f"{evidence_match.group('label')}{dimensions} | {risk} | "

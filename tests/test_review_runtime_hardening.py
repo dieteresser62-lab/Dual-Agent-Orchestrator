@@ -262,7 +262,7 @@ def test_review_normalization_accepts_realistic_break_condition_label() -> None:
         (
             "REVIEWER: claude",
             "TEST_FILES_TOUCHED: NONE",
-            "REVIEW_EVIDENCE: Checked dimensions — cleanup and failure paths. "
+            "REVIEW_EVIDENCE: Checked dimensions — prepare→measure→(raise|proceed). "
             "Largest residual risk: private runtime files survive. "
             "Realistic break condition: capability validation raises after preparation.",
             "PRE_MORTEM: capability validation leaks a prepared review packet",
@@ -274,7 +274,7 @@ def test_review_normalization_accepts_realistic_break_condition_label() -> None:
     normalized = normalize_review_contract_output(output, contract, ())
 
     assert (
-        "REVIEW_EVIDENCE: Checked dimensions — cleanup and failure paths. | "
+        "REVIEW_EVIDENCE: Checked dimensions — prepare→measure→(raise∣proceed). | "
         "private runtime files survive. | capability validation raises after preparation."
     ) in normalized
 

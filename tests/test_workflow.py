@@ -1638,7 +1638,7 @@ def test_realistic_break_condition_is_normalized_without_contract_repair() -> No
     labeled = _review_approval(AgentRole.CLAUDE).replace(
         "REVIEW_EVIDENCE: reviewed invariants | residual concurrency risk | "
         "parallel mutation",
-        "REVIEW_EVIDENCE: reviewed invariants. Largest residual risk: residual "
+        "REVIEW_EVIDENCE: reviewed read|write invariants. Largest residual risk: residual "
         "concurrency risk. Realistic break condition: parallel mutation",
     )
     assert "Largest residual risk:" in labeled
