@@ -303,6 +303,20 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
         expected_outcome = "completed" if completed else None
         if completions[-1].payload.outcome != expected_outcome:
             raise mismatch("workflow completion differs from state-v3", completions[-1].record_id)
+        completion = completions[-1]
+        final_binding_id = completion.payload.final_binding_id
+        if final_binding_id is not None:
+            final_binding = records_by_id.get(final_binding_id)
+            if (
+                final_binding is None
+                or not isinstance(final_binding.payload, BindingPayload)
+                or final_binding.fingerprint != completion.fingerprint
+            ):
+                raise mismatch(
+                    "workflow completion references an unknown, invalid, or "
+                    "fingerprint-mismatched final binding",
+                    completion.record_id,
+                )
 
     return ResumeResolution(state, mode, head)
 

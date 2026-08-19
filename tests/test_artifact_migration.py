@@ -19,6 +19,7 @@ from artifact_models import (
     ValidationAttestationPayload,
     ValidationResult,
     WorkUnitPayload,
+    WorkflowCompletionPayload,
 )
 from artifact_store import ArtifactStore
 from contracts import PlannedSlice
@@ -321,6 +322,74 @@ def test_structured_resume_halts_when_state_mirror_reports_completion_without_ch
     with pytest.raises(
         ArtifactResumeError,
         match="state-v3 mirror reports workflow completion without a structured record",
+    ):
+        resolve_resume_state(tmp_path, state)
+
+
+@pytest.mark.parametrize("binding_mode", ("unknown", "mismatched"))
+def test_structured_resume_halts_when_completion_final_binding_id_is_unknown_or_mismatched(
+    tmp_path: Path,
+    binding_mode: str,
+) -> None:
+    state = (
+        _state(tmp_path)
+        .complete_current_slice(commit_ref="d" * 40)
+        .start_final_review_work_unit()
+        .complete_current_work_unit()
+    )
+    _records(tmp_path, state)
+    binding_fingerprint = "e" * 64 if binding_mode == "mismatched" else "d" * 64
+    attestation, review = _authorization_records(
+        tmp_path,
+        state,
+        attestation_fingerprint=binding_fingerprint,
+        review_fingerprint=binding_fingerprint,
+    )
+    state = replace(
+        state,
+        runtime_history={
+            "attestations": [
+                {
+                    "attestation_id": attestation.logical_id,
+                    "diff_fingerprint": attestation.fingerprint.sha256,
+                }
+            ]
+        },
+    )
+    bridge = ArtifactBridge(ArtifactStore(tmp_path, state.run_id))
+    bridge.append(
+        WorkUnitPayload("1", 1, ("src/resume.py",)),
+        logical_id="work-unit-3",
+        idempotency_key="work-unit:3:round:1",
+        fingerprint_sha256="d" * 64,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    binding = bridge.append(
+        BindingPayload(
+            binding_kind="commit",
+            target="d" * 40,
+            attestation_id=attestation.record_id,
+            approval_ids=(review.record_id,),
+        ),
+        logical_id="commit-1",
+        idempotency_key="commit:1",
+        fingerprint_sha256=binding_fingerprint,
+    )
+    bridge.append(
+        WorkflowCompletionPayload(
+            outcome="completed",
+            final_binding_id=(
+                "ar1-" + "f" * 64 if binding_mode == "unknown" else binding.record_id
+            ),
+        ),
+        logical_id="workflow-completion",
+        idempotency_key="workflow-completion:completed",
+        fingerprint_sha256="d" * 64,
+    )
+
+    with pytest.raises(
+        ArtifactResumeError,
+        match="unknown, invalid, or fingerprint-mismatched final binding",
     ):
         resolve_resume_state(tmp_path, state)
 

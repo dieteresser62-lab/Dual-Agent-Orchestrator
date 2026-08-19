@@ -18,6 +18,32 @@ QUOTA_RESUME_DIFF_PATTERN = re.compile(
 )
 
 
+def managed_correction_slice_report_path(
+    audit_report_path: str, slice_id: int
+) -> str:
+    """Derive the report path that must belong to a correction Slice's scope."""
+    _require_positive_int(slice_id, "correction slice_id")
+    stem = re.sub(
+        r"-(?:gesamtpruefung|review)-[0-9a-f]{8}$",  # allowlist:german
+        "",
+        PurePosixPath(audit_report_path).stem,
+    )
+    slug = re.sub(r"[^a-z0-9]+", "-", stem.lower()).strip("-") or "task"
+    return (
+        f"docs/internal/slice-{slug}-{slice_id:02d}-abschlusskorrektur.md"
+    )
+
+
+def _is_managed_correction_slice_report(
+    audit_report_path: str, candidate: str
+) -> bool:
+    first = managed_correction_slice_report_path(audit_report_path, 1)
+    prefix = first.removesuffix("01-abschlusskorrektur.md")
+    return re.fullmatch(
+        rf"{re.escape(prefix)}[0-9]{{2,}}-abschlusskorrektur\.md", candidate
+    ) is not None
+
+
 def quota_resume_diff_acknowledgement(
     invocation_id: str, fingerprint: str
 ) -> str:
@@ -1201,6 +1227,21 @@ class WorkflowState:
     ) -> WorkflowState:
         """Append one regular, commit-backed correction after a failed final review."""
         _require_non_empty(start_commit, "correction start_commit")
+        correction_slice_id = len(self.slices) + 1
+        if self.audit_report_path is not None:
+            current_report = managed_correction_slice_report_path(
+                self.audit_report_path, correction_slice_id
+            )
+            scope_paths = (
+                *(
+                    path
+                    for path in scope_paths
+                    if not _is_managed_correction_slice_report(
+                        self.audit_report_path, path
+                    )
+                ),
+                current_report,
+            )
         normalized_scope = _normalize_scope_paths(scope_paths)
         normalized_groups = (
             tuple((path,) for path in normalized_scope)
@@ -1224,7 +1265,7 @@ class WorkflowState:
                 "a correction work unit requires a completed final review attempt"
             )
         correction_slice = SliceRecord(
-            slice_id=len(self.slices) + 1,
+            slice_id=correction_slice_id,
             status=SliceStatus.IN_PROGRESS,
             start_commit=start_commit,
             scope_paths=normalized_scope,

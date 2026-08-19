@@ -125,6 +125,7 @@ from workflow_state import (
     WorkUnitKind,
     WorkUnitStatus,
     init_workflow_state,
+    managed_correction_slice_report_path,
 )
 from validation_matrix import ValidationCommand, ValidationMatrix
 from inbox_watcher import (
@@ -1010,7 +1011,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
         scope = remediation_scope
         correction_slice_id = len(self.active_state.slices) + 1
         if self.active_state.audit_report_path is not None:
-            correction_doc = _managed_correction_slice_path(
+            correction_doc = managed_correction_slice_report_path(
                 self.active_state.audit_report_path, correction_slice_id
             )
             scope = tuple(
@@ -1830,12 +1831,6 @@ def _managed_slice_scope_pattern(audit_report_path: str) -> str:
     )
     slug = re.sub(r"[^a-z0-9]+", "-", stem.lower()).strip("-") or "task"
     return f"docs/internal/slice-{slug}-*.md"
-
-
-def _managed_correction_slice_path(audit_report_path: str, slice_id: int) -> str:
-    pattern = _managed_slice_scope_pattern(audit_report_path)
-    prefix = pattern.removesuffix("*.md")
-    return f"{prefix}{slice_id:02d}-abschlusskorrektur.md"
 
 
 def _is_managed_audit_path(state: WorkflowState, path: str) -> bool:

@@ -422,6 +422,51 @@ def test_final_review_references_committed_slice_and_appends_bounded_correction(
     assert repeated_final_loaded.current_slice.commit_ref == "c" * 40
 
 
+def test_correction_slice_remediation_scope_includes_current_slice_report_path() -> None:
+    audit_path = "docs/internal/strukturierte-agentenkommunikation-implement-review-542ccc72.md"
+    stale_report = (
+        "docs/internal/slice-strukturierte-agentenkommunikation-implement-"
+        "01-abschlusskorrektur.md"
+    )
+    state = init_workflow_state(
+        run_id="run-correction-scope",
+        task_file="/repo/task.md",
+        branch="feature/state-v3",
+        branch_base="a" * 40,
+        slice_count=1,
+        audit_report_path=audit_path,
+        timestamp="2026-08-11T10:00:00+00:00",
+    ).bind_slice_plan(
+        (PlannedSlice(1, "initial implementation", ("src/one.py",)),),
+        first_start_commit="a" * 40,
+    ).complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    ).bind_current_slice_git_boundary(
+        start_commit="a" * 40,
+        scope_paths=("src/one.py",),
+        start_fingerprint="1" * 64,
+    ).complete_current_slice(
+        commit_ref="b" * 40,
+    ).start_final_review_work_unit().complete_current_work_unit()
+
+    correction = state.start_correction_work_unit(
+        start_commit="b" * 40,
+        scope_paths=("src/one.py", audit_path, stale_report),
+        start_fingerprint="2" * 64,
+        finding_ids=("C-25",),
+    )
+
+    expected_report = (
+        "docs/internal/slice-strukturierte-agentenkommunikation-implement-"
+        "02-abschlusskorrektur.md"
+    )
+    assert expected_report in correction.current_slice.scope_paths
+    assert stale_report not in correction.current_slice.scope_paths
+    assert WorkflowState.from_dict(correction.to_dict()) == correction
+
+
 def test_final_review_requires_all_slices_committed() -> None:
     with pytest.raises(WorkflowStateValidationError, match="every current slice"):
         make_state().complete_current_work_unit().start_final_review_work_unit()

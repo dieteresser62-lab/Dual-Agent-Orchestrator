@@ -605,6 +605,59 @@ def test_final_review_compacts_generated_audit_without_weakening_fingerprint(
     assert audit_sentinel not in changed.full_diff
 
 
+def test_final_review_evidence_never_silently_truncates_diff_content(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/complete-final-review-evidence")
+    head = _git(repository, "rev-parse", "HEAD")
+    audit_path = "docs/internal/complete-final-review-review-12345678.md"
+    source_path = "src/large.py"
+    (repository / "docs/internal").mkdir(parents=True)
+    (repository / "src").mkdir()
+    (repository / audit_path).write_text("audit row\n" * 40_000, encoding="utf-8")
+    (repository / source_path).write_text(
+        "FIRST_SENTINEL\n"
+        + "A" * 400_000
+        + "\nMIDDLE_SENTINEL\n"
+        + "Z" * 400_000
+        + "\nLAST_SENTINEL\n",
+        encoding="utf-8",
+    )
+    _git(repository, "add", audit_path, source_path)
+    state = init_workflow_state(
+        run_id="complete-final-review-evidence",
+        task_file=str(tmp_path / "task.md"),
+        branch="feature/complete-final-review-evidence",
+        branch_base=head,
+        slice_count=1,
+        task_scope_patterns=(audit_path, source_path),
+        audit_report_path=audit_path,
+    ).bind_current_slice_git_boundary(
+        start_commit=head,
+        scope_paths=(audit_path, source_path),
+        start_fingerprint="a" * 64,
+    )
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    driver.active_state = state.complete_current_slice(
+        commit_ref="b" * 40
+    ).start_final_review_work_unit()
+
+    changes = driver.collect_changes(head)
+
+    assert len(changes.full_diff) > 650_000
+    assert "FIRST_SENTINEL" in changes.full_diff
+    assert "MIDDLE_SENTINEL" in changes.full_diff
+    assert "LAST_SENTINEL" in changes.full_diff
+    assert "middle of final-review diff section" not in changes.full_diff
+    assert "DETERMINISTIC AUDIT PROJECTION (COMPACT EVIDENCE)" in changes.full_diff
+
+
 def test_structured_bind_persists_contract_and_active_work_unit_once(
     tmp_path: Path,
 ) -> None:
