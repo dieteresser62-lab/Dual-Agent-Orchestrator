@@ -24,6 +24,8 @@ from artifact_models import (
     FingerprintKind,
     FindingSeverity,
     FindingTransitionPayload,
+    ProviderInputComponentPayload,
+    ProviderInputMeasurementPayload,
     GatePayload,
     PlanPayload,
     ReviewPayload,
@@ -48,6 +50,7 @@ from contracts import (
 )
 from task_contract import TaskContract
 from validation_matrix import ValidationRequest
+from provider_input_budget import ProviderInputMeasurement
 
 
 class ArtifactBridgeError(RuntimeError):
@@ -185,6 +188,43 @@ def validation_request_payload(request: ValidationRequest) -> ValidationRequestP
     )
 
 
+def provider_input_measurement_payload(
+    measurement: ProviderInputMeasurement,
+    *,
+    work_unit_id: int | str,
+    transition_fingerprint: str,
+    relevant_record_head: str,
+) -> ProviderInputMeasurementPayload:
+    return ProviderInputMeasurementPayload(
+        provider=Role(measurement.provider),
+        role=Role(measurement.role),
+        operation=measurement.operation,
+        work_unit_id=str(work_unit_id),
+        transition_fingerprint=transition_fingerprint,
+        relevant_record_head=relevant_record_head,
+        input_digest=measurement.input_digest,
+        policy_digest=measurement.policy_digest,
+        components=tuple(
+            ProviderInputComponentPayload(item.name, item.chars, item.bytes)
+            for item in measurement.components
+        ),
+        total_chars=measurement.total_chars,
+        total_bytes=measurement.total_bytes,
+        safety_limit_chars=measurement.safety_limit_chars,
+        safety_limit_bytes=measurement.safety_limit_bytes,
+        technical_limit_chars=measurement.technical_limit_chars,
+        technical_limit_bytes=measurement.technical_limit_bytes,
+        technical_limit_source=measurement.technical_limit_source,
+        effective_limit_chars=measurement.effective_limit_chars,
+        effective_limit_bytes=measurement.effective_limit_bytes,
+        allowed=measurement.allowed,
+        violated_dimensions=measurement.violated_dimensions,
+        char_overage=measurement.char_overage,
+        byte_overage=measurement.byte_overage,
+        largest_component=measurement.largest_component,
+    )
+
+
 @dataclass(slots=True)
 class ArtifactBridge:
     """Idempotently persist and re-read typed domain statements."""
@@ -291,6 +331,7 @@ __all__ = [
     "ArtifactBridge", "ArtifactBridgeError", "agent_result_payload",
     "attestation_payload", "command_payload", "finding_payload", "plan_payload",
     "review_payload", "task_payload", "validation_request_payload",
+    "provider_input_measurement_payload",
     "BindingPayload", "GatePayload",
     "WorkUnitPayload",
 ]

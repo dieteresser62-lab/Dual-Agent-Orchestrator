@@ -22,6 +22,7 @@ from agent_runtime import (
 from artifact_bridge import (
     ArtifactBridge, agent_result_payload, attestation_payload, finding_payload,
     plan_payload, review_payload, validation_request_payload,
+    provider_input_measurement_payload,
 )
 from artifact_migration import ArtifactResumeError, resolve_resume_state
 from artifact_projection import ArtifactAuditProjection
@@ -30,8 +31,14 @@ from artifact_models import (
     QuotaPausePayload, ReviewPayload, Role, TaskPayload, TransientRetryPayload,
     WorkUnitPayload,
     WorkflowCompletionPayload,
+    ArtifactRecord, Fingerprint, ProviderInputMeasurementPayload, canonical_json,
 )
 from artifact_store import ArtifactStore
+from final_review_preflight import (
+    FINAL_REVIEW_OPERATIONS, FinalReviewPreflightDenied, preflight_payload,
+    relevant_record_head, run_final_review_preflight, transition_fingerprint,
+)
+from provider_input_budget import ProviderInputMeasurement
 from audit_trail import (
     AuditProjection,
     AuthorizedTestChanges,
@@ -126,6 +133,7 @@ from workflow_state import (
     WorkUnitKind,
     WorkUnitStatus,
     init_workflow_state,
+    BootstrapCheckFact,
     managed_correction_slice_report_path,
 )
 from validation_matrix import ValidationCommand, ValidationMatrix
@@ -263,6 +271,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
             state = replace(
                 state,
                 runtime_history=self.active_state.runtime_history,
+                bootstrap_checks=self.active_state.bootstrap_checks,
             )
         self.active_state = state
         self._bind_artifact_store(state)
@@ -504,8 +513,96 @@ class ProductionWorkflowDriver(WorkflowDriver):
             reviewer_repository_required=reviewer_repository_required,
             operation=operation.value,
             binding_fingerprint=binding_fingerprint,
+            pre_start_callback=self._persist_provider_bootstrap,
         )
         return output
+
+    def _persist_provider_bootstrap(self, measurement: ProviderInputMeasurement) -> None:
+        """Dual-write a lossless measurement and final-transition preflight."""
+        state = self.active_state
+        if state is None:
+            raise WorkflowExecutionError("provider bootstrap has no active state")
+        bridge = self._artifact_bridge
+        chain = bridge.store.load_chain() if bridge is not None else ()
+        record_head = relevant_record_head(chain)
+        repository_fingerprint = (
+            self.collect_changes(state.branch_base).fingerprint
+            if measurement.operation in FINAL_REVIEW_OPERATIONS
+            else self._artifact_fingerprint()
+        )
+        transition = transition_fingerprint(
+            provider=measurement.provider, role=measurement.role,
+            operation=measurement.operation, work_unit_id=str(state.current_work_unit_id),
+            record_head=record_head, repository_fingerprint=repository_fingerprint,
+            input_digest=measurement.input_digest, policy_digest=measurement.policy_digest,
+        )
+        payload = provider_input_measurement_payload(
+            measurement, work_unit_id=state.current_work_unit_id,
+            transition_fingerprint=transition, relevant_record_head=record_head,
+        )
+        if bridge is not None:
+            measurement_record = bridge.append(
+                payload, logical_id=f"provider-input-{state.current_work_unit_id}-{measurement.operation}",
+                idempotency_key=f"provider-input:{transition}",
+                fingerprint_sha256=repository_fingerprint,
+            )
+        else:
+            measurement_record = ArtifactRecord.create(
+                run_id=state.run_id, logical_id=f"provider-input-{state.current_work_unit_id}-{measurement.operation}",
+                revision=1, fingerprint=Fingerprint(FingerprintKind.IMPLEMENTATION, repository_fingerprint),
+                predecessor_ids=(), created_at=self._artifact_bridge.now() if self._artifact_bridge is not None else "2000-01-01T00:00:00+00:00",
+                idempotency_key=f"provider-input:{transition}", payload=payload,
+            )
+        state = state.with_bootstrap_check(self._bootstrap_fact(payload))
+        self._persist_bootstrap_state(state)
+        if measurement.operation not in FINAL_REVIEW_OPERATIONS or not measurement.allowed:
+            return
+        current_chain = bridge.store.load_chain() if bridge is not None else (*chain, measurement_record)
+        try:
+            changes = self.collect_changes(state.branch_base)
+            repository_paths = changes.paths
+        except NoWorkflowChangesError:
+            repository_paths = ()
+        result = run_final_review_preflight(
+            state=state, records=current_chain, measurement_record=measurement_record,
+            repository_paths=repository_paths,
+        )
+        checked = preflight_payload(measurement_record=measurement_record, result=result)
+        if bridge is not None:
+            bridge.append(
+                checked, logical_id=f"final-preflight-{state.current_work_unit_id}-{measurement.operation}",
+                idempotency_key=f"final-preflight:{transition}",
+                fingerprint_sha256=repository_fingerprint,
+            )
+        state = state.with_bootstrap_check(self._bootstrap_fact(checked))
+        self._persist_bootstrap_state(state)
+        if not result.passed:
+            raise FinalReviewPreflightDenied(result)
+
+    @staticmethod
+    def _bootstrap_fact(payload: ProviderInputMeasurementPayload | object) -> BootstrapCheckFact:
+        digest = hashlib.sha256(canonical_json(payload)).hexdigest()
+        check_kind = payload.record_type.value
+        decision = (
+            "allowed" if isinstance(payload, ProviderInputMeasurementPayload) and payload.allowed
+            else "denied" if getattr(payload, "outcome", None) == "denied" or isinstance(payload, ProviderInputMeasurementPayload)
+            else "passed"
+        )
+        return BootstrapCheckFact(
+            check_kind=check_kind, transition_fingerprint=payload.transition_fingerprint,
+            provider=payload.provider.value, role=payload.role.value, operation=payload.operation,
+            work_unit_id=int(payload.work_unit_id), semantic_digest=digest, decision=decision,
+            error_code=(
+                "PROVIDER-INPUT-BUDGET" if isinstance(payload, ProviderInputMeasurementPayload) and not payload.allowed
+                else getattr(payload, "error_code", None)
+            ),
+        )
+
+    def _persist_bootstrap_state(self, state: WorkflowState) -> None:
+        save_workflow_state(self.state_file, state, allowed_roots=self.allowed_roots, replace_existing_run_id=self._replace_existing_run_id)
+        write_workflow_checkpoint(self.checkpoint_dir / state.run_id, state, allowed_roots=self.allowed_roots)
+        self._replace_existing_run_id = None
+        self.active_state = state
 
     def invoke_codex(self, invocation: CodexInvocation) -> str:
         state_binding = (
@@ -1171,6 +1268,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
             state = replace(
                 state,
                 runtime_history=self.active_state.runtime_history,
+                bootstrap_checks=self.active_state.bootstrap_checks,
             )
         persisted = replace(
             state,

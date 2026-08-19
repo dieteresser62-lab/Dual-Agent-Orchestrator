@@ -44,6 +44,8 @@ class RecordType(StrEnum):
     TRANSIENT_RETRY = "transient_retry"
     RESUME_CHECK = "resume_check"
     WORKFLOW_COMPLETION = "workflow_completion"
+    PROVIDER_INPUT_MEASUREMENT = "provider_input_measurement"
+    FINAL_REVIEW_PREFLIGHT = "final_review_preflight"
 
 
 class FingerprintKind(StrEnum):
@@ -295,6 +297,131 @@ class ValidationAttestationPayload:
 
 
 @dataclass(frozen=True, slots=True)
+class ProviderInputComponentPayload:
+    name: str
+    chars: int
+    bytes: int
+
+    def __post_init__(self) -> None:
+        _require_identifier(self.name, "provider input component name")
+        for value, label in ((self.chars, "component chars"), (self.bytes, "component bytes")):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ArtifactValidationError(f"{label} must be a non-negative integer")
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderInputMeasurementPayload:
+    provider: Role
+    role: Role
+    operation: str
+    work_unit_id: str
+    transition_fingerprint: str
+    relevant_record_head: str
+    input_digest: str
+    policy_digest: str
+    components: tuple[ProviderInputComponentPayload, ...]
+    total_chars: int
+    total_bytes: int
+    safety_limit_chars: int
+    safety_limit_bytes: int
+    technical_limit_chars: int | None
+    technical_limit_bytes: int | None
+    technical_limit_source: str | None
+    effective_limit_chars: int
+    effective_limit_bytes: int
+    allowed: bool
+    violated_dimensions: tuple[str, ...]
+    char_overage: int
+    byte_overage: int
+    largest_component: str
+    status: ClassVar[str] = "measured"
+    record_type: ClassVar[RecordType] = RecordType.PROVIDER_INPUT_MEASUREMENT
+
+    def __post_init__(self) -> None:
+        if self.provider not in {Role.CODEX, Role.CLAUDE, Role.ANTIGRAVITY} or self.role is not self.provider:
+            raise ArtifactValidationError("measurement provider and role must identify one agent")
+        _require_identifier(self.operation, "measurement operation")
+        _require_identifier(self.work_unit_id, "measurement work_unit_id")
+        for value, label in (
+            (self.transition_fingerprint, "transition_fingerprint"),
+            (self.relevant_record_head, "relevant_record_head"),
+            (self.input_digest, "input_digest"),
+            (self.policy_digest, "policy_digest"),
+        ):
+            _require_sha256(value, label)
+        if not self.components or len({item.name for item in self.components}) != len(self.components):
+            raise ArtifactValidationError("measurement components must be non-empty and unique")
+        for value, label, positive in (
+            (self.total_chars, "total_chars", False), (self.total_bytes, "total_bytes", False),
+            (self.safety_limit_chars, "safety_limit_chars", True), (self.safety_limit_bytes, "safety_limit_bytes", True),
+            (self.effective_limit_chars, "effective_limit_chars", True), (self.effective_limit_bytes, "effective_limit_bytes", True),
+            (self.char_overage, "char_overage", False), (self.byte_overage, "byte_overage", False),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value < (1 if positive else 0):
+                raise ArtifactValidationError(f"{label} has an invalid size")
+        for value in (self.technical_limit_chars, self.technical_limit_bytes):
+            if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 1):
+                raise ArtifactValidationError("technical limits must be positive or null")
+        if (self.technical_limit_chars is None) != (self.technical_limit_bytes is None):
+            raise ArtifactValidationError("technical limits must be supplied together")
+        if (self.technical_limit_chars is None) != (self.technical_limit_source is None):
+            raise ArtifactValidationError("technical limit source must match technical limits")
+        if self.technical_limit_source is not None:
+            _require_text(self.technical_limit_source, "technical_limit_source")
+        if not isinstance(self.allowed, bool):
+            raise ArtifactValidationError("allowed must be boolean")
+        if any(item not in {"chars", "bytes"} for item in self.violated_dimensions):
+            raise ArtifactValidationError("violated_dimensions is invalid")
+        _require_identifier(self.largest_component, "largest_component")
+        if sum(item.chars for item in self.components) != self.total_chars or sum(item.bytes for item in self.components) != self.total_bytes:
+            raise ArtifactValidationError("measurement totals differ from component sizes")
+        if self.allowed != (not self.violated_dimensions):
+            raise ArtifactValidationError("measurement decision differs from violations")
+
+
+@dataclass(frozen=True, slots=True)
+class FinalReviewPreflightPayload:
+    provider: Role
+    role: Role
+    operation: str
+    work_unit_id: str
+    transition_fingerprint: str
+    relevant_record_head: str
+    measurement_record_id: str
+    outcome: str
+    category: str | None
+    error_code: str | None
+    affected_record_ids: tuple[str, ...]
+    affected_paths: tuple[str, ...]
+    remediation: str | None
+    status: ClassVar[str] = "checked"
+    record_type: ClassVar[RecordType] = RecordType.FINAL_REVIEW_PREFLIGHT
+
+    def __post_init__(self) -> None:
+        if self.provider not in {Role.CODEX, Role.CLAUDE, Role.ANTIGRAVITY} or self.role is not self.provider:
+            raise ArtifactValidationError("preflight provider and role must identify one agent")
+        _require_identifier(self.operation, "preflight operation")
+        _require_identifier(self.work_unit_id, "preflight work_unit_id")
+        _require_sha256(self.transition_fingerprint, "transition_fingerprint")
+        _require_sha256(self.relevant_record_head, "relevant_record_head")
+        _require_identifier(self.measurement_record_id, "measurement_record_id")
+        if self.outcome not in {"passed", "denied"}:
+            raise ArtifactValidationError("preflight outcome is invalid")
+        if self.outcome == "passed":
+            if any(value is not None for value in (self.category, self.error_code, self.remediation)) or self.affected_record_ids or self.affected_paths:
+                raise ArtifactValidationError("passed preflight cannot carry denial details")
+        else:
+            if self.category not in {"technical", "correction_required"}:
+                raise ArtifactValidationError("denied preflight requires a category")
+            if self.error_code is None or self.remediation is None:
+                raise ArtifactValidationError("denied preflight requires code and remediation")
+            _require_identifier(self.error_code, "preflight error_code")
+            _require_text(self.remediation, "preflight remediation")
+        _require_unique_identifiers(self.affected_record_ids, "affected_record_ids", allow_empty=True)
+        _require_paths(self.affected_paths, allow_empty=True)
+
+
+@dataclass(frozen=True, slots=True)
 class GatePayload:
     gate_kind: str
     decision: str
@@ -393,6 +520,7 @@ ArtifactPayload: TypeAlias = (
     | ValidationRequestPayload | ValidationAttestationPayload | GatePayload | BindingPayload
     | QuotaPausePayload | TransientRetryPayload | ResumeCheckPayload
     | WorkflowCompletionPayload
+    | ProviderInputMeasurementPayload | FinalReviewPreflightPayload
 )
 
 
@@ -761,6 +889,23 @@ def _payload_from_dict(record_type: RecordType, raw: Mapping[str, Any]) -> Artif
         return ResumeCheckPayload(data["expected_head_id"], data["repository_fingerprint"], data["outcome"])
     if record_type is RecordType.WORKFLOW_COMPLETION:
         return WorkflowCompletionPayload(data["outcome"], data["final_binding_id"])
+    if record_type is RecordType.PROVIDER_INPUT_MEASUREMENT:
+        return ProviderInputMeasurementPayload(
+            Role(data["provider"]), Role(data["role"]), data["operation"], data["work_unit_id"],
+            data["transition_fingerprint"], data["relevant_record_head"], data["input_digest"], data["policy_digest"],
+            tuple(ProviderInputComponentPayload(item["name"], item["chars"], item["bytes"]) for item in data["components"]),
+            data["total_chars"], data["total_bytes"], data["safety_limit_chars"], data["safety_limit_bytes"],
+            data["technical_limit_chars"], data["technical_limit_bytes"], data["technical_limit_source"],
+            data["effective_limit_chars"], data["effective_limit_bytes"], data["allowed"],
+            tuple(data["violated_dimensions"]), data["char_overage"], data["byte_overage"], data["largest_component"],
+        )
+    if record_type is RecordType.FINAL_REVIEW_PREFLIGHT:
+        return FinalReviewPreflightPayload(
+            Role(data["provider"]), Role(data["role"]), data["operation"], data["work_unit_id"],
+            data["transition_fingerprint"], data["relevant_record_head"], data["measurement_record_id"],
+            data["outcome"], data["category"], data["error_code"], tuple(data["affected_record_ids"]),
+            tuple(data["affected_paths"]), data["remediation"],
+        )
     raise ArtifactValidationError(f"unsupported record_type: {record_type}")
 
 

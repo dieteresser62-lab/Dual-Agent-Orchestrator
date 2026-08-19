@@ -8,7 +8,7 @@
   "properties": {
     "schema_version": {"const": "1"},
     "record_id": {"$ref": "#/$defs/identifier"},
-    "record_type": {"enum": ["task", "plan", "work_unit", "correction_work_unit", "agent_result", "diagnostic", "review", "finding_transition", "validation_request", "validation_attestation", "gate", "binding", "quota_pause", "transient_retry", "resume_check", "workflow_completion"]},
+    "record_type": {"enum": ["task", "plan", "work_unit", "correction_work_unit", "agent_result", "diagnostic", "review", "finding_transition", "validation_request", "validation_attestation", "gate", "binding", "quota_pause", "transient_retry", "resume_check", "workflow_completion", "provider_input_measurement", "final_review_preflight"]},
     "run_id": {"$ref": "#/$defs/identifier"},
     "logical_id": {"$ref": "#/$defs/identifier"},
     "revision": {"type": "integer", "minimum": 1},
@@ -35,7 +35,9 @@
     {"if": {"properties": {"record_type": {"const": "quota_pause"}}}, "then": {"properties": {"status": {"const": "paused"}, "payload": {"$ref": "#/$defs/quota_pause"}}}},
     {"if": {"properties": {"record_type": {"const": "transient_retry"}}}, "then": {"properties": {"status": {"const": "waiting"}, "payload": {"$ref": "#/$defs/transient_retry"}}}},
     {"if": {"properties": {"record_type": {"const": "resume_check"}}}, "then": {"properties": {"status": {"const": "checked"}, "payload": {"$ref": "#/$defs/resume_check"}}}},
-    {"if": {"properties": {"record_type": {"const": "workflow_completion"}}}, "then": {"properties": {"status": {"const": "completed"}, "payload": {"$ref": "#/$defs/workflow_completion"}}}}
+    {"if": {"properties": {"record_type": {"const": "workflow_completion"}}}, "then": {"properties": {"status": {"const": "completed"}, "payload": {"$ref": "#/$defs/workflow_completion"}}}},
+    {"if": {"properties": {"record_type": {"const": "provider_input_measurement"}}}, "then": {"properties": {"status": {"const": "measured"}, "payload": {"$ref": "#/$defs/provider_input_measurement"}}}},
+    {"if": {"properties": {"record_type": {"const": "final_review_preflight"}}}, "then": {"properties": {"status": {"const": "checked"}, "payload": {"$ref": "#/$defs/final_review_preflight"}}}}
   ],
   "$defs": {
     "identifier": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$"},
@@ -118,6 +120,41 @@
     "quota_pause": {
       "type": "object", "additionalProperties": false, "required": ["role", "repository_fingerprint", "retry_at"],
       "properties": {"role": {"$ref": "#/$defs/role"}, "repository_fingerprint": {"$ref": "#/$defs/sha256"}, "retry_at": {"type": "string", "format": "date-time"}}
+    },
+    "provider_input_component": {
+      "type": "object", "additionalProperties": false, "required": ["name", "chars", "bytes"],
+      "properties": {"name": {"$ref": "#/$defs/identifier"}, "chars": {"type": "integer", "minimum": 0}, "bytes": {"type": "integer", "minimum": 0}}
+    },
+    "provider_input_measurement": {
+      "type": "object", "additionalProperties": false,
+      "required": ["provider", "role", "operation", "work_unit_id", "transition_fingerprint", "relevant_record_head", "input_digest", "policy_digest", "components", "total_chars", "total_bytes", "safety_limit_chars", "safety_limit_bytes", "technical_limit_chars", "technical_limit_bytes", "technical_limit_source", "effective_limit_chars", "effective_limit_bytes", "allowed", "violated_dimensions", "char_overage", "byte_overage", "largest_component"],
+      "properties": {
+        "provider": {"enum": ["codex", "claude", "antigravity"]}, "role": {"enum": ["codex", "claude", "antigravity"]},
+        "operation": {"$ref": "#/$defs/identifier"}, "work_unit_id": {"$ref": "#/$defs/identifier"},
+        "transition_fingerprint": {"$ref": "#/$defs/sha256"}, "relevant_record_head": {"$ref": "#/$defs/sha256"},
+        "input_digest": {"$ref": "#/$defs/sha256"}, "policy_digest": {"$ref": "#/$defs/sha256"},
+        "components": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/provider_input_component"}},
+        "total_chars": {"type": "integer", "minimum": 0}, "total_bytes": {"type": "integer", "minimum": 0},
+        "safety_limit_chars": {"type": "integer", "minimum": 1}, "safety_limit_bytes": {"type": "integer", "minimum": 1},
+        "technical_limit_chars": {"type": ["integer", "null"], "minimum": 1}, "technical_limit_bytes": {"type": ["integer", "null"], "minimum": 1},
+        "technical_limit_source": {"type": ["string", "null"], "minLength": 1},
+        "effective_limit_chars": {"type": "integer", "minimum": 1}, "effective_limit_bytes": {"type": "integer", "minimum": 1},
+        "allowed": {"type": "boolean"}, "violated_dimensions": {"type": "array", "uniqueItems": true, "items": {"enum": ["chars", "bytes"]}},
+        "char_overage": {"type": "integer", "minimum": 0}, "byte_overage": {"type": "integer", "minimum": 0}, "largest_component": {"$ref": "#/$defs/identifier"}
+      }
+    },
+    "final_review_preflight": {
+      "type": "object", "additionalProperties": false,
+      "required": ["provider", "role", "operation", "work_unit_id", "transition_fingerprint", "relevant_record_head", "measurement_record_id", "outcome", "category", "error_code", "affected_record_ids", "affected_paths", "remediation"],
+      "properties": {
+        "provider": {"enum": ["codex", "claude", "antigravity"]}, "role": {"enum": ["codex", "claude", "antigravity"]},
+        "operation": {"$ref": "#/$defs/identifier"}, "work_unit_id": {"$ref": "#/$defs/identifier"},
+        "transition_fingerprint": {"$ref": "#/$defs/sha256"}, "relevant_record_head": {"$ref": "#/$defs/sha256"},
+        "measurement_record_id": {"$ref": "#/$defs/identifier"}, "outcome": {"enum": ["passed", "denied"]},
+        "category": {"enum": ["technical", "correction_required", null]}, "error_code": {"oneOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]},
+        "affected_record_ids": {"$ref": "#/$defs/identifiers"}, "affected_paths": {"$ref": "#/$defs/paths"},
+        "remediation": {"type": ["string", "null"], "minLength": 1}
+      }
     },
     "transient_retry": {
       "type": "object", "additionalProperties": false, "required": ["role", "repository_fingerprint", "retry_at", "attempt"],

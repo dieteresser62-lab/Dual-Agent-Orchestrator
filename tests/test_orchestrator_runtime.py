@@ -52,6 +52,7 @@ from workflow_state import (
     init_workflow_state,
 )
 from workflow_state import AgentFailureKind
+from provider_input_budget import default_provider_input_budget_policy
 
 
 def _git(root: Path, *args: str) -> str:
@@ -59,6 +60,29 @@ def _git(root: Path, *args: str) -> str:
         ["git", *args], cwd=root, capture_output=True, text=True, check=True
     )
     return result.stdout.strip()
+
+
+def test_every_orchestrated_agent_step_has_a_provider_input_budget_rule() -> None:
+    policy = default_provider_input_budget_policy()
+    operations = {
+        "codex": (
+            WorkflowStep.CODEX_PLAN, WorkflowStep.CODEX_PLAN_REVISION,
+            WorkflowStep.CODEX_IMPLEMENTATION, WorkflowStep.CODEX_CORRECTION,
+            WorkflowStep.CODEX_FINAL_REVIEW, WorkflowStep.CODEX_FINAL_CORRECTION,
+        ),
+        "claude": (
+            WorkflowStep.CLAUDE_PLAN_REVIEW, WorkflowStep.CLAUDE_SLICE_REVIEW,
+            WorkflowStep.CLAUDE_FINAL_REVIEW,
+        ),
+        "antigravity": (
+            WorkflowStep.ANTIGRAVITY_PLAN_REVIEW, WorkflowStep.ANTIGRAVITY_SLICE_REVIEW,
+            WorkflowStep.ANTIGRAVITY_FINAL_REVIEW,
+        ),
+    }
+
+    for provider, steps in operations.items():
+        for step in steps:
+            assert policy.select(provider, provider, step.value).operation == step.value
 
 
 def _repository(tmp_path: Path, branch: str) -> Path:

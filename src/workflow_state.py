@@ -117,6 +117,7 @@ class GateReason(str, Enum):
     PLAN_APPROVAL = "plan_approval"
     QUOTA = "quota"
     INSTANCE_FAILURE = "instance_failure"
+    BOOTSTRAP_CHECK = "bootstrap_check"
 
 
 class AgentFailureKind(str, Enum):
@@ -712,12 +713,12 @@ class WorkUnitRecord:
             WorkUnitStatus.WAITING_FOR_RETRY,
             WorkUnitStatus.AWAITING_RESUME,
         }:
-            if not self.invocation_failures:
+            if not self.invocation_failures and self.gate.reason is not GateReason.BOOTSTRAP_CHECK:
                 raise WorkflowStateValidationError(
                     "an invocation halt requires persisted failure evidence"
                 )
-            latest = self.invocation_failures[-1]
-            if latest.step is not self.current_step:
+            latest = self.invocation_failures[-1] if self.invocation_failures else None
+            if latest is not None and latest.step is not self.current_step:
                 raise WorkflowStateValidationError(
                     "invocation halt must preserve the failed workflow step"
                 )
@@ -731,7 +732,7 @@ class WorkUnitRecord:
                     raise WorkflowStateValidationError(
                         "instance-failure gate cannot carry a quota failure"
                     )
-            else:
+            elif self.gate.reason is not GateReason.BOOTSTRAP_CHECK:
                 raise WorkflowStateValidationError(
                     "invocation halt requires quota or instance_failure reason"
                 )
@@ -918,6 +919,56 @@ class ResumeCursor:
 
 
 @dataclass(frozen=True)
+class BootstrapCheckFact:
+    check_kind: str
+    transition_fingerprint: str
+    provider: str
+    role: str
+    operation: str
+    work_unit_id: int
+    semantic_digest: str
+    decision: str
+    error_code: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.check_kind not in {"provider_input_measurement", "final_review_preflight"}:
+            raise WorkflowStateValidationError("bootstrap check kind is invalid")
+        for value, label in ((self.transition_fingerprint, "bootstrap transition fingerprint"), (self.semantic_digest, "bootstrap semantic digest")):
+            if not SHA256_PATTERN.fullmatch(value):
+                raise WorkflowStateValidationError(f"{label} must be a lowercase SHA-256 digest")
+        if self.provider not in {"codex", "claude", "antigravity"} or self.role != self.provider:
+            raise WorkflowStateValidationError("bootstrap provider and role are invalid")
+        _require_non_empty(self.operation, "bootstrap operation")
+        _require_positive_int(self.work_unit_id, "bootstrap work_unit_id")
+        if self.decision not in {"allowed", "denied", "passed"}:
+            raise WorkflowStateValidationError("bootstrap decision is invalid")
+        if self.decision == "denied" and self.error_code is None:
+            raise WorkflowStateValidationError("denied bootstrap fact requires error_code")
+        if self.error_code is not None:
+            _require_non_empty(self.error_code, "bootstrap error_code")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "check_kind": self.check_kind, "transition_fingerprint": self.transition_fingerprint,
+            "provider": self.provider, "role": self.role, "operation": self.operation,
+            "work_unit_id": self.work_unit_id, "semantic_digest": self.semantic_digest,
+            "decision": self.decision, "error_code": self.error_code,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: Mapping[str, Any]) -> "BootstrapCheckFact":
+        _require_exact_keys(raw, {"check_kind", "transition_fingerprint", "provider", "role", "operation", "work_unit_id", "semantic_digest", "decision", "error_code"}, "bootstrap check")
+        return cls(
+            _string(raw["check_kind"], "bootstrap check_kind"),
+            _string(raw["transition_fingerprint"], "bootstrap transition_fingerprint"),
+            _string(raw["provider"], "bootstrap provider"), _string(raw["role"], "bootstrap role"),
+            _string(raw["operation"], "bootstrap operation"), _positive_int(raw["work_unit_id"], "bootstrap work_unit_id"),
+            _string(raw["semantic_digest"], "bootstrap semantic_digest"), _string(raw["decision"], "bootstrap decision"),
+            _optional_string(raw["error_code"], "bootstrap error_code"),
+        )
+
+
+@dataclass(frozen=True)
 class WorkflowState:
     version: int
     run_id: str
@@ -941,6 +992,7 @@ class WorkflowState:
     audit_report_path: str | None = None
     target_branch: str | None = None
     protocol_binding: ProtocolBinding | None = None
+    bootstrap_checks: tuple[BootstrapCheckFact, ...] = ()
 
     def __post_init__(self) -> None:
         if self.version != STATE_VERSION:
@@ -1057,6 +1109,9 @@ class WorkflowState:
                 raise WorkflowStateValidationError(
                     "audit_report_path must be a canonical Markdown path directly below docs/internal"
                 )
+        keys = tuple((item.check_kind, item.transition_fingerprint) for item in self.bootstrap_checks)
+        if len(keys) != len(set(keys)):
+            raise WorkflowStateValidationError("bootstrap checks must be idempotently unique")
 
     @property
     def current_work_unit(self) -> WorkUnitRecord:
@@ -1778,6 +1833,7 @@ class WorkflowState:
             WorkUnitStatus.WAITING_FOR_RETRY if automatic_network else
             WorkUnitStatus.AWAITING_RESUME
         )
+
         slice_status = (
             SliceStatus.WAITING_FOR_QUOTA if automatic_quota else
             SliceStatus.WAITING_FOR_RETRY if automatic_network else
@@ -1816,6 +1872,25 @@ class WorkflowState:
         return self._replace_current_unit(
             updated_unit, slices=slices, updated_at=updated_at
         )
+
+    def with_bootstrap_check(self, fact: BootstrapCheckFact, *, updated_at: str | None = None) -> "WorkflowState":
+        existing = next((item for item in self.bootstrap_checks if (item.check_kind, item.transition_fingerprint) == (fact.check_kind, fact.transition_fingerprint)), None)
+        if existing is not None:
+            if existing != fact:
+                raise WorkflowStateValidationError("bootstrap idempotency conflict")
+            return self
+        return replace(self, bootstrap_checks=(*self.bootstrap_checks, fact), updated_at=updated_at or self.updated_at)
+
+    def await_bootstrap_resume(self, *, detail: str, fingerprint: str, updated_at: str | None = None) -> "WorkflowState":
+        current = self.current_work_unit
+        if current.status is WorkUnitStatus.AWAITING_RESUME:
+            if current.gate.reason is GateReason.BOOTSTRAP_CHECK and current.gate.fingerprint == fingerprint:
+                return self
+            raise WorkflowStateValidationError("cannot replace an unresolved bootstrap gate")
+        if current.status is not WorkUnitStatus.IN_PROGRESS:
+            raise WorkflowStateValidationError("only an in-progress work unit can enter bootstrap resume")
+        updated = replace(current, status=WorkUnitStatus.AWAITING_RESUME, gate=GateRecord(status=GateStatus.AWAITING_RESUME, reason=GateReason.BOOTSTRAP_CHECK, detail=detail, fingerprint=fingerprint, resume_step=current.current_step))
+        return self._replace_current_unit(updated, slices=self._slices_with_current_status(SliceStatus.AWAITING_RESUME), updated_at=updated_at)
 
     def resume_after_invocation_halt(
         self, *, updated_at: str | None = None
@@ -1953,6 +2028,7 @@ class WorkflowState:
             "protocol_binding": (
                 None if self.protocol_binding is None else self.protocol_binding.to_dict()
             ),
+            "bootstrap_checks": [item.to_dict() for item in self.bootstrap_checks],
         }
 
     @classmethod
@@ -1984,6 +2060,7 @@ class WorkflowState:
         protocol_keys = {*audit_keys, "protocol_binding"}
         plan_commit_keys = {*audit_keys, "approved_plan_commit"}
         plan_binding_keys = {*plan_commit_keys, "protocol_binding"}
+        bootstrap_keys = {*plan_binding_keys, "bootstrap_checks"}
         if set(raw) == legacy_keys:
             planned_slices: tuple[PlannedSlice, ...] = ()
             runtime_history = None
@@ -1996,7 +2073,9 @@ class WorkflowState:
             target_branch = None
             protocol_binding = None
         else:
-            raw_keys = frozenset(raw)
+            # ``bootstrap_checks`` is an additive optional mirror field.  Remove it
+            # for historical shape selection while validating its contents below.
+            raw_keys = frozenset(raw) - {"bootstrap_checks"}
             if raw_keys not in {
                 frozenset(previous_keys),
                 frozenset(current_keys),
@@ -2006,8 +2085,10 @@ class WorkflowState:
                     frozenset(protocol_keys),
                     frozenset(plan_commit_keys),
                     frozenset(plan_binding_keys),
+                    frozenset(bootstrap_keys),
                 }:
-                    _require_exact_keys(raw, plan_binding_keys, "workflow state")
+                    if raw_keys != frozenset(bootstrap_keys):
+                        _require_exact_keys(raw, plan_binding_keys, "workflow state")
             raw_plan = _list(raw["planned_slices"], "planned_slices")
             planned: list[PlannedSlice] = []
             for index, item in enumerate(raw_plan):
@@ -2063,6 +2144,7 @@ class WorkflowState:
                         frozenset(protocol_keys),
                         frozenset(plan_commit_keys),
                         frozenset(plan_binding_keys),
+                        frozenset(bootstrap_keys),
                     }
                     else None
                 )
@@ -2078,6 +2160,12 @@ class WorkflowState:
                     _mapping(binding_raw, "protocol_binding")
                 )
             )
+            bootstrap_checks = tuple(
+                BootstrapCheckFact.from_dict(_mapping(item, f"bootstrap_checks[{index}]"))
+                for index, item in enumerate(_list(raw.get("bootstrap_checks", []), "bootstrap_checks"))
+            )
+        if set(raw) == legacy_keys:
+            bootstrap_checks = ()
         slices_raw = _list(raw["slices"], "slices")
         units_raw = _list(raw["work_units"], "work_units")
         return cls(
@@ -2107,6 +2195,7 @@ class WorkflowState:
             audit_report_path=audit_report_path,
             target_branch=target_branch,
             protocol_binding=protocol_binding,
+            bootstrap_checks=bootstrap_checks,
         )
 
 

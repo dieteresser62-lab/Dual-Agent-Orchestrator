@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+import hashlib
 from pathlib import Path
 
 from artifact_models import (
@@ -21,6 +22,9 @@ from artifact_models import (
     ValidationAttestationPayload,
     WorkUnitPayload,
     WorkflowCompletionPayload,
+    ProviderInputMeasurementPayload,
+    FinalReviewPreflightPayload,
+    canonical_json,
 )
 from artifact_store import ArtifactStore, ArtifactStoreError
 from workflow_state import (
@@ -282,6 +286,29 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
             "transient retries differ from state-v3",
             None if record is None else record.record_id,
         )
+
+    bootstrap_records = {
+        (
+            record.record_type.value,
+            record.payload.transition_fingerprint,
+        ): (
+            hashlib.sha256(canonical_json(asdict(record.payload))).hexdigest(),
+            record,
+        )
+        for record in chain
+        if isinstance(record.payload, (ProviderInputMeasurementPayload, FinalReviewPreflightPayload))
+    }
+    bootstrap_facts = {
+        (fact.check_kind, fact.transition_fingerprint): fact.semantic_digest
+        for fact in state.bootstrap_checks
+    }
+    if set(bootstrap_records) != set(bootstrap_facts):
+        differing = next(iter(set(bootstrap_records) ^ set(bootstrap_facts)), None)
+        record = bootstrap_records.get(differing, (None, None))[1] if differing is not None else None
+        raise mismatch("bootstrap checks differ from state-v3", None if record is None else record.record_id)
+    for key, (digest, record) in bootstrap_records.items():
+        if bootstrap_facts[key] != digest:
+            raise mismatch("bootstrap check payload differs from state-v3", record.record_id)
 
     for record in chain:
         if isinstance(record.payload, ResumeCheckPayload):

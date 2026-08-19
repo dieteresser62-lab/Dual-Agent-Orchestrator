@@ -30,6 +30,9 @@ from artifact_models import (
     ValidationResult,
     WorkUnitPayload,
     WorkflowCompletionPayload,
+    ProviderInputComponentPayload,
+    ProviderInputMeasurementPayload,
+    FinalReviewPreflightPayload,
     canonical_json,
     load_schema,
     validate_artifact_document,
@@ -70,6 +73,15 @@ def _record(payload, *, revision: int = 1) -> ArtifactRecord:  # type: ignore[no
     TransientRetryPayload(Role.ANTIGRAVITY, DIGEST, "2026-08-18T11:30:05Z", 1),
     ResumeCheckPayload("head-01", DIGEST, "matched"),
     WorkflowCompletionPayload("completed", "binding-final"),
+    ProviderInputMeasurementPayload(
+        Role.CODEX, Role.CODEX, "codex_final_review", "work-01", DIGEST, "b" * 64,
+        "c" * 64, "d" * 64, (ProviderInputComponentPayload("stdin_prompt", 3, 3),),
+        3, 3, 10, 10, None, None, None, 10, 10, True, (), 0, 0, "stdin_prompt",
+    ),
+    FinalReviewPreflightPayload(
+        Role.CODEX, Role.CODEX, "codex_final_review", "work-01", DIGEST, "b" * 64,
+        "measurement-01", "passed", None, None, (), (), None,
+    ),
 ])
 def payload(request):  # type: ignore[no-untyped-def]
     return request.param

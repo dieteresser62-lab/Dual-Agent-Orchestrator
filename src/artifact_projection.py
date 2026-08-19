@@ -21,6 +21,8 @@ from artifact_models import (
     TaskPayload,
     ValidationAttestationPayload,
     ValidationRequestPayload,
+    ProviderInputMeasurementPayload,
+    FinalReviewPreflightPayload,
     WorkUnitPayload,
     canonical_json,
 )
@@ -185,6 +187,23 @@ def render_artifact_sections(records: Sequence[ArtifactRecord]) -> Mapping[str, 
                     f"  - `{_safe(result.outcome)}` / Exit `{result.exit_code}` / "
                     f"Output `{result.output_sha256}`: {_command(result.command.argv, result.command.mode)}"
                 )
+        elif isinstance(payload, ProviderInputMeasurementPayload):
+            validations.append(
+                f"- {prefix}: Providerinput `{payload.provider.value}/{_safe(payload.operation)}` "
+                f"= `{'allowed' if payload.allowed else 'denied'}`; Zeichen "
+                f"`{payload.total_chars}/{payload.effective_limit_chars}`, Bytes "
+                f"`{payload.total_bytes}/{payload.effective_limit_bytes}`; Input "
+                f"`{payload.input_digest}`, Policy `{payload.policy_digest}`, Übergang "
+                f"`{payload.transition_fingerprint}`; technisches Limit "
+                f"`{payload.technical_limit_chars}/{payload.technical_limit_bytes}`"
+            )
+        elif isinstance(payload, FinalReviewPreflightPayload):
+            validations.append(
+                f"- {prefix}: Finalreview-Preflight `{_safe(payload.operation)}` = "
+                f"`{payload.outcome}`; Fehler `{_safe(payload.error_code or 'none')}`; "
+                f"Übergang `{payload.transition_fingerprint}`; Messung "
+                f"`{payload.measurement_record_id}`"
+            )
         elif isinstance(payload, GatePayload):
             gates.append(
                 f"- {prefix}: `{_safe(payload.gate_kind)}` = `{_safe(payload.decision)}` "
