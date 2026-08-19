@@ -14,7 +14,7 @@ from typing import Callable, Mapping, Sequence
 import tomllib
 
 from agent_config import AgentConfigError, add_agent_arguments, resolve_agent_settings
-from agent_runtime import QuotaWaitPolicy
+from agent_runtime import QuotaWaitPolicy, TransientRetryPolicy
 from gates import PathClasses, STOP_RULE_ID_PATTERN, StopRule
 from validation_matrix import (
     DEFAULT_VALIDATION_TIMEOUT_SECONDS,
@@ -390,7 +390,11 @@ def _read_state_for_auto_resume(state_file: Path) -> tuple[bool, bool, bool]:
             and bool(slices)
             and all(isinstance(item, dict) and item.get("status") == "completed" for item in slices)
         )
-        frozen = current.get("status") in {"waiting_for_quota", "awaiting_resume"}
+        frozen = current.get("status") in {
+            "waiting_for_quota",
+            "waiting_for_retry",
+            "awaiting_resume",
+        }
     else:
         completed = str(data.get("phase", "")).strip().lower() == "done"
         frozen = any(
@@ -572,6 +576,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="Quota-wait heartbeat interval in seconds (default: 300).",
     )
     parser.add_argument(
+        "--transient-retry-auto",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Automatically retry proven transient network failures (default: on).",
+    )
+    parser.add_argument(
+        "--transient-retry-initial-delay",
+        type=int,
+        default=None,
+        help="Initial transient retry delay in seconds (default: 5).",
+    )
+    parser.add_argument(
+        "--transient-retry-max-delay",
+        type=int,
+        default=None,
+        help="Maximum transient retry delay in seconds (default: 30).",
+    )
+    parser.add_argument(
+        "--transient-retry-max-auto-resumes",
+        type=int,
+        default=None,
+        help="Maximum automatic transient retries per role step (default: 2).",
+    )
+    parser.add_argument(
         "--agent-output",
         choices=["none", "summary", "full"],
         default="none",
@@ -721,6 +749,34 @@ def parse_args(
                 args.quota_heartbeat_interval,
                 "RUN_TASK_QUOTA_HEARTBEAT_INTERVAL",
                 quota_defaults.heartbeat_interval_seconds,
+            ),
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+
+    transient_defaults = TransientRetryPolicy()
+    transient_automatic = args.transient_retry_auto
+    if transient_automatic is None:
+        transient_automatic = _parse_env_bool("RUN_TASK_TRANSIENT_RETRY_AUTO", env)
+    if transient_automatic is None:
+        transient_automatic = transient_defaults.automatic
+    try:
+        args.transient_retry_policy = TransientRetryPolicy(
+            automatic=transient_automatic,
+            initial_delay_seconds=quota_int(
+                args.transient_retry_initial_delay,
+                "RUN_TASK_TRANSIENT_RETRY_INITIAL_DELAY",
+                transient_defaults.initial_delay_seconds,
+            ),
+            maximum_delay_seconds=quota_int(
+                args.transient_retry_max_delay,
+                "RUN_TASK_TRANSIENT_RETRY_MAX_DELAY",
+                transient_defaults.maximum_delay_seconds,
+            ),
+            maximum_auto_resumes=quota_int(
+                args.transient_retry_max_auto_resumes,
+                "RUN_TASK_TRANSIENT_RETRY_MAX_AUTO_RESUMES",
+                transient_defaults.maximum_auto_resumes,
             ),
         )
     except ValueError as exc:

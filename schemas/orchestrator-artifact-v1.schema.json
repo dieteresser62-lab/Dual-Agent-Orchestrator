@@ -8,7 +8,7 @@
   "properties": {
     "schema_version": {"const": "1"},
     "record_id": {"$ref": "#/$defs/identifier"},
-    "record_type": {"enum": ["task", "plan", "work_unit", "correction_work_unit", "agent_result", "diagnostic", "review", "finding_transition", "validation_request", "validation_attestation", "gate", "binding", "quota_pause", "resume_check", "workflow_completion"]},
+    "record_type": {"enum": ["task", "plan", "work_unit", "correction_work_unit", "agent_result", "diagnostic", "review", "finding_transition", "validation_request", "validation_attestation", "gate", "binding", "quota_pause", "transient_retry", "resume_check", "workflow_completion"]},
     "run_id": {"$ref": "#/$defs/identifier"},
     "logical_id": {"$ref": "#/$defs/identifier"},
     "revision": {"type": "integer", "minimum": 1},
@@ -33,6 +33,7 @@
     {"if": {"properties": {"record_type": {"const": "gate"}}}, "then": {"properties": {"status": {"const": "decided"}, "payload": {"$ref": "#/$defs/gate"}}}},
     {"if": {"properties": {"record_type": {"const": "binding"}}}, "then": {"properties": {"status": {"const": "bound"}, "payload": {"$ref": "#/$defs/binding"}}}},
     {"if": {"properties": {"record_type": {"const": "quota_pause"}}}, "then": {"properties": {"status": {"const": "paused"}, "payload": {"$ref": "#/$defs/quota_pause"}}}},
+    {"if": {"properties": {"record_type": {"const": "transient_retry"}}}, "then": {"properties": {"status": {"const": "waiting"}, "payload": {"$ref": "#/$defs/transient_retry"}}}},
     {"if": {"properties": {"record_type": {"const": "resume_check"}}}, "then": {"properties": {"status": {"const": "checked"}, "payload": {"$ref": "#/$defs/resume_check"}}}},
     {"if": {"properties": {"record_type": {"const": "workflow_completion"}}}, "then": {"properties": {"status": {"const": "completed"}, "payload": {"$ref": "#/$defs/workflow_completion"}}}}
   ],
@@ -117,6 +118,10 @@
     "quota_pause": {
       "type": "object", "additionalProperties": false, "required": ["role", "repository_fingerprint", "retry_at"],
       "properties": {"role": {"$ref": "#/$defs/role"}, "repository_fingerprint": {"$ref": "#/$defs/sha256"}, "retry_at": {"type": "string", "format": "date-time"}}
+    },
+    "transient_retry": {
+      "type": "object", "additionalProperties": false, "required": ["role", "repository_fingerprint", "retry_at", "attempt"],
+      "properties": {"role": {"$ref": "#/$defs/role"}, "repository_fingerprint": {"$ref": "#/$defs/sha256"}, "retry_at": {"type": "string", "format": "date-time"}, "attempt": {"type": "integer", "minimum": 1}}
     },
     "resume_check": {
       "type": "object", "additionalProperties": false, "required": ["expected_head_id", "repository_fingerprint", "outcome"],

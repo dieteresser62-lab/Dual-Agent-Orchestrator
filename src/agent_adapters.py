@@ -18,6 +18,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 REVIEW_HARNESS = Path(__file__).resolve().parent / "review_harness.py"
 CLAUDE_REVIEW_PACKET_CHUNK_CHARS = 24_000
 CLAUDE_REVIEW_RESPONSE_MAX_CHARS = 12_000
+ANTIGRAVITY_REVIEW_RESPONSE_MAX_CHARS = 12_000
 
 
 class AgentOutputError(RuntimeError):
@@ -29,9 +30,13 @@ class AgentOutputError(RuntimeError):
         *,
         provider_text: str | None = None,
         provider_data: dict[str, object] | None = None,
+        technical_text: str | None = None,
+        exit_code: int | None = None,
     ) -> None:
         self.provider_text = provider_text or message
         self.provider_data = provider_data
+        self.technical_text = technical_text or self.provider_text
+        self.exit_code = exit_code
         super().__init__(message)
 
 
@@ -493,7 +498,6 @@ class ClaudeAdapter(_BaseAdapter):
         return command, use_stdin
 
     def extract_output(self, stdout: str, stderr: str, extra_files: dict[str, str]) -> str:
-        _ = stderr
         _ = extra_files
         envelope = _json_object(stdout or "", self.name)
         self.metadata = {
@@ -571,6 +575,7 @@ class AntigravityAdapter(_BaseAdapter):
             "--print",
             "--add-dir",
             "--log-file",
+            "--json-schema",
         ),
     )
 
@@ -602,7 +607,24 @@ class AntigravityAdapter(_BaseAdapter):
             f"Read the complete request from {self._prompt_file} and follow it. "
             "The repository is read-only. Do not rerun full validation; inspect the supplied "
             "orchestrator validation evidence and spend the review budget on "
-            "adversarial implementation analysis."
+            "adversarial implementation analysis. Return only the requested contract in the "
+            "response field: no headings, no repeated analysis, and no description of planned "
+            "changes as if they were already implemented."
+        )
+        response_schema = json.dumps(
+            {
+                "type": "object",
+                "properties": {
+                    "response": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": ANTIGRAVITY_REVIEW_RESPONSE_MAX_CHARS,
+                    }
+                },
+                "required": ["response"],
+                "additionalProperties": False,
+            },
+            separators=(",", ":"),
         )
         command = [
             self.cli_binary,
@@ -621,6 +643,8 @@ class AntigravityAdapter(_BaseAdapter):
             str(runtime_dir),
             "--log-file",
             str(log_file),
+            "--json-schema",
+            response_schema,
             "--print",
             directive,
         ]
@@ -660,7 +684,6 @@ class AntigravityAdapter(_BaseAdapter):
         return command, use_stdin
 
     def extract_output(self, stdout: str, stderr: str, extra_files: dict[str, str]) -> str:
-        _ = stderr
         _ = extra_files
         envelope = _json_object(stdout or "", self.name)
         self.metadata = {
@@ -669,13 +692,48 @@ class AntigravityAdapter(_BaseAdapter):
             if key in envelope
         }
         if envelope.get("status") != "SUCCESS":
-            detail = envelope.get("response") or envelope.get("error") or "unknown JSON error"
+            status = str(envelope.get("status") or "UNKNOWN")
+            error = envelope.get("error")
+            technical_status = status.upper() in {
+                "RESOURCE_EXHAUSTED",
+                "RATE_LIMITED",
+                "UNAVAILABLE",
+                "NETWORK_ERROR",
+            }
+            response_detail = envelope.get("response") if technical_status else None
+            detail = str(error or stderr or response_detail or f"status={status}")[-1200:]
+            diagnostic = {
+                key: envelope[key]
+                for key in (
+                    "status",
+                    "error",
+                    "code",
+                    "conversation_id",
+                    "retry_after",
+                    "retry_after_seconds",
+                    "reset_at",
+                )
+                if key in envelope
+            }
             raise AgentOutputError(
                 f"antigravity returned non-success status: {detail}",
-                provider_text=str(detail),
-                provider_data=envelope,
+                provider_text=detail,
+                provider_data=diagnostic,
+                technical_text=detail,
             )
         response = envelope.get("response")
+        if isinstance(response, str):
+            try:
+                decoded = json.loads(response)
+            except json.JSONDecodeError:
+                pass
+            else:
+                if isinstance(decoded, dict):
+                    response = decoded.get("response")
+        elif isinstance(response, dict):
+            response = response.get("response")
+        if response is None and isinstance(envelope.get("structured_output"), dict):
+            response = envelope["structured_output"].get("response")
         if not isinstance(response, str) or not response.strip():
             raise AgentOutputError("antigravity JSON envelope has no non-empty response")
         return _trim_after_done_marker(response)

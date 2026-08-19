@@ -10,6 +10,7 @@ from agent_adapters import (
     AgentOutputError,
     AgentPermissionError,
     AntigravityAdapter,
+    ANTIGRAVITY_REVIEW_RESPONSE_MAX_CHARS,
     CLAUDE_REVIEW_PACKET_CHUNK_CHARS,
     ClaudeAdapter,
     CodexAdapter,
@@ -368,6 +369,10 @@ def test_antigravity_print_is_last_option_and_long_prompt_is_file_backed() -> No
         assert command[command.index("--model") + 1] == "gemini-model"
         assert command[command.index("--effort") + 1] == "high"
         assert command[command.index("--output-format") + 1] == "json"
+        schema = json.loads(command[command.index("--json-schema") + 1])
+        assert schema["properties"]["response"]["maxLength"] == (
+            ANTIGRAVITY_REVIEW_RESPONSE_MAX_CHARS
+        )
         assert command[command.index("--print-timeout") + 1] == "900s"
         assert "--sandbox" in command
         assert "--dangerously-skip-permissions" in command
@@ -443,12 +448,34 @@ def test_antigravity_json_envelope_requires_success_and_trims_chatter() -> None:
     )
     assert prefixed_fence.startswith("Unexpected preamble\n```text")
 
-    with pytest.raises(AgentOutputError, match="non-success"):
+    with pytest.raises(AgentOutputError, match="non-success") as exc_info:
         adapter.extract_output(
-            json.dumps({"status": "ERROR", "response": "permission denied"}),
+            json.dumps(
+                {
+                    "status": "ERROR",
+                    "error": "temporary network failure",
+                    "response": "REVIEWER: antigravity\nnetwork is a residual risk",
+                }
+            ),
             "",
             {},
         )
+    assert exc_info.value.provider_text == "temporary network failure"
+    assert "response" not in (exc_info.value.provider_data or {})
+
+    structured = adapter.extract_output(
+        json.dumps(
+            {
+                "status": "SUCCESS",
+                "response": json.dumps(
+                    {"response": "REVIEWER: antigravity\nSTATUS: DONE"}
+                ),
+            }
+        ),
+        "",
+        {},
+    )
+    assert structured.startswith("REVIEWER: antigravity")
 
 
 @pytest.mark.parametrize(

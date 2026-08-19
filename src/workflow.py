@@ -12,7 +12,9 @@ from typing import Callable, Protocol
 from agent_runtime import (
     AgentInvocationError,
     QuotaWaitPolicy,
+    TransientRetryPolicy,
     wait_until_quota_resume,
+    wait_until_transient_retry,
 )
 
 from audit_trail import (
@@ -396,6 +398,7 @@ class WorkflowContext:
     retry_incomplete_validation: bool = False
     retry_failed_validation: bool = False
     quota_wait_policy: QuotaWaitPolicy = QuotaWaitPolicy()
+    transient_retry_policy: TransientRetryPolicy = TransientRetryPolicy()
     require_slice_plan: bool = False
     dynamic_test_scope: bool = False
     plan_gate: bool = False
@@ -448,6 +451,8 @@ class WorkflowContext:
             raise ValueError("retry_failed_validation must be a boolean")
         if not isinstance(self.quota_wait_policy, QuotaWaitPolicy):
             raise ValueError("quota_wait_policy must be a QuotaWaitPolicy")
+        if not isinstance(self.transient_retry_policy, TransientRetryPolicy):
+            raise ValueError("transient_retry_policy must be a TransientRetryPolicy")
         if not isinstance(self.require_slice_plan, bool):
             raise ValueError("require_slice_plan must be a boolean")
         if not isinstance(self.dynamic_test_scope, bool):
@@ -1936,20 +1941,32 @@ class WorkflowEngine:
                 if not failure.automatic_resume:
                     return state, None
                 assert failure.resume_at_utc is not None
-                wait_until_quota_resume(
-                    role=role.value,
-                    task_label=state.task_file,
-                    work_unit_id=state.current_work_unit_id,
-                    resume_at_utc=datetime.fromisoformat(
-                        failure.resume_at_utc.replace("Z", "+00:00")
-                    ),
-                    heartbeat_interval_seconds=(
-                        context.quota_wait_policy.heartbeat_interval_seconds
-                    ),
-                    now_fn=self.now_fn,
-                    sleep_fn=self.sleep_fn,
-                    heartbeat_fn=self.heartbeat_fn,
+                resume_at = datetime.fromisoformat(
+                    failure.resume_at_utc.replace("Z", "+00:00")
                 )
+                if failure.failure_kind is AgentFailureKind.QUOTA:
+                    wait_until_quota_resume(
+                        role=role.value,
+                        task_label=state.task_file,
+                        work_unit_id=state.current_work_unit_id,
+                        resume_at_utc=resume_at,
+                        heartbeat_interval_seconds=(
+                            context.quota_wait_policy.heartbeat_interval_seconds
+                        ),
+                        now_fn=self.now_fn,
+                        sleep_fn=self.sleep_fn,
+                        heartbeat_fn=self.heartbeat_fn,
+                    )
+                else:
+                    wait_until_transient_retry(
+                        role=role.value,
+                        task_label=state.task_file,
+                        work_unit_id=state.current_work_unit_id,
+                        resume_at_utc=resume_at,
+                        now_fn=self.now_fn,
+                        sleep_fn=self.sleep_fn,
+                        heartbeat_fn=self.heartbeat_fn,
+                    )
                 state = state.resume_after_invocation_halt()
                 state, halted = self._apply_pre_agent_policy_gates(state, context)
                 if not halted:
@@ -1980,38 +1997,55 @@ class WorkflowEngine:
         )
         prior_auto_resumes = sum(
             item.idempotency_key == key
-            and item.failure_kind is AgentFailureKind.QUOTA
+            and item.failure_kind is error.kind
             and item.automatic_resume
             for item in unit.invocation_failures
         )
-        policy = context.quota_wait_policy
+        quota_policy = context.quota_wait_policy
+        transient_policy = context.transient_retry_policy
         reset_at = error.quota_reset.reset_at_utc if error.quota_reset else None
-        resume_at = (
-            reset_at + timedelta(seconds=policy.safety_margin_seconds)
-            if reset_at is not None
-            else None
-        )
         now_value = self.now_fn()
         if now_value.tzinfo is None or now_value.utcoffset() is None:
             raise WorkflowExecutionError("quota clock must return a timezone-aware datetime")
         now_utc = now_value.astimezone(timezone.utc)
-        wait_seconds = (
-            max(0.0, (resume_at - now_utc).total_seconds())
-            if resume_at is not None
+        quota_resume_at = (
+            reset_at + timedelta(seconds=quota_policy.safety_margin_seconds)
+            if reset_at is not None
             else None
         )
-        automatic = (
+        wait_seconds = (
+            max(0.0, (quota_resume_at - now_utc).total_seconds())
+            if quota_resume_at is not None
+            else None
+        )
+        automatic_quota = (
             error.kind is AgentFailureKind.QUOTA
-            and policy.automatic
+            and quota_policy.automatic
             and reset_at is not None
             and (
                 unit.kind is WorkUnitKind.PLAN
                 or fingerprint is not None
             )
             and wait_seconds is not None
-            and wait_seconds <= policy.maximum_wait_seconds
-            and prior_auto_resumes < policy.maximum_auto_resumes
+            and wait_seconds <= quota_policy.maximum_wait_seconds
+            and prior_auto_resumes < quota_policy.maximum_auto_resumes
         )
+        automatic_network = (
+            error.kind is AgentFailureKind.NETWORK
+            and transient_policy.automatic
+            and (unit.kind is WorkUnitKind.PLAN or fingerprint is not None)
+            and prior_auto_resumes < transient_policy.maximum_auto_resumes
+        )
+        transient_delay = min(
+            transient_policy.maximum_delay_seconds,
+            transient_policy.initial_delay_seconds * (2 ** prior_auto_resumes),
+        )
+        resume_at = (
+            quota_resume_at if error.kind is AgentFailureKind.QUOTA else
+            now_utc + timedelta(seconds=transient_delay) if automatic_network else
+            None
+        )
+        automatic = automatic_quota or automatic_network
         record = InvocationFailureRecord(
             invocation_id=error.invocation_id,
             idempotency_key=key,
@@ -2033,7 +2067,9 @@ class WorkflowEngine:
             ),
             reset_at_utc=reset_at.isoformat() if reset_at is not None else None,
             resume_at_utc=resume_at.isoformat() if resume_at is not None else None,
-            safety_margin_seconds=policy.safety_margin_seconds,
+            safety_margin_seconds=(
+                quota_policy.safety_margin_seconds if automatic_quota else 0
+            ),
             auto_resume_count=prior_auto_resumes + (1 if automatic else 0),
             automatic_resume=automatic,
             diff_fingerprint=fingerprint,

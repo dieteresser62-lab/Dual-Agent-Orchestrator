@@ -83,6 +83,7 @@ class WorkUnitStatus(str, Enum):
     IN_PROGRESS = "in_progress"
     AWAITING_USER_DECISION = "awaiting_user_decision"
     WAITING_FOR_QUOTA = "waiting_for_quota"
+    WAITING_FOR_RETRY = "waiting_for_retry"
     AWAITING_RESUME = "awaiting_resume"
     COMPLETED = "completed"
 
@@ -92,6 +93,7 @@ class SliceStatus(str, Enum):
     IN_PROGRESS = "in_progress"
     AWAITING_USER_DECISION = "awaiting_user_decision"
     WAITING_FOR_QUOTA = "waiting_for_quota"
+    WAITING_FOR_RETRY = "waiting_for_retry"
     AWAITING_RESUME = "awaiting_resume"
     COMPLETED = "completed"
 
@@ -100,6 +102,7 @@ class GateStatus(str, Enum):
     CLEAR = "clear"
     AWAITING_USER_DECISION = "awaiting_user_decision"
     WAITING_FOR_QUOTA = "waiting_for_quota"
+    WAITING_FOR_RETRY = "waiting_for_retry"
     AWAITING_RESUME = "awaiting_resume"
 
 
@@ -231,15 +234,25 @@ class InvocationFailureRecord:
                 if parsed.utcoffset() != timezone.utc.utcoffset(parsed):
                     raise WorkflowStateValidationError(f"{label} must be normalized to UTC")
         has_reset = self.reset_at_utc is not None
-        if has_reset != (self.resume_at_utc is not None):
+        has_resume = self.resume_at_utc is not None
+        if has_reset and not has_resume:
             raise WorkflowStateValidationError(
-                "invocation failure reset and resume timestamps must be present together"
+                "invocation failure reset timestamp requires a resume timestamp"
             )
-        if self.automatic_resume and (
-            self.failure_kind is not AgentFailureKind.QUOTA or not has_reset
-        ):
+        if self.automatic_resume and not has_resume:
             raise WorkflowStateValidationError(
-                "automatic resume requires a quota failure with a reset timestamp"
+                "automatic resume requires a resume timestamp"
+            )
+        if self.automatic_resume and self.failure_kind not in {
+            AgentFailureKind.QUOTA,
+            AgentFailureKind.NETWORK,
+        }:
+            raise WorkflowStateValidationError(
+                "automatic resume is limited to quota and network failures"
+            )
+        if self.failure_kind is AgentFailureKind.QUOTA and self.automatic_resume and not has_reset:
+            raise WorkflowStateValidationError(
+                "automatic quota resume requires a reset timestamp"
             )
         if self.failure_kind is not AgentFailureKind.QUOTA and any(
             value is not None
@@ -675,6 +688,7 @@ class WorkUnitRecord:
             WorkUnitStatus.COMPLETED: GateStatus.CLEAR,
             WorkUnitStatus.AWAITING_USER_DECISION: GateStatus.AWAITING_USER_DECISION,
             WorkUnitStatus.WAITING_FOR_QUOTA: GateStatus.WAITING_FOR_QUOTA,
+            WorkUnitStatus.WAITING_FOR_RETRY: GateStatus.WAITING_FOR_RETRY,
             WorkUnitStatus.AWAITING_RESUME: GateStatus.AWAITING_RESUME,
         }[self.status]
         if self.gate.status is not expected_gate_status:
@@ -693,7 +707,11 @@ class WorkUnitRecord:
             raise WorkflowStateValidationError(
                 "invocation failures must belong to their containing work unit and slice"
             )
-        if self.status in {WorkUnitStatus.WAITING_FOR_QUOTA, WorkUnitStatus.AWAITING_RESUME}:
+        if self.status in {
+            WorkUnitStatus.WAITING_FOR_QUOTA,
+            WorkUnitStatus.WAITING_FOR_RETRY,
+            WorkUnitStatus.AWAITING_RESUME,
+        }:
             if not self.invocation_failures:
                 raise WorkflowStateValidationError(
                     "an invocation halt requires persisted failure evidence"
@@ -1746,24 +1764,29 @@ class WorkflowState:
             raise WorkflowStateValidationError(
                 "invocation wait mode differs from persisted failure evidence"
             )
-        if wait_automatically and failure.failure_kind is not AgentFailureKind.QUOTA:
+        if wait_automatically and failure.failure_kind not in {
+            AgentFailureKind.QUOTA,
+            AgentFailureKind.NETWORK,
+        }:
             raise WorkflowStateValidationError(
-                "only quota failures may wait automatically"
+                "only quota and network failures may wait automatically"
             )
+        automatic_quota = wait_automatically and failure.failure_kind is AgentFailureKind.QUOTA
+        automatic_network = wait_automatically and failure.failure_kind is AgentFailureKind.NETWORK
         status = (
-            WorkUnitStatus.WAITING_FOR_QUOTA
-            if wait_automatically
-            else WorkUnitStatus.AWAITING_RESUME
+            WorkUnitStatus.WAITING_FOR_QUOTA if automatic_quota else
+            WorkUnitStatus.WAITING_FOR_RETRY if automatic_network else
+            WorkUnitStatus.AWAITING_RESUME
         )
         slice_status = (
-            SliceStatus.WAITING_FOR_QUOTA
-            if wait_automatically
-            else SliceStatus.AWAITING_RESUME
+            SliceStatus.WAITING_FOR_QUOTA if automatic_quota else
+            SliceStatus.WAITING_FOR_RETRY if automatic_network else
+            SliceStatus.AWAITING_RESUME
         )
         gate_status = (
-            GateStatus.WAITING_FOR_QUOTA
-            if wait_automatically
-            else GateStatus.AWAITING_RESUME
+            GateStatus.WAITING_FOR_QUOTA if automatic_quota else
+            GateStatus.WAITING_FOR_RETRY if automatic_network else
+            GateStatus.AWAITING_RESUME
         )
         reason = (
             GateReason.QUOTA
@@ -1801,6 +1824,7 @@ class WorkflowState:
         current = self.current_work_unit
         if current.status not in {
             WorkUnitStatus.WAITING_FOR_QUOTA,
+            WorkUnitStatus.WAITING_FOR_RETRY,
             WorkUnitStatus.AWAITING_RESUME,
         }:
             raise WorkflowStateValidationError(

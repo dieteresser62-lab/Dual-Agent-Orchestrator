@@ -17,12 +17,19 @@ from artifact_models import (
     ReviewPayload,
     ResumeCheckPayload,
     TaskPayload,
+    TransientRetryPayload,
     ValidationAttestationPayload,
     WorkUnitPayload,
     WorkflowCompletionPayload,
 )
 from artifact_store import ArtifactStore, ArtifactStoreError
-from workflow_state import ProtocolMode, WorkflowState, WorkflowStep, WorkUnitKind
+from workflow_state import (
+    AgentFailureKind,
+    ProtocolMode,
+    WorkflowState,
+    WorkflowStep,
+    WorkUnitKind,
+)
 
 
 class ArtifactResumeError(ValueError):
@@ -219,7 +226,11 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
         (failure.role, failure.diff_fingerprint, failure.resume_at_utc)
         for unit in state.work_units
         for failure in unit.invocation_failures
-        if failure.diff_fingerprint is not None and failure.resume_at_utc is not None
+        if (
+            failure.failure_kind is AgentFailureKind.QUOTA
+            and failure.diff_fingerprint is not None
+            and failure.resume_at_utc is not None
+        )
     }
     quota_records = {
         (
@@ -235,6 +246,40 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
         record = quota_records.get(differing) if differing is not None else None
         raise mismatch(
             "quota pauses differ from state-v3",
+            None if record is None else record.record_id,
+        )
+
+    transient_facts = {
+        (
+            failure.role,
+            failure.diff_fingerprint,
+            failure.resume_at_utc,
+            failure.auto_resume_count,
+        )
+        for unit in state.work_units
+        for failure in unit.invocation_failures
+        if (
+            failure.failure_kind is AgentFailureKind.NETWORK
+            and failure.automatic_resume
+            and failure.diff_fingerprint is not None
+            and failure.resume_at_utc is not None
+        )
+    }
+    transient_records = {
+        (
+            record.payload.role.value,
+            record.payload.repository_fingerprint,
+            record.payload.retry_at,
+            record.payload.attempt,
+        ): record
+        for record in chain
+        if isinstance(record.payload, TransientRetryPayload)
+    }
+    if set(transient_records) != transient_facts:
+        differing = next(iter(set(transient_records) ^ transient_facts), None)
+        record = transient_records.get(differing) if differing is not None else None
+        raise mismatch(
+            "transient retries differ from state-v3",
             None if record is None else record.record_id,
         )
 

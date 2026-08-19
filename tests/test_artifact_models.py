@@ -24,6 +24,7 @@ from artifact_models import (
     Role,
     SliceSpec,
     TaskPayload,
+    TransientRetryPayload,
     ValidationAttestationPayload,
     ValidationRequestPayload,
     ValidationResult,
@@ -66,6 +67,7 @@ def _record(payload, *, revision: int = 1) -> ArtifactRecord:  # type: ignore[no
     GatePayload("manual-plan", "approved", Role.USER, "explicit approval"),
     BindingPayload("implementation_handoff", "ec40aa3", "attestation-01", ("review-claude", "review-antigravity")),
     QuotaPausePayload(Role.CLAUDE, DIGEST, "2026-08-18T11:30:00Z"),
+    TransientRetryPayload(Role.ANTIGRAVITY, DIGEST, "2026-08-18T11:30:05Z", 1),
     ResumeCheckPayload("head-01", DIGEST, "matched"),
     WorkflowCompletionPayload("completed", "binding-final"),
 ])

@@ -1835,6 +1835,9 @@ def test_production_session_plans_commits_two_slices_and_persists_final_state(
     monkeypatch.setattr(ProductionWorkflowDriver, "invoke_reviewer", reviewer)
     monkeypatch.chdir(repository)
     args = _args(repository, task)
+    args.transient_retry_policy = replace(
+        args.transient_retry_policy, automatic=False
+    )
 
     halted = run_production_workflow(task, args)
     assert halted.exit_code == 3

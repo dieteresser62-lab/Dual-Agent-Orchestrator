@@ -335,6 +335,10 @@ Für deterministische Negativ- und Fortsetzungsszenarien kann ein State-v3-JSON-
 | `--quota-max-wait <seconds>` | `86400` | Maximale automatische Wartezeit. |
 | `--quota-max-auto-resumes <count>` | `1` | Automatische Fortsetzungen je blockiertem Rollenschritt. |
 | `--quota-heartbeat-interval <seconds>` | `300` | Heartbeat-Intervall während des Quotawartens. |
+| `--transient-retry-auto` / `--no-transient-retry-auto` | an | Eindeutig technische Netzwerkfehler desselben Rollenschritts automatisch wiederholen. |
+| `--transient-retry-initial-delay <seconds>` | `5` | Wartezeit vor dem ersten transienten Netzwerk-Neuversuch. |
+| `--transient-retry-max-delay <seconds>` | `30` | Obergrenze für die exponentielle Wartezeit. |
+| `--transient-retry-max-auto-resumes <count>` | `2` | Maximale automatische Netzwerk-Neuversuche je Rollenschritt. |
 
 ### Agentenausgabe und Rollenkonfiguration
 
@@ -435,7 +439,16 @@ RUN_TASK_TEST_CMD="python3 -m pytest tests/ -v" ./run_task
 RUN_TASK_SKIP_GIT_CHECK=0 ./run_task --watch
 RUN_TASK_WATCH_STREAM_CHANNELS=both ./run_task --watch
 RUN_TASK_QUOTA_AUTO_RESUME=0 ./run_task
+RUN_TASK_TRANSIENT_RETRY_AUTO=0 ./run_task
+RUN_TASK_TRANSIENT_RETRY_INITIAL_DELAY=5 RUN_TASK_TRANSIENT_RETRY_MAX_DELAY=30 \
+  RUN_TASK_TRANSIENT_RETRY_MAX_AUTO_RESUMES=2 ./run_task
 ```
+
+Technische Provider-Envelopes und Agentenantworten werden getrennt ausgewertet. Wörter
+wie `network`, `quota` oder `auth` innerhalb einer fachlichen Reviewantwort dürfen daher
+keine technische Fehlerklasse auslösen. Automatische transiente Neuversuche gelten nur
+für belegte Netzwerkdiagnosen; Auth-, Runtime-, Output- und Prozessfehler halten weiterhin
+fortsetzbar an.
 
 ## Agentenanweisungen und Ausgabevertrag
 

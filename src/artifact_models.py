@@ -41,6 +41,7 @@ class RecordType(StrEnum):
     GATE = "gate"
     BINDING = "binding"
     QUOTA_PAUSE = "quota_pause"
+    TRANSIENT_RETRY = "transient_retry"
     RESUME_CHECK = "resume_check"
     WORKFLOW_COMPLETION = "workflow_completion"
 
@@ -340,6 +341,22 @@ class QuotaPausePayload:
 
 
 @dataclass(frozen=True, slots=True)
+class TransientRetryPayload:
+    role: Role
+    repository_fingerprint: str
+    retry_at: str
+    attempt: int
+    status: ClassVar[str] = "waiting"
+    record_type: ClassVar[RecordType] = RecordType.TRANSIENT_RETRY
+
+    def __post_init__(self) -> None:
+        _require_sha256(self.repository_fingerprint, "repository_fingerprint")
+        _require_timestamp(self.retry_at, "retry_at")
+        if isinstance(self.attempt, bool) or not isinstance(self.attempt, int) or self.attempt < 1:
+            raise ArtifactValidationError("transient retry attempt must be positive")
+
+
+@dataclass(frozen=True, slots=True)
 class ResumeCheckPayload:
     expected_head_id: str
     repository_fingerprint: str
@@ -374,7 +391,8 @@ ArtifactPayload: TypeAlias = (
     TaskPayload | PlanPayload | WorkUnitPayload | CorrectionWorkUnitPayload
     | AgentResultPayload | DiagnosticPayload | ReviewPayload | FindingTransitionPayload
     | ValidationRequestPayload | ValidationAttestationPayload | GatePayload | BindingPayload
-    | QuotaPausePayload | ResumeCheckPayload | WorkflowCompletionPayload
+    | QuotaPausePayload | TransientRetryPayload | ResumeCheckPayload
+    | WorkflowCompletionPayload
 )
 
 
@@ -732,6 +750,13 @@ def _payload_from_dict(record_type: RecordType, raw: Mapping[str, Any]) -> Artif
         return BindingPayload(data["binding_kind"], data["target"], data["attestation_id"], tuple(data["approval_ids"]))
     if record_type is RecordType.QUOTA_PAUSE:
         return QuotaPausePayload(Role(data["role"]), data["repository_fingerprint"], data["retry_at"])
+    if record_type is RecordType.TRANSIENT_RETRY:
+        return TransientRetryPayload(
+            Role(data["role"]),
+            data["repository_fingerprint"],
+            data["retry_at"],
+            data["attempt"],
+        )
     if record_type is RecordType.RESUME_CHECK:
         return ResumeCheckPayload(data["expected_head_id"], data["repository_fingerprint"], data["outcome"])
     if record_type is RecordType.WORKFLOW_COMPLETION:

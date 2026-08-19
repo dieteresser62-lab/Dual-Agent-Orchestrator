@@ -10,7 +10,13 @@ import pytest
 import orchestrator
 from audit_trail import ReviewAuditEvent, ValidationAuditEvent
 from artifact_bridge import ArtifactBridge, attestation_payload
-from artifact_models import QuotaPausePayload, RecordType, ReviewPayload, Role
+from artifact_models import (
+    QuotaPausePayload,
+    RecordType,
+    ReviewPayload,
+    Role,
+    TransientRetryPayload,
+)
 from artifact_store import ArtifactStore
 from contracts import (
     AgentRole,
@@ -200,6 +206,73 @@ def test_automatic_quota_pause_persists_matching_chain_record_and_resumes(
             record
             for record in ArtifactStore(repository, paused.run_id).load_chain()
             if isinstance(record.payload, QuotaPausePayload)
+        )
+    ) == 1
+
+
+def test_automatic_network_retry_uses_its_own_chain_record_idempotently(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/structured-regression")
+    state = _state(repository, "structured-network-retry")
+    head = _git(repository, "rev-parse", "HEAD")
+    state = state.complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CLAUDE_SLICE_REVIEW,
+    ).bind_current_slice_git_boundary(
+        start_commit=head,
+        scope_paths=("src/runtime.py",),
+        start_fingerprint="b" * 64,
+    )
+    failure = InvocationFailureRecord(
+        invocation_id="network-retry-1",
+        idempotency_key=(
+            f"{state.run_id}:{state.current_work_unit_id}:"
+            f"{state.current_step.value}:claude"
+        ),
+        role="claude",
+        failure_kind=AgentFailureKind.NETWORK,
+        provider_text="HTTP 529 overloaded",
+        received_at=datetime(2026, 8, 18, 10, 0, tzinfo=timezone.utc).isoformat(),
+        step=state.current_step,
+        slice_id=state.current_slice_id,
+        work_unit_id=state.current_work_unit_id,
+        diagnostic_exit_code=3,
+        resume_at_utc=datetime(2026, 8, 18, 10, 0, 5, tzinfo=timezone.utc).isoformat(),
+        auto_resume_count=1,
+        automatic_resume=True,
+        diff_fingerprint="c" * 64,
+    )
+    waiting = state.record_invocation_failure(failure, wait_automatically=True)
+    driver = _driver(repository)
+
+    driver.checkpoint(waiting, WorkflowHistory(waiting.current_work_unit_id))
+
+    chain = ArtifactStore(repository, waiting.run_id).load_chain()
+    retry_records = tuple(
+        record for record in chain if isinstance(record.payload, TransientRetryPayload)
+    )
+    assert len(retry_records) == 1
+    assert retry_records[0].payload == TransientRetryPayload(
+        role=Role.CLAUDE,
+        repository_fingerprint="c" * 64,
+        retry_at=failure.resume_at_utc,
+        attempt=1,
+    )
+    assert not any(isinstance(record.payload, QuotaPausePayload) for record in chain)
+
+    assert driver.active_state is not None
+    resumed_state = driver.active_state.resume_after_invocation_halt()
+    driver.checkpoint(
+        resumed_state, WorkflowHistory(resumed_state.current_work_unit_id)
+    )
+    driver.assert_structured_decision_context()
+    assert len(
+        tuple(
+            record
+            for record in ArtifactStore(repository, waiting.run_id).load_chain()
+            if isinstance(record.payload, TransientRetryPayload)
         )
     ) == 1
 

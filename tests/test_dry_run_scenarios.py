@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from agent_runtime import TransientRetryPolicy
 from cli import ConfigError, parse_args, run_cli
 from contracts import AgentRole, AnchorRecord
 from dry_run_scenarios import (
@@ -918,6 +919,10 @@ def test_non_quota_instance_failure_scenarios_exit_three(
         ),
         validations=(),
         commits=(),
+        context=replace(
+            happy_scenario().context,
+            transient_retry_policy=TransientRetryPolicy(automatic=False),
+        ),
     )
     report = run(scenario, tmp_path)
 

@@ -21,7 +21,7 @@ from cli import (
     parse_args,
     run_cli,
 )
-from agent_runtime import QuotaWaitPolicy
+from agent_runtime import QuotaWaitPolicy, TransientRetryPolicy
 
 
 def _write_config(repo: Path, text: str) -> Path:
@@ -55,6 +55,10 @@ def _isolate_process_environment(monkeypatch) -> None:
         "RUN_TASK_QUOTA_MAX_WAIT",
         "RUN_TASK_QUOTA_MAX_AUTO_RESUMES",
         "RUN_TASK_QUOTA_HEARTBEAT_INTERVAL",
+        "RUN_TASK_TRANSIENT_RETRY_AUTO",
+        "RUN_TASK_TRANSIENT_RETRY_INITIAL_DELAY",
+        "RUN_TASK_TRANSIENT_RETRY_MAX_DELAY",
+        "RUN_TASK_TRANSIENT_RETRY_MAX_AUTO_RESUMES",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -133,6 +137,29 @@ def test_quota_wait_policy_uses_cli_then_environment_then_defaults(tmp_path: Pat
     assert overridden.quota_wait_policy.automatic is True
     assert overridden.quota_wait_policy.maximum_wait_seconds == 60
     assert overridden.quota_wait_policy.safety_margin_seconds == 12
+
+
+def test_transient_retry_policy_defaults_and_overrides(tmp_path: Path) -> None:
+    default = parse_args([], cwd=tmp_path, environ={})
+    environment = {
+        "RUN_TASK_TRANSIENT_RETRY_AUTO": "0",
+        "RUN_TASK_TRANSIENT_RETRY_INITIAL_DELAY": "7",
+        "RUN_TASK_TRANSIENT_RETRY_MAX_DELAY": "40",
+        "RUN_TASK_TRANSIENT_RETRY_MAX_AUTO_RESUMES": "3",
+    }
+    configured = parse_args(
+        ["--transient-retry-auto", "--transient-retry-max-delay", "20"],
+        cwd=tmp_path,
+        environ=environment,
+    )
+
+    assert default.transient_retry_policy == TransientRetryPolicy()
+    assert configured.transient_retry_policy == TransientRetryPolicy(
+        automatic=True,
+        initial_delay_seconds=7,
+        maximum_delay_seconds=20,
+        maximum_auto_resumes=3,
+    )
 
 
 @pytest.mark.parametrize(

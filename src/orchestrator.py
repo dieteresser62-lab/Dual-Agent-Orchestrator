@@ -27,7 +27,8 @@ from artifact_migration import ArtifactResumeError, resolve_resume_state
 from artifact_projection import ArtifactAuditProjection
 from artifact_models import (
     BindingPayload, CorrectionWorkUnitPayload, FingerprintKind, GatePayload,
-    QuotaPausePayload, ReviewPayload, Role, TaskPayload, WorkUnitPayload,
+    QuotaPausePayload, ReviewPayload, Role, TaskPayload, TransientRetryPayload,
+    WorkUnitPayload,
     WorkflowCompletionPayload,
 )
 from artifact_store import ArtifactStore
@@ -397,6 +398,22 @@ class ProductionWorkflowDriver(WorkflowDriver):
                     failure.diff_fingerprint is None
                     or failure.resume_at_utc is None
                 ):
+                    continue
+                if failure.failure_kind is AgentFailureKind.NETWORK:
+                    bridge.append(
+                        TransientRetryPayload(
+                            role=Role(failure.role),
+                            repository_fingerprint=failure.diff_fingerprint,
+                            retry_at=failure.resume_at_utc,
+                            attempt=failure.auto_resume_count,
+                        ),
+                        logical_id=f"transient-retry-{failure.invocation_id}",
+                        idempotency_key=f"transient-retry:{failure.invocation_id}",
+                        fingerprint_sha256=failure.diff_fingerprint,
+                        fingerprint_kind=FingerprintKind.IMPLEMENTATION,
+                    )
+                    continue
+                if failure.failure_kind is not AgentFailureKind.QUOTA:
                     continue
                 bridge.append(
                     QuotaPausePayload(
@@ -1627,6 +1644,7 @@ def _context(
         retry_incomplete_validation=bool(args.retry_incomplete_validation),
         retry_failed_validation=bool(args.retry_failed_validation),
         quota_wait_policy=args.quota_wait_policy,
+        transient_retry_policy=args.transient_retry_policy,
         require_slice_plan=state.current_work_unit.kind is WorkUnitKind.PLAN,
         dynamic_test_scope=True,
         plan_gate=bool(getattr(args, "plan_gate", False)),
@@ -2206,7 +2224,11 @@ def run_production_workflow(
     for _ in range(100):
         history = _history(state)
         current = state.current_work_unit
-        if current.status in {WorkUnitStatus.WAITING_FOR_QUOTA, WorkUnitStatus.AWAITING_RESUME}:
+        if current.status in {
+            WorkUnitStatus.WAITING_FOR_QUOTA,
+            WorkUnitStatus.WAITING_FOR_RETRY,
+            WorkUnitStatus.AWAITING_RESUME,
+        }:
             if not effective_resume:
                 return WorkflowRunResult(state, history)
             state = state.resume_after_invocation_halt()

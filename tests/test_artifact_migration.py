@@ -16,6 +16,7 @@ from artifact_models import (
     Role,
     SliceSpec,
     TaskPayload,
+    TransientRetryPayload,
     ValidationAttestationPayload,
     ValidationResult,
     WorkUnitPayload,
@@ -270,6 +271,82 @@ def test_structured_resume_halts_when_mirror_quota_pause_has_no_chain_record(
 
     with pytest.raises(ArtifactResumeError, match="quota pauses differ from state-v3"):
         resolve_resume_state(tmp_path, state)
+
+
+def test_structured_resume_halts_when_mirror_transient_retry_has_no_chain_record(
+    tmp_path: Path,
+) -> None:
+    state = _state(tmp_path)
+    _records(tmp_path, state)
+    failure = InvocationFailureRecord(
+        invocation_id="inv-network-mirror-only",
+        idempotency_key="resume-run:2:codex_implementation:claude",
+        role="claude",
+        failure_kind=AgentFailureKind.NETWORK,
+        provider_text="HTTP 529 overloaded",
+        received_at="2026-08-18T12:00:00+00:00",
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+        slice_id=1,
+        work_unit_id=2,
+        diagnostic_exit_code=3,
+        resume_at_utc="2026-08-18T12:00:05+00:00",
+        auto_resume_count=1,
+        automatic_resume=True,
+        diff_fingerprint="d" * 64,
+    )
+    state = state.record_invocation_failure(
+        failure,
+        wait_automatically=True,
+    ).resume_after_invocation_halt(updated_at="2026-08-18T12:00:05+00:00")
+
+    with pytest.raises(
+        ArtifactResumeError,
+        match="transient retries differ from state-v3",
+    ):
+        resolve_resume_state(tmp_path, state)
+
+
+def test_structured_resume_accepts_matching_transient_retry_record(
+    tmp_path: Path,
+) -> None:
+    state = _state(tmp_path)
+    _records(tmp_path, state)
+    failure = InvocationFailureRecord(
+        invocation_id="inv-network-mirrored",
+        idempotency_key="resume-run:2:codex_implementation:claude",
+        role="claude",
+        failure_kind=AgentFailureKind.NETWORK,
+        provider_text="HTTP 529 overloaded",
+        received_at="2026-08-18T12:00:00+00:00",
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+        slice_id=1,
+        work_unit_id=2,
+        diagnostic_exit_code=3,
+        resume_at_utc="2026-08-18T12:00:05+00:00",
+        auto_resume_count=1,
+        automatic_resume=True,
+        diff_fingerprint="d" * 64,
+    )
+    state = state.record_invocation_failure(
+        failure,
+        wait_automatically=True,
+    ).resume_after_invocation_halt(updated_at="2026-08-18T12:00:05+00:00")
+    ArtifactBridge(ArtifactStore(tmp_path, state.run_id)).append(
+        TransientRetryPayload(
+            role=Role.CLAUDE,
+            repository_fingerprint="d" * 64,
+            retry_at="2026-08-18T12:00:05+00:00",
+            attempt=1,
+        ),
+        logical_id="transient-retry-inv-network-mirrored",
+        idempotency_key="transient-retry:inv-network-mirrored",
+        fingerprint_sha256="d" * 64,
+        fingerprint_kind=FingerprintKind.IMPLEMENTATION,
+    )
+
+    resolved = resolve_resume_state(tmp_path, state)
+
+    assert resolved.state == state
 
 
 def test_structured_resume_halts_when_state_mirror_reports_completion_without_chain_record(

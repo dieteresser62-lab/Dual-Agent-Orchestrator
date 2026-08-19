@@ -24,6 +24,7 @@ from agent_adapters import (
     AgentAdapter,
     AgentBudgetError,
     AgentPermissionError,
+    AgentOutputError,
 )
 from path_policy import PathPolicyError, resolve_repository_path
 from repo_changes import RepositoryChanges
@@ -79,6 +80,8 @@ class AgentInvocationError(RuntimeError):
         received_at: datetime,
         exit_code: int | None = None,
         quota_reset: QuotaReset | None = None,
+        provider_data: Mapping[str, object] | None = None,
+        technical_text: str | None = None,
     ) -> None:
         self.agent_key = agent_key
         self.kind = kind
@@ -87,6 +90,8 @@ class AgentInvocationError(RuntimeError):
         self.received_at = received_at.astimezone(timezone.utc)
         self.process_exit_code = exit_code
         self.quota_reset = quota_reset
+        self.provider_data = dict(provider_data) if provider_data is not None else None
+        self.technical_text = technical_text or provider_text
         label = "quota/rate limit reached" if kind is AgentFailureKind.QUOTA else f"{kind.value} failure"
         super().__init__(
             f"{agent_key} {label} [invocation {invocation_id}]: {provider_text}"
@@ -102,6 +107,8 @@ class QuotaReachedError(AgentInvocationError):
         invocation_id: str = "legacy-quota",
         received_at: datetime | None = None,
         quota_reset: QuotaReset | None = None,
+        exit_code: int | None = None,
+        provider_data: Mapping[str, object] | None = None,
     ) -> None:
         super().__init__(
             agent_key=agent_key,
@@ -110,6 +117,9 @@ class QuotaReachedError(AgentInvocationError):
             provider_text=detail,
             received_at=received_at or datetime.now(timezone.utc),
             quota_reset=quota_reset,
+            exit_code=exit_code,
+            provider_data=provider_data,
+            technical_text=detail,
         )
 
 
@@ -157,6 +167,51 @@ class QuotaWaitPolicy:
             ):
                 qualifier = "non-negative" if allow_zero else "positive"
                 raise ValueError(f"{label} must be a {qualifier} integer")
+
+
+@dataclass(frozen=True)
+class TransientRetryPolicy:
+    automatic: bool = True
+    initial_delay_seconds: int = 5
+    maximum_delay_seconds: int = 30
+    maximum_auto_resumes: int = 2
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.automatic, bool):
+            raise ValueError("transient retry automatic policy must be a boolean")
+        for value, label, allow_zero in (
+            (self.initial_delay_seconds, "transient retry initial delay", False),
+            (self.maximum_delay_seconds, "transient retry maximum delay", False),
+            (self.maximum_auto_resumes, "transient retry maximum auto resumes", True),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value < (0 if allow_zero else 1):
+                qualifier = "non-negative" if allow_zero else "positive"
+                raise ValueError(f"{label} must be a {qualifier} integer")
+        if self.maximum_delay_seconds < self.initial_delay_seconds:
+            raise ValueError("transient retry maximum delay cannot be below initial delay")
+
+
+def wait_until_transient_retry(
+    *,
+    role: str,
+    task_label: str,
+    work_unit_id: int,
+    resume_at_utc: datetime,
+    now_fn: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    sleep_fn: Callable[[float], None] = time.sleep,
+    heartbeat_fn: Callable[[str], None] = logger.info,
+) -> None:
+    target = resume_at_utc.astimezone(timezone.utc)
+    now = now_fn().astimezone(timezone.utc)
+    remaining = max(0.0, (target - now).total_seconds())
+    if remaining <= 0:
+        return
+    heartbeat_fn(
+        "transient retry wait: "
+        f"role={role} task={task_label} work_unit={work_unit_id} "
+        f"resume_utc={target.isoformat()} remaining={int(remaining + 0.999)}s"
+    )
+    sleep_fn(remaining)
 
 
 def wait_until_quota_resume(
@@ -895,8 +950,13 @@ def run_agent(
 
         stdout = (result.stdout or "").strip()
         stderr = (result.stderr or "").strip()
-        adapter.validate_process_output(stderr)
-        output = adapter.extract_output(stdout, stderr, extra_files)
+        try:
+            adapter.validate_process_output(stderr)
+            output = adapter.extract_output(stdout, stderr, extra_files)
+        except AgentOutputError as exc:
+            if exc.exit_code is None:
+                exc.exit_code = result.returncode
+            raise
         if result.returncode != 0:
             error_text = stderr or output or "Unknown CLI error without output."
             raise AgentProcessError(error_text, exit_code=result.returncode)
@@ -1154,6 +1214,40 @@ def is_quota_or_rate_limit_error(text: str) -> bool:
     return any(marker in raw for marker in markers)
 
 
+_PROVIDER_DIAGNOSTIC_KEYS = frozenset(
+    {
+        "status",
+        "error",
+        "code",
+        "type",
+        "subtype",
+        "message",
+        "reset_at",
+        "resetAt",
+        "retry_after",
+        "retryAfter",
+        "retry_after_seconds",
+    }
+)
+
+
+def _sanitize_provider_diagnostic(value: object) -> dict[str, object] | None:
+    """Keep technical envelope facts while excluding model output and prompts."""
+    if not isinstance(value, Mapping):
+        return None
+    sanitized: dict[str, object] = {}
+    for key, child in value.items():
+        if key not in _PROVIDER_DIAGNOSTIC_KEYS:
+            continue
+        if isinstance(child, Mapping):
+            nested = _sanitize_provider_diagnostic(child)
+            if nested:
+                sanitized[str(key)] = nested
+        elif isinstance(child, (str, int, float, bool)) or child is None:
+            sanitized[str(key)] = child
+    return sanitized or None
+
+
 def classify_agent_failure(
     agent_key: str,
     exc: BaseException,
@@ -1164,21 +1258,23 @@ def classify_agent_failure(
     """Classify one failed invocation without retrying or substituting its role."""
     stamp = (received_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
     provider_text = str(getattr(exc, "provider_text", "") or str(exc) or type(exc).__name__)
-    provider_data = getattr(exc, "provider_data", None)
+    technical_text = str(getattr(exc, "technical_text", "") or provider_text)
+    raw_provider_data = getattr(exc, "provider_data", None)
+    provider_data = _sanitize_provider_diagnostic(raw_provider_data)
     process_exit_code = getattr(exc, "exit_code", None)
     kind_hint = getattr(exc, "kind_hint", None)
-    lowered = provider_text.lower()
+    lowered = technical_text.lower()
     structured_text = (
         json.dumps(provider_data, ensure_ascii=False, sort_keys=True)
         if isinstance(provider_data, Mapping)
         else ""
     )
-    if is_quota_or_rate_limit_error(provider_text) or is_quota_or_rate_limit_error(
+    if is_quota_or_rate_limit_error(technical_text) or is_quota_or_rate_limit_error(
         structured_text
     ):
         reset = parse_quota_reset(
             agent_key,
-            provider_text,
+            technical_text,
             received_at=stamp,
             provider_data=provider_data if isinstance(provider_data, Mapping) else None,
         )
@@ -1188,6 +1284,8 @@ def classify_agent_failure(
             invocation_id=invocation_id,
             received_at=stamp,
             quota_reset=reset,
+            exit_code=process_exit_code if isinstance(process_exit_code, int) else None,
+            provider_data=provider_data,
         )
     if isinstance(kind_hint, AgentFailureKind):
         kind = kind_hint
@@ -1214,6 +1312,8 @@ def classify_agent_failure(
         provider_text=provider_text,
         received_at=stamp,
         exit_code=process_exit_code if isinstance(process_exit_code, int) else None,
+        provider_data=provider_data,
+        technical_text=technical_text,
     )
 
 
@@ -1355,6 +1455,7 @@ def run_agent_checked(
                         "failure_kind": failure.kind.value,
                         "invocation_id": failure.invocation_id,
                         "provider_text": failure.provider_text,
+                        "provider_diagnostic": failure.provider_data,
                         "received_at": failure.received_at.isoformat(),
                         "process_exit_code": failure.process_exit_code,
                         "quota_reset_at_utc": (

@@ -11,6 +11,7 @@ from agent_runtime import (
     AgentInvocationError,
     AgentProcessError,
     QuotaWaitPolicy,
+    TransientRetryPolicy,
     classify_agent_failure,
 )
 from audit_trail import ReviewAuditEvent, ValidationAuditEvent
@@ -375,6 +376,7 @@ class ScriptedContext:
     current_branch: str | None = None
     max_productive_files: int = 10
     quota_wait_policy: QuotaWaitPolicy = QuotaWaitPolicy()
+    transient_retry_policy: TransientRetryPolicy = TransientRetryPolicy()
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, object]) -> ScriptedContext:
@@ -385,6 +387,7 @@ class ScriptedContext:
                 "expected_test_files", "test_changes_approved", "manual_slice_gate",
                 "red_state_followup_slice", "current_branch", "max_productive_files",
                 "quota_wait_policy",
+                "transient_retry_policy",
             },
             "scenario.context",
         )
@@ -431,6 +434,39 @@ class ScriptedContext:
             )
         except ValueError as exc:
             raise DryRunScenarioError(str(exc)) from exc
+        transient_raw = raw.get("transient_retry_policy", {})
+        transient_table = _mapping(
+            transient_raw, "scenario.context.transient_retry_policy"
+        )
+        _require_exact_keys(
+            transient_table,
+            set(),
+            {
+                "automatic",
+                "initial_delay_seconds",
+                "maximum_delay_seconds",
+                "maximum_auto_resumes",
+            },
+            "scenario.context.transient_retry_policy",
+        )
+        transient_defaults = TransientRetryPolicy()
+        try:
+            transient = TransientRetryPolicy(
+                automatic=transient_table.get(
+                    "automatic", transient_defaults.automatic
+                ),
+                initial_delay_seconds=transient_table.get(
+                    "initial_delay_seconds", transient_defaults.initial_delay_seconds
+                ),
+                maximum_delay_seconds=transient_table.get(
+                    "maximum_delay_seconds", transient_defaults.maximum_delay_seconds
+                ),
+                maximum_auto_resumes=transient_table.get(
+                    "maximum_auto_resumes", transient_defaults.maximum_auto_resumes
+                ),
+            )
+        except ValueError as exc:
+            raise DryRunScenarioError(str(exc)) from exc
         return cls(
             expected_test_files=test_files,
             test_changes_approved=raw.get("test_changes_approved", True),
@@ -447,6 +483,7 @@ class ScriptedContext:
             ),
             max_productive_files=maximum,
             quota_wait_policy=quota,
+            transient_retry_policy=transient,
         )
 
 
@@ -1092,6 +1129,7 @@ def build_scenario_context(scenario: DryRunScenario) -> WorkflowContext:
         max_productive_files=configured.max_productive_files,
         red_state_followup_slice=configured.red_state_followup_slice,
         quota_wait_policy=configured.quota_wait_policy,
+        transient_retry_policy=configured.transient_retry_policy,
     )
 
 

@@ -5,7 +5,12 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from agent_runtime import AgentInvocationError, QuotaReset, QuotaWaitPolicy
+from agent_runtime import (
+    AgentInvocationError,
+    QuotaReset,
+    QuotaWaitPolicy,
+    TransientRetryPolicy,
+)
 
 from contracts import (
     AgentRole,
@@ -1191,7 +1196,10 @@ def test_instance_failure_stops_with_exit_three_and_manual_resume_same_step() ->
     )
     engine = WorkflowEngine(driver, now_fn=lambda: received)
 
-    halted = engine.run_current_work_unit(_slice_state(), _context())
+    manual_context = replace(
+        _context(), transient_retry_policy=TransientRetryPolicy(automatic=False)
+    )
+    halted = engine.run_current_work_unit(_slice_state(), manual_context)
 
     assert halted.exit_code == 3
     assert halted.state.current_step is WorkflowStep.CODEX_IMPLEMENTATION
@@ -1231,18 +1239,64 @@ def test_manual_resume_at_claude_does_not_repeat_codex_or_call_antigravity_early
     )
     engine = WorkflowEngine(driver, now_fn=lambda: received)
 
-    halted = engine.run_current_work_unit(_slice_state(), _context())
+    manual_context = replace(
+        _context(), transient_retry_policy=TransientRetryPolicy(automatic=False)
+    )
+    halted = engine.run_current_work_unit(_slice_state(), manual_context)
 
     assert halted.exit_code == 3
     assert halted.state.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
     assert [call.reviewer for call in driver.reviewer_calls] == [AgentRole.CLAUDE]
 
     completed = engine.run_current_work_unit(
-        halted.state.resume_after_invocation_halt(), _context(), halted.history
+        halted.state.resume_after_invocation_halt(), manual_context, halted.history
     )
 
     assert completed.completed
     assert len(driver.codex_calls) == 1
+    assert [call.reviewer for call in driver.reviewer_calls] == [
+        AgentRole.CLAUDE,
+        AgentRole.CLAUDE,
+        AgentRole.ANTIGRAVITY,
+    ]
+
+
+def test_transient_network_failure_retries_same_step_after_persisted_wait() -> None:
+    now = [datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)]
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[
+            _review_approval(AgentRole.CLAUDE),
+            _review_approval(AgentRole.ANTIGRAVITY),
+        ],
+        reviewer_failures=[
+            _invocation_failure(
+                AgentRole.CLAUDE,
+                AgentFailureKind.NETWORK,
+                "claude-network-auto",
+                received_at=now[0],
+            ),
+            None,
+        ],
+    )
+    sleeps: list[float] = []
+
+    def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        now[0] += timedelta(seconds=seconds)
+
+    result = WorkflowEngine(
+        driver, now_fn=lambda: now[0], sleep_fn=sleep
+    ).run_current_work_unit(_slice_state(), _context())
+
+    assert result.completed
+    assert sleeps == [5.0]
+    assert any(
+        item.current_work_unit.status is WorkUnitStatus.WAITING_FOR_RETRY
+        for item in driver.checkpoints
+    )
     assert [call.reviewer for call in driver.reviewer_calls] == [
         AgentRole.CLAUDE,
         AgentRole.CLAUDE,
@@ -3254,7 +3308,10 @@ def test_correction_resume_applies_file_limit_to_actual_diff_not_broad_allowlist
     )
     engine = WorkflowEngine(driver, now_fn=lambda: received)
 
-    halted = engine.run_final_review(_completed_single_slice_state(), _context())
+    manual_context = replace(
+        _context(), transient_retry_policy=TransientRetryPolicy(automatic=False)
+    )
+    halted = engine.run_final_review(_completed_single_slice_state(), manual_context)
 
     assert halted.exit_code == 3
     assert halted.state.current_work_unit.kind is WorkUnitKind.CORRECTION
@@ -3262,7 +3319,7 @@ def test_correction_resume_applies_file_limit_to_actual_diff_not_broad_allowlist
     assert "PRODUCTIVE-FILE-LIMIT" not in (halted.state.current_work_unit.gate.detail or "")
 
     completed = engine.run_current_work_unit(
-        halted.state.resume_after_invocation_halt(), _context(), halted.history
+        halted.state.resume_after_invocation_halt(), manual_context, halted.history
     )
 
     assert completed.completed

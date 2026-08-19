@@ -72,6 +72,7 @@ class WatchTaskResult:
         resumable = status in {
             WorkUnitStatus.AWAITING_USER_DECISION,
             WorkUnitStatus.WAITING_FOR_QUOTA,
+            WorkUnitStatus.WAITING_FOR_RETRY,
             WorkUnitStatus.AWAITING_RESUME,
         }
         if result.workflow_completed:

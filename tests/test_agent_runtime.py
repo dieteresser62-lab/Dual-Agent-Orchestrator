@@ -9,6 +9,7 @@ import agent_runtime
 from agent_adapters import (
     AGENT_REGISTRY,
     AgentBudgetError,
+    AgentOutputError,
     AgentPermissionError,
     AntigravityAdapter,
     CapabilitySpec,
@@ -23,6 +24,7 @@ from agent_runtime import (
     QuotaReachedError,
     check_git_clean,
     collect_file_snapshots,
+    classify_agent_failure,
     compute_retry_backoff_seconds,
     create_read_only_reviewer_workspace,
     preflight,
@@ -190,6 +192,44 @@ def test_run_agent_checked_does_not_retry_instance_failure(monkeypatch, tmp_path
     failure_logs = tuple(tmp_path.glob("unit.attempt-1.failure.json"))
     assert len(failure_logs) == 1
     assert exc_info.value.invocation_id in failure_logs[0].read_text(encoding="utf-8")
+
+
+def test_failure_classification_ignores_model_response_prose() -> None:
+    failure = classify_agent_failure(
+        "antigravity",
+        AgentOutputError(
+            "non-success envelope",
+            provider_text="status=ERROR",
+            technical_text="status=ERROR",
+            provider_data={
+                "status": "ERROR",
+                "response": "network quota 429 authentication are review risks",
+            },
+            exit_code=7,
+        ),
+        invocation_id="invocation-1",
+    )
+
+    assert failure.kind.value == "process"
+    assert failure.process_exit_code == 7
+    assert failure.provider_data == {"status": "ERROR"}
+
+
+def test_failure_classification_uses_technical_network_diagnostic() -> None:
+    failure = classify_agent_failure(
+        "antigravity",
+        AgentOutputError(
+            "non-success envelope",
+            provider_text="connection reset by peer",
+            technical_text="connection reset by peer",
+            provider_data={"status": "ERROR", "response": "valid review contract"},
+            exit_code=1,
+        ),
+        invocation_id="invocation-2",
+    )
+
+    assert failure.kind.value == "network"
+    assert "response" not in (failure.provider_data or {})
 
 
 def test_run_agent_checked_validation_error_backoff(monkeypatch, tmp_path: Path) -> None:
@@ -774,6 +814,55 @@ def test_run_agent_calls_adapter_cleanup_on_timeout(monkeypatch) -> None:
         assert False, "expected RuntimeError"
 
     assert adapter.cleaned is True
+
+
+def test_run_agent_preserves_exit_code_when_adapter_rejects_envelope(monkeypatch) -> None:
+    class RejectingAdapter:
+        name = "rejecting"
+        cli_binary = "rejecting"
+        model = "model"
+        effort = "medium"
+        timeout = 1
+        reviewer = False
+        env: dict[str, str] = {}
+        required_hosts: tuple[str, ...] = ()
+        capability = CapabilitySpec((), (), (r".*",), ())
+        capability_verified = True
+        metadata: dict[str, object] = {}
+
+        def build_command(self, prompt: str) -> tuple[list[str], bool]:
+            return ["rejecting-cli"], True
+
+        def extract_output(self, stdout: str, stderr: str, extra_files: dict[str, str]) -> str:
+            raise AgentOutputError(
+                "provider rejected envelope", technical_text="status=ERROR"
+            )
+
+        def stream_filter(self, channel: str, line: str, state: dict[str, str | bool]) -> bool:
+            return False
+
+        def validate_process_output(self, stderr: str) -> None:
+            return None
+
+        def cleanup(self) -> None:
+            return None
+
+    class Result:
+        returncode = 9
+        stdout = '{"status":"ERROR"}'
+        stderr = ""
+
+    monkeypatch.setattr(agent_runtime.subprocess, "run", lambda *args, **kwargs: Result())
+
+    with pytest.raises(AgentOutputError) as exc_info:
+        run_agent(
+            RejectingAdapter(),
+            "prompt",
+            config=OrchestratorConfig(dry_run=False, agent_live_stream=False),
+            shorten=lambda text, _limit: text or "",
+        )
+
+    assert exc_info.value.exit_code == 9
 
 
 def test_read_only_reviewer_workspace_blocks_writes_and_preserves_source(tmp_path: Path) -> None:
