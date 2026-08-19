@@ -588,9 +588,11 @@ class AntigravityAdapter(_BaseAdapter):
         super().__init__(settings or default_agent_settings()["antigravity"])
         self.review_harness = review_harness.resolve()
         self._bound_review_harness: Path | None = None
+        self._bound_reviewer_workspace: Path | None = None
         self._prompt_file: Path | None = None
 
     def bind_reviewer_workspace(self, source_root: Path, snapshot_root: Path) -> None:
+        self._bound_reviewer_workspace = snapshot_root.resolve()
         try:
             relative_harness = self.review_harness.relative_to(source_root.resolve())
         except ValueError:
@@ -603,8 +605,15 @@ class AntigravityAdapter(_BaseAdapter):
         self._prompt_file = runtime_dir / "review-prompt.md"
         self._prompt_file.write_text(prompt, encoding="utf-8")
         log_file = runtime_dir / "antigravity.log"
+        repository_instruction = (
+            f"Use {self._bound_reviewer_workspace} as the repository root for every "
+            "repository-relative search or read. "
+            if self._bound_reviewer_workspace is not None
+            else ""
+        )
         directive = (
             f"Read the complete request from {self._prompt_file} and follow it. "
+            f"{repository_instruction}"
             "The repository is read-only. Do not rerun full validation; inspect the supplied "
             "orchestrator validation evidence and spend the review budget on "
             "adversarial implementation analysis. Return only the requested contract in the "
@@ -641,13 +650,19 @@ class AntigravityAdapter(_BaseAdapter):
             "--disable-slash-commands",
             "--add-dir",
             str(runtime_dir),
-            "--log-file",
-            str(log_file),
-            "--json-schema",
-            response_schema,
-            "--print",
-            directive,
         ]
+        if self._bound_reviewer_workspace is not None:
+            command.extend(["--add-dir", str(self._bound_reviewer_workspace)])
+        command.extend(
+            [
+                "--log-file",
+                str(log_file),
+                "--json-schema",
+                response_schema,
+                "--print",
+                directive,
+            ]
+        )
         return command, False
 
     def build_capability_smoke_command(
@@ -741,6 +756,7 @@ class AntigravityAdapter(_BaseAdapter):
     def cleanup(self) -> None:
         super().cleanup()
         self._bound_review_harness = None
+        self._bound_reviewer_workspace = None
         self._prompt_file = None
 
 

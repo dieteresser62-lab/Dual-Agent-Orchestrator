@@ -388,6 +388,38 @@ def test_antigravity_print_is_last_option_and_long_prompt_is_file_backed() -> No
     assert not add_dir.exists()
 
 
+def test_antigravity_exposes_bound_snapshot_as_repository_search_root(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    snapshot = tmp_path / "snapshot" / "repo"
+    source.mkdir()
+    snapshot.mkdir(parents=True)
+    adapter = AntigravityAdapter(_settings("antigravity", binary="agy"))
+    adapter.bind_reviewer_workspace(source, snapshot)
+    command, use_stdin = adapter.build_command("review request")
+    add_dirs = [
+        Path(command[index + 1])
+        for index, value in enumerate(command)
+        if value == "--add-dir"
+    ]
+    runtime_dir = add_dirs[0]
+
+    try:
+        assert add_dirs == [runtime_dir, snapshot.resolve()]
+        assert runtime_dir != snapshot.resolve()
+        assert (runtime_dir / "review-prompt.md").is_file()
+        assert (
+            f"Use {snapshot.resolve()} as the repository root for every "
+            "repository-relative search or read."
+        ) in command[-1]
+        assert use_stdin is False
+    finally:
+        adapter.cleanup()
+
+    assert not runtime_dir.exists()
+
+
 def test_antigravity_json_envelope_requires_success_and_trims_chatter() -> None:
     adapter = AntigravityAdapter(_settings("antigravity", binary="agy"))
     output = adapter.extract_output(
