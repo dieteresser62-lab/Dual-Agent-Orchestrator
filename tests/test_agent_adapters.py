@@ -76,6 +76,18 @@ def test_codex_command_is_configured_workspace_write_jsonl_and_stdin() -> None:
     assert not message_path.parent.exists()
 
 
+def test_prepared_codex_input_uses_the_exact_stdin_prompt() -> None:
+    adapter = CodexAdapter(_settings("codex"))
+    prepared = adapter.prepare_provider_input("full secret prompt €")
+    try:
+        assert prepared.stdin_text == "full secret prompt €"
+        assert [(item.name, item.content) for item in prepared.components] == [
+            ("stdin_prompt", "full secret prompt €")
+        ]
+    finally:
+        adapter.cleanup()
+
+
 def test_codex_prefers_final_message_file_over_jsonl() -> None:
     adapter = CodexAdapter(_settings("codex"))
     command, _ = adapter.build_command("prompt")
@@ -138,7 +150,8 @@ def test_claude_defaults_are_quota_conscious_and_permissions_are_separate() -> N
         packet_path = packet_dir / "review-packet-001.md"
         assert packet_path.read_text(encoding="utf-8") == "secret long prompt"
         assert "review-packet-001.md" in manifest_path.read_text(encoding="utf-8")
-        assert str(manifest_path) in command[-1]
+        assert manifest_path.name in command[-1]
+        assert str(manifest_path.parent) not in command[-1]
         assert "2 Read calls total" in command[-1]
         assert "Do not run tests or the review harness" in command[-1]
         assert use_stdin is False
@@ -146,6 +159,38 @@ def test_claude_defaults_are_quota_conscious_and_permissions_are_separate() -> N
         adapter.cleanup()
 
     assert not packet_dir.exists()
+
+
+def test_prepared_claude_input_is_lossless_and_includes_every_model_channel() -> None:
+    adapter = ClaudeAdapter(_settings("claude"))
+    prompt = "a" * (CLAUDE_REVIEW_PACKET_CHUNK_CHARS + 17)
+    prepared = adapter.prepare_provider_input(prompt)
+    try:
+        by_name = {item.name: item.content for item in prepared.components}
+        chunks = [
+            item.content for item in prepared.components if item.name.startswith("packet_chunk_")
+        ]
+        assert "".join(chunks) == prompt
+        assert "packet_manifest" in by_name
+        assert "system_policy" in by_name
+        assert "response_schema" in by_name
+        assert "start_directive" in by_name
+        assert prepared.stdin_text is None
+    finally:
+        adapter.cleanup()
+
+
+def test_prepared_antigravity_input_includes_file_schema_and_directive() -> None:
+    adapter = AntigravityAdapter(_settings("antigravity", binary="agy"))
+    prepared = adapter.prepare_provider_input("complete review request")
+    try:
+        by_name = {item.name: item.content for item in prepared.components}
+        assert by_name["prompt_file"] == "complete review request"
+        assert json.loads(by_name["response_schema"])["required"] == ["response"]
+        assert "Read the complete request" in by_name["start_directive"]
+        assert prepared.stdin_text is None
+    finally:
+        adapter.cleanup()
 
 
 def test_claude_json_envelope_tracks_usage_and_rejects_permission_denials() -> None:
@@ -379,7 +424,8 @@ def test_antigravity_print_is_last_option_and_long_prompt_is_file_backed() -> No
         assert "--mode" not in command
         assert print_index == len(command) - 2
         assert long_prompt not in command
-        assert str(prompt_path) in command[-1]
+        assert prompt_path.name in command[-1]
+        assert str(prompt_path.parent) not in command[-1]
         assert prompt_path.read_text(encoding="utf-8") == long_prompt
         assert use_stdin is False
     finally:
@@ -410,9 +456,10 @@ def test_antigravity_exposes_bound_snapshot_as_repository_search_root(
         assert runtime_dir != snapshot.resolve()
         assert (runtime_dir / "review-prompt.md").is_file()
         assert (
-            f"Use {snapshot.resolve()} as the repository root for every "
+            "Use the supplied read-only repository working directory for every "
             "repository-relative search or read."
         ) in command[-1]
+        assert str(snapshot.resolve()) not in command[-1]
         assert use_stdin is False
     finally:
         adapter.cleanup()

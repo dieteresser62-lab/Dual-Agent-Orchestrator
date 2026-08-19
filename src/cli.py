@@ -23,6 +23,12 @@ from validation_matrix import (
     ValidationMatrixError,
     ValidationRule,
 )
+from provider_input_budget import (
+    ProviderInputBudgetError,
+    ProviderInputBudgetPolicy,
+    ProviderInputBudgetRule,
+    default_provider_input_budget_policy,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -53,6 +59,9 @@ class RepoConfig:
     workflow: WorkflowConfig = field(default_factory=WorkflowConfig)
     validation_declared: bool = False
     source: Path | None = None
+    provider_input_budget: ProviderInputBudgetPolicy = field(
+        default_factory=default_provider_input_budget_policy
+    )
 
 
 def _reject_unknown_keys(data: Mapping[str, object], allowed: set[str], location: str) -> None:
@@ -282,6 +291,44 @@ def _load_workflow(data: object) -> WorkflowConfig:
     )
 
 
+def _load_provider_input_budget(data: object) -> ProviderInputBudgetPolicy:
+    if not isinstance(data, list):
+        raise ConfigError("provider_input_budget must be an array of tables")
+    rules: list[ProviderInputBudgetRule] = []
+    for index, raw_rule in enumerate(data):
+        location = f"provider_input_budget[{index}]"
+        rule = _require_table(raw_rule, location)
+        _reject_unknown_keys(
+            rule, {"provider", "role", "operation", "max_chars", "max_bytes"}, location
+        )
+        try:
+            rules.append(
+                ProviderInputBudgetRule(
+                    provider=_require_non_empty_string(
+                        rule.get("provider"), f"{location}.provider"
+                    ),
+                    role=_require_non_empty_string(rule.get("role"), f"{location}.role"),
+                    operation=_require_non_empty_string(
+                        rule.get("operation"), f"{location}.operation"
+                    ),
+                    max_chars=_positive_config_int(
+                        rule.get("max_chars"), f"{location}.max_chars"
+                    ),
+                    max_bytes=_positive_config_int(
+                        rule.get("max_bytes"), f"{location}.max_bytes"
+                    ),
+                )
+            )
+        except ProviderInputBudgetError as exc:
+            raise ConfigError(f"Invalid {location}: {exc}") from exc
+    explicit_keys = tuple(rule.key for rule in rules)
+    if len(explicit_keys) != len(set(explicit_keys)):
+        raise ConfigError("Invalid provider_input_budget: duplicate rules are not allowed")
+    merged = {rule.key: rule for rule in default_provider_input_budget_policy().rules}
+    merged.update({rule.key: rule for rule in rules})
+    return ProviderInputBudgetPolicy(tuple(merged.values()))
+
+
 def load_repo_config(path: Path) -> RepoConfig:
     """Load a strict optional repository configuration."""
     resolved = path.expanduser().resolve()
@@ -296,7 +343,11 @@ def load_repo_config(path: Path) -> RepoConfig:
         raise ConfigError(f"Cannot read {resolved}: {exc}") from exc
     if not isinstance(raw, dict):  # pragma: no cover - TOML roots are tables
         raise ConfigError(f"Configuration root must be a TOML table: {resolved}")
-    _reject_unknown_keys(raw, {"paths", "stop_rules", "validation", "workflow"}, "root")
+    _reject_unknown_keys(
+        raw,
+        {"paths", "stop_rules", "validation", "workflow", "provider_input_budget"},
+        "root",
+    )
     return RepoConfig(
         paths=_load_path_classes(raw["paths"]) if "paths" in raw else PathClasses(),
         stop_rules=_load_stop_rules(raw["stop_rules"]) if "stop_rules" in raw else (),
@@ -308,6 +359,11 @@ def load_repo_config(path: Path) -> RepoConfig:
         else WorkflowConfig(),
         validation_declared="validation" in raw,
         source=resolved,
+        provider_input_budget=(
+            _load_provider_input_budget(raw["provider_input_budget"])
+            if "provider_input_budget" in raw
+            else default_provider_input_budget_policy()
+        ),
     )
 
 

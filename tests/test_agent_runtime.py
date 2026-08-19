@@ -40,6 +40,14 @@ from agent_runtime import (
 )
 from validation_matrix import ValidationCommand, ValidationRequest
 from repo_changes import ChangedPath, RepositoryChanges
+from provider_input_budget import (
+    PreparedProviderInput,
+    ProviderInputBudgetExceeded,
+    ProviderInputBudgetPolicy,
+    ProviderInputBudgetRule,
+    ProviderInputComponent,
+    default_provider_input_budget_policy,
+)
 
 
 def test_compute_retry_backoff_seconds_exponential() -> None:
@@ -59,6 +67,76 @@ def test_orchestrator_config_has_no_agent_substitution_state() -> None:
 
     assert not hasattr(config, "allow_fallback_to_gemini")
     assert not hasattr(config, "claude_quota_reached")
+
+
+def test_budget_denial_happens_after_preparation_but_before_capability_or_process(
+    monkeypatch,
+) -> None:
+    calls = {"prepare": 0, "capability": 0, "process": 0, "cleanup": 0}
+    measurements = []
+
+    class FakeCodex:
+        name = "codex"
+        cli_binary = "codex"
+        model = "model"
+        effort = "medium"
+        timeout = 1
+        reviewer = False
+        env: dict[str, str] = {}
+        required_hosts: tuple[str, ...] = ()
+        capability = CapabilitySpec((), (), (r".*",), ())
+        capability_verified = False
+        metadata: dict[str, object] = {}
+
+        def prepare_provider_input(self, prompt: str) -> PreparedProviderInput:
+            calls["prepare"] += 1
+            return PreparedProviderInput(
+                ("codex", "exec", "-"),
+                prompt,
+                (ProviderInputComponent("stdin_prompt", prompt),),
+            )
+
+        def cleanup(self) -> None:
+            calls["cleanup"] += 1
+
+    defaults = default_provider_input_budget_policy()
+    policy = ProviderInputBudgetPolicy(
+        tuple(
+            ProviderInputBudgetRule(
+                rule.provider,
+                rule.role,
+                rule.operation,
+                3 if rule.key == ("codex", "codex", "codex_implementation") else rule.max_chars,
+                3 if rule.key == ("codex", "codex", "codex_implementation") else rule.max_bytes,
+            )
+            for rule in defaults.rules
+        )
+    )
+    monkeypatch.setattr(
+        agent_runtime,
+        "verify_agent_capabilities",
+        lambda *args, **kwargs: calls.__setitem__("capability", calls["capability"] + 1),
+    )
+    monkeypatch.setattr(
+        agent_runtime.subprocess,
+        "run",
+        lambda *args, **kwargs: calls.__setitem__("process", calls["process"] + 1),
+    )
+
+    with pytest.raises(ProviderInputBudgetExceeded) as exc_info:
+        run_agent(
+            FakeCodex(),
+            "four",
+            operation="codex_implementation",
+            binding_fingerprint="binding",
+            pre_start_callback=measurements.append,
+            config=OrchestratorConfig(provider_input_budget=policy),
+            shorten=lambda text, limit: (text or "")[:limit],
+        )
+
+    assert exc_info.value.measurement.violated_dimensions == ("chars", "bytes")
+    assert measurements == [exc_info.value.measurement]
+    assert calls == {"prepare": 1, "capability": 0, "process": 0, "cleanup": 1}
 
 
 def test_compact_live_output_extracts_codex_text_and_hides_reviewer_envelopes() -> None:

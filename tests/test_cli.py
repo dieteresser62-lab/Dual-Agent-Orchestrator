@@ -30,6 +30,56 @@ def _write_config(repo: Path, text: str) -> Path:
     return path
 
 
+def test_repository_config_loads_complete_provider_input_budget_table() -> None:
+    config = load_repo_config(Path(__file__).resolve().parents[1] / "orchestrator.toml")
+
+    rule = config.provider_input_budget.select(
+        "claude", "claude", "claude_final_review"
+    )
+    assert rule.max_chars == 4_000_000
+    assert rule.max_bytes == 16_000_000
+
+
+def test_provider_input_budget_config_is_closed_and_complete(tmp_path: Path) -> None:
+    path = _write_config(
+        tmp_path,
+        """
+[[provider_input_budget]]
+provider = "codex"
+role = "codex"
+operation = "codex_implementation"
+max_chars = 10
+max_bytes = 20
+unexpected = true
+""",
+    )
+    with pytest.raises(ConfigError, match="Unknown key"):
+        load_repo_config(path)
+
+    path.write_text(
+        """
+[[provider_input_budget]]
+provider = "codex"
+role = "codex"
+operation = "codex_implementation"
+max_chars = 10
+max_bytes = 20
+""",
+        encoding="utf-8",
+    )
+    config = load_repo_config(path)
+    assert config.provider_input_budget.select(
+        "codex", "codex", "codex_implementation"
+    ).max_chars == 10
+    assert config.provider_input_budget.select(
+        "claude", "claude", "claude_final_review"
+    ).max_chars == 4_000_000
+
+    path.write_text(path.read_text(encoding="utf-8") * 2, encoding="utf-8")
+    with pytest.raises(ConfigError, match="duplicate"):
+        load_repo_config(path)
+
+
 @pytest.fixture(autouse=True)
 def _isolate_process_environment(monkeypatch) -> None:
     for name in (

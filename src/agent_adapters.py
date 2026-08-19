@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Protocol
 
 from agent_config import AgentSettings, default_agent_settings
+from provider_input_budget import PreparedProviderInput, ProviderInputComponent
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -130,6 +131,8 @@ class AgentAdapter(Protocol):
 
     def build_command(self, prompt: str) -> tuple[list[str], bool]: ...
 
+    def prepare_provider_input(self, prompt: str) -> PreparedProviderInput: ...
+
     def bind_reviewer_workspace(self, source_root: Path, snapshot_root: Path) -> None: ...
 
     def extract_output(self, stdout: str, stderr: str, extra_files: dict[str, str]) -> str: ...
@@ -160,6 +163,21 @@ class _BaseAdapter:
     def bind_reviewer_workspace(self, source_root: Path, snapshot_root: Path) -> None:
         _ = source_root
         _ = snapshot_root
+
+    def prepare_provider_input(self, prompt: str) -> PreparedProviderInput:
+        command, use_stdin = self.build_command(prompt)
+        return PreparedProviderInput(
+            command=tuple(command),
+            stdin_text=prompt if use_stdin else None,
+            components=self._provider_input_components(prompt, command),
+        )
+
+    def _provider_input_components(
+        self, prompt: str, command: list[str]
+    ) -> tuple[ProviderInputComponent, ...]:
+        _ = prompt
+        _ = command
+        raise NotImplementedError
 
     def _new_runtime_dir(self) -> Path:
         self._cleanup_runtime_dir()
@@ -258,6 +276,12 @@ class CodexAdapter(_BaseAdapter):
             ],
             True,
         )
+
+    def _provider_input_components(
+        self, prompt: str, command: list[str]
+    ) -> tuple[ProviderInputComponent, ...]:
+        _ = command
+        return (ProviderInputComponent("stdin_prompt", prompt),)
 
     def extract_output(self, stdout: str, stderr: str, extra_files: dict[str, str]) -> str:
         _ = stderr
@@ -410,7 +434,7 @@ class ClaudeAdapter(_BaseAdapter):
             separators=(",", ":"),
         )
         directive = (
-            f"Read {self._review_manifest_file} exactly once, then read every listed packet "
+            f"Read {self._review_manifest_file.name} exactly once, then read every listed packet "
             f"chunk exactly once in order ({read_call_budget} Read calls total), and follow "
             "the concatenated request. Do not run tests or the review harness; inspect the "
             "supplied validation evidence and focus on the implementation. Return the answer "
@@ -491,11 +515,40 @@ class ClaudeAdapter(_BaseAdapter):
             "then run the exact allowlisted review harness once. Do not try alternatives."
         )
         command[-1] = (
-            f"Read {self._review_manifest_file}, then every listed packet chunk exactly "
+            f"Read {self._review_manifest_file.name}, then every listed packet chunk exactly "
             "once. Run this exact capability diagnostic once and no alternative: "
             f"{harness_command}. Return the answer in the response field."
         )
         return command, use_stdin
+
+    def _provider_input_components(
+        self, prompt: str, command: list[str]
+    ) -> tuple[ProviderInputComponent, ...]:
+        _ = prompt
+        if self._review_manifest_file is None or not self._review_packet_files:
+            raise RuntimeError("claude provider input was not prepared")
+        components = [
+            ProviderInputComponent(
+                f"packet_chunk_{index:03d}", packet.read_text(encoding="utf-8")
+            )
+            for index, packet in enumerate(self._review_packet_files, start=1)
+        ]
+        components.extend(
+            (
+                ProviderInputComponent(
+                    "packet_manifest",
+                    self._review_manifest_file.read_text(encoding="utf-8"),
+                ),
+                ProviderInputComponent(
+                    "system_policy", command[command.index("--system-prompt") + 1]
+                ),
+                ProviderInputComponent(
+                    "response_schema", command[command.index("--json-schema") + 1]
+                ),
+                ProviderInputComponent("start_directive", command[-1]),
+            )
+        )
+        return tuple(components)
 
     def extract_output(self, stdout: str, stderr: str, extra_files: dict[str, str]) -> str:
         _ = extra_files
@@ -606,13 +659,13 @@ class AntigravityAdapter(_BaseAdapter):
         self._prompt_file.write_text(prompt, encoding="utf-8")
         log_file = runtime_dir / "antigravity.log"
         repository_instruction = (
-            f"Use {self._bound_reviewer_workspace} as the repository root for every "
+            "Use the supplied read-only repository working directory for every "
             "repository-relative search or read. "
             if self._bound_reviewer_workspace is not None
             else ""
         )
         directive = (
-            f"Read the complete request from {self._prompt_file} and follow it. "
+            f"Read the complete request from {self._prompt_file.name} and follow it. "
             f"{repository_instruction}"
             "The repository is read-only. Do not rerun full validation; inspect the supplied "
             "orchestrator validation evidence and spend the review budget on "
@@ -691,12 +744,28 @@ class AntigravityAdapter(_BaseAdapter):
             ]
         )
         command[-1] = (
-            f"Read the complete diagnostic request from {self._prompt_file}. The repository "
+            f"Read the complete diagnostic request from {self._prompt_file.name}. The repository "
             "is read-only. This is an explicit adapter/version capability diagnostic, not "
             "a normal review. Run this exact harness command once and no alternative: "
             f"{harness_command}."
         )
         return command, use_stdin
+
+    def _provider_input_components(
+        self, prompt: str, command: list[str]
+    ) -> tuple[ProviderInputComponent, ...]:
+        _ = prompt
+        if self._prompt_file is None:
+            raise RuntimeError("antigravity provider input was not prepared")
+        return (
+            ProviderInputComponent(
+                "prompt_file", self._prompt_file.read_text(encoding="utf-8")
+            ),
+            ProviderInputComponent(
+                "response_schema", command[command.index("--json-schema") + 1]
+            ),
+            ProviderInputComponent("start_directive", command[-1]),
+        )
 
     def extract_output(self, stdout: str, stderr: str, extra_files: dict[str, str]) -> str:
         _ = extra_files

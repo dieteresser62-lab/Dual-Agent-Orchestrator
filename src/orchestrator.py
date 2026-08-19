@@ -483,6 +483,8 @@ class ProductionWorkflowDriver(WorkflowDriver):
         label: str,
         *,
         reviewer_repository_required: bool = True,
+        operation: WorkflowStep,
+        binding_fingerprint: str,
     ) -> str:
         self.assert_structured_decision_context()
         output = run_agent_checked(
@@ -500,14 +502,23 @@ class ProductionWorkflowDriver(WorkflowDriver):
             parse_flag=_parse_flag,
             validate_done_marker=_has_done,
             reviewer_repository_required=reviewer_repository_required,
+            operation=operation.value,
+            binding_fingerprint=binding_fingerprint,
         )
         return output
 
     def invoke_codex(self, invocation: CodexInvocation) -> str:
+        state_binding = (
+            self.active_state.task_digest
+            if self.active_state is not None and self.active_state.task_digest is not None
+            else "unbound"
+        )
         output = self._agent(
             AgentRole.CODEX,
             invocation.prompt,
             f"work-unit-{invocation.work_unit_id:04d}-{invocation.step.value}",
+            operation=invocation.step,
+            binding_fingerprint=state_binding,
         )
         self.last_codex_output = output
         if self.active_state is not None:
@@ -524,6 +535,8 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 invocation.reviewer,
                 invocation.prompt,
                 f"work-unit-{invocation.work_unit_id:04d}-{invocation.step.value}",
+                operation=invocation.step,
+                binding_fingerprint=invocation.fingerprint,
             )
         except AgentInvocationError as exc:
             recovered = _recover_completed_reviewer_contract(
@@ -744,6 +757,8 @@ class ProductionWorkflowDriver(WorkflowDriver):
         )
 
     def repair_review_contract(self, invocation: ContractRepairInvocation) -> str:
+        if self.active_state is None:
+            raise WorkflowExecutionError("contract repair requires an active workflow state")
         prompt = (
             "Repair only the formal output contract of the rejected review. Preserve its "
             "verdict, findings, evidence, and rationale. Return only the complete corrected "
@@ -761,6 +776,8 @@ class ProductionWorkflowDriver(WorkflowDriver):
             prompt,
             "review-contract-repair",
             reviewer_repository_required=False,
+            operation=self.active_state.current_step,
+            binding_fingerprint=self.active_state.task_digest or "unbound",
         )
 
     def collect_changes(self, start_commit: str) -> WorkflowChanges:
@@ -2209,6 +2226,7 @@ def run_production_workflow(
         agent_live_stream_channels=args.agent_live_stream_channels,
         repo_root=root,
         strict_preflight=bool(args.strict_preflight),
+        provider_input_budget=args.repo_config.provider_input_budget,
     )
     driver = ProductionWorkflowDriver(
         repository_root=root,

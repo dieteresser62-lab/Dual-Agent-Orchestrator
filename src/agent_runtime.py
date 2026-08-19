@@ -31,6 +31,16 @@ from repo_changes import RepositoryChanges
 from contracts import ValidationAttestation
 from validation_matrix import ValidationMatrixRunner, ValidationRequest
 from workflow_state import AgentFailureKind
+from provider_input_budget import (
+    PROVIDER_OPERATIONS,
+    PreparedProviderInput,
+    ProviderInputComponent,
+    ProviderInputBudgetExceeded,
+    ProviderInputBudgetPolicy,
+    ProviderInputMeasurement,
+    default_provider_input_budget_policy,
+    measure_provider_input,
+)
 
 TEST_OUTPUT_LIMIT = 7000
 ERROR_TRUNCATION_LIMIT = 1200
@@ -259,6 +269,9 @@ class OrchestratorConfig:
     agent_live_stream_channels: str = "both"
     repo_root: Path = field(default_factory=lambda: Path.cwd().resolve())
     strict_preflight: bool = False
+    provider_input_budget: ProviderInputBudgetPolicy = field(
+        default_factory=default_provider_input_budget_policy
+    )
 
 
 @dataclass
@@ -797,13 +810,15 @@ def run_agent(
     config: OrchestratorConfig,
     shorten: Callable[[str | None, int], str],
     reviewer_repository_required: bool = True,
+    operation: str | None = None,
+    binding_fingerprint: str = "unbound",
+    pre_start_callback: Callable[[ProviderInputMeasurement], None] | None = None,
 ) -> str:
     """Run an adapter command once, with optional live streaming and strict output checks."""
     agent_key = adapter.name
     if config.dry_run:
         return build_dry_run_agent_output(agent_key, prompt)
 
-    verify_agent_capabilities(adapter, strict_dns=config.strict_preflight)
     workspace: ReviewerWorkspace | None = None
     execution_root = config.repo_root.resolve()
     timeout_seconds = adapter.timeout
@@ -820,7 +835,58 @@ def run_agent(
             execution_root = workspace.root
             adapter.bind_reviewer_workspace(source_root, execution_root)
 
-        command_parts, use_stdin_prompt = adapter.build_command(prompt)
+        prepare_input = getattr(adapter, "prepare_provider_input", None)
+        if callable(prepare_input):
+            prepared = prepare_input(prompt)
+        else:
+            legacy_command, legacy_stdin = adapter.build_command(prompt)
+            prepared = PreparedProviderInput(
+                tuple(legacy_command),
+                prompt if legacy_stdin else None,
+                (ProviderInputComponent("stdin_prompt", prompt),),
+            )
+        effective_operation = operation or {
+            "codex": "codex_implementation",
+            "claude": "claude_slice_review",
+            "antigravity": "antigravity_slice_review",
+        }.get(agent_key)
+        measurement = None
+        if agent_key in PROVIDER_OPERATIONS:
+            if effective_operation is None:
+                raise ValueError(f"provider input operation is required for {agent_key}")
+            measurement = measure_provider_input(
+                prepared,
+                provider=agent_key,
+                role=agent_key,
+                operation=effective_operation,
+                binding_fingerprint=binding_fingerprint,
+                policy=config.provider_input_budget,
+            )
+            if pre_start_callback is not None:
+                pre_start_callback(measurement)
+            logger.info(
+                "[PROVIDER_INPUT] provider=%s role=%s operation=%s allowed=%s "
+                "chars=%s/%s bytes=%s/%s input_digest=%s policy_digest=%s "
+                "largest_component=%s violations=%s",
+                measurement.provider,
+                measurement.role,
+                measurement.operation,
+                measurement.allowed,
+                measurement.total_chars,
+                measurement.effective_limit_chars,
+                measurement.total_bytes,
+                measurement.effective_limit_bytes,
+                measurement.input_digest,
+                measurement.policy_digest,
+                measurement.largest_component,
+                ",".join(measurement.violated_dimensions) or "none",
+            )
+            if not measurement.allowed:
+                raise ProviderInputBudgetExceeded(measurement)
+
+        verify_agent_capabilities(adapter, strict_dns=config.strict_preflight)
+        command_parts = list(prepared.command)
+        stdin_text = prepared.stdin_text
         env = os.environ.copy()
         env.update(adapter.env)
         if adapter.reviewer:
@@ -849,8 +915,8 @@ def run_agent(
             assert process.stdout is not None
             assert process.stderr is not None
 
-            if use_stdin_prompt:
-                process.stdin.write(prompt)
+            if stdin_text is not None:
+                process.stdin.write(stdin_text)
             process.stdin.close()
 
             stream_queue: queue.Queue[tuple[str, str | None]] = queue.Queue()
@@ -939,7 +1005,7 @@ def run_agent(
         else:
             result = subprocess.run(
                 command_parts,
-                input=(prompt if use_stdin_prompt else None),
+                input=stdin_text,
                 capture_output=True,
                 text=True,
                 env=env,
@@ -1377,6 +1443,9 @@ def run_agent_checked(
     parse_flag: Callable[[str, str], str | None],
     validate_done_marker: Callable[[str], bool],
     reviewer_repository_required: bool = True,
+    operation: str | None = None,
+    binding_fingerprint: str = "unbound",
+    pre_start_callback: Callable[[ProviderInputMeasurement], None] | None = None,
 ) -> str:
     """Run the requested agent with retries and contract validation."""
     required_flags = required_flags or []
@@ -1426,6 +1495,9 @@ def run_agent_checked(
                 config=config,
                 shorten=shorten,
                 reviewer_repository_required=reviewer_repository_required,
+                operation=operation,
+                binding_fingerprint=binding_fingerprint,
+                pre_start_callback=pre_start_callback,
             )
             log_path = log_dir / f"{log_prefix}.attempt-{attempt}.log"
             write_file(log_path, output)
@@ -1438,7 +1510,7 @@ def run_agent_checked(
                 rejected_output = output
             else:
                 return output
-        except AgentInvocationError:
+        except (AgentInvocationError, ProviderInputBudgetExceeded):
             raise
         except Exception as exc:
             failure = classify_agent_failure(
