@@ -377,32 +377,107 @@ Langfristig wachsende Recordbestände bleiben performant, prüfbar und verständ
 
 ## 8. Empfohlene Auftrags- und Branchfolge
 
-1. Phase 1 abschließen und committen.
-2. Roadmap in `docs/internal/` übernehmen und separat committen.
-3. Phase 2/2B als gemeinsamen Planungsauftrag auf einem neuen Feature-Branch starten, beispielsweise `feature/native-agent-json`.
-4. Nach mehreren realen erfolgreichen Workflows Phase 3 separat planen.
-5. Phase 4 erst nach einer dokumentierten Legacy-Bestandsaufnahme autorisieren.
-6. Phase 5 unabhängig priorisieren, sobald Recordwachstum und Betriebserfahrung belastbare Anforderungen liefern.
+1. Phase 1 abschließen und committen. Erledigt mit Commit `2ad6957`.
+2. Abgeschlossene Phase-1-Unterlagen archivieren und die Roadmap separat in
+   `docs/internal/` committen. Erledigt mit den Commits `3bee0f9` und
+   `1f97e54`.
+3. Das erste Phase-2/2B-Arbeitspaket auf `feature/native-agent-json`
+   durchführen. Dieser Branch ist ausschließlich der Bootstrap-Härtung des
+   Reviewwegs zugeordnet und nicht der gesamten Roadmap.
+4. Jedes weitere Arbeitspaket beginnt nach Abschluss, Review und lokaler
+   Übernahme des Vorgängers auf einem neuen, fachlich benannten Feature-Branch.
+5. Nach mehreren realen erfolgreichen Workflows Phase 3 separat planen.
+6. Phase 4 erst nach einer dokumentierten Legacy-Bestandsaufnahme autorisieren.
+7. Phase 5 unabhängig priorisieren, sobald Recordwachstum und
+   Betriebserfahrung belastbare Anforderungen liefern.
 
-## 9. Vorgeschlagene erste Slices für Phase 2/2B
+## 9. Eigenständige Arbeitspakete für Phase 2/2B
 
-Die endgültige Sliceplanung muss repository-grounded neu erstellt werden. Als Ausgangspunkt:
+Die folgenden Punkte sind **keine Slices eines gemeinsamen Orchestratorlaufs**.
+Jeder Punkt ist ein eigenständiger Auftrag mit eigenem Branch, eigenem
+repository-grounded Arbeitsplan, eigenen Reviews und einem abgeschlossenen
+Merge- beziehungsweise Commitcheckpoint.
 
-1. Versionierte Request-/Response-Schemas, Domänenmodelle und generischer
-   Recordgraph-Integritätsvalidator.
-2. Native Codex-Ausgabe und Implementierungs-/Planresultate.
-3. Native Claude-Reviewausgabe mit Finding-Lifecycle.
-4. Native Antigravity-Reviewausgabe und Freigabereihenfolge.
-5. Semantischer Evidence-Builder mit offenen Findings, Delta-Hunks,
-   Manifestabdeckung und Snapshot-Leseplan.
-6. Gesamteingabebudget, Telemetrie und vollständige
-   Provider-Nutzungsdaten.
-7. Deterministisches Finalreview-Preflight sowie Resume-, Quota-,
-   Idempotenz- und Vertragsfehlerhärtung.
-8. End-to-End-Cutover für neue Workflows, Fault-Injection gegen jede
-   Referenzkante, Dokumentation und UML.
+### 9.1 Gemeinsamer Ausführungsvertrag
 
-Die Anzahl soll vor Implementierung minimiert werden: fachlich zusammengehörige Pfade werden bis zur zulässigen Dateigrenze gebündelt, ohne Prüfbarkeit oder sichere Korrekturgrenzen zu verlieren.
+- Ein Arbeitspaket umfasst im Regelfall höchstens ein bis drei Slices.
+- Der Plan autorisiert nur den kleinsten fachlich vollständigen Dateiscope des
+  aktuellen Pakets.
+- Frühere Audit-, Slice- und Reviewdokumente werden nicht als vollständige
+  Evidenz in den nächsten Lauf übernommen.
+- Ein Folgepaket beginnt erst, wenn der Vorgänger validiert, ohne offene
+  Findings abgeschlossen und lokal in den vorgesehenen Basisbranch übernommen
+  wurde.
+- Branchweite Finalreviews prüfen nur das Delta des aktuellen Arbeitspakets
+  gegen dessen festgeschriebene Basis.
+- Wird ein Paket während der Planung größer als drei sinnvoll prüfbare Slices,
+  muss es vor der Implementierung erneut fachlich geteilt werden.
+- Zusammengehörige Pfade werden innerhalb eines Pakets bis zur zulässigen
+  Dateigrenze gebündelt, ohne Prüfbarkeit oder sichere Korrekturgrenzen zu
+  verlieren.
+
+### 9.2 Arbeitspaket 1 – Review-Bootstrap und deterministisches Preflight
+
+Dieses Paket läuft auf `feature/native-agent-json`. Es reduziert zuerst die
+Kosten und seriellen Fehlerquellen des noch textbasierten Entwicklungswegs,
+bevor die native Agentenschnittstelle selbst umgesetzt wird.
+
+- vollständiges provider- und operationsspezifisches Gesamteingabebudget;
+- deterministisches Finalreview-Preflight für Recordgraph, Bindings, Findings,
+  Attestierung, Pfadgrenzen und Completion;
+- fail-closed Verhalten vor dem Providerstart bei Budget- oder
+  Integritätsverletzungen;
+- fokussierte Telemetrie über Paketbestandteile und tatsächliche
+  Provideraufträge;
+- keine stille Trunkierung oder unvollständige Manifestabdeckung.
+
+### 9.3 Arbeitspaket 2 – Native Verträge und Referenzintegrität
+
+- versionierte Request-/Response-Schemas und Domänenmodelle;
+- diskriminierte Ergebnis- und Fehlertypen;
+- generischer Recordgraph-Integritätsvalidator;
+- Validierung aller Run-, Fingerprint-, Rollen-, Work-Unit- und
+  Vorgängerbindungen;
+- Legacy-Lesbarkeit ohne stillen Protokollwechsel.
+
+### 9.4 Arbeitspaket 3 – Native Claude-Reviews
+
+- native Claude-Reviewantwort mit Finding-Lifecycle;
+- idempotente Persistenz vor Reparatur-, Quota- oder Resumeentscheidungen;
+- kleine typisierte Ergänzungsaufträge statt vollständiger Reviewwiederholung;
+- keine technische Fehlerklassifikation aus Reviewprosa.
+
+### 9.5 Arbeitspaket 4 – Native Antigravity-Reviews
+
+- native Antigravity-Reviewantwort;
+- unveränderte Freigabereihenfolge nach Claude für denselben Fingerprint;
+- genau einmalige Ausführung pro gebundener Reviewentscheidung;
+- Resume-, Quota- und Providerfehlerverhalten analog zu Claude.
+
+### 9.6 Arbeitspaket 5 – Native Codex-Ergebnisse
+
+- native Planungs-, Implementierungs-, Korrektur- und Abschlussresultate;
+- typisierte Readiness-, Testdatei-, Finding-Response- und Stopdaten;
+- kein Rückfall auf Textmarker bei Vertragsfehlern eines nativ gebundenen Laufs.
+
+### 9.7 Arbeitspaket 6 – Semantischer Evidence-Builder
+
+- offene Findings, Delta-Hunks und relevante Vertragskanten;
+- vollständiges Änderungsmanifest mit semantischen Digests;
+- hashgebundener Snapshot und gezielter Leseplan für große Finalreviews;
+- maschinenlesbarer Nachweis vollständiger Manifestabdeckung;
+- kompakte Referenzen auf unveränderte geschlossene Findings und frühere
+  Attestierungen.
+
+### 9.8 Arbeitspaket 7 – End-to-End-Cutover
+
+- unveränderlich gebundener Protokollmodus `native-agent-json-v1` für neue
+  Workflows;
+- Intake bis Finalfreigabe ohne Parsing textueller Rollenmarker;
+- Fault-Injection gegen jede Referenzkante;
+- Resume-, Quota-, Idempotenz-, Watch- und Prozessabbruchtests;
+- Dokumentations- und UML-Abgleich;
+- mehrere reale Pilotläufe vor Beginn von Phase 3.
 
 ## 10. Gesamtabnahme der Roadmapumsetzung
 
