@@ -434,6 +434,10 @@ bevor die native Agentenschnittstelle selbst umgesetzt wird.
 ### 9.3 Arbeitspaket 2 – Native Verträge und Referenzintegrität
 
 - versionierte Request-/Response-Schemas und Domänenmodelle;
+- gemeinsames rollenunabhängiges `review_result`-Basismodell für Findings,
+  Statusänderungen, Reklassifizierungen, Reviewevidenz, Pre-Mortem und
+  Freigabeentscheidung; Claude und Antigravity ergänzen dieses Modell in den
+  Folgepaketen nur um ihre Rollen- und Reihenfolgeverträge;
 - diskriminierte Ergebnis- und Fehlertypen;
 - generischer Recordgraph-Integritätsvalidator;
 - Validierung aller Run-, Fingerprint-, Rollen-, Work-Unit- und
@@ -465,6 +469,9 @@ bevor die native Agentenschnittstelle selbst umgesetzt wird.
 - offene Findings, Delta-Hunks und relevante Vertragskanten;
 - vollständiges Änderungsmanifest mit semantischen Digests;
 - hashgebundener Snapshot und gezielter Leseplan für große Finalreviews;
+- ausschließlich allowlist-gebundene Reads auf vorab bekannte
+  Repositorypfade; der Leseplan darf keine freie oder unkontrollierte
+  Repositoryexploration auslösen;
 - maschinenlesbarer Nachweis vollständiger Manifestabdeckung;
 - kompakte Referenzen auf unveränderte geschlossene Findings und frühere
   Attestierungen.
