@@ -3311,6 +3311,17 @@ def test_final_blocker_runs_regular_correction_commit_then_restarts_full_review(
     ]
     assert result.state.slices[-1].slice_id == 2
     assert result.state.slices[-1].commit_ref == "c" * 40
+    denying_review_checkpoints = [
+        history
+        for history in driver.checkpoint_histories
+        if history.work_unit_id == 3
+        and (
+            history.latest_claude_review is not None
+            if denial_role is AgentRole.CLAUDE
+            else history.latest_antigravity_review is not None
+        )
+    ]
+    assert denying_review_checkpoints
     assert driver.validation_calls == [
         first_branch.fingerprint,
         correction.fingerprint,

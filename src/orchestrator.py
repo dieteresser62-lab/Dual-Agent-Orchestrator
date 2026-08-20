@@ -353,6 +353,22 @@ class ProductionWorkflowDriver(WorkflowDriver):
                         tuple(item.finding_id for item in result.findings),
                     )
                 ] += 1
+        # Compatibility for runs checkpointed by the former final-denial
+        # transition bug: the authoritative denied ReviewPayload and the
+        # following correction work unit were durable, but the redundant
+        # ReviewAuditEvent was not archived before the work-unit switch.  Accept
+        # only that exact, fully evidenced transition; every other record/mirror
+        # difference remains fail-closed.
+        recoverable = _recoverable_final_denial_mirror_gap(
+            state, record_reviews, mirror_reviews
+        )
+        if recoverable:
+            logger.warning(
+                "Accepting an authoritative final-review denial whose legacy "
+                "state-v3 mirror is represented by the immediately following "
+                "correction work unit."
+            )
+            mirror_reviews.update(recoverable)
         if record_reviews != mirror_reviews:
             raise WorkflowExecutionError(
                 "structured reviewer decisions differ from the state-v3 mirror"
@@ -1605,6 +1621,47 @@ def _persisted_histories(state: WorkflowState) -> dict[int, WorkflowHistory]:
             continue
         histories[parsed.work_unit_id] = parsed
     return histories
+
+
+def _recoverable_final_denial_mirror_gap(
+    state: WorkflowState,
+    record_reviews: Counter[tuple[object, ...]],
+    mirror_reviews: Counter[tuple[object, ...]],
+) -> Counter[tuple[object, ...]]:
+    """Recognize only the historical final-denial checkpoint ordering defect."""
+    missing_reviews = record_reviews - mirror_reviews
+    if not missing_reviews or mirror_reviews - record_reviews:
+        return Counter()
+    units = {item.work_unit_id: item for item in state.work_units}
+    histories = _persisted_histories(state)
+    recoverable: Counter[tuple[object, ...]] = Counter()
+    for signature, count in missing_reviews.items():
+        work_unit_id, _reviewer, fingerprint, verdict, finding_ids = signature
+        try:
+            numeric_work_unit_id = int(str(work_unit_id))
+        except ValueError:
+            return Counter()
+        reviewed_unit = units.get(numeric_work_unit_id)
+        correction_unit = units.get(numeric_work_unit_id + 1)
+        reviewed_history = histories.get(numeric_work_unit_id)
+        if (
+            count != 1
+            or verdict != "denied"
+            or reviewed_unit is None
+            or reviewed_unit.kind is not WorkUnitKind.FINAL_REVIEW
+            or reviewed_unit.status is not WorkUnitStatus.COMPLETED
+            or correction_unit is None
+            or correction_unit.kind is not WorkUnitKind.CORRECTION
+            or not set(correction_unit.open_findings).issubset(set(finding_ids))
+            or reviewed_history is None
+            or not any(
+                item.diff_fingerprint == fingerprint
+                for item in reviewed_history.attestations
+            )
+        ):
+            return Counter()
+        recoverable[signature] += 1
+    return recoverable
 
 
 def _carry_forward_findings(

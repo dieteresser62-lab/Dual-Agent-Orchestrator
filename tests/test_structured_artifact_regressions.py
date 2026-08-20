@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 import hashlib
 import json
 import subprocess
@@ -163,6 +164,74 @@ def test_external_side_effect_guard_rejects_review_record_ahead_of_mirror(
 
     with pytest.raises(WorkflowExecutionError, match="reviewer decisions differ"):
         driver.assert_structured_decision_context()
+
+
+def test_external_side_effect_guard_accepts_legacy_final_denial_correction_transition(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/structured-regression")
+    head = _git(repository, "rev-parse", "HEAD")
+    state = _state(repository, "structured-final-denial-transition").bind_slice_plan(
+        (PlannedSlice(1, "implementation", ("src/runtime.py",)),),
+        first_start_commit=head,
+    ).complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    ).bind_current_slice_git_boundary(
+        start_commit=head,
+        scope_paths=("src/runtime.py",),
+        start_fingerprint="b" * 64,
+    ).complete_current_slice(
+        commit_ref=head,
+    ).start_final_review_work_unit()
+    attestation = ValidationAttestation(
+        attestation_id="validation-final-denial",
+        diff_fingerprint="c" * 64,
+        expected_commands=("python3 -m pytest tests/ -v",),
+        records=(
+            ValidationRecord(
+                ValidationStatus.PASS,
+                "python3 -m pytest tests/ -v",
+                0,
+            ),
+        ),
+        output_digest="d" * 64,
+        summary="validation completed before final denial",
+        command_specs=(
+            ValidationCommandSpec(
+                argv=("python3", "-m", "pytest", "tests/", "-v")
+            ),
+        ),
+    )
+    final_history = WorkflowHistory(
+        state.current_work_unit_id,
+        events=(ValidationAuditEvent(1, 1, attestation),),
+        attestations=(attestation,),
+    )
+    state = replace(
+        state,
+        runtime_history={"current": final_history.to_dict(), "archive": []},
+    )
+    correction = state.complete_current_work_unit().start_correction_work_unit(
+        start_commit=head,
+        scope_paths=("src/runtime.py",),
+        start_fingerprint="e" * 64,
+        finding_ids=("C-01",),
+    )
+    signature = (
+        str(state.current_work_unit_id),
+        "claude",
+        attestation.diff_fingerprint,
+        "denied",
+        ("C-01",),
+    )
+
+    assert orchestrator._recoverable_final_denial_mirror_gap(
+        correction,
+        Counter({signature: 1}),
+        Counter(),
+    ) == Counter({signature: 1})
 
 
 def test_budget_denial_persists_gate_checkpoint_and_resumes_idempotently(

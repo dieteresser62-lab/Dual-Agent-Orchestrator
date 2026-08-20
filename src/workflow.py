@@ -1939,6 +1939,11 @@ class WorkflowEngine:
         else:
             own_ids = tuple(item.finding_id for item in result.own_open_blockers)
             if is_final_review:
+                # Persist the denying final-review event while the final-review
+                # work unit is still current. Starting the correction unit first
+                # would archive the driver's older mirror and leave the already
+                # appended structured ReviewPayload ahead of state-v3.
+                self.driver.checkpoint(state, history)
                 boundary = self.driver.prepare_correction(history.findings)
                 state = state.complete_current_work_unit().start_correction_work_unit(
                     start_commit=boundary.start_commit,
