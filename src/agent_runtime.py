@@ -14,7 +14,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path, PurePosixPath
 from typing import Callable, Mapping, TextIO
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -1078,6 +1078,25 @@ _LOCAL_CLOCK_RESET_PATTERN = re.compile(
     r"(?i)\bresets?(?:\s+at)?\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)"
     r"\s*\(\s*([A-Za-z0-9._+-]+(?:/[A-Za-z0-9._+-]+)+)\s*\)"
 )
+_CODEX_DATED_LOCAL_RESET_PATTERN = re.compile(
+    r"(?i)\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+"
+    r"(\d{1,2})(?:st|nd|rd|th)?,\s*(\d{4})\s+"
+    r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b"
+)
+_CODEX_DATED_LOCAL_RESET_TRIGGER_PATTERN = re.compile(
+    r"(?i)\b(?:try again|retry|available again|resets?)(?:\s+at)?\s+"
+    r"(?=(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b)"
+)
+_ENGLISH_MONTHS = {
+    name: index
+    for index, name in enumerate(
+        (
+            "jan", "feb", "mar", "apr", "may", "jun",
+            "jul", "aug", "sep", "oct", "nov", "dec",
+        ),
+        start=1,
+    )
+}
 _STRUCTURED_ABSOLUTE_KEYS = frozenset(
     {"reset_at", "resets_at", "reset_time", "resettime", "retry_at"}
 )
@@ -1092,6 +1111,7 @@ def parse_quota_reset(
     *,
     received_at: datetime,
     provider_data: Mapping[str, object] | None = None,
+    local_timezone: tzinfo | None = None,
 ) -> QuotaReset | None:
     """Parse only unambiguous provider reset evidence, normalized to UTC."""
     if agent_key not in {"codex", "claude", "antigravity"}:
@@ -1173,6 +1193,52 @@ def parse_quota_reset(
     if len(distinct_local_clocks) > 1:
         return None
 
+    dated_local_values: list[tuple[datetime, str]] = []
+    if agent_key == "codex" and _CODEX_DATED_LOCAL_RESET_TRIGGER_PATTERN.search(
+        provider_text or ""
+    ):
+        source_zone = local_timezone or _system_local_timezone()
+        timezone_name = _timezone_evidence_name(source_zone, received_at)
+        if source_zone is not None and timezone_name is not None:
+            for month_text, day_text, year_text, hour_text, minute_text, meridiem in (
+                _CODEX_DATED_LOCAL_RESET_PATTERN.findall(provider_text or "")
+            ):
+                hour = int(hour_text)
+                minute = int(minute_text or "0")
+                if not 1 <= hour <= 12 or not 0 <= minute <= 59:
+                    continue
+                hour_24 = hour % 12 + (12 if meridiem.lower() == "pm" else 0)
+                try:
+                    local_naive = datetime(
+                        int(year_text),
+                        _ENGLISH_MONTHS[month_text.lower()],
+                        int(day_text),
+                        hour_24,
+                        minute,
+                    )
+                except (KeyError, ValueError):
+                    continue
+                candidate = _unambiguous_local_datetime(local_naive, source_zone)
+                if (
+                    candidate is None
+                    or candidate.astimezone(timezone.utc) <= received_utc
+                ):
+                    continue
+                dated_local_values.append((candidate, timezone_name))
+    distinct_dated_local = {
+        (item.astimezone(timezone.utc), timezone_name)
+        for item, timezone_name in dated_local_values
+    }
+    if len(distinct_dated_local) == 1:
+        parsed, timezone_name = dated_local_values[0]
+        return QuotaReset(
+            parsed,
+            f"{agent_key}:text:dated-local",
+            timezone_name,
+        )
+    if len(distinct_dated_local) > 1:
+        return None
+
     relative_values: list[timedelta] = []
     for amount_text, unit in _RELATIVE_RESET_PATTERN.findall(provider_text or ""):
         amount = float(amount_text)
@@ -1195,7 +1261,7 @@ def parse_quota_reset(
 
 
 def _unambiguous_local_datetime(
-    local_naive: datetime, source_zone: ZoneInfo
+    local_naive: datetime, source_zone: tzinfo
 ) -> datetime | None:
     """Attach an IANA zone only when the local wall clock identifies one instant."""
     first = local_naive.replace(tzinfo=source_zone, fold=0)
@@ -1206,6 +1272,47 @@ def _unambiguous_local_datetime(
     if roundtrip.replace(tzinfo=None) != local_naive:
         return None
     return first
+
+
+def _system_local_timezone() -> ZoneInfo | None:
+    """Resolve the host's IANA zone; unknown local zones remain fail-closed."""
+    candidates: list[str] = []
+    configured = os.environ.get("TZ", "").strip()
+    if configured:
+        candidates.append(configured)
+    localtime = Path("/etc/localtime")
+    try:
+        resolved = localtime.resolve(strict=True).as_posix()
+    except (OSError, RuntimeError):
+        resolved = ""
+    marker = "/zoneinfo/"
+    if marker in resolved:
+        candidates.append(resolved.split(marker, 1)[1])
+    timezone_file = Path("/etc/timezone")
+    try:
+        configured_file = timezone_file.read_text(encoding="utf-8").strip()
+    except OSError:
+        configured_file = ""
+    if configured_file:
+        candidates.append(configured_file)
+    for candidate in candidates:
+        try:
+            return ZoneInfo(candidate)
+        except (ZoneInfoNotFoundError, ValueError):
+            continue
+    return None
+
+
+def _timezone_evidence_name(
+    source_zone: tzinfo | None, reference: datetime
+) -> str | None:
+    if source_zone is None:
+        return None
+    key = getattr(source_zone, "key", None)
+    if isinstance(key, str) and key.strip():
+        return key
+    localized = reference.astimezone(source_zone)
+    return localized.tzname() or str(source_zone)
 
 
 def _structured_reset_candidates(

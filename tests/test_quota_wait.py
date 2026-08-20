@@ -4,6 +4,7 @@ import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from zoneinfo import ZoneInfo
 
 from agent_adapters import (
     AgentOutputError,
@@ -80,6 +81,51 @@ def test_local_clock_reset_rolls_forward_to_next_day() -> None:
     assert parsed is not None
     assert parsed.reset_at_utc == datetime(
         2026, 8, 18, 18, 10, tzinfo=timezone.utc
+    )
+
+
+def test_codex_dated_local_reset_uses_host_timezone() -> None:
+    received = datetime(2026, 8, 19, 16, 2, 7, tzinfo=timezone.utc)
+
+    parsed = parse_quota_reset(
+        "codex",
+        "You've hit your usage limit. Visit the usage page or try again at "
+        "Aug 20th, 2026 5:36 AM.",
+        received_at=received,
+        local_timezone=ZoneInfo("Europe/Berlin"),
+    )
+
+    assert parsed is not None
+    assert parsed.reset_at_utc == datetime(
+        2026, 8, 20, 3, 36, tzinfo=timezone.utc
+    )
+    assert parsed.parse_path == "codex:text:dated-local"
+    assert parsed.source_timezone == "Europe/Berlin"
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        "usage limit; try again at Aug 19th, 2026 5:36 PM",
+        "usage limit; try again at Feb 30th, 2026 5:36 AM",
+        "usage limit; account period ends Aug 20th, 2026 5:36 AM",
+        "usage limit; try again at Aug 20th, 2026 5:36 AM or "
+        "Aug 20th, 2026 6:36 AM",
+    ),
+)
+def test_codex_dated_local_reset_rejects_past_invalid_or_ambiguous_text(
+    text: str,
+) -> None:
+    received = datetime(2026, 8, 19, 16, 2, 7, tzinfo=timezone.utc)
+
+    assert (
+        parse_quota_reset(
+            "codex",
+            text,
+            received_at=received,
+            local_timezone=ZoneInfo("Europe/Berlin"),
+        )
+        is None
     )
 
 
