@@ -69,6 +69,45 @@ def test_claude_local_clock_reset_with_iana_timezone_is_automatic_evidence() -> 
     assert parsed.source_timezone == "Europe/Berlin"
 
 
+def test_claude_session_limit_process_failure_is_quota_with_automatic_reset() -> None:
+    received = datetime(2026, 8, 20, 16, 34, 33, tzinfo=timezone.utc)
+    failure = classify_agent_failure(
+        "claude",
+        AgentProcessError(
+            "You've hit your session limit · resets 8:40pm (Europe/Berlin)",
+            exit_code=1,
+            provider_data={"type": "result", "subtype": "success"},
+        ),
+        invocation_id="inv-claude-session-limit",
+        received_at=received,
+    )
+
+    assert isinstance(failure, QuotaReachedError)
+    assert failure.process_exit_code == 1
+    assert failure.quota_reset is not None
+    assert failure.quota_reset.reset_at_utc == datetime(
+        2026, 8, 20, 18, 40, tzinfo=timezone.utc
+    )
+    assert failure.quota_reset.parse_path == "claude:text:local-clock"
+    assert failure.quota_reset.source_timezone == "Europe/Berlin"
+
+
+def test_claude_session_limit_review_prose_is_not_a_technical_quota() -> None:
+    failure = classify_agent_failure(
+        "claude",
+        AgentOutputError(
+            "claude returned invalid JSON",
+            provider_text="A session limit is a future operational risk",
+            technical_text="invalid JSON response envelope",
+        ),
+        invocation_id="inv-claude-review-prose",
+        received_at=RECEIVED,
+    )
+
+    assert not isinstance(failure, QuotaReachedError)
+    assert failure.kind is AgentFailureKind.OUTPUT
+
+
 def test_local_clock_reset_rolls_forward_to_next_day() -> None:
     received = datetime(2026, 8, 17, 19, 0, tzinfo=timezone.utc)
 

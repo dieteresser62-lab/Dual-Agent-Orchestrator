@@ -1390,6 +1390,11 @@ def is_quota_or_rate_limit_error(text: str) -> bool:
     return any(marker in raw for marker in markers)
 
 
+_CLAUDE_SESSION_LIMIT_PATTERN = re.compile(
+    r"(?i)\byou(?:'ve| have) hit your session limit\b"
+)
+
+
 _PROVIDER_DIAGNOSTIC_KEYS = frozenset(
     {
         "status",
@@ -1445,8 +1450,15 @@ def classify_agent_failure(
         if isinstance(provider_data, Mapping)
         else ""
     )
-    if is_quota_or_rate_limit_error(technical_text) or is_quota_or_rate_limit_error(
-        structured_text
+    claude_process_session_limit = (
+        agent_key == "claude"
+        and isinstance(exc, AgentProcessError)
+        and _CLAUDE_SESSION_LIMIT_PATTERN.search(technical_text) is not None
+    )
+    if (
+        is_quota_or_rate_limit_error(technical_text)
+        or is_quota_or_rate_limit_error(structured_text)
+        or claude_process_session_limit
     ):
         reset = parse_quota_reset(
             agent_key,
