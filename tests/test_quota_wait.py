@@ -92,6 +92,38 @@ def test_claude_session_limit_process_failure_is_quota_with_automatic_reset() ->
     assert failure.quota_reset.source_timezone == "Europe/Berlin"
 
 
+def test_claude_session_limit_error_envelope_is_quota_with_automatic_reset() -> None:
+    received = datetime(2026, 8, 20, 17, 25, 13, tzinfo=timezone.utc)
+    envelope = {
+        "type": "result",
+        "subtype": "success",
+        "is_error": True,
+        "result": "You've hit your session limit · resets 8:40pm (Europe/Berlin)",
+    }
+    adapter = ClaudeAdapter()
+
+    with pytest.raises(AgentOutputError) as captured:
+        adapter.extract_output(json.dumps(envelope), "", {})
+    # run_agent attaches the real Claude process exit code before classification.
+    captured.value.exit_code = 1
+
+    failure = classify_agent_failure(
+        "claude",
+        captured.value,
+        invocation_id="inv-claude-session-envelope",
+        received_at=received,
+    )
+
+    assert isinstance(failure, QuotaReachedError)
+    assert failure.process_exit_code == 1
+    assert failure.quota_reset is not None
+    assert failure.quota_reset.reset_at_utc == datetime(
+        2026, 8, 20, 18, 40, tzinfo=timezone.utc
+    )
+    assert failure.quota_reset.parse_path == "claude:text:local-clock"
+    assert failure.quota_reset.source_timezone == "Europe/Berlin"
+
+
 def test_claude_session_limit_review_prose_is_not_a_technical_quota() -> None:
     failure = classify_agent_failure(
         "claude",

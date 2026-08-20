@@ -1450,15 +1450,21 @@ def classify_agent_failure(
         if isinstance(provider_data, Mapping)
         else ""
     )
-    claude_process_session_limit = (
+    claude_technical_session_limit = (
         agent_key == "claude"
-        and isinstance(exc, AgentProcessError)
+        and (
+            isinstance(exc, AgentProcessError)
+            or (
+                isinstance(exc, AgentOutputError)
+                and process_exit_code not in (None, 0)
+            )
+        )
         and _CLAUDE_SESSION_LIMIT_PATTERN.search(technical_text) is not None
     )
     if (
         is_quota_or_rate_limit_error(technical_text)
         or is_quota_or_rate_limit_error(structured_text)
-        or claude_process_session_limit
+        or claude_technical_session_limit
     ):
         reset = parse_quota_reset(
             agent_key,
