@@ -14,6 +14,7 @@ from artifact_models import (
     FinalReviewPreflightPayload,
     FindingSeverity,
     FindingTransitionPayload,
+    GatePayload,
     ProviderInputMeasurementPayload,
     RecordType,
     ReviewPayload,
@@ -22,7 +23,14 @@ from artifact_models import (
     WorkflowCompletionPayload,
     canonical_json,
 )
-from workflow_state import WorkflowState, WorkflowStep, WorkUnitKind
+from workflow_state import (
+    GateReason,
+    SliceStatus,
+    WorkflowState,
+    WorkflowStep,
+    WorkUnitKind,
+    WorkUnitStatus,
+)
 from provider_input_budget import ProviderInputBudgetExceeded
 
 
@@ -32,6 +40,10 @@ FINAL_REVIEW_OPERATIONS = frozenset(
 _BOOTSTRAP_TYPES = {
     RecordType.PROVIDER_INPUT_MEASUREMENT,
     RecordType.FINAL_REVIEW_PREFLIGHT,
+}
+_EXTERNAL_PATH_GATE_KINDS = {
+    GateReason.UNEXPECTED_FILE: "unexpected-file",
+    GateReason.QUOTA_RESUME_DIFF: "quota-resume-diff",
 }
 
 
@@ -131,6 +143,7 @@ def run_final_review_preflight(
 
     allowed_paths = set(state.task_scope_patterns)
     allowed_paths.update(path for item in state.slices for path in item.scope_paths)
+    allowed_paths.update(_approved_committed_external_paths(state, records))
     unexpected = tuple(sorted(set(repository_paths) - allowed_paths))
     if unexpected:
         return _deny("correction_required", "UNAUTHORIZED-PATH", (), unexpected, "move the changes into an authorized Slice or revert them")
@@ -177,6 +190,56 @@ def run_final_review_preflight(
         if blockers:
             return _deny("correction_required", "CLAUDE-BLOCKER-OPEN", blockers, (), "close or escalate every Claude blocker before Antigravity")
     return FinalReviewPreflightResult("passed")
+
+
+def _approved_committed_external_paths(
+    state: WorkflowState,
+    records: Sequence[ArtifactRecord],
+) -> frozenset[str]:
+    """Recover exact path grants that were bound into completed Slice commits.
+
+    A user decision alone is insufficient.  The structured chain must contain
+    both its approved user-gate mirror and a commit binding with the identical
+    fingerprint whose target is the completed Slice commit.  This keeps the
+    final-review scope check symmetric with the earlier Slice commit
+    authorization without turning a historical path approval into a general
+    task-scope expansion.
+    """
+    approved_gates = {
+        (item.fingerprint.sha256, item.payload.gate_kind)
+        for item in records
+        if isinstance(item.payload, GatePayload)
+        and item.payload.authority is Role.USER
+        and item.payload.decision == "approved"
+    }
+    commit_bindings = {
+        (item.fingerprint.sha256, item.payload.target)
+        for item in records
+        if isinstance(item.payload, BindingPayload)
+        and item.payload.binding_kind == "commit"
+    }
+    slices_by_id = {item.slice_id: item for item in state.slices}
+    authorized: set[str] = set()
+    for unit in state.work_units:
+        if unit.kind is not WorkUnitKind.SLICE or unit.status is not WorkUnitStatus.COMPLETED:
+            continue
+        slice_record = slices_by_id.get(unit.slice_id)
+        if (
+            slice_record is None
+            or slice_record.status is not SliceStatus.COMPLETED
+            or slice_record.commit_ref is None
+        ):
+            continue
+        for decision in unit.gate_decisions:
+            gate_kind = _EXTERNAL_PATH_GATE_KINDS.get(decision.reason)
+            if gate_kind is None or not decision.approved:
+                continue
+            if (decision.fingerprint, gate_kind) not in approved_gates:
+                continue
+            if (decision.fingerprint, slice_record.commit_ref) not in commit_bindings:
+                continue
+            authorized.update(decision.paths)
+    return frozenset(authorized)
 
 
 def preflight_payload(

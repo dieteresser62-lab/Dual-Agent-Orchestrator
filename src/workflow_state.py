@@ -1965,15 +1965,38 @@ class WorkflowState:
             return self
         return replace(self, bootstrap_checks=(*self.bootstrap_checks, fact), updated_at=updated_at or self.updated_at)
 
-    def await_bootstrap_resume(self, *, detail: str, fingerprint: str, updated_at: str | None = None) -> "WorkflowState":
+    def await_bootstrap_resume(
+        self,
+        *,
+        detail: str,
+        fingerprint: str,
+        paths: tuple[str, ...] = (),
+        updated_at: str | None = None,
+    ) -> "WorkflowState":
         current = self.current_work_unit
+        normalized_paths = tuple(sorted(set(paths)))
         if current.status is WorkUnitStatus.AWAITING_RESUME:
-            if current.gate.reason is GateReason.BOOTSTRAP_CHECK and current.gate.fingerprint == fingerprint:
+            if (
+                current.gate.reason is GateReason.BOOTSTRAP_CHECK
+                and current.gate.fingerprint == fingerprint
+                and current.gate.paths == normalized_paths
+            ):
                 return self
             raise WorkflowStateValidationError("cannot replace an unresolved bootstrap gate")
         if current.status is not WorkUnitStatus.IN_PROGRESS:
             raise WorkflowStateValidationError("only an in-progress work unit can enter bootstrap resume")
-        updated = replace(current, status=WorkUnitStatus.AWAITING_RESUME, gate=GateRecord(status=GateStatus.AWAITING_RESUME, reason=GateReason.BOOTSTRAP_CHECK, detail=detail, fingerprint=fingerprint, resume_step=current.current_step))
+        updated = replace(
+            current,
+            status=WorkUnitStatus.AWAITING_RESUME,
+            gate=GateRecord(
+                status=GateStatus.AWAITING_RESUME,
+                reason=GateReason.BOOTSTRAP_CHECK,
+                detail=detail,
+                fingerprint=fingerprint,
+                paths=normalized_paths,
+                resume_step=current.current_step,
+            ),
+        )
         return self._replace_current_unit(updated, slices=self._slices_with_current_status(SliceStatus.AWAITING_RESUME), updated_at=updated_at)
 
     def resume_after_invocation_halt(

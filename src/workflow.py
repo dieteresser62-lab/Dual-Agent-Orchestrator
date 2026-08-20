@@ -1998,15 +1998,19 @@ class WorkflowEngine:
                     fingerprint = hashlib.sha256(str(error).encode("utf-8")).hexdigest()
                     code = error.result.error_code or "FINAL-REVIEW-PREFLIGHT"
                     detail = str(error)
+                    affected_paths = error.result.affected_paths
                 else:
                     fingerprint = error.measurement.input_digest
                     code = "PROVIDER-INPUT-BUDGET"
                     detail = str(error)
+                    affected_paths = ()
                 driver_state = getattr(self.driver, "active_state", None)
                 if isinstance(driver_state, WorkflowState) and driver_state.run_id == state.run_id:
                     state = replace(state, bootstrap_checks=driver_state.bootstrap_checks)
                 state = state.await_bootstrap_resume(
-                    detail=f"{code} | {detail}", fingerprint=fingerprint
+                    detail=f"{code} | {detail}",
+                    fingerprint=fingerprint,
+                    paths=affected_paths,
                 )
                 self.driver.checkpoint(state, history)
                 return state, None

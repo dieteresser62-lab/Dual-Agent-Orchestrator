@@ -58,12 +58,15 @@ def test_bootstrap_facts_roundtrip_idempotently_and_use_a_resume_gate() -> None:
     )
     state = make_state().with_bootstrap_check(fact).with_bootstrap_check(fact)
     halted = state.await_bootstrap_resume(
-        detail="PROVIDER-INPUT-BUDGET | chars exceeded", fingerprint="c" * 64,
+        detail="PROVIDER-INPUT-BUDGET | chars exceeded",
+        fingerprint="c" * 64,
+        paths=("src/external.py",),
     )
 
     assert WorkflowState.from_dict(state.to_dict()).bootstrap_checks == (fact,)
     assert halted.current_work_unit.status is WorkUnitStatus.AWAITING_RESUME
     assert halted.current_work_unit.gate.reason is GateReason.BOOTSTRAP_CHECK
+    assert halted.current_work_unit.gate.paths == ("src/external.py",)
     assert halted.resume_after_invocation_halt().current_step is WorkflowStep.CODEX_PLAN
     assert state.current_work_unit.max_codex_returns == DEFAULT_MAX_CODEX_RETURNS
     assert state.current_work_unit.gate.status is GateStatus.CLEAR

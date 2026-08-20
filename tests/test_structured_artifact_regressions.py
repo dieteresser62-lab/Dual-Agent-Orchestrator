@@ -32,6 +32,10 @@ from contracts import (
     ValidationStatus,
 )
 from orchestrator import ProductionWorkflowDriver
+from final_review_preflight import (
+    FinalReviewPreflightDenied,
+    FinalReviewPreflightResult,
+)
 from provider_input_budget import (
     PreparedProviderInput,
     ProviderInputBudgetExceeded,
@@ -267,6 +271,51 @@ def test_budget_denial_persists_gate_checkpoint_and_resumes_idempotently(
             if isinstance(record.payload, ProviderInputMeasurementPayload)
         )
     ) == 1
+
+
+def test_final_preflight_denial_exposes_affected_paths_on_resume_gate(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/preflight-paths")
+    state = init_workflow_state(
+        run_id="preflight-paths",
+        task_file=str(repository / "task.md"),
+        branch="feature/preflight-paths",
+        branch_base=_git(repository, "rev-parse", "HEAD"),
+        slice_count=1,
+    )
+    driver = _driver(repository)
+    history = WorkflowHistory(state.current_work_unit_id)
+    driver.checkpoint(state, history)
+    state = driver.active_state or state
+    denial = FinalReviewPreflightDenied(
+        FinalReviewPreflightResult(
+            "denied",
+            "correction_required",
+            "UNAUTHORIZED-PATH",
+            (),
+            ("src/external.py", "tests/test_external.py"),
+            "move the changes into an authorized Slice or revert them",
+        )
+    )
+
+    def denied_provider_start() -> str:
+        raise denial
+
+    halted, output = WorkflowEngine(driver)._invoke_role(
+        state,
+        history,
+        WorkflowContext("assignment", "plan", "slice"),
+        AgentRole.CODEX,
+        denied_provider_start,
+    )
+
+    assert output is None
+    assert halted.current_work_unit.gate.reason.value == "bootstrap_check"
+    assert halted.current_work_unit.gate.paths == (
+        "src/external.py",
+        "tests/test_external.py",
+    )
 
 
 def test_automatic_quota_pause_persists_matching_chain_record_and_resumes(
