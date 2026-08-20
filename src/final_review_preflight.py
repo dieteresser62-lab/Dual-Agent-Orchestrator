@@ -23,6 +23,8 @@ from artifact_models import (
     WorkflowCompletionPayload,
     canonical_json,
 )
+from gates import matches_path_patterns
+from provider_input_budget import ProviderInputBudgetExceeded
 from workflow_state import (
     GateReason,
     SliceStatus,
@@ -31,7 +33,6 @@ from workflow_state import (
     WorkUnitKind,
     WorkUnitStatus,
 )
-from provider_input_budget import ProviderInputBudgetExceeded
 
 
 FINAL_REVIEW_OPERATIONS = frozenset(
@@ -141,10 +142,19 @@ def run_final_review_preflight(
             if any(records_by_id[ref].fingerprint != item.fingerprint for ref in references):
                 return _deny("technical", "FINGERPRINT-MISMATCH", (item.record_id, *references), (), "restore fingerprint-identical binding references")
 
-    allowed_paths = set(state.task_scope_patterns)
-    allowed_paths.update(path for item in state.slices for path in item.scope_paths)
-    allowed_paths.update(_approved_committed_external_paths(state, records))
-    unexpected = tuple(sorted(set(repository_paths) - allowed_paths))
+    allowed_patterns = (
+        *state.task_scope_patterns,
+        *(path for item in state.slices for path in item.scope_paths),
+    )
+    approved_external_paths = set(_approved_committed_external_paths(state, records))
+    unexpected = tuple(
+        sorted(
+            path
+            for path in set(repository_paths)
+            if path not in approved_external_paths
+            and not matches_path_patterns(path, allowed_patterns)
+        )
+    )
     if unexpected:
         return _deny("correction_required", "UNAUTHORIZED-PATH", (), unexpected, "move the changes into an authorized Slice or revert them")
 

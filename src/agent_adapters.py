@@ -525,8 +525,24 @@ class ClaudeAdapter(_BaseAdapter):
         self, prompt: str, command: list[str]
     ) -> tuple[ProviderInputComponent, ...]:
         _ = prompt
-        if self._review_manifest_file is None or not self._review_packet_files:
+        if (
+            self._runtime_dir is None
+            or self._review_manifest_file is None
+            or not self._review_packet_files
+        ):
             raise RuntimeError("claude provider input was not prepared")
+        runtime_path = str(self._runtime_dir)
+        runtime_prefix = f"dao-{self.name}-runtime-"
+        random_suffix = self._runtime_dir.name.removeprefix(runtime_prefix)
+        stable_runtime_path = str(
+            self._runtime_dir.with_name(runtime_prefix + "_" * len(random_suffix))
+        )
+
+        def stable_transport_paths(content: str) -> str:
+            # The path is required by Claude's Read tool, but its random mkdtemp
+            # suffix is transport metadata rather than part of the logical request.
+            return content.replace(runtime_path, stable_runtime_path)
+
         components = [
             ProviderInputComponent(
                 f"packet_chunk_{index:03d}", packet.read_text(encoding="utf-8")
@@ -537,7 +553,9 @@ class ClaudeAdapter(_BaseAdapter):
             (
                 ProviderInputComponent(
                     "packet_manifest",
-                    self._review_manifest_file.read_text(encoding="utf-8"),
+                    stable_transport_paths(
+                        self._review_manifest_file.read_text(encoding="utf-8")
+                    ),
                 ),
                 ProviderInputComponent(
                     "system_policy", command[command.index("--system-prompt") + 1]
@@ -545,7 +563,9 @@ class ClaudeAdapter(_BaseAdapter):
                 ProviderInputComponent(
                     "response_schema", command[command.index("--json-schema") + 1]
                 ),
-                ProviderInputComponent("start_directive", command[-1]),
+                ProviderInputComponent(
+                    "start_directive", stable_transport_paths(command[-1])
+                ),
             )
         )
         return tuple(components)

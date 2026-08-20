@@ -186,6 +186,26 @@ def test_each_final_transition_accepts_only_currently_available_facts(
     assert result.passed
 
 
+def test_preflight_matches_repository_paths_against_task_scope_globs(
+    tmp_path: Path,
+) -> None:
+    state = replace(
+        _state(WorkflowStep.CODEX_FINAL_REVIEW), task_scope_patterns=("src/**",)
+    )
+    bridge = ArtifactBridge(ArtifactStore(tmp_path, state.run_id))
+    _attest(bridge)
+    measurement = _measurement(bridge, state, state.current_step.value)
+
+    result = run_final_review_preflight(
+        state=state,
+        records=bridge.store.load_chain(),
+        measurement_record=measurement,
+        repository_paths=("src/nested/one.py",),
+    )
+
+    assert result.passed
+
+
 def test_preflight_denies_missing_attestation_unexpected_path_and_premature_completion(tmp_path: Path) -> None:
     state = _state(WorkflowStep.CODEX_FINAL_REVIEW)
     bridge = ArtifactBridge(ArtifactStore(tmp_path, state.run_id))

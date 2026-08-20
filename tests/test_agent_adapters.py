@@ -17,6 +17,7 @@ from agent_adapters import (
     build_agent_registry,
 )
 from agent_config import AgentSettings
+from provider_input_budget import default_provider_input_budget_policy, measure_provider_input
 
 
 def _settings(
@@ -175,6 +176,55 @@ def test_prepared_claude_input_is_lossless_and_includes_every_model_channel() ->
         assert "response_schema" in by_name
         assert "start_directive" in by_name
         assert prepared.stdin_text is None
+    finally:
+        adapter.cleanup()
+
+
+def test_prepared_claude_input_digest_ignores_random_runtime_transport_paths() -> None:
+    adapter = ClaudeAdapter(_settings("claude"))
+    policy = default_provider_input_budget_policy()
+    prompt = "stable review packet\n" * 3
+
+    first = adapter.prepare_provider_input(prompt)
+    first_runtime_path = first.command[first.command.index("--add-dir") + 1]
+    first_manifest = Path(first_runtime_path, "review-manifest.md").read_text(
+        encoding="utf-8"
+    )
+    first_measurement = measure_provider_input(
+        first,
+        provider="claude",
+        role="claude",
+        operation="claude_final_review",
+        binding_fingerprint="f" * 64,
+        policy=policy,
+    )
+    second = adapter.prepare_provider_input(prompt)
+    second_runtime_path = second.command[second.command.index("--add-dir") + 1]
+    second_measurement = measure_provider_input(
+        second,
+        provider="claude",
+        role="claude",
+        operation="claude_final_review",
+        binding_fingerprint="f" * 64,
+        policy=policy,
+    )
+    try:
+        assert first_runtime_path != second_runtime_path
+        assert first.components == second.components
+        assert first_measurement.input_digest == second_measurement.input_digest
+        first_by_name = {
+            component.name: component.content for component in first.components
+        }
+        assert len(first_by_name["packet_manifest"]) == len(first_manifest)
+        assert len(first_by_name["start_directive"]) == len(first.command[-1])
+        assert all(
+            first_runtime_path not in component.content
+            for component in first.components
+        )
+        assert all(
+            second_runtime_path not in component.content
+            for component in second.components
+        )
     finally:
         adapter.cleanup()
 
