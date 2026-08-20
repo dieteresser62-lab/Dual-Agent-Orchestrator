@@ -42,6 +42,7 @@ from validation_matrix import ValidationCommand, ValidationRequest
 from repo_changes import ChangedPath, RepositoryChanges
 from provider_input_budget import (
     PreparedProviderInput,
+    ProviderInputBudgetError,
     ProviderInputBudgetExceeded,
     ProviderInputBudgetPolicy,
     ProviderInputBudgetRule,
@@ -137,6 +138,22 @@ def test_budget_denial_happens_after_preparation_but_before_capability_or_proces
     assert exc_info.value.measurement.violated_dimensions == ("chars", "bytes")
     assert measurements == [exc_info.value.measurement]
     assert calls == {"prepare": 1, "capability": 0, "process": 0, "cleanup": 1}
+
+
+def test_unregistered_adapter_is_denied_before_preparation_or_process() -> None:
+    class UnregisteredAdapter:
+        name = "fourth-provider"
+
+    with pytest.raises(
+        ProviderInputBudgetError,
+        match="has no provider input budget registration",
+    ):
+        run_agent(
+            UnregisteredAdapter(),  # type: ignore[arg-type]
+            "prompt",
+            config=OrchestratorConfig(dry_run=False),
+            shorten=lambda text, limit: (text or "")[:limit],
+        )
 
 
 def test_compact_live_output_extracts_codex_text_and_hides_reviewer_envelopes() -> None:
@@ -834,7 +851,7 @@ def test_run_tests_snapshot_uses_shell_true_and_raw_command(monkeypatch) -> None
 
 def test_run_agent_calls_adapter_cleanup_on_timeout(monkeypatch) -> None:
     class TimeoutAdapter:
-        name = "timeout"
+        name = "codex"
         cli_binary = "timeout"
         model = "model"
         effort = "medium"
@@ -896,7 +913,7 @@ def test_run_agent_calls_adapter_cleanup_on_timeout(monkeypatch) -> None:
 
 def test_run_agent_preserves_exit_code_when_adapter_rejects_envelope(monkeypatch) -> None:
     class RejectingAdapter:
-        name = "rejecting"
+        name = "codex"
         cli_binary = "rejecting"
         model = "model"
         effort = "medium"
@@ -976,7 +993,7 @@ def test_reviewer_process_pwd_matches_disposable_working_directory(
     captured: dict[str, object] = {}
 
     class ReviewerAdapter:
-        name = "reviewer"
+        name = "claude"
         cli_binary = "reviewer"
         model = "model"
         effort = "medium"

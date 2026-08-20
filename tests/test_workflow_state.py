@@ -49,6 +49,12 @@ def test_init_workflow_state_uses_v3_and_one_based_ids() -> None:
     assert state.current_step is WorkflowStep.CODEX_PLAN
     assert state.current_work_unit.round_number == 1
     assert state.current_work_unit.codex_return_count == 0
+    assert state.current_work_unit.max_codex_returns == DEFAULT_MAX_CODEX_RETURNS
+    assert state.current_work_unit.gate.status is GateStatus.CLEAR
+    assert state.branch_base == "a" * 40
+    assert state.current_slice.start_commit == "a" * 40
+    assert state.current_slice.commit_ref is None
+    assert state.slices[1].start_commit is None
 
 
 def test_bootstrap_facts_roundtrip_idempotently_and_use_a_resume_gate() -> None:
@@ -68,12 +74,6 @@ def test_bootstrap_facts_roundtrip_idempotently_and_use_a_resume_gate() -> None:
     assert halted.current_work_unit.gate.reason is GateReason.BOOTSTRAP_CHECK
     assert halted.current_work_unit.gate.paths == ("src/external.py",)
     assert halted.resume_after_invocation_halt().current_step is WorkflowStep.CODEX_PLAN
-    assert state.current_work_unit.max_codex_returns == DEFAULT_MAX_CODEX_RETURNS
-    assert state.current_work_unit.gate.status is GateStatus.CLEAR
-    assert state.branch_base == "a" * 40
-    assert state.current_slice.start_commit == "a" * 40
-    assert state.current_slice.commit_ref is None
-    assert state.slices[1].start_commit is None
 
 
 def test_hardened_task_contract_roundtrips_in_state() -> None:

@@ -2426,7 +2426,7 @@ def test_unavailable_validation_uses_policy_gate_before_reviewer() -> None:
     assert driver.reviewer_calls == []
 
 
-def test_antigravity_is_not_called_when_fingerprint_changes_after_claude() -> None:
+def test_changed_fingerprint_rewinds_to_claude_before_antigravity() -> None:
     approved = _changes("1", "src/early.py", TEST_FILE)
     mutated = _changes("2", "src/early.py", "src/latest.py", TEST_FILE)
 
@@ -2442,14 +2442,27 @@ def test_antigravity_is_not_called_when_fingerprint_changes_after_claude() -> No
     driver = MutatingDriver(
         snapshots=[approved],
         codex_outputs=[_codex_ready()],
-        reviewer_outputs=[_review_approval(AgentRole.CLAUDE)],
+        reviewer_outputs=[
+            _review_approval(AgentRole.CLAUDE),
+            _review_stop(AgentRole.CLAUDE, "DOMAIN-001"),
+        ],
+        deltas={(approved.fingerprint, mutated.fingerprint): mutated.full_diff},
     )
 
-    with pytest.raises(WorkflowExecutionError, match="current fingerprint"):
-        WorkflowEngine(driver).run_current_work_unit(_slice_state(), _context())
+    result = WorkflowEngine(driver).run_current_work_unit(
+        _slice_state(),
+        replace(
+            _context(),
+            stop_rules=(StopRule("DOMAIN-001", "review current fingerprint"),),
+        ),
+    )
 
-    assert [call.reviewer for call in driver.reviewer_calls] == [AgentRole.CLAUDE]
-    assert driver.validation_calls == [approved.fingerprint]
+    assert result.exit_code == 4
+    assert [call.reviewer for call in driver.reviewer_calls] == [
+        AgentRole.CLAUDE,
+        AgentRole.CLAUDE,
+    ]
+    assert driver.validation_calls == [approved.fingerprint, mutated.fingerprint]
     assert driver.commit_calls == []
 
 

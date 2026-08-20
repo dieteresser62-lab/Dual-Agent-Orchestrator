@@ -35,6 +35,7 @@ from provider_input_budget import (
     PROVIDER_OPERATIONS,
     PreparedProviderInput,
     ProviderInputComponent,
+    ProviderInputBudgetError,
     ProviderInputBudgetExceeded,
     ProviderInputBudgetPolicy,
     ProviderInputMeasurement,
@@ -818,6 +819,10 @@ def run_agent(
     agent_key = adapter.name
     if config.dry_run:
         return build_dry_run_agent_output(agent_key, prompt)
+    if agent_key not in PROVIDER_OPERATIONS:
+        raise ProviderInputBudgetError(
+            f"adapter {agent_key!r} has no provider input budget registration"
+        )
 
     workspace: ReviewerWorkspace | None = None
     execution_root = config.repo_root.resolve()
@@ -850,39 +855,37 @@ def run_agent(
             "claude": "claude_slice_review",
             "antigravity": "antigravity_slice_review",
         }.get(agent_key)
-        measurement = None
-        if agent_key in PROVIDER_OPERATIONS:
-            if effective_operation is None:
-                raise ValueError(f"provider input operation is required for {agent_key}")
-            measurement = measure_provider_input(
-                prepared,
-                provider=agent_key,
-                role=agent_key,
-                operation=effective_operation,
-                binding_fingerprint=binding_fingerprint,
-                policy=config.provider_input_budget,
-            )
-            if pre_start_callback is not None:
-                pre_start_callback(measurement)
-            logger.info(
-                "[PROVIDER_INPUT] provider=%s role=%s operation=%s allowed=%s "
-                "chars=%s/%s bytes=%s/%s input_digest=%s policy_digest=%s "
-                "largest_component=%s violations=%s",
-                measurement.provider,
-                measurement.role,
-                measurement.operation,
-                measurement.allowed,
-                measurement.total_chars,
-                measurement.effective_limit_chars,
-                measurement.total_bytes,
-                measurement.effective_limit_bytes,
-                measurement.input_digest,
-                measurement.policy_digest,
-                measurement.largest_component,
-                ",".join(measurement.violated_dimensions) or "none",
-            )
-            if not measurement.allowed:
-                raise ProviderInputBudgetExceeded(measurement)
+        if effective_operation is None:
+            raise ValueError(f"provider input operation is required for {agent_key}")
+        measurement = measure_provider_input(
+            prepared,
+            provider=agent_key,
+            role=agent_key,
+            operation=effective_operation,
+            binding_fingerprint=binding_fingerprint,
+            policy=config.provider_input_budget,
+        )
+        if pre_start_callback is not None:
+            pre_start_callback(measurement)
+        logger.info(
+            "[PROVIDER_INPUT] provider=%s role=%s operation=%s allowed=%s "
+            "chars=%s/%s bytes=%s/%s input_digest=%s policy_digest=%s "
+            "largest_component=%s violations=%s",
+            measurement.provider,
+            measurement.role,
+            measurement.operation,
+            measurement.allowed,
+            measurement.total_chars,
+            measurement.effective_limit_chars,
+            measurement.total_bytes,
+            measurement.effective_limit_bytes,
+            measurement.input_digest,
+            measurement.policy_digest,
+            measurement.largest_component,
+            ",".join(measurement.violated_dimensions) or "none",
+        )
+        if not measurement.allowed:
+            raise ProviderInputBudgetExceeded(measurement)
 
         verify_agent_capabilities(adapter, strict_dns=config.strict_preflight)
         command_parts = list(prepared.command)

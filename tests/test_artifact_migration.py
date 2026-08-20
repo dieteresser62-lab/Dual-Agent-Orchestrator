@@ -5,11 +5,15 @@ from pathlib import Path
 
 import pytest
 
+import artifact_migration
 from artifact_bridge import ArtifactBridge
 from artifact_migration import ArtifactResumeError, resolve_resume_state
 from artifact_models import (
     BindingPayload,
     CommandSpec,
+    CorrectionWorkUnitPayload,
+    FindingSeverity,
+    FindingTransitionPayload,
     FingerprintKind,
     PlanPayload,
     ReviewPayload,
@@ -30,6 +34,7 @@ from workflow_state import (
     InvocationFailureRecord,
     ProtocolBinding,
     ProtocolMode,
+    Reviewer,
     WorkflowState,
     WorkflowStep,
     WorkUnitKind,
@@ -273,6 +278,30 @@ def test_structured_resume_halts_when_mirror_quota_pause_has_no_chain_record(
         resolve_resume_state(tmp_path, state)
 
 
+def test_runtime_finding_closure_overrides_correction_work_unit_attribution(
+    tmp_path: Path,
+) -> None:
+    state = _state(tmp_path).record_review_denial(
+        reviewer=Reviewer.CLAUDE,
+        open_findings=("C-05",),
+        return_step=WorkflowStep.CODEX_CORRECTION,
+    )
+    state = replace(
+        state,
+        runtime_history={
+            "findings": [
+                {
+                    "finding_id": "C-05",
+                    "status": "CLOSED",
+                }
+            ]
+        },
+    )
+
+    assert state.current_work_unit.open_findings == ("C-05",)
+    assert artifact_migration._finding_statuses(state) == {"C-05": "closed"}
+
+
 def test_structured_resume_halts_when_mirror_transient_retry_has_no_chain_record(
     tmp_path: Path,
 ) -> None:
@@ -304,6 +333,457 @@ def test_structured_resume_halts_when_mirror_transient_retry_has_no_chain_record
         match="transient retries differ from state-v3",
     ):
         resolve_resume_state(tmp_path, state)
+
+
+def _correction_round_state(repository: Path) -> WorkflowState:
+    state = _state(repository)
+    return (
+        state.complete_current_slice(commit_ref="d" * 40)
+        .start_final_review_work_unit()
+        .complete_current_work_unit()
+        .start_correction_work_unit(
+            start_commit="d" * 40,
+            scope_paths=("src/resume.py",),
+            start_fingerprint="e" * 64,
+            finding_ids=("C-01",),
+        )
+    )
+
+
+def _append_correction_round(
+    bridge: ArtifactBridge,
+    state: WorkflowState,
+    *,
+    round_number: int,
+    finding_ids: tuple[str, ...],
+) -> None:
+    bridge.append(
+        CorrectionWorkUnitPayload(
+            str(state.current_slice_id),
+            round_number,
+            state.current_slice.scope_paths,
+            finding_ids,
+        ),
+        logical_id=f"work-unit-{state.current_work_unit_id}",
+        idempotency_key=(
+            f"correction-work-unit:{state.current_work_unit_id}:round:{round_number}"
+        ),
+        fingerprint_sha256="a" * 64,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+
+
+def _append_open_finding(
+    bridge: ArtifactBridge,
+    *,
+    finding_id: str,
+) -> None:
+    bridge.append(
+        FindingTransitionPayload(
+            finding_id=finding_id,
+            reporter=Role.CLAUDE,
+            actor=Role.CLAUDE,
+            action="opened",
+            severity=FindingSeverity.BLOCKER,
+            finding_status="open",
+            rationale="correction round finding",
+        ),
+        logical_id=f"finding-{finding_id}",
+        idempotency_key=f"finding-{finding_id}-opened",
+        fingerprint_sha256="a" * 64,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+
+
+def _pending_review_chain(
+    repository: Path,
+) -> tuple[
+    WorkflowState,
+    tuple[object, ...],
+    object,
+    object,
+    object,
+    object,
+    object,
+]:
+    state = _correction_round_state(repository).with_current_step(
+        WorkflowStep.CLAUDE_SLICE_REVIEW
+    )
+    bridge = ArtifactBridge(ArtifactStore(repository, state.run_id))
+    attestation = bridge.append(
+        ValidationAttestationPayload(
+            results=(
+                ValidationResult(
+                    command=CommandSpec("pytest", ("python3", "-m", "pytest")),
+                    outcome="pass",
+                    exit_code=0,
+                    output_sha256="e" * 64,
+                ),
+            ),
+            attested_by=Role.ORCHESTRATOR,
+        ),
+        logical_id="validation-pending-review",
+        idempotency_key="validation-pending-review",
+        fingerprint_sha256="d" * 64,
+    )
+    prior = bridge.append(
+        FindingTransitionPayload(
+            finding_id="C-01",
+            reporter=Role.CLAUDE,
+            actor=Role.CLAUDE,
+            action="opened",
+            severity=FindingSeverity.BLOCKER,
+            finding_status="open",
+            rationale="prior correction finding",
+        ),
+        logical_id="finding-C-01",
+        idempotency_key="finding-C-01-opened",
+        fingerprint_sha256="d" * 64,
+    )
+    review = bridge.append(
+        ReviewPayload(
+            reviewer=Role.CLAUDE,
+            work_unit_id=str(state.current_work_unit_id),
+            verdict="denied",
+            finding_ids=("C-01", "C-07"),
+            evidence=None,
+        ),
+        logical_id=f"review-claude-{state.current_work_unit_id}-1",
+        idempotency_key="pending-review",
+        fingerprint_sha256="d" * 64,
+    )
+    current = bridge.append(
+        FindingTransitionPayload(
+            finding_id="C-07",
+            reporter=Role.CLAUDE,
+            actor=Role.CLAUDE,
+            action="opened",
+            severity=FindingSeverity.BLOCKER,
+            finding_status="open",
+            rationale="new correction finding",
+        ),
+        logical_id="finding-C-07",
+        idempotency_key="finding-C-07-opened",
+        fingerprint_sha256="d" * 64,
+    )
+    correction = bridge.append(
+        CorrectionWorkUnitPayload(
+            slice_id=str(state.current_slice_id),
+            round_number=2,
+            paths=state.current_slice.scope_paths,
+            finding_ids=("C-07",),
+        ),
+        logical_id=f"work-unit-{state.current_work_unit_id}",
+        idempotency_key="correction-round-2",
+        fingerprint_sha256=state.task_digest,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    return state, bridge.store.load_chain(), attestation, prior, review, current, correction
+
+
+@pytest.mark.parametrize(
+    "failure_mode",
+    (
+        "wrong-round",
+        "wrong-reviewer",
+        "approved-verdict",
+        "finding-outside-review",
+        "wrong-finding-prefix",
+        "correction-before-review",
+        "duplicate-review",
+    ),
+)
+def test_pending_correction_resume_exception_rejects_near_misses(
+    tmp_path: Path,
+    failure_mode: str,
+) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    state, chain, _attestation, _prior, review, _current, correction = (
+        _pending_review_chain(repository)
+    )
+    if failure_mode == "wrong-round":
+        correction = replace(
+            correction,
+            payload=replace(correction.payload, round_number=3),
+        )
+    elif failure_mode == "wrong-reviewer":
+        review = replace(
+            review,
+            payload=replace(review.payload, reviewer=Role.ANTIGRAVITY),
+        )
+    elif failure_mode == "approved-verdict":
+        review = replace(
+            review,
+            payload=replace(
+                review.payload,
+                verdict="approved",
+                evidence="approval evidence",
+            ),
+        )
+    elif failure_mode == "finding-outside-review":
+        correction = replace(
+            correction,
+            payload=replace(correction.payload, finding_ids=("C-08",)),
+        )
+    elif failure_mode == "wrong-finding-prefix":
+        correction = replace(
+            correction,
+            payload=replace(correction.payload, finding_ids=("A-07",)),
+        )
+    chain = tuple(
+        correction if item.record_id == correction.record_id else
+        review if item.record_id == review.record_id else item
+        for item in chain
+    )
+    if failure_mode == "correction-before-review":
+        items = list(chain)
+        review_index = items.index(review)
+        correction_index = items.index(correction)
+        items[review_index], items[correction_index] = (
+            items[correction_index],
+            items[review_index],
+        )
+        chain = tuple(items)
+    elif failure_mode == "duplicate-review":
+        chain = (*chain, review)
+
+    assert not artifact_migration._recoverable_pending_correction_record(
+        state, chain, correction
+    ), failure_mode
+
+
+@pytest.mark.parametrize(
+    "failure_mode",
+    (
+        "wrong-reviewer",
+        "approved-verdict",
+        "missing-attestation",
+        "finding-outside-review",
+        "wrong-transition-actor",
+        "transition-before-review",
+        "duplicate-review",
+    ),
+)
+def test_pending_review_finding_resume_exception_rejects_near_misses(
+    tmp_path: Path,
+    failure_mode: str,
+) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    state, chain, attestation, prior, review, current, _correction = (
+        _pending_review_chain(repository)
+    )
+    if failure_mode == "wrong-reviewer":
+        review = replace(
+            review,
+            payload=replace(review.payload, reviewer=Role.ANTIGRAVITY),
+        )
+    elif failure_mode == "approved-verdict":
+        review = replace(
+            review,
+            payload=replace(
+                review.payload,
+                verdict="approved",
+                evidence="approval evidence",
+            ),
+        )
+    elif failure_mode == "finding-outside-review":
+        current = replace(
+            current,
+            payload=replace(current.payload, finding_id="C-08"),
+        )
+    elif failure_mode == "wrong-transition-actor":
+        current = replace(
+            current,
+            payload=replace(
+                current.payload,
+                reporter=Role.ANTIGRAVITY,
+                actor=Role.ANTIGRAVITY,
+            ),
+        )
+    chain = tuple(
+        review if item.record_id == review.record_id else
+        current if item.record_id == current.record_id else item
+        for item in chain
+    )
+    if failure_mode == "missing-attestation":
+        chain = tuple(item for item in chain if item.record_id != attestation.record_id)
+    elif failure_mode == "transition-before-review":
+        items = list(chain)
+        review_index = items.index(review)
+        current_index = items.index(current)
+        items[review_index], items[current_index] = items[current_index], items[review_index]
+        chain = tuple(items)
+    elif failure_mode == "duplicate-review":
+        chain = (*chain, review)
+    latest = {
+        "C-01": prior,
+        current.payload.finding_id: current,
+    }
+
+    assert not artifact_migration._recoverable_pending_review_finding_gap(
+        state,
+        chain,
+        {"C-01": "open"},
+        latest,
+    ), failure_mode
+
+
+def test_pending_approved_review_closure_is_admitted_for_exact_local_replay(
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    state, chain, _attestation, prior, review, transition, correction = (
+        _pending_review_chain(repository)
+    )
+    review = replace(
+        review,
+        payload=replace(
+            review.payload,
+            verdict="approved",
+            finding_ids=("C-01",),
+            evidence="review identity | residual risk | break condition",
+        ),
+    )
+    transition = replace(
+        transition,
+        payload=replace(
+            transition.payload,
+            finding_id="C-01",
+            action="status_changed",
+            finding_status="closed",
+            rationale="the correction is verified",
+        ),
+    )
+    chain = tuple(
+        review
+        if item.record_id == review.record_id
+        else transition
+        if item.record_id == transition.record_id
+        else item
+        for item in chain
+        if item.record_id != correction.record_id
+    )
+
+    assert artifact_migration._recoverable_pending_review_finding_gap(
+        state,
+        chain,
+        {"C-01": "open"},
+        {"C-01": transition},
+    )
+
+
+def _append_completed_slice_binding(
+    repository: Path,
+    state: WorkflowState,
+) -> WorkflowState:
+    attestation, review = _authorization_records(
+        repository,
+        state,
+        attestation_fingerprint="d" * 64,
+        review_fingerprint="d" * 64,
+    )
+    ArtifactBridge(ArtifactStore(repository, state.run_id)).append(
+        BindingPayload(
+            binding_kind="commit",
+            target="d" * 40,
+            attestation_id=attestation.record_id,
+            approval_ids=(review.record_id,),
+        ),
+        logical_id="commit-1",
+        idempotency_key="commit:1",
+        fingerprint_sha256="d" * 64,
+    )
+    return replace(
+        state,
+        runtime_history={
+            "attestations": [
+                {
+                    "attestation_id": attestation.logical_id,
+                    "diff_fingerprint": attestation.fingerprint.sha256,
+                }
+            ]
+        },
+    )
+
+
+def test_structured_resume_compares_correction_findings_with_their_own_round(
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    first_round = _append_completed_slice_binding(
+        repository, _correction_round_state(repository)
+    )
+    second_round = first_round.record_review_denial(
+        reviewer=Reviewer.CLAUDE,
+        open_findings=("C-07",),
+        return_step=WorkflowStep.CODEX_FINAL_CORRECTION,
+    )
+    bridge = ArtifactBridge(ArtifactStore(repository, second_round.run_id))
+    bridge.append(
+        TaskPayload("feature/resume", ("src/resume.py",), "a" * 64),
+        logical_id="task-contract",
+        idempotency_key="task-contract",
+        fingerprint_sha256="a" * 64,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    _append_correction_round(
+        bridge, first_round, round_number=1, finding_ids=("C-01",)
+    )
+    _append_correction_round(
+        bridge, second_round, round_number=2, finding_ids=("C-07",)
+    )
+    _append_open_finding(bridge, finding_id="C-07")
+
+    resolution = resolve_resume_state(repository, second_round)
+
+    assert resolution.record_head_id is not None
+
+
+@pytest.mark.parametrize(
+    "record_mode",
+    ("missing-latest", "wrong-latest-findings", "future-round"),
+)
+def test_structured_resume_rejects_invalid_latest_correction_round(
+    tmp_path: Path,
+    record_mode: str,
+) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    first_round = _append_completed_slice_binding(
+        repository, _correction_round_state(repository)
+    )
+    second_round = first_round.record_review_denial(
+        reviewer=Reviewer.CLAUDE,
+        open_findings=("C-07",),
+        return_step=WorkflowStep.CODEX_FINAL_CORRECTION,
+    )
+    bridge = ArtifactBridge(ArtifactStore(repository, second_round.run_id))
+    bridge.append(
+        TaskPayload("feature/resume", ("src/resume.py",), "a" * 64),
+        logical_id="task-contract",
+        idempotency_key="task-contract",
+        fingerprint_sha256="a" * 64,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    _append_correction_round(
+        bridge, first_round, round_number=1, finding_ids=("C-01",)
+    )
+    if record_mode == "wrong-latest-findings":
+        _append_correction_round(
+            bridge, second_round, round_number=2, finding_ids=("C-99",)
+        )
+    elif record_mode == "future-round":
+        _append_correction_round(
+            bridge, second_round, round_number=3, finding_ids=("C-07",)
+        )
+    _append_open_finding(bridge, finding_id="C-07")
+
+    with pytest.raises(ArtifactResumeError, match="round|finding attribution"):
+        resolve_resume_state(repository, second_round)
 
 
 def test_structured_resume_accepts_matching_transient_retry_record(

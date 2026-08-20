@@ -556,6 +556,26 @@ class ReviewerInvocation:
 
 
 @dataclass(frozen=True)
+class PersistedReviewerReplay:
+    output: str
+    fingerprint: str
+    round_number: int
+    verdict: str
+
+    def __post_init__(self) -> None:
+        if not self.output.strip():
+            raise ValueError("persisted reviewer replay output must be non-empty")
+        if not SHA256_PATTERN.fullmatch(self.fingerprint):
+            raise ValueError("persisted reviewer replay requires a SHA-256 fingerprint")
+        if self.round_number < 1:
+            raise ValueError("persisted reviewer replay round must be positive")
+        if self.verdict not in {"approved", "denied"}:
+            raise ValueError(
+                "persisted reviewer replay verdict must be approved or denied"
+            )
+
+
+@dataclass(frozen=True)
 class ContractRepairInvocation:
     reviewer: AgentRole
     rejected_output: str
@@ -1654,6 +1674,125 @@ class WorkflowEngine:
             raise WorkflowExecutionError(
                 "Antigravity cannot run before an approving Claude review"
             )
+        replay_loader = getattr(self.driver, "recover_pending_reviewer", None)
+        replay = (
+            replay_loader(
+                reviewer=reviewer,
+                work_unit_id=unit.work_unit_id,
+                step=state.current_step,
+                round_number=(
+                    1
+                    + sum(
+                        isinstance(event, ReviewAuditEvent)
+                        and event.result.reviewer is reviewer
+                        for event in history.events
+                    )
+                ),
+            )
+            if callable(replay_loader)
+            else None
+        )
+        if replay is not None:
+            if not isinstance(replay, PersistedReviewerReplay):
+                raise WorkflowExecutionError(
+                    "pending reviewer recovery returned an invalid replay contract"
+                )
+            attestation = next(
+                (
+                    item
+                    for item in reversed(history.attestations)
+                    if item.diff_fingerprint == replay.fingerprint
+                ),
+                None,
+            )
+            if attestation is None or not attestation.complete:
+                raise WorkflowExecutionError(
+                    "pending reviewer recovery has no complete mirrored attestation"
+                )
+            contract = StepContract(
+                name=f"work-unit-{unit.work_unit_id}-{state.current_step.value}-replay",
+                reviewer=reviewer,
+                approval_marker=(
+                    ApprovalMarker.PLAN
+                    if is_plan_review
+                    else ApprovalMarker.FINAL
+                    if is_final_review
+                    else ApprovalMarker.SLICE
+                ),
+                slice_id="FINAL" if is_final_review else f"{unit.slice_id:02d}",
+                round_number=replay.round_number,
+                review_fingerprint=replay.fingerprint,
+                validation_attestation=attestation,
+                expected_test_files=(),
+                test_changes_approved=True,
+                red_state_followup_slice=context.red_state_followup_slice,
+                existing_finding_ids=tuple(
+                    sorted(finding.finding_id for finding in history.findings)
+                ),
+                allow_new_observations=unit.kind is not WorkUnitKind.CORRECTION,
+            )
+            try:
+                normalized = normalize_review_contract_output(
+                    replay.output, contract, history.findings
+                )
+                result = validate_review_response(
+                    normalized, contract, history.findings
+                )
+            except ContractValidationError as exc:
+                raise WorkflowExecutionError(
+                    f"persisted reviewer replay no longer validates: {exc}"
+                ) from exc
+            expected_approval = replay.verdict == "approved"
+            if result.stopped or result.approval is not expected_approval:
+                raise WorkflowExecutionError(
+                    "pending reviewer recovery verdict differs from its durable record"
+                )
+            self._persist_structured(
+                "persist_review_contract",
+                result,
+                replay.output,
+                replay.fingerprint,
+                replay.round_number,
+                history.findings,
+            )
+            history = self._record_review(
+                history,
+                unit.slice_id,
+                replay.round_number,
+                result,
+                replay.fingerprint,
+                track_slice_approval=True,
+                allowed_finding_origins=tuple(
+                    sorted(
+                        {
+                            finding.origin.slice_id
+                            for finding in history.findings
+                            if finding.origin.slice_id != f"{unit.slice_id:02d}"
+                        }
+                    )
+                ),
+            )
+            if result.approval is True:
+                state = state.with_current_step(
+                    WorkflowStep.ANTIGRAVITY_SLICE_REVIEW
+                    if reviewer is AgentRole.CLAUDE
+                    else WorkflowStep.SLICE_COMMIT
+                )
+            else:
+                own_ids = tuple(
+                    item.finding_id for item in result.own_open_blockers
+                )
+                state = state.record_review_denial(
+                    reviewer=(
+                        Reviewer.CLAUDE
+                        if reviewer is AgentRole.CLAUDE
+                        else Reviewer.ANTIGRAVITY
+                    ),
+                    open_findings=own_ids,
+                    return_step=WorkflowStep.CODEX_FINAL_CORRECTION,
+                )
+            self.driver.checkpoint(state, history)
+            return state, history
         start_commit = state.branch_base if is_final_review else (
             state.current_slice.start_commit or state.branch_base
         )
@@ -1719,9 +1858,13 @@ class WorkflowEngine:
                 claude_validation is None
                 or claude_validation.diff_fingerprint != changes.fingerprint
             ):
-                raise WorkflowExecutionError(
-                    "Antigravity requires Claude approval for the current fingerprint"
+                logger.warning(
+                    "Claude approval does not match the current fingerprint; "
+                    "rewinding automatically from Antigravity to Claude review."
                 )
+                state = state.with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW)
+                self.driver.checkpoint(state, history)
+                return state, history
         try:
             attestation, history = self._attestation(
                 changes,

@@ -704,6 +704,109 @@ def test_commit_accepts_exactly_approved_descendant_head_and_commits_only_worktr
     )
 
 
+def test_commit_rejects_stale_approved_head_for_descendant_drift(
+    tmp_path: Path,
+) -> None:
+    repository, _ = _new_repository(tmp_path)
+    boundary, _ = begin_slice(
+        repository_root=repository,
+        slice_id=9,
+        expected_branch="feature/transaction",
+        scope_paths=("allowed.txt",),
+    )
+    (repository / "external.py").write_text("reviewed repair\n", encoding="utf-8")
+    _git(repository, "add", "external.py")
+    _git(repository, "commit", "-m", "reviewed intermediate repair")
+    (repository / "allowed.txt").write_text("slice work\n", encoding="utf-8")
+    authorization = replace(
+        _authorization(repository, boundary.start_commit),
+        approved_head_commit=boundary.start_commit,
+        approved_external_paths=("external.py",),
+    )
+
+    with pytest.raises(
+        GitTransactionError,
+        match="slice HEAD drift lacks an exact fingerprint-bound user approval",
+    ):
+        commit_slice(
+            repository_root=repository,
+            boundary=boundary,
+            authorization=authorization,
+            title="stale approved head",
+        )
+
+
+def test_commit_rejects_approved_head_that_no_longer_descends_from_slice_start(
+    tmp_path: Path,
+) -> None:
+    repository, _ = _new_repository(tmp_path)
+    boundary, _ = begin_slice(
+        repository_root=repository,
+        slice_id=9,
+        expected_branch="feature/transaction",
+        scope_paths=(".gitignore", "allowed.txt", "base.txt", "unrelated.txt"),
+    )
+    _git(repository, "switch", "--orphan", "unrelated")
+    (repository / "unrelated.txt").write_text("unrelated root\n", encoding="utf-8")
+    _git(repository, "add", "unrelated.txt")
+    _git(repository, "commit", "-m", "unrelated root")
+    _git(repository, "branch", "-D", "feature/transaction")
+    _git(repository, "branch", "-m", "feature/transaction")
+    unrelated_head = _git(repository, "rev-parse", "HEAD")
+    (repository / "allowed.txt").write_text("slice work\n", encoding="utf-8")
+    authorization = replace(
+        _authorization(repository, boundary.start_commit),
+        approved_head_commit=unrelated_head,
+    )
+
+    with pytest.raises(
+        GitTransactionError,
+        match="slice HEAD no longer descends from its persisted start",
+    ):
+        commit_slice(
+            repository_root=repository,
+            boundary=boundary,
+            authorization=authorization,
+            title="unrelated approved head",
+        )
+
+
+@pytest.mark.parametrize(
+    "approved_external_paths",
+    [(), ("external.py", "phantom.py")],
+    ids=("missing-path", "additional-path"),
+)
+def test_commit_rejects_non_exact_approved_external_paths(
+    tmp_path: Path,
+    approved_external_paths: tuple[str, ...],
+) -> None:
+    repository, _ = _new_repository(tmp_path)
+    boundary, _ = begin_slice(
+        repository_root=repository,
+        slice_id=9,
+        expected_branch="feature/transaction",
+        scope_paths=("allowed.txt",),
+    )
+    (repository / "allowed.txt").write_text("slice work\n", encoding="utf-8")
+    (repository / "external.py").write_text("external repair\n", encoding="utf-8")
+    authorization = replace(
+        _authorization(repository, boundary.start_commit),
+        approved_head_commit=boundary.start_commit,
+        approved_external_paths=approved_external_paths,
+    )
+
+    with pytest.raises(
+        GitTransactionError,
+        match="reviewed paths outside the Slice scope lack an exact user approval",
+    ):
+        commit_slice(
+            repository_root=repository,
+            boundary=boundary,
+            authorization=authorization,
+            title="inexact external paths",
+        )
+
+
 def test_commit_completes_source_deletion_for_partially_staged_rename(
     tmp_path: Path,
 ) -> None:

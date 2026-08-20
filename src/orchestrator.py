@@ -27,11 +27,12 @@ from artifact_bridge import (
 from artifact_migration import ArtifactResumeError, resolve_resume_state
 from artifact_projection import ArtifactAuditProjection
 from artifact_models import (
-    BindingPayload, CorrectionWorkUnitPayload, FingerprintKind, GatePayload,
+    ArtifactRecord, BindingPayload, CorrectionWorkUnitPayload, FingerprintKind, GatePayload,
     QuotaPausePayload, ReviewPayload, Role, TaskPayload, TransientRetryPayload,
+    ValidationAttestationPayload,
     WorkUnitPayload,
     WorkflowCompletionPayload,
-    ArtifactRecord, Fingerprint, ProviderInputMeasurementPayload, canonical_json,
+    ProviderInputMeasurementPayload, canonical_json,
 )
 from artifact_store import ArtifactStore
 from final_review_preflight import (
@@ -108,6 +109,7 @@ from task_contract import TaskContract, TaskMode, parse_task_contract
 from workflow import (
     CodexInvocation,
     ContractRepairInvocation,
+    PersistedReviewerReplay,
     ReviewerInvocation,
     NoWorkflowChangesError,
     WorkflowChanges,
@@ -360,7 +362,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
         # only that exact, fully evidenced transition; every other record/mirror
         # difference remains fail-closed.
         recoverable = _recoverable_final_denial_mirror_gap(
-            state, record_reviews, mirror_reviews
+            state, record_reviews, mirror_reviews, chain=chain
         )
         if recoverable:
             logger.warning(
@@ -556,24 +558,23 @@ class ProductionWorkflowDriver(WorkflowDriver):
             measurement, work_unit_id=state.current_work_unit_id,
             transition_fingerprint=transition, relevant_record_head=record_head,
         )
+        measurement_record = None
         if bridge is not None:
             measurement_record = bridge.append(
                 payload, logical_id=f"provider-input-{state.current_work_unit_id}-{measurement.operation}",
                 idempotency_key=f"provider-input:{transition}",
                 fingerprint_sha256=repository_fingerprint,
             )
-        else:
-            measurement_record = ArtifactRecord.create(
-                run_id=state.run_id, logical_id=f"provider-input-{state.current_work_unit_id}-{measurement.operation}",
-                revision=1, fingerprint=Fingerprint(FingerprintKind.IMPLEMENTATION, repository_fingerprint),
-                predecessor_ids=(), created_at=self._artifact_bridge.now() if self._artifact_bridge is not None else "2000-01-01T00:00:00+00:00",
-                idempotency_key=f"provider-input:{transition}", payload=payload,
-            )
         state = state.with_bootstrap_check(self._bootstrap_fact(payload))
         self._persist_bootstrap_state(state)
-        if measurement.operation not in FINAL_REVIEW_OPERATIONS or not measurement.allowed:
+        if (
+            measurement.operation not in FINAL_REVIEW_OPERATIONS
+            or not measurement.allowed
+            or bridge is None
+        ):
             return
-        current_chain = bridge.store.load_chain() if bridge is not None else (*chain, measurement_record)
+        assert measurement_record is not None
+        current_chain = bridge.store.load_chain()
         try:
             changes = self.collect_changes(state.branch_base)
             repository_paths = changes.paths
@@ -664,6 +665,180 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 exc.invocation_id,
             )
             return recovered
+
+    def recover_pending_reviewer(
+        self,
+        *,
+        reviewer: AgentRole,
+        work_unit_id: int,
+        step: WorkflowStep,
+        round_number: int,
+    ) -> PersistedReviewerReplay | None:
+        """Replay one hash-bound review left ahead by a failed checkpoint."""
+        state = self.active_state
+        bridge = self._artifact_bridge
+        if (
+            state is None
+            or bridge is None
+            or state.effective_protocol_mode is not ProtocolMode.STRUCTURED_V1
+            or state.current_work_unit.kind is not WorkUnitKind.CORRECTION
+            or state.current_work_unit_id != work_unit_id
+            or state.current_step is not step
+            or step
+            not in {
+                WorkflowStep.CLAUDE_SLICE_REVIEW,
+                WorkflowStep.ANTIGRAVITY_SLICE_REVIEW,
+            }
+        ):
+            return None
+        chain = bridge.store.load_chain()
+        record_reviews = Counter(
+            (
+                item.payload.work_unit_id,
+                item.payload.reviewer.value,
+                item.fingerprint.sha256,
+                item.payload.verdict,
+                item.payload.finding_ids,
+            )
+            for item in chain
+            if isinstance(item.payload, ReviewPayload)
+        )
+        mirror_reviews: Counter[tuple[object, ...]] = Counter()
+        for persisted_work_unit_id, history in _persisted_histories(state).items():
+            for event in history.events:
+                if not isinstance(event, ReviewAuditEvent):
+                    continue
+                result = event.result
+                if result.validation is None:
+                    return None
+                mirror_reviews[
+                    (
+                        str(persisted_work_unit_id),
+                        result.reviewer.value,
+                        result.validation.diff_fingerprint,
+                        (
+                            "stop"
+                            if result.stopped
+                            else "approved"
+                            if result.approval is True
+                            else "denied"
+                        ),
+                        tuple(item.finding_id for item in result.findings),
+                    )
+                ] += 1
+        pending_logical_id = (
+            f"review-{reviewer.value}-{work_unit_id}-{round_number}"
+        )
+        current_pending = Counter(
+            (
+                item.payload.work_unit_id,
+                item.payload.reviewer.value,
+                item.fingerprint.sha256,
+                item.payload.verdict,
+                item.payload.finding_ids,
+            )
+            for item in chain
+            if isinstance(item.payload, ReviewPayload)
+            and item.logical_id == pending_logical_id
+            and item.payload.verdict in {"approved", "denied"}
+        )
+        if sum(current_pending.values()) != 1:
+            return None
+        historical_record_reviews = record_reviews - current_pending
+        mirror_reviews.update(
+            _recoverable_final_denial_mirror_gap(
+                state,
+                historical_record_reviews,
+                mirror_reviews,
+                chain=chain,
+            )
+        )
+        missing = record_reviews - mirror_reviews
+        if mirror_reviews - record_reviews or sum(missing.values()) != 1:
+            return None
+        signature, count = next(iter(missing.items()))
+        missing_unit, missing_reviewer, fingerprint, verdict, finding_ids = signature
+        if (
+            count != 1
+            or missing_unit != str(work_unit_id)
+            or missing_reviewer != reviewer.value
+            or verdict not in {"approved", "denied"}
+        ):
+            return None
+        logical_id = f"review-{reviewer.value}-{work_unit_id}-{round_number}"
+        matching_records = tuple(
+            item
+            for item in chain
+            if isinstance(item.payload, ReviewPayload)
+            and item.logical_id == logical_id
+            and item.payload.work_unit_id == str(work_unit_id)
+            and item.payload.reviewer.value == reviewer.value
+            and item.payload.verdict == verdict
+            and item.payload.finding_ids == finding_ids
+            and item.fingerprint.sha256 == fingerprint
+        )
+        if len(matching_records) != 1:
+            return None
+        record = matching_records[0]
+        matching_attestations = tuple(
+            item
+            for item in chain
+            if isinstance(item.payload, ValidationAttestationPayload)
+            and item.fingerprint.sha256 == fingerprint
+            and item.payload.attested_by is Role.ORCHESTRATOR
+        )
+        if len(matching_attestations) != 1:
+            return None
+        key_prefix = f"parsed:{logical_id}:{fingerprint}:"
+        if not record.idempotency_key.startswith(key_prefix):
+            return None
+        output_digest = record.idempotency_key.removeprefix(key_prefix)
+        if not re.fullmatch(r"[0-9a-f]{64}", output_digest):
+            return None
+        log_pattern = (
+            f"work-unit-{work_unit_id:04d}-{step.value}.attempt-*.log"
+        )
+        matching_outputs = []
+        for path in sorted(self.log_dir.glob(log_pattern)):
+            if not path.is_file():
+                continue
+            output = path.read_text(encoding="utf-8").strip()
+            if hashlib.sha256(output.encode("utf-8")).hexdigest() == output_digest:
+                matching_outputs.append(output)
+        if len(matching_outputs) != 1:
+            raise WorkflowExecutionError(
+                "pending structured reviewer decision has no unique hash-bound "
+                "provider log for deterministic replay"
+            )
+        approval_matches = re.findall(
+            r"^SLICE_APPROVAL\s*:\s*\d+\s*\|\s*(YES|NO)\s*$",
+            matching_outputs[0],
+            flags=re.MULTILINE,
+        )
+        output_verdict = (
+            "approved"
+            if approval_matches == ["YES"]
+            else "denied"
+            if approval_matches == ["NO"]
+            else None
+        )
+        if output_verdict != verdict:
+            return None
+        logger.warning(
+            "Replaying hash-bound %s %s review after its state checkpoint failed: "
+            "work-unit=%s round=%s fingerprint=%s",
+            reviewer.value,
+            verdict,
+            work_unit_id,
+            round_number,
+            fingerprint,
+        )
+        return PersistedReviewerReplay(
+            output=matching_outputs[0],
+            fingerprint=str(fingerprint),
+            round_number=round_number,
+            verdict=str(verdict),
+        )
 
     def _artifact_fingerprint(self) -> str:
         if self.active_state is None:
@@ -1627,6 +1802,8 @@ def _recoverable_final_denial_mirror_gap(
     state: WorkflowState,
     record_reviews: Counter[tuple[object, ...]],
     mirror_reviews: Counter[tuple[object, ...]],
+    *,
+    chain: tuple[ArtifactRecord, ...] = (),
 ) -> Counter[tuple[object, ...]]:
     """Recognize only the historical final-denial checkpoint ordering defect."""
     missing_reviews = record_reviews - mirror_reviews
@@ -1644,6 +1821,19 @@ def _recoverable_final_denial_mirror_gap(
         reviewed_unit = units.get(numeric_work_unit_id)
         correction_unit = units.get(numeric_work_unit_id + 1)
         reviewed_history = histories.get(numeric_work_unit_id)
+        finding_attribution_matches = (
+            _historical_correction_attribution_matches(
+                chain,
+                reviewed_work_unit_id=numeric_work_unit_id,
+                correction_work_unit_id=numeric_work_unit_id + 1,
+                review_signature=signature,
+            )
+            if chain
+            else (
+                correction_unit is not None
+                and set(correction_unit.open_findings).issubset(set(finding_ids))
+            )
+        )
         if (
             count != 1
             or verdict != "denied"
@@ -1652,7 +1842,7 @@ def _recoverable_final_denial_mirror_gap(
             or reviewed_unit.status is not WorkUnitStatus.COMPLETED
             or correction_unit is None
             or correction_unit.kind is not WorkUnitKind.CORRECTION
-            or not set(correction_unit.open_findings).issubset(set(finding_ids))
+            or not finding_attribution_matches
             or reviewed_history is None
             or not any(
                 item.diff_fingerprint == fingerprint
@@ -1662,6 +1852,47 @@ def _recoverable_final_denial_mirror_gap(
             return Counter()
         recoverable[signature] += 1
     return recoverable
+
+
+def _historical_correction_attribution_matches(
+    chain: tuple[ArtifactRecord, ...],
+    *,
+    reviewed_work_unit_id: int,
+    correction_work_unit_id: int,
+    review_signature: tuple[object, ...],
+) -> bool:
+    review_records = tuple(
+        record
+        for record in chain
+        if isinstance(record.payload, ReviewPayload)
+        and (
+            record.payload.work_unit_id,
+            record.payload.reviewer.value,
+            record.fingerprint.sha256,
+            record.payload.verdict,
+            record.payload.finding_ids,
+        )
+        == review_signature
+        and record.payload.work_unit_id == str(reviewed_work_unit_id)
+    )
+    correction_records = tuple(
+        record
+        for record in chain
+        if isinstance(record.payload, CorrectionWorkUnitPayload)
+        and record.logical_id == f"work-unit-{correction_work_unit_id}"
+        and record.payload.round_number == 1
+    )
+    if len(review_records) != 1 or len(correction_records) != 1:
+        return False
+    review = review_records[0]
+    correction = correction_records[0]
+    return (
+        chain.index(review) < chain.index(correction)
+        and bool(correction.payload.finding_ids)
+        and set(correction.payload.finding_ids).issubset(
+            set(review.payload.finding_ids)
+        )
+    )
 
 
 def _carry_forward_findings(

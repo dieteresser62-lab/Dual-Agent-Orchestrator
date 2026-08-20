@@ -99,26 +99,52 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
         for item in chain
         if item.record_type in {RecordType.WORK_UNIT, RecordType.CORRECTION_WORK_UNIT}
     ]
+    latest_work_record_by_id = {}
     for record in work_records:
         payload = record.payload
         assert isinstance(payload, (WorkUnitPayload, CorrectionWorkUnitPayload))
         unit_id = record.logical_id.removeprefix("work-unit-")
+        latest_work_record_by_id[unit_id] = record
         unit = unit_by_id.get(unit_id)
         slice_record = slice_by_id.get(payload.slice_id)
+        pending_correction = _recoverable_pending_correction_record(
+            state, chain, record
+        )
         if unit is None or slice_record is None:
             raise mismatch("work-unit record has no state-v3 counterpart", record.record_id)
         if (
             str(unit.slice_id) != payload.slice_id
-            or payload.round_number > unit.round_number
+            or (payload.round_number > unit.round_number and not pending_correction)
             or payload.paths != slice_record.scope_paths
         ):
             raise mismatch("work-unit round, slice, or path allowlist differs", record.record_id)
-        if isinstance(payload, CorrectionWorkUnitPayload) and (
-            unit.kind is not WorkUnitKind.CORRECTION
-            or payload.finding_ids != unit.open_findings
+        if isinstance(payload, CorrectionWorkUnitPayload) != (
+            unit.kind is WorkUnitKind.CORRECTION
         ):
             raise mismatch(
                 "correction work-unit finding attribution differs from state-v3",
+                record.record_id,
+            )
+
+    for unit_id, record in latest_work_record_by_id.items():
+        unit = unit_by_id[unit_id]
+        payload = record.payload
+        assert isinstance(payload, (WorkUnitPayload, CorrectionWorkUnitPayload))
+        pending_correction = _recoverable_pending_correction_record(
+            state, chain, record
+        )
+        if payload.round_number != unit.round_number and not pending_correction:
+            raise mismatch(
+                "latest work-unit round differs from state-v3",
+                record.record_id,
+            )
+        if (
+            isinstance(payload, CorrectionWorkUnitPayload)
+            and payload.finding_ids != unit.open_findings
+            and not pending_correction
+        ):
+            raise mismatch(
+                "latest correction finding attribution differs from state-v3",
                 record.record_id,
             )
 
@@ -134,7 +160,10 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
         latest = current_records[-1]
         payload = latest.payload
         assert isinstance(payload, (WorkUnitPayload, CorrectionWorkUnitPayload))
-        if payload.round_number != current.round_number:
+        if (
+            payload.round_number != current.round_number
+            and not _recoverable_pending_correction_record(state, chain, latest)
+        ):
             raise mismatch("current work-unit round differs from the record chain", latest.record_id)
 
     plans = [item for item in chain if item.record_type is RecordType.PLAN]
@@ -200,7 +229,13 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
     for record in chain:
         if isinstance(record.payload, FindingTransitionPayload):
             latest_findings[record.payload.finding_id] = record
-    if set(latest_findings) != set(finding_statuses):
+    pending_review_finding_gap = _recoverable_pending_review_finding_gap(
+        state,
+        chain,
+        finding_statuses,
+        latest_findings,
+    )
+    if set(latest_findings) != set(finding_statuses) and not pending_review_finding_gap:
         differing = next(iter(set(latest_findings) ^ set(finding_statuses)), None)
         record = latest_findings.get(differing) if differing is not None else None
         raise mismatch(
@@ -209,7 +244,11 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
         )
     for finding_id, record in latest_findings.items():
         assert isinstance(record.payload, FindingTransitionPayload)
-        if record.payload.finding_status != finding_statuses[finding_id]:
+        if (
+            finding_id in finding_statuses
+            and record.payload.finding_status != finding_statuses[finding_id]
+            and not pending_review_finding_gap
+        ):
             raise mismatch("finding status differs from state-v3", record.record_id)
 
     attestation_facts = _attestation_facts(state)
@@ -416,8 +455,177 @@ def _finding_statuses(state: WorkflowState) -> dict[str, str]:
                 statuses[finding_id] = status.lower()
     for unit in state.work_units:
         for finding_id in unit.open_findings:
-            statuses[finding_id] = "open"
+            # ``open_findings`` records the immutable attribution carried into a
+            # correction work unit.  It is not the live finding mirror: an
+            # approving reviewer may close that finding while the same work unit
+            # remains current.  Prefer the status projected from runtime_history
+            # and use the work-unit tuple only to recover legacy mirrors which do
+            # not contain a finding entry yet.
+            statuses.setdefault(finding_id, "open")
     return statuses
+
+
+def _recoverable_pending_review_finding_gap(
+    state: WorkflowState,
+    chain: tuple[ArtifactRecord, ...],
+    mirror_statuses: dict[str, str],
+    latest_findings: dict[str, ArtifactRecord],
+) -> bool:
+    """Admit one durable review for exact local replay after a failed checkpoint."""
+    unit = state.current_work_unit
+    reviewer_by_step = {
+        WorkflowStep.CLAUDE_SLICE_REVIEW: "claude",
+        WorkflowStep.ANTIGRAVITY_SLICE_REVIEW: "antigravity",
+    }
+    reviewer = reviewer_by_step.get(state.current_step)
+    if unit.kind is not WorkUnitKind.CORRECTION or reviewer is None:
+        return False
+    logical_id = f"review-{reviewer}-{unit.work_unit_id}-{unit.round_number}"
+    reviews = tuple(
+        record
+        for record in chain
+        if isinstance(record.payload, ReviewPayload)
+        and record.logical_id == logical_id
+        and record.payload.work_unit_id == str(unit.work_unit_id)
+        and record.payload.reviewer.value == reviewer
+        and record.payload.verdict in {"approved", "denied"}
+    )
+    if len(reviews) != 1 or _state_has_review_event(
+        state,
+        work_unit_id=unit.work_unit_id,
+        reviewer=reviewer,
+        round_number=unit.round_number,
+    ):
+        return False
+    review = reviews[0]
+    review_ids = set(review.payload.finding_ids)
+    if not set(unit.open_findings).issubset(review_ids):
+        return False
+    if not any(
+        isinstance(record.payload, ValidationAttestationPayload)
+        and record.fingerprint == review.fingerprint
+        for record in chain
+    ):
+        return False
+    changed_ids = {
+        finding_id
+        for finding_id in set(mirror_statuses) | set(latest_findings)
+        if finding_id not in mirror_statuses
+        or finding_id not in latest_findings
+        or latest_findings[finding_id].payload.finding_status
+        != mirror_statuses[finding_id]
+    }
+    if not changed_ids or not changed_ids.issubset(review_ids):
+        return False
+    if review.payload.verdict == "approved" and any(
+        latest_findings[finding_id].payload.finding_status != "closed"
+        for finding_id in changed_ids
+        if finding_id in latest_findings
+    ):
+        return False
+    record_positions = {record.record_id: index for index, record in enumerate(chain)}
+    review_position = record_positions[review.record_id]
+    for finding_id in changed_ids:
+        transition = latest_findings.get(finding_id)
+        if (
+            transition is None
+            or transition.payload.actor.value != reviewer
+            or record_positions[transition.record_id] <= review_position
+        ):
+            return False
+    return True
+
+
+def _recoverable_pending_correction_record(
+    state: WorkflowState,
+    chain: tuple[ArtifactRecord, ...],
+    record: ArtifactRecord,
+) -> bool:
+    """Recognize the next correction round durably written before its mirror."""
+    payload = record.payload
+    unit = state.current_work_unit
+    reviewer_by_step = {
+        WorkflowStep.CLAUDE_SLICE_REVIEW: "claude",
+        WorkflowStep.ANTIGRAVITY_SLICE_REVIEW: "antigravity",
+    }
+    reviewer = reviewer_by_step.get(state.current_step)
+    if (
+        reviewer is None
+        or unit.kind is not WorkUnitKind.CORRECTION
+        or not isinstance(payload, CorrectionWorkUnitPayload)
+        or record.logical_id != f"work-unit-{unit.work_unit_id}"
+        or payload.slice_id != str(unit.slice_id)
+        or payload.round_number != unit.round_number + 1
+        or not payload.finding_ids
+    ):
+        return False
+    logical_id = f"review-{reviewer}-{unit.work_unit_id}-{unit.round_number}"
+    reviews = tuple(
+        candidate
+        for candidate in chain
+        if isinstance(candidate.payload, ReviewPayload)
+        and candidate.logical_id == logical_id
+        and candidate.payload.work_unit_id == str(unit.work_unit_id)
+        and candidate.payload.reviewer.value == reviewer
+        and candidate.payload.verdict == "denied"
+    )
+    if len(reviews) != 1:
+        return False
+    review = reviews[0]
+    prefix = "C-" if reviewer == "claude" else "A-"
+    return (
+        chain.index(review) < chain.index(record)
+        and any(
+            isinstance(candidate.payload, ValidationAttestationPayload)
+            and candidate.fingerprint == review.fingerprint
+            for candidate in chain
+        )
+        and set(payload.finding_ids).issubset(review.payload.finding_ids)
+        and all(item.startswith(prefix) for item in payload.finding_ids)
+    )
+
+
+def _state_has_review_event(
+    state: WorkflowState,
+    *,
+    work_unit_id: int,
+    reviewer: str,
+    round_number: int,
+) -> bool:
+    raw = state.runtime_history
+    if not isinstance(raw, dict):
+        return False
+    candidates: list[object] = []
+    if set(raw) == {"current", "archive"}:
+        archive = raw.get("archive")
+        if isinstance(archive, list):
+            candidates.extend(archive)
+        candidates.append(raw.get("current"))
+    else:
+        candidates.append(raw)
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        try:
+            candidate_work_unit = int(candidate.get("work_unit_id", -1))
+        except (TypeError, ValueError):
+            continue
+        if candidate_work_unit != work_unit_id:
+            continue
+        events = candidate.get("events")
+        if not isinstance(events, list):
+            continue
+        for event in events:
+            if not isinstance(event, dict) or event.get("kind") != "review":
+                continue
+            result = event.get("result")
+            if (
+                isinstance(result, dict)
+                and result.get("reviewer") == reviewer
+                and event.get("round_number") == round_number
+            ):
+                return True
+    return False
 
 
 def _attestation_facts(state: WorkflowState) -> set[tuple[str, str]]:
