@@ -131,7 +131,8 @@ def run_final_review_preflight(
         return _deny("technical", "PREMATURE-COMPLETION", ids, (), "remove or repair the premature completion record")
 
     records_by_id = {item.record_id: item for item in records}
-    for item in records:
+    record_positions = {item.record_id: index for index, item in enumerate(records)}
+    for index, item in enumerate(records):
         if item.run_id != state.run_id:
             return _deny("technical", "FOREIGN-RUN-RECORD", (item.record_id,), (), "restore a single-run record chain")
         if isinstance(item.payload, BindingPayload):
@@ -139,6 +140,23 @@ def run_final_review_preflight(
             missing = tuple(ref for ref in references if ref not in records_by_id)
             if missing:
                 return _deny("technical", "MISSING-REFERENCE", (item.record_id, *missing), (), "restore every referenced predecessor record")
+            invalid = tuple(
+                ref
+                for ref, expected_type in (
+                    (item.payload.attestation_id, ValidationAttestationPayload),
+                    *((ref, ReviewPayload) for ref in item.payload.approval_ids),
+                )
+                if record_positions[ref] >= index
+                or not isinstance(records_by_id[ref].payload, expected_type)
+            )
+            if invalid:
+                return _deny(
+                    "technical",
+                    "MISSING-REFERENCE",
+                    (item.record_id, *invalid),
+                    (),
+                    "restore every referenced typed predecessor record",
+                )
             if any(records_by_id[ref].fingerprint != item.fingerprint for ref in references):
                 return _deny("technical", "FINGERPRINT-MISMATCH", (item.record_id, *references), (), "restore fingerprint-identical binding references")
 

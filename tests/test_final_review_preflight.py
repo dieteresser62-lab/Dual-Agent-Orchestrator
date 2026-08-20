@@ -285,6 +285,94 @@ def test_preflight_rejects_external_path_without_matching_gate_and_commit_bindin
     assert result.affected_paths == ("src/external.py",)
 
 
+@pytest.mark.parametrize("wrong_reference", ["attestation", "approval"])
+def test_preflight_rejects_binding_reference_with_wrong_payload_type(
+    tmp_path: Path,
+    wrong_reference: str,
+) -> None:
+    state = _state(WorkflowStep.CODEX_FINAL_REVIEW)
+    bridge = ArtifactBridge(ArtifactStore(tmp_path, state.run_id))
+    attestation = bridge.append(
+        ValidationAttestationPayload(
+            (ValidationResult(CommandSpec("pytest", ("pytest",)), "pass", 0, "2" * 64),),
+            Role.ORCHESTRATOR,
+        ),
+        logical_id="binding-attestation",
+        idempotency_key="binding-attestation",
+        fingerprint_sha256=FINGERPRINT,
+    )
+    approval = bridge.append(
+        ReviewPayload(Role.CLAUDE, "2", "approved", (), "checked"),
+        logical_id="binding-approval",
+        idempotency_key="binding-approval",
+        fingerprint_sha256=FINGERPRINT,
+    )
+    wrong_type = bridge.append(
+        AgentResultPayload(Role.CODEX, "2", "ready", ()),
+        logical_id="binding-wrong-type",
+        idempotency_key="binding-wrong-type",
+        fingerprint_sha256=FINGERPRINT,
+    )
+    binding = bridge.append(
+        BindingPayload(
+            "commit",
+            SLICE_COMMIT,
+            wrong_type.record_id if wrong_reference == "attestation" else attestation.record_id,
+            (wrong_type.record_id if wrong_reference == "approval" else approval.record_id,),
+        ),
+        logical_id="typed-binding",
+        idempotency_key="typed-binding",
+        fingerprint_sha256=FINGERPRINT,
+    )
+    measurement = _measurement(bridge, state, state.current_step.value)
+
+    result = run_final_review_preflight(
+        state=state,
+        records=bridge.store.load_chain(),
+        measurement_record=measurement,
+        repository_paths=("src/one.py",),
+    )
+
+    assert result.error_code == "MISSING-REFERENCE"
+    assert result.affected_record_ids == (binding.record_id, wrong_type.record_id)
+
+
+def test_preflight_rejects_binding_reference_that_is_not_a_predecessor(
+    tmp_path: Path,
+) -> None:
+    state = _state(WorkflowStep.CODEX_FINAL_REVIEW)
+    bridge = ArtifactBridge(ArtifactStore(tmp_path, state.run_id))
+    _append_external_path_evidence(bridge)
+    _attest(bridge)
+    measurement = _measurement(bridge, state, state.current_step.value)
+    records = list(bridge.store.load_chain())
+    binding_index = next(
+        index for index, item in enumerate(records)
+        if isinstance(item.payload, BindingPayload)
+    )
+    approval_index = next(
+        index for index, item in enumerate(records)
+        if isinstance(item.payload, ReviewPayload)
+    )
+    records[binding_index], records[approval_index] = (
+        records[approval_index],
+        records[binding_index],
+    )
+
+    result = run_final_review_preflight(
+        state=state,
+        records=records,
+        measurement_record=measurement,
+        repository_paths=("src/one.py",),
+    )
+
+    assert result.error_code == "MISSING-REFERENCE"
+    binding = records[approval_index]
+    assert isinstance(binding.payload, BindingPayload)
+    assert result.affected_record_ids[0] == binding.record_id
+    assert set(result.affected_record_ids[1:]) == set(binding.payload.approval_ids)
+
+
 def test_relevant_record_head_excludes_bootstrap_records(tmp_path: Path) -> None:
     state = _state(WorkflowStep.CODEX_FINAL_REVIEW)
     bridge = ArtifactBridge(ArtifactStore(tmp_path, state.run_id))
