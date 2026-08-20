@@ -2198,15 +2198,17 @@ class WorkflowEngine:
             failure.invocation_id, changes.fingerprint
         ) in state.current_work_unit.completed_side_effects
         fingerprint_changed = changes.fingerprint != failure.diff_fingerprint
-        if unexpected or (fingerprint_changed and not acknowledged):
+        if (unexpected or fingerprint_changed) and not acknowledged:
             paths = unexpected or changes.user_gate_paths
-            halted = state.await_policy_gate(
-                reason=GateReason.STOP_REQUEST,
+            halted = state.await_user_gate(
+                reason=GateReason.QUOTA_RESUME_DIFF,
                 detail=(
                     "QUOTA-RESUME-DIFF | repository changed while the role was waiting; "
                     f"expected {failure.diff_fingerprint}, got {changes.fingerprint}"
                 ),
+                fingerprint=changes.fingerprint,
                 paths=paths,
+                resume_step=failure.step,
             )
             return halted, True
         if fingerprint_changed:

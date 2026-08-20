@@ -2315,6 +2315,7 @@ def run_production_workflow(
         )
     state = _attach_managed_audit_paths(state)
     state = _recover_legacy_plan_only_post_gate(state)
+    state = state.reopen_legacy_quota_resume_diff_gate()
     config = OrchestratorConfig(
         dry_run=False,
         agent_output_mode=args.agent_output,

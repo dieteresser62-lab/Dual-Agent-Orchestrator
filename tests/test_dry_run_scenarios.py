@@ -988,7 +988,10 @@ def test_quota_without_reset_second_quota_changed_fingerprint_and_interrupt(
     mutated = replace(second, agent_events=second.agent_events[:1], changes=(change(), change(FP2)))
     mutated_report = run(mutated, tmp_path)
     assert mutated_report.result.exit_code == 4
-    assert mutated_report.result.state.current_work_unit.gate.reason is GateReason.STOP_REQUEST
+    assert (
+        mutated_report.result.state.current_work_unit.gate.reason
+        is GateReason.QUOTA_RESUME_DIFF
+    )
 
     interrupted = replace(second, agent_events=second.agent_events[:1], interrupt_on_sleep=1)
     interrupted_report = run(interrupted, tmp_path)

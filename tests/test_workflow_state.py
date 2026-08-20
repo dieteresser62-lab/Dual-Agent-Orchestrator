@@ -234,6 +234,80 @@ def test_quota_failure_roundtrips_and_resumes_exact_failed_step() -> None:
     assert resumed.current_work_unit.invocation_failures == (failure,)
 
 
+def test_legacy_quota_resume_diff_gate_reopens_for_fingerprint_revalidation() -> None:
+    failure = InvocationFailureRecord(
+        invocation_id="inv-quota-diff",
+        idempotency_key="run-1:1:codex_plan:codex",
+        role="codex",
+        failure_kind=AgentFailureKind.QUOTA,
+        provider_text="usage cap reached",
+        received_at="2026-08-12T10:00:00+00:00",
+        step=WorkflowStep.CODEX_PLAN,
+        slice_id=1,
+        work_unit_id=1,
+        diagnostic_exit_code=2,
+        automatic_resume=False,
+        diff_fingerprint="1" * 64,
+    )
+    halted = make_state().record_invocation_failure(
+        failure, wait_automatically=False
+    )
+    active = halted.resume_after_invocation_halt()
+    detail = (
+        "QUOTA-RESUME-DIFF | repository changed while the role was waiting; "
+        f"expected {'1' * 64}, got {'2' * 64}"
+    )
+    first_gate = active.await_policy_gate(
+        reason=GateReason.STOP_REQUEST,
+        detail=detail,
+        paths=("src/runtime.py",),
+    )
+    repeated_gate = first_gate.resume_after_user_decision().await_policy_gate(
+        reason=GateReason.STOP_REQUEST,
+        detail=detail,
+        paths=("src/runtime.py",),
+    )
+
+    reopened = repeated_gate.reopen_legacy_quota_resume_diff_gate()
+
+    assert reopened.current_work_unit.status is WorkUnitStatus.AWAITING_RESUME
+    assert reopened.current_work_unit.gate.reason is GateReason.QUOTA
+    assert reopened.current_work_unit.gate.resume_step is WorkflowStep.CODEX_PLAN
+    assert not any(
+        item.startswith("quota-resume-diff:inv-quota-diff:")
+        for item in reopened.current_work_unit.completed_side_effects
+    )
+    revalidating = reopened.resume_after_invocation_halt()
+    assert revalidating.current_step is WorkflowStep.CODEX_PLAN
+
+    rebound = revalidating.await_user_gate(
+        reason=GateReason.QUOTA_RESUME_DIFF,
+        detail=detail,
+        fingerprint="3" * 64,
+        paths=("src/runtime.py",),
+        resume_step=WorkflowStep.CODEX_PLAN,
+    )
+    with pytest.raises(WorkflowStateValidationError, match="explicit recorded"):
+        rebound.resume_after_user_decision()
+    approved = rebound.record_user_gate_decision(
+        approved=True,
+        fingerprint="3" * 64,
+        paths=("src/runtime.py",),
+        decided_by="operator",
+        decided_at="2026-08-12T12:00:00+00:00",
+        rationale="reviewed exact changed fingerprint and path",
+    )
+    loaded = WorkflowState.from_dict(approved.to_dict())
+
+    assert loaded.current_work_unit.status is WorkUnitStatus.IN_PROGRESS
+    assert loaded.current_work_unit.gate.reason is GateReason.NONE
+    assert loaded.current_work_unit.gate_decisions[-1].reason is GateReason.QUOTA_RESUME_DIFF
+    assert (
+        "quota-resume-diff:inv-quota-diff:" + "3" * 64
+        in loaded.current_work_unit.completed_side_effects
+    )
+
+
 def test_network_failure_roundtrips_as_bounded_retry_wait() -> None:
     state = make_state()
     failure = InvocationFailureRecord(

@@ -1406,8 +1406,17 @@ def test_acknowledged_resume_diff_at_antigravity_restarts_claude_review() -> Non
         diff_halt.state.current_work_unit.gate.detail or ""
     )
 
+    gate = diff_halt.state.current_work_unit.gate
+    approved = diff_halt.state.record_user_gate_decision(
+        approved=True,
+        fingerprint=gate.fingerprint or "",
+        paths=gate.paths,
+        decided_by="operator",
+        decided_at=received.isoformat(),
+        rationale="reviewed exact changed fingerprint and paths",
+    )
     completed = engine.run_current_work_unit(
-        diff_halt.state.resume_after_user_decision(),
+        approved,
         _context(),
         diff_halt.history,
     )
@@ -1466,11 +1475,24 @@ def test_changed_fingerprint_during_quota_wait_halts_before_retry() -> None:
     )
 
     assert result.exit_code == 4
-    assert result.state.current_work_unit.gate.reason is GateReason.STOP_REQUEST
+    assert (
+        result.state.current_work_unit.gate.reason
+        is GateReason.QUOTA_RESUME_DIFF
+    )
     assert "QUOTA-RESUME-DIFF" in (result.state.current_work_unit.gate.detail or "")
     assert len(driver.codex_calls) == 1
 
-    acknowledged = result.state.resume_after_user_decision()
+    gate = result.state.current_work_unit.gate
+    assert gate.fingerprint == changed.fingerprint
+    assert gate.resume_step is WorkflowStep.CODEX_IMPLEMENTATION
+    acknowledged = result.state.record_user_gate_decision(
+        approved=True,
+        fingerprint=gate.fingerprint,
+        paths=gate.paths,
+        decided_by="operator",
+        decided_at=now[0].isoformat(),
+        rationale="reviewed exact changed fingerprint and paths",
+    )
     failure = acknowledged.current_work_unit.invocation_failures[-1]
     revalidated, halted = engine._revalidate_waiting_diff(acknowledged, failure)
 
@@ -1482,7 +1504,10 @@ def test_changed_fingerprint_during_quota_wait_halts_before_retry() -> None:
     halted_again, halted = engine._revalidate_waiting_diff(acknowledged, failure)
 
     assert halted is True
-    assert halted_again.current_work_unit.gate.reason is GateReason.STOP_REQUEST
+    assert (
+        halted_again.current_work_unit.gate.reason
+        is GateReason.QUOTA_RESUME_DIFF
+    )
     assert changed_again.fingerprint in (halted_again.current_work_unit.gate.detail or "")
 
 

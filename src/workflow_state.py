@@ -118,6 +118,7 @@ class GateReason(str, Enum):
     QUOTA = "quota"
     INSTANCE_FAILURE = "instance_failure"
     BOOTSTRAP_CHECK = "bootstrap_check"
+    QUOTA_RESUME_DIFF = "quota_resume_diff"
 
 
 class AgentFailureKind(str, Enum):
@@ -386,6 +387,7 @@ class GateRecord:
             GateReason.PLAN_APPROVAL,
             GateReason.UNEXPECTED_FILE,
             GateReason.STOP_REQUEST,
+            GateReason.QUOTA_RESUME_DIFF,
         }:
             for raw_path in self.paths:
                 path = PurePosixPath(raw_path)
@@ -404,6 +406,11 @@ class GateRecord:
             and self.resume_step is None
         ):
             raise WorkflowStateValidationError("anchor-change gate requires a resume step")
+        if self.reason is GateReason.QUOTA_RESUME_DIFF:
+            if self.fingerprint is None or self.resume_step is None:
+                raise WorkflowStateValidationError(
+                    "quota-resume-diff gate requires fingerprint and resume step"
+                )
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -462,6 +469,7 @@ class GateDecisionRecord:
             GateReason.ANCHOR_CHANGE,
             GateReason.MANUAL_SLICE,
             GateReason.PLAN_APPROVAL,
+            GateReason.QUOTA_RESUME_DIFF,
         }:
             raise WorkflowStateValidationError(
                 "a fingerprint-bound decision requires a user-gate reason"
@@ -497,6 +505,7 @@ class GateDecisionRecord:
             GateReason.PLAN_APPROVAL,
             GateReason.UNEXPECTED_FILE,
             GateReason.STOP_REQUEST,
+            GateReason.QUOTA_RESUME_DIFF,
         }:
             for raw_path in self.paths:
                 path = PurePosixPath(raw_path)
@@ -512,6 +521,13 @@ class GateDecisionRecord:
         if self.reason is GateReason.ANCHOR_CHANGE and self.resume_step is None:
             raise WorkflowStateValidationError(
                 "anchor-change decision requires a resume step"
+            )
+        if (
+            self.reason is GateReason.QUOTA_RESUME_DIFF
+            and self.resume_step is None
+        ):
+            raise WorkflowStateValidationError(
+                "quota-resume-diff decision requires a resume step"
             )
 
     def to_dict(self) -> dict[str, object]:
@@ -1703,6 +1719,18 @@ class WorkflowState:
             rationale=rationale,
             resume_step=gate.resume_step,
         )
+        completed_side_effects = current.completed_side_effects
+        if approved and gate.reason is GateReason.QUOTA_RESUME_DIFF:
+            if not current.invocation_failures:
+                raise WorkflowStateValidationError(
+                    "quota-resume-diff approval requires invocation evidence"
+                )
+            acknowledgement = quota_resume_diff_acknowledgement(
+                current.invocation_failures[-1].invocation_id,
+                fingerprint,
+            )
+            if acknowledgement not in completed_side_effects:
+                completed_side_effects = (*completed_side_effects, acknowledgement)
         updated_unit = replace(
             current,
             gate_decisions=(*current.gate_decisions, decision),
@@ -1712,6 +1740,7 @@ class WorkflowState:
                 else WorkUnitStatus.AWAITING_USER_DECISION
             ),
             gate=GateRecord() if approved else gate,
+            completed_side_effects=completed_side_effects,
         )
         slices = self.slices
         if approved:
@@ -1720,6 +1749,55 @@ class WorkflowState:
             updated_unit,
             slices=slices,
             updated_at=updated_at or decided_at,
+        )
+
+    def reopen_legacy_quota_resume_diff_gate(
+        self, *, updated_at: str | None = None
+    ) -> WorkflowState:
+        """Return a pre-fingerprint QUOTA-RESUME-DIFF gate to safe revalidation."""
+        current = self.current_work_unit
+        gate = current.gate
+        if (
+            current.status is not WorkUnitStatus.AWAITING_USER_DECISION
+            or gate.reason is not GateReason.STOP_REQUEST
+            or gate.fingerprint is not None
+            or gate.detail is None
+        ):
+            return self
+        match = QUOTA_RESUME_DIFF_PATTERN.fullmatch(gate.detail)
+        if match is None or not current.invocation_failures:
+            return self
+        failure = current.invocation_failures[-1]
+        acknowledgement_prefix = f"quota-resume-diff:{failure.invocation_id}:"
+        completed_side_effects = tuple(
+            item
+            for item in current.completed_side_effects
+            if not item.startswith(acknowledgement_prefix)
+        )
+        reason = (
+            GateReason.QUOTA
+            if failure.failure_kind is AgentFailureKind.QUOTA
+            else GateReason.INSTANCE_FAILURE
+        )
+        updated_unit = replace(
+            current,
+            status=WorkUnitStatus.AWAITING_RESUME,
+            gate=GateRecord(
+                status=GateStatus.AWAITING_RESUME,
+                reason=reason,
+                detail=(
+                    "legacy QUOTA-RESUME-DIFF requires fingerprint-bound "
+                    "repository revalidation"
+                ),
+                fingerprint=failure.diff_fingerprint,
+                resume_step=failure.step,
+            ),
+            completed_side_effects=completed_side_effects,
+        )
+        return self._replace_current_unit(
+            updated_unit,
+            slices=self._slices_with_current_status(SliceStatus.AWAITING_RESUME),
+            updated_at=updated_at,
         )
 
     def record_review_denial(
