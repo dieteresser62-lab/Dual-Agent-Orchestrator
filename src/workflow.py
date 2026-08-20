@@ -2749,12 +2749,19 @@ class WorkflowEngine:
         if not scope:
             raise WorkflowExecutionError("slice review requires a persisted Git boundary")
         unexpected = tuple(path for path in changes.paths if path not in scope)
-        if unexpected and state.current_work_unit.has_gate_approval(
-            GateReason.UNEXPECTED_FILE,
-            changes.fingerprint,
-            unexpected,
-        ):
-            return ()
+        if unexpected:
+            if state.current_work_unit.has_gate_approval(
+                GateReason.UNEXPECTED_FILE,
+                changes.fingerprint,
+                unexpected,
+            ):
+                return ()
+            if state.current_work_unit.has_gate_approval(
+                GateReason.QUOTA_RESUME_DIFF,
+                changes.fingerprint,
+                unexpected,
+            ):
+                return ()
         return unexpected
 
     def _apply_test_change_gate(

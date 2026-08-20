@@ -1368,7 +1368,7 @@ def test_manual_resume_at_antigravity_repeats_neither_codex_nor_claude() -> None
 def test_acknowledged_resume_diff_at_antigravity_restarts_claude_review() -> None:
     received = datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)
     original = _changes("1", "src/early.py", TEST_FILE)
-    changed = _changes("2", "src/early.py", TEST_FILE)
+    changed = _changes("2", "src/early.py", "src/foreign.py", TEST_FILE)
     driver = FakeDriver(
         snapshots=[original],
         codex_outputs=[_codex_ready()],
@@ -1407,6 +1407,7 @@ def test_acknowledged_resume_diff_at_antigravity_restarts_claude_review() -> Non
     )
 
     gate = diff_halt.state.current_work_unit.gate
+    assert gate.paths == ("src/foreign.py",)
     approved = diff_halt.state.record_user_gate_decision(
         approved=True,
         fingerprint=gate.fingerprint or "",
