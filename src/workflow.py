@@ -1999,6 +1999,30 @@ class WorkflowEngine:
                     code = error.result.error_code or "FINAL-REVIEW-PREFLIGHT"
                     detail = str(error)
                     affected_paths = error.result.affected_paths
+                    rewind_step = {
+                        (
+                            WorkflowStep.CLAUDE_FINAL_REVIEW,
+                            "CODEX-FINAL-RESULT-MISSING",
+                        ): WorkflowStep.CODEX_FINAL_REVIEW,
+                        (
+                            WorkflowStep.ANTIGRAVITY_FINAL_REVIEW,
+                            "CLAUDE-FINAL-APPROVAL-MISSING",
+                        ): WorkflowStep.CLAUDE_FINAL_REVIEW,
+                    }.get((state.current_step, code))
+                    if (
+                        rewind_step is not None
+                        and state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
+                    ):
+                        logger.warning(
+                            "Final-review prerequisite %s is missing for the current "
+                            "fingerprint; rewinding automatically from %s to %s.",
+                            code,
+                            state.current_step.value,
+                            rewind_step.value,
+                        )
+                        state = state.with_current_step(rewind_step)
+                        self.driver.checkpoint(state, history)
+                        return state, None
                 else:
                     fingerprint = error.measurement.input_digest
                     code = "PROVIDER-INPUT-BUDGET"

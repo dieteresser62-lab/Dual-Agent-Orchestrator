@@ -25,6 +25,7 @@ from artifact_projection import ArtifactAuditProjection
 from contracts import (
     AgentRole,
     ContractResult,
+    PlannedSlice,
     StopRequest,
     ValidationAttestation,
     ValidationCommandSpec,
@@ -316,6 +317,85 @@ def test_final_preflight_denial_exposes_affected_paths_on_resume_gate(
         "src/external.py",
         "tests/test_external.py",
     )
+
+
+@pytest.mark.parametrize(
+    ("current_step", "error_code", "rewind_step"),
+    [
+        (
+            WorkflowStep.CLAUDE_FINAL_REVIEW,
+            "CODEX-FINAL-RESULT-MISSING",
+            WorkflowStep.CODEX_FINAL_REVIEW,
+        ),
+        (
+            WorkflowStep.ANTIGRAVITY_FINAL_REVIEW,
+            "CLAUDE-FINAL-APPROVAL-MISSING",
+            WorkflowStep.CLAUDE_FINAL_REVIEW,
+        ),
+    ],
+)
+def test_final_preflight_missing_prerequisite_rewinds_without_manual_resume(
+    tmp_path: Path,
+    current_step: WorkflowStep,
+    error_code: str,
+    rewind_step: WorkflowStep,
+) -> None:
+    repository = _repository(tmp_path, "feature/preflight-rewind")
+    head = _git(repository, "rev-parse", "HEAD")
+    state = _state(repository, f"preflight-rewind-{current_step.value}").bind_slice_plan(
+        (PlannedSlice(1, "implementation", ("src/runtime.py",)),),
+        first_start_commit=head,
+    ).complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    ).bind_current_slice_git_boundary(
+        start_commit=head,
+        scope_paths=("src/runtime.py",),
+        start_fingerprint="b" * 64,
+    ).complete_current_slice(
+        commit_ref=head,
+    ).start_final_review_work_unit().with_current_step(current_step)
+
+    class RewindDriver:
+        def __init__(self) -> None:
+            self.active_state: WorkflowState | None = None
+
+        def checkpoint(
+            self,
+            checkpoint_state: WorkflowState,
+            _history: WorkflowHistory,
+        ) -> None:
+            self.active_state = checkpoint_state
+
+    driver = RewindDriver()
+    history = WorkflowHistory(state.current_work_unit_id)
+    denial = FinalReviewPreflightDenied(
+        FinalReviewPreflightResult(
+            "denied",
+            "technical",
+            error_code,
+            (),
+            (),
+            "restore the missing prerequisite",
+        )
+    )
+
+    def denied_provider_start() -> str:
+        raise denial
+
+    rewound, output = WorkflowEngine(driver)._invoke_role(
+        state,
+        history,
+        WorkflowContext("assignment", "plan", "slice"),
+        AgentRole.CLAUDE,
+        denied_provider_start,
+    )
+
+    assert output is None
+    assert rewound.current_step is rewind_step
+    assert rewound.current_work_unit.status.value == "in_progress"
+    assert rewound.current_work_unit.gate.reason.value == "none"
 
 
 def test_automatic_quota_pause_persists_matching_chain_record_and_resumes(

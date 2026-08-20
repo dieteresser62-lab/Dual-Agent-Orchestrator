@@ -657,10 +657,13 @@ class ProductionWorkflowDriver(WorkflowDriver):
             if state.task_digest is None:
                 raise WorkflowExecutionError("plan artifact requires a task fingerprint")
             return state.task_digest
+        start_commit = (
+            state.branch_base
+            if state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
+            else state.current_slice.start_commit or state.branch_base
+        )
         try:
-            return self.collect_changes(
-                state.current_slice.start_commit or state.branch_base
-            ).fingerprint
+            return self.collect_changes(start_commit).fingerprint
         except NoWorkflowChangesError:
             # A not-ready or empty Codex result is still a decision record.  Bind
             # it to the persisted empty Slice boundary instead of losing the
@@ -684,7 +687,10 @@ class ProductionWorkflowDriver(WorkflowDriver):
         self._artifact_bridge.append(
             agent_result_payload(result, role=AgentRole.CODEX, work_unit_id=unit.work_unit_id),
             logical_id=logical,
-            idempotency_key=f"parsed:{logical}:{hashlib.sha256(output.encode('utf-8')).hexdigest()}",
+            idempotency_key=(
+                f"parsed:{logical}:{fingerprint}:"
+                f"{hashlib.sha256(output.encode('utf-8')).hexdigest()}"
+            ),
             fingerprint_sha256=fingerprint,
             fingerprint_kind=(
                 FingerprintKind.CONTRACT
@@ -727,7 +733,10 @@ class ProductionWorkflowDriver(WorkflowDriver):
         self._artifact_bridge.append(
             review_payload(result, work_unit_id=unit.work_unit_id),
             logical_id=logical,
-            idempotency_key=f"parsed:{logical}:{hashlib.sha256(output.encode('utf-8')).hexdigest()}",
+            idempotency_key=(
+                f"parsed:{logical}:{fingerprint}:"
+                f"{hashlib.sha256(output.encode('utf-8')).hexdigest()}"
+            ),
             fingerprint_sha256=fingerprint,
         )
         previous_by_id = {item.finding_id: item for item in previous_findings}

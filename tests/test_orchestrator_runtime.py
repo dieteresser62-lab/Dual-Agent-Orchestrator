@@ -33,6 +33,7 @@ from workflow import (
     CodexInvocation,
     EvidenceKind,
     ReviewerInvocation,
+    WorkflowChanges,
     WorkflowContext,
     WorkflowEngine,
     WorkflowHistory,
@@ -193,6 +194,65 @@ def test_fresh_workflow_is_immutably_bound_to_structured_v1(tmp_path: Path) -> N
     assert state.protocol_binding == ProtocolBinding(
         ProtocolMode.STRUCTURED_V1, "1"
     )
+
+
+def test_final_review_structured_records_use_branch_wide_fingerprint(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    repository = _repository(tmp_path, "feature/final-fingerprint")
+    branch_base = _git(repository, "rev-parse", "HEAD")
+    (repository / "prior.txt").write_text("prior slice\n", encoding="utf-8")
+    _git(repository, "add", "prior.txt")
+    _git(repository, "commit", "-m", "prior slice")
+    slice_start = _git(repository, "rev-parse", "HEAD")
+    (repository / "current.txt").write_text("current slice\n", encoding="utf-8")
+    _git(repository, "add", "current.txt")
+    _git(repository, "commit", "-m", "current slice")
+    slice_commit = _git(repository, "rev-parse", "HEAD")
+    state = init_workflow_state(
+        run_id="final-fingerprint",
+        task_file=str(repository / "task.md"),
+        branch="feature/final-fingerprint",
+        branch_base=branch_base,
+        slice_count=1,
+    ).bind_slice_plan(
+        (PlannedSlice(1, "implementation", ("current.txt",)),),
+        first_start_commit=slice_start,
+    ).complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    ).bind_current_slice_git_boundary(
+        start_commit=slice_start,
+        scope_paths=("current.txt",),
+        start_fingerprint="1" * 64,
+    ).complete_current_slice(
+        commit_ref=slice_commit,
+    ).start_final_review_work_unit()
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    driver.active_state = state
+    starts: list[str] = []
+
+    def collect(start_commit: str) -> WorkflowChanges:
+        starts.append(start_commit)
+        return WorkflowChanges(
+            start_commit,
+            "b" * 64 if start_commit == branch_base else "c" * 64,
+            ("current.txt",),
+            "diff",
+        )
+
+    monkeypatch.setattr(driver, "collect_changes", collect)
+
+    assert driver._artifact_fingerprint() == "b" * 64
+    assert starts == [branch_base]
 
 
 def test_reviewer_recovers_complete_contract_from_false_401_auth_classification(
