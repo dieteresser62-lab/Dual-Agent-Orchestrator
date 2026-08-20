@@ -1854,16 +1854,45 @@ def test_scope_foreign_change_stops_before_validation_and_review() -> None:
     driver = FakeDriver(
         snapshots=[changes],
         codex_outputs=[_codex_ready()],
-        reviewer_outputs=[],
+        reviewer_outputs=[
+            _review_approval(AgentRole.CLAUDE),
+            _review_approval(AgentRole.ANTIGRAVITY),
+        ],
     )
+    engine = WorkflowEngine(driver)
 
-    result = WorkflowEngine(driver).run_current_work_unit(_slice_state(), _context())
+    result = engine.run_current_work_unit(_slice_state(), _context())
 
     assert result.exit_code == 4
     assert result.state.current_work_unit.gate.reason is GateReason.UNEXPECTED_FILE
+    assert result.state.current_work_unit.gate.fingerprint == changes.fingerprint
     assert result.state.current_work_unit.gate.paths == ("src/foreign.py",)
     assert driver.validation_calls == []
     assert driver.reviewer_calls == []
+
+    approved = engine.decide_current_gate(
+        result.state,
+        result.history,
+        approved=True,
+        decided_by="operator",
+        decided_at="2026-08-20T10:00:00+00:00",
+        rationale="reviewed exact external change",
+    )
+    completed = engine.run_current_work_unit(
+        approved.state,
+        _context(),
+        approved.history,
+    )
+
+    assert completed.completed
+    assert driver.validation_calls == [changes.fingerprint]
+    assert [call.reviewer for call in driver.reviewer_calls] == [
+        AgentRole.CLAUDE,
+        AgentRole.ANTIGRAVITY,
+    ]
+    assert completed.state.current_work_unit.gate_decisions[-1].reason is (
+        GateReason.UNEXPECTED_FILE
+    )
 
 
 def test_productive_file_limit_halts_before_first_agent_and_rechecks_on_resume() -> None:

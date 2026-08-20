@@ -1661,12 +1661,13 @@ class WorkflowEngine:
             state, changes, unit.kind, context=context
         )
         if unexpected:
-            state = state.await_policy_gate(
+            state = state.await_user_gate(
                 reason=GateReason.UNEXPECTED_FILE,
                 detail=(
                     f"{UNEXPECTED_PATH_RULE_ID} | canonical changes contain paths "
                     f"outside the persisted Slice scope: {', '.join(unexpected)}"
                 ),
+                fingerprint=changes.fingerprint,
                 paths=unexpected,
             )
             self.driver.checkpoint(state, history)
@@ -2438,12 +2439,13 @@ class WorkflowEngine:
             state, changes, state.current_work_unit.kind
         )
         if unexpected:
-            state = state.await_policy_gate(
+            state = state.await_user_gate(
                 reason=GateReason.UNEXPECTED_FILE,
                 detail=(
                     f"{UNEXPECTED_PATH_RULE_ID} | canonical changes contain paths "
                     f"outside the persisted Slice scope: {', '.join(unexpected)}"
                 ),
+                fingerprint=changes.fingerprint,
                 paths=unexpected,
             )
             self.driver.checkpoint(state, history)
@@ -2746,7 +2748,14 @@ class WorkflowEngine:
         scope = state.current_slice.scope_paths
         if not scope:
             raise WorkflowExecutionError("slice review requires a persisted Git boundary")
-        return tuple(path for path in changes.paths if path not in scope)
+        unexpected = tuple(path for path in changes.paths if path not in scope)
+        if unexpected and state.current_work_unit.has_gate_approval(
+            GateReason.UNEXPECTED_FILE,
+            changes.fingerprint,
+            unexpected,
+        ):
+            return ()
+        return unexpected
 
     def _apply_test_change_gate(
         self,

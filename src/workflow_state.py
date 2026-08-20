@@ -469,6 +469,7 @@ class GateDecisionRecord:
             GateReason.ANCHOR_CHANGE,
             GateReason.MANUAL_SLICE,
             GateReason.PLAN_APPROVAL,
+            GateReason.UNEXPECTED_FILE,
             GateReason.QUOTA_RESUME_DIFF,
         }:
             raise WorkflowStateValidationError(
@@ -495,9 +496,14 @@ class GateDecisionRecord:
             raise WorkflowStateValidationError(
                 "test-change decision requires changed test paths"
             )
-        if self.reason in {GateReason.MANUAL_SLICE, GateReason.PLAN_APPROVAL} and not self.paths:
+        if self.reason in {
+            GateReason.MANUAL_SLICE,
+            GateReason.PLAN_APPROVAL,
+            GateReason.UNEXPECTED_FILE,
+        } and not self.paths:
             raise WorkflowStateValidationError(
-                "manual-slice and plan-approval decisions require bound paths"
+                "manual-slice, plan-approval, and unexpected-file decisions require "
+                "bound paths"
             )
         if self.reason in {
             GateReason.TEST_CHANGE,

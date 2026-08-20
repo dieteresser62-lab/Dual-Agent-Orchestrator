@@ -844,6 +844,32 @@ def test_policy_gate_rejects_fingerprint_bound_reason_and_unsafe_path() -> None:
         )
 
 
+def test_unexpected_file_user_gate_decision_roundtrips() -> None:
+    state = make_state().await_user_gate(
+        reason=GateReason.UNEXPECTED_FILE,
+        detail="UNEXPECTED-PATH | reviewed external changes",
+        fingerprint="4" * 64,
+        paths=("src/external.py",),
+    )
+
+    approved = state.record_user_gate_decision(
+        approved=True,
+        fingerprint="4" * 64,
+        paths=("src/external.py",),
+        decided_by="operator",
+        decided_at="2026-08-20T10:00:00+00:00",
+        rationale="exact external change reviewed",
+    )
+    loaded = WorkflowState.from_dict(approved.to_dict())
+
+    assert loaded.current_work_unit.has_gate_approval(
+        GateReason.UNEXPECTED_FILE,
+        "4" * 64,
+        ("src/external.py",),
+    )
+    assert loaded.current_work_unit.gate.status is GateStatus.CLEAR
+
+
 def test_plan_time_slice_one_start_commit_cannot_be_rebound_after_resume() -> None:
     original_head = "a" * 40
     advanced_head = "b" * 40
