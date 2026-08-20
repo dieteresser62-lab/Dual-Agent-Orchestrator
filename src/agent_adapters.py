@@ -399,7 +399,7 @@ class ClaudeAdapter(_BaseAdapter):
             packet_file.write_text(chunk, encoding="utf-8")
             digest = hashlib.sha256(chunk.encode("utf-8")).hexdigest()
             manifest_lines.append(
-                f"- `{packet_file.name}` | chars={len(chunk)} | sha256={digest}"
+                f"- `{packet_file}` | chars={len(chunk)} | sha256={digest}"
             )
         self._review_manifest_file = runtime_dir / "review-manifest.md"
         self._review_manifest_file.write_text(
@@ -434,7 +434,7 @@ class ClaudeAdapter(_BaseAdapter):
             separators=(",", ":"),
         )
         directive = (
-            f"Read {self._review_manifest_file.name} exactly once, then read every listed packet "
+            f"Read {self._review_manifest_file} exactly once, then read every listed packet "
             f"chunk exactly once in order ({read_call_budget} Read calls total), and follow "
             "the concatenated request. Do not run tests or the review harness; inspect the "
             "supplied validation evidence and focus on the implementation. Return the answer "
@@ -515,7 +515,7 @@ class ClaudeAdapter(_BaseAdapter):
             "then run the exact allowlisted review harness once. Do not try alternatives."
         )
         command[-1] = (
-            f"Read {self._review_manifest_file.name}, then every listed packet chunk exactly "
+            f"Read {self._review_manifest_file}, then every listed packet chunk exactly "
             "once. Run this exact capability diagnostic once and no alternative: "
             f"{harness_command}. Return the answer in the response field."
         )

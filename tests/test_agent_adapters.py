@@ -149,9 +149,8 @@ def test_claude_defaults_are_quota_conscious_and_permissions_are_separate() -> N
         manifest_path = packet_dir / "review-manifest.md"
         packet_path = packet_dir / "review-packet-001.md"
         assert packet_path.read_text(encoding="utf-8") == "secret long prompt"
-        assert "review-packet-001.md" in manifest_path.read_text(encoding="utf-8")
-        assert manifest_path.name in command[-1]
-        assert str(manifest_path.parent) not in command[-1]
+        assert str(packet_path) in manifest_path.read_text(encoding="utf-8")
+        assert str(manifest_path) in command[-1]
         assert "2 Read calls total" in command[-1]
         assert "Do not run tests or the review harness" in command[-1]
         assert use_stdin is False
@@ -367,11 +366,12 @@ def test_claude_review_packet_is_losslessly_chunked_with_dynamic_read_budget() -
         assert "".join(path.read_text(encoding="utf-8") for path in chunks) == prompt
         assert all(len(path.read_text(encoding="utf-8")) <= 24_000 for path in chunks)
         manifest = (packet_dir / "review-manifest.md").read_text(encoding="utf-8")
-        assert all(path.name in manifest for path in chunks)
+        assert all(str(path) in manifest for path in chunks)
         expected_calls = len(chunks) + 1
         policy = command[command.index("--system-prompt") + 1]
         assert f"exactly {expected_calls} Read calls" in policy
         assert f"{expected_calls} Read calls total" in command[-1]
+        assert str(packet_dir / "review-manifest.md") in command[-1]
     finally:
         adapter.cleanup()
 
