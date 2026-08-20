@@ -431,6 +431,19 @@ bevor die native Agentenschnittstelle selbst umgesetzt wird.
   Provideraufträge;
 - keine stille Trunkierung oder unvollständige Manifestabdeckung.
 
+### 9.2a Stabilisierungspaket 1.1 – Record-Autorität, Recovery und Kostenbremsen
+
+Vor Arbeitspaket 2 wird ein eigenständiges Konsolidierungspaket eingeschoben.
+Es fügt keine neue Protokolloberfläche hinzu, sondern stabilisiert die in
+Arbeitspaket 1 unter realer Last sichtbar gewordenen Record-/Mirror-,
+Resume-, Finalreview-, Logging- und Kostenpfade. Verbindliche Detailbefunde,
+Architekturziele, Crash-Matrix, Kostenbremsen und Abnahmekriterien stehen in
+[Phase 2 – Erkenntnisse aus Arbeitspaket 1 und Stabilisierungspaket 1.1](phase-2-arbeitspaket-1-erkenntnisse-und-stabilisierung-1-1.md).
+
+Arbeitspaket 2 darf erst beginnen, wenn Paket 1.1 mehrere repräsentative
+End-to-End-Läufe ohne manuelle State-, Record- oder Auditkorrektur bestanden
+hat.
+
 ### 9.3 Arbeitspaket 2 – Native Verträge und Referenzintegrität
 
 - versionierte Request-/Response-Schemas und Domänenmodelle;
