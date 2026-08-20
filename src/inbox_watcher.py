@@ -16,7 +16,7 @@ from typing import Callable, TextIO
 
 from state_io import atomic_write_file
 from workflow import WorkflowRunResult
-from workflow_state import WorkUnitStatus
+from workflow_state import GateReason, WorkUnitStatus
 
 try:
     import fcntl
@@ -64,6 +64,16 @@ class WatchTaskResult:
             and self.exit_code not in {2, 3, 4}
         ):
             raise ValueError("resumable watch halt requires exit code 2, 3, or 4")
+        if self.gate_reason == GateReason.BOOTSTRAP_CHECK.value:
+            if (
+                self.disposition is not WatchTaskDisposition.RESUMABLE_HALT
+                or self.status != WorkUnitStatus.AWAITING_RESUME.value
+                or self.exit_code != 4
+                or not self.resume_available
+            ):
+                raise ValueError(
+                    "bootstrap check must remain an exit-4 resumable watch halt"
+                )
 
     @classmethod
     def from_workflow(cls, result: WorkflowRunResult) -> WatchTaskResult:
@@ -75,9 +85,19 @@ class WatchTaskResult:
             WorkUnitStatus.WAITING_FOR_RETRY,
             WorkUnitStatus.AWAITING_RESUME,
         }
+        bootstrap_halt = (
+            status is WorkUnitStatus.AWAITING_RESUME
+            and state.current_work_unit.gate.reason is GateReason.BOOTSTRAP_CHECK
+        )
         if result.workflow_completed:
             disposition = WatchTaskDisposition.COMPLETED
             exit_code = 0
+        elif bootstrap_halt:
+            # This local denial happens before a provider process.  Exit 4 keeps it
+            # distinct from quota/agent failures while preserving the watch identity
+            # for an operator to repair the cause and resume the exact same step.
+            disposition = WatchTaskDisposition.RESUMABLE_HALT
+            exit_code = 4
         elif resumable and result.exit_code in {2, 3, 4}:
             disposition = WatchTaskDisposition.RESUMABLE_HALT
             exit_code = result.exit_code

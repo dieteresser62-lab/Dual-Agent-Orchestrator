@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import subprocess
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -11,6 +13,7 @@ import orchestrator
 from audit_trail import ReviewAuditEvent, ValidationAuditEvent
 from artifact_bridge import ArtifactBridge, attestation_payload
 from artifact_models import (
+    ProviderInputMeasurementPayload,
     QuotaPausePayload,
     RecordType,
     ReviewPayload,
@@ -18,6 +21,7 @@ from artifact_models import (
     TransientRetryPayload,
 )
 from artifact_store import ArtifactStore
+from artifact_projection import ArtifactAuditProjection
 from contracts import (
     AgentRole,
     ContractResult,
@@ -28,12 +32,27 @@ from contracts import (
     ValidationStatus,
 )
 from orchestrator import ProductionWorkflowDriver
-from workflow import WorkflowExecutionError, WorkflowHistory
+from provider_input_budget import (
+    PreparedProviderInput,
+    ProviderInputBudgetExceeded,
+    ProviderInputBudgetPolicy,
+    ProviderInputBudgetRule,
+    ProviderInputComponent,
+    default_provider_input_budget_policy,
+    measure_provider_input,
+)
+from workflow import (
+    WorkflowContext,
+    WorkflowEngine,
+    WorkflowExecutionError,
+    WorkflowHistory,
+)
 from workflow_state import (
     AgentFailureKind,
     InvocationFailureRecord,
     ProtocolBinding,
     ProtocolMode,
+    WorkflowState,
     WorkflowStep,
     WorkUnitKind,
     init_workflow_state,
@@ -139,6 +158,115 @@ def test_external_side_effect_guard_rejects_review_record_ahead_of_mirror(
 
     with pytest.raises(WorkflowExecutionError, match="reviewer decisions differ"):
         driver.assert_structured_decision_context()
+
+
+def test_budget_denial_persists_gate_checkpoint_and_resumes_idempotently(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/structured-regression")
+    (repository / ".gitignore").write_text(
+        ".orchestrator/\ntask.md\n", encoding="utf-8"
+    )
+    _git(repository, "add", ".gitignore")
+    _git(repository, "commit", "-m", "ignore runtime control files")
+    task = repository / "task.md"
+    task.write_text("bootstrap task\n", encoding="utf-8")
+    state = replace(
+        _state(repository, "structured-bootstrap-resume"),
+        task_digest=hashlib.sha256(task.read_text(encoding="utf-8").encode("utf-8")).hexdigest(),
+    )
+    head = _git(repository, "rev-parse", "HEAD")
+    state = state.complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    ).bind_current_slice_git_boundary(
+        start_commit=head,
+        scope_paths=("src/runtime.py",),
+        start_fingerprint="b" * 64,
+    )
+    defaults = default_provider_input_budget_policy()
+    policy = ProviderInputBudgetPolicy(
+        tuple(
+            ProviderInputBudgetRule(
+                rule.provider,
+                rule.role,
+                rule.operation,
+                3 if rule.key == ("codex", "codex", "codex_implementation") else rule.max_chars,
+                3 if rule.key == ("codex", "codex", "codex_implementation") else rule.max_bytes,
+            )
+            for rule in defaults.rules
+        )
+    )
+    measurement = measure_provider_input(
+        PreparedProviderInput(
+            command=("codex",),
+            stdin_text="oversized",
+            components=(ProviderInputComponent("stdin_prompt", "oversized"),),
+        ),
+        provider="codex",
+        role="codex",
+        operation="codex_implementation",
+        binding_fingerprint="b" * 64,
+        policy=policy,
+    )
+    assert not measurement.allowed
+    driver = _driver(repository)
+    history = WorkflowHistory(state.current_work_unit_id)
+    driver.checkpoint(state, history)
+    state = driver.active_state or state
+    engine = WorkflowEngine(driver)
+    context = WorkflowContext("assignment", "plan", "slice")
+
+    def denied_provider_start() -> str:
+        driver._persist_provider_bootstrap(measurement)
+        raise ProviderInputBudgetExceeded(measurement)
+
+    halted, output = engine._invoke_role(
+        state, history, context, AgentRole.CODEX, denied_provider_start
+    )
+
+    assert output is None
+    assert halted.current_work_unit.gate.reason.value == "bootstrap_check"
+    assert halted.current_work_unit.gate.resume_step is WorkflowStep.CODEX_IMPLEMENTATION
+    assert driver.state_file.exists()
+    checkpoint_path = next((driver.checkpoint_dir / halted.run_id).iterdir())
+    checkpoint_state = WorkflowState.from_dict(
+        json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    )
+    assert checkpoint_state.current_work_unit.gate.reason.value == "bootstrap_check"
+    measurement_records = tuple(
+        record
+        for record in ArtifactStore(repository, halted.run_id).load_chain()
+        if isinstance(record.payload, ProviderInputMeasurementPayload)
+    )
+    assert len(measurement_records) == 1
+    audit = ArtifactAuditProjection(
+        ArtifactStore(repository, halted.run_id).load_chain()
+    ).render_sections()["validation-attestation"]
+    assert "Verletzung `chars,bytes`" in audit
+    assert "Überhang `6/6`" in audit
+    assert "größte Komponente `stdin_prompt`" in audit
+    assert "Komponenten `stdin_prompt=9/9`" in audit
+    assert "oversized" not in audit
+
+    resumed = halted.resume_after_invocation_halt()
+    driver.checkpoint(resumed, history)
+    resumed = driver.active_state or resumed
+    halted_again, output = engine._invoke_role(
+        resumed, history, context, AgentRole.CODEX, denied_provider_start
+    )
+
+    assert output is None
+    assert halted_again.current_step is WorkflowStep.CODEX_IMPLEMENTATION
+    assert halted_again.current_work_unit.gate == halted.current_work_unit.gate
+    assert len(
+        tuple(
+            record
+            for record in ArtifactStore(repository, halted.run_id).load_chain()
+            if isinstance(record.payload, ProviderInputMeasurementPayload)
+        )
+    ) == 1
 
 
 def test_automatic_quota_pause_persists_matching_chain_record_and_resumes(

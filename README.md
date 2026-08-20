@@ -419,6 +419,13 @@ description = "Stop when the named domain invariant changes."
 default_command = ["python3", "-m", "pytest", "tests/", "-v"]
 default_timeout_seconds = 1800
 
+[[provider_input_budget]]
+provider = "codex"
+role = "codex"
+operation = "codex_implementation"
+max_chars = 4000000
+max_bytes = 16000000
+
 [[validation.rules]]
 patterns = ["frontend/**"]
 command = ["npm", "test"]
@@ -431,6 +438,8 @@ test_change_gate = false
 ```
 
 `default_shell_command` oder ein regelbezogener `shell_command` sollten nur verwendet werden, wenn Shell-Semantik erforderlich ist. Ein Validierungseintrag darf nicht sowohl einen Argumentvektorbefehl als auch einen Shell-Befehl enthalten. Muster sind repositoryrelativ, verwenden `/` und dürfen nicht mit `..` ausbrechen.
+
+`provider_input_budget` ist eine geschlossene Tabelle für jede unterstützte Kombination aus Provider, Rolle und Operation; [orchestrator.toml](orchestrator.toml) zeigt die vollständige Liste. Zeichen und UTF-8-Bytes werden nach der verlustfreien Adapterserialisierung und vor Capabilityprüfung oder Providerprozess separat gemessen. Gleichheit mit dem positiven Sicherheitsbudget ist erlaubt, jede Überschreitung hält lokal an. Technische Providerlimits bleiben `null`, solange keine belastbare, versionierte Quelle einen Zeichen- und Bytewert belegt; ein unbekanntes Limit erweitert das Sicherheitsbudget nicht. Auditprojektion und Logs enthalten nur Größen, Grenzwerte, Komponentennamen, Überhang, Fehlercode und Bindungsdigests, niemals Prompttext, Secrets, Umgebungen oder vollständige Kommandozeilen.
 
 Nützliche Umgebungsüberschreibungen sind:
 
@@ -449,6 +458,8 @@ wie `network`, `quota` oder `auth` innerhalb einer fachlichen Reviewantwort dür
 keine technische Fehlerklasse auslösen. Automatische transiente Neuversuche gelten nur
 für belegte Netzwerkdiagnosen; Auth-, Runtime-, Output- und Prozessfehler halten weiterhin
 fortsetzbar an.
+
+Vor jedem der drei branchweiten Finalaufrufe prüft ein lokales, agentenfreies Preflight außerdem Recordkette, State-v3-Spiegel, Findingzustände, aktuelle Validierungsattestierung, autorisierte Pfade und die unmittelbar zuvor persistierte Eingabemessung. Ein Budget- oder Preflightdenial ist kein Providerfehler: Der unveränderte Rollenstep bleibt mit `bootstrap_check` und Exitcode 4 resumierbar. Im Watchbetrieb steigen weder Attempt-Zähler noch entstehen `.poison`-Dateien oder automatische Providerretries. Nach Korrektur von Konfiguration, Record-/State-Spiegel oder Repositoryzustand wird derselbe Auftrag mit `run_task --watch` beziehungsweise `run_task --resume --task-file ...` erneut geprüft; dafür ist keine `--approve-gate`-Entscheidung zulässig oder nötig.
 
 ## Agentenanweisungen und Ausgabevertrag
 

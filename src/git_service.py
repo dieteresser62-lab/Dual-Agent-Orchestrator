@@ -103,6 +103,8 @@ class CommitAuthorization:
     antigravity_review: ContractResult
     findings: tuple[FindingRecord, ...] = ()
     red_state_followup_slice: str | None = None
+    approved_head_commit: str | None = None
+    approved_external_paths: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if (
@@ -111,6 +113,23 @@ class CommitAuthorization:
         ):
             raise GitTransactionError(
                 "red-state follow-up slice must be non-empty when provided"
+            )
+        approved_paths = _normalize_optional_scope_paths(
+            self.approved_external_paths
+        )
+        if approved_paths != self.approved_external_paths:
+            raise GitTransactionError(
+                "approved external paths must be sorted and unique"
+            )
+        if approved_paths and self.approved_head_commit is None:
+            raise GitTransactionError(
+                "approved external paths require the exact approved HEAD commit"
+            )
+        if self.approved_head_commit is not None and not re.fullmatch(
+            r"[0-9a-f]{40}", self.approved_head_commit
+        ):
+            raise GitTransactionError(
+                "approved HEAD commit must be a lowercase SHA-1 commit id"
             )
 
 
@@ -485,21 +504,86 @@ def commit_slice(
     if authorization.slice_id != boundary.slice_id:
         raise GitTransactionError("commit authorization belongs to a different slice")
     identity = _require_expected_feature_branch(repository_root, boundary.branch)
-    if identity.head != boundary.start_commit:
-        raise GitTransactionError("slice HEAD changed after its persisted start")
-    changes = _collect_boundary_changes(identity.repository_root, boundary)
-    if not changes.entries:
+    reviewed_changes = _collect_boundary_changes(identity.repository_root, boundary)
+    if not reviewed_changes.entries:
         raise GitTransactionError("slice commit requires at least one changed path")
+    reviewed_paths = _change_paths(reviewed_changes)
+    unexpected_reviewed = tuple(
+        path for path in reviewed_paths if path not in boundary.scope_paths
+    )
+    allowed_scope = tuple(
+        sorted({*boundary.scope_paths, *authorization.approved_external_paths})
+    )
     staged_before = _staged_paths(identity.repository_root, detect_renames=False)
     foreign_staged = tuple(
-        path for path in staged_before if path not in boundary.scope_paths
+        path for path in staged_before if path not in allowed_scope
     )
     if foreign_staged:
         raise GitTransactionError(
             "foreign staged paths block the slice commit: " + ", ".join(foreign_staged)
         )
-    transaction_paths = _require_scope(changes, boundary.scope_paths)
-    _validate_authorization(authorization, changes.fingerprint)
+    if unexpected_reviewed != authorization.approved_external_paths:
+        raise GitTransactionError(
+            "reviewed paths outside the Slice scope lack an exact user approval: "
+            + ", ".join(unexpected_reviewed)
+        )
+    if identity.head != boundary.start_commit:
+        ancestry = _git(
+            identity.repository_root,
+            "merge-base",
+            "--is-ancestor",
+            boundary.start_commit,
+            identity.head,
+            accepted_exit_codes=(0, 1, 128),
+        )
+        if ancestry.returncode != 0:
+            raise GitTransactionError(
+                "slice HEAD no longer descends from its persisted start"
+            )
+        if authorization.approved_head_commit != identity.head:
+            raise GitTransactionError(
+                "slice HEAD drift lacks an exact fingerprint-bound user approval"
+            )
+    semantic_transaction_paths = tuple(
+        sorted(
+            {
+                path
+                for path in (
+                    *boundary.semantic_markdown_paths,
+                    *authorization.approved_external_paths,
+                )
+                if path.startswith("docs/internal/") and path.endswith(".md")
+            }
+        )
+    )
+    if identity.head == boundary.start_commit:
+        transaction_changes = reviewed_changes
+    else:
+        transaction_boundary = SliceGitBoundary(
+            slice_id=boundary.slice_id,
+            branch=boundary.branch,
+            start_commit=identity.head,
+            start_fingerprint=boundary.start_fingerprint,
+            scope_paths=allowed_scope,
+            semantic_markdown_paths=semantic_transaction_paths,
+            excluded_control_paths=boundary.excluded_control_paths,
+        )
+        transaction_changes = _collect_boundary_changes(
+            identity.repository_root, transaction_boundary
+        )
+    if not transaction_changes.entries:
+        raise GitTransactionError(
+            "slice commit has no uncommitted transaction after approved HEAD drift"
+        )
+    transaction_paths = _require_scope(
+        transaction_changes,
+        allowed_scope,
+    )
+    if not any(path in boundary.scope_paths for path in transaction_paths):
+        raise GitTransactionError(
+            "slice commit transaction contains no path from the persisted Slice scope"
+        )
+    _validate_authorization(authorization, reviewed_changes.fingerprint)
     normalized_title = title.strip()
     if not normalized_title or "\n" in normalized_title or "\r" in normalized_title:
         raise GitTransactionError("slice commit title must be one non-empty line")
@@ -512,7 +596,7 @@ def commit_slice(
         sorted(
             {
                 entry.old_path if entry.old_path is not None else entry.path
-                for entry in changes.entries
+                for entry in transaction_changes.entries
                 if entry.kind in ("deleted", "renamed")
                 and (
                     entry.old_path if entry.old_path is not None else entry.path
@@ -522,7 +606,11 @@ def commit_slice(
         )
     )
     content_paths = tuple(
-        sorted(entry.path for entry in changes.entries if entry.kind != "deleted")
+        sorted(
+            entry.path
+            for entry in transaction_changes.entries
+            if entry.kind != "deleted"
+        )
     )
     try:
         if update_paths:
@@ -552,13 +640,20 @@ def commit_slice(
                 *(f":(top,literal){path}" for path in markdown_paths),
             )
         staged_after = _staged_paths(identity.repository_root)
-        if staged_after != changes.paths:
+        if staged_after != transaction_changes.paths:
             raise GitTransactionError(
                 "staged paths do not exactly match the slice transaction: "
                 + ", ".join(staged_after)
             )
-        final_changes = _collect_boundary_changes(identity.repository_root, boundary)
-        if final_changes.fingerprint != changes.fingerprint:
+        if identity.head == boundary.start_commit:
+            final_changes = _collect_boundary_changes(
+                identity.repository_root, boundary
+            )
+        else:
+            final_changes = _collect_boundary_changes(
+                identity.repository_root, transaction_boundary
+            )
+        if final_changes.fingerprint != transaction_changes.fingerprint:
             raise GitTransactionError("slice fingerprint changed during exact staging")
 
         _git(
@@ -575,7 +670,7 @@ def commit_slice(
         current_head = os.fsdecode(
             _git(identity.repository_root, "rev-parse", "--verify", "HEAD^{commit}").stdout
         ).strip()
-        if current_head == boundary.start_commit:
+        if current_head == identity.head:
             _git(identity.repository_root, "read-tree", index_tree_before)
         raise
     commit_hash = os.fsdecode(
@@ -600,13 +695,13 @@ def commit_slice(
             if field
         )
     )
-    if committed_paths != changes.paths:
+    if committed_paths != transaction_changes.paths:
         raise GitTransactionError("created commit path list differs from the reviewed slice")
     return SliceCommitResult(
         slice_id=boundary.slice_id,
         commit_hash=commit_hash,
         message=message,
-        diff_fingerprint=changes.fingerprint,
+        diff_fingerprint=reviewed_changes.fingerprint,
         committed_paths=committed_paths,
     )
 
@@ -693,7 +788,17 @@ def _require_scope(
     changes: RepositoryChanges,
     scope_paths: tuple[str, ...],
 ) -> tuple[str, ...]:
-    transaction_paths = tuple(
+    transaction_paths = _change_paths(changes)
+    unexpected = tuple(path for path in transaction_paths if path not in scope_paths)
+    if unexpected:
+        raise GitTransactionError(
+            "paths outside the persisted slice scope: " + ", ".join(unexpected)
+        )
+    return transaction_paths
+
+
+def _change_paths(changes: RepositoryChanges) -> tuple[str, ...]:
+    return tuple(
         sorted(
             {
                 path
@@ -703,12 +808,6 @@ def _require_scope(
             }
         )
     )
-    unexpected = tuple(path for path in transaction_paths if path not in scope_paths)
-    if unexpected:
-        raise GitTransactionError(
-            "paths outside the persisted slice scope: " + ", ".join(unexpected)
-        )
-    return transaction_paths
 
 
 def _staged_paths(

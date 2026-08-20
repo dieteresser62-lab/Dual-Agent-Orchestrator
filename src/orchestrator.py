@@ -1194,6 +1194,45 @@ class ProductionWorkflowDriver(WorkflowDriver):
             ),
             "apply approved correction",
         )
+        reviewed_changes = self._repository_changes.get(request.fingerprint)
+        if reviewed_changes is None:
+            raise WorkflowExecutionError(
+                "slice commit has no canonical repository evidence for its fingerprint"
+            )
+        unexpected_paths = tuple(
+            path
+            for path in reviewed_changes.paths
+            if path not in current.scope_paths
+        )
+        exact_scope_approval = any(
+            state.current_work_unit.has_gate_approval(
+                reason,
+                request.fingerprint,
+                unexpected_paths,
+            )
+            for reason in (
+                GateReason.UNEXPECTED_FILE,
+                GateReason.QUOTA_RESUME_DIFF,
+            )
+        )
+        if unexpected_paths and not exact_scope_approval:
+            raise WorkflowExecutionError(
+                "slice commit has unapproved paths outside its persisted scope"
+            )
+        head_approval = next(
+            (
+                decision
+                for decision in reversed(
+                    state.current_work_unit.gate_decisions
+                )
+                if decision.approved
+                and decision.fingerprint == request.fingerprint
+                and decision.reason
+                in {GateReason.UNEXPECTED_FILE, GateReason.QUOTA_RESUME_DIFF}
+            ),
+            None,
+        )
+        identity = inspect_repository(self.root)
         result = commit_slice(
             repository_root=self.root,
             boundary=boundary,
@@ -1205,6 +1244,12 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 antigravity_review=request.antigravity_review,
                 findings=request.findings,
                 red_state_followup_slice=request.red_state_followup_slice,
+                approved_head_commit=(
+                    identity.head if head_approval is not None else None
+                ),
+                approved_external_paths=(
+                    unexpected_paths if exact_scope_approval else ()
+                ),
             ),
             title=summary,
         )
@@ -2771,12 +2816,17 @@ def run_pipeline(
 
     if getattr(args, "watch_run_id", None) is not None:
         return WatchTaskResult.from_workflow(result)
-    if result.exit_code != 0:
+    bootstrap_halt = (
+        result.state.current_work_unit.status is WorkUnitStatus.AWAITING_RESUME
+        and result.state.current_work_unit.gate.reason is GateReason.BOOTSTRAP_CHECK
+    )
+    exit_code = 4 if bootstrap_halt else result.exit_code
+    if exit_code != 0:
         unit = result.state.current_work_unit
         gate = unit.gate
         logger.warning(
             "Workflow stopped: exit=%s status=%s step=%s reason=%s detail=%s paths=%s",
-            result.exit_code,
+            exit_code,
             unit.status.value,
             unit.current_step.value,
             gate.reason.value,
@@ -2787,7 +2837,7 @@ def run_pipeline(
             "Continue this persisted run with --resume and the unchanged --task-file; "
             "use an explicit gate decision only when reason and fingerprint were reviewed."
         )
-    return result.exit_code
+    return exit_code
 
 
 def main() -> int:

@@ -1439,6 +1439,34 @@ def test_acknowledged_resume_diff_at_antigravity_restarts_claude_review() -> Non
     )
 
 
+def test_slice_commit_with_stale_review_fingerprint_revalidates_automatically() -> None:
+    changes = _changes("2", "src/early.py", TEST_FILE)
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[],
+        reviewer_outputs=[
+            _review_approval(AgentRole.CLAUDE),
+            _review_approval(AgentRole.ANTIGRAVITY),
+        ],
+    )
+    state = _slice_state().with_current_step(WorkflowStep.SLICE_COMMIT)
+
+    result = WorkflowEngine(driver).run_current_work_unit(
+        state,
+        _context(),
+        WorkflowHistory(state.current_work_unit_id),
+    )
+
+    assert result.completed
+    assert driver.validation_calls == [changes.fingerprint]
+    assert [call.reviewer for call in driver.reviewer_calls] == [
+        AgentRole.CLAUDE,
+        AgentRole.ANTIGRAVITY,
+    ]
+    assert len(driver.codex_calls) == 0
+    assert len(driver.commit_calls) == 1
+
+
 def test_changed_fingerprint_during_quota_wait_halts_before_retry() -> None:
     now = [datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)]
     first = _changes("1", "src/early.py", TEST_FILE)

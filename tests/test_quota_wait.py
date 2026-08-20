@@ -256,6 +256,27 @@ def test_non_quota_failures_are_distinct(error: Exception, kind: AgentFailureKin
     assert failure.kind is kind
 
 
+def test_antigravity_remote_missing_shell_is_transient_not_local_binary() -> None:
+    failure = classify_agent_failure(
+        "antigravity",
+        RuntimeError(
+            "remote error: run bash: fork/exec /usr/bin/bash: "
+            "no such file or directory"
+        ),
+        invocation_id="inv-remote-shell",
+        received_at=RECEIVED,
+    )
+
+    assert failure.kind is AgentFailureKind.NETWORK
+    local = classify_agent_failure(
+        "antigravity",
+        FileNotFoundError("No such file: agy"),
+        invocation_id="inv-local-binary",
+        received_at=RECEIVED,
+    )
+    assert local.kind is AgentFailureKind.BINARY
+
+
 def test_wait_uses_bounded_sleeps_and_emits_local_and_utc_heartbeat() -> None:
     clock = [RECEIVED]
     sleeps: list[float] = []

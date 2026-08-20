@@ -188,6 +188,12 @@ def render_artifact_sections(records: Sequence[ArtifactRecord]) -> Mapping[str, 
                     f"Output `{result.output_sha256}`: {_command(result.command.argv, result.command.mode)}"
                 )
         elif isinstance(payload, ProviderInputMeasurementPayload):
+            components = ", ".join(
+                f"{_safe(item.name)}={item.chars}/{item.bytes}"
+                for item in payload.components
+            )
+            violations = ",".join(payload.violated_dimensions) or "none"
+            technical_source = _safe(payload.technical_limit_source or "unknown")
             validations.append(
                 f"- {prefix}: Providerinput `{payload.provider.value}/{_safe(payload.operation)}` "
                 f"= `{'allowed' if payload.allowed else 'denied'}`; Zeichen "
@@ -195,12 +201,20 @@ def render_artifact_sections(records: Sequence[ArtifactRecord]) -> Mapping[str, 
                 f"`{payload.total_bytes}/{payload.effective_limit_bytes}`; Input "
                 f"`{payload.input_digest}`, Policy `{payload.policy_digest}`, Übergang "
                 f"`{payload.transition_fingerprint}`; technisches Limit "
-                f"`{payload.technical_limit_chars}/{payload.technical_limit_bytes}`"
+                f"`{payload.technical_limit_chars}/{payload.technical_limit_bytes}` "
+                f"(Quelle `{technical_source}`); Verletzung `{violations}`, Überhang "
+                f"`{payload.char_overage}/{payload.byte_overage}`, größte Komponente "
+                f"`{_safe(payload.largest_component)}`; Komponenten `{components}`"
             )
         elif isinstance(payload, FinalReviewPreflightPayload):
+            affected_records = _codes(payload.affected_record_ids)
+            affected_paths = _codes(payload.affected_paths)
             validations.append(
                 f"- {prefix}: Finalreview-Preflight `{_safe(payload.operation)}` = "
                 f"`{payload.outcome}`; Fehler `{_safe(payload.error_code or 'none')}`; "
+                f"Kategorie `{_safe(payload.category or 'none')}`; Records "
+                f"{affected_records}; Pfade {affected_paths}; Abhilfe "
+                f"`{_safe(payload.remediation or 'none')}`; "
                 f"Übergang `{payload.transition_fingerprint}`; Messung "
                 f"`{payload.measurement_record_id}`"
             )

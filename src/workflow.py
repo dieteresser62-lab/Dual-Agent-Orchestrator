@@ -1100,6 +1100,15 @@ class WorkflowEngine:
             if step is WorkflowStep.SLICE_COMMIT:
                 committed = self._commit(state, active_history, context)
                 if (
+                    not committed.completed
+                    and committed.state.current_work_unit.status
+                    is WorkUnitStatus.IN_PROGRESS
+                    and committed.state.current_step is not WorkflowStep.SLICE_COMMIT
+                ):
+                    state = committed.state
+                    active_history = committed.history
+                    continue
+                if (
                     committed.state.current_work_unit.kind is not WorkUnitKind.CORRECTION
                     or not committed.completed
                 ):
@@ -2467,18 +2476,30 @@ class WorkflowEngine:
                 and context.red_state_followup_slice is not None
             )
         )
-        if not validation_authorized:
-            raise WorkflowExecutionError(
-                "slice commit requires a passing attestation or named complete red-state exception"
+        reviews_current = (
+            validation_authorized
+            and claude is not None
+            and claude.approval is True
+            and claude.validation == attestation
+            and antigravity is not None
+            and antigravity.approval is True
+            and antigravity.validation == attestation
+        )
+        if not reviews_current:
+            review_step = (
+                WorkflowStep.CLAUDE_PLAN_REVIEW
+                if state.current_work_unit.kind is WorkUnitKind.PLAN
+                else WorkflowStep.CLAUDE_SLICE_REVIEW
             )
-        if claude is None or claude.approval is not True or claude.validation != attestation:
-            raise WorkflowExecutionError("slice commit requires current Claude approval")
-        if (
-            antigravity is None
-            or antigravity.approval is not True
-            or antigravity.validation != attestation
-        ):
-            raise WorkflowExecutionError("slice commit requires current Antigravity approval")
+            state = state.with_current_step(review_step)
+            history = replace(
+                history,
+                last_claude_fingerprint=None,
+                latest_claude_review=None,
+                latest_antigravity_review=None,
+            )
+            self.driver.checkpoint(state, history)
+            return WorkflowRunResult(state, history)
         if any(
             finding.status is FindingStatus.OPEN
             and finding.finding_class is FindingClass.BLOCKER

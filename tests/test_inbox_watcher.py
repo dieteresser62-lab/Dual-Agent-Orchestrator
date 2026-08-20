@@ -688,6 +688,31 @@ def test_workflow_result_requires_commits_and_completed_final_review() -> None:
     assert halted.failure_detail == "S-001 | operator decision required"
 
 
+def test_bootstrap_denial_maps_to_resumable_watch_halt_before_provider_retry() -> None:
+    state = init_workflow_state(
+        run_id="watch-bootstrap",
+        task_file="/repo/task.md",
+        branch="feature/watch",
+        branch_base="a" * 40,
+        slice_count=1,
+        timestamp="2026-08-13T10:00:00+00:00",
+    ).await_bootstrap_resume(
+        detail="PROVIDER-INPUT-BUDGET | chars=101/100",
+        fingerprint="b" * 64,
+    )
+
+    halted = WatchTaskResult.from_workflow(
+        WorkflowRunResult(state, WorkflowHistory(1))
+    )
+
+    assert halted.disposition is WatchTaskDisposition.RESUMABLE_HALT
+    assert halted.exit_code == 4
+    assert halted.status == "awaiting_resume"
+    assert halted.step == WorkflowStep.CODEX_PLAN.value
+    assert halted.gate_reason == GateReason.BOOTSTRAP_CHECK.value
+    assert halted.failure_detail == "PROVIDER-INPUT-BUDGET | chars=101/100"
+
+
 @pytest.mark.parametrize(
     ("exit_code", "status", "gate_reason"),
     (
@@ -802,6 +827,71 @@ def test_watch_restart_resumes_same_run_id_and_moves_only_final_workflow(
     assert run_ids[0] == run_ids[1]
     assert not task.exists()
     assert not watch_identity_path(task).exists()
+    assert len(list((outbox / "done").glob("*.md"))) == 1
+
+
+def test_watch_keeps_unchanged_bootstrap_denial_resumable_until_external_repair(
+    tmp_path: Path,
+) -> None:
+    inbox = tmp_path / "inbox"
+    outbox = tmp_path / "outbox"
+    inbox.mkdir()
+    task = inbox / "bootstrap.md"
+    task.write_text("bootstrap", encoding="utf-8")
+    calls: list[tuple[str, bool, bool]] = []
+
+    def deny(_task: Path, args: Namespace, force_new: bool) -> WatchTaskResult:
+        calls.append((args.watch_run_id, args.resume, force_new))
+        return WatchTaskResult(
+            exit_code=4,
+            run_id=args.watch_run_id,
+            disposition=WatchTaskDisposition.RESUMABLE_HALT,
+            status="awaiting_resume",
+            step="codex_final_review",
+            work_unit_id=4,
+            gate_reason=GateReason.BOOTSTRAP_CHECK.value,
+            failure_detail="FINAL-REVIEW-PREFLIGHT | restore matching records",
+        )
+
+    for _ in range(2):
+        assert watch_inbox(
+            inbox_dir=inbox,
+            outbox_dir=outbox,
+            poll_interval=0.01,
+            args=_args(),
+            process_task=deny,
+            max_retries=1,
+            time_fn=lambda: 10_000_000_000.0,
+        ) == 4
+        assert task.exists()
+        assert not (inbox / "bootstrap.md.attempts").exists()
+        assert list((outbox / "failed").glob("*")) == []
+
+    def finish(_task: Path, args: Namespace, force_new: bool) -> WatchTaskResult:
+        calls.append((args.watch_run_id, args.resume, force_new))
+        return WatchTaskResult.from_workflow(
+            _workflow_result(args.watch_run_id, final=True)
+        )
+
+    assert watch_inbox(
+        inbox_dir=inbox,
+        outbox_dir=outbox,
+        poll_interval=0.01,
+        args=_args(),
+        process_task=finish,
+        max_retries=1,
+        sleep_fn=_InterruptingSleep(interrupt_after=1),
+        time_fn=lambda: 10_000_000_000.0,
+    ) == 0
+
+    assert len({run_id for run_id, _, _ in calls}) == 1
+    assert calls[0][1:] == (False, True)
+    assert calls[1][1:] == (True, False)
+    assert calls[2][1:] == (True, False)
+    assert not task.exists()
+    assert not watch_identity_path(task).exists()
+    assert not (inbox / "bootstrap.md.attempts").exists()
+    assert list((outbox / "failed").glob("*")) == []
     assert len(list((outbox / "done").glob("*.md"))) == 1
 
 

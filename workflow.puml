@@ -109,9 +109,33 @@ while (A planned slice remains?) is (yes)
 endwhile (no)
 
 partition "Branch-wide final review" {
+  :Serialize and measure Codex final input losslessly;
+  :Persist measurement and run local Codex-final preflight;
+  if (Budget or preflight denied?) then (yes)
+    :Persist bootstrap_check at the unchanged Codex step;
+    :Return resumable exit 4 without provider/watch retry;
+    stop
+  else (passed)
+  endif
   :Codex checks completeness against the full branch diff;
   :Orchestrator validates and attests the branch fingerprint;
+  :Serialize and measure Claude final input losslessly;
+  :Persist measurement and run local Claude-final preflight;
+  if (Budget or preflight denied?) then (yes)
+    :Persist bootstrap_check at the unchanged Claude step;
+    :Return resumable exit 4 without provider/watch retry;
+    stop
+  else (passed)
+  endif
   :Claude reviews the complete branch;
+  :Serialize and measure Antigravity final input losslessly;
+  :Persist measurement and run local Antigravity-final preflight;
+  if (Budget or preflight denied?) then (yes)
+    :Persist bootstrap_check at the unchanged Antigravity step;
+    :Return resumable exit 4 without provider/watch retry;
+    stop
+  else (passed)
+  endif
   :Antigravity reviews the same complete branch;
 
   while (Any final finding remains open?) is (yes)

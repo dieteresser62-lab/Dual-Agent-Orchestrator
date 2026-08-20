@@ -668,6 +668,42 @@ def test_commit_handles_exact_rename_scope_without_including_predecessor_commit(
     assert _git(repository, "status", "--short") == ""
 
 
+def test_commit_accepts_exactly_approved_descendant_head_and_commits_only_worktree(
+    tmp_path: Path,
+) -> None:
+    repository, _ = _new_repository(tmp_path)
+    boundary, _ = begin_slice(
+        repository_root=repository,
+        slice_id=9,
+        expected_branch="feature/transaction",
+        scope_paths=("allowed.txt",),
+    )
+    (repository / "external.py").write_text("reviewed repair\n", encoding="utf-8")
+    _git(repository, "add", "external.py")
+    _git(repository, "commit", "-m", "reviewed intermediate repair")
+    approved_head = _git(repository, "rev-parse", "HEAD")
+    (repository / "allowed.txt").write_text("slice work\n", encoding="utf-8")
+    (repository / "repair.py").write_text("reviewed follow-up\n", encoding="utf-8")
+    authorization = replace(
+        _authorization(repository, boundary.start_commit),
+        approved_head_commit=approved_head,
+        approved_external_paths=("external.py", "repair.py"),
+    )
+
+    result = commit_slice(
+        repository_root=repository,
+        boundary=boundary,
+        authorization=authorization,
+        title="approved head drift",
+    )
+
+    assert result.committed_paths == ("allowed.txt", "repair.py")
+    assert _git(repository, "rev-parse", "HEAD^") == approved_head
+    assert _git(repository, "show", "--format=", "--name-only", "HEAD") == (
+        "allowed.txt\nrepair.py"
+    )
+
+
 def test_commit_completes_source_deletion_for_partially_staged_rename(
     tmp_path: Path,
 ) -> None:

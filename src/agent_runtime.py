@@ -1470,6 +1470,15 @@ def classify_agent_failure(
         kind = AgentFailureKind.AUTH
     elif any(marker in lowered for marker in ("dns", "name resolution", "connection", "network", "econn", "socket", "loopback", "egress")):
         kind = AgentFailureKind.NETWORK
+    elif (
+        agent_key == "antigravity"
+        and "remote error: run bash: fork/exec" in lowered
+        and "no such file or directory" in lowered
+    ):
+        # The local agy executable completed and reported a missing shell in its
+        # remote tool runtime. Treat that provider-instance failure as bounded
+        # transient infrastructure, never as a missing local CLI binary.
+        kind = AgentFailureKind.NETWORK
     elif isinstance(exc, FileNotFoundError) or "no such file" in lowered or "missing cli binary" in lowered:
         kind = AgentFailureKind.BINARY
     elif any(marker in lowered for marker in ("empty output", "invalid json", "no non-empty", "unparsable")):
