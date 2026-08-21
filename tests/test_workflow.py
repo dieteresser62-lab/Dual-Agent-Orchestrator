@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 
@@ -1715,6 +1716,58 @@ Use one canonical packet.
     )
     assert "BOUND CORRECTION DELTA" in driver.reviewer_calls[2].review_packet.text
     assert "Implement Slice 10" not in driver.reviewer_calls[2].prompt
+
+
+def test_plan_bound_same_slice_correction_packet_excludes_unaffected_findings() -> None:
+    first = _changes("1", "src/early.py", TEST_FILE)
+    corrected = _changes("2", "src/early.py", "src/latest.py", TEST_FILE)
+    unrelated = FindingRecord(
+        finding_id="A-99",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="unrelated other Slice defect",
+        acceptance_test="run the other Slice regression",
+        origin=FindingOrigin("02", 1, AgentRole.ANTIGRAVITY),
+    )
+    driver = FakeDriver(
+        snapshots=[first, corrected],
+        codex_outputs=[
+            _codex_ready("A-99"),
+            _codex_ready("A-99", "C-01"),
+        ],
+        reviewer_outputs=[
+            _review_denial(AgentRole.CLAUDE, "C-01"),
+            _review_closes(AgentRole.CLAUDE, "C-01"),
+            _review_closes(AgentRole.ANTIGRAVITY, "A-99"),
+        ],
+        deltas={("0" * 64, corrected.fingerprint): "BOUND CORRECTION DELTA"},
+    )
+    plan = """# Approved plan
+
+### Slice 1 - Packet Slice
+
+**Ziel**
+
+Use one canonical packet.
+
+#### \u0041kzeptanzkriterien
+
+- Include only findings that caused the correction round.
+"""
+    state = _slice_state()
+    history = WorkflowHistory(state.current_work_unit_id, findings=(unrelated,))
+
+    result = WorkflowEngine(driver).run_current_work_unit(
+        state, replace(_context(), approved_plan_text=plan), history
+    )
+
+    assert result.completed
+    correction_packet = driver.reviewer_calls[1].review_packet
+    assert correction_packet is not None
+    correction_payload = json.loads(correction_packet.canonical_bytes)
+    assert [item["id"] for item in correction_payload["open_findings"]] == ["C-01"]
+    assert correction_payload["closure_references"] == []
+    assert "A-99" not in correction_packet.text
 
 
 def test_antigravity_reuses_claude_base_packet_when_claude_adds_observation() -> None:

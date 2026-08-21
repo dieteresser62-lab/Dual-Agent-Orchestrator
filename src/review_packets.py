@@ -133,11 +133,13 @@ def build_review_packet(
     if len(finding_by_id) != len(findings):
         raise ReviewPacketError("review packet findings must be unique")
     affected = tuple(sorted(set(affected_finding_ids)))
+    if purpose == "correction" and not affected:
+        raise ReviewPacketError("correction packet requires affected findings")
     if affected and any(item not in finding_by_id for item in affected):
         raise ReviewPacketError("correction packet references an unknown finding")
     selected = (
         tuple(finding_by_id[item] for item in affected)
-        if purpose == "correction" and affected
+        if purpose == "correction"
         else tuple(findings)
     )
     active = [

@@ -2049,7 +2049,7 @@ class WorkflowEngine:
                         findings=history.findings,
                         affected_finding_ids=(
                             unit.open_findings
-                            if unit.kind is WorkUnitKind.CORRECTION
+                            if packet_purpose == "correction"
                             else ()
                         ),
                     )

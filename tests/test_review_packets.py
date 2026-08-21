@@ -129,6 +129,15 @@ def test_correction_packet_selects_only_affected_findings_and_binds_fingerprint(
         )
 
 
+def test_correction_packet_rejects_missing_affected_finding_scope() -> None:
+    with pytest.raises(ReviewPacketError, match="requires affected findings"):
+        build_review_packet(
+            purpose="correction", fingerprint="a" * 64, start_fingerprint="c" * 64,
+            paths=("src/core.py",), review_diff="CORRECTION DELTA", plan_text=PLAN,
+            slice_id=2, attestation=_attestation(), findings=_findings(),
+        )
+
+
 def test_packet_rejects_duplicate_manifest_and_ambiguous_plan_section() -> None:
     with pytest.raises(ReviewPacketError, match="sorted, unique"):
         build_review_packet(
