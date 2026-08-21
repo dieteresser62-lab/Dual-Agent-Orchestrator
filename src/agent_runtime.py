@@ -1394,6 +1394,16 @@ _CLAUDE_SESSION_LIMIT_PATTERN = re.compile(
     r"(?i)\byou(?:'ve| have) hit your session limit\b"
 )
 
+_ANTIGRAVITY_TRANSIENT_PROVIDER_PATTERNS = (
+    re.compile(
+        r"(?i)\Athe stream was interrupted\. please continue the task you were "
+        r"working on\.\Z"
+    ),
+    re.compile(
+        r"(?i)\Acontentoffset [0-9]+ exceeds line range size [0-9]+\Z"
+    ),
+)
+
 
 _PROVIDER_DIAGNOSTIC_KEYS = frozenset(
     {
@@ -1461,6 +1471,16 @@ def classify_agent_failure(
         )
         and _CLAUDE_SESSION_LIMIT_PATTERN.search(technical_text) is not None
     )
+    antigravity_transient_provider_failure = (
+        agent_key == "antigravity"
+        and isinstance(exc, AgentOutputError)
+        and isinstance(provider_data, Mapping)
+        and str(provider_data.get("status") or "").upper() == "ERROR"
+        and any(
+            pattern.fullmatch(technical_text.strip()) is not None
+            for pattern in _ANTIGRAVITY_TRANSIENT_PROVIDER_PATTERNS
+        )
+    )
     if (
         is_quota_or_rate_limit_error(technical_text)
         or is_quota_or_rate_limit_error(structured_text)
@@ -1490,6 +1510,11 @@ def classify_agent_failure(
     elif any(marker in lowered for marker in ("unauthorized", "authentication", "invalid api key", "401", "403")):
         kind = AgentFailureKind.AUTH
     elif any(marker in lowered for marker in ("dns", "name resolution", "connection", "network", "econn", "socket", "loopback", "egress")):
+        kind = AgentFailureKind.NETWORK
+    elif antigravity_transient_provider_failure:
+        # agy completed locally but its remote reader/stream failed before a
+        # review contract existed. Retry only these exact technical envelopes
+        # through the existing bounded, fingerprint-bound network policy.
         kind = AgentFailureKind.NETWORK
     elif (
         agent_key == "antigravity"

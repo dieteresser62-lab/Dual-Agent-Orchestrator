@@ -348,6 +348,68 @@ def test_antigravity_remote_missing_shell_is_transient_not_local_binary() -> Non
     assert local.kind is AgentFailureKind.BINARY
 
 
+@pytest.mark.parametrize(
+    "detail",
+    (
+        "The stream was interrupted. Please continue the task you were working on.",
+        "ContentOffset 46080 exceeds line range size 7511",
+    ),
+)
+def test_antigravity_known_remote_runtime_envelopes_are_transient(detail: str) -> None:
+    adapter = AntigravityAdapter()
+    envelope = {"status": "ERROR", "error": detail}
+
+    with pytest.raises(AgentOutputError) as captured:
+        adapter.extract_output(json.dumps(envelope), "", {})
+    # run_agent preserves the successful local agy exit code on adapter errors.
+    captured.value.exit_code = 0
+
+    failure = classify_agent_failure(
+        "antigravity",
+        captured.value,
+        invocation_id="inv-antigravity-transient-runtime",
+        received_at=RECEIVED,
+    )
+
+    assert failure.kind is AgentFailureKind.NETWORK
+    assert failure.process_exit_code == 0
+
+
+@pytest.mark.parametrize(
+    "error",
+    (
+        RuntimeError(
+            "The stream was interrupted. Please continue the task you were working on."
+        ),
+        AgentOutputError(
+            "antigravity returned non-success status",
+            provider_text="ContentOffset 46080 exceeds line range size 7511",
+            technical_text="ContentOffset 46080 exceeds line range size 7511",
+            provider_data={"status": "SUCCESS"},
+            exit_code=0,
+        ),
+        AgentOutputError(
+            "antigravity returned non-success status",
+            provider_text="ContentOffset -1 exceeds line range size 7511",
+            technical_text="ContentOffset -1 exceeds line range size 7511",
+            provider_data={"status": "ERROR"},
+            exit_code=0,
+        ),
+    ),
+)
+def test_antigravity_transient_runtime_near_misses_remain_fail_closed(
+    error: Exception,
+) -> None:
+    failure = classify_agent_failure(
+        "antigravity",
+        error,
+        invocation_id="inv-antigravity-runtime-near-miss",
+        received_at=RECEIVED,
+    )
+
+    assert failure.kind is AgentFailureKind.RUNTIME
+
+
 def test_wait_uses_bounded_sleeps_and_emits_local_and_utc_heartbeat() -> None:
     clock = [RECEIVED]
     sleeps: list[float] = []
