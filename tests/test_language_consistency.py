@@ -277,6 +277,11 @@ def test_readme_defaults_and_environment_names_match_runtime(tmp_path: Path) -> 
         "`claude`, `sonnet`, 1800s, `high`",
         "`codex`, `gpt-5.6-sol`, 1800s, `medium`",
         "erkanntes `agy`, `gemini-3.7-flash-high`, 1800s, `high`",
+        "`RUN_TASK_QUOTA_AUTO_RESUME`",
+        "`RUN_TASK_QUOTA_SAFETY_MARGIN`",
+        "`RUN_TASK_QUOTA_MAX_WAIT`",
+        "`RUN_TASK_QUOTA_MAX_AUTO_RESUMES`",
+        "`RUN_TASK_QUOTA_HEARTBEAT_INTERVAL`",
     )
     for fragment in expected_fragments:
         assert fragment in readme

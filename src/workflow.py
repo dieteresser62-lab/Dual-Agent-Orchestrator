@@ -2346,6 +2346,7 @@ class WorkflowEngine:
                         role=role.value,
                         task_label=state.task_file,
                         work_unit_id=state.current_work_unit_id,
+                        reset_at_utc=error.quota_reset.reset_at_utc,
                         resume_at_utc=resume_at,
                         heartbeat_interval_seconds=(
                             context.quota_wait_policy.heartbeat_interval_seconds
@@ -2410,9 +2411,9 @@ class WorkflowEngine:
             if reset_at is not None
             else None
         )
-        wait_seconds = (
-            max(0.0, (quota_resume_at - now_utc).total_seconds())
-            if quota_resume_at is not None
+        reset_delay_seconds = (
+            max(0.0, (reset_at - now_utc).total_seconds())
+            if reset_at is not None
             else None
         )
         automatic_quota = (
@@ -2423,8 +2424,8 @@ class WorkflowEngine:
                 unit.kind is WorkUnitKind.PLAN
                 or fingerprint is not None
             )
-            and wait_seconds is not None
-            and wait_seconds <= quota_policy.maximum_wait_seconds
+            and reset_delay_seconds is not None
+            and reset_delay_seconds <= quota_policy.maximum_wait_seconds
             and prior_auto_resumes < quota_policy.maximum_auto_resumes
         )
         automatic_network = (

@@ -158,9 +158,9 @@ class AgentProcessError(RuntimeError):
 class QuotaWaitPolicy:
     automatic: bool = True
     safety_margin_seconds: int = 60
-    maximum_wait_seconds: int = 86_400
+    maximum_wait_seconds: int = 604_800
     maximum_auto_resumes: int = 1
-    heartbeat_interval_seconds: int = 300
+    heartbeat_interval_seconds: int = 3_600
 
     def __post_init__(self) -> None:
         if not isinstance(self.automatic, bool):
@@ -230,34 +230,76 @@ def wait_until_quota_resume(
     role: str,
     task_label: str,
     work_unit_id: int,
+    reset_at_utc: datetime,
     resume_at_utc: datetime,
     heartbeat_interval_seconds: int,
     now_fn: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     sleep_fn: Callable[[float], None] = time.sleep,
     heartbeat_fn: Callable[[str], None] = logger.info,
 ) -> None:
-    """Wait interruptibly with bounded sleeps and concise local/UTC heartbeats."""
-    if resume_at_utc.tzinfo is None or resume_at_utc.utcoffset() is None:
-        raise ValueError("quota resume timestamp must be timezone-aware")
+    """Wait through reset and safety-margin phases using an injected clock."""
+    for value, label in (
+        (reset_at_utc, "quota reset timestamp"),
+        (resume_at_utc, "quota resume timestamp"),
+    ):
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError(f"{label} must be timezone-aware")
     if heartbeat_interval_seconds < 1:
         raise ValueError("quota heartbeat interval must be positive")
-    target = resume_at_utc.astimezone(timezone.utc)
-    while True:
+    reset_target = reset_at_utc.astimezone(timezone.utc)
+    resume_target = resume_at_utc.astimezone(timezone.utc)
+    if resume_target < reset_target:
+        raise ValueError("quota resume timestamp cannot precede quota reset timestamp")
+
+    def current_utc() -> datetime:
         now = now_fn()
         if now.tzinfo is None or now.utcoffset() is None:
             raise ValueError("quota wait clock must return a timezone-aware datetime")
-        now_utc = now.astimezone(timezone.utc)
-        remaining = max(0.0, (target - now_utc).total_seconds())
+        return now.astimezone(timezone.utc)
+
+    now_utc = current_utc()
+    heartbeat_fn(
+        "quota wait entered: "
+        f"role={role} task={task_label} work_unit={work_unit_id} "
+        f"reset_local={reset_target.astimezone().isoformat()} "
+        f"reset_utc={reset_target.isoformat()} "
+        f"resume_local={resume_target.astimezone().isoformat()} "
+        f"resume_utc={resume_target.isoformat()} "
+        f"remaining_to_reset={int(max(0.0, (reset_target - now_utc).total_seconds()) + 0.999)}s"
+    )
+
+    while True:
+        remaining = max(0.0, (reset_target - now_utc).total_seconds())
         if remaining <= 0:
-            return
-        local_target = target.astimezone()
-        heartbeat_fn(
-            "quota wait: "
-            f"role={role} task={task_label} work_unit={work_unit_id} "
-            f"resume_local={local_target.isoformat()} resume_utc={target.isoformat()} "
-            f"remaining={int(remaining + 0.999)}s"
-        )
+            break
         sleep_fn(min(float(heartbeat_interval_seconds), remaining))
+        now_utc = current_utc()
+        remaining = max(0.0, (reset_target - now_utc).total_seconds())
+        if remaining <= 0:
+            break
+        heartbeat_fn(
+            "quota wait heartbeat: "
+            f"role={role} task={task_label} work_unit={work_unit_id} "
+            f"reset_local={reset_target.astimezone().isoformat()} "
+            f"reset_utc={reset_target.isoformat()} "
+            f"remaining_to_reset={int(remaining + 0.999)}s"
+        )
+
+    heartbeat_fn(
+        "quota reset reached: "
+        f"role={role} task={task_label} work_unit={work_unit_id} "
+        f"reset_utc={reset_target.isoformat()} resume_utc={resume_target.isoformat()}"
+    )
+    remaining_margin = max(0.0, (resume_target - now_utc).total_seconds())
+    while remaining_margin > 0:
+        sleep_fn(remaining_margin)
+        now_utc = current_utc()
+        remaining_margin = max(0.0, (resume_target - now_utc).total_seconds())
+    heartbeat_fn(
+        "quota wait resumed: "
+        f"role={role} task={task_label} work_unit={work_unit_id} "
+        f"resume_utc={resume_target.isoformat()}"
+    )
 
 
 @dataclass

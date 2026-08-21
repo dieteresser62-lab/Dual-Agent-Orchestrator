@@ -597,6 +597,86 @@ def test_quota_classified_recoverable_contract_still_persists_matching_quota_pau
     assert quota_records[0].payload.retry_at == quota.quota_reset.reset_at_utc.isoformat()
 
 
+@pytest.mark.parametrize(
+    ("reset_delay_seconds", "safety_margin_seconds", "expected_automatic"),
+    (
+        (604_800, 0, True),
+        (604_800, 60, True),
+        (604_801, 0, False),
+        (604_801, 60, False),
+        (None, 60, False),
+    ),
+)
+def test_quota_auto_wait_boundary_uses_reset_span_without_safety_margin(
+    reset_delay_seconds: int | None,
+    safety_margin_seconds: int,
+    expected_automatic: bool,
+) -> None:
+    class CheckpointDriver:
+        def checkpoint(self, state, history) -> None:
+            _ = (state, history)
+
+    now = datetime(2026, 8, 19, 10, 0, tzinfo=timezone.utc)
+    state = init_workflow_state(
+        run_id=f"quota-boundary-{reset_delay_seconds}-{safety_margin_seconds}",
+        task_file="task.md",
+        branch="feature/quota-boundary",
+        branch_base="a" * 40,
+        slice_count=1,
+    )
+    reset_at = (
+        (now + timedelta(seconds=reset_delay_seconds)).astimezone(
+            timezone(timedelta(hours=2))
+        )
+        if reset_delay_seconds is not None
+        else None
+    )
+    error = AgentInvocationError(
+        agent_key="codex",
+        kind=AgentFailureKind.QUOTA,
+        invocation_id=f"quota-{reset_delay_seconds}-{safety_margin_seconds}",
+        provider_text="quota exceeded",
+        received_at=now,
+        quota_reset=(
+            QuotaReset(reset_at, "codex:text:absolute", "UTC+02:00")
+            if reset_at is not None
+            else None
+        ),
+    )
+    context = WorkflowContext(
+        assignment="Test the quota boundary.",
+        distilled_plan="Use only the provider reset span for the boundary.",
+        slice_summary="Quota boundary",
+        quota_wait_policy=QuotaWaitPolicy(
+            safety_margin_seconds=safety_margin_seconds,
+            maximum_wait_seconds=604_800,
+        ),
+    )
+    engine = WorkflowEngine(CheckpointDriver(), now_fn=lambda: now)
+
+    persisted, failure = engine._persist_invocation_failure(
+        state,
+        WorkflowHistory(state.current_work_unit_id),
+        context,
+        AgentRole.CODEX,
+        error,
+    )
+
+    assert failure.automatic_resume is expected_automatic
+    assert persisted.current_work_unit.invocation_failures[-1] == failure
+    expected_resume = (
+        (reset_at + timedelta(seconds=safety_margin_seconds))
+        .astimezone(timezone.utc)
+        .isoformat()
+        if reset_at is not None
+        else None
+    )
+    assert failure.resume_at_utc == expected_resume
+    assert failure.safety_margin_seconds == (
+        safety_margin_seconds if expected_automatic else 0
+    )
+
+
 def test_runtime_context_auto_authorizes_scoped_test_changes_unless_gate_enabled(
     tmp_path: Path, monkeypatch
 ) -> None:

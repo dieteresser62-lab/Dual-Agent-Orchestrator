@@ -410,7 +410,7 @@ def test_antigravity_transient_runtime_near_misses_remain_fail_closed(
     assert failure.kind is AgentFailureKind.RUNTIME
 
 
-def test_wait_uses_bounded_sleeps_and_emits_local_and_utc_heartbeat() -> None:
+def test_wait_uses_bounded_sleeps_and_emits_distinct_phase_events() -> None:
     clock = [RECEIVED]
     sleeps: list[float] = []
     heartbeats: list[str] = []
@@ -423,6 +423,7 @@ def test_wait_uses_bounded_sleeps_and_emits_local_and_utc_heartbeat() -> None:
         role="claude",
         task_label="task-14",
         work_unit_id=9,
+        reset_at_utc=RECEIVED + timedelta(seconds=12),
         resume_at_utc=RECEIVED + timedelta(seconds=12),
         heartbeat_interval_seconds=5,
         now_fn=lambda: clock[0],
@@ -431,9 +432,50 @@ def test_wait_uses_bounded_sleeps_and_emits_local_and_utc_heartbeat() -> None:
     )
 
     assert sleeps == [5.0, 5.0, 2.0]
-    assert len(heartbeats) == 3
+    assert len(heartbeats) == 5
     assert all("role=claude" in item and "work_unit=9" in item for item in heartbeats)
-    assert all("resume_local=" in item and "resume_utc=" in item for item in heartbeats)
+    assert heartbeats[0].startswith("quota wait entered:")
+    assert sum(
+        item.startswith("quota wait heartbeat:") for item in heartbeats
+    ) == 2
+    assert heartbeats[-2].startswith("quota reset reached:")
+    assert heartbeats[-1].startswith("quota wait resumed:")
+    assert "reset_local=" in heartbeats[0] and "resume_local=" in heartbeats[0]
+
+
+def test_wait_skips_seven_days_with_fake_clock_and_no_margin_heartbeat() -> None:
+    clock = [RECEIVED]
+    sleeps: list[float] = []
+    events: list[str] = []
+
+    def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        clock[0] += timedelta(seconds=seconds)
+
+    reset_at = RECEIVED + timedelta(days=7)
+    wait_until_quota_resume(
+        role="antigravity",
+        task_label="task-seven-days",
+        work_unit_id=4,
+        reset_at_utc=reset_at.astimezone(ZoneInfo("Europe/Berlin")),
+        resume_at_utc=reset_at + timedelta(seconds=60),
+        heartbeat_interval_seconds=3_600,
+        now_fn=lambda: clock[0],
+        sleep_fn=sleep,
+        heartbeat_fn=events.append,
+    )
+
+    assert sleeps == [3_600.0] * 168 + [60.0]
+    assert clock[0] == reset_at + timedelta(seconds=60)
+    assert sum(item.startswith("quota wait entered:") for item in events) == 1
+    assert sum(item.startswith("quota wait heartbeat:") for item in events) == 167
+    assert sum(item.startswith("quota reset reached:") for item in events) == 1
+    assert sum(item.startswith("quota wait resumed:") for item in events) == 1
+    reset_event = next(
+        i for i, item in enumerate(events)
+        if item.startswith("quota reset reached:")
+    )
+    assert events[reset_event + 1].startswith("quota wait resumed:")
 
 
 def test_wait_is_interruptible_without_internal_retry() -> None:
@@ -442,6 +484,7 @@ def test_wait_is_interruptible_without_internal_retry() -> None:
             role="codex",
             task_label="task-14",
             work_unit_id=2,
+            reset_at_utc=RECEIVED + timedelta(minutes=1),
             resume_at_utc=RECEIVED + timedelta(minutes=1),
             heartbeat_interval_seconds=10,
             now_fn=lambda: RECEIVED,
@@ -457,6 +500,7 @@ def test_wait_returns_immediately_when_reset_is_already_reached() -> None:
         role="antigravity",
         task_label="task-14",
         work_unit_id=3,
+        reset_at_utc=RECEIVED - timedelta(seconds=1),
         resume_at_utc=RECEIVED - timedelta(seconds=1),
         heartbeat_interval_seconds=10,
         now_fn=lambda: RECEIVED,
@@ -465,3 +509,18 @@ def test_wait_returns_immediately_when_reset_is_already_reached() -> None:
     )
 
     assert sleeps == []
+
+
+def test_wait_rejects_naive_injected_clock() -> None:
+    with pytest.raises(ValueError, match="timezone-aware"):
+        wait_until_quota_resume(
+            role="claude",
+            task_label="task-14",
+            work_unit_id=5,
+            reset_at_utc=RECEIVED + timedelta(seconds=1),
+            resume_at_utc=RECEIVED + timedelta(seconds=1),
+            heartbeat_interval_seconds=3_600,
+            now_fn=lambda: datetime(2026, 8, 12, 10, 0),
+            sleep_fn=lambda _seconds: None,
+            heartbeat_fn=lambda _message: None,
+        )

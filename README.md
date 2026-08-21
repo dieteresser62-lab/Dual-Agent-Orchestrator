@@ -332,13 +332,19 @@ Für deterministische Negativ- und Fortsetzungsszenarien kann ein State-v3-JSON-
 | `--dry-run-report <path>` | nicht gesetzt | Den Auditbericht des skriptgesteuerten Szenarios schreiben. |
 | `--quota-auto-resume` / `--no-quota-auto-resume` | an | Eine automatische Fortsetzung bei eindeutigem Reset aktivieren. |
 | `--quota-safety-margin <seconds>` | `60` | Nach einem erkannten Reset zusätzlich zu wartende Zeit. |
-| `--quota-max-wait <seconds>` | `86400` | Maximale automatische Wartezeit. |
+| `--quota-max-wait <seconds>` | `604800` | Maximale automatische Provider-Resetspanne; die Sicherheitsmarge wird erst danach addiert. |
 | `--quota-max-auto-resumes <count>` | `1` | Automatische Fortsetzungen je blockiertem Rollenschritt. |
-| `--quota-heartbeat-interval <seconds>` | `300` | Heartbeat-Intervall während des Quotawartens. |
+| `--quota-heartbeat-interval <seconds>` | `3600` | Heartbeat-Intervall bis zum Provider-Reset; die Sicherheitsmarge erzeugt keine periodischen Heartbeats. |
 | `--transient-retry-auto` / `--no-transient-retry-auto` | an | Eindeutig technische Netzwerkfehler desselben Rollenschritts automatisch wiederholen. |
 | `--transient-retry-initial-delay <seconds>` | `5` | Wartezeit vor dem ersten transienten Netzwerk-Neuversuch. |
 | `--transient-retry-max-delay <seconds>` | `30` | Obergrenze für die exponentielle Wartezeit. |
 | `--transient-retry-max-auto-resumes <count>` | `2` | Maximale automatische Netzwerk-Neuversuche je Rollenschritt. |
+
+Die Quota-Wartepolitik kann entsprechend über
+`RUN_TASK_QUOTA_AUTO_RESUME`, `RUN_TASK_QUOTA_SAFETY_MARGIN`,
+`RUN_TASK_QUOTA_MAX_WAIT`, `RUN_TASK_QUOTA_MAX_AUTO_RESUMES` und
+`RUN_TASK_QUOTA_HEARTBEAT_INTERVAL` gesetzt werden. Explizite CLI-Werte haben
+Vorrang vor diesen Umgebungsvariablen; danach gelten die Tabellenstandards.
 
 ### Agentenausgabe und Rollenkonfiguration
 

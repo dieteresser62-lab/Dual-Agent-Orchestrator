@@ -617,7 +617,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--quota-max-wait",
         type=int,
         default=None,
-        help="Maximum automatic quota wait in seconds (default: 86400).",
+        help="Maximum automatic provider reset span in seconds (default: 604800).",
     )
     parser.add_argument(
         "--quota-max-auto-resumes",
@@ -629,7 +629,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--quota-heartbeat-interval",
         type=int,
         default=None,
-        help="Quota-wait heartbeat interval in seconds (default: 300).",
+        help="Quota-wait heartbeat interval in seconds (default: 3600).",
     )
     parser.add_argument(
         "--transient-retry-auto",
