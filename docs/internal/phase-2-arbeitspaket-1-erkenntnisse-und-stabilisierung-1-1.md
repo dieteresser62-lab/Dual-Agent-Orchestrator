@@ -38,6 +38,12 @@ Historie bleiben im archivierten Gesamtreview erhalten.
 | P2-FU-022 | **GELÖST AUF FEATURE-BRANCH** | 1.1C Slice 1, Commit `fac92b0` | Fake-Clock-Tests für Stundenheartbeat und Sieben-Tage-Grenze | Merge nach `master` |
 | P2-FU-013, Betriebsnachtrag | **TEILWEISE GELÖST** | 1.1C2 Slice 1, Commit `c8e1788` | persistenter Providerattempt-Lebenszyklus und Usage-Projektion | neuer enger `LineNumber`-Runtimefehler sowie Erstaufrufkosten bleiben offen |
 | P2-FU-025 | **OFFEN** | nach 1.1C | reales Finalreview-Protokoll mit wiederholter identischer Kompaktierung | semantischen Übergangscache und ruhiges Standardlogging umsetzen |
+| P2-FU-026 | **GELÖST AUF FEATURE-BRANCH** | 1.1C2 Self-Hosting-Hotfix | gemeinsame Plan-Handoff-/Reviewpaket-Extraktion, `984 passed` | Merge nach `master` |
+| P2-FU-027 | **GELÖST AUF FEATURE-BRANCH** | 1.1C2 Self-Hosting-Hotfix | Attestierungsübernahme und Resume-Rekonstruktion, `985 passed` | Merge nach `master` |
+| P2-FU-028 | **GELÖST AUF FEATURE-BRANCH** | 1.1C2 Self-Hosting-Hotfix | gespeicherte `EVIDENCE:`-Antwort, lokale Normalisierung und Replay, `991 passed` | Merge nach `master` |
+| P2-FU-029 | **GELÖST AUF FEATURE-BRANCH** | 1.1C2 Self-Hosting-Hotfix | Finding-abgeleitete Korrekturpakete, `992 passed` | Merge nach `master` |
+| P2-FU-030 | **GELÖST AUF FEATURE-BRANCH** | 1.1C2 Abschluss-Hotfix | commitgebundene Korrekturpfade im Finalreview-Preflight, `993 passed` | Merge nach `master` |
+| P2-FU-031 | **GELÖST AUF FEATURE-BRANCH** | 1.1C2 Abschluss-Hotfix | fingerprintgebundenes `UNEXPECTED_FILE`-Benutzergate, `993 passed` | Merge nach `master` |
 | P2-DEC-001 | **TEILWEISE GELÖST** | 1.1A bis 1.1C | Replay-/Projektionsautorität, Reviewpakete, Quota-Wartepolitik und Providerattempt-Telemetrie umgesetzt | record-first Liveübergänge, Betriebslogging, Finalreview-Deduplizierung und Pfaddigest-Freigaben neu zuschneiden |
 
 Die Statusangaben in diesem Dokument beschreiben den Sachstand. Ein gelöster
@@ -268,7 +274,7 @@ verifiziert.
 
 ## P2-FU-003 – Claude-Nutzungszeile bildet file-backed Reviewinput nicht verständlich ab
 
-**Status:** offen  
+**Status:** durch Stabilisierungspaket 1.1C2 gelöst; Merge nach `master` ausstehend
 **Priorität:** mittel
 
 ### Beobachtung
@@ -299,6 +305,16 @@ lokal bekannten Paketzeichen, Paketbytes und Chunkzahlen protokolliert werden.
 2. Fehlende Providerfelder werden nicht als Null oder vollständiger Verbrauch
    missverständlich dargestellt.
 3. Geheimnisse und Promptinhalte erscheinen nicht in der Telemetrie.
+
+### Abschluss in Stabilisierungspaket 1.1C2
+
+Der persistente `provider_attempt`-Lebenszyklus und seine read-only Projektion
+weisen lokal bekannte Inputzeichen, Inputbytes, Komponentenanzahl und größte
+Komponente getrennt von den tatsächlich verfügbaren Provider-Usagefeldern
+aus. Fehlende Werte bleiben ausdrücklich unbekannt; Teilwerte wie
+`input_tokens=6` werden nicht mehr als vollständiger Gesamtverbrauch
+missverständlich dargestellt. Slice 1 ist in Commit `c8e1788` enthalten und
+durch die abschließende Vollsuite mit `993 passed` verifiziert.
 
 ## P2-PLAN-001 – Noch im Arbeitsplan zu verifizierende Scopegrenzen
 
@@ -1162,7 +1178,7 @@ Transaktion ist derzeit an den Watcher gebunden und wird beim direkten
 
 ## P2-FU-022 – Quota-Wartebetrieb erzeugt zu häufige Heartbeats und endet zu früh
 
-**Status:** für den Neuzuschnitt nach 1.1A einplanen
+**Status:** durch Stabilisierungspaket 1.1C gelöst; Merge nach `master` ausstehend
 **Priorität:** mittel
 
 ### Beobachtung
@@ -1196,6 +1212,16 @@ kurz; solche Fälle verlangen unnötig einen manuellen Resume.
 - Exakte Grenzfälle, Sicherheitszuschlag, Unterbrechung und Fortsetzung sind
   abgedeckt.
 - Fingerprint-, Rollen- und Resume-Bindung bleiben unverändert.
+
+### Abschluss in Stabilisierungspaket 1.1C
+
+Runtime, CLI und Dokumentation verwenden nun einen stündlichen
+Quota-Wait-Heartbeat und eine konfigurierbare maximale Resetspanne von sieben
+Tagen. Sicherheitsmarge und zulässige Providerspanne werden getrennt
+behandelt. Fake-Clock-Tests decken Stundenheartbeat, exakte Sieben-Tage-Grenze,
+spätere und mehrdeutige Resets sowie Unterbrechung und Fortsetzung ohne reale
+Wartezeit ab. Die Umsetzung liegt in Commit `fac92b0`; die spätere
+Branch-Vollsuite bestand mit `993 passed`.
 
 ## P2-FU-023 – Deterministisch bekannte Reviewfelder lösen unnötige Providerreparaturen aus
 
@@ -1341,6 +1367,179 @@ unnötig lokale Übergangsarbeit und erzeugt kaum hilfreiche Standardlogs.
   höchstens unter `--verbose` sichtbar.
 - Ein instrumentierter End-to-End-Test zählt für einen unveränderten
   Finalreview-Übergang genau eine teure Diff-/Kompaktierungsberechnung.
+
+## P2-FU-026 – Plan-Handoff und Reviewpaket verwenden unterschiedliche Slice-Verträge
+
+**Status:** Self-Hosting-Hotfix in 1.1C2 umgesetzt; Merge nach `master` ausstehend
+
+**Priorität:** kritisch
+
+### Beobachtung und Ursache
+
+Der 1.1C2-Plan wurde vom `PLAN_ONLY`-Handoff-Parser akzeptiert, von Claude und
+Antigravity freigegeben, commitgebunden umgesetzt und vollständig validiert.
+Erst beim anschließenden Slice-Review scheiterte der kanonische Reviewpaketbau
+mit `Slice section lacks an unambiguous goal or acceptance criteria`.
+
+Der Handoff-Parser verlangte Slice-Überschrift und exakte Pfade; der
+Reviewpaket-Parser verlangte zusätzlich exakt `**Ziel**` und
+`#### Akzeptanzkriterien`. Der generierte Plan verwendete den eindeutigen
+Slice-Titel als Ziel und `#### Fokussierte synthetische Akzeptanztests` als
+Kriterien. Zwei unabhängige Parser hatten damit unterschiedliche Verträge,
+obwohl derselbe Plan beide Übergänge durchlaufen musste.
+
+### Umsetzung und Nachweis
+
+Ziel und Akzeptanzkriterien werden nun einmal durch den gemeinsamen
+Plan-Handoff-Parser extrahiert. Explizite ältere Überschriften und die
+repository-grounded generierte Form bleiben kompatibel. Bereits der
+`PLAN_ONLY`-Handoff validiert alle später vom Reviewpaket benötigten Fakten;
+der Reviewpaketbau verwendet dieselbe Extraktion. Der gebundene Plan musste
+nicht semantisch verändert werden.
+
+- gemeinsamer positiver Test für die generierte Planform;
+- negative Handoff-Tests für fehlende Akzeptanzkriterien;
+- jeder akzeptierte Handoff kann unmittelbar ein kanonisches Reviewpaket
+  bilden;
+- vollständige Suite nach dem Hotfix: `984 passed`.
+
+## P2-FU-027 – Finalreview validiert denselben Fingerprint unnötig erneut
+
+**Status:** Self-Hosting-Hotfix in 1.1C2 umgesetzt; Merge nach `master` ausstehend
+
+**Priorität:** kritisch
+
+### Beobachtung und Ursache
+
+Nach erfolgreichem Slice-Review und bestandener Validierungsmatrix wechselte
+der Workflow in die Finalreview-Work-Unit, verlor dabei jedoch die letzte
+fingerprintgebundene Attestierung aus der aktiven History. Deshalb führte das
+Finalreview dieselbe Matrix für denselben Fingerprint erneut aus.
+Laufzeitabhängige Testausgabe erzeugte dabei einen anderen Output-Digest unter
+derselben deterministischen Attestierungs-ID. Die ArtifactBridge verweigerte
+den semantisch abweichenden Dual-Write zu Recht mit `structured artifact
+differs semantically from the state-v3 statement`.
+
+### Umsetzung und Nachweis
+
+Der Übergang in die Finalreview-Work-Unit übernimmt die neueste Attestierung
+zusammen mit ihrem `ValidationAuditEvent`. Ein bereits am Übergang
+gespeicherter älterer Zustand rekonstruiert beide Fakten deterministisch aus
+der archivierten vorherigen Work-Unit. Bei unverändertem Fingerprint läuft
+weder die Matrix noch die semantische Attestierung ein zweites Mal; bei einem
+geänderten Fingerprint bleibt die reguläre Neuvalidierung erhalten.
+
+Direkte Übergangs- und Resume-Regressionen belegen genau eine Matrix und eine
+Attestierung sowie die provider- und validierungsfreie Rekonstruktion nach dem
+Checkpoint. Die vollständige Suite bestand mit `985 passed`.
+
+## P2-FU-028 – Vollständige Reviewerantwort wird wegen `EVIDENCE:` verworfen
+
+**Status:** Self-Hosting-Hotfix in 1.1C2 umgesetzt; Merge nach `master` ausstehend
+
+**Priorität:** kritisch
+
+### Beobachtung und Ursache
+
+Claude lieferte im 1.1C2-Korrekturreview einen fachlich vollständigen Vertrag
+mit `REVIEWER`, begründeter Schließung von C-03, `PRE_MORTEM`, positivem
+`SLICE_APPROVAL` und abschließendem `STATUS: DONE`. Zwischen Reviewer und
+Vertragsmarkern stand ein ausführlicher Aufzählungsabschnitt unter der
+Zwischenüberschrift `EVIDENCE:`. Der strikte Parser behandelte diese
+Überschrift als unbekannten State-v3-Marker und verwarf die gesamte
+Freigabe. Ein Resume hätte denselben kostenpflichtigen Claude-Review erneut
+gestartet.
+
+### Umsetzung und Nachweis
+
+Der Prompt untersagt nichtvertragliche Prosa weiterhin. Zusätzlich entfernt
+die lokale Normalisierung genau einen eindeutig abgegrenzten, rein aus
+Aufzählungszeilen bestehenden `EVIDENCE:`-Block, wenn danach ein vollständiger
+und widerspruchsfreier Reviewer-Vertrag verbleibt. Markerartige,
+mehrdeutige, doppelte oder unvollständige Varianten bleiben fail-closed;
+Findingstatus, Approval und Pre-Mortem werden niemals erfunden.
+
+Ein diagnosegebundener unveränderter Output kann nach einem fehlgeschlagenen
+State-Checkpoint ohne Providerwiederholung wiederverwendet werden, wenn Rolle,
+Work-Unit, Step, Fingerprint, Loginhalt und SHA-256-Digest exakt
+übereinstimmen. Positive und adversarielle Tests verwenden die gespeicherte
+Realantwort; die vollständige Suite bestand mit `991 passed`.
+
+## P2-FU-029 – Nachträgliche Korrektur-Slices werden fälschlich im Plan gesucht
+
+**Status:** Self-Hosting-Hotfix in 1.1C2 umgesetzt; Merge nach `master` ausstehend
+
+**Priorität:** kritisch
+
+### Beobachtung und Ursache
+
+Nach erfolgreicher Validierung einer Abschlusskorrektur scheiterte der
+Reviewpaketbau mit `approved plan must contain exactly one Slice 3 section`.
+Der freigegebene Plan enthielt ordnungsgemäß nur den ursprünglichen Slice 1.
+Slice 3 war erst später durch eine Finalreview-Ablehnung als
+Korrektur-Work-Unit entstanden und konnte deshalb nicht Bestandteil dieses
+Plans sein.
+
+### Umsetzung und Nachweis
+
+Reguläre Implementierungsslices beziehen Ziel und Akzeptanzkriterien weiterhin
+ausschließlich aus dem freigegebenen Plan. Nachträglich erzeugte
+Korrektur-Slices leiten ihren Auftrag dagegen deterministisch aus der
+fingerprintgebundenen Findingmenge und deren persistierten Akzeptanztests ab.
+Der Plan wird weder ergänzt noch nachträglich umgeschrieben.
+
+Ein Regressionstest bildet exakt `Plan: Slice 1` und `Korrektur: Slice 3` ab;
+die vollständige Suite bestand mit `992 passed`, `git diff --check` war sauber.
+
+## P2-FU-030 – Genehmigte Korrekturpfade fehlen im Finalreview-Preflight
+
+**Status:** Abschluss-Hotfix in 1.1C2 umgesetzt; Merge nach `master` ausstehend
+
+**Priorität:** kritisch
+
+### Beobachtung und Ursache
+
+Claude und Antigravity hatten die nachträgliche Slice-3-Korrektur für
+denselben Fingerprint freigegeben, die Validierung war erfolgreich und der
+Slice commitgebunden abgeschlossen. Das Finalreview-Preflight verweigerte
+dennoch `src/workflow.py` und `tests/test_review_runtime_hardening.py` als
+`UNAUTHORIZED-PATH`. State-Gate, strukturierter User-Gate-Record und
+Commit-Binding waren vorhanden; die Pfadprojektion berücksichtigte aber nur
+abgeschlossene Work-Units vom Typ `SLICE` und übersprang `CORRECTION`.
+
+### Umsetzung und Nachweis
+
+Abgeschlossene reguläre und Korrektur-Slices gelten identisch als Quelle
+externer Pfadfreigaben, aber nur wenn State-Mirror, strukturierter Gate-Record,
+exakter Fingerprint und Commit-Binding vollständig übereinstimmen.
+Uncommittete, fremde oder nur im Mirror vorhandene Freigaben bleiben
+fail-closed. Der Regressionstest bildet den Korrekturfall ab; zusätzlich
+bestand der echte festgefahrene Preflight für die zuvor abgewiesenen Pfade.
+Die vollständige Suite bestand mit `993 passed`.
+
+## P2-FU-031 – `UNAUTHORIZED-PATH` ist kein entscheidbares Benutzergate
+
+**Status:** Abschluss-Hotfix in 1.1C2 umgesetzt; Merge nach `master` ausstehend
+
+**Priorität:** kritisch
+
+### Beobachtung und Ursache
+
+Das Finalreview-Preflight lieferte bei fremden Pfaden den richtigen Fehlercode
+und die exakte Pfadliste, der Workflow persistierte den Fall jedoch als
+technisches `bootstrap_check/awaiting_resume`. Dieses Gate konnte mit
+`--approve-gate` weder genehmigt noch abgelehnt werden und führte deshalb trotz
+vollständiger Evidenz in einen manuellen Reparaturkreislauf.
+
+### Umsetzung und Nachweis
+
+Ausschließlich ein fingerprinttragendes `UNAUTHORIZED-PATH` mit nichtleerer
+exakter Pfadliste wird als `UNEXPECTED_FILE/awaiting_user_decision`
+gespeichert. Fehlende Voraussetzungen, Inputbudgets und alle anderen
+Preflightfehler bleiben technische Bootstrap-Denials. Die Benutzerfreigabe
+wird weiterhin durch strukturierten Gate-Record, exakten Fingerprint und
+Preflight verifiziert. 46 fokussierte Tests und die vollständige Suite mit
+`993 passed` bestätigen die Klassifikation.
 
 ## P2-DEC-001 – Stabilisierungspaket 1.1 vor weiterer Protokolloberfläche
 
