@@ -5,7 +5,27 @@ Orchestratorfälle, die nicht im abgeschlossenen Arbeitsauftrag repariert
 werden sollten. Es ist die verbindliche Detailgrundlage für das begrenzte
 Stabilisierungspaket 1.1 vor den weiteren nativen JSON-Arbeitspaketen.
 
-Stand: 2026-08-20
+Stand: 2026-08-21
+
+## Bearbeitungsstand nach Stabilisierungspaket 1.1A
+
+Das im Arbeitsplan als **1.1A1** bezeichnete Paket ist auf dem Feature-Branch
+fachlich abgeschlossen: Beide Slices wurden implementiert, die vollständige
+Suite bestand mit `934 passed`, und Claude sowie Antigravity genehmigten den
+branchweiten Finalreview für Fingerprint
+`d266f918c89831173d11990b8d7245d9ba60780356d48f2041bc6e8789811982`.
+Die Integration auf `master` steht noch aus.
+
+| Erkenntnis | Sachstatus | Erledigt in | Verifikation | Rest |
+|---|---|---|---|---|
+| P2-FU-002 | **GELÖST** | Slice 1, Commit `5638f6b` | Cache-/Replaytests und Finalreview | Merge nach `master` |
+| P2-FU-015, Nachkorrektur | **GELÖST** | Hotfix-Commit `9f1b6b6` | Scope-/Gate-Regressions und Finalreview | Merge nach `master` |
+| P2-DEC-001 | **TEILWEISE GELÖST** | Commits `5638f6b`, `d0c2ac4` und `9f1b6b6` | Gemeinsamer Replaykern, Resume-/Auditgrenzen, Legacy-Trennung und Finalreview-Scope genehmigt | Vollständige record-first Liveübergänge, Betriebslogging, Kostenbremsen und Pfaddigest-Freigaben neu zuschneiden |
+
+Die Statusangaben in diesem Dokument beschreiben den Sachstand. Ein gelöster
+Punkt gilt erst nach dem noch ausstehenden Merge zusätzlich als **auf master
+integriert**. Beobachtung, Ursache und frühere Diagnose bleiben auch nach einer
+Lösung als historische Evidenz erhalten.
 
 ## P2-FU-001 – Vollständiger Antigravity-Reviewvertrag trotz Non-Success verworfen
 
@@ -178,7 +198,8 @@ bleibt anschließend unverändert maßgeblich.
 
 ## P2-FU-002 – Normale Record-Anhänge erzeugen irreführende Cache-Warnungen
 
-**Status:** offen  
+**Status:** durch Stabilisierungspaket 1.1A gelöst; auf Feature-Branch final genehmigt
+
 **Priorität:** niedrig
 
 ### Beobachtung
@@ -215,6 +236,17 @@ vorbehalten. Die Recordkette bleibt in jedem Fall die Source of Truth.
 2. Ein tatsächlich fremder oder inkonsistenter `head.json` wird weiterhin
    erkannt, aus der Recordkette repariert und angemessen protokolliert.
 3. Cacheverlust verändert weder Recordreihenfolge noch Idempotenz.
+
+### Abschluss in Stabilisierungspaket 1.1A
+
+Slice 1 führte den reinen Record-Replaykern ein und korrigierte die
+Cacheautorität. `ArtifactStore.put()` übergibt den erwarteten eigenen
+Cachefortschritt nun explizit; ein normaler Append erzeugt keine
+Stale-Cache-Warnung. Cacheverlust wird aus der Recordkette rekonstruiert,
+während fremde oder manipulierte Abweichungen weiterhin sichtbar und
+fail-closed behandelt werden. Der Abschluss ist in Commit `5638f6b` enthalten
+und durch die vollständige `934 passed`-Attestierung sowie beide Finalreviews
+verifiziert.
 
 ## P2-FU-003 – Claude-Nutzungszeile bildet file-backed Reviewinput nicht verständlich ab
 
@@ -409,6 +441,24 @@ normalisiert wird.
 Der pausierte Lauf ist an den vorherigen Frameworkfingerprint gebunden. Sein
 Slice-1-Arbeitsstand bleibt recoverbar in `stash@{0}` gesichert und der Lauf
 wird nicht normal resumed.
+
+### Nachtrag vom 2026-08-21 – Gedankenstrichvarianten
+
+Ein späterer Claude-Slice-Review zeigte dieselbe Fehlerklasse in einer weiteren
+eindeutigen Schreibweise: `Largest residual risk —` und
+`Realistic break condition —` wurden statt Pipe-Trennzeichen beziehungsweise
+Doppelpunktlabels verwendet. Trotz eines fachlich vollständigen Blockers wurde
+dadurch ein zweiter, kostenpflichtiger Claude-Aufruf gestartet, der dieselbe
+ungültige Evidenzform wiederholte.
+
+Die lokale Normalisierung soll deshalb eindeutig bezeichnete Dreifeldformen
+auch mit Bindestrich, Gedankenstrich oder Halbgeviertstrich in
+`<dimensions> | <largest risk> | <break condition>` überführen. Das gilt nur,
+wenn alle drei Labels genau einmal und ohne Mehrdeutigkeit vorhanden sind.
+Finding, Verdict und Rationale bleiben bytegetreu; fehlende, doppelte oder
+vertauschte Labels bleiben fail-closed. Eine solche rein syntaktische
+Normalisierung darf keinen zweiten Providerprozess starten und muss durch den
+tatsächlich beobachteten Antworttext als Regressionstest belegt werden.
 
 ## P2-FU-008 – Ungültiges Review nach Reparatur beendet den Prozess ungeordnet
 
@@ -608,7 +658,7 @@ ersetzen könnte.
 
 ## P2-FU-013 – Entfernte Antigravity-Shell wird als lokale fehlende Binärdatei klassifiziert
 
-**Status:** behoben; Übergabe an laufenden Slice ausstehend  
+**Status:** technische Klassifikation behoben; wiederkehrender Erstfehler und Kostenwirkung offen
 **Priorität:** mittel  
 **Beobachtet in:** Lauf `20260819-152415Z`, Arbeitseinheit 4,
 `antigravity_slice_review`, Invocation `0431a2988ce6481fa1c3fa3fd3b846b2`
@@ -648,6 +698,23 @@ greift der vorhandene, auf zwei Wiederholungen begrenzte Network-Retry. Ein
 lokaler `FileNotFoundError` für `agy` bleibt `BINARY` und wird nicht automatisch
 wiederholt.
 
+### Betriebsnachtrag vom 2026-08-21
+
+Der entfernte Shellfehler blieb auch nach der korrekten transienten
+Klassifikation als wiederkehrendes Providerphänomen sichtbar: Mehrere
+Antigravity-Reviews scheiterten beim ersten physischen Aufruf und waren beim
+automatischen zweiten Aufruf mit identischem Providerinput-Digest erfolgreich.
+Fachlich entsteht dabei nur ein Review, physisch jedoch ein zusätzlicher,
+möglicherweise kostenpflichtiger Provideraufruf.
+
+Die Betriebsmetriken müssen deshalb Erstfehler- und Retryquote,
+Digestgleichheit, Laufzeit und Tokens gemeinsam pro logischer Reviewoperation
+ausweisen. Ein bestätigter Remote-Instanzfehler zählt nicht als zweite
+Reviewrunde. Vor einem erneuten Provideraufruf ist zu prüfen, ob ein
+kostenarmer Laufzeit-Warm-up oder eine instanzlokale Wiederaufnahme möglich
+ist; fachliche Ergebnisse oder Freigaben dürfen dabei weder übernommen noch
+erfunden werden.
+
 ## P2-FU-014 – Freigegebene Zwischen-Commits blockieren den Slice-Commit
 
 **Status:** behoben; Übergabe an laufenden Slice ausstehend  
@@ -685,7 +752,7 @@ nicht. Zwei neue Durchstichtests sichern beide Verträge.
 
 ## P2-FU-015 – Finalreview-Preflight ignoriert gebundene externe Slice-Freigaben
 
-**Status:** behoben und als Commit `48cf07a` gesichert  
+**Status:** behoben; Scope-Deduplizierung und Finalreview-Hotfix-Gate in 1.1A ergänzt
 **Priorität:** kritisch  
 **Beobachtet in:** Lauf `20260819-152415Z`, Arbeitseinheit 5,
 `codex_final_review`
@@ -726,6 +793,22 @@ Restbefund.
 - vollständige Suite: `856 passed`;
 - `git diff --check`: bestanden;
 - Commit: `48cf07a`.
+
+### Nachkorrektur vom 2026-08-21
+
+Beim Abschluss von 1.1A trat eine zweite Scopeabweichung auf: Der Finalreview
+verband Task-Scope und die Scope-Pfade aller Slices ohne Deduplizierung. Ein in
+mehreren Slices verwalteter Auditpfad führte dadurch bereits vor dem
+Codex-Aufruf zu `validation path patterns must be unique`.
+
+Die Scope-Vereinigung ist nun reihenfolgestabil und eindeutig. Ein während des
+Finalreview-Halts notwendiger Orchestrator-Hotfix kann ausschließlich durch ein
+strukturiertes, exaktes und fingerprintgebundenes Benutzergate bis zur
+branchweiten Prüfung getragen werden. Historische Gates, abweichende
+Fingerprints und überdeckende Pfadmengen bleiben wirkungslos. Regressionstests
+decken sowohl überlappenden Task-/Slice-Scope als auch den explizit
+freigegebenen Finalreview-Hotfix ab; die vollständige Suite bestand mit
+`934 passed`.
 
 ## P2-FU-016 – Abschlussrollen verwenden unterschiedliche Fingerprint-Grenzen
 
@@ -967,6 +1050,23 @@ nicht seine eigenen Findings freigeben oder schließen.
 - Resume nach Record-/Checkpoint-Unterbrechung erzeugt weder doppelte
   Kandidaten noch doppelte Claude-Findings.
 
+### Entscheidung nach Abschluss von 1.1A
+
+Der Schritt darf nur in einer von zwei klaren Formen fortbestehen:
+
+- Codex erhält einen eigenen strukturierten, fingerprintgebundenen
+  Befundkanal. Jeder neue Befund muss von Claude und anschließend Antigravity
+  beurteilt werden; Codex darf ihn niemals selbst schließen oder freigeben.
+- Oder der Codex-Finalschritt wird auf einen nicht-reviewenden Übergabebericht
+  reduziert. Dann darf der Auftrag keine adversariale Defektsuche verlangen;
+  ein dennoch erkannter konkreter Defekt muss einen typisierten
+  Stop-/Korrekturpfad auslösen.
+
+Ein konkreter Defekt in ungebundener Prosa bei anschließendem Weiterlauf ist
+in beiden Varianten unzulässig. Dieser Vertrag wird erst beim Neuzuschnitt
+nach 1.1A umgesetzt und nicht nachträglich in den abgeschlossenen 1.1A-Scope
+eingeschoben.
+
 ## P2-FU-021 – Erfolgreicher Direktlauf endet still und lässt Inbox-Artefakte zurück
 
 **Status:** für Stabilisierungspaket 1.1 einplanen  
@@ -1002,9 +1102,126 @@ Transaktion ist derzeit an den Watcher gebunden und wird beim direkten
 - Wiederholte Finalisierung erzeugt weder doppelte Outboxdateien noch einen
   zweiten Completion- oder Auditcommit.
 
+## P2-FU-022 – Quota-Wartebetrieb erzeugt zu häufige Heartbeats und endet zu früh
+
+**Status:** für den Neuzuschnitt nach 1.1A einplanen
+**Priorität:** mittel
+
+### Beobachtung
+
+Während einer mehrstündigen automatischen Quota-Pause meldet der Orchestrator
+standardmäßig alle fünf Minuten einen Heartbeat. Für reines Betriebsmonitoring
+ist das zu häufig. Zugleich ist die derzeitige Standardobergrenze von 86.400
+Sekunden für eindeutig erkannte Providerresets mit mehrtägigem Abstand zu
+kurz; solche Fälle verlangen unnötig einen manuellen Resume.
+
+### Zielvertrag
+
+- Das Standardintervall für periodische Quota-Wait-Heartbeats beträgt 3.600
+  Sekunden und bleibt über CLI beziehungsweise Umgebung konfigurierbar.
+- Der erste Wartehinweis, der berechnete lokale und UTC-Resumezeitpunkt, eine
+  Unterbrechung sowie die abschließende Fortsetzungsmeldung bleiben sofort
+  sichtbar.
+- Die standardmäßige maximale automatische Quota-Wartezeit beträgt 604.800
+  Sekunden beziehungsweise sieben Tage und bleibt konfigurierbar.
+- Ein eindeutiger Reset genau an dieser Grenze ist automatisch wartbar. Ein
+  späterer, fehlender oder mehrdeutiger Resetzeitpunkt bleibt fail-closed und
+  manuell resumierbar.
+- Sicherheitszuschlag und Grenzvergleich werden getrennt behandelt, damit der
+  Zuschlag die zulässige Provider-Resetspanne nicht still verkürzt.
+
+### Abnahme
+
+- Runtime-, CLI- und Dokumentationsdefaults stimmen für beide Werte überein.
+- Fake-Clock-Tests belegen mehrtägiges Warten mit höchstens einem periodischen
+  Heartbeat pro Stunde, ohne reale Verzögerung der Tests.
+- Exakte Grenzfälle, Sicherheitszuschlag, Unterbrechung und Fortsetzung sind
+  abgedeckt.
+- Fingerprint-, Rollen- und Resume-Bindung bleiben unverändert.
+
+## P2-FU-023 – Deterministisch bekannte Reviewfelder lösen unnötige Providerreparaturen aus
+
+**Status:** für den Neuzuschnitt nach 1.1A einplanen
+**Priorität:** hoch
+**Beobachtet in:** Claude-Slice-Review mit vollständiger fachlicher
+Entscheidung, aber fehlendem `TEST_FILES_TOUCHED`
+
+### Beobachtung und Zielvertrag
+
+Der Orchestrator startete Claude ein zweites Mal, obwohl Findings,
+Findingstatus und negatives Verdict bereits eindeutig vorlagen. Es fehlte nur
+`TEST_FILES_TOUCHED`, dessen einzig zulässiger Wert aus dem gebundenen
+`StepContract` bekannt war. Der Reparaturaufruf wiederholte die fachliche
+Prüfung und verbrauchte zusätzlich 5.125 Output-Tokens, 44 Sekunden und etwa
+0,12 USD.
+
+Felder mit genau einem aus dem fingerprintgebundenen Schrittvertrag
+ableitbaren Wert werden lokal erzeugt oder ergänzt. Dazu gehören insbesondere
+ein fehlendes `TEST_FILES_TOUCHED`, Reviewer, Slice-Bezeichner und eindeutig
+ableitbare Abschlussmarker. Ein vorhandener widersprüchlicher Wert wird nie
+überschrieben. Findinginhalt, Findingklasse, Status, Verdict und Rationale
+werden nicht synthetisiert.
+
+### Abnahme
+
+- Ein fachlich vollständiges Review ohne `TEST_FILES_TOUCHED` wird ohne
+  weiteren Providerprozess lokal vervollständigt.
+- Die Liste entspricht bytegenau `StepContract.expected_test_files`; eine
+  vorhandene Abweichung bleibt ein Vertragsfehler.
+- Die lokale Reparatur wird protokolliert, zählt aber nicht als Agenten-Turn
+  oder Reviewrunde.
+- Ein zweiter Provideraufruf bleibt semantischer Mehrdeutigkeit vorbehalten;
+  Grund und Zusatzkosten werden separat ausgewiesen.
+
+## P2-FU-024 – Slice- und Korrekturreviews erhalten zu viel historische Evidenz
+
+**Status:** für den Neuzuschnitt nach 1.1A einplanen
+**Priorität:** hoch
+
+### Beobachtung
+
+Vor der strukturierten Gesamtüberarbeitung erhielten Claude und Antigravity im
+Slice-Review im Wesentlichen Slice-Diff, Anforderungen, offene Findings und
+Testergebnis. Der Hybridpfad überträgt zusätzlich Record-/Mirror-Historie,
+Finding-Lebenszyklen, Auditprosa und teilweise vollständige Dateien. Ein als
+selektiv bezeichneter Snapshot umfasste zuletzt 136 Repositorydateien;
+Korrekturreviews wiederholen zudem geschlossene Findings mit vollständiger
+Begründung.
+
+### Zielvertrag
+
+- Ein Slice-Review erhält nur aktuellen Slice-Diff, Akzeptanzkriterien,
+  kompakte fingerprintgebundene Attestierung und offene Findings.
+- Ein Korrekturreview erhält nur das Delta seit dem abgelehnten Fingerprint
+  sowie betroffene Findings und Akzeptanztests.
+- Geschlossene Findings werden als ID, Status, Closure-Digest und höchstens
+  einzeilige Zusammenfassung übertragen.
+- Auditprosa, vollständige Reviewertexte und komplette Recordhistorie werden
+  nicht erneut eingebettet.
+- Repositoryzugriff ist auf exakte Slice-Pfade und manifestierte
+  Abhängigkeiten begrenzt; zusätzliche Reads sind nachvollziehbar und
+  budgetiert.
+- Die vollständige branchweite Evidenz wird nur für das einmalige
+  Gesamtreview materialisiert und pro Fingerprint inhaltsadressiert
+  wiederverwendet.
+
+### Abnahme
+
+- Synthetische Slice- und Korrekturläufe enthalten keine Auditprosa,
+  geschlossenen Volltexte oder sachfremden Dateien im Providerinput.
+- Derselbe Korrekturfingerprint erzeugt byteidentisch dasselbe Reviewpaket und
+  höchstens einen fachlichen Revieweraufruf.
+- Zeichen, Bytes, Ausgabetokens, Turns und physische Aufrufe werden pro
+  logischer Reviewoperation und kumuliert ausgewiesen.
+- Claude und Antigravity erhalten dasselbe kanonische Evidenzmanifest;
+  providerspezifische Transporthüllen verändern den semantischen Digest nicht.
+- Das branchweite Finalreview bleibt adversarial vollständig, wird aber nicht
+  für jeden Slice oder jede Korrekturrunde wiederholt.
+
 ## P2-DEC-001 – Stabilisierungspaket 1.1 vor weiterer Protokolloberfläche
 
-**Status:** als nächster Schritt nach Abschluss von Arbeitspaket 1 vorgesehen  
+**Status:** durch 1.1A teilweise umgesetzt; Restumfang wird nach 1.1A neu zugeschnitten
+
 **Priorität:** kritisch  
 **Einordnung:** Konsolidierung der Phase-1-/Phase-2-Zwischenarchitektur, keine
 neue Fachfunktion
@@ -1025,6 +1242,29 @@ Protokolloberfläche die Zahl möglicher asymmetrischer Zwischenzustände. Desha
 wird zwischen Arbeitspaket 1 und den weiteren nativen JSON-Arbeitspaketen ein
 kleines, eigenständig review- und mergebares Stabilisierungspaket 1.1
 eingeschoben.
+
+### Zwischenstand nach Abschluss von 1.1A
+
+1.1A hat den bewusst begrenzten, eigenständig nutzbaren Kern umgesetzt:
+
+- eine validierte Recordkette als autoritative Eingabe eines reinen,
+  unveränderlichen Replaykerns;
+- eine gemeinsame deterministische Projektion für die angeschlossenen
+  Structured-Resume- und Auditgrenzen;
+- stabile, maschinenlesbare Diagnosen für fehlende, doppelte, typ-, run-,
+  referenz- und fingerprintfremde Records sowie Mirrorabweichungen;
+- eine frühe, nachweislich getrennte Legacy-Abzweigung;
+- Cache-Rekonstruktion ohne Warnung beim erwarteten eigenen Append;
+- atomare und idempotente Auditprojektion an den angeschlossenen Grenzen;
+- deterministische Finalreview-Scope-Vereinigung und ein eng
+  fingerprintgebundenes Gate für notwendige Finalreview-Hotfixes.
+
+Ausdrücklich **nicht** abgeschlossen sind die vollständige Umstellung aller
+fachlichen Liveübergänge auf record-first Transitionen, der Abbau sämtlicher
+unabhängiger State-Schreibentscheidungen, die kompakte Betriebsoberfläche, die
+Kostenbremsen sowie die Wiederverwendung pfadspezifischer Freigaben. Diese
+Restpunkte werden zusammen mit P2-FU-020 bis P2-FU-024 nach 1.1A neu
+priorisiert und in kleinere Pakete geschnitten.
 
 ### Verbindliche Architekturziele
 
@@ -1168,8 +1408,9 @@ zulässiger Recoverypfad.
 Nach erfolgreichem Abschluss des laufenden Arbeitspakets wird diese
 Entscheidung in
 `docs/internal/ORCHESTRATOR_ROADMAP_PHASE_2_PLUS.md` zwischen Arbeitspaket 1
-und dem nächsten JSON-Paket eingeordnet. Die Details werden in einem separaten
-Dokument, voraussichtlich
-`docs/internal/PHASE_2_ARBEITSPAKET_1_1_STABILISIERUNG.md`, persistiert und als
-eigener Dokumentationscommit gesichert. Erst danach wird daraus ein
-ausführbarer Inbox-Auftrag erzeugt.
+und dem nächsten JSON-Paket eingeordnet. Dieses Dokument bleibt die einzige
+persistente Detailgrundlage für Erkenntnisse, Kostenbremsen und den
+Neuzuschnitt von Stabilisierung 1.1; dafür wird kein zweites paralleles
+Stabilisierungsdokument angelegt. Aus den nach Abschluss von 1.1A neu
+priorisierten Teilpaketen werden jeweils eigene ausführbare Inbox-Aufträge
+abgeleitet.
