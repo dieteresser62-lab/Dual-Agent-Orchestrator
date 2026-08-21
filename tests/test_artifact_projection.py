@@ -26,8 +26,10 @@ from artifact_projection import (
     ArtifactAuditProjection,
     ArtifactProjectionError,
     render_artifact_sections,
+    render_replay_sections,
     semantic_artifact_digest,
 )
+from artifact_replay import replay_artifacts
 
 
 def _chain() -> tuple[ArtifactRecord, ...]:
@@ -120,6 +122,17 @@ def test_same_chain_renders_byte_identically_in_record_sequence() -> None:
     assert "Korrektur-Work-Unit" in first["approval-status"]
     assert "`src/a.py`" in first["approval-status"]
     assert "Binding `commit`" in first["approval-status"]
+
+
+def test_projection_can_render_an_accepted_replay_without_reduction_drift() -> None:
+    chain = _chain()
+    replay = replay_artifacts(chain, "run-5")
+
+    projection = ArtifactAuditProjection.from_replay(replay)
+
+    assert projection.replay_result is replay
+    assert projection.render_sections() == render_replay_sections(replay)
+    assert projection.render_sections() == render_artifact_sections(chain)
 
 
 def test_digest_ignores_timestamp_and_markdown_presentation_but_not_typed_facts() -> None:

@@ -116,6 +116,35 @@ def test_scan_ignores_temporary_files_and_reconstructs_stale_head(tmp_path: Path
     assert head["record_count"] == 1
 
 
+def test_expected_cache_progress_after_own_append_is_not_warned(
+    caplog: pytest.LogCaptureFixture, tmp_path: Path
+) -> None:
+    store = ArtifactStore(tmp_path, "run-1")
+    first = store.put(make_record("one"))
+    caplog.clear()
+
+    store.put(make_record("two", predecessors=(first.record_id,)))
+
+    assert "Discarding stale artifact head cache" not in caplog.text
+
+
+def test_missing_cache_is_silent_but_malformed_cache_warns_and_is_rebuilt(
+    caplog: pytest.LogCaptureFixture, tmp_path: Path
+) -> None:
+    store = ArtifactStore(tmp_path, "run-1")
+    record = store.put(make_record("one"))
+    store.head_path.unlink()
+
+    assert store.load_chain() == (record,)
+    assert "Discarding stale artifact head cache" not in caplog.text
+
+    store.head_path.write_text("not-json", encoding="utf-8")
+    caplog.clear()
+    assert store.load_chain() == (record,)
+    assert caplog.text.count("Discarding stale artifact head cache") == 1
+    assert json.loads(store.head_path.read_text(encoding="utf-8"))["head_record_id"] == record.record_id
+
+
 def test_crash_before_publication_leaves_no_record_candidate(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -137,7 +166,7 @@ def test_crash_after_publication_is_recovered_by_scan(
     store = ArtifactStore(tmp_path, "run-1")
     record = make_record("one")
 
-    def fail_cache(chain) -> None:  # type: ignore[no-untyped-def]
+    def fail_cache(chain, **kwargs) -> None:  # type: ignore[no-untyped-def]
         raise OSError("simulated cache failure")
 
     monkeypatch.setattr(store, "_refresh_head_cache", fail_cache)
@@ -147,6 +176,29 @@ def test_crash_after_publication_is_recovered_by_scan(
     recovered = ArtifactStore(tmp_path, "run-1")
     assert recovered.load_chain() == (record,)
     assert recovered.head == record
+
+
+def test_cache_refresh_passes_expected_progress_without_instance_state(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    store = ArtifactStore(tmp_path, "run-1")
+    prior = (make_record("one"),)
+    current = (*prior, make_record("two", predecessors=(prior[0].record_id,)))
+    observed: list[tuple[ArtifactRecord, ...] | None] = []
+
+    def capture(
+        chain: tuple[ArtifactRecord, ...],
+        *,
+        expected_cache_chain: tuple[ArtifactRecord, ...] | None = None,
+    ) -> None:
+        assert chain == current
+        observed.append(expected_cache_chain)
+
+    monkeypatch.setattr(store, "_refresh_head_cache", capture)
+    store._refresh_cache_with_context(current, prior)
+
+    assert observed == [prior]
+    assert not hasattr(store, "_expected_cache_chain")
 
 
 def test_scan_detects_predecessor_cycle(tmp_path: Path) -> None:

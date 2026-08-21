@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
-import hashlib
+from dataclasses import dataclass, field
 import html
 from typing import Any, Mapping, Sequence
 
@@ -24,8 +23,8 @@ from artifact_models import (
     ProviderInputMeasurementPayload,
     FinalReviewPreflightPayload,
     WorkUnitPayload,
-    canonical_json,
 )
+from artifact_replay import ArtifactReplayError, ArtifactReplayResult, replay_artifacts
 
 
 class ArtifactProjectionError(ValueError):
@@ -64,11 +63,26 @@ class ArtifactAuditProjection:
 
     records: tuple[ArtifactRecord, ...]
     slice_id: str | None = None
+    _accepted_replay: ArtifactReplayResult | None = field(
+        default=None, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
-        _validate_sequence(self.records)
+        replay = self._accepted_replay
+        if replay is None:
+            replay = _replay_for_projection(self.records)
+            object.__setattr__(self, "_accepted_replay", replay)
+        elif replay.records != self.records:
+            raise ArtifactProjectionError("accepted replay does not match projection records")
         if self.slice_id is not None and (not self.slice_id or not self.slice_id.isdigit()):
             raise ArtifactProjectionError("slice_id must be a decimal identifier")
+
+    @classmethod
+    def from_replay(
+        cls, replay: ArtifactReplayResult, *, slice_id: str | None = None
+    ) -> "ArtifactAuditProjection":
+        """Project an already accepted replay without reducing it again."""
+        return cls(replay.records, slice_id, replay)
 
     @property
     def selected_records(self) -> tuple[ArtifactRecord, ...]:
@@ -107,44 +121,39 @@ class ArtifactAuditProjection:
 
     @property
     def semantic_digest(self) -> str:
-        return semantic_artifact_digest(self.selected_records)
+        return self.replay_result.subset(self.selected_records).semantic_digest
 
     def render_sections(self) -> Mapping[str, str]:
-        return render_artifact_sections(self.selected_records)
+        return render_replay_sections(self.replay_result.subset(self.selected_records))
+
+    @property
+    def replay_result(self) -> ArtifactReplayResult:
+        assert self._accepted_replay is not None
+        return self._accepted_replay
 
 
 def semantic_artifact_facts(records: Sequence[ArtifactRecord]) -> tuple[dict[str, Any], ...]:
     """Return formatting- and timestamp-independent facts in chain order."""
-    chain = tuple(records)
-    _validate_sequence(chain)
     return tuple(
-        {
-            "record_id": record.record_id,
-            "record_type": record.record_type.value,
-            "logical_id": record.logical_id,
-            "revision": record.revision,
-            "status": record.status,
-            "fingerprint": {
-                "kind": record.fingerprint.kind.value,
-                "sha256": record.fingerprint.sha256,
-            },
-            "predecessor_ids": list(record.predecessor_ids),
-            "payload": asdict(record.payload),
-        }
-        for record in chain
+        fact.to_document()
+        for fact in _replay_for_projection(tuple(records)).semantic_facts
     )
 
 
 def semantic_artifact_digest(records: Sequence[ArtifactRecord]) -> str:
     """Digest IDs, status, bindings and every typed payload field, not presentation."""
-    return hashlib.sha256(canonical_json(semantic_artifact_facts(records))).hexdigest()
+    return _replay_for_projection(tuple(records)).semantic_digest
 
 
 def render_artifact_sections(records: Sequence[ArtifactRecord]) -> Mapping[str, str]:
     """Render managed audit bodies without parsing Markdown back into facts."""
-    chain = tuple(records)
-    _validate_sequence(chain)
-    digest = semantic_artifact_digest(chain)
+    return render_replay_sections(_replay_for_projection(tuple(records)))
+
+
+def render_replay_sections(replay: ArtifactReplayResult) -> Mapping[str, str]:
+    """Render directly from one accepted, immutable replay result."""
+    chain = replay.records
+    digest = replay.semantic_digest
     reviews = {
         Role.CLAUDE: [],
         Role.ANTIGRAVITY: [],
@@ -268,20 +277,12 @@ def render_artifact_sections(records: Sequence[ArtifactRecord]) -> Mapping[str, 
     }
 
 
-def _validate_sequence(records: tuple[ArtifactRecord, ...]) -> None:
-    if not records:
-        return
-    run_id = records[0].run_id
-    positions = {record.record_id: index for index, record in enumerate(records)}
-    if len(positions) != len(records):
-        raise ArtifactProjectionError("record sequence contains duplicate IDs")
-    for index, record in enumerate(records):
-        if record.run_id != run_id:
-            raise ArtifactProjectionError("one projection cannot mix run identifiers")
-        for predecessor in record.predecessor_ids:
-            predecessor_position = positions.get(predecessor)
-            if predecessor_position is not None and predecessor_position >= index:
-                raise ArtifactProjectionError("record sequence is not in append order")
+def _replay_for_projection(records: tuple[ArtifactRecord, ...]) -> ArtifactReplayResult:
+    expected_run_id = records[0].run_id if records else "empty-projection"
+    try:
+        return replay_artifacts(records, expected_run_id, allow_empty=True)
+    except ArtifactReplayError as exc:
+        raise ArtifactProjectionError(str(exc)) from exc
 
 
 def _block(header: str, lines: list[str], empty: str) -> str:
@@ -314,6 +315,7 @@ __all__ = [
     "ArtifactProjectionError",
     "SECTION_KEYS",
     "render_artifact_sections",
+    "render_replay_sections",
     "semantic_artifact_digest",
     "semantic_artifact_facts",
 ]

@@ -23,6 +23,7 @@ from path_policy import PathPolicyError, resolve_path_within_roots
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
 _RECORD_NAME_RE = re.compile(r"^(ar1-[0-9a-f]{64})\.json$")
 logger = logging.getLogger(__name__)
+_INVALID_CACHE = object()
 
 
 class ArtifactStoreError(ValueError):
@@ -59,6 +60,9 @@ class ArtifactStore:
 
     def put(self, record: ArtifactRecord) -> ArtifactRecord:
         """Append ``record`` or return the matching idempotent prior write.
+
+        Appends require one external writer per run. The store detects conflicts
+        and corruption but does not serialize concurrent callers or processes.
 
         An exception does not prove that nothing was written.  Once the bytes
         have been atomically published in ``records_dir``, a later verification
@@ -128,7 +132,7 @@ class ArtifactStore:
 
         # Re-scan published bytes before advertising the new head. If the cache
         # update fails, the next scan reconstructs it from the record files.
-        published = self.load_chain()
+        published = self._load_chain(expected_cache_chain=chain)
         result = next((item for item in published if item.record_id == record.record_id), None)
         if result is None:
             raise ArtifactCorruptionError("published record was not recovered by store scan")
@@ -136,9 +140,17 @@ class ArtifactStore:
 
     def load_chain(self) -> tuple[ArtifactRecord, ...]:
         """Load and fully validate the authoritative chain in append order."""
+        return self._load_chain()
+
+    def _load_chain(
+        self,
+        *,
+        expected_cache_chain: tuple[ArtifactRecord, ...] | None = None,
+    ) -> tuple[ArtifactRecord, ...]:
+        """Internal scan with optional proof of this store's own append."""
         if not self.records_dir.exists():
             if self.head_path.exists():
-                self._refresh_head_cache(())
+                self._refresh_cache_with_context((), expected_cache_chain)
             return ()
         self._confined(self.records_dir)
         records: dict[str, ArtifactRecord] = {}
@@ -185,7 +197,7 @@ class ArtifactStore:
             records[record.record_id] = record
 
         ordered = _order_chain(records)
-        self._refresh_head_cache(ordered)
+        self._refresh_cache_with_context(ordered, expected_cache_chain)
         return ordered
 
     def select(
@@ -231,28 +243,55 @@ class ArtifactStore:
         except PathPolicyError as exc:
             raise ArtifactStoreError(f"artifact path escapes repository root: {path}") from exc
 
-    def _refresh_head_cache(self, chain: tuple[ArtifactRecord, ...]) -> None:
+    def _refresh_cache_with_context(
+        self,
+        chain: tuple[ArtifactRecord, ...],
+        expected_cache_chain: tuple[ArtifactRecord, ...] | None,
+    ) -> None:
+        self._refresh_head_cache(
+            chain,
+            expected_cache_chain=expected_cache_chain,
+        )
+
+    def _refresh_head_cache(
+        self,
+        chain: tuple[ArtifactRecord, ...],
+        *,
+        expected_cache_chain: tuple[ArtifactRecord, ...] | None = None,
+    ) -> None:
         head_path = self._confined(self.head_path)
-        expected = {
-            "head_record_id": chain[-1].record_id if chain else None,
-            "record_count": len(chain),
-            "chain_sha256": hashlib.sha256(
-                canonical_json([record.record_id for record in chain])
-            ).hexdigest(),
-        }
+        expected = _head_cache_document(chain)
         try:
-            current = json.loads(head_path.read_text(encoding="utf-8"))
-        except (FileNotFoundError, OSError, UnicodeError, json.JSONDecodeError):
+            current: object = json.loads(head_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
             current = None
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            current = _INVALID_CACHE
         if not chain and current is None:
             return
         if current != expected:
-            if current is not None:
+            expected_prior = (
+                _head_cache_document(expected_cache_chain)
+                if expected_cache_chain is not None
+                else None
+            )
+            own_expected_progress = current == expected_prior
+            if current is not None and not own_expected_progress:
                 logger.warning(
                     "Discarding stale artifact head cache for run %s", self.run_id
                 )
             self.run_dir.mkdir(parents=True, exist_ok=True)
             _atomic_write(head_path, canonical_json(expected) + b"\n")
+
+
+def _head_cache_document(chain: tuple[ArtifactRecord, ...]) -> dict[str, object]:
+    return {
+        "head_record_id": chain[-1].record_id if chain else None,
+        "record_count": len(chain),
+        "chain_sha256": hashlib.sha256(
+            canonical_json([record.record_id for record in chain])
+        ).hexdigest(),
+    }
 
 
 def _read_record(path: Path) -> ArtifactRecord:
