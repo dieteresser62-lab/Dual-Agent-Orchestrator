@@ -1202,8 +1202,6 @@ def run_agent(
                     effective_operation,
                     _compact_usage_metadata(adapter.metadata),
                 )
-        if attempt_invocation is not None:
-            attempt_invocation.finish(None, adapter.metadata)
         logger.info(
             "[PROVIDER_COMPLETION] role=%s operation=%s success=true elapsed=%.2fs usage=%s",
             agent_key,
@@ -1832,9 +1830,13 @@ def run_agent_checked(
             )
             validation_error = validate_output_contract(output)
             if validation_error:
+                if attempt_invocation is not None:
+                    attempt_invocation.finish(AgentFailureKind.OUTPUT, None)
                 errors.append(validation_error)
                 rejected_output = output
             else:
+                if attempt_invocation is not None:
+                    attempt_invocation.finish(None, agents[agent_key].metadata)
                 return output
         except AgentInvocationError as failure:
             if attempt_invocation is not None:

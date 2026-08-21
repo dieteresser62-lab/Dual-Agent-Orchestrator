@@ -10,6 +10,7 @@ from pathlib import Path
 import orchestrator
 import pytest
 from agent_runtime import AgentInvocationError, QuotaReset, QuotaWaitPolicy
+from audit_trail import ValidationAuditEvent
 from artifact_models import (
     CorrectionWorkUnitPayload,
     PlanPayload,
@@ -21,12 +22,17 @@ from artifact_store import ArtifactStore
 from cli import parse_args
 from contracts import (
     AgentRole,
+    ContractResult,
     FindingClass,
     FindingOrigin,
     FindingRecord,
     FindingStatus,
     PlannedSlice,
+    ValidationAttestation,
+    ValidationRecord,
+    ValidationStatus,
 )
+from git_service import GitTransactionError
 from inbox_watcher import WatchTaskDisposition, WatchTaskResult
 from orchestrator import ProductionWorkflowDriver, run_pipeline, run_production_workflow
 from review_packets import ReviewPacket, ReviewPacketManifest
@@ -36,6 +42,7 @@ from workflow import (
     EvidenceKind,
     ReviewerInvocation,
     WorkflowChanges,
+    WorkflowCommitRequest,
     WorkflowContext,
     WorkflowEngine,
     WorkflowHistory,
@@ -677,6 +684,72 @@ def test_quota_auto_wait_boundary_uses_reset_span_without_safety_margin(
     )
 
 
+def test_commit_backstop_rejects_yes_reviews_bound_to_failed_attestation(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/red-attestation-backstop")
+    start_commit = _git(repository, "rev-parse", "HEAD")
+    changed_path = "runtime.py"
+    (repository / changed_path).write_text("VALUE = 1\n", encoding="utf-8")
+    state = init_workflow_state(
+        run_id="red-attestation-backstop",
+        task_file=str(tmp_path / "task.md"),
+        branch="feature/red-attestation-backstop",
+        branch_base=start_commit,
+        slice_count=1,
+    ).bind_current_slice_git_boundary(
+        start_commit=start_commit,
+        scope_paths=(changed_path,),
+        start_fingerprint="a" * 64,
+    )
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    driver.active_state = state
+    changes = driver.collect_changes(start_commit)
+    attestation = ValidationAttestation(
+        "validation-failed",
+        changes.fingerprint,
+        ("pytest",),
+        (ValidationRecord(ValidationStatus.FAIL, "pytest", 1, "failed"),),
+        "b" * 64,
+        "failed",
+    )
+
+    def approving_review(role: AgentRole) -> ContractResult:
+        return ContractResult(
+            reviewer=role,
+            approval=True,
+            stopped=False,
+            stop_request=None,
+            validation=attestation,
+            test_files=(),
+            pre_mortem="a latent gate regression permits a red commit",
+            evidence=None,
+            findings=(),
+            anchors=(),
+        )
+
+    request = WorkflowCommitRequest(
+        slice_id=1,
+        fingerprint=changes.fingerprint,
+        attestation=attestation,
+        claude_review=approving_review(AgentRole.CLAUDE),
+        antigravity_review=approving_review(AgentRole.ANTIGRAVITY),
+        findings=(),
+    )
+
+    with pytest.raises(GitTransactionError, match="passing current attestation"):
+        driver.commit_slice(request)
+
+    assert _git(repository, "rev-parse", "HEAD") == start_commit
+    assert _git(repository, "status", "--short") == "?? runtime.py"
+
+
 def test_runtime_context_auto_authorizes_scoped_test_changes_unless_gate_enabled(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -755,6 +828,55 @@ def test_carry_forward_findings_migrates_reused_legacy_ids_stably() -> None:
         },
     )
     assert orchestrator._carry_forward_findings(state, carried_history) == migrated
+
+
+def test_final_review_recovers_latest_prior_attestation_after_transition_checkpoint() -> None:
+    attestation = ValidationAttestation(
+        "validation-a",
+        "a" * 64,
+        ("pytest",),
+        (ValidationRecord(ValidationStatus.PASS, "pytest", 0, "ok"),),
+        "b" * 64,
+        "passed",
+    )
+    prior = WorkflowHistory(2, attestations=(attestation,))
+    final_state = init_workflow_state(
+        run_id="final-attestation-recovery",
+        task_file="task.md",
+        branch="feature/final-attestation",
+        branch_base="a" * 40,
+        slice_count=1,
+        timestamp="2026-08-21T12:00:00+00:00",
+    ).bind_slice_plan(
+        (PlannedSlice(1, "implementation", ("src/core.py",)),),
+        first_start_commit="a" * 40,
+    ).complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    ).bind_current_slice_git_boundary(
+        start_commit="a" * 40,
+        scope_paths=("src/core.py",),
+        start_fingerprint="0" * 64,
+    ).complete_current_slice(
+        commit_ref="b" * 40,
+    ).start_final_review_work_unit()
+    final_history = WorkflowHistory(final_state.current_work_unit_id)
+    runtime = {
+        "current": final_history.to_dict(),
+        "archive": [prior.to_dict()],
+    }
+    final_state = replace(final_state, runtime_history=runtime)
+
+    recovered = orchestrator._recover_final_review_attestation(
+        final_state,
+        final_history,
+    )
+
+    assert recovered.attestations == prior.attestations
+    assert len(recovered.events) == 1
+    assert isinstance(recovered.events[0], ValidationAuditEvent)
+    assert recovered.events[0].attestation == attestation
 
 
 def test_bind_work_unit_preserves_latest_driver_owned_runtime_history(

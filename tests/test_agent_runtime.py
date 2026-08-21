@@ -40,6 +40,9 @@ from agent_runtime import (
     _compact_usage_metadata,
     normalize_provider_usage,
 )
+from artifact_bridge import ArtifactBridge, provider_input_measurement_payload
+from artifact_models import ProviderAttemptPayload
+from artifact_store import ArtifactStore
 from validation_matrix import ValidationCommand, ValidationRequest
 from repo_changes import ChangedPath, RepositoryChanges
 from provider_input_budget import (
@@ -51,6 +54,7 @@ from provider_input_budget import (
     ProviderInputComponent,
     default_provider_input_budget_policy,
 )
+from workflow_state import AgentFailureKind
 
 
 def test_compute_retry_backoff_seconds_exponential() -> None:
@@ -1194,9 +1198,113 @@ def test_provider_attempt_lifecycle_starts_after_preflight_and_terminalizes_succ
     assert events[0] == "preflight"
     assert events[1][0:2] == ("start", "measurement-1")  # type: ignore[index]
     assert events[2] == "process"
-    terminal = events[3]
+    terminal = next(
+        event
+        for event in events
+        if isinstance(event, tuple) and event[0] == "terminal"
+    )
     assert terminal[0:3] == ("terminal", "attempt-1", None)  # type: ignore[index]
     assert terminal[3].input_tokens == 0  # type: ignore[index,union-attr]
+
+
+def test_provider_attempt_rejected_output_is_durably_failed_not_succeeded(
+    monkeypatch, tmp_path: Path
+) -> None:
+    class Adapter:
+        name = "codex"
+        cli_binary = "codex"
+        model = "model"
+        effort = "medium"
+        timeout = 1
+        reviewer = False
+        env: dict[str, str] = {}
+        required_hosts: tuple[str, ...] = ()
+        capability = CapabilitySpec((), (), (r".*",), ())
+        capability_verified = True
+        metadata: dict[str, object] = {}
+
+        def build_command(self, prompt: str) -> tuple[list[str], bool]:
+            return ["codex"], True
+
+        def validate_process_output(self, stderr: str) -> None:
+            return None
+
+        def extract_output(
+            self, stdout: str, stderr: str, extra_files: dict[str, str]
+        ) -> str:
+            self.metadata = {"usage": {"output_tokens": 5}}
+            return stdout
+
+        def cleanup(self) -> None:
+            return None
+
+    class Result:
+        returncode = 0
+        stderr = ""
+
+        def __init__(self, stdout: str) -> None:
+            self.stdout = stdout
+
+    monkeypatch.setattr(
+        agent_runtime, "verify_agent_capabilities", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        agent_runtime.subprocess, "run", lambda *args, **kwargs: Result("invalid output")
+    )
+    bridge = ArtifactBridge(ArtifactStore(tmp_path, "rejected-output"))
+
+    def persist_measurement(measurement):  # type: ignore[no-untyped-def]
+        payload = provider_input_measurement_payload(
+            measurement,
+            work_unit_id=1,
+            transition_fingerprint="b" * 64,
+            relevant_record_head="0" * 64,
+        )
+        return bridge.append(
+            payload,
+            logical_id="measurement-1",
+            idempotency_key="measurement:1",
+            fingerprint_sha256="a" * 64,
+        )
+
+    with pytest.raises(AgentInvocationError) as exc_info:
+        run_agent_checked(
+            agent_key="codex", prompt="prompt", log_prefix="rejected", max_retries=0,
+            required_flags=["READY"], output_validator=None, config=OrchestratorConfig(),
+            agents={"codex": Adapter()}, log_dir=tmp_path,
+            write_file=lambda path, content: path.write_text(content, encoding="utf-8"),
+            shorten=lambda text, limit=1800: (text or "")[:limit],
+            parse_flag=lambda text, key: key if key in text else None,
+            validate_done_marker=lambda text: text.endswith("STATUS: DONE"),
+            operation="codex_implementation", binding_fingerprint="a" * 64,
+            pre_start_callback=persist_measurement,
+            provider_attempt_lifecycle=ProviderAttemptLifecycle(
+                start=lambda _measurement, bootstrap: bridge.start_provider_attempt(
+                    measurement_record=bootstrap,
+                    binding_fingerprint="a" * 64,
+                    work_unit_id=1,
+                ),
+                terminal=(
+                    lambda started, duration, failure, usage:
+                    bridge.finish_provider_attempt(
+                        started,
+                        duration_seconds=duration,
+                        failure_kind=failure,
+                        usage=usage,
+                    )
+                ),
+            ),
+        )
+
+    assert exc_info.value.kind is AgentFailureKind.OUTPUT
+    attempts = tuple(
+        record.payload
+        for record in bridge.store.load_chain()
+        if isinstance(record.payload, ProviderAttemptPayload)
+    )
+    assert [attempt.phase for attempt in attempts] == ["started", "failed"]
+    assert attempts[-1].failure_kind == AgentFailureKind.OUTPUT.value
+    assert all(attempt.phase != "succeeded" for attempt in attempts)
 
 
 def test_unknown_agent_version_is_a_non_retryable_gate(monkeypatch, tmp_path: Path) -> None:

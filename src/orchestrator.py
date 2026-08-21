@@ -47,6 +47,7 @@ from audit_trail import (
     AuthorizedTestChanges,
     OverallAuditEntry,
     ReviewAuditEvent,
+    ValidationAuditEvent,
     project_managed_slice_audit,
     project_overall_audit,
     project_structured_slice_audit,
@@ -2048,6 +2049,54 @@ def _carry_forward_findings(
     return tuple(sorted(carried, key=lambda finding: finding.finding_id))
 
 
+def _recover_final_review_attestation(
+    state: WorkflowState,
+    current_history: WorkflowHistory,
+) -> WorkflowHistory:
+    """Recover the latest prior attestation at a final-review transition.
+
+    Attestations are fingerprint-bound rather than work-unit-bound.  Keeping the
+    latest prior fact lets ``_attestation`` reuse it when the branch is unchanged;
+    a changed branch still selects and persists a new validation normally.
+    """
+    if state.current_work_unit.kind is not WorkUnitKind.FINAL_REVIEW:
+        return current_history
+    carried = current_history.attestations[-1:]
+    if not carried:
+        histories = _persisted_histories(state)
+        prior = tuple(
+            history
+            for work_unit_id, history in sorted(histories.items())
+            if work_unit_id < current_history.work_unit_id and history.attestations
+        )
+        if not prior:
+            return current_history
+        carried = prior[-1].attestations[-1:]
+    attestation = carried[0]
+    if any(
+        isinstance(event, ValidationAuditEvent)
+        and event.attestation.attestation_id == attestation.attestation_id
+        for event in current_history.events
+    ):
+        return current_history
+    events = (
+        ValidationAuditEvent(
+            event_id=1,
+            slice_id=state.current_slice_id,
+            attestation=attestation,
+        ),
+        *(
+            replace(event, event_id=index)
+            for index, event in enumerate(current_history.events, start=2)
+        ),
+    )
+    return replace(
+        current_history,
+        events=events,
+        attestations=carried,
+    )
+
+
 def _overall_audit_entries(state: WorkflowState) -> tuple[OverallAuditEntry, ...]:
     histories = _persisted_histories(state)
     entries: list[OverallAuditEntry] = []
@@ -2789,6 +2838,12 @@ def run_production_workflow(
     for _ in range(100):
         history = _history(state)
         current = state.current_work_unit
+        recovered_history = _recover_final_review_attestation(state, history)
+        if recovered_history != history:
+            history = recovered_history
+            driver.checkpoint(state, history)
+            state = driver.active_state or state
+            current = state.current_work_unit
         if current.status in {
             WorkUnitStatus.WAITING_FOR_QUOTA,
             WorkUnitStatus.WAITING_FOR_RETRY,
@@ -2940,11 +2995,24 @@ def run_production_workflow(
 
         carried_findings = _carry_forward_findings(state, history)
         state = state.start_final_review_work_unit()
+        carried_attestations = history.attestations[-1:]
         driver.checkpoint(
             state,
             WorkflowHistory(
                 state.current_work_unit_id,
                 findings=carried_findings,
+                events=(
+                    (
+                        ValidationAuditEvent(
+                            event_id=1,
+                            slice_id=state.current_slice_id,
+                            attestation=carried_attestations[0],
+                        ),
+                    )
+                    if carried_attestations
+                    else ()
+                ),
+                attestations=carried_attestations,
             ),
         )
         state = driver.active_state or state
