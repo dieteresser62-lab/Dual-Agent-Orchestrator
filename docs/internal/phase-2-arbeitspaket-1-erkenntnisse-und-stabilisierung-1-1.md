@@ -7,23 +7,38 @@ Stabilisierungspaket 1.1 vor den weiteren nativen JSON-Arbeitspaketen.
 
 Stand: 2026-08-21
 
-## Bearbeitungsstand nach Stabilisierungspaketen 1.1A und 1.1B
+## Bearbeitungsstand nach Stabilisierungspaketen 1.1A bis 1.1C
 
-Das im Arbeitsplan als **1.1A1** bezeichnete Paket ist auf `master`
-integriert. Release 1.1B ist auf seinem Feature-Branch fachlich abgeschlossen:
-Die vollständige Suite bestand mit `961 passed`, und Claude sowie Antigravity
-genehmigten den branchweiten Finalreview für Fingerprint
-`b6e26794c449e97ebaa10dd4808864a489ee4cf6daadad63fc5e5ae7e4d56b6a`.
-Die Integration von 1.1B auf `master` steht noch aus.
+Die Pakete 1.1A und 1.1B sind auf `master` integriert. Release 1.1C wurde auf
+`feature/orchestrator-stabilization-1-1c` in zwei bewusst getrennten Aufträgen
+umgesetzt: Quota-Wartepolitik und Fake Clock in 1.1C sowie der zuvor fehlende
+Providerattempt-/Schemavertrag in 1.1C2. Alle drei Implementierungs- und
+Korrekturslices von 1.1C2 wurden von Claude und Antigravity genehmigt und
+commitgebunden abgeschlossen. Die letzte vollständige Suite bestand mit
+`993 passed`.
+
+Der branchweite Abschluss von 1.1C2 wurde am 21.08.2026 manuell administrativ
+beendet: Codex lieferte seinen Abschlussbericht, Claude genehmigte den
+Fingerprint `f865ddcb02a23b0a9730f884c2f47dbf6a7189f80b8fa8bf8f2765839e8f0a2e`,
+der abschließende Antigravity-Aufruf erzeugte jedoch wegen eines entfernten
+Tool-Schemafehlers (`additional properties 'LineNumber' not allowed`) keinen
+Reviewvertrag. Dies wird ausdrücklich nicht als Antigravity-Freigabe
+umgedeutet. Der Lauf wird zur Vermeidung weiterer kostenpflichtiger
+Wiederholungsreviews nicht fortgesetzt; die Ausnahme und die vollständige
+Historie bleiben im archivierten Gesamtreview erhalten.
 
 | Erkenntnis | Sachstatus | Erledigt in | Verifikation | Rest |
 |---|---|---|---|---|
 | P2-FU-002 | **GELÖST / AUF MASTER** | 1.1A Slice 1, Commit `5638f6b` | Cache-/Replaytests und Finalreview | keiner |
 | P2-FU-015, Nachkorrektur | **GELÖST / AUF MASTER** | 1.1A Hotfix, Commit `9f1b6b6` | Scope-/Gate-Regressions und Finalreview | keiner |
-| P2-FU-007, Gedankenstrichnachtrag | **GELÖST** | 1.1B Slice 1, Commit `3827e81` | gespeicherte Realantwort, lokale Normalisierung und Finalreview | Merge nach `master` |
-| P2-FU-023 | **GELÖST** | 1.1B Slice 1, Commit `3827e81` | deterministische Metadatenergänzung, Fail-closed-Regressions und Finalreview | Merge nach `master` |
-| P2-FU-024 | **GELÖST** | 1.1B Slice 2 und Abschlusskorrektur, Commits `fc44f70`, `64b14e2` | kanonische Pakete, Same-Slice-Korrekturscope und Finalreview | Merge nach `master` |
-| P2-DEC-001 | **TEILWEISE GELÖST** | 1.1A und 1.1B | Replay-/Projektionsautorität sowie Reviewvertrags- und Paketkostenbremsen genehmigt | record-first Liveübergänge, Betriebslogging, Quota-Betrieb und Pfaddigest-Freigaben neu zuschneiden |
+| P2-FU-007, Gedankenstrichnachtrag | **GELÖST / AUF MASTER** | 1.1B Slice 1, Commit `3827e81` | gespeicherte Realantwort, lokale Normalisierung und Finalreview | gleichartige einzeilige Labelvariante aus 1.1C als neuer Restfall |
+| P2-FU-023 | **GELÖST / AUF MASTER** | 1.1B Slice 1, Commit `3827e81` | deterministische Metadatenergänzung, Fail-closed-Regressions und Finalreview | keiner |
+| P2-FU-024 | **GELÖST / AUF MASTER** | 1.1B Slice 2 und Abschlusskorrektur, Commits `fc44f70`, `64b14e2` | kanonische Pakete, Same-Slice-Korrekturscope und Finalreview | branchweite Finalreview-Evidenzkompaktierung bleibt offen |
+| P2-FU-003 | **GELÖST AUF FEATURE-BRANCH** | 1.1C2 Slice 1, Commit `c8e1788` | Providerattempt-Projektion mit verständlicher Known-/Unknown-Usage-Semantik | Merge nach `master` |
+| P2-FU-022 | **GELÖST AUF FEATURE-BRANCH** | 1.1C Slice 1, Commit `fac92b0` | Fake-Clock-Tests für Stundenheartbeat und Sieben-Tage-Grenze | Merge nach `master` |
+| P2-FU-013, Betriebsnachtrag | **TEILWEISE GELÖST** | 1.1C2 Slice 1, Commit `c8e1788` | persistenter Providerattempt-Lebenszyklus und Usage-Projektion | neuer enger `LineNumber`-Runtimefehler sowie Erstaufrufkosten bleiben offen |
+| P2-FU-025 | **OFFEN** | nach 1.1C | reales Finalreview-Protokoll mit wiederholter identischer Kompaktierung | semantischen Übergangscache und ruhiges Standardlogging umsetzen |
+| P2-DEC-001 | **TEILWEISE GELÖST** | 1.1A bis 1.1C | Replay-/Projektionsautorität, Reviewpakete, Quota-Wartepolitik und Providerattempt-Telemetrie umgesetzt | record-first Liveübergänge, Betriebslogging, Finalreview-Deduplizierung und Pfaddigest-Freigaben neu zuschneiden |
 
 Die Statusangaben in diesem Dokument beschreiben den Sachstand. Ein gelöster
 Punkt gilt erst nach seinem Merge zusätzlich als **auf master integriert**.
@@ -472,6 +487,22 @@ syntaktische Korrekturen starten keinen zweiten Providerprozess. Die Umsetzung
 ist in Commit `3827e81` enthalten und durch die abschließende
 `961 passed`-Attestierung sowie beide Finalreviews verifiziert.
 
+### Neuer Restfall aus dem 1.1C2-Finalreview
+
+Im finalen Claude-Review von 1.1C2 trat trotz der 1.1B-Normalisierung eine
+weitere eindeutig lesbare Variante auf. Claude lieferte eine einzelne
+`REVIEW_EVIDENCE`-Zeile mit den in Prosa eingebetteten Labels `Largest
+residual risk:` und `Realistic break condition:`, aber ohne die kanonischen
+Pipe-Feldgrenzen. Verdict und fachliche Prüfung waren vollständig; dennoch
+startete der Orchestrator einen zweiten `claude_contract_repair`-Prozess.
+
+Der erste Aufruf benötigte 288 Sekunden und etwa 1,37 USD. Die rein formale
+Reparatur benötigte weitere 89 Sekunden, vier Turns, 6.164 Output-Tokens und
+etwa 0,14 USD und wiederholte dabei sämtliche geschlossenen Findings. Dieser
+Fall bleibt als Kosten- und Vertragsrestpunkt offen: Eine genau einmal
+vorhandene, eindeutig beschriftete Dreifeldzeile soll lokal normalisiert
+werden; fehlende, doppelte oder widersprüchliche Labels bleiben fail-closed.
+
 ## P2-FU-008 – Ungültiges Review nach Reparatur beendet den Prozess ungeordnet
 
 **Status:** behoben mit Commit `385d137`  
@@ -726,6 +757,21 @@ Reviewrunde. Vor einem erneuten Provideraufruf ist zu prüfen, ob ein
 kostenarmer Laufzeit-Warm-up oder eine instanzlokale Wiederaufnahme möglich
 ist; fachliche Ergebnisse oder Freigaben dürfen dabei weder übernommen noch
 erfunden werden.
+
+Beim manuellen Abschluss von 1.1C2 trat eine zweite, eng abgrenzbare entfernte
+Antigravity-Runtimeklasse auf. Der lokale `agy`-Prozess und das Finalreview-
+Preflight waren erfolgreich gestartet; die Providerhülle brach jedoch ohne
+Reviewvertrag mit `additional properties 'LineNumber' not allowed` ab. Das
+weist auf ein inkompatibles entferntes Toolargumentschema hin, nicht auf eine
+fehlende lokale Binärdatei oder eine fachliche Ablehnung.
+
+Vor einer automatischen Wiederholung darf ausschließlich diese exakte
+Providerhüllen-Signatur als transient klassifiziert werden. Abweichende
+Properties, lokale Startfehler und nicht eindeutig entfernte Schemafehler
+bleiben harte Runtimefehler. Regressionstests müssen den unveränderten
+Fingerprint, höchstens zwei physische Versuche, das Ausbleiben eines
+Reviewrecords für den Fehlversuch sowie eine separate Attempt-/Kostenmessung
+belegen.
 
 ## P2-FU-014 – Freigegebene Zwischen-Commits blockieren den Slice-Commit
 
@@ -1258,9 +1304,47 @@ Korrekturzweck ab und lehnt ein leeres betroffenes Finding-Scope fail-closed
 ab. Die Umsetzung liegt in `fc44f70` und `64b14e2`; die vollständige Suite
 bestand abschließend mit `961 passed`.
 
+## P2-FU-025 – Finalreview-Evidenz wird für denselben Fingerprint mehrfach kompaktiert
+
+**Status:** offen nach Stabilisierungspaket 1.1C
+
+**Priorität:** hoch
+
+### Beobachtung
+
+Im manuellen Abschlusslauf von 1.1C2 erschien `Final review evidence
+compacted` mindestens dreizehnmal. Mehrere Gruppen meldeten identische
+`original_chars`, `evidence_chars` und denselben Fingerprint unmittelbar vor
+Codex, vor und nach Claude, vor der Claude-Vertragsreparatur sowie vor und
+während Antigravity. Das sind keine zusätzlichen Revieweraufrufe, aber echte
+wiederholte Diff-/Kompaktierungsarbeiten auf dem Windows-/WSL-Dateisystem.
+
+Teilweise wuchs nur die verwaltete Auditprojektion von 507.217 auf 510.451
+beziehungsweise 530.674 Rohzeichen. Die kompaktierte Evidenz und der
+fachliche Fingerprint blieben unverändert. Damit invalidiert derzeit selbst
+eine Änderung, die anschließend bewusst aus der Modellevidenz entfernt wird,
+unnötig lokale Übergangsarbeit und erzeugt kaum hilfreiche Standardlogs.
+
+### Zielvertrag und Abnahme
+
+- Pro unverändertem fachlichem Fingerprint wird genau ein kanonisches
+  `WorkflowChanges`-/Finalreview-Evidenzergebnis materialisiert.
+- Boundary-Check, Attestierung, Promptbau und Provider-Preflight verwenden
+  denselben Digest und denselben inhaltsadressierten Cacheeintrag.
+- Der Rollenwechsel Codex zu Claude zu Antigravity kompaktiert dieselbe
+  fachliche Evidenz nicht erneut. Fortschreibungen ausschließlich innerhalb
+  verwalteter, aus der Evidenz entfernter Auditblöcke invalidieren den
+  semantischen Cache nicht.
+- Jede echte Repositoryänderung außerhalb dieser Projektionen verwirft den
+  Cache vollständig und erzeugt einen neuen Fingerprint.
+- Das Standardlog meldet nur tatsächliche Neuberechnungen; Cachetreffer sind
+  höchstens unter `--verbose` sichtbar.
+- Ein instrumentierter End-to-End-Test zählt für einen unveränderten
+  Finalreview-Übergang genau eine teure Diff-/Kompaktierungsberechnung.
+
 ## P2-DEC-001 – Stabilisierungspaket 1.1 vor weiterer Protokolloberfläche
 
-**Status:** durch 1.1A und 1.1B teilweise umgesetzt; Restumfang wird neu zugeschnitten
+**Status:** durch 1.1A bis 1.1C teilweise umgesetzt; Restumfang wird neu zugeschnitten
 
 **Priorität:** kritisch  
 **Einordnung:** Konsolidierung der Phase-1-/Phase-2-Zwischenarchitektur, keine

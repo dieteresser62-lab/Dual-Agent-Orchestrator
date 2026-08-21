@@ -1148,7 +1148,8 @@ def test_final_preflight_denial_exposes_affected_paths_on_resume_gate(
             (),
             ("src/external.py", "tests/test_external.py"),
             "move the changes into an authorized Slice or revert them",
-        )
+        ),
+        fingerprint="d" * 64,
     )
 
     def denied_provider_start() -> str:
@@ -1163,7 +1164,9 @@ def test_final_preflight_denial_exposes_affected_paths_on_resume_gate(
     )
 
     assert output is None
-    assert halted.current_work_unit.gate.reason.value == "bootstrap_check"
+    assert halted.current_work_unit.gate.reason.value == "unexpected_file"
+    assert halted.current_work_unit.gate.fingerprint == "d" * 64
+    assert halted.current_work_unit.gate.resume_step is WorkflowStep.CODEX_PLAN
     assert halted.current_work_unit.gate.paths == (
         "src/external.py",
         "tests/test_external.py",

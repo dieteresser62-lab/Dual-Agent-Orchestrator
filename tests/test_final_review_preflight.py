@@ -35,6 +35,7 @@ from workflow_state import (
 FINGERPRINT = "d" * 64
 EXTERNAL_FINGERPRINT = "9" * 64
 SLICE_COMMIT = "b" * 40
+CORRECTION_COMMIT = "c" * 40
 
 
 def _state(step: WorkflowStep):
@@ -79,6 +80,50 @@ def _state_with_approved_external_path():  # type: ignore[no-untyped-def]
     return state
 
 
+def _state_with_approved_correction_external_path():  # type: ignore[no-untyped-def]
+    state = _state(WorkflowStep.CODEX_FINAL_REVIEW).complete_current_work_unit()
+    state = state.start_correction_work_unit(
+        start_commit=SLICE_COMMIT,
+        scope_paths=("src/one.py",),
+        start_fingerprint="3" * 64,
+        finding_ids=("C-01",),
+    )
+    failure = InvocationFailureRecord(
+        invocation_id="correction-runtime-failure",
+        idempotency_key="preflight-run:correction-runtime-failure",
+        role="codex",
+        failure_kind=AgentFailureKind.RUNTIME,
+        provider_text="correction interrupted",
+        received_at="2026-08-21T17:59:00+00:00",
+        step=WorkflowStep.CODEX_FINAL_CORRECTION,
+        slice_id=state.current_slice_id,
+        work_unit_id=state.current_work_unit_id,
+        diagnostic_exit_code=3,
+        automatic_resume=False,
+        diff_fingerprint="8" * 64,
+    )
+    state = state.record_invocation_failure(
+        failure,
+        wait_automatically=False,
+    ).resume_after_invocation_halt()
+    return state.await_user_gate(
+        reason=GateReason.QUOTA_RESUME_DIFF,
+        detail="QUOTA-RESUME-DIFF | reviewed correction hotfix",
+        fingerprint=EXTERNAL_FINGERPRINT,
+        paths=("src/external.py",),
+        resume_step=WorkflowStep.CODEX_FINAL_CORRECTION,
+    ).record_user_gate_decision(
+        approved=True,
+        fingerprint=EXTERNAL_FINGERPRINT,
+        paths=("src/external.py",),
+        decided_by="operator",
+        decided_at="2026-08-21T18:00:00+00:00",
+        rationale="reviewed exact correction path",
+    ).complete_current_slice(
+        commit_ref=CORRECTION_COMMIT,
+    ).start_final_review_work_unit()
+
+
 def _measurement(bridge: ArtifactBridge, state, operation: str):  # type: ignore[no-untyped-def]
     head = relevant_record_head(bridge.store.load_chain())
     payload = ProviderInputMeasurementPayload(
@@ -109,6 +154,7 @@ def _append_external_path_evidence(
     *,
     include_gate: bool = True,
     binding_target: str = SLICE_COMMIT,
+    gate_kind: str = "unexpected-file",
 ) -> None:
     attestation = bridge.append(
         ValidationAttestationPayload(
@@ -134,7 +180,7 @@ def _append_external_path_evidence(
     if include_gate:
         bridge.append(
             GatePayload(
-                "unexpected-file", "approved", Role.USER,
+                gate_kind, "approved", Role.USER,
                 "reviewed exact external path",
             ),
             logical_id="slice-user-gate",
@@ -322,6 +368,29 @@ def test_preflight_accepts_user_approved_external_path_bound_to_completed_slice_
     state = _state_with_approved_external_path()
     bridge = ArtifactBridge(ArtifactStore(tmp_path, state.run_id))
     _append_external_path_evidence(bridge)
+    _attest(bridge)
+    measurement = _measurement(bridge, state, state.current_step.value)
+
+    result = run_final_review_preflight(
+        state=state,
+        records=bridge.store.load_chain(),
+        measurement_record=measurement,
+        repository_paths=("src/one.py", "src/external.py"),
+    )
+
+    assert result.passed
+
+
+def test_preflight_accepts_user_approved_external_path_bound_to_correction_commit(
+    tmp_path: Path,
+) -> None:
+    state = _state_with_approved_correction_external_path()
+    bridge = ArtifactBridge(ArtifactStore(tmp_path, state.run_id))
+    _append_external_path_evidence(
+        bridge,
+        binding_target=CORRECTION_COMMIT,
+        gate_kind="quota-resume-diff",
+    )
     _attest(bridge)
     measurement = _measurement(bridge, state, state.current_step.value)
 

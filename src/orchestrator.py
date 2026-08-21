@@ -622,7 +622,10 @@ class ProductionWorkflowDriver(WorkflowDriver):
         state = state.with_bootstrap_check(self._bootstrap_fact(checked))
         self._persist_bootstrap_state(state)
         if not result.passed:
-            raise FinalReviewPreflightDenied(result)
+            raise FinalReviewPreflightDenied(
+                result,
+                fingerprint=repository_fingerprint,
+            )
         return measurement_record
 
     def _start_provider_attempt(

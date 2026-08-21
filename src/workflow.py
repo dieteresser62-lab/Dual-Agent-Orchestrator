@@ -2358,7 +2358,9 @@ class WorkflowEngine:
                 return state, output
             except (ProviderInputBudgetExceeded, FinalReviewPreflightDenied) as error:
                 if isinstance(error, FinalReviewPreflightDenied):
-                    fingerprint = hashlib.sha256(str(error).encode("utf-8")).hexdigest()
+                    fingerprint = error.fingerprint or hashlib.sha256(
+                        str(error).encode("utf-8")
+                    ).hexdigest()
                     code = error.result.error_code or "FINAL-REVIEW-PREFLIGHT"
                     detail = str(error)
                     affected_paths = error.result.affected_paths
@@ -2384,6 +2386,29 @@ class WorkflowEngine:
                             rewind_step.value,
                         )
                         state = state.with_current_step(rewind_step)
+                        self.driver.checkpoint(state, history)
+                        return state, None
+                    if (
+                        code == "UNAUTHORIZED-PATH"
+                        and error.fingerprint is not None
+                        and affected_paths
+                    ):
+                        driver_state = getattr(self.driver, "active_state", None)
+                        if (
+                            isinstance(driver_state, WorkflowState)
+                            and driver_state.run_id == state.run_id
+                        ):
+                            state = replace(
+                                state,
+                                bootstrap_checks=driver_state.bootstrap_checks,
+                            )
+                        state = state.await_user_gate(
+                            reason=GateReason.UNEXPECTED_FILE,
+                            detail=f"UNEXPECTED-PATH | {detail}",
+                            fingerprint=error.fingerprint,
+                            paths=affected_paths,
+                            resume_step=state.current_step,
+                        )
                         self.driver.checkpoint(state, history)
                         return state, None
                 else:

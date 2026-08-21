@@ -21,6 +21,31 @@ wenn der Lauf abgeschlossen oder sein manueller Abschluss dokumentiert ist.
 
 ## Archive
 
+### Orchestrator-Stabilisierung 1.1C – Quota-Betrieb und Providerattempt-Telemetrie
+
+Pfad: [`archive/orchestrator-stabilization-1-1c/`](archive/orchestrator-stabilization-1-1c/)
+
+Wichtige Einstiegspunkte:
+
+- [Arbeitsplan 1.1C – Quota-Wartebetrieb](archive/orchestrator-stabilization-1-1c/release-1-1c-quota-wartebetrieb-und-provideraufruf-telemetrie-arbeitsplan.md)
+- [Review 1.1C](archive/orchestrator-stabilization-1-1c/release-1-1c-quota-wartebetrieb-und-provideraufruf-telemetrie-implement-review-414a32cf.md)
+- [Arbeitsplan 1.1C2 – Providerattempt und Schema](archive/orchestrator-stabilization-1-1c/release-1-1c2-providerattempt-record-und-schema-arbeitsplan.md)
+- [Konsolidiertes Review 1.1C2 mit manueller Abschlussausnahme](archive/orchestrator-stabilization-1-1c/release-1-1c2-providerattempt-record-und-schema-implement-review-8c9aa8f1.md)
+- [Slice 1 – Quota-Wartepolitik](archive/orchestrator-stabilization-1-1c/slice-release-1-1c-quota-wartebetrieb-und-provideraufruf-telemetrie-arbeitspla-01-quota-wartepolitik-sieben-tage-grenze-und-fake-clock.md)
+- [Slice 1 – Providerattempt-Kern](archive/orchestrator-stabilization-1-1c/slice-release-1-1c2-providerattempt-record-und-schema-arbeitsplan-01-providerattempt-kern-sichere-projektion-und-abschluss-der-quota-beobacht.md)
+- [Abschlusskorrektur 2](archive/orchestrator-stabilization-1-1c/slice-release-1-1c2-providerattempt-record-und-schema-implement-02-abschlusskorrektur.md)
+- [Abschlusskorrektur 3](archive/orchestrator-stabilization-1-1c/slice-release-1-1c2-providerattempt-record-und-schema-implement-03-abschlusskorrektur.md)
+
+Alle Implementierungs- und Korrekturslices wurden von Claude und Antigravity
+genehmigt und commitgebunden abgeschlossen. Die vollständige Suite bestand
+vor dem manuellen Abschluss mit `993 passed`; die Abschlussvalidierung des
+Archivcommits ist im konsolidierten Review dokumentiert. Codex und Claude
+beendeten den letzten branchweiten Review, während Antigravity wegen des
+entfernten Tool-Schemafehlers `additional properties 'LineNumber' not allowed`
+keinen Finalvertrag erzeugte. Der Lauf wurde deshalb ausdrücklich als
+administrative Ausnahme beendet und nicht als vollständige dreifache
+Finalfreigabe dargestellt.
+
 ### Orchestrator-Stabilisierung 1.1B – Reviewverträge und Reviewpakete
 
 Pfad: [`archive/orchestrator-stabilization-1-1b/`](archive/orchestrator-stabilization-1-1b/)

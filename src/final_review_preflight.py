@@ -51,8 +51,14 @@ _EXTERNAL_PATH_GATE_KINDS = {
 class FinalReviewPreflightDenied(ProviderInputBudgetExceeded):
     """A deterministic local denial; no provider process has started."""
 
-    def __init__(self, result: "FinalReviewPreflightResult") -> None:
+    def __init__(
+        self,
+        result: "FinalReviewPreflightResult",
+        *,
+        fingerprint: str | None = None,
+    ) -> None:
         self.result = result
+        self.fingerprint = fingerprint
         RuntimeError.__init__(self, f"final review preflight denied: {result.error_code}: {result.remediation}")
 
 
@@ -261,7 +267,10 @@ def _approved_external_paths(
     slices_by_id = {item.slice_id: item for item in state.slices}
     authorized: set[str] = set()
     for unit in state.work_units:
-        if unit.kind is not WorkUnitKind.SLICE or unit.status is not WorkUnitStatus.COMPLETED:
+        if (
+            unit.kind not in {WorkUnitKind.SLICE, WorkUnitKind.CORRECTION}
+            or unit.status is not WorkUnitStatus.COMPLETED
+        ):
             continue
         slice_record = slices_by_id.get(unit.slice_id)
         if (
