@@ -13,7 +13,7 @@ import tempfile
 import threading
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path, PurePosixPath
 from typing import Callable, Mapping, TextIO
@@ -31,6 +31,7 @@ from repo_changes import RepositoryChanges
 from contracts import ValidationAttestation
 from validation_matrix import ValidationMatrixRunner, ValidationRequest
 from workflow_state import AgentFailureKind
+from artifact_models import ProviderUsagePayload
 from provider_input_budget import (
     PROVIDER_OPERATIONS,
     PreparedProviderInput,
@@ -427,34 +428,91 @@ def _compact_result_lines(output: str) -> tuple[str, ...]:
     return tuple(selected)
 
 
-def _compact_usage_metadata(metadata: Mapping[str, object]) -> str:
-    """Summarize provider usage without printing nested token/accounting JSON."""
-    parts: list[str] = []
-    duration_ms = metadata.get("duration_api_ms")
-    duration_seconds = metadata.get("duration_seconds")
-    if isinstance(duration_ms, (int, float)):
-        parts.append(f"duration={float(duration_ms) / 1000:.2f}s")
-    elif isinstance(duration_seconds, (int, float)):
-        parts.append(f"duration={float(duration_seconds):.2f}s")
-    turns = metadata.get("num_turns")
-    if isinstance(turns, int):
-        parts.append(f"turns={turns}")
-    cost = metadata.get("total_cost_usd")
-    if isinstance(cost, (int, float)):
-        parts.append(f"cost_usd={float(cost):.4f}")
+def normalize_provider_usage(metadata: Mapping[str, object] | None) -> ProviderUsagePayload | None:
+    """Map provider envelopes onto the sole persisted/logged numeric allowlist."""
+    if not isinstance(metadata, Mapping):
+        return None
     usage = metadata.get("usage")
-    if isinstance(usage, Mapping):
-        total_tokens = usage.get("total_tokens")
-        if isinstance(total_tokens, int):
-            parts.append(f"tokens={total_tokens}")
-        else:
-            input_tokens = usage.get("input_tokens")
-            output_tokens = usage.get("output_tokens")
-            if isinstance(input_tokens, int):
-                parts.append(f"input_tokens={input_tokens}")
-            if isinstance(output_tokens, int):
-                parts.append(f"output_tokens={output_tokens}")
-    return " ".join(parts) or "available"
+    usage_map = usage if isinstance(usage, Mapping) else {}
+
+    def integer(*keys: str) -> int | None:
+        for source in (usage_map, metadata):
+            for key in keys:
+                value = source.get(key)
+                if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                    return value
+        return None
+
+    def number(*keys: str) -> float | None:
+        for source in (usage_map, metadata):
+            for key in keys:
+                value = source.get(key)
+                if (
+                    isinstance(value, (int, float))
+                    and not isinstance(value, bool)
+                    and math.isfinite(float(value))
+                    and value >= 0
+                ):
+                    return float(value)
+        return None
+
+    normalized = ProviderUsagePayload(
+        input_tokens=integer("input_tokens", "inputTokens", "promptTokenCount"),
+        tool_input_tokens=integer("tool_input_tokens", "toolInputTokens", "toolUseInputTokens"),
+        cache_read_input_tokens=integer("cache_read_input_tokens", "cacheReadInputTokens"),
+        cache_creation_input_tokens=integer(
+            "cache_creation_input_tokens", "cache_write_input_tokens",
+            "cacheCreationInputTokens", "cacheWriteInputTokens",
+        ),
+        thinking_tokens=integer("thinking_tokens", "thinkingTokens", "thoughtsTokenCount"),
+        output_tokens=integer("output_tokens", "outputTokens", "candidatesTokenCount"),
+        total_tokens=integer("total_tokens", "totalTokens", "totalTokenCount"),
+        turns=integer("num_turns", "turns"),
+        cost_usd=number("total_cost_usd", "cost_usd"),
+    )
+    return normalized if any(value is not None for value in asdict(normalized).values()) else None
+
+
+def _compact_usage_metadata(metadata: Mapping[str, object] | None) -> str:
+    """Summarize only normalized provider usage; unknown is never rendered as zero."""
+    normalized = normalize_provider_usage(metadata)
+    if normalized is None:
+        return "unknown"
+    parts: list[str] = []
+    for name, value in asdict(normalized).items():
+        if value is not None:
+            rendered = f"{value:.4f}" if name == "cost_usd" else str(value)
+            parts.append(f"{name}={rendered}")
+    return " ".join(parts)
+
+
+@dataclass(frozen=True)
+class ProviderAttemptLifecycle:
+    start: Callable[[ProviderInputMeasurement, object | None], object]
+    terminal: Callable[[object, float, str | None, ProviderUsagePayload | None], None]
+
+
+@dataclass
+class _ProviderAttemptInvocation:
+    lifecycle: ProviderAttemptLifecycle
+    handle: object | None = None
+    monotonic_started: float | None = None
+    terminalized: bool = False
+
+    def begin(self, measurement: ProviderInputMeasurement, bootstrap: object | None) -> None:
+        self.handle = self.lifecycle.start(measurement, bootstrap)
+        self.monotonic_started = time.monotonic()
+
+    def finish(self, failure_kind: AgentFailureKind | None, metadata: Mapping[str, object] | None) -> None:
+        if self.handle is None or self.monotonic_started is None or self.terminalized:
+            return
+        self.terminalized = True
+        self.lifecycle.terminal(
+            self.handle,
+            max(0.0, time.monotonic() - self.monotonic_started),
+            failure_kind.value if failure_kind is not None else None,
+            normalize_provider_usage(metadata) if failure_kind is None else None,
+        )
 
 
 def _review_snapshot_paths(source: Path) -> tuple[PurePosixPath, ...] | None:
@@ -890,7 +948,8 @@ def run_agent(
     reviewer_manifest_paths: tuple[str, ...] | None = None,
     operation: str | None = None,
     binding_fingerprint: str = "unbound",
-    pre_start_callback: Callable[[ProviderInputMeasurement], None] | None = None,
+    pre_start_callback: Callable[[ProviderInputMeasurement], object | None] | None = None,
+    attempt_invocation: _ProviderAttemptInvocation | None = None,
 ) -> str:
     """Run an adapter command once, with optional live streaming and strict output checks."""
     agent_key = adapter.name
@@ -944,12 +1003,14 @@ def run_agent(
             binding_fingerprint=binding_fingerprint,
             policy=config.provider_input_budget,
         )
-        if pre_start_callback is not None:
-            pre_start_callback(measurement)
+        bootstrap_context = (
+            pre_start_callback(measurement) if pre_start_callback is not None else None
+        )
         logger.info(
             "[PROVIDER_INPUT] provider=%s role=%s operation=%s allowed=%s "
-            "chars=%s/%s bytes=%s/%s input_digest=%s policy_digest=%s "
-            "largest_component=%s violations=%s",
+            "local_input_chars=%s/%s local_input_bytes=%s/%s "
+            "local_input_component_count=%s local_input_digest=%s policy_digest=%s "
+            "local_input_largest_component=%s violations=%s",
             measurement.provider,
             measurement.role,
             measurement.operation,
@@ -958,6 +1019,7 @@ def run_agent(
             measurement.effective_limit_chars,
             measurement.total_bytes,
             measurement.effective_limit_bytes,
+            len(measurement.components),
             measurement.input_digest,
             measurement.policy_digest,
             measurement.largest_component,
@@ -980,6 +1042,9 @@ def run_agent(
             ):
                 env.pop(variable, None)
         env["PWD"] = str(execution_root)
+
+        if attempt_invocation is not None:
+            attempt_invocation.begin(measurement, bootstrap_context)
 
         if config.agent_live_stream:
             # Stream mode captures stdout/stderr incrementally while still preserving full output.
@@ -1121,13 +1186,14 @@ def run_agent(
                     logger.info("[AGENT_RESULT] role=%s %s", agent_key, summary_line)
             else:
                 logger.info("[AGENT_RESULT] role=%s completed", agent_key)
-        if adapter.metadata:
+        normalized_usage = normalize_provider_usage(adapter.metadata)
+        if normalized_usage is not None:
             if config.agent_live_stream_mode == "full" or config.agent_output_mode == "full":
                 logger.info(
-                    "[AGENT_USAGE] role=%s operation=%s metadata=%s",
+                    "[AGENT_USAGE] role=%s operation=%s usage=%s",
                     agent_key,
                     effective_operation,
-                    json.dumps(adapter.metadata, ensure_ascii=False, sort_keys=True),
+                    json.dumps(asdict(normalized_usage), ensure_ascii=False, sort_keys=True),
                 )
             else:
                 logger.info(
@@ -1136,12 +1202,14 @@ def run_agent(
                     effective_operation,
                     _compact_usage_metadata(adapter.metadata),
                 )
+        if attempt_invocation is not None:
+            attempt_invocation.finish(None, adapter.metadata)
         logger.info(
             "[PROVIDER_COMPLETION] role=%s operation=%s success=true elapsed=%.2fs usage=%s",
             agent_key,
             effective_operation,
             time.monotonic() - invocation_started,
-            _compact_usage_metadata(adapter.metadata) if adapter.metadata else "unavailable",
+            _compact_usage_metadata(adapter.metadata),
         )
         return output
     except subprocess.TimeoutExpired as exc:
@@ -1696,7 +1764,8 @@ def run_agent_checked(
     reviewer_manifest_paths: tuple[str, ...] | None = None,
     operation: str | None = None,
     binding_fingerprint: str = "unbound",
-    pre_start_callback: Callable[[ProviderInputMeasurement], None] | None = None,
+    pre_start_callback: Callable[[ProviderInputMeasurement], object | None] | None = None,
+    provider_attempt_lifecycle: ProviderAttemptLifecycle | None = None,
 ) -> str:
     """Run the requested agent with retries and contract validation."""
     required_flags = required_flags or []
@@ -1739,6 +1808,10 @@ def run_agent_checked(
                 f"Error context:\n{chr(10).join(errors[-2:])}\n"
             )
 
+        attempt_invocation = (
+            _ProviderAttemptInvocation(provider_attempt_lifecycle)
+            if provider_attempt_lifecycle is not None else None
+        )
         try:
             output = run_agent(
                 agents[agent_key],
@@ -1750,6 +1823,7 @@ def run_agent_checked(
                 operation=operation,
                 binding_fingerprint=binding_fingerprint,
                 pre_start_callback=pre_start_callback,
+                attempt_invocation=attempt_invocation,
             )
             log_path = log_dir / f"{log_prefix}.attempt-{attempt}.log"
             write_file(log_path, output)
@@ -1762,7 +1836,11 @@ def run_agent_checked(
                 rejected_output = output
             else:
                 return output
-        except (AgentInvocationError, ProviderInputBudgetExceeded):
+        except AgentInvocationError as failure:
+            if attempt_invocation is not None:
+                attempt_invocation.finish(failure.kind, None)
+            raise
+        except ProviderInputBudgetExceeded:
             raise
         except Exception as exc:
             failure = classify_agent_failure(
@@ -1770,6 +1848,8 @@ def run_agent_checked(
                 exc,
                 invocation_id=invocation_id,
             )
+            if attempt_invocation is not None:
+                attempt_invocation.finish(failure.kind, None)
             failure_path = log_dir / f"{log_prefix}.attempt-{attempt}.failure.json"
             write_file(
                 failure_path,

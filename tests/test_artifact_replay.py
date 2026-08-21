@@ -18,6 +18,10 @@ from artifact_models import (
     ValidationAttestationPayload,
     ValidationResult,
     WorkUnitPayload,
+    ProviderAttemptPayload,
+    ProviderInputComponentPayload,
+    ProviderInputMeasurementPayload,
+    ProviderUsagePayload,
 )
 from artifact_replay import (
     ArtifactReplayError,
@@ -181,6 +185,45 @@ def test_replay_rejects_activity_that_references_a_later_work_unit() -> None:
     _append(records, "work-unit-2", WorkUnitPayload("2", 2, ("src/b.py",)))
 
     _assert_code(tuple(records), ReplayDiagnosticCode.RECORD_REFERENCE_MISSING)
+
+
+def test_replay_accepts_one_provider_attempt_and_rejects_terminal_without_start() -> None:
+    records: list[ArtifactRecord] = []
+    _append(records, "work-unit-1", WorkUnitPayload("1", 1, ("src/a.py",)))
+    measurement = _append(
+        records,
+        "measurement-1",
+        ProviderInputMeasurementPayload(
+            Role.CLAUDE, Role.CLAUDE, "claude_slice_review", "1", "a" * 64,
+            "b" * 64, "c" * 64, "d" * 64,
+            (ProviderInputComponentPayload("prompt", 3, 3),),
+            3, 3, 10, 10, None, None, None, 10, 10, True, (), 0, 0, "prompt",
+        ),
+    )
+    started_payload = ProviderAttemptPayload(
+        Role.CLAUDE, Role.CLAUDE, "claude_slice_review", "1",
+        "provider-operation-01", "a" * 64, measurement.record_id, "c" * 64, 1,
+        "started", "2026-08-21T10:00:01+00:00", None, None, None, None,
+    )
+    _append(records, "attempt-1", started_payload)
+    _append(
+        records, "attempt-1",
+        replace(
+            started_payload, phase="succeeded",
+            ended_at="2026-08-21T10:00:02+00:00", duration_seconds=1.0,
+            usage=ProviderUsagePayload(output_tokens=4),
+        ),
+        revision=2,
+    )
+    assert replay_artifacts(records, "run-replay").records == tuple(records)
+
+    terminal_only = [records[0], records[1], records[3]]
+    terminal_only[2] = replace(
+        terminal_only[2], revision=1,
+        record_id=records[2].record_id,
+        predecessor_ids=(records[1].record_id,),
+    )
+    _assert_code(tuple(terminal_only), ReplayDiagnosticCode.RECORD_REFERENCE_MISSING)
 
 
 def test_replay_uses_first_work_unit_revision_as_reference_boundary() -> None:

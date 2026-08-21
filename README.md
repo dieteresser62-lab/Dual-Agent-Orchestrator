@@ -331,7 +331,7 @@ Für deterministische Negativ- und Fortsetzungsszenarien kann ein State-v3-JSON-
 | `--dry-run-scenario <path>` | nicht gesetzt | Ein deterministisches JSON-Szenario ausführen. |
 | `--dry-run-report <path>` | nicht gesetzt | Den Auditbericht des skriptgesteuerten Szenarios schreiben. |
 | `--quota-auto-resume` / `--no-quota-auto-resume` | an | Eine automatische Fortsetzung bei eindeutigem Reset aktivieren. |
-| `--quota-safety-margin <seconds>` | `60` | Nach einem erkannten Reset zusätzlich zu wartende Zeit. |
+| `--quota-safety-margin <seconds>` | `60` | Nach einem erkannten Reset zusätzlich zu wartende Zeit. Das Reset-Ereignis wird sofort geloggt; eine große Marge wartet danach erwartungsgemäß als ein einzelner Abschnitt ohne periodischen Heartbeat und vergrößert entsprechend die heartbeatlose Dauer. |
 | `--quota-max-wait <seconds>` | `604800` | Maximale automatische Provider-Resetspanne; die Sicherheitsmarge wird erst danach addiert. |
 | `--quota-max-auto-resumes <count>` | `1` | Automatische Fortsetzungen je blockiertem Rollenschritt. |
 | `--quota-heartbeat-interval <seconds>` | `3600` | Heartbeat-Intervall bis zum Provider-Reset; die Sicherheitsmarge erzeugt keine periodischen Heartbeats. |

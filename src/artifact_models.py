@@ -13,6 +13,7 @@ from datetime import datetime
 from enum import StrEnum
 import hashlib
 import json
+import math
 from pathlib import Path, PurePosixPath
 import re
 from typing import Any, ClassVar, Mapping, Sequence, TypeAlias
@@ -45,6 +46,7 @@ class RecordType(StrEnum):
     RESUME_CHECK = "resume_check"
     WORKFLOW_COMPLETION = "workflow_completion"
     PROVIDER_INPUT_MEASUREMENT = "provider_input_measurement"
+    PROVIDER_ATTEMPT = "provider_attempt"
     FINAL_REVIEW_PREFLIGHT = "final_review_preflight"
 
 
@@ -380,6 +382,106 @@ class ProviderInputMeasurementPayload:
 
 
 @dataclass(frozen=True, slots=True)
+class ProviderUsagePayload:
+    input_tokens: int | None = None
+    tool_input_tokens: int | None = None
+    cache_read_input_tokens: int | None = None
+    cache_creation_input_tokens: int | None = None
+    thinking_tokens: int | None = None
+    output_tokens: int | None = None
+    total_tokens: int | None = None
+    turns: int | None = None
+    cost_usd: float | None = None
+
+    def __post_init__(self) -> None:
+        for value, label in (
+            (self.input_tokens, "input_tokens"),
+            (self.tool_input_tokens, "tool_input_tokens"),
+            (self.cache_read_input_tokens, "cache_read_input_tokens"),
+            (self.cache_creation_input_tokens, "cache_creation_input_tokens"),
+            (self.thinking_tokens, "thinking_tokens"),
+            (self.output_tokens, "output_tokens"),
+            (self.total_tokens, "total_tokens"),
+            (self.turns, "turns"),
+        ):
+            if value is not None and (
+                isinstance(value, bool) or not isinstance(value, int) or value < 0
+            ):
+                raise ArtifactValidationError(f"provider usage {label} must be non-negative or null")
+        if self.cost_usd is not None and (
+            isinstance(self.cost_usd, bool)
+            or not isinstance(self.cost_usd, (int, float))
+            or not math.isfinite(float(self.cost_usd))
+            or self.cost_usd < 0
+        ):
+            raise ArtifactValidationError("provider usage cost_usd must be non-negative or null")
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderAttemptPayload:
+    provider: Role
+    role: Role
+    operation: str
+    work_unit_id: str
+    logical_operation_id: str
+    binding_fingerprint: str
+    measurement_record_id: str
+    input_digest: str
+    attempt_number: int
+    phase: str
+    started_at: str
+    ended_at: str | None
+    duration_seconds: float | None
+    failure_kind: str | None
+    usage: ProviderUsagePayload | None
+    record_type: ClassVar[RecordType] = RecordType.PROVIDER_ATTEMPT
+
+    @property
+    def status(self) -> str:
+        return self.phase
+
+    def __post_init__(self) -> None:
+        if self.provider not in {Role.CODEX, Role.CLAUDE, Role.ANTIGRAVITY} or self.role is not self.provider:
+            raise ArtifactValidationError("attempt provider and role must identify one agent")
+        _require_identifier(self.operation, "attempt operation")
+        _require_identifier(self.work_unit_id, "attempt work_unit_id")
+        _require_identifier(self.logical_operation_id, "logical_operation_id")
+        _require_sha256(self.binding_fingerprint, "binding_fingerprint")
+        _require_identifier(self.measurement_record_id, "measurement_record_id")
+        _require_sha256(self.input_digest, "input_digest")
+        _require_positive(self.attempt_number, "attempt_number")
+        if self.phase not in {"started", "succeeded", "failed"}:
+            raise ArtifactValidationError("provider attempt phase is invalid")
+        _require_timestamp(self.started_at, "started_at")
+        if self.phase == "started":
+            if any(value is not None for value in (self.ended_at, self.duration_seconds, self.failure_kind, self.usage)):
+                raise ArtifactValidationError("started provider attempt cannot carry terminal fields")
+            return
+        if self.ended_at is None or self.duration_seconds is None:
+            raise ArtifactValidationError("terminal provider attempt requires end and duration")
+        _require_timestamp(self.ended_at, "ended_at")
+        if (
+            isinstance(self.duration_seconds, bool)
+            or not isinstance(self.duration_seconds, (int, float))
+            or not math.isfinite(float(self.duration_seconds))
+            or self.duration_seconds < 0
+        ):
+            raise ArtifactValidationError("duration_seconds must be non-negative")
+        if datetime.fromisoformat(self.ended_at.replace("Z", "+00:00")) < datetime.fromisoformat(self.started_at.replace("Z", "+00:00")):
+            raise ArtifactValidationError("provider attempt end cannot precede start")
+        if self.phase == "succeeded" and self.failure_kind is not None:
+            raise ArtifactValidationError("successful provider attempt cannot carry failure_kind")
+        if self.phase == "failed":
+            if self.failure_kind not in {
+                "quota", "network", "timeout", "permission", "auth", "binary",
+                "output", "process", "runtime",
+            }:
+                raise ArtifactValidationError("failed provider attempt requires a classified failure_kind")
+            if self.usage is not None:
+                raise ArtifactValidationError("failed provider attempt cannot carry usage")
+
+
+@dataclass(frozen=True, slots=True)
 class FinalReviewPreflightPayload:
     provider: Role
     role: Role
@@ -520,7 +622,7 @@ ArtifactPayload: TypeAlias = (
     | ValidationRequestPayload | ValidationAttestationPayload | GatePayload | BindingPayload
     | QuotaPausePayload | TransientRetryPayload | ResumeCheckPayload
     | WorkflowCompletionPayload
-    | ProviderInputMeasurementPayload | FinalReviewPreflightPayload
+    | ProviderInputMeasurementPayload | ProviderAttemptPayload | FinalReviewPreflightPayload
 )
 
 
@@ -898,6 +1000,15 @@ def _payload_from_dict(record_type: RecordType, raw: Mapping[str, Any]) -> Artif
             data["technical_limit_chars"], data["technical_limit_bytes"], data["technical_limit_source"],
             data["effective_limit_chars"], data["effective_limit_bytes"], data["allowed"],
             tuple(data["violated_dimensions"]), data["char_overage"], data["byte_overage"], data["largest_component"],
+        )
+    if record_type is RecordType.PROVIDER_ATTEMPT:
+        usage = data["usage"]
+        return ProviderAttemptPayload(
+            Role(data["provider"]), Role(data["role"]), data["operation"], data["work_unit_id"],
+            data["logical_operation_id"], data["binding_fingerprint"], data["measurement_record_id"],
+            data["input_digest"], data["attempt_number"], data["phase"], data["started_at"],
+            data["ended_at"], data["duration_seconds"], data["failure_kind"],
+            ProviderUsagePayload(**usage) if usage is not None else None,
         )
     if record_type is RecordType.FINAL_REVIEW_PREFLIGHT:
         return FinalReviewPreflightPayload(

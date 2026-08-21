@@ -21,6 +21,8 @@ from artifact_models import (
     ValidationAttestationPayload,
     ValidationRequestPayload,
     ProviderInputMeasurementPayload,
+    ProviderAttemptPayload,
+    ProviderUsagePayload,
     FinalReviewPreflightPayload,
     WorkUnitPayload,
 )
@@ -163,10 +165,15 @@ def render_replay_sections(replay: ArtifactReplayResult) -> Mapping[str, str]:
     gates: list[str] = []
     findings: list[str] = []
     bindings_and_units: list[str] = []
+    latest_attempts: dict[tuple[str, int], tuple[int, ArtifactRecord]] = {}
 
     for sequence, record in enumerate(chain, start=1):
         payload = record.payload
         prefix = f"{sequence}. `{_safe(record.record_id)}`"
+        if isinstance(payload, ProviderAttemptPayload):
+            latest_attempts[(payload.logical_operation_id, payload.attempt_number)] = (
+                sequence, record
+            )
         if isinstance(payload, ReviewPayload):
             reviews[payload.reviewer].append(
                 f"- {prefix}: `{_safe(payload.verdict)}`; Work-Unit "
@@ -205,15 +212,17 @@ def render_replay_sections(replay: ArtifactReplayResult) -> Mapping[str, str]:
             technical_source = _safe(payload.technical_limit_source or "unknown")
             validations.append(
                 f"- {prefix}: Providerinput `{payload.provider.value}/{_safe(payload.operation)}` "
-                f"= `{'allowed' if payload.allowed else 'denied'}`; Zeichen "
-                f"`{payload.total_chars}/{payload.effective_limit_chars}`, Bytes "
-                f"`{payload.total_bytes}/{payload.effective_limit_bytes}`; Input "
+                f"= `{'allowed' if payload.allowed else 'denied'}`; local_input_chars "
+                f"`{payload.total_chars}/{payload.effective_limit_chars}`, local_input_bytes "
+                f"`{payload.total_bytes}/{payload.effective_limit_bytes}`; local_input_digest "
                 f"`{payload.input_digest}`, Policy `{payload.policy_digest}`, Übergang "
                 f"`{payload.transition_fingerprint}`; technisches Limit "
                 f"`{payload.technical_limit_chars}/{payload.technical_limit_bytes}` "
                 f"(Quelle `{technical_source}`); Verletzung `{violations}`, Überhang "
-                f"`{payload.char_overage}/{payload.byte_overage}`, größte Komponente "
-                f"`{_safe(payload.largest_component)}`; Komponenten `{components}`"
+                f"`{payload.char_overage}/{payload.byte_overage}`, "
+                f"local_input_largest_component `{_safe(payload.largest_component)}`; "
+                f"local_input_component_count `{len(payload.components)}`; Komponenten "
+                f"`{components}`"
             )
         elif isinstance(payload, FinalReviewPreflightPayload):
             affected_records = _codes(payload.affected_record_ids)
@@ -249,6 +258,69 @@ def render_replay_sections(replay: ArtifactReplayResult) -> Mapping[str, str]:
                 f"- {prefix}: Binding `{_safe(payload.binding_kind)}` auf "
                 f"`{_safe(payload.target)}`; Attestierung `{_safe(payload.attestation_id)}`; "
                 f"Approvals {_codes(payload.approval_ids)}"
+            )
+
+    attempts_by_operation: dict[str, list[tuple[int, ArtifactRecord]]] = {}
+    for (logical_operation_id, _attempt_number), value in latest_attempts.items():
+        attempts_by_operation.setdefault(logical_operation_id, []).append(value)
+    usage_fields = tuple(ProviderUsagePayload.__dataclass_fields__)
+    for logical_operation_id in sorted(attempts_by_operation):
+        attempts = sorted(
+            attempts_by_operation[logical_operation_id],
+            key=lambda item: item[1].payload.attempt_number,
+        )
+        known_duration = sum(
+            float(item.payload.duration_seconds)
+            for _, item in attempts
+            if isinstance(item.payload, ProviderAttemptPayload)
+            and item.payload.duration_seconds is not None
+        )
+        duration_known = sum(
+            1 for _, item in attempts
+            if isinstance(item.payload, ProviderAttemptPayload)
+            and item.payload.duration_seconds is not None
+        )
+        summaries: list[str] = []
+        for field_name in usage_fields:
+            values = [
+                getattr(item.payload.usage, field_name)
+                for _, item in attempts
+                if isinstance(item.payload, ProviderAttemptPayload)
+                and item.payload.usage is not None
+                and getattr(item.payload.usage, field_name) is not None
+            ]
+            total = sum(values) if values else 0
+            summaries.append(
+                f"{field_name}=sum:{total},known:{len(values)},unknown:{len(attempts) - len(values)}"
+            )
+        first = attempts[0][1].payload
+        assert isinstance(first, ProviderAttemptPayload)
+        open_count = sum(
+            item.payload.phase == "started" for _, item in attempts
+            if isinstance(item.payload, ProviderAttemptPayload)
+        )
+        validations.append(
+            f"- Providerattempt-Summe Run `{_safe(replay.expected_run_id)}` / "
+            f"Operation `{_safe(logical_operation_id)}` (`{first.provider.value}/"
+            f"{_safe(first.operation)}`): Attempts `{len(attempts)}`, offen `{open_count}`, "
+            f"Duration `{known_duration:.6f}` (bekannt `{duration_known}`, unbekannt "
+            f"`{len(attempts) - duration_known}`); " + "; ".join(summaries)
+        )
+        for sequence, record in attempts:
+            payload = record.payload
+            assert isinstance(payload, ProviderAttemptPayload)
+            usage = (
+                ", ".join(
+                    f"{name}={getattr(payload.usage, name) if getattr(payload.usage, name) is not None else 'unknown'}"
+                    for name in usage_fields
+                )
+                if payload.usage is not None else "unknown"
+            )
+            validations.append(
+                f"  - {sequence}. `{record.record_id}`: Attempt `{payload.attempt_number}` "
+                f"= `{payload.phase}`; Messung `{payload.measurement_record_id}`; "
+                f"Duration `{payload.duration_seconds if payload.duration_seconds is not None else 'unknown'}`; "
+                f"Fehler `{_safe(payload.failure_kind or 'none')}`; Usage `{usage}`"
             )
 
     header = f"Semantischer Record-Digest: `{digest}`"

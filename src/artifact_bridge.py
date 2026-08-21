@@ -26,6 +26,8 @@ from artifact_models import (
     FindingTransitionPayload,
     ProviderInputComponentPayload,
     ProviderInputMeasurementPayload,
+    ProviderAttemptPayload,
+    ProviderUsagePayload,
     GatePayload,
     PlanPayload,
     ReviewPayload,
@@ -51,6 +53,7 @@ from contracts import (
 from task_contract import TaskContract
 from validation_matrix import ValidationRequest
 from provider_input_budget import ProviderInputMeasurement
+from artifact_replay import replay_artifacts
 
 
 class ArtifactBridgeError(RuntimeError):
@@ -326,12 +329,154 @@ class ArtifactBridge:
             fingerprint_sha256=fingerprint_sha256,
         )
 
+    def start_provider_attempt(
+        self,
+        *,
+        measurement_record: ArtifactRecord,
+        binding_fingerprint: str,
+        work_unit_id: int | str,
+    ) -> ArtifactRecord:
+        """Persist one physical provider start after all local preflights pass."""
+        chain = self.store.load_chain()
+        replay_artifacts(chain, self.store.run_id)
+        if (
+            measurement_record not in chain
+            or not isinstance(measurement_record.payload, ProviderInputMeasurementPayload)
+        ):
+            raise ArtifactBridgeError("provider attempt measurement is not in the accepted chain")
+        measurement = measurement_record.payload
+        if str(work_unit_id) != measurement.work_unit_id:
+            raise ArtifactBridgeError("provider attempt work unit differs from its measurement")
+        logical_operation_id = _logical_provider_operation_id(
+            run_id=self.store.run_id,
+            work_unit_id=str(work_unit_id),
+            provider=measurement.provider,
+            operation=measurement.operation,
+            binding_fingerprint=binding_fingerprint,
+        )
+        prior = tuple(
+            record
+            for record in chain
+            if isinstance(record.payload, ProviderAttemptPayload)
+            and record.payload.logical_operation_id == logical_operation_id
+        )
+        for record in prior:
+            payload = record.payload
+            if (
+                payload.provider != measurement.provider
+                or payload.role != measurement.role
+                or payload.operation != measurement.operation
+                or payload.work_unit_id != measurement.work_unit_id
+                or payload.binding_fingerprint != binding_fingerprint
+                or payload.input_digest != measurement.input_digest
+            ):
+                raise ArtifactBridgeError("provider attempt immutable binding differs from its first attempt")
+        attempt_number = max(
+            (record.payload.attempt_number for record in prior), default=0
+        ) + 1
+        started_at = self.now()
+        payload = ProviderAttemptPayload(
+            provider=measurement.provider,
+            role=measurement.role,
+            operation=measurement.operation,
+            work_unit_id=measurement.work_unit_id,
+            logical_operation_id=logical_operation_id,
+            binding_fingerprint=binding_fingerprint,
+            measurement_record_id=measurement_record.record_id,
+            input_digest=measurement.input_digest,
+            attempt_number=attempt_number,
+            phase="started",
+            started_at=started_at,
+            ended_at=None,
+            duration_seconds=None,
+            failure_kind=None,
+            usage=None,
+        )
+        return self.append(
+            payload,
+            logical_id=f"{logical_operation_id}-{attempt_number}",
+            idempotency_key=f"provider-attempt:{logical_operation_id}:{attempt_number}:started",
+            fingerprint_sha256=measurement_record.fingerprint.sha256,
+        )
+
+    def finish_provider_attempt(
+        self,
+        started_record: ArtifactRecord,
+        *,
+        duration_seconds: float,
+        failure_kind: str | None,
+        usage: ProviderUsagePayload | None,
+    ) -> ArtifactRecord:
+        """Persist the sole terminal revision for a previously durable start."""
+        if not isinstance(started_record.payload, ProviderAttemptPayload) or started_record.payload.phase != "started":
+            raise ArtifactBridgeError("provider attempt terminal requires a started record")
+        started = started_record.payload
+        phase = "failed" if failure_kind is not None else "succeeded"
+        terminal_key = (
+            f"provider-attempt:{started.logical_operation_id}:"
+            f"{started.attempt_number}:terminal"
+        )
+        existing = next(
+            (
+                record for record in self.store.load_chain()
+                if record.idempotency_key == terminal_key
+            ),
+            None,
+        )
+        if existing is not None:
+            payload = existing.payload
+            if (
+                not isinstance(payload, ProviderAttemptPayload)
+                or payload.phase != phase
+                or payload.failure_kind != failure_kind
+                or payload.usage != (usage if phase == "succeeded" else None)
+                or payload.logical_operation_id != started.logical_operation_id
+                or payload.attempt_number != started.attempt_number
+            ):
+                raise ArtifactBridgeError("provider attempt terminal differs from its durable result")
+            return existing
+        payload = ProviderAttemptPayload(
+            provider=started.provider,
+            role=started.role,
+            operation=started.operation,
+            work_unit_id=started.work_unit_id,
+            logical_operation_id=started.logical_operation_id,
+            binding_fingerprint=started.binding_fingerprint,
+            measurement_record_id=started.measurement_record_id,
+            input_digest=started.input_digest,
+            attempt_number=started.attempt_number,
+            phase=phase,
+            started_at=started.started_at,
+            ended_at=self.now(),
+            duration_seconds=duration_seconds,
+            failure_kind=failure_kind,
+            usage=usage if phase == "succeeded" else None,
+        )
+        return self.append(
+            payload,
+            logical_id=started_record.logical_id,
+            idempotency_key=terminal_key,
+            fingerprint_sha256=started_record.fingerprint.sha256,
+        )
+
+
+def _logical_provider_operation_id(
+    *, run_id: str, work_unit_id: str, provider: Role, operation: str,
+    binding_fingerprint: str,
+) -> str:
+    digest = hashlib.sha256(
+        canonical_json(
+            [run_id, work_unit_id, provider.value, operation, binding_fingerprint]
+        )
+    ).hexdigest()
+    return f"provider-operation-{digest}"
+
 
 __all__ = [
     "ArtifactBridge", "ArtifactBridgeError", "agent_result_payload",
     "attestation_payload", "command_payload", "finding_payload", "plan_payload",
     "review_payload", "task_payload", "validation_request_payload",
     "provider_input_measurement_payload",
-    "BindingPayload", "GatePayload",
+    "BindingPayload", "GatePayload", "ProviderUsagePayload",
     "WorkUnitPayload",
 ]

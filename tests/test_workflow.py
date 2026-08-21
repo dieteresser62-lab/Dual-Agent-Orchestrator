@@ -1964,6 +1964,41 @@ def test_complete_failing_attestation_reaches_reviewer_without_red_state() -> No
     assert driver.commit_calls == []
 
 
+def test_plan_bound_complete_failing_attestation_reaches_reviewer_as_red_packet() -> None:
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[],
+        invalid_attestation="failing",
+        fail_reviewer_once=True,
+    )
+    plan = """# Approved plan
+
+### Slice 1 - Red packet
+
+**Ziel**
+
+Keep complete failed validation evidence reviewable.
+
+#### \u0041kzeptanzkriterien
+
+- Claude must deny a complete red attestation.
+"""
+
+    with pytest.raises(RuntimeError, match="interruption"):
+        WorkflowEngine(driver).run_current_work_unit(
+            _slice_state(), replace(_context(), approved_plan_text=plan)
+        )
+
+    assert [call.reviewer for call in driver.reviewer_calls] == [AgentRole.CLAUDE]
+    packet = driver.reviewer_calls[0].review_packet
+    assert packet is not None
+    assert json.loads(packet.canonical_bytes)["attestation"]["status"] == "FAIL"
+    assert "approval MUST be NO" in driver.reviewer_calls[0].prompt
+    assert driver.commit_calls == []
+
+
 def test_resume_from_persisted_reviewer_step_does_not_repeat_codex() -> None:
     changes = _changes("1", "src/early.py", TEST_FILE)
     interrupted = FakeDriver(

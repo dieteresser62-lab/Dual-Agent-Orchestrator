@@ -21,6 +21,7 @@ from agent_runtime import (
     AgentCompatibilityError,
     AgentInvocationError,
     OrchestratorConfig,
+    ProviderAttemptLifecycle,
     QuotaReachedError,
     check_git_clean,
     collect_file_snapshots,
@@ -37,6 +38,7 @@ from agent_runtime import (
     _compact_result_lines,
     _compact_stream_text,
     _compact_usage_metadata,
+    normalize_provider_usage,
 )
 from validation_matrix import ValidationCommand, ValidationRequest
 from repo_changes import ChangedPath, RepositoryChanges
@@ -212,9 +214,7 @@ def test_compact_result_and_usage_keep_decisions_without_nested_json() -> None:
             "modelUsage": {"large": {"nested": "payload"}},
         }
     )
-    assert summary == (
-        "duration=64.20s turns=5 cost_usd=0.2116 input_tokens=6 output_tokens=5726"
-    )
+    assert summary == "input_tokens=6 output_tokens=5726 turns=5 cost_usd=0.2116"
     assert "modelUsage" not in summary
 
 
@@ -1095,7 +1095,108 @@ def test_reviewer_process_pwd_matches_disposable_working_directory(
     assert not working_directory.exists()
     assert output == "STATUS: DONE"
     assert "operation=claude_contract_repair" in caplog.text
-    assert "duration=1.25s turns=2 input_tokens=10 output_tokens=20" in caplog.text
+    assert "input_tokens=10 output_tokens=20 turns=2" in caplog.text
+
+
+def test_provider_usage_normalization_is_closed_and_preserves_unknown() -> None:
+    usage = normalize_provider_usage(
+        {
+            "conversation_id": "secret-conversation",
+            "num_turns": 0,
+            "usage": {
+                "input_tokens": 0,
+                "output_tokens": 7,
+                "private_provider_key": 99,
+            },
+        }
+    )
+
+    assert usage is not None
+    assert usage.input_tokens == 0
+    assert usage.output_tokens == 7
+    assert usage.turns == 0
+    assert usage.total_tokens is None
+    assert "conversation" not in _compact_usage_metadata(
+        {"conversation_id": "secret-conversation", "usage": {"output_tokens": 7}}
+    )
+    assert normalize_provider_usage({"conversation_id": "secret"}) is None
+    assert _compact_usage_metadata(None) == "unknown"
+
+
+def test_provider_attempt_lifecycle_starts_after_preflight_and_terminalizes_success(
+    monkeypatch, tmp_path: Path
+) -> None:
+    events: list[object] = []
+
+    class Adapter:
+        name = "codex"
+        cli_binary = "codex"
+        model = "model"
+        effort = "medium"
+        timeout = 1
+        reviewer = False
+        env: dict[str, str] = {}
+        required_hosts: tuple[str, ...] = ()
+        capability = CapabilitySpec((), (), (r".*",), ())
+        capability_verified = True
+        metadata: dict[str, object] = {}
+
+        def build_command(self, prompt: str) -> tuple[list[str], bool]:
+            return ["codex"], True
+
+        def validate_process_output(self, stderr: str) -> None:
+            return None
+
+        def extract_output(self, stdout: str, stderr: str, extra_files: dict[str, str]) -> str:
+            self.metadata = {
+                "conversation_id": "excluded",
+                "usage": {"input_tokens": 0, "output_tokens": 3},
+            }
+            return stdout
+
+        def cleanup(self) -> None:
+            events.append("cleanup")
+
+    class Result:
+        returncode = 0
+        stdout = "STATUS: DONE"
+        stderr = ""
+
+    monkeypatch.setattr(
+        agent_runtime, "verify_agent_capabilities", lambda *args, **kwargs: events.append("preflight")
+    )
+    monkeypatch.setattr(
+        agent_runtime.subprocess, "run",
+        lambda *args, **kwargs: (events.append("process") or Result()),
+    )
+    lifecycle = ProviderAttemptLifecycle(
+        start=lambda measurement, bootstrap: (
+            events.append(("start", bootstrap, measurement.input_digest)) or "attempt-1"
+        ),
+        terminal=lambda handle, duration, failure, usage: events.append(
+            ("terminal", handle, failure, usage)
+        ),
+    )
+
+    output = run_agent_checked(
+        agent_key="codex", prompt="prompt", log_prefix="lifecycle", max_retries=0,
+        required_flags=[], output_validator=None, config=OrchestratorConfig(),
+        agents={"codex": Adapter()}, log_dir=tmp_path,
+        write_file=lambda path, content: path.write_text(content, encoding="utf-8"),
+        shorten=lambda text, limit=1800: (text or "")[:limit],
+        parse_flag=lambda text, key: None, validate_done_marker=lambda text: True,
+        operation="codex_implementation", binding_fingerprint="a" * 64,
+        pre_start_callback=lambda measurement: "measurement-1",
+        provider_attempt_lifecycle=lifecycle,
+    )
+
+    assert output == "STATUS: DONE"
+    assert events[0] == "preflight"
+    assert events[1][0:2] == ("start", "measurement-1")  # type: ignore[index]
+    assert events[2] == "process"
+    terminal = events[3]
+    assert terminal[0:3] == ("terminal", "attempt-1", None)  # type: ignore[index]
+    assert terminal[3].input_tokens == 0  # type: ignore[index,union-attr]
 
 
 def test_unknown_agent_version_is_a_non_retryable_gate(monkeypatch, tmp_path: Path) -> None:

@@ -9,7 +9,10 @@ from artifact_bridge import (
     ArtifactBridge, ArtifactBridgeError, attestation_payload, command_payload,
     validation_request_payload,
 )
-from artifact_models import WorkUnitPayload
+from artifact_models import (
+    ProviderAttemptPayload, ProviderInputComponentPayload,
+    ProviderInputMeasurementPayload, ProviderUsagePayload, Role, WorkUnitPayload,
+)
 from artifact_store import ArtifactStore
 from contracts import (
     ValidationAttestation, ValidationCommandSpec, ValidationRecord, ValidationStatus,
@@ -117,3 +120,75 @@ def test_validation_request_mapping_keeps_matrix_argv() -> None:
     payload = validation_request_payload(request)
     assert payload.commands[0].argv == request.commands[0].argv
     assert payload.commands[0].mode == "argv"
+
+
+def _measurement() -> ProviderInputMeasurementPayload:
+    return ProviderInputMeasurementPayload(
+        Role.CLAUDE, Role.CLAUDE, "claude_slice_review", "1", DIGEST,
+        "b" * 64, "c" * 64, "d" * 64,
+        (ProviderInputComponentPayload("prompt", 3, 3),),
+        3, 3, 10, 10, None, None, None, 10, 10, True, (), 0, 0, "prompt",
+    )
+
+
+def test_provider_attempt_start_terminal_and_resume_are_stable(tmp_path: Path) -> None:
+    ticks = iter(
+        (
+            "2026-08-18T10:00:00+00:00", "2026-08-18T10:00:01+00:00",
+            "2026-08-18T10:00:02+00:00", "2026-08-18T10:00:03+00:00",
+            "2026-08-18T10:00:04+00:00", "2026-08-18T10:00:05+00:00",
+            "2026-08-18T10:00:06+00:00",
+        )
+    )
+    bridge = ArtifactBridge(ArtifactStore(tmp_path, "run-1"), now=lambda: next(ticks))
+    measurement = bridge.append(
+        _measurement(), logical_id="measurement-1", idempotency_key="measurement:1",
+        fingerprint_sha256=DIGEST,
+    )
+
+    first = bridge.start_provider_attempt(
+        measurement_record=measurement, binding_fingerprint=DIGEST, work_unit_id="1"
+    )
+    terminal = bridge.finish_provider_attempt(
+        first, duration_seconds=1.5, failure_kind=None,
+        usage=ProviderUsagePayload(input_tokens=0, output_tokens=9),
+    )
+    recovered_terminal = bridge.finish_provider_attempt(
+        first, duration_seconds=99.0, failure_kind=None,
+        usage=ProviderUsagePayload(input_tokens=0, output_tokens=9),
+    )
+    second = bridge.start_provider_attempt(
+        measurement_record=measurement, binding_fingerprint=DIGEST, work_unit_id="1"
+    )
+
+    assert isinstance(first.payload, ProviderAttemptPayload)
+    assert first.revision == 1 and terminal.revision == 2
+    assert recovered_terminal == terminal
+    assert first.idempotency_key.endswith(":1:started")
+    assert terminal.idempotency_key.endswith(":1:terminal")
+    assert second.payload.attempt_number == 2
+    assert second.payload.phase == "started"
+    assert bridge.store.load_chain()[-1] == second
+
+
+def test_provider_attempt_rejects_changed_digest_for_same_operation(tmp_path: Path) -> None:
+    bridge = ArtifactBridge(ArtifactStore(tmp_path, "run-1"))
+    first_measurement = bridge.append(
+        _measurement(), logical_id="measurement-1", idempotency_key="measurement:1",
+        fingerprint_sha256=DIGEST,
+    )
+    bridge.start_provider_attempt(
+        measurement_record=first_measurement, binding_fingerprint=DIGEST, work_unit_id="1"
+    )
+    changed = replace(_measurement(), input_digest="e" * 64)
+    changed_measurement = bridge.append(
+        changed, logical_id="measurement-2", idempotency_key="measurement:2",
+        fingerprint_sha256=DIGEST,
+    )
+
+    with pytest.raises(ArtifactBridgeError, match="immutable binding"):
+        bridge.start_provider_attempt(
+            measurement_record=changed_measurement,
+            binding_fingerprint=DIGEST,
+            work_unit_id="1",
+        )

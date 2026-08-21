@@ -21,6 +21,7 @@ from artifact_models import (
     DiagnosticPayload,
     FinalReviewPreflightPayload,
     ProviderInputMeasurementPayload,
+    ProviderAttemptPayload,
     RecordType,
     ResumeCheckPayload,
     ReviewPayload,
@@ -269,6 +270,7 @@ def _validate_payload_references(
                     DiagnosticPayload,
                     ReviewPayload,
                     ProviderInputMeasurementPayload,
+                    ProviderAttemptPayload,
                     FinalReviewPreflightPayload,
                 ),
             )
@@ -336,6 +338,32 @@ def _validate_payload_references(
                     record,
                 )
             _same_fingerprint(record, measurement)
+        elif isinstance(payload, ProviderAttemptPayload):
+            measurement = records_by_id.get(payload.measurement_record_id)
+            if (
+                measurement is None
+                or not isinstance(measurement.payload, ProviderInputMeasurementPayload)
+                or positions[measurement.record_id] >= positions[record.record_id]
+            ):
+                _fail(
+                    ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+                    f"measurement {payload.measurement_record_id!r} is not present",
+                    record,
+                )
+            _same_fingerprint(record, measurement)
+            measured = measurement.payload
+            if (
+                payload.provider != measured.provider
+                or payload.role != measured.role
+                or payload.operation != measured.operation
+                or payload.work_unit_id != measured.work_unit_id
+                or payload.input_digest != measured.input_digest
+            ):
+                _fail(
+                    ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+                    "provider attempt differs from its bound measurement",
+                    record,
+                )
         elif isinstance(payload, ResumeCheckPayload):
             predecessor = record.predecessor_ids[0] if record.predecessor_ids else None
             if payload.expected_head_id != predecessor:
@@ -344,6 +372,58 @@ def _validate_payload_references(
                     "resume check is not bound to its immediate prior head",
                     record,
                 )
+
+    attempts: dict[str, dict[int, list[ArtifactRecord]]] = {}
+    for record in chain:
+        if isinstance(record.payload, ProviderAttemptPayload):
+            attempts.setdefault(record.payload.logical_operation_id, {}).setdefault(
+                record.payload.attempt_number, []
+            ).append(record)
+    for logical_operation_id, numbered in attempts.items():
+        expected = set(range(1, max(numbered) + 1))
+        if set(numbered) != expected:
+            record = next(iter(numbered[max(numbered)]))
+            _fail(
+                ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+                f"provider attempts for {logical_operation_id!r} are not contiguous",
+                record,
+            )
+        immutable: tuple[object, ...] | None = None
+        for attempt_number in sorted(numbered):
+            records = numbered[attempt_number]
+            if len(records) not in {1, 2}:
+                _fail(ReplayDiagnosticCode.RECORD_DUPLICATE, "provider attempt has too many revisions", records[-1])
+            started = records[0]
+            payload = started.payload
+            assert isinstance(payload, ProviderAttemptPayload)
+            if started.revision != 1 or payload.phase != "started":
+                _fail(ReplayDiagnosticCode.RECORD_REFERENCE_MISSING, "provider attempt must begin with revision 1 started", started)
+            binding = (
+                payload.provider, payload.role, payload.operation, payload.work_unit_id,
+                payload.logical_operation_id, payload.binding_fingerprint,
+                payload.input_digest,
+            )
+            if immutable is None:
+                immutable = binding
+            elif binding != immutable:
+                _fail(ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH, "provider attempt immutable binding changed", started)
+            if len(records) == 2:
+                terminal = records[1]
+                terminal_payload = terminal.payload
+                assert isinstance(terminal_payload, ProviderAttemptPayload)
+                if terminal.revision != 2 or terminal_payload.phase not in {"succeeded", "failed"}:
+                    _fail(ReplayDiagnosticCode.RECORD_REFERENCE_MISSING, "provider attempt terminal must be revision 2", terminal)
+                if terminal_payload.measurement_record_id != payload.measurement_record_id or (
+                    terminal_payload.provider, terminal_payload.role, terminal_payload.operation,
+                    terminal_payload.work_unit_id, terminal_payload.logical_operation_id,
+                    terminal_payload.binding_fingerprint, terminal_payload.input_digest,
+                    terminal_payload.attempt_number, terminal_payload.started_at,
+                ) != (
+                    payload.provider, payload.role, payload.operation, payload.work_unit_id,
+                    payload.logical_operation_id, payload.binding_fingerprint, payload.input_digest,
+                    payload.attempt_number, payload.started_at,
+                ):
+                    _fail(ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH, "provider attempt terminal changed immutable fields", terminal)
 
 
 def _same_fingerprint(record: ArtifactRecord, referenced: ArtifactRecord) -> None:

@@ -6,13 +6,13 @@ import re
 from dataclasses import dataclass
 
 from contracts import FindingRecord, FindingStatus, ValidationAttestation
+from plan_handoff import (
+    PlanHandoffError,
+    extract_slice_requirements as extract_plan_slice_requirements,
+)
 
 
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
-_SLICE_HEADING = re.compile(r"^### Slice (?P<id>\d+)\s+-\s+(?P<title>.+?)\s*$", re.MULTILINE)
-_SUBHEADING = re.compile(r"^#### (?P<title>.+?)\s*$", re.MULTILINE)
-_PLAN_GOAL_HEADING = "**Ziel**"  # allowlist:german -- canonical plan contract
-_PLAN_ACCEPTANCE_HEADING = "#### Akzeptanzkriterien"  # allowlist:german -- canonical plan contract
 
 
 class ReviewPacketError(ValueError):
@@ -57,48 +57,11 @@ class ReviewPacket:
 
 
 def extract_slice_requirements(plan_text: str, slice_id: int) -> tuple[str, tuple[str, ...]]:
-    """Extract only the selected Slice goal and acceptance-criterion bullets."""
-    matches = list(_SLICE_HEADING.finditer(plan_text))
-    selected = [item for item in matches if int(item.group("id")) == slice_id]
-    if len(selected) != 1:
-        raise ReviewPacketError(f"approved plan must contain exactly one Slice {slice_id} section")
-    match = selected[0]
-    next_start = next((item.start() for item in matches if item.start() > match.start()), len(plan_text))
-    section = plan_text[match.end():next_start]
-
-    goal_match = re.search(rf"^{re.escape(_PLAN_GOAL_HEADING)}\s*$", section, re.MULTILINE)
-    acceptance_match = re.search(
-        rf"^{re.escape(_PLAN_ACCEPTANCE_HEADING)}\s*$", section, re.MULTILINE
-    )
-    if goal_match is None or acceptance_match is None or goal_match.end() >= acceptance_match.start():
-        raise ReviewPacketError("Slice section lacks an unambiguous goal or acceptance criteria")
-    intermediate_heading = re.search(
-        r"^(?:#### |\*\*[^*]+\*\*\s*$)",
-        section[goal_match.end():acceptance_match.start()],
-        re.MULTILINE,
-    )
-    goal_end = goal_match.end() + (intermediate_heading.start() if intermediate_heading else len(section[goal_match.end():acceptance_match.start()]))
-    goal = " ".join(section[goal_match.end():goal_end].split())
-    if not goal:
-        raise ReviewPacketError("Slice goal must not be empty")
-
-    after = section[acceptance_match.end():]
-    next_subheading = _SUBHEADING.search(after)
-    acceptance_block = after[: next_subheading.start() if next_subheading else len(after)]
-    criteria: list[str] = []
-    current: list[str] = []
-    for line in acceptance_block.splitlines():
-        if line.startswith("- "):
-            if current:
-                criteria.append(" ".join(current))
-            current = [line[2:].strip()]
-        elif current and line.strip():
-            current.append(line.strip())
-    if current:
-        criteria.append(" ".join(current))
-    if not criteria:
-        raise ReviewPacketError("Slice acceptance criteria must contain bullet records")
-    return goal, tuple(criteria)
+    """Expose the shared plan-handoff requirement parser to packet callers."""
+    try:
+        return extract_plan_slice_requirements(plan_text, slice_id)
+    except PlanHandoffError as exc:
+        raise ReviewPacketError(str(exc)) from exc
 
 
 def build_review_packet(
@@ -121,8 +84,10 @@ def build_review_packet(
         raise ReviewPacketError("review packet boundaries require SHA-256 fingerprints")
     if not review_diff.strip():
         raise ReviewPacketError("review packet requires a non-empty diff or correction delta")
-    if attestation.diff_fingerprint != fingerprint or not attestation.passed:
-        raise ReviewPacketError("review packet requires a fingerprint-bound PASS attestation")
+    if attestation.diff_fingerprint != fingerprint or not attestation.complete:
+        raise ReviewPacketError(
+            "review packet requires a fingerprint-bound complete attestation"
+        )
     manifest = ReviewPacketManifest(paths=paths)
     review_diff = _filter_diff_to_manifest(review_diff, manifest.paths)
     if not review_diff.strip():

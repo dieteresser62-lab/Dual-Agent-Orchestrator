@@ -25,6 +25,7 @@ from artifact_models import (
     CorrectionWorkUnitPayload,
     FingerprintKind,
     ProviderInputMeasurementPayload,
+    ProviderAttemptPayload,
     QuotaPausePayload,
     RecordType,
     ReviewPayload,
@@ -1039,12 +1040,17 @@ def test_budget_denial_persists_gate_checkpoint_and_resumes_idempotently(
         if isinstance(record.payload, ProviderInputMeasurementPayload)
     )
     assert len(measurement_records) == 1
+    assert not any(
+        isinstance(record.payload, ProviderAttemptPayload)
+        for record in ArtifactStore(repository, halted.run_id).load_chain()
+    )
     audit = ArtifactAuditProjection(
         ArtifactStore(repository, halted.run_id).load_chain()
     ).render_sections()["validation-attestation"]
     assert "Verletzung `chars,bytes`" in audit
     assert "Überhang `6/6`" in audit
-    assert "größte Komponente `stdin_prompt`" in audit
+    assert "local_input_largest_component `stdin_prompt`" in audit
+    assert "local_input_component_count `1`" in audit
     assert "Komponenten `stdin_prompt=9/9`" in audit
     assert "oversized" not in audit
 

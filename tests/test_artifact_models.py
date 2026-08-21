@@ -32,6 +32,8 @@ from artifact_models import (
     WorkflowCompletionPayload,
     ProviderInputComponentPayload,
     ProviderInputMeasurementPayload,
+    ProviderAttemptPayload,
+    ProviderUsagePayload,
     FinalReviewPreflightPayload,
     canonical_json,
     load_schema,
@@ -77,6 +79,12 @@ def _record(payload, *, revision: int = 1) -> ArtifactRecord:  # type: ignore[no
         Role.CODEX, Role.CODEX, "codex_final_review", "work-01", DIGEST, "b" * 64,
         "c" * 64, "d" * 64, (ProviderInputComponentPayload("stdin_prompt", 3, 3),),
         3, 3, 10, 10, None, None, None, 10, 10, True, (), 0, 0, "stdin_prompt",
+    ),
+    ProviderAttemptPayload(
+        Role.CODEX, Role.CODEX, "codex_final_review", "work-01",
+        "provider-operation-01", DIGEST, "measurement-01", "c" * 64, 1,
+        "succeeded", CREATED_AT, "2026-08-18T10:30:01+00:00", 1.0, None,
+        ProviderUsagePayload(input_tokens=0, output_tokens=7, turns=1),
     ),
     FinalReviewPreflightPayload(
         Role.CODEX, Role.CODEX, "codex_final_review", "work-01", DIGEST, "b" * 64,
@@ -183,3 +191,33 @@ def test_canonical_json_is_utf8_sorted_compact_and_rejects_nan() -> None:
     assert canonical_json({"z": "ä", "a": ["x y", "x/y"]}) == b'{"a":["x y","x/y"],"z":"\xc3\xa4"}'
     with pytest.raises(ValueError):
         canonical_json({"bad": float("nan")})
+
+
+def test_provider_attempt_phase_and_usage_are_fail_closed() -> None:
+    with pytest.raises(ArtifactValidationError, match="started provider attempt"):
+        ProviderAttemptPayload(
+            Role.CLAUDE, Role.CLAUDE, "claude_slice_review", "1",
+            "provider-operation-01", DIGEST, "measurement-01", "b" * 64, 1,
+            "started", CREATED_AT, None, None, None,
+            ProviderUsagePayload(input_tokens=0),
+        )
+    with pytest.raises(ArtifactValidationError, match="failure_kind"):
+        ProviderAttemptPayload(
+            Role.CLAUDE, Role.CLAUDE, "claude_slice_review", "1",
+            "provider-operation-01", DIGEST, "measurement-01", "b" * 64, 1,
+            "failed", CREATED_AT, "2026-08-18T10:30:01+00:00", 1.0, None, None,
+        )
+    with pytest.raises(ArtifactValidationError, match="non-negative"):
+        ProviderUsagePayload(output_tokens=-1)
+
+    succeeded = _record(
+        ProviderAttemptPayload(
+            Role.CODEX, Role.CODEX, "codex_final_review", "work-01",
+            "provider-operation-01", DIGEST, "measurement-01", "c" * 64, 1,
+            "succeeded", CREATED_AT, "2026-08-18T10:30:01+00:00", 1.0,
+            None, ProviderUsagePayload(output_tokens=1),
+        )
+    ).to_dict()
+    succeeded["status"] = "started"
+    with pytest.raises(ArtifactValidationError, match="schema validation failed"):
+        validate_artifact_document(succeeded)

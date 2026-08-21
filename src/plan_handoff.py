@@ -21,6 +21,20 @@ _EXACT_PATH_HEADING = re.compile(
     re.MULTILINE,
 )
 _BULLET_PATH = re.compile(r"^[ \t]*[-*][ \t]+`([^`]+)`[ \t]*$", re.MULTILINE)
+_REQUIREMENT_SECTION = re.compile(
+    r"^(?:#{1,6}[ \t]+|\*\*[^*]+\*\*\s*$)",
+    re.MULTILINE,
+)
+_GOAL_HEADINGS = (
+    "**Ziel**",  # allowlist:german -- supported plan contract
+    "**Zweck:**",  # allowlist:german -- legacy plan compatibility
+)
+_ACCEPTANCE_HEADINGS = (
+    "#### Akzeptanzkriterien",  # allowlist:german -- canonical plan contract
+    "**Akzeptanzkriterien**",  # allowlist:german -- compatibility
+    "**Akzeptanz und fokussierte Tests:**",  # allowlist:german -- compatibility
+    "#### Fokussierte synthetische Akzeptanztests",  # allowlist:german -- generated plan compatibility
+)
 
 
 def extract_implementation_slices(
@@ -59,6 +73,10 @@ def extract_implementation_slices(
         )
         if not product_paths:
             raise PlanHandoffError(f"Slice {slice_id} has no exact change path")
+        # Review packets consume the same goal/acceptance facts later.  Validate
+        # them here so an approved handoff cannot fail for the first time after
+        # implementation and authoritative validation have already completed.
+        extract_slice_requirements(markdown, slice_id)
         title = heading.group("title").strip()
         audit_path = (
             f"docs/internal/slice-{_slug(plan_stem)}-{slice_id:02d}-{_slug(title)}.md"
@@ -71,6 +89,101 @@ def extract_implementation_slices(
             )
         )
     return tuple(slices)
+
+
+def extract_slice_requirements(
+    markdown: str,
+    slice_id: int,
+) -> tuple[str, tuple[str, ...]]:
+    """Extract one Slice's stable goal and acceptance-criterion bullets.
+
+    Older plans used an explicit goal/acceptance heading pair.
+    Repository-grounded plans also use the unambiguous Slice title as
+    their goal and a focused synthetic acceptance-test section.  Both are one
+    semantic handoff contract and must be parsed identically by planning and
+    review-packet construction.
+    """
+    headings = tuple(_SLICE_HEADING.finditer(markdown))
+    selected = tuple(item for item in headings if int(item.group("id")) == slice_id)
+    if len(selected) != 1:
+        raise PlanHandoffError(
+            f"approved plan must contain exactly one Slice {slice_id} section"
+        )
+    heading = selected[0]
+    end = next(
+        (item.start() for item in headings if item.start() > heading.start()),
+        len(markdown),
+    )
+    section = markdown[heading.end() : end]
+
+    goal = _extract_explicit_goal(section)
+    if goal is None:
+        goal = " ".join(heading.group("title").split())
+    if not goal:
+        raise PlanHandoffError("Slice goal must not be empty")
+
+    acceptance_matches = tuple(
+        match
+        for literal in _ACCEPTANCE_HEADINGS
+        for match in re.finditer(
+            rf"^{re.escape(literal)}\s*$",
+            section,
+            re.MULTILINE,
+        )
+    )
+    if len(acceptance_matches) != 1:
+        raise PlanHandoffError(
+            "Slice section lacks an unambiguous acceptance-criteria section"
+        )
+    acceptance_match = acceptance_matches[0]
+    after = section[acceptance_match.end() :]
+    next_section = _REQUIREMENT_SECTION.search(after)
+    block = after[: next_section.start() if next_section else len(after)]
+    criteria = _extract_bullet_records(block)
+    if not criteria:
+        raise PlanHandoffError("Slice acceptance criteria must contain bullet records")
+    return goal, criteria
+
+
+def _extract_explicit_goal(section: str) -> str | None:
+    matches = tuple(
+        match
+        for literal in _GOAL_HEADINGS
+        for match in re.finditer(
+            rf"^{re.escape(literal)}(?P<inline>.*?)$",
+            section,
+            re.MULTILINE,
+        )
+    )
+    if not matches:
+        return None
+    if len(matches) != 1:
+        raise PlanHandoffError("Slice section contains ambiguous goal headings")
+    match = matches[0]
+    inline = " ".join(match.group("inline").split())
+    after = section[match.end() :]
+    next_section = _REQUIREMENT_SECTION.search(after)
+    block = after[: next_section.start() if next_section else len(after)]
+    body = " ".join(block.split())
+    goal = " ".join(item for item in (inline, body) if item)
+    if not goal:
+        raise PlanHandoffError("Slice goal must not be empty")
+    return goal
+
+
+def _extract_bullet_records(block: str) -> tuple[str, ...]:
+    records: list[str] = []
+    current: list[str] = []
+    for line in block.splitlines():
+        if line.startswith("- "):
+            if current:
+                records.append(" ".join(current))
+            current = [line[2:].strip()]
+        elif current and line.strip():
+            current.append(line.strip())
+    if current:
+        records.append(" ".join(current))
+    return tuple(records)
 
 
 def implementation_task_path(plan_task_path: Path) -> Path:

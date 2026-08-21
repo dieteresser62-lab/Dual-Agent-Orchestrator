@@ -16,6 +16,7 @@ from agent_adapters import AgentAdapter, build_agent_registry
 from agent_runtime import (
     AgentInvocationError,
     OrchestratorConfig,
+    ProviderAttemptLifecycle,
     run_agent_checked,
     run_validation_matrix,
 )
@@ -32,6 +33,7 @@ from artifact_models import (
     WorkUnitPayload,
     WorkflowCompletionPayload,
     ProviderInputMeasurementPayload, canonical_json,
+    ProviderUsagePayload,
 )
 from artifact_store import ArtifactStore
 from final_review_preflight import (
@@ -547,10 +549,17 @@ class ProductionWorkflowDriver(WorkflowDriver):
             ),
             binding_fingerprint=binding_fingerprint,
             pre_start_callback=self._persist_provider_bootstrap,
+            provider_attempt_lifecycle=(
+                ProviderAttemptLifecycle(
+                    start=self._start_provider_attempt,
+                    terminal=self._finish_provider_attempt,
+                )
+                if self._artifact_bridge is not None else None
+            ),
         )
         return output
 
-    def _persist_provider_bootstrap(self, measurement: ProviderInputMeasurement) -> None:
+    def _persist_provider_bootstrap(self, measurement: ProviderInputMeasurement) -> ArtifactRecord | None:
         """Dual-write a lossless measurement and final-transition preflight."""
         state = self.active_state
         if state is None:
@@ -587,7 +596,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
             or not measurement.allowed
             or bridge is None
         ):
-            return
+            return measurement_record
         assert measurement_record is not None
         current_chain = bridge.store.load_chain()
         try:
@@ -610,6 +619,48 @@ class ProductionWorkflowDriver(WorkflowDriver):
         self._persist_bootstrap_state(state)
         if not result.passed:
             raise FinalReviewPreflightDenied(result)
+        return measurement_record
+
+    def _start_provider_attempt(
+        self, measurement: ProviderInputMeasurement, bootstrap: object | None
+    ) -> ArtifactRecord:
+        bridge = self._artifact_bridge
+        state = self.active_state
+        if (
+            bridge is None or state is None or not isinstance(bootstrap, ArtifactRecord)
+            or not isinstance(bootstrap.payload, ProviderInputMeasurementPayload)
+        ):
+            raise WorkflowExecutionError("provider attempt start requires its durable measurement")
+        if not re.fullmatch(r"[0-9a-f]{64}", measurement.binding_fingerprint):
+            raise WorkflowExecutionError("provider attempt has no bound fingerprint")
+        if (
+            bootstrap.payload.input_digest != measurement.input_digest
+            or bootstrap.payload.provider.value != measurement.provider
+            or bootstrap.payload.operation != measurement.operation
+        ):
+            raise WorkflowExecutionError("provider attempt measurement context diverged")
+        return bridge.start_provider_attempt(
+            measurement_record=bootstrap,
+            binding_fingerprint=measurement.binding_fingerprint,
+            work_unit_id=state.current_work_unit_id,
+        )
+
+    def _finish_provider_attempt(
+        self,
+        started: object,
+        duration_seconds: float,
+        failure_kind: str | None,
+        usage: ProviderUsagePayload | None,
+    ) -> None:
+        bridge = self._artifact_bridge
+        if bridge is None or not isinstance(started, ArtifactRecord):
+            raise WorkflowExecutionError("provider attempt terminal requires its durable start")
+        bridge.finish_provider_attempt(
+            started,
+            duration_seconds=duration_seconds,
+            failure_kind=failure_kind,
+            usage=usage,
+        )
 
     @staticmethod
     def _bootstrap_fact(payload: ProviderInputMeasurementPayload | object) -> BootstrapCheckFact:

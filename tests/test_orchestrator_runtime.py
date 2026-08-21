@@ -2313,7 +2313,8 @@ def test_plan_only_uses_internal_plan_validation_and_commits_no_product_code(
             plan.parent.mkdir(parents=True)
             plan.write_text(
                 "# Work plan\n\n### Slice 1 – Future implementation\n\n"
-                "**Exakter Änderungspfad**\n\n- `src/future.py`\n",
+                "**Exakter Änderungspfad**\n\n- `src/future.py`\n\n"
+                "#### \u0041kzeptanzkriterien\n\n- Future behavior is covered.\n",
                 encoding="utf-8",
             )
             output = (
@@ -2468,7 +2469,10 @@ def test_plan_only_repairs_handoff_contract_before_review(
         else:
             assert "AUTOMATIC PLAN CONTRACT REPAIR" in invocation.prompt
             assert "Slice 1 has no exact change-path section" in invocation.prompt
-            body = "**Exakter Änderungspfad**\n\n- `src/future.py`\n"
+            body = (
+                "**Exakter Änderungspfad**\n\n- `src/future.py`\n\n"
+                "#### \u0041kzeptanzkriterien\n\n- Future behavior is covered.\n"
+            )
         plan.write_text(
             "# Work plan\n\n### Slice 1 - Future implementation\n\n" + body,
             encoding="utf-8",
@@ -2624,7 +2628,8 @@ def test_completed_plan_resume_retries_failed_handoff_without_agents(
         plan.parent.mkdir(parents=True, exist_ok=True)
         plan.write_text(
             "# Resume plan\n\n### Slice 1 – Implement resume\n\n"
-            "**Exakter Änderungspfad**\n\n- `src/resume.py`\n",
+            "**Exakter Änderungspfad**\n\n- `src/resume.py`\n\n"
+            "#### \u0041kzeptanzkriterien\n\n- Resume behavior is covered.\n",
             encoding="utf-8",
         )
         output = (

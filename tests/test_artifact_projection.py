@@ -30,6 +30,12 @@ from artifact_projection import (
     semantic_artifact_digest,
 )
 from artifact_replay import replay_artifacts
+from artifact_bridge import ArtifactBridge
+from artifact_store import ArtifactStore
+from artifact_models import (
+    ProviderInputComponentPayload, ProviderInputMeasurementPayload,
+    ProviderUsagePayload,
+)
 
 
 def _chain() -> tuple[ArtifactRecord, ...]:
@@ -122,6 +128,40 @@ def test_same_chain_renders_byte_identically_in_record_sequence() -> None:
     assert "Korrektur-Work-Unit" in first["approval-status"]
     assert "`src/a.py`" in first["approval-status"]
     assert "Binding `commit`" in first["approval-status"]
+
+
+def test_projection_reduces_attempts_and_keeps_unknown_usage_explicit(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    bridge = ArtifactBridge(ArtifactStore(tmp_path, "run-attempts"))
+    bridge.append(
+        WorkUnitPayload("1", 1, ("src/a.py",)), logical_id="work-unit-1",
+        idempotency_key="work-unit:1", fingerprint_sha256="a" * 64,
+    )
+    measurement = bridge.append(
+        ProviderInputMeasurementPayload(
+            Role.CLAUDE, Role.CLAUDE, "claude_slice_review", "1", "a" * 64,
+            "b" * 64, "c" * 64, "d" * 64,
+            (ProviderInputComponentPayload("prompt", 3, 3),),
+            3, 3, 10, 10, None, None, None, 10, 10, True, (), 0, 0, "prompt",
+        ),
+        logical_id="measurement-1", idempotency_key="measurement:1",
+        fingerprint_sha256="a" * 64,
+    )
+    first = bridge.start_provider_attempt(
+        measurement_record=measurement, binding_fingerprint="a" * 64, work_unit_id="1"
+    )
+    bridge.finish_provider_attempt(
+        first, duration_seconds=2.0, failure_kind=None,
+        usage=ProviderUsagePayload(input_tokens=0, output_tokens=5),
+    )
+    bridge.start_provider_attempt(
+        measurement_record=measurement, binding_fingerprint="a" * 64, work_unit_id="1"
+    )
+
+    rendered = render_artifact_sections(bridge.store.load_chain())["validation-attestation"]
+    assert "Attempts `2`, offen `1`" in rendered
+    assert "input_tokens=sum:0,known:1,unknown:1" in rendered
+    assert "output_tokens=sum:5,known:1,unknown:1" in rendered
+    assert "local_input_chars" in rendered and "local_input_bytes" in rendered
 
 
 def test_projection_can_render_an_accepted_replay_without_reduction_drift() -> None:

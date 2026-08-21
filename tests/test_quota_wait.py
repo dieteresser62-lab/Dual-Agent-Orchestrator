@@ -511,6 +511,39 @@ def test_wait_returns_immediately_when_reset_is_already_reached() -> None:
     assert sleeps == []
 
 
+def test_wait_rejects_resume_before_reset_directly() -> None:
+    with pytest.raises(ValueError, match="cannot precede"):
+        wait_until_quota_resume(
+            role="claude", task_label="task-invalid", work_unit_id=1,
+            reset_at_utc=RECEIVED + timedelta(minutes=2),
+            resume_at_utc=RECEIVED + timedelta(minutes=1),
+            heartbeat_interval_seconds=10,
+        )
+
+
+def test_large_margin_logs_reset_before_single_fake_clock_sleep() -> None:
+    clock = [RECEIVED]
+    events: list[str] = []
+    sleeps: list[float] = []
+    resume = RECEIVED + timedelta(days=3)
+
+    def sleep(seconds: float) -> None:
+        assert events[-1].startswith("quota reset reached:")
+        sleeps.append(seconds)
+        clock[0] += timedelta(seconds=seconds)
+
+    wait_until_quota_resume(
+        role="claude", task_label="large-margin", work_unit_id=2,
+        reset_at_utc=RECEIVED, resume_at_utc=resume,
+        heartbeat_interval_seconds=3_600,
+        now_fn=lambda: clock[0], sleep_fn=sleep, heartbeat_fn=events.append,
+    )
+
+    assert sleeps == [3 * 24 * 60 * 60]
+    assert clock[0] == resume
+    assert events[-1].startswith("quota wait resumed:")
+
+
 def test_wait_rejects_naive_injected_clock() -> None:
     with pytest.raises(ValueError, match="timezone-aware"):
         wait_until_quota_resume(

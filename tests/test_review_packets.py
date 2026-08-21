@@ -46,11 +46,21 @@ Build one role-neutral packet without audit prose.
 """
 
 
-def _attestation(fingerprint: str = "a" * 64) -> ValidationAttestation:
+def _attestation(
+    fingerprint: str = "a" * 64,
+    *,
+    status: ValidationStatus = ValidationStatus.PASS,
+    complete: bool = True,
+) -> ValidationAttestation:
+    records = (
+        (ValidationRecord(status, "pytest", 0 if status is ValidationStatus.PASS else 1, "ignored output"),)
+        if complete
+        else ()
+    )
     return ValidationAttestation(
         "validation-a", fingerprint, ("pytest",),
-        (ValidationRecord(ValidationStatus.PASS, "pytest", 0, "ignored output"),),
-        "b" * 64, "947 passed",
+        records, "b" * 64,
+        "947 passed" if status is ValidationStatus.PASS else "validation failed",
     )
 
 
@@ -121,11 +131,61 @@ def test_correction_packet_selects_only_affected_findings_and_binds_fingerprint(
     assert [item["id"] for item in payload["open_findings"]] == ["C-01"]
     assert payload["closure_references"] == []
 
-    with pytest.raises(ReviewPacketError, match="fingerprint-bound PASS"):
+    with pytest.raises(ReviewPacketError, match="fingerprint-bound complete"):
         build_review_packet(
             purpose="correction", fingerprint="d" * 64, start_fingerprint="c" * 64,
             paths=("src/core.py",), review_diff="delta", plan_text=PLAN, slice_id=2,
             attestation=_attestation(), findings=(),
+        )
+
+
+def test_slice_packet_accepts_complete_red_attestation_for_mandatory_denial() -> None:
+    packet = build_review_packet(
+        purpose="slice", fingerprint="a" * 64, start_fingerprint="0" * 64,
+        paths=("src/core.py",), review_diff="diff", plan_text=PLAN, slice_id=2,
+        attestation=_attestation(status=ValidationStatus.FAIL), findings=(),
+    )
+
+    assert json.loads(packet.canonical_bytes)["attestation"]["status"] == "FAIL"
+
+
+def test_extracts_generated_plan_shape_with_title_goal_and_focused_tests() -> None:
+    plan = """# Plan
+
+### Slice 1 - Providerattempt core
+
+#### Integrationspunkte und Umsetzung
+
+- Implement the record lifecycle.
+
+**Exakter Änderungspfad**
+
+- `src/artifact_models.py`
+
+#### Fokussierte synthetische Akzeptanztests
+
+- `tests/test_artifact_models.py`: Roundtrip provider attempts.
+- Resume retains an open attempt.
+
+#### Stopbedingungen
+
+- Do not expand scope.
+"""
+
+    goal, criteria = extract_slice_requirements(plan, 1)
+
+    assert goal == "Providerattempt core"
+    assert criteria == (
+        "`tests/test_artifact_models.py`: Roundtrip provider attempts.",
+        "Resume retains an open attempt.",
+    )
+
+def test_slice_packet_rejects_incomplete_attestation() -> None:
+    with pytest.raises(ReviewPacketError, match="fingerprint-bound complete"):
+        build_review_packet(
+            purpose="slice", fingerprint="a" * 64, start_fingerprint="0" * 64,
+            paths=("src/core.py",), review_diff="diff", plan_text=PLAN, slice_id=2,
+            attestation=_attestation(complete=False), findings=(),
         )
 
 
