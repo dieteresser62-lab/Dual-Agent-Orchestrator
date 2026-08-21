@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 
 import pytest
@@ -209,6 +210,23 @@ def test_provider_attempt_phase_and_usage_are_fail_closed() -> None:
         )
     with pytest.raises(ArtifactValidationError, match="non-negative"):
         ProviderUsagePayload(output_tokens=-1)
+
+    failed = _record(
+        ProviderAttemptPayload(
+            Role.ANTIGRAVITY, Role.ANTIGRAVITY, "antigravity_slice_review", "1",
+            "provider-operation-schema", DIGEST, "measurement-schema", "b" * 64, 1,
+            "failed", CREATED_AT, "2026-08-18T10:30:01+00:00", 1.0,
+            "antigravity_tool_schema",
+            ProviderUsagePayload(input_tokens=8, output_tokens=1, turns=1),
+        )
+    )
+    validate_artifact_document(failed.to_dict())
+    assert ArtifactRecord.from_dict(failed.to_dict()) == failed
+
+    failed_without_usage = replace(failed.payload, usage=None)
+    assert failed_without_usage.usage is None
+    with pytest.raises(ArtifactValidationError, match="antigravity provider"):
+        replace(failed.payload, provider=Role.CLAUDE, role=Role.CLAUDE)
 
     succeeded = _record(
         ProviderAttemptPayload(

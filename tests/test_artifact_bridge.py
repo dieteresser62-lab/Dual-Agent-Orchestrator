@@ -171,6 +171,77 @@ def test_provider_attempt_start_terminal_and_resume_are_stable(tmp_path: Path) -
     assert bridge.store.load_chain()[-1] == second
 
 
+def test_antigravity_schema_failure_allows_only_one_bound_continuation(
+    tmp_path: Path,
+) -> None:
+    bridge = ArtifactBridge(ArtifactStore(tmp_path, "run-schema"))
+    measurement = bridge.append(
+        replace(
+            _measurement(),
+            provider=Role.ANTIGRAVITY,
+            role=Role.ANTIGRAVITY,
+            operation="antigravity_slice_review",
+        ),
+        logical_id="measurement-schema",
+        idempotency_key="measurement:schema",
+        fingerprint_sha256=DIGEST,
+    )
+    first = bridge.start_provider_attempt(
+        measurement_record=measurement, binding_fingerprint=DIGEST, work_unit_id="1"
+    )
+    first_terminal = bridge.finish_provider_attempt(
+        first,
+        duration_seconds=1.5,
+        failure_kind="antigravity_tool_schema",
+        usage=ProviderUsagePayload(input_tokens=12, output_tokens=1),
+    )
+    second = bridge.start_provider_attempt(
+        measurement_record=measurement, binding_fingerprint=DIGEST, work_unit_id="1"
+    )
+    bridge.finish_provider_attempt(
+        second,
+        duration_seconds=2.0,
+        failure_kind="antigravity_tool_schema",
+        usage=None,
+    )
+    chain_before = bridge.store.load_chain()
+
+    with pytest.raises(ArtifactBridgeError, match="only physical attempt 2"):
+        bridge.start_provider_attempt(
+            measurement_record=measurement,
+            binding_fingerprint=DIGEST,
+            work_unit_id="1",
+        )
+
+    assert bridge.store.load_chain() == chain_before
+    assert first_terminal.payload.usage == ProviderUsagePayload(
+        input_tokens=12, output_tokens=1
+    )
+    assert second.payload.logical_operation_id == first.payload.logical_operation_id
+    assert second.payload.attempt_number == 2
+
+
+def test_provider_attempt_requires_terminal_direct_predecessor(tmp_path: Path) -> None:
+    bridge = ArtifactBridge(ArtifactStore(tmp_path, "run-open"))
+    measurement = bridge.append(
+        _measurement(), logical_id="measurement-open",
+        idempotency_key="measurement:open", fingerprint_sha256=DIGEST,
+    )
+    bridge.start_provider_attempt(
+        measurement_record=measurement, binding_fingerprint=DIGEST, work_unit_id="1"
+    )
+    chain_before = bridge.store.load_chain()
+
+    with pytest.raises(ArtifactBridgeError, match="terminal direct predecessor"):
+        bridge.start_provider_attempt(
+            measurement_record=measurement,
+            binding_fingerprint=DIGEST,
+            work_unit_id="1",
+        )
+
+    assert bridge.store.load_chain() == chain_before
+
+
 def test_provider_attempt_rejects_changed_digest_for_same_operation(tmp_path: Path) -> None:
     bridge = ArtifactBridge(ArtifactStore(tmp_path, "run-1"))
     first_measurement = bridge.append(

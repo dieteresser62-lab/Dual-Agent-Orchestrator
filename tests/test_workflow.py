@@ -16,6 +16,7 @@ from agent_runtime import (
 from contracts import (
     AgentRole,
     AnchorRecord,
+    ApprovalMarker,
     CodexStepContract,
     ContractValidationError,
     FindingClass,
@@ -25,9 +26,11 @@ from contracts import (
     FindingStatus,
     PlannedSlice,
     ReadinessMarker,
+    StepContract,
     ValidationAttestation,
     ValidationRecord,
     ValidationStatus,
+    validate_review_response,
 )
 from gates import PathClasses, StopRule, TestChangeEvidence as GateTestChangeEvidence
 from inbox_watcher import WatchTaskDisposition, WatchTaskResult
@@ -49,6 +52,7 @@ from workflow import (
     ValidationExecutionError,
     authorized_test_changes_from_state,
     normalize_codex_contract_output,
+    normalize_review_contract,
 )
 from workflow_state import (
     AgentFailureKind,
@@ -1321,6 +1325,125 @@ def test_transient_network_failure_retries_same_step_after_persisted_wait() -> N
     ]
 
 
+def test_antigravity_tool_schema_failure_has_one_automatic_continuation() -> None:
+    now = [datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)]
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[_review_approval(AgentRole.CLAUDE)],
+        reviewer_failures=[
+            None,
+            _invocation_failure(
+                AgentRole.ANTIGRAVITY,
+                AgentFailureKind.ANTIGRAVITY_TOOL_SCHEMA,
+                "schema-1",
+                received_at=now[0],
+            ),
+            _invocation_failure(
+                AgentRole.ANTIGRAVITY,
+                AgentFailureKind.ANTIGRAVITY_TOOL_SCHEMA,
+                "schema-2",
+                received_at=now[0],
+            ),
+        ],
+    )
+
+    def sleep(seconds: float) -> None:
+        now[0] += timedelta(seconds=seconds)
+
+    halted = WorkflowEngine(
+        driver, now_fn=lambda: now[0], sleep_fn=sleep
+    ).run_current_work_unit(_slice_state(), _context())
+
+    failures = halted.state.current_work_unit.invocation_failures
+    assert halted.exit_code == 3
+    assert [call.reviewer for call in driver.reviewer_calls] == [
+        AgentRole.CLAUDE,
+        AgentRole.ANTIGRAVITY,
+        AgentRole.ANTIGRAVITY,
+    ]
+    assert [item.automatic_resume for item in failures] == [True, False]
+    assert failures[-1].provider_text == "Execution error"
+    assert halted.state.current_work_unit.status is WorkUnitStatus.AWAITING_RESUME
+    assert halted.history.latest_claude_review is not None
+    assert halted.history.latest_antigravity_review is None
+
+
+def test_prior_network_attempt_consumes_antigravity_schema_continuation() -> None:
+    now = [datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)]
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[_review_approval(AgentRole.CLAUDE)],
+        reviewer_failures=[
+            None,
+            _invocation_failure(
+                AgentRole.ANTIGRAVITY, AgentFailureKind.NETWORK, "network-1",
+                received_at=now[0],
+            ),
+            _invocation_failure(
+                AgentRole.ANTIGRAVITY,
+                AgentFailureKind.ANTIGRAVITY_TOOL_SCHEMA,
+                "schema-after-network",
+                received_at=now[0],
+            ),
+        ],
+    )
+
+    def sleep(seconds: float) -> None:
+        now[0] += timedelta(seconds=seconds)
+
+    halted = WorkflowEngine(
+        driver, now_fn=lambda: now[0], sleep_fn=sleep
+    ).run_current_work_unit(_slice_state(), _context())
+
+    assert halted.exit_code == 3
+    assert len(driver.reviewer_calls) == 3
+    assert [
+        item.failure_kind for item in halted.state.current_work_unit.invocation_failures
+    ] == [AgentFailureKind.NETWORK, AgentFailureKind.ANTIGRAVITY_TOOL_SCHEMA]
+    assert halted.state.current_work_unit.invocation_failures[-1].automatic_resume is False
+
+
+def test_plain_network_retry_keeps_configured_two_resume_ceiling() -> None:
+    now = [datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)]
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[
+            _review_approval(AgentRole.CLAUDE),
+            _review_approval(AgentRole.ANTIGRAVITY),
+        ],
+        reviewer_failures=[
+            None,
+            _invocation_failure(
+                AgentRole.ANTIGRAVITY, AgentFailureKind.NETWORK, "network-1",
+                received_at=now[0],
+            ),
+            _invocation_failure(
+                AgentRole.ANTIGRAVITY, AgentFailureKind.NETWORK, "network-2",
+                received_at=now[0],
+            ),
+            None,
+        ],
+    )
+
+    def sleep(seconds: float) -> None:
+        now[0] += timedelta(seconds=seconds)
+
+    completed = WorkflowEngine(
+        driver, now_fn=lambda: now[0], sleep_fn=sleep
+    ).run_current_work_unit(_slice_state(), _context())
+
+    assert completed.completed
+    assert [call.reviewer for call in driver.reviewer_calls].count(
+        AgentRole.ANTIGRAVITY
+    ) == 3
+
+
 def test_manual_resume_at_antigravity_repeats_neither_codex_nor_claude() -> None:
     received = datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)
     changes = _changes("1", "src/early.py", TEST_FILE)
@@ -1875,6 +1998,100 @@ def test_realistic_break_condition_is_normalized_without_contract_repair() -> No
         AgentRole.CLAUDE,
         AgentRole.ANTIGRAVITY,
     ]
+
+
+def test_empty_findings_heading_is_normalized_without_contract_repair() -> None:
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    output = _review_approval(AgentRole.CLAUDE).replace(
+        f"TEST_FILES_TOUCHED: {TEST_FILE}",
+        f"TEST_FILES_TOUCHED: {TEST_FILE}\n\nFINDINGS:",
+    )
+    contract = StepContract(
+        name="work-unit-2-claude_slice_review",
+        reviewer=AgentRole.CLAUDE,
+        approval_marker=ApprovalMarker.SLICE,
+        slice_id="01",
+        round_number=1,
+        review_fingerprint=changes.fingerprint,
+        validation_attestation=_attestation(changes),
+        expected_test_files=(TEST_FILE,),
+        test_changes_approved=True,
+    )
+
+    normalized = normalize_review_contract(
+        output, contract, (), provider_completed=True
+    )
+    result = validate_review_response(normalized.output, contract, ())
+
+    assert normalized.changes == ("removed_empty_findings_heading",)
+    assert "FINDINGS:" not in normalized.output
+    assert result.approval is True
+
+
+def test_empty_finding_status_is_removed_without_losing_new_blocker() -> None:
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    output = _review_denial(AgentRole.CLAUDE, "C-01").replace(
+        "SLICE_APPROVAL: 01 | NO",
+        "FINDING_STATUS: none reported by claude previously in this packet.\n"
+        "SLICE_APPROVAL: 01 | NO",
+    )
+    contract = StepContract(
+        name="work-unit-2-claude_slice_review",
+        reviewer=AgentRole.CLAUDE,
+        approval_marker=ApprovalMarker.SLICE,
+        slice_id="01",
+        round_number=1,
+        review_fingerprint=changes.fingerprint,
+        validation_attestation=_attestation(changes),
+        expected_test_files=(TEST_FILE,),
+        test_changes_approved=True,
+    )
+
+    normalized = normalize_review_contract(
+        output, contract, (), provider_completed=True
+    )
+    result = validate_review_response(normalized.output, contract, ())
+
+    assert normalized.changes == ("removed_empty_finding_status",)
+    assert "FINDING_STATUS:" not in normalized.output
+    assert result.approval is False
+    assert tuple(item.finding_id for item in result.own_open_blockers) == ("C-01",)
+
+
+def test_empty_finding_status_remains_fail_closed_with_own_previous_finding() -> None:
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    previous = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="stale usage attribution",
+        acceptance_test="add a retry regression",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
+    output = _review_approval(AgentRole.CLAUDE).replace(
+        "REVIEW_EVIDENCE: reviewed invariants | residual concurrency risk | parallel mutation",
+        "FINDING_STATUS: none reported by claude previously in this packet.",
+    )
+    contract = StepContract(
+        name="work-unit-2-claude_slice_review",
+        reviewer=AgentRole.CLAUDE,
+        approval_marker=ApprovalMarker.SLICE,
+        slice_id="01",
+        round_number=1,
+        review_fingerprint=changes.fingerprint,
+        validation_attestation=_attestation(changes),
+        expected_test_files=(TEST_FILE,),
+        test_changes_approved=True,
+    )
+
+    normalized = normalize_review_contract(
+        output, contract, (previous,), provider_completed=True
+    )
+
+    assert normalized.changes == ()
+    assert "FINDING_STATUS: none reported" in normalized.output
+    with pytest.raises(ContractValidationError, match="invalid FINDING_STATUS record"):
+        validate_review_response(normalized.output, contract, (previous,))
 
 
 def test_missing_verdict_stops_without_repair_or_antigravity() -> None:

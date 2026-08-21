@@ -474,11 +474,16 @@ class ProviderAttemptPayload:
         if self.phase == "failed":
             if self.failure_kind not in {
                 "quota", "network", "timeout", "permission", "auth", "binary",
-                "output", "process", "runtime",
+                "output", "process", "runtime", "antigravity_tool_schema",
             }:
                 raise ArtifactValidationError("failed provider attempt requires a classified failure_kind")
-            if self.usage is not None:
-                raise ArtifactValidationError("failed provider attempt cannot carry usage")
+            if (
+                self.failure_kind == "antigravity_tool_schema"
+                and self.provider is not Role.ANTIGRAVITY
+            ):
+                raise ArtifactValidationError(
+                    "Antigravity tool-schema failure requires the antigravity provider"
+                )
 
 
 @dataclass(frozen=True, slots=True)

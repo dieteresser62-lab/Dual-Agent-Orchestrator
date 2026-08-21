@@ -25,6 +25,7 @@ from artifact_models import (
     CorrectionWorkUnitPayload,
     FingerprintKind,
     ProviderInputMeasurementPayload,
+    ProviderInputComponentPayload,
     ProviderAttemptPayload,
     QuotaPausePayload,
     RecordType,
@@ -33,6 +34,7 @@ from artifact_models import (
     TransientRetryPayload,
     WorkUnitPayload,
 )
+from artifact_replay import replay_artifacts
 from artifact_store import ArtifactStore
 from artifact_projection import ArtifactAuditProjection
 from contracts import (
@@ -1470,3 +1472,55 @@ def test_unbound_historical_state_keeps_legacy_resume_mode(tmp_path: Path) -> No
 
     assert historical.effective_protocol_mode is ProtocolMode.LEGACY_STATE_V3
     assert ArtifactStore(repository, historical.run_id).load_chain() == ()
+
+
+def test_pre_schema_failure_artifact_chain_replays_without_synthesized_facts(
+    tmp_path: Path,
+) -> None:
+    store = ArtifactStore(tmp_path, "pre-schema-failure-chain")
+    bridge = ArtifactBridge(store)
+    bridge.append(
+        WorkUnitPayload("1", 1, ("src/runtime.py",)),
+        logical_id="work-unit-1",
+        idempotency_key="work-unit:1",
+        fingerprint_sha256="a" * 64,
+    )
+    measurement = bridge.append(
+        ProviderInputMeasurementPayload(
+            Role.ANTIGRAVITY, Role.ANTIGRAVITY, "antigravity_slice_review", "1",
+            "a" * 64, "b" * 64, "c" * 64, "d" * 64,
+            (ProviderInputComponentPayload("prompt_file", 3, 3),),
+            3, 3, 10, 10, None, None, None, 10, 10, True, (), 0, 0,
+            "prompt_file",
+        ),
+        logical_id="measurement-legacy",
+        idempotency_key="measurement:legacy",
+        fingerprint_sha256="a" * 64,
+    )
+    started = bridge.start_provider_attempt(
+        measurement_record=measurement,
+        binding_fingerprint="a" * 64,
+        work_unit_id="1",
+    )
+    bridge.finish_provider_attempt(
+        started, duration_seconds=1.0, failure_kind="network", usage=None
+    )
+    before = store.load_chain()
+
+    first_replay = replay_artifacts(before, store.run_id)
+    after = store.load_chain()
+    second_replay = replay_artifacts(after, store.run_id)
+
+    assert after == before
+    assert first_replay.records == second_replay.records
+    assert Counter(record.record_type for record in after) == Counter(
+        {
+            RecordType.WORK_UNIT: 1,
+            RecordType.PROVIDER_INPUT_MEASUREMENT: 1,
+            RecordType.PROVIDER_ATTEMPT: 2,
+        }
+    )
+    assert not any(
+        record.record_type in {RecordType.REVIEW, RecordType.DIAGNOSTIC}
+        for record in after
+    )

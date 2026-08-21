@@ -339,6 +339,31 @@ def test_network_failure_roundtrips_as_bounded_retry_wait() -> None:
     assert loaded.resume_after_invocation_halt().current_step is WorkflowStep.CODEX_PLAN
 
 
+def test_antigravity_tool_schema_failure_roundtrips_as_retry_wait() -> None:
+    state = make_state()
+    failure = InvocationFailureRecord(
+        invocation_id="inv-schema-1",
+        idempotency_key="run-1:1:codex_plan:antigravity",
+        role="antigravity",
+        failure_kind=AgentFailureKind.ANTIGRAVITY_TOOL_SCHEMA,
+        provider_text="additional properties 'LineNumber' not allowed",
+        received_at="2026-08-12T10:00:00+00:00",
+        step=WorkflowStep.CODEX_PLAN,
+        slice_id=1,
+        work_unit_id=1,
+        diagnostic_exit_code=3,
+        resume_at_utc="2026-08-12T10:00:05+00:00",
+        auto_resume_count=1,
+        automatic_resume=True,
+    )
+
+    waiting = state.record_invocation_failure(failure, wait_automatically=True)
+    loaded = WorkflowState.from_dict(waiting.to_dict())
+
+    assert loaded.current_work_unit.status is WorkUnitStatus.WAITING_FOR_RETRY
+    assert loaded.current_work_unit.invocation_failures[-1] == failure
+
+
 def test_resume_after_user_decision_keeps_saved_step_and_review_context() -> None:
     state = make_state()
     for _ in range(DEFAULT_MAX_CODEX_RETURNS):

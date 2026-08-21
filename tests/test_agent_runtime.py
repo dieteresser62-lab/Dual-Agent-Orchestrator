@@ -331,6 +331,90 @@ def test_failure_classification_uses_technical_network_diagnostic() -> None:
     assert "response" not in (failure.provider_data or {})
 
 
+@pytest.mark.parametrize(
+    "error_value",
+    [
+        "additional properties 'LineNumber' not allowed",
+        {"message": "additional properties 'LineNumber' not allowed"},
+        {
+            "message": "additional properties 'LineNumber' not allowed",
+            "code": "INVALID_ARGUMENT",
+        },
+    ],
+)
+def test_antigravity_line_number_schema_failure_is_narrowly_classified(
+    error_value: object,
+) -> None:
+    failure = classify_agent_failure(
+        "antigravity",
+        AgentOutputError(
+            "failed envelope",
+            provider_data={"status": "ERROR", "error": error_value},
+            technical_text="unrelated runtime prose",
+        ),
+        invocation_id="schema-1",
+    )
+
+    assert failure.kind is AgentFailureKind.ANTIGRAVITY_TOOL_SCHEMA
+
+
+@pytest.mark.parametrize(
+    ("provider_data", "technical_text"),
+    [
+        ({"status": "ERROR", "error": "additional properties 'Other' not allowed"}, "runtime"),
+        ({"status": "ERROR", "error": "invalid arguments"}, "runtime"),
+        ({"status": "ERROR", "message": "additional properties 'LineNumber' not allowed"}, "runtime"),
+        ({"status": "SUCCESS", "error": "additional properties 'LineNumber' not allowed"}, "runtime"),
+        ({"status": "ERROR", "response": "additional properties 'LineNumber' not allowed"}, "runtime"),
+        ({"status": "ERROR"}, "additional properties 'LineNumber' not allowed"),
+    ],
+)
+def test_antigravity_schema_failure_rejects_prose_and_envelope_variants(
+    provider_data: dict[str, object], technical_text: str,
+) -> None:
+    failure = classify_agent_failure(
+        "antigravity",
+        AgentOutputError(
+            "failed envelope",
+            provider_data=provider_data,
+            technical_text=technical_text,
+        ),
+        invocation_id="schema-negative",
+    )
+
+    assert failure.kind is not AgentFailureKind.ANTIGRAVITY_TOOL_SCHEMA
+
+
+def test_failed_provider_attempt_uses_injected_clock_and_allowlisted_usage() -> None:
+    ticks = iter((10.0, 12.75))
+    terminal: list[tuple[float, str | None, object]] = []
+    invocation = agent_runtime._ProviderAttemptInvocation(
+        ProviderAttemptLifecycle(
+            start=lambda _measurement, _bootstrap: "attempt-1",
+            terminal=lambda _handle, duration, failure, usage: terminal.append(
+                (duration, failure, usage)
+            ),
+            monotonic_fn=lambda: next(ticks),
+        )
+    )
+    measurement = object()
+
+    invocation.begin(measurement, None)  # type: ignore[arg-type]
+    invocation.finish(
+        AgentFailureKind.ANTIGRAVITY_TOOL_SCHEMA,
+        {
+            "usage": {"input_tokens": 7, "output_tokens": 2, "raw": "secret"},
+            "response": "private provider output",
+        },
+    )
+
+    duration, failure_kind, usage = terminal[0]
+    assert duration == 2.75
+    assert failure_kind == "antigravity_tool_schema"
+    assert usage is not None and usage.input_tokens == 7 and usage.output_tokens == 2
+    assert not hasattr(usage, "raw")
+
+
 def test_run_agent_checked_validation_error_backoff(monkeypatch, tmp_path: Path) -> None:
     sleeps: list[int] = []
     prompts: list[str] = []

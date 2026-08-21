@@ -125,6 +125,7 @@ class AgentFailureKind(str, Enum):
     QUOTA = "quota"
     AUTH = "auth"
     NETWORK = "network"
+    ANTIGRAVITY_TOOL_SCHEMA = "antigravity_tool_schema"
     PERMISSION = "permission"
     TIMEOUT = "timeout"
     BINARY = "binary"
@@ -207,6 +208,13 @@ class InvocationFailureRecord:
             raise WorkflowStateValidationError(
                 "invocation failure role must be codex, claude, or antigravity"
             )
+        if (
+            self.failure_kind is AgentFailureKind.ANTIGRAVITY_TOOL_SCHEMA
+            and self.role != "antigravity"
+        ):
+            raise WorkflowStateValidationError(
+                "Antigravity tool-schema failure requires the antigravity role"
+            )
         _require_timestamp(self.received_at, "invocation failure received_at")
         _require_positive_int(self.slice_id, "invocation failure slice_id")
         _require_positive_int(self.work_unit_id, "invocation failure work_unit_id")
@@ -248,9 +256,10 @@ class InvocationFailureRecord:
         if self.automatic_resume and self.failure_kind not in {
             AgentFailureKind.QUOTA,
             AgentFailureKind.NETWORK,
+            AgentFailureKind.ANTIGRAVITY_TOOL_SCHEMA,
         }:
             raise WorkflowStateValidationError(
-                "automatic resume is limited to quota and network failures"
+                "automatic resume is limited to quota, network, and Antigravity tool-schema failures"
             )
         if self.failure_kind is AgentFailureKind.QUOTA and self.automatic_resume and not has_reset:
             raise WorkflowStateValidationError(
@@ -1906,26 +1915,30 @@ class WorkflowState:
         if wait_automatically and failure.failure_kind not in {
             AgentFailureKind.QUOTA,
             AgentFailureKind.NETWORK,
+            AgentFailureKind.ANTIGRAVITY_TOOL_SCHEMA,
         }:
             raise WorkflowStateValidationError(
-                "only quota and network failures may wait automatically"
+                "only quota, network, and Antigravity tool-schema failures may wait automatically"
             )
         automatic_quota = wait_automatically and failure.failure_kind is AgentFailureKind.QUOTA
-        automatic_network = wait_automatically and failure.failure_kind is AgentFailureKind.NETWORK
+        automatic_transient = wait_automatically and failure.failure_kind in {
+            AgentFailureKind.NETWORK,
+            AgentFailureKind.ANTIGRAVITY_TOOL_SCHEMA,
+        }
         status = (
             WorkUnitStatus.WAITING_FOR_QUOTA if automatic_quota else
-            WorkUnitStatus.WAITING_FOR_RETRY if automatic_network else
+            WorkUnitStatus.WAITING_FOR_RETRY if automatic_transient else
             WorkUnitStatus.AWAITING_RESUME
         )
 
         slice_status = (
             SliceStatus.WAITING_FOR_QUOTA if automatic_quota else
-            SliceStatus.WAITING_FOR_RETRY if automatic_network else
+            SliceStatus.WAITING_FOR_RETRY if automatic_transient else
             SliceStatus.AWAITING_RESUME
         )
         gate_status = (
             GateStatus.WAITING_FOR_QUOTA if automatic_quota else
-            GateStatus.WAITING_FOR_RETRY if automatic_network else
+            GateStatus.WAITING_FOR_RETRY if automatic_transient else
             GateStatus.AWAITING_RESUME
         )
         reason = (

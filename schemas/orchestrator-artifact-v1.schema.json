@@ -173,7 +173,7 @@
         "attempt_number": {"type": "integer", "minimum": 1}, "phase": {"enum": ["started", "succeeded", "failed"]},
         "started_at": {"type": "string", "format": "date-time"}, "ended_at": {"type": ["string", "null"], "format": "date-time"},
         "duration_seconds": {"type": ["number", "null"], "minimum": 0},
-        "failure_kind": {"enum": ["quota", "network", "timeout", "permission", "auth", "binary", "output", "process", "runtime", null]},
+        "failure_kind": {"enum": ["quota", "network", "timeout", "permission", "auth", "binary", "output", "process", "runtime", "antigravity_tool_schema", null]},
         "usage": {"oneOf": [{"$ref": "#/$defs/provider_usage"}, {"type": "null"}]}
       },
       "allOf": [
@@ -182,7 +182,8 @@
         {"if": {"properties": {"provider": {"const": "antigravity"}}}, "then": {"properties": {"role": {"const": "antigravity"}}}},
         {"if": {"properties": {"phase": {"const": "started"}}}, "then": {"properties": {"ended_at": {"type": "null"}, "duration_seconds": {"type": "null"}, "failure_kind": {"type": "null"}, "usage": {"type": "null"}}}},
         {"if": {"properties": {"phase": {"const": "succeeded"}}}, "then": {"properties": {"ended_at": {"type": "string"}, "duration_seconds": {"type": "number"}, "failure_kind": {"type": "null"}}}},
-        {"if": {"properties": {"phase": {"const": "failed"}}}, "then": {"properties": {"ended_at": {"type": "string"}, "duration_seconds": {"type": "number"}, "failure_kind": {"enum": ["quota", "network", "timeout", "permission", "auth", "binary", "output", "process", "runtime"]}, "usage": {"type": "null"}}}}
+        {"if": {"properties": {"failure_kind": {"const": "antigravity_tool_schema"}}}, "then": {"properties": {"provider": {"const": "antigravity"}, "role": {"const": "antigravity"}}}},
+        {"if": {"properties": {"phase": {"const": "failed"}}}, "then": {"properties": {"ended_at": {"type": "string"}, "duration_seconds": {"type": "number"}, "failure_kind": {"enum": ["quota", "network", "timeout", "permission", "auth", "binary", "output", "process", "runtime", "antigravity_tool_schema"]}}}}
       ]
     },
     "final_review_preflight": {

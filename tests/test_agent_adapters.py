@@ -592,6 +592,30 @@ def test_antigravity_json_envelope_requires_success_and_trims_chatter() -> None:
     assert exc_info.value.provider_text == "temporary network failure"
     assert "response" not in (exc_info.value.provider_data or {})
 
+    with pytest.raises(AgentOutputError) as schema_exc:
+        adapter.extract_output(
+            json.dumps(
+                {
+                    "status": "ERROR",
+                    "error": "additional properties 'LineNumber' not allowed",
+                    "duration_seconds": 1.25,
+                    "num_turns": 2,
+                    "usage": {"input_tokens": 11, "output_tokens": 3},
+                    "response": "SLICE_APPROVAL: 01 | YES\nSTATUS: DONE",
+                    "structured_output": {"response": "NEW_FINDING: A-01"},
+                }
+            ),
+            "",
+            {},
+        )
+    assert schema_exc.value.provider_data == {
+        "status": "ERROR",
+        "error": "additional properties 'LineNumber' not allowed",
+    }
+    assert adapter.metadata["duration_seconds"] == 1.25
+    assert adapter.metadata["num_turns"] == 2
+    assert adapter.metadata["usage"] == {"input_tokens": 11, "output_tokens": 3}
+
     structured = adapter.extract_output(
         json.dumps(
             {

@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
+import logging
 from typing import Callable, Iterable
 
 from artifact_models import (
@@ -58,6 +59,10 @@ from artifact_replay import replay_artifacts
 
 class ArtifactBridgeError(RuntimeError):
     """Raised when structured and state-v3 meanings are not identical."""
+
+
+logger = logging.getLogger(__name__)
+_ANTIGRAVITY_TOOL_SCHEMA_FAILURE = "antigravity_tool_schema"
 
 
 def _now() -> str:
@@ -371,6 +376,33 @@ class ArtifactBridge:
                 or payload.input_digest != measurement.input_digest
             ):
                 raise ArtifactBridgeError("provider attempt immutable binding differs from its first attempt")
+        if prior:
+            latest_attempt = max(record.payload.attempt_number for record in prior)
+            latest_records = tuple(
+                record for record in prior
+                if record.payload.attempt_number == latest_attempt
+            )
+            latest_terminal = tuple(
+                record for record in latest_records
+                if record.payload.phase in {"succeeded", "failed"}
+            )
+            if len(latest_terminal) != 1:
+                raise ArtifactBridgeError(
+                    "provider attempt requires one terminal direct predecessor"
+                )
+            schema_failures = tuple(
+                record for record in prior
+                if record.payload.phase == "failed"
+                and record.payload.failure_kind == _ANTIGRAVITY_TOOL_SCHEMA_FAILURE
+            )
+            if schema_failures and not (
+                len(schema_failures) == 1
+                and schema_failures[0].payload.attempt_number == 1
+                and latest_attempt == 1
+            ):
+                raise ArtifactBridgeError(
+                    "Antigravity tool-schema failure permits only physical attempt 2"
+                )
         attempt_number = max(
             (record.payload.attempt_number for record in prior), default=0
         ) + 1
@@ -392,12 +424,20 @@ class ArtifactBridge:
             failure_kind=None,
             usage=None,
         )
-        return self.append(
+        record = self.append(
             payload,
             logical_id=f"{logical_operation_id}-{attempt_number}",
             idempotency_key=f"provider-attempt:{logical_operation_id}:{attempt_number}:started",
             fingerprint_sha256=measurement_record.fingerprint.sha256,
         )
+        logger.info(
+            "provider attempt started provider=%s operation=%s logical_operation_id=%s attempt=%d status=started",
+            measurement.provider.value,
+            measurement.operation,
+            logical_operation_id,
+            attempt_number,
+        )
+        return record
 
     def finish_provider_attempt(
         self,
@@ -413,6 +453,7 @@ class ArtifactBridge:
             raise ArtifactBridgeError(
                 "provider attempt start is not in the accepted chain"
             )
+        replay_artifacts(chain, self.store.run_id)
         if not isinstance(started_record.payload, ProviderAttemptPayload) or started_record.payload.phase != "started":
             raise ArtifactBridgeError("provider attempt terminal requires a started record")
         started = started_record.payload
@@ -434,7 +475,7 @@ class ArtifactBridge:
                 not isinstance(payload, ProviderAttemptPayload)
                 or payload.phase != phase
                 or payload.failure_kind != failure_kind
-                or payload.usage != (usage if phase == "succeeded" else None)
+                or payload.usage != usage
                 or payload.logical_operation_id != started.logical_operation_id
                 or payload.attempt_number != started.attempt_number
             ):
@@ -455,14 +496,23 @@ class ArtifactBridge:
             ended_at=self.now(),
             duration_seconds=duration_seconds,
             failure_kind=failure_kind,
-            usage=usage if phase == "succeeded" else None,
+            usage=usage,
         )
-        return self.append(
+        record = self.append(
             payload,
             logical_id=started_record.logical_id,
             idempotency_key=terminal_key,
             fingerprint_sha256=started_record.fingerprint.sha256,
         )
+        logger.info(
+            "provider attempt terminal provider=%s operation=%s logical_operation_id=%s attempt=%d status=%s",
+            started.provider.value,
+            started.operation,
+            started.logical_operation_id,
+            started.attempt_number,
+            phase,
+        )
+        return record
 
 
 def _logical_provider_operation_id(

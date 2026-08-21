@@ -490,6 +490,7 @@ def _compact_usage_metadata(metadata: Mapping[str, object] | None) -> str:
 class ProviderAttemptLifecycle:
     start: Callable[[ProviderInputMeasurement, object | None], object]
     terminal: Callable[[object, float, str | None, ProviderUsagePayload | None], None]
+    monotonic_fn: Callable[[], float] = time.monotonic
 
 
 @dataclass
@@ -501,7 +502,7 @@ class _ProviderAttemptInvocation:
 
     def begin(self, measurement: ProviderInputMeasurement, bootstrap: object | None) -> None:
         self.handle = self.lifecycle.start(measurement, bootstrap)
-        self.monotonic_started = time.monotonic()
+        self.monotonic_started = self.lifecycle.monotonic_fn()
 
     def finish(self, failure_kind: AgentFailureKind | None, metadata: Mapping[str, object] | None) -> None:
         if self.handle is None or self.monotonic_started is None or self.terminalized:
@@ -509,9 +510,9 @@ class _ProviderAttemptInvocation:
         self.terminalized = True
         self.lifecycle.terminal(
             self.handle,
-            max(0.0, time.monotonic() - self.monotonic_started),
+            max(0.0, self.lifecycle.monotonic_fn() - self.monotonic_started),
             failure_kind.value if failure_kind is not None else None,
-            normalize_provider_usage(metadata) if failure_kind is None else None,
+            normalize_provider_usage(metadata),
         )
 
 
@@ -1593,6 +1594,32 @@ def _sanitize_provider_diagnostic(value: object) -> dict[str, object] | None:
     return sanitized or None
 
 
+_ANTIGRAVITY_TOOL_SCHEMA_ERROR = "additional properties 'LineNumber' not allowed"
+
+
+def _is_antigravity_tool_schema_failure(
+    agent_key: str,
+    exc: BaseException,
+    provider_data: Mapping[str, object] | None,
+) -> bool:
+    """Match only the known failed agy envelope, never free-form diagnostics."""
+    if (
+        agent_key != "antigravity"
+        or not isinstance(exc, AgentOutputError)
+        or not isinstance(provider_data, Mapping)
+        or provider_data.get("status") != "ERROR"
+    ):
+        return False
+    error = provider_data.get("error")
+    if isinstance(error, str):
+        message: object = error
+    elif isinstance(error, Mapping):
+        message = error.get("message")
+    else:
+        return False
+    return message == _ANTIGRAVITY_TOOL_SCHEMA_ERROR
+
+
 def classify_agent_failure(
     agent_key: str,
     exc: BaseException,
@@ -1635,6 +1662,9 @@ def classify_agent_failure(
             for pattern in _ANTIGRAVITY_TRANSIENT_PROVIDER_PATTERNS
         )
     )
+    antigravity_tool_schema_failure = _is_antigravity_tool_schema_failure(
+        agent_key, exc, provider_data
+    )
     if (
         is_quota_or_rate_limit_error(technical_text)
         or is_quota_or_rate_limit_error(structured_text)
@@ -1655,7 +1685,9 @@ def classify_agent_failure(
             exit_code=process_exit_code if isinstance(process_exit_code, int) else None,
             provider_data=provider_data,
         )
-    if isinstance(kind_hint, AgentFailureKind):
+    if antigravity_tool_schema_failure:
+        kind = AgentFailureKind.ANTIGRAVITY_TOOL_SCHEMA
+    elif isinstance(kind_hint, AgentFailureKind):
         kind = kind_hint
     elif isinstance(exc, subprocess.TimeoutExpired) or "timed out" in lowered or "timeout" in lowered:
         kind = AgentFailureKind.TIMEOUT
@@ -1831,7 +1863,9 @@ def run_agent_checked(
             validation_error = validate_output_contract(output)
             if validation_error:
                 if attempt_invocation is not None:
-                    attempt_invocation.finish(AgentFailureKind.OUTPUT, None)
+                    attempt_invocation.finish(
+                        AgentFailureKind.OUTPUT, agents[agent_key].metadata
+                    )
                 errors.append(validation_error)
                 rejected_output = output
             else:
@@ -1840,7 +1874,7 @@ def run_agent_checked(
                 return output
         except AgentInvocationError as failure:
             if attempt_invocation is not None:
-                attempt_invocation.finish(failure.kind, None)
+                attempt_invocation.finish(failure.kind, agents[agent_key].metadata)
             raise
         except ProviderInputBudgetExceeded:
             raise
@@ -1851,7 +1885,7 @@ def run_agent_checked(
                 invocation_id=invocation_id,
             )
             if attempt_invocation is not None:
-                attempt_invocation.finish(failure.kind, None)
+                attempt_invocation.finish(failure.kind, agents[agent_key].metadata)
             failure_path = log_dir / f"{log_prefix}.attempt-{attempt}.failure.json"
             write_file(
                 failure_path,

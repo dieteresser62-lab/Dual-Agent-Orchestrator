@@ -235,6 +235,44 @@ def normalize_review_contract(
     original = output.strip()
     text = original
     changes: list[str] = []
+
+    lines = text.splitlines()
+    findings_heading = re.compile(r"^[ \t]*FINDINGS[ \t]*:[ \t]*$", re.IGNORECASE)
+    findings_heading_indexes = [
+        index for index, line in enumerate(lines) if findings_heading.fullmatch(line)
+    ]
+    if len(findings_heading_indexes) == 1:
+        del lines[findings_heading_indexes[0]]
+        text = "\n".join(lines).strip()
+        changes.append("removed_empty_findings_heading")
+
+    own_previous_findings = tuple(
+        finding
+        for finding in previous_findings
+        if finding.origin.reporter is contract.reviewer
+    )
+    lines = text.splitlines()
+    empty_status = re.compile(
+        rf"^[ \t]*FINDING_STATUS[ \t]*:[ \t]*none reported by "
+        rf"{re.escape(contract.reviewer.value)} previously in this packet\.[ \t]*$",
+        re.IGNORECASE,
+    )
+    empty_status_indexes = [
+        index for index, line in enumerate(lines) if empty_status.fullmatch(line)
+    ]
+    status_marker_count = sum(
+        re.match(r"^[ \t]*FINDING_STATUS[ \t]*:", line, re.IGNORECASE) is not None
+        for line in lines
+    )
+    if (
+        not own_previous_findings
+        and len(empty_status_indexes) == 1
+        and status_marker_count == 1
+    ):
+        del lines[empty_status_indexes[0]]
+        text = "\n".join(lines).strip()
+        changes.append("removed_empty_finding_status")
+
     if remove_bulleted_evidence:
         text, removed = _remove_bulleted_evidence_section(text)
         if removed:
@@ -2488,11 +2526,15 @@ class WorkflowEngine:
             f"{state.run_id}:{unit.work_unit_id}:{state.current_step.value}:"
             f"{role.value}"
         )
-        prior_auto_resumes = sum(
-            item.idempotency_key == key
-            and item.failure_kind is error.kind
-            and item.automatic_resume
+        matching_failures = tuple(
+            item
             for item in unit.invocation_failures
+            if item.idempotency_key == key
+            and item.diff_fingerprint == fingerprint
+        )
+        prior_auto_resumes = sum(
+            item.failure_kind is error.kind and item.automatic_resume
+            for item in matching_failures
         )
         quota_policy = context.quota_wait_policy
         transient_policy = context.transient_retry_policy
@@ -2529,16 +2571,25 @@ class WorkflowEngine:
             and (unit.kind is WorkUnitKind.PLAN or fingerprint is not None)
             and prior_auto_resumes < transient_policy.maximum_auto_resumes
         )
+        automatic_tool_schema = (
+            error.kind is AgentFailureKind.ANTIGRAVITY_TOOL_SCHEMA
+            and transient_policy.automatic
+            and role is AgentRole.ANTIGRAVITY
+            and (unit.kind is WorkUnitKind.PLAN or fingerprint is not None)
+            and not matching_failures
+        )
         transient_delay = min(
             transient_policy.maximum_delay_seconds,
             transient_policy.initial_delay_seconds * (2 ** prior_auto_resumes),
         )
         resume_at = (
             quota_resume_at if error.kind is AgentFailureKind.QUOTA else
-            now_utc + timedelta(seconds=transient_delay) if automatic_network else
+            now_utc + timedelta(seconds=transient_delay)
+            if automatic_network or automatic_tool_schema else
             None
         )
-        automatic = automatic_quota or automatic_network
+        automatic = automatic_quota or automatic_network or automatic_tool_schema
+        prior_continuations = sum(item.automatic_resume for item in matching_failures)
         record = InvocationFailureRecord(
             invocation_id=error.invocation_id,
             idempotency_key=key,
@@ -2563,12 +2614,19 @@ class WorkflowEngine:
             safety_margin_seconds=(
                 quota_policy.safety_margin_seconds if automatic_quota else 0
             ),
-            auto_resume_count=prior_auto_resumes + (1 if automatic else 0),
+            auto_resume_count=prior_continuations + (1 if automatic else 0),
             automatic_resume=automatic,
             diff_fingerprint=fingerprint,
         )
         state = state.record_invocation_failure(
             record, wait_automatically=automatic
+        )
+        logger.info(
+            "provider invocation terminal role=%s operation=%s physical_attempt=%d status=failed retry=%s",
+            role.value,
+            state.current_step.value,
+            len(matching_failures) + 1,
+            "scheduled" if automatic else "halted",
         )
         self.driver.checkpoint(state, history)
         return state, record
