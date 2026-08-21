@@ -51,6 +51,51 @@ Punkt gilt erst nach seinem Merge zusätzlich als **auf master integriert**.
 Beobachtung, Ursache und frühere Diagnose bleiben auch nach einer Lösung als
 historische Evidenz erhalten.
 
+## Aktuelle Priorisierung nach Abschluss von 1.1C
+
+Diese Rangfolge ersetzt für die weitere Planung die bei der Entdeckung der
+einzelnen Fälle vergebenen Prioritätsangaben. Jene Angaben bleiben in den
+Detailabschnitten als historische Bewertung erhalten. Maßgeblich für neue
+Arbeitsaufträge ist ausschließlich die folgende Liste.
+
+Vor dem nächsten Stabilisierungspaket ist der vollständig getestete Stand von
+1.1C nach ausdrücklicher Freigabe nach `master` zu integrieren. Das ist eine
+Releasevoraussetzung, aber kein neuer Implementierungspunkt.
+
+| Rang | Erkenntnis | Nächstes überprüfbares Ergebnis | Begründung der Reihenfolge |
+|---|---|---|---|
+| **P0.1** | P2-FU-013 | Den exakt erkannten entfernten Antigravity-Fehler `additional properties 'LineNumber' not allowed` eng klassifizieren, höchstens einmal automatisch wiederholen und jeden physischen Versuch ohne erfundenes Reviewresultat messen. | Der Fehler verhinderte den letzten branchweiten Reviewvertrag von 1.1C2. Er blockiert damit einen autonomen ordnungsgemäßen Abschluss und kann bei Wiederholung erneut Providerkosten erzeugen. |
+| **P0.2** | P2-FU-021 | Eine gemeinsame, idempotente Abschlussoperation für Direkt- und Watchmodus bereitstellen, die Erfolg eindeutig meldet und Task sowie Sidecars genau einmal nach `outbox/done/` überführt. | Ein fachlich abgeschlossener Lauf darf nicht manuell archiviert werden müssen oder als erneut ausführbarer Inbox-Task zurückbleiben. Das ist die zweite unmittelbare Lücke in der autonomen Abschlussfähigkeit. |
+| **P1.1** | offener Restfall zu P2-FU-007 | Die exakt einmal beschriftete einzeilige `REVIEW_EVIDENCE`-Variante lokal und fail-closed normalisieren, ohne `claude_contract_repair` aufzurufen. | Der beobachtete Zusatzaufruf kostete Zeit, Tokens und Geld, obwohl keine fachliche Reparatur nötig war. Der Eingriff ist eng begrenzbar und durch die gespeicherte Realantwort direkt testbar. |
+| **P1.2** | P2-FU-018 | Bereits genehmigte externe Pfade über einen kanonischen pfadspezifischen Diffdigest sicher wiederverwenden; jede Inhaltsänderung verlangt weiterhin ein neues Gate. | Wiederholte sachgleiche Benutzergates verursachten zahlreiche manuelle Unterbrechungen. Die Korrektur ist sicherheitsrelevant und muss deshalb als eigenständiger, adversarial getesteter Slice erfolgen. |
+| **P1.3** | P2-FU-025 | Finalreview-Evidenz pro semantischem Fingerprint genau einmal materialisieren und rollenübergreifend wiederverwenden; Cachetreffer nur unter `--verbose` protokollieren. | Die wiederholte Kompaktierung erzeugt vermeidbare Laufzeit und unbrauchbares Standardlogging. Sie löst derzeit keinen zweiten Provideraufruf aus und steht daher hinter den direkt kosten- oder abschlusswirksamen Fällen. |
+| **P1.4** | P2-FU-020 | Entweder einen strukturierten, von Claude zwingend zu disponierenden Codex-Defektkandidatenvertrag einführen oder die adversariale Codex-Abschlussanalyse entfernen. | Erkannte Defekte dürfen nicht in unverbindlicher Prosa verloren gehen. Die Rollentrennung und das Kostenprofil verlangen vor der Umsetzung jedoch eine bewusste Vertragsentscheidung. |
+| **P2** | Restumfang von P2-DEC-001 | Die noch nicht record-first arbeitenden Liveübergänge einzeln inventarisieren und anschließend in kleinen, crashgetesteten Paketen auf Recordautorität und deterministische Projektion umstellen. | Das bleibt das wichtigste Architekturziel, ist aber breiter als die unmittelbar beobachteten Betriebsdefekte. Es soll erst nach den P0-/P1-Lücken und nicht als neuer Großumbau umgesetzt werden. |
+
+### Schnitt für die nächsten Arbeitsaufträge
+
+Die Punkte werden nicht zu einem einzigen weiteren Stabilisierungspaket
+zusammengezogen. Empfohlen ist folgende Reihenfolge eigenständig reviewbarer
+Aufträge:
+
+1. P2-FU-013 allein: entfernte Antigravity-Runtimefehler, begrenzter Retry und
+   vollständige Attempt-Telemetrie.
+2. P2-FU-021 allein: gemeinsame terminale Finalisierung von Direkt- und
+   Watchmodus einschließlich Crash-/Resume-Tests.
+3. Restfall P2-FU-007 und P2-FU-025 als höchstens zwei Slices eines
+   Reviewkosten-/Evidenzpakets.
+4. P2-FU-018 als eigener sicherheitsrelevanter Pfaddigest-Auftrag.
+5. P2-FU-020 erst nach expliziter Entscheidung zwischen Kandidatenvertrag und
+   Wegfall der Codex-Abschlussanalyse.
+6. Danach P2-DEC-001 neu inventarisieren und nur den nächsten geschlossenen
+   Record-first-Übergang beauftragen.
+
+Alle als gelöst ausgewiesenen Punkte sind aus dem aktiven Rückstand entfernt.
+Für die auf dem Feature-Branch gelösten Punkte P2-FU-003, P2-FU-022 und
+P2-FU-026 bis P2-FU-031 verbleiben ausschließlich Merge- und
+Integrationsnachweise; sie dürfen nicht ohne einen neuen reproduzierbaren
+Befund erneut zum Implementierungsscope werden.
+
 ## P2-FU-001 – Vollständiger Antigravity-Reviewvertrag trotz Non-Success verworfen
 
 **Status:** im Hotfix umgesetzt; 813/813 Tests bestanden  
@@ -318,7 +363,12 @@ durch die abschließende Vollsuite mit `993 passed` verifiziert.
 
 ## P2-PLAN-001 – Noch im Arbeitsplan zu verifizierende Scopegrenzen
 
-**Status:** im laufenden Plan-/Implementierungsreview beobachten
+**Status:** historischer Planprüfpunkt; keine aktive Umsetzungseinheit
+
+Die folgenden Grenzen wurden während der abgeschlossenen Pakete als
+Reviewleitplanken verwendet. Neue Arbeiten werden ausschließlich aus der
+aktuellen Priorisierung oben abgeleitet; dieser Abschnitt begründet keinen
+eigenständigen Folgeauftrag.
 
 - Slice 1 verlangt `AgentFailureKind.PREFLIGHT`, während der Enum derzeit in
   `src/workflow_state.py` liegt und diese Datei erst im exakten Pfad von Slice 2
