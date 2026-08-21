@@ -160,11 +160,21 @@ def run_final_review_preflight(
             if any(records_by_id[ref].fingerprint != item.fingerprint for ref in references):
                 return _deny("technical", "FINGERPRINT-MISMATCH", (item.record_id, *references), (), "restore fingerprint-identical binding references")
 
-    allowed_patterns = (
-        *state.task_scope_patterns,
-        *(path for item in state.slices for path in item.scope_paths),
+    allowed_patterns = tuple(
+        dict.fromkeys(
+            (
+                *state.task_scope_patterns,
+                *(path for item in state.slices for path in item.scope_paths),
+            )
+        )
     )
-    approved_external_paths = set(_approved_committed_external_paths(state, records))
+    approved_external_paths = set(
+        _approved_external_paths(
+            state,
+            records,
+            current_fingerprint=measurement_record.fingerprint.sha256,
+        )
+    )
     unexpected = tuple(
         sorted(
             path
@@ -220,18 +230,20 @@ def run_final_review_preflight(
     return FinalReviewPreflightResult("passed")
 
 
-def _approved_committed_external_paths(
+def _approved_external_paths(
     state: WorkflowState,
     records: Sequence[ArtifactRecord],
+    *,
+    current_fingerprint: str,
 ) -> frozenset[str]:
-    """Recover exact path grants that were bound into completed Slice commits.
+    """Recover exact path grants bound to commits or the active final review.
 
-    A user decision alone is insufficient.  The structured chain must contain
-    both its approved user-gate mirror and a commit binding with the identical
-    fingerprint whose target is the completed Slice commit.  This keeps the
-    final-review scope check symmetric with the earlier Slice commit
-    authorization without turning a historical path approval into a general
-    task-scope expansion.
+    Completed Slice grants require both the approved user-gate mirror and a
+    commit binding with the identical fingerprint.  A final-review grant cannot
+    have a Slice commit binding yet, so it is accepted only from the active
+    final-review work unit, for the exact current fingerprint, with its matching
+    structured user-gate record.  Historical approvals never widen later
+    fingerprints.
     """
     approved_gates = {
         (item.fingerprint.sha256, item.payload.gate_kind)
@@ -265,6 +277,17 @@ def _approved_committed_external_paths(
             if (decision.fingerprint, gate_kind) not in approved_gates:
                 continue
             if (decision.fingerprint, slice_record.commit_ref) not in commit_bindings:
+                continue
+            authorized.update(decision.paths)
+    if state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW:
+        for decision in state.current_work_unit.gate_decisions:
+            gate_kind = _EXTERNAL_PATH_GATE_KINDS.get(decision.reason)
+            if (
+                gate_kind is None
+                or not decision.approved
+                or decision.fingerprint != current_fingerprint
+                or (decision.fingerprint, gate_kind) not in approved_gates
+            ):
                 continue
             authorized.update(decision.paths)
     return frozenset(authorized)

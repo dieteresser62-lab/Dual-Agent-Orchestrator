@@ -23,7 +23,9 @@ from artifact_store import ArtifactStore
 from contracts import PlannedSlice
 from final_review_preflight import relevant_record_head, run_final_review_preflight
 from workflow_state import (
+    AgentFailureKind,
     GateReason,
+    InvocationFailureRecord,
     WorkflowStep,
     WorkUnitKind,
     init_workflow_state,
@@ -201,6 +203,87 @@ def test_preflight_matches_repository_paths_against_task_scope_globs(
         records=bridge.store.load_chain(),
         measurement_record=measurement,
         repository_paths=("src/nested/one.py",),
+    )
+
+    assert result.passed
+
+
+def test_preflight_deduplicates_overlapping_task_and_slice_scope(
+    tmp_path: Path,
+) -> None:
+    state = replace(
+        _state(WorkflowStep.CODEX_FINAL_REVIEW),
+        task_scope_patterns=("src/one.py",),
+    )
+    bridge = ArtifactBridge(ArtifactStore(tmp_path, state.run_id))
+    _attest(bridge)
+    measurement = _measurement(bridge, state, state.current_step.value)
+
+    result = run_final_review_preflight(
+        state=state,
+        records=bridge.store.load_chain(),
+        measurement_record=measurement,
+        repository_paths=("src/one.py",),
+    )
+
+    assert result.passed
+
+
+def test_preflight_accepts_exact_current_final_review_gate_paths(
+    tmp_path: Path,
+) -> None:
+    state = _state(WorkflowStep.CODEX_FINAL_REVIEW)
+    failure = InvocationFailureRecord(
+        invocation_id="final-review-runtime-failure",
+        idempotency_key="preflight-run:2:codex_final_review:codex",
+        role="codex",
+        failure_kind=AgentFailureKind.RUNTIME,
+        provider_text="validation path patterns must be unique",
+        received_at="2026-08-21T09:59:00+00:00",
+        step=WorkflowStep.CODEX_FINAL_REVIEW,
+        slice_id=state.current_slice_id,
+        work_unit_id=state.current_work_unit_id,
+        diagnostic_exit_code=3,
+        automatic_resume=False,
+        diff_fingerprint="c" * 64,
+    )
+    state = state.record_invocation_failure(
+        failure,
+        wait_automatically=False,
+    ).resume_after_invocation_halt().await_user_gate(
+        reason=GateReason.QUOTA_RESUME_DIFF,
+        detail="QUOTA-RESUME-DIFF | reviewed final-review hotfix",
+        fingerprint=FINGERPRINT,
+        paths=("src/final_review_preflight.py",),
+        resume_step=WorkflowStep.CODEX_FINAL_REVIEW,
+    ).record_user_gate_decision(
+        approved=True,
+        fingerprint=FINGERPRINT,
+        paths=("src/final_review_preflight.py",),
+        decided_by="operator",
+        decided_at="2026-08-21T10:00:00+00:00",
+        rationale="reviewed exact final-review hotfix",
+    )
+    bridge = ArtifactBridge(ArtifactStore(tmp_path, state.run_id))
+    bridge.append(
+        GatePayload(
+            "quota-resume-diff",
+            "approved",
+            Role.USER,
+            "reviewed exact final-review hotfix",
+        ),
+        logical_id="final-review-user-gate",
+        idempotency_key="final-review-user-gate",
+        fingerprint_sha256=FINGERPRINT,
+    )
+    _attest(bridge)
+    measurement = _measurement(bridge, state, state.current_step.value)
+
+    result = run_final_review_preflight(
+        state=state,
+        records=bridge.store.load_chain(),
+        measurement_record=measurement,
+        repository_paths=("src/one.py", "src/final_review_preflight.py"),
     )
 
     assert result.passed
