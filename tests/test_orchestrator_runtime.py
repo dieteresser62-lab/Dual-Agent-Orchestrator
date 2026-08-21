@@ -31,6 +31,7 @@ from inbox_watcher import WatchTaskDisposition, WatchTaskResult
 from orchestrator import ProductionWorkflowDriver, run_pipeline, run_production_workflow
 from workflow import (
     CodexInvocation,
+    ContractRepairInvocation,
     EvidenceKind,
     ReviewerInvocation,
     WorkflowChanges,
@@ -361,6 +362,56 @@ def test_reviewer_does_not_recover_real_incomplete_or_foreign_failure(
         driver.invoke_reviewer(invocation)
 
     assert caught.value is failure
+
+
+@pytest.mark.parametrize(
+    ("reviewer", "expected_operation"),
+    (
+        (AgentRole.CLAUDE, "claude_contract_repair"),
+        (AgentRole.ANTIGRAVITY, "antigravity_contract_repair"),
+    ),
+)
+def test_contract_repair_uses_a_separate_provider_operation(
+    tmp_path: Path,
+    monkeypatch,
+    reviewer: AgentRole,
+    expected_operation: str,
+) -> None:
+    repository = _repository(tmp_path, "feature/repair-operation")
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    driver.active_state = init_workflow_state(
+        run_id="repair-operation",
+        task_file=str(repository / "task.md"),
+        branch="feature/repair-operation",
+        branch_base=_git(repository, "rev-parse", "HEAD"),
+        slice_count=1,
+    )
+    captured: dict[str, object] = {}
+
+    def fake_agent(*args, **kwargs):  # type: ignore[no-untyped-def]
+        captured["args"] = args
+        captured.update(kwargs)
+        return "STATUS: DONE"
+
+    monkeypatch.setattr(driver, "_agent", fake_agent)
+    output = driver.repair_review_contract(
+        ContractRepairInvocation(
+            reviewer=reviewer,
+            rejected_output="REVIEWER: claude",
+            validation_error="REVIEW_EVIDENCE is ambiguous",
+            contract="contract",
+        )
+    )
+
+    assert output == "STATUS: DONE"
+    assert captured["operation"] == expected_operation
+    assert captured["reviewer_repository_required"] is False
 
 
 def test_quota_classified_recoverable_contract_still_persists_matching_quota_pause_record(

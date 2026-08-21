@@ -318,6 +318,39 @@ def test_positive_approval_requires_all_gate_records(
         validate_review_response(output, contract)
 
 
+def test_review_evidence_escaped_pipe_and_backslash_round_trip() -> None:
+    contract = _contract()
+    output = _valid_evidence_output(contract).replace(
+        "contracts, lifecycle, injection | parser drift | a new marker bypasses validation",
+        r"read\|write and C:\\repo | risk\|branch with \\ | break at C:\\tmp\|x",
+    )
+
+    result = validate_review_response(output, contract)
+
+    assert result.evidence is not None
+    assert result.evidence.dimensions == r"read|write and C:\repo"
+    assert result.evidence.largest_residual_risk == "risk|branch with \\"
+    assert result.evidence.break_condition == r"break at C:\tmp|x"
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    (
+        r"one\q | two | three",
+        "one | two | three\\",
+        r"one | two | three | four",
+    ),
+)
+def test_review_evidence_rejects_invalid_or_ambiguous_escapes(evidence: str) -> None:
+    contract = _contract()
+    output = _valid_evidence_output(contract).replace(
+        "contracts, lifecycle, injection | parser drift | a new marker bypasses validation",
+        evidence,
+    )
+    with pytest.raises(ContractValidationError, match="REVIEW_EVIDENCE"):
+        validate_review_response(output, contract)
+
+
 def test_pre_mortem_must_precede_positive_approval() -> None:
     contract = _contract()
     output = _valid_evidence_output(contract).replace(

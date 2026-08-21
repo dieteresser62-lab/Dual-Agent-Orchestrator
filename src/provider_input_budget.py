@@ -19,13 +19,19 @@ PROVIDER_OPERATIONS: Mapping[str, frozenset[str]] = {
         }
     ),
     "claude": frozenset(
-        {"claude_plan_review", "claude_slice_review", "claude_final_review"}
+        {
+            "claude_plan_review",
+            "claude_slice_review",
+            "claude_final_review",
+            "claude_contract_repair",
+        }
     ),
     "antigravity": frozenset(
         {
             "antigravity_plan_review",
             "antigravity_slice_review",
             "antigravity_final_review",
+            "antigravity_contract_repair",
         }
     ),
 }

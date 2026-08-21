@@ -36,6 +36,7 @@ from orchestrator import (
 from repo_changes import collect_repository_changes
 from workflow import (
     WorkflowExecutionError,
+    normalize_review_contract,
     normalize_repaired_review_contract_output,
     normalize_review_contract_output,
 )
@@ -50,6 +51,30 @@ from workflow_state import (
 def _git(repository: Path, *args: str) -> None:
     subprocess.run(
         ["git", *args], cwd=repository, check=True, capture_output=True
+    )
+
+
+def _validated_slice_contract(
+    slice_id: str = "01", expected_test_files: tuple[str, ...] = ()
+) -> StepContract:
+    fingerprint = "a" * 64
+    return StepContract(
+        name="slice-review",
+        reviewer=AgentRole.CLAUDE,
+        approval_marker=ApprovalMarker.SLICE,
+        slice_id=slice_id,
+        round_number=1,
+        review_fingerprint=fingerprint,
+        validation_attestation=ValidationAttestation(
+            attestation_id="validation-normalization",
+            diff_fingerprint=fingerprint,
+            expected_commands=("pytest",),
+            records=(ValidationRecord(ValidationStatus.PASS, "pytest", 0),),
+            output_digest="b" * 64,
+            summary="passed",
+        ),
+        expected_test_files=expected_test_files,
+        test_changes_approved=bool(expected_test_files),
     )
 
 
@@ -103,7 +128,68 @@ def test_antigravity_known_contract_repair_wrapper_is_unwrapped() -> None:
     assert "```" not in output
 
 
-def test_local_review_normalization_adds_bound_test_marker_and_drops_foreign_status() -> None:
+def test_saved_em_dash_review_normalizes_without_provider_repair() -> None:
+    contract = _validated_slice_contract()
+    fixture = (
+        Path(__file__).parent
+        / "fixtures/review_responses/claude-slice-review-em-dash-evidence.txt"
+    ).read_text(encoding="utf-8")
+
+    result = normalize_review_contract(fixture, contract, (), provider_completed=True)
+    parsed = validate_review_response(result.output, contract, ())
+
+    assert result.changes == ("canonicalized_labeled_evidence",)
+    assert parsed.evidence is not None
+    assert parsed.evidence.dimensions == "correctness, contracts, failure paths"
+
+
+def test_bound_metadata_and_done_are_added_only_when_unambiguous() -> None:
+    contract = _validated_slice_contract("07", ("tests/a.py", "tests/z.py"))
+    output = "\n".join(
+        (
+            "REVIEW_EVIDENCE: scope | risk | break",
+            "PRE_MORTEM: drift",
+            "SLICE_APPROVAL: YES",
+        )
+    )
+
+    result = normalize_review_contract(output, contract, (), provider_completed=True)
+
+    assert result.changes == (
+        "added_bound_reviewer",
+        "added_bound_test_files",
+        "added_bound_slice_id",
+        "added_terminal_done",
+    )
+    assert validate_review_response(result.output, contract, ()).approval is True
+    assert normalize_review_contract(
+        result.output, contract, (), provider_completed=True
+    ).changes == ()
+
+
+def test_done_is_not_added_without_confirmed_provider_completion() -> None:
+    contract = StepContract(
+        name="slice-review",
+        reviewer=AgentRole.CLAUDE,
+        approval_marker=ApprovalMarker.SLICE,
+        slice_id="01",
+        round_number=1,
+    )
+    output = "\n".join(
+        (
+            "REVIEWER: claude",
+            "TEST_FILES_TOUCHED: NONE",
+            "REVIEW_EVIDENCE: scope | risk | break",
+            "PRE_MORTEM: drift",
+            "SLICE_APPROVAL: 01 | YES",
+        )
+    )
+    result = normalize_review_contract(output, contract, (), provider_completed=False)
+    assert "added_terminal_done" not in result.changes
+    assert result.diagnostic == "status_not_added:provider_completion_unconfirmed"
+
+
+def test_local_review_normalization_adds_bound_test_marker_without_mutating_findings() -> None:
     contract = StepContract(
         name="plan-review",
         reviewer=AgentRole.ANTIGRAVITY,
@@ -133,11 +219,11 @@ def test_local_review_normalization_adds_bound_test_marker_and_drops_foreign_sta
     normalized = normalize_review_contract_output(output, contract, (claude_finding,))
 
     assert normalized.splitlines()[1] == "TEST_FILES_TOUCHED: NONE"
-    assert "FINDING_STATUS: C-01" not in normalized
+    assert "FINDING_STATUS: C-01 | OPEN | still applies" in normalized
     assert "NEW_FINDING: A-01" in normalized
 
 
-def test_review_normalization_carries_omitted_owned_findings_open() -> None:
+def test_review_normalization_does_not_invent_omitted_owned_finding_status() -> None:
     fingerprint = "a" * 64
     contract = StepContract(
         name="slice-review",
@@ -179,15 +265,10 @@ def test_review_normalization_carries_omitted_owned_findings_open() -> None:
     )
 
     normalized = normalize_review_contract_output(output, contract, findings)
-    result = validate_review_response(normalized, contract, findings)
-
     assert "FINDING_STATUS: C-02 | OPEN | explicitly deferred" in normalized
-    assert (
-        "FINDING_STATUS: C-03 | OPEN | Carried forward unchanged; "
-        "the current review supplied no explicit status update."
-    ) in normalized
-    assert result.approval is True
-    assert tuple(item.finding_id for item in result.open_findings) == ("C-02", "C-03")
+    assert "FINDING_STATUS: C-03" not in normalized
+    with pytest.raises(ContractValidationError, match="missing review update.*C-03"):
+        validate_review_response(normalized, contract, findings)
 
 
 def test_review_normalization_never_carries_foreign_finding_as_owned_update() -> None:
@@ -222,7 +303,7 @@ def test_review_normalization_never_carries_foreign_finding_as_owned_update() ->
     assert "FINDING_STATUS: C-03" not in normalized
 
 
-def test_review_normalization_converts_labeled_evidence_without_model_repair() -> None:
+def test_review_normalization_does_not_guess_unlabeled_dimensions() -> None:
     contract = StepContract(
         name="slice-review",
         reviewer=AgentRole.CLAUDE,
@@ -244,20 +325,11 @@ def test_review_normalization_converts_labeled_evidence_without_model_repair() -
     )
 
     normalized = normalize_review_contract_output(output, contract, ())
-    assert (
-        "REVIEW_EVIDENCE: checked scope and anchors. | documentation drift. | "
-        "an anchor disappears."
-    ) in normalized
+    assert normalized == output
 
 
 def test_review_normalization_accepts_realistic_break_condition_label() -> None:
-    contract = StepContract(
-        name="slice-review",
-        reviewer=AgentRole.CLAUDE,
-        approval_marker=ApprovalMarker.SLICE,
-        slice_id="01",
-        round_number=1,
-    )
+    contract = _validated_slice_contract()
     output = "\n".join(
         (
             "REVIEWER: claude",
@@ -274,9 +346,12 @@ def test_review_normalization_accepts_realistic_break_condition_label() -> None:
     normalized = normalize_review_contract_output(output, contract, ())
 
     assert (
-        "REVIEW_EVIDENCE: Checked dimensions — prepare→measure→(raise∣proceed). | "
+        "REVIEW_EVIDENCE: prepare→measure→(raise\\|proceed). | "
         "private runtime files survive. | capability validation raises after preparation."
     ) in normalized
+    result = validate_review_response(normalized, contract, ())
+    assert result.evidence is not None
+    assert result.evidence.dimensions == "prepare→measure→(raise|proceed)."
 
 
 def test_repaired_review_normalization_removes_one_non_contract_preamble() -> None:
@@ -398,7 +473,7 @@ def test_review_normalization_does_not_flatten_multiline_evidence() -> None:
     assert normalize_review_contract_output(output, contract, ()) == output
 
 
-def test_review_normalization_preserves_unicode_offsets() -> None:
+def test_review_normalization_preserves_unlabeled_unicode_text_fail_closed() -> None:
     contract = StepContract(
         name="slice-review",
         reviewer=AgentRole.CLAUDE,
@@ -420,10 +495,7 @@ def test_review_normalization_preserves_unicode_offsets() -> None:
 
     normalized = normalize_review_contract_output(output, contract, ())
 
-    assert (
-        "REVIEW_EVIDENCE: prüfte die Straße. | größere Abweichung. | "
-        "Übergabe scheitert."
-    ) in normalized
+    assert normalized == output
 
 
 def test_review_normalization_rejects_multiple_evidence_lines() -> None:
@@ -466,8 +538,28 @@ def test_review_normalization_handles_long_nonmatching_line_in_linear_time() -> 
     started = time.monotonic()
     normalized = normalize_review_contract_output(output, contract, ())
 
-    assert normalized == output.strip()
+    assert normalized.endswith("REVIEW_EVIDENCE:")
     assert time.monotonic() - started < 0.5
+
+
+@pytest.mark.parametrize("separator", (":", " - ", " – ", " — "))
+def test_review_normalization_accepts_all_bound_label_separators(separator: str) -> None:
+    contract = _validated_slice_contract()
+    output = "\n".join(
+        (
+            "REVIEWER: claude",
+            "TEST_FILES_TOUCHED: NONE",
+            f"REVIEW_EVIDENCE: Checked dimensions{separator}scope "
+            f"Largest residual risk{separator}risk "
+            f"Realistic break condition{separator}break",
+            "PRE_MORTEM: drift",
+            "SLICE_APPROVAL: 01 | YES",
+            "STATUS: DONE",
+        )
+    )
+    normalized = normalize_review_contract_output(output, contract, ())
+    assert "REVIEW_EVIDENCE: scope | risk | break" in normalized
+    assert validate_review_response(normalized, contract, ()).approval is True
 
 
 def test_generic_work_plan_audit_is_prepared_and_fingerprint_neutral(tmp_path: Path) -> None:

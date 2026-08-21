@@ -985,7 +985,7 @@ def test_read_only_reviewer_workspace_blocks_writes_and_preserves_source(tmp_pat
 
 
 def test_reviewer_process_pwd_matches_disposable_working_directory(
-    monkeypatch, tmp_path: Path
+    monkeypatch, tmp_path: Path, caplog
 ) -> None:
     source = tmp_path / "source"
     source.mkdir()
@@ -1003,7 +1003,11 @@ def test_reviewer_process_pwd_matches_disposable_working_directory(
         required_hosts: tuple[str, ...] = ()
         capability = CapabilitySpec((), (), (r".*",), ())
         capability_verified = True
-        metadata: dict[str, object] = {}
+        metadata: dict[str, object] = {
+            "duration_api_ms": 1250,
+            "num_turns": 2,
+            "usage": {"input_tokens": 10, "output_tokens": 20},
+        }
 
         def bind_reviewer_workspace(self, source_root: Path, snapshot_root: Path) -> None:
             captured["bound_source"] = source_root
@@ -1037,11 +1041,13 @@ def test_reviewer_process_pwd_matches_disposable_working_directory(
     monkeypatch.setenv("RUN_TASK_REVIEW_TEST_COMMAND", "python3 -m pytest tests/ -v")
     monkeypatch.setenv("RUN_TASK_REVIEW_PROBE_PATH", "README.md")
     monkeypatch.setenv("RUN_TASK_REVIEW_TIMEOUT", "1800")
+    caplog.set_level("INFO")
     output = run_agent(
         ReviewerAdapter(),
         "prompt",
         config=OrchestratorConfig(repo_root=source, agent_live_stream=False),
         shorten=lambda text, limit: (text or "")[:limit],
+        operation="claude_contract_repair",
     )
 
     working_directory = captured["cwd"]
@@ -1056,6 +1062,8 @@ def test_reviewer_process_pwd_matches_disposable_working_directory(
     assert captured["bound_snapshot"] == working_directory
     assert not working_directory.exists()
     assert output == "STATUS: DONE"
+    assert "operation=claude_contract_repair" in caplog.text
+    assert "duration=1.25s turns=2 input_tokens=10 output_tokens=20" in caplog.text
 
 
 def test_unknown_agent_version_is_a_non_retryable_gate(monkeypatch, tmp_path: Path) -> None:

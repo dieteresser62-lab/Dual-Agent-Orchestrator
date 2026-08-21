@@ -1,0 +1,6 @@
+REVIEWER: claude
+TEST_FILES_TOUCHED: NONE
+REVIEW_EVIDENCE: Checked dimensions — correctness, contracts, failure paths Largest residual risk — adapter metadata drift Realistic break condition — a successful process loses its final marker
+PRE_MORTEM: a provider wrapper changes punctuation without changing the review
+SLICE_APPROVAL: 01 | YES
+STATUS: DONE

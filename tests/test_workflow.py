@@ -1670,10 +1670,15 @@ def test_contract_only_repair_receives_no_implementation_evidence() -> None:
         "Corrected, complete answer:\n\n"
         + valid
     )
+    rejected = valid.replace(
+        "REVIEW_EVIDENCE: reviewed invariants | residual concurrency risk | parallel mutation",
+        "REVIEW_EVIDENCE: Checked dimensions: invariants Largest residual risk: risk "
+        "Realistic break condition:",
+    )
     driver = FakeDriver(
         snapshots=[changes],
         codex_outputs=[_codex_ready()],
-        reviewer_outputs=[valid.removesuffix("\nSTATUS: DONE"), _review_approval(AgentRole.ANTIGRAVITY)],
+        reviewer_outputs=[rejected, _review_approval(AgentRole.ANTIGRAVITY)],
         repair_outputs=[wrapped_repair],
     )
 
@@ -1683,7 +1688,7 @@ def test_contract_only_repair_receives_no_implementation_evidence() -> None:
     assert len(driver.repair_calls) == 1
     repair = driver.repair_calls[0]
     assert "diff -- src/early.py" not in repair.contract
-    assert repair.rejected_output == valid.removesuffix("\nSTATUS: DONE")
+    assert repair.rejected_output == rejected
     assert len(driver.reviewer_calls) == 2
 
 
@@ -1692,10 +1697,11 @@ def test_realistic_break_condition_is_normalized_without_contract_repair() -> No
     labeled = _review_approval(AgentRole.CLAUDE).replace(
         "REVIEW_EVIDENCE: reviewed invariants | residual concurrency risk | "
         "parallel mutation",
-        "REVIEW_EVIDENCE: reviewed read|write invariants. Largest residual risk: residual "
-        "concurrency risk. Realistic break condition: parallel mutation",
+        "REVIEW_EVIDENCE: Checked dimensions — reviewed read|write invariants. "
+        "Largest residual risk — residual concurrency risk. "
+        "Realistic break condition — parallel mutation",
     )
-    assert "Largest residual risk:" in labeled
+    assert "Largest residual risk —" in labeled
     driver = FakeDriver(
         snapshots=[changes],
         codex_outputs=[_codex_ready()],
@@ -1715,7 +1721,7 @@ def test_realistic_break_condition_is_normalized_without_contract_repair() -> No
     ]
 
 
-def test_missing_verdict_after_compact_repair_stops_at_claude_without_antigravity() -> None:
+def test_missing_verdict_stops_without_repair_or_antigravity() -> None:
     changes = _changes("1", "src/early.py", TEST_FILE)
     missing = "\n".join(
         (
@@ -1747,7 +1753,7 @@ def test_missing_verdict_after_compact_repair_stops_at_claude_without_antigravit
         is AgentFailureKind.OUTPUT
     )
     assert [call.reviewer for call in driver.reviewer_calls] == [AgentRole.CLAUDE]
-    assert len(driver.repair_calls) == 1
+    assert driver.repair_calls == []
     assert driver.commit_calls == []
     assert driver.checkpoints[-1].current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
 

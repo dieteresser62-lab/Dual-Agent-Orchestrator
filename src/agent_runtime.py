@@ -829,6 +829,7 @@ def run_agent(
     timeout_seconds = adapter.timeout
     extra_files: dict[str, str] = {}
 
+    invocation_started = time.monotonic()
     try:
         if adapter.reviewer:
             workspace = (
@@ -1045,16 +1046,25 @@ def run_agent(
         if adapter.metadata:
             if config.agent_live_stream_mode == "full" or config.agent_output_mode == "full":
                 logger.info(
-                    "[AGENT_USAGE] role=%s metadata=%s",
+                    "[AGENT_USAGE] role=%s operation=%s metadata=%s",
                     agent_key,
+                    effective_operation,
                     json.dumps(adapter.metadata, ensure_ascii=False, sort_keys=True),
                 )
             else:
                 logger.info(
-                    "[AGENT_USAGE] role=%s %s",
+                    "[AGENT_USAGE] role=%s operation=%s %s",
                     agent_key,
+                    effective_operation,
                     _compact_usage_metadata(adapter.metadata),
                 )
+        logger.info(
+            "[PROVIDER_COMPLETION] role=%s operation=%s success=true elapsed=%.2fs usage=%s",
+            agent_key,
+            effective_operation,
+            time.monotonic() - invocation_started,
+            _compact_usage_metadata(adapter.metadata) if adapter.metadata else "unavailable",
+        )
         return output
     except subprocess.TimeoutExpired as exc:
         raise AgentProcessError(

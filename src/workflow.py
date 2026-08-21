@@ -51,6 +51,7 @@ from contracts import (
     ValidationStatus,
     validate_codex_response,
     validate_review_response,
+    encode_review_evidence_field,
 )
 from gates import (
     BRANCH_MISMATCH_RULE_ID,
@@ -122,6 +123,156 @@ class WorkflowContractError(WorkflowExecutionError):
     """Raised after a reviewer response and its compact format repair both fail."""
 
 
+@dataclass(frozen=True)
+class ReviewNormalizationResult:
+    output: str
+    changes: tuple[str, ...]
+    diagnostic: str | None
+    reviewer: AgentRole
+    step_name: str
+    fingerprint: str | None
+    original_digest: str
+    result_digest: str
+
+
+_EVIDENCE_LABELS = (
+    "Checked dimensions",
+    "Largest residual risk",
+    "Realistic break condition",
+)
+_EVIDENCE_SEPARATOR = r"[ \t]*[:\-\u2013\u2014][ \t]*"
+
+
+def _normalize_labeled_evidence(body: str) -> tuple[str, str, str] | None:
+    if re.search(
+        rf"(?i)(?<!Realistic )(?<!\w)Break condition{_EVIDENCE_SEPARATOR}",
+        body,
+    ):
+        return None
+    positions: list[tuple[int, int]] = []
+    for label in _EVIDENCE_LABELS:
+        matches = list(
+            re.finditer(
+                rf"(?i)(?<!\w){re.escape(label)}{_EVIDENCE_SEPARATOR}", body
+            )
+        )
+        if len(matches) != 1:
+            return None
+        positions.append((matches[0].start(), matches[0].end()))
+    if positions[0][0] != 0 or not (
+        positions[0][1] <= positions[1][0] <= positions[1][1] <= positions[2][0]
+    ):
+        return None
+    values = (
+        body[positions[0][1] : positions[1][0]].strip(),
+        body[positions[1][1] : positions[2][0]].strip(),
+        body[positions[2][1] :].strip(),
+    )
+    return values if all(values) else None
+
+
+def normalize_review_contract(
+    output: str,
+    contract: StepContract,
+    previous_findings: tuple[FindingRecord, ...],
+    *,
+    provider_completed: bool = False,
+) -> ReviewNormalizationResult:
+    """Apply deterministic syntax/metadata completion and report every mutation."""
+    original = output.strip()
+    text = original
+    changes: list[str] = []
+    lines = text.splitlines()
+
+    reviewer_count = sum(
+        re.match(r"^[ \t]*REVIEWER[ \t]*:", line, re.IGNORECASE) is not None
+        for line in lines
+    )
+    if reviewer_count == 0:
+        lines.insert(0, f"REVIEWER: {contract.reviewer.value}")
+        changes.append("added_bound_reviewer")
+    text = "\n".join(lines).strip()
+
+    evidence_lines = text.splitlines()
+    evidence_pattern = re.compile(
+        r"^(?P<prefix>[ \t]*REVIEW_EVIDENCE[ \t]*:[ \t]*)(?P<body>.*)$",
+        re.IGNORECASE,
+    )
+    evidence_matches = [
+        (index, match)
+        for index, line in enumerate(evidence_lines)
+        if (match := evidence_pattern.fullmatch(line)) is not None
+    ]
+    if len(evidence_matches) == 1:
+        index, match = evidence_matches[0]
+        values = _normalize_labeled_evidence(match.group("body"))
+        if values is not None:
+            encoded = " | ".join(encode_review_evidence_field(value) for value in values)
+            evidence_lines[index] = f"{match.group('prefix')}{encoded}"
+            text = "\n".join(evidence_lines)
+            changes.append("canonicalized_labeled_evidence")
+
+    if not re.search(r"^[ \t]*TEST_FILES_TOUCHED[ \t]*:", text, re.I | re.M):
+        lines = text.splitlines()
+        reviewer_indexes = [
+            index
+            for index, line in enumerate(lines)
+            if re.fullmatch(
+                rf"[ \t]*REVIEWER[ \t]*:[ \t]*{re.escape(contract.reviewer.value)}[ \t]*",
+                line,
+                re.IGNORECASE,
+            )
+        ]
+        if len(reviewer_indexes) == 1:
+            expected = ",".join(contract.expected_test_files) or "NONE"
+            lines.insert(reviewer_indexes[0] + 1, f"TEST_FILES_TOUCHED: {expected}")
+            text = "\n".join(lines)
+            changes.append("added_bound_test_files")
+
+    if contract.approval_marker is ApprovalMarker.SLICE:
+        abbreviated = re.compile(
+            r"^[ \t]*SLICE_APPROVAL[ \t]*:[ \t]*(YES|NO)[ \t]*$",
+            re.IGNORECASE | re.MULTILINE,
+        )
+        matches = list(abbreviated.finditer(text))
+        marker_count = len(
+            re.findall(r"^[ \t]*SLICE_APPROVAL[ \t]*:", text, re.I | re.M)
+        )
+        if len(matches) == 1 and marker_count == 1:
+            decision = matches[0].group(1)
+            text = (
+                text[: matches[0].start()]
+                + f"SLICE_APPROVAL: {contract.slice_id} | {decision}"
+                + text[matches[0].end() :]
+            )
+            changes.append("added_bound_slice_id")
+
+    diagnostic: str | None = None
+    if not re.search(r"^[ \t]*STATUS[ \t]*:", text, re.I | re.M):
+        if provider_completed:
+            candidate = f"{text.rstrip()}\nSTATUS: DONE"
+            try:
+                validate_review_response(candidate, contract, previous_findings)
+            except ContractValidationError as exc:
+                diagnostic = f"status_not_added:{exc}"
+            else:
+                text = candidate
+                changes.append("added_terminal_done")
+        else:
+            diagnostic = "status_not_added:provider_completion_unconfirmed"
+
+    return ReviewNormalizationResult(
+        output=text,
+        changes=tuple(changes),
+        diagnostic=diagnostic,
+        reviewer=contract.reviewer,
+        step_name=contract.name,
+        fingerprint=contract.review_fingerprint,
+        original_digest=hashlib.sha256(original.encode("utf-8")).hexdigest(),
+        result_digest=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+    )
+
+
 def normalize_codex_contract_output(
     output: str,
     contract: CodexStepContract,
@@ -152,150 +303,18 @@ def normalize_review_contract_output(
     previous_findings: tuple[FindingRecord, ...],
 ) -> str:
     """Apply only contract-owned, semantically neutral reviewer normalizations."""
-    text = output.strip()
-    changed = False
-    finding_owners = {
-        finding.finding_id: finding.origin.reporter for finding in previous_findings
-    }
-    kept: list[str] = []
-    foreign_pattern = re.compile(
-        r"^\s*(?:FINDING_STATUS|FINDING_RECLASSIFIED)\s*:\s*([^|]+?)\s*\|",
-        re.IGNORECASE,
-    )
-    for line in text.splitlines():
-        match = foreign_pattern.match(line)
-        if match is not None:
-            finding_id = match.group(1).strip().upper()
-            owner = finding_owners.get(finding_id)
-            if owner is not None and owner is not contract.reviewer:
-                # A foreign status line cannot legally mutate the finding. Removing it
-                # preserves the already-persisted lifecycle exactly.
-                changed = True
-                continue
-        kept.append(line)
-    text = "\n".join(kept).strip()
-
-    existing_update_ids: set[str] = set()
-    update_pattern = re.compile(
-        r"^\s*(?:FINDING_STATUS|FINDING_RECLASSIFIED)\s*:\s*([^|]+?)\s*\|",
-        re.IGNORECASE | re.MULTILINE,
-    )
-    for match in update_pattern.finditer(text):
-        existing_update_ids.add(match.group(1).strip().upper())
-    missing_owned_open = tuple(
-        finding.finding_id
-        for finding in sorted(previous_findings, key=lambda item: item.finding_id)
-        if finding.status is FindingStatus.OPEN
-        and finding.origin.reporter is contract.reviewer
-        and finding.finding_id not in existing_update_ids
-    )
-    if missing_owned_open:
-        lines = text.splitlines()
-        insertion_marker = re.compile(
-            r"^[ \t]*(?:REVIEW_EVIDENCE|PRE_MORTEM|PLAN_APPROVAL|SLICE_APPROVAL|"
-            r"FINAL_APPROVAL|STATUS)[ \t]*:",
-            re.IGNORECASE,
-        )
-        insertion_index = next(
-            (
-                index
-                for index, line in enumerate(lines)
-                if insertion_marker.match(line) is not None
-            ),
-            len(lines),
-        )
-        carry_forward = [
-            f"FINDING_STATUS: {finding_id} | OPEN | Carried forward unchanged; "
-            "the current review supplied no explicit status update."
-            for finding_id in missing_owned_open
-        ]
-        lines[insertion_index:insertion_index] = carry_forward
-        text = "\n".join(lines).strip()
-        changed = True
+    result = normalize_review_contract(output, contract, previous_findings)
+    if result.changes:
         logger.info(
-            "Carried forward omitted reviewer-owned open findings: role=%s step=%s ids=%s",
+            "Normalized reviewer contract locally: role=%s step=%s changes=%s "
+            "original=%s result=%s",
             contract.reviewer.value,
             contract.name,
-            ",".join(missing_owned_open),
+            ",".join(result.changes),
+            result.original_digest,
+            result.result_digest,
         )
-
-    evidence_lines = text.splitlines()
-    evidence_prefix = re.compile(
-        r"^(?P<label>[ \t]*REVIEW_EVIDENCE[ \t]*:[ \t]*)(?P<body>.*)$",
-        re.IGNORECASE,
-    )
-    evidence_matches = [
-        (index, match)
-        for index, line in enumerate(evidence_lines)
-        if (match := evidence_prefix.fullmatch(line)) is not None
-    ]
-    if len(evidence_matches) == 1:
-        evidence_index, evidence_match = evidence_matches[0]
-        evidence_line = evidence_lines[evidence_index]
-        body = evidence_match.group("body")
-        risk_label = "Largest residual risk:"
-        risk_start = body.find(risk_label)
-        break_labels = ("Break condition:", "Realistic break condition:")
-        break_occurrences = sum(body.count(label) for label in break_labels)
-        break_label = next(
-            (label for label in break_labels if body.count(label) == 1),
-            None,
-        )
-        break_start = (
-            body.find(break_label, risk_start + len(risk_label))
-            if break_label is not None
-            else -1
-        )
-        embedded_pipe_count = len(re.findall(r"(?<=\S)\|(?=\S)", body))
-        has_only_embedded_pipes = body.count("|") == embedded_pipe_count
-        labels_are_unique = (
-            risk_start > 0
-            and break_start > 0
-            and body[risk_start - 1].isspace()
-            and body[break_start - 1].isspace()
-            and body.count(risk_label) == 1
-            and break_occurrences == 1
-            and has_only_embedded_pipes
-        )
-        if labels_are_unique:
-            assert break_label is not None
-            dimensions = body[:risk_start].strip().replace("|", "∣")
-            risk = (
-                body[risk_start + len(risk_label) : break_start]
-                .strip()
-                .replace("|", "∣")
-            )
-            break_condition = (
-                body[break_start + len(break_label) :].strip().replace("|", "∣")
-            )
-            if dimensions and risk and break_condition:
-                evidence_lines[evidence_index] = (
-                    f"{evidence_match.group('label')}{dimensions} | {risk} | "
-                    f"{break_condition}"
-                )
-                text = "\n".join(evidence_lines)
-                changed = True
-
-    if not re.search(
-        r"^\s*TEST_FILES_TOUCHED\s*:", text, re.IGNORECASE | re.MULTILINE
-    ):
-        lines = text.splitlines()
-        if lines and re.fullmatch(
-            rf"\s*REVIEWER\s*:\s*{re.escape(contract.reviewer.value)}\s*",
-            lines[0],
-            re.IGNORECASE,
-        ):
-            expected = ",".join(contract.expected_test_files) or "NONE"
-            lines.insert(1, f"TEST_FILES_TOUCHED: {expected}")
-            text = "\n".join(lines)
-            changed = True
-    if changed:
-        logger.info(
-            "Normalized contract-owned reviewer markers locally: role=%s step=%s",
-            contract.reviewer.value,
-            contract.name,
-        )
-    return text
+    return result.output
 
 
 _REVIEW_CONTRACT_MARKER_LINE = re.compile(
@@ -2414,7 +2433,10 @@ class WorkflowEngine:
         contract: StepContract,
         findings: tuple[FindingRecord, ...],
     ) -> ContractResult:
-        normalized = normalize_review_contract_output(output, contract, findings)
+        normalization = normalize_review_contract(
+            output, contract, findings, provider_completed=True
+        )
+        normalized = normalization.output
         try:
             return validate_review_response(normalized, contract, findings)
         except ContractValidationError as first_error:
@@ -2424,6 +2446,35 @@ class WorkflowEngine:
                 normalized,
                 str(first_error),
                 1,
+            )
+            validation_error = str(first_error)
+            repairable_fragments = (
+                "REVIEW_EVIDENCE",
+                "PRE_MORTEM",
+                "missing FINDING_STATUS",
+                "missing review update",
+            )
+            missing_evidence_behind_approval_error = (
+                "missing or invalid " in validation_error
+                and "APPROVAL marker" in validation_error
+                and re.search(
+                    r"^[ \t]*REVIEW_EVIDENCE[ \t]*:", normalized, re.I | re.M
+                )
+                is None
+            )
+            if not (
+                any(fragment in validation_error for fragment in repairable_fragments)
+                or missing_evidence_behind_approval_error
+            ):
+                raise WorkflowContractError(
+                    f"invalid {contract.reviewer.value} verdict is not safely repairable: "
+                    f"{first_error}"
+                ) from first_error
+            logger.info(
+                "Starting compact contract repair: role=%s step=%s reason=%s",
+                contract.reviewer.value,
+                contract.name,
+                first_error,
             )
             repaired = self.driver.repair_review_contract(
                 ContractRepairInvocation(

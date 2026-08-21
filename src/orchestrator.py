@@ -513,7 +513,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
         label: str,
         *,
         reviewer_repository_required: bool = True,
-        operation: WorkflowStep,
+        operation: WorkflowStep | str,
         binding_fingerprint: str,
     ) -> str:
         self.assert_structured_decision_context()
@@ -530,9 +530,18 @@ class ProductionWorkflowDriver(WorkflowDriver):
             write_file=write_file,
             shorten=_shorten,
             parse_flag=_parse_flag,
-            validate_done_marker=_has_done,
+            # A successfully exited reviewer process may omit only STATUS: DONE;
+            # the workflow's bound local normalizer decides whether appending it
+            # yields a completely valid contract. Codex still requires it here.
+            validate_done_marker=(
+                (lambda _output: True)
+                if role in (AgentRole.CLAUDE, AgentRole.ANTIGRAVITY)
+                else _has_done
+            ),
             reviewer_repository_required=reviewer_repository_required,
-            operation=operation.value,
+            operation=(
+                operation.value if isinstance(operation, WorkflowStep) else operation
+            ),
             binding_fingerprint=binding_fingerprint,
             pre_start_callback=self._persist_provider_bootstrap,
         )
@@ -1076,7 +1085,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
             prompt,
             "review-contract-repair",
             reviewer_repository_required=False,
-            operation=self.active_state.current_step,
+            operation=f"{invocation.reviewer.value}_contract_repair",
             binding_fingerprint=self.active_state.task_digest or "unbound",
         )
 

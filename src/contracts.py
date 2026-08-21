@@ -1293,15 +1293,45 @@ def _parse_test_files(text: str) -> tuple[str, ...]:
     return paths
 
 
+def encode_review_evidence_field(value: str) -> str:
+    """Escape one evidence field without changing its semantic text."""
+    return value.replace("\\", "\\\\").replace("|", "\\|")
+
+
+def _decode_review_evidence_fields(raw: str) -> tuple[str, str, str]:
+    fields: list[str] = []
+    current: list[str] = []
+    escaped = False
+    for character in raw:
+        if escaped:
+            if character not in {"\\", "|"}:
+                raise ContractValidationError(
+                    "REVIEW_EVIDENCE contains an invalid escape sequence"
+                )
+            current.append(character)
+            escaped = False
+        elif character == "\\":
+            escaped = True
+        elif character == "|":
+            fields.append("".join(current).strip())
+            current = []
+        else:
+            current.append(character)
+    if escaped:
+        raise ContractValidationError("REVIEW_EVIDENCE ends with an incomplete escape")
+    fields.append("".join(current).strip())
+    if len(fields) != 3:
+        raise ContractValidationError(
+            "REVIEW_EVIDENCE requires <dimensions> | <largest risk> | <break condition>"
+        )
+    return fields[0], fields[1], fields[2]
+
+
 def _parse_review_evidence(text: str) -> ReviewEvidence | None:
     raw, _ = _parse_optional_single_value(text, "REVIEW_EVIDENCE")
     if raw is None:
         return None
-    parts = [part.strip() for part in raw.split("|", 2)]
-    if len(parts) != 3:
-        raise ContractValidationError(
-            "REVIEW_EVIDENCE requires <dimensions> | <largest risk> | <break condition>"
-        )
+    parts = _decode_review_evidence_fields(raw)
     try:
         return ReviewEvidence(*parts)
     except ValueError as exc:
