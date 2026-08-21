@@ -27,7 +27,8 @@ from artifact_bridge import (
 )
 from artifact_migration import ArtifactResumeError, resolve_resume_state
 from artifact_models import (
-    ArtifactRecord, BindingPayload, CorrectionWorkUnitPayload, FingerprintKind, GatePayload,
+    ArtifactRecord, BindingPayload, CorrectionWorkUnitPayload, DiagnosticPayload,
+    FingerprintKind, GatePayload,
     QuotaPausePayload, ReviewPayload, Role, TaskPayload, TransientRetryPayload,
     ValidationAttestationPayload,
     WorkUnitPayload,
@@ -65,6 +66,7 @@ from contracts import (
     CodexContractResult,
     CodexStepContract,
     ContractResult,
+    ContractValidationError,
     FindingRecord,
     PlannedSlice,
     StepContract,
@@ -124,6 +126,7 @@ from workflow import (
     WorkflowExecutionError,
     WorkflowHistory,
     WorkflowRunResult,
+    normalize_review_contract,
 )
 from workflow_state import (
     AgentFailureKind,
@@ -934,6 +937,92 @@ class ProductionWorkflowDriver(WorkflowDriver):
             round_number=round_number,
             verdict=str(verdict),
         )
+
+    def recover_failed_reviewer_output(
+        self,
+        invocation: ReviewerInvocation,
+        contract: StepContract,
+        previous_findings: tuple[FindingRecord, ...],
+    ) -> str | None:
+        """Reuse one diagnostic-bound provider log after local syntax hardening.
+
+        No verdict is inferred here.  The caller still runs the complete strict
+        review parser before persisting any decision.
+        """
+        state = self.active_state
+        bridge = self._artifact_bridge
+        if (
+            state is None
+            or bridge is None
+            or state.effective_protocol_mode is not ProtocolMode.STRUCTURED_V1
+            or state.current_work_unit_id != invocation.work_unit_id
+            or state.current_step is not invocation.step
+        ):
+            return None
+        failures = tuple(
+            failure
+            for failure in state.current_work_unit.invocation_failures
+            if failure.failure_kind is AgentFailureKind.OUTPUT
+            and failure.role == invocation.reviewer.value
+            and failure.work_unit_id == invocation.work_unit_id
+            and failure.step is invocation.step
+            and failure.diff_fingerprint == invocation.fingerprint
+        )
+        if not failures:
+            return None
+        failure = failures[-1]
+        diagnostics = tuple(
+            item
+            for item in bridge.store.load_chain()
+            if isinstance(item.payload, DiagnosticPayload)
+            and item.payload.role.value == invocation.reviewer.value
+            and item.payload.work_unit_id == str(invocation.work_unit_id)
+            and item.fingerprint.sha256 == invocation.fingerprint
+            and item.payload.reason in failure.provider_text
+        )
+        if len(diagnostics) != 1:
+            return None
+        diagnostic = diagnostics[0].payload
+        assert isinstance(diagnostic, DiagnosticPayload)
+        log_pattern = (
+            f"work-unit-{invocation.work_unit_id:04d}-"
+            f"{invocation.step.value}.attempt-*.log"
+        )
+        matches: list[str] = []
+        for path in sorted(self.log_dir.glob(log_pattern)):
+            if not path.is_file():
+                continue
+            raw = path.read_text(encoding="utf-8").strip()
+            legacy = normalize_review_contract(
+                raw,
+                contract,
+                previous_findings,
+                provider_completed=True,
+                remove_bulleted_evidence=False,
+            ).output
+            if hashlib.sha256(legacy.encode("utf-8")).hexdigest() != diagnostic.output_sha256:
+                continue
+            repaired = normalize_review_contract(
+                raw,
+                contract,
+                previous_findings,
+                provider_completed=True,
+            ).output
+            try:
+                validate_review_response(repaired, contract, previous_findings)
+            except ContractValidationError:
+                continue
+            matches.append(repaired)
+        if len(matches) != 1:
+            return None
+        logger.warning(
+            "Reusing diagnostic-bound %s reviewer output after deterministic local "
+            "contract normalization: work-unit=%s fingerprint=%s",
+            invocation.reviewer.value,
+            invocation.work_unit_id,
+            invocation.fingerprint,
+        )
+        return matches[0]
 
     def _artifact_fingerprint(self) -> str:
         if self.active_state is None:

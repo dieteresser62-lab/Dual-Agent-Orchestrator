@@ -92,8 +92,6 @@ def build_review_packet(
     review_diff = _filter_diff_to_manifest(review_diff, manifest.paths)
     if not review_diff.strip():
         raise ReviewPacketError("review packet diff contains no manifest path")
-    goal, criteria = extract_slice_requirements(plan_text, slice_id)
-
     finding_by_id = {item.finding_id: item for item in findings}
     if len(finding_by_id) != len(findings):
         raise ReviewPacketError("review packet findings must be unique")
@@ -107,6 +105,17 @@ def build_review_packet(
         if purpose == "correction"
         else tuple(findings)
     )
+    if purpose == "correction":
+        # Correction Slices are created by the workflow after a final-review
+        # denial and therefore need not exist in the originally approved plan.
+        # Their fingerprint-bound finding set is the authoritative correction
+        # contract: it supplies both the goal and the exact acceptance tests.
+        goal = "Resolve reviewer findings " + ", ".join(affected)
+        criteria = tuple(
+            f"{item.finding_id}: {item.acceptance_test}" for item in selected
+        )
+    else:
+        goal, criteria = extract_slice_requirements(plan_text, slice_id)
     active = [
         {
             "id": item.finding_id,

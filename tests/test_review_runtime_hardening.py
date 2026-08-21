@@ -143,6 +143,68 @@ def test_saved_em_dash_review_normalizes_without_provider_repair() -> None:
     assert parsed.evidence.dimensions == "correctness, contracts, failure paths"
 
 
+def test_bulleted_evidence_heading_is_removed_only_when_contract_remains_complete() -> None:
+    contract = _validated_slice_contract("03", ("tests/test_artifact_bridge.py",))
+    finding = FindingRecord(
+        finding_id="C-03",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="foreign chain accepted",
+        acceptance_test="reject a foreign start record",
+        origin=FindingOrigin("03", 1, AgentRole.CLAUDE),
+    )
+    output = "\n".join(
+        (
+            "REVIEWER: claude",
+            "",
+            "EVIDENCE:",
+            "- Checked the chain-membership guard.",
+            "- Confirmed the regression test and bound attestation.",
+            "",
+            "FINDING_STATUS: C-03 | CLOSED | guard and test are present",
+            "PRE_MORTEM: a future cache bypasses store provenance",
+            "SLICE_APPROVAL: 03 | YES",
+            "STATUS: DONE",
+        )
+    )
+
+    result = normalize_review_contract(
+        output, contract, (finding,), provider_completed=True
+    )
+    parsed = validate_review_response(result.output, contract, (finding,))
+
+    assert "EVIDENCE:" not in result.output
+    assert result.changes == (
+        "removed_non_contract_evidence_section",
+        "added_bound_test_files",
+    )
+    assert parsed.approval is True
+    assert parsed.findings[0].status is FindingStatus.CLOSED
+
+
+def test_evidence_heading_with_marker_like_body_remains_fail_closed() -> None:
+    contract = _validated_slice_contract("03")
+    output = "\n".join(
+        (
+            "REVIEWER: claude",
+            "EVIDENCE:",
+            "DANGEROUS: hidden marker",
+            "REVIEW_EVIDENCE: scope | risk | break",
+            "PRE_MORTEM: drift",
+            "SLICE_APPROVAL: 03 | YES",
+            "STATUS: DONE",
+        )
+    )
+
+    result = normalize_review_contract(
+        output, contract, (), provider_completed=True
+    )
+
+    assert "EVIDENCE:" in result.output
+    with pytest.raises(ContractValidationError, match="unknown state-v3 contract marker"):
+        validate_review_response(result.output, contract, ())
+
+
 def test_bound_metadata_and_done_are_added_only_when_unambiguous() -> None:
     contract = _validated_slice_contract("07", ("tests/a.py", "tests/z.py"))
     output = "\n".join(

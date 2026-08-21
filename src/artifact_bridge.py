@@ -408,6 +408,11 @@ class ArtifactBridge:
         usage: ProviderUsagePayload | None,
     ) -> ArtifactRecord:
         """Persist the sole terminal revision for a previously durable start."""
+        chain = self.store.load_chain()
+        if started_record not in chain:
+            raise ArtifactBridgeError(
+                "provider attempt start is not in the accepted chain"
+            )
         if not isinstance(started_record.payload, ProviderAttemptPayload) or started_record.payload.phase != "started":
             raise ArtifactBridgeError("provider attempt terminal requires a started record")
         started = started_record.payload
@@ -418,7 +423,7 @@ class ArtifactBridge:
         )
         existing = next(
             (
-                record for record in self.store.load_chain()
+                record for record in chain
                 if record.idempotency_key == terminal_key
             ),
             None,

@@ -22,15 +22,18 @@ from artifact_store import ArtifactStore
 from cli import parse_args
 from contracts import (
     AgentRole,
+    ApprovalMarker,
     ContractResult,
     FindingClass,
     FindingOrigin,
     FindingRecord,
     FindingStatus,
     PlannedSlice,
+    StepContract,
     ValidationAttestation,
     ValidationRecord,
     ValidationStatus,
+    validate_review_response,
 )
 from git_service import GitTransactionError
 from inbox_watcher import WatchTaskDisposition, WatchTaskResult
@@ -46,6 +49,7 @@ from workflow import (
     WorkflowContext,
     WorkflowEngine,
     WorkflowHistory,
+    normalize_review_contract,
 )
 from workflow import WorkflowExecutionError
 from plan_handoff import PlanHandoffError
@@ -53,6 +57,7 @@ from state_io import StateSchemaError, save_workflow_state, write_workflow_check
 from task_contract import parse_task_contract
 from workflow_state import (
     GateReason,
+    InvocationFailureRecord,
     ProtocolBinding,
     ProtocolMode,
     Reviewer,
@@ -602,6 +607,143 @@ def test_quota_classified_recoverable_contract_still_persists_matching_quota_pau
     assert len(quota_records) == 1
     assert quota_records[0].payload.role is Role.ANTIGRAVITY
     assert quota_records[0].payload.retry_at == quota.quota_reset.reset_at_utc.isoformat()
+
+
+def test_reviewer_reuses_diagnostic_bound_bulleted_evidence_output_without_provider(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/output-recovery")
+    fingerprint = "a" * 64
+    attestation = ValidationAttestation(
+        "validation-output-recovery",
+        fingerprint,
+        ("pytest",),
+        (ValidationRecord(ValidationStatus.PASS, "pytest", 0, "passed"),),
+        "b" * 64,
+        "passed",
+    )
+    finding = FindingRecord(
+        finding_id="C-03",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="foreign chain accepted",
+        acceptance_test="reject a foreign start record",
+        origin=FindingOrigin("03", 1, AgentRole.CLAUDE),
+    )
+    state = init_workflow_state(
+        run_id="output-recovery",
+        task_file=str(repository / "task.md"),
+        branch="feature/output-recovery",
+        branch_base=_git(repository, "rev-parse", "HEAD"),
+        slice_count=3,
+    ).bind_slice_plan(
+        (
+            PlannedSlice(1, "first", ("src/first.py",)),
+            PlannedSlice(2, "second", ("src/second.py",)),
+            PlannedSlice(3, "correction", ("src/artifact_bridge.py",)),
+        ),
+        first_start_commit=_git(repository, "rev-parse", "HEAD"),
+    ).complete_current_work_unit().start_work_unit(
+        slice_id=3,
+        kind=WorkUnitKind.CORRECTION,
+        step=WorkflowStep.CLAUDE_SLICE_REVIEW,
+        slice_start_commit=_git(repository, "rev-parse", "HEAD"),
+    )
+    state = replace(
+        state,
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V1, "1"),
+    )
+    failure = InvocationFailureRecord(
+        invocation_id="contract-2-claude_slice_review-1",
+        idempotency_key="output-recovery:2:claude_slice_review:claude",
+        role="claude",
+        failure_kind=AgentFailureKind.OUTPUT,
+        provider_text=(
+            "invalid claude verdict is not safely repairable: "
+            "unknown state-v3 contract marker EVIDENCE"
+        ),
+        received_at="2026-08-21T15:33:32+00:00",
+        step=WorkflowStep.CLAUDE_SLICE_REVIEW,
+        slice_id=3,
+        work_unit_id=2,
+        diagnostic_exit_code=3,
+        diff_fingerprint=fingerprint,
+    )
+    state = state.record_invocation_failure(failure, wait_automatically=False)
+    contract = StepContract(
+        name="work-unit-2-claude_slice_review",
+        reviewer=AgentRole.CLAUDE,
+        approval_marker=ApprovalMarker.SLICE,
+        slice_id="03",
+        round_number=1,
+        review_fingerprint=fingerprint,
+        validation_attestation=attestation,
+        expected_test_files=("tests/test_artifact_bridge.py",),
+        test_changes_approved=True,
+        existing_finding_ids=("C-03",),
+        allow_new_observations=False,
+    )
+    raw = "\n".join(
+        (
+            "REVIEWER: claude",
+            "EVIDENCE:",
+            "- Checked the exact chain-membership fix.",
+            "FINDING_STATUS: C-03 | CLOSED | guard and regression are present",
+            "PRE_MORTEM: a shared cache bypasses provenance",
+            "SLICE_APPROVAL: 03 | YES",
+            "STATUS: DONE",
+        )
+    )
+    legacy = normalize_review_contract(
+        raw,
+        contract,
+        (finding,),
+        provider_completed=True,
+        remove_bulleted_evidence=False,
+    ).output
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    driver.active_state = state
+    driver._bind_artifact_store(state)
+    assert driver._artifact_bridge is not None
+    driver._artifact_bridge.diagnostic(
+        role=AgentRole.CLAUDE,
+        work_unit_id=2,
+        attempt=1,
+        output=legacy,
+        reason="unknown state-v3 contract marker EVIDENCE",
+        fingerprint_sha256=fingerprint,
+    )
+    driver.log_dir.mkdir(parents=True)
+    (driver.log_dir / "work-unit-0002-claude_slice_review.attempt-1.log").write_text(
+        raw,
+        encoding="utf-8",
+    )
+    invocation = ReviewerInvocation(
+        work_unit_id=2,
+        step=WorkflowStep.CLAUDE_SLICE_REVIEW,
+        reviewer=AgentRole.CLAUDE,
+        round_number=1,
+        evidence_kind=EvidenceKind.CORRECTION_DELTA,
+        fingerprint=fingerprint,
+        paths=("src/artifact_bridge.py", "tests/test_artifact_bridge.py"),
+        prompt="unused",
+    )
+
+    recovered = driver.recover_failed_reviewer_output(
+        invocation, contract, (finding,)
+    )
+
+    assert recovered is not None
+    assert "EVIDENCE:" not in recovered
+    assert validate_review_response(
+        recovered, contract, (finding,)
+    ).approval is True
 
 
 @pytest.mark.parametrize(

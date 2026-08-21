@@ -131,6 +131,31 @@ def test_correction_packet_selects_only_affected_findings_and_binds_fingerprint(
     assert [item["id"] for item in payload["open_findings"]] == ["C-01"]
     assert payload["closure_references"] == []
 
+
+def test_correction_packet_derives_requirements_when_slice_is_not_in_approved_plan() -> None:
+    packet = build_review_packet(
+        purpose="correction",
+        fingerprint="a" * 64,
+        start_fingerprint="c" * 64,
+        paths=("src/core.py",),
+        review_diff="CORRECTION DELTA",
+        plan_text=PLAN,
+        slice_id=3,
+        attestation=_attestation(),
+        findings=_findings(),
+        affected_finding_ids=("C-01",),
+    )
+
+    payload = json.loads(packet.canonical_bytes)
+
+    assert payload["slice"] == {
+        "id": 3,
+        "goal": "Resolve reviewer findings C-01",
+        "acceptance_criteria": [
+            "C-01: run focused test",
+        ],
+    }
+
     with pytest.raises(ReviewPacketError, match="fingerprint-bound complete"):
         build_review_packet(
             purpose="correction", fingerprint="d" * 64, start_fingerprint="c" * 64,

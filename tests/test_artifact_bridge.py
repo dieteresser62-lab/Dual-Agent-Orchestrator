@@ -192,3 +192,35 @@ def test_provider_attempt_rejects_changed_digest_for_same_operation(tmp_path: Pa
             binding_fingerprint=DIGEST,
             work_unit_id="1",
         )
+
+
+def test_provider_attempt_finish_rejects_start_from_foreign_chain(
+    tmp_path: Path,
+) -> None:
+    foreign_bridge = ArtifactBridge(ArtifactStore(tmp_path, "foreign-run"))
+    foreign_measurement = foreign_bridge.append(
+        _measurement(),
+        logical_id="foreign-measurement",
+        idempotency_key="foreign-measurement:1",
+        fingerprint_sha256=DIGEST,
+    )
+    foreign_start = foreign_bridge.start_provider_attempt(
+        measurement_record=foreign_measurement,
+        binding_fingerprint=DIGEST,
+        work_unit_id="1",
+    )
+    bridge = ArtifactBridge(ArtifactStore(tmp_path, "run-1"))
+    chain_before = bridge.store.load_chain()
+
+    with pytest.raises(
+        ArtifactBridgeError,
+        match="provider attempt start is not in the accepted chain",
+    ):
+        bridge.finish_provider_attempt(
+            foreign_start,
+            duration_seconds=1.0,
+            failure_kind=None,
+            usage=ProviderUsagePayload(input_tokens=1, output_tokens=1),
+        )
+
+    assert bridge.store.load_chain() == chain_before

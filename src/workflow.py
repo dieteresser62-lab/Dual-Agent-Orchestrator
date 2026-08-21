@@ -146,6 +146,55 @@ _EVIDENCE_LABELS = (
 _EVIDENCE_SEPARATOR = r"[ \t]*[:\-\u2013\u2014][ \t]*"
 
 
+def _remove_bulleted_evidence_section(text: str) -> tuple[str, bool]:
+    """Remove one unambiguous non-contract ``EVIDENCE:`` prose block.
+
+    Reviewers occasionally place a detailed bulleted analysis between the
+    role marker and the actual state-v3 records.  Only that exact, purely
+    bulleted shape is syntax noise.  Any second heading, marker-like body line,
+    missing terminal marker, or absent following contract record remains
+    fail-closed in the strict parser.
+    """
+    lines = text.splitlines()
+    evidence_indexes = [
+        index
+        for index, line in enumerate(lines)
+        if re.fullmatch(r"[ \t]*EVIDENCE[ \t]*:[ \t]*", line, re.IGNORECASE)
+    ]
+    non_empty = [line.strip() for line in lines if line.strip()]
+    reviewer_indexes = [
+        index
+        for index, line in enumerate(lines)
+        if re.match(r"^[ \t]*REVIEWER[ \t]*:", line, re.IGNORECASE)
+    ]
+    if (
+        len(evidence_indexes) != 1
+        or len(reviewer_indexes) != 1
+        or evidence_indexes[0] <= reviewer_indexes[0]
+        or not non_empty
+        or non_empty[-1] != "STATUS: DONE"
+        or sum(line == "STATUS: DONE" for line in non_empty) != 1
+    ):
+        return text, False
+    marker_line = re.compile(
+        r"^[ \t]*(?:TEST_FILES_TOUCHED|NEW_FINDING|FINDING_STATUS|"
+        r"FINDING_RECLASSIFIED|REVIEW_EVIDENCE|PRE_MORTEM|PLAN_APPROVAL|"
+        r"SLICE_APPROVAL|FINAL_APPROVAL|STOP_REQUESTED|STATUS)[ \t]*:",
+        re.IGNORECASE,
+    )
+    start = evidence_indexes[0]
+    end = next(
+        (index for index in range(start + 1, len(lines)) if marker_line.match(lines[index])),
+        None,
+    )
+    if end is None:
+        return text, False
+    body = [line.strip() for line in lines[start + 1 : end] if line.strip()]
+    if not body or any(not line.startswith("- ") for line in body):
+        return text, False
+    return "\n".join((*lines[:start], *lines[end:])).strip(), True
+
+
 def _normalize_labeled_evidence(body: str) -> tuple[str, str, str] | None:
     if re.search(
         rf"(?i)(?<!Realistic )(?<!\w)Break condition{_EVIDENCE_SEPARATOR}",
@@ -180,11 +229,16 @@ def normalize_review_contract(
     previous_findings: tuple[FindingRecord, ...],
     *,
     provider_completed: bool = False,
+    remove_bulleted_evidence: bool = True,
 ) -> ReviewNormalizationResult:
     """Apply deterministic syntax/metadata completion and report every mutation."""
     original = output.strip()
     text = original
     changes: list[str] = []
+    if remove_bulleted_evidence:
+        text, removed = _remove_bulleted_evidence_section(text)
+        if removed:
+            changes.append("removed_non_contract_evidence_section")
     lines = text.splitlines()
 
     reviewer_count = sum(
@@ -647,6 +701,13 @@ class WorkflowDriver(Protocol):
     ) -> ValidationAttestation: ...
 
     def invoke_reviewer(self, invocation: ReviewerInvocation) -> str: ...
+
+    def recover_failed_reviewer_output(
+        self,
+        invocation: ReviewerInvocation,
+        contract: StepContract,
+        previous_findings: tuple[FindingRecord, ...],
+    ) -> str | None: ...
 
     def repair_review_contract(self, invocation: ContractRepairInvocation) -> str: ...
 
@@ -2099,13 +2160,22 @@ class WorkflowEngine:
             prompt=prompt,
             review_packet=review_packet,
         )
-        state, output = self._invoke_role(
-            state,
-            history,
-            context,
-            reviewer,
-            lambda: self.driver.invoke_reviewer(invocation),
+        failed_output_loader = getattr(
+            self.driver, "recover_failed_reviewer_output", None
         )
+        output = (
+            failed_output_loader(invocation, contract, history.findings)
+            if callable(failed_output_loader)
+            else None
+        )
+        if output is None:
+            state, output = self._invoke_role(
+                state,
+                history,
+                context,
+                reviewer,
+                lambda: self.driver.invoke_reviewer(invocation),
+            )
         if output is None:
             return state, history
         try:
