@@ -25,7 +25,6 @@ from artifact_bridge import (
     provider_input_measurement_payload,
 )
 from artifact_migration import ArtifactResumeError, resolve_resume_state
-from artifact_projection import ArtifactAuditProjection
 from artifact_models import (
     ArtifactRecord, BindingPayload, CorrectionWorkUnitPayload, FingerprintKind, GatePayload,
     QuotaPausePayload, ReviewPayload, Role, TaskPayload, TransientRetryPayload,
@@ -317,8 +316,12 @@ class ProductionWorkflowDriver(WorkflowDriver):
             raise WorkflowExecutionError(
                 "structured decision context has no authoritative record head"
             )
-        assert self._artifact_bridge is not None
-        chain = self._artifact_bridge.store.load_chain()
+        replay = resolution.replay_result
+        if replay is None:
+            raise WorkflowExecutionError(
+                "structured decision context has no authoritative replay result"
+            )
+        chain = replay.records
         record_reviews = Counter(
             (
                 item.payload.work_unit_id,
@@ -1547,14 +1550,15 @@ class ProductionWorkflowDriver(WorkflowDriver):
     def _project_audit(self, state: WorkflowState, history: WorkflowHistory) -> None:
         """Write only managed audit blocks when the persisted plan names a target."""
         unit = state.current_work_unit
-        structured_chain = None
+        structured_replay = None
         if (
             state.protocol_binding is not None
             and state.protocol_binding.mode is ProtocolMode.STRUCTURED_V1
         ):
             try:
-                resolve_resume_state(self.root, state)
-                structured_chain = ArtifactStore(self.root, state.run_id).load_chain()
+                structured_replay = resolve_resume_state(
+                    self.root, state
+                ).replay_result
             except (ArtifactResumeError, ValueError) as exc:
                 raise WorkflowExecutionError(
                     f"structured audit dual-write mismatch: {exc}"
@@ -1577,9 +1581,9 @@ class ProductionWorkflowDriver(WorkflowDriver):
             entries = _overall_audit_entries(state)
             if entries:
                 project_overall_audit(document, entries)
-                if structured_chain is not None:
+                if structured_replay is not None:
                     project_structured_work_plan_audit(
-                        document, ArtifactAuditProjection(structured_chain)
+                        document, structured_replay
                     )
         if unit.kind is WorkUnitKind.FINAL_REVIEW:
             return
@@ -1629,9 +1633,9 @@ class ProductionWorkflowDriver(WorkflowDriver):
             else:
                 if history.events:
                     project_work_plan_audit(document, projection)
-                    if structured_chain is not None:
+                    if structured_replay is not None:
                         project_structured_work_plan_audit(
-                            document, ArtifactAuditProjection(structured_chain)
+                            document, structured_replay
                         )
                 return
         if unit.kind is WorkUnitKind.PLAN:
@@ -1646,9 +1650,9 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 else:
                     if history.events:
                         project_work_plan_audit(document, projection)
-                        if structured_chain is not None:
+                        if structured_replay is not None:
                             project_structured_work_plan_audit(
-                                document, ArtifactAuditProjection(structured_chain)
+                                document, structured_replay
                             )
                     return
             if not history.events:
@@ -1670,9 +1674,9 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 except ValueError:
                     continue
                 project_work_plan_audit(document, projection)
-                if structured_chain is not None:
+                if structured_replay is not None:
                     project_structured_work_plan_audit(
-                        document, ArtifactAuditProjection(structured_chain)
+                        document, structured_replay
                     )
                 return
             logger.debug("No prepared work-plan audit target is present in the Slice plan.")
@@ -1708,12 +1712,10 @@ class ProductionWorkflowDriver(WorkflowDriver):
             except ValueError:
                 continue
             project_managed_slice_audit(document, projection)
-            if structured_chain is not None:
+            if structured_replay is not None:
                 project_structured_slice_audit(
                     document,
-                    ArtifactAuditProjection(
-                        structured_chain, slice_id=str(state.current_slice_id)
-                    ),
+                    structured_replay,
                 )
             return
         logger.debug("No prepared Slice audit target is present for Slice %s.", state.current_slice_id)

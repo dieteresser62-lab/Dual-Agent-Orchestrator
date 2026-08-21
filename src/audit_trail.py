@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath
 from typing import Mapping, TypeAlias
 
 from artifact_projection import ArtifactAuditProjection, SECTION_KEYS
+from artifact_replay import ArtifactReplayResult
 
 from contracts import (
     AgentRole,
@@ -771,9 +772,13 @@ def project_overall_audit(
 
 def project_structured_slice_audit(
     document: SliceDocument,
-    projection: ArtifactAuditProjection,
+    projection: ArtifactAuditProjection | ArtifactReplayResult,
 ) -> str:
     """Append the record-native view to a validated Slice audit atomically."""
+    if isinstance(projection, ArtifactReplayResult):
+        projection = ArtifactAuditProjection.from_replay(
+            projection, slice_id=str(document.slice_id)
+        )
     if projection.slice_id is not None and int(projection.slice_id) != document.slice_id:
         raise AuditTrailError("structured projection slice does not match its document")
     current = validate_managed_slice_document(
@@ -792,9 +797,11 @@ def project_structured_slice_audit(
 
 def project_structured_work_plan_audit(
     document: WorkPlanDocument,
-    projection: ArtifactAuditProjection,
+    projection: ArtifactAuditProjection | ArtifactReplayResult,
 ) -> str:
     """Append the record-native view to a work-plan or overall audit."""
+    if isinstance(projection, ArtifactReplayResult):
+        projection = ArtifactAuditProjection.from_replay(projection)
     current = validate_managed_work_plan_document(
         repository_root=document.repository_root,
         work_plan_path=document.work_plan_path,

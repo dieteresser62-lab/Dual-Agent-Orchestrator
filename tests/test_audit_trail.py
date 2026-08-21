@@ -16,6 +16,7 @@ from audit_trail import (
     ValidationAuditEvent,
     project_slice_audit,
     project_overall_audit,
+    project_structured_slice_audit,
     project_work_plan_audit,
     merge_structured_record_sections,
     prepare_managed_overall_document,
@@ -24,6 +25,10 @@ from audit_trail import (
     validate_slice_document,
     validate_work_plan_document,
 )
+from artifact_bridge import ArtifactBridge
+from artifact_models import FingerprintKind, TaskPayload
+from artifact_replay import replay_artifacts
+from artifact_store import ArtifactStore
 from contracts import (
     AgentRole,
     ContractResult,
@@ -367,6 +372,36 @@ def test_projection_renders_bound_attestation_and_reviews_atomically_and_idempot
     assert "- Commit autorisiert: `YES`" in rendered
     assert "Unverwalteter Inhalt für Ziel des Slice." in rendered
     assert "alter Inhalt" not in rendered
+
+
+def test_structured_projection_uses_accepted_replay_and_is_a_byte_equal_noop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    document = _document(tmp_path)
+    bridge = ArtifactBridge(ArtifactStore(tmp_path, "audit-replay"))
+    bridge.append(
+        TaskPayload("feature/test", (RELATIVE_PATH,), "a" * 64),
+        logical_id="task-contract",
+        idempotency_key="task-contract",
+        fingerprint_sha256="a" * 64,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    replay = replay_artifacts(bridge.store.load_chain(), "audit-replay")
+
+    monkeypatch.setattr(
+        "artifact_projection.replay_artifacts",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("accepted replay must not be reduced again")
+        ),
+    )
+    rendered = project_structured_slice_audit(document, replay)
+    stat_after_first = document.slice_path.stat().st_mtime_ns
+
+    repeated = project_structured_slice_audit(document, replay)
+
+    assert repeated == rendered
+    assert document.slice_path.stat().st_mtime_ns == stat_after_first
+    assert replay.semantic_digest in rendered
 
 
 def test_work_plan_uses_same_safe_projection_without_parallel_raw_log(tmp_path: Path) -> None:

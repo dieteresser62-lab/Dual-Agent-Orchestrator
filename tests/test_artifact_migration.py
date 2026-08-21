@@ -27,6 +27,7 @@ from artifact_models import (
     WorkflowCompletionPayload,
 )
 from artifact_store import ArtifactStore
+from artifact_replay import ReplayDiagnosticCode
 from contracts import PlannedSlice
 from workflow_state import (
     AgentFailureKind,
@@ -127,14 +128,24 @@ def _authorization_records(
     return attestation, review
 
 
-def test_legacy_state_without_records_remains_on_legacy_path(tmp_path: Path) -> None:
+def test_legacy_state_without_records_remains_on_legacy_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     state = _state(tmp_path, structured=False)
+    monkeypatch.setattr(
+        artifact_migration,
+        "ArtifactStore",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("legacy resume must not open the artifact store")
+        ),
+    )
 
     resolved = resolve_resume_state(tmp_path, state)
 
     assert resolved.state == state
     assert resolved.mode is ProtocolMode.LEGACY_STATE_V3
     assert resolved.record_head_id is None
+    assert resolved.replay_result is None
     assert not (tmp_path / ".orchestrator" / "artifacts").exists()
 
 
@@ -147,6 +158,8 @@ def test_structured_state_rehydrates_from_matching_complete_chain(tmp_path: Path
     assert resolved.state == state
     assert resolved.mode is ProtocolMode.STRUCTURED_V1
     assert resolved.record_head_id is not None
+    assert resolved.replay_result is not None
+    assert resolved.replay_result.head_record_id == resolved.record_head_id
 
 
 def test_structured_state_without_records_halts_with_repair_hint(tmp_path: Path) -> None:
@@ -192,11 +205,10 @@ def test_structured_resume_halts_when_legacy_state_missing_approved_plan_commit_
             fingerprint_kind=FingerprintKind.CONTRACT,
         )
 
-    with pytest.raises(
-        ArtifactResumeError,
-        match="expected exactly one immutable approved-plan record, found 2",
-    ):
+    with pytest.raises(ArtifactResumeError) as error:
         resolve_resume_state(tmp_path, legacy_state)
+
+    assert error.value.code is ReplayDiagnosticCode.RECORD_DUPLICATE
 
 
 def test_structured_resume_halts_when_mirror_gate_decision_has_no_chain_record(
@@ -218,8 +230,10 @@ def test_structured_resume_halts_when_mirror_gate_decision_has_no_chain_record(
         rationale="approve changed resume test",
     )
 
-    with pytest.raises(ArtifactResumeError, match="gate decisions differ from state-v3"):
+    with pytest.raises(ArtifactResumeError, match="gate decisions differ from state-v3") as error:
         resolve_resume_state(tmp_path, state)
+
+    assert error.value.code is ReplayDiagnosticCode.MIRROR_AHEAD
 
 
 def test_structured_resume_halts_when_mirror_finding_transition_has_no_chain_record(
@@ -944,21 +958,23 @@ def test_structured_resume_halts_when_completion_final_binding_id_is_unknown_or_
         fingerprint_sha256="d" * 64,
     )
 
-    with pytest.raises(
-        ArtifactResumeError,
-        match="unknown, invalid, or fingerprint-mismatched final binding",
-    ):
+    with pytest.raises(ArtifactResumeError) as error:
         resolve_resume_state(tmp_path, state)
+
+    assert error.value.code in {
+        ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+        ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+    }
 
 
 @pytest.mark.parametrize(
-    ("attestation_mode", "approval_mode", "review_verdict", "message"),
+    ("attestation_mode", "approval_mode", "review_verdict", "expected_code"),
     (
-        ("unknown", "valid", "approved", "unknown, invalid, or fingerprint-mismatched"),
-        ("mismatched", "valid", "approved", "unknown, invalid, or fingerprint-mismatched"),
-        ("valid", "unknown", "approved", "unknown, unapproved, or fingerprint-mismatched"),
-        ("valid", "mismatched", "approved", "unknown, unapproved, or fingerprint-mismatched"),
-        ("valid", "valid", "denied", "unknown, unapproved, or fingerprint-mismatched"),
+        ("unknown", "valid", "approved", ReplayDiagnosticCode.RECORD_REFERENCE_MISSING),
+        ("mismatched", "valid", "approved", ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH),
+        ("valid", "unknown", "approved", ReplayDiagnosticCode.RECORD_REFERENCE_MISSING),
+        ("valid", "mismatched", "approved", ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH),
+        ("valid", "valid", "denied", ReplayDiagnosticCode.RECORD_REFERENCE_MISSING),
     ),
 )
 def test_structured_resume_halts_when_commit_binding_references_unknown_or_mismatched_attestation_or_approval(
@@ -966,7 +982,7 @@ def test_structured_resume_halts_when_commit_binding_references_unknown_or_misma
     attestation_mode: str,
     approval_mode: str,
     review_verdict: str,
-    message: str,
+    expected_code: ReplayDiagnosticCode,
 ) -> None:
     binding_fingerprint = "d" * 64
     attestation_fingerprint = (
@@ -1016,5 +1032,7 @@ def test_structured_resume_halts_when_commit_binding_references_unknown_or_misma
         fingerprint_sha256=binding_fingerprint,
     )
 
-    with pytest.raises(ArtifactResumeError, match=message):
+    with pytest.raises(ArtifactResumeError) as error:
         resolve_resume_state(tmp_path, state)
+
+    assert error.value.code is expected_code

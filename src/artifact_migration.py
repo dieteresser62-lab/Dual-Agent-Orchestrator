@@ -27,6 +27,12 @@ from artifact_models import (
     canonical_json,
 )
 from artifact_store import ArtifactStore, ArtifactStoreError
+from artifact_replay import (
+    ArtifactReplayError,
+    ArtifactReplayResult,
+    ReplayDiagnosticCode,
+    replay_artifacts,
+)
 from workflow_state import (
     AgentFailureKind,
     ProtocolMode,
@@ -39,12 +45,25 @@ from workflow_state import (
 class ArtifactResumeError(ValueError):
     """Raised when records cannot safely rehydrate their state-v3 mirror."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: ReplayDiagnosticCode = ReplayDiagnosticCode.MIRROR_AMBIGUOUS,
+        record_id: str | None = None,
+    ) -> None:
+        self.code = code
+        self.record_id = record_id
+        location = f" at record {record_id}" if record_id is not None else ""
+        super().__init__(f"{code.value}{location}: {message}")
+
 
 @dataclass(frozen=True, slots=True)
 class ResumeResolution:
     state: WorkflowState
     mode: ProtocolMode
     record_head_id: str | None
+    replay_result: ArtifactReplayResult | None
 
 
 def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeResolution:
@@ -56,28 +75,48 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
     """
     mode = state.effective_protocol_mode
     if mode is ProtocolMode.LEGACY_STATE_V3:
-        return ResumeResolution(state, mode, None)
+        return ResumeResolution(state, mode, None, None)
 
     try:
         chain = ArtifactStore(repository_root, state.run_id).load_chain()
     except ArtifactStoreError as exc:
         raise ArtifactResumeError(
             f"structured-v1 record chain for run {state.run_id!r} is invalid: {exc}; "
-            "repair or restore the append-only records before resuming"
+            "repair or restore the append-only records before resuming",
+            code=ReplayDiagnosticCode.RECORD_UNKNOWN,
         ) from exc
     if not chain:
         raise ArtifactResumeError(
             f"structured-v1 run {state.run_id!r} has no records; restore its record "
-            "directory before resuming"
+            "directory before resuming",
+            code=ReplayDiagnosticCode.RECORD_MISSING,
         )
 
-    head = chain[-1].record_id
+    try:
+        replay = replay_artifacts(chain, state.run_id)
+    except ArtifactReplayError as exc:
+        raise ArtifactResumeError(
+            exc.diagnostic.message,
+            code=exc.code,
+            record_id=exc.record_id,
+        ) from exc
+    chain = replay.records
 
-    def mismatch(message: str, record_id: str | None = None) -> ArtifactResumeError:
+    head = replay.head_record_id
+    assert head is not None
+
+    def mismatch(
+        message: str,
+        record_id: str | None = None,
+        *,
+        code: ReplayDiagnosticCode = ReplayDiagnosticCode.MIRROR_AMBIGUOUS,
+    ) -> ArtifactResumeError:
         location = record_id or head
         return ArtifactResumeError(
             f"structured-v1 resume mismatch at record {location}: {message}; "
-            "repair the state mirror or restore the matching record chain before resuming"
+            "repair the state mirror or restore the matching record chain before resuming",
+            code=code,
+            record_id=location,
         )
 
     tasks = [item for item in chain if item.record_type is RecordType.TASK]
@@ -156,7 +195,10 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
             if item.logical_id == f"work-unit-{current.work_unit_id}"
         ]
         if not current_records:
-            raise mismatch("current work unit has no structured record")
+            raise mismatch(
+                "current work unit has no structured record",
+                code=ReplayDiagnosticCode.MIRROR_AHEAD,
+            )
         latest = current_records[-1]
         payload = latest.payload
         assert isinstance(payload, (WorkUnitPayload, CorrectionWorkUnitPayload))
@@ -173,7 +215,10 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
         and state.work_plan_path
     ):
         if not plans:
-            raise mismatch("approved plan has no structured record")
+            raise mismatch(
+                "approved plan has no structured record",
+                code=ReplayDiagnosticCode.MIRROR_AHEAD,
+            )
         if len(plans) != 1:
             raise mismatch(
                 f"expected exactly one immutable approved-plan record, found {len(plans)}"
@@ -222,6 +267,7 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
         raise mismatch(
             "gate decisions differ from state-v3",
             None if record is None else record.record_id,
+            code=_mirror_difference_code(set(decision_records), decisions),
         )
 
     finding_statuses = _finding_statuses(state)
@@ -241,6 +287,7 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
         raise mismatch(
             "finding transitions differ from state-v3",
             None if record is None else record.record_id,
+            code=_mirror_difference_code(set(latest_findings), set(finding_statuses)),
         )
     for finding_id, record in latest_findings.items():
         assert isinstance(record.payload, FindingTransitionPayload)
@@ -263,6 +310,7 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
         raise mismatch(
             "validation attestations differ from state-v3",
             None if record is None else record.record_id,
+            code=_mirror_difference_code(set(attestation_records), attestation_facts),
         )
 
     quota_facts = {
@@ -290,6 +338,7 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
         raise mismatch(
             "quota pauses differ from state-v3",
             None if record is None else record.record_id,
+            code=_mirror_difference_code(set(quota_records), quota_facts),
         )
 
     transient_facts = {
@@ -324,6 +373,7 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
         raise mismatch(
             "transient retries differ from state-v3",
             None if record is None else record.record_id,
+            code=_mirror_difference_code(set(transient_records), transient_facts),
         )
 
     bootstrap_records = {
@@ -344,7 +394,11 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
     if set(bootstrap_records) != set(bootstrap_facts):
         differing = next(iter(set(bootstrap_records) ^ set(bootstrap_facts)), None)
         record = bootstrap_records.get(differing, (None, None))[1] if differing is not None else None
-        raise mismatch("bootstrap checks differ from state-v3", None if record is None else record.record_id)
+        raise mismatch(
+            "bootstrap checks differ from state-v3",
+            None if record is None else record.record_id,
+            code=_mirror_difference_code(set(bootstrap_records), set(bootstrap_facts)),
+        )
     for key, (digest, record) in bootstrap_records.items():
         if bootstrap_facts[key] != digest:
             raise mismatch("bootstrap check payload differs from state-v3", record.record_id)
@@ -394,7 +448,10 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
             bound_commit_targets.add(record.payload.target)
     missing_bindings = commit_targets - bound_commit_targets
     if missing_bindings:
-        raise mismatch("completed slice is missing a structured commit binding")
+        raise mismatch(
+            "completed slice is missing a structured commit binding",
+            code=ReplayDiagnosticCode.MIRROR_AHEAD,
+        )
 
     completed = (
         state.current_step is WorkflowStep.COMPLETED
@@ -409,7 +466,10 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
     )
     completions = [item for item in chain if isinstance(item.payload, WorkflowCompletionPayload)]
     if completed and not completions:
-        raise mismatch("state-v3 mirror reports workflow completion without a structured record")
+        raise mismatch(
+            "state-v3 mirror reports workflow completion without a structured record",
+            code=ReplayDiagnosticCode.MIRROR_AHEAD,
+        )
     if completions:
         expected_outcome = "completed" if completed else None
         if completions[-1].payload.outcome != expected_outcome:
@@ -429,7 +489,16 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
                     completion.record_id,
                 )
 
-    return ResumeResolution(state, mode, head)
+    return ResumeResolution(state, mode, head, replay)
+
+
+def _mirror_difference_code(
+    record_facts: set[object], mirror_facts: set[object]
+) -> ReplayDiagnosticCode:
+    """Classify a strict mirror superset separately from ambiguous divergence."""
+    if mirror_facts - record_facts and not record_facts - mirror_facts:
+        return ReplayDiagnosticCode.MIRROR_AHEAD
+    return ReplayDiagnosticCode.MIRROR_AMBIGUOUS
 
 
 def _finding_statuses(state: WorkflowState) -> dict[str, str]:

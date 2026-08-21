@@ -30,6 +30,7 @@ from artifact_models import (
     ReviewPayload,
     Role,
     TransientRetryPayload,
+    WorkUnitPayload,
 )
 from artifact_store import ArtifactStore
 from artifact_projection import ArtifactAuditProjection
@@ -140,6 +141,28 @@ def test_first_checkpoint_bootstraps_authoritative_chain_idempotently(
 
     chain = ArtifactStore(repository, state.run_id).load_chain()
     assert tuple(record.record_type for record in chain) == (RecordType.TASK,)
+
+
+def test_external_side_effect_guard_loads_and_replays_the_chain_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = _repository(tmp_path, "feature/structured-regression")
+    state = _state(repository, "structured-single-replay")
+    driver = _driver(repository)
+    driver.checkpoint(state, WorkflowHistory(1))
+    original_load_chain = ArtifactStore.load_chain
+    calls = 0
+
+    def counted_load_chain(store: ArtifactStore):
+        nonlocal calls
+        calls += 1
+        return original_load_chain(store)
+
+    monkeypatch.setattr(ArtifactStore, "load_chain", counted_load_chain)
+
+    driver.assert_structured_decision_context()
+
+    assert calls == 1
 
 
 def test_external_side_effect_guard_rejects_mirror_ahead_of_records(
@@ -479,6 +502,27 @@ def test_hash_bound_denied_review_replays_after_checkpoint_failure_without_provi
     driver.bind_work_unit(state)
     driver.persist_validation_attestation(attestation)
     bridge = ArtifactBridge(ArtifactStore(repository, state.run_id))
+    final_unit = next(
+        item
+        for item in state.work_units
+        if item.work_unit_id == state.current_work_unit_id - 1
+    )
+    final_slice = next(
+        item for item in state.slices if item.slice_id == final_unit.slice_id
+    )
+    bridge.append(
+        WorkUnitPayload(
+            slice_id=str(final_unit.slice_id),
+            round_number=final_unit.round_number,
+            paths=final_slice.scope_paths,
+        ),
+        logical_id=f"work-unit-{state.current_work_unit_id - 1}",
+        idempotency_key=(
+            f"work-unit:{state.current_work_unit_id - 1}:round:{final_unit.round_number}"
+        ),
+        fingerprint_sha256=state.task_digest,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
     bridge.append(
         finding_payload(prior_finding),
         logical_id="finding-A-01",
