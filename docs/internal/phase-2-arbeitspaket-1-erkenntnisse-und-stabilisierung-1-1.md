@@ -9,13 +9,14 @@ Stand: 2026-08-21
 
 ## Bearbeitungsstand nach Stabilisierungspaketen 1.1A bis 1.1C
 
-Die Pakete 1.1A und 1.1B sind auf `master` integriert. Release 1.1C wurde auf
-`feature/orchestrator-stabilization-1-1c` in zwei bewusst getrennten Aufträgen
-umgesetzt: Quota-Wartepolitik und Fake Clock in 1.1C sowie der zuvor fehlende
-Providerattempt-/Schemavertrag in 1.1C2. Alle drei Implementierungs- und
-Korrekturslices von 1.1C2 wurden von Claude und Antigravity genehmigt und
-commitgebunden abgeschlossen. Die letzte vollständige Suite bestand mit
-`993 passed`.
+Die Pakete 1.1A, 1.1B und 1.1C sind auf `master` integriert. Release 1.1C wurde
+auf `feature/orchestrator-stabilization-1-1c` in zwei bewusst getrennten
+Aufträgen umgesetzt: Quota-Wartepolitik und Fake Clock in 1.1C sowie der zuvor
+fehlende Providerattempt-/Schemavertrag in 1.1C2. Der geprüfte Branch wurde am
+21.08.2026 bis Commit `7ff3fde` per Fast-forward nach `master` übernommen. Alle
+drei Implementierungs- und Korrekturslices von 1.1C2 wurden von Claude und
+Antigravity genehmigt und commitgebunden abgeschlossen. Die letzte
+vollständige Suite bestand mit `993 passed`.
 
 Der branchweite Abschluss von 1.1C2 wurde am 21.08.2026 manuell administrativ
 beendet: Codex lieferte seinen Abschlussbericht, Claude genehmigte den
@@ -34,16 +35,16 @@ Historie bleiben im archivierten Gesamtreview erhalten.
 | P2-FU-007, Gedankenstrichnachtrag | **GELÖST / AUF MASTER** | 1.1B Slice 1, Commit `3827e81` | gespeicherte Realantwort, lokale Normalisierung und Finalreview | gleichartige einzeilige Labelvariante aus 1.1C als neuer Restfall |
 | P2-FU-023 | **GELÖST / AUF MASTER** | 1.1B Slice 1, Commit `3827e81` | deterministische Metadatenergänzung, Fail-closed-Regressions und Finalreview | keiner |
 | P2-FU-024 | **GELÖST / AUF MASTER** | 1.1B Slice 2 und Abschlusskorrektur, Commits `fc44f70`, `64b14e2` | kanonische Pakete, Same-Slice-Korrekturscope und Finalreview | branchweite Finalreview-Evidenzkompaktierung bleibt offen |
-| P2-FU-003 | **GELÖST AUF FEATURE-BRANCH** | 1.1C2 Slice 1, Commit `c8e1788` | Providerattempt-Projektion mit verständlicher Known-/Unknown-Usage-Semantik | Merge nach `master` |
-| P2-FU-022 | **GELÖST AUF FEATURE-BRANCH** | 1.1C Slice 1, Commit `fac92b0` | Fake-Clock-Tests für Stundenheartbeat und Sieben-Tage-Grenze | Merge nach `master` |
+| P2-FU-003 | **GELÖST / AUF MASTER** | 1.1C2 Slice 1, Commit `c8e1788` | Providerattempt-Projektion mit verständlicher Known-/Unknown-Usage-Semantik | keiner |
+| P2-FU-022 | **GELÖST / AUF MASTER** | 1.1C Slice 1, Commit `fac92b0` | Fake-Clock-Tests für Stundenheartbeat und Sieben-Tage-Grenze | keiner |
 | P2-FU-013, Betriebsnachtrag | **TEILWEISE GELÖST** | 1.1C2 Slice 1, Commit `c8e1788` | persistenter Providerattempt-Lebenszyklus und Usage-Projektion | neuer enger `LineNumber`-Runtimefehler sowie Erstaufrufkosten bleiben offen |
 | P2-FU-025 | **OFFEN** | nach 1.1C | reales Finalreview-Protokoll mit wiederholter identischer Kompaktierung | semantischen Übergangscache und ruhiges Standardlogging umsetzen |
-| P2-FU-026 | **GELÖST AUF FEATURE-BRANCH** | 1.1C2 Self-Hosting-Hotfix | gemeinsame Plan-Handoff-/Reviewpaket-Extraktion, `984 passed` | Merge nach `master` |
-| P2-FU-027 | **GELÖST AUF FEATURE-BRANCH** | 1.1C2 Self-Hosting-Hotfix | Attestierungsübernahme und Resume-Rekonstruktion, `985 passed` | Merge nach `master` |
-| P2-FU-028 | **GELÖST AUF FEATURE-BRANCH** | 1.1C2 Self-Hosting-Hotfix | gespeicherte `EVIDENCE:`-Antwort, lokale Normalisierung und Replay, `991 passed` | Merge nach `master` |
-| P2-FU-029 | **GELÖST AUF FEATURE-BRANCH** | 1.1C2 Self-Hosting-Hotfix | Finding-abgeleitete Korrekturpakete, `992 passed` | Merge nach `master` |
-| P2-FU-030 | **GELÖST AUF FEATURE-BRANCH** | 1.1C2 Abschluss-Hotfix | commitgebundene Korrekturpfade im Finalreview-Preflight, `993 passed` | Merge nach `master` |
-| P2-FU-031 | **GELÖST AUF FEATURE-BRANCH** | 1.1C2 Abschluss-Hotfix | fingerprintgebundenes `UNEXPECTED_FILE`-Benutzergate, `993 passed` | Merge nach `master` |
+| P2-FU-026 | **GELÖST / AUF MASTER** | 1.1C2 Self-Hosting-Hotfix | gemeinsame Plan-Handoff-/Reviewpaket-Extraktion, `984 passed` | keiner |
+| P2-FU-027 | **GELÖST / AUF MASTER** | 1.1C2 Self-Hosting-Hotfix | Attestierungsübernahme und Resume-Rekonstruktion, `985 passed` | keiner |
+| P2-FU-028 | **GELÖST / AUF MASTER** | 1.1C2 Self-Hosting-Hotfix | gespeicherte `EVIDENCE:`-Antwort, lokale Normalisierung und Replay, `991 passed` | keiner |
+| P2-FU-029 | **GELÖST / AUF MASTER** | 1.1C2 Self-Hosting-Hotfix | Finding-abgeleitete Korrekturpakete, `992 passed` | keiner |
+| P2-FU-030 | **GELÖST / AUF MASTER** | 1.1C2 Abschluss-Hotfix | commitgebundene Korrekturpfade im Finalreview-Preflight, `993 passed` | keiner |
+| P2-FU-031 | **GELÖST / AUF MASTER** | 1.1C2 Abschluss-Hotfix | fingerprintgebundenes `UNEXPECTED_FILE`-Benutzergate, `993 passed` | keiner |
 | P2-DEC-001 | **TEILWEISE GELÖST** | 1.1A bis 1.1C | Replay-/Projektionsautorität, Reviewpakete, Quota-Wartepolitik und Providerattempt-Telemetrie umgesetzt | record-first Liveübergänge, Betriebslogging, Finalreview-Deduplizierung und Pfaddigest-Freigaben neu zuschneiden |
 
 Die Statusangaben in diesem Dokument beschreiben den Sachstand. Ein gelöster
@@ -58,9 +59,8 @@ einzelnen Fälle vergebenen Prioritätsangaben. Jene Angaben bleiben in den
 Detailabschnitten als historische Bewertung erhalten. Maßgeblich für neue
 Arbeitsaufträge ist ausschließlich die folgende Liste.
 
-Vor dem nächsten Stabilisierungspaket ist der vollständig getestete Stand von
-1.1C nach ausdrücklicher Freigabe nach `master` zu integrieren. Das ist eine
-Releasevoraussetzung, aber kein neuer Implementierungspunkt.
+Die Releasevoraussetzung für den nächsten Arbeitsauftrag ist erfüllt: Der
+vollständig getestete Stand von 1.1C ist auf `master` integriert.
 
 | Rang | Erkenntnis | Nächstes überprüfbares Ergebnis | Begründung der Reihenfolge |
 |---|---|---|---|
@@ -91,10 +91,9 @@ Aufträge:
    Record-first-Übergang beauftragen.
 
 Alle als gelöst ausgewiesenen Punkte sind aus dem aktiven Rückstand entfernt.
-Für die auf dem Feature-Branch gelösten Punkte P2-FU-003, P2-FU-022 und
-P2-FU-026 bis P2-FU-031 verbleiben ausschließlich Merge- und
-Integrationsnachweise; sie dürfen nicht ohne einen neuen reproduzierbaren
-Befund erneut zum Implementierungsscope werden.
+Die Punkte P2-FU-003, P2-FU-022 und P2-FU-026 bis P2-FU-031 sind auf `master`
+integriert. Sie dürfen nicht ohne einen neuen reproduzierbaren Befund erneut
+zum Implementierungsscope werden.
 
 ## P2-FU-001 – Vollständiger Antigravity-Reviewvertrag trotz Non-Success verworfen
 
@@ -319,7 +318,7 @@ verifiziert.
 
 ## P2-FU-003 – Claude-Nutzungszeile bildet file-backed Reviewinput nicht verständlich ab
 
-**Status:** durch Stabilisierungspaket 1.1C2 gelöst; Merge nach `master` ausstehend
+**Status:** durch Stabilisierungspaket 1.1C2 gelöst und auf `master` integriert
 **Priorität:** mittel
 
 ### Beobachtung
@@ -1228,7 +1227,7 @@ Transaktion ist derzeit an den Watcher gebunden und wird beim direkten
 
 ## P2-FU-022 – Quota-Wartebetrieb erzeugt zu häufige Heartbeats und endet zu früh
 
-**Status:** durch Stabilisierungspaket 1.1C gelöst; Merge nach `master` ausstehend
+**Status:** durch Stabilisierungspaket 1.1C gelöst und auf `master` integriert
 **Priorität:** mittel
 
 ### Beobachtung
@@ -1420,7 +1419,7 @@ unnötig lokale Übergangsarbeit und erzeugt kaum hilfreiche Standardlogs.
 
 ## P2-FU-026 – Plan-Handoff und Reviewpaket verwenden unterschiedliche Slice-Verträge
 
-**Status:** Self-Hosting-Hotfix in 1.1C2 umgesetzt; Merge nach `master` ausstehend
+**Status:** Self-Hosting-Hotfix in 1.1C2 umgesetzt und auf `master` integriert
 
 **Priorität:** kritisch
 
@@ -1455,7 +1454,7 @@ nicht semantisch verändert werden.
 
 ## P2-FU-027 – Finalreview validiert denselben Fingerprint unnötig erneut
 
-**Status:** Self-Hosting-Hotfix in 1.1C2 umgesetzt; Merge nach `master` ausstehend
+**Status:** Self-Hosting-Hotfix in 1.1C2 umgesetzt und auf `master` integriert
 
 **Priorität:** kritisch
 
@@ -1485,7 +1484,7 @@ Checkpoint. Die vollständige Suite bestand mit `985 passed`.
 
 ## P2-FU-028 – Vollständige Reviewerantwort wird wegen `EVIDENCE:` verworfen
 
-**Status:** Self-Hosting-Hotfix in 1.1C2 umgesetzt; Merge nach `master` ausstehend
+**Status:** Self-Hosting-Hotfix in 1.1C2 umgesetzt und auf `master` integriert
 
 **Priorität:** kritisch
 
@@ -1517,7 +1516,7 @@ Realantwort; die vollständige Suite bestand mit `991 passed`.
 
 ## P2-FU-029 – Nachträgliche Korrektur-Slices werden fälschlich im Plan gesucht
 
-**Status:** Self-Hosting-Hotfix in 1.1C2 umgesetzt; Merge nach `master` ausstehend
+**Status:** Self-Hosting-Hotfix in 1.1C2 umgesetzt und auf `master` integriert
 
 **Priorität:** kritisch
 
@@ -1543,7 +1542,7 @@ die vollständige Suite bestand mit `992 passed`, `git diff --check` war sauber.
 
 ## P2-FU-030 – Genehmigte Korrekturpfade fehlen im Finalreview-Preflight
 
-**Status:** Abschluss-Hotfix in 1.1C2 umgesetzt; Merge nach `master` ausstehend
+**Status:** Abschluss-Hotfix in 1.1C2 umgesetzt und auf `master` integriert
 
 **Priorität:** kritisch
 
@@ -1569,7 +1568,7 @@ Die vollständige Suite bestand mit `993 passed`.
 
 ## P2-FU-031 – `UNAUTHORIZED-PATH` ist kein entscheidbares Benutzergate
 
-**Status:** Abschluss-Hotfix in 1.1C2 umgesetzt; Merge nach `master` ausstehend
+**Status:** Abschluss-Hotfix in 1.1C2 umgesetzt und auf `master` integriert
 
 **Priorität:** kritisch
 
