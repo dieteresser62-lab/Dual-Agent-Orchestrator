@@ -7,25 +7,28 @@ Stabilisierungspaket 1.1 vor den weiteren nativen JSON-Arbeitspaketen.
 
 Stand: 2026-08-21
 
-## Bearbeitungsstand nach Stabilisierungspaket 1.1A
+## Bearbeitungsstand nach Stabilisierungspaketen 1.1A und 1.1B
 
-Das im Arbeitsplan als **1.1A1** bezeichnete Paket ist auf dem Feature-Branch
-fachlich abgeschlossen: Beide Slices wurden implementiert, die vollständige
-Suite bestand mit `934 passed`, und Claude sowie Antigravity genehmigten den
-branchweiten Finalreview für Fingerprint
-`d266f918c89831173d11990b8d7245d9ba60780356d48f2041bc6e8789811982`.
-Die Integration auf `master` steht noch aus.
+Das im Arbeitsplan als **1.1A1** bezeichnete Paket ist auf `master`
+integriert. Release 1.1B ist auf seinem Feature-Branch fachlich abgeschlossen:
+Die vollständige Suite bestand mit `961 passed`, und Claude sowie Antigravity
+genehmigten den branchweiten Finalreview für Fingerprint
+`b6e26794c449e97ebaa10dd4808864a489ee4cf6daadad63fc5e5ae7e4d56b6a`.
+Die Integration von 1.1B auf `master` steht noch aus.
 
 | Erkenntnis | Sachstatus | Erledigt in | Verifikation | Rest |
 |---|---|---|---|---|
-| P2-FU-002 | **GELÖST** | Slice 1, Commit `5638f6b` | Cache-/Replaytests und Finalreview | Merge nach `master` |
-| P2-FU-015, Nachkorrektur | **GELÖST** | Hotfix-Commit `9f1b6b6` | Scope-/Gate-Regressions und Finalreview | Merge nach `master` |
-| P2-DEC-001 | **TEILWEISE GELÖST** | Commits `5638f6b`, `d0c2ac4` und `9f1b6b6` | Gemeinsamer Replaykern, Resume-/Auditgrenzen, Legacy-Trennung und Finalreview-Scope genehmigt | Vollständige record-first Liveübergänge, Betriebslogging, Kostenbremsen und Pfaddigest-Freigaben neu zuschneiden |
+| P2-FU-002 | **GELÖST / AUF MASTER** | 1.1A Slice 1, Commit `5638f6b` | Cache-/Replaytests und Finalreview | keiner |
+| P2-FU-015, Nachkorrektur | **GELÖST / AUF MASTER** | 1.1A Hotfix, Commit `9f1b6b6` | Scope-/Gate-Regressions und Finalreview | keiner |
+| P2-FU-007, Gedankenstrichnachtrag | **GELÖST** | 1.1B Slice 1, Commit `3827e81` | gespeicherte Realantwort, lokale Normalisierung und Finalreview | Merge nach `master` |
+| P2-FU-023 | **GELÖST** | 1.1B Slice 1, Commit `3827e81` | deterministische Metadatenergänzung, Fail-closed-Regressions und Finalreview | Merge nach `master` |
+| P2-FU-024 | **GELÖST** | 1.1B Slice 2 und Abschlusskorrektur, Commits `fc44f70`, `64b14e2` | kanonische Pakete, Same-Slice-Korrekturscope und Finalreview | Merge nach `master` |
+| P2-DEC-001 | **TEILWEISE GELÖST** | 1.1A und 1.1B | Replay-/Projektionsautorität sowie Reviewvertrags- und Paketkostenbremsen genehmigt | record-first Liveübergänge, Betriebslogging, Quota-Betrieb und Pfaddigest-Freigaben neu zuschneiden |
 
 Die Statusangaben in diesem Dokument beschreiben den Sachstand. Ein gelöster
-Punkt gilt erst nach dem noch ausstehenden Merge zusätzlich als **auf master
-integriert**. Beobachtung, Ursache und frühere Diagnose bleiben auch nach einer
-Lösung als historische Evidenz erhalten.
+Punkt gilt erst nach seinem Merge zusätzlich als **auf master integriert**.
+Beobachtung, Ursache und frühere Diagnose bleiben auch nach einer Lösung als
+historische Evidenz erhalten.
 
 ## P2-FU-001 – Vollständiger Antigravity-Reviewvertrag trotz Non-Success verworfen
 
@@ -459,6 +462,15 @@ Finding, Verdict und Rationale bleiben bytegetreu; fehlende, doppelte oder
 vertauschte Labels bleiben fail-closed. Eine solche rein syntaktische
 Normalisierung darf keinen zweiten Providerprozess starten und muss durch den
 tatsächlich beobachteten Antworttext als Regressionstest belegt werden.
+
+### Abschluss des Nachtrags in Stabilisierungspaket 1.1B
+
+Slice 1 normalisiert die gespeicherte reale Gedankenstrichantwort lokal und
+verlustfrei. Eindeutige Separatorvarianten werden kanonisiert; mehrdeutige,
+doppelte, fehlende oder widersprüchliche Formen bleiben fail-closed. Rein
+syntaktische Korrekturen starten keinen zweiten Providerprozess. Die Umsetzung
+ist in Commit `3827e81` enthalten und durch die abschließende
+`961 passed`-Attestierung sowie beide Finalreviews verifiziert.
 
 ## P2-FU-008 – Ungültiges Review nach Reparatur beendet den Prozess ungeordnet
 
@@ -1141,8 +1153,10 @@ kurz; solche Fälle verlangen unnötig einen manuellen Resume.
 
 ## P2-FU-023 – Deterministisch bekannte Reviewfelder lösen unnötige Providerreparaturen aus
 
-**Status:** für den Neuzuschnitt nach 1.1A einplanen
+**Status:** durch Stabilisierungspaket 1.1B gelöst; auf Feature-Branch final genehmigt
+
 **Priorität:** hoch
+
 **Beobachtet in:** Claude-Slice-Review mit vollständiger fachlicher
 Entscheidung, aber fehlendem `TEST_FILES_TOUCHED`
 
@@ -1173,9 +1187,20 @@ werden nicht synthetisiert.
 - Ein zweiter Provideraufruf bleibt semantischer Mehrdeutigkeit vorbehalten;
   Grund und Zusatzkosten werden separat ausgewiesen.
 
+### Abschluss in Stabilisierungspaket 1.1B
+
+Slice 1 ergänzt ausschließlich Metadaten, für die der gebundene Schrittvertrag
+genau einen zulässigen Wert vorgibt. Vorhandene Abweichungen, unbekannter
+Providerabschluss, Trunkierungsverdacht und fachlich fehlende Entscheidungen
+bleiben gesperrt; Approval, Findingsemantik und Rationale werden nie lokal
+erzeugt. Lokale Vervollständigung und echte Providerreparatur werden getrennt
+diagnostiziert und budgetiert. Commit `3827e81` sowie der abschließende
+Finalreview belegen den Zielvertrag.
+
 ## P2-FU-024 – Slice- und Korrekturreviews erhalten zu viel historische Evidenz
 
-**Status:** für den Neuzuschnitt nach 1.1A einplanen
+**Status:** durch Stabilisierungspaket 1.1B gelöst; auf Feature-Branch final genehmigt
+
 **Priorität:** hoch
 
 ### Beobachtung
@@ -1218,9 +1243,24 @@ Begründung.
 - Das branchweite Finalreview bleibt adversarial vollständig, wird aber nicht
   für jeden Slice oder jede Korrekturrunde wiederholt.
 
+### Abschluss in Stabilisierungspaket 1.1B
+
+Slice 2 führte ein kanonisches, inhaltsadressiertes Reviewbasispaket ein,
+filterte Diff und Reviewerworkspace auf manifestierte Pfade und entfernte
+Auditprosa sowie vollständige historische Reviewertexte aus Slice- und
+Korrekturpaketen. Claude und Antigravity verwenden denselben Basisdigest;
+Claudes vorherige Freigabe bleibt eine kleine, rollenrichtige Hülle.
+
+Der erste Gesamtreview fand eine Scope-Lücke für Same-Slice-Korrekturrunden:
+Ohne betroffene Finding-IDs hätte der Paketkern wieder alle Findings
+eingebettet. Die Abschlusskorrektur stellt nun auf den bereits berechneten
+Korrekturzweck ab und lehnt ein leeres betroffenes Finding-Scope fail-closed
+ab. Die Umsetzung liegt in `fc44f70` und `64b14e2`; die vollständige Suite
+bestand abschließend mit `961 passed`.
+
 ## P2-DEC-001 – Stabilisierungspaket 1.1 vor weiterer Protokolloberfläche
 
-**Status:** durch 1.1A teilweise umgesetzt; Restumfang wird nach 1.1A neu zugeschnitten
+**Status:** durch 1.1A und 1.1B teilweise umgesetzt; Restumfang wird neu zugeschnitten
 
 **Priorität:** kritisch  
 **Einordnung:** Konsolidierung der Phase-1-/Phase-2-Zwischenarchitektur, keine
@@ -1262,9 +1302,30 @@ eingeschoben.
 Ausdrücklich **nicht** abgeschlossen sind die vollständige Umstellung aller
 fachlichen Liveübergänge auf record-first Transitionen, der Abbau sämtlicher
 unabhängiger State-Schreibentscheidungen, die kompakte Betriebsoberfläche, die
-Kostenbremsen sowie die Wiederverwendung pfadspezifischer Freigaben. Diese
-Restpunkte werden zusammen mit P2-FU-020 bis P2-FU-024 nach 1.1A neu
-priorisiert und in kleinere Pakete geschnitten.
+übrigen Quota-/Providerkostenbremsen sowie die Wiederverwendung
+pfadspezifischer Freigaben. Diese Restpunkte werden zusammen mit P2-FU-003,
+P2-FU-013, P2-FU-018 sowie P2-FU-020 bis P2-FU-022 neu priorisiert und in
+kleinere Pakete geschnitten.
+
+### Zwischenstand nach Abschluss von 1.1B
+
+1.1B hat den Reviewvertrags- und Reviewpaketanteil der Kostenbremsen umgesetzt:
+
+- eindeutig lokale Reviewnormalisierung ohne zweiten Providerprozess;
+- ausschließlich schrittvertraglich eindeutige Metadatenergänzung unter
+  strikten Fail-closed-Grenzen;
+- kanonische, inhaltsadressierte Basispakete für Slice- und
+  Korrekturreviews;
+- manifestgebundene Diff- und Workspace-Minimierung ohne Auditprosa und
+  vollständige historische Reviewertexte;
+- ein gemeinsamer Basisdigest für Claude und Antigravity bei unveränderter
+  asymmetrischer Reviewreihenfolge;
+- korrekt auf betroffene Findings begrenzte Same-Slice-Korrekturpakete ohne
+  Fallback auf die vollständige Findingmenge.
+
+Nicht Bestandteil von 1.1B waren branchweite Finalreview-Kompaktierung,
+allgemeine Providertelemetrie, Quota-Wartebetrieb, Antigravity-Runtimefehler,
+Codex-Defektkandidaten und die gemeinsame Watch-/Direkt-Finalisierung.
 
 ### Verbindliche Architekturziele
 

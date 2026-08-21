@@ -21,6 +21,23 @@ wenn der Lauf abgeschlossen oder sein manueller Abschluss dokumentiert ist.
 
 ## Archive
 
+### Orchestrator-Stabilisierung 1.1B – Reviewverträge und Reviewpakete
+
+Pfad: [`archive/orchestrator-stabilization-1-1b/`](archive/orchestrator-stabilization-1-1b/)
+
+Wichtige Einstiegspunkte:
+
+- [Arbeitsplan](archive/orchestrator-stabilization-1-1b/release-1-1b-deterministische-reviewvertraege-und-schlanke-reviewpakete-arbeitsplan.md)
+- [Konsolidiertes Gesamtreview](archive/orchestrator-stabilization-1-1b/release-1-1b-deterministische-reviewvertraege-und-schlanke-reviewpakete-implement-review-c80d392c.md)
+- [Slice 1 – Lokale Reviewverträge](archive/orchestrator-stabilization-1-1b/slice-release-1-1b-deterministische-reviewvertraege-und-schlanke-reviewpakete-01-lokale-reviewvertrage-fail-closed-vervollstandigen.md)
+- [Slice 2 – Kanonisch minimierte Reviewpakete](archive/orchestrator-stabilization-1-1b/slice-release-1-1b-deterministische-reviewvertraege-und-schlanke-reviewpakete-02-slice-und-korrekturreviewpakete-kanonisch-minimieren.md)
+- [Abschlusskorrektur – Finding-Scope in Korrekturpaketen](archive/orchestrator-stabilization-1-1b/slice-release-1-1b-deterministische-reviewvertraege-und-schlanke-reviewpakete-implement-03-abschlusskorrektur.md)
+
+Das Paket wurde mit `961 passed` sowie den finalen Freigaben von Claude und
+Antigravity abgeschlossen. P2-FU-007 (Nachtrag), P2-FU-023 und P2-FU-024 sind
+damit fachlich gelöst; der verbleibende Stabilisierungsscope steht im aktiven
+Erkenntnisdokument.
+
 ### Orchestrator-Stabilisierung 1.1A – Record-Autorität und Replay
 
 Pfad: [`archive/orchestrator-stabilization-1-1a/`](archive/orchestrator-stabilization-1-1a/)
