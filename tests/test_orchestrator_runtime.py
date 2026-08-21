@@ -29,6 +29,7 @@ from contracts import (
 )
 from inbox_watcher import WatchTaskDisposition, WatchTaskResult
 from orchestrator import ProductionWorkflowDriver, run_pipeline, run_production_workflow
+from review_packets import ReviewPacket, ReviewPacketManifest
 from workflow import (
     CodexInvocation,
     ContractRepairInvocation,
@@ -412,6 +413,62 @@ def test_contract_repair_uses_a_separate_provider_operation(
     assert output == "STATUS: DONE"
     assert captured["operation"] == expected_operation
     assert captured["reviewer_repository_required"] is False
+
+
+def test_review_packet_materialization_reuses_bytes_and_rejects_cache_mismatch(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    repository = _repository(tmp_path, "feature/packet-cache")
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    driver.active_state = init_workflow_state(
+        run_id="packet-run", task_file="/repo/task.md",
+        branch="feature/packet-cache", branch_base="a" * 40,
+        slice_count=1, timestamp="2026-08-21T10:00:00+00:00",
+    )
+    canonical = b'{"schema":"review-packet-v1"}'
+    packet = ReviewPacket(
+        purpose="slice", fingerprint="a" * 64,
+        manifest=ReviewPacketManifest(("seed.txt",)),
+        canonical_bytes=canonical,
+        digest=hashlib.sha256(canonical).hexdigest(),
+    )
+
+    first = driver._materialize_review_packet(packet)
+    second = driver._materialize_review_packet(packet)
+    assert first == second
+    assert first.read_bytes() == canonical
+
+    captured: dict[str, object] = {}
+
+    def fake_agent(*args, **kwargs):  # type: ignore[no-untyped-def]
+        captured.update(kwargs)
+        return "STATUS: DONE"
+
+    monkeypatch.setattr(driver, "_agent", fake_agent)
+    assert driver.invoke_reviewer(
+        ReviewerInvocation(
+            work_unit_id=2,
+            step=WorkflowStep.CLAUDE_SLICE_REVIEW,
+            reviewer=AgentRole.CLAUDE,
+            round_number=1,
+            evidence_kind=EvidenceKind.FULL_SLICE,
+            fingerprint="a" * 64,
+            paths=("seed.txt",),
+            prompt="review",
+            review_packet=packet,
+        )
+    ) == "STATUS: DONE"
+    assert captured["reviewer_manifest_paths"] == ("seed.txt",)
+
+    first.write_text("collision", encoding="utf-8")
+    with pytest.raises(WorkflowExecutionError, match="differs from canonical bytes"):
+        driver._materialize_review_packet(packet)
 
 
 def test_quota_classified_recoverable_contract_still_persists_matching_quota_pause_record(
@@ -2390,8 +2447,10 @@ def test_generated_implementation_handoff_skips_second_plan_review(
             plan = repository / "docs" / "internal" / "guide.md"
             plan.parent.mkdir(parents=True)
             plan.write_text(
-                "# Guide plan\n\n### Slice 1 – Rewrite guide\n\n"
-                "**Exakter Änderungspfad**\n\n- `Guide.html`\n",
+                "# Guide plan\n\n### Slice 1 - Rewrite guide\n\n"
+                "**Ziel**\n\nRewrite the guide.\n\n"
+                "**Exakter Änderungspfad**\n\n- `Guide.html`\n\n"
+                "#### \u0041kzeptanzkriterien\n\n- The guide is rewritten.\n",
                 encoding="utf-8",
             )
             output = (

@@ -39,6 +39,7 @@ from final_review_preflight import (
     relevant_record_head, run_final_review_preflight, transition_fingerprint,
 )
 from provider_input_budget import ProviderInputMeasurement
+from review_packets import ReviewPacket
 from audit_trail import (
     AuditProjection,
     AuthorizedTestChanges,
@@ -513,6 +514,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
         label: str,
         *,
         reviewer_repository_required: bool = True,
+        reviewer_manifest_paths: tuple[str, ...] | None = None,
         operation: WorkflowStep | str,
         binding_fingerprint: str,
     ) -> str:
@@ -539,6 +541,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 else _has_done
             ),
             reviewer_repository_required=reviewer_repository_required,
+            reviewer_manifest_paths=reviewer_manifest_paths,
             operation=(
                 operation.value if isinstance(operation, WorkflowStep) else operation
             ),
@@ -656,6 +659,10 @@ class ProductionWorkflowDriver(WorkflowDriver):
         return output
 
     def invoke_reviewer(self, invocation: ReviewerInvocation) -> str:
+        manifest_paths: tuple[str, ...] | None = None
+        if invocation.review_packet is not None:
+            self._materialize_review_packet(invocation.review_packet)
+            manifest_paths = invocation.review_packet.manifest.paths
         try:
             return self._agent(
                 invocation.reviewer,
@@ -663,6 +670,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 f"work-unit-{invocation.work_unit_id:04d}-{invocation.step.value}",
                 operation=invocation.step,
                 binding_fingerprint=invocation.fingerprint,
+                reviewer_manifest_paths=manifest_paths,
             )
         except AgentInvocationError as exc:
             recovered = _recover_completed_reviewer_contract(
@@ -677,6 +685,29 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 exc.invocation_id,
             )
             return recovered
+
+    def _materialize_review_packet(self, packet: ReviewPacket) -> Path:
+        """Write or verify the reconstructable content-addressed packet cache."""
+        if self.active_state is None:
+            raise WorkflowExecutionError("review packet materialization has no active state")
+        packet_dir = (
+            self.root / ".orchestrator" / "artifacts" / self.active_state.run_id
+            / "review-packets"
+        )
+        packet_dir.mkdir(parents=True, exist_ok=True)
+        target = packet_dir / f"{packet.digest}.json"
+        try:
+            with target.open("xb") as stream:
+                stream.write(packet.canonical_bytes)
+        except FileExistsError:
+            if not target.is_file() or target.read_bytes() != packet.canonical_bytes:
+                raise WorkflowExecutionError(
+                    "content-addressed review packet cache differs from canonical bytes"
+                )
+            return target
+        if target.read_bytes() != packet.canonical_bytes:
+            raise WorkflowExecutionError("review packet cache verification failed")
+        return target
 
     def recover_pending_reviewer(
         self,
@@ -2059,6 +2090,18 @@ def _context(
         f"the declared task scope: {', '.join(state.task_scope_patterns) or 'LEGACY'}"
     )
     effective_scope = state.task_scope_patterns
+    approved_plan_text: str | None = None
+    if (
+        state.work_plan_path is not None
+        and state.current_work_unit.kind in {WorkUnitKind.SLICE, WorkUnitKind.CORRECTION}
+    ):
+        repository_root = Path.cwd().resolve()
+        plan_path = (repository_root / state.work_plan_path).resolve()
+        if not plan_path.is_relative_to(repository_root) or not plan_path.is_file():
+            raise WorkflowExecutionError(
+                "approved work plan is unavailable inside the repository boundary"
+            )
+        approved_plan_text = plan_path.read_text(encoding="utf-8")
     if state.audit_report_path is not None:
         effective_scope = tuple(
             sorted(
@@ -2119,6 +2162,7 @@ def _context(
         plan_only=state.execution_mode == TaskMode.PLAN_ONLY.value,
         task_scope_patterns=effective_scope,
         work_plan_path=state.work_plan_path,
+        approved_plan_text=approved_plan_text,
         audit_report_path=state.audit_report_path,
         current_scope_paths=state.current_slice.scope_paths,
     )

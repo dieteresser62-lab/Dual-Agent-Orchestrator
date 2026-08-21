@@ -72,6 +72,9 @@ from prompts import (
     build_v3_review_prompt,
     delimit_block,
 )
+from review_packets import (
+    ReviewPacket, ReviewPacketError, ReviewPacketManifest, build_review_packet,
+)
 from validation_matrix import (
     ValidationCommand,
     ValidationMatrix,
@@ -445,6 +448,7 @@ class WorkflowContext:
     plan_only: bool = False
     task_scope_patterns: tuple[str, ...] = ()
     work_plan_path: str | None = None
+    approved_plan_text: str | None = None
     audit_report_path: str | None = None
     current_scope_paths: tuple[str, ...] = ()
 
@@ -507,6 +511,8 @@ class WorkflowContext:
             raise ValueError(
                 "plan-only context requires work_plan_path and task scope patterns"
             )
+        if self.approved_plan_text is not None and not self.approved_plan_text.strip():
+            raise ValueError("approved plan text must be non-empty when provided")
         if self.audit_report_path is not None and not self.audit_report_path.startswith(
             "docs/internal/"
         ):
@@ -572,6 +578,7 @@ class ReviewerInvocation:
     fingerprint: str
     paths: tuple[str, ...]
     prompt: str
+    review_packet: ReviewPacket | None = None
 
 
 @dataclass(frozen=True)
@@ -662,6 +669,7 @@ class WorkflowHistory:
     latest_claude_review: ContractResult | None = None
     latest_antigravity_review: ContractResult | None = None
     codex_final_report: str | None = None
+    active_review_packet: ReviewPacket | None = None
 
     def __post_init__(self) -> None:
         if self.work_unit_id < 1:
@@ -680,7 +688,7 @@ class WorkflowHistory:
             raise ValueError("workflow history event ids must be contiguous and 1-based")
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        result: dict[str, object] = {
             "work_unit_id": self.work_unit_id,
             "findings": [_finding_to_dict(item) for item in self.findings],
             "events": [_event_to_dict(item) for item in self.events],
@@ -690,6 +698,16 @@ class WorkflowHistory:
             "latest_antigravity_review": _review_to_dict(self.latest_antigravity_review),
             "codex_final_report": self.codex_final_report,
         }
+        if self.active_review_packet is not None:
+            packet = self.active_review_packet
+            result["active_review_packet"] = {
+                "purpose": packet.purpose,
+                "fingerprint": packet.fingerprint,
+                "paths": list(packet.manifest.paths),
+                "canonical_text": packet.text,
+                "digest": packet.digest,
+            }
+        return result
 
     @classmethod
     def from_dict(cls, raw: object) -> WorkflowHistory:
@@ -700,8 +718,25 @@ class WorkflowHistory:
             "last_claude_fingerprint", "latest_claude_review",
             "latest_antigravity_review",
         }
-        if set(raw) not in (expected, {*expected, "codex_final_report"}):
+        allowed = {*expected, "codex_final_report", "active_review_packet"}
+        if not expected.issubset(raw) or not set(raw).issubset(allowed):
             raise ValueError("workflow history has unknown or missing fields")
+        packet_raw = raw.get("active_review_packet")
+        active_review_packet: ReviewPacket | None = None
+        if packet_raw is not None:
+            if not isinstance(packet_raw, dict) or set(packet_raw) != {
+                "purpose", "fingerprint", "paths", "canonical_text", "digest"
+            }:
+                raise ValueError("workflow history review packet has invalid fields")
+            active_review_packet = ReviewPacket(
+                purpose=str(packet_raw["purpose"]),
+                fingerprint=str(packet_raw["fingerprint"]),
+                manifest=ReviewPacketManifest(
+                    tuple(str(item) for item in _json_list(packet_raw["paths"]))
+                ),
+                canonical_bytes=str(packet_raw["canonical_text"]).encode("utf-8"),
+                digest=str(packet_raw["digest"]),
+            )
         return cls(
             work_unit_id=int(raw["work_unit_id"]),
             findings=tuple(_finding_from_dict(item) for item in _json_list(raw["findings"])),
@@ -720,6 +755,7 @@ class WorkflowHistory:
                 if raw.get("codex_final_report") is None
                 else str(raw["codex_final_report"])
             ),
+            active_review_packet=active_review_packet,
         )
 
 
@@ -1940,10 +1976,26 @@ class WorkflowEngine:
             ),
             allow_new_observations=unit.kind is not WorkUnitKind.CORRECTION,
         )
+        review_packet: ReviewPacket | None = None
         if is_final_review:
             evidence_kind = EvidenceKind.FULL_BRANCH
             review_diff = changes.full_diff
+        elif context.approved_plan_text is not None and (
+            unit.kind is WorkUnitKind.CORRECTION or unit.round_number > 1
+        ):
+            evidence_kind = EvidenceKind.CORRECTION_DELTA
+            correction_start = state.current_slice.start_fingerprint
+            if correction_start is None:
+                raise WorkflowExecutionError(
+                    "correction review requires a persisted start fingerprint"
+                )
+            review_diff = self.driver.collect_correction_delta(
+                correction_start, changes.fingerprint
+            )
         elif reviewer is AgentRole.CLAUDE and history.last_claude_fingerprint is not None:
+            # Compatibility for historical and synthetic contexts that predate
+            # canonical packets. New persisted plan-bound runs use the shared
+            # start-fingerprint delta above for both reviewers.
             evidence_kind = EvidenceKind.CORRECTION_DELTA
             review_diff = self.driver.collect_correction_delta(
                 history.last_claude_fingerprint, changes.fingerprint
@@ -1951,18 +2003,87 @@ class WorkflowEngine:
         else:
             evidence_kind = EvidenceKind.FULL_SLICE
             review_diff = changes.full_diff
-        evidence = self._review_evidence(
-            context=context,
-            history=history,
-            changes=changes,
-            evidence_kind=evidence_kind,
-            review_diff=review_diff,
-        )
-        prompt = build_v3_review_prompt(
-            assignment=context.assignment,
-            evidence=evidence,
-            contract=contract,
-        )
+        if (
+            not is_plan_review
+            and not is_final_review
+            and context.approved_plan_text is not None
+        ):
+            start_fingerprint = state.current_slice.start_fingerprint
+            if start_fingerprint is None:
+                raise WorkflowExecutionError(
+                    "Slice review packet requires a persisted start fingerprint"
+                )
+            packet_purpose = (
+                "correction"
+                if evidence_kind is EvidenceKind.CORRECTION_DELTA
+                else "slice"
+            )
+            if reviewer is AgentRole.ANTIGRAVITY:
+                review_packet = history.active_review_packet
+                if (
+                    review_packet is None
+                    or review_packet.fingerprint != changes.fingerprint
+                    or review_packet.purpose != packet_purpose
+                ):
+                    raise WorkflowExecutionError(
+                        "Antigravity requires Claude's fingerprint-matching base packet"
+                    )
+            else:
+                try:
+                    packet_paths = tuple(
+                        path
+                        for path in changes.paths
+                        if path != context.audit_report_path
+                        and not path.startswith(".orchestrator/")
+                        and not path.startswith("docs/internal/slice-")
+                    )
+                    review_packet = build_review_packet(
+                        purpose=packet_purpose,
+                        fingerprint=changes.fingerprint,
+                        start_fingerprint=start_fingerprint,
+                        paths=packet_paths,
+                        review_diff=review_diff,
+                        plan_text=context.approved_plan_text,
+                        slice_id=unit.slice_id,
+                        attestation=attestation,
+                        findings=history.findings,
+                        affected_finding_ids=(
+                            unit.open_findings
+                            if unit.kind is WorkUnitKind.CORRECTION
+                            else ()
+                        ),
+                    )
+                except ReviewPacketError as exc:
+                    raise WorkflowExecutionError(
+                        f"canonical review packet could not be built: {exc}"
+                    ) from exc
+                history = replace(history, active_review_packet=review_packet)
+                self.driver.checkpoint(state, history)
+            prompt = build_v3_review_prompt(
+                assignment="",
+                evidence="",
+                contract=contract,
+                base_packet=review_packet.text,
+                base_digest=review_packet.digest,
+                claude_approval_fingerprint=(
+                    history.last_claude_fingerprint
+                    if reviewer is AgentRole.ANTIGRAVITY
+                    else None
+                ),
+            )
+        else:
+            evidence = self._review_evidence(
+                context=context,
+                history=history,
+                changes=changes,
+                evidence_kind=evidence_kind,
+                review_diff=review_diff,
+            )
+            prompt = build_v3_review_prompt(
+                assignment=context.assignment,
+                evidence=evidence,
+                contract=contract,
+            )
         invocation = ReviewerInvocation(
             work_unit_id=unit.work_unit_id,
             step=state.current_step,
@@ -1970,8 +2091,13 @@ class WorkflowEngine:
             round_number=review_round,
             evidence_kind=evidence_kind,
             fingerprint=changes.fingerprint,
-            paths=changes.paths,
+            paths=(
+                review_packet.manifest.paths
+                if review_packet is not None
+                else changes.paths
+            ),
             prompt=prompt,
+            review_packet=review_packet,
         )
         state, output = self._invoke_role(
             state,

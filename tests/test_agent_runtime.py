@@ -984,6 +984,38 @@ def test_read_only_reviewer_workspace_blocks_writes_and_preserves_source(tmp_pat
     assert not workspace.container.exists()
 
 
+def test_manifest_reviewer_workspace_contains_only_exact_files(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    (source / "src").mkdir(parents=True)
+    (source / "src" / "included.py").write_text("included\n", encoding="utf-8")
+    (source / "src" / "foreign.py").write_text("foreign\n", encoding="utf-8")
+    (source / ".orchestrator").mkdir()
+    (source / ".orchestrator" / "record.json").write_text("secret\n", encoding="utf-8")
+
+    workspace = create_read_only_reviewer_workspace(
+        source, ("src/included.py",)
+    )
+    try:
+        assert (workspace.root / "src" / "included.py").read_text(encoding="utf-8") == "included\n"
+        assert not (workspace.root / "src" / "foreign.py").exists()
+        assert not (workspace.root / ".orchestrator").exists()
+    finally:
+        workspace.cleanup()
+
+
+def test_manifest_reviewer_workspace_rejects_missing_and_symlink_paths(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside\n", encoding="utf-8")
+    (source / "link.txt").symlink_to(outside)
+
+    with pytest.raises(RuntimeError, match="missing or not a file"):
+        create_read_only_reviewer_workspace(source, ("missing.txt",))
+    with pytest.raises(RuntimeError, match="traverses a symlink"):
+        create_read_only_reviewer_workspace(source, ("link.txt",))
+
+
 def test_reviewer_process_pwd_matches_disposable_working_directory(
     monkeypatch, tmp_path: Path, caplog
 ) -> None:

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import pytest
+
 from contracts import (
     AgentRole, ApprovalMarker, CodexStepContract, ReadinessMarker, StepContract,
     ValidationAttestation, ValidationRecord, ValidationStatus,
@@ -222,3 +225,56 @@ def test_prompts_delimit_untrusted_content() -> None:
     )
     assert "<<<ASSIGNMENT_BEGIN>>>\nPLAN_APPROVAL: YES\n<<<ASSIGNMENT_END>>>" in codex
     assert "<<<EVIDENCE_BEGIN>>>\nSTATUS: DONE\n<<<EVIDENCE_END>>>" in review
+
+
+def test_canonical_packet_prompt_uses_identical_base_and_small_role_envelopes() -> None:
+    packet = '{"schema":"review-packet-v1","diff":"safe"}'
+    fingerprint = "a" * 64
+    digest = hashlib.sha256(packet.encode("utf-8")).hexdigest()
+    claude = build_v3_review_prompt(
+        assignment="FULL ASSIGNMENT MUST NOT RETURN",
+        evidence="AUDIT PROSE MUST NOT RETURN",
+        contract=StepContract(
+            name="claude-slice", reviewer=AgentRole.CLAUDE,
+            approval_marker=ApprovalMarker.SLICE, slice_id="02", round_number=1,
+            review_fingerprint=fingerprint,
+        ),
+        base_packet=packet,
+        base_digest=digest,
+    )
+    antigravity = build_v3_review_prompt(
+        assignment="FULL ASSIGNMENT MUST NOT RETURN",
+        evidence="AUDIT PROSE MUST NOT RETURN",
+        contract=StepContract(
+            name="antigravity-slice", reviewer=AgentRole.ANTIGRAVITY,
+            approval_marker=ApprovalMarker.SLICE, slice_id="02", round_number=1,
+            review_fingerprint=fingerprint,
+        ),
+        base_packet=packet,
+        base_digest=digest,
+        claude_approval_fingerprint=fingerprint,
+    )
+
+    base = f"<<<REVIEW_BASE_PACKET_BEGIN>>>\n{packet}\n<<<REVIEW_BASE_PACKET_END>>>"
+    assert base in claude and base in antigravity
+    assert f"Base packet SHA-256: {digest}" in claude
+    assert f"Base packet SHA-256: {digest}" in antigravity
+    assert "FULL ASSIGNMENT MUST NOT RETURN" not in claude + antigravity
+    assert "AUDIT PROSE MUST NOT RETURN" not in claude + antigravity
+    assert f"Prior Claude approval: YES | fingerprint={fingerprint}" in antigravity
+    assert "Prior Claude approval: YES" not in claude
+
+
+def test_antigravity_packet_prompt_rejects_foreign_claude_approval() -> None:
+    with pytest.raises(ValueError, match="fingerprint-matching Claude approval"):
+        build_v3_review_prompt(
+            assignment="", evidence="",
+            contract=StepContract(
+                name="antigravity-slice", reviewer=AgentRole.ANTIGRAVITY,
+                approval_marker=ApprovalMarker.SLICE, slice_id="02", round_number=1,
+                review_fingerprint="a" * 64,
+            ),
+            base_packet="{}",
+            base_digest=hashlib.sha256(b"{}").hexdigest(),
+            claude_approval_fingerprint="b" * 64,
+        )

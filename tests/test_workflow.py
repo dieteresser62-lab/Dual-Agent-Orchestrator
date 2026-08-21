@@ -1662,6 +1662,109 @@ def test_antigravity_denial_returns_to_codex_then_claude_before_recheck() -> Non
     assert all(not request.findings[-1].status.value == "OPEN" for request in driver.commit_calls)
 
 
+def test_plan_bound_correction_packet_uses_same_start_delta_for_both_reviewers() -> None:
+    first = _changes("1", "src/early.py", TEST_FILE)
+    corrected = _changes("2", "src/early.py", "src/latest.py", TEST_FILE)
+    driver = FakeDriver(
+        snapshots=[first, corrected],
+        codex_outputs=[_codex_ready(), _codex_ready("A-01")],
+        reviewer_outputs=[
+            _review_approval(AgentRole.CLAUDE),
+            _review_denial(AgentRole.ANTIGRAVITY, "A-01"),
+            _review_approval(AgentRole.CLAUDE),
+            _review_closes(AgentRole.ANTIGRAVITY, "A-01"),
+        ],
+        deltas={("0" * 64, corrected.fingerprint): "BOUND CORRECTION DELTA"},
+    )
+    plan = """# Approved plan
+
+### Slice 1 - Packet Slice
+
+**Ziel**
+
+Use one canonical packet.
+
+#### \u0041kzeptanzkriterien
+
+- Both reviewers receive identical correction bytes.
+
+#### Geplante fokussierte Tests
+
+- focused
+"""
+
+    result = WorkflowEngine(driver).run_current_work_unit(
+        _slice_state(), replace(_context(), approved_plan_text=plan)
+    )
+
+    assert result.completed
+    assert [call.evidence_kind for call in driver.reviewer_calls] == [
+        EvidenceKind.FULL_SLICE,
+        EvidenceKind.FULL_SLICE,
+        EvidenceKind.CORRECTION_DELTA,
+        EvidenceKind.CORRECTION_DELTA,
+    ]
+    assert driver.reviewer_calls[0].review_packet is not None
+    assert (
+        driver.reviewer_calls[0].review_packet.canonical_bytes
+        == driver.reviewer_calls[1].review_packet.canonical_bytes
+    )
+    assert (
+        driver.reviewer_calls[2].review_packet.canonical_bytes
+        == driver.reviewer_calls[3].review_packet.canonical_bytes
+    )
+    assert "BOUND CORRECTION DELTA" in driver.reviewer_calls[2].review_packet.text
+    assert "Implement Slice 10" not in driver.reviewer_calls[2].prompt
+
+
+def test_antigravity_reuses_claude_base_packet_when_claude_adds_observation() -> None:
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    claude_with_observation = "\n".join(
+        (
+            "REVIEWER: claude",
+            f"TEST_FILES_TOUCHED: {TEST_FILE}",
+            "NEW_FINDING: C-01 | OBSERVATION | future cleanup | document later",
+            "PRE_MORTEM: a future transition could bypass the role order",
+            "SLICE_APPROVAL: 01 | YES",
+            "STATUS: DONE",
+        )
+    )
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[
+            claude_with_observation,
+            _review_approval(AgentRole.ANTIGRAVITY),
+        ],
+    )
+    plan = """# Approved plan
+
+### Slice 1 - Packet Slice
+
+**Ziel**
+
+Use one canonical packet.
+
+#### \u0041kzeptanzkriterien
+
+- Both reviewers receive identical bytes.
+"""
+
+    result = WorkflowEngine(driver).run_current_work_unit(
+        _slice_state(), replace(_context(), approved_plan_text=plan)
+    )
+
+    assert result.completed
+    claude_packet = driver.reviewer_calls[0].review_packet
+    antigravity_packet = driver.reviewer_calls[1].review_packet
+    assert claude_packet is not None
+    assert antigravity_packet is not None
+    assert claude_packet.canonical_bytes == antigravity_packet.canonical_bytes
+    assert "future cleanup" not in antigravity_packet.text
+    restored = WorkflowHistory.from_dict(result.history.to_dict())
+    assert restored.active_review_packet == antigravity_packet
+
+
 def test_contract_only_repair_receives_no_implementation_evidence() -> None:
     changes = _changes("1", "src/early.py", TEST_FILE)
     valid = _review_approval(AgentRole.CLAUDE)

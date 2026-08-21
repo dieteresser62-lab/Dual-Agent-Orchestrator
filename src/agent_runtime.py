@@ -450,7 +450,38 @@ def _review_snapshot_paths(source: Path) -> tuple[PurePosixPath, ...] | None:
     return tuple(sorted(set(paths), key=lambda item: item.as_posix()))
 
 
-def _copy_review_snapshot(source: Path, destination: Path) -> int:
+def _copy_review_snapshot(
+    source: Path,
+    destination: Path,
+    manifest_paths: tuple[str, ...] | None = None,
+) -> int:
+    if manifest_paths is not None:
+        if not manifest_paths or manifest_paths != tuple(sorted(set(manifest_paths))):
+            raise RuntimeError("reviewer snapshot manifest must be sorted, unique, and non-empty")
+        destination.mkdir()
+        copied = 0
+        for raw in manifest_paths:
+            relative = PurePosixPath(raw)
+            if relative.is_absolute() or not relative.parts or ".." in relative.parts:
+                raise RuntimeError(f"unsafe reviewer snapshot manifest path: {raw!r}")
+            source_path = source.joinpath(*relative.parts)
+            cursor = source
+            for part in relative.parts:
+                cursor = cursor / part
+                if cursor.is_symlink():
+                    raise RuntimeError(
+                        f"reviewer snapshot manifest path traverses a symlink: {raw!r}"
+                    )
+            if not source_path.exists() or not source_path.is_file():
+                raise RuntimeError(
+                    f"reviewer snapshot manifest path is missing or not a file: {raw!r}"
+                )
+            destination_path = destination.joinpath(*relative.parts)
+            destination_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_path, destination_path, follow_symlinks=False)
+            copied += 1
+        return copied
+
     paths = _review_snapshot_paths(source)
     if paths is None:
         # Unit tests and explicit diagnostics may use a non-Git fixture. Keep that
@@ -484,7 +515,10 @@ def _copy_review_snapshot(source: Path, destination: Path) -> int:
     return copied
 
 
-def create_read_only_reviewer_workspace(repo_root: Path) -> ReviewerWorkspace:
+def create_read_only_reviewer_workspace(
+    repo_root: Path,
+    manifest_paths: tuple[str, ...] | None = None,
+) -> ReviewerWorkspace:
     """Copy canonical repository files and remove write bits without following links."""
     source = repo_root.resolve()
     container = Path(tempfile.mkdtemp(prefix="dao-review-workspace-"))
@@ -492,7 +526,7 @@ def create_read_only_reviewer_workspace(repo_root: Path) -> ReviewerWorkspace:
     started = time.monotonic()
     logger.info("Preparing selective read-only reviewer snapshot.")
     try:
-        copied = _copy_review_snapshot(source, destination)
+        copied = _copy_review_snapshot(source, destination, manifest_paths)
         paths = sorted(destination.rglob("*"), key=lambda item: len(item.parts), reverse=True)
         for path in paths:
             if path.is_symlink():
@@ -811,6 +845,7 @@ def run_agent(
     config: OrchestratorConfig,
     shorten: Callable[[str | None, int], str],
     reviewer_repository_required: bool = True,
+    reviewer_manifest_paths: tuple[str, ...] | None = None,
     operation: str | None = None,
     binding_fingerprint: str = "unbound",
     pre_start_callback: Callable[[ProviderInputMeasurement], None] | None = None,
@@ -832,11 +867,12 @@ def run_agent(
     invocation_started = time.monotonic()
     try:
         if adapter.reviewer:
-            workspace = (
-                create_read_only_reviewer_workspace(execution_root)
-                if reviewer_repository_required
-                else create_empty_reviewer_workspace()
-            )
+            if not reviewer_repository_required:
+                workspace = create_empty_reviewer_workspace()
+            else:
+                workspace = create_read_only_reviewer_workspace(
+                    execution_root, reviewer_manifest_paths
+                )
             source_root = execution_root
             execution_root = workspace.root
             adapter.bind_reviewer_workspace(source_root, execution_root)
@@ -1615,6 +1651,7 @@ def run_agent_checked(
     parse_flag: Callable[[str, str], str | None],
     validate_done_marker: Callable[[str], bool],
     reviewer_repository_required: bool = True,
+    reviewer_manifest_paths: tuple[str, ...] | None = None,
     operation: str | None = None,
     binding_fingerprint: str = "unbound",
     pre_start_callback: Callable[[ProviderInputMeasurement], None] | None = None,
@@ -1667,6 +1704,7 @@ def run_agent_checked(
                 config=config,
                 shorten=shorten,
                 reviewer_repository_required=reviewer_repository_required,
+                reviewer_manifest_paths=reviewer_manifest_paths,
                 operation=operation,
                 binding_fingerprint=binding_fingerprint,
                 pre_start_callback=pre_start_callback,
