@@ -457,27 +457,91 @@ hat.
   Vorgängerbindungen;
 - Legacy-Lesbarkeit ohne stillen Protokollwechsel.
 
-### 9.4 Arbeitspaket 3 – Native Claude-Reviews
+Stand 22. August 2026: Der erste providerunabhängige Teil dieses Pakets ist als
+nativer `review_result`-/`stop_request`-Kern abgeschlossen und archiviert. Er
+umfasst das geschlossene Response-Schema, das unveränderliche Domänenmodell,
+die Kontext- und Findinginvarianten sowie die gemeinsame öffentliche
+Schema-Validierung. Die rollenspezifische Requesthülle und ihre Livebindung
+werden bewusst erst zusammen mit dem jeweiligen Providerpfad umgesetzt, damit
+kein ungenutzter Transportvertrag vorweggenommen wird.
 
+### 9.4 Priorisierungsentscheidung – Codex–Claude vor Antigravity
+
+Ab 22. August 2026 wird die weitere Umsetzung nach ihrem unmittelbaren Nutzen
+für die tägliche Planungs-, Implementierungs- und Korrekturschleife geordnet.
+Nach dem nativen Claude-Reviewpfad folgen deshalb native Codex-Ergebnisse und
+die vollständig strukturierte Codex–Claude-Konvergenz. Antigravity bleibt Teil
+des Zielsystems, wird aber erst auf der dann stabilen gemeinsamen Transport-,
+Persistenz- und Resume-Infrastruktur integriert.
+
+Codex und Claude kommunizieren dabei nicht direkt miteinander. Der
+Orchestrator bleibt die einzige Vermittlungs- und Autoritätsgrenze: Er baut
+typisierte Aufträge, persistiert Ergebnisse und Findings, erzeugt daraus den
+nächsten gebundenen Auftrag und erzwingt Reihenfolge, Eigentum, Fingerprint und
+Idempotenz. Die vorgezogene Zweierkette darf daher keine Claude-spezifischen
+Recordmodelle oder Abkürzungen einführen, die eine spätere Antigravity-
+Integration erschweren.
+
+Die verbindliche Ausführungsreihenfolge der noch offenen Pakete ist:
+
+1. nativer Claude-Reviewpfad;
+2. native Codex-Ergebnisse;
+3. geschlossene strukturierte Codex–Claude-Korrekturschleife;
+4. semantischer Evidence-Builder;
+5. native Antigravity-Reviews;
+6. End-to-End-Cutover.
+
+### 9.5 Arbeitspaket 3 – Native Claude-Reviews
+
+- versionierte native Review-Requesthülle und deterministischer
+  `NativeReviewContext` für Plan-, Slice- und Finalreview;
+- direktes Claude-Resultatschema statt einer JSON-Hülle mit freiem
+  textuellem `response`-Feld;
 - native Claude-Reviewantwort mit Finding-Lifecycle;
 - idempotente Persistenz vor Reparatur-, Quota- oder Resumeentscheidungen;
 - kleine typisierte Ergänzungsaufträge statt vollständiger Reviewwiederholung;
-- keine technische Fehlerklassifikation aus Reviewprosa.
+- keine technische Fehlerklassifikation aus Reviewprosa;
+- kein Textmarkerfallback nach einem nativen Vertragsfehler;
+- zunächst expliziter Pilotpfad ohne Änderung des Defaultprotokolls.
 
-### 9.5 Arbeitspaket 4 – Native Antigravity-Reviews
+Das Paket ist abgeschlossen, wenn je mehrere repräsentative Plan-, Slice- und
+Finalreviews schema- und domänenvalidiert ohne Textmarkerparser gelaufen sind,
+ein vollständig empfangenes Ergebnis einen Crash vor dem State-Checkpoint
+überlebt und Resume keinen zweiten Claude-Aufruf oder doppelte Findings
+erzeugt.
 
-- native Antigravity-Reviewantwort;
-- unveränderte Freigabereihenfolge nach Claude für denselben Fingerprint;
-- genau einmalige Ausführung pro gebundener Reviewentscheidung;
-- Resume-, Quota- und Providerfehlerverhalten analog zu Claude.
+### 9.6 Arbeitspaket 4 – Native Codex-Ergebnisse
 
-### 9.6 Arbeitspaket 5 – Native Codex-Ergebnisse
-
+- versionierte native Request- und Responseschemas für Codex;
 - native Planungs-, Implementierungs-, Korrektur- und Abschlussresultate;
 - typisierte Readiness-, Testdatei-, Finding-Response- und Stopdaten;
-- kein Rückfall auf Textmarker bei Vertragsfehlern eines nativ gebundenen Laufs.
+- deterministische Übernahme orchestrator-eigener Metadaten statt Echo in
+  Modellprosa;
+- kein Rückfall auf Textmarker bei Vertragsfehlern eines nativ gebundenen
+  Laufs;
+- historische Codex-Läufe bleiben über ihren gebundenen Textadapter lesbar und
+  fortsetzbar.
 
-### 9.7 Arbeitspaket 6 – Semantischer Evidence-Builder
+### 9.7 Arbeitspaket 5 – Geschlossene Codex–Claude-Korrekturschleife
+
+- Claude erzeugt und aktualisiert Findings ausschließlich als native,
+  reviewer-eigene Entscheidungen;
+- der Orchestrator persistiert das Claude-Ergebnis vor jeder Folgeentscheidung
+  und baut daraus genau einen typisierten Codex-Korrekturauftrag;
+- Codex beantwortet jedes offene Finding mit einer strukturierten
+  Disposition, ohne es selbst schließen oder reklassifizieren zu können;
+- Claude schließt oder eskaliert das eigene Finding in einem neuen, an den
+  korrigierten Fingerprint gebundenen Review;
+- Crash, Quota, Resume und wiederholte Zustellung erzeugen weder doppelte
+  Findings noch doppelte Korrekturen oder Reviewerentscheidungen;
+- dieselbe Mechanik trägt Planung, Slice-Konvergenz und branchweiten Abschluss,
+  ohne direkte Agent-zu-Agent-Kommunikation.
+
+Das Paket ist der erste vollständige native Nutzpfad: Plan beziehungsweise
+Implementierung durch Codex, Review durch Claude, gegebenenfalls Korrektur und
+erneute Claude-Entscheidung müssen ohne textuelle Rollenmarker konvergieren.
+
+### 9.8 Arbeitspaket 6 – Semantischer Evidence-Builder
 
 - offene Findings, Delta-Hunks und relevante Vertragskanten;
 - vollständiges Änderungsmanifest mit semantischen Digests;
@@ -489,7 +553,22 @@ hat.
 - kompakte Referenzen auf unveränderte geschlossene Findings und frühere
   Attestierungen.
 
-### 9.8 Arbeitspaket 7 – End-to-End-Cutover
+### 9.9 Arbeitspaket 7 – Native Antigravity-Reviews
+
+- native Antigravity-Reviewantwort auf demselben providerunabhängigen
+  `review_result`-Kern;
+- unveränderte Freigabereihenfolge nach Claude für denselben Fingerprint;
+- genau einmalige Ausführung pro gebundener Reviewentscheidung;
+- Resume-, Quota- und Providerfehlerverhalten analog zum bereits stabilisierten
+  Claude-Pfad;
+- keine Sonderbehandlung, die Findingeigentum, Persistenz oder
+  Korrekturauftragsbildung der Codex–Claude-Kette umgeht.
+
+Die zeitliche Vertagung ist keine Freigabe für einen dauerhaften
+Zwei-Agenten-Produktivmodus. Antigravity bleibt Voraussetzung für den
+regulären Drei-Reviewer-Orchestrator und den anschließenden Cutover.
+
+### 9.10 Arbeitspaket 8 – End-to-End-Cutover
 
 - unveränderlich gebundener Protokollmodus `native-agent-json-v1` für neue
   Workflows;

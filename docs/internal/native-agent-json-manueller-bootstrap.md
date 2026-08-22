@@ -52,9 +52,14 @@ Protokollbindungen.
 
 ## Rückkehr zum regulären Orchestrator
 
-Der Ausnahmeprozess endet erst, wenn mindestens der gemeinsame native
-Reviewresultatvertrag und der native Claude-Reviewpfad schema- und
-domänenvalidiert mehrere repräsentative Plan-, Slice- und Finalreviews ohne
-Textmarkerparser durchlaufen haben. Antigravity wird anschließend in einem
-eigenen Paket nativ integriert und erst nach bestandenen End-to-End-Läufen
-wieder zum verpflichtenden regulären Reviewer.
+Der derzeitige Ausnahmeprozess bleibt mindestens so lange aktiv, bis der
+gemeinsame native Reviewresultatvertrag und der native Claude-Reviewpfad
+schema- und domänenvalidiert mehrere repräsentative Plan-, Slice- und
+Finalreviews ohne Textmarkerparser durchlaufen haben. Danach werden unter
+demselben manuellen Verfahren zunächst die nativen Codex-Ergebnisse und die
+vollständig strukturierte, orchestratorvermittelte Codex–Claude-
+Korrekturschleife stabilisiert. Vor dem späteren Antigravity-Paket wird der
+Ausnahmevertrag ausdrücklich neu bewertet; bis dahin bleibt Antigravity in
+diesem Verfahren `NOT_RUN`. Die Rückkehr zum regulären Drei-Reviewer-
+Orchestrator und der allgemeine `native-agent-json-v1`-Cutover bleiben bis zur
+nativen Antigravity-Integration und bestandenen End-to-End-Läufen gesperrt.
