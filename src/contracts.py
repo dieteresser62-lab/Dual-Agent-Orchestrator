@@ -547,6 +547,7 @@ class CodexContractResult:
     test_files: tuple[str, ...]
     findings: tuple[FindingRecord, ...]
     slice_plan: tuple[PlannedSlice, ...] = ()
+    self_check: str | None = None
 
 
 def strip_delimited_sections(text: str) -> str:

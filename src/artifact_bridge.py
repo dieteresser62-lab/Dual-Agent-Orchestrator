@@ -111,7 +111,13 @@ def plan_payload(
 
 
 def agent_result_payload(
-    result: CodexContractResult, *, role: AgentRole, work_unit_id: int | str
+    result: CodexContractResult,
+    *,
+    role: AgentRole,
+    work_unit_id: int | str,
+    transport_schema: str | None = None,
+    request_id: str | None = None,
+    response_sha256: str | None = None,
 ) -> AgentResultPayload:
     outcome = "stopped" if result.stopped else "ready" if result.ready else "not_ready"
     return AgentResultPayload(
@@ -119,6 +125,9 @@ def agent_result_payload(
         work_unit_id=str(work_unit_id),
         outcome=outcome,
         test_files=result.test_files,
+        transport_schema=transport_schema,
+        request_id=request_id,
+        response_sha256=response_sha256,
     )
 
 

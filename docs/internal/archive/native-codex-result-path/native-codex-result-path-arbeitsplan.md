@@ -2,7 +2,7 @@
 
 TARGET_BRANCH: feature/native-codex-result-path
 
-STATUS: DRAFT_AWAITING_DIRECT_CLAUDE_PLAN_REVIEW
+STATUS: IMPLEMENTED_AND_REVIEWED
 
 ## 1. Auftrag und Abgrenzung
 
@@ -222,12 +222,16 @@ Recovery werden ergänzt.
 - `schemas/orchestrator-artifact-v1.schema.json`
 - `src/artifact_bridge.py`
 - `src/artifact_models.py`
+- `src/artifact_projection.py`
+- `src/audit_trail.py`
 - `src/cli.py`
 - `src/orchestrator.py`
 - `src/workflow.py`
 - `src/workflow_state.py`
 - `tests/test_artifact_bridge.py`
 - `tests/test_artifact_models.py`
+- `tests/test_artifact_projection.py`
+- `tests/test_audit_trail.py`
 - `tests/test_cli.py`
 - `tests/test_orchestrator_runtime.py`
 - `tests/test_structured_artifact_regressions.py`
@@ -247,6 +251,13 @@ Recovery werden ergänzt.
    Attestierung aus seinem Kontext und nie aus ungebundenen Responsefeldern.
 - Native AgentResult-Records binden Transport, Request-ID, Response-Digest,
    Operation, Work Unit und Fingerprint; historische Records bleiben gültig.
+- Die deterministische Markdown-Projektion macht für jeden nativen
+   AgentResult-Record `transport_schema`, `request_id` und `response_sha256`
+   sichtbar. `artifact_projection` erzeugt diese Angaben ausschließlich aus
+   der Recordkette; `audit_trail` übernimmt sie ohne Rücklesen oder
+   Neuinterpretation von Markdown. Projektionstests decken native und
+   historische Records sowie die bereits vorhandenen nativen Reviewfelder
+   symmetrisch ab.
 - Ein injizierter Crash nach Rohantwort beziehungsweise nach AgentResult-
    Persistenz und vor dem State-Checkpoint wird für jede Codex-Auftragsart
    ohne zweiten Providerstart wiederaufgenommen.

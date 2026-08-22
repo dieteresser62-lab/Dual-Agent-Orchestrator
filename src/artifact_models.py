@@ -187,6 +187,9 @@ class AgentResultPayload:
     work_unit_id: str
     outcome: str
     test_files: tuple[str, ...]
+    transport_schema: str | None = None
+    request_id: str | None = None
+    response_sha256: str | None = None
     status: ClassVar[str] = "ready"
     record_type: ClassVar[RecordType] = RecordType.AGENT_RESULT
 
@@ -195,6 +198,33 @@ class AgentResultPayload:
         if self.outcome not in {"ready", "not_ready", "stopped"}:
             raise ArtifactValidationError("agent result outcome is invalid")
         _require_paths(self.test_files, allow_empty=True)
+        native_fields = (
+            self.transport_schema,
+            self.request_id,
+            self.response_sha256,
+        )
+        if any(value is not None for value in native_fields) and not all(
+            value is not None for value in native_fields
+        ):
+            raise ArtifactValidationError(
+                "native agent result transport fields must be present together"
+            )
+        if self.transport_schema is not None:
+            if self.transport_schema != "native-codex-v1":
+                raise ArtifactValidationError(
+                    "agent result transport_schema is unsupported"
+                )
+            if self.role is not Role.CODEX:
+                raise ArtifactValidationError(
+                    "native Codex result transport requires role=codex"
+                )
+            assert self.request_id is not None
+            assert self.response_sha256 is not None
+            if re.fullmatch(r"native-codex-request-[0-9a-f]{64}", self.request_id) is None:
+                raise ArtifactValidationError(
+                    "native Codex result request_id is invalid"
+                )
+            _require_sha256(self.response_sha256, "response_sha256")
 
 
 @dataclass(frozen=True, slots=True)
@@ -814,7 +844,15 @@ def _payload_from_dict(record_type: RecordType, raw: Mapping[str, Any]) -> Artif
     if record_type is RecordType.CORRECTION_WORK_UNIT:
         return CorrectionWorkUnitPayload(data["slice_id"], data["round_number"], tuple(data["paths"]), tuple(data["finding_ids"]))
     if record_type is RecordType.AGENT_RESULT:
-        return AgentResultPayload(Role(data["role"]), data["work_unit_id"], data["outcome"], tuple(data["test_files"]))
+        return AgentResultPayload(
+            Role(data["role"]),
+            data["work_unit_id"],
+            data["outcome"],
+            tuple(data["test_files"]),
+            data.get("transport_schema"),
+            data.get("request_id"),
+            data.get("response_sha256"),
+        )
     if record_type is RecordType.DIAGNOSTIC:
         return DiagnosticPayload(Role(data["role"]), data["work_unit_id"], data["attempt"], data["output_sha256"], data["reason"])
     if record_type is RecordType.REVIEW:

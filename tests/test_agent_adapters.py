@@ -15,6 +15,7 @@ from agent_adapters import (
     CLAUDE_REVIEW_PACKET_CHUNK_CHARS,
     ClaudeAdapter,
     CodexAdapter,
+    NativeCodexAdapter,
     NativeClaudeReviewAdapter,
     build_agent_registry,
 )
@@ -34,6 +35,13 @@ from native_review_request import (
     NativeReviewRequestSpec,
     build_native_review_request,
 )
+from native_codex_contract import NativeCodexContext, NativeCodexRequestKind
+from native_codex_request import (
+    NativeCodexEvidenceInput,
+    NativeCodexRequestSpec,
+    build_native_codex_request,
+)
+from contracts import CodexStepContract, ReadinessMarker
 from provider_input_budget import default_provider_input_budget_policy, measure_provider_input
 
 
@@ -99,6 +107,36 @@ def _native_bundle(*, large: bool = False):  # type: ignore[no-untyped-def]
     )
 
 
+def _native_codex_bundle():  # type: ignore[no-untyped-def]
+    contract = CodexStepContract(
+        name="native-codex-plan",
+        readiness_marker=ReadinessMarker.PLAN,
+        slice_id="01",
+        round_number=1,
+        require_slice_plan=True,
+        plan_artifact_path="docs/internal/plan.md",
+    )
+    context = NativeCodexContext(
+        run_id="run-native-codex",
+        work_unit_id="work-unit-1",
+        operation="codex_plan",
+        current_fingerprint="c" * 64,
+        request_kind=NativeCodexRequestKind.PLAN,
+        contract=contract,
+    )
+    return build_native_codex_request(
+        NativeCodexRequestSpec(
+            context=context,
+            target_branch="feature/native-codex",
+            base_commit="d" * 40,
+            authorized_paths=("docs/internal/plan.md",),
+            assignment="Create the approved work plan.",
+            work_context="Repository-grounded context.",
+            evidence=(NativeCodexEvidenceInput("e01_plan", "plan", "plan body"),),
+        )
+    )
+
+
 def test_registry_contains_exact_role_identities() -> None:
     registry = build_agent_registry(
         {
@@ -145,6 +183,87 @@ def test_prepared_codex_input_uses_the_exact_stdin_prompt() -> None:
         assert [(item.name, item.content) for item in prepared.components] == [
             ("stdin_prompt", "full secret prompt €")
         ]
+    finally:
+        adapter.cleanup()
+
+
+def test_native_codex_adapter_uses_exact_request_and_output_schema() -> None:
+    bundle = _native_codex_bundle()
+    adapter = NativeCodexAdapter(
+        _settings("codex", binary="/opt/codex", model="gpt-model", effort="high")
+    )
+    prepared = adapter.prepare_native_provider_input(bundle)
+    schema_path = Path(
+        prepared.command[prepared.command.index("--output-schema") + 1]
+    )
+    message_path = Path(
+        prepared.command[prepared.command.index("--output-last-message") + 1]
+    )
+    try:
+        assert prepared.stdin_text == bundle.canonical_json
+        assert prepared.command[0] == "/opt/codex"
+        assert prepared.command[-1] == "-"
+        assert prepared.command[prepared.command.index("--sandbox") + 1] == (
+            "workspace-write"
+        )
+        assert json.loads(schema_path.read_text(encoding="utf-8"))["$id"] == (
+            "native-agent-codex-result-v1"
+        )
+        by_name = {item.name: item.content for item in prepared.components}
+        assert by_name["stdin_prompt"] == bundle.canonical_json
+        assert json.loads(by_name["response_schema"])["$id"] == (
+            "native-agent-codex-result-v1"
+        )
+        response = {
+            "schema_version": "native-agent-codex-result-v1",
+            "result_type": "plan_result",
+            "request_id": bundle.bound_context.request_id,
+            "ready": True,
+            "slice_plan": [
+                {
+                    "slice_id": 1,
+                    "summary": "Implement it.",
+                    "scope_paths": ["src/native_codex_contract.py"],
+                }
+            ],
+        }
+        message_path.write_text(json.dumps(response, indent=2), encoding="utf-8")
+        output = adapter.extract_output("ignored jsonl", "", {})
+        assert json.loads(output) == response
+        assert output == json.dumps(
+            response, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+    finally:
+        runtime_dir = schema_path.parent
+        adapter.cleanup()
+    assert not runtime_dir.exists()
+
+
+def test_native_codex_adapter_rejects_wrappers_and_wrong_request() -> None:
+    bundle = _native_codex_bundle()
+    adapter = NativeCodexAdapter(_settings("codex"))
+    prepared = adapter.prepare_native_provider_input(bundle)
+    message_path = Path(
+        prepared.command[prepared.command.index("--output-last-message") + 1]
+    )
+    try:
+        message_path.write_text("```json\n{}\n```", encoding="utf-8")
+        with pytest.raises(AgentOutputError, match="not valid JSON"):
+            adapter.extract_output("", "", {})
+        message_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "native-agent-codex-result-v1",
+                    "result_type": "plan_result",
+                    "request_id": "native-codex-request-" + "0" * 64,
+                    "ready": True,
+                    "slice_plan": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        with pytest.raises(AgentOutputError, match="request_id differs"):
+            adapter.extract_output("", "", {})
     finally:
         adapter.cleanup()
 

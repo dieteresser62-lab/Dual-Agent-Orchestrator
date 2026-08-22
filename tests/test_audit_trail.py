@@ -26,7 +26,13 @@ from audit_trail import (
     validate_work_plan_document,
 )
 from artifact_bridge import ArtifactBridge
-from artifact_models import FingerprintKind, TaskPayload
+from artifact_models import (
+    AgentResultPayload,
+    FingerprintKind,
+    Role,
+    TaskPayload,
+    WorkUnitPayload,
+)
 from artifact_replay import replay_artifacts
 from artifact_store import ArtifactStore
 from contracts import (
@@ -386,6 +392,26 @@ def test_structured_projection_uses_accepted_replay_and_is_a_byte_equal_noop(
         fingerprint_sha256="a" * 64,
         fingerprint_kind=FingerprintKind.CONTRACT,
     )
+    bridge.append(
+        WorkUnitPayload("8", 1, (RELATIVE_PATH,)),
+        logical_id="work-unit-2",
+        idempotency_key="work-unit-2",
+        fingerprint_sha256="b" * 64,
+    )
+    bridge.append(
+        AgentResultPayload(
+            Role.CODEX,
+            "2",
+            "ready",
+            (),
+            transport_schema="native-codex-v1",
+            request_id="native-codex-request-" + "c" * 64,
+            response_sha256="d" * 64,
+        ),
+        logical_id="agent-2-codex_implementation-1",
+        idempotency_key="native-agent-result",
+        fingerprint_sha256="b" * 64,
+    )
     replay = replay_artifacts(bridge.store.load_chain(), "audit-replay")
 
     monkeypatch.setattr(
@@ -402,6 +428,8 @@ def test_structured_projection_uses_accepted_replay_and_is_a_byte_equal_noop(
     assert repeated == rendered
     assert document.slice_path.stat().st_mtime_ns == stat_after_first
     assert replay.semantic_digest in rendered
+    assert "`native-codex-v1`" in rendered
+    assert "`native-codex-request-" in rendered
 
 
 def test_work_plan_uses_same_safe_projection_without_parallel_raw_log(tmp_path: Path) -> None:

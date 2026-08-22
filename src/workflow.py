@@ -12,11 +12,19 @@ from typing import Callable, Protocol
 
 from agent_runtime import (
     AgentInvocationError,
+    NativeAgentCodexOutput,
     NativeAgentReviewOutput,
     QuotaWaitPolicy,
     TransientRetryPolicy,
     wait_until_quota_resume,
     wait_until_transient_retry,
+)
+from native_codex_contract import NativeCodexContext, NativeCodexRequestKind
+from native_codex_request import (
+    NativeCodexEvidenceInput,
+    NativeCodexRequestBundle,
+    NativeCodexRequestSpec,
+    build_native_codex_request,
 )
 from native_review_contract import NativeReviewContext
 from native_review_request import (
@@ -105,6 +113,7 @@ from workflow_state import (
     WorkUnitKind,
     WorkUnitStatus,
     NATIVE_CLAUDE_REVIEW_TRANSPORT,
+    NATIVE_CODEX_RESULT_TRANSPORT,
     quota_resume_diff_acknowledgement,
 )
 
@@ -757,6 +766,8 @@ class CodexInvocation:
     step: WorkflowStep
     round_number: int
     prompt: str
+    native_request: NativeCodexRequestBundle | None = None
+    previous_findings: tuple[FindingRecord, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -818,7 +829,9 @@ class WorkflowCommitRequest:
 
 
 class WorkflowDriver(Protocol):
-    def invoke_codex(self, invocation: CodexInvocation) -> str: ...
+    def invoke_codex(
+        self, invocation: CodexInvocation
+    ) -> str | NativeAgentCodexOutput: ...
 
     def collect_changes(self, start_commit: str) -> WorkflowChanges: ...
 
@@ -1504,29 +1517,81 @@ class WorkflowEngine:
             findings=history.findings,
             contract=contract,
         )
+        native_codex = (
+            state.protocol_binding is not None
+            and state.protocol_binding.codex_result_transport
+            == NATIVE_CODEX_RESULT_TRANSPORT
+        )
+        request_kind = (
+            NativeCodexRequestKind.PLAN
+            if is_plan
+            else NativeCodexRequestKind.CORRECTION
+            if state.current_step
+            in {
+                WorkflowStep.CODEX_CORRECTION,
+                WorkflowStep.CODEX_FINAL_CORRECTION,
+            }
+            else NativeCodexRequestKind.IMPLEMENTATION
+        )
+        native_request = (
+            self._native_codex_request(
+                state=state,
+                context=context,
+                history=history,
+                contract=contract,
+                prompt=prompt,
+                request_kind=request_kind,
+            )
+            if native_codex
+            else None
+        )
         invocation = CodexInvocation(
-            unit.work_unit_id, state.current_step, unit.round_number, prompt
+            unit.work_unit_id,
+            state.current_step,
+            unit.round_number,
+            "" if native_codex else prompt,
+            native_request=native_request,
+            previous_findings=history.findings,
+        )
+        recovery_loader = getattr(self.driver, "recover_pending_native_codex", None)
+        recovered = (
+            recovery_loader(invocation, contract, history)
+            if native_request is not None and callable(recovery_loader)
+            else None
         )
         state, output = self._invoke_role(
             state,
             history,
             context,
             AgentRole.CODEX,
-            lambda: self.driver.invoke_codex(invocation),
+            lambda: recovered or self.driver.invoke_codex(invocation),
         )
         if output is None:
             return state, history
-        output = normalize_codex_contract_output(output, contract)
-        try:
-            result = validate_codex_response(output, contract, history.findings)
-        except ContractValidationError as exc:
+        if isinstance(output, NativeAgentCodexOutput):
+            result = output.result
+            output_text = output.canonical_json
             self._persist_structured(
-                "persist_contract_diagnostic", AgentRole.CODEX, output, str(exc), 1
+                "persist_native_codex_contract", output, history.findings
             )
-            raise WorkflowContractError(f"invalid Codex response: {exc}") from exc
-        self._persist_structured(
-            "persist_codex_contract", result, output, history.findings
-        )
+        else:
+            output_text = normalize_codex_contract_output(output, contract)
+            try:
+                result = validate_codex_response(
+                    output_text, contract, history.findings
+                )
+            except ContractValidationError as exc:
+                self._persist_structured(
+                    "persist_contract_diagnostic",
+                    AgentRole.CODEX,
+                    output_text,
+                    str(exc),
+                    1,
+                )
+                raise WorkflowContractError(f"invalid Codex response: {exc}") from exc
+            self._persist_structured(
+                "persist_codex_contract", result, output_text, history.findings
+            )
         history = replace(history, findings=result.findings)
         if result.stopped:
             if result.stop_request is None:
@@ -1844,33 +1909,73 @@ class WorkflowEngine:
             findings=history.findings,
             contract=contract,
         )
+        native_codex = (
+            state.protocol_binding is not None
+            and state.protocol_binding.codex_result_transport
+            == NATIVE_CODEX_RESULT_TRANSPORT
+        )
+        native_request = (
+            self._native_codex_request(
+                state=state,
+                context=context,
+                history=history,
+                contract=contract,
+                prompt=prompt,
+                request_kind=NativeCodexRequestKind.FINAL_REPORT,
+                work_context=branch_context,
+            )
+            if native_codex
+            else None
+        )
+        invocation = CodexInvocation(
+            unit.work_unit_id,
+            state.current_step,
+            unit.round_number,
+            "" if native_codex else prompt,
+            native_request=native_request,
+            previous_findings=history.findings,
+        )
+        recovery_loader = getattr(self.driver, "recover_pending_native_codex", None)
+        recovered = (
+            recovery_loader(invocation, contract, history)
+            if native_request is not None and callable(recovery_loader)
+            else None
+        )
         state, output = self._invoke_role(
             state,
             history,
             context,
             AgentRole.CODEX,
-            lambda: self.driver.invoke_codex(
-                CodexInvocation(
-                    unit.work_unit_id,
-                    state.current_step,
-                    unit.round_number,
-                    prompt,
-                )
-            ),
+            lambda: recovered or self.driver.invoke_codex(invocation),
         )
         if output is None:
             return state, history
-        output = normalize_codex_contract_output(output, contract)
-        try:
-            result = validate_codex_response(output, contract, history.findings)
-        except ContractValidationError as exc:
+        if isinstance(output, NativeAgentCodexOutput):
+            result = output.result
+            output_text = output.canonical_json
             self._persist_structured(
-                "persist_contract_diagnostic", AgentRole.CODEX, output, str(exc), 1
+                "persist_native_codex_contract", output, history.findings
             )
-            raise WorkflowContractError(f"invalid Codex final report: {exc}") from exc
-        self._persist_structured(
-            "persist_codex_contract", result, output, history.findings
-        )
+        else:
+            output_text = normalize_codex_contract_output(output, contract)
+            try:
+                result = validate_codex_response(
+                    output_text, contract, history.findings
+                )
+            except ContractValidationError as exc:
+                self._persist_structured(
+                    "persist_contract_diagnostic",
+                    AgentRole.CODEX,
+                    output_text,
+                    str(exc),
+                    1,
+                )
+                raise WorkflowContractError(
+                    f"invalid Codex final report: {exc}"
+                ) from exc
+            self._persist_structured(
+                "persist_codex_contract", result, output_text, history.findings
+            )
         if result.stopped:
             if result.stop_request is None:
                 raise WorkflowExecutionError("Codex final stop has no structured request")
@@ -1906,7 +2011,7 @@ class WorkflowEngine:
         history = replace(
             history,
             findings=result.findings,
-            codex_final_report=output,
+            codex_final_report=output_text,
         )
         state = state.with_current_step(WorkflowStep.CLAUDE_FINAL_REVIEW)
         self.driver.checkpoint(state, history)
@@ -2553,8 +2658,13 @@ class WorkflowEngine:
         history: WorkflowHistory,
         context: WorkflowContext,
         role: AgentRole,
-        invoke: Callable[[], str | NativeAgentReviewOutput],
-    ) -> tuple[WorkflowState, str | NativeAgentReviewOutput | None]:
+        invoke: Callable[
+            [], str | NativeAgentCodexOutput | NativeAgentReviewOutput
+        ],
+    ) -> tuple[
+        WorkflowState,
+        str | NativeAgentCodexOutput | NativeAgentReviewOutput | None,
+    ]:
         """Invoke one fixed role, persisting every failure before any optional wait."""
         while True:
             try:
@@ -3541,6 +3651,86 @@ class WorkflowEngine:
             f"CURRENT FINGERPRINT\n{changes.fingerprint}\n\n"
             f"STRUCTURED FINDINGS\n{findings}\n\n"
             f"REVIEW DIFF\n{review_diff}{final_dimensions}"
+        )
+
+    @staticmethod
+    def _native_codex_request(
+        *,
+        state: WorkflowState,
+        context: WorkflowContext,
+        history: WorkflowHistory,
+        contract: CodexStepContract,
+        prompt: str,
+        request_kind: NativeCodexRequestKind,
+        work_context: str | None = None,
+    ) -> NativeCodexRequestBundle:
+        """Build one Codex request exclusively from orchestrator-owned values."""
+        if request_kind is NativeCodexRequestKind.FINAL_REPORT:
+            current_fingerprint = contract.review_fingerprint
+            base_commit = state.branch_base
+            authorized_paths = tuple(
+                sorted(
+                    {
+                        path
+                        for completed_slice in state.slices
+                        if completed_slice.status is SliceStatus.COMPLETED
+                        for path in completed_slice.scope_paths
+                    }
+                )
+            )
+        elif state.current_work_unit.kind is WorkUnitKind.PLAN:
+            current_fingerprint = state.task_digest
+            base_commit = state.branch_base
+            authorized_paths = state.task_scope_patterns
+        else:
+            current_fingerprint = state.current_slice.start_fingerprint
+            base_commit = state.current_slice.start_commit or state.branch_base
+            authorized_paths = state.current_slice.scope_paths
+        if current_fingerprint is None:
+            raise WorkflowExecutionError(
+                "native Codex request lacks an orchestrator-owned fingerprint"
+            )
+        if not authorized_paths:
+            raise WorkflowExecutionError(
+                "native Codex request lacks an authorized path boundary"
+            )
+        native_context = NativeCodexContext(
+            run_id=state.run_id,
+            work_unit_id=str(state.current_work_unit_id),
+            operation=state.current_step.value,
+            current_fingerprint=current_fingerprint,
+            request_kind=request_kind,
+            contract=contract,
+            previous_findings=history.findings,
+        )
+        evidence = [
+            NativeCodexEvidenceInput(
+                "workflow-prompt", "orchestrator_instruction", prompt
+            )
+        ]
+        if context.approved_plan_text is not None:
+            evidence.append(
+                NativeCodexEvidenceInput(
+                    "approved-plan",
+                    "approved_work_plan",
+                    context.approved_plan_text,
+                    source_path=context.work_plan_path,
+                )
+            )
+        return build_native_codex_request(
+            NativeCodexRequestSpec(
+                context=native_context,
+                target_branch=context.current_branch or state.branch,
+                base_commit=base_commit,
+                authorized_paths=tuple(sorted(set(authorized_paths))),
+                assignment=context.assignment,
+                work_context=(
+                    context.distilled_context
+                    if work_context is None
+                    else work_context
+                ),
+                evidence=tuple(sorted(evidence, key=lambda item: item.evidence_id)),
+            )
         )
 
     @staticmethod

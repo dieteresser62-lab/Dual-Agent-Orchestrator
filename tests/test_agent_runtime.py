@@ -17,6 +17,7 @@ from agent_adapters import (
     CapabilitySpec,
     ClaudeAdapter,
     CodexAdapter,
+    NativeCodexAdapter,
 )
 from agent_config import AgentSettings
 from agent_runtime import (
@@ -35,6 +36,9 @@ from agent_runtime import (
     run_agent,
     run_agent_checked,
     run_native_review_agent,
+    run_native_codex_agent,
+    run_native_codex_agent_checked,
+    NativeAgentCodexOutput,
     run_tests_snapshot,
     run_validation_matrix,
     verify_agent_capabilities,
@@ -73,6 +77,43 @@ from native_review_request import (
     NativeReviewRequestSpec,
     build_native_review_request,
 )
+from native_codex_contract import NativeCodexContext, NativeCodexRequestKind
+from native_codex_request import (
+    NativeCodexEvidenceInput,
+    NativeCodexRequestSpec,
+    build_native_codex_request,
+)
+from contracts import CodexStepContract, ReadinessMarker
+
+
+def _runtime_native_codex_bundle():  # type: ignore[no-untyped-def]
+    contract = CodexStepContract(
+        name="native-plan",
+        readiness_marker=ReadinessMarker.PLAN,
+        slice_id="01",
+        round_number=1,
+        require_slice_plan=True,
+        plan_artifact_path="docs/internal/plan.md",
+    )
+    context = NativeCodexContext(
+        run_id="run-native-codex-runtime",
+        work_unit_id="work-unit-1",
+        operation="codex_plan",
+        current_fingerprint="a" * 64,
+        request_kind=NativeCodexRequestKind.PLAN,
+        contract=contract,
+    )
+    return build_native_codex_request(
+        NativeCodexRequestSpec(
+            context=context,
+            target_branch="feature/native",
+            base_commit="b" * 40,
+            authorized_paths=("docs/internal/plan.md",),
+            assignment="Create the plan.",
+            work_context="Context.",
+            evidence=(NativeCodexEvidenceInput("e01_plan", "plan", "body"),),
+        )
+    )
 
 
 def test_compute_retry_backoff_seconds_exponential() -> None:
@@ -85,6 +126,241 @@ def test_compute_retry_backoff_seconds_rate_limit_floor() -> None:
     assert compute_retry_backoff_seconds("HTTP 429 too many requests", 1) == 10
     assert compute_retry_backoff_seconds("rate limit", 2) == 10
     assert compute_retry_backoff_seconds("rate limit", 5) == 30
+
+
+def test_run_native_codex_agent_parses_bound_result_without_text_contract(
+    monkeypatch,
+) -> None:
+    bundle = _runtime_native_codex_bundle()
+    response = {
+        "schema_version": "native-agent-codex-result-v1",
+        "result_type": "plan_result",
+        "request_id": bundle.bound_context.request_id,
+        "ready": True,
+        "slice_plan": [
+            {
+                "slice_id": 1,
+                "summary": "Implement native Codex.",
+                "scope_paths": ["src/native_codex_contract.py"],
+            }
+        ],
+    }
+    canonical = json.dumps(
+        response, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    captured: dict[str, object] = {}
+
+    class FakeNativeCodex:
+        name = "codex"
+
+        def prepare_native_provider_input(self, request_bundle):  # type: ignore[no-untyped-def]
+            assert request_bundle is bundle
+            return PreparedProviderInput(
+                command=("codex",),
+                stdin_text=bundle.canonical_json,
+                components=(
+                    ProviderInputComponent("stdin_prompt", bundle.canonical_json),
+                ),
+            )
+
+    def fake_run_agent(_adapter, prompt, **kwargs):  # type: ignore[no-untyped-def]
+        captured["prompt"] = prompt
+        captured.update(kwargs)
+        return canonical
+
+    monkeypatch.setattr(agent_runtime, "run_agent", fake_run_agent)
+    output = run_native_codex_agent(
+        FakeNativeCodex(),  # type: ignore[arg-type]
+        bundle,
+        config=OrchestratorConfig(),
+        shorten=lambda value, _maximum: value or "",
+        operation="codex_plan",
+        binding_fingerprint="a" * 64,
+    )
+    assert output.result.ready is True
+    assert output.result.slice_plan[0].slice_id == 1
+    assert output.request_id == bundle.bound_context.request_id
+    assert output.response_sha256 == hashlib.sha256(canonical.encode()).hexdigest()
+    assert captured["prompt"] == bundle.canonical_json
+    assert isinstance(captured["prepared_provider_input"], PreparedProviderInput)
+
+
+def test_native_codex_exposes_schema_valid_bytes_before_domain_rejection(
+    monkeypatch,
+) -> None:
+    bundle = _runtime_native_codex_bundle()
+    response = {
+        "schema_version": "native-agent-codex-result-v1",
+        "result_type": "plan_result",
+        "request_id": bundle.bound_context.request_id,
+        "ready": True,
+        "slice_plan": [
+            {
+                "slice_id": 2,
+                "summary": "Non-contiguous domain-invalid slice.",
+                "scope_paths": ["src/native_codex_contract.py"],
+            }
+        ],
+    }
+    canonical = json.dumps(
+        response, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+
+    class FakeNativeCodex:
+        name = "codex"
+
+        def prepare_native_provider_input(self, request_bundle):  # type: ignore[no-untyped-def]
+            return PreparedProviderInput(
+                command=("codex",),
+                stdin_text=request_bundle.canonical_json,
+                components=(
+                    ProviderInputComponent(
+                        "stdin_prompt", request_bundle.canonical_json
+                    ),
+                ),
+            )
+
+    monkeypatch.setattr(agent_runtime, "run_agent", lambda *args, **kwargs: canonical)
+    persisted: list[str] = []
+    with pytest.raises(AgentOutputError) as raised:
+        run_native_codex_agent(
+            FakeNativeCodex(),  # type: ignore[arg-type]
+            bundle,
+            config=OrchestratorConfig(),
+            shorten=lambda value, _maximum: value or "",
+            operation="codex_plan",
+            binding_fingerprint="a" * 64,
+            validated_response_callback=persisted.append,
+        )
+    assert "slice-plan-invalid" in raised.value.technical_text
+    assert persisted == [canonical]
+
+
+def test_native_codex_checked_writes_raw_before_accepted_callback(
+    monkeypatch, tmp_path: Path
+) -> None:
+    bundle = _runtime_native_codex_bundle()
+    result = parse_bound_native_codex_contract_result_for_test(bundle)
+    canonical = json.dumps(
+        {
+            "schema_version": "native-agent-codex-result-v1",
+            "result_type": "plan_result",
+            "request_id": bundle.bound_context.request_id,
+            "ready": True,
+            "slice_plan": [
+                {
+                    "slice_id": 1,
+                    "summary": "Implement it.",
+                    "scope_paths": ["src/native_codex_contract.py"],
+                }
+            ],
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    output = NativeAgentCodexOutput(
+        result=result,
+        canonical_json=canonical,
+        request_id=bundle.bound_context.request_id,
+        response_sha256=hashlib.sha256(canonical.encode()).hexdigest(),
+    )
+    events: list[str] = []
+
+    def fake_native_run(*args, **kwargs):  # type: ignore[no-untyped-def]
+        kwargs["validated_response_callback"](canonical)
+        return output
+
+    monkeypatch.setattr(agent_runtime, "run_native_codex_agent", fake_native_run)
+    monkeypatch.setattr(agent_runtime, "print_agent_output", lambda *args, **kwargs: None)
+
+    class Adapter:
+        name = "codex"
+        metadata: dict[str, object] = {}
+
+    raw_path = tmp_path / "raw.json"
+
+    def write_raw(path: Path, content: str) -> None:
+        events.append("write")
+        path.write_text(content, encoding="utf-8")
+
+    def accept(_output: NativeAgentCodexOutput) -> None:
+        assert raw_path.read_text(encoding="utf-8") == canonical
+        events.append("accept")
+
+    returned = run_native_codex_agent_checked(
+        adapter=Adapter(),  # type: ignore[arg-type]
+        bundle=bundle,
+        raw_response_path=raw_path,
+        config=OrchestratorConfig(),
+        write_file=write_raw,
+        shorten=lambda value, _maximum: value or "",
+        operation="codex_plan",
+        binding_fingerprint="a" * 64,
+        pre_start_callback=None,
+        provider_attempt_lifecycle=None,
+        accepted_output_callback=accept,
+    )
+    assert returned is output
+    assert events == ["write", "accept"]
+
+
+def test_native_codex_checked_write_failure_prevents_callback(
+    monkeypatch, tmp_path: Path
+) -> None:
+    bundle = _runtime_native_codex_bundle()
+    result = parse_bound_native_codex_contract_result_for_test(bundle)
+    output = NativeAgentCodexOutput(
+        result=result,
+        canonical_json="{}",
+        request_id=bundle.bound_context.request_id,
+        response_sha256=hashlib.sha256(b"{}").hexdigest(),
+    )
+    def fake_native_run(*args, **kwargs):  # type: ignore[no-untyped-def]
+        kwargs["validated_response_callback"]("{}")
+        return output
+
+    monkeypatch.setattr(agent_runtime, "run_native_codex_agent", fake_native_run)
+    accepted: list[bool] = []
+
+    class Adapter:
+        name = "codex"
+        metadata: dict[str, object] = {}
+
+    with pytest.raises(AgentInvocationError):
+        run_native_codex_agent_checked(
+            adapter=Adapter(),  # type: ignore[arg-type]
+            bundle=bundle,
+            raw_response_path=tmp_path / "raw.json",
+            config=OrchestratorConfig(),
+            write_file=lambda _path, _content: (_ for _ in ()).throw(OSError("disk")),
+            shorten=lambda value, _maximum: value or "",
+            operation="codex_plan",
+            binding_fingerprint="a" * 64,
+            pre_start_callback=None,
+            provider_attempt_lifecycle=None,
+            accepted_output_callback=lambda _output: accepted.append(True),
+        )
+    assert accepted == []
+
+
+def parse_bound_native_codex_contract_result_for_test(bundle):  # type: ignore[no-untyped-def]
+    document = {
+        "schema_version": "native-agent-codex-result-v1",
+        "result_type": "plan_result",
+        "request_id": bundle.bound_context.request_id,
+        "ready": True,
+        "slice_plan": [
+            {
+                "slice_id": 1,
+                "summary": "Implement it.",
+                "scope_paths": ["src/native_codex_contract.py"],
+            }
+        ],
+    }
+    from native_codex_contract import parse_bound_native_codex_contract_result
+
+    return parse_bound_native_codex_contract_result(document, bundle.bound_context)
 
 
 def test_orchestrator_config_has_no_agent_substitution_state() -> None:

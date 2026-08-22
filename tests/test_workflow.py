@@ -8,6 +8,7 @@ import pytest
 
 from agent_runtime import (
     AgentInvocationError,
+    NativeAgentCodexOutput,
     NativeAgentReviewOutput,
     QuotaReset,
     QuotaWaitPolicy,
@@ -18,6 +19,7 @@ from contracts import (
     AgentRole,
     AnchorRecord,
     ApprovalMarker,
+    CodexContractResult,
     CodexStepContract,
     ContractValidationError,
     FindingClass,
@@ -36,6 +38,7 @@ from contracts import (
     validate_review_response,
 )
 from gates import PathClasses, StopRule, TestChangeEvidence as GateTestChangeEvidence
+from native_codex_contract import NativeCodexRequestKind
 from inbox_watcher import WatchTaskDisposition, WatchTaskResult
 from orchestrator import run_v3_final_review, run_v3_work_unit
 from validation_matrix import ValidationCommand, ValidationMatrix, ValidationRequest, ValidationRule
@@ -664,6 +667,348 @@ def test_native_claude_review_bypasses_legacy_marker_parser(
         "src/early.py",
         TEST_FILE,
     ]
+
+
+@pytest.mark.parametrize(
+    ("step", "request_type"),
+    (
+        (WorkflowStep.CODEX_IMPLEMENTATION, "implementation"),
+        (WorkflowStep.CODEX_CORRECTION, "correction"),
+    ),
+)
+def test_native_codex_result_bypasses_legacy_marker_parser(
+    monkeypatch, step: WorkflowStep, request_type: str
+) -> None:
+    @dataclass
+    class NativeCodexDriver(FakeDriver):
+        persisted: list[NativeAgentCodexOutput] = field(default_factory=list)
+
+        def invoke_codex(
+            self, invocation: CodexInvocation
+        ) -> NativeAgentCodexOutput:
+            self.codex_calls.append(invocation)
+            assert invocation.prompt == ""
+            assert invocation.native_request is not None
+            bound = invocation.native_request.bound_context
+            result = CodexContractResult(
+                ready=True,
+                stopped=False,
+                stop_request=None,
+                validation=None,
+                test_files=(TEST_FILE,),
+                findings=(),
+                slice_plan=(),
+            )
+            canonical = json.dumps(
+                {
+                    "request_id": bound.request_id,
+                    "result_type": "implementation_result",
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            return NativeAgentCodexOutput(
+                result=result,
+                canonical_json=canonical,
+                request_id=bound.request_id,
+                response_sha256="b" * 64,
+            )
+
+        def persist_native_codex_contract(
+            self,
+            output: NativeAgentCodexOutput,
+            previous_findings: tuple[FindingRecord, ...],
+        ) -> None:
+            assert previous_findings == ()
+            self.persisted.append(output)
+
+    state = replace(
+        _slice_state().with_current_step(step),
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V1,
+            "1",
+            codex_result_transport="native-codex-v1",
+        ),
+    )
+    driver = NativeCodexDriver(
+        snapshots=[_changes("b", "src/early.py", TEST_FILE)],
+        codex_outputs=[],
+        reviewer_outputs=[],
+    )
+    monkeypatch.setattr(
+        "workflow.normalize_codex_contract_output",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("legacy normalizer was called")
+        ),
+    )
+    monkeypatch.setattr(
+        "workflow.validate_codex_response",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("legacy parser was called")
+        ),
+    )
+
+    advanced, history = WorkflowEngine(driver)._run_codex(
+        state, _context(), WorkflowHistory(state.current_work_unit_id)
+    )
+
+    assert advanced.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
+    assert history.findings == ()
+    assert len(driver.persisted) == 1
+    invocation = driver.codex_calls[0]
+    assert invocation.native_request is not None
+    assert invocation.native_request.document["request_type"] == request_type
+    assert invocation.native_request.document["authorized_paths"] == sorted(
+        state.current_slice.scope_paths
+    )
+
+
+def test_native_codex_plan_bypasses_legacy_marker_parser(monkeypatch) -> None:
+    @dataclass
+    class NativePlanDriver(FakeDriver):
+        persisted: list[NativeAgentCodexOutput] = field(default_factory=list)
+
+        def invoke_codex(
+            self, invocation: CodexInvocation
+        ) -> NativeAgentCodexOutput:
+            self.codex_calls.append(invocation)
+            assert invocation.prompt == ""
+            assert invocation.native_request is not None
+            bound = invocation.native_request.bound_context
+            result = CodexContractResult(
+                ready=True,
+                stopped=False,
+                stop_request=None,
+                validation=None,
+                test_files=(),
+                findings=(),
+                slice_plan=(
+                    PlannedSlice(
+                        1,
+                        "Create the native Codex work plan.",
+                        ("docs/internal/native-codex-plan.md",),
+                    ),
+                ),
+            )
+            return NativeAgentCodexOutput(
+                result=result,
+                canonical_json=json.dumps(
+                    {
+                        "request_id": bound.request_id,
+                        "result_type": "plan_result",
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                request_id=bound.request_id,
+                response_sha256="c" * 64,
+            )
+
+        def persist_native_codex_contract(
+            self,
+            output: NativeAgentCodexOutput,
+            previous_findings: tuple[FindingRecord, ...],
+        ) -> None:
+            assert previous_findings == ()
+            self.persisted.append(output)
+
+    state = replace(
+        init_workflow_state(
+            run_id="native-plan-runtime",
+            task_file="/repo/task.md",
+            branch="feature/workflow",
+            branch_base=START_COMMIT,
+            slice_count=1,
+            task_digest="d" * 64,
+            task_scope_patterns=("docs/internal/native-codex-plan.md",),
+            target_branch="feature/workflow",
+        ),
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V1,
+            "1",
+            codex_result_transport="native-codex-v1",
+        ),
+    )
+    context = replace(
+        _context(),
+        require_slice_plan=True,
+        task_scope_patterns=("docs/internal/native-codex-plan.md",),
+    )
+    driver = NativePlanDriver(snapshots=[], codex_outputs=[], reviewer_outputs=[])
+    monkeypatch.setattr(
+        "workflow.normalize_codex_contract_output",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("legacy normalizer was called")
+        ),
+    )
+    monkeypatch.setattr(
+        "workflow.validate_codex_response",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("legacy parser was called")
+        ),
+    )
+
+    advanced, history = WorkflowEngine(driver)._run_codex(
+        state, context, WorkflowHistory(state.current_work_unit_id)
+    )
+
+    assert advanced.current_step is WorkflowStep.CLAUDE_PLAN_REVIEW
+    assert history.findings == ()
+    assert len(driver.persisted) == 1
+    invocation = driver.codex_calls[0]
+    assert invocation.native_request is not None
+    assert invocation.native_request.document["request_type"] == "plan"
+
+
+def test_native_codex_final_report_bypasses_legacy_marker_parser(
+    monkeypatch,
+) -> None:
+    @dataclass
+    class NativeFinalDriver(FakeDriver):
+        persisted: list[NativeAgentCodexOutput] = field(default_factory=list)
+
+        def invoke_codex(
+            self, invocation: CodexInvocation
+        ) -> NativeAgentCodexOutput:
+            self.codex_calls.append(invocation)
+            assert invocation.prompt == ""
+            assert invocation.native_request is not None
+            bound = invocation.native_request.bound_context
+            result = CodexContractResult(
+                ready=True,
+                stopped=False,
+                stop_request=None,
+                validation=None,
+                test_files=(),
+                findings=(),
+                self_check="Checked contracts, recovery, and branch boundaries.",
+            )
+            return NativeAgentCodexOutput(
+                result=result,
+                canonical_json=json.dumps(
+                    {
+                        "request_id": bound.request_id,
+                        "result_type": "final_report_result",
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                request_id=bound.request_id,
+                response_sha256="d" * 64,
+            )
+
+        def persist_native_codex_contract(
+            self,
+            output: NativeAgentCodexOutput,
+            previous_findings: tuple[FindingRecord, ...],
+        ) -> None:
+            assert previous_findings == ()
+            self.persisted.append(output)
+
+    changes = _changes("e", "src/early.py", TEST_FILE)
+    state = replace(
+        _completed_single_slice_state().start_final_review_work_unit(),
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V1,
+            "1",
+            codex_result_transport="native-codex-v1",
+        ),
+    )
+    driver = NativeFinalDriver(
+        snapshots=[changes], codex_outputs=[], reviewer_outputs=[]
+    )
+    monkeypatch.setattr(
+        "workflow.normalize_codex_contract_output",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("legacy normalizer was called")
+        ),
+    )
+    monkeypatch.setattr(
+        "workflow.validate_codex_response",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("legacy parser was called")
+        ),
+    )
+
+    advanced, history = WorkflowEngine(driver)._run_final_codex_report(
+        state, _context(), WorkflowHistory(state.current_work_unit_id)
+    )
+
+    assert advanced.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW
+    assert history.codex_final_report is not None
+    assert len(driver.persisted) == 1
+    invocation = driver.codex_calls[0]
+    assert invocation.native_request is not None
+    assert invocation.native_request.document["request_type"] == "final_report"
+
+
+def test_native_codex_request_builder_covers_plan_and_final_report() -> None:
+    plan_state = replace(
+        init_workflow_state(
+            run_id="native-plan",
+            task_file="/repo/task.md",
+            branch="feature/workflow",
+            branch_base=START_COMMIT,
+            slice_count=1,
+            task_digest="a" * 64,
+            task_scope_patterns=("docs/internal/plan.md",),
+            target_branch="feature/workflow",
+        ),
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V1,
+            "1",
+            codex_result_transport="native-codex-v1",
+        ),
+    )
+    plan_contract = CodexStepContract(
+        "native-plan",
+        ReadinessMarker.PLAN,
+        "01",
+        1,
+        require_slice_plan=True,
+        plan_artifact_path="docs/internal/plan.md",
+    )
+    plan_bundle = WorkflowEngine._native_codex_request(
+        state=plan_state,
+        context=_context(),
+        history=WorkflowHistory(plan_state.current_work_unit_id),
+        contract=plan_contract,
+        prompt="Create the bound plan.",
+        request_kind=NativeCodexRequestKind.PLAN,
+    )
+
+    final_state = replace(
+        _completed_single_slice_state().start_final_review_work_unit(),
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V1,
+            "1",
+            codex_result_transport="native-codex-v1",
+        ),
+    )
+    final_contract = CodexStepContract(
+        "native-final",
+        ReadinessMarker.FINAL_REPORT,
+        "FINAL",
+        1,
+        review_fingerprint="f" * 64,
+    )
+    final_bundle = WorkflowEngine._native_codex_request(
+        state=final_state,
+        context=_context(),
+        history=WorkflowHistory(final_state.current_work_unit_id),
+        contract=final_contract,
+        prompt="Report the bound branch self-check.",
+        request_kind=NativeCodexRequestKind.FINAL_REPORT,
+    )
+
+    assert plan_bundle.document["request_type"] == "plan"
+    assert plan_bundle.document["current_fingerprint"] == "a" * 64
+    assert plan_bundle.document["authorized_paths"] == ["docs/internal/plan.md"]
+    assert final_bundle.document["request_type"] == "final_report"
+    assert final_bundle.document["current_fingerprint"] == "f" * 64
+    assert final_bundle.document["authorized_paths"] == sorted(
+        final_state.slices[0].scope_paths
+    )
 
 
 def test_native_final_review_rejects_missing_codex_report_before_request() -> None:

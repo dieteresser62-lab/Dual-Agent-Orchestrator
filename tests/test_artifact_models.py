@@ -108,6 +108,42 @@ def test_every_record_family_roundtrips_through_model_and_schema(payload) -> Non
     assert restored.canonical_json() == encoded
 
 
+def test_native_codex_agent_result_roundtrips_with_closed_transport_binding() -> None:
+    payload = AgentResultPayload(
+        Role.CODEX,
+        "work-01",
+        "ready",
+        ("tests/test_native_codex_contract.py",),
+        transport_schema="native-codex-v1",
+        request_id="native-codex-request-" + "b" * 64,
+        response_sha256="c" * 64,
+    )
+    record = _record(payload)
+    document = json.loads(record.canonical_json())
+
+    validate_artifact_document(document)
+    assert ArtifactRecord.from_dict(document) == record
+
+
+def test_native_codex_agent_result_rejects_partial_or_foreign_bindings() -> None:
+    payload = AgentResultPayload(
+        Role.CODEX,
+        "work-01",
+        "ready",
+        (),
+        transport_schema="native-codex-v1",
+        request_id="native-codex-request-" + "b" * 64,
+        response_sha256="c" * 64,
+    )
+
+    with pytest.raises(ArtifactValidationError, match="present together"):
+        replace(payload, response_sha256=None)
+    with pytest.raises(ArtifactValidationError, match="role=codex"):
+        replace(payload, role=Role.CLAUDE)
+    with pytest.raises(ArtifactValidationError, match="request_id"):
+        replace(payload, request_id="native-codex-request-invalid")
+
+
 def test_schema_is_bundled_and_self_contained() -> None:
     schema = load_schema()
     assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"

@@ -145,6 +145,7 @@ class ProtocolMode(str, Enum):
 
 
 NATIVE_CLAUDE_REVIEW_TRANSPORT = "native-claude-review-v1"
+NATIVE_CODEX_RESULT_TRANSPORT = "native-codex-v1"
 
 
 @dataclass(frozen=True)
@@ -154,6 +155,7 @@ class ProtocolBinding:
     mode: ProtocolMode
     schema_version: str
     claude_review_transport: str | None = None
+    codex_result_transport: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.mode, ProtocolMode):
@@ -176,19 +178,34 @@ class ProtocolBinding:
                 raise WorkflowStateValidationError(
                     "claude_review_transport is unsupported"
                 )
+        if self.codex_result_transport is not None:
+            if self.mode is not ProtocolMode.STRUCTURED_V1:
+                raise WorkflowStateValidationError(
+                    "native Codex result transport requires structured-v1"
+                )
+            if self.codex_result_transport != NATIVE_CODEX_RESULT_TRANSPORT:
+                raise WorkflowStateValidationError(
+                    "codex_result_transport is unsupported"
+                )
 
     def to_dict(self) -> dict[str, str]:
         result = {"mode": self.mode.value, "schema_version": self.schema_version}
         if self.claude_review_transport is not None:
             result["claude_review_transport"] = self.claude_review_transport
+        if self.codex_result_transport is not None:
+            result["codex_result_transport"] = self.codex_result_transport
         return result
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> ProtocolBinding:
         keys = set(raw)
-        if keys not in (
-            {"mode", "schema_version"},
-            {"mode", "schema_version", "claude_review_transport"},
+        if not {"mode", "schema_version"}.issubset(keys) or not keys.issubset(
+            {
+                "mode",
+                "schema_version",
+                "claude_review_transport",
+                "codex_result_transport",
+            }
         ):
             raise WorkflowStateValidationError(
                 "protocol binding has unknown or missing fields"
@@ -202,6 +219,14 @@ class ProtocolBinding:
                     "protocol claude_review_transport",
                 )
                 if "claude_review_transport" in raw
+                else None
+            ),
+            codex_result_transport=(
+                _string(
+                    raw["codex_result_transport"],
+                    "protocol codex_result_transport",
+                )
+                if "codex_result_transport" in raw
                 else None
             ),
         )

@@ -21,6 +21,14 @@ from native_review_request import (
     NativeReviewRequestBundle,
     native_review_provider_response_schema,
 )
+from native_codex_contract import (
+    NativeCodexContractError,
+    canonical_native_codex_json,
+)
+from native_codex_request import (
+    NativeCodexRequestBundle,
+    native_codex_provider_response_schema,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -342,6 +350,144 @@ class CodexAdapter(_BaseAdapter):
     def cleanup(self) -> None:
         super().cleanup()
         self._last_message_file = None
+
+    def native_codex_adapter(self) -> "NativeCodexAdapter":
+        """Create an isolated native transport with identical Codex settings."""
+        return NativeCodexAdapter(self.settings)
+
+
+class NativeCodexAdapter(CodexAdapter):
+    """Codex transport whose last message is one schema-bound JSON object."""
+
+    capability = CapabilitySpec(
+        version_args=("--version",),
+        help_args=("exec", "--help"),
+        supported_version_patterns=(r"^codex-cli 0\.147\.\d+$",),
+        required_help_flags=(
+            "--model",
+            "--sandbox",
+            "--ephemeral",
+            "--json",
+            "--output-last-message",
+            "--output-schema",
+        ),
+    )
+
+    def __init__(self, settings: AgentSettings | None = None) -> None:
+        super().__init__(settings or default_agent_settings()["codex"])
+        self._native_request_id: str | None = None
+        self._response_schema_file: Path | None = None
+
+    def build_command(self, prompt: str) -> tuple[list[str], bool]:
+        _ = prompt
+        raise RuntimeError(
+            "native Codex requests require prepare_native_provider_input(bundle)"
+        )
+
+    def prepare_provider_input(self, prompt: str) -> PreparedProviderInput:
+        _ = prompt
+        raise RuntimeError(
+            "native Codex requests require a bound NativeCodexRequestBundle"
+        )
+
+    def prepare_native_provider_input(
+        self, bundle: NativeCodexRequestBundle
+    ) -> PreparedProviderInput:
+        if not isinstance(bundle, NativeCodexRequestBundle):
+            raise TypeError("native Codex adapter requires NativeCodexRequestBundle")
+        runtime_dir = self._new_runtime_dir()
+        self._last_message_file = runtime_dir / "last-message.json"
+        self._response_schema_file = runtime_dir / "response-schema.json"
+        response_schema = native_codex_provider_response_schema()
+        response_schema_json = json.dumps(
+            response_schema,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        self._response_schema_file.write_text(response_schema_json, encoding="utf-8")
+        for asset in bundle.evidence_assets:
+            target = PROJECT_ROOT.joinpath(*Path(asset.path).parts)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.exists():
+                existing = target.read_text(encoding="utf-8")
+                if existing != asset.content:
+                    raise AgentOutputError(
+                        "native Codex evidence asset digest path contains different bytes"
+                    )
+            else:
+                target.write_text(asset.content, encoding="utf-8")
+        self._native_request_id = bundle.bound_context.request_id
+        command = (
+            self.cli_binary,
+            "exec",
+            "--model",
+            self.model,
+            "--config",
+            f'model_reasoning_effort="{self.effort}"',
+            "--skip-git-repo-check",
+            "--ephemeral",
+            "--sandbox",
+            "workspace-write",
+            "--color",
+            "never",
+            "--json",
+            "--output-schema",
+            str(self._response_schema_file),
+            "--output-last-message",
+            str(self._last_message_file),
+            "-",
+        )
+        return PreparedProviderInput(
+            command=command,
+            stdin_text=bundle.canonical_json,
+            components=(
+                ProviderInputComponent("stdin_prompt", bundle.canonical_json),
+                ProviderInputComponent("response_schema", response_schema_json),
+                *(
+                    ProviderInputComponent(
+                        f"evidence_asset_{index:03d}", asset.content
+                    )
+                    for index, asset in enumerate(bundle.evidence_assets, start=1)
+                ),
+            ),
+        )
+
+    def extract_output(
+        self, stdout: str, stderr: str, extra_files: dict[str, str]
+    ) -> str:
+        _ = stdout
+        _ = stderr
+        _ = extra_files
+        if self._last_message_file is None or not self._last_message_file.is_file():
+            raise AgentOutputError("native Codex produced no last-message file")
+        raw = self._last_message_file.read_text(encoding="utf-8").strip()
+        try:
+            document = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise AgentOutputError(
+                "native Codex last message is not valid JSON",
+                provider_text=raw or str(exc),
+            ) from exc
+        if not isinstance(document, dict):
+            raise AgentOutputError("native Codex result must be one JSON object")
+        if self._native_request_id is None:
+            raise AgentOutputError("native Codex adapter has no bound request id")
+        if document.get("request_id") != self._native_request_id:
+            raise AgentOutputError("native Codex response request_id differs from request")
+        try:
+            return canonical_native_codex_json(document)
+        except NativeCodexContractError as exc:
+            raise AgentOutputError(
+                "native Codex response violates the local result schema",
+                provider_data=document,
+                technical_text=f"{exc.code.value}: {exc.detail}",
+            ) from exc
+
+    def cleanup(self) -> None:
+        super().cleanup()
+        self._native_request_id = None
+        self._response_schema_file = None
 
 
 class ClaudeAdapter(_BaseAdapter):

@@ -22,6 +22,19 @@ wenn der Lauf abgeschlossen oder sein manueller Abschluss dokumentiert ist.
 
 ## Archive
 
+### Nativer Codex-Resultatpfad
+
+Pfad: [`archive/native-codex-result-path/`](archive/native-codex-result-path/)
+
+Codex-Planung, Implementierung, Korrektur und Abschlussbericht können für neue
+Pilotläufe über einen geschlossenen, requestgebundenen JSON-Vertrag ohne
+Textmarkerparser geführt werden. Der Transport ist im Workflowzustand
+unveränderlich gebunden, persistiert die kanonische Rohantwort vor ihrer
+fachlichen Anwendung und unterstützt idempotente Raw-ahead- und Record-ahead-
+Recovery. Arbeitsplan, Planreview, vollständige Findinghistorie und der
+Abschlussnachweis stehen im
+[Archivbericht](archive/native-codex-result-path/README.md).
+
 ### Nativer Reviewresultat-Kern
 
 Pfad: [`archive/native-agent-review-result-core/`](archive/native-agent-review-result-core/)

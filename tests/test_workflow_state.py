@@ -139,6 +139,26 @@ def test_protocol_binding_rejects_native_transport_outside_structured_v1() -> No
             "native-claude-review-v1",
         )
 
+    with pytest.raises(
+        WorkflowStateValidationError,
+        match="requires structured-v1",
+    ):
+        ProtocolBinding(
+            ProtocolMode.LEGACY_STATE_V3,
+            "3",
+            codex_result_transport="native-codex-v1",
+        )
+
+
+def test_protocol_binding_roundtrips_native_codex_result_transport() -> None:
+    binding = ProtocolBinding(
+        ProtocolMode.STRUCTURED_V1,
+        "1",
+        codex_result_transport="native-codex-v1",
+    )
+
+    assert ProtocolBinding.from_dict(binding.to_dict()) == binding
+
 
 @pytest.mark.parametrize(
     ("mode", "schema_version"),

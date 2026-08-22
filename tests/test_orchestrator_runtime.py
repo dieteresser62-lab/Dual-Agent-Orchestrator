@@ -11,13 +11,16 @@ import orchestrator
 import pytest
 from agent_runtime import (
     AgentInvocationError,
+    NativeAgentCodexOutput,
     NativeAgentReviewOutput,
     QuotaReset,
     QuotaWaitPolicy,
 )
 from audit_trail import ValidationAuditEvent
 from artifact_models import (
+    AgentResultPayload,
     CorrectionWorkUnitPayload,
+    FindingTransitionPayload,
     PlanPayload,
     QuotaPausePayload,
     RecordType,
@@ -29,12 +32,15 @@ from cli import parse_args
 from contracts import (
     AgentRole,
     ApprovalMarker,
+    CodexContractResult,
+    CodexStepContract,
     ContractResult,
     FindingClass,
     FindingOrigin,
     FindingRecord,
     FindingStatus,
     PlannedSlice,
+    ReadinessMarker,
     StepContract,
     ValidationAttestation,
     ValidationCommandSpec,
@@ -86,6 +92,18 @@ from native_review_request import (
     NativeReviewKind,
     NativeReviewRequestSpec,
     build_native_review_request,
+)
+from artifact_replay import replay_artifacts
+from native_codex_contract import (
+    NativeCodexContext,
+    NativeCodexRequestKind,
+    canonical_native_codex_json,
+    parse_bound_native_codex_contract_result,
+)
+from native_codex_request import (
+    NativeCodexEvidenceInput,
+    NativeCodexRequestSpec,
+    build_native_codex_request,
 )
 
 
@@ -239,6 +257,19 @@ def test_fresh_workflow_is_immutably_bound_to_structured_v1(tmp_path: Path) -> N
         ProtocolMode.STRUCTURED_V1,
         "1",
         "native-claude-review-v1",
+    )
+
+    native_codex = orchestrator._fresh_state(
+        task_file=task,
+        run_id="structured-native-codex-cutover",
+        repository_root=repository,
+        task_contract=parse_task_contract(task.read_text(encoding="utf-8")),
+        native_codex_results=True,
+    )
+    assert native_codex.protocol_binding == ProtocolBinding(
+        ProtocolMode.STRUCTURED_V1,
+        "1",
+        codex_result_transport="native-codex-v1",
     )
 
 
@@ -1433,6 +1464,508 @@ def test_native_review_record_ahead_recovery_reuses_bound_json_without_provider(
             contract,
             WorkflowHistory(state.current_work_unit_id),
         )
+
+
+def test_native_codex_record_ahead_recovery_reuses_raw_json_without_provider(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/native-codex-record-ahead")
+    task = repository / "task.md"
+    _write_task(task, "feature/native-codex-record-ahead", "src/runtime.py")
+    head = _git(repository, "rev-parse", "HEAD")
+    state = init_workflow_state(
+        run_id="native-codex-record-ahead",
+        task_file=str(task),
+        branch="feature/native-codex-record-ahead",
+        branch_base=head,
+        slice_count=1,
+        task_digest=hashlib.sha256(
+            task.read_text(encoding="utf-8").encode("utf-8")
+        ).hexdigest(),
+        task_scope_patterns=("src/runtime.py",),
+        target_branch="feature/native-codex-record-ahead",
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V1,
+            "1",
+            codex_result_transport="native-codex-v1",
+        ),
+    ).complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    ).bind_current_slice_git_boundary(
+        start_commit=head,
+        scope_paths=("src/runtime.py",),
+        start_fingerprint="c" * 64,
+    )
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    driver.bind_work_unit(state)
+    contract = CodexStepContract(
+        "native-codex-recovery",
+        ReadinessMarker.IMPLEMENTATION,
+        "01",
+        1,
+        require_test_files_record=True,
+        expected_test_files=(),
+        test_changes_approved=True,
+    )
+    native_context = NativeCodexContext(
+        run_id=state.run_id,
+        work_unit_id=str(state.current_work_unit_id),
+        operation=WorkflowStep.CODEX_IMPLEMENTATION.value,
+        current_fingerprint="c" * 64,
+        request_kind=NativeCodexRequestKind.IMPLEMENTATION,
+        contract=contract,
+    )
+    bundle = build_native_codex_request(
+        NativeCodexRequestSpec(
+            context=native_context,
+            target_branch=state.branch,
+            base_commit=head,
+            authorized_paths=("src/runtime.py",),
+            assignment="Implement runtime.",
+            work_context="Use the bound native contract.",
+            evidence=(
+                NativeCodexEvidenceInput(
+                    "workflow-prompt", "orchestrator_instruction", "Implement."
+                ),
+            ),
+        )
+    )
+    document = {
+        "schema_version": "native-agent-codex-result-v1",
+        "result_type": "implementation_result",
+        "request_id": bundle.bound_context.request_id,
+        "ready": True,
+        "test_files": [],
+        "finding_dispositions": [],
+    }
+    canonical = canonical_native_codex_json(document)
+    result = parse_bound_native_codex_contract_result(
+        document, bundle.bound_context
+    )
+    output = NativeAgentCodexOutput(
+        result=result,
+        canonical_json=canonical,
+        request_id=bundle.bound_context.request_id,
+        response_sha256=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+    )
+    invocation = CodexInvocation(
+        state.current_work_unit_id,
+        WorkflowStep.CODEX_IMPLEMENTATION,
+        1,
+        "",
+        native_request=bundle,
+    )
+    raw_path = driver._native_codex_response_path(invocation)
+    driver._write_native_codex_raw_response(raw_path, canonical)
+
+    raw_ahead_recovered = driver.recover_pending_native_codex(
+        invocation,
+        contract,
+        WorkflowHistory(state.current_work_unit_id),
+    )
+    recovered = driver.recover_pending_native_codex(
+        invocation,
+        contract,
+        WorkflowHistory(state.current_work_unit_id),
+    )
+
+    assert raw_ahead_recovered == output
+    assert recovered == output
+    results = tuple(
+        item
+        for item in ArtifactStore(repository, state.run_id).load_chain()
+        if isinstance(item.payload, AgentResultPayload)
+    )
+    assert len(results) == 1
+    assert results[0].payload.request_id == bundle.bound_context.request_id
+
+    raw_path.write_text("{}", encoding="utf-8")
+    with pytest.raises(
+        WorkflowExecutionError,
+        match="raw response digest differs",
+    ):
+        driver.recover_pending_native_codex(
+            invocation,
+            contract,
+            WorkflowHistory(state.current_work_unit_id),
+        )
+
+
+def test_native_codex_record_ahead_recovery_completes_finding_responses(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repository = _repository(tmp_path, "feature/native-codex-finding-recovery")
+    task = repository / "task.md"
+    _write_task(task, "feature/native-codex-finding-recovery", "src/runtime.py")
+    head = _git(repository, "rev-parse", "HEAD")
+    state = (
+        init_workflow_state(
+            run_id="native-codex-finding-recovery",
+            task_file=str(task),
+            branch="feature/native-codex-finding-recovery",
+            branch_base=head,
+            slice_count=1,
+            task_digest=hashlib.sha256(
+                task.read_text(encoding="utf-8").encode("utf-8")
+            ).hexdigest(),
+            task_scope_patterns=("src/runtime.py",),
+            target_branch="feature/native-codex-finding-recovery",
+            protocol_binding=ProtocolBinding(
+                ProtocolMode.STRUCTURED_V1,
+                "1",
+                codex_result_transport="native-codex-v1",
+            ),
+        )
+        .complete_current_work_unit()
+        .start_work_unit(
+            slice_id=1,
+            kind=WorkUnitKind.SLICE,
+            step=WorkflowStep.CODEX_CORRECTION,
+        )
+        .bind_current_slice_git_boundary(
+            start_commit=head,
+            scope_paths=("src/runtime.py",),
+            start_fingerprint="c" * 64,
+        )
+    )
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    driver.bind_work_unit(state)
+    finding = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="Native recovery must retain the Codex disposition.",
+        acceptance_test="Recover the missing response transition idempotently.",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
+    contract = CodexStepContract(
+        "native-codex-finding-recovery",
+        ReadinessMarker.IMPLEMENTATION,
+        "01",
+        1,
+        require_test_files_record=True,
+        expected_test_files=(),
+        test_changes_approved=True,
+    )
+    native_context = NativeCodexContext(
+        run_id=state.run_id,
+        work_unit_id=str(state.current_work_unit_id),
+        operation=WorkflowStep.CODEX_CORRECTION.value,
+        current_fingerprint="c" * 64,
+        request_kind=NativeCodexRequestKind.CORRECTION,
+        contract=contract,
+        previous_findings=(finding,),
+    )
+    bundle = build_native_codex_request(
+        NativeCodexRequestSpec(
+            context=native_context,
+            target_branch=state.branch,
+            base_commit=head,
+            authorized_paths=("src/runtime.py",),
+            assignment="Correct the open finding.",
+            work_context="Use the bound native contract.",
+            evidence=(
+                NativeCodexEvidenceInput(
+                    "workflow-prompt", "orchestrator_instruction", "Correct."
+                ),
+            ),
+        )
+    )
+    document = {
+        "schema_version": "native-agent-codex-result-v1",
+        "result_type": "correction_result",
+        "request_id": bundle.bound_context.request_id,
+        "ready": True,
+        "test_files": [],
+        "finding_dispositions": [
+            {
+                "finding_id": "C-01",
+                "decision": "accepted",
+                "rationale": "The recovery path now completes durable responses.",
+            }
+        ],
+    }
+    canonical = canonical_native_codex_json(document)
+    output = NativeAgentCodexOutput(
+        result=parse_bound_native_codex_contract_result(
+            document, bundle.bound_context
+        ),
+        canonical_json=canonical,
+        request_id=bundle.bound_context.request_id,
+        response_sha256=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+    )
+    invocation = CodexInvocation(
+        state.current_work_unit_id,
+        WorkflowStep.CODEX_CORRECTION,
+        1,
+        "",
+        native_request=bundle,
+        previous_findings=(finding,),
+    )
+    raw_path = driver._native_codex_response_path(invocation)
+    driver._write_native_codex_raw_response(raw_path, canonical)
+    bridge = driver._artifact_bridge
+    assert bridge is not None
+    original_append = type(bridge).append
+    crash_once = {"pending": True}
+
+    def append_with_mid_persistence_crash(self, payload, **kwargs):  # type: ignore[no-untyped-def]
+        if (
+            self is bridge
+            and isinstance(payload, FindingTransitionPayload)
+            and crash_once["pending"]
+        ):
+            crash_once["pending"] = False
+            raise RuntimeError("crash after AgentResult persistence")
+        return original_append(self, payload, **kwargs)
+
+    monkeypatch.setattr(type(bridge), "append", append_with_mid_persistence_crash)
+    with pytest.raises(RuntimeError, match="crash after AgentResult"):
+        driver.persist_native_codex_contract(output, (finding,))
+
+    incomplete = ArtifactStore(repository, state.run_id).load_chain()
+    assert sum(
+        isinstance(item.payload, AgentResultPayload) for item in incomplete
+    ) == 1
+    assert not any(
+        isinstance(item.payload, FindingTransitionPayload)
+        and item.payload.action == "responded"
+        for item in incomplete
+    )
+
+    recovered = driver.recover_pending_native_codex(
+        invocation,
+        contract,
+        WorkflowHistory(state.current_work_unit_id, findings=(finding,)),
+    )
+
+    assert recovered == output
+    replay = replay_artifacts(
+        ArtifactStore(repository, state.run_id).load_chain(), state.run_id
+    )
+    response = output.result.findings[0].responses[-1]
+    durable_responses = tuple(
+        (item.payload.finding_id, item.payload.rationale)
+        for item in replay.records
+        if isinstance(item.payload, FindingTransitionPayload)
+        and item.payload.action == "responded"
+    )
+    assert durable_responses == (
+        ("C-01", f"{response.decision.value}: {response.rationale}"),
+    )
+
+
+@pytest.mark.parametrize(
+    ("request_kind", "step", "readiness", "result_type"),
+    (
+        (
+            NativeCodexRequestKind.PLAN,
+            WorkflowStep.CODEX_PLAN,
+            ReadinessMarker.PLAN,
+            "plan_result",
+        ),
+        (
+            NativeCodexRequestKind.FINAL_REPORT,
+            WorkflowStep.CODEX_FINAL_REVIEW,
+            ReadinessMarker.FINAL_REPORT,
+            "final_report_result",
+        ),
+        (
+            NativeCodexRequestKind.CORRECTION,
+            WorkflowStep.CODEX_CORRECTION,
+            ReadinessMarker.IMPLEMENTATION,
+            "correction_result",
+        ),
+    ),
+)
+def test_native_codex_plan_and_final_recovery_are_raw_and_record_ahead_safe(
+    tmp_path: Path,
+    request_kind: NativeCodexRequestKind,
+    step: WorkflowStep,
+    readiness: ReadinessMarker,
+    result_type: str,
+) -> None:
+    branch = f"feature/native-codex-{request_kind.value}-recovery"
+    repository = _repository(tmp_path, branch)
+    task = repository / "task.md"
+    _write_task(task, branch, "src/runtime.py")
+    head = _git(repository, "rev-parse", "HEAD")
+    task_digest = hashlib.sha256(
+        task.read_text(encoding="utf-8").encode("utf-8")
+    ).hexdigest()
+    state = init_workflow_state(
+        run_id=f"native-codex-{request_kind.value}-recovery",
+        task_file=str(task),
+        branch=branch,
+        branch_base=head,
+        slice_count=1,
+        task_digest=task_digest,
+        task_scope_patterns=("src/runtime.py",),
+        target_branch=branch,
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V1,
+            "1",
+            codex_result_transport="native-codex-v1",
+        ),
+    )
+    current_fingerprint = task_digest
+    if request_kind is NativeCodexRequestKind.CORRECTION:
+        state = (
+            state.complete_current_work_unit()
+            .start_work_unit(
+                slice_id=1,
+                kind=WorkUnitKind.SLICE,
+                step=WorkflowStep.CODEX_IMPLEMENTATION,
+            )
+            .bind_current_slice_git_boundary(
+                start_commit=head,
+                scope_paths=("src/runtime.py",),
+                start_fingerprint="c" * 64,
+            )
+            .with_current_step(WorkflowStep.CODEX_CORRECTION)
+        )
+        current_fingerprint = "c" * 64
+    elif request_kind is NativeCodexRequestKind.FINAL_REPORT:
+        state = (
+            state.complete_current_work_unit()
+            .start_work_unit(
+                slice_id=1,
+                kind=WorkUnitKind.SLICE,
+                step=WorkflowStep.CODEX_IMPLEMENTATION,
+            )
+            .bind_current_slice_git_boundary(
+                start_commit=head,
+                scope_paths=("src/runtime.py",),
+                start_fingerprint="c" * 64,
+            )
+            .complete_current_slice(commit_ref=head)
+            .start_final_review_work_unit()
+        )
+        current_fingerprint = "f" * 64
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    driver.bind_work_unit(state)
+    contract = CodexStepContract(
+        f"native-codex-{request_kind.value}-recovery",
+        readiness,
+        "FINAL" if request_kind is NativeCodexRequestKind.FINAL_REPORT else "01",
+        1,
+        review_fingerprint=(
+            current_fingerprint
+            if request_kind is NativeCodexRequestKind.FINAL_REPORT
+            else None
+        ),
+        require_test_files_record=(
+            request_kind is NativeCodexRequestKind.CORRECTION
+        ),
+        test_changes_approved=True,
+        require_slice_plan=request_kind is NativeCodexRequestKind.PLAN,
+        plan_artifact_path=(
+            "src/runtime.py" if request_kind is NativeCodexRequestKind.PLAN else None
+        ),
+    )
+    native_context = NativeCodexContext(
+        run_id=state.run_id,
+        work_unit_id=str(state.current_work_unit_id),
+        operation=step.value,
+        current_fingerprint=current_fingerprint,
+        request_kind=request_kind,
+        contract=contract,
+    )
+    bundle = build_native_codex_request(
+        NativeCodexRequestSpec(
+            context=native_context,
+            target_branch=state.branch,
+            base_commit=head,
+            authorized_paths=("src/runtime.py",),
+            assignment=f"Execute native Codex {request_kind.value}.",
+            work_context="Use the bound native contract.",
+            evidence=(
+                NativeCodexEvidenceInput(
+                    "workflow-prompt", "orchestrator_instruction", "Execute."
+                ),
+            ),
+        )
+    )
+    document: dict[str, object] = {
+        "schema_version": "native-agent-codex-result-v1",
+        "result_type": result_type,
+        "request_id": bundle.bound_context.request_id,
+        "ready": True,
+    }
+    if request_kind is NativeCodexRequestKind.PLAN:
+        document["slice_plan"] = [
+            {
+                "slice_id": 1,
+                "summary": "Implement the bound plan.",
+                "scope_paths": ["src/runtime.py"],
+            }
+        ]
+    elif request_kind is NativeCodexRequestKind.FINAL_REPORT:
+        document["finding_dispositions"] = []
+        document["self_check"] = "Checked branch contracts and recovery."
+    else:
+        document["test_files"] = []
+        document["finding_dispositions"] = []
+    canonical = canonical_native_codex_json(document)
+    result = parse_bound_native_codex_contract_result(
+        document, bundle.bound_context
+    )
+    output = NativeAgentCodexOutput(
+        result=result,
+        canonical_json=canonical,
+        request_id=bundle.bound_context.request_id,
+        response_sha256=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+    )
+    invocation = CodexInvocation(
+        state.current_work_unit_id,
+        step,
+        1,
+        "",
+        native_request=bundle,
+    )
+    raw_path = driver._native_codex_response_path(invocation)
+    driver._write_native_codex_raw_response(raw_path, canonical)
+
+    raw_ahead_recovered = driver.recover_pending_native_codex(
+        invocation,
+        contract,
+        WorkflowHistory(state.current_work_unit_id),
+    )
+    record_ahead_recovered = driver.recover_pending_native_codex(
+        invocation,
+        contract,
+        WorkflowHistory(state.current_work_unit_id),
+    )
+
+    assert raw_ahead_recovered == output
+    assert record_ahead_recovered == output
+    results = tuple(
+        item
+        for item in ArtifactStore(repository, state.run_id).load_chain()
+        if isinstance(item.payload, AgentResultPayload)
+    )
+    assert len(results) == 1
+    assert results[0].payload.request_id == bundle.bound_context.request_id
 
 
 def test_structured_bind_survives_round_number_increase_within_same_work_unit(

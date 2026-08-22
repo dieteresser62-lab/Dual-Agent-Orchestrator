@@ -86,7 +86,8 @@
     },
     "agent_result": {
       "type": "object", "additionalProperties": false, "required": ["role", "work_unit_id", "outcome", "test_files"],
-      "properties": {"role": {"$ref": "#/$defs/role"}, "work_unit_id": {"$ref": "#/$defs/identifier"}, "outcome": {"enum": ["ready", "not_ready", "stopped"]}, "test_files": {"$ref": "#/$defs/paths"}}
+      "properties": {"role": {"$ref": "#/$defs/role"}, "work_unit_id": {"$ref": "#/$defs/identifier"}, "outcome": {"enum": ["ready", "not_ready", "stopped"]}, "test_files": {"$ref": "#/$defs/paths"}, "transport_schema": {"type": ["string", "null"]}, "request_id": {"type": ["string", "null"]}, "response_sha256": {"type": ["string", "null"]}},
+      "oneOf": [{"properties": {"transport_schema": {"type": "null"}, "request_id": {"type": "null"}, "response_sha256": {"type": "null"}}}, {"required": ["transport_schema", "request_id", "response_sha256"], "properties": {"role": {"const": "codex"}, "transport_schema": {"const": "native-codex-v1"}, "request_id": {"type": "string", "pattern": "^native-codex-request-[0-9a-f]{64}$"}, "response_sha256": {"$ref": "#/$defs/sha256"}}}]
     },
     "diagnostic": {
       "type": "object", "additionalProperties": false, "required": ["role", "work_unit_id", "attempt", "output_sha256", "reason"],

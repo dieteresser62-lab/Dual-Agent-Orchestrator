@@ -130,6 +130,53 @@ def test_same_chain_renders_byte_identically_in_record_sequence() -> None:
     assert "Binding `commit`" in first["approval-status"]
 
 
+def test_projection_renders_native_and_legacy_transport_bindings_symmetrically() -> None:
+    payloads = (
+        WorkUnitPayload("1", 1, ("src/a.py",)),
+        AgentResultPayload(
+            Role.CODEX,
+            "12",
+            "ready",
+            ("tests/test_a.py",),
+            transport_schema="native-codex-v1",
+            request_id="native-codex-request-" + "b" * 64,
+            response_sha256="c" * 64,
+        ),
+        ReviewPayload(
+            Role.CLAUDE,
+            "12",
+            "approved",
+            (),
+            "contracts checked",
+            transport_schema="native-claude-review-v1",
+            request_id="native-review-request-" + "d" * 64,
+            response_sha256="e" * 64,
+        ),
+    )
+    records: list[ArtifactRecord] = []
+    predecessor: tuple[str, ...] = ()
+    for sequence, payload in enumerate(payloads, start=1):
+        record = ArtifactRecord.create(
+            run_id="run-native",
+            logical_id="work-unit-12" if sequence == 1 else f"native-{sequence}",
+            revision=1,
+            fingerprint=Fingerprint(FingerprintKind.IMPLEMENTATION, "a" * 64),
+            predecessor_ids=predecessor,
+            created_at=f"2026-08-18T10:01:0{sequence}+00:00",
+            idempotency_key=f"native:{sequence}",
+            payload=payload,
+        )
+        records.append(record)
+        predecessor = (record.record_id,)
+
+    sections = render_artifact_sections(tuple(records))
+
+    assert "`native-codex-v1`" in sections["approval-status"]
+    assert "`native-codex-request-" in sections["approval-status"]
+    assert "`native-claude-review-v1`" in sections["claude-review"]
+    assert "`native-review-request-" in sections["claude-review"]
+
+
 def test_projection_reduces_attempts_and_keeps_unknown_usage_explicit(tmp_path) -> None:  # type: ignore[no-untyped-def]
     bridge = ArtifactBridge(ArtifactStore(tmp_path, "run-attempts"))
     bridge.append(

@@ -15,12 +15,18 @@ from pathlib import Path, PurePosixPath
 from agent_adapters import AgentAdapter, build_agent_registry
 from agent_runtime import (
     AgentInvocationError,
+    NativeAgentCodexOutput,
     NativeAgentReviewOutput,
     OrchestratorConfig,
     ProviderAttemptLifecycle,
     run_agent_checked,
+    run_native_codex_agent_checked,
     run_native_review_agent_checked,
     run_validation_matrix,
+)
+from native_codex_contract import (
+    canonical_native_codex_json,
+    parse_bound_native_codex_contract_result,
 )
 from artifact_bridge import (
     ArtifactBridge, agent_result_payload, attestation_payload, finding_payload,
@@ -31,7 +37,7 @@ from artifact_migration import ArtifactResumeError, resolve_resume_state
 from artifact_models import (
     ArtifactRecord, BindingPayload, CorrectionWorkUnitPayload, DiagnosticPayload,
     FingerprintKind, GatePayload,
-    QuotaPausePayload, ReviewPayload, Role, TaskPayload, TransientRetryPayload,
+    AgentResultPayload, QuotaPausePayload, ReviewPayload, Role, TaskPayload, TransientRetryPayload,
     ValidationAttestationPayload,
     WorkUnitPayload,
     WorkflowCompletionPayload,
@@ -147,6 +153,7 @@ from workflow_state import (
     WorkUnitKind,
     WorkUnitStatus,
     NATIVE_CLAUDE_REVIEW_TRANSPORT,
+    NATIVE_CODEX_RESULT_TRANSPORT,
     init_workflow_state,
     BootstrapCheckFact,
     managed_correction_slice_report_path,
@@ -701,12 +708,64 @@ class ProductionWorkflowDriver(WorkflowDriver):
         self._replace_existing_run_id = None
         self.active_state = state
 
-    def invoke_codex(self, invocation: CodexInvocation) -> str:
+    def invoke_codex(
+        self, invocation: CodexInvocation
+    ) -> str | NativeAgentCodexOutput:
         state_binding = (
             self.active_state.task_digest
             if self.active_state is not None and self.active_state.task_digest is not None
             else "unbound"
         )
+        if invocation.native_request is not None:
+            state = self.active_state
+            if (
+                state is None
+                or state.protocol_binding is None
+                or state.protocol_binding.codex_result_transport
+                != NATIVE_CODEX_RESULT_TRANSPORT
+                or state.current_work_unit_id != invocation.work_unit_id
+                or state.current_step is not invocation.step
+            ):
+                raise WorkflowExecutionError(
+                    "native Codex invocation lacks its immutable state binding"
+                )
+            self.assert_structured_decision_context()
+            native_factory = getattr(
+                self.agents[AgentRole.CODEX.value], "native_codex_adapter", None
+            )
+            if not callable(native_factory):
+                raise WorkflowExecutionError(
+                    "configured Codex adapter has no native result transport"
+                )
+            raw_path = self._native_codex_response_path(invocation)
+            output = run_native_codex_agent_checked(
+                adapter=native_factory(),
+                bundle=invocation.native_request,
+                raw_response_path=raw_path,
+                config=self.config,
+                write_file=self._write_native_codex_raw_response,
+                shorten=_shorten,
+                operation=invocation.step.value,
+                binding_fingerprint=(
+                    invocation.native_request.bound_context.context.current_fingerprint
+                ),
+                pre_start_callback=self._persist_provider_bootstrap,
+                provider_attempt_lifecycle=(
+                    ProviderAttemptLifecycle(
+                        start=self._start_provider_attempt,
+                        terminal=self._finish_provider_attempt,
+                    )
+                    if self._artifact_bridge is not None
+                    else None
+                ),
+                accepted_output_callback=lambda accepted: (
+                    self.persist_native_codex_contract(
+                        accepted, invocation.previous_findings
+                    )
+                ),
+            )
+            self.last_codex_output = output.canonical_json
+            return output
         output = self._agent(
             AgentRole.CODEX,
             invocation.prompt,
@@ -722,6 +781,46 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 output,
             )
         return output
+
+    def _native_codex_response_path(self, invocation: CodexInvocation) -> Path:
+        state = self.active_state
+        if state is None:
+            raise WorkflowExecutionError("native Codex response has no active state")
+        return (
+            self.root
+            / ".orchestrator"
+            / "artifacts"
+            / state.run_id
+            / "native-codex-responses"
+            / (
+                f"work-unit-{invocation.work_unit_id:04d}-"
+                f"{invocation.step.value}-round-{invocation.round_number:04d}.json"
+            )
+        )
+
+    @staticmethod
+    def _write_native_codex_raw_response(path: Path, content: str) -> None:
+        """Create or verify one immutable raw response artifact."""
+        if path.exists():
+            if not path.is_file() or path.read_text(encoding="utf-8") != content:
+                raise WorkflowExecutionError(
+                    "native Codex raw response differs from its persisted artifact"
+                )
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with path.open("x", encoding="utf-8", newline="") as stream:
+                stream.write(content)
+        except FileExistsError:
+            if not path.is_file() or path.read_text(encoding="utf-8") != content:
+                raise WorkflowExecutionError(
+                    "native Codex raw response differs from its persisted artifact"
+                )
+            return
+        if path.read_text(encoding="utf-8") != content:
+            raise WorkflowExecutionError(
+                "native Codex raw response verification failed"
+            )
 
     def invoke_reviewer(
         self, invocation: ReviewerInvocation
@@ -827,6 +926,131 @@ class ProductionWorkflowDriver(WorkflowDriver):
         if target.read_bytes() != packet.canonical_bytes:
             raise WorkflowExecutionError("review packet cache verification failed")
         return target
+
+    def recover_pending_native_codex(
+        self,
+        invocation: CodexInvocation,
+        contract: CodexStepContract,
+        history: WorkflowHistory,
+    ) -> NativeAgentCodexOutput | None:
+        """Replay one record-ahead Codex result without another provider start."""
+        _ = contract
+        state = self.active_state
+        bridge = self._artifact_bridge
+        bundle = invocation.native_request
+        if (
+            state is None
+            or bridge is None
+            or bundle is None
+            or state.protocol_binding is None
+            or state.protocol_binding.codex_result_transport
+            != NATIVE_CODEX_RESULT_TRANSPORT
+            or state.current_work_unit_id != invocation.work_unit_id
+            or state.current_step is not invocation.step
+        ):
+            return None
+        logical = (
+            f"agent-{invocation.work_unit_id}-{invocation.step.value}-"
+            f"{invocation.round_number}"
+        )
+        candidates = tuple(
+            item
+            for item in bridge.store.load_chain()
+            if isinstance(item.payload, AgentResultPayload)
+            and item.logical_id == logical
+        )
+        if len(candidates) > 1:
+            raise WorkflowExecutionError(
+                "native Codex recovery has multiple agent-result records"
+            )
+        raw_path = self._native_codex_response_path(invocation)
+        if not raw_path.is_file():
+            if not candidates:
+                return None
+            raise WorkflowExecutionError(
+                "native Codex recovery record has no raw response artifact"
+            )
+        canonical = raw_path.read_text(encoding="utf-8")
+        response_sha256 = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        if (
+            candidates
+            and candidates[0].payload.response_sha256 != response_sha256
+        ):
+            raise WorkflowExecutionError(
+                "native Codex recovery raw response digest differs from its record"
+            )
+        try:
+            document = json.loads(canonical)
+            if not isinstance(document, dict):
+                raise ValueError("native Codex raw response is not an object")
+            if canonical_native_codex_json(document) != canonical:
+                raise ValueError("native Codex raw response is not canonical JSON")
+            result = parse_bound_native_codex_contract_result(
+                document, bundle.bound_context
+            )
+        except (ValueError, TypeError) as exc:
+            raise WorkflowExecutionError(
+                f"native Codex recovery response no longer validates: {exc}"
+            ) from exc
+        output = NativeAgentCodexOutput(
+            result=result,
+            canonical_json=canonical,
+            request_id=bundle.bound_context.request_id,
+            response_sha256=response_sha256,
+        )
+        if not candidates:
+            self.persist_native_codex_contract(
+                output, invocation.previous_findings
+            )
+            logger.warning(
+                "Recovered native Codex result from raw-response-ahead persistence: "
+                "work-unit=%s operation=%s",
+                invocation.work_unit_id,
+                invocation.step.value,
+            )
+            self.last_codex_output = canonical
+            return output
+        record = candidates[0]
+        payload = record.payload
+        expected_fingerprint = self._artifact_fingerprint()
+        if (
+            payload.role is not Role.CODEX
+            or payload.work_unit_id != str(invocation.work_unit_id)
+            or payload.transport_schema != NATIVE_CODEX_RESULT_TRANSPORT
+            or payload.request_id != bundle.bound_context.request_id
+            or payload.response_sha256 != response_sha256
+            or record.fingerprint.sha256 != expected_fingerprint
+        ):
+            raise WorkflowExecutionError(
+                "native Codex recovery record differs from the rebuilt request"
+            )
+        expected_payload = agent_result_payload(
+            result,
+            role=AgentRole.CODEX,
+            work_unit_id=invocation.work_unit_id,
+            transport_schema=NATIVE_CODEX_RESULT_TRANSPORT,
+            request_id=bundle.bound_context.request_id,
+            response_sha256=response_sha256,
+        )
+        if payload != expected_payload:
+            raise WorkflowExecutionError(
+                "native Codex recovery result differs from its durable record"
+            )
+        # AgentResult and its per-finding response transitions are separate
+        # append-only records.  Re-drive the idempotent persistence routine so
+        # a crash after AgentResult publication cannot make an incomplete
+        # finding-disposition set look fully recovered.
+        self.persist_native_codex_contract(
+            output, invocation.previous_findings
+        )
+        logger.warning(
+            "Recovered native Codex result from record-ahead persistence: "
+            "work-unit=%s operation=%s",
+            invocation.work_unit_id,
+            invocation.step.value,
+        )
+        self.last_codex_output = canonical
+        return output
 
     def recover_pending_reviewer(
         self,
@@ -1282,6 +1506,68 @@ class ProductionWorkflowDriver(WorkflowDriver):
         )
         previous_by_id = {item.finding_id: item for item in previous_findings}
         for finding in result.findings:
+            prior_count = len(previous_by_id.get(finding.finding_id, finding).responses)
+            if finding.finding_id not in previous_by_id:
+                prior_count = 0
+            for index, response in enumerate(
+                finding.responses[prior_count:], start=prior_count + 1
+            ):
+                self._artifact_bridge.append(
+                    finding_payload(
+                        finding,
+                        actor=AgentRole.CODEX,
+                        action="responded",
+                        rationale=f"{response.decision.value}: {response.rationale}",
+                    ),
+                    logical_id=f"finding-{finding.finding_id}",
+                    idempotency_key=f"finding-response:{finding.finding_id}:{index}",
+                    fingerprint_sha256=fingerprint,
+                )
+
+    def persist_native_codex_contract(
+        self,
+        output: NativeAgentCodexOutput,
+        previous_findings: tuple[FindingRecord, ...],
+    ) -> None:
+        if self._artifact_bridge is None or self.active_state is None:
+            return
+        state = self.active_state
+        if (
+            state.protocol_binding is None
+            or state.protocol_binding.codex_result_transport
+            != NATIVE_CODEX_RESULT_TRANSPORT
+        ):
+            raise WorkflowExecutionError(
+                "native Codex persistence lacks its immutable transport binding"
+            )
+        unit = state.current_work_unit
+        fingerprint = self._artifact_fingerprint()
+        logical = f"agent-{unit.work_unit_id}-{state.current_step.value}-{unit.round_number}"
+        binding_digest = hashlib.sha256(
+            (
+                f"{fingerprint}:{output.request_id}:{output.response_sha256}"
+            ).encode("utf-8")
+        ).hexdigest()
+        self._artifact_bridge.append(
+            agent_result_payload(
+                output.result,
+                role=AgentRole.CODEX,
+                work_unit_id=unit.work_unit_id,
+                transport_schema=NATIVE_CODEX_RESULT_TRANSPORT,
+                request_id=output.request_id,
+                response_sha256=output.response_sha256,
+            ),
+            logical_id=logical,
+            idempotency_key=f"native:{logical}:{binding_digest}",
+            fingerprint_sha256=fingerprint,
+            fingerprint_kind=(
+                FingerprintKind.CONTRACT
+                if unit.kind is WorkUnitKind.PLAN
+                else FingerprintKind.IMPLEMENTATION
+            ),
+        )
+        previous_by_id = {item.finding_id: item for item in previous_findings}
+        for finding in output.result.findings:
             prior_count = len(previous_by_id.get(finding.finding_id, finding).responses)
             if finding.finding_id not in previous_by_id:
                 prior_count = 0
@@ -2968,6 +3254,7 @@ def _fresh_state(
     branch_base_override: str | None = None,
     audit_report_path: str | None = None,
     native_claude_reviews: bool = False,
+    native_codex_results: bool = False,
 ) -> WorkflowState:
     identity = inspect_repository(repository_root)
     if identity.branch != task_contract.target_branch:
@@ -3001,11 +3288,16 @@ def _fresh_state(
         audit_report_path=audit_report_path,
         target_branch=task_contract.target_branch,
         protocol_binding=ProtocolBinding(
-            ProtocolMode.STRUCTURED_V1,
-            "1",
-            (
+            mode=ProtocolMode.STRUCTURED_V1,
+            schema_version="1",
+            claude_review_transport=(
                 "native-claude-review-v1"
                 if native_claude_reviews
+                else None
+            ),
+            codex_result_transport=(
+                NATIVE_CODEX_RESULT_TRANSPORT
+                if native_codex_results
                 else None
             ),
         ),
@@ -3179,6 +3471,20 @@ def run_production_workflow(
                 "--native-claude-reviews differs from the immutable persisted "
                 "review transport binding"
             )
+        requested_native_codex = getattr(args, "native_codex_results", None)
+        persisted_native_codex = (
+            state.protocol_binding is not None
+            and state.protocol_binding.codex_result_transport
+            == NATIVE_CODEX_RESULT_TRANSPORT
+        )
+        if (
+            requested_native_codex is not None
+            and bool(requested_native_codex) is not persisted_native_codex
+        ):
+            raise StateSchemaError(
+                "--native-codex-results differs from the immutable persisted "
+                "Codex result transport binding"
+            )
         if state.audit_report_path is None and managed_audit_path is not None:
             state = replace(state, audit_report_path=managed_audit_path)
     else:
@@ -3195,6 +3501,9 @@ def run_production_workflow(
             audit_report_path=managed_audit_path,
             native_claude_reviews=bool(
                 getattr(args, "native_claude_reviews", False)
+            ),
+            native_codex_results=bool(
+                getattr(args, "native_codex_results", False)
             ),
         )
     state = _attach_managed_audit_paths(state)

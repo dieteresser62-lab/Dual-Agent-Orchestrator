@@ -174,11 +174,30 @@ def render_replay_sections(replay: ArtifactReplayResult) -> Mapping[str, str]:
             latest_attempts[(payload.logical_operation_id, payload.attempt_number)] = (
                 sequence, record
             )
-        if isinstance(payload, ReviewPayload):
+        if isinstance(payload, AgentResultPayload):
+            transport = (
+                f"; Transport `{_safe(payload.transport_schema)}`; Request "
+                f"`{_safe(payload.request_id)}`; Response `{payload.response_sha256}`"
+                if payload.transport_schema is not None
+                else "; Transport `legacy-text`"
+            )
+            bindings_and_units.append(
+                f"- {prefix}: Agentresult `{payload.role.value}` / "
+                f"`{_safe(payload.outcome)}`; Work-Unit "
+                f"`{_safe(payload.work_unit_id)}`; Tests {_codes(payload.test_files)}"
+                f"{transport}; Fingerprint `{record.fingerprint.sha256}`"
+            )
+        elif isinstance(payload, ReviewPayload):
+            transport = (
+                f"; Transport `{_safe(payload.transport_schema)}`; Request "
+                f"`{_safe(payload.request_id)}`; Response `{payload.response_sha256}`"
+                if payload.transport_schema is not None
+                else "; Transport `legacy-text`"
+            )
             reviews[payload.reviewer].append(
                 f"- {prefix}: `{_safe(payload.verdict)}`; Work-Unit "
                 f"`{_safe(payload.work_unit_id)}`; Findings {_codes(payload.finding_ids)}; "
-                f"Fingerprint `{record.fingerprint.sha256}`"
+                f"Fingerprint `{record.fingerprint.sha256}`{transport}"
             )
         elif isinstance(payload, FindingTransitionPayload):
             line = (

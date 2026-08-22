@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import math
 import os
@@ -28,7 +29,14 @@ from agent_adapters import (
 )
 from path_policy import PathPolicyError, resolve_repository_path
 from repo_changes import RepositoryChanges
-from contracts import ContractResult, ValidationAttestation
+from contracts import CodexContractResult, ContractResult, ValidationAttestation
+from native_codex_contract import (
+    NativeCodexContractError,
+    NativeCodexErrorCode,
+    parse_bound_native_codex_contract_result,
+    validate_native_codex_document,
+)
+from native_codex_request import NativeCodexRequestBundle
 from native_review_contract import (
     NativeReviewContractError,
     parse_bound_native_contract_result,
@@ -1383,6 +1391,166 @@ def run_native_review_agent_checked(
                 sort_keys=True,
             ),
         )
+        raise failure from exc
+
+
+@dataclass(frozen=True, slots=True)
+class NativeAgentCodexOutput:
+    """One schema-, request-, and domain-bound native Codex result."""
+
+    result: CodexContractResult
+    canonical_json: str
+    request_id: str
+    response_sha256: str
+
+
+def run_native_codex_agent(
+    adapter: AgentAdapter,
+    bundle: NativeCodexRequestBundle,
+    *,
+    config: OrchestratorConfig,
+    shorten: Callable[[str | None, int], str],
+    operation: str,
+    binding_fingerprint: str,
+    pre_start_callback: Callable[[ProviderInputMeasurement], object | None] | None = None,
+    attempt_invocation: _ProviderAttemptInvocation | None = None,
+    validated_response_callback: Callable[[str], None] | None = None,
+) -> NativeAgentCodexOutput:
+    """Run native Codex without marker parsing, flag extraction, or repair."""
+    prepare = getattr(adapter, "prepare_native_provider_input", None)
+    if not callable(prepare):
+        raise TypeError("native Codex adapter lacks prepare_native_provider_input")
+    prepared = prepare(bundle)
+    canonical = run_agent(
+        adapter,
+        bundle.canonical_json,
+        config=config,
+        shorten=shorten,
+        reviewer_repository_required=False,
+        operation=operation,
+        binding_fingerprint=binding_fingerprint,
+        pre_start_callback=pre_start_callback,
+        attempt_invocation=attempt_invocation,
+        prepared_provider_input=prepared,
+    )
+    try:
+        document = json.loads(canonical)
+        if not isinstance(document, dict):
+            raise AgentOutputError("native Codex result must be a JSON object")
+        validate_native_codex_document(document)
+        if document.get("request_id") != bundle.bound_context.request_id:
+            raise NativeCodexContractError(
+                NativeCodexErrorCode.REQUEST_MISMATCH,
+                "response request_id does not match bound request",
+            )
+        if validated_response_callback is not None:
+            validated_response_callback(canonical)
+        result = parse_bound_native_codex_contract_result(
+            document, bundle.bound_context
+        )
+    except json.JSONDecodeError as exc:
+        raise AgentOutputError(
+            "native Codex result is not valid JSON",
+            technical_text=f"native-json-invalid: {exc}",
+        ) from exc
+    except NativeCodexContractError as exc:
+        raise AgentOutputError(
+            "native Codex result violates its bound contract",
+            provider_data=document,
+            technical_text=f"{exc.code.value}: {exc.detail}",
+        ) from exc
+    return NativeAgentCodexOutput(
+        result=result,
+        canonical_json=canonical,
+        request_id=bundle.bound_context.request_id,
+        response_sha256=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+    )
+
+
+def run_native_codex_agent_checked(
+    *,
+    adapter: AgentAdapter,
+    bundle: NativeCodexRequestBundle,
+    raw_response_path: Path,
+    config: OrchestratorConfig,
+    write_file: Callable[[Path, str], None],
+    shorten: Callable[[str | None, int], str],
+    operation: str,
+    binding_fingerprint: str,
+    pre_start_callback: Callable[[ProviderInputMeasurement], object | None] | None,
+    provider_attempt_lifecycle: ProviderAttemptLifecycle | None,
+    accepted_output_callback: Callable[[NativeAgentCodexOutput], None] | None = None,
+) -> NativeAgentCodexOutput:
+    """Persist canonical response bytes before any accepted-result callback."""
+    invocation_id = uuid.uuid4().hex
+    attempt_invocation = (
+        _ProviderAttemptInvocation(provider_attempt_lifecycle)
+        if provider_attempt_lifecycle is not None
+        else None
+    )
+    try:
+        output = run_native_codex_agent(
+            adapter,
+            bundle,
+            config=config,
+            shorten=shorten,
+            operation=operation,
+            binding_fingerprint=binding_fingerprint,
+            pre_start_callback=pre_start_callback,
+            attempt_invocation=attempt_invocation,
+            validated_response_callback=lambda canonical: write_file(
+                raw_response_path, canonical
+            ),
+        )
+        print_agent_output(
+            adapter.name,
+            raw_response_path,
+            1,
+            output.canonical_json,
+            config=config,
+            shorten=shorten,
+        )
+        if accepted_output_callback is not None:
+            accepted_output_callback(output)
+        if attempt_invocation is not None:
+            attempt_invocation.finish(None, adapter.metadata)
+        return output
+    except AgentInvocationError as failure:
+        if attempt_invocation is not None:
+            attempt_invocation.finish(failure.kind, adapter.metadata)
+        raise
+    except ProviderInputBudgetExceeded:
+        raise
+    except Exception as exc:
+        failure = classify_agent_failure(
+            adapter.name,
+            exc,
+            invocation_id=invocation_id,
+        )
+        if attempt_invocation is not None:
+            attempt_invocation.finish(failure.kind, adapter.metadata)
+        failure_path = raw_response_path.with_suffix(
+            raw_response_path.suffix + ".failure.json"
+        )
+        try:
+            write_file(
+                failure_path,
+                json.dumps(
+                    {
+                        "agent": failure.agent_key,
+                        "failure_kind": failure.kind.value,
+                        "invocation_id": failure.invocation_id,
+                        "provider_text": failure.provider_text,
+                        "provider_diagnostic": failure.provider_data,
+                        "received_at": failure.received_at.isoformat(),
+                        "process_exit_code": failure.process_exit_code,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+            )
+        except Exception as log_exc:  # pragma: no cover - original failure wins
+            logger.warning("Native Codex failure log could not be written: %s", log_exc)
         raise failure from exc
 
 

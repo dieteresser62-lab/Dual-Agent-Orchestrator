@@ -551,6 +551,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--native-codex-results",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Bind native JSON Codex results for a newly created structured-v1 "
+            "run. Omission preserves an existing resume binding and keeps new "
+            "runs, including watch mode, on the legacy text result transport."
+        ),
+    )
+    parser.add_argument(
         "--work-plan",
         help="Repository-relative WORK_PLAN_PATH override for a PLAN_ONLY task.",
     )
