@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import re
 import time
@@ -223,6 +224,88 @@ def _normalize_labeled_evidence(body: str) -> tuple[str, str, str] | None:
     return values if all(values) else None
 
 
+def _fold_standalone_validate_into_reclassification(
+    text: str,
+    own_previous_findings: tuple[FindingRecord, ...],
+) -> tuple[str, bool]:
+    """Preserve one unambiguous misplaced ``VALIDATE`` request as rationale.
+
+    A previous finding already owns an immutable acceptance test.  Reviewers
+    occasionally reclassify that finding to ``BLOCKER`` and then repeat a
+    focused command as a standalone marker, although ``VALIDATE`` is valid
+    only inside a new finding's acceptance-test field.  Folding the command
+    into the reclassification rationale preserves the reviewer evidence while
+    leaving the persisted acceptance test authoritative.  Every ambiguous
+    shape remains untouched for the strict parser to reject.
+    """
+    lines = text.splitlines()
+    validate_pattern = re.compile(
+        r"^[ \t]*VALIDATE[ \t]*:[ \t]*(?P<argv>\[.*\])[ \t]*$"
+    )
+    validate_matches = [
+        (index, match)
+        for index, line in enumerate(lines)
+        if (match := validate_pattern.fullmatch(line)) is not None
+    ]
+    if len(validate_matches) != 1:
+        return text, False
+    validate_index, validate_match = validate_matches[0]
+    try:
+        argv = json.loads(validate_match.group("argv"))
+    except json.JSONDecodeError:
+        return text, False
+    if not (
+        isinstance(argv, list)
+        and argv
+        and all(isinstance(item, str) and item for item in argv)
+    ):
+        return text, False
+    if re.search(r"^[ \t]*NEW_FINDING[ \t]*:", text, re.IGNORECASE | re.MULTILINE):
+        return text, False
+
+    reclassification_pattern = re.compile(
+        r"^(?P<prefix>[ \t]*FINDING_RECLASSIFIED[ \t]*:[ \t]*"
+        r"(?P<id>[A-Za-z0-9_-]+)[ \t]*\|[ \t]*BLOCKER[ \t]*\|[ \t]*)"
+        r"(?P<rationale>.+?)[ \t]*$",
+        re.IGNORECASE,
+    )
+    reclassifications = [
+        (index, match)
+        for index, line in enumerate(lines)
+        if (match := reclassification_pattern.fullmatch(line)) is not None
+    ]
+    if len(reclassifications) != 1:
+        return text, False
+    reclassification_index, reclassification = reclassifications[0]
+    finding_id = reclassification.group("id").upper()
+    previous = {finding.finding_id: finding for finding in own_previous_findings}
+    if finding_id not in previous or previous[finding_id].status is not FindingStatus.OPEN:
+        return text, False
+
+    open_status_pattern = re.compile(
+        rf"^[ \t]*FINDING_STATUS[ \t]*:[ \t]*{re.escape(finding_id)}[ \t]*"
+        r"\|[ \t]*OPEN[ \t]*\|[ \t]*.+$",
+        re.IGNORECASE,
+    )
+    if sum(open_status_pattern.fullmatch(line) is not None for line in lines) != 1:
+        return text, False
+    denial_pattern = re.compile(
+        r"^[ \t]*(?:PLAN_APPROVAL|FINAL_APPROVAL)[ \t]*:[ \t]*NO[ \t]*$"
+        r"|^[ \t]*SLICE_APPROVAL[ \t]*:[ \t]*[^|]+[ \t]*\|[ \t]*NO[ \t]*$",
+        re.IGNORECASE,
+    )
+    if sum(denial_pattern.fullmatch(line) is not None for line in lines) != 1:
+        return text, False
+
+    validate_text = f"VALIDATE: {json.dumps(argv, separators=(',', ':'))}"
+    lines[reclassification_index] = (
+        f"{reclassification.group('prefix')}{reclassification.group('rationale').rstrip()} "
+        f"Focused validation requested: {validate_text}"
+    )
+    del lines[validate_index]
+    return "\n".join(lines).strip(), True
+
+
 def normalize_review_contract(
     output: str,
     contract: StepContract,
@@ -272,6 +355,12 @@ def normalize_review_contract(
         del lines[empty_status_indexes[0]]
         text = "\n".join(lines).strip()
         changes.append("removed_empty_finding_status")
+
+    text, folded_validate = _fold_standalone_validate_into_reclassification(
+        text, own_previous_findings
+    )
+    if folded_validate:
+        changes.append("folded_standalone_validate_into_reclassification")
 
     if remove_bulleted_evidence:
         text, removed = _remove_bulleted_evidence_section(text)

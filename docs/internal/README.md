@@ -21,6 +21,26 @@ wenn der Lauf abgeschlossen oder sein manueller Abschluss dokumentiert ist.
 
 ## Archive
 
+### Orchestrator-Stabilisierung 1.1D – Antigravity-Runtime-Retry und Attempt-Telemetrie
+
+Pfad: [`archive/orchestrator-stabilization-1-1d/`](archive/orchestrator-stabilization-1-1d/)
+
+Wichtige Einstiegspunkte:
+
+- [Arbeitsplan](archive/orchestrator-stabilization-1-1d/release-1-1d-antigravity-runtime-retry-und-attempt-telemetrie-arbeitsplan.md)
+- [Konsolidiertes Review mit manueller Abschlussausnahme](archive/orchestrator-stabilization-1-1d/release-1-1d-antigravity-runtime-retry-und-attempt-telemetrie-implement-review-17521525.md)
+- [Slice 1 – enger Toolschema-Retry und Attemptabschluss](archive/orchestrator-stabilization-1-1d/slice-release-1-1d-antigravity-runtime-retry-und-attempt-telemetrie-arbeitspla-01-enger-antigravity-toolschema-retry-mit-vollstandigem-attemptabschluss.md)
+- [Slice 2 – Abschlusskorrektur](archive/orchestrator-stabilization-1-1d/slice-release-1-1d-antigravity-runtime-retry-und-attempt-telemetrie-implement-02-abschlusskorrektur.md)
+
+Slice 01 wurde vollständig validiert, von Claude und Antigravity genehmigt
+und an Commit `7a6c27a` gebunden. Die Abschlusskorrektur schloss `C-02` und
+`C-03`; die fingerprintgebundene Matrix bestand, und Claude genehmigte den
+Korrekturslice. Antigravity erzeugte wegen dreier identischer entfernter
+`/usr/bin/bash`-Runtimefehler keinen Reviewvertrag. Der Lauf wurde deshalb
+transparent administrativ beendet. Dies ist ausdrücklich keine
+Antigravity-Freigabe. Der externe Restfall und die neu erkannten Finding- und
+Operationsidentitätslücken werden im aktiven Erkenntnisdokument fortgeführt.
+
 ### Orchestrator-Stabilisierung 1.1C – Quota-Betrieb und Providerattempt-Telemetrie
 
 Pfad: [`archive/orchestrator-stabilization-1-1c/`](archive/orchestrator-stabilization-1-1c/)

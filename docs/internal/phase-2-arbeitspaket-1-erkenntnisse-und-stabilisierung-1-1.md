@@ -5,9 +5,9 @@ Orchestratorfälle, die nicht im abgeschlossenen Arbeitsauftrag repariert
 werden sollten. Es ist die verbindliche Detailgrundlage für das begrenzte
 Stabilisierungspaket 1.1 vor den weiteren nativen JSON-Arbeitspaketen.
 
-Stand: 2026-08-21
+Stand: 2026-08-22
 
-## Bearbeitungsstand nach Stabilisierungspaketen 1.1A bis 1.1C
+## Bearbeitungsstand nach Stabilisierungspaketen 1.1A bis 1.1D
 
 Die Pakete 1.1A, 1.1B und 1.1C sind auf `master` integriert. Release 1.1C wurde
 auf `feature/orchestrator-stabilization-1-1c` in zwei bewusst getrennten
@@ -28,6 +28,23 @@ umgedeutet. Der Lauf wird zur Vermeidung weiterer kostenpflichtiger
 Wiederholungsreviews nicht fortgesetzt; die Ausnahme und die vollständige
 Historie bleiben im archivierten Gesamtreview erhalten.
 
+Release 1.1D setzte anschließend die enge Tool-Schema-Klassifikation, den
+begrenzten Retry und die vollständige Providerattempt-Telemetrie um. Slice 01
+wurde von Claude und Antigravity genehmigt und an Commit `7a6c27a` gebunden.
+Im branchweiten Review erkannte Codex eine zu permissive zwischenzeitliche
+Provideroperations-ID; Claude öffnete dazu `C-03` und hielt zusätzlich `C-02`
+offen. Die Abschlusskorrektur stellte die fail-closed Inputbindung wieder her
+und ergänzte den fehlenden Network-Usage-Roundtrip. Die autoritative Matrix
+bestand mit zwei erforderlichen Kommandos, und Claude schloss beide Findings.
+
+Antigravity konnte den Korrekturslice dennoch nicht dispositionieren: Drei
+physische Aufrufe mit identischem Input scheiterten in der entfernten Runtime
+mit `remote error: run bash: fork/exec /usr/bin/bash: no such file or
+directory`. Der Lauf wurde deshalb am 22.08.2026 erneut als transparente
+administrative Ausnahme beendet. Dies ist keine Antigravity-Freigabe. Die
+lokal vollständig validierte Korrektur, Claudes Freigabe und die drei
+fehlgeschlagenen Attempts bleiben im archivierten Review nachvollziehbar.
+
 | Erkenntnis | Sachstatus | Erledigt in | Verifikation | Rest |
 |---|---|---|---|---|
 | P2-FU-002 | **GELÖST / AUF MASTER** | 1.1A Slice 1, Commit `5638f6b` | Cache-/Replaytests und Finalreview | keiner |
@@ -37,7 +54,7 @@ Historie bleiben im archivierten Gesamtreview erhalten.
 | P2-FU-024 | **GELÖST / AUF MASTER** | 1.1B Slice 2 und Abschlusskorrektur, Commits `fc44f70`, `64b14e2` | kanonische Pakete, Same-Slice-Korrekturscope und Finalreview | branchweite Finalreview-Evidenzkompaktierung bleibt offen |
 | P2-FU-003 | **GELÖST / AUF MASTER** | 1.1C2 Slice 1, Commit `c8e1788` | Providerattempt-Projektion mit verständlicher Known-/Unknown-Usage-Semantik | keiner |
 | P2-FU-022 | **GELÖST / AUF MASTER** | 1.1C Slice 1, Commit `fac92b0` | Fake-Clock-Tests für Stundenheartbeat und Sieben-Tage-Grenze | keiner |
-| P2-FU-013, Betriebsnachtrag | **TEILWEISE GELÖST** | 1.1C2 Slice 1, Commit `c8e1788` | persistenter Providerattempt-Lebenszyklus und Usage-Projektion | neuer enger `LineNumber`-Runtimefehler sowie Erstaufrufkosten bleiben offen |
+| P2-FU-013, Betriebsnachtrag | **TEILWEISE GELÖST** | 1.1C2 Slice 1 und 1.1D Slice 1, Commits `c8e1788`, `7a6c27a` | persistenter Providerattempt-Lebenszyklus, enge `LineNumber`-Klassifikation und Attempt-Telemetrie | entfernter `/usr/bin/bash`-Fehler blieb über drei Network-Attempts bestehen; autonome Antigravity-Disposition weiterhin offen |
 | P2-FU-025 | **OFFEN** | nach 1.1C | reales Finalreview-Protokoll mit wiederholter identischer Kompaktierung | semantischen Übergangscache und ruhiges Standardlogging umsetzen |
 | P2-FU-026 | **GELÖST / AUF MASTER** | 1.1C2 Self-Hosting-Hotfix | gemeinsame Plan-Handoff-/Reviewpaket-Extraktion, `984 passed` | keiner |
 | P2-FU-027 | **GELÖST / AUF MASTER** | 1.1C2 Self-Hosting-Hotfix | Attestierungsübernahme und Resume-Rekonstruktion, `985 passed` | keiner |
@@ -45,6 +62,10 @@ Historie bleiben im archivierten Gesamtreview erhalten.
 | P2-FU-029 | **GELÖST / AUF MASTER** | 1.1C2 Self-Hosting-Hotfix | Finding-abgeleitete Korrekturpakete, `992 passed` | keiner |
 | P2-FU-030 | **GELÖST / AUF MASTER** | 1.1C2 Abschluss-Hotfix | commitgebundene Korrekturpfade im Finalreview-Preflight, `993 passed` | keiner |
 | P2-FU-031 | **GELÖST / AUF MASTER** | 1.1C2 Abschluss-Hotfix | fingerprintgebundenes `UNEXPECTED_FILE`-Benutzergate, `993 passed` | keiner |
+| P2-FU-032 | **OFFEN** | beobachtet in 1.1D | Plan-Observation bleibt im Planlauf sichtbar | verbindliche Findingidentität über PLAN_ONLY-/IMPLEMENT-Handoff fehlt |
+| P2-FU-033 | **OFFEN** | beobachtet in 1.1D | Rohoutput und Vertragsdiagnose bleiben forensisch erhalten | parsebares Finding aus formal verworfenem Review kann beim Fingerprintwechsel aus der verpflichtenden Disposition verschwinden |
+| P2-FU-034 | **TEILWEISE GELÖST** | 1.1D Self-Hosting-Hotfix | eindeutig gebundene einzelne `VALIDATE`-Zeile wird lokal fail-closed normalisiert | strukturierte Akzeptanztestrevision bei Finding-Reklassifizierung fehlt |
+| P2-FU-035 | **OFFEN** | beobachtet und als permissiver Hotfix in 1.1D zurückgewiesen | unveränderter Input bleibt innerhalb derselben Operation fail-closed gebunden | neue Reviewrevision und technischer Retry besitzen noch keine getrennte, explizite Identität |
 | P2-DEC-001 | **TEILWEISE GELÖST** | 1.1A bis 1.1C | Replay-/Projektionsautorität, Reviewpakete, Quota-Wartepolitik und Providerattempt-Telemetrie umgesetzt | record-first Liveübergänge, Betriebslogging, Finalreview-Deduplizierung und Pfaddigest-Freigaben neu zuschneiden |
 
 Die Statusangaben in diesem Dokument beschreiben den Sachstand. Ein gelöster
@@ -52,24 +73,28 @@ Punkt gilt erst nach seinem Merge zusätzlich als **auf master integriert**.
 Beobachtung, Ursache und frühere Diagnose bleiben auch nach einer Lösung als
 historische Evidenz erhalten.
 
-## Aktuelle Priorisierung nach Abschluss von 1.1C
+## Aktuelle Priorisierung nach Abschluss von 1.1D
 
 Diese Rangfolge ersetzt für die weitere Planung die bei der Entdeckung der
 einzelnen Fälle vergebenen Prioritätsangaben. Jene Angaben bleiben in den
 Detailabschnitten als historische Bewertung erhalten. Maßgeblich für neue
 Arbeitsaufträge ist ausschließlich die folgende Liste.
 
-Die Releasevoraussetzung für den nächsten Arbeitsauftrag ist erfüllt: Der
-vollständig getestete Stand von 1.1C ist auf `master` integriert.
+Der fachlich validierte Stand von 1.1D wird zunächst als administrative
+Ausnahme abgeschlossen, archiviert und auf den Feature-Branch gebunden. Erst
+nach seinem ausdrücklichen Merge gilt er als auf `master` integriert.
 
 | Rang | Erkenntnis | Nächstes überprüfbares Ergebnis | Begründung der Reihenfolge |
 |---|---|---|---|
-| **P0.1** | P2-FU-013 | Den exakt erkannten entfernten Antigravity-Fehler `additional properties 'LineNumber' not allowed` eng klassifizieren, höchstens einmal automatisch wiederholen und jeden physischen Versuch ohne erfundenes Reviewresultat messen. | Der Fehler verhinderte den letzten branchweiten Reviewvertrag von 1.1C2. Er blockiert damit einen autonomen ordnungsgemäßen Abschluss und kann bei Wiederholung erneut Providerkosten erzeugen. |
-| **P0.2** | P2-FU-021 | Eine gemeinsame, idempotente Abschlussoperation für Direkt- und Watchmodus bereitstellen, die Erfolg eindeutig meldet und Task sowie Sidecars genau einmal nach `outbox/done/` überführt. | Ein fachlich abgeschlossener Lauf darf nicht manuell archiviert werden müssen oder als erneut ausführbarer Inbox-Task zurückbleiben. Das ist die zweite unmittelbare Lücke in der autonomen Abschlussfähigkeit. |
-| **P1.1** | offener Restfall zu P2-FU-007 | Die exakt einmal beschriftete einzeilige `REVIEW_EVIDENCE`-Variante lokal und fail-closed normalisieren, ohne `claude_contract_repair` aufzurufen. | Der beobachtete Zusatzaufruf kostete Zeit, Tokens und Geld, obwohl keine fachliche Reparatur nötig war. Der Eingriff ist eng begrenzbar und durch die gespeicherte Realantwort direkt testbar. |
-| **P1.2** | P2-FU-018 | Bereits genehmigte externe Pfade über einen kanonischen pfadspezifischen Diffdigest sicher wiederverwenden; jede Inhaltsänderung verlangt weiterhin ein neues Gate. | Wiederholte sachgleiche Benutzergates verursachten zahlreiche manuelle Unterbrechungen. Die Korrektur ist sicherheitsrelevant und muss deshalb als eigenständiger, adversarial getesteter Slice erfolgen. |
-| **P1.3** | P2-FU-025 | Finalreview-Evidenz pro semantischem Fingerprint genau einmal materialisieren und rollenübergreifend wiederverwenden; Cachetreffer nur unter `--verbose` protokollieren. | Die wiederholte Kompaktierung erzeugt vermeidbare Laufzeit und unbrauchbares Standardlogging. Sie löst derzeit keinen zweiten Provideraufruf aus und steht daher hinter den direkt kosten- oder abschlusswirksamen Fällen. |
-| **P1.4** | P2-FU-020 | Entweder einen strukturierten, von Claude zwingend zu disponierenden Codex-Defektkandidatenvertrag einführen oder die adversariale Codex-Abschlussanalyse entfernen. | Erkannte Defekte dürfen nicht in unverbindlicher Prosa verloren gehen. Die Rollentrennung und das Kostenprofil verlangen vor der Umsetzung jedoch eine bewusste Vertragsentscheidung. |
+| **P0.1** | P2-FU-033 | Formal verworfene, aber eindeutig parsebare Reviewer-Findings content-addressiert quarantänisieren und vor jeder späteren Freigabe durch denselben Reviewer disponieren lassen. | In 1.1D verschwand ein konkreter Claude-Blocker nach einem sachfremden Syntaxfehler und Fingerprintwechsel aus dem verpflichtenden Ledger. Das ist ein correctness- und sicherheitsrelevanter Verlust von Reviewevidenz. |
+| **P0.2** | P2-FU-035 | Eine explizite, fingerprintgebundene Reviewrevision von technischen Retries trennen: innerhalb einer Revision bleibt der Input unveränderlich, eine neue autorisierte Revision erhält eine neue Operationsidentität. | Die zu grobe Identität blockierte einen legitimen neuen Finalreview; der erste Hotfix umging dagegen das Attemptlimit. Beide Extreme sind bereits real reproduziert. |
+| **P0.3** | P2-FU-021 | Eine gemeinsame, idempotente Abschlussoperation für Direkt- und Watchmodus bereitstellen, die Erfolg oder administrative Ausnahme eindeutig meldet und Task sowie Sidecars genau einmal verschiebt. | Auch 1.1D musste trotz validierter Korrektur manuell archiviert werden. Ein fachlich abgeschlossener oder transparent ausgenommener Lauf darf nicht als erneut ausführbarer Inbox-Task zurückbleiben. |
+| **P1.1** | P2-FU-032 | Offene Plan-Observations unveränderlich an Plancommit und Implementierungshandoff binden und im neuen Lauf idempotent importieren. | Hinweise dürfen beim absichtlich getrennten PLAN_ONLY-/IMPLEMENT-Lauf nicht ihre Findingidentität und spätere Dispositionspflicht verlieren. |
+| **P1.2** | P2-FU-034 | Reklassifizierungen um eine strukturierte, versionierte Akzeptanztestrevision erweitern; die enge lokale `VALIDATE`-Normalisierung bleibt nur Kompatibilität. | Der konkrete Lauf ist wiederholbar repariert, der native Vertrag kann einen beim Eskalieren neu erforderlichen Validierungsbefehl aber weiterhin nicht ausdrücken. |
+| **P1.3** | P2-FU-013 | Für wiederholt fehlende entfernte Antigravity-Runtimes nach ausgeschöpftem Retry eine kostenbegrenzte Betriebsentscheidung vorsehen, ohne Reviewresultat zu erfinden. | 1.1D klassifiziert und misst die Fehler korrekt; drei identische `/usr/bin/bash`-Fehler blockierten dennoch erneut die autonome Reviewer-Disposition. |
+| **P1.4** | P2-FU-018 | Bereits genehmigte externe Pfade über einen kanonischen pfadspezifischen Diffdigest sicher wiederverwenden; jede Inhaltsänderung verlangt weiterhin ein neues Gate. | Wiederholte sachgleiche Benutzergates verursachten zahlreiche manuelle Unterbrechungen. Die Korrektur ist sicherheitsrelevant und muss deshalb als eigenständiger, adversarial getesteter Slice erfolgen. |
+| **P1.5** | P2-FU-025 | Finalreview-Evidenz pro semantischem Fingerprint genau einmal materialisieren und rollenübergreifend wiederverwenden; Cachetreffer nur unter `--verbose` protokollieren. | Die wiederholte Kompaktierung erzeugt vermeidbare Laufzeit und unbrauchbares Standardlogging. |
+| **P1.6** | P2-FU-020 | Codex-Defektkandidaten in denselben verpflichtenden Dispositionskanal wie quarantänisierte Reviewerbefunde überführen oder die adversariale Codex-Abschlussanalyse entfernen. | Erkannte Defekte dürfen nicht in unverbindlicher Prosa verloren gehen; P2-FU-033 liefert dafür nun einen konkreteren Persistenzfall. |
 | **P2** | Restumfang von P2-DEC-001 | Die noch nicht record-first arbeitenden Liveübergänge einzeln inventarisieren und anschließend in kleinen, crashgetesteten Paketen auf Recordautorität und deterministische Projektion umstellen. | Das bleibt das wichtigste Architekturziel, ist aber breiter als die unmittelbar beobachteten Betriebsdefekte. Es soll erst nach den P0-/P1-Lücken und nicht als neuer Großumbau umgesetzt werden. |
 
 ### Schnitt für die nächsten Arbeitsaufträge
@@ -78,22 +103,27 @@ Die Punkte werden nicht zu einem einzigen weiteren Stabilisierungspaket
 zusammengezogen. Empfohlen ist folgende Reihenfolge eigenständig reviewbarer
 Aufträge:
 
-1. P2-FU-013 allein: entfernte Antigravity-Runtimefehler, begrenzter Retry und
-   vollständige Attempt-Telemetrie.
-2. P2-FU-021 allein: gemeinsame terminale Finalisierung von Direkt- und
-   Watchmodus einschließlich Crash-/Resume-Tests.
-3. Restfall P2-FU-007 und P2-FU-025 als höchstens zwei Slices eines
-   Reviewkosten-/Evidenzpakets.
-4. P2-FU-018 als eigener sicherheitsrelevanter Pfaddigest-Auftrag.
-5. P2-FU-020 erst nach expliziter Entscheidung zwischen Kandidatenvertrag und
-   Wegfall der Codex-Abschlussanalyse.
-6. Danach P2-DEC-001 neu inventarisieren und nur den nächsten geschlossenen
+1. P2-FU-033 allein: quarantänisierte Reviewer-Findingkandidaten und
+   fingerprintübergreifende Dispositionspflicht.
+2. P2-FU-035 allein: explizite Reviewrevision und unveränderlicher Retryinput.
+3. P2-FU-021 allein: gemeinsame terminale Finalisierung von Direkt- und
+   Watchmodus einschließlich administrativer Ausnahme und Crash-/Resume-Tests.
+4. P2-FU-032 und P2-FU-034 als höchstens zwei kleine Handoff-/Findingvertrags-
+   Slices; nicht gemeinsam mit neuer Fachfunktion.
+5. P2-FU-013 als enger Betriebsentscheidungsauftrag; keine weitere breite
+   Retryklasse und keine erfundene Freigabe.
+6. P2-FU-018 als eigener sicherheitsrelevanter Pfaddigest-Auftrag.
+7. P2-FU-025 sowie der Restfall zu P2-FU-007 als Reviewkostenpaket.
+8. P2-FU-020 erst nach expliziter Entscheidung, ob Reviewer- und
+   Codex-Kandidaten denselben Dispositionskanal verwenden.
+9. Danach P2-DEC-001 neu inventarisieren und nur den nächsten geschlossenen
    Record-first-Übergang beauftragen.
 
 Alle als gelöst ausgewiesenen Punkte sind aus dem aktiven Rückstand entfernt.
 Die Punkte P2-FU-003, P2-FU-022 und P2-FU-026 bis P2-FU-031 sind auf `master`
 integriert. Sie dürfen nicht ohne einen neuen reproduzierbaren Befund erneut
-zum Implementierungsscope werden.
+zum Implementierungsscope werden. Die 1.1D-Änderungen gelten bis zu ihrem
+ausdrücklichen Merge nur als auf dem Feature-Branch gelöst.
 
 ## P2-FU-001 – Vollständiger Antigravity-Reviewvertrag trotz Non-Success verworfen
 
@@ -766,7 +796,7 @@ ersetzen könnte.
 
 ## P2-FU-013 – Entfernte Antigravity-Shell wird als lokale fehlende Binärdatei klassifiziert
 
-**Status:** technische Klassifikation behoben; wiederkehrender Erstfehler und Kostenwirkung offen
+**Status:** Klassifikation, `LineNumber`-Retry und Attempt-Telemetrie umgesetzt; entfernte Shellausfälle und autonome Abschlussentscheidung offen
 **Priorität:** mittel  
 **Beobachtet in:** Lauf `20260819-152415Z`, Arbeitseinheit 4,
 `antigravity_slice_review`, Invocation `0431a2988ce6481fa1c3fa3fd3b846b2`
@@ -837,6 +867,29 @@ bleiben harte Runtimefehler. Regressionstests müssen den unveränderten
 Fingerprint, höchstens zwei physische Versuche, das Ausbleiben eines
 Reviewrecords für den Fehlversuch sowie eine separate Attempt-/Kostenmessung
 belegen.
+
+### Ergebnis von Stabilisierungspaket 1.1D
+
+1.1D führte für die exakte entfernte `LineNumber`-Signatur die enge
+Fehlerklasse `antigravity_tool_schema` ein. Nur diese Klasse erhält höchstens
+einen automatischen Retry; jeder physische Start und Abschluss wird als
+eigener Providerattempt mit normalisierter Usage und Dauer persistiert.
+Historische Ketten bleiben lesbar, und der allgemeine Network-Retryvertrag
+bleibt absichtlich davon getrennt.
+
+Der reale Abschluss zeigte die verbleibende Grenze: Antigravity scheiterte im
+Review des Korrekturslices dreimal hintereinander mit dem entfernten
+`/usr/bin/bash`-Fehler. Weil dieser Fall als allgemeine
+Providerinfrastruktur/Network klassifiziert ist, griffen zwei automatische
+Fortsetzungen und damit drei physische Starts. Alle drei endeten ohne
+Reviewrecord; Attemptstatus und gleicher Inputdigest sind nachvollziehbar.
+
+Die technische Beobachtbarkeit ist damit hergestellt, der autonome Abschluss
+aber nicht. Ein Folgeauftrag darf weder eine weitere breite Retryklasse noch
+eine synthetische Freigabe ergänzen. Er muss stattdessen eine kostenbegrenzte
+Betriebsentscheidung nach ausgeschöpftem Retry modellieren und klar zwischen
+extern nicht verfügbarer Reviewinstanz, fachlicher Ablehnung und ausdrücklich
+autorisierter administrativer Ausnahme unterscheiden.
 
 ## P2-FU-014 – Freigegebene Zwischen-Commits blockieren den Slice-Commit
 
@@ -1589,6 +1642,227 @@ Preflightfehler bleiben technische Bootstrap-Denials. Die Benutzerfreigabe
 wird weiterhin durch strukturierten Gate-Record, exakten Fingerprint und
 Preflight verifiziert. 46 fokussierte Tests und die vollständige Suite mit
 `993 passed` bestätigen die Klassifikation.
+
+## P2-FU-032 – Plan-Observations verlieren am Implementierungshandoff ihre Findingidentität
+
+**Status:** offen nach Stabilisierungspaket 1.1D
+**Priorität:** hoch
+**Beobachtet in:** getrennten `PLAN_ONLY`-/`IMPLEMENT`-Läufen von 1.1C2 und
+1.1D
+
+### Beobachtung
+
+Eine Reviewer-Observation darf einen Planreview nicht blockieren, bleibt aber
+bis zu ihrer späteren Disposition ein reviewer-eigenes Finding. Innerhalb
+eines einzelnen Laufs erzwingt der State-v3-Vertrag diese Eigentümerschaft.
+Beim automatisch erzeugten Implementierungshandoff beginnt jedoch ein neuer
+Run mit neuem State- und Recordkontext:
+
+- Der Finding-Record bleibt im Audit des Planlaufs.
+- Der Handoff bindet Arbeitsplan, Plancommit, Zielbranch, Taskscope und
+  Slices, aber nicht die offenen Findings des Planreviews.
+- Codex kann die Observation aus dem Plandokument berücksichtigen, muss aber
+  keine strukturierte `FINDING_RESPONSE` für dieselbe Findingidentität liefern.
+- Der ursprüngliche Reviewer muss sie im Implementierungslauf nicht mehr
+  schließen oder eskalieren. Eine formal offene Observation kann dadurch
+  historisch archiviert werden, während der Folgeauftrag ohne sie endet.
+
+Die manuelle Übernahme einzelner Hinweise in einen Folgeauftrag ist kein
+allgemeiner Findingvertrag.
+
+### Zielvertrag
+
+1. Offene Plan-Findings werden unveränderlich an Plancommit, Ursprungsrun,
+   Reviewer und Handoff gebunden.
+2. Der Implementierungslauf importiert sie idempotent mit unveränderter ID,
+   Klasse, Beschreibung, Akzeptanzanforderung und Eigentümerschaft.
+3. Jede Observation erhält einen spätesten Dispositionspunkt: konkreter Slice
+   oder branchweiter Finalreview.
+4. Codex antwortet, darf das Finding aber nicht schließen oder
+   reklassifizieren. Nur der ursprüngliche Reviewer darf dies.
+5. Ein positiver Antigravity-Finalreview bleibt ausgeschlossen, solange ein
+   importiertes Finding beider Reviewer offen ist.
+6. Fremde, nicht commitgebundene oder bereits geschlossene Findings werden
+   nicht importiert; Resume und erneute Handoff-Auswertung erzeugen keine
+   Dubletten.
+
+### Erforderliche Regressionstests
+
+- Claude öffnet im Planreview eine Observation und genehmigt den Plan; der
+  erzeugte Handoff bindet genau diese Findingidentität an den Plancommit.
+- Der Implementierungslauf verlangt Codex' Antwort und anschließend die
+  Disposition durch Claude.
+- Bleibt das Finding offen, sind Claude- und Antigravity-Finalfreigaben
+  unmöglich.
+- Watcher-Fortsetzung, Direkt-Resume und Handoff-Wiederholung importieren
+  genau einen Record.
+- Findings eines anderen Plans, Runs oder Reviewers werden fail-closed
+  abgewiesen.
+
+## P2-FU-033 – Parsebares Finding aus formal verworfenem Review verliert seine Dispositionspflicht
+
+**Status:** offen nach Stabilisierungspaket 1.1D
+**Priorität:** kritisch
+**Beobachtet in:** Claude-Slice-Review von 1.1D, Work Unit 02
+
+### Beobachtung
+
+Eine physisch erfolgreiche Claude-Antwort enthielt ein formal korrektes neues
+Blocker-Finding und zusätzlich die ungültige Zeile
+`FINDING_STATUS: none reported by claude previously in this packet.`. Der
+Orchestrator verwarf den gesamten Reviewvertrag zu Recht fail-closed. Er
+persistierte Diagnostic, Outputdigest und Providerattempt, übernahm das
+parsebare `NEW_FINDING` aber weder autoritativ noch als zu disponierenden
+Kandidaten.
+
+Nach einer lokalen Parserkorrektur änderte sich der Fingerprint. Der neue
+Claude-Review begann mit leerem Ledger, verwendete dieselbe Finding-ID für
+andere Hinweise und genehmigte den Slice. Ob die technische These des ersten
+Blockers zutraf, ist für den Vertragsdefekt zweitrangig: Der zuständige
+Reviewer musste sie nie bestätigen, als durch den neuen Diff behoben schließen
+oder begründet verwerfen.
+
+Damit kann ein konkreter Reviewerbefund durch einen sachfremden Syntaxfehler
+und Fingerprintwechsel aus der verpflichtenden Disposition verschwinden. Das
+native Agenten-JSON reduziert die Entstehungswahrscheinlichkeit solcher
+Syntaxfehler, ersetzt aber nicht die erforderliche Failed-Output-Provenienz.
+
+### Zielvertrag
+
+1. Ein ungültiger Gesamtvertrag bewirkt weiterhin keine Freigabe und keine
+   autoritative Findingtransition.
+2. Der vollständige Rohoutput wird vor der Vertragsprüfung
+   content-addressiert mit Reviewer, Operation, Inputdigest, Fingerprint,
+   Providerabschluss und Vertragsdiagnose gebunden.
+3. Eindeutig parsebare `NEW_FINDING`-Records werden als nicht autoritative,
+   quarantänisierte Kandidaten mit reservierter Finding-ID persistiert.
+4. Derselbe gespeicherte Output kann nach einer deterministischen
+   Parserkorrektur ohne Provideraufruf erneut validiert werden.
+5. Bei echtem Fingerprintwechsel muss derselbe Reviewer jeden Kandidaten
+   bestätigen, schließen oder begründet verwerfen. Bis dahin sind
+   ID-Wiederverwendung und positive Freigabe unzulässig.
+6. Bestätigte Kandidaten werden genau einmal in das autoritative Ledger
+   übernommen; freie Prosa, beschädigte Marker und fremde IDs bleiben reine
+   Diagnose.
+
+### Erforderliche Regressionstests
+
+- Die exakt beobachtete Antwort bleibt als Reviewentscheid ungültig, bindet
+  das syntaktisch vollständige `NEW_FINDING` aber als Kandidaten an Output und
+  Fingerprint.
+- Lokale Neuvalidierung desselben Outputs öffnet das Finding höchstens einmal
+  und startet keinen Provider.
+- Nach Fingerprintwechsel kann Claude nicht genehmigen oder dieselbe ID neu
+  vergeben, bevor der Kandidat disponiert ist.
+- Prozessabbruch, Watcher-Neustart und Resume bewahren genau einen Kandidaten.
+- Freie Prosa, fremdes ID-Präfix und widersprüchliche Teilrecords erzeugen
+  keinen Findingkandidaten.
+
+## P2-FU-034 – Reklassifizierte Findings besitzen keinen nativen Akzeptanztest-Updatepfad
+
+**Status:** konkreter Lauf lokal stabilisiert; nativer Vertrag offen
+**Priorität:** hoch
+**Beobachtet in:** Claude-Finalreview von 1.1D
+
+### Beobachtung
+
+Claude schloss `C-01`, reklassifizierte die vorhandene Observation `C-02` zum
+Blocker, hielt sie offen und lehnte den Branch ab. Den nun gewünschten
+fokussierten Befehl gab Claude als eigenständige `VALIDATE: [...]`-Zeile aus.
+Der Providerprozess war erfolgreich, der Textvertrag verwarf den Output aber
+mit `unknown state-v3 contract marker VALIDATE`.
+
+`VALIDATE` ist derzeit nur als Akzeptanztest eines `NEW_FINDING` zulässig.
+`FINDING_RECLASSIFIED` und `FINDING_STATUS` können den unveränderlichen
+Akzeptanztest eines bestehenden Findings nicht versioniert ergänzen. Der
+1.1D-Hotfix faltet genau eine syntaktisch gültige `VALIDATE`-Zeile nur bei
+eindeutiger Bindung an ein eigenes offenes, gleichzeitig zum Blocker
+reklassifiziertes Finding und eine negative Entscheidung in die Begründung.
+Der alte Akzeptanztest bleibt autoritativ; mehrdeutige Formen bleiben
+fail-closed. Das bringt den Realfall weiter, ersetzt aber keinen nativen
+Updatevertrag.
+
+### Zielvertrag
+
+1. Der Eigentümer kann beim Reklassifizieren zum Blocker einen neuen
+   Akzeptanztest strukturiert angeben.
+2. Die Änderung wird als eigene Findingrevision mit altem und neuem Test,
+   Reviewer, Fingerprint und Begründung persistiert.
+3. Nur konfigurierte Kommandofamilien und negative Entscheidungen dürfen
+   einen ausführbaren Test hinzufügen; ohne Update bleibt der alte Test
+   autoritativ.
+4. Der Matrixselektor verwendet ausschließlich die aktuelle autoritative
+   Findingrevision.
+5. Resume und Replay wenden die Revision genau einmal an; eigenständige oder
+   mehrdeutige `VALIDATE`-Marker bleiben ungültig.
+
+### Erforderliche Regressionstests
+
+- Observation wird durch ihren Eigentümer zum Blocker reklassifiziert und
+  ergänzt genau einen konfigurierten Matrixbefehl.
+- Reklassifizierung ohne Update behält den bisherigen Prosetest.
+- Fremder Reviewer, positive Entscheidung, nicht konfigurierte Befehle,
+  Shellstrings und mehrere ungebundene Marker werden abgewiesen.
+- Der gespeicherte 1.1D-Realoutput wird eng normalisiert, ohne Akzeptanztext,
+  Findingstatus oder Verdict zu verändern.
+
+## P2-FU-035 – Reviewrevision und technischer Providerretry besitzen keine eindeutige gemeinsame Identität
+
+**Status:** permissiver Hotfix zurückgenommen; Architekturrest offen
+**Priorität:** kritisch
+**Beobachtet in:** Rücksprung zum Codex-Finalreview von 1.1D
+
+### Beobachtung
+
+Nach einem genehmigten Self-Hosting-Hotfix sprang der Finalreview korrekt zu
+Codex zurück, weil der neue Repositoryfingerprint noch keinen Codex-Bericht
+besaß. Der neue Prompt hatte einen neuen `input_digest`; als
+`binding_fingerprint` wurde jedoch weiterhin der grobe, unveränderte
+Task-Digest verwendet. Die Operations-ID aus Run, Work Unit, Rolle, Operation
+und dieser Bindung war deshalb identisch mit dem abgeschlossenen alten
+Finalreview. Die Bridge lehnte den Start korrekt mit `provider attempt
+immutable binding differs from its first attempt` ab.
+
+Ein erster Hotfix nahm den Input-Digest in die Operations-ID auf und erreichte
+damit den Providerstart. Codex und Claude erkannten jedoch unabhängig den
+entgegengesetzten Defekt: Jeder geänderte Digest begann nun unkontrolliert eine
+neue Operation mit Attempt 1 und konnte dadurch den Zwei-Start-Deckel umgehen.
+`C-03` blockierte den Branch. Die Abschlusskorrektur nahm diesen permissiven
+Hotfix zurück und stellte die unveränderliche Inputbindung wieder her. Damit
+ist der Retryvertrag wieder sicher, die Identität einer legitim neuen
+Reviewrevision aber weiterhin nicht nativ modelliert.
+
+### Zielvertrag
+
+1. Der Orchestrator erzeugt eine explizite, unveränderliche semantische
+   Reviewrevision, gebunden an den tatsächlich geprüften Repositoryfingerprint
+   und den Workflowübergang.
+2. Die logische Provideroperations-ID enthält diese Revision, nicht den
+   Input-Digest als frei rotierbaren Resetmechanismus.
+3. Innerhalb derselben Revision bleiben Input-Digest und übrige Bindings
+   unveränderlich; Retry und Resume behalten Operations-ID und fortlaufende
+   Attemptnummer.
+4. Nur ein autorisierter neuer Reviewübergang erzeugt eine neue Revision mit
+   Attempt 1. Transportpfade, erneute Messung oder technische Fehler dürfen
+   dies nicht.
+5. Alte Recordketten bleiben lesbar. Mehrdeutige alte und neue Identitäten
+   werden fail-closed abgewiesen.
+6. Replay und Projektion unterscheiden Revisionen und Attempts
+   deterministisch; Attemptlimits gelten pro autorisierter Revision und
+   identischem semantischem Input.
+
+### Erforderliche Regressionstests
+
+- Unveränderter Retry und Resume setzen dieselbe Operation mit nächster
+  Attemptnummer fort; geänderter Input innerhalb derselben Revision stoppt.
+- Fingerprintgebundener Rücksprung von Claude zu Codex erzeugt genau eine neue
+  autorisierte Revision und erreicht den Providerstart.
+- Nur ein anderer Input-Digest ohne neuen Übergangsrecord erzeugt keine neue
+  Operation.
+- Legacy-Identität wird bei vollständiger Übereinstimmung fortgesetzt;
+  konkurrierende Identitäten bleiben fail-closed.
+- Network- und Antigravity-Toolschema-Retries können ihr Limit nicht durch
+  volatile Eingabekomponenten zurücksetzen.
 
 ## P2-DEC-001 – Stabilisierungspaket 1.1 vor weiterer Protokolloberfläche
 

@@ -239,3 +239,20 @@ def test_provider_attempt_phase_and_usage_are_fail_closed() -> None:
     succeeded["status"] = "started"
     with pytest.raises(ArtifactValidationError, match="schema validation failed"):
         validate_artifact_document(succeeded)
+
+
+def test_failed_network_attempt_with_usage_roundtrips_model_and_schema() -> None:
+    failed = _record(
+        ProviderAttemptPayload(
+            Role.CLAUDE, Role.CLAUDE, "claude_slice_review", "1",
+            "provider-operation-network", DIGEST, "measurement-network",
+            "b" * 64, 1, "failed", CREATED_AT,
+            "2026-08-18T10:30:01+00:00", 1.0, "network",
+            ProviderUsagePayload(input_tokens=8, output_tokens=1, turns=1),
+        )
+    )
+
+    encoded = failed.to_dict()
+    validate_artifact_document(encoded)
+
+    assert ArtifactRecord.from_dict(encoded) == failed

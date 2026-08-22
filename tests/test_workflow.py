@@ -2094,6 +2094,103 @@ def test_empty_finding_status_remains_fail_closed_with_own_previous_finding() ->
         validate_review_response(normalized.output, contract, (previous,))
 
 
+def test_standalone_validate_is_folded_for_one_open_reclassified_blocker() -> None:
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    previous = FindingRecord(
+        finding_id="C-02",
+        finding_class=FindingClass.OBSERVATION,
+        status=FindingStatus.OPEN,
+        summary="failed attempts with usage lack a general regression",
+        acceptance_test="add a network failure usage round-trip test",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
+    output = "\n".join(
+        (
+            "REVIEWER: claude",
+            f"TEST_FILES_TOUCHED: {TEST_FILE}",
+            "FINDING_RECLASSIFIED: C-02 | BLOCKER | gap remains actionable",
+            "FINDING_STATUS: C-02 | OPEN | regression is still missing",
+            'VALIDATE: ["python3", "-m", "pytest", "tests/test_agent_runtime.py", "-v"]',
+            "REVIEW_EVIDENCE: usage contract | stale attribution | failed retry",
+            "FINAL_APPROVAL: NO",
+            "STATUS: DONE",
+        )
+    )
+    contract = StepContract(
+        name="work-unit-3-claude_final_review",
+        reviewer=AgentRole.CLAUDE,
+        approval_marker=ApprovalMarker.FINAL,
+        slice_id="FINAL",
+        round_number=1,
+        review_fingerprint=changes.fingerprint,
+        validation_attestation=_attestation(changes),
+        expected_test_files=(TEST_FILE,),
+        test_changes_approved=True,
+        existing_finding_ids=("C-02",),
+    )
+
+    normalized = normalize_review_contract(
+        output, contract, (previous,), provider_completed=True
+    )
+    result = validate_review_response(normalized.output, contract, (previous,))
+
+    assert normalized.changes == (
+        "folded_standalone_validate_into_reclassification",
+    )
+    assert "\nVALIDATE:" not in normalized.output
+    assert "Focused validation requested: VALIDATE:" in normalized.output
+    updated = next(item for item in result.findings if item.finding_id == "C-02")
+    assert updated.finding_class is FindingClass.BLOCKER
+    assert updated.status is FindingStatus.OPEN
+    assert updated.acceptance_test == previous.acceptance_test
+    assert result.approval is False
+
+
+def test_standalone_validate_remains_fail_closed_when_binding_is_ambiguous() -> None:
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    previous = FindingRecord(
+        finding_id="C-02",
+        finding_class=FindingClass.OBSERVATION,
+        status=FindingStatus.OPEN,
+        summary="failed attempts with usage lack a general regression",
+        acceptance_test="add a network failure usage round-trip test",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
+    output = "\n".join(
+        (
+            "REVIEWER: claude",
+            f"TEST_FILES_TOUCHED: {TEST_FILE}",
+            "FINDING_STATUS: C-02 | OPEN | regression is still missing",
+            'VALIDATE: ["python3", "-m", "pytest", "tests/test_agent_runtime.py", "-v"]',
+            "REVIEW_EVIDENCE: usage contract | stale attribution | failed retry",
+            "FINAL_APPROVAL: NO",
+            "STATUS: DONE",
+        )
+    )
+    contract = StepContract(
+        name="work-unit-3-claude_final_review",
+        reviewer=AgentRole.CLAUDE,
+        approval_marker=ApprovalMarker.FINAL,
+        slice_id="FINAL",
+        round_number=1,
+        review_fingerprint=changes.fingerprint,
+        validation_attestation=_attestation(changes),
+        expected_test_files=(TEST_FILE,),
+        test_changes_approved=True,
+        existing_finding_ids=("C-02",),
+    )
+
+    normalized = normalize_review_contract(
+        output, contract, (previous,), provider_completed=True
+    )
+
+    assert normalized.changes == ()
+    with pytest.raises(
+        ContractValidationError, match="unknown state-v3 contract marker VALIDATE"
+    ):
+        validate_review_response(normalized.output, contract, (previous,))
+
+
 def test_missing_verdict_stops_without_repair_or_antigravity() -> None:
     changes = _changes("1", "src/early.py", TEST_FILE)
     missing = "\n".join(
