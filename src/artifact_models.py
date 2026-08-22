@@ -18,6 +18,13 @@ from pathlib import Path, PurePosixPath
 import re
 from typing import Any, ClassVar, Mapping, Sequence, TypeAlias
 
+from schema_validation import (
+    SchemaDefinitionError,
+    SchemaMismatch,
+    check_schema,
+    validate_schema_document,
+)
+
 SCHEMA_VERSION = "1"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
@@ -744,7 +751,10 @@ def load_schema() -> dict[str, Any]:
     schema = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
     if not isinstance(schema, dict):
         raise ArtifactValidationError("bundled artifact schema must be a JSON object")
-    _check_schema_node(schema, schema, "<schema>")
+    try:
+        check_schema(schema)
+    except SchemaDefinitionError as error:
+        raise ArtifactValidationError(str(error)) from error
     return schema
 
 
@@ -758,197 +768,12 @@ def validate_artifact_document(document: Mapping[str, Any]) -> None:
     """
     schema = load_schema()
     try:
-        _validate_schema_node(document, schema, schema, ())
-    except _SchemaMismatch as error:
+        validate_schema_document(document, schema)
+    except SchemaMismatch as error:
         location = ".".join(str(part) for part in error.path) or "<record>"
         raise ArtifactValidationError(
             f"schema validation failed at {location}: {error.message}"
         ) from None
-
-
-@dataclass(frozen=True, slots=True)
-class _SchemaMismatch(Exception):
-    path: tuple[str | int, ...]
-    message: str
-
-
-_SCHEMA_ANNOTATIONS = {"$schema", "$id", "title", "description"}
-_SCHEMA_KEYWORDS = {
-    "$ref", "$defs", "type", "enum", "const", "pattern", "format",
-    "minLength", "minimum", "required", "properties",
-    "additionalProperties", "items", "minItems", "maxItems", "uniqueItems",
-    "allOf", "anyOf", "oneOf", "if", "then", "else",
-}
-
-
-def _check_schema_node(node: Any, root: Mapping[str, Any], location: str) -> None:
-    if not isinstance(node, dict):
-        raise ArtifactValidationError(f"schema definition at {location} must be an object")
-    unknown = set(node) - _SCHEMA_ANNOTATIONS - _SCHEMA_KEYWORDS
-    if unknown:
-        raise ArtifactValidationError(
-            f"unsupported schema keyword at {location}: {sorted(unknown)[0]}"
-        )
-    reference = node.get("$ref")
-    if reference is not None:
-        if not isinstance(reference, str) or not reference.startswith("#/"):
-            raise ArtifactValidationError(f"schema reference at {location} must be local")
-        _resolve_schema_reference(root, reference)
-    definitions = node.get("$defs", {})
-    if not isinstance(definitions, dict):
-        raise ArtifactValidationError(f"$defs at {location} must be an object")
-    for name, child in definitions.items():
-        _check_schema_node(child, root, f"{location}.$defs.{name}")
-    properties = node.get("properties", {})
-    if not isinstance(properties, dict):
-        raise ArtifactValidationError(f"properties at {location} must be an object")
-    for name, child in properties.items():
-        _check_schema_node(child, root, f"{location}.properties.{name}")
-    items = node.get("items")
-    if items is not None:
-        _check_schema_node(items, root, f"{location}.items")
-    additional = node.get("additionalProperties")
-    if additional is not None and not isinstance(additional, bool):
-        _check_schema_node(additional, root, f"{location}.additionalProperties")
-    for keyword in ("allOf", "anyOf", "oneOf"):
-        branches = node.get(keyword, [])
-        if not isinstance(branches, list):
-            raise ArtifactValidationError(f"{keyword} at {location} must be an array")
-        for index, child in enumerate(branches):
-            _check_schema_node(child, root, f"{location}.{keyword}[{index}]")
-    for keyword in ("if", "then", "else"):
-        child = node.get(keyword)
-        if child is not None:
-            _check_schema_node(child, root, f"{location}.{keyword}")
-
-
-def _resolve_schema_reference(root: Mapping[str, Any], reference: str) -> Mapping[str, Any]:
-    current: Any = root
-    for encoded_part in reference[2:].split("/"):
-        part = encoded_part.replace("~1", "/").replace("~0", "~")
-        if not isinstance(current, dict) or part not in current:
-            raise ArtifactValidationError(f"unresolved local schema reference: {reference}")
-        current = current[part]
-    if not isinstance(current, dict):
-        raise ArtifactValidationError(f"schema reference does not target an object: {reference}")
-    return current
-
-
-def _validate_schema_node(
-    value: Any,
-    schema: Mapping[str, Any],
-    root: Mapping[str, Any],
-    path: tuple[str | int, ...],
-) -> None:
-    reference = schema.get("$ref")
-    if reference is not None:
-        _validate_schema_node(value, _resolve_schema_reference(root, reference), root, path)
-
-    if "const" in schema and not _json_equal(value, schema["const"]):
-        raise _SchemaMismatch(path, f"must equal {schema['const']!r}")
-    if "enum" in schema and not any(_json_equal(value, item) for item in schema["enum"]):
-        raise _SchemaMismatch(path, f"must be one of {schema['enum']!r}")
-
-    expected = schema.get("type")
-    if expected is not None:
-        expected_types = expected if isinstance(expected, list) else [expected]
-        if not any(_matches_json_type(value, name) for name in expected_types):
-            raise _SchemaMismatch(path, f"must have JSON type {' or '.join(expected_types)}")
-
-    if isinstance(value, str):
-        if len(value) < schema.get("minLength", 0):
-            raise _SchemaMismatch(path, "must not be empty")
-        pattern = schema.get("pattern")
-        if pattern is not None and re.search(pattern, value) is None:
-            raise _SchemaMismatch(path, f"does not match pattern {pattern!r}")
-        if schema.get("format") == "date-time":
-            try:
-                _require_timestamp(value, "timestamp")
-            except ArtifactValidationError as error:
-                raise _SchemaMismatch(path, str(error)) from None
-
-    if isinstance(value, int) and not isinstance(value, bool):
-        if "minimum" in schema and value < schema["minimum"]:
-            raise _SchemaMismatch(path, f"must be at least {schema['minimum']}")
-
-    if isinstance(value, list):
-        if len(value) < schema.get("minItems", 0):
-            raise _SchemaMismatch(path, f"must contain at least {schema['minItems']} item(s)")
-        if "maxItems" in schema and len(value) > schema["maxItems"]:
-            raise _SchemaMismatch(path, f"must contain at most {schema['maxItems']} item(s)")
-        if schema.get("uniqueItems"):
-            encoded = [canonical_json(item) for item in value]
-            if len(encoded) != len(set(encoded)):
-                raise _SchemaMismatch(path, "must contain unique items")
-        item_schema = schema.get("items")
-        if item_schema is not None:
-            for index, item in enumerate(value):
-                _validate_schema_node(item, item_schema, root, (*path, index))
-
-    if isinstance(value, dict):
-        required = schema.get("required", [])
-        for name in required:
-            if name not in value:
-                raise _SchemaMismatch((*path, name), "is required")
-        properties = schema.get("properties", {})
-        if schema.get("additionalProperties") is False:
-            extras = set(value) - set(properties)
-            if extras:
-                name = sorted(extras)[0]
-                raise _SchemaMismatch((*path, name), "is not an allowed property")
-        additional = schema.get("additionalProperties")
-        for name, child in value.items():
-            if name in properties:
-                _validate_schema_node(child, properties[name], root, (*path, name))
-            elif isinstance(additional, dict):
-                _validate_schema_node(child, additional, root, (*path, name))
-
-    for branch in schema.get("allOf", []):
-        _validate_schema_node(value, branch, root, path)
-    if "anyOf" in schema and not any(
-        _schema_branch_matches(value, branch, root, path) for branch in schema["anyOf"]
-    ):
-        raise _SchemaMismatch(path, "does not match any allowed schema")
-    if "oneOf" in schema:
-        matches = sum(
-            _schema_branch_matches(value, branch, root, path) for branch in schema["oneOf"]
-        )
-        if matches != 1:
-            raise _SchemaMismatch(path, "must match exactly one allowed schema")
-    condition = schema.get("if")
-    if condition is not None:
-        keyword = "then" if _schema_branch_matches(value, condition, root, path) else "else"
-        if keyword in schema:
-            _validate_schema_node(value, schema[keyword], root, path)
-
-
-def _schema_branch_matches(
-    value: Any,
-    schema: Mapping[str, Any],
-    root: Mapping[str, Any],
-    path: tuple[str | int, ...],
-) -> bool:
-    try:
-        _validate_schema_node(value, schema, root, path)
-    except _SchemaMismatch:
-        return False
-    return True
-
-
-def _matches_json_type(value: Any, expected: str) -> bool:
-    return {
-        "object": isinstance(value, dict),
-        "array": isinstance(value, list),
-        "string": isinstance(value, str),
-        "integer": isinstance(value, int) and not isinstance(value, bool),
-        "number": isinstance(value, (int, float)) and not isinstance(value, bool),
-        "boolean": isinstance(value, bool),
-        "null": value is None,
-    }.get(expected, False)
-
-
-def _json_equal(left: Any, right: Any) -> bool:
-    return type(left) is type(right) and left == right
 
 
 def _payload_from_dict(record_type: RecordType, raw: Mapping[str, Any]) -> ArtifactPayload:

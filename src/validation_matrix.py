@@ -67,7 +67,7 @@ def _finding_validation_command(value: list[str]) -> "ValidationCommand":
     return ValidationCommand(argv=tuple(value))
 
 
-def _matches_validation_family(
+def matches_validation_family(
     argv: tuple[str, ...], prefix: tuple[str, ...]
 ) -> bool:
     if argv[: len(prefix)] == prefix:
@@ -307,7 +307,7 @@ def _finding_validation_commands(
                 f"finding {finding.finding_id} has invalid VALIDATE command: {exc}"
             ) from exc
         if not any(
-            _matches_validation_family(command.argv, prefix)
+            matches_validation_family(command.argv, prefix)
             for prefix in allowed_prefixes
         ):
             allowed = ", ".join(shlex.join(prefix) for prefix in allowed_prefixes)

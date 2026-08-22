@@ -1,0 +1,597 @@
+from __future__ import annotations
+
+from copy import deepcopy
+from dataclasses import replace
+import hashlib
+
+import pytest
+
+from contracts import (
+    AgentRole,
+    AnchorRecord,
+    ApprovalMarker,
+    FindingClass,
+    FindingOrigin,
+    FindingRecord,
+    FindingStatus,
+    ValidationAttestation,
+    ValidationCommandSpec,
+    ValidationRecord,
+    ValidationStatus,
+)
+from gates import detect_anchor_changes
+from native_review_contract import (
+    NativeFinding,
+    NativeProseAcceptance,
+    NativeReviewContext,
+    NativeReviewContractError,
+    NativeReviewErrorCode,
+    NativeReviewResult,
+    NativeStopResult,
+    native_response_to_contract_result,
+    parse_native_contract_result,
+    parse_native_review_response,
+)
+from validation_matrix import (
+    ValidationCommand,
+    ValidationMatrix,
+    select_validation_request,
+)
+
+
+FINGERPRINT = "a" * 64
+
+
+def _attestation() -> ValidationAttestation:
+    command = "python3 -m pytest tests/ -v"
+    return ValidationAttestation(
+        attestation_id="validation-native",
+        diff_fingerprint=FINGERPRINT,
+        expected_commands=(command,),
+        records=(ValidationRecord(ValidationStatus.PASS, command, 0, "passed"),),
+        output_digest=hashlib.sha256(b"passed").hexdigest(),
+        summary="1 passed",
+        command_specs=(
+            ValidationCommandSpec(argv=("python3", "-m", "pytest", "tests/", "-v")),
+        ),
+    )
+
+
+def _context(
+    *,
+    reviewer: AgentRole = AgentRole.CLAUDE,
+    approval: ApprovalMarker = ApprovalMarker.SLICE,
+    previous: tuple[FindingRecord, ...] = (),
+    test_files: tuple[str, ...] = (),
+    tests_approved: bool = False,
+    allow_observations: bool = True,
+    anchor_origin: str | None = "approved-plan-v1",
+) -> NativeReviewContext:
+    return NativeReviewContext(
+        run_id="run-native",
+        work_unit_id="work-unit-1",
+        operation=f"{reviewer.value}_slice_review",
+        diff_fingerprint=FINGERPRINT,
+        reviewer=reviewer,
+        approval_marker=approval,
+        slice_id="1",
+        round_number=2,
+        previous_findings=previous,
+        validation_attestation=_attestation(),
+        test_files=test_files,
+        test_changes_approved=tests_approved,
+        allow_new_observations=allow_observations,
+        anchor_origin=anchor_origin,
+        validation_command_prefixes=(("python3", "-m", "pytest"),),
+    )
+
+
+def _review(context: NativeReviewContext, *, approved: bool = True) -> dict[str, object]:
+    return {
+        "schema_version": "native-agent-review-result-v1",
+        "result_type": "review_result",
+        "request_id": context.request_id,
+        "reviewer": context.reviewer.value,
+        "decision": "approved" if approved else "denied",
+        "new_findings": [],
+        "status_changes": [],
+        "reclassifications": [],
+        "anchors": [],
+        "review_evidence": {
+            "dimensions": "correctness, failure paths, resume",
+            "largest_residual_risk": "later adapter integration",
+            "break_condition": "a mismatched response is accepted",
+        },
+        "pre_mortem": "A future adapter could pass the wrong context.",
+    }
+
+
+def _finding(
+    finding_id: str,
+    reporter: AgentRole,
+    *,
+    status: FindingStatus = FindingStatus.OPEN,
+    finding_class: FindingClass = FindingClass.BLOCKER,
+) -> FindingRecord:
+    return FindingRecord(
+        finding_id=finding_id,
+        finding_class=finding_class,
+        status=status,
+        summary="Existing finding",
+        acceptance_test="Focused regression",
+        origin=FindingOrigin("1", 1, reporter),
+        status_rationale="Closed earlier" if status is FindingStatus.CLOSED else None,
+    )
+
+
+def _assert_error(
+    document: dict[str, object],
+    context: NativeReviewContext,
+    code: NativeReviewErrorCode,
+) -> None:
+    with pytest.raises(NativeReviewContractError) as raised:
+        parse_native_contract_result(document, context)
+    assert raised.value.code is code
+
+
+@pytest.mark.parametrize("reviewer", (AgentRole.CLAUDE, AgentRole.ANTIGRAVITY))
+def test_minimal_positive_review_converts_deterministically(reviewer: AgentRole) -> None:
+    context = _context(reviewer=reviewer)
+    document = _review(context)
+    first = parse_native_contract_result(document, context)
+    second = parse_native_contract_result(deepcopy(document), context)
+    assert first == second
+    assert first.approval is True
+    assert first.validation is context.validation_attestation
+    assert first.evidence is not None
+    assert first.red_state_followup_slice is None
+
+
+def test_new_blocker_uses_exact_context_origin_and_denies() -> None:
+    context = _context()
+    document = _review(context, approved=False)
+    document["new_findings"] = [
+        {
+            "finding_id": "C-01",
+            "finding_class": "BLOCKER",
+            "summary": "Native response may be misbound",
+            "acceptance_test": {"kind": "prose", "text": "Reject wrong request id"},
+        }
+    ]
+    result = parse_native_contract_result(document, context)
+    assert result.approval is False
+    assert len(result.findings) == 1
+    assert result.findings[0].origin == FindingOrigin("1", 2, AgentRole.CLAUDE)
+
+
+def test_request_and_reviewer_are_bound_to_context() -> None:
+    context = _context()
+    wrong_request = _review(context)
+    wrong_request["request_id"] = "native-review-request-" + "b" * 64
+    _assert_error(wrong_request, context, NativeReviewErrorCode.REQUEST_MISMATCH)
+
+    wrong_reviewer = _review(context)
+    wrong_reviewer["reviewer"] = "antigravity"
+    _assert_error(wrong_reviewer, context, NativeReviewErrorCode.REVIEWER_MISMATCH)
+
+    changed_round = replace(context, round_number=3)
+    assert changed_round.request_id != context.request_id
+    changed_attestation = replace(
+        context,
+        validation_attestation=replace(
+            context.validation_attestation, summary="same id, changed evidence"
+        ),
+    )
+    assert changed_attestation.request_id != context.request_id
+
+
+def test_validation_command_reaches_existing_matrix_as_identical_argv() -> None:
+    context = _context()
+    document = _review(context, approved=False)
+    argv = ("python3", "-m", "pytest", "tests/test_native_review_contract.py", "-v")
+    document["new_findings"] = [
+        {
+            "finding_id": "C-01",
+            "finding_class": "BLOCKER",
+            "summary": "Focused native regression required",
+            "acceptance_test": {
+                "kind": "validation_command",
+                "argv": list(argv),
+            },
+        }
+    ]
+    result = parse_native_contract_result(document, context)
+    assert result.findings[0].acceptance_test == (
+        'VALIDATE: ["python3","-m","pytest",'
+        '"tests/test_native_review_contract.py","-v"]'
+    )
+    request = select_validation_request(
+        ValidationMatrix(
+            default_command=ValidationCommand(
+                argv=("python3", "-m", "pytest", "tests/", "-v")
+            )
+        ),
+        diff_fingerprint=FINGERPRINT,
+        changed_paths=("src/native_review_contract.py",),
+        findings=result.findings,
+    )
+    assert request.commands[-1].argv == argv
+
+
+def test_observation_cannot_carry_validation_command() -> None:
+    context = _context()
+    document = _review(context, approved=False)
+    document["new_findings"] = [
+        {
+            "finding_id": "C-01",
+            "finding_class": "OBSERVATION",
+            "summary": "Future hardening",
+            "acceptance_test": {
+                "kind": "validation_command",
+                "argv": ["python3", "-m", "pytest", "tests/", "-v"],
+            },
+        }
+    ]
+    _assert_error(document, context, NativeReviewErrorCode.ACCEPTANCE_INVALID)
+
+
+@pytest.mark.parametrize(
+    ("reviewer", "finding_id"),
+    ((AgentRole.CLAUDE, "A-01"), (AgentRole.ANTIGRAVITY, "C-01")),
+)
+def test_new_finding_id_must_belong_to_reviewer(
+    reviewer: AgentRole, finding_id: str
+) -> None:
+    context = _context(reviewer=reviewer)
+    document = _review(context, approved=False)
+    document["new_findings"] = [
+        {
+            "finding_id": finding_id,
+            "finding_class": "BLOCKER",
+            "summary": "Wrong owner",
+            "acceptance_test": {"kind": "prose", "text": "Use the correct prefix"},
+        }
+    ]
+    _assert_error(document, context, NativeReviewErrorCode.FINDING_ID_INVALID)
+
+
+def test_unknown_foreign_and_conflicting_finding_events_fail_closed() -> None:
+    foreign = _finding("A-01", AgentRole.ANTIGRAVITY)
+    context = _context(previous=(foreign,))
+    document = _review(context, approved=False)
+    document["status_changes"] = [
+        {"finding_id": "A-01", "status": "CLOSED", "rationale": "Looks fixed"}
+    ]
+    _assert_error(document, context, NativeReviewErrorCode.FINDING_REFERENCE_UNKNOWN)
+
+    own = _finding("C-01", AgentRole.CLAUDE)
+    context = _context(previous=(own,))
+    conflict = _review(context, approved=False)
+    conflict["status_changes"] = [
+        {"finding_id": "C-01", "status": "OPEN", "rationale": "Still open"}
+    ]
+    conflict["reclassifications"] = [
+        {"finding_id": "C-01", "finding_class": "BLOCKER", "rationale": "Still blocking"}
+    ]
+    _assert_error(conflict, context, NativeReviewErrorCode.FINDING_EVENT_CONFLICT)
+
+    duplicate = _review(_context(), approved=False)
+    item = {
+        "finding_id": "C-01",
+        "finding_class": "BLOCKER",
+        "summary": "Duplicate",
+        "acceptance_test": {"kind": "prose", "text": "Deduplicate"},
+    }
+    duplicate["new_findings"] = [item, deepcopy(item)]
+    _assert_error(duplicate, _context(), NativeReviewErrorCode.FINDING_EVENT_CONFLICT)
+
+
+def test_previous_open_own_finding_requires_explicit_update() -> None:
+    own = _finding("C-01", AgentRole.CLAUDE)
+    context = _context(previous=(own,))
+    missing = _review(context, approved=False)
+    _assert_error(missing, context, NativeReviewErrorCode.FINDING_UPDATE_MISSING)
+
+    updated = _review(context, approved=False)
+    updated["status_changes"] = [
+        {"finding_id": "C-01", "status": "OPEN", "rationale": "Still reproducible"}
+    ]
+    assert parse_native_contract_result(updated, context).findings[0].status is FindingStatus.OPEN
+
+
+def test_test_change_and_observation_convergence_guards() -> None:
+    test_context = _context(test_files=("tests/test_native_review_contract.py",))
+    _assert_error(_review(test_context), test_context, NativeReviewErrorCode.APPROVAL_INVALID)
+
+    convergence = _context(allow_observations=False)
+    observation = _review(convergence, approved=False)
+    observation["new_findings"] = [
+        {
+            "finding_id": "C-01",
+            "finding_class": "OBSERVATION",
+            "summary": "Future idea",
+            "acceptance_test": {"kind": "prose", "text": "Consider later"},
+        }
+    ]
+    _assert_error(observation, convergence, NativeReviewErrorCode.APPROVAL_INVALID)
+
+    prior_blocker = _finding("C-01", AgentRole.CLAUDE)
+    reclass_context = _context(previous=(prior_blocker,), allow_observations=False)
+    reclassified = _review(reclass_context, approved=False)
+    reclassified["reclassifications"] = [
+        {
+            "finding_id": "C-01",
+            "finding_class": "OBSERVATION",
+            "rationale": "No longer blocking",
+        }
+    ]
+    _assert_error(reclassified, reclass_context, NativeReviewErrorCode.APPROVAL_INVALID)
+
+    approved_context = _context(
+        test_files=("tests/test_native_review_contract.py",), tests_approved=True
+    )
+    assert parse_native_contract_result(
+        _review(approved_context), approved_context
+    ).test_files == ("tests/test_native_review_contract.py",)
+
+
+def test_denied_review_requires_open_own_blocker() -> None:
+    context = _context()
+    _assert_error(_review(context, approved=False), context, NativeReviewErrorCode.APPROVAL_INVALID)
+
+
+def test_direct_domain_conversion_rejects_contentless_review() -> None:
+    context = _context()
+    response = NativeReviewResult(
+        request_id=context.request_id,
+        reviewer=AgentRole.CLAUDE,
+        approved=True,
+        new_findings=(),
+        status_changes=(),
+        reclassifications=(),
+        anchors=(),
+        evidence=None,
+        pre_mortem="A later adapter could bypass transport validation.",
+    )
+
+    with pytest.raises(NativeReviewContractError) as raised:
+        native_response_to_contract_result(response, context)
+
+    assert raised.value.code is NativeReviewErrorCode.REVIEW_CONTENT_MISSING
+
+
+def test_direct_domain_conversion_rejects_blank_finding_content() -> None:
+    context = _context()
+    response = NativeReviewResult(
+        request_id=context.request_id,
+        reviewer=AgentRole.CLAUDE,
+        approved=False,
+        new_findings=(
+            NativeFinding(
+                finding_id="C-01",
+                finding_class=FindingClass.BLOCKER,
+                summary="   ",
+                acceptance_test=NativeProseAcceptance("Focused regression"),
+            ),
+        ),
+        status_changes=(),
+        reclassifications=(),
+        anchors=(),
+        evidence=None,
+        pre_mortem=None,
+    )
+
+    with pytest.raises(NativeReviewContractError) as raised:
+        native_response_to_contract_result(response, context)
+
+    assert raised.value.code is NativeReviewErrorCode.FINDING_CONTENT_INVALID
+
+
+@pytest.mark.parametrize(
+    "field",
+    ("dimensions", "largest_residual_risk", "break_condition"),
+)
+def test_whitespace_review_evidence_is_a_typed_native_error(field: str) -> None:
+    context = _context()
+    document = _review(context)
+    evidence = document["review_evidence"]
+    assert isinstance(evidence, dict)
+    evidence[field] = "   "
+
+    _assert_error(
+        document,
+        context,
+        NativeReviewErrorCode.REVIEW_CONTENT_MISSING,
+    )
+
+
+def test_whitespace_status_rationale_has_a_content_error_not_reference_error() -> None:
+    own = _finding("C-01", AgentRole.CLAUDE)
+    context = _context(previous=(own,))
+    document = _review(context, approved=False)
+    document["status_changes"] = [
+        {"finding_id": "C-01", "status": "OPEN", "rationale": "   "}
+    ]
+
+    _assert_error(
+        document,
+        context,
+        NativeReviewErrorCode.FINDING_CONTENT_INVALID,
+    )
+
+
+def test_whitespace_pre_mortem_cannot_approve() -> None:
+    context = _context()
+    document = _review(context)
+    document["pre_mortem"] = "   "
+
+    _assert_error(document, context, NativeReviewErrorCode.APPROVAL_INVALID)
+
+
+def test_direct_non_string_pre_mortem_is_a_typed_native_error() -> None:
+    context = _context()
+    parsed = parse_native_review_response(_review(context), context)
+    assert isinstance(parsed, NativeReviewResult)
+    malformed = replace(parsed, pre_mortem=42)  # type: ignore[arg-type]
+
+    with pytest.raises(NativeReviewContractError) as raised:
+        native_response_to_contract_result(malformed, context)
+
+    assert raised.value.code is NativeReviewErrorCode.APPROVAL_INVALID
+
+
+def test_whitespace_stop_fields_are_a_typed_native_error() -> None:
+    context = _context()
+    document = {
+        "schema_version": "native-agent-review-result-v1",
+        "result_type": "stop_request",
+        "request_id": context.request_id,
+        "reviewer": "claude",
+        "rule_id": "   ",
+        "rationale": "Cannot continue.",
+    }
+
+    _assert_error(document, context, NativeReviewErrorCode.STOP_CONTENT_INVALID)
+
+
+def test_direct_non_string_stop_field_is_a_typed_native_error() -> None:
+    context = _context()
+    response = NativeStopResult(
+        request_id=context.request_id,
+        reviewer=AgentRole.CLAUDE,
+        rule_id=42,  # type: ignore[arg-type]
+        rationale="Cannot continue.",
+    )
+
+    with pytest.raises(NativeReviewContractError) as raised:
+        native_response_to_contract_result(response, context)
+
+    assert raised.value.code is NativeReviewErrorCode.STOP_CONTENT_INVALID
+
+
+def test_positive_review_requires_premortem_attestation_and_no_own_blocker() -> None:
+    context = _context()
+    no_pre_mortem = _review(context)
+    no_pre_mortem["pre_mortem"] = None
+    _assert_error(no_pre_mortem, context, NativeReviewErrorCode.APPROVAL_INVALID)
+
+    no_attestation = replace(context, validation_attestation=None)
+    _assert_error(
+        _review(no_attestation), no_attestation, NativeReviewErrorCode.APPROVAL_INVALID
+    )
+
+    blocker = _finding("C-01", AgentRole.CLAUDE)
+    blocker_context = _context(previous=(blocker,))
+    with_open_blocker = _review(blocker_context)
+    with_open_blocker["status_changes"] = [
+        {"finding_id": "C-01", "status": "OPEN", "rationale": "Still blocking"}
+    ]
+    _assert_error(
+        with_open_blocker, blocker_context, NativeReviewErrorCode.APPROVAL_INVALID
+    )
+
+
+def test_final_review_rejects_new_observation_and_open_own_observation() -> None:
+    final = _context(approval=ApprovalMarker.FINAL)
+    new_observation = _review(final)
+    new_observation["new_findings"] = [
+        {
+            "finding_id": "C-01",
+            "finding_class": "OBSERVATION",
+            "summary": "Future idea",
+            "acceptance_test": {"kind": "prose", "text": "Consider later"},
+        }
+    ]
+    _assert_error(new_observation, final, NativeReviewErrorCode.APPROVAL_INVALID)
+
+    prior = _finding(
+        "C-01",
+        AgentRole.CLAUDE,
+        finding_class=FindingClass.OBSERVATION,
+    )
+    prior_context = _context(approval=ApprovalMarker.FINAL, previous=(prior,))
+    still_open = _review(prior_context)
+    still_open["status_changes"] = [
+        {"finding_id": "C-01", "status": "OPEN", "rationale": "Still relevant"}
+    ]
+    _assert_error(still_open, prior_context, NativeReviewErrorCode.APPROVAL_INVALID)
+
+
+def test_antigravity_final_approval_requires_global_finding_convergence() -> None:
+    open_claude = _finding("C-01", AgentRole.CLAUDE)
+    context = _context(
+        reviewer=AgentRole.ANTIGRAVITY,
+        approval=ApprovalMarker.FINAL,
+        previous=(open_claude,),
+    )
+    _assert_error(_review(context), context, NativeReviewErrorCode.APPROVAL_INVALID)
+
+    closed_context = _context(
+        reviewer=AgentRole.ANTIGRAVITY,
+        approval=ApprovalMarker.FINAL,
+        previous=(_finding("C-01", AgentRole.CLAUDE, status=FindingStatus.CLOSED),),
+    )
+    assert parse_native_contract_result(_review(closed_context), closed_context).approval is True
+
+
+def test_native_anchors_preserve_context_origin_and_trigger_drift_guard() -> None:
+    context = _context()
+    document = _review(context)
+    document["anchors"] = [
+        {
+            "anchor_id": "tax-01",
+            "input_fixture": "income=100",
+            "expected": "42",
+            "tolerance": "exact",
+        },
+        {
+            "anchor_id": "tax-02",
+            "input_fixture": "income=200",
+            "expected": "80",
+            "tolerance": "0.01",
+        },
+    ]
+    result = parse_native_contract_result(document, context)
+    assert {item.origin for item in result.anchors} == {"approved-plan-v1"}
+    approved = (
+        AnchorRecord("tax-01", "approved-plan-v1", "income=100", "41", "exact"),
+    )
+    changes = detect_anchor_changes(approved, result.anchors)
+    assert changes is not None
+    assert changes.changes.changed == ("tax-01",)
+    assert changes.changes.added == ("tax-02",)
+
+
+def test_native_anchor_requires_bound_origin() -> None:
+    context = _context(anchor_origin=None)
+    document = _review(context)
+    document["anchors"] = [
+        {
+            "anchor_id": "tax-01",
+            "input_fixture": "income=100",
+            "expected": "42",
+            "tolerance": "exact",
+        }
+    ]
+    _assert_error(document, context, NativeReviewErrorCode.ANCHOR_INVALID)
+
+
+def test_stop_request_has_explicit_safe_contract_result_defaults() -> None:
+    context = _context(test_files=("tests/test_native_review_contract.py",), tests_approved=True)
+    document = {
+        "schema_version": "native-agent-review-result-v1",
+        "result_type": "stop_request",
+        "request_id": context.request_id,
+        "reviewer": "claude",
+        "rule_id": "UNEXPECTED-PATH",
+        "rationale": "A required path is outside the bound scope.",
+    }
+    result = parse_native_contract_result(document, context)
+    assert result.stopped is True
+    assert result.stop_request is not None
+    assert result.stop_request.remediation_paths == ()
+    assert result.anchors == ()
+    assert result.test_files == ()
+    assert result.evidence is None
+    assert result.pre_mortem is None
+    assert result.validation is context.validation_attestation

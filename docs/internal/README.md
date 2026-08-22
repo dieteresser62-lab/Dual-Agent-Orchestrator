@@ -14,12 +14,38 @@ Derzeit aktiv:
 
 - [Roadmap für Phase 2 und spätere Folgephasen](ORCHESTRATOR_ROADMAP_PHASE_2_PLUS.md)
 - [Erkenntnisse aus Arbeitspaket 1 und Neuzuschnitt der Stabilisierung 1.1](phase-2-arbeitspaket-1-erkenntnisse-und-stabilisierung-1-1.md)
+- [Manueller Bootstrap für native Agenten-JSON-Verträge](native-agent-json-manueller-bootstrap.md)
 
 Während eines aktiven Orchestratorlaufs dürfen gebundene Arbeitsplan-, Slice-
 und Auditpfade nicht manuell verschoben werden. Die Archivierung erfolgt erst,
 wenn der Lauf abgeschlossen oder sein manueller Abschluss dokumentiert ist.
 
 ## Archive
+
+### Nativer Reviewresultat-Kern
+
+Pfad: [`archive/native-agent-review-result-core/`](archive/native-agent-review-result-core/)
+
+Der providerunabhängige Kern für schema-validierte native Reviewergebnisse ist
+implementiert, mit `1061 passed` vollständig validiert und von Claude im
+Korrektur- und Finalreview für den gebundenen Implementierungsdigest
+freigegeben. Alle vier Claude-Befunde und alle drei Befunde des manuellen
+Agy-Advisory sind geschlossen. Arbeitsplan, Reviewhistorie, Restrisiko und
+Vertagungsgrenze stehen im
+[Archivbericht](archive/native-agent-review-result-core/README.md).
+
+### Abgebrochener Bootstraplauf 1.1E – Reviewerfinding-Quarantäne
+
+Pfad: [`archive/native-agent-json-bootstrap-exception-1-1e/`](archive/native-agent-json-bootstrap-exception-1-1e/)
+
+Der textmarkerbasierte Planlauf wurde nach einem inhaltlich positiven, formal
+aber ungültigen Claude-Review bei `claude_plan_review` beendet. Weder Claudes
+Freigabe noch die Finding-Schließung wurden autoritativ übernommen;
+Antigravity wurde nicht gestartet. Auftrag, nicht freigegebener Plan und die
+technische Abbruchbindung sind im
+[Archivbericht](archive/native-agent-json-bootstrap-exception-1-1e/README.md)
+erhalten. Die weitere Entwicklung erfolgt befristet über den dokumentierten
+manuellen JSON-Bootstrap.
 
 ### Orchestrator-Stabilisierung 1.1D – Antigravity-Runtime-Retry und Attempt-Telemetrie
 
