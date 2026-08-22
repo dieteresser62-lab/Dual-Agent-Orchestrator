@@ -164,6 +164,23 @@ def test_new_blocker_uses_exact_context_origin_and_denies() -> None:
     assert result.findings[0].origin == FindingOrigin("1", 2, AgentRole.CLAUDE)
 
 
+def test_new_findings_must_start_at_next_reviewer_id_and_remain_contiguous() -> None:
+    context = _context(previous=(_finding("C-01", AgentRole.CLAUDE),))
+    document = _review(context, approved=False)
+    document["status_changes"] = [
+        {"finding_id": "C-01", "status": "CLOSED", "rationale": "Fixed"}
+    ]
+    document["new_findings"] = [
+        {
+            "finding_id": "C-03",
+            "finding_class": "BLOCKER",
+            "summary": "Skipped the next id",
+            "acceptance_test": {"kind": "prose", "text": "Use C-02 first"},
+        }
+    ]
+    _assert_error(document, context, NativeReviewErrorCode.FINDING_ID_INVALID)
+
+
 def test_request_and_reviewer_are_bound_to_context() -> None:
     context = _context()
     wrong_request = _review(context)

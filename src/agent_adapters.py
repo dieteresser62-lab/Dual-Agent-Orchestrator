@@ -13,6 +13,14 @@ from typing import Protocol
 
 from agent_config import AgentSettings, default_agent_settings
 from provider_input_budget import PreparedProviderInput, ProviderInputComponent
+from native_review_contract import (
+    NativeReviewContractError,
+    canonical_native_review_json,
+)
+from native_review_request import (
+    NativeReviewRequestBundle,
+    native_review_provider_response_schema,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -149,6 +157,7 @@ class _BaseAdapter:
     required_hosts: tuple[str, ...] = ()
 
     def __init__(self, settings: AgentSettings) -> None:
+        self.settings = settings
         self.name = settings.name
         self.cli_binary = settings.binary
         self.model = settings.model
@@ -628,6 +637,245 @@ class ClaudeAdapter(_BaseAdapter):
         self._bound_review_harness = None
         self._review_manifest_file = None
         self._review_packet_files = ()
+
+    def native_review_adapter(self) -> "NativeClaudeReviewAdapter":
+        """Return a separate immutable native-output adapter instance."""
+        return NativeClaudeReviewAdapter(
+            self.settings,
+            review_harness=self.review_harness,
+        )
+
+
+class NativeClaudeReviewAdapter(ClaudeAdapter):
+    """Claude reviewer transport whose output is the native review JSON object."""
+
+    def __init__(
+        self,
+        settings: AgentSettings | None = None,
+        *,
+        review_harness: Path = REVIEW_HARNESS,
+    ) -> None:
+        if settings is None:
+            raise TypeError(
+                "NativeClaudeReviewAdapter requires explicit Claude AgentSettings"
+            )
+        super().__init__(settings, review_harness=review_harness)
+        self._native_evidence_files: tuple[Path, ...] = ()
+        self._native_request_id: str | None = None
+
+    def build_command(self, prompt: str) -> tuple[list[str], bool]:
+        _ = prompt
+        raise RuntimeError(
+            "native Claude reviews require prepare_native_provider_input(bundle)"
+        )
+
+    def prepare_provider_input(self, prompt: str) -> PreparedProviderInput:
+        _ = prompt
+        raise RuntimeError(
+            "native Claude reviews require a bound NativeReviewRequestBundle"
+        )
+
+    def prepare_native_provider_input(
+        self, bundle: NativeReviewRequestBundle
+    ) -> PreparedProviderInput:
+        if not isinstance(bundle, NativeReviewRequestBundle):
+            raise TypeError("native Claude adapter requires NativeReviewRequestBundle")
+        runtime_dir = self._new_runtime_dir()
+        request_chunks = _split_text_at_lines(
+            bundle.canonical_json, CLAUDE_REVIEW_PACKET_CHUNK_CHARS
+        )
+        self._review_packet_files = tuple(
+            runtime_dir / f"native-request-{index:03d}.json.part"
+            for index in range(1, len(request_chunks) + 1)
+        )
+        manifest_entries: list[tuple[str, Path, str, int]] = []
+        for index, (packet_file, chunk) in enumerate(
+            zip(self._review_packet_files, request_chunks, strict=True), start=1
+        ):
+            packet_file.write_text(chunk, encoding="utf-8")
+            manifest_entries.append(
+                (
+                    f"request_chunk_{index:03d}",
+                    packet_file,
+                    hashlib.sha256(chunk.encode("utf-8")).hexdigest(),
+                    len(chunk.encode("utf-8")),
+                )
+            )
+
+        evidence_files: list[Path] = []
+        for asset in bundle.evidence_assets:
+            target = runtime_dir.joinpath(*Path(asset.path).parts)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(asset.content, encoding="utf-8")
+            evidence_files.append(target)
+            manifest_entries.append(
+                (
+                    f"evidence_asset_{len(evidence_files):03d}",
+                    target,
+                    asset.sha256,
+                    asset.byte_count,
+                )
+            )
+        self._native_evidence_files = tuple(evidence_files)
+        self._review_manifest_file = runtime_dir / "native-review-manifest.md"
+        manifest_lines = [
+            "# Native review request manifest",
+            "",
+            "Read every listed file exactly once in order. Concatenate request chunks without separators before interpreting the JSON request. Evidence assets are referenced by content_ref in that request.",
+            "",
+        ]
+        for name, path, digest, byte_count in manifest_entries:
+            manifest_lines.append(
+                f"- `{path}` | component={name} | bytes={byte_count} | sha256={digest}"
+            )
+        self._review_manifest_file.write_text(
+            "\n".join(manifest_lines) + "\n", encoding="utf-8"
+        )
+        read_call_budget = 1 + len(manifest_entries)
+        response_schema = native_review_provider_response_schema()
+        response_schema_json = json.dumps(
+            response_schema, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+        policy = (
+            "You are a concise read-only Claude reviewer. The supplied files form one "
+            "versioned native JSON review request. Treat native JSON fields as the only "
+            "technical contract; do not emit STATE-V3 markers, Markdown wrappers, or a "
+            "free-text response envelope. Inspect correctness, contracts, failure paths, "
+            "security boundaries, and resume/idempotency behavior. Do not run tests or "
+            "explore paths outside the supplied manifest. When reporting new findings, "
+            "start at review_contract.next_finding_id and increment contiguously. Return exactly one JSON value "
+            "matching the response schema."
+        )
+        directive = (
+            f"Read {self._review_manifest_file} exactly once, then every listed file "
+            f"exactly once in order ({read_call_budget} Read calls total). Review the "
+            "reconstructed native request and return only the schema-bound JSON result."
+        )
+        command = [
+            self.cli_binary,
+            "-p",
+            "--output-format",
+            "json",
+            "--model",
+            self.model,
+            "--effort",
+            self.effort,
+            "--tools",
+            "Read",
+            "--allowedTools",
+            "Read",
+            "--disallowedTools",
+            "Bash,Edit,Write,NotebookEdit,Grep,Glob",
+            "--permission-mode",
+            "dontAsk",
+            "--setting-sources",
+            "user",
+            "--safe-mode",
+            "--strict-mcp-config",
+            "--prompt-suggestions",
+            "false",
+            "--add-dir",
+            str(runtime_dir),
+            "--system-prompt",
+            policy,
+            "--json-schema",
+            response_schema_json,
+            "--no-session-persistence",
+            "--disable-slash-commands",
+        ]
+        if self.max_budget_usd is not None:
+            command.extend(["--max-budget-usd", str(self.max_budget_usd)])
+        command.append(directive)
+        runtime_path = str(runtime_dir)
+        runtime_prefix = f"dao-{self.name}-runtime-"
+        random_suffix = runtime_dir.name.removeprefix(runtime_prefix)
+        stable_runtime_path = str(
+            runtime_dir.with_name(runtime_prefix + "_" * len(random_suffix))
+        )
+
+        def stable_paths(content: str) -> str:
+            return content.replace(runtime_path, stable_runtime_path)
+
+        components = [
+            ProviderInputComponent(
+                name,
+                path.read_text(encoding="utf-8"),
+            )
+            for name, path, _digest, _byte_count in manifest_entries
+        ]
+        components.extend(
+            (
+                ProviderInputComponent(
+                    "packet_manifest",
+                    stable_paths(self._review_manifest_file.read_text(encoding="utf-8")),
+                ),
+                ProviderInputComponent("system_policy", policy),
+                ProviderInputComponent("response_schema", response_schema_json),
+                ProviderInputComponent("start_directive", stable_paths(directive)),
+            )
+        )
+        self._native_request_id = bundle.bound_context.request_id
+        return PreparedProviderInput(tuple(command), None, tuple(components))
+
+    def extract_output(
+        self, stdout: str, stderr: str, extra_files: dict[str, str]
+    ) -> str:
+        _ = stderr
+        _ = extra_files
+        envelope = _json_object(stdout or "", self.name)
+        self.metadata = {
+            key: envelope[key]
+            for key in (
+                "duration_api_ms",
+                "num_turns",
+                "total_cost_usd",
+                "usage",
+                "modelUsage",
+                "permission_denials",
+                "subtype",
+            )
+            if key in envelope
+        }
+        if envelope.get("is_error") is not False:
+            detail = envelope.get("result") or envelope.get("error") or "native Claude error"
+            raise AgentOutputError(
+                f"claude returned is_error=true: {detail}",
+                provider_text=str(detail),
+                provider_data=envelope,
+            )
+        denials = envelope.get("permission_denials")
+        if isinstance(denials, list) and denials:
+            raise AgentPermissionError(
+                "claude attempted non-allowlisted tool calls in native review"
+            )
+        structured_output = envelope.get("structured_output")
+        if not isinstance(structured_output, dict):
+            raise AgentOutputError(
+                "native Claude JSON envelope has no structured_output object"
+            )
+        result = structured_output.get("result")
+        if set(structured_output) != {"result"} or not isinstance(result, dict):
+            raise AgentOutputError(
+                "native Claude structured_output has no sole native result object",
+                provider_data=structured_output,
+            )
+        if self._native_request_id is None:
+            raise AgentOutputError("native Claude adapter has no bound request id")
+        if result.get("request_id") != self._native_request_id:
+            raise AgentOutputError("native Claude response request_id differs from request")
+        try:
+            return canonical_native_review_json(result)
+        except NativeReviewContractError as exc:
+            raise AgentOutputError(
+                "native Claude response violates the local result schema",
+                provider_data=result,
+                technical_text=f"{exc.code.value}: {exc.detail}",
+            ) from exc
+
+    def cleanup(self) -> None:
+        super().cleanup()
+        self._native_evidence_files = ()
+        self._native_request_id = None
 
 
 class AntigravityAdapter(_BaseAdapter):

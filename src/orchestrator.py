@@ -15,9 +15,11 @@ from pathlib import Path, PurePosixPath
 from agent_adapters import AgentAdapter, build_agent_registry
 from agent_runtime import (
     AgentInvocationError,
+    NativeAgentReviewOutput,
     OrchestratorConfig,
     ProviderAttemptLifecycle,
     run_agent_checked,
+    run_native_review_agent_checked,
     run_validation_matrix,
 )
 from artifact_bridge import (
@@ -111,6 +113,10 @@ from state_io import (
     write_workflow_checkpoint,
 )
 from task_contract import TaskContract, TaskMode, parse_task_contract
+from native_review_contract import (
+    NativeReviewContractError,
+    parse_bound_native_contract_result,
+)
 from workflow import (
     CodexInvocation,
     ContractRepairInvocation,
@@ -140,6 +146,7 @@ from workflow_state import (
     WorkUnitRecord,
     WorkUnitKind,
     WorkUnitStatus,
+    NATIVE_CLAUDE_REVIEW_TRANSPORT,
     init_workflow_state,
     BootstrapCheckFact,
     managed_correction_slice_report_path,
@@ -716,11 +723,65 @@ class ProductionWorkflowDriver(WorkflowDriver):
             )
         return output
 
-    def invoke_reviewer(self, invocation: ReviewerInvocation) -> str:
+    def invoke_reviewer(
+        self, invocation: ReviewerInvocation
+    ) -> str | NativeAgentReviewOutput:
         manifest_paths: tuple[str, ...] | None = None
         if invocation.review_packet is not None:
             self._materialize_review_packet(invocation.review_packet)
             manifest_paths = invocation.review_packet.manifest.paths
+        if invocation.native_request is not None:
+            state = self.active_state
+            if (
+                state is None
+                or invocation.reviewer is not AgentRole.CLAUDE
+                or state.protocol_binding is None
+                or state.protocol_binding.claude_review_transport
+                != NATIVE_CLAUDE_REVIEW_TRANSPORT
+            ):
+                raise WorkflowExecutionError(
+                    "native Claude invocation lacks its immutable state binding"
+                )
+            self.assert_structured_decision_context()
+            native_factory = getattr(
+                self.agents[AgentRole.CLAUDE.value], "native_review_adapter", None
+            )
+            if not callable(native_factory):
+                raise WorkflowExecutionError(
+                    "configured Claude adapter has no native review transport"
+                )
+            return run_native_review_agent_checked(
+                adapter=native_factory(),
+                bundle=invocation.native_request,
+                log_prefix=(
+                    f"work-unit-{invocation.work_unit_id:04d}-"
+                    f"{invocation.step.value}-round-{invocation.round_number:04d}"
+                ),
+                config=self.config,
+                log_dir=self.log_dir,
+                write_file=write_file,
+                shorten=_shorten,
+                reviewer_manifest_paths=manifest_paths,
+                operation=invocation.step.value,
+                binding_fingerprint=invocation.fingerprint,
+                pre_start_callback=self._persist_provider_bootstrap,
+                provider_attempt_lifecycle=(
+                    ProviderAttemptLifecycle(
+                        start=self._start_provider_attempt,
+                        terminal=self._finish_provider_attempt,
+                    )
+                    if self._artifact_bridge is not None
+                    else None
+                ),
+                accepted_output_callback=lambda output: (
+                    self.persist_native_review_contract(
+                        output,
+                        invocation.fingerprint,
+                        invocation.round_number,
+                        invocation.previous_findings,
+                    )
+                ),
+            )
         try:
             return self._agent(
                 invocation.reviewer,
@@ -941,6 +1002,149 @@ class ProductionWorkflowDriver(WorkflowDriver):
             verdict=str(verdict),
         )
 
+    def recover_pending_native_reviewer(
+        self,
+        invocation: ReviewerInvocation,
+        contract: StepContract,
+        history: WorkflowHistory,
+    ) -> NativeAgentReviewOutput | None:
+        """Replay one native record-ahead decision without starting Claude."""
+        state = self.active_state
+        bridge = self._artifact_bridge
+        bundle = invocation.native_request
+        if (
+            state is None
+            or bridge is None
+            or bundle is None
+            or invocation.reviewer is not AgentRole.CLAUDE
+            or state.protocol_binding is None
+            or state.protocol_binding.claude_review_transport
+            != NATIVE_CLAUDE_REVIEW_TRANSPORT
+            or state.current_work_unit_id != invocation.work_unit_id
+            or state.current_step is not invocation.step
+        ):
+            return None
+        logical_id = (
+            f"review-claude-{invocation.work_unit_id}-{invocation.round_number}"
+        )
+        chain = bridge.store.load_chain()
+        candidates = tuple(
+            item
+            for item in chain
+            if isinstance(item.payload, ReviewPayload)
+            and item.logical_id == logical_id
+        )
+        if not candidates:
+            return None
+        if len(candidates) != 1:
+            raise WorkflowExecutionError(
+                "native reviewer recovery has multiple decision records"
+            )
+        record = candidates[0]
+        payload = record.payload
+        assert isinstance(payload, ReviewPayload)
+        if (
+            payload.reviewer is not Role.CLAUDE
+            or payload.work_unit_id != str(invocation.work_unit_id)
+            or payload.transport_schema != NATIVE_CLAUDE_REVIEW_TRANSPORT
+            or payload.request_id != bundle.bound_context.request_id
+            or payload.response_sha256 is None
+            or record.fingerprint.sha256 != invocation.fingerprint
+        ):
+            raise WorkflowExecutionError(
+                "native reviewer recovery record differs from the rebuilt request"
+            )
+        if any(
+            isinstance(event, ReviewAuditEvent)
+            and event.round_number == invocation.round_number
+            and event.result.reviewer is AgentRole.CLAUDE
+            and event.result.validation is not None
+            and event.result.validation.diff_fingerprint == invocation.fingerprint
+            for event in history.events
+        ):
+            raise WorkflowExecutionError(
+                "native reviewer decision is already mirrored but the workflow step "
+                "did not advance"
+            )
+        matching_attestations = tuple(
+            item
+            for item in chain
+            if isinstance(item.payload, ValidationAttestationPayload)
+            and item.fingerprint.sha256 == invocation.fingerprint
+            and item.payload.attested_by is Role.ORCHESTRATOR
+        )
+        if len(matching_attestations) != 1:
+            raise WorkflowExecutionError(
+                "native reviewer recovery requires one authoritative attestation"
+            )
+        if (
+            contract.validation_attestation is None
+            or not contract.validation_attestation.complete
+            or contract.validation_attestation.diff_fingerprint
+            != invocation.fingerprint
+        ):
+            raise WorkflowExecutionError(
+                "native reviewer recovery has no complete bound attestation"
+            )
+        log_pattern = (
+            f"work-unit-{invocation.work_unit_id:04d}-"
+            f"{invocation.step.value}-round-{invocation.round_number:04d}."
+            "attempt-*.log"
+        )
+        outputs = tuple(
+            path.read_text(encoding="utf-8").strip()
+            for path in sorted(self.log_dir.glob(log_pattern))
+            if path.is_file()
+            and hashlib.sha256(
+                path.read_text(encoding="utf-8").strip().encode("utf-8")
+            ).hexdigest()
+            == payload.response_sha256
+        )
+        if len(outputs) != 1:
+            raise WorkflowExecutionError(
+                "native reviewer recovery has no unique response-digest-bound log"
+            )
+        canonical = outputs[0]
+        try:
+            document = json.loads(canonical)
+            if not isinstance(document, dict):
+                raise ValueError("native response log must contain a JSON object")
+            result = parse_bound_native_contract_result(
+                document, bundle.bound_context
+            )
+        except (json.JSONDecodeError, ValueError, NativeReviewContractError) as exc:
+            raise WorkflowExecutionError(
+                f"native reviewer recovery response no longer validates: {exc}"
+            ) from exc
+        expected_verdict = (
+            "stop"
+            if result.stopped
+            else "approved"
+            if result.approval is True
+            else "denied"
+        )
+        if (
+            payload.verdict != expected_verdict
+            or payload.finding_ids
+            != tuple(item.finding_id for item in result.findings)
+        ):
+            raise WorkflowExecutionError(
+                "native reviewer recovery result differs from its decision record"
+            )
+        logger.warning(
+            "Replaying request-bound native Claude review after its state "
+            "checkpoint failed: work-unit=%s round=%s fingerprint=%s request=%s",
+            invocation.work_unit_id,
+            invocation.round_number,
+            invocation.fingerprint,
+            bundle.bound_context.request_id,
+        )
+        return NativeAgentReviewOutput(
+            result=result,
+            canonical_json=canonical,
+            request_id=bundle.bound_context.request_id,
+        )
+
     def recover_failed_reviewer_output(
         self,
         invocation: ReviewerInvocation,
@@ -1117,6 +1321,71 @@ class ProductionWorkflowDriver(WorkflowDriver):
             ),
             fingerprint_sha256=fingerprint,
         )
+        self._persist_review_finding_transitions(
+            result,
+            fingerprint=fingerprint,
+            round_number=round_number,
+            previous_findings=previous_findings,
+        )
+
+    def persist_native_review_contract(
+        self,
+        output: NativeAgentReviewOutput,
+        fingerprint: str,
+        round_number: int,
+        previous_findings: tuple[FindingRecord, ...],
+    ) -> None:
+        if self._artifact_bridge is None or self.active_state is None:
+            return
+        state = self.active_state
+        if (
+            state.protocol_binding is None
+            or state.protocol_binding.claude_review_transport
+            != NATIVE_CLAUDE_REVIEW_TRANSPORT
+            or output.result.reviewer is not AgentRole.CLAUDE
+        ):
+            raise WorkflowExecutionError(
+                "native review persistence lacks its immutable Claude binding"
+            )
+        unit = state.current_work_unit
+        logical = f"review-claude-{unit.work_unit_id}-{round_number}"
+        response_sha256 = hashlib.sha256(
+            output.canonical_json.encode("utf-8")
+        ).hexdigest()
+        binding_digest = hashlib.sha256(
+            (
+                f"{fingerprint}:{output.request_id}:{response_sha256}"
+            ).encode("utf-8")
+        ).hexdigest()
+        self._artifact_bridge.append(
+            review_payload(
+                output.result,
+                work_unit_id=unit.work_unit_id,
+                transport_schema=NATIVE_CLAUDE_REVIEW_TRANSPORT,
+                request_id=output.request_id,
+                response_sha256=response_sha256,
+            ),
+            logical_id=logical,
+            idempotency_key=f"native:{logical}:{binding_digest}",
+            fingerprint_sha256=fingerprint,
+        )
+        self._persist_review_finding_transitions(
+            output.result,
+            fingerprint=fingerprint,
+            round_number=round_number,
+            previous_findings=previous_findings,
+        )
+
+    def _persist_review_finding_transitions(
+        self,
+        result: ContractResult,
+        *,
+        fingerprint: str,
+        round_number: int,
+        previous_findings: tuple[FindingRecord, ...],
+    ) -> None:
+        if self._artifact_bridge is None:
+            return
         previous_by_id = {item.finding_id: item for item in previous_findings}
         for finding in result.findings:
             previous = previous_by_id.get(finding.finding_id)
@@ -2698,6 +2967,7 @@ def _fresh_state(
     task_contract: TaskContract,
     branch_base_override: str | None = None,
     audit_report_path: str | None = None,
+    native_claude_reviews: bool = False,
 ) -> WorkflowState:
     identity = inspect_repository(repository_root)
     if identity.branch != task_contract.target_branch:
@@ -2730,7 +3000,15 @@ def _fresh_state(
         approved_plan_commit=task_contract.approved_plan_commit,
         audit_report_path=audit_report_path,
         target_branch=task_contract.target_branch,
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V1, "1"),
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V1,
+            "1",
+            (
+                "native-claude-review-v1"
+                if native_claude_reviews
+                else None
+            ),
+        ),
     )
     if task_contract.approved_plan_commit is not None:
         assert task_contract.work_plan_path is not None
@@ -2887,6 +3165,20 @@ def run_production_workflow(
             raise StateSchemaError("persisted task contract differs from --resume task")
         if getattr(args, "watch_run_id", None) and state.run_id != args.watch_run_id:
             raise StateSchemaError("persisted watch run identity differs from inbox task")
+        requested_native = getattr(args, "native_claude_reviews", None)
+        persisted_native = (
+            state.protocol_binding is not None
+            and state.protocol_binding.claude_review_transport
+            == "native-claude-review-v1"
+        )
+        if (
+            requested_native is not None
+            and bool(requested_native) is not persisted_native
+        ):
+            raise StateSchemaError(
+                "--native-claude-reviews differs from the immutable persisted "
+                "review transport binding"
+            )
         if state.audit_report_path is None and managed_audit_path is not None:
             state = replace(state, audit_report_path=managed_audit_path)
     else:
@@ -2901,6 +3193,9 @@ def run_production_workflow(
             task_contract=task_contract,
             branch_base_override=prepared_branch_base,
             audit_report_path=managed_audit_path,
+            native_claude_reviews=bool(
+                getattr(args, "native_claude_reviews", False)
+            ),
         )
     state = _attach_managed_audit_paths(state)
     state = _recover_legacy_plan_only_post_gate(state)

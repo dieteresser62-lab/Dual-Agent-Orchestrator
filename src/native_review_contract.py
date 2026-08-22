@@ -239,6 +239,41 @@ class NativeReviewContext:
         return "native-review-request-" + hashlib.sha256(encoded).hexdigest()
 
 
+@dataclass(frozen=True, slots=True)
+class BoundNativeReviewContext:
+    """A live-provider context bound to one complete canonical request.
+
+    The provider-independent :class:`NativeReviewContext` intentionally keeps
+    its original local binding for isolated domain tests.  Productive native
+    transport, persistence, and recovery APIs use this distinct wrapper so a
+    caller cannot silently fall back to the narrower local request id.
+    """
+
+    context: NativeReviewContext
+    request_id: str
+    request_digest: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.context, NativeReviewContext):
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.CONTEXT_INVALID,
+                "bound review context requires a NativeReviewContext",
+            )
+        if len(self.request_digest) != 64 or any(
+            character not in "0123456789abcdef"
+            for character in self.request_digest
+        ):
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.CONTEXT_INVALID,
+                "bound request_digest must be lowercase SHA-256",
+            )
+        if self.request_id != f"native-review-request-{self.request_digest}":
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.CONTEXT_INVALID,
+                "bound request_id must contain request_digest",
+            )
+
+
 def load_native_review_schema() -> dict[str, Any]:
     """Load and self-check the bundled native response schema offline."""
     schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
@@ -273,8 +308,21 @@ def parse_native_review_response(
     document: Mapping[str, Any], context: NativeReviewContext
 ) -> NativeReviewResponse:
     """Validate and parse a native response against immutable local context."""
+    return _parse_native_review_response(
+        document,
+        context,
+        expected_request_id=context.request_id,
+    )
+
+
+def _parse_native_review_response(
+    document: Mapping[str, Any],
+    context: NativeReviewContext,
+    *,
+    expected_request_id: str,
+) -> NativeReviewResponse:
     validate_native_review_document(document)
-    if document["request_id"] != context.request_id:
+    if document["request_id"] != expected_request_id:
         raise NativeReviewContractError(
             NativeReviewErrorCode.REQUEST_MISMATCH,
             "response request_id does not match bound context",
@@ -343,7 +391,20 @@ def native_response_to_contract_result(
     response: NativeReviewResponse, context: NativeReviewContext
 ) -> ContractResult:
     """Convert a previously validated native response without side effects."""
-    if response.request_id != context.request_id:
+    return _native_response_to_contract_result(
+        response,
+        context,
+        expected_request_id=context.request_id,
+    )
+
+
+def _native_response_to_contract_result(
+    response: NativeReviewResponse,
+    context: NativeReviewContext,
+    *,
+    expected_request_id: str,
+) -> ContractResult:
+    if response.request_id != expected_request_id:
         raise NativeReviewContractError(
             NativeReviewErrorCode.REQUEST_MISMATCH,
             "parsed response does not match bound context",
@@ -411,6 +472,41 @@ def parse_native_contract_result(
     return native_response_to_contract_result(
         parse_native_review_response(document, context), context
     )
+
+
+def parse_bound_native_contract_result(
+    document: Mapping[str, Any], bound_context: BoundNativeReviewContext
+) -> ContractResult:
+    """Validate one live native response against its complete request binding."""
+    if not isinstance(bound_context, BoundNativeReviewContext):
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.CONTEXT_INVALID,
+            "live native review parsing requires BoundNativeReviewContext",
+        )
+    response = _parse_native_review_response(
+        document,
+        bound_context.context,
+        expected_request_id=bound_context.request_id,
+    )
+    return _native_response_to_contract_result(
+        response,
+        bound_context.context,
+        expected_request_id=bound_context.request_id,
+    )
+
+
+def next_native_finding_id(context: NativeReviewContext) -> str:
+    """Return the first reviewer-owned finding id available in this context."""
+    prefix = "C" if context.reviewer is AgentRole.CLAUDE else "A"
+    number = max(
+        (
+            int(item.finding_id.split("-", 1)[1])
+            for item in context.previous_findings
+            if item.finding_id.startswith(prefix + "-")
+        ),
+        default=0,
+    ) + 1
+    return f"{prefix}-{number:02d}"
 
 
 def canonical_native_review_json(document: Mapping[str, Any]) -> str:
@@ -503,6 +599,17 @@ def _validate_response_events(
                 f"reviewer does not own finding {finding_id}",
             )
     expected_prefix = "C-" if context.reviewer is AgentRole.CLAUDE else "A-"
+    first_id = next_native_finding_id(context)
+    first_number = int(first_id.split("-", 1)[1])
+    expected_new_ids = [
+        f"{expected_prefix}{first_number + index:02d}"
+        for index in range(len(response.new_findings))
+    ]
+    if new_ids != expected_new_ids:
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.FINDING_ID_INVALID,
+            f"new findings must start at {first_id} and remain contiguous",
+        )
     for finding in response.new_findings:
         if not finding.finding_id.startswith(expected_prefix):
             raise NativeReviewContractError(
@@ -717,7 +824,8 @@ def _validate_decision(
             )
 
 
-def _context_binding(context: NativeReviewContext) -> dict[str, Any]:
+def native_review_context_binding(context: NativeReviewContext) -> dict[str, Any]:
+    """Return the canonical provider-independent domain-context binding."""
     return {
         "run_id": context.run_id,
         "work_unit_id": context.work_unit_id,
@@ -739,6 +847,11 @@ def _context_binding(context: NativeReviewContext) -> dict[str, Any]:
             list(prefix) for prefix in context.validation_command_prefixes
         ],
     }
+
+
+# Private compatibility alias for the original provider-independent request-id
+# implementation.  New live callers use BoundNativeReviewContext instead.
+_context_binding = native_review_context_binding
 
 
 def _finding_binding(finding: FindingRecord) -> dict[str, Any]:

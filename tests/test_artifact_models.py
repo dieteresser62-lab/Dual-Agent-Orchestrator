@@ -188,6 +188,78 @@ def test_approval_requires_fingerprint_and_positive_evidence() -> None:
         validate_artifact_document(raw)
 
 
+def test_native_review_transport_fields_roundtrip_together() -> None:
+    payload = ReviewPayload(
+        Role.CLAUDE,
+        "work-01",
+        "approved",
+        (),
+        "checked",
+        "native-claude-review-v1",
+        f"native-review-request-{'b' * 64}",
+        "c" * 64,
+    )
+    record = _record(payload)
+
+    assert ArtifactRecord.from_dict(record.to_dict()) == record
+
+
+def test_historical_review_record_without_native_fields_remains_readable() -> None:
+    raw = _record(
+        ReviewPayload(Role.CLAUDE, "work-01", "approved", (), "checked")
+    ).to_dict()
+    for field_name in ("transport_schema", "request_id", "response_sha256"):
+        raw["payload"].pop(field_name)
+
+    validate_artifact_document(raw)
+    restored = ArtifactRecord.from_dict(raw)
+
+    assert restored.payload == ReviewPayload(
+        Role.CLAUDE, "work-01", "approved", (), "checked"
+    )
+
+
+@pytest.mark.parametrize(
+    "native_fields",
+    (
+        ("native-claude-review-v1", None, None),
+        (None, f"native-review-request-{'b' * 64}", None),
+    ),
+)
+def test_native_review_transport_rejects_partial_binding(
+    native_fields: tuple[str | None, str | None, str | None],
+) -> None:
+    with pytest.raises(
+        ArtifactValidationError,
+        match="must be present together",
+    ):
+        ReviewPayload(
+            Role.CLAUDE,
+            "work-01",
+            "approved",
+            (),
+            "checked",
+            *native_fields,
+        )
+
+
+def test_native_review_transport_rejects_non_claude_reviewer() -> None:
+    with pytest.raises(
+        ArtifactValidationError,
+        match="requires reviewer=claude",
+    ):
+        ReviewPayload(
+            Role.ANTIGRAVITY,
+            "work-01",
+            "denied",
+            (),
+            "checked",
+            "native-claude-review-v1",
+            f"native-review-request-{'b' * 64}",
+            "c" * 64,
+        )
+
+
 def test_canonical_json_is_utf8_sorted_compact_and_rejects_nan() -> None:
     assert canonical_json({"z": "ä", "a": ["x y", "x/y"]}) == b'{"a":["x y","x/y"],"z":"\xc3\xa4"}'
     with pytest.raises(ValueError):

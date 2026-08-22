@@ -117,6 +117,28 @@ def test_protocol_binding_roundtrips_and_missing_binding_is_legacy() -> None:
     assert WorkflowState.from_dict(structured.to_dict()) == structured
     assert structured.effective_protocol_mode is ProtocolMode.STRUCTURED_V1
 
+    native = replace(
+        historical,
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V1,
+            "1",
+            "native-claude-review-v1",
+        ),
+    )
+    assert WorkflowState.from_dict(native.to_dict()) == native
+
+
+def test_protocol_binding_rejects_native_transport_outside_structured_v1() -> None:
+    with pytest.raises(
+        WorkflowStateValidationError,
+        match="requires structured-v1",
+    ):
+        ProtocolBinding(
+            ProtocolMode.LEGACY_STATE_V3,
+            "3",
+            "native-claude-review-v1",
+        )
+
 
 @pytest.mark.parametrize(
     ("mode", "schema_version"),

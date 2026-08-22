@@ -94,8 +94,8 @@
     },
     "review": {
       "type": "object", "additionalProperties": false, "required": ["reviewer", "work_unit_id", "verdict", "finding_ids", "evidence"],
-      "properties": {"reviewer": {"$ref": "#/$defs/reviewer"}, "work_unit_id": {"$ref": "#/$defs/identifier"}, "verdict": {"enum": ["approved", "denied", "stop"]}, "finding_ids": {"$ref": "#/$defs/identifiers"}, "evidence": {"type": ["string", "null"], "minLength": 1}},
-      "allOf": [{"if": {"properties": {"verdict": {"const": "approved"}}}, "then": {"anyOf": [{"properties": {"finding_ids": {"minItems": 1}}}, {"properties": {"evidence": {"type": "string"}}}]}}]
+      "properties": {"reviewer": {"$ref": "#/$defs/reviewer"}, "work_unit_id": {"$ref": "#/$defs/identifier"}, "verdict": {"enum": ["approved", "denied", "stop"]}, "finding_ids": {"$ref": "#/$defs/identifiers"}, "evidence": {"type": ["string", "null"], "minLength": 1}, "transport_schema": {"type": ["string", "null"]}, "request_id": {"type": ["string", "null"]}, "response_sha256": {"type": ["string", "null"]}},
+      "allOf": [{"if": {"properties": {"verdict": {"const": "approved"}}}, "then": {"anyOf": [{"properties": {"finding_ids": {"minItems": 1}}}, {"properties": {"evidence": {"type": "string"}}}]}}, {"oneOf": [{"properties": {"transport_schema": {"type": "null"}, "request_id": {"type": "null"}, "response_sha256": {"type": "null"}}}, {"required": ["transport_schema", "request_id", "response_sha256"], "properties": {"reviewer": {"const": "claude"}, "transport_schema": {"const": "native-claude-review-v1"}, "request_id": {"type": "string", "pattern": "^native-review-request-[0-9a-f]{64}$"}, "response_sha256": {"$ref": "#/$defs/sha256"}}}]}]
     },
     "finding_transition": {
       "type": "object", "additionalProperties": false, "required": ["finding_id", "reporter", "actor", "action", "severity", "finding_status", "rationale"],

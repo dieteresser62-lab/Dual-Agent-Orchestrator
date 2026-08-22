@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -32,6 +34,7 @@ from agent_runtime import (
     repo_snapshot,
     run_agent,
     run_agent_checked,
+    run_native_review_agent,
     run_tests_snapshot,
     run_validation_matrix,
     verify_agent_capabilities,
@@ -55,6 +58,21 @@ from provider_input_budget import (
     default_provider_input_budget_policy,
 )
 from workflow_state import AgentFailureKind
+from contracts import (
+    AgentRole,
+    ApprovalMarker,
+    ValidationAttestation,
+    ValidationCommandSpec,
+    ValidationRecord,
+    ValidationStatus,
+)
+from native_review_contract import NativeReviewContext
+from native_review_request import (
+    NativeReviewEvidenceInput,
+    NativeReviewKind,
+    NativeReviewRequestSpec,
+    build_native_review_request,
+)
 
 
 def test_compute_retry_backoff_seconds_exponential() -> None:
@@ -74,6 +92,116 @@ def test_orchestrator_config_has_no_agent_substitution_state() -> None:
 
     assert not hasattr(config, "allow_fallback_to_gemini")
     assert not hasattr(config, "claude_quota_reached")
+
+
+def test_native_review_runtime_returns_bound_contract_without_marker_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fingerprint = "a" * 64
+    command = "python3 -m pytest tests/ -v"
+    attestation = ValidationAttestation(
+        attestation_id="validation-native-runtime",
+        diff_fingerprint=fingerprint,
+        expected_commands=(command,),
+        records=(ValidationRecord(ValidationStatus.PASS, command, 0, "passed"),),
+        output_digest=hashlib.sha256(b"passed").hexdigest(),
+        summary="1 passed",
+        command_specs=(
+            ValidationCommandSpec(argv=("python3", "-m", "pytest", "tests/", "-v")),
+        ),
+    )
+    context = NativeReviewContext(
+        run_id="run-native-runtime",
+        work_unit_id="work-unit-1",
+        operation="claude_slice_review",
+        diff_fingerprint=fingerprint,
+        reviewer=AgentRole.CLAUDE,
+        approval_marker=ApprovalMarker.SLICE,
+        slice_id="01",
+        round_number=1,
+        validation_attestation=attestation,
+        anchor_origin="plan",
+    )
+    bundle = build_native_review_request(
+        NativeReviewRequestSpec(
+            context=context,
+            review_kind=NativeReviewKind.SLICE,
+            target_branch="feature/native",
+            base_commit="b" * 40,
+            authorized_paths=("src/native_review_request.py",),
+            acceptance_criteria=("No marker parser is invoked.",),
+            evidence=(NativeReviewEvidenceInput("diff", "diff", "change"),),
+        )
+    )
+    response = {
+        "schema_version": "native-agent-review-result-v1",
+        "result_type": "review_result",
+        "request_id": bundle.bound_context.request_id,
+        "reviewer": "claude",
+        "decision": "approved",
+        "new_findings": [],
+        "status_changes": [],
+        "reclassifications": [],
+        "anchors": [],
+        "review_evidence": {
+            "dimensions": "correctness and resume",
+            "largest_residual_risk": "later workflow integration",
+            "break_condition": "a text marker is required",
+        },
+        "pre_mortem": "A later caller could select the legacy path.",
+    }
+    canonical_response = json.dumps(
+        response, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    captured: dict[str, object] = {}
+
+    class FakeNativeAdapter:
+        def prepare_native_provider_input(self, request_bundle):  # type: ignore[no-untyped-def]
+            assert request_bundle is bundle
+            return PreparedProviderInput(
+                command=("claude",),
+                stdin_text=None,
+                components=(ProviderInputComponent("stdin_prompt", bundle.canonical_json),),
+            )
+
+    returned = {"canonical": canonical_response}
+
+    def fake_run_agent(_adapter, prompt, **kwargs):  # type: ignore[no-untyped-def]
+        captured["prompt"] = prompt
+        captured.update(kwargs)
+        return returned["canonical"]
+
+    monkeypatch.setattr(agent_runtime, "run_agent", fake_run_agent)
+    output = run_native_review_agent(
+        FakeNativeAdapter(),  # type: ignore[arg-type]
+        bundle,
+        config=OrchestratorConfig(),
+        shorten=lambda value, _maximum: value or "",
+        operation="claude_slice_review",
+        binding_fingerprint=fingerprint,
+    )
+
+    assert output.result.approval is True
+    assert output.request_id == bundle.bound_context.request_id
+    assert output.canonical_json == canonical_response
+    assert captured["prompt"] == bundle.canonical_json
+    assert isinstance(captured["prepared_provider_input"], PreparedProviderInput)
+
+    mismatched = {**response, "request_id": "native-review-request-" + "0" * 64}
+    returned["canonical"] = json.dumps(
+        mismatched, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    with pytest.raises(AgentOutputError) as raised:
+        run_native_review_agent(
+            FakeNativeAdapter(),  # type: ignore[arg-type]
+            bundle,
+            config=OrchestratorConfig(),
+            shorten=lambda value, _maximum: value or "",
+            operation="claude_slice_review",
+            binding_fingerprint=fingerprint,
+        )
+    assert "request-mismatch" in raised.value.technical_text
+    assert raised.value.provider_data == mismatched
 
 
 def test_budget_denial_happens_after_preparation_but_before_capability_or_process(

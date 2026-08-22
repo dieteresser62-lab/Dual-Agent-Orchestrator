@@ -28,7 +28,12 @@ from agent_adapters import (
 )
 from path_policy import PathPolicyError, resolve_repository_path
 from repo_changes import RepositoryChanges
-from contracts import ValidationAttestation
+from contracts import ContractResult, ValidationAttestation
+from native_review_contract import (
+    NativeReviewContractError,
+    parse_bound_native_contract_result,
+)
+from native_review_request import NativeReviewRequestBundle
 from validation_matrix import ValidationMatrixRunner, ValidationRequest
 from workflow_state import AgentFailureKind
 from artifact_models import ProviderUsagePayload
@@ -951,6 +956,7 @@ def run_agent(
     binding_fingerprint: str = "unbound",
     pre_start_callback: Callable[[ProviderInputMeasurement], object | None] | None = None,
     attempt_invocation: _ProviderAttemptInvocation | None = None,
+    prepared_provider_input: PreparedProviderInput | None = None,
 ) -> str:
     """Run an adapter command once, with optional live streaming and strict output checks."""
     agent_key = adapter.name
@@ -980,7 +986,9 @@ def run_agent(
             adapter.bind_reviewer_workspace(source_root, execution_root)
 
         prepare_input = getattr(adapter, "prepare_provider_input", None)
-        if callable(prepare_input):
+        if prepared_provider_input is not None:
+            prepared = prepared_provider_input
+        elif callable(prepare_input):
             prepared = prepare_input(prompt)
         else:
             legacy_command, legacy_stdin = adapter.build_command(prompt)
@@ -1223,6 +1231,159 @@ def run_agent(
             logger.warning("Adapter cleanup failed for %s: %s", agent_key, exc)
         if workspace is not None:
             workspace.cleanup()
+
+
+@dataclass(frozen=True, slots=True)
+class NativeAgentReviewOutput:
+    """One schema- and request-bound native reviewer result."""
+
+    result: ContractResult
+    canonical_json: str
+    request_id: str
+
+
+def run_native_review_agent(
+    adapter: AgentAdapter,
+    bundle: NativeReviewRequestBundle,
+    *,
+    config: OrchestratorConfig,
+    shorten: Callable[[str | None, int], str],
+    reviewer_manifest_paths: tuple[str, ...] | None = None,
+    operation: str,
+    binding_fingerprint: str,
+    pre_start_callback: Callable[[ProviderInputMeasurement], object | None] | None = None,
+    attempt_invocation: _ProviderAttemptInvocation | None = None,
+) -> NativeAgentReviewOutput:
+    """Run one native Claude review without legacy marker or repair parsing."""
+    prepare = getattr(adapter, "prepare_native_provider_input", None)
+    if not callable(prepare):
+        raise TypeError("native review adapter lacks prepare_native_provider_input")
+    prepared = prepare(bundle)
+    canonical = run_agent(
+        adapter,
+        bundle.canonical_json,
+        config=config,
+        shorten=shorten,
+        reviewer_repository_required=True,
+        reviewer_manifest_paths=reviewer_manifest_paths,
+        operation=operation,
+        binding_fingerprint=binding_fingerprint,
+        pre_start_callback=pre_start_callback,
+        attempt_invocation=attempt_invocation,
+        prepared_provider_input=prepared,
+    )
+    try:
+        document = json.loads(canonical)
+        if not isinstance(document, dict):
+            raise AgentOutputError("native review result must be a JSON object")
+        result = parse_bound_native_contract_result(document, bundle.bound_context)
+    except json.JSONDecodeError as exc:
+        raise AgentOutputError(
+            "native review result is not valid JSON",
+            technical_text=f"native-json-invalid: {exc}",
+        ) from exc
+    except NativeReviewContractError as exc:
+        raise AgentOutputError(
+            "native review result violates its bound contract",
+            provider_data=document,
+            technical_text=f"{exc.code.value}: {exc.detail}",
+        ) from exc
+    return NativeAgentReviewOutput(
+        result=result,
+        canonical_json=canonical,
+        request_id=bundle.bound_context.request_id,
+    )
+
+
+def run_native_review_agent_checked(
+    *,
+    adapter: AgentAdapter,
+    bundle: NativeReviewRequestBundle,
+    log_prefix: str,
+    config: OrchestratorConfig,
+    log_dir: Path,
+    write_file: Callable[[Path, str], None],
+    shorten: Callable[[str | None, int], str],
+    reviewer_manifest_paths: tuple[str, ...] | None,
+    operation: str,
+    binding_fingerprint: str,
+    pre_start_callback: Callable[[ProviderInputMeasurement], object | None] | None,
+    provider_attempt_lifecycle: ProviderAttemptLifecycle | None,
+    accepted_output_callback: (
+        Callable[[NativeAgentReviewOutput], None] | None
+    ) = None,
+) -> NativeAgentReviewOutput:
+    """Run one physical native review with the established attempt telemetry.
+
+    This deliberately has no marker validation, text repair, or provider retry.
+    Domain/schema rejection is a single typed output failure owned by the
+    workflow's resumable correction boundary.
+    """
+    invocation_id = uuid.uuid4().hex
+    attempt_invocation = (
+        _ProviderAttemptInvocation(provider_attempt_lifecycle)
+        if provider_attempt_lifecycle is not None
+        else None
+    )
+    try:
+        output = run_native_review_agent(
+            adapter,
+            bundle,
+            config=config,
+            shorten=shorten,
+            reviewer_manifest_paths=reviewer_manifest_paths,
+            operation=operation,
+            binding_fingerprint=binding_fingerprint,
+            pre_start_callback=pre_start_callback,
+            attempt_invocation=attempt_invocation,
+        )
+        log_path = log_dir / f"{log_prefix}.attempt-1.log"
+        write_file(log_path, output.canonical_json)
+        print_agent_output(
+            adapter.name,
+            log_path,
+            1,
+            output.canonical_json,
+            config=config,
+            shorten=shorten,
+        )
+        if accepted_output_callback is not None:
+            accepted_output_callback(output)
+        if attempt_invocation is not None:
+            attempt_invocation.finish(None, adapter.metadata)
+        return output
+    except AgentInvocationError as failure:
+        if attempt_invocation is not None:
+            attempt_invocation.finish(failure.kind, adapter.metadata)
+        raise
+    except ProviderInputBudgetExceeded:
+        raise
+    except Exception as exc:
+        failure = classify_agent_failure(
+            adapter.name,
+            exc,
+            invocation_id=invocation_id,
+        )
+        if attempt_invocation is not None:
+            attempt_invocation.finish(failure.kind, adapter.metadata)
+        failure_path = log_dir / f"{log_prefix}.attempt-1.failure.json"
+        write_file(
+            failure_path,
+            json.dumps(
+                {
+                    "agent": failure.agent_key,
+                    "failure_kind": failure.kind.value,
+                    "invocation_id": failure.invocation_id,
+                    "provider_text": failure.provider_text,
+                    "provider_diagnostic": failure.provider_data,
+                    "received_at": failure.received_at.isoformat(),
+                    "process_exit_code": failure.process_exit_code,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+        )
+        raise failure from exc
 
 
 _ISO_TIMESTAMP_PATTERN = re.compile(

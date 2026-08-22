@@ -7,7 +7,7 @@ import pytest
 
 from artifact_bridge import (
     ArtifactBridge, ArtifactBridgeError, attestation_payload, command_payload,
-    validation_request_payload,
+    review_payload, validation_request_payload,
 )
 from artifact_models import (
     ProviderAttemptPayload, ProviderInputComponentPayload,
@@ -15,7 +15,8 @@ from artifact_models import (
 )
 from artifact_store import ArtifactStore
 from contracts import (
-    ValidationAttestation, ValidationCommandSpec, ValidationRecord, ValidationStatus,
+    AgentRole, ContractResult, ReviewEvidence, ValidationAttestation,
+    ValidationCommandSpec, ValidationRecord, ValidationStatus,
 )
 from validation_matrix import ValidationCommand, ValidationRequest
 
@@ -120,6 +121,33 @@ def test_validation_request_mapping_keeps_matrix_argv() -> None:
     payload = validation_request_payload(request)
     assert payload.commands[0].argv == request.commands[0].argv
     assert payload.commands[0].mode == "argv"
+
+
+def test_native_review_mapping_preserves_request_and_response_binding() -> None:
+    result = ContractResult(
+        reviewer=AgentRole.CLAUDE,
+        approval=True,
+        stopped=False,
+        stop_request=None,
+        validation=None,
+        test_files=(),
+        pre_mortem="A replay implementation may accidentally invoke Claude twice.",
+        evidence=ReviewEvidence("resume", "record drift", "a second provider call"),
+        findings=(),
+        anchors=(),
+    )
+
+    payload = review_payload(
+        result,
+        work_unit_id=1,
+        transport_schema="native-claude-review-v1",
+        request_id=f"native-review-request-{'b' * 64}",
+        response_sha256="c" * 64,
+    )
+
+    assert payload.transport_schema == "native-claude-review-v1"
+    assert payload.request_id == f"native-review-request-{'b' * 64}"
+    assert payload.response_sha256 == "c" * 64
 
 
 def _measurement() -> ProviderInputMeasurementPayload:

@@ -122,7 +122,14 @@ def agent_result_payload(
     )
 
 
-def review_payload(result: ContractResult, *, work_unit_id: int | str) -> ReviewPayload:
+def review_payload(
+    result: ContractResult,
+    *,
+    work_unit_id: int | str,
+    transport_schema: str | None = None,
+    request_id: str | None = None,
+    response_sha256: str | None = None,
+) -> ReviewPayload:
     verdict = "stop" if result.stopped else "approved" if result.approval else "denied"
     evidence = None
     if result.evidence is not None:
@@ -139,6 +146,9 @@ def review_payload(result: ContractResult, *, work_unit_id: int | str) -> Review
         verdict=verdict,
         finding_ids=tuple(item.finding_id for item in result.findings),
         evidence=evidence,
+        transport_schema=transport_schema,
+        request_id=request_id,
+        response_sha256=response_sha256,
     )
 
 

@@ -113,3 +113,16 @@ def test_policy_rejects_duplicates_and_incomplete_tables() -> None:
         ProviderInputBudgetPolicy((rule, rule))
     with pytest.raises(ProviderInputBudgetError, match="complete"):
         ProviderInputBudgetPolicy((rule,))
+
+
+@pytest.mark.parametrize(
+    "name",
+    ("packet_chunk_001", "request_chunk_001", "evidence_asset_001"),
+)
+def test_provider_input_component_accepts_closed_indexed_names(name: str) -> None:
+    assert ProviderInputComponent(name, "payload").name == name
+
+
+def test_provider_input_component_rejects_unknown_indexed_name() -> None:
+    with pytest.raises(ValueError, match="unknown provider input component"):
+        ProviderInputComponent("arbitrary_chunk_001", "payload")

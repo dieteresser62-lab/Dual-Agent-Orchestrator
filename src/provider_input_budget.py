@@ -45,7 +45,9 @@ PROVIDER_INPUT_COMPONENT_NAMES = frozenset(
         "prompt_file",
     }
 )
-PACKET_CHUNK_NAME = re.compile(r"packet_chunk_[0-9]{3}")
+INDEXED_COMPONENT_NAME = re.compile(
+    r"(?:packet_chunk|request_chunk|evidence_asset)_[0-9]{3}"
+)
 
 
 class ProviderInputBudgetError(ValueError):
@@ -75,7 +77,7 @@ class ProviderInputComponent:
     def __post_init__(self) -> None:
         if (
             self.name not in PROVIDER_INPUT_COMPONENT_NAMES
-            and PACKET_CHUNK_NAME.fullmatch(self.name) is None
+            and INDEXED_COMPONENT_NAME.fullmatch(self.name) is None
         ):
             raise ValueError(f"unknown provider input component name: {self.name}")
         if not isinstance(self.content, str):

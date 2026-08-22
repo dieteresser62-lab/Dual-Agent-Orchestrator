@@ -221,6 +221,9 @@ class ReviewPayload:
     verdict: str
     finding_ids: tuple[str, ...]
     evidence: str | None
+    transport_schema: str | None = None
+    request_id: str | None = None
+    response_sha256: str | None = None
     status: ClassVar[str] = "decided"
     record_type: ClassVar[RecordType] = RecordType.REVIEW
 
@@ -235,6 +238,29 @@ class ReviewPayload:
             _require_text(self.evidence, "evidence")
         if self.verdict == "approved" and not self.finding_ids and self.evidence is None:
             raise ArtifactValidationError("an approval requires findings or review evidence")
+        native_fields = (
+            self.transport_schema,
+            self.request_id,
+            self.response_sha256,
+        )
+        if any(value is not None for value in native_fields) and not all(
+            value is not None for value in native_fields
+        ):
+            raise ArtifactValidationError(
+                "native review transport fields must be present together"
+            )
+        if self.transport_schema is not None:
+            if self.transport_schema != "native-claude-review-v1":
+                raise ArtifactValidationError("review transport_schema is unsupported")
+            if self.reviewer is not Role.CLAUDE:
+                raise ArtifactValidationError(
+                    "native Claude review transport requires reviewer=claude"
+                )
+            assert self.request_id is not None
+            assert self.response_sha256 is not None
+            if re.fullmatch(r"native-review-request-[0-9a-f]{64}", self.request_id) is None:
+                raise ArtifactValidationError("native review request_id is invalid")
+            _require_sha256(self.response_sha256, "response_sha256")
 
 
 @dataclass(frozen=True, slots=True)
@@ -792,7 +818,16 @@ def _payload_from_dict(record_type: RecordType, raw: Mapping[str, Any]) -> Artif
     if record_type is RecordType.DIAGNOSTIC:
         return DiagnosticPayload(Role(data["role"]), data["work_unit_id"], data["attempt"], data["output_sha256"], data["reason"])
     if record_type is RecordType.REVIEW:
-        return ReviewPayload(Role(data["reviewer"]), data["work_unit_id"], data["verdict"], tuple(data["finding_ids"]), data["evidence"])
+        return ReviewPayload(
+            Role(data["reviewer"]),
+            data["work_unit_id"],
+            data["verdict"],
+            tuple(data["finding_ids"]),
+            data["evidence"],
+            data.get("transport_schema"),
+            data.get("request_id"),
+            data.get("response_sha256"),
+        )
     if record_type is RecordType.FINDING_TRANSITION:
         return FindingTransitionPayload(data["finding_id"], Role(data["reporter"]), Role(data["actor"]), data["action"], FindingSeverity(data["severity"]), data["finding_status"], data["rationale"])
     if record_type is RecordType.VALIDATION_REQUEST:

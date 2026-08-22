@@ -8,6 +8,7 @@ import pytest
 
 from agent_runtime import (
     AgentInvocationError,
+    NativeAgentReviewOutput,
     QuotaReset,
     QuotaWaitPolicy,
     TransientRetryPolicy,
@@ -27,6 +28,8 @@ from contracts import (
     PlannedSlice,
     ReadinessMarker,
     StepContract,
+    ContractResult,
+    ReviewEvidence,
     ValidationAttestation,
     ValidationRecord,
     ValidationStatus,
@@ -61,6 +64,8 @@ from workflow_state import (
     WorkflowStep,
     WorkUnitKind,
     WorkUnitStatus,
+    ProtocolBinding,
+    ProtocolMode,
     init_workflow_state,
 )
 
@@ -563,6 +568,298 @@ def test_plan_chain_uses_codex_then_claude_then_antigravity() -> None:
         AgentRole.ANTIGRAVITY,
     ]
     assert driver.commit_calls == []
+
+
+def test_native_claude_review_bypasses_legacy_marker_parser(
+    monkeypatch,
+) -> None:
+    changes = _changes("b", "src/early.py", TEST_FILE)
+
+    @dataclass
+    class NativeDriver(FakeDriver):
+        persisted_native: list[tuple[NativeAgentReviewOutput, str, int]] = field(
+            default_factory=list
+        )
+
+        def invoke_reviewer(
+            self, invocation: ReviewerInvocation
+        ) -> NativeAgentReviewOutput:
+            self.reviewer_calls.append(invocation)
+            assert invocation.prompt == ""
+            assert invocation.native_request is not None
+            bound = invocation.native_request.bound_context
+            attestation = bound.context.validation_attestation
+            assert attestation is not None
+            result = ContractResult(
+                reviewer=AgentRole.CLAUDE,
+                approval=True,
+                stopped=False,
+                stop_request=None,
+                validation=attestation,
+                test_files=bound.context.test_files,
+                pre_mortem="A recovery branch may accidentally invoke Claude twice.",
+                evidence=ReviewEvidence(
+                    "correctness and resume",
+                    "record-ahead drift",
+                    "a second provider start",
+                ),
+                findings=bound.context.previous_findings,
+                anchors=(),
+            )
+            return NativeAgentReviewOutput(
+                result=result,
+                canonical_json=(
+                    '{"request_id":"' + bound.request_id + '","result":"approved"}'
+                ),
+                request_id=bound.request_id,
+            )
+
+        def persist_native_review_contract(
+            self,
+            output: NativeAgentReviewOutput,
+            fingerprint: str,
+            round_number: int,
+            previous_findings: tuple[FindingRecord, ...],
+        ) -> None:
+            assert previous_findings == ()
+            self.persisted_native.append((output, fingerprint, round_number))
+
+    state = replace(
+        _slice_state().with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW),
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V1,
+            "1",
+            "native-claude-review-v1",
+        ),
+    )
+    driver = NativeDriver(
+        snapshots=[changes], codex_outputs=[], reviewer_outputs=[]
+    )
+    monkeypatch.setattr(
+        "workflow.normalize_review_contract_output",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("legacy normalizer was called")
+        ),
+    )
+    monkeypatch.setattr(
+        "workflow.validate_review_response",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("legacy parser was called")
+        ),
+    )
+
+    advanced, history = WorkflowEngine(driver)._run_review(
+        state,
+        _context(),
+        WorkflowHistory(state.current_work_unit_id),
+        AgentRole.CLAUDE,
+    )
+
+    assert advanced.current_step is WorkflowStep.ANTIGRAVITY_SLICE_REVIEW
+    assert history.latest_claude_review is not None
+    assert len(driver.persisted_native) == 1
+    invocation = driver.reviewer_calls[0]
+    assert invocation.native_request is not None
+    assert invocation.native_request.document["authorized_paths"] == [
+        "src/early.py",
+        TEST_FILE,
+    ]
+
+
+def test_native_final_review_rejects_missing_codex_report_before_request() -> None:
+    changes = _changes("c", "src/early.py", TEST_FILE)
+    state = replace(
+        _slice_state().with_current_step(WorkflowStep.CLAUDE_FINAL_REVIEW),
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V1,
+            "1",
+            "native-claude-review-v1",
+        ),
+    )
+    contract = StepContract(
+        "native-final-review",
+        AgentRole.CLAUDE,
+        ApprovalMarker.FINAL,
+        "FINAL",
+        1,
+        changes.fingerprint,
+        _attestation(changes),
+    )
+
+    with pytest.raises(
+        WorkflowExecutionError,
+        match="requires a persisted Codex final report",
+    ):
+        WorkflowEngine._native_review_request(
+            state=state,
+            context=_context(),
+            history=WorkflowHistory(state.current_work_unit_id),
+            contract=contract,
+            changes=changes,
+            evidence_kind=EvidenceKind.FULL_BRANCH,
+            review_diff=changes.full_diff,
+            review_packet=None,
+            expected_test_files=(TEST_FILE,),
+        )
+
+
+@pytest.mark.parametrize(
+    ("step", "marker", "expected_kind", "evidence_kind"),
+    (
+        (
+            WorkflowStep.CLAUDE_PLAN_REVIEW,
+            ApprovalMarker.PLAN,
+            "plan",
+            EvidenceKind.FULL_SLICE,
+        ),
+        (
+            WorkflowStep.CLAUDE_SLICE_REVIEW,
+            ApprovalMarker.SLICE,
+            "slice",
+            EvidenceKind.FULL_SLICE,
+        ),
+        (
+            WorkflowStep.CLAUDE_FINAL_REVIEW,
+            ApprovalMarker.FINAL,
+            "final",
+            EvidenceKind.FULL_BRANCH,
+        ),
+    ),
+)
+def test_native_request_builder_covers_plan_slice_and_final_reviews(
+    step: WorkflowStep,
+    marker: ApprovalMarker,
+    expected_kind: str,
+    evidence_kind: EvidenceKind,
+) -> None:
+    changes = _changes("e", "src/early.py", TEST_FILE)
+    state = replace(
+        _slice_state().with_current_step(step),
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V1,
+            "1",
+            "native-claude-review-v1",
+        ),
+    )
+    history = WorkflowHistory(state.current_work_unit_id)
+    if marker is ApprovalMarker.FINAL:
+        history = replace(history, codex_final_report=_final_report())
+    contract = StepContract(
+        f"native-{expected_kind}-review",
+        AgentRole.CLAUDE,
+        marker,
+        "FINAL" if marker is ApprovalMarker.FINAL else "01",
+        1,
+        changes.fingerprint,
+        _attestation(changes),
+    )
+
+    bundle = WorkflowEngine._native_review_request(
+        state=state,
+        context=_context(),
+        history=history,
+        contract=contract,
+        changes=changes,
+        evidence_kind=evidence_kind,
+        review_diff=changes.full_diff,
+        review_packet=None,
+        expected_test_files=(TEST_FILE,),
+    )
+
+    assert bundle.document["review_kind"] == expected_kind
+    assert bundle.document["operation"] == step.value
+    evidence_ids = {
+        item["evidence_id"] for item in bundle.document["evidence_manifest"]
+    }
+    assert ("codex-final-report" in evidence_ids) is (
+        marker is ApprovalMarker.FINAL
+    )
+
+
+def test_native_record_ahead_recovery_receives_full_history_and_skips_provider() -> None:
+    changes = _changes("d", "src/early.py", TEST_FILE)
+
+    @dataclass
+    class RecoveringNativeDriver(FakeDriver):
+        recovered_history: WorkflowHistory | None = None
+        persisted_native: list[NativeAgentReviewOutput] = field(default_factory=list)
+
+        def recover_pending_native_reviewer(
+            self,
+            invocation: ReviewerInvocation,
+            contract: StepContract,
+            history: WorkflowHistory,
+        ) -> NativeAgentReviewOutput:
+            assert isinstance(history, WorkflowHistory)
+            assert len(history.events) == 1
+            assert invocation.native_request is not None
+            self.recovered_history = history
+            bound = invocation.native_request.bound_context
+            attestation = bound.context.validation_attestation
+            assert attestation == contract.validation_attestation
+            return NativeAgentReviewOutput(
+                result=ContractResult(
+                    reviewer=AgentRole.CLAUDE,
+                    approval=True,
+                    stopped=False,
+                    stop_request=None,
+                    validation=attestation,
+                    test_files=bound.context.test_files,
+                    pre_mortem="A recovery caller may pass only finding records.",
+                    evidence=ReviewEvidence(
+                        "record-ahead recovery",
+                        "call-site type drift",
+                        "the provider is invoked again",
+                    ),
+                    findings=history.findings,
+                    anchors=(),
+                ),
+                canonical_json=(
+                    '{"request_id":"' + bound.request_id + '","result":"approved"}'
+                ),
+                request_id=bound.request_id,
+            )
+
+        def invoke_reviewer(self, invocation: ReviewerInvocation):  # type: ignore[no-untyped-def]
+            raise AssertionError("provider must not run during record-ahead recovery")
+
+        def persist_native_review_contract(
+            self,
+            output: NativeAgentReviewOutput,
+            fingerprint: str,
+            round_number: int,
+            previous_findings: tuple[FindingRecord, ...],
+        ) -> None:
+            assert fingerprint == changes.fingerprint
+            assert round_number == 1
+            assert previous_findings == ()
+            self.persisted_native.append(output)
+
+    state = replace(
+        _slice_state().with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW),
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V1,
+            "1",
+            "native-claude-review-v1",
+        ),
+    )
+    history = WorkflowHistory(state.current_work_unit_id)
+    driver = RecoveringNativeDriver(
+        snapshots=[changes], codex_outputs=[], reviewer_outputs=[]
+    )
+
+    advanced, recovered = WorkflowEngine(driver)._run_review(
+        state,
+        _context(),
+        history,
+        AgentRole.CLAUDE,
+    )
+
+    assert driver.recovered_history is not None
+    assert len(driver.recovered_history.events) == 1
+    assert len(driver.persisted_native) == 1
+    assert advanced.current_step is WorkflowStep.ANTIGRAVITY_SLICE_REVIEW
+    assert recovered.latest_claude_review is not None
 
 
 def test_managed_audit_paths_are_added_after_codex_plan_only() -> None:

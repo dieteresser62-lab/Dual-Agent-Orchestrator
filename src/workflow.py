@@ -12,10 +12,19 @@ from typing import Callable, Protocol
 
 from agent_runtime import (
     AgentInvocationError,
+    NativeAgentReviewOutput,
     QuotaWaitPolicy,
     TransientRetryPolicy,
     wait_until_quota_resume,
     wait_until_transient_retry,
+)
+from native_review_contract import NativeReviewContext
+from native_review_request import (
+    NativeReviewEvidenceInput,
+    NativeReviewKind,
+    NativeReviewRequestBundle,
+    NativeReviewRequestSpec,
+    build_native_review_request,
 )
 from provider_input_budget import ProviderInputBudgetExceeded
 from final_review_preflight import FinalReviewPreflightDenied
@@ -95,6 +104,7 @@ from workflow_state import (
     WorkflowStep,
     WorkUnitKind,
     WorkUnitStatus,
+    NATIVE_CLAUDE_REVIEW_TRANSPORT,
     quota_resume_diff_acknowledgement,
 )
 
@@ -760,6 +770,12 @@ class ReviewerInvocation:
     paths: tuple[str, ...]
     prompt: str
     review_packet: ReviewPacket | None = None
+    native_request: NativeReviewRequestBundle | None = None
+    previous_findings: tuple[FindingRecord, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.native_request is not None and self.reviewer is not AgentRole.CLAUDE:
+            raise ValueError("native review requests are supported only for Claude")
 
 
 @dataclass(frozen=True)
@@ -827,7 +843,9 @@ class WorkflowDriver(Protocol):
         plan_only: bool,
     ) -> ValidationAttestation: ...
 
-    def invoke_reviewer(self, invocation: ReviewerInvocation) -> str: ...
+    def invoke_reviewer(
+        self, invocation: ReviewerInvocation
+    ) -> str | NativeAgentReviewOutput: ...
 
     def recover_failed_reviewer_output(
         self,
@@ -1910,6 +1928,12 @@ class WorkflowEngine:
             WorkflowStep.CLAUDE_FINAL_REVIEW,
             WorkflowStep.ANTIGRAVITY_FINAL_REVIEW,
         }
+        native_claude_review = (
+            reviewer is AgentRole.CLAUDE
+            and state.protocol_binding is not None
+            and state.protocol_binding.claude_review_transport
+            == NATIVE_CLAUDE_REVIEW_TRANSPORT
+        )
         if reviewer is AgentRole.ANTIGRAVITY and (
             history.latest_claude_review is None
             or history.latest_claude_review.approval is not True
@@ -1932,7 +1956,7 @@ class WorkflowEngine:
                     )
                 ),
             )
-            if callable(replay_loader)
+            if callable(replay_loader) and not native_claude_review
             else None
         )
         if replay is not None:
@@ -2247,17 +2271,21 @@ class WorkflowEngine:
                     ) from exc
                 history = replace(history, active_review_packet=review_packet)
                 self.driver.checkpoint(state, history)
-            prompt = build_v3_review_prompt(
-                assignment="",
-                evidence="",
-                contract=contract,
-                base_packet=review_packet.text,
-                base_digest=review_packet.digest,
-                claude_approval_fingerprint=(
-                    history.last_claude_fingerprint
-                    if reviewer is AgentRole.ANTIGRAVITY
-                    else None
-                ),
+            prompt = (
+                ""
+                if native_claude_review
+                else build_v3_review_prompt(
+                    assignment="",
+                    evidence="",
+                    contract=contract,
+                    base_packet=review_packet.text,
+                    base_digest=review_packet.digest,
+                    claude_approval_fingerprint=(
+                        history.last_claude_fingerprint
+                        if reviewer is AgentRole.ANTIGRAVITY
+                        else None
+                    ),
+                )
             )
         else:
             evidence = self._review_evidence(
@@ -2267,11 +2295,32 @@ class WorkflowEngine:
                 evidence_kind=evidence_kind,
                 review_diff=review_diff,
             )
-            prompt = build_v3_review_prompt(
-                assignment=context.assignment,
-                evidence=evidence,
-                contract=contract,
+            prompt = (
+                ""
+                if native_claude_review
+                else build_v3_review_prompt(
+                    assignment=context.assignment,
+                    evidence=evidence,
+                    contract=contract,
+                )
             )
+        native_request = (
+            self._native_review_request(
+                state=state,
+                context=context,
+                history=history,
+                contract=contract,
+                changes=changes,
+                evidence_kind=evidence_kind,
+                review_diff=review_diff,
+                review_packet=review_packet,
+                expected_test_files=(
+                    expected_test_files if not is_plan_review else ()
+                ),
+            )
+            if native_claude_review
+            else None
+        )
         invocation = ReviewerInvocation(
             work_unit_id=unit.work_unit_id,
             step=state.current_step,
@@ -2286,15 +2335,36 @@ class WorkflowEngine:
             ),
             prompt=prompt,
             review_packet=review_packet,
+            native_request=native_request,
+            previous_findings=history.findings,
         )
+        native_replay_loader = getattr(
+            self.driver, "recover_pending_native_reviewer", None
+        )
+        native_output = (
+            native_replay_loader(invocation, contract, history)
+            if native_request is not None and callable(native_replay_loader)
+            else None
+        )
+        if native_output is not None and not isinstance(
+            native_output, NativeAgentReviewOutput
+        ):
+            raise WorkflowExecutionError(
+                "native reviewer recovery returned an invalid result contract"
+            )
         failed_output_loader = getattr(
             self.driver, "recover_failed_reviewer_output", None
         )
-        output = (
+        output: str | NativeAgentReviewOutput | None = native_output
+        legacy_output = (
             failed_output_loader(invocation, contract, history.findings)
-            if callable(failed_output_loader)
+            if output is None
+            and native_request is None
+            and callable(failed_output_loader)
             else None
         )
+        if output is None:
+            output = legacy_output
         if output is None:
             state, output = self._invoke_role(
                 state,
@@ -2305,33 +2375,43 @@ class WorkflowEngine:
             )
         if output is None:
             return state, history
-        try:
-            result = self._validate_or_repair_review(
-                output=output,
-                contract=contract,
-                findings=history.findings,
+        if isinstance(output, NativeAgentReviewOutput):
+            result = output.result
+            self._persist_structured(
+                "persist_native_review_contract",
+                output,
+                changes.fingerprint,
+                review_round,
+                history.findings,
             )
-        except WorkflowContractError as exc:
-            failure_ordinal = len(unit.invocation_failures) + 1
-            failure = AgentInvocationError(
-                agent_key=reviewer.value,
-                kind=AgentFailureKind.OUTPUT,
-                invocation_id=(
-                    f"contract-{unit.work_unit_id}-{state.current_step.value}-"
-                    f"{failure_ordinal}"
-                ),
-                provider_text=str(exc),
-                technical_text=str(exc),
-                received_at=self.now_fn(),
+        else:
+            try:
+                result = self._validate_or_repair_review(
+                    output=output,
+                    contract=contract,
+                    findings=history.findings,
+                )
+            except WorkflowContractError as exc:
+                failure_ordinal = len(unit.invocation_failures) + 1
+                failure = AgentInvocationError(
+                    agent_key=reviewer.value,
+                    kind=AgentFailureKind.OUTPUT,
+                    invocation_id=(
+                        f"contract-{unit.work_unit_id}-{state.current_step.value}-"
+                        f"{failure_ordinal}"
+                    ),
+                    provider_text=str(exc),
+                    technical_text=str(exc),
+                    received_at=self.now_fn(),
+                )
+                state, _ = self._persist_invocation_failure(
+                    state, history, context, reviewer, failure
+                )
+                return state, history
+            self._persist_structured(
+                "persist_review_contract", result, output, changes.fingerprint,
+                review_round, history.findings
             )
-            state, _ = self._persist_invocation_failure(
-                state, history, context, reviewer, failure
-            )
-            return state, history
-        self._persist_structured(
-            "persist_review_contract", result, output, changes.fingerprint,
-            review_round, history.findings
-        )
         # The structured ReviewPayload is already durable at this point. Mirror every
         # parsed verdict, including STOP_REQUESTED, before checkpointing so a resumed
         # structured-v1 run cannot observe a chain-ahead reviewer decision.
@@ -2473,8 +2553,8 @@ class WorkflowEngine:
         history: WorkflowHistory,
         context: WorkflowContext,
         role: AgentRole,
-        invoke: Callable[[], str],
-    ) -> tuple[WorkflowState, str | None]:
+        invoke: Callable[[], str | NativeAgentReviewOutput],
+    ) -> tuple[WorkflowState, str | NativeAgentReviewOutput | None]:
         """Invoke one fixed role, persisting every failure before any optional wait."""
         while True:
             try:
@@ -3461,6 +3541,100 @@ class WorkflowEngine:
             f"CURRENT FINGERPRINT\n{changes.fingerprint}\n\n"
             f"STRUCTURED FINDINGS\n{findings}\n\n"
             f"REVIEW DIFF\n{review_diff}{final_dimensions}"
+        )
+
+    @staticmethod
+    def _native_review_request(
+        *,
+        state: WorkflowState,
+        context: WorkflowContext,
+        history: WorkflowHistory,
+        contract: StepContract,
+        changes: WorkflowChanges,
+        evidence_kind: EvidenceKind,
+        review_diff: str,
+        review_packet: ReviewPacket | None,
+        expected_test_files: tuple[str, ...],
+    ) -> NativeReviewRequestBundle:
+        """Build the native request only from typed local workflow values."""
+        review_kind = {
+            ApprovalMarker.PLAN: NativeReviewKind.PLAN,
+            ApprovalMarker.SLICE: NativeReviewKind.SLICE,
+            ApprovalMarker.FINAL: NativeReviewKind.FINAL,
+        }[contract.approval_marker]
+        native_context = NativeReviewContext(
+            run_id=state.run_id,
+            work_unit_id=str(state.current_work_unit_id),
+            operation=state.current_step.value,
+            diff_fingerprint=changes.fingerprint,
+            reviewer=contract.reviewer,
+            approval_marker=contract.approval_marker,
+            slice_id=contract.slice_id,
+            round_number=contract.round_number,
+            previous_findings=history.findings,
+            validation_attestation=contract.validation_attestation,
+            test_files=expected_test_files,
+            test_changes_approved=contract.test_changes_approved,
+            allow_new_observations=contract.allow_new_observations,
+            anchor_origin=contract.anchor_origin,
+            validation_command_prefixes=(
+                context.validation_matrix.finding_command_prefixes
+            ),
+        )
+        evidence: list[NativeReviewEvidenceInput] = [
+            NativeReviewEvidenceInput(
+                "assignment", "assignment", context.assignment
+            ),
+            NativeReviewEvidenceInput(
+                "distilled-context", "workflow_context", context.distilled_context
+            ),
+        ]
+        if review_packet is not None:
+            evidence.append(
+                NativeReviewEvidenceInput(
+                    "review-packet", "canonical_review_packet", review_packet.text
+                )
+            )
+        else:
+            evidence.append(
+                NativeReviewEvidenceInput(
+                    "review-diff", evidence_kind.value, review_diff
+                )
+            )
+        if evidence_kind is EvidenceKind.FULL_BRANCH:
+            if history.codex_final_report is None:
+                raise WorkflowExecutionError(
+                    "native Claude final review requires a persisted Codex final "
+                    "report before request construction"
+                )
+            evidence.append(
+                NativeReviewEvidenceInput(
+                    "codex-final-report",
+                    "codex_final_report",
+                    history.codex_final_report,
+                )
+            )
+        acceptance_criteria = tuple(
+            dict.fromkeys(
+                (
+                    context.slice_summary.strip(),
+                    "The decision must satisfy the bound review contract and the "
+                    "fingerprint-matching deterministic validation attestation.",
+                    "The reviewed changes must remain within the exact authorized "
+                    "path boundary and preserve resume/idempotency invariants.",
+                )
+            )
+        )
+        return build_native_review_request(
+            NativeReviewRequestSpec(
+                context=native_context,
+                review_kind=review_kind,
+                target_branch=context.current_branch or state.branch,
+                base_commit=changes.start_commit,
+                authorized_paths=tuple(sorted(set(changes.paths))),
+                acceptance_criteria=acceptance_criteria,
+                evidence=tuple(sorted(evidence, key=lambda item: item.evidence_id)),
+            )
         )
 
     @staticmethod

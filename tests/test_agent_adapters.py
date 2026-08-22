@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -14,9 +15,25 @@ from agent_adapters import (
     CLAUDE_REVIEW_PACKET_CHUNK_CHARS,
     ClaudeAdapter,
     CodexAdapter,
+    NativeClaudeReviewAdapter,
     build_agent_registry,
 )
 from agent_config import AgentSettings
+from contracts import (
+    AgentRole,
+    ApprovalMarker,
+    ValidationAttestation,
+    ValidationCommandSpec,
+    ValidationRecord,
+    ValidationStatus,
+)
+from native_review_contract import NativeReviewContext
+from native_review_request import (
+    NativeReviewEvidenceInput,
+    NativeReviewKind,
+    NativeReviewRequestSpec,
+    build_native_review_request,
+)
 from provider_input_budget import default_provider_input_budget_policy, measure_provider_input
 
 
@@ -36,6 +53,49 @@ def _settings(
         timeout_seconds=timeout,
         effort=effort,
         max_budget_usd=budget,
+    )
+
+
+def _native_bundle(*, large: bool = False):  # type: ignore[no-untyped-def]
+    fingerprint = "a" * 64
+    command = "python3 -m pytest tests/ -v"
+    attestation = ValidationAttestation(
+        attestation_id="validation-native-adapter",
+        diff_fingerprint=fingerprint,
+        expected_commands=(command,),
+        records=(ValidationRecord(ValidationStatus.PASS, command, 0, "passed"),),
+        output_digest=hashlib.sha256(b"passed").hexdigest(),
+        summary="1 passed",
+        command_specs=(
+            ValidationCommandSpec(argv=("python3", "-m", "pytest", "tests/", "-v")),
+        ),
+    )
+    context = NativeReviewContext(
+        run_id="run-native-adapter",
+        work_unit_id="work-unit-1",
+        operation="claude_slice_review",
+        diff_fingerprint=fingerprint,
+        reviewer=AgentRole.CLAUDE,
+        approval_marker=ApprovalMarker.SLICE,
+        slice_id="01",
+        round_number=1,
+        validation_attestation=attestation,
+        anchor_origin="plan",
+    )
+    return build_native_review_request(
+        NativeReviewRequestSpec(
+            context=context,
+            review_kind=NativeReviewKind.SLICE,
+            target_branch="feature/native",
+            base_commit="b" * 40,
+            authorized_paths=("src/native_review_request.py",),
+            acceptance_criteria=("Native output has no marker text.",),
+            evidence=(
+                NativeReviewEvidenceInput(
+                    "current_diff", "diff", "x" * (25_000 if large else 20)
+                ),
+            ),
+        )
     )
 
 
@@ -225,6 +285,145 @@ def test_prepared_claude_input_digest_ignores_random_runtime_transport_paths() -
             second_runtime_path not in component.content
             for component in second.components
         )
+    finally:
+        adapter.cleanup()
+
+
+def test_native_claude_adapter_is_separate_and_measures_all_request_channels() -> None:
+    legacy = ClaudeAdapter(_settings("claude"))
+    adapter = legacy.native_review_adapter()
+    assert isinstance(adapter, NativeClaudeReviewAdapter)
+    assert adapter is not legacy
+    bundle = _native_bundle(large=True)
+    prepared = adapter.prepare_native_provider_input(bundle)
+    try:
+        by_name = {item.name: item.content for item in prepared.components}
+        assert prepared.components[0].content == bundle.canonical_json
+        assert prepared.components[1].content == bundle.evidence_assets[0].content
+        assert "packet_manifest" in by_name
+        assert "system_policy" in by_name
+        assert "response_schema" in by_name
+        assert "start_directive" in by_name
+        schema = json.loads(by_name["response_schema"])
+        assert schema["type"] == "object"
+        assert "oneOf" not in schema
+        assert "allOf" not in schema
+        assert "anyOf" not in schema
+        assert "response" not in schema.get("properties", {})
+        assert schema["required"] == ["result"]
+        assert schema["properties"]["result"]["oneOf"] == [
+            {"$ref": "#/$defs/review_result"},
+            {"$ref": "#/$defs/stop_request"},
+        ]
+        assert schema["$defs"]["common"]["properties"]["reviewer"] == {
+            "const": "claude"
+        }
+        assert schema["$defs"]["finding"]["properties"]["finding_id"][
+            "pattern"
+        ].startswith("^C-")
+        assert "$schema" not in schema
+        assert "$id" not in schema
+        assert hashlib.sha256(
+            by_name["response_schema"].encode("utf-8")
+        ).hexdigest() == bundle.document["response_contract"]["schema_sha256"]
+        assert "STATUS: DONE" not in by_name["start_directive"]
+        assert prepared.stdin_text is None
+    finally:
+        adapter.cleanup()
+
+
+def test_native_claude_measurement_names_evidence_assets_separately() -> None:
+    adapter = NativeClaudeReviewAdapter(_settings("claude"))
+    prepared = adapter.prepare_native_provider_input(_native_bundle(large=True))
+    try:
+        component_names = {item.name for item in prepared.components}
+        assert "request_chunk_001" in component_names
+        assert "evidence_asset_001" in component_names
+        assert not any(name.startswith("packet_chunk_") for name in component_names)
+    finally:
+        adapter.cleanup()
+
+
+def test_native_claude_input_digest_ignores_random_runtime_paths() -> None:
+    bundle = _native_bundle(large=True)
+    first_adapter = NativeClaudeReviewAdapter(_settings("claude"))
+    second_adapter = NativeClaudeReviewAdapter(_settings("claude"))
+    first = first_adapter.prepare_native_provider_input(bundle)
+    second = second_adapter.prepare_native_provider_input(bundle)
+    policy = default_provider_input_budget_policy()
+    try:
+        assert first.components == second.components
+        first_measurement = measure_provider_input(
+            first,
+            provider="claude",
+            role="claude",
+            operation="claude_slice_review",
+            binding_fingerprint="a" * 64,
+            policy=policy,
+        )
+        second_measurement = measure_provider_input(
+            second,
+            provider="claude",
+            role="claude",
+            operation="claude_slice_review",
+            binding_fingerprint="a" * 64,
+            policy=policy,
+        )
+        assert first_measurement.input_digest == second_measurement.input_digest
+    finally:
+        first_adapter.cleanup()
+        second_adapter.cleanup()
+
+
+def test_native_claude_adapter_requires_explicit_settings() -> None:
+    with pytest.raises(TypeError, match="explicit Claude AgentSettings"):
+        NativeClaudeReviewAdapter()
+    with pytest.raises(TypeError, match="explicit Claude AgentSettings"):
+        NativeClaudeReviewAdapter(None)
+
+
+def test_native_claude_extracts_only_complete_structured_result() -> None:
+    adapter = NativeClaudeReviewAdapter(_settings("claude"))
+    bundle = _native_bundle()
+    adapter.prepare_native_provider_input(bundle)
+    response = {
+        "schema_version": "native-agent-review-result-v1",
+        "result_type": "review_result",
+        "request_id": bundle.bound_context.request_id,
+        "reviewer": "claude",
+        "decision": "approved",
+        "new_findings": [],
+        "status_changes": [],
+        "reclassifications": [],
+        "anchors": [],
+        "review_evidence": {
+            "dimensions": "correctness, failure paths, resume",
+            "largest_residual_risk": "pilot integration",
+            "break_condition": "text marker fallback is used",
+        },
+        "pre_mortem": "Recovery could rebuild another request.",
+    }
+    envelope = json.dumps(
+        {
+            "is_error": False,
+            "structured_output": {"result": response},
+            "permission_denials": [],
+        }
+    )
+    try:
+        assert json.loads(adapter.extract_output(envelope, "", {})) == response
+        with pytest.raises(AgentOutputError):
+            adapter.extract_output(
+                json.dumps(
+                    {
+                        "is_error": False,
+                        "structured_output": {"response": json.dumps(response)},
+                        "permission_denials": [],
+                    }
+                ),
+                "",
+                {},
+            )
     finally:
         adapter.cleanup()
 

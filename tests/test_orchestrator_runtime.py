@@ -9,13 +9,19 @@ from pathlib import Path
 
 import orchestrator
 import pytest
-from agent_runtime import AgentInvocationError, QuotaReset, QuotaWaitPolicy
+from agent_runtime import (
+    AgentInvocationError,
+    NativeAgentReviewOutput,
+    QuotaReset,
+    QuotaWaitPolicy,
+)
 from audit_trail import ValidationAuditEvent
 from artifact_models import (
     CorrectionWorkUnitPayload,
     PlanPayload,
     QuotaPausePayload,
     RecordType,
+    ReviewPayload,
     Role,
 )
 from artifact_store import ArtifactStore
@@ -31,8 +37,10 @@ from contracts import (
     PlannedSlice,
     StepContract,
     ValidationAttestation,
+    ValidationCommandSpec,
     ValidationRecord,
     ValidationStatus,
+    ReviewEvidence,
     validate_review_response,
 )
 from git_service import GitTransactionError
@@ -68,6 +76,17 @@ from workflow_state import (
 )
 from workflow_state import AgentFailureKind
 from provider_input_budget import default_provider_input_budget_policy
+from native_review_contract import (
+    NativeReviewContext,
+    canonical_native_review_json,
+    parse_bound_native_contract_result,
+)
+from native_review_request import (
+    NativeReviewEvidenceInput,
+    NativeReviewKind,
+    NativeReviewRequestSpec,
+    build_native_review_request,
+)
 
 
 def _git(root: Path, *args: str) -> str:
@@ -207,6 +226,19 @@ def test_fresh_workflow_is_immutably_bound_to_structured_v1(tmp_path: Path) -> N
     )
     assert state.protocol_binding == ProtocolBinding(
         ProtocolMode.STRUCTURED_V1, "1"
+    )
+
+    native = orchestrator._fresh_state(
+        task_file=task,
+        run_id="structured-native-cutover",
+        repository_root=repository,
+        task_contract=parse_task_contract(task.read_text(encoding="utf-8")),
+        native_claude_reviews=True,
+    )
+    assert native.protocol_binding == ProtocolBinding(
+        ProtocolMode.STRUCTURED_V1,
+        "1",
+        "native-claude-review-v1",
     )
 
 
@@ -1236,6 +1268,171 @@ def test_structured_bind_persists_contract_and_active_work_unit_once(
         RecordType.TASK,
         RecordType.WORK_UNIT,
     )
+
+
+def test_native_review_record_ahead_recovery_reuses_bound_json_without_provider(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/native-record-ahead")
+    task = repository / "task.md"
+    _write_task(task, "feature/native-record-ahead", "src/runtime.py")
+    head = _git(repository, "rev-parse", "HEAD")
+    fingerprint = "b" * 64
+    state = init_workflow_state(
+        run_id="native-record-ahead",
+        task_file=str(task),
+        branch="feature/native-record-ahead",
+        branch_base=head,
+        slice_count=1,
+        task_digest="a" * 64,
+        task_scope_patterns=("src/runtime.py",),
+        target_branch="feature/native-record-ahead",
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V1,
+            "1",
+            "native-claude-review-v1",
+        ),
+    ).complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    ).bind_current_slice_git_boundary(
+        start_commit=head,
+        scope_paths=("src/runtime.py",),
+        start_fingerprint="c" * 64,
+    ).with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW)
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    driver.bind_work_unit(state)
+    command = "python3 -m pytest tests/ -v"
+    attestation = ValidationAttestation(
+        "validation-native-recovery",
+        fingerprint,
+        (command,),
+        (ValidationRecord(ValidationStatus.PASS, command, 0, "passed"),),
+        "d" * 64,
+        "passed",
+        command_specs=(
+            ValidationCommandSpec(
+                argv=("python3", "-m", "pytest", "tests/", "-v")
+            ),
+        ),
+    )
+    driver.persist_validation_attestation(attestation)
+    context = NativeReviewContext(
+        run_id=state.run_id,
+        work_unit_id=str(state.current_work_unit_id),
+        operation=WorkflowStep.CLAUDE_SLICE_REVIEW.value,
+        diff_fingerprint=fingerprint,
+        reviewer=AgentRole.CLAUDE,
+        approval_marker=ApprovalMarker.SLICE,
+        slice_id="01",
+        round_number=1,
+        validation_attestation=attestation,
+        validation_command_prefixes=(("python3", "-m", "pytest"),),
+    )
+    bundle = build_native_review_request(
+        NativeReviewRequestSpec(
+            context=context,
+            review_kind=NativeReviewKind.SLICE,
+            target_branch=state.branch,
+            base_commit=head,
+            authorized_paths=("src/runtime.py",),
+            acceptance_criteria=("Native recovery does not invoke Claude twice.",),
+            evidence=(
+                NativeReviewEvidenceInput(
+                    "review-diff", "full_slice", "diff -- src/runtime.py"
+                ),
+            ),
+        )
+    )
+    response = {
+        "schema_version": "native-agent-review-result-v1",
+        "result_type": "review_result",
+        "request_id": bundle.bound_context.request_id,
+        "reviewer": "claude",
+        "decision": "approved",
+        "new_findings": [],
+        "status_changes": [],
+        "reclassifications": [],
+        "anchors": [],
+        "review_evidence": {
+            "dimensions": "persistence and recovery",
+            "largest_residual_risk": "log loss",
+            "break_condition": "Claude is started twice",
+        },
+        "pre_mortem": "A response log could be detached from its record.",
+    }
+    canonical = canonical_native_review_json(response)
+    result = parse_bound_native_contract_result(
+        response, bundle.bound_context
+    )
+    output = NativeAgentReviewOutput(
+        result=result,
+        canonical_json=canonical,
+        request_id=bundle.bound_context.request_id,
+    )
+    driver.persist_native_review_contract(output, fingerprint, 1, ())
+    driver.log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = (
+        driver.log_dir
+        / (
+            f"work-unit-{state.current_work_unit_id:04d}-claude_slice_review-"
+            "round-0001.attempt-1.log"
+        )
+    )
+    log_path.write_text(canonical, encoding="utf-8")
+    invocation = ReviewerInvocation(
+        work_unit_id=state.current_work_unit_id,
+        step=WorkflowStep.CLAUDE_SLICE_REVIEW,
+        reviewer=AgentRole.CLAUDE,
+        round_number=1,
+        evidence_kind=EvidenceKind.FULL_SLICE,
+        fingerprint=fingerprint,
+        paths=("src/runtime.py",),
+        prompt="",
+        native_request=bundle,
+    )
+    contract = StepContract(
+        "native-recovery",
+        AgentRole.CLAUDE,
+        ApprovalMarker.SLICE,
+        "01",
+        1,
+        fingerprint,
+        attestation,
+    )
+
+    recovered = driver.recover_pending_native_reviewer(
+        invocation,
+        contract,
+        WorkflowHistory(state.current_work_unit_id),
+    )
+
+    assert recovered == output
+    reviews = tuple(
+        item
+        for item in ArtifactStore(repository, state.run_id).load_chain()
+        if isinstance(item.payload, ReviewPayload)
+    )
+    assert len(reviews) == 1
+    assert reviews[0].payload.request_id == bundle.bound_context.request_id
+
+    log_path.unlink()
+    with pytest.raises(
+        WorkflowExecutionError,
+        match="no unique response-digest-bound log",
+    ):
+        driver.recover_pending_native_reviewer(
+            invocation,
+            contract,
+            WorkflowHistory(state.current_work_unit_id),
+        )
 
 
 def test_structured_bind_survives_round_number_increase_within_same_work_unit(

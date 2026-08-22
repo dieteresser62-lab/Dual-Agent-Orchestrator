@@ -310,6 +310,7 @@ Für deterministische Negativ- und Fortsetzungsszenarien kann ein State-v3-JSON-
 | `--force-overwrite-state` | automatisch bei abgeschlossenem Zustand | Trotz vorhandenen Zustands einen neuen Lauf beginnen; explizite Verwendung umgeht den normalen Zustandsschutz. |
 | `--strict-preflight` | aus | Einen Fehler der Provider-DNS-Vorabprüfung als fatal behandeln. |
 | `--skip-git-check` / `--no-skip-git-check` | aus; im Watch-Modus an | Prüfung auf einen sauberen Repositoryzustand überschreiben. |
+| `--native-claude-reviews` / `--no-native-claude-reviews` | aus | Nur beim Start eines neuen `structured-v1`-Laufs den experimentellen nativen JSON-Transport für Claude-Reviews unveränderlich binden oder ausdrücklich deaktivieren. Ohne Schalter bleibt auch der Watch-Modus auf dem Texttransport; beim Resume muss eine explizite Angabe der bereits persistierten Bindung entsprechen. |
 | `--manual-slice-gate` / `--no-manual-slice-gate` | Repositorykonfiguration oder aus | Vor jedem Slice-Commit eine explizite Freigabe verlangen. |
 | `--plan-gate` / `--no-plan-gate` | Repositorykonfiguration oder aus | Nach Claude-/Antigravity-Planfreigabe eine explizite fingerprintgebundene Benutzerfreigabe vor dem Plancommit verlangen. |
 | `--test-change-gate` / `--no-test-change-gate` | Repositorykonfiguration oder aus | Vor Review und Commit eines Slices mit Testdateiänderungen eine zusätzliche fingerprintgebundene Benutzerfreigabe verlangen. Ohne Gate bleiben Scopeprüfung, Tests und beide KI-Reviews verpflichtend. |

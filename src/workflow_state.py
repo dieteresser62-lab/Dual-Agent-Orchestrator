@@ -144,12 +144,16 @@ class ProtocolMode(str, Enum):
     STRUCTURED_V1 = "structured-v1"
 
 
+NATIVE_CLAUDE_REVIEW_TRANSPORT = "native-claude-review-v1"
+
+
 @dataclass(frozen=True)
 class ProtocolBinding:
     """Immutable selection of the persistence protocol for one workflow."""
 
     mode: ProtocolMode
     schema_version: str
+    claude_review_transport: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.mode, ProtocolMode):
@@ -163,16 +167,43 @@ class ProtocolBinding:
             raise WorkflowStateValidationError(
                 f"protocol mode {self.mode.value} requires schema_version {expected}"
             )
+        if self.claude_review_transport is not None:
+            if self.mode is not ProtocolMode.STRUCTURED_V1:
+                raise WorkflowStateValidationError(
+                    "native Claude review transport requires structured-v1"
+                )
+            if self.claude_review_transport != NATIVE_CLAUDE_REVIEW_TRANSPORT:
+                raise WorkflowStateValidationError(
+                    "claude_review_transport is unsupported"
+                )
 
     def to_dict(self) -> dict[str, str]:
-        return {"mode": self.mode.value, "schema_version": self.schema_version}
+        result = {"mode": self.mode.value, "schema_version": self.schema_version}
+        if self.claude_review_transport is not None:
+            result["claude_review_transport"] = self.claude_review_transport
+        return result
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> ProtocolBinding:
-        _require_exact_keys(raw, {"mode", "schema_version"}, "protocol binding")
+        keys = set(raw)
+        if keys not in (
+            {"mode", "schema_version"},
+            {"mode", "schema_version", "claude_review_transport"},
+        ):
+            raise WorkflowStateValidationError(
+                "protocol binding has unknown or missing fields"
+            )
         return cls(
             mode=_enum_value(ProtocolMode, raw["mode"], "protocol mode"),
             schema_version=_string(raw["schema_version"], "protocol schema_version"),
+            claude_review_transport=(
+                _string(
+                    raw["claude_review_transport"],
+                    "protocol claude_review_transport",
+                )
+                if "claude_review_transport" in raw
+                else None
+            ),
         )
 
 
