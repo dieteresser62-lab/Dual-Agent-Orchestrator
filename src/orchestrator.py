@@ -3609,6 +3609,16 @@ def run_production_workflow(
             if inherited != state:
                 state = inherited
                 driver.checkpoint(state, history)
+            elif (existing_approval := _current_gate_approval(state)) is not None:
+                decided = engine.decide_current_gate(
+                    state,
+                    history,
+                    approved=True,
+                    decided_by=existing_approval.decided_by,
+                    decided_at=existing_approval.decided_at,
+                    rationale=existing_approval.rationale,
+                )
+                state, history = decided.state, decided.history
             elif args.gate_decision is not None:
                 decided = engine.decide_current_gate(
                     state,
@@ -3782,6 +3792,29 @@ def _inherit_redundant_test_gate(state: WorkflowState) -> WorkflowState:
     ):
         return state
     return state.inherit_prior_test_approval(gate.fingerprint, gate.paths)
+
+
+def _current_gate_approval(state: WorkflowState) -> GateDecisionRecord | None:
+    """Return an exact immutable approval when the same gate was reopened."""
+    current = state.current_work_unit
+    gate = current.gate
+    if (
+        current.status is not WorkUnitStatus.AWAITING_USER_DECISION
+        or gate.fingerprint is None
+    ):
+        return None
+    return next(
+        (
+            decision
+            for decision in reversed(current.gate_decisions)
+            if decision.approved
+            and decision.reason is gate.reason
+            and decision.fingerprint == gate.fingerprint
+            and decision.paths == gate.paths
+            and decision.resume_step is gate.resume_step
+        ),
+        None,
+    )
 
 
 def _recover_legacy_plan_only_post_gate(state: WorkflowState) -> WorkflowState:

@@ -2680,6 +2680,70 @@ def test_runtime_inherits_exact_prior_test_gate_before_early_resume_return() -> 
     assert resumed.current_work_unit.active_test_paths == (test_path,)
 
 
+def test_runtime_recognizes_exact_reopened_gate_approval_for_plain_resume() -> None:
+    paths = ("src/agent_runtime.py", "tests/test_agent_runtime.py")
+    fingerprint = "a" * 64
+    state = orchestrator.init_workflow_state(
+        run_id="resume-reopened-user-gate",
+        task_file="/repo/inbox/native-review.md",
+        branch="feature/native-review",
+        branch_base="b" * 40,
+        slice_count=1,
+    ).await_user_gate(
+        reason=GateReason.UNEXPECTED_FILE,
+        detail="reviewed diagnostic hotfix",
+        fingerprint=fingerprint,
+        paths=paths,
+    ).record_user_gate_decision(
+        approved=True,
+        fingerprint=fingerprint,
+        paths=paths,
+        decided_by="dieter",
+        decided_at="2026-08-23T10:24:26+00:00",
+        rationale="fingerprint-bound hotfix reviewed",
+    ).await_user_gate(
+        reason=GateReason.UNEXPECTED_FILE,
+        detail="same gate rediscovered after resume",
+        fingerprint=fingerprint,
+        paths=paths,
+    )
+
+    approval = orchestrator._current_gate_approval(state)
+
+    assert approval is state.current_work_unit.gate_decisions[0]
+    assert approval.rationale == "fingerprint-bound hotfix reviewed"
+
+
+def test_runtime_does_not_reuse_gate_approval_for_changed_fingerprint() -> None:
+    paths = ("src/agent_runtime.py", "tests/test_agent_runtime.py")
+    state = orchestrator.init_workflow_state(
+        run_id="resume-changed-user-gate",
+        task_file="/repo/inbox/native-review.md",
+        branch="feature/native-review",
+        branch_base="b" * 40,
+        slice_count=1,
+    ).await_user_gate(
+        reason=GateReason.UNEXPECTED_FILE,
+        detail="first hotfix fingerprint",
+        fingerprint="a" * 64,
+        paths=paths,
+    ).record_user_gate_decision(
+        approved=True,
+        fingerprint="a" * 64,
+        paths=paths,
+        decided_by="dieter",
+        decided_at="2026-08-23T10:24:26+00:00",
+        rationale="first fingerprint reviewed",
+    ).await_user_gate(
+        reason=GateReason.UNEXPECTED_FILE,
+        detail="changed repository fingerprint",
+        fingerprint="c" * 64,
+        paths=paths,
+    )
+
+    assert orchestrator._current_gate_approval(state) is None
+
+
 def test_new_watch_task_does_not_require_a_conventional_base_branch(
     tmp_path: Path, monkeypatch
 ) -> None:
