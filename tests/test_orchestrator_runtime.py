@@ -94,6 +94,7 @@ from native_review_request import (
     build_native_review_request,
 )
 from artifact_replay import replay_artifacts, replay_findings
+from artifact_bridge import ArtifactBridgeError, finding_payload
 from native_codex_contract import (
     NativeCodexContext,
     NativeCodexRequestKind,
@@ -1734,6 +1735,362 @@ def test_native_review_persists_open_status_rationale_for_authoritative_replay(
         "opened",
         "status_changed",
     )
+
+
+def _finding_transition_driver(
+    tmp_path: Path, run_id: str
+) -> tuple[ProductionWorkflowDriver, object, FindingRecord]:
+    repository = _repository(tmp_path, f"feature/{run_id}")
+    head = _git(repository, "rev-parse", "HEAD")
+    state = init_workflow_state(
+        run_id=run_id,
+        task_file=str(tmp_path / "task.md"),
+        branch=f"feature/{run_id}",
+        branch_base=head,
+        slice_count=1,
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V1,
+            "1",
+            claude_review_transport="native-claude-review-v1",
+        ),
+    ).bind_current_slice_git_boundary(
+        start_commit=head,
+        scope_paths=("src/runtime.py",),
+        start_fingerprint="c" * 64,
+    )
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    driver.bind_work_unit(state)
+    finding = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="Finding transition identity must be durable.",
+        acceptance_test="Replay the transition without duplication.",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
+    return driver, state, finding
+
+
+def _finding_review(finding: FindingRecord) -> ContractResult:
+    return ContractResult(
+        reviewer=AgentRole.CLAUDE,
+        approval=False,
+        stopped=False,
+        stop_request=None,
+        validation=None,
+        test_files=(),
+        pre_mortem=None,
+        evidence=None,
+        findings=(finding,),
+        anchors=(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("transition_identity", "action"),
+    (
+        ("opened", "opened"),
+        ("reclassified", "reclassified"),
+        ("status_changed", "status_changed"),
+    ),
+)
+def test_structured_finding_transition_reuses_semantically_identical_old_key(
+    tmp_path: Path, transition_identity: str, action: str
+) -> None:
+    driver, state, finding = _finding_transition_driver(
+        tmp_path, f"old-key-{transition_identity}"
+    )
+    previous: tuple[FindingRecord, ...] = ()
+    current = finding
+    rationale = finding.summary
+    if transition_identity == "reclassified":
+        previous = (finding,)
+        current = replace(
+            finding,
+            finding_class=FindingClass.OBSERVATION,
+            status_rationale="The issue is non-blocking.",
+        )
+        rationale = current.status_rationale or current.summary
+    elif transition_identity == "status_changed":
+        previous = (finding,)
+        current = replace(
+            finding,
+            status=FindingStatus.CLOSED,
+            status_rationale="The issue is fixed.",
+        )
+        rationale = current.status_rationale or current.summary
+    fingerprint = "d" * 64
+    old_key = f"finding:C-01:{transition_identity}:1:claude"
+    bridge = driver._artifact_bridge
+    assert bridge is not None
+    old_record = bridge.append(
+        finding_payload(
+            current,
+            action=action,
+            rationale=rationale,
+            work_unit_id=state.current_work_unit_id,
+        ),
+        logical_id="finding-C-01",
+        idempotency_key=old_key,
+        fingerprint_sha256=fingerprint,
+    )
+
+    driver._persist_review_finding_transitions(
+        _finding_review(current),
+        fingerprint=fingerprint,
+        round_number=1,
+        previous_findings=previous,
+        structured=True,
+    )
+
+    records = tuple(
+        item
+        for item in bridge.store.load_chain()
+        if isinstance(item.payload, FindingTransitionPayload)
+    )
+    assert records == (old_record,)
+
+
+def test_structured_finding_transition_old_key_from_other_work_unit_is_not_reused(
+    tmp_path: Path,
+) -> None:
+    driver, state, finding = _finding_transition_driver(tmp_path, "old-key-other-unit")
+    bridge = driver._artifact_bridge
+    assert bridge is not None
+    old_key = "finding:C-01:opened:1:claude"
+    bridge.append(
+        finding_payload(
+            finding,
+            rationale=finding.summary,
+            work_unit_id="999",
+        ),
+        logical_id="finding-C-01",
+        idempotency_key=old_key,
+        fingerprint_sha256="d" * 64,
+    )
+
+    driver._persist_review_finding_transitions(
+        _finding_review(finding),
+        fingerprint="d" * 64,
+        round_number=1,
+        previous_findings=(),
+        structured=True,
+    )
+    records = tuple(
+        item
+        for item in bridge.store.load_chain()
+        if isinstance(item.payload, FindingTransitionPayload)
+    )
+    assert tuple(item.payload.work_unit_id for item in records) == (
+        "999",
+        str(state.current_work_unit_id),
+    )
+    assert records[1].idempotency_key == (
+        f"finding:C-01:opened:work_unit:{state.current_work_unit_id}:1:claude"
+    )
+
+
+def test_structured_finding_transition_old_key_conflict_in_same_work_unit_fails_closed(
+    tmp_path: Path,
+) -> None:
+    driver, state, finding = _finding_transition_driver(tmp_path, "old-key-conflict")
+    bridge = driver._artifact_bridge
+    assert bridge is not None
+    bridge.append(
+        finding_payload(
+            finding,
+            rationale="Conflicting historical rationale.",
+            work_unit_id=state.current_work_unit_id,
+        ),
+        logical_id="finding-C-01",
+        idempotency_key="finding:C-01:opened:1:claude",
+        fingerprint_sha256="d" * 64,
+    )
+
+    with pytest.raises(ArtifactBridgeError, match="differs semantically"):
+        driver._persist_review_finding_transitions(
+            _finding_review(finding),
+            fingerprint="d" * 64,
+            round_number=1,
+            previous_findings=(),
+            structured=True,
+        )
+
+
+def test_status_rationale_key_resume_boundary_keeps_existing_identity(
+    tmp_path: Path,
+) -> None:
+    driver, state, finding = _finding_transition_driver(
+        tmp_path, "status-rationale-resume"
+    )
+    reaffirmed = replace(finding, status_rationale="Keep the blocker open.")
+    review = _finding_review(reaffirmed)
+
+    driver._persist_review_finding_transitions(
+        _finding_review(finding),
+        fingerprint="d" * 64,
+        round_number=1,
+        previous_findings=(),
+        structured=True,
+    )
+    driver._persist_review_finding_transitions(
+        review,
+        fingerprint="e" * 64,
+        round_number=2,
+        previous_findings=(finding,),
+        structured=True,
+    )
+    driver._persist_review_finding_transitions(
+        review,
+        fingerprint="e" * 64,
+        round_number=2,
+        previous_findings=(finding,),
+        structured=True,
+    )
+
+    bridge = driver._artifact_bridge
+    assert bridge is not None
+    replay = replay_artifacts(bridge.store.load_chain(), state.run_id)
+    records = tuple(
+        item
+        for item in replay.records
+        if isinstance(item.payload, FindingTransitionPayload)
+    )
+    assert len(records) == 2
+    assert records[1].idempotency_key == (
+        f"finding:C-01:status_rationale:{state.current_work_unit_id}:2:claude"
+    )
+    assert replay_findings(replay, state.current_work_unit_id) == (reaffirmed,)
+
+
+def test_unstructured_finding_transition_key_is_unchanged(tmp_path: Path) -> None:
+    driver, _, finding = _finding_transition_driver(tmp_path, "legacy-key")
+    driver._persist_review_finding_transitions(
+        _finding_review(finding),
+        fingerprint="d" * 64,
+        round_number=1,
+        previous_findings=(),
+        structured=False,
+    )
+    bridge = driver._artifact_bridge
+    assert bridge is not None
+    records = tuple(
+        item
+        for item in bridge.store.load_chain()
+        if isinstance(item.payload, FindingTransitionPayload)
+    )
+    assert len(records) == 1
+    assert records[0].idempotency_key == "finding:C-01:opened:1:claude"
+    assert records[0].payload.work_unit_id is None
+
+
+def test_structured_finding_transition_keys_separate_work_units(
+    tmp_path: Path,
+) -> None:
+    driver, state, finding = _finding_transition_driver(tmp_path, "separate-units")
+    review = _finding_review(finding)
+    driver._persist_review_finding_transitions(
+        review,
+        fingerprint="d" * 64,
+        round_number=1,
+        previous_findings=(),
+        structured=True,
+    )
+    driver._persist_review_finding_transitions(
+        review,
+        fingerprint="d" * 64,
+        round_number=1,
+        previous_findings=(),
+        structured=True,
+    )
+    next_state = state.complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    ).bind_current_slice_git_boundary(
+        start_commit=state.branch_base,
+        scope_paths=("src/runtime.py",),
+        start_fingerprint="c" * 64,
+    )
+    driver.bind_work_unit(next_state)
+    driver._persist_review_finding_transitions(
+        review,
+        fingerprint="d" * 64,
+        round_number=1,
+        previous_findings=(),
+        structured=True,
+    )
+
+    bridge = driver._artifact_bridge
+    assert bridge is not None
+    replay = replay_artifacts(bridge.store.load_chain(), state.run_id)
+    records = tuple(
+        item
+        for item in replay.records
+        if isinstance(item.payload, FindingTransitionPayload)
+    )
+    assert tuple(item.payload.work_unit_id for item in records) == (
+        str(state.current_work_unit_id),
+        str(next_state.current_work_unit_id),
+    )
+    assert len({item.idempotency_key for item in records}) == 2
+    assert replay_findings(replay, state.current_work_unit_id) == (finding,)
+    assert replay_findings(replay, next_state.current_work_unit_id) == (finding,)
+
+
+def test_structured_reclassification_and_status_change_have_distinct_keys(
+    tmp_path: Path,
+) -> None:
+    driver, state, finding = _finding_transition_driver(
+        tmp_path, "reclassify-and-close"
+    )
+    changed = replace(
+        finding,
+        finding_class=FindingClass.OBSERVATION,
+        status=FindingStatus.CLOSED,
+        status_rationale="The issue is fixed and no longer blocking.",
+    )
+    driver._persist_review_finding_transitions(
+        _finding_review(finding),
+        fingerprint="d" * 64,
+        round_number=1,
+        previous_findings=(),
+        structured=True,
+    )
+    driver._persist_review_finding_transitions(
+        _finding_review(changed),
+        fingerprint="e" * 64,
+        round_number=2,
+        previous_findings=(finding,),
+        structured=True,
+    )
+
+    bridge = driver._artifact_bridge
+    assert bridge is not None
+    replay = replay_artifacts(bridge.store.load_chain(), state.run_id)
+    records = tuple(
+        item
+        for item in replay.records
+        if isinstance(item.payload, FindingTransitionPayload)
+    )
+    assert tuple(item.payload.action for item in records) == (
+        "opened",
+        "reclassified",
+        "status_changed",
+    )
+    assert len({item.idempotency_key for item in records}) == 3
+    projected = replay_findings(replay, state.current_work_unit_id)
+    assert len(projected) == 1
+    assert projected[0].finding_class is FindingClass.OBSERVATION
+    assert projected[0].status is FindingStatus.CLOSED
+    assert projected[0].status_rationale == changed.status_rationale
+    assert projected[0].class_history == (FindingClass.BLOCKER,)
 
 
 def test_native_codex_record_ahead_recovery_completes_finding_responses(

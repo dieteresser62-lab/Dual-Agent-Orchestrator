@@ -1954,6 +1954,13 @@ class ProductionWorkflowDriver(WorkflowDriver):
     ) -> None:
         if self._artifact_bridge is None:
             return
+        work_unit_id: str | None = None
+        if structured:
+            if self.active_state is None:
+                raise WorkflowExecutionError(
+                    "structured finding persistence lacks an active work unit"
+                )
+            work_unit_id = str(self.active_state.current_work_unit_id)
         previous_by_id = {item.finding_id: item for item in previous_findings}
         for finding in result.findings:
             previous = previous_by_id.get(finding.finding_id)
@@ -1987,31 +1994,58 @@ class ProductionWorkflowDriver(WorkflowDriver):
                             "status_changed",
                             finding.status_rationale or finding.summary,
                             (
-                                "status_rationale:"
-                                f"{self.active_state.current_work_unit_id}"
-                                if structured and self.active_state is not None
+                                f"status_rationale:{work_unit_id}"
+                                if structured
                                 else "status_rationale"
                             ),
                         )
                     )
             for action, rationale, transition_identity in transitions:
-                self._artifact_bridge.append(
-                    finding_payload(
-                        finding,
-                        action=action,
-                        rationale=rationale,
-                        work_unit_id=(
-                            self.active_state.current_work_unit_id
-                            if structured
-                            else None
-                        ),
-                    ),
-                    logical_id=f"finding-{finding.finding_id}",
-                    idempotency_key=(
+                payload = finding_payload(
+                    finding,
+                    action=action,
+                    rationale=rationale,
+                    work_unit_id=work_unit_id,
+                )
+                logical_id = f"finding-{finding.finding_id}"
+                legacy_key = (
+                    f"finding:{finding.finding_id}:{transition_identity}:"
+                    f"{round_number}:{result.reviewer.value}"
+                )
+                idempotency_key = legacy_key
+                if structured and not transition_identity.startswith(
+                    "status_rationale:"
+                ):
+                    assert work_unit_id is not None
+                    idempotency_key = (
                         f"finding:{finding.finding_id}:{transition_identity}:"
-                        f"{round_number}:"
+                        f"work_unit:{work_unit_id}:{round_number}:"
                         f"{result.reviewer.value}"
-                    ),
+                    )
+                    legacy_record = next(
+                        (
+                            record
+                            for record in self._artifact_bridge.store.load_chain()
+                            if record.idempotency_key == legacy_key
+                        ),
+                        None,
+                    )
+                    if (
+                        legacy_record is not None
+                        and getattr(legacy_record.payload, "work_unit_id", None)
+                        == work_unit_id
+                    ):
+                        self._artifact_bridge.append(
+                            payload,
+                            logical_id=logical_id,
+                            idempotency_key=legacy_key,
+                            fingerprint_sha256=fingerprint,
+                        )
+                        continue
+                self._artifact_bridge.append(
+                    payload,
+                    logical_id=logical_id,
+                    idempotency_key=idempotency_key,
                     fingerprint_sha256=fingerprint,
                 )
 

@@ -22,6 +22,21 @@ wenn der Lauf abgeschlossen oder sein manueller Abschluss dokumentiert ist.
 
 ## Archive
 
+### Work-Unit-gebundene Findingtransition-Identität – manueller Abschluss
+
+Pfad: [`archive/native-finding-transition-identity-manual-completion/`](archive/native-finding-transition-identity-manual-completion/)
+
+Der native Bootstrap-Slice bindet strukturierte Findingtransition-Schlüssel
+an die autoritative Work Unit, wahrt historische Schlüssel bei exakt gleicher
+Semantik und hält Konflikte weiterhin fail-closed an. Die vollständige Suite
+bestand mit `1216 passed`, und Claude genehmigte den exakten
+Implementierungsfingerprint ohne Finding. Antigravity konnte wegen einer
+unvollständigen selektiven Snapshotgrenze keinen Reviewvertrag erzeugen; der
+Benutzer verzichtete ausdrücklich auf diesen Slicereview und einen zusätzlichen
+branchweiten Komplettreview. Laufstatus, Freigabeabweichung und sämtliche
+Paketdateien stehen im
+[Archivbericht](archive/native-finding-transition-identity-manual-completion/README.md).
+
 ### Geschlossene native Codex–Claude-Korrekturschleife
 
 Pfad: [`archive/native-codex-claude-correction-loop/`](archive/native-codex-claude-correction-loop/)

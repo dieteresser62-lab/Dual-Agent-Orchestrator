@@ -200,7 +200,7 @@ class NativeReviewRequestBundle:
                 "request content differs from its bound digest",
             )
         expected_response_schema_digest = hashlib.sha256(
-            _canonical_json(native_review_provider_response_schema()).encode("utf-8")
+            _canonical_json(self.provider_response_schema).encode("utf-8")
         ).hexdigest()
         if document["response_contract"] != {
             "schema_version": RESPONSE_SCHEMA_VERSION,
@@ -276,6 +276,15 @@ class NativeReviewRequestBundle:
             )
         return parsed
 
+    @property
+    def provider_response_schema(self) -> dict[str, Any]:
+        """Return the provider schema specialized to this request context."""
+        context = self.bound_context.context
+        return native_review_provider_response_schema(
+            reviewer=context.reviewer,
+            allow_anchors=context.anchor_origin is not None,
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class NativeReviewRepairError:
@@ -316,6 +325,8 @@ def validate_native_review_request_document(document: Mapping[str, Any]) -> None
 
 def native_review_provider_response_schema(
     reviewer: AgentRole = AgentRole.CLAUDE,
+    *,
+    allow_anchors: bool = True,
 ) -> dict[str, Any]:
     """Return the exact provider-facing schema bound by native requests.
 
@@ -348,6 +359,10 @@ def native_review_provider_response_schema(
             "type": "string",
             "pattern": finding_pattern,
         }
+    if not allow_anchors:
+        definitions["review_result"]["allOf"][1]["properties"]["anchors"][
+            "maxItems"
+        ] = 0
     return {
         "title": "Native agent review result v1 provider projection",
         "type": "object",
@@ -375,7 +390,10 @@ def build_native_review_request(
             NativeReviewRequestErrorCode.EVIDENCE_INVALID,
             "inline evidence limit must be positive",
         )
-    response_schema = native_review_provider_response_schema()
+    response_schema = native_review_provider_response_schema(
+        reviewer=spec.context.reviewer,
+        allow_anchors=spec.context.anchor_origin is not None,
+    )
     response_schema_digest = hashlib.sha256(
         _canonical_json(response_schema).encode("utf-8")
     ).hexdigest()
