@@ -1976,10 +1976,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
         current = self._rendered_changes.get(current_fingerprint)
         if current is None:
             raise WorkflowExecutionError("current correction fingerprint was not collected")
-        return (
-            f"Correction delta since {previous_fingerprint}:\n"
-            f"{current.full_diff}"
-        )
+        return current.full_diff
 
     def detect_test_changes(
         self, changes: WorkflowChanges, patterns: tuple[str, ...]

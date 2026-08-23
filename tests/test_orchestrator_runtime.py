@@ -114,6 +114,29 @@ def _git(root: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
+def test_production_correction_delta_preserves_unified_diff_boundary() -> None:
+    fingerprint = "f" * 64
+    unified_diff = (
+        "diff --git a/src/core.py b/src/core.py\n"
+        "--- a/src/core.py\n"
+        "+++ b/src/core.py\n"
+        "@@ -1 +1 @@\n"
+        "-old\n"
+        "+new\n"
+    )
+    driver = object.__new__(ProductionWorkflowDriver)
+    driver._rendered_changes = {
+        fingerprint: WorkflowChanges(
+            start_commit="a" * 40,
+            fingerprint=fingerprint,
+            paths=("src/core.py",),
+            full_diff=unified_diff,
+        )
+    }
+
+    assert driver.collect_correction_delta("e" * 64, fingerprint) == unified_diff
+
+
 def test_every_orchestrated_agent_step_has_a_provider_input_budget_rule() -> None:
     policy = default_provider_input_budget_policy()
     operations = {
