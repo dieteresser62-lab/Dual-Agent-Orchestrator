@@ -2112,6 +2112,60 @@ def test_approved_plan_waits_at_fingerprint_bound_user_gate() -> None:
     assert completed.completed
 
 
+def test_reopened_exact_gate_reuses_immutable_approval_without_dual_write() -> None:
+    state = init_workflow_state(
+        run_id="run-reopened-gate",
+        task_file="/repo/task.md",
+        branch="feature/workflow",
+        branch_base=START_COMMIT,
+        slice_count=1,
+        timestamp="2026-08-12T10:00:00+00:00",
+    )
+    paths = ("src/agent_runtime.py", "tests/test_agent_runtime.py")
+    fingerprint = "a" * 64
+    gated = state.await_user_gate(
+        reason=GateReason.UNEXPECTED_FILE,
+        detail="reviewed hotfix paths",
+        fingerprint=fingerprint,
+        paths=paths,
+    )
+    driver = FakeDriver(snapshots=[], codex_outputs=[], reviewer_outputs=[])
+    persisted: list[GateDecisionRecord] = []
+    driver.persist_gate_decision = persisted.append  # type: ignore[attr-defined]
+    engine = WorkflowEngine(driver)
+
+    first = engine.decide_current_gate(
+        gated,
+        WorkflowHistory(1),
+        approved=True,
+        decided_by="dieter",
+        decided_at="2026-08-23T10:24:26+00:00",
+        rationale="fingerprint-bound hotfix reviewed",
+    )
+    reopened = first.state.await_user_gate(
+        reason=GateReason.UNEXPECTED_FILE,
+        detail="same gate rediscovered after resume",
+        fingerprint=fingerprint,
+        paths=paths,
+    )
+    resumed = engine.decide_current_gate(
+        reopened,
+        first.history,
+        approved=True,
+        decided_by="dieter",
+        decided_at="2026-08-23T10:32:55+00:00",
+        rationale="second confirmation must not rewrite immutable audit semantics",
+    )
+
+    assert resumed.state.current_work_unit.status is WorkUnitStatus.IN_PROGRESS
+    assert resumed.state.current_work_unit.gate.reason is GateReason.NONE
+    assert len(resumed.state.current_work_unit.gate_decisions) == 1
+    assert resumed.state.current_work_unit.gate_decisions[0].rationale == (
+        "fingerprint-bound hotfix reviewed"
+    )
+    assert len(persisted) == 1
+
+
 def test_plan_only_rejects_future_product_slices_as_executable_records() -> None:
     state = init_workflow_state(
         run_id="run-plan-only",

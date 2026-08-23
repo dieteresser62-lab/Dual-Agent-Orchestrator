@@ -1472,6 +1472,7 @@ class WorkflowEngine:
             raise WorkflowExecutionError(
                 "current gate is not a fingerprint-bound Slice-11 user gate"
             )
+        prior_decision_count = len(state.current_work_unit.gate_decisions)
         try:
             updated = state.record_user_gate_decision(
                 approved=approved,
@@ -1483,9 +1484,10 @@ class WorkflowEngine:
             )
         except ValueError as exc:
             raise WorkflowExecutionError(f"invalid user gate decision: {exc}") from exc
-        self._persist_structured(
-            "persist_gate_decision", updated.current_work_unit.gate_decisions[-1]
-        )
+        if len(updated.current_work_unit.gate_decisions) > prior_decision_count:
+            self._persist_structured(
+                "persist_gate_decision", updated.current_work_unit.gate_decisions[-1]
+            )
         self.driver.checkpoint(updated, history)
         return WorkflowRunResult(updated, history)
 

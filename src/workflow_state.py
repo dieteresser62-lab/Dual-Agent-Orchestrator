@@ -1780,7 +1780,20 @@ class WorkflowState:
             raise WorkflowStateValidationError(
                 "user decision does not match the persisted gate fingerprint and paths"
             )
-        decision = GateDecisionRecord(
+        existing_approval = next(
+            (
+                decision
+                for decision in reversed(current.gate_decisions)
+                if approved
+                and decision.approved
+                and decision.reason is gate.reason
+                and decision.fingerprint == fingerprint
+                and decision.paths == normalized_paths
+                and decision.resume_step is gate.resume_step
+            ),
+            None,
+        )
+        decision = existing_approval or GateDecisionRecord(
             approved=approved,
             reason=gate.reason,
             fingerprint=fingerprint,
@@ -1804,7 +1817,11 @@ class WorkflowState:
                 completed_side_effects = (*completed_side_effects, acknowledgement)
         updated_unit = replace(
             current,
-            gate_decisions=(*current.gate_decisions, decision),
+            gate_decisions=(
+                current.gate_decisions
+                if existing_approval is not None
+                else (*current.gate_decisions, decision)
+            ),
             status=(
                 WorkUnitStatus.IN_PROGRESS
                 if approved
