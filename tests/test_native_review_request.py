@@ -38,6 +38,7 @@ from native_review_request import (
     build_native_review_request,
     canonical_native_review_request_json,
     load_native_review_request_schema,
+    native_review_provider_response_schema,
 )
 from review_packets import ReviewPacket, build_review_packet
 
@@ -108,6 +109,47 @@ def _spec() -> NativeReviewRequestSpec:
             ),
         ),
     )
+
+
+def test_provider_schema_forbids_anchors_without_bound_origin() -> None:
+    without_origin = build_native_review_request(
+        replace(_spec(), context=replace(_context(), anchor_origin=None))
+    )
+    with_origin = build_native_review_request(_spec())
+
+    anchors_without_origin = without_origin.provider_response_schema["$defs"][
+        "review_result"
+    ]["allOf"][1]["properties"]["anchors"]
+    anchors_with_origin = with_origin.provider_response_schema["$defs"][
+        "review_result"
+    ]["allOf"][1]["properties"]["anchors"]
+
+    assert anchors_without_origin["maxItems"] == 0
+    assert anchors_with_origin["maxItems"] == 64
+    assert without_origin.document["response_contract"]["schema_sha256"] == (
+        hashlib.sha256(
+            json.dumps(
+                without_origin.provider_response_schema,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+    )
+    assert without_origin.document["response_contract"] != with_origin.document[
+        "response_contract"
+    ]
+    assert (
+        without_origin.bound_context.request_id
+        != with_origin.bound_context.request_id
+    )
+
+
+def test_default_provider_schema_remains_anchor_capable() -> None:
+    schema = native_review_provider_response_schema()
+    assert schema["$defs"]["review_result"]["allOf"][1]["properties"]["anchors"][
+        "maxItems"
+    ] == 64
 
 
 def _packet_evidence(*, content: str = "+new content") -> NativeReviewEvidenceInput:

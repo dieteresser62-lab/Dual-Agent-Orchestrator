@@ -64,7 +64,9 @@ def _settings(
     )
 
 
-def _native_bundle(*, large: bool = False):  # type: ignore[no-untyped-def]
+def _native_bundle(
+    *, large: bool = False, anchor_origin: str | None = "plan"
+):  # type: ignore[no-untyped-def]
     fingerprint = "a" * 64
     command = "python3 -m pytest tests/ -v"
     attestation = ValidationAttestation(
@@ -88,7 +90,7 @@ def _native_bundle(*, large: bool = False):  # type: ignore[no-untyped-def]
         slice_id="01",
         round_number=1,
         validation_attestation=attestation,
-        anchor_origin="plan",
+        anchor_origin=anchor_origin,
     )
     return build_native_review_request(
         NativeReviewRequestSpec(
@@ -438,6 +440,9 @@ def test_native_claude_adapter_is_separate_and_measures_all_request_channels() -
         assert schema["$defs"]["finding"]["properties"]["finding_id"][
             "pattern"
         ].startswith("^C-")
+        assert schema["$defs"]["review_result"]["allOf"][1]["properties"][
+            "anchors"
+        ]["maxItems"] == 64
         assert "$schema" not in schema
         assert "$id" not in schema
         assert hashlib.sha256(
@@ -445,6 +450,23 @@ def test_native_claude_adapter_is_separate_and_measures_all_request_channels() -
         ).hexdigest() == bundle.document["response_contract"]["schema_sha256"]
         assert "STATUS: DONE" not in by_name["start_directive"]
         assert prepared.stdin_text is None
+    finally:
+        adapter.cleanup()
+
+
+def test_native_claude_adapter_forbids_anchors_without_bound_origin() -> None:
+    adapter = NativeClaudeReviewAdapter(_settings("claude"))
+    bundle = _native_bundle(anchor_origin=None)
+    prepared = adapter.prepare_native_provider_input(bundle)
+    try:
+        by_name = {item.name: item.content for item in prepared.components}
+        schema = json.loads(by_name["response_schema"])
+        assert schema["$defs"]["review_result"]["allOf"][1]["properties"][
+            "anchors"
+        ]["maxItems"] == 0
+        assert hashlib.sha256(
+            by_name["response_schema"].encode("utf-8")
+        ).hexdigest() == bundle.document["response_contract"]["schema_sha256"]
     finally:
         adapter.cleanup()
 

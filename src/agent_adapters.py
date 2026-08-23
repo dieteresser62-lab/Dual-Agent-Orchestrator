@@ -17,10 +17,7 @@ from native_review_contract import (
     NativeReviewContractError,
     canonical_native_review_json,
 )
-from native_review_request import (
-    NativeReviewRequestBundle,
-    native_review_provider_response_schema,
-)
+from native_review_request import NativeReviewRequestBundle
 from native_codex_contract import (
     NativeCodexContractError,
     canonical_native_codex_json,
@@ -883,7 +880,7 @@ class NativeClaudeReviewAdapter(ClaudeAdapter):
             "\n".join(manifest_lines) + "\n", encoding="utf-8"
         )
         read_call_budget = 1 + len(manifest_entries)
-        response_schema = native_review_provider_response_schema()
+        response_schema = bundle.provider_response_schema
         response_schema_json = json.dumps(
             response_schema, ensure_ascii=False, sort_keys=True, separators=(",", ":")
         )
