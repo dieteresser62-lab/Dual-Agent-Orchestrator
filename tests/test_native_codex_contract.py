@@ -136,9 +136,33 @@ def test_historical_plan_result_without_dispositions_remains_readable() -> None:
     assert "finding_dispositions" not in (
         persisted_schema["$defs"]["plan_result"]["required"]
     )
-    assert "finding_dispositions" in (
-        provider_schema["$defs"]["plan_result"]["required"]
-    )
+    assert provider_schema["type"] == "object"
+    assert provider_schema["required"] == ["result"]
+    assert "oneOf" not in provider_schema
+    assert "finding_dispositions" in provider_schema["$defs"]["plan_result"][
+        "required"
+    ]
+
+
+def test_provider_schema_uses_explicit_scalar_types_and_closed_objects() -> None:
+    provider_schema = native_codex_provider_response_schema()
+
+    def visit(node: object) -> None:
+        if isinstance(node, dict):
+            assert "uniqueItems" not in node
+            assert "oneOf" not in node
+            if "const" in node or "enum" in node:
+                assert "type" in node
+            if node.get("type") == "object" and "properties" in node:
+                assert node.get("additionalProperties") is False
+                assert set(node["properties"]) == set(node.get("required", []))
+            for value in node.values():
+                visit(value)
+        elif isinstance(node, list):
+            for value in node:
+                visit(value)
+
+    visit(provider_schema)
 
 
 def test_plan_revision_requires_every_open_finding_disposition() -> None:

@@ -471,6 +471,11 @@ class NativeCodexAdapter(CodexAdapter):
             ) from exc
         if not isinstance(document, dict):
             raise AgentOutputError("native Codex result must be one JSON object")
+        if tuple(document) != ("result",) or not isinstance(document["result"], dict):
+            raise AgentOutputError(
+                "native Codex result must use the closed provider envelope"
+            )
+        document = document["result"]
         if self._native_request_id is None:
             raise AgentOutputError("native Codex adapter has no bound request id")
         if document.get("request_id") != self._native_request_id:

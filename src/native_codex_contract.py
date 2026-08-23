@@ -211,12 +211,45 @@ def native_codex_provider_response_schema() -> dict[str, Any]:
     The bundled v1 schema accepts an omitted plan disposition list so already
     persisted plan results remain readable.  Every newly invoked provider is
     held to the stronger writer contract and must emit the field explicitly.
+
+    OpenAI Structured Outputs requires an object at the schema root.  The
+    persisted contract is a discriminated top-level union, so the provider
+    projection places that union below one required ``result`` property.  The
+    adapter unwraps the envelope before applying the unchanged local contract.
     """
     schema = copy.deepcopy(load_native_codex_schema())
     required = schema["$defs"]["plan_result"]["required"]
     if "finding_dispositions" not in required:
         required.append("finding_dispositions")
-    return schema
+    # The full local schema retains stricter replay checks.  OpenAI Structured
+    # Outputs does not support ``uniqueItems``; duplicates are rejected again
+    # by the bound domain parser before any result becomes authoritative.
+    pending: list[object] = [schema["$defs"]]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, dict):
+            node.pop("uniqueItems", None)
+            pending.extend(node.values())
+        elif isinstance(node, list):
+            pending.extend(node)
+    return {
+        "title": "Native Codex result v1 provider projection",
+        "type": "object",
+        "properties": {
+            "result": {
+                "anyOf": [
+                    {"$ref": "#/$defs/plan_result"},
+                    {"$ref": "#/$defs/implementation_result"},
+                    {"$ref": "#/$defs/correction_result"},
+                    {"$ref": "#/$defs/final_report_result"},
+                    {"$ref": "#/$defs/stop_result"},
+                ]
+            }
+        },
+        "required": ["result"],
+        "additionalProperties": False,
+        "$defs": schema["$defs"],
+    }
 
 
 def validate_native_codex_document(document: Mapping[str, Any]) -> None:
