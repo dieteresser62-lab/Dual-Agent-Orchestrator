@@ -151,6 +151,7 @@ def test_provider_schema_uses_explicit_scalar_types_and_closed_objects() -> None
         if isinstance(node, dict):
             assert "uniqueItems" not in node
             assert "oneOf" not in node
+            assert "(?" not in str(node.get("pattern", ""))
             if "const" in node or "enum" in node:
                 assert "type" in node
             if node.get("type") == "object" and "properties" in node:

@@ -222,13 +222,16 @@ def native_codex_provider_response_schema() -> dict[str, Any]:
     if "finding_dispositions" not in required:
         required.append("finding_dispositions")
     # The full local schema retains stricter replay checks.  OpenAI Structured
-    # Outputs does not support ``uniqueItems``; duplicates are rejected again
-    # by the bound domain parser before any result becomes authoritative.
+    # Outputs does not support ``uniqueItems`` or regex lookarounds.  Those
+    # constraints are enforced again by the bound domain parser before any
+    # result becomes authoritative.
     pending: list[object] = [schema["$defs"]]
     while pending:
         node = pending.pop()
         if isinstance(node, dict):
             node.pop("uniqueItems", None)
+            if "(?" in str(node.get("pattern", "")):
+                node.pop("pattern")
             pending.extend(node.values())
         elif isinstance(node, list):
             pending.extend(node)
