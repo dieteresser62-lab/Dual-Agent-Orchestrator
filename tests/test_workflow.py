@@ -588,6 +588,69 @@ def test_plan_chain_uses_codex_then_claude_then_antigravity() -> None:
     assert driver.commit_calls == []
 
 
+def test_plan_change_boundary_honors_exact_fingerprint_bound_path_approval() -> None:
+    state = init_workflow_state(
+        run_id="run-plan-approved-hotfix",
+        task_file="/repo/task.md",
+        branch="feature/workflow",
+        branch_base=START_COMMIT,
+        slice_count=1,
+        timestamp="2026-08-12T10:00:00+00:00",
+        task_scope_patterns=("docs/internal/plan.md",),
+    )
+    changes = _changes(
+        "1",
+        "docs/internal/plan.md",
+        "src/agent_runtime.py",
+        "tests/test_agent_runtime.py",
+    )
+    context = replace(
+        _context(),
+        plan_only=True,
+        task_scope_patterns=("docs/internal/plan.md",),
+        work_plan_path="docs/internal/plan.md",
+    )
+    engine = WorkflowEngine(
+        FakeDriver(snapshots=[], codex_outputs=[], reviewer_outputs=[])
+    )
+
+    unexpected = engine._validate_change_boundary(
+        state,
+        changes,
+        WorkUnitKind.PLAN,
+        context=context,
+    )
+    assert unexpected == ("src/agent_runtime.py", "tests/test_agent_runtime.py")
+
+    gated = state.await_user_gate(
+        reason=GateReason.UNEXPECTED_FILE,
+        detail="reviewed hotfix paths",
+        fingerprint=changes.fingerprint,
+        paths=unexpected,
+    )
+    approved = gated.record_user_gate_decision(
+        approved=True,
+        fingerprint=changes.fingerprint,
+        paths=unexpected,
+        decided_by="dieter",
+        decided_at="2026-08-23T10:24:26+00:00",
+        rationale="fingerprint-bound hotfix reviewed",
+    )
+
+    assert engine._validate_change_boundary(
+        approved,
+        changes,
+        WorkUnitKind.PLAN,
+        context=context,
+    ) == ()
+    assert engine._validate_change_boundary(
+        approved,
+        replace(changes, fingerprint="2" * 64),
+        WorkUnitKind.PLAN,
+        context=context,
+    ) == unexpected
+
+
 def test_native_claude_review_bypasses_legacy_marker_parser(
     monkeypatch,
 ) -> None:

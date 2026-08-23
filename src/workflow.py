@@ -3559,11 +3559,24 @@ class WorkflowEngine:
                 and changes.paths == (".orchestrator/plan-output.md",)
             ):
                 return ()
-            return tuple(
+            unexpected = tuple(
                 path
                 for path in changes.paths
                 if not matches_path_patterns(path, context.task_scope_patterns)
             )
+            if unexpected and any(
+                state.current_work_unit.has_gate_approval(
+                    reason,
+                    changes.fingerprint,
+                    unexpected,
+                )
+                for reason in (
+                    GateReason.UNEXPECTED_FILE,
+                    GateReason.QUOTA_RESUME_DIFF,
+                )
+            ):
+                return ()
+            return unexpected
         scope = state.current_slice.scope_paths
         if not scope:
             raise WorkflowExecutionError("slice review requires a persisted Git boundary")
