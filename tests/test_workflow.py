@@ -25,6 +25,7 @@ from contracts import (
     FindingClass,
     FindingOrigin,
     FindingRecord,
+    FindingResponse,
     FindingResponseDecision,
     FindingStatus,
     PlannedSlice,
@@ -284,7 +285,21 @@ class FakeDriver:
     checkpoints: list = field(default_factory=list)
     checkpoint_histories: list = field(default_factory=list)
     require_checkpointed_attestation: bool = False
+    authoritative_finding_error: str | None = None
+    authoritative_finding_calls: list[tuple[str, tuple[FindingRecord, ...]]] = field(
+        default_factory=list
+    )
     snapshot_index: int = -1
+
+    def authoritative_native_findings(
+        self,
+        state: WorkflowState,
+        mirror_findings: tuple[FindingRecord, ...],
+    ) -> tuple[FindingRecord, ...]:
+        self.authoritative_finding_calls.append((state.current_step.value, mirror_findings))
+        if self.authoritative_finding_error is not None:
+            raise WorkflowExecutionError(self.authoritative_finding_error)
+        return mirror_findings
 
     def _assert_checkpointed_attestation(self, fingerprint: str) -> None:
         if not self.require_checkpointed_attestation:
@@ -632,7 +647,8 @@ def test_native_claude_review_bypasses_legacy_marker_parser(
         protocol_binding=ProtocolBinding(
             ProtocolMode.STRUCTURED_V1,
             "1",
-            "native-claude-review-v1",
+            claude_review_transport="native-claude-review-v1",
+            codex_result_transport="native-codex-v1",
         ),
     )
     driver = NativeDriver(
@@ -858,6 +874,733 @@ def test_native_codex_plan_bypasses_legacy_marker_parser(monkeypatch) -> None:
     invocation = driver.codex_calls[0]
     assert invocation.native_request is not None
     assert invocation.native_request.document["request_type"] == "plan"
+
+
+@pytest.mark.parametrize(
+    "step",
+    (WorkflowStep.CODEX_PLAN_REVISION, WorkflowStep.CODEX_CORRECTION),
+)
+def test_combined_native_codex_finding_steps_fail_before_provider_on_mirror_drift(
+    step: WorkflowStep,
+) -> None:
+    finding = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="The mirror differs from replay.",
+        acceptance_test="No provider starts before reconciliation.",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
+    if step is WorkflowStep.CODEX_PLAN_REVISION:
+        state = init_workflow_state(
+            run_id="combined-native-plan-drift",
+            task_file="/repo/task.md",
+            branch="feature/workflow",
+            branch_base=START_COMMIT,
+            slice_count=1,
+            task_digest="d" * 64,
+            task_scope_patterns=("docs/internal/native-plan.md",),
+            target_branch="feature/workflow",
+            protocol_binding=ProtocolBinding(
+                ProtocolMode.STRUCTURED_V1,
+                "1",
+                claude_review_transport="native-claude-review-v1",
+                codex_result_transport="native-codex-v1",
+            ),
+        ).with_current_step(step)
+    else:
+        state = replace(
+            _slice_state().with_current_step(step),
+            protocol_binding=ProtocolBinding(
+                ProtocolMode.STRUCTURED_V1,
+                "1",
+                claude_review_transport="native-claude-review-v1",
+                codex_result_transport="native-codex-v1",
+            ),
+        )
+    driver = FakeDriver(
+        snapshots=[_changes("b", "src/early.py", TEST_FILE)],
+        codex_outputs=[],
+        reviewer_outputs=[],
+        authoritative_finding_error="authoritative finding replay differs from mirror",
+    )
+
+    with pytest.raises(WorkflowExecutionError, match="differs from mirror"):
+        WorkflowEngine(driver)._run_codex(
+            state,
+            _context(),
+            WorkflowHistory(state.current_work_unit_id, findings=(finding,)),
+        )
+
+    assert driver.codex_calls == []
+    assert driver.authoritative_finding_calls == [(step.value, (finding,))]
+
+
+def test_combined_native_claude_review_fails_before_provider_on_mirror_drift() -> None:
+    finding = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="The mirror differs from replay.",
+        acceptance_test="Claude is not started with mirror-only facts.",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
+    state = replace(
+        _slice_state().with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW),
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V1,
+            "1",
+            claude_review_transport="native-claude-review-v1",
+            codex_result_transport="native-codex-v1",
+        ),
+    )
+    driver = FakeDriver(
+        snapshots=[_changes("b", "src/early.py", TEST_FILE)],
+        codex_outputs=[],
+        reviewer_outputs=[],
+        authoritative_finding_error="authoritative finding replay differs from mirror",
+    )
+
+    with pytest.raises(WorkflowExecutionError, match="differs from mirror"):
+        WorkflowEngine(driver)._run_review(
+            state,
+            _context(),
+            WorkflowHistory(state.current_work_unit_id, findings=(finding,)),
+            AgentRole.CLAUDE,
+        )
+
+    assert driver.reviewer_calls == []
+    assert driver.authoritative_finding_calls == [
+        (WorkflowStep.CLAUDE_SLICE_REVIEW.value, (finding,))
+    ]
+
+
+def test_combined_native_slice_converges_without_legacy_parsers(monkeypatch) -> None:
+    changes = _changes("b", "src/early.py", TEST_FILE)
+
+    @dataclass
+    class ConvergingNativeDriver(FakeDriver):
+        persisted_reviews: list[NativeAgentReviewOutput] = field(default_factory=list)
+        persisted_codex: list[NativeAgentCodexOutput] = field(default_factory=list)
+
+        def invoke_reviewer(
+            self, invocation: ReviewerInvocation
+        ) -> NativeAgentReviewOutput:
+            self.reviewer_calls.append(invocation)
+            assert invocation.prompt == ""
+            assert invocation.native_request is not None
+            bound = invocation.native_request.bound_context
+            attestation = bound.context.validation_attestation
+            assert attestation is not None
+            if not bound.context.previous_findings:
+                finding = FindingRecord(
+                    finding_id="C-01",
+                    finding_class=FindingClass.BLOCKER,
+                    status=FindingStatus.OPEN,
+                    summary="The native convergence path needs a correction.",
+                    acceptance_test="Codex dispositions are replayed into the next review.",
+                    origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+                )
+                approval = False
+                findings = (finding,)
+            else:
+                finding = bound.context.previous_findings[0]
+                assert finding.responses == (
+                    FindingResponse(
+                        FindingResponseDecision.ACCEPTED,
+                        "The native correction satisfies the acceptance test.",
+                    ),
+                )
+                approval = True
+                findings = (
+                    replace(
+                        finding,
+                        status=FindingStatus.CLOSED,
+                        status_rationale="The corrected fingerprint proves convergence.",
+                    ),
+                )
+            result = ContractResult(
+                reviewer=AgentRole.CLAUDE,
+                approval=approval,
+                stopped=False,
+                stop_request=None,
+                validation=attestation,
+                test_files=bound.context.test_files,
+                pre_mortem="A future refactor could accidentally restore text parsing.",
+                evidence=ReviewEvidence(
+                    "native correction convergence",
+                    "record/state drift",
+                    "a legacy parser is invoked",
+                ),
+                findings=findings,
+                anchors=(),
+            )
+            return NativeAgentReviewOutput(
+                result=result,
+                canonical_json=json.dumps(
+                    {
+                        "request_id": bound.request_id,
+                        "decision": "approved" if approval else "denied",
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                request_id=bound.request_id,
+            )
+
+        def invoke_codex(self, invocation: CodexInvocation) -> NativeAgentCodexOutput:
+            self.codex_calls.append(invocation)
+            assert invocation.prompt == ""
+            assert invocation.native_request is not None
+            bound = invocation.native_request.bound_context
+            finding = bound.context.previous_findings[0]
+            answered = replace(
+                finding,
+                responses=(
+                    FindingResponse(
+                        FindingResponseDecision.ACCEPTED,
+                        "The native correction satisfies the acceptance test.",
+                    ),
+                ),
+            )
+            result = CodexContractResult(
+                ready=True,
+                stopped=False,
+                stop_request=None,
+                validation=None,
+                test_files=(TEST_FILE,),
+                findings=(answered,),
+            )
+            return NativeAgentCodexOutput(
+                result=result,
+                canonical_json=json.dumps(
+                    {
+                        "request_id": bound.request_id,
+                        "result_type": "correction_result",
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                request_id=bound.request_id,
+                response_sha256="c" * 64,
+            )
+
+        def persist_native_review_contract(
+            self,
+            output: NativeAgentReviewOutput,
+            _fingerprint: str,
+            _round_number: int,
+            _previous_findings: tuple[FindingRecord, ...],
+        ) -> None:
+            self.persisted_reviews.append(output)
+
+        def persist_native_codex_contract(
+            self,
+            output: NativeAgentCodexOutput,
+            _previous_findings: tuple[FindingRecord, ...],
+        ) -> None:
+            self.persisted_codex.append(output)
+
+    state = replace(
+        _slice_state().with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW),
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V1,
+            "1",
+            claude_review_transport="native-claude-review-v1",
+            codex_result_transport="native-codex-v1",
+        ),
+    )
+    driver = ConvergingNativeDriver(
+        snapshots=[changes],
+        codex_outputs=[],
+        reviewer_outputs=[],
+        deltas={(changes.fingerprint, changes.fingerprint): changes.full_diff},
+    )
+    for name in (
+        "normalize_codex_contract_output",
+        "validate_codex_response",
+        "normalize_review_contract_output",
+        "validate_review_response",
+    ):
+        monkeypatch.setattr(
+            f"workflow.{name}",
+            lambda *_args, _name=name, **_kwargs: (_ for _ in ()).throw(
+                AssertionError(f"legacy parser was called: {_name}")
+            ),
+        )
+
+    state, history = WorkflowEngine(driver)._run_review(
+        state,
+        _context(),
+        WorkflowHistory(state.current_work_unit_id),
+        AgentRole.CLAUDE,
+    )
+    assert state.current_step is WorkflowStep.CODEX_CORRECTION
+    state, history = WorkflowEngine(driver)._run_codex(state, _context(), history)
+    assert state.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
+    state, history = WorkflowEngine(driver)._run_review(
+        state, _context(), history, AgentRole.CLAUDE
+    )
+
+    assert state.current_step is WorkflowStep.ANTIGRAVITY_SLICE_REVIEW
+    assert history.findings[0].status is FindingStatus.CLOSED
+    assert len(driver.persisted_reviews) == 2
+    assert len(driver.persisted_codex) == 1
+    assert all(call.native_request is not None for call in driver.reviewer_calls)
+    assert driver.codex_calls[0].native_request is not None
+    assert [item[0] for item in driver.authoritative_finding_calls] == [
+        WorkflowStep.CLAUDE_SLICE_REVIEW.value,
+        WorkflowStep.CODEX_CORRECTION.value,
+        WorkflowStep.CLAUDE_SLICE_REVIEW.value,
+    ]
+
+
+def test_combined_native_plan_revision_converges_without_legacy_parsers(
+    monkeypatch,
+) -> None:
+    changes = _changes("d", "docs/internal/native-plan.md")
+
+    @dataclass
+    class ConvergingNativePlanDriver(FakeDriver):
+        persisted_reviews: list[NativeAgentReviewOutput] = field(default_factory=list)
+        persisted_codex: list[NativeAgentCodexOutput] = field(default_factory=list)
+
+        def invoke_reviewer(
+            self, invocation: ReviewerInvocation
+        ) -> NativeAgentReviewOutput:
+            self.reviewer_calls.append(invocation)
+            assert invocation.prompt == ""
+            assert invocation.native_request is not None
+            bound = invocation.native_request.bound_context
+            attestation = bound.context.validation_attestation
+            assert attestation is not None
+            if not bound.context.previous_findings:
+                findings = (
+                    FindingRecord(
+                        finding_id="C-01",
+                        finding_class=FindingClass.BLOCKER,
+                        status=FindingStatus.OPEN,
+                        summary="The native plan omits a required boundary.",
+                        acceptance_test="The revised plan binds the boundary.",
+                        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+                    ),
+                )
+                approval = False
+            else:
+                finding = bound.context.previous_findings[0]
+                assert finding.responses[-1] == FindingResponse(
+                    FindingResponseDecision.ACCEPTED,
+                    "The revised plan binds the required boundary.",
+                )
+                findings = (
+                    replace(
+                        finding,
+                        status=FindingStatus.CLOSED,
+                        status_rationale="The plan revision satisfies the finding.",
+                    ),
+                )
+                approval = True
+            return NativeAgentReviewOutput(
+                result=ContractResult(
+                    reviewer=AgentRole.CLAUDE,
+                    approval=approval,
+                    stopped=False,
+                    stop_request=None,
+                    validation=attestation,
+                    test_files=bound.context.test_files,
+                    pre_mortem="A future plan revision could lose its finding binding.",
+                    evidence=ReviewEvidence(
+                        "native plan revision",
+                        "record/state drift",
+                        "a legacy plan parser is invoked",
+                    ),
+                    findings=findings,
+                    anchors=(),
+                ),
+                canonical_json=json.dumps(
+                    {
+                        "request_id": bound.request_id,
+                        "decision": "approved" if approval else "denied",
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                request_id=bound.request_id,
+            )
+
+        def invoke_codex(self, invocation: CodexInvocation) -> NativeAgentCodexOutput:
+            self.codex_calls.append(invocation)
+            assert invocation.step is WorkflowStep.CODEX_PLAN_REVISION
+            assert invocation.prompt == ""
+            assert invocation.native_request is not None
+            bound = invocation.native_request.bound_context
+            assert bound.context.request_kind is NativeCodexRequestKind.PLAN
+            finding = bound.context.previous_findings[0]
+            answered = replace(
+                finding,
+                responses=(
+                    FindingResponse(
+                        FindingResponseDecision.ACCEPTED,
+                        "The revised plan binds the required boundary.",
+                    ),
+                ),
+            )
+            return NativeAgentCodexOutput(
+                result=CodexContractResult(
+                    ready=True,
+                    stopped=False,
+                    stop_request=None,
+                    validation=None,
+                    test_files=(),
+                    findings=(answered,),
+                    slice_plan=(
+                        PlannedSlice(
+                            1,
+                            "Implement the bound native plan.",
+                            ("docs/internal/native-plan.md",),
+                        ),
+                    ),
+                ),
+                canonical_json=json.dumps(
+                    {
+                        "request_id": bound.request_id,
+                        "result_type": "plan_result",
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                request_id=bound.request_id,
+                response_sha256="e" * 64,
+            )
+
+        def persist_native_review_contract(
+            self,
+            output: NativeAgentReviewOutput,
+            _fingerprint: str,
+            _round_number: int,
+            _previous_findings: tuple[FindingRecord, ...],
+        ) -> None:
+            self.persisted_reviews.append(output)
+
+        def persist_native_codex_contract(
+            self,
+            output: NativeAgentCodexOutput,
+            _previous_findings: tuple[FindingRecord, ...],
+        ) -> None:
+            self.persisted_codex.append(output)
+
+    state = init_workflow_state(
+        run_id="combined-native-plan-convergence",
+        task_file="/repo/task.md",
+        branch="feature/workflow",
+        branch_base=START_COMMIT,
+        slice_count=1,
+        task_digest="d" * 64,
+        task_scope_patterns=("docs/internal/native-plan.md",),
+        target_branch="feature/workflow",
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V1,
+            "1",
+            claude_review_transport="native-claude-review-v1",
+            codex_result_transport="native-codex-v1",
+        ),
+    ).with_current_step(WorkflowStep.CLAUDE_PLAN_REVIEW)
+    context = replace(
+        _context(),
+        require_slice_plan=True,
+        task_scope_patterns=("docs/internal/native-plan.md",),
+    )
+    driver = ConvergingNativePlanDriver(
+        snapshots=[changes],
+        codex_outputs=[],
+        reviewer_outputs=[],
+        deltas={(changes.fingerprint, changes.fingerprint): changes.full_diff},
+    )
+    for name in (
+        "normalize_codex_contract_output",
+        "validate_codex_response",
+        "normalize_review_contract_output",
+        "validate_review_response",
+    ):
+        monkeypatch.setattr(
+            f"workflow.{name}",
+            lambda *_args, _name=name, **_kwargs: (_ for _ in ()).throw(
+                AssertionError(f"legacy parser was called: {_name}")
+            ),
+        )
+
+    state, history = WorkflowEngine(driver)._run_review(
+        state,
+        context,
+        WorkflowHistory(state.current_work_unit_id),
+        AgentRole.CLAUDE,
+    )
+    assert state.current_step is WorkflowStep.CODEX_PLAN_REVISION
+    state, history = WorkflowEngine(driver)._run_codex(state, context, history)
+    assert state.current_step is WorkflowStep.CLAUDE_PLAN_REVIEW
+    state, history = WorkflowEngine(driver)._run_review(
+        state, context, history, AgentRole.CLAUDE
+    )
+
+    assert state.current_step is WorkflowStep.ANTIGRAVITY_PLAN_REVIEW
+    assert history.findings[0].status is FindingStatus.CLOSED
+    assert len(driver.persisted_reviews) == 2
+    assert len(driver.persisted_codex) == 1
+    assert [item[0] for item in driver.authoritative_finding_calls] == [
+        WorkflowStep.CLAUDE_PLAN_REVIEW.value,
+        WorkflowStep.CODEX_PLAN_REVISION.value,
+        WorkflowStep.CLAUDE_PLAN_REVIEW.value,
+    ]
+
+
+def test_combined_native_final_restart_rebinds_codex_and_claude_without_legacy_parsers(
+    monkeypatch,
+) -> None:
+    changes = _changes("f", "src/early.py", TEST_FILE, full_diff="CORRECTED BRANCH")
+    finding = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="The final branch required a commit-bound correction.",
+        acceptance_test="The repeated final review closes the corrected fingerprint.",
+        origin=FindingOrigin("FINAL", 1, AgentRole.CLAUDE),
+        responses=(
+            FindingResponse(
+                FindingResponseDecision.ACCEPTED,
+                "The correction work unit is committed and ready for final review.",
+            ),
+        ),
+    )
+
+    @dataclass
+    class RestartedNativeFinalDriver(FakeDriver):
+        persisted_reviews: list[NativeAgentReviewOutput] = field(default_factory=list)
+        persisted_codex: list[NativeAgentCodexOutput] = field(default_factory=list)
+
+        def invoke_codex(self, invocation: CodexInvocation) -> NativeAgentCodexOutput:
+            self.codex_calls.append(invocation)
+            assert invocation.step is WorkflowStep.CODEX_FINAL_REVIEW
+            assert invocation.prompt == ""
+            assert invocation.native_request is not None
+            bound = invocation.native_request.bound_context
+            assert bound.context.current_fingerprint == changes.fingerprint
+            assert bound.context.previous_findings == (finding,)
+            reported = replace(
+                finding,
+                responses=(
+                    *finding.responses,
+                    FindingResponse(
+                        FindingResponseDecision.ACCEPTED,
+                        "The corrected branch passes the complete final self-check.",
+                    ),
+                ),
+            )
+            return NativeAgentCodexOutput(
+                result=CodexContractResult(
+                    ready=True,
+                    stopped=False,
+                    stop_request=None,
+                    validation=None,
+                    test_files=(),
+                    findings=(reported,),
+                    self_check="Rechecked the complete corrected branch and its bindings.",
+                ),
+                canonical_json=json.dumps(
+                    {
+                        "request_id": bound.request_id,
+                        "result_type": "final_report_result",
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                request_id=bound.request_id,
+                response_sha256="a" * 64,
+            )
+
+        def invoke_reviewer(
+            self, invocation: ReviewerInvocation
+        ) -> NativeAgentReviewOutput:
+            self.reviewer_calls.append(invocation)
+            assert invocation.step is WorkflowStep.CLAUDE_FINAL_REVIEW
+            assert invocation.prompt == ""
+            assert invocation.native_request is not None
+            bound = invocation.native_request.bound_context
+            assert bound.context.diff_fingerprint == changes.fingerprint
+            assert any(
+                item["evidence_id"] == "codex-final-report"
+                for item in invocation.native_request.document["evidence_manifest"]
+            )
+            final_finding = bound.context.previous_findings[0]
+            assert len(final_finding.responses) == 2
+            closed = replace(
+                final_finding,
+                status=FindingStatus.CLOSED,
+                status_rationale="The repeated final review verifies the correction.",
+            )
+            attestation = bound.context.validation_attestation
+            assert attestation is not None
+            return NativeAgentReviewOutput(
+                result=ContractResult(
+                    reviewer=AgentRole.CLAUDE,
+                    approval=True,
+                    stopped=False,
+                    stop_request=None,
+                    validation=attestation,
+                    test_files=bound.context.test_files,
+                    pre_mortem="A later final restart could bind the stale branch fingerprint.",
+                    evidence=ReviewEvidence(
+                        "native final restart and correction binding",
+                        "stale final-report reuse",
+                        "the corrected fingerprint is not bound end to end",
+                    ),
+                    findings=(closed,),
+                    anchors=(),
+                ),
+                canonical_json=json.dumps(
+                    {"request_id": bound.request_id, "decision": "approved"},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                request_id=bound.request_id,
+            )
+
+        def persist_native_review_contract(
+            self,
+            output: NativeAgentReviewOutput,
+            _fingerprint: str,
+            _round_number: int,
+            _previous_findings: tuple[FindingRecord, ...],
+        ) -> None:
+            self.persisted_reviews.append(output)
+
+        def persist_native_codex_contract(
+            self,
+            output: NativeAgentCodexOutput,
+            _previous_findings: tuple[FindingRecord, ...],
+        ) -> None:
+            self.persisted_codex.append(output)
+
+    state = replace(
+        _completed_single_slice_state().start_final_review_work_unit(),
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V1,
+            "1",
+            claude_review_transport="native-claude-review-v1",
+            codex_result_transport="native-codex-v1",
+        ),
+    )
+    history = WorkflowHistory(state.current_work_unit_id, findings=(finding,))
+    driver = RestartedNativeFinalDriver(
+        snapshots=[changes], codex_outputs=[], reviewer_outputs=[]
+    )
+    for name in (
+        "normalize_codex_contract_output",
+        "validate_codex_response",
+        "normalize_review_contract_output",
+        "validate_review_response",
+    ):
+        monkeypatch.setattr(
+            f"workflow.{name}",
+            lambda *_args, _name=name, **_kwargs: (_ for _ in ()).throw(
+                AssertionError(f"legacy parser was called: {_name}")
+            ),
+        )
+
+    state, history = WorkflowEngine(driver)._run_final_codex_report(
+        state, _context(), history
+    )
+    assert state.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW
+    state, history = WorkflowEngine(driver)._run_review(
+        state, _context(), history, AgentRole.CLAUDE
+    )
+
+    assert state.current_step is WorkflowStep.ANTIGRAVITY_FINAL_REVIEW
+    assert history.findings[0].status is FindingStatus.CLOSED
+    assert len(driver.persisted_codex) == 1
+    assert len(driver.persisted_reviews) == 1
+    assert [item[0] for item in driver.authoritative_finding_calls] == [
+        WorkflowStep.CODEX_FINAL_REVIEW.value,
+        WorkflowStep.CLAUDE_FINAL_REVIEW.value,
+    ]
+
+
+def test_combined_native_codex_record_ahead_recovery_precedes_mirror_guard() -> None:
+    finding = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="The durable response is ahead of state.",
+        acceptance_test="Resume reuses it without a provider start.",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
+    answered = replace(
+        finding,
+        responses=(
+            FindingResponse(
+                FindingResponseDecision.ACCEPTED,
+                "The correction now satisfies the acceptance test.",
+            ),
+        ),
+    )
+    result = CodexContractResult(
+        ready=True,
+        stopped=False,
+        stop_request=None,
+        validation=None,
+        test_files=(TEST_FILE,),
+        findings=(answered,),
+    )
+    recovered_output = NativeAgentCodexOutput(
+        result=result,
+        canonical_json='{"result_type":"correction_result"}',
+        request_id="native-codex-request-" + "a" * 64,
+        response_sha256="b" * 64,
+    )
+
+    @dataclass
+    class RecoveryDriver(FakeDriver):
+        persisted: list[NativeAgentCodexOutput] = field(default_factory=list)
+
+        def recover_pending_native_codex(self, *_args):  # type: ignore[no-untyped-def]
+            return recovered_output
+
+        def invoke_codex(self, invocation: CodexInvocation) -> NativeAgentCodexOutput:
+            raise AssertionError("record-ahead recovery must suppress the provider")
+
+        def persist_native_codex_contract(
+            self,
+            output: NativeAgentCodexOutput,
+            previous_findings: tuple[FindingRecord, ...],
+        ) -> None:
+            assert previous_findings == (finding,)
+            self.persisted.append(output)
+
+    state = replace(
+        _slice_state().with_current_step(WorkflowStep.CODEX_CORRECTION),
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V1,
+            "1",
+            claude_review_transport="native-claude-review-v1",
+            codex_result_transport="native-codex-v1",
+        ),
+    )
+    driver = RecoveryDriver(
+        snapshots=[_changes("b", "src/early.py", TEST_FILE)],
+        codex_outputs=[],
+        reviewer_outputs=[],
+        authoritative_finding_error="record-ahead mirror is expected to differ",
+    )
+
+    advanced, history = WorkflowEngine(driver)._run_codex(
+        state,
+        _context(),
+        WorkflowHistory(state.current_work_unit_id, findings=(finding,)),
+    )
+
+    assert advanced.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
+    assert history.findings == (answered,)
+    assert driver.authoritative_finding_calls == []
+    assert driver.persisted == [recovered_output]
 
 
 def test_native_codex_final_report_bypasses_legacy_marker_parser(
@@ -1190,7 +1933,10 @@ def test_native_record_ahead_recovery_receives_full_history_and_skips_provider()
     )
     history = WorkflowHistory(state.current_work_unit_id)
     driver = RecoveringNativeDriver(
-        snapshots=[changes], codex_outputs=[], reviewer_outputs=[]
+        snapshots=[changes],
+        codex_outputs=[],
+        reviewer_outputs=[],
+        authoritative_finding_error="record-ahead mirror is expected to differ",
     )
 
     advanced, recovered = WorkflowEngine(driver)._run_review(
@@ -1203,6 +1949,7 @@ def test_native_record_ahead_recovery_receives_full_history_and_skips_provider()
     assert driver.recovered_history is not None
     assert len(driver.recovered_history.events) == 1
     assert len(driver.persisted_native) == 1
+    assert driver.authoritative_finding_calls == []
     assert advanced.current_step is WorkflowStep.ANTIGRAVITY_SLICE_REVIEW
     assert recovered.latest_claude_review is not None
 

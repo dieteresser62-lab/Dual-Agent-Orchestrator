@@ -130,6 +130,80 @@ def test_same_chain_renders_byte_identically_in_record_sequence() -> None:
     assert "Binding `commit`" in first["approval-status"]
 
 
+def test_projection_renders_native_finding_convergence_from_records(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    bridge = ArtifactBridge(ArtifactStore(tmp_path, "run-convergence"))
+    bridge.append(
+        CorrectionWorkUnitPayload(
+            slice_id="1",
+            round_number=2,
+            paths=("src/a.py",),
+            finding_ids=("C-01",),
+        ),
+        logical_id="work-unit-7",
+        idempotency_key="work-unit:7:round:2",
+        fingerprint_sha256="a" * 64,
+    )
+    bridge.append(
+        FindingTransitionPayload(
+            finding_id="C-01",
+            reporter=Role.CLAUDE,
+            actor=Role.CLAUDE,
+            action="opened",
+            severity=FindingSeverity.BLOCKER,
+            finding_status="open",
+            rationale="The native correction is required.",
+            work_unit_id="7",
+            summary="The native correction is required.",
+            acceptance_test="The following review closes the replayed finding.",
+            origin_slice_id="01",
+            origin_round_number=1,
+        ),
+        logical_id="finding-C-01",
+        idempotency_key="finding:C-01:opened:1:claude",
+        fingerprint_sha256="a" * 64,
+    )
+    bridge.append(
+        FindingTransitionPayload(
+            finding_id="C-01",
+            reporter=Role.CLAUDE,
+            actor=Role.CODEX,
+            action="responded",
+            severity=FindingSeverity.BLOCKER,
+            finding_status="open",
+            rationale="The correction is complete.",
+            work_unit_id="7",
+            response_decision="accepted",
+        ),
+        logical_id="finding-C-01",
+        idempotency_key="finding-response:C-01:1",
+        fingerprint_sha256="b" * 64,
+    )
+    bridge.append(
+        FindingTransitionPayload(
+            finding_id="C-01",
+            reporter=Role.CLAUDE,
+            actor=Role.CLAUDE,
+            action="status_changed",
+            severity=FindingSeverity.BLOCKER,
+            finding_status="closed",
+            rationale="The corrected fingerprint proves convergence.",
+            work_unit_id="7",
+        ),
+        logical_id="finding-C-01",
+        idempotency_key="finding:C-01:status_changed:2:claude",
+        fingerprint_sha256="b" * 64,
+    )
+
+    rendered = render_artifact_sections(bridge.store.load_chain())["findings"]
+
+    assert "### Native convergence summary" in rendered
+    assert "| `C-01` | `7` | `2` |" in rendered
+    assert "`opened:open`<br>`status_changed:closed`" in rendered
+    assert "`accepted` | `closed` |" in rendered
+    assert "a" * 64 in rendered
+    assert "b" * 64 in rendered
+
+
 def test_projection_renders_native_and_legacy_transport_bindings_symmetrically() -> None:
     payloads = (
         WorkUnitPayload("1", 1, ("src/a.py",)),

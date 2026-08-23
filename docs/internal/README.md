@@ -22,6 +22,20 @@ wenn der Lauf abgeschlossen oder sein manueller Abschluss dokumentiert ist.
 
 ## Archive
 
+### Geschlossene native Codex–Claude-Korrekturschleife
+
+Pfad: [`archive/native-codex-claude-correction-loop/`](archive/native-codex-claude-correction-loop/)
+
+Arbeitspaket 5 verbindet die nativen Codex- und Claude-Pfade zu einer
+recordautoritativen JSON-Korrekturschleife ohne Textfallback. Planrevision,
+Slice-Korrektur, wiederaufgenommener Finalreview, Mirror-Guard,
+Record-ahead-Recovery und deterministische Markdownprojektion sind mit
+`1160 passed` abgeschlossen. Claude gab beide Slices frei und schloss alle
+Befunde `C-01` bis `C-05`; der zusätzliche branchweite Claude-Abschlussreview
+und Antigravity wurden gemäß manuellem Bootstrapvertrag nicht ausgeführt.
+Arbeitsplan, konsolidierte Reviewhistorie und sämtliche native Rohreviews
+stehen im [Archivbericht](archive/native-codex-claude-correction-loop/README.md).
+
 ### Nativer Codex-Resultatpfad
 
 Pfad: [`archive/native-codex-result-path/`](archive/native-codex-result-path/)

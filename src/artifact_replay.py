@@ -20,6 +20,7 @@ from artifact_models import (
     BindingPayload,
     DiagnosticPayload,
     FinalReviewPreflightPayload,
+    FindingTransitionPayload,
     ProviderInputMeasurementPayload,
     ProviderAttemptPayload,
     RecordType,
@@ -30,6 +31,16 @@ from artifact_models import (
     WorkUnitPayload,
     CorrectionWorkUnitPayload,
     canonical_json,
+)
+from contracts import (
+    AgentRole,
+    FindingClass,
+    FindingOrigin,
+    FindingRecord,
+    FindingResponseDecision,
+    FindingStatus,
+    apply_finding_response,
+    apply_reviewer_finding_update,
 )
 
 
@@ -234,6 +245,121 @@ def replay_artifacts(
 
     _validate_payload_references(chain, seen_ids)
     return _result(expected_run_id, chain)
+
+
+def replay_findings(
+    replay: ArtifactReplayResult,
+    work_unit_id: int | str | None = None,
+) -> tuple[FindingRecord, ...]:
+    """Project native finding authority from accepted structured transitions.
+
+    Historical finding-transition records remain valid replay inputs, but they
+    are unconditionally excluded here: without a persisted work-unit id they
+    cannot safely authorize a new native request when C-/A-identifiers may be
+    reused in another work unit.
+    """
+    target = None if work_unit_id is None else str(work_unit_id)
+    findings: dict[str, FindingRecord] = {}
+    for record in replay.records:
+        payload = record.payload
+        if not isinstance(payload, FindingTransitionPayload):
+            continue
+        if payload.work_unit_id is None:
+            continue
+        if target is not None and payload.work_unit_id != target:
+            continue
+        if payload.action == "opened":
+            if payload.finding_id in findings:
+                _fail(
+                    ReplayDiagnosticCode.RECORD_DUPLICATE,
+                    f"finding {payload.finding_id!r} is opened more than once",
+                    record,
+                )
+            if (
+                payload.summary is None
+                or payload.acceptance_test is None
+                or payload.origin_slice_id is None
+                or payload.origin_round_number is None
+                or payload.finding_status != "open"
+            ):
+                _fail(
+                    ReplayDiagnosticCode.RECORD_TYPE_MISMATCH,
+                    "structured finding opening metadata is incomplete",
+                    record,
+                )
+            try:
+                findings[payload.finding_id] = FindingRecord(
+                    finding_id=payload.finding_id,
+                    finding_class=FindingClass(payload.severity.value),
+                    status=FindingStatus.OPEN,
+                    summary=payload.summary,
+                    acceptance_test=payload.acceptance_test,
+                    origin=FindingOrigin(
+                        payload.origin_slice_id,
+                        payload.origin_round_number,
+                        AgentRole(payload.reporter.value),
+                    ),
+                )
+            except ValueError as exc:
+                _fail(
+                    ReplayDiagnosticCode.RECORD_TYPE_MISMATCH,
+                    f"structured finding opening is invalid: {exc}",
+                    record,
+                )
+            continue
+        finding = findings.get(payload.finding_id)
+        if finding is None:
+            _fail(
+                ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+                f"finding transition references unopened finding {payload.finding_id!r}",
+                record,
+            )
+        if payload.reporter.value != finding.origin.reporter.value or (
+            payload.action != "reclassified"
+            and payload.severity.value != finding.finding_class.value
+        ):
+            _fail(
+                ReplayDiagnosticCode.RECORD_TYPE_MISMATCH,
+                "finding transition changes immutable reviewer ownership",
+                record,
+            )
+        try:
+            if payload.action == "responded":
+                if payload.response_decision is None:
+                    _fail(
+                        ReplayDiagnosticCode.RECORD_TYPE_MISMATCH,
+                        "structured finding response lacks response_decision",
+                        record,
+                    )
+                finding = apply_finding_response(
+                    finding,
+                    FindingResponseDecision(payload.response_decision.upper()),
+                    payload.rationale,
+                )
+            elif payload.action == "reclassified":
+                finding = apply_reviewer_finding_update(
+                    finding,
+                    reviewer=finding.origin.reporter,
+                    status=finding.status,
+                    rationale=payload.rationale,
+                    finding_class=FindingClass(payload.severity.value),
+                )
+            elif payload.action == "status_changed":
+                finding = apply_reviewer_finding_update(
+                    finding,
+                    reviewer=finding.origin.reporter,
+                    status=FindingStatus(payload.finding_status.upper()),
+                    rationale=payload.rationale,
+                    finding_class=FindingClass(payload.severity.value),
+                )
+        except ValueError as exc:
+            _fail(
+                ReplayDiagnosticCode.RECORD_TYPE_MISMATCH,
+                f"structured finding transition is invalid: {exc}",
+                record,
+            )
+        findings[payload.finding_id] = finding
+    return tuple(sorted(findings.values(), key=lambda item: item.finding_id))
 
 
 def _validate_payload_references(

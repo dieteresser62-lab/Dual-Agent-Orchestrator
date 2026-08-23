@@ -28,6 +28,8 @@ from audit_trail import (
 from artifact_bridge import ArtifactBridge
 from artifact_models import (
     AgentResultPayload,
+    FindingSeverity,
+    FindingTransitionPayload,
     FingerprintKind,
     Role,
     TaskPayload,
@@ -412,6 +414,25 @@ def test_structured_projection_uses_accepted_replay_and_is_a_byte_equal_noop(
         idempotency_key="native-agent-result",
         fingerprint_sha256="b" * 64,
     )
+    bridge.append(
+        FindingTransitionPayload(
+            finding_id="C-01",
+            reporter=Role.CLAUDE,
+            actor=Role.CLAUDE,
+            action="opened",
+            severity=FindingSeverity.BLOCKER,
+            finding_status="open",
+            rationale="A native correction is required.",
+            work_unit_id="2",
+            summary="A native correction is required.",
+            acceptance_test="The next review closes the finding.",
+            origin_slice_id="08",
+            origin_round_number=1,
+        ),
+        logical_id="finding-C-01",
+        idempotency_key="finding:C-01:opened:1:claude",
+        fingerprint_sha256="b" * 64,
+    )
     replay = replay_artifacts(bridge.store.load_chain(), "audit-replay")
 
     monkeypatch.setattr(
@@ -430,6 +451,8 @@ def test_structured_projection_uses_accepted_replay_and_is_a_byte_equal_noop(
     assert replay.semantic_digest in rendered
     assert "`native-codex-v1`" in rendered
     assert "`native-codex-request-" in rendered
+    assert "### Native convergence summary" in rendered
+    assert "| `C-01` | `2` | `1` |" in rendered
 
 
 def test_work_plan_uses_same_safe_projection_without_parallel_raw_log(tmp_path: Path) -> None:

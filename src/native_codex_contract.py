@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 from enum import StrEnum
 import json
@@ -152,6 +153,7 @@ class NativePlanResult:
     request_id: str
     ready: bool
     slice_plan: tuple[PlannedSlice, ...]
+    dispositions: tuple[NativeFindingDisposition, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -204,8 +206,17 @@ def load_native_codex_schema() -> dict[str, Any]:
 
 
 def native_codex_provider_response_schema() -> dict[str, Any]:
-    """Return the exact checked schema passed to ``codex --output-schema``."""
-    return load_native_codex_schema()
+    """Return the live provider schema while keeping historical reads valid.
+
+    The bundled v1 schema accepts an omitted plan disposition list so already
+    persisted plan results remain readable.  Every newly invoked provider is
+    held to the stronger writer contract and must emit the field explicitly.
+    """
+    schema = copy.deepcopy(load_native_codex_schema())
+    required = schema["$defs"]["plan_result"]["required"]
+    if "finding_dispositions" not in required:
+        required.append("finding_dispositions")
+    return schema
 
 
 def validate_native_codex_document(document: Mapping[str, Any]) -> None:
@@ -278,7 +289,12 @@ def parse_native_codex_response(
                 NativeCodexErrorCode.SLICE_PLAN_INVALID,
                 "slice plan ids must be contiguous and 1-based",
             )
-        return NativePlanResult(document["request_id"], document["ready"], slices)
+        return NativePlanResult(
+            document["request_id"],
+            document["ready"],
+            slices,
+            _parse_dispositions(document.get("finding_dispositions", [])),
+        )
     dispositions = _parse_dispositions(document["finding_dispositions"])
     if result_type in {"implementation_result", "correction_result"}:
         test_files = tuple(document["test_files"])
@@ -345,7 +361,7 @@ def native_codex_response_to_contract_result(
     slice_plan: tuple[PlannedSlice, ...]
     self_check: str | None
     if isinstance(response, NativePlanResult):
-        dispositions = ()
+        dispositions = response.dispositions
         test_files = ()
         slice_plan = response.slice_plan
         self_check = None

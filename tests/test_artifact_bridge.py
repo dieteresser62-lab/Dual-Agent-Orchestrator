@@ -7,7 +7,7 @@ import pytest
 
 from artifact_bridge import (
     ArtifactBridge, ArtifactBridgeError, attestation_payload, command_payload,
-    review_payload, validation_request_payload,
+    finding_payload, review_payload, validation_request_payload,
 )
 from artifact_models import (
     ProviderAttemptPayload, ProviderInputComponentPayload,
@@ -15,13 +15,39 @@ from artifact_models import (
 )
 from artifact_store import ArtifactStore
 from contracts import (
-    AgentRole, ContractResult, ReviewEvidence, ValidationAttestation,
-    ValidationCommandSpec, ValidationRecord, ValidationStatus,
+    AgentRole, ContractResult, FindingClass, FindingOrigin, FindingRecord,
+    FindingStatus, ReviewEvidence, ValidationAttestation, ValidationCommandSpec,
+    ValidationRecord, ValidationStatus,
 )
 from validation_matrix import ValidationCommand, ValidationRequest
 
 
 DIGEST = "a" * 64
+
+
+def test_finding_payload_preserves_legacy_shape_and_native_authority() -> None:
+    finding = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="Persist the complete native finding snapshot.",
+        acceptance_test="Replay rebuilds the request without state or Markdown.",
+        origin=FindingOrigin("01", 2, AgentRole.CLAUDE),
+    )
+
+    legacy = finding_payload(finding)
+    native = finding_payload(finding, work_unit_id=3)
+
+    assert legacy.work_unit_id is None
+    assert legacy.summary is None
+    assert legacy.acceptance_test is None
+    assert legacy.origin_slice_id is None
+    assert legacy.origin_round_number is None
+    assert native.work_unit_id == "3"
+    assert native.summary == finding.summary
+    assert native.acceptance_test == finding.acceptance_test
+    assert native.origin_slice_id == "01"
+    assert native.origin_round_number == 2
 
 
 def test_bridge_is_idempotent_before_creating_volatile_metadata(tmp_path: Path) -> None:

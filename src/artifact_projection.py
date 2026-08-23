@@ -166,6 +166,20 @@ def render_replay_sections(replay: ArtifactReplayResult) -> Mapping[str, str]:
     findings: list[str] = []
     bindings_and_units: list[str] = []
     latest_attempts: dict[tuple[str, int], tuple[int, ArtifactRecord]] = {}
+    work_unit_rounds: dict[str, int] = {}
+    for record in chain:
+        if (
+            isinstance(record.payload, (WorkUnitPayload, CorrectionWorkUnitPayload))
+            and record.logical_id.startswith("work-unit-")
+        ):
+            # The first accepted revision establishes the round identity. Later
+            # revisions may enrich the work unit but must not rewrite history in
+            # the human-readable convergence projection.
+            work_unit_rounds.setdefault(
+                record.logical_id.removeprefix("work-unit-"),
+                record.payload.round_number,
+            )
+    convergence: dict[str, dict[str, Any]] = {}
 
     for sequence, record in enumerate(chain, start=1):
         payload = record.payload
@@ -209,6 +223,35 @@ def render_replay_sections(replay: ArtifactReplayResult) -> Mapping[str, str]:
             findings.append(line)
             if payload.action == "responded":
                 responses.append(line)
+            if payload.work_unit_id is not None:
+                row = convergence.setdefault(
+                    payload.finding_id,
+                    {
+                        "work_units": [],
+                        "rounds": [],
+                        "fingerprints": [],
+                        "claude": [],
+                        "codex": [],
+                        "status": payload.finding_status,
+                    },
+                )
+                _append_unique(row["work_units"], payload.work_unit_id)
+                round_number = work_unit_rounds.get(payload.work_unit_id)
+                if round_number is None and payload.origin_round_number is not None:
+                    round_number = payload.origin_round_number
+                if round_number is not None:
+                    _append_unique(row["rounds"], str(round_number))
+                _append_unique(row["fingerprints"], record.fingerprint.sha256)
+                if payload.actor is Role.CLAUDE:
+                    _append_unique(
+                        row["claude"],
+                        f"{payload.action}:{payload.finding_status}",
+                    )
+                elif payload.actor is Role.CODEX and payload.action == "responded":
+                    _append_unique(
+                        row["codex"], payload.response_decision or "legacy-text"
+                    )
+                row["status"] = payload.finding_status
         elif isinstance(payload, ValidationRequestPayload):
             commands = "; ".join(_command(item.argv, item.mode) for item in payload.commands)
             validations.append(f"- {prefix}: Anforderung durch `{payload.requested_by.value}`: {commands}")
@@ -356,6 +399,26 @@ def render_replay_sections(replay: ArtifactReplayResult) -> Mapping[str, str]:
     if not chain:
         ledger.append("| – | – | – | – | – | – | – |")
 
+    if convergence:
+        findings.extend(
+            (
+                "",
+                "### Native convergence summary",
+                "",
+                "| Finding | Work units | Rounds | Fingerprints | Claude decisions | Codex dispositions | Final status |",
+                "|---|---|---|---|---|---|---|",
+            )
+        )
+        for finding_id in sorted(convergence):
+            row = convergence[finding_id]
+            findings.append(
+                f"| `{_safe(finding_id)}` | {_table_values(row['work_units'])} | "
+                f"{_table_values(row['rounds'])} | "
+                f"{_table_values(row['fingerprints'])} | "
+                f"{_table_values(row['claude'])} | "
+                f"{_table_values(row['codex'])} | `{_safe(row['status'])}` |"
+            )
+
     return {
         "claude-review": _block(header, reviews[Role.CLAUDE], "Keine Claude-Review-Records."),
         "antigravity-review": _block(header, reviews[Role.ANTIGRAVITY], "Keine Antigravity-Review-Records."),
@@ -382,6 +445,15 @@ def _block(header: str, lines: list[str], empty: str) -> str:
 
 def _codes(values: Sequence[str]) -> str:
     return ", ".join(f"`{_safe(value)}`" for value in values) if values else "keine"
+
+
+def _append_unique(values: list[str], value: str) -> None:
+    if value not in values:
+        values.append(value)
+
+
+def _table_values(values: Sequence[str]) -> str:
+    return "<br>".join(f"`{_safe(value)}`" for value in values) if values else "–"
 
 
 def _command(argv: Sequence[str], mode: str) -> str:

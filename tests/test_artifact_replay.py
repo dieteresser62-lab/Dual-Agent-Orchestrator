@@ -11,6 +11,8 @@ from artifact_models import (
     CommandSpec,
     Fingerprint,
     FingerprintKind,
+    FindingSeverity,
+    FindingTransitionPayload,
     RecordType,
     ReviewPayload,
     Role,
@@ -27,7 +29,9 @@ from artifact_replay import (
     ArtifactReplayError,
     ReplayDiagnosticCode,
     replay_artifacts,
+    replay_findings,
 )
+from contracts import FindingResponseDecision, FindingStatus
 
 
 FP = Fingerprint(FingerprintKind.IMPLEMENTATION, "a" * 64)
@@ -110,6 +114,136 @@ def test_replay_is_deterministic_and_does_not_mutate_input() -> None:
     assert first.semantic_digest == second.semantic_digest
     assert first.audit_events == second.audit_events
     assert tuple(record.canonical_json() for record in chain) == before
+
+
+def test_structured_finding_projection_rebuilds_reviewer_owned_history() -> None:
+    records: list[ArtifactRecord] = []
+    _append(records, "work-unit-1", WorkUnitPayload("1", 1, ("src/a.py",)))
+    _append(
+        records,
+        "finding-C-01",
+        FindingTransitionPayload(
+            finding_id="C-01",
+            reporter=Role.CLAUDE,
+            actor=Role.CLAUDE,
+            action="opened",
+            severity=FindingSeverity.BLOCKER,
+            finding_status="open",
+            rationale="The retry guard is incomplete.",
+            work_unit_id="1",
+            summary="The retry guard is incomplete.",
+            acceptance_test="A third physical start is rejected.",
+            origin_slice_id="01",
+            origin_round_number=1,
+        ),
+    )
+    _append(
+        records,
+        "finding-C-01",
+        FindingTransitionPayload(
+            finding_id="C-01",
+            reporter=Role.CLAUDE,
+            actor=Role.CODEX,
+            action="responded",
+            severity=FindingSeverity.BLOCKER,
+            finding_status="open",
+            rationale="The bridge now rejects the third start.",
+            work_unit_id="1",
+            response_decision="accepted",
+        ),
+        revision=2,
+    )
+    _append(
+        records,
+        "finding-C-01",
+        FindingTransitionPayload(
+            finding_id="C-01",
+            reporter=Role.CLAUDE,
+            actor=Role.CLAUDE,
+            action="status_changed",
+            severity=FindingSeverity.BLOCKER,
+            finding_status="closed",
+            rationale="The bound regression passes.",
+            work_unit_id="1",
+        ),
+        revision=3,
+    )
+
+    findings = replay_findings(replay_artifacts(records, "run-replay"), "1")
+
+    assert len(findings) == 1
+    assert findings[0].status is FindingStatus.CLOSED
+    assert findings[0].acceptance_test == "A third physical start is rejected."
+    assert findings[0].responses[0].decision is FindingResponseDecision.ACCEPTED
+
+
+def test_structured_finding_projection_rejects_legacy_incomplete_opening() -> None:
+    records: list[ArtifactRecord] = []
+    _append(records, "work-unit-1", WorkUnitPayload("1", 1, ("src/a.py",)))
+    _append(
+        records,
+        "finding-C-01",
+        FindingTransitionPayload(
+            "C-01",
+            Role.CLAUDE,
+            Role.CLAUDE,
+            "opened",
+            FindingSeverity.BLOCKER,
+            "open",
+            "Legacy finding without structured snapshot.",
+            work_unit_id="1",
+        ),
+    )
+
+    replay = replay_artifacts(records, "run-replay")
+    with pytest.raises(ArtifactReplayError) as caught:
+        replay_findings(replay, "1")
+    assert caught.value.code is ReplayDiagnosticCode.RECORD_TYPE_MISMATCH
+
+
+def test_structured_finding_projection_carries_findings_across_work_units() -> None:
+    records: list[ArtifactRecord] = []
+    _append(records, "work-unit-1", WorkUnitPayload("1", 1, ("src/a.py",)))
+    _append(
+        records,
+        "finding-C-01",
+        FindingTransitionPayload(
+            finding_id="C-01",
+            reporter=Role.CLAUDE,
+            actor=Role.CLAUDE,
+            action="opened",
+            severity=FindingSeverity.BLOCKER,
+            finding_status="open",
+            rationale="The first review opened the finding.",
+            work_unit_id="1",
+            summary="The first review opened the finding.",
+            acceptance_test="The correction response is carried forward.",
+            origin_slice_id="01",
+            origin_round_number=1,
+        ),
+    )
+    _append(records, "work-unit-2", WorkUnitPayload("1", 2, ("src/a.py",)))
+    _append(
+        records,
+        "finding-C-01",
+        FindingTransitionPayload(
+            finding_id="C-01",
+            reporter=Role.CLAUDE,
+            actor=Role.CODEX,
+            action="responded",
+            severity=FindingSeverity.BLOCKER,
+            finding_status="open",
+            rationale="The later work unit implements the correction.",
+            work_unit_id="2",
+            response_decision="accepted",
+        ),
+        revision=2,
+    )
+
+    replay = replay_artifacts(records, "run-replay")
+
+    assert replay_findings(replay, "1")[0].responses == ()
+    assert len(replay_findings(replay)[0].responses) == 1
 
 
 def test_replay_ignores_created_at_for_semantic_digest() -> None:

@@ -47,6 +47,7 @@ from contracts import (
     CodexContractResult,
     ContractResult,
     FindingRecord,
+    FindingResponseDecision,
     PlannedSlice,
     ValidationAttestation,
     ValidationCommandSpec,
@@ -167,8 +168,11 @@ def finding_payload(
     actor: AgentRole | None = None,
     action: str = "opened",
     rationale: str | None = None,
+    work_unit_id: int | str | None = None,
+    response_decision: FindingResponseDecision | None = None,
 ) -> FindingTransitionPayload:
     reporter = _role(finding.origin.reporter)
+    structured = work_unit_id is not None
     return FindingTransitionPayload(
         finding_id=finding.finding_id,
         reporter=reporter,
@@ -177,6 +181,20 @@ def finding_payload(
         severity=FindingSeverity(finding.finding_class.value),
         finding_status=finding.status.value.lower(),
         rationale=rationale or finding.status_rationale or finding.summary,
+        work_unit_id=None if work_unit_id is None else str(work_unit_id),
+        summary=finding.summary if structured and action == "opened" else None,
+        acceptance_test=(
+            finding.acceptance_test if structured and action == "opened" else None
+        ),
+        origin_slice_id=(
+            finding.origin.slice_id if structured and action == "opened" else None
+        ),
+        origin_round_number=(
+            finding.origin.round_number if structured and action == "opened" else None
+        ),
+        response_decision=(
+            response_decision.value.lower() if response_decision is not None else None
+        ),
     )
 
 

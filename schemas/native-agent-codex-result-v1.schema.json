@@ -63,6 +63,11 @@
           "minItems": 1,
           "maxItems": 64,
           "items": { "$ref": "#/$defs/planned_slice" }
+        },
+        "finding_dispositions": {
+          "type": "array",
+          "maxItems": 128,
+          "items": { "$ref": "#/$defs/finding_disposition" }
         }
       },
       "required": ["schema_version", "result_type", "request_id", "ready", "slice_plan"],

@@ -1759,14 +1759,125 @@ def test_native_codex_record_ahead_recovery_completes_finding_responses(
     )
     response = output.result.findings[0].responses[-1]
     durable_responses = tuple(
-        (item.payload.finding_id, item.payload.rationale)
+        (
+            item.payload.finding_id,
+            item.payload.rationale,
+            item.payload.response_decision,
+            item.payload.work_unit_id,
+        )
         for item in replay.records
         if isinstance(item.payload, FindingTransitionPayload)
         and item.payload.action == "responded"
     )
     assert durable_responses == (
-        ("C-01", f"{response.decision.value}: {response.rationale}"),
+        (
+            "C-01",
+            response.rationale,
+            response.decision.value.lower(),
+            str(state.current_work_unit_id),
+        ),
     )
+
+
+def test_combined_native_finding_authority_rejects_state_mirror_drift(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/combined-native-authority")
+    task = repository / "task.md"
+    _write_task(task, "feature/combined-native-authority", "src/runtime.py")
+    head = _git(repository, "rev-parse", "HEAD")
+    state = (
+        init_workflow_state(
+            run_id="combined-native-authority",
+            task_file=str(task),
+            branch="feature/combined-native-authority",
+            branch_base=head,
+            slice_count=1,
+            task_digest=hashlib.sha256(
+                task.read_text(encoding="utf-8").encode("utf-8")
+            ).hexdigest(),
+            task_scope_patterns=("src/runtime.py",),
+            target_branch="feature/combined-native-authority",
+            protocol_binding=ProtocolBinding(
+                ProtocolMode.STRUCTURED_V1,
+                "1",
+                claude_review_transport="native-claude-review-v1",
+                codex_result_transport="native-codex-v1",
+            ),
+        )
+        .complete_current_work_unit()
+        .start_work_unit(
+            slice_id=1,
+            kind=WorkUnitKind.SLICE,
+            step=WorkflowStep.CODEX_CORRECTION,
+        )
+        .bind_current_slice_git_boundary(
+            start_commit=head,
+            scope_paths=("src/runtime.py",),
+            start_fingerprint="c" * 64,
+        )
+    )
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    driver.bind_work_unit(state)
+    finding = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="The request must use replayed findings.",
+        acceptance_test="Mirror-only changes stop before provider invocation.",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
+    bridge = driver._artifact_bridge
+    assert bridge is not None
+    bridge.append(
+        orchestrator.finding_payload(
+            finding,
+            work_unit_id=state.current_work_unit_id,
+        ),
+        logical_id="finding-C-01",
+        idempotency_key="finding:C-01:opened:1:claude",
+        fingerprint_sha256="c" * 64,
+    )
+    second_finding = FindingRecord(
+        finding_id="C-02",
+        finding_class=FindingClass.OBSERVATION,
+        status=FindingStatus.OPEN,
+        summary="The projection order must not define mirror equality.",
+        acceptance_test="Equivalent finding sets compare canonically by finding ID.",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
+    bridge.append(
+        orchestrator.finding_payload(
+            second_finding,
+            work_unit_id=state.current_work_unit_id,
+        ),
+        logical_id="finding-C-02",
+        idempotency_key="finding:C-02:opened:1:claude",
+        fingerprint_sha256="c" * 64,
+    )
+
+    # State-v3 preserves event order while replay deliberately canonicalizes by
+    # finding ID. Order-only differences are not semantic mirror drift.
+    assert driver.authoritative_native_findings(
+        state, (second_finding, finding)
+    ) == (finding, second_finding)
+    with pytest.raises(
+        WorkflowExecutionError,
+        match="differs from the state-v3 mirror",
+    ):
+        driver.authoritative_native_findings(
+            state,
+            (
+                second_finding,
+                replace(finding, summary="Tampered state-only summary."),
+            ),
+        )
 
 
 @pytest.mark.parametrize(

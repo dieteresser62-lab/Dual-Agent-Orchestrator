@@ -50,6 +50,32 @@ Protokollbindungen.
    Benutzerfreigabe. Push, Rebase und History-Rewrite bleiben ausgeschlossen,
    solange sie nicht einzeln autorisiert wurden.
 
+## Kombinierter Codex–Claude-Pilot
+
+Ein neuer Pilotlauf bindet beide bereits vorhandenen nativen Transporte
+gemeinsam mit `--native-codex-results --native-claude-reviews`. Diese
+Kombination ist keine nachträgliche Umschaltung: Sie wird beim Laufstart in
+State und Recordkette festgeschrieben und muss beim Resume unverändert bleiben.
+Planung, Planrevision, Implementierung, Korrektur, Codex-Abschlussbericht und
+Claude-Review verwenden dann ausschließlich schema- und domänenvalidierte
+JSON-Verträge. Ein Fehler im nativen Pfad fällt niemals auf Textmarkerparser
+oder Contract-Repair-Prosa zurück.
+
+Der Findingstand für einen Codex-Folgeauftrag und die Codex-Dispositionen für
+das anschließende Claude-Review stammen allein aus dem akzeptierten Replay der
+append-only Recordkette. Vor einem frischen Providerstart wird diese Autorität
+symmetrisch gegen den State-v3-Spiegel geprüft. Liegt ein vollständiges natives
+Ergebnis record-ahead vor, wird es zuerst wiederhergestellt; derselbe Provider
+wird dafür nicht erneut gestartet. Markdown wird deterministisch aus diesen
+Records projiziert und zeigt die Konvergenz nach Work-Unit, Runde, Fingerprint,
+Finding, Claude-Entscheidung, Codex-Disposition und Endstatus. Es wird weder
+zur Entscheidung noch zur Wiederherstellung zurückgelesen.
+
+Der Pilot ist bewusst nur ein Codex–Claude-Durchstich. Nach Claudes positiver
+Konvergenz hält der reguläre Ablauf am nächsten Antigravity-Schritt an. Bis zur
+nativen Antigravity-Integration ist damit weder eine Antigravity-Freigabe noch
+eine produktive Gesamtfreigabe erteilt oder simuliert.
+
 ## Rückkehr zum regulären Orchestrator
 
 Der derzeitige Ausnahmeprozess bleibt mindestens so lange aktiv, bis der

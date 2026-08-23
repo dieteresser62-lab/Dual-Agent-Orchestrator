@@ -24,6 +24,7 @@ from native_codex_contract import (
     NativeCodexRequestKind,
     canonical_native_codex_json,
     load_native_codex_schema,
+    native_codex_provider_response_schema,
     parse_bound_native_codex_contract_result,
 )
 
@@ -111,6 +112,62 @@ def test_native_codex_schema_is_checked_and_canonical() -> None:
     result = parse_bound_native_codex_contract_result(document, bound)
     assert result.ready is True
     assert result.slice_plan[0].slice_id == 1
+
+
+def test_historical_plan_result_without_dispositions_remains_readable() -> None:
+    bound = _bound(NativeCodexRequestKind.PLAN)
+    historical = {
+        **_base(bound, "plan_result"),
+        "ready": True,
+        "slice_plan": [
+            {
+                "slice_id": 1,
+                "summary": "Historical native plan.",
+                "scope_paths": ["docs/internal/plan.md"],
+            }
+        ],
+    }
+
+    provider_schema = native_codex_provider_response_schema()
+    persisted_schema = load_native_codex_schema()
+    result = parse_bound_native_codex_contract_result(historical, bound)
+
+    assert result.findings == ()
+    assert "finding_dispositions" not in (
+        persisted_schema["$defs"]["plan_result"]["required"]
+    )
+    assert "finding_dispositions" in (
+        provider_schema["$defs"]["plan_result"]["required"]
+    )
+
+
+def test_plan_revision_requires_every_open_finding_disposition() -> None:
+    bound = _bound(NativeCodexRequestKind.PLAN, findings=(_finding(),))
+    document = {
+        **_base(bound, "plan_result"),
+        "ready": True,
+        "slice_plan": [
+            {
+                "slice_id": 1,
+                "summary": "Revise the native plan.",
+                "scope_paths": ["docs/internal/plan.md"],
+            }
+        ],
+        "finding_dispositions": [],
+    }
+    with pytest.raises(NativeCodexContractError) as raised:
+        parse_bound_native_codex_contract_result(document, bound)
+    assert raised.value.code is NativeCodexErrorCode.FINDING_REFERENCE_INVALID
+
+    document["finding_dispositions"] = [
+        {
+            "finding_id": "C-01",
+            "decision": "accepted",
+            "rationale": "The revised plan now closes the contractual gap.",
+        }
+    ]
+    result = parse_bound_native_codex_contract_result(document, bound)
+    assert result.findings[0].responses[-1].decision is FindingResponseDecision.ACCEPTED
 
 
 def test_implementation_result_applies_every_open_finding_disposition() -> None:

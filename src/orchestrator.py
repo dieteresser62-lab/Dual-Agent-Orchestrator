@@ -45,6 +45,7 @@ from artifact_models import (
     ProviderUsagePayload,
 )
 from artifact_store import ArtifactStore
+from artifact_replay import ArtifactReplayError, replay_artifacts, replay_findings
 from final_review_preflight import (
     FINAL_REVIEW_OPERATIONS, FinalReviewPreflightDenied, preflight_payload,
     relevant_record_head, run_final_review_preflight, transition_fingerprint,
@@ -781,6 +782,46 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 output,
             )
         return output
+
+    def authoritative_native_findings(
+        self,
+        state: WorkflowState,
+        mirror_findings: tuple[FindingRecord, ...],
+    ) -> tuple[FindingRecord, ...]:
+        """Return the current work unit's finding state only from accepted records."""
+        active = self.active_state
+        bridge = self._artifact_bridge
+        if (
+            active is None
+            or bridge is None
+            or active.run_id != state.run_id
+            or active.current_work_unit_id != state.current_work_unit_id
+            or state.protocol_binding is None
+            or state.protocol_binding.codex_result_transport
+            != NATIVE_CODEX_RESULT_TRANSPORT
+            or state.protocol_binding.claude_review_transport
+            != NATIVE_CLAUDE_REVIEW_TRANSPORT
+        ):
+            raise WorkflowExecutionError(
+                "combined native finding replay lacks its immutable state binding"
+            )
+        try:
+            replay = replay_artifacts(
+                bridge.store.load_chain(), state.run_id, allow_empty=True
+            )
+            projected = replay_findings(replay)
+        except ArtifactReplayError as exc:
+            raise WorkflowExecutionError(
+                f"authoritative finding replay failed: {exc}"
+            ) from exc
+        canonical_mirror = tuple(
+            sorted(mirror_findings, key=lambda item: item.finding_id)
+        )
+        if projected != canonical_mirror:
+            raise WorkflowExecutionError(
+                "authoritative finding replay differs from the state-v3 mirror"
+            )
+        return projected
 
     def _native_codex_response_path(self, invocation: CodexInvocation) -> Path:
         state = self.active_state
@@ -1579,7 +1620,9 @@ class ProductionWorkflowDriver(WorkflowDriver):
                         finding,
                         actor=AgentRole.CODEX,
                         action="responded",
-                        rationale=f"{response.decision.value}: {response.rationale}",
+                        rationale=response.rationale,
+                        work_unit_id=unit.work_unit_id,
+                        response_decision=response.decision,
                     ),
                     logical_id=f"finding-{finding.finding_id}",
                     idempotency_key=f"finding-response:{finding.finding_id}:{index}",
@@ -1612,6 +1655,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
             fingerprint=fingerprint,
             round_number=round_number,
             previous_findings=previous_findings,
+            structured=False,
         )
 
     def persist_native_review_contract(
@@ -1660,6 +1704,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
             fingerprint=fingerprint,
             round_number=round_number,
             previous_findings=previous_findings,
+            structured=True,
         )
 
     def _persist_review_finding_transitions(
@@ -1669,6 +1714,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
         fingerprint: str,
         round_number: int,
         previous_findings: tuple[FindingRecord, ...],
+        structured: bool,
     ) -> None:
         if self._artifact_bridge is None:
             return
@@ -1689,7 +1735,16 @@ class ProductionWorkflowDriver(WorkflowDriver):
                     )
             for action, rationale in transitions:
                 self._artifact_bridge.append(
-                    finding_payload(finding, action=action, rationale=rationale),
+                    finding_payload(
+                        finding,
+                        action=action,
+                        rationale=rationale,
+                        work_unit_id=(
+                            self.active_state.current_work_unit_id
+                            if structured
+                            else None
+                        ),
+                    ),
                     logical_id=f"finding-{finding.finding_id}",
                     idempotency_key=(
                         f"finding:{finding.finding_id}:{action}:{round_number}:"

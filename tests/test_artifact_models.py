@@ -214,6 +214,48 @@ def test_finding_ownership_and_codex_response_do_not_allow_foreign_closure() -> 
         FindingTransitionPayload("C-01", Role.CLAUDE, Role.CODEX, "responded", FindingSeverity.BLOCKER, "closed", "fixed")
 
 
+def test_structured_finding_transition_roundtrips_and_legacy_fields_stay_optional() -> None:
+    structured = _record(
+        FindingTransitionPayload(
+            finding_id="C-01",
+            reporter=Role.CLAUDE,
+            actor=Role.CLAUDE,
+            action="opened",
+            severity=FindingSeverity.BLOCKER,
+            finding_status="open",
+            rationale="Replay must own the finding.",
+            work_unit_id="7",
+            summary="Replay must own the finding.",
+            acceptance_test="The state mirror cannot change a native request.",
+            origin_slice_id="01",
+            origin_round_number=2,
+        )
+    )
+    assert ArtifactRecord.from_dict(structured.to_dict()) == structured
+
+    historical = _record(
+        FindingTransitionPayload(
+            "C-01",
+            Role.CLAUDE,
+            Role.CLAUDE,
+            "opened",
+            FindingSeverity.BLOCKER,
+            "open",
+            "Historical transition.",
+        )
+    ).to_dict()
+    for key in (
+        "work_unit_id",
+        "summary",
+        "acceptance_test",
+        "origin_slice_id",
+        "origin_round_number",
+        "response_decision",
+    ):
+        historical["payload"].pop(key)
+    assert ArtifactRecord.from_dict(historical).payload.work_unit_id is None
+
+
 def test_approval_requires_fingerprint_and_positive_evidence() -> None:
     with pytest.raises(ArtifactValidationError, match="findings or review evidence"):
         ReviewPayload(Role.CLAUDE, "work-01", "approved", (), None)

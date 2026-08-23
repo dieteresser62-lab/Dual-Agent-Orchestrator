@@ -9,6 +9,12 @@ import pytest
 from contracts import (
     AgentRole,
     ApprovalMarker,
+    FindingClass,
+    FindingOrigin,
+    FindingRecord,
+    FindingResponse,
+    FindingResponseDecision,
+    FindingStatus,
     ValidationAttestation,
     ValidationCommandSpec,
     ValidationRecord,
@@ -163,6 +169,42 @@ def test_semantic_request_changes_change_request_id(mutate) -> None:  # type: ig
     original = build_native_review_request(_spec())
     changed = build_native_review_request(mutate(_spec()))
     assert changed.bound_context.request_id != original.bound_context.request_id
+
+
+def test_request_binds_persisted_codex_disposition_and_attestation() -> None:
+    finding = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="The native loop must carry the response.",
+        acceptance_test="Claude sees the durable Codex disposition.",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+        responses=(
+            FindingResponse(
+                FindingResponseDecision.ACCEPTED,
+                "The correction now implements the invariant.",
+            ),
+        ),
+    )
+    spec = _spec()
+    bound = build_native_review_request(
+        replace(
+            spec,
+            context=replace(spec.context, previous_findings=(finding,)),
+        )
+    )
+
+    persisted = bound.document["review_contract"]["previous_findings"][0]
+    assert persisted["responses"] == [
+        {
+            "decision": "ACCEPTED",
+            "rationale": "The correction now implements the invariant.",
+        }
+    ]
+    assert bound.document["review_contract"]["validation_attestation"][
+        "attestation_id"
+    ] == "validation-native-request"
+    assert bound.bound_context.request_id != build_native_review_request(spec).bound_context.request_id
 
 
 def test_large_evidence_is_content_addressed_and_bound() -> None:

@@ -829,6 +829,12 @@ class WorkflowCommitRequest:
 
 
 class WorkflowDriver(Protocol):
+    def authoritative_native_findings(
+        self,
+        state: WorkflowState,
+        mirror_findings: tuple[FindingRecord, ...],
+    ) -> tuple[FindingRecord, ...]: ...
+
     def invoke_codex(
         self, invocation: CodexInvocation
     ) -> str | NativeAgentCodexOutput: ...
@@ -1559,6 +1565,8 @@ class WorkflowEngine:
             if native_request is not None and callable(recovery_loader)
             else None
         )
+        if recovered is None and native_request is not None:
+            history = self._bind_authoritative_native_findings(state, history)
         state, output = self._invoke_role(
             state,
             history,
@@ -1941,6 +1949,8 @@ class WorkflowEngine:
             if native_request is not None and callable(recovery_loader)
             else None
         )
+        if recovered is None and native_request is not None:
+            history = self._bind_authoritative_native_findings(state, history)
         state, output = self._invoke_role(
             state,
             history,
@@ -2457,6 +2467,8 @@ class WorkflowEngine:
             raise WorkflowExecutionError(
                 "native reviewer recovery returned an invalid result contract"
             )
+        if native_output is None and native_request is not None:
+            history = self._bind_authoritative_native_findings(state, history)
         failed_output_loader = getattr(
             self.driver, "recover_failed_reviewer_output", None
         )
@@ -3617,6 +3629,31 @@ class WorkflowEngine:
         binder = getattr(self.driver, "bind_work_unit", None)
         if binder is not None:
             binder(state)
+
+    def _bind_authoritative_native_findings(
+        self, state: WorkflowState, history: WorkflowHistory
+    ) -> WorkflowHistory:
+        """Bind combined native requests to the replayed finding projection."""
+        binding = state.protocol_binding
+        if (
+            binding is None
+            or binding.codex_result_transport != NATIVE_CODEX_RESULT_TRANSPORT
+            or binding.claude_review_transport != NATIVE_CLAUDE_REVIEW_TRANSPORT
+        ):
+            return history
+        resolver = getattr(self.driver, "authoritative_native_findings", None)
+        if not callable(resolver):
+            raise WorkflowExecutionError(
+                "combined native workflow has no authoritative finding replay"
+            )
+        findings = resolver(state, history.findings)
+        if not isinstance(findings, tuple) or any(
+            not isinstance(item, FindingRecord) for item in findings
+        ):
+            raise WorkflowExecutionError(
+                "authoritative finding replay returned an invalid projection"
+            )
+        return replace(history, findings=findings)
 
     @staticmethod
     def _review_evidence(

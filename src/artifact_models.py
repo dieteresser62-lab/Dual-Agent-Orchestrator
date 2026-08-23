@@ -302,6 +302,12 @@ class FindingTransitionPayload:
     severity: FindingSeverity
     finding_status: str
     rationale: str
+    work_unit_id: str | None = None
+    summary: str | None = None
+    acceptance_test: str | None = None
+    origin_slice_id: str | None = None
+    origin_round_number: int | None = None
+    response_decision: str | None = None
     status: ClassVar[str] = "recorded"
     record_type: ClassVar[RecordType] = RecordType.FINDING_TRANSITION
 
@@ -320,6 +326,35 @@ class FindingTransitionPayload:
         if self.action == "responded" and self.finding_status != "open":
             raise ArtifactValidationError("a codex response cannot close a finding")
         _require_text(self.rationale, "rationale")
+        if self.work_unit_id is not None:
+            _require_identifier(self.work_unit_id, "work_unit_id")
+        opening_metadata = (
+            self.summary,
+            self.acceptance_test,
+            self.origin_slice_id,
+            self.origin_round_number,
+        )
+        if any(item is not None for item in opening_metadata):
+            if self.action != "opened" or any(item is None for item in opening_metadata):
+                raise ArtifactValidationError(
+                    "finding opening metadata must be complete and limited to opened transitions"
+                )
+            assert self.summary is not None
+            assert self.acceptance_test is not None
+            assert self.origin_slice_id is not None
+            assert self.origin_round_number is not None
+            _require_text(self.summary, "summary")
+            _require_text(self.acceptance_test, "acceptance_test")
+            _require_identifier(self.origin_slice_id, "origin_slice_id")
+            _require_positive(self.origin_round_number, "origin_round_number")
+        if self.response_decision is not None:
+            if self.action != "responded" or self.response_decision not in {
+                "accepted",
+                "rejected",
+            }:
+                raise ArtifactValidationError(
+                    "response_decision must describe a responded transition"
+                )
 
 
 @dataclass(frozen=True, slots=True)
@@ -867,7 +902,21 @@ def _payload_from_dict(record_type: RecordType, raw: Mapping[str, Any]) -> Artif
             data.get("response_sha256"),
         )
     if record_type is RecordType.FINDING_TRANSITION:
-        return FindingTransitionPayload(data["finding_id"], Role(data["reporter"]), Role(data["actor"]), data["action"], FindingSeverity(data["severity"]), data["finding_status"], data["rationale"])
+        return FindingTransitionPayload(
+            finding_id=data["finding_id"],
+            reporter=Role(data["reporter"]),
+            actor=Role(data["actor"]),
+            action=data["action"],
+            severity=FindingSeverity(data["severity"]),
+            finding_status=data["finding_status"],
+            rationale=data["rationale"],
+            work_unit_id=data.get("work_unit_id"),
+            summary=data.get("summary"),
+            acceptance_test=data.get("acceptance_test"),
+            origin_slice_id=data.get("origin_slice_id"),
+            origin_round_number=data.get("origin_round_number"),
+            response_decision=data.get("response_decision"),
+        )
     if record_type is RecordType.VALIDATION_REQUEST:
         commands = tuple(CommandSpec(item["family"], tuple(item["argv"]), item["mode"]) for item in data["commands"])
         return ValidationRequestPayload(commands, Role(data["requested_by"]))
