@@ -39,6 +39,7 @@ from native_review_request import (
     canonical_native_review_request_json,
     load_native_review_request_schema,
 )
+from review_packets import ReviewPacket, build_review_packet
 
 
 FINGERPRINT = "a" * 64
@@ -106,6 +107,48 @@ def _spec() -> NativeReviewRequestSpec:
                 "docs/internal/native-claude-review-path-arbeitsplan.md",
             ),
         ),
+    )
+
+
+def _packet_evidence(*, content: str = "+new content") -> NativeReviewEvidenceInput:
+    plan = """# Plan
+
+### Slice 1 - Native packet binding
+
+#### Fokussierte synthetische Akzeptanztests
+
+- Packet manifest digest is bound.
+"""
+    diff = (
+        "diff --git a/src/a.py b/src/a.py\n"
+        "index 1111111..2222222 100644\n"
+        "--- a/src/a.py\n+++ b/src/a.py\n"
+        f"@@ -1 +1 @@\n-old\n{content}\n"
+    )
+    packet = build_review_packet(
+        purpose="slice", fingerprint=FINGERPRINT, start_fingerprint="0" * 64,
+        paths=("src/a.py",), review_diff=diff, plan_text=plan, slice_id=1,
+        attestation=_attestation(), findings=(),
+    )
+    return NativeReviewEvidenceInput(
+        "review-packet", "canonical_review_packet", packet.text,
+        semantic_digest=packet.manifest.diff_coverage_digest,
+    )
+
+
+def _legacy_packet_evidence() -> NativeReviewEvidenceInput:
+    canonical = json.dumps(
+        {
+            "schema": "review-packet-v1",
+            "purpose": "slice",
+            "fingerprint": FINGERPRINT,
+            "manifest": {"paths": ["src/a.py"]},
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+    packet = ReviewPacket.restore(canonical, hashlib.sha256(canonical).hexdigest())
+    return NativeReviewEvidenceInput(
+        "review-packet", "canonical_review_packet", packet.text
     )
 
 
@@ -221,6 +264,43 @@ def test_large_evidence_is_content_addressed_and_bound() -> None:
     assert len(bundle.evidence_assets) == 1
     assert bundle.evidence_assets[0].path == item["content_ref"]
     assert bundle.evidence_assets[0].sha256 == item["sha256"]
+
+
+@pytest.mark.parametrize("inline_limit", (1, 1_000_000))
+def test_canonical_packet_semantic_digest_is_bound_for_both_deliveries(
+    inline_limit: int,
+) -> None:
+    evidence = _packet_evidence()
+    bundle = build_native_review_request(
+        replace(_spec(), evidence=(evidence,)), inline_evidence_chars=inline_limit
+    )
+    item = bundle.document["evidence_manifest"][0]
+    assert item["semantic_digest"] == evidence.semantic_digest
+    assert build_native_review_request(
+        replace(_spec(), evidence=(_packet_evidence(content="+changed"),)),
+        inline_evidence_chars=inline_limit,
+    ).bound_context.request_id != bundle.bound_context.request_id
+
+
+def test_canonical_packet_rejects_missing_or_mismatched_semantic_digest() -> None:
+    evidence = _packet_evidence()
+    with pytest.raises(NativeReviewRequestError, match="requires semantic_digest"):
+        replace(evidence, semantic_digest=None)
+    with pytest.raises(NativeReviewRequestError, match="differs from packet manifest"):
+        replace(evidence, semantic_digest="f" * 64)
+    with pytest.raises(NativeReviewRequestError, match="reserved"):
+        replace(_spec().evidence[0], semantic_digest="f" * 64)
+
+
+@pytest.mark.parametrize("inline_limit", (1, 1_000_000))
+def test_legacy_canonical_packet_remains_requestable_without_semantic_digest(
+    inline_limit: int,
+) -> None:
+    bundle = build_native_review_request(
+        replace(_spec(), evidence=(_legacy_packet_evidence(),)),
+        inline_evidence_chars=inline_limit,
+    )
+    assert "semantic_digest" not in bundle.document["evidence_manifest"][0]
 
 
 @pytest.mark.parametrize(

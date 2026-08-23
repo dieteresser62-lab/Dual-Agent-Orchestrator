@@ -1957,19 +1957,44 @@ class ProductionWorkflowDriver(WorkflowDriver):
         previous_by_id = {item.finding_id: item for item in previous_findings}
         for finding in result.findings:
             previous = previous_by_id.get(finding.finding_id)
-            transitions: list[tuple[str, str]] = []
+            transitions: list[tuple[str, str, str]] = []
             if previous is None:
-                transitions.append(("opened", finding.summary))
+                transitions.append(("opened", finding.summary, "opened"))
             else:
-                if previous.finding_class is not finding.finding_class:
+                class_changed = previous.finding_class is not finding.finding_class
+                rationale_changed = (
+                    previous.status_rationale != finding.status_rationale
+                )
+                if class_changed:
                     transitions.append(
-                        ("reclassified", finding.status_rationale or finding.summary)
+                        (
+                            "reclassified",
+                            finding.status_rationale or finding.summary,
+                            "reclassified",
+                        )
                     )
                 if previous.status is not finding.status:
                     transitions.append(
-                        ("status_changed", finding.status_rationale or finding.summary)
+                        (
+                            "status_changed",
+                            finding.status_rationale or finding.summary,
+                            "status_changed",
+                        )
                     )
-            for action, rationale in transitions:
+                elif rationale_changed and not class_changed:
+                    transitions.append(
+                        (
+                            "status_changed",
+                            finding.status_rationale or finding.summary,
+                            (
+                                "status_rationale:"
+                                f"{self.active_state.current_work_unit_id}"
+                                if structured and self.active_state is not None
+                                else "status_rationale"
+                            ),
+                        )
+                    )
+            for action, rationale, transition_identity in transitions:
                 self._artifact_bridge.append(
                     finding_payload(
                         finding,
@@ -1983,7 +2008,8 @@ class ProductionWorkflowDriver(WorkflowDriver):
                     ),
                     logical_id=f"finding-{finding.finding_id}",
                     idempotency_key=(
-                        f"finding:{finding.finding_id}:{action}:{round_number}:"
+                        f"finding:{finding.finding_id}:{transition_identity}:"
+                        f"{round_number}:"
                         f"{result.reviewer.value}"
                     ),
                     fingerprint_sha256=fingerprint,

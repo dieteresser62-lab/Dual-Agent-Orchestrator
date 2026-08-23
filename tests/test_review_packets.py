@@ -9,7 +9,7 @@ from contracts import (
     FindingResponseDecision, FindingStatus, ValidationAttestation,
     ValidationRecord, ValidationStatus,
 )
-from review_packets import ReviewPacketError, build_review_packet, extract_slice_requirements
+from review_packets import ReviewPacket, ReviewPacketError, build_review_packet, extract_slice_requirements
 
 
 PLAN = """# Plan
@@ -44,6 +44,15 @@ Build one role-neutral packet without audit prose.
 
 - not an acceptance criterion
 """
+
+
+def _diff(path: str = "src/core.py", content: str = "+line", context: str = "") -> str:
+    return (
+        f"diff --git a/{path} b/{path}\n"
+        "index 1111111..2222222 100644\n"
+        f"--- a/{path}\n+++ b/{path}\n"
+        f"@@ -1 +1 @@{context}\n-old\n{content}\n"
+    )
 
 
 def _attestation(
@@ -90,11 +99,8 @@ def test_extracts_only_selected_slice_goal_and_acceptance_criteria() -> None:
     )
 
 
-def test_slice_packet_is_canonical_compact_and_filters_non_manifest_diff() -> None:
-    diff = (
-        "diff --git a/src/core.py b/src/core.py\n+line\n"
-        "diff --git a/docs/internal/audit.md b/docs/internal/audit.md\n+managed audit prose\n"
-    )
+def test_slice_packet_is_canonical_compact_and_binds_diff_coverage() -> None:
+    diff = _diff()
     first = build_review_packet(
         purpose="slice", fingerprint="a" * 64, start_fingerprint="0" * 64,
         paths=("src/core.py",), review_diff=diff, plan_text=PLAN, slice_id=2,
@@ -109,18 +115,21 @@ def test_slice_packet_is_canonical_compact_and_filters_non_manifest_diff() -> No
 
     assert first.canonical_bytes == second.canonical_bytes
     assert first.digest == second.digest
-    assert "managed audit prose" not in first.text
     assert "long response excluded" not in first.text
     assert "implementation detail" not in first.text
     assert payload["open_findings"][0]["id"] == "C-01"
     assert payload["closure_references"][0]["summary"] == "fixed by deterministic delta"
     assert "ignored output" not in first.text
+    assert payload["schema"] == "review-packet-v2"
+    assert payload["manifest"]["diff_coverage"][0]["path"] == "src/core.py"
+    assert first.manifest.diff_coverage_digest == payload["manifest"]["diff_coverage_digest"]
+    assert ReviewPacket.restore(first.canonical_bytes, first.digest) == first
 
 
 def test_correction_packet_selects_only_affected_findings_and_binds_fingerprint() -> None:
     packet = build_review_packet(
         purpose="correction", fingerprint="a" * 64, start_fingerprint="c" * 64,
-        paths=("src/core.py",), review_diff="CORRECTION DELTA", plan_text=PLAN,
+        paths=("src/core.py",), review_diff=_diff(content="+corrected"), plan_text=PLAN,
         slice_id=2, attestation=_attestation(), findings=_findings(),
         affected_finding_ids=("C-01",),
     )
@@ -138,7 +147,7 @@ def test_correction_packet_derives_requirements_when_slice_is_not_in_approved_pl
         fingerprint="a" * 64,
         start_fingerprint="c" * 64,
         paths=("src/core.py",),
-        review_diff="CORRECTION DELTA",
+        review_diff=_diff(content="+corrected"),
         plan_text=PLAN,
         slice_id=3,
         attestation=_attestation(),
@@ -159,7 +168,7 @@ def test_correction_packet_derives_requirements_when_slice_is_not_in_approved_pl
     with pytest.raises(ReviewPacketError, match="fingerprint-bound complete"):
         build_review_packet(
             purpose="correction", fingerprint="d" * 64, start_fingerprint="c" * 64,
-            paths=("src/core.py",), review_diff="delta", plan_text=PLAN, slice_id=2,
+            paths=("src/core.py",), review_diff=_diff(), plan_text=PLAN, slice_id=2,
             attestation=_attestation(), findings=(),
         )
 
@@ -167,7 +176,7 @@ def test_correction_packet_derives_requirements_when_slice_is_not_in_approved_pl
 def test_slice_packet_accepts_complete_red_attestation_for_mandatory_denial() -> None:
     packet = build_review_packet(
         purpose="slice", fingerprint="a" * 64, start_fingerprint="0" * 64,
-        paths=("src/core.py",), review_diff="diff", plan_text=PLAN, slice_id=2,
+        paths=("src/core.py",), review_diff=_diff(), plan_text=PLAN, slice_id=2,
         attestation=_attestation(status=ValidationStatus.FAIL), findings=(),
     )
 
@@ -209,7 +218,7 @@ def test_slice_packet_rejects_incomplete_attestation() -> None:
     with pytest.raises(ReviewPacketError, match="fingerprint-bound complete"):
         build_review_packet(
             purpose="slice", fingerprint="a" * 64, start_fingerprint="0" * 64,
-            paths=("src/core.py",), review_diff="diff", plan_text=PLAN, slice_id=2,
+            paths=("src/core.py",), review_diff=_diff(), plan_text=PLAN, slice_id=2,
             attestation=_attestation(complete=False), findings=(),
         )
 
@@ -218,7 +227,7 @@ def test_correction_packet_rejects_missing_affected_finding_scope() -> None:
     with pytest.raises(ReviewPacketError, match="requires affected findings"):
         build_review_packet(
             purpose="correction", fingerprint="a" * 64, start_fingerprint="c" * 64,
-            paths=("src/core.py",), review_diff="CORRECTION DELTA", plan_text=PLAN,
+            paths=("src/core.py",), review_diff=_diff(), plan_text=PLAN,
             slice_id=2, attestation=_attestation(), findings=_findings(),
         )
 
@@ -227,8 +236,93 @@ def test_packet_rejects_duplicate_manifest_and_ambiguous_plan_section() -> None:
     with pytest.raises(ReviewPacketError, match="sorted, unique"):
         build_review_packet(
             purpose="slice", fingerprint="a" * 64, start_fingerprint="0" * 64,
-            paths=("src/core.py", "src/core.py"), review_diff="diff", plan_text=PLAN,
+            paths=("src/core.py", "src/core.py"), review_diff=_diff(), plan_text=PLAN,
             slice_id=2, attestation=_attestation(), findings=(),
         )
     with pytest.raises(ReviewPacketError, match="exactly one"):
         extract_slice_requirements(PLAN + PLAN, 2)
+
+
+def test_diff_manifest_is_path_sorted_and_preserves_complete_hunk_headers() -> None:
+    alpha = _diff("src/a.py", "+alpha", " function context")
+    beta = _diff("src/b.py", "+beta")
+    kwargs = dict(
+        purpose="slice", fingerprint="a" * 64, start_fingerprint="0" * 64,
+        plan_text=PLAN, slice_id=2, attestation=_attestation(), findings=(),
+    )
+    first = build_review_packet(paths=("src/a.py", "src/b.py"), review_diff=beta + alpha, **kwargs)
+    second = build_review_packet(paths=("src/a.py", "src/b.py"), review_diff=alpha + beta, **kwargs)
+
+    assert first.canonical_bytes == second.canonical_bytes
+    assert tuple(item.path for item in first.manifest.diff_coverage) == ("src/a.py", "src/b.py")
+    assert first.manifest.diff_coverage[0].hunk_headers == ("@@ -1 +1 @@ function context",)
+    assert len({item.section_sha256 for item in first.manifest.diff_coverage}) == 2
+
+
+def test_diff_content_change_changes_section_and_packet_digest() -> None:
+    common = dict(
+        purpose="slice", fingerprint="a" * 64, start_fingerprint="0" * 64,
+        paths=("src/core.py",), plan_text=PLAN, slice_id=2,
+        attestation=_attestation(), findings=(),
+    )
+    first = build_review_packet(review_diff=_diff(content="+one"), **common)
+    second = build_review_packet(review_diff=_diff(content="+two"), **common)
+    assert first.manifest.diff_coverage[0].section_sha256 != second.manifest.diff_coverage[0].section_sha256
+    assert first.digest != second.digest
+
+
+def test_hunk_content_cannot_impersonate_file_headers_or_diff_sections() -> None:
+    diff = _diff(content="+++ markdown heading")
+    packet = build_review_packet(
+        purpose="slice", fingerprint="a" * 64, start_fingerprint="0" * 64,
+        paths=("src/core.py",), review_diff=diff, plan_text=PLAN, slice_id=2,
+        attestation=_attestation(), findings=(),
+    )
+    assert packet.manifest.diff_coverage[0].path == "src/core.py"
+
+
+@pytest.mark.parametrize(
+    ("metadata", "old_header", "new_header", "expected"),
+    (
+        ("new file mode 100644\n", "--- /dev/null", "+++ b/src/core.py", "added"),
+        ("deleted file mode 100644\n", "--- a/src/core.py", "+++ /dev/null", "deleted"),
+    ),
+)
+def test_diff_manifest_classifies_added_and_deleted_files(
+    metadata: str, old_header: str, new_header: str, expected: str
+) -> None:
+    diff = (
+        "diff --git a/src/core.py b/src/core.py\n"
+        f"{metadata}{old_header}\n{new_header}\n"
+        "@@ -0,0 +1 @@\n+line\n"
+    )
+    packet = build_review_packet(
+        purpose="slice", fingerprint="a" * 64, start_fingerprint="0" * 64,
+        paths=("src/core.py",), review_diff=diff, plan_text=PLAN, slice_id=2,
+        attestation=_attestation(), findings=(),
+    )
+    assert packet.manifest.diff_coverage[0].change_type == expected
+
+
+@pytest.mark.parametrize(
+    ("diff", "paths"),
+    (
+        ("not a git diff", ("src/core.py",)),
+        (_diff(), ("src/core.py", "src/missing.py")),
+        (_diff() + _diff(), ("src/core.py",)),
+        (_diff("src/other.py"), ("src/core.py",)),
+        (_diff("../unsafe.py"), ("../unsafe.py",)),
+        ("diff --git a/src/old.py b/src/new.py\n--- a/src/old.py\n+++ b/src/new.py\n@@ -1 +1 @@\n-a\n+b\n", ("src/new.py",)),
+        ("diff --git a/src/core.py b/src/core.py\nrename from src/old.py\nrename to src/core.py\n--- a/src/core.py\n+++ b/src/core.py\n@@ -1 +1 @@\n-a\n+b\n", ("src/core.py",)),
+        ("diff --git a/src/core.py b/src/core.py\nBinary files a/src/core.py and b/src/core.py differ\n", ("src/core.py",)),
+    ),
+)
+def test_diff_manifest_rejects_incomplete_ambiguous_or_unsafe_sections(
+    diff: str, paths: tuple[str, ...]
+) -> None:
+    with pytest.raises(ReviewPacketError):
+        build_review_packet(
+            purpose="slice", fingerprint="a" * 64, start_fingerprint="0" * 64,
+            paths=paths, review_diff=diff, plan_text=PLAN, slice_id=2,
+            attestation=_attestation(), findings=(),
+        )

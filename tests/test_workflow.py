@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
@@ -43,6 +44,7 @@ from gates import PathClasses, StopRule, TestChangeEvidence as GateTestChangeEvi
 from native_codex_contract import NativeCodexRequestKind
 from inbox_watcher import WatchTaskDisposition, WatchTaskResult
 from orchestrator import run_v3_final_review, run_v3_work_unit
+from review_packets import ReviewPacket
 from validation_matrix import ValidationCommand, ValidationMatrix, ValidationRequest, ValidationRule
 from workflow import (
     CodexInvocation,
@@ -91,7 +93,13 @@ def _changes(
         start_commit=start_commit,
         fingerprint=token * 64,
         paths=tuple(sorted(paths)),
-        full_diff=full_diff or "\n".join(f"diff -- {path}" for path in paths),
+        full_diff=full_diff or "".join(
+            f"diff --git a/{path} b/{path}\n"
+            "index 1111111..2222222 100644\n"
+            f"--- a/{path}\n+++ b/{path}\n"
+            "@@ -1 +1 @@\n-old\n+new\n"
+            for path in paths
+        ),
     )
 
 
@@ -589,6 +597,16 @@ def test_plan_chain_uses_codex_then_claude_then_antigravity() -> None:
         AgentRole.ANTIGRAVITY,
     ]
     assert driver.commit_calls == []
+
+
+def _diff_for_paths(*paths: str, content: str = "+corrected") -> str:
+    return "".join(
+        f"diff --git a/{path} b/{path}\n"
+        "index 1111111..2222222 100644\n"
+        f"--- a/{path}\n+++ b/{path}\n"
+        f"@@ -1 +1 @@\n-old\n{content}\n"
+        for path in paths
+    )
 
 
 def test_plan_change_boundary_honors_exact_fingerprint_bound_path_approval() -> None:
@@ -1928,6 +1946,60 @@ def test_native_request_builder_covers_plan_slice_and_final_reviews(
     assert ("codex-final-report" in evidence_ids) is (
         marker is ApprovalMarker.FINAL
     )
+
+
+def test_native_request_reuses_restored_legacy_review_packet_without_semantic_digest() -> None:
+    changes = _changes("e", "src/early.py", TEST_FILE)
+    state = replace(
+        _slice_state().with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW),
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V1,
+            "1",
+            "native-claude-review-v1",
+        ),
+    )
+    canonical = json.dumps(
+        {
+            "schema": "review-packet-v1",
+            "purpose": "slice",
+            "fingerprint": changes.fingerprint,
+            "manifest": {"paths": sorted(("src/early.py", TEST_FILE))},
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+    packet = ReviewPacket.restore(canonical, hashlib.sha256(canonical).hexdigest())
+    history = WorkflowHistory.from_dict(
+        WorkflowHistory(state.current_work_unit_id, active_review_packet=packet).to_dict()
+    )
+    contract = StepContract(
+        "native-legacy-packet-review",
+        AgentRole.CLAUDE,
+        ApprovalMarker.SLICE,
+        "01",
+        2,
+        changes.fingerprint,
+        _attestation(changes),
+    )
+
+    bundle = WorkflowEngine._native_review_request(
+        state=state,
+        context=_context(),
+        history=history,
+        contract=contract,
+        changes=changes,
+        evidence_kind=EvidenceKind.FULL_SLICE,
+        review_diff=changes.full_diff,
+        review_packet=history.active_review_packet,
+        expected_test_files=(TEST_FILE,),
+    )
+
+    packet_item = next(
+        item
+        for item in bundle.document["evidence_manifest"]
+        if item["evidence_id"] == "review-packet"
+    )
+    assert packet_item["sha256"] == packet.digest
+    assert "semantic_digest" not in packet_item
 
 
 def test_native_record_ahead_recovery_receives_full_history_and_skips_provider() -> None:
@@ -3307,7 +3379,7 @@ def test_plan_bound_correction_packet_uses_same_start_delta_for_both_reviewers()
             _review_approval(AgentRole.CLAUDE),
             _review_closes(AgentRole.ANTIGRAVITY, "A-01"),
         ],
-        deltas={("0" * 64, corrected.fingerprint): "BOUND CORRECTION DELTA"},
+        deltas={("0" * 64, corrected.fingerprint): _diff_for_paths("src/early.py", "src/latest.py", TEST_FILE)},
     )
     plan = """# Approved plan
 
@@ -3346,7 +3418,7 @@ Use one canonical packet.
         driver.reviewer_calls[2].review_packet.canonical_bytes
         == driver.reviewer_calls[3].review_packet.canonical_bytes
     )
-    assert "BOUND CORRECTION DELTA" in driver.reviewer_calls[2].review_packet.text
+    assert "+corrected" in driver.reviewer_calls[2].review_packet.text
     assert "Implement Slice 10" not in driver.reviewer_calls[2].prompt
 
 
@@ -3372,7 +3444,7 @@ def test_plan_bound_same_slice_correction_packet_excludes_unaffected_findings() 
             _review_closes(AgentRole.CLAUDE, "C-01"),
             _review_closes(AgentRole.ANTIGRAVITY, "A-99"),
         ],
-        deltas={("0" * 64, corrected.fingerprint): "BOUND CORRECTION DELTA"},
+        deltas={("0" * 64, corrected.fingerprint): _diff_for_paths("src/early.py", "src/latest.py", TEST_FILE)},
     )
     plan = """# Approved plan
 
@@ -3448,6 +3520,29 @@ Use one canonical packet.
     assert "future cleanup" not in antigravity_packet.text
     restored = WorkflowHistory.from_dict(result.history.to_dict())
     assert restored.active_review_packet == antigravity_packet
+
+
+def test_invalid_unified_diff_prevents_any_reviewer_invocation() -> None:
+    changes = _changes("1", "src/early.py", TEST_FILE, full_diff="markerless delta")
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[_review_approval(AgentRole.CLAUDE)],
+    )
+    plan = """# Approved plan
+
+### Slice 1 - Packet Slice
+
+#### Fokussierte synthetische Akzeptanztests
+
+- Invalid coverage fails before provider start.
+"""
+
+    with pytest.raises(WorkflowExecutionError, match="marker-delimited"):
+        WorkflowEngine(driver).run_current_work_unit(
+            _slice_state(), replace(_context(), approved_plan_text=plan)
+        )
+    assert driver.reviewer_calls == []
 
 
 def test_contract_only_repair_receives_no_implementation_evidence() -> None:

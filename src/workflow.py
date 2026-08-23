@@ -91,7 +91,7 @@ from prompts import (
     delimit_block,
 )
 from review_packets import (
-    ReviewPacket, ReviewPacketError, ReviewPacketManifest, build_review_packet,
+    ReviewPacket, ReviewPacketError, build_review_packet, exclude_review_diff_paths,
 )
 from validation_matrix import (
     ValidationCommand,
@@ -968,15 +968,17 @@ class WorkflowHistory:
                 "purpose", "fingerprint", "paths", "canonical_text", "digest"
             }:
                 raise ValueError("workflow history review packet has invalid fields")
-            active_review_packet = ReviewPacket(
-                purpose=str(packet_raw["purpose"]),
-                fingerprint=str(packet_raw["fingerprint"]),
-                manifest=ReviewPacketManifest(
-                    tuple(str(item) for item in _json_list(packet_raw["paths"]))
-                ),
-                canonical_bytes=str(packet_raw["canonical_text"]).encode("utf-8"),
-                digest=str(packet_raw["digest"]),
+            active_review_packet = ReviewPacket.restore(
+                str(packet_raw["canonical_text"]).encode("utf-8"),
+                str(packet_raw["digest"]),
             )
+            if (
+                active_review_packet.purpose != str(packet_raw["purpose"])
+                or active_review_packet.fingerprint != str(packet_raw["fingerprint"])
+                or active_review_packet.manifest.paths
+                != tuple(str(item) for item in _json_list(packet_raw["paths"]))
+            ):
+                raise ValueError("workflow history review packet cache differs from canonical bytes")
         return cls(
             work_unit_id=int(raw["work_unit_id"]),
             findings=tuple(_finding_from_dict(item) for item in _json_list(raw["findings"])),
@@ -2454,12 +2456,17 @@ class WorkflowEngine:
                         and not path.startswith(".orchestrator/")
                         and not path.startswith("docs/internal/slice-")
                     )
+                    excluded_packet_paths = tuple(
+                        path for path in changes.paths if path not in packet_paths
+                    )
                     review_packet = build_review_packet(
                         purpose=packet_purpose,
                         fingerprint=changes.fingerprint,
                         start_fingerprint=start_fingerprint,
                         paths=packet_paths,
-                        review_diff=review_diff,
+                        review_diff=exclude_review_diff_paths(
+                            review_diff, excluded_packet_paths
+                        ),
                         plan_text=context.approved_plan_text,
                         slice_id=unit.slice_id,
                         attestation=attestation,
@@ -3986,7 +3993,10 @@ class WorkflowEngine:
         if review_packet is not None:
             evidence.append(
                 NativeReviewEvidenceInput(
-                    "review-packet", "canonical_review_packet", review_packet.text
+                    "review-packet",
+                    "canonical_review_packet",
+                    review_packet.text,
+                    semantic_digest=review_packet.manifest.diff_coverage_digest,
                 )
             )
         else:

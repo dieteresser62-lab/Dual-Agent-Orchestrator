@@ -93,7 +93,7 @@ from native_review_request import (
     NativeReviewRequestSpec,
     build_native_review_request,
 )
-from artifact_replay import replay_artifacts
+from artifact_replay import replay_artifacts, replay_findings
 from native_codex_contract import (
     NativeCodexContext,
     NativeCodexRequestKind,
@@ -529,7 +529,16 @@ def test_review_packet_materialization_reuses_bytes_and_rejects_cache_mismatch(
         branch="feature/packet-cache", branch_base="a" * 40,
         slice_count=1, timestamp="2026-08-21T10:00:00+00:00",
     )
-    canonical = b'{"schema":"review-packet-v1"}'
+    canonical = json.dumps(
+        {
+            "schema": "review-packet-v1",
+            "purpose": "slice",
+            "fingerprint": "a" * 64,
+            "manifest": {"paths": ["seed.txt"], "additional_dependencies": []},
+            "diff": "legacy compact delta",
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
     packet = ReviewPacket(
         purpose="slice", fingerprint="a" * 64,
         manifest=ReviewPacketManifest(("seed.txt",)),
@@ -1638,6 +1647,93 @@ def test_native_codex_record_ahead_recovery_reuses_raw_json_without_provider(
             contract,
             WorkflowHistory(state.current_work_unit_id),
         )
+
+
+def test_native_review_persists_open_status_rationale_for_authoritative_replay(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/native-open-rationale-replay")
+    head = _git(repository, "rev-parse", "HEAD")
+    state = init_workflow_state(
+        run_id="native-open-rationale-replay",
+        task_file=str(tmp_path / "task.md"),
+        branch="feature/native-open-rationale-replay",
+        branch_base=head,
+        slice_count=1,
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V1,
+            "1",
+            codex_result_transport="native-codex-v1",
+            claude_review_transport="native-claude-review-v1",
+        ),
+    ).bind_current_slice_git_boundary(
+        start_commit=head,
+        scope_paths=("src/runtime.py",),
+        start_fingerprint="c" * 64,
+    )
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    driver.bind_work_unit(state)
+    finding = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="The reviewer needs another correction round.",
+        acceptance_test="The next review must retain its OPEN rationale.",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
+    opened = ContractResult(
+        reviewer=AgentRole.CLAUDE,
+        approval=False,
+        stopped=False,
+        stop_request=None,
+        validation=None,
+        test_files=(),
+        pre_mortem=None,
+        evidence=None,
+        findings=(finding,),
+        anchors=(),
+    )
+    driver._persist_review_finding_transitions(
+        opened,
+        fingerprint="d" * 64,
+        round_number=1,
+        previous_findings=(),
+        structured=True,
+    )
+    reaffirmed = replace(
+        finding,
+        status_rationale="The first correction is incomplete; keep this blocker open.",
+    )
+    denied = replace(opened, findings=(reaffirmed,))
+    driver._persist_review_finding_transitions(
+        denied,
+        fingerprint="e" * 64,
+        round_number=2,
+        previous_findings=(finding,),
+        structured=True,
+    )
+
+    replay = replay_artifacts(
+        ArtifactStore(repository, state.run_id).load_chain(), state.run_id
+    )
+    projected = replay_findings(replay, state.current_work_unit_id)
+
+    assert projected == (reaffirmed,)
+    transitions = tuple(
+        record.payload
+        for record in replay.records
+        if isinstance(record.payload, FindingTransitionPayload)
+    )
+    assert tuple(item.action for item in transitions) == (
+        "opened",
+        "status_changed",
+    )
 
 
 def test_native_codex_record_ahead_recovery_completes_finding_responses(
