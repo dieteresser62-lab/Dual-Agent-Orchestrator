@@ -1545,12 +1545,22 @@ class WorkflowEngine:
         """Upgrade a legacy Codex UNEXPECTED-PATH stop to an exact user gate."""
         current = state.current_work_unit
         gate = current.gate
+        direct_unexpected_path = (
+            gate.detail is not None
+            and gate.detail.startswith(f"{UNEXPECTED_PATH_RULE_ID} |")
+        )
+        plan_validation_scope_stop = (
+            current.kind is WorkUnitKind.PLAN
+            and gate.detail is not None
+            and gate.detail.startswith("PLAN-CONTRACT-INVALID |")
+            and "internal plan validation found out-of-scope planning changes:"
+            in gate.detail
+        )
         if (
             current.status is not WorkUnitStatus.AWAITING_USER_DECISION
             or gate.reason is not GateReason.STOP_REQUEST
             or gate.fingerprint is not None
-            or gate.detail is None
-            or not gate.detail.startswith(f"{UNEXPECTED_PATH_RULE_ID} |")
+            or not (direct_unexpected_path or plan_validation_scope_stop)
         ):
             return state
         start_commit = self._change_start_commit(state)
@@ -1566,6 +1576,11 @@ class WorkflowEngine:
         resumed = state.resume_after_user_decision()
         if not unexpected:
             return resumed
+        next_step = (
+            WorkflowStep.CLAUDE_PLAN_REVIEW
+            if plan_validation_scope_stop
+            else current.current_step
+        )
         return resumed.await_user_gate(
             reason=GateReason.UNEXPECTED_FILE,
             detail=(
@@ -1574,7 +1589,8 @@ class WorkflowEngine:
             ),
             fingerprint=changes.fingerprint,
             paths=unexpected,
-            resume_step=current.current_step,
+            gate_step=next_step,
+            resume_step=next_step,
         )
 
     def _run_codex(
@@ -1865,6 +1881,27 @@ class WorkflowEngine:
         start_commit = state.current_slice.start_commit or state.branch_base
         try:
             changes = self.driver.collect_changes(start_commit)
+            unexpected = self._validate_change_boundary(
+                state,
+                changes,
+                WorkUnitKind.PLAN,
+                context=context,
+            )
+            if unexpected:
+                next_step = WorkflowStep.CLAUDE_PLAN_REVIEW
+                state = state.await_user_gate(
+                    reason=GateReason.UNEXPECTED_FILE,
+                    detail=(
+                        f"{UNEXPECTED_PATH_RULE_ID} | canonical changes contain paths "
+                        f"outside the persisted Slice scope: {', '.join(unexpected)}"
+                    ),
+                    fingerprint=changes.fingerprint,
+                    paths=unexpected,
+                    gate_step=next_step,
+                    resume_step=next_step,
+                )
+                self.driver.checkpoint(state, history)
+                return state, history, True
             _, history = self._attestation(
                 changes,
                 history,
@@ -3675,17 +3712,23 @@ class WorkflowEngine:
         if changes.start_commit != expected_start:
             raise WorkflowExecutionError("change evidence uses a foreign slice start commit")
         if kind is WorkUnitKind.PLAN:
-            if context is None or not context.task_scope_patterns:
+            scope_patterns = (
+                context.task_scope_patterns
+                if context is not None
+                else state.task_scope_patterns
+            )
+            if not scope_patterns:
                 return ()
             if (
-                not context.plan_only
+                context is not None
+                and not context.plan_only
                 and changes.paths == (".orchestrator/plan-output.md",)
             ):
                 return ()
             unexpected = tuple(
                 path
                 for path in changes.paths
-                if not matches_path_patterns(path, context.task_scope_patterns)
+                if not matches_path_patterns(path, scope_patterns)
             )
             if unexpected and any(
                 state.current_work_unit.has_gate_approval(

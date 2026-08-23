@@ -215,6 +215,110 @@ def test_legacy_unexpected_path_stop_becomes_fingerprint_bound_user_gate() -> No
     assert reframed.current_work_unit.gate.resume_step is WorkflowStep.CODEX_CORRECTION
 
 
+def test_plan_scope_stop_becomes_post_revision_fingerprint_gate() -> None:
+    plan_path = "docs/internal/work-plan.md"
+    hotfix_path = "src/runtime-hotfix.py"
+    state = init_workflow_state(
+        run_id="run-plan-scope-reframe",
+        task_file="/repo/inbox/plan.md",
+        branch="feature/plan-scope-reframe",
+        branch_base="a" * 40,
+        slice_count=1,
+        task_scope_patterns=(plan_path,),
+    ).with_current_step(WorkflowStep.CODEX_PLAN_REVISION).await_policy_gate(
+        reason=GateReason.STOP_REQUEST,
+        detail=(
+            "PLAN-CONTRACT-INVALID | The work plan is not safe to hand to "
+            "reviewers or implementation: internal plan validation found "
+            f"out-of-scope planning changes: {hotfix_path}"
+        ),
+    )
+
+    class Driver:
+        @staticmethod
+        def collect_changes(_start_commit: str) -> WorkflowChanges:
+            return WorkflowChanges(
+                start_commit="a" * 40,
+                fingerprint="c" * 64,
+                paths=(plan_path, hotfix_path),
+                full_diff="diff --git a/src/runtime-hotfix.py b/src/runtime-hotfix.py",
+            )
+
+    reframed = WorkflowEngine(Driver()).reframe_unexpected_path_stop_gate(  # type: ignore[arg-type]
+        state
+    )
+
+    assert reframed.current_work_unit.gate.reason is GateReason.UNEXPECTED_FILE
+    assert reframed.current_work_unit.gate.fingerprint == "c" * 64
+    assert reframed.current_work_unit.gate.paths == (hotfix_path,)
+    assert reframed.current_step is WorkflowStep.CLAUDE_PLAN_REVIEW
+    assert (
+        reframed.current_work_unit.gate.resume_step
+        is WorkflowStep.CLAUDE_PLAN_REVIEW
+    )
+
+
+def test_plan_pre_review_scope_drift_gates_without_reinvoking_codex() -> None:
+    plan_path = "docs/internal/work-plan.md"
+    hotfix_path = "src/runtime-hotfix.py"
+    state = init_workflow_state(
+        run_id="run-plan-pre-review-gate",
+        task_file="/repo/inbox/plan.md",
+        branch="feature/plan-pre-review-gate",
+        branch_base="a" * 40,
+        slice_count=1,
+        task_scope_patterns=(plan_path,),
+    ).with_current_step(WorkflowStep.CODEX_PLAN_REVISION)
+    checkpoints: list[WorkflowState] = []
+
+    class Driver:
+        @staticmethod
+        def collect_changes(_start_commit: str) -> WorkflowChanges:
+            return WorkflowChanges(
+                start_commit="a" * 40,
+                fingerprint="d" * 64,
+                paths=(plan_path, hotfix_path),
+                full_diff="diff --git a/src/runtime-hotfix.py b/src/runtime-hotfix.py",
+            )
+
+        @staticmethod
+        def validate_plan(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+            raise AssertionError("validation must wait for the exact path gate")
+
+        @staticmethod
+        def checkpoint(
+            checkpoint_state: WorkflowState, _history: WorkflowHistory
+        ) -> None:
+            checkpoints.append(checkpoint_state)
+
+    context = WorkflowContext(
+        assignment="Create the work plan.",
+        distilled_plan="Keep the task scope exact.",
+        slice_summary="Revise the plan after review.",
+        plan_only=True,
+        task_scope_patterns=(plan_path,),
+        work_plan_path=plan_path,
+    )
+    engine = WorkflowEngine(Driver())  # type: ignore[arg-type]
+
+    gated, history, halted = engine._validate_plan_before_review(
+        state,
+        context,
+        WorkflowHistory(state.current_work_unit_id),
+    )
+
+    assert halted
+    assert history == WorkflowHistory(state.current_work_unit_id)
+    assert checkpoints == [gated]
+    assert gated.current_step is WorkflowStep.CLAUDE_PLAN_REVIEW
+    assert gated.current_work_unit.gate.reason is GateReason.UNEXPECTED_FILE
+    assert gated.current_work_unit.gate.paths == (hotfix_path,)
+    assert (
+        gated.current_work_unit.gate.resume_step
+        is WorkflowStep.CLAUDE_PLAN_REVIEW
+    )
+
+
 def test_hardened_task_contract_roundtrips_in_state() -> None:
     state = init_workflow_state(
         run_id="run-contract",
