@@ -4,12 +4,15 @@ from dataclasses import replace
 
 import pytest
 
-from contracts import PlannedSlice
+from contracts import CodexStepContract, PlannedSlice, ReadinessMarker
+from native_codex_contract import NativeCodexRequestKind
+from workflow import WorkflowChanges, WorkflowContext, WorkflowEngine, WorkflowHistory
 
 from workflow_state import (
     AgentFailureKind,
     DEFAULT_MAX_CODEX_RETURNS,
     GateRecord,
+    GateDecisionRecord,
     GateReason,
     GateStatus,
     InvocationFailureRecord,
@@ -74,6 +77,142 @@ def test_bootstrap_facts_roundtrip_idempotently_and_use_a_resume_gate() -> None:
     assert halted.current_work_unit.gate.reason is GateReason.BOOTSTRAP_CHECK
     assert halted.current_work_unit.gate.paths == ("src/external.py",)
     assert halted.resume_after_invocation_halt().current_step is WorkflowStep.CODEX_PLAN
+
+
+def test_stop_request_resume_starts_a_new_semantic_round() -> None:
+    state = make_state().with_current_step(WorkflowStep.CODEX_PLAN_REVISION)
+    halted = state.await_policy_gate(
+        reason=GateReason.STOP_REQUEST,
+        detail="UNEXPECTED-PATH | exact authorization is required",
+    )
+
+    resumed = halted.resume_after_user_decision()
+
+    assert resumed.current_step is WorkflowStep.CODEX_PLAN_REVISION
+    assert resumed.current_work_unit.round_number == 2
+    assert resumed.current_work_unit.gate.status is GateStatus.CLEAR
+
+
+def test_codex_scope_uses_only_matching_fingerprint_bound_resume_approval() -> None:
+    path = "src/runtime-hotfix.py"
+    decision = GateDecisionRecord(
+        approved=True,
+        reason=GateReason.UNEXPECTED_FILE,
+        fingerprint="b" * 64,
+        paths=(path,),
+        decided_by="architect",
+        decided_at="2026-08-23T13:00:00+00:00",
+        rationale="Reviewed bootstrap hotfix.",
+        resume_step=WorkflowStep.CODEX_PLAN_REVISION,
+    )
+    state = make_state().with_current_step(WorkflowStep.CODEX_PLAN_REVISION)
+    state = state._replace_current_unit(
+        replace(state.current_work_unit, gate_decisions=(decision,))
+    )
+
+    class Driver:
+        @staticmethod
+        def collect_changes(_start_commit: str):  # type: ignore[no-untyped-def]
+            return type("Changes", (), {"fingerprint": "b" * 64})()
+
+    engine = WorkflowEngine(Driver())  # type: ignore[arg-type]
+
+    assert engine._fingerprint_bound_codex_scope_paths(state) == (path,)
+
+    class DriftedDriver:
+        @staticmethod
+        def collect_changes(_start_commit: str):  # type: ignore[no-untyped-def]
+            return type("Changes", (), {"fingerprint": "c" * 64})()
+
+    drifted = WorkflowEngine(DriftedDriver())  # type: ignore[arg-type]
+    assert drifted._fingerprint_bound_codex_scope_paths(state) == ()
+
+
+def test_native_codex_request_projects_fingerprint_bound_paths_and_explanation() -> None:
+    state = init_workflow_state(
+        run_id="native-scope",
+        task_file="/repo/task.md",
+        branch="feature/native-scope",
+        branch_base="a" * 40,
+        slice_count=1,
+        task_digest="b" * 64,
+        task_scope_patterns=("docs/internal/plan.md",),
+        target_branch="feature/native-scope",
+        timestamp="2026-08-23T13:00:00+00:00",
+    )
+    context = WorkflowContext(
+        assignment="Create the plan.",
+        distilled_plan="Use the persisted task contract.",
+        slice_summary="Plan the work.",
+    )
+    contract = CodexStepContract(
+        "native-plan",
+        ReadinessMarker.PLAN,
+        "01",
+        1,
+        require_slice_plan=True,
+        plan_artifact_path="docs/internal/plan.md",
+    )
+
+    bundle = WorkflowEngine._native_codex_request(
+        state=state,
+        context=context,
+        history=WorkflowHistory(state.current_work_unit_id),
+        contract=contract,
+        prompt="Create the bound plan.",
+        request_kind=NativeCodexRequestKind.PLAN,
+        additional_authorized_paths=("src/runtime-hotfix.py",),
+    )
+
+    assert bundle.document["authorized_paths"] == [
+        "docs/internal/plan.md",
+        "src/runtime-hotfix.py",
+    ]
+    assert "FINGERPRINT-BOUND ORCHESTRATOR PATH AUTHORIZATION" in bundle.document[
+        "work_context"
+    ]
+    assert "not an UNEXPECTED-PATH condition" in bundle.document["work_context"]
+
+
+def test_legacy_unexpected_path_stop_becomes_fingerprint_bound_user_gate() -> None:
+    state = (
+        make_state()
+        .complete_current_work_unit()
+        .start_work_unit(
+            slice_id=1,
+            kind=WorkUnitKind.SLICE,
+            step=WorkflowStep.CODEX_CORRECTION,
+        )
+        .bind_current_slice_git_boundary(
+            start_commit="a" * 40,
+            scope_paths=("src/allowed.py",),
+            start_fingerprint="0" * 64,
+        )
+        .await_policy_gate(
+            reason=GateReason.STOP_REQUEST,
+            detail="UNEXPECTED-PATH | Codex requested exact scope authorization.",
+        )
+    )
+
+    class Driver:
+        @staticmethod
+        def collect_changes(_start_commit: str) -> WorkflowChanges:
+            return WorkflowChanges(
+                start_commit="a" * 40,
+                fingerprint="b" * 64,
+                paths=("src/allowed.py", "src/runtime-hotfix.py"),
+                full_diff="diff --git a/src/runtime-hotfix.py b/src/runtime-hotfix.py",
+            )
+
+    reframed = WorkflowEngine(Driver()).reframe_unexpected_path_stop_gate(  # type: ignore[arg-type]
+        state
+    )
+
+    assert reframed.current_work_unit.round_number == 2
+    assert reframed.current_work_unit.gate.reason is GateReason.UNEXPECTED_FILE
+    assert reframed.current_work_unit.gate.fingerprint == "b" * 64
+    assert reframed.current_work_unit.gate.paths == ("src/runtime-hotfix.py",)
+    assert reframed.current_work_unit.gate.resume_step is WorkflowStep.CODEX_CORRECTION
 
 
 def test_hardened_task_contract_roundtrips_in_state() -> None:

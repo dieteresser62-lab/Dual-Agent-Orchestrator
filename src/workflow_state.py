@@ -2121,6 +2121,7 @@ class WorkflowState:
                 "fingerprint-bound gate requires an explicit recorded user decision"
             )
         continuing_iteration_limit = current.gate.reason is GateReason.ITERATION_LIMIT
+        continuing_stop_request = current.gate.reason is GateReason.STOP_REQUEST
         completed_side_effects = current.completed_side_effects
         if (
             current.gate.reason is GateReason.STOP_REQUEST
@@ -2143,7 +2144,7 @@ class WorkflowState:
             status=WorkUnitStatus.IN_PROGRESS,
             round_number=(
                 current.round_number + 1
-                if continuing_iteration_limit
+                if continuing_iteration_limit or continuing_stop_request
                 else current.round_number
             ),
             max_codex_returns=(

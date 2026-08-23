@@ -3626,6 +3626,13 @@ def run_production_workflow(
             state = state.resume_after_invocation_halt()
             driver.checkpoint(state, history)
         elif current.status is WorkUnitStatus.AWAITING_USER_DECISION:
+            reframed = engine.reframe_unexpected_path_stop_gate(state)
+            if reframed != state:
+                state = reframed
+                driver.checkpoint(state, history)
+                current = state.current_work_unit
+                if current.status is WorkUnitStatus.IN_PROGRESS:
+                    continue
             inherited = _inherit_redundant_test_gate(state)
             if inherited != state:
                 state = inherited

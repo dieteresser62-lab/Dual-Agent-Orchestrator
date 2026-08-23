@@ -1491,6 +1491,44 @@ class WorkflowEngine:
         self.driver.checkpoint(updated, history)
         return WorkflowRunResult(updated, history)
 
+    def reframe_unexpected_path_stop_gate(
+        self, state: WorkflowState
+    ) -> WorkflowState:
+        """Upgrade a legacy Codex UNEXPECTED-PATH stop to an exact user gate."""
+        current = state.current_work_unit
+        gate = current.gate
+        if (
+            current.status is not WorkUnitStatus.AWAITING_USER_DECISION
+            or gate.reason is not GateReason.STOP_REQUEST
+            or gate.fingerprint is not None
+            or gate.detail is None
+            or not gate.detail.startswith(f"{UNEXPECTED_PATH_RULE_ID} |")
+        ):
+            return state
+        start_commit = self._change_start_commit(state)
+        if start_commit is None:
+            return state
+        try:
+            changes = self.driver.collect_changes(start_commit)
+        except Exception:
+            return state
+        unexpected = self._validate_change_boundary(
+            state, changes, current.kind
+        )
+        resumed = state.resume_after_user_decision()
+        if not unexpected:
+            return resumed
+        return resumed.await_user_gate(
+            reason=GateReason.UNEXPECTED_FILE,
+            detail=(
+                f"{UNEXPECTED_PATH_RULE_ID} | canonical changes contain paths "
+                f"outside the persisted Slice scope: {', '.join(unexpected)}"
+            ),
+            fingerprint=changes.fingerprint,
+            paths=unexpected,
+            resume_step=current.current_step,
+        )
+
     def _run_codex(
         self,
         state: WorkflowState,
@@ -1541,6 +1579,9 @@ class WorkflowEngine:
             }
             else NativeCodexRequestKind.IMPLEMENTATION
         )
+        additional_authorized_paths = self._fingerprint_bound_codex_scope_paths(
+            state
+        )
         native_request = (
             self._native_codex_request(
                 state=state,
@@ -1549,6 +1590,7 @@ class WorkflowEngine:
                 contract=contract,
                 prompt=prompt,
                 request_kind=request_kind,
+                additional_authorized_paths=additional_authorized_paths,
             )
             if native_codex
             else None
@@ -3715,6 +3757,7 @@ class WorkflowEngine:
         prompt: str,
         request_kind: NativeCodexRequestKind,
         work_context: str | None = None,
+        additional_authorized_paths: tuple[str, ...] = (),
     ) -> NativeCodexRequestBundle:
         """Build one Codex request exclusively from orchestrator-owned values."""
         if request_kind is NativeCodexRequestKind.FINAL_REPORT:
@@ -3746,6 +3789,21 @@ class WorkflowEngine:
             raise WorkflowExecutionError(
                 "native Codex request lacks an authorized path boundary"
             )
+        authorized_paths = tuple(
+            sorted({*authorized_paths, *additional_authorized_paths})
+        )
+        effective_work_context = (
+            context.distilled_context if work_context is None else work_context
+        )
+        if additional_authorized_paths:
+            effective_work_context += (
+                "\n\nFINGERPRINT-BOUND ORCHESTRATOR PATH AUTHORIZATION\n"
+                + "\n".join(additional_authorized_paths)
+                + "\nThese exact paths were approved by a user gate for the current "
+                "repository fingerprint. They are part of this request's authoritative "
+                "allowlist even when absent from the original plan. Their presence is "
+                "not an UNEXPECTED-PATH condition."
+            )
         native_context = NativeCodexContext(
             run_id=state.run_id,
             work_unit_id=str(state.current_work_unit_id),
@@ -3776,14 +3834,36 @@ class WorkflowEngine:
                 base_commit=base_commit,
                 authorized_paths=tuple(sorted(set(authorized_paths))),
                 assignment=context.assignment,
-                work_context=(
-                    context.distilled_context
-                    if work_context is None
-                    else work_context
-                ),
+                work_context=effective_work_context,
                 evidence=tuple(sorted(evidence, key=lambda item: item.evidence_id)),
             )
         )
+
+    def _fingerprint_bound_codex_scope_paths(
+        self, state: WorkflowState
+    ) -> tuple[str, ...]:
+        """Expose only the latest exact resume-gate path approval to Codex."""
+        decision = next(
+            (
+                item
+                for item in reversed(state.current_work_unit.gate_decisions)
+                if item.approved
+                and item.reason
+                in {GateReason.UNEXPECTED_FILE, GateReason.QUOTA_RESUME_DIFF}
+                and item.resume_step is state.current_step
+            ),
+            None,
+        )
+        if decision is None:
+            return ()
+        start_commit = self._change_start_commit(state)
+        if start_commit is None:
+            return ()
+        try:
+            fingerprint = self.driver.collect_changes(start_commit).fingerprint
+        except Exception:
+            return ()
+        return decision.paths if decision.fingerprint == fingerprint else ()
 
     @staticmethod
     def _native_review_request(
