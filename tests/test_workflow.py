@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from audit_trail import ReviewAuditEvent
 from agent_runtime import (
     AgentInvocationError,
     NativeAgentCodexOutput,
@@ -42,11 +44,13 @@ from gates import PathClasses, StopRule, TestChangeEvidence as GateTestChangeEvi
 from native_codex_contract import NativeCodexRequestKind
 from inbox_watcher import WatchTaskDisposition, WatchTaskResult
 from orchestrator import run_v3_final_review, run_v3_work_unit
+from review_packets import ReviewPacket
 from validation_matrix import ValidationCommand, ValidationMatrix, ValidationRequest, ValidationRule
 from workflow import (
     CodexInvocation,
     ContractRepairInvocation,
     EvidenceKind,
+    PersistedNativeReviewerReplay,
     ReviewerInvocation,
     WorkflowChanges,
     WorkflowCommitRequest,
@@ -66,6 +70,7 @@ from workflow_state import (
     GateReason,
     GateStatus,
     WorkflowStep,
+    WorkflowState,
     WorkUnitKind,
     WorkUnitStatus,
     ProtocolBinding,
@@ -88,7 +93,13 @@ def _changes(
         start_commit=start_commit,
         fingerprint=token * 64,
         paths=tuple(sorted(paths)),
-        full_diff=full_diff or "\n".join(f"diff -- {path}" for path in paths),
+        full_diff=full_diff or "".join(
+            f"diff --git a/{path} b/{path}\n"
+            "index 1111111..2222222 100644\n"
+            f"--- a/{path}\n+++ b/{path}\n"
+            "@@ -1 +1 @@\n-old\n+new\n"
+            for path in paths
+        ),
     )
 
 
@@ -586,6 +597,79 @@ def test_plan_chain_uses_codex_then_claude_then_antigravity() -> None:
         AgentRole.ANTIGRAVITY,
     ]
     assert driver.commit_calls == []
+
+
+def _diff_for_paths(*paths: str, content: str = "+corrected") -> str:
+    return "".join(
+        f"diff --git a/{path} b/{path}\n"
+        "index 1111111..2222222 100644\n"
+        f"--- a/{path}\n+++ b/{path}\n"
+        f"@@ -1 +1 @@\n-old\n{content}\n"
+        for path in paths
+    )
+
+
+def test_plan_change_boundary_honors_exact_fingerprint_bound_path_approval() -> None:
+    state = init_workflow_state(
+        run_id="run-plan-approved-hotfix",
+        task_file="/repo/task.md",
+        branch="feature/workflow",
+        branch_base=START_COMMIT,
+        slice_count=1,
+        timestamp="2026-08-12T10:00:00+00:00",
+        task_scope_patterns=("docs/internal/plan.md",),
+    )
+    changes = _changes(
+        "1",
+        "docs/internal/plan.md",
+        "src/agent_runtime.py",
+        "tests/test_agent_runtime.py",
+    )
+    context = replace(
+        _context(),
+        plan_only=True,
+        task_scope_patterns=("docs/internal/plan.md",),
+        work_plan_path="docs/internal/plan.md",
+    )
+    engine = WorkflowEngine(
+        FakeDriver(snapshots=[], codex_outputs=[], reviewer_outputs=[])
+    )
+
+    unexpected = engine._validate_change_boundary(
+        state,
+        changes,
+        WorkUnitKind.PLAN,
+        context=context,
+    )
+    assert unexpected == ("src/agent_runtime.py", "tests/test_agent_runtime.py")
+
+    gated = state.await_user_gate(
+        reason=GateReason.UNEXPECTED_FILE,
+        detail="reviewed hotfix paths",
+        fingerprint=changes.fingerprint,
+        paths=unexpected,
+    )
+    approved = gated.record_user_gate_decision(
+        approved=True,
+        fingerprint=changes.fingerprint,
+        paths=unexpected,
+        decided_by="dieter",
+        decided_at="2026-08-23T10:24:26+00:00",
+        rationale="fingerprint-bound hotfix reviewed",
+    )
+
+    assert engine._validate_change_boundary(
+        approved,
+        changes,
+        WorkUnitKind.PLAN,
+        context=context,
+    ) == ()
+    assert engine._validate_change_boundary(
+        approved,
+        replace(changes, fingerprint="2" * 64),
+        WorkUnitKind.PLAN,
+        context=context,
+    ) == unexpected
 
 
 def test_native_claude_review_bypasses_legacy_marker_parser(
@@ -1864,6 +1948,60 @@ def test_native_request_builder_covers_plan_slice_and_final_reviews(
     )
 
 
+def test_native_request_reuses_restored_legacy_review_packet_without_semantic_digest() -> None:
+    changes = _changes("e", "src/early.py", TEST_FILE)
+    state = replace(
+        _slice_state().with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW),
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V1,
+            "1",
+            "native-claude-review-v1",
+        ),
+    )
+    canonical = json.dumps(
+        {
+            "schema": "review-packet-v1",
+            "purpose": "slice",
+            "fingerprint": changes.fingerprint,
+            "manifest": {"paths": sorted(("src/early.py", TEST_FILE))},
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+    packet = ReviewPacket.restore(canonical, hashlib.sha256(canonical).hexdigest())
+    history = WorkflowHistory.from_dict(
+        WorkflowHistory(state.current_work_unit_id, active_review_packet=packet).to_dict()
+    )
+    contract = StepContract(
+        "native-legacy-packet-review",
+        AgentRole.CLAUDE,
+        ApprovalMarker.SLICE,
+        "01",
+        2,
+        changes.fingerprint,
+        _attestation(changes),
+    )
+
+    bundle = WorkflowEngine._native_review_request(
+        state=state,
+        context=_context(),
+        history=history,
+        contract=contract,
+        changes=changes,
+        evidence_kind=EvidenceKind.FULL_SLICE,
+        review_diff=changes.full_diff,
+        review_packet=history.active_review_packet,
+        expected_test_files=(TEST_FILE,),
+    )
+
+    packet_item = next(
+        item
+        for item in bundle.document["evidence_manifest"]
+        if item["evidence_id"] == "review-packet"
+    )
+    assert packet_item["sha256"] == packet.digest
+    assert "semantic_digest" not in packet_item
+
+
 def test_native_record_ahead_recovery_receives_full_history_and_skips_provider() -> None:
     changes = _changes("d", "src/early.py", TEST_FILE)
 
@@ -2047,6 +2185,60 @@ def test_approved_plan_waits_at_fingerprint_bound_user_gate() -> None:
         approved.history,
     )
     assert completed.completed
+
+
+def test_reopened_exact_gate_reuses_immutable_approval_without_dual_write() -> None:
+    state = init_workflow_state(
+        run_id="run-reopened-gate",
+        task_file="/repo/task.md",
+        branch="feature/workflow",
+        branch_base=START_COMMIT,
+        slice_count=1,
+        timestamp="2026-08-12T10:00:00+00:00",
+    )
+    paths = ("src/agent_runtime.py", "tests/test_agent_runtime.py")
+    fingerprint = "a" * 64
+    gated = state.await_user_gate(
+        reason=GateReason.UNEXPECTED_FILE,
+        detail="reviewed hotfix paths",
+        fingerprint=fingerprint,
+        paths=paths,
+    )
+    driver = FakeDriver(snapshots=[], codex_outputs=[], reviewer_outputs=[])
+    persisted: list[GateDecisionRecord] = []
+    driver.persist_gate_decision = persisted.append  # type: ignore[attr-defined]
+    engine = WorkflowEngine(driver)
+
+    first = engine.decide_current_gate(
+        gated,
+        WorkflowHistory(1),
+        approved=True,
+        decided_by="dieter",
+        decided_at="2026-08-23T10:24:26+00:00",
+        rationale="fingerprint-bound hotfix reviewed",
+    )
+    reopened = first.state.await_user_gate(
+        reason=GateReason.UNEXPECTED_FILE,
+        detail="same gate rediscovered after resume",
+        fingerprint=fingerprint,
+        paths=paths,
+    )
+    resumed = engine.decide_current_gate(
+        reopened,
+        first.history,
+        approved=True,
+        decided_by="dieter",
+        decided_at="2026-08-23T10:32:55+00:00",
+        rationale="second confirmation must not rewrite immutable audit semantics",
+    )
+
+    assert resumed.state.current_work_unit.status is WorkUnitStatus.IN_PROGRESS
+    assert resumed.state.current_work_unit.gate.reason is GateReason.NONE
+    assert len(resumed.state.current_work_unit.gate_decisions) == 1
+    assert resumed.state.current_work_unit.gate_decisions[0].rationale == (
+        "fingerprint-bound hotfix reviewed"
+    )
+    assert len(persisted) == 1
 
 
 def test_plan_only_rejects_future_product_slices_as_executable_records() -> None:
@@ -3187,7 +3379,7 @@ def test_plan_bound_correction_packet_uses_same_start_delta_for_both_reviewers()
             _review_approval(AgentRole.CLAUDE),
             _review_closes(AgentRole.ANTIGRAVITY, "A-01"),
         ],
-        deltas={("0" * 64, corrected.fingerprint): "BOUND CORRECTION DELTA"},
+        deltas={("0" * 64, corrected.fingerprint): _diff_for_paths("src/early.py", "src/latest.py", TEST_FILE)},
     )
     plan = """# Approved plan
 
@@ -3226,7 +3418,7 @@ Use one canonical packet.
         driver.reviewer_calls[2].review_packet.canonical_bytes
         == driver.reviewer_calls[3].review_packet.canonical_bytes
     )
-    assert "BOUND CORRECTION DELTA" in driver.reviewer_calls[2].review_packet.text
+    assert "+corrected" in driver.reviewer_calls[2].review_packet.text
     assert "Implement Slice 10" not in driver.reviewer_calls[2].prompt
 
 
@@ -3252,7 +3444,7 @@ def test_plan_bound_same_slice_correction_packet_excludes_unaffected_findings() 
             _review_closes(AgentRole.CLAUDE, "C-01"),
             _review_closes(AgentRole.ANTIGRAVITY, "A-99"),
         ],
-        deltas={("0" * 64, corrected.fingerprint): "BOUND CORRECTION DELTA"},
+        deltas={("0" * 64, corrected.fingerprint): _diff_for_paths("src/early.py", "src/latest.py", TEST_FILE)},
     )
     plan = """# Approved plan
 
@@ -3328,6 +3520,29 @@ Use one canonical packet.
     assert "future cleanup" not in antigravity_packet.text
     restored = WorkflowHistory.from_dict(result.history.to_dict())
     assert restored.active_review_packet == antigravity_packet
+
+
+def test_invalid_unified_diff_prevents_any_reviewer_invocation() -> None:
+    changes = _changes("1", "src/early.py", TEST_FILE, full_diff="markerless delta")
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[_review_approval(AgentRole.CLAUDE)],
+    )
+    plan = """# Approved plan
+
+### Slice 1 - Packet Slice
+
+#### Fokussierte synthetische Akzeptanztests
+
+- Invalid coverage fails before provider start.
+"""
+
+    with pytest.raises(WorkflowExecutionError, match="marker-delimited"):
+        WorkflowEngine(driver).run_current_work_unit(
+            _slice_state(), replace(_context(), approved_plan_text=plan)
+        )
+    assert driver.reviewer_calls == []
 
 
 def test_contract_only_repair_receives_no_implementation_evidence() -> None:
@@ -5427,3 +5642,99 @@ def test_correction_actual_diff_still_enforces_productive_file_limit() -> None:
     assert "PRODUCTIVE-FILE-LIMIT" in halted.state.current_work_unit.gate.detail
     assert driver.validation_calls == [first_branch.fingerprint]
     assert [call.reviewer for call in driver.reviewer_calls] == [AgentRole.CLAUDE]
+
+
+def test_native_record_ahead_review_is_mirrored_before_next_policy_or_provider() -> None:
+    fingerprint = "f" * 64
+    state = replace(
+        _slice_state().with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW),
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V1,
+            "1",
+            claude_review_transport="native-claude-review-v1",
+        ),
+    )
+    attestation = ValidationAttestation(
+        "validation-record-ahead",
+        fingerprint,
+        ("python3 -m pytest tests/ -v",),
+        (
+            ValidationRecord(
+                ValidationStatus.PASS,
+                "python3 -m pytest tests/ -v",
+                0,
+                "passed",
+            ),
+        ),
+        "a" * 64,
+        "passed",
+    )
+    finding = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="record-ahead finding",
+        acceptance_test="resume without another reviewer invocation",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
+    result = ContractResult(
+        reviewer=AgentRole.CLAUDE,
+        approval=False,
+        stopped=False,
+        stop_request=None,
+        validation=attestation,
+        test_files=(TEST_FILE,),
+        pre_mortem=None,
+        evidence=ReviewEvidence(
+            "record-ahead recovery",
+            "a stale state mirror",
+            "Claude is invoked twice",
+        ),
+        findings=(finding,),
+        anchors=(),
+    )
+    replay = PersistedNativeReviewerReplay(
+        output=NativeAgentReviewOutput(
+            result=result,
+            canonical_json='{"decision":"denied"}',
+            request_id="native-review-request-" + "b" * 64,
+        ),
+        fingerprint=fingerprint,
+        round_number=1,
+    )
+
+    @dataclass
+    class RecoveringDriver(FakeDriver):
+        def recover_pending_native_reviewer_before_policy(
+            self,
+            recovered_state: WorkflowState,
+            context: WorkflowContext,
+            history: WorkflowHistory,
+        ) -> PersistedNativeReviewerReplay:
+            assert recovered_state.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
+            assert not history.events
+            return replay
+
+    driver = RecoveringDriver(
+        snapshots=[],
+        codex_outputs=[
+            "STOP_REQUESTED: UNEXPECTED-PATH | await a bound scope decision\n"
+            "STATUS: DONE"
+        ],
+        reviewer_outputs=[],
+    )
+    outcome = WorkflowEngine(driver).run_current_work_unit(
+        state,
+        _context(),
+        WorkflowHistory(state.current_work_unit_id, attestations=(attestation,)),
+    )
+
+    assert not driver.reviewer_calls
+    assert len(driver.codex_calls) == 1
+    assert outcome.state.current_work_unit.status is WorkUnitStatus.AWAITING_USER_DECISION
+    assert outcome.history.findings == (finding,)
+    reviews = tuple(
+        event for event in outcome.history.events if isinstance(event, ReviewAuditEvent)
+    )
+    assert len(reviews) == 1
+    assert reviews[0].round_number == 1

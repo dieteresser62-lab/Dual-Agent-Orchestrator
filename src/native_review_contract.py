@@ -636,7 +636,8 @@ def _validate_response_events(
     touched = set(status_ids) | set(class_ids)
     for finding in context.previous_findings:
         if (
-            finding.status is FindingStatus.OPEN
+            response.approved
+            and finding.status is FindingStatus.OPEN
             and finding.origin.reporter is context.reviewer
             and finding.finding_id not in touched
         ):

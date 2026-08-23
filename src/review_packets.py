@@ -20,9 +20,29 @@ class ReviewPacketError(ValueError):
 
 
 @dataclass(frozen=True)
+class DiffCoverageEntry:
+    path: str
+    change_type: str
+    section_sha256: str
+    hunk_headers: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        _validate_repository_path(self.path)
+        if self.change_type not in {"added", "modified", "deleted"}:
+            raise ReviewPacketError("diff coverage change type is invalid")
+        if not SHA256_PATTERN.fullmatch(self.section_sha256):
+            raise ReviewPacketError("diff coverage section digest must be SHA-256")
+        for header in self.hunk_headers:
+            if not _HUNK_HEADER.fullmatch(header):
+                raise ReviewPacketError(f"invalid diff hunk header: {header!r}")
+
+
+@dataclass(frozen=True)
 class ReviewPacketManifest:
     paths: tuple[str, ...]
     additional_dependencies: tuple[str, ...] = ()
+    diff_coverage: tuple[DiffCoverageEntry, ...] = ()
+    diff_coverage_digest: str | None = None
 
     def __post_init__(self) -> None:
         if not self.paths or self.paths != tuple(sorted(set(self.paths))):
@@ -30,8 +50,16 @@ class ReviewPacketManifest:
         if self.additional_dependencies:
             raise ReviewPacketError("release 1.1B does not allow implicit review dependencies")
         for path in self.paths:
-            if not path or path.startswith("/") or ".." in path.split("/"):
-                raise ReviewPacketError(f"unsafe review packet path: {path!r}")
+            _validate_repository_path(path)
+        if self.diff_coverage:
+            coverage_paths = tuple(item.path for item in self.diff_coverage)
+            if coverage_paths != self.paths:
+                raise ReviewPacketError("diff coverage must match all manifest paths exactly")
+            actual = _coverage_digest(self.diff_coverage)
+            if self.diff_coverage_digest != actual:
+                raise ReviewPacketError("diff coverage manifest digest does not match entries")
+        elif self.diff_coverage_digest is not None:
+            raise ReviewPacketError("legacy manifest cannot carry a coverage digest")
 
 
 @dataclass(frozen=True)
@@ -50,10 +78,46 @@ class ReviewPacket:
         actual = hashlib.sha256(self.canonical_bytes).hexdigest()
         if self.digest != actual:
             raise ReviewPacketError("review packet digest does not match canonical bytes")
+        _validate_packet_document(self)
 
     @property
     def text(self) -> str:
         return self.canonical_bytes.decode("utf-8")
+
+    @classmethod
+    def restore(cls, canonical_bytes: bytes, digest: str) -> ReviewPacket:
+        """Restore manifest metadata from authoritative canonical packet bytes."""
+        try:
+            payload = json.loads(canonical_bytes)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ReviewPacketError("review packet canonical bytes are invalid JSON") from exc
+        if not isinstance(payload, dict):
+            raise ReviewPacketError("review packet canonical bytes must contain an object")
+        manifest_raw = payload.get("manifest")
+        if not isinstance(manifest_raw, dict):
+            raise ReviewPacketError("review packet manifest is missing")
+        paths_raw = manifest_raw.get("paths")
+        if not isinstance(paths_raw, list) or not all(isinstance(p, str) for p in paths_raw):
+            raise ReviewPacketError("review packet manifest paths are invalid")
+        coverage: tuple[DiffCoverageEntry, ...] = ()
+        coverage_digest: str | None = None
+        if payload.get("schema") == "review-packet-v2":
+            coverage_raw = manifest_raw.get("diff_coverage")
+            coverage_digest = manifest_raw.get("diff_coverage_digest")
+            if not isinstance(coverage_raw, list) or not isinstance(coverage_digest, str):
+                raise ReviewPacketError("review packet v2 coverage manifest is missing")
+            coverage = tuple(_coverage_entry_from_dict(item) for item in coverage_raw)
+        return cls(
+            purpose=str(payload.get("purpose", "")),
+            fingerprint=str(payload.get("fingerprint", "")),
+            manifest=ReviewPacketManifest(
+                paths=tuple(paths_raw),
+                diff_coverage=coverage,
+                diff_coverage_digest=coverage_digest,
+            ),
+            canonical_bytes=canonical_bytes,
+            digest=digest,
+        )
 
 
 def extract_slice_requirements(plan_text: str, slice_id: int) -> tuple[str, tuple[str, ...]]:
@@ -88,10 +152,13 @@ def build_review_packet(
         raise ReviewPacketError(
             "review packet requires a fingerprint-bound complete attestation"
         )
-    manifest = ReviewPacketManifest(paths=paths)
-    review_diff = _filter_diff_to_manifest(review_diff, manifest.paths)
-    if not review_diff.strip():
-        raise ReviewPacketError("review packet diff contains no manifest path")
+    base_manifest = ReviewPacketManifest(paths=paths)
+    review_diff, coverage = _canonicalize_diff(review_diff, base_manifest.paths)
+    manifest = ReviewPacketManifest(
+        paths=paths,
+        diff_coverage=coverage,
+        diff_coverage_digest=_coverage_digest(coverage),
+    )
     finding_by_id = {item.finding_id: item for item in findings}
     if len(finding_by_id) != len(findings):
         raise ReviewPacketError("review packet findings must be unique")
@@ -143,13 +210,15 @@ def build_review_packet(
         )
 
     payload = {
-        "schema": "review-packet-v1",
+        "schema": "review-packet-v2",
         "purpose": purpose,
         "fingerprint": fingerprint,
         "start_fingerprint": start_fingerprint,
         "manifest": {
             "paths": list(manifest.paths),
             "additional_dependencies": [],
+            "diff_coverage": [_coverage_entry_to_dict(item) for item in coverage],
+            "diff_coverage_digest": manifest.diff_coverage_digest,
         },
         "slice": {"id": slice_id, "goal": goal, "acceptance_criteria": list(criteria)},
         "diff": review_diff,
@@ -178,20 +247,170 @@ def build_review_packet(
     )
 
 
-def _filter_diff_to_manifest(review_diff: str, paths: tuple[str, ...]) -> str:
-    """Retain complete git diff sections for manifest paths, without parsing hunks."""
-    marker = re.compile(r"(?m)^diff --git a/(.+?) b/(.+?)$")
-    matches = list(marker.finditer(review_diff))
-    if not matches:
-        # Synthetic drivers use compact delta labels rather than unified diffs.
-        return review_diff
+_DIFF_HEADER = re.compile(r"^diff --git a/([^\s]+) b/([^\s]+)$")
+_HUNK_HEADER = re.compile(r"^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@(?: .*)?$")
+
+
+def _canonicalize_diff(
+    review_diff: str, paths: tuple[str, ...]
+) -> tuple[str, tuple[DiffCoverageEntry, ...]]:
+    normalized = review_diff.replace("\r\n", "\n").replace("\r", "\n")
+    lines = normalized.splitlines(keepends=True)
+    starts = [index for index, line in enumerate(lines) if line.rstrip("\n").startswith("diff --git ")]
+    if not starts or starts[0] != 0:
+        raise ReviewPacketError("review packet requires a marker-delimited unified Git diff")
+    sections: list[tuple[str, str, DiffCoverageEntry]] = []
     allowed = set(paths)
-    sections: list[str] = []
-    for index, match in enumerate(matches):
-        end = matches[index + 1].start() if index + 1 < len(matches) else len(review_diff)
-        if match.group(1) in allowed or match.group(2) in allowed:
-            sections.append(review_diff[match.start():end].rstrip())
-    return "\n".join(sections)
+    seen: set[str] = set()
+    for position, start in enumerate(starts):
+        end = starts[position + 1] if position + 1 < len(starts) else len(lines)
+        section_lines = lines[start:end]
+        header = section_lines[0].rstrip("\n")
+        match = _DIFF_HEADER.fullmatch(header)
+        if match is None:
+            raise ReviewPacketError(f"unsafe or unsupported diff header: {header!r}")
+        old_path, new_path = match.groups()
+        _validate_repository_path(old_path)
+        _validate_repository_path(new_path)
+        if old_path != new_path:
+            raise ReviewPacketError("rename, copy, or mismatched diff paths are unsupported")
+        path = old_path
+        if path not in allowed:
+            raise ReviewPacketError(f"diff path is not authorized: {path}")
+        if path in seen:
+            raise ReviewPacketError(f"duplicate diff section for path: {path}")
+        seen.add(path)
+        text_lines = [line.rstrip("\n") for line in section_lines]
+        hunk_indexes = [index for index, line in enumerate(text_lines) if line.startswith("@@")]
+        if not hunk_indexes:
+            raise ReviewPacketError("text diff section requires valid hunk headers")
+        prelude = text_lines[:hunk_indexes[0]]
+        forbidden = ("rename from ", "rename to ", "copy from ", "copy to ", "Binary files ")
+        if any(line.startswith(forbidden) or line == "GIT binary patch" for line in prelude):
+            raise ReviewPacketError("rename, copy, and binary diffs are unsupported")
+        new_markers = [line for line in prelude if line.startswith("new file mode ")]
+        deleted_markers = [line for line in prelude if line.startswith("deleted file mode ")]
+        if len(new_markers) > 1 or len(deleted_markers) > 1 or (new_markers and deleted_markers):
+            raise ReviewPacketError("diff contains contradictory change metadata")
+        old_headers = [line for line in prelude if line.startswith("--- ")]
+        new_headers = [line for line in prelude if line.startswith("+++ ")]
+        if len(old_headers) != 1 or len(new_headers) != 1:
+            raise ReviewPacketError("diff section requires exactly one old/new file header pair")
+        if new_markers:
+            change_type = "added"
+            expected_headers = ("--- /dev/null", f"+++ b/{path}")
+        elif deleted_markers:
+            change_type = "deleted"
+            expected_headers = (f"--- a/{path}", "+++ /dev/null")
+        else:
+            change_type = "modified"
+            expected_headers = (f"--- a/{path}", f"+++ b/{path}")
+        if (old_headers[0], new_headers[0]) != expected_headers:
+            raise ReviewPacketError("diff file headers contradict its change type or path")
+        hunk_headers = tuple(line for line in text_lines if line.startswith("@@"))
+        if not hunk_headers or any(_HUNK_HEADER.fullmatch(line) is None for line in hunk_headers):
+            raise ReviewPacketError("text diff section requires valid hunk headers")
+        section = "".join(section_lines).rstrip("\n") + "\n"
+        entry = DiffCoverageEntry(
+            path=path,
+            change_type=change_type,
+            section_sha256=hashlib.sha256(section.encode("utf-8")).hexdigest(),
+            hunk_headers=hunk_headers,
+        )
+        sections.append((path, section, entry))
+    if seen != allowed:
+        missing = ", ".join(sorted(allowed - seen))
+        raise ReviewPacketError(f"diff is missing manifest path coverage: {missing}")
+    sections.sort(key=lambda item: item[0])
+    canonical_diff = "".join(item[1] for item in sections)
+    return canonical_diff, tuple(item[2] for item in sections)
+
+
+def exclude_review_diff_paths(review_diff: str, excluded_paths: tuple[str, ...]) -> str:
+    """Remove only explicitly managed, structurally delimited diff sections."""
+    if not excluded_paths:
+        return review_diff
+    excluded = set(excluded_paths)
+    normalized = review_diff.replace("\r\n", "\n").replace("\r", "\n")
+    lines = normalized.splitlines(keepends=True)
+    starts = [index for index, line in enumerate(lines) if line.rstrip("\n").startswith("diff --git ")]
+    if not starts or starts[0] != 0:
+        return review_diff
+    retained: list[str] = []
+    for position, start in enumerate(starts):
+        end = starts[position + 1] if position + 1 < len(starts) else len(lines)
+        match = _DIFF_HEADER.fullmatch(lines[start].rstrip("\n"))
+        if match is None or match.group(1) != match.group(2) or match.group(1) not in excluded:
+            retained.extend(lines[start:end])
+    return "".join(retained)
+
+
+def _coverage_entry_to_dict(item: DiffCoverageEntry) -> dict[str, object]:
+    return {
+        "path": item.path,
+        "change_type": item.change_type,
+        "section_sha256": item.section_sha256,
+        "hunk_headers": list(item.hunk_headers),
+    }
+
+
+def _coverage_entry_from_dict(raw: object) -> DiffCoverageEntry:
+    if not isinstance(raw, dict) or set(raw) != {"path", "change_type", "section_sha256", "hunk_headers"}:
+        raise ReviewPacketError("diff coverage entry has invalid fields")
+    headers = raw["hunk_headers"]
+    if not isinstance(headers, list) or not all(isinstance(item, str) for item in headers):
+        raise ReviewPacketError("diff coverage hunk headers are invalid")
+    return DiffCoverageEntry(str(raw["path"]), str(raw["change_type"]), str(raw["section_sha256"]), tuple(headers))
+
+
+def _coverage_digest(entries: tuple[DiffCoverageEntry, ...]) -> str:
+    canonical = json.dumps(
+        {"schema": "diff-coverage-manifest-v1", "entries": [_coverage_entry_to_dict(item) for item in entries]},
+        ensure_ascii=False, separators=(",", ":"), sort_keys=False,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def _validate_repository_path(path: str) -> None:
+    if (
+        not path or path.startswith("/") or ".." in path.split("/")
+        or path != path.replace("\\", "/") or any(char in path for char in "\x00\r\n")
+        or any(part in {"", "."} for part in path.split("/"))
+    ):
+        raise ReviewPacketError(f"unsafe review packet path: {path!r}")
+
+
+def _validate_packet_document(packet: ReviewPacket) -> None:
+    try:
+        payload = json.loads(packet.canonical_bytes)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ReviewPacketError("review packet canonical bytes are invalid JSON") from exc
+    if not isinstance(payload, dict) or payload.get("purpose") != packet.purpose or payload.get("fingerprint") != packet.fingerprint:
+        raise ReviewPacketError("review packet metadata differs from canonical bytes")
+    canonical = json.dumps(
+        payload, ensure_ascii=False, separators=(",", ":"), sort_keys=False
+    ).encode("utf-8")
+    if canonical != packet.canonical_bytes:
+        raise ReviewPacketError("review packet bytes are not canonical JSON")
+    schema = payload.get("schema")
+    manifest_raw = payload.get("manifest")
+    if not isinstance(manifest_raw, dict) or manifest_raw.get("paths") != list(packet.manifest.paths):
+        raise ReviewPacketError("review packet manifest differs from canonical bytes")
+    if schema == "review-packet-v1":
+        if packet.manifest.diff_coverage:
+            raise ReviewPacketError("legacy packet cannot claim diff coverage")
+        return
+    if schema != "review-packet-v2":
+        raise ReviewPacketError("unsupported review packet schema")
+    if not packet.manifest.diff_coverage:
+        raise ReviewPacketError("review packet v2 requires diff coverage")
+    if manifest_raw.get("diff_coverage_digest") != packet.manifest.diff_coverage_digest:
+        raise ReviewPacketError("review packet coverage digest differs from canonical bytes")
+    if manifest_raw.get("diff_coverage") != [_coverage_entry_to_dict(item) for item in packet.manifest.diff_coverage]:
+        raise ReviewPacketError("review packet coverage entries differ from canonical bytes")
+    canonical_diff, coverage = _canonicalize_diff(str(payload.get("diff", "")), packet.manifest.paths)
+    if canonical_diff != payload.get("diff") or coverage != packet.manifest.diff_coverage:
+        raise ReviewPacketError("review packet diff coverage differs from canonical diff")
 
 
 def _compact_one_line(value: str, maximum: int = 240) -> str:
@@ -202,6 +421,6 @@ def _compact_one_line(value: str, maximum: int = 240) -> str:
 
 
 __all__ = [
-    "ReviewPacket", "ReviewPacketError", "ReviewPacketManifest",
-    "build_review_packet", "extract_slice_requirements",
+    "DiffCoverageEntry", "ReviewPacket", "ReviewPacketError", "ReviewPacketManifest",
+    "build_review_packet", "exclude_review_diff_paths", "extract_slice_requirements",
 ]

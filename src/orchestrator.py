@@ -72,6 +72,7 @@ from audit_trail import (
 from cli import DEFAULT_AGENTS_FILE, DEFAULT_TASK_FILE
 from contracts import (
     AgentRole,
+    ApprovalMarker,
     CodexContractResult,
     CodexStepContract,
     ContractResult,
@@ -121,12 +122,15 @@ from state_io import (
 )
 from task_contract import TaskContract, TaskMode, parse_task_contract
 from native_review_contract import (
+    BoundNativeReviewContext,
+    NativeReviewContext,
     NativeReviewContractError,
     parse_bound_native_contract_result,
 )
 from workflow import (
     CodexInvocation,
     ContractRepairInvocation,
+    PersistedNativeReviewerReplay,
     PersistedReviewerReplay,
     ReviewerInvocation,
     NoWorkflowChangesError,
@@ -644,7 +648,11 @@ class ProductionWorkflowDriver(WorkflowDriver):
         return measurement_record
 
     def _start_provider_attempt(
-        self, measurement: ProviderInputMeasurement, bootstrap: object | None
+        self,
+        measurement: ProviderInputMeasurement,
+        bootstrap: object | None,
+        *,
+        operation_instance: str | None = None,
     ) -> ArtifactRecord:
         bridge = self._artifact_bridge
         state = self.active_state
@@ -665,6 +673,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
             measurement_record=bootstrap,
             binding_fingerprint=measurement.binding_fingerprint,
             work_unit_id=state.current_work_unit_id,
+            operation_instance=operation_instance,
         )
 
     def _finish_provider_attempt(
@@ -753,7 +762,11 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 pre_start_callback=self._persist_provider_bootstrap,
                 provider_attempt_lifecycle=(
                     ProviderAttemptLifecycle(
-                        start=self._start_provider_attempt,
+                        start=lambda measurement, bootstrap: self._start_provider_attempt(
+                            measurement,
+                            bootstrap,
+                            operation_instance=f"round:{invocation.round_number}",
+                        ),
                         terminal=self._finish_provider_attempt,
                     )
                     if self._artifact_bridge is not None
@@ -907,7 +920,11 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 pre_start_callback=self._persist_provider_bootstrap,
                 provider_attempt_lifecycle=(
                     ProviderAttemptLifecycle(
-                        start=self._start_provider_attempt,
+                        start=lambda measurement, bootstrap: self._start_provider_attempt(
+                            measurement,
+                            bootstrap,
+                            operation_instance=f"round:{invocation.round_number}",
+                        ),
                         terminal=self._finish_provider_attempt,
                     )
                     if self._artifact_bridge is not None
@@ -1410,6 +1427,225 @@ class ProductionWorkflowDriver(WorkflowDriver):
             request_id=bundle.bound_context.request_id,
         )
 
+    def recover_pending_native_reviewer_before_policy(
+        self,
+        state: WorkflowState,
+        context: WorkflowContext,
+        history: WorkflowHistory,
+    ) -> PersistedNativeReviewerReplay | None:
+        """Recover a native decision before current-worktree policy is evaluated.
+
+        A provider response and its ReviewPayload are written before the state-v3
+        checkpoint.  Repository changes made after that durable write must not
+        force the already completed reviewer round to be rebuilt against a new
+        fingerprint or invoke the provider again.
+        """
+        bridge = self._artifact_bridge
+        unit = state.current_work_unit
+        if (
+            bridge is None
+            or self.active_state is None
+            or state.protocol_binding is None
+            or state.protocol_binding.claude_review_transport
+            != NATIVE_CLAUDE_REVIEW_TRANSPORT
+            or state.current_step
+            not in {
+                WorkflowStep.CLAUDE_PLAN_REVIEW,
+                WorkflowStep.CLAUDE_SLICE_REVIEW,
+                WorkflowStep.CLAUDE_FINAL_REVIEW,
+            }
+            or self.active_state.run_id != state.run_id
+            or self.active_state.current_work_unit_id != unit.work_unit_id
+        ):
+            return None
+
+        mirrored = {
+            (
+                event.round_number,
+                event.result.validation.diff_fingerprint,
+                (
+                    "stop"
+                    if event.result.stopped
+                    else "approved"
+                    if event.result.approval is True
+                    else "denied"
+                ),
+                tuple(item.finding_id for item in event.result.findings),
+            )
+            for event in history.events
+            if isinstance(event, ReviewAuditEvent)
+            and event.result.reviewer is AgentRole.CLAUDE
+            and event.result.validation is not None
+        }
+        chain = bridge.store.load_chain()
+        pending: list[tuple[int, ArtifactRecord]] = []
+        logical_prefix = f"review-claude-{unit.work_unit_id}-"
+        for record in chain:
+            payload = record.payload
+            if (
+                not isinstance(payload, ReviewPayload)
+                or payload.reviewer is not Role.CLAUDE
+                or payload.work_unit_id != str(unit.work_unit_id)
+                or payload.transport_schema != NATIVE_CLAUDE_REVIEW_TRANSPORT
+                or not record.logical_id.startswith(logical_prefix)
+            ):
+                continue
+            suffix = record.logical_id.removeprefix(logical_prefix)
+            if not suffix.isdigit() or int(suffix) < 1:
+                raise WorkflowExecutionError(
+                    "native reviewer recovery record has an invalid logical round"
+                )
+            round_number = int(suffix)
+            signature = (
+                round_number,
+                record.fingerprint.sha256,
+                payload.verdict,
+                payload.finding_ids,
+            )
+            if signature not in mirrored:
+                pending.append((round_number, record))
+        if not pending:
+            return None
+        if len(pending) != 1:
+            raise WorkflowExecutionError(
+                "pre-policy native reviewer recovery has multiple pending decisions"
+            )
+
+        round_number, record = pending[0]
+        payload = record.payload
+        assert isinstance(payload, ReviewPayload)
+        if payload.request_id is None or payload.response_sha256 is None:
+            raise WorkflowExecutionError(
+                "pre-policy native reviewer recovery lacks its request binding"
+            )
+        matching_attestations = tuple(
+            item
+            for item in history.attestations
+            if item.complete
+            and item.diff_fingerprint == record.fingerprint.sha256
+        )
+        authoritative_attestations = tuple(
+            item
+            for item in chain
+            if isinstance(item.payload, ValidationAttestationPayload)
+            and item.payload.attested_by is Role.ORCHESTRATOR
+            and item.fingerprint.sha256 == record.fingerprint.sha256
+        )
+        if len(matching_attestations) != 1 or len(authoritative_attestations) != 1:
+            raise WorkflowExecutionError(
+                "pre-policy native reviewer recovery requires one complete "
+                "authoritative attestation"
+            )
+        attestation = matching_attestations[0]
+
+        log_pattern = (
+            f"work-unit-{unit.work_unit_id:04d}-{state.current_step.value}-"
+            f"round-{round_number:04d}.attempt-*.log"
+        )
+        outputs = tuple(
+            output
+            for path in sorted(self.log_dir.glob(log_pattern))
+            if path.is_file()
+            for output in (path.read_text(encoding="utf-8").strip(),)
+            if hashlib.sha256(output.encode("utf-8")).hexdigest()
+            == payload.response_sha256
+        )
+        if len(outputs) != 1:
+            raise WorkflowExecutionError(
+                "pre-policy native reviewer recovery has no unique "
+                "response-digest-bound log"
+            )
+        canonical = outputs[0]
+        expected_test_files = (
+            tuple(
+                path
+                for path in history.active_review_packet.manifest.paths
+                if matches_path_patterns(path, context.test_path_patterns)
+            )
+            if history.active_review_packet is not None
+            and history.active_review_packet.fingerprint
+            == record.fingerprint.sha256
+            else ()
+            if state.current_step is WorkflowStep.CLAUDE_PLAN_REVIEW
+            else context.expected_test_files
+        )
+        approval_marker = (
+            ApprovalMarker.PLAN
+            if state.current_step is WorkflowStep.CLAUDE_PLAN_REVIEW
+            else ApprovalMarker.FINAL
+            if state.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW
+            else ApprovalMarker.SLICE
+        )
+        native_context = NativeReviewContext(
+            run_id=state.run_id,
+            work_unit_id=str(unit.work_unit_id),
+            operation=state.current_step.value,
+            diff_fingerprint=record.fingerprint.sha256,
+            reviewer=AgentRole.CLAUDE,
+            approval_marker=approval_marker,
+            slice_id=(
+                "FINAL" if approval_marker is ApprovalMarker.FINAL else f"{unit.slice_id:02d}"
+            ),
+            round_number=round_number,
+            previous_findings=history.findings,
+            validation_attestation=attestation,
+            test_files=tuple(sorted(set(expected_test_files))),
+            test_changes_approved=True,
+            allow_new_observations=unit.kind is not WorkUnitKind.CORRECTION,
+            validation_command_prefixes=(
+                context.validation_matrix.finding_command_prefixes
+            ),
+        )
+        request_digest = payload.request_id.removeprefix("native-review-request-")
+        try:
+            document = json.loads(canonical)
+            if not isinstance(document, dict):
+                raise ValueError("native response log must contain a JSON object")
+            result = parse_bound_native_contract_result(
+                document,
+                BoundNativeReviewContext(
+                    context=native_context,
+                    request_id=payload.request_id,
+                    request_digest=request_digest,
+                ),
+            )
+        except (json.JSONDecodeError, ValueError, NativeReviewContractError) as exc:
+            raise WorkflowExecutionError(
+                f"pre-policy native reviewer response no longer validates: {exc}"
+            ) from exc
+        expected_verdict = (
+            "stop"
+            if result.stopped
+            else "approved"
+            if result.approval is True
+            else "denied"
+        )
+        if (
+            payload.verdict != expected_verdict
+            or payload.finding_ids
+            != tuple(item.finding_id for item in result.findings)
+        ):
+            raise WorkflowExecutionError(
+                "pre-policy native reviewer result differs from its decision record"
+            )
+        logger.warning(
+            "Mirroring request-bound native Claude review before current-diff "
+            "policy: work-unit=%s round=%s fingerprint=%s request=%s",
+            unit.work_unit_id,
+            round_number,
+            record.fingerprint.sha256,
+            payload.request_id,
+        )
+        return PersistedNativeReviewerReplay(
+            output=NativeAgentReviewOutput(
+                result=result,
+                canonical_json=canonical,
+                request_id=payload.request_id,
+            ),
+            fingerprint=record.fingerprint.sha256,
+            round_number=round_number,
+        )
+
     def recover_failed_reviewer_output(
         self,
         invocation: ReviewerInvocation,
@@ -1721,19 +1957,44 @@ class ProductionWorkflowDriver(WorkflowDriver):
         previous_by_id = {item.finding_id: item for item in previous_findings}
         for finding in result.findings:
             previous = previous_by_id.get(finding.finding_id)
-            transitions: list[tuple[str, str]] = []
+            transitions: list[tuple[str, str, str]] = []
             if previous is None:
-                transitions.append(("opened", finding.summary))
+                transitions.append(("opened", finding.summary, "opened"))
             else:
-                if previous.finding_class is not finding.finding_class:
+                class_changed = previous.finding_class is not finding.finding_class
+                rationale_changed = (
+                    previous.status_rationale != finding.status_rationale
+                )
+                if class_changed:
                     transitions.append(
-                        ("reclassified", finding.status_rationale or finding.summary)
+                        (
+                            "reclassified",
+                            finding.status_rationale or finding.summary,
+                            "reclassified",
+                        )
                     )
                 if previous.status is not finding.status:
                     transitions.append(
-                        ("status_changed", finding.status_rationale or finding.summary)
+                        (
+                            "status_changed",
+                            finding.status_rationale or finding.summary,
+                            "status_changed",
+                        )
                     )
-            for action, rationale in transitions:
+                elif rationale_changed and not class_changed:
+                    transitions.append(
+                        (
+                            "status_changed",
+                            finding.status_rationale or finding.summary,
+                            (
+                                "status_rationale:"
+                                f"{self.active_state.current_work_unit_id}"
+                                if structured and self.active_state is not None
+                                else "status_rationale"
+                            ),
+                        )
+                    )
+            for action, rationale, transition_identity in transitions:
                 self._artifact_bridge.append(
                     finding_payload(
                         finding,
@@ -1747,7 +2008,8 @@ class ProductionWorkflowDriver(WorkflowDriver):
                     ),
                     logical_id=f"finding-{finding.finding_id}",
                     idempotency_key=(
-                        f"finding:{finding.finding_id}:{action}:{round_number}:"
+                        f"finding:{finding.finding_id}:{transition_identity}:"
+                        f"{round_number}:"
                         f"{result.reviewer.value}"
                     ),
                     fingerprint_sha256=fingerprint,
@@ -1976,10 +2238,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
         current = self._rendered_changes.get(current_fingerprint)
         if current is None:
             raise WorkflowExecutionError("current correction fingerprint was not collected")
-        return (
-            f"Correction delta since {previous_fingerprint}:\n"
-            f"{current.full_diff}"
-        )
+        return current.full_diff
 
     def detect_test_changes(
         self, changes: WorkflowChanges, patterns: tuple[str, ...]
@@ -2049,7 +2308,18 @@ class ProductionWorkflowDriver(WorkflowDriver):
             for path in actual_paths
             if scope_patterns and not matches_path_patterns(path, scope_patterns)
         )
-        if unexpected_actual:
+        approved_actual = any(
+            self.active_state.current_work_unit.has_gate_approval(
+                reason,
+                changes.fingerprint,
+                unexpected_actual,
+            )
+            for reason in (
+                GateReason.UNEXPECTED_FILE,
+                GateReason.QUOTA_RESUME_DIFF,
+            )
+        )
+        if unexpected_actual and not approved_actual:
             raise WorkflowExecutionError(
                 "internal plan validation found out-of-scope planning changes: "
                 + ", ".join(unexpected_actual)
@@ -3605,10 +3875,27 @@ def run_production_workflow(
             state = state.resume_after_invocation_halt()
             driver.checkpoint(state, history)
         elif current.status is WorkUnitStatus.AWAITING_USER_DECISION:
+            reframed = engine.reframe_unexpected_path_stop_gate(state)
+            if reframed != state:
+                state = reframed
+                driver.checkpoint(state, history)
+                current = state.current_work_unit
+                if current.status is WorkUnitStatus.IN_PROGRESS:
+                    continue
             inherited = _inherit_redundant_test_gate(state)
             if inherited != state:
                 state = inherited
                 driver.checkpoint(state, history)
+            elif (existing_approval := _current_gate_approval(state)) is not None:
+                decided = engine.decide_current_gate(
+                    state,
+                    history,
+                    approved=True,
+                    decided_by=existing_approval.decided_by,
+                    decided_at=existing_approval.decided_at,
+                    rationale=existing_approval.rationale,
+                )
+                state, history = decided.state, decided.history
             elif args.gate_decision is not None:
                 decided = engine.decide_current_gate(
                     state,
@@ -3782,6 +4069,29 @@ def _inherit_redundant_test_gate(state: WorkflowState) -> WorkflowState:
     ):
         return state
     return state.inherit_prior_test_approval(gate.fingerprint, gate.paths)
+
+
+def _current_gate_approval(state: WorkflowState) -> GateDecisionRecord | None:
+    """Return an exact immutable approval when the same gate was reopened."""
+    current = state.current_work_unit
+    gate = current.gate
+    if (
+        current.status is not WorkUnitStatus.AWAITING_USER_DECISION
+        or gate.fingerprint is None
+    ):
+        return None
+    return next(
+        (
+            decision
+            for decision in reversed(current.gate_decisions)
+            if decision.approved
+            and decision.reason is gate.reason
+            and decision.fingerprint == gate.fingerprint
+            and decision.paths == gate.paths
+            and decision.resume_step is gate.resume_step
+        ),
+        None,
+    )
 
 
 def _recover_legacy_plan_only_post_gate(state: WorkflowState) -> WorkflowState:

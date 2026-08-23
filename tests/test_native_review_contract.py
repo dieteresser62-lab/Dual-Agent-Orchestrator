@@ -303,11 +303,21 @@ def test_unknown_foreign_and_conflicting_finding_events_fail_closed() -> None:
     _assert_error(duplicate, _context(), NativeReviewErrorCode.FINDING_EVENT_CONFLICT)
 
 
-def test_previous_open_own_finding_requires_explicit_update() -> None:
+def test_denial_preserves_omitted_open_finding_but_approval_requires_update() -> None:
     own = _finding("C-01", AgentRole.CLAUDE)
     context = _context(previous=(own,))
-    missing = _review(context, approved=False)
-    _assert_error(missing, context, NativeReviewErrorCode.FINDING_UPDATE_MISSING)
+
+    denied = _review(context, approved=False)
+    result = parse_native_contract_result(denied, context)
+    assert result.approval is False
+    assert result.findings[0].status is FindingStatus.OPEN
+
+    missing_from_approval = _review(context, approved=True)
+    _assert_error(
+        missing_from_approval,
+        context,
+        NativeReviewErrorCode.FINDING_UPDATE_MISSING,
+    )
 
     updated = _review(context, approved=False)
     updated["status_changes"] = [

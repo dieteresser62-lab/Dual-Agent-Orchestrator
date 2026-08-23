@@ -1,0 +1,106 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "native-agent-review-result-v1"
+    },
+    "result_type": {
+      "type": "string",
+      "const": "review_result"
+    },
+    "request_id": {
+      "type": "string"
+    },
+    "reviewer": {
+      "type": "string",
+      "const": "claude"
+    },
+    "decision": {
+      "type": "string",
+      "enum": ["approved", "denied"]
+    },
+    "new_findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "finding_id": {"type": "string"},
+          "finding_class": {
+            "type": "string",
+            "const": "BLOCKER"
+          },
+          "summary": {"type": "string"},
+          "acceptance_test": {"type": "string"}
+        },
+        "required": [
+          "finding_id",
+          "finding_class",
+          "summary",
+          "acceptance_test"
+        ]
+      }
+    },
+    "status_changes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "finding_id": {"type": "string"},
+          "status": {
+            "type": "string",
+            "enum": ["OPEN", "CLOSED"]
+          },
+          "rationale": {"type": "string"}
+        },
+        "required": ["finding_id", "status", "rationale"]
+      }
+    },
+    "reclassifications": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "finding_id": {"type": "string"},
+          "finding_class": {
+            "type": "string",
+            "enum": ["BLOCKER", "OBSERVATION"]
+          },
+          "rationale": {"type": "string"}
+        },
+        "required": ["finding_id", "finding_class", "rationale"]
+      }
+    },
+    "review_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "dimensions": {"type": "string"},
+        "largest_residual_risk": {"type": "string"},
+        "break_condition": {"type": "string"}
+      },
+      "required": [
+        "dimensions",
+        "largest_residual_risk",
+        "break_condition"
+      ]
+    },
+    "pre_mortem": {"type": "string"}
+  },
+  "required": [
+    "schema_version",
+    "result_type",
+    "request_id",
+    "reviewer",
+    "decision",
+    "new_findings",
+    "status_changes",
+    "reclassifications",
+    "review_evidence",
+    "pre_mortem"
+  ]
+}

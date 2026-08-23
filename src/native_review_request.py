@@ -24,6 +24,7 @@ from schema_validation import (
     check_schema,
     validate_schema_document,
 )
+from review_packets import ReviewPacket, ReviewPacketError
 
 
 REQUEST_SCHEMA_VERSION = "native-agent-review-request-v1"
@@ -68,6 +69,7 @@ class NativeReviewEvidenceInput:
     kind: str
     content: str
     source_path: str | None = None
+    semantic_digest: str | None = None
 
     def __post_init__(self) -> None:
         _require_identifier(self.evidence_id, "evidence_id")
@@ -75,6 +77,13 @@ class NativeReviewEvidenceInput:
         _require_text(self.content, "evidence content", maximum=4_000_000)
         if self.source_path is not None:
             _require_repository_path(self.source_path, "evidence source_path")
+        if self.kind == "canonical_review_packet":
+            _validate_review_packet_semantic_digest(self.content, self.semantic_digest)
+        elif self.semantic_digest is not None:
+            raise NativeReviewRequestError(
+                NativeReviewRequestErrorCode.EVIDENCE_INVALID,
+                "semantic_digest is reserved for canonical review packet evidence",
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -214,17 +223,17 @@ class NativeReviewRequestBundle:
                 "request evidence manifest must be sorted and unique by evidence_id",
             )
         for item in manifest:
-            if item["delivery"] != "inline":
-                continue
-            content = item["content"]
-            if (
-                _sha256_text(content) != item["sha256"]
-                or len(content.encode("utf-8")) != item["byte_count"]
-            ):
-                raise NativeReviewRequestError(
-                    NativeReviewRequestErrorCode.EVIDENCE_INVALID,
-                    f"inline evidence {item['evidence_id']} metadata differs from content",
-                )
+            if item["delivery"] == "inline":
+                content = item["content"]
+                if (
+                    _sha256_text(content) != item["sha256"]
+                    or len(content.encode("utf-8")) != item["byte_count"]
+                ):
+                    raise NativeReviewRequestError(
+                        NativeReviewRequestErrorCode.EVIDENCE_INVALID,
+                        f"inline evidence {item['evidence_id']} metadata differs from content",
+                    )
+                _validate_manifest_semantic_binding(item, content)
         if len(expected_assets) != sum(
             item["delivery"] == "content_ref" for item in manifest
         ):
@@ -245,6 +254,10 @@ class NativeReviewRequestBundle:
                 NativeReviewRequestErrorCode.EVIDENCE_INVALID,
                 "request evidence assets differ from content references",
             )
+        asset_content = {item.path: item.content for item in self.evidence_assets}
+        for item in manifest:
+            if item["delivery"] == "content_ref":
+                _validate_manifest_semantic_binding(item, asset_content[item["content_ref"]])
 
     @property
     def document(self) -> dict[str, Any]:
@@ -378,6 +391,8 @@ def build_native_review_request(
             "sha256": digest,
             "byte_count": byte_count,
         }
+        if evidence.semantic_digest is not None:
+            common["semantic_digest"] = evidence.semantic_digest
         if len(evidence.content) <= inline_evidence_chars:
             manifest.append(
                 {**common, "delivery": "inline", "content": evidence.content}
@@ -517,6 +532,54 @@ def _canonical_json(value: object) -> str:
 
 def _sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _validate_manifest_semantic_binding(item: Mapping[str, Any], content: str) -> None:
+    semantic_digest = item.get("semantic_digest")
+    if item.get("kind") == "canonical_review_packet":
+        if semantic_digest is not None and not isinstance(semantic_digest, str):
+            raise NativeReviewRequestError(
+                NativeReviewRequestErrorCode.EVIDENCE_INVALID,
+                "canonical review packet semantic_digest must be a string",
+            )
+        _validate_review_packet_semantic_digest(content, semantic_digest)
+    elif semantic_digest is not None:
+        raise NativeReviewRequestError(
+            NativeReviewRequestErrorCode.EVIDENCE_INVALID,
+            "non-packet evidence cannot carry semantic_digest",
+        )
+
+
+def _validate_review_packet_semantic_digest(
+    content: str, semantic_digest: str | None
+) -> None:
+    canonical = content.encode("utf-8")
+    try:
+        packet = ReviewPacket.restore(canonical, hashlib.sha256(canonical).hexdigest())
+    except ReviewPacketError as exc:
+        raise NativeReviewRequestError(
+            NativeReviewRequestErrorCode.EVIDENCE_INVALID,
+            f"canonical review packet evidence is invalid: {exc}",
+        ) from exc
+    manifest_digest = packet.manifest.diff_coverage_digest
+    if manifest_digest is None:
+        if semantic_digest is not None:
+            raise NativeReviewRequestError(
+                NativeReviewRequestErrorCode.EVIDENCE_INVALID,
+                "legacy canonical review packet cannot carry semantic_digest",
+            )
+        return
+    if semantic_digest is None:
+        raise NativeReviewRequestError(
+            NativeReviewRequestErrorCode.EVIDENCE_INVALID,
+            "canonical review packet evidence requires semantic_digest",
+        )
+    _require_sha256(semantic_digest, "review packet semantic_digest")
+    if manifest_digest != semantic_digest:
+        raise NativeReviewRequestError(
+            NativeReviewRequestErrorCode.EVIDENCE_INVALID,
+            "canonical review packet semantic_digest differs from packet manifest",
+        )
 
 
 def _require_identifier(value: object, label: str) -> None:

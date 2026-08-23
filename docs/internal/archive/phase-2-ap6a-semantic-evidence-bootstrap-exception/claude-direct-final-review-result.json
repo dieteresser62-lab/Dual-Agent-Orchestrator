@@ -1,0 +1,33 @@
+{
+  "schema_version": "native-agent-review-result-v1",
+  "result_type": "review_result",
+  "request_id": "native-review-request-ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "reviewer": "claude",
+  "decision": "approved",
+  "new_findings": [],
+  "status_changes": [
+    {
+      "finding_id": "C-01",
+      "status": "CLOSED",
+      "rationale": "_diff_for_paths is confirmed as a module-level test helper in tests/test_workflow.py:602, unrelated to and not called by test_plan_change_boundary_honors_exact_fingerprint_bound_path_approval (tests/test_workflow.py:612-672), which itself has exactly ten reachable top-level statements and three assertions and executes to completion. Verified by running pytest tests/ -k test_plan_change_boundary_honors_exact_fingerprint_bound_path_approval directly: 1 passed, no truncation."
+    },
+    {
+      "finding_id": "C-03",
+      "status": "CLOSED",
+      "rationale": "Re-reviewed as two explicit, separately-scoped diffs rather than one mixed packet: (1) committed range a897f70..c7778ab plus the current uncommitted OPEN-to-OPEN rationale-persistence fix in src/orchestrator.py/tests/test_orchestrator_runtime.py, and (2) the uncommitted AP6A feature diff. No claim is made that the historical mixed packet was in scope or that the hotfix paths were absent from it. The scope-mixing concern is resolved by reviewing the two diffs separately in this pass, not by retroactively excusing the earlier packet."
+    },
+    {
+      "finding_id": "C-04",
+      "status": "CLOSED",
+      "rationale": "The direct-completion review independently inspected the full a897f70..c7778ab commit range as its own scope and did not rely on or repeat any prior claim that the nine hotfix paths were absent from a packet. The paths are explicitly acknowledged as present and separately authorized."
+    }
+  ],
+  "reclassifications": [],
+  "anchors": [],
+  "review_evidence": {
+    "dimensions": "Scope 1: full bootstrap/recovery commit range plus the OPEN-to-OPEN rationale persistence fix, including record replay, immutable binding, idempotency and cross-work-unit collision behavior. Scope 2: full AP6A feature diff, including canonical diff-section coverage, digest recomputation, inline/content-ref request binding, v1 compatibility, resume/idempotency and fail-closed behavior. Claude reproduced the new rationale regression tests, the C-01 focused test, the four AP6A test files and git diff --check.",
+    "largest_residual_risk": "The pre-existing idempotency keys for real status_changed, reclassified and opened transitions still omit work_unit_id; a genuine cross-work-unit collision could therefore stop fail-closed at the artifact-store layer. This was not introduced by the reviewed change and cannot silently corrupt replay, but should be handled in a later bounded package.",
+    "break_condition": "Approval would be wrong if the OPEN-to-OPEN key could collide with a real status transition, if diff content could forge hunk or diff-git headers, if legacy v1 packets required a fabricated semantic digest, or if the supplied focused/full validation evidence failed to reproduce. Claude found none of these conditions."
+  },
+  "pre_mortem": "The most likely later failure is the pre-existing work-unit omission in idempotency keys for real finding transitions surfacing once finding-ID reuse across work units becomes common; the expected symptom is a fail-closed ArtifactBridgeError, not silent corruption. A second likely availability edge is an unusual but valid Git diff form being rejected by the intentionally strict canonicalizer."
+}

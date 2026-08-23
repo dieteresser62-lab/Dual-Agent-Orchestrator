@@ -206,14 +206,10 @@ def test_native_codex_adapter_uses_exact_request_and_output_schema() -> None:
         assert prepared.command[prepared.command.index("--sandbox") + 1] == (
             "workspace-write"
         )
-        assert json.loads(schema_path.read_text(encoding="utf-8"))["$id"] == (
-            "native-agent-codex-result-v1"
-        )
+        assert json.loads(schema_path.read_text(encoding="utf-8"))["type"] == "object"
         by_name = {item.name: item.content for item in prepared.components}
         assert by_name["stdin_prompt"] == bundle.canonical_json
-        assert json.loads(by_name["response_schema"])["$id"] == (
-            "native-agent-codex-result-v1"
-        )
+        assert json.loads(by_name["response_schema"])["required"] == ["result"]
         response = {
             "schema_version": "native-agent-codex-result-v1",
             "result_type": "plan_result",
@@ -227,7 +223,9 @@ def test_native_codex_adapter_uses_exact_request_and_output_schema() -> None:
                 }
             ],
         }
-        message_path.write_text(json.dumps(response, indent=2), encoding="utf-8")
+        message_path.write_text(
+            json.dumps({"result": response}, indent=2), encoding="utf-8"
+        )
         output = adapter.extract_output("ignored jsonl", "", {})
         assert json.loads(output) == response
         assert output == json.dumps(
@@ -252,13 +250,13 @@ def test_native_codex_adapter_rejects_wrappers_and_wrong_request() -> None:
             adapter.extract_output("", "", {})
         message_path.write_text(
             json.dumps(
-                {
+                {"result": {
                     "schema_version": "native-agent-codex-result-v1",
                     "result_type": "plan_result",
                     "request_id": "native-codex-request-" + "0" * 64,
                     "ready": True,
                     "slice_plan": [],
-                }
+                }}
             ),
             encoding="utf-8",
         )

@@ -74,6 +74,22 @@ technische Abbruchbindung sind im
 erhalten. Die weitere Entwicklung erfolgt befristet über den dokumentierten
 manuellen JSON-Bootstrap.
 
+### AP6A – kontrollierter nativer Pilotabbruch
+
+Pfad: [`archive/phase-2-ap6a-semantic-evidence-bootstrap-exception/`](archive/phase-2-ap6a-semantic-evidence-bootstrap-exception/)
+
+Der erste kombinierte native Codex–Claude-Pilot wurde nach erfolgreicher
+Fachimplementierung, aber vor einer konsistenten Workflow-Freigabe beendet.
+Der historische Lauf bleibt unverändert und wird nicht fortgesetzt. Ursache
+war eine nachgewiesene Divergenz zwischen `OPEN → OPEN`-Statusbegründungen im
+State-Spiegel und der Finding-Recordprojektion. Die Korrektur und `1202`
+bestandene Tests sind im
+[Archivbericht](archive/phase-2-ap6a-semantic-evidence-bootstrap-exception/README.md)
+dokumentiert; AP6A und die Bootstrap-Hotfixes werden im manuellen
+Direktabschluss als getrennte Prüfgegenstände behandelt. Claude hat diesen
+Direktabschluss genehmigt, keine neuen Findings eröffnet und `C-01`, `C-03`
+sowie `C-04` geschlossen.
+
 ### Orchestrator-Stabilisierung 1.1D – Antigravity-Runtime-Retry und Attempt-Telemetrie
 
 Pfad: [`archive/orchestrator-stabilization-1-1d/`](archive/orchestrator-stabilization-1-1d/)

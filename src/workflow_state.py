@@ -766,8 +766,10 @@ class WorkUnitRecord:
             raise WorkflowStateValidationError("codex_return_count must be an integer")
         if not 0 <= self.codex_return_count <= self.max_codex_returns:
             raise WorkflowStateValidationError("codex_return_count is outside its configured limit")
-        if self.round_number > self.max_codex_returns:
-            raise WorkflowStateValidationError("round_number exceeds max_codex_returns")
+        # A workflow round is a semantic invocation identity, not a Codex-return
+        # budget counter.  Fingerprint-bound stop/resume transitions may advance
+        # the round without returning work to Codex, so only
+        # ``codex_return_count`` is bounded by ``max_codex_returns``.
         _require_unique_non_empty(self.open_findings, "open_findings")
         _require_unique_non_empty(self.completed_side_effects, "completed_side_effects")
         expected_gate_status = {
@@ -1780,7 +1782,20 @@ class WorkflowState:
             raise WorkflowStateValidationError(
                 "user decision does not match the persisted gate fingerprint and paths"
             )
-        decision = GateDecisionRecord(
+        existing_approval = next(
+            (
+                decision
+                for decision in reversed(current.gate_decisions)
+                if approved
+                and decision.approved
+                and decision.reason is gate.reason
+                and decision.fingerprint == fingerprint
+                and decision.paths == normalized_paths
+                and decision.resume_step is gate.resume_step
+            ),
+            None,
+        )
+        decision = existing_approval or GateDecisionRecord(
             approved=approved,
             reason=gate.reason,
             fingerprint=fingerprint,
@@ -1804,7 +1819,11 @@ class WorkflowState:
                 completed_side_effects = (*completed_side_effects, acknowledgement)
         updated_unit = replace(
             current,
-            gate_decisions=(*current.gate_decisions, decision),
+            gate_decisions=(
+                current.gate_decisions
+                if existing_approval is not None
+                else (*current.gate_decisions, decision)
+            ),
             status=(
                 WorkUnitStatus.IN_PROGRESS
                 if approved
@@ -2104,6 +2123,7 @@ class WorkflowState:
                 "fingerprint-bound gate requires an explicit recorded user decision"
             )
         continuing_iteration_limit = current.gate.reason is GateReason.ITERATION_LIMIT
+        continuing_stop_request = current.gate.reason is GateReason.STOP_REQUEST
         completed_side_effects = current.completed_side_effects
         if (
             current.gate.reason is GateReason.STOP_REQUEST
@@ -2126,7 +2146,7 @@ class WorkflowState:
             status=WorkUnitStatus.IN_PROGRESS,
             round_number=(
                 current.round_number + 1
-                if continuing_iteration_limit
+                if continuing_iteration_limit or continuing_stop_request
                 else current.round_number
             ),
             max_codex_returns=(

@@ -29,7 +29,7 @@
           "type": "string",
           "pattern": "^[CA]-(0[1-9]|[1-9][0-9]*)$"
         },
-        "decision": { "enum": ["accepted", "rejected"] },
+        "decision": { "type": "string", "enum": ["accepted", "rejected"] },
         "rationale": { "$ref": "#/$defs/safe_text" }
       },
       "required": ["finding_id", "decision", "rationale"],
@@ -54,8 +54,8 @@
     "plan_result": {
       "type": "object",
       "properties": {
-        "schema_version": { "const": "native-agent-codex-result-v1" },
-        "result_type": { "const": "plan_result" },
+        "schema_version": { "type": "string", "const": "native-agent-codex-result-v1" },
+        "result_type": { "type": "string", "const": "plan_result" },
         "request_id": { "$ref": "#/$defs/request_id" },
         "ready": { "type": "boolean" },
         "slice_plan": {
@@ -76,8 +76,8 @@
     "implementation_result": {
       "type": "object",
       "properties": {
-        "schema_version": { "const": "native-agent-codex-result-v1" },
-        "result_type": { "const": "implementation_result" },
+        "schema_version": { "type": "string", "const": "native-agent-codex-result-v1" },
+        "result_type": { "type": "string", "const": "implementation_result" },
         "request_id": { "$ref": "#/$defs/request_id" },
         "ready": { "type": "boolean" },
         "test_files": {
@@ -98,8 +98,8 @@
     "correction_result": {
       "type": "object",
       "properties": {
-        "schema_version": { "const": "native-agent-codex-result-v1" },
-        "result_type": { "const": "correction_result" },
+        "schema_version": { "type": "string", "const": "native-agent-codex-result-v1" },
+        "result_type": { "type": "string", "const": "correction_result" },
         "request_id": { "$ref": "#/$defs/request_id" },
         "ready": { "type": "boolean" },
         "test_files": {
@@ -120,8 +120,8 @@
     "final_report_result": {
       "type": "object",
       "properties": {
-        "schema_version": { "const": "native-agent-codex-result-v1" },
-        "result_type": { "const": "final_report_result" },
+        "schema_version": { "type": "string", "const": "native-agent-codex-result-v1" },
+        "result_type": { "type": "string", "const": "final_report_result" },
         "request_id": { "$ref": "#/$defs/request_id" },
         "ready": { "type": "boolean" },
         "finding_dispositions": {
@@ -137,8 +137,8 @@
     "stop_result": {
       "type": "object",
       "properties": {
-        "schema_version": { "const": "native-agent-codex-result-v1" },
-        "result_type": { "const": "stop_result" },
+        "schema_version": { "type": "string", "const": "native-agent-codex-result-v1" },
+        "result_type": { "type": "string", "const": "stop_result" },
         "request_id": { "$ref": "#/$defs/request_id" },
         "rule_id": { "$ref": "#/$defs/safe_text" },
         "rationale": { "$ref": "#/$defs/safe_text" },

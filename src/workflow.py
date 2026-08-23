@@ -91,7 +91,7 @@ from prompts import (
     delimit_block,
 )
 from review_packets import (
-    ReviewPacket, ReviewPacketError, ReviewPacketManifest, build_review_packet,
+    ReviewPacket, ReviewPacketError, build_review_packet, exclude_review_diff_paths,
 )
 from validation_matrix import (
     ValidationCommand,
@@ -810,6 +810,21 @@ class PersistedReviewerReplay:
 
 
 @dataclass(frozen=True)
+class PersistedNativeReviewerReplay:
+    """One request-bound native decision durable ahead of its state mirror."""
+
+    output: NativeAgentReviewOutput
+    fingerprint: str
+    round_number: int
+
+    def __post_init__(self) -> None:
+        if not SHA256_PATTERN.fullmatch(self.fingerprint):
+            raise ValueError("native reviewer replay requires a SHA-256 fingerprint")
+        if self.round_number < 1:
+            raise ValueError("native reviewer replay round must be 1-based")
+
+
+@dataclass(frozen=True)
 class ContractRepairInvocation:
     reviewer: AgentRole
     rejected_output: str
@@ -953,15 +968,17 @@ class WorkflowHistory:
                 "purpose", "fingerprint", "paths", "canonical_text", "digest"
             }:
                 raise ValueError("workflow history review packet has invalid fields")
-            active_review_packet = ReviewPacket(
-                purpose=str(packet_raw["purpose"]),
-                fingerprint=str(packet_raw["fingerprint"]),
-                manifest=ReviewPacketManifest(
-                    tuple(str(item) for item in _json_list(packet_raw["paths"]))
-                ),
-                canonical_bytes=str(packet_raw["canonical_text"]).encode("utf-8"),
-                digest=str(packet_raw["digest"]),
+            active_review_packet = ReviewPacket.restore(
+                str(packet_raw["canonical_text"]).encode("utf-8"),
+                str(packet_raw["digest"]),
             )
+            if (
+                active_review_packet.purpose != str(packet_raw["purpose"])
+                or active_review_packet.fingerprint != str(packet_raw["fingerprint"])
+                or active_review_packet.manifest.paths
+                != tuple(str(item) for item in _json_list(packet_raw["paths"]))
+            ):
+                raise ValueError("workflow history review packet cache differs from canonical bytes")
         return cls(
             work_unit_id=int(raw["work_unit_id"]),
             findings=tuple(_finding_from_dict(item) for item in _json_list(raw["findings"])),
@@ -1317,6 +1334,37 @@ class WorkflowEngine:
         if current.status is not WorkUnitStatus.IN_PROGRESS:
             return WorkflowRunResult(state, active_history)
 
+        pending_native_loader = getattr(
+            self.driver, "recover_pending_native_reviewer_before_policy", None
+        )
+        pending_native = (
+            pending_native_loader(state, context, active_history)
+            if callable(pending_native_loader)
+            else None
+        )
+        if pending_native is not None:
+            if not isinstance(pending_native, PersistedNativeReviewerReplay):
+                raise WorkflowExecutionError(
+                    "pre-policy native reviewer recovery returned an invalid contract"
+                )
+            recovered_step = state.current_step
+            is_plan_review = recovered_step is WorkflowStep.CLAUDE_PLAN_REVIEW
+            is_final_review = recovered_step is WorkflowStep.CLAUDE_FINAL_REVIEW
+            state, active_history = self._apply_review_result(
+                state=state,
+                context=context,
+                history=active_history,
+                reviewer=AgentRole.CLAUDE,
+                result=pending_native.output.result,
+                fingerprint=pending_native.fingerprint,
+                round_number=pending_native.round_number,
+                is_plan_review=is_plan_review,
+                is_final_review=is_final_review,
+            )
+            if state.current_work_unit.status is not WorkUnitStatus.IN_PROGRESS:
+                return WorkflowRunResult(state, active_history)
+            self._bind_driver_work_unit(state)
+
         state, policy_halted = self._apply_pre_agent_policy_gates(state, context)
         if policy_halted:
             self.driver.checkpoint(state, active_history)
@@ -1472,6 +1520,7 @@ class WorkflowEngine:
             raise WorkflowExecutionError(
                 "current gate is not a fingerprint-bound Slice-11 user gate"
             )
+        prior_decision_count = len(state.current_work_unit.gate_decisions)
         try:
             updated = state.record_user_gate_decision(
                 approved=approved,
@@ -1483,11 +1532,50 @@ class WorkflowEngine:
             )
         except ValueError as exc:
             raise WorkflowExecutionError(f"invalid user gate decision: {exc}") from exc
-        self._persist_structured(
-            "persist_gate_decision", updated.current_work_unit.gate_decisions[-1]
-        )
+        if len(updated.current_work_unit.gate_decisions) > prior_decision_count:
+            self._persist_structured(
+                "persist_gate_decision", updated.current_work_unit.gate_decisions[-1]
+            )
         self.driver.checkpoint(updated, history)
         return WorkflowRunResult(updated, history)
+
+    def reframe_unexpected_path_stop_gate(
+        self, state: WorkflowState
+    ) -> WorkflowState:
+        """Upgrade a legacy Codex UNEXPECTED-PATH stop to an exact user gate."""
+        current = state.current_work_unit
+        gate = current.gate
+        if (
+            current.status is not WorkUnitStatus.AWAITING_USER_DECISION
+            or gate.reason is not GateReason.STOP_REQUEST
+            or gate.fingerprint is not None
+            or gate.detail is None
+            or not gate.detail.startswith(f"{UNEXPECTED_PATH_RULE_ID} |")
+        ):
+            return state
+        start_commit = self._change_start_commit(state)
+        if start_commit is None:
+            return state
+        try:
+            changes = self.driver.collect_changes(start_commit)
+        except Exception:
+            return state
+        unexpected = self._validate_change_boundary(
+            state, changes, current.kind
+        )
+        resumed = state.resume_after_user_decision()
+        if not unexpected:
+            return resumed
+        return resumed.await_user_gate(
+            reason=GateReason.UNEXPECTED_FILE,
+            detail=(
+                f"{UNEXPECTED_PATH_RULE_ID} | canonical changes contain paths "
+                f"outside the persisted Slice scope: {', '.join(unexpected)}"
+            ),
+            fingerprint=changes.fingerprint,
+            paths=unexpected,
+            resume_step=current.current_step,
+        )
 
     def _run_codex(
         self,
@@ -1539,6 +1627,9 @@ class WorkflowEngine:
             }
             else NativeCodexRequestKind.IMPLEMENTATION
         )
+        additional_authorized_paths = self._fingerprint_bound_codex_scope_paths(
+            state
+        )
         native_request = (
             self._native_codex_request(
                 state=state,
@@ -1547,6 +1638,7 @@ class WorkflowEngine:
                 contract=contract,
                 prompt=prompt,
                 request_kind=request_kind,
+                additional_authorized_paths=additional_authorized_paths,
             )
             if native_codex
             else None
@@ -2364,12 +2456,17 @@ class WorkflowEngine:
                         and not path.startswith(".orchestrator/")
                         and not path.startswith("docs/internal/slice-")
                     )
+                    excluded_packet_paths = tuple(
+                        path for path in changes.paths if path not in packet_paths
+                    )
                     review_packet = build_review_packet(
                         purpose=packet_purpose,
                         fingerprint=changes.fingerprint,
                         start_fingerprint=start_fingerprint,
                         paths=packet_paths,
-                        review_diff=review_diff,
+                        review_diff=exclude_review_diff_paths(
+                            review_diff, excluded_packet_paths
+                        ),
                         plan_text=context.approved_plan_text,
                         slice_id=unit.slice_id,
                         attestation=attestation,
@@ -2529,15 +2626,41 @@ class WorkflowEngine:
                 "persist_review_contract", result, output, changes.fingerprint,
                 review_round, history.findings
             )
-        # The structured ReviewPayload is already durable at this point. Mirror every
-        # parsed verdict, including STOP_REQUESTED, before checkpointing so a resumed
-        # structured-v1 run cannot observe a chain-ahead reviewer decision.
+        return self._apply_review_result(
+            state=state,
+            context=context,
+            history=history,
+            reviewer=reviewer,
+            result=result,
+            fingerprint=changes.fingerprint,
+            round_number=review_round,
+            is_plan_review=is_plan_review,
+            is_final_review=is_final_review,
+            user_gate_paths=changes.user_gate_paths,
+        )
+
+    def _apply_review_result(
+        self,
+        *,
+        state: WorkflowState,
+        context: WorkflowContext,
+        history: WorkflowHistory,
+        reviewer: AgentRole,
+        result: ContractResult,
+        fingerprint: str,
+        round_number: int,
+        is_plan_review: bool,
+        is_final_review: bool,
+        user_gate_paths: tuple[str, ...] = (),
+    ) -> tuple[WorkflowState, WorkflowHistory]:
+        """Mirror one durable verdict and perform its deterministic transition."""
+        unit = state.current_work_unit
         history = self._record_review(
             history,
             unit.slice_id,
-            review_round,
+            round_number,
             result,
-            changes.fingerprint,
+            fingerprint,
             track_slice_approval=(
                 not is_plan_review or unit.kind is WorkUnitKind.PLAN
             ),
@@ -2592,8 +2715,8 @@ class WorkflowEngine:
                             "PLAN-APPROVAL | Claude and Antigravity approved the bound "
                             "plan; explicit user approval is required before execution"
                         ),
-                        fingerprint=changes.fingerprint,
-                        paths=changes.user_gate_paths,
+                        fingerprint=fingerprint,
+                        paths=user_gate_paths,
                         gate_step=(
                             WorkflowStep.SLICE_COMMIT
                             if context.plan_only
@@ -3559,11 +3682,24 @@ class WorkflowEngine:
                 and changes.paths == (".orchestrator/plan-output.md",)
             ):
                 return ()
-            return tuple(
+            unexpected = tuple(
                 path
                 for path in changes.paths
                 if not matches_path_patterns(path, context.task_scope_patterns)
             )
+            if unexpected and any(
+                state.current_work_unit.has_gate_approval(
+                    reason,
+                    changes.fingerprint,
+                    unexpected,
+                )
+                for reason in (
+                    GateReason.UNEXPECTED_FILE,
+                    GateReason.QUOTA_RESUME_DIFF,
+                )
+            ):
+                return ()
+            return unexpected
         scope = state.current_slice.scope_paths
         if not scope:
             raise WorkflowExecutionError("slice review requires a persisted Git boundary")
@@ -3700,6 +3836,7 @@ class WorkflowEngine:
         prompt: str,
         request_kind: NativeCodexRequestKind,
         work_context: str | None = None,
+        additional_authorized_paths: tuple[str, ...] = (),
     ) -> NativeCodexRequestBundle:
         """Build one Codex request exclusively from orchestrator-owned values."""
         if request_kind is NativeCodexRequestKind.FINAL_REPORT:
@@ -3731,6 +3868,21 @@ class WorkflowEngine:
             raise WorkflowExecutionError(
                 "native Codex request lacks an authorized path boundary"
             )
+        authorized_paths = tuple(
+            sorted({*authorized_paths, *additional_authorized_paths})
+        )
+        effective_work_context = (
+            context.distilled_context if work_context is None else work_context
+        )
+        if additional_authorized_paths:
+            effective_work_context += (
+                "\n\nFINGERPRINT-BOUND ORCHESTRATOR PATH AUTHORIZATION\n"
+                + "\n".join(additional_authorized_paths)
+                + "\nThese exact paths were approved by a user gate for the current "
+                "repository fingerprint. They are part of this request's authoritative "
+                "allowlist even when absent from the original plan. Their presence is "
+                "not an UNEXPECTED-PATH condition."
+            )
         native_context = NativeCodexContext(
             run_id=state.run_id,
             work_unit_id=str(state.current_work_unit_id),
@@ -3761,14 +3913,36 @@ class WorkflowEngine:
                 base_commit=base_commit,
                 authorized_paths=tuple(sorted(set(authorized_paths))),
                 assignment=context.assignment,
-                work_context=(
-                    context.distilled_context
-                    if work_context is None
-                    else work_context
-                ),
+                work_context=effective_work_context,
                 evidence=tuple(sorted(evidence, key=lambda item: item.evidence_id)),
             )
         )
+
+    def _fingerprint_bound_codex_scope_paths(
+        self, state: WorkflowState
+    ) -> tuple[str, ...]:
+        """Expose only the latest exact resume-gate path approval to Codex."""
+        decision = next(
+            (
+                item
+                for item in reversed(state.current_work_unit.gate_decisions)
+                if item.approved
+                and item.reason
+                in {GateReason.UNEXPECTED_FILE, GateReason.QUOTA_RESUME_DIFF}
+                and item.resume_step is state.current_step
+            ),
+            None,
+        )
+        if decision is None:
+            return ()
+        start_commit = self._change_start_commit(state)
+        if start_commit is None:
+            return ()
+        try:
+            fingerprint = self.driver.collect_changes(start_commit).fingerprint
+        except Exception:
+            return ()
+        return decision.paths if decision.fingerprint == fingerprint else ()
 
     @staticmethod
     def _native_review_request(
@@ -3819,7 +3993,10 @@ class WorkflowEngine:
         if review_packet is not None:
             evidence.append(
                 NativeReviewEvidenceInput(
-                    "review-packet", "canonical_review_packet", review_packet.text
+                    "review-packet",
+                    "canonical_review_packet",
+                    review_packet.text,
+                    semantic_digest=review_packet.manifest.diff_coverage_digest,
                 )
             )
         else:

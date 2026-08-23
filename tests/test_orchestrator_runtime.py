@@ -93,7 +93,7 @@ from native_review_request import (
     NativeReviewRequestSpec,
     build_native_review_request,
 )
-from artifact_replay import replay_artifacts
+from artifact_replay import replay_artifacts, replay_findings
 from native_codex_contract import (
     NativeCodexContext,
     NativeCodexRequestKind,
@@ -112,6 +112,29 @@ def _git(root: Path, *args: str) -> str:
         ["git", *args], cwd=root, capture_output=True, text=True, check=True
     )
     return result.stdout.strip()
+
+
+def test_production_correction_delta_preserves_unified_diff_boundary() -> None:
+    fingerprint = "f" * 64
+    unified_diff = (
+        "diff --git a/src/core.py b/src/core.py\n"
+        "--- a/src/core.py\n"
+        "+++ b/src/core.py\n"
+        "@@ -1 +1 @@\n"
+        "-old\n"
+        "+new\n"
+    )
+    driver = object.__new__(ProductionWorkflowDriver)
+    driver._rendered_changes = {
+        fingerprint: WorkflowChanges(
+            start_commit="a" * 40,
+            fingerprint=fingerprint,
+            paths=("src/core.py",),
+            full_diff=unified_diff,
+        )
+    }
+
+    assert driver.collect_correction_delta("e" * 64, fingerprint) == unified_diff
 
 
 def test_every_orchestrated_agent_step_has_a_provider_input_budget_rule() -> None:
@@ -506,7 +529,16 @@ def test_review_packet_materialization_reuses_bytes_and_rejects_cache_mismatch(
         branch="feature/packet-cache", branch_base="a" * 40,
         slice_count=1, timestamp="2026-08-21T10:00:00+00:00",
     )
-    canonical = b'{"schema":"review-packet-v1"}'
+    canonical = json.dumps(
+        {
+            "schema": "review-packet-v1",
+            "purpose": "slice",
+            "fingerprint": "a" * 64,
+            "manifest": {"paths": ["seed.txt"], "additional_dependencies": []},
+            "diff": "legacy compact delta",
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
     packet = ReviewPacket(
         purpose="slice", fingerprint="a" * 64,
         manifest=ReviewPacketManifest(("seed.txt",)),
@@ -1454,6 +1486,24 @@ def test_native_review_record_ahead_recovery_reuses_bound_json_without_provider(
     assert len(reviews) == 1
     assert reviews[0].payload.request_id == bundle.bound_context.request_id
 
+    pre_policy = driver.recover_pending_native_reviewer_before_policy(
+        state,
+        WorkflowContext(
+            assignment="Recover the durable native decision.",
+            distilled_plan="Claude reviews the bound response once.",
+            slice_summary="Native reviewer record-ahead recovery.",
+            test_changes_approved=True,
+        ),
+        WorkflowHistory(
+            state.current_work_unit_id,
+            attestations=(attestation,),
+        ),
+    )
+    assert pre_policy is not None
+    assert pre_policy.output == output
+    assert pre_policy.fingerprint == fingerprint
+    assert pre_policy.round_number == 1
+
     log_path.unlink()
     with pytest.raises(
         WorkflowExecutionError,
@@ -1597,6 +1647,93 @@ def test_native_codex_record_ahead_recovery_reuses_raw_json_without_provider(
             contract,
             WorkflowHistory(state.current_work_unit_id),
         )
+
+
+def test_native_review_persists_open_status_rationale_for_authoritative_replay(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/native-open-rationale-replay")
+    head = _git(repository, "rev-parse", "HEAD")
+    state = init_workflow_state(
+        run_id="native-open-rationale-replay",
+        task_file=str(tmp_path / "task.md"),
+        branch="feature/native-open-rationale-replay",
+        branch_base=head,
+        slice_count=1,
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V1,
+            "1",
+            codex_result_transport="native-codex-v1",
+            claude_review_transport="native-claude-review-v1",
+        ),
+    ).bind_current_slice_git_boundary(
+        start_commit=head,
+        scope_paths=("src/runtime.py",),
+        start_fingerprint="c" * 64,
+    )
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    driver.bind_work_unit(state)
+    finding = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="The reviewer needs another correction round.",
+        acceptance_test="The next review must retain its OPEN rationale.",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
+    opened = ContractResult(
+        reviewer=AgentRole.CLAUDE,
+        approval=False,
+        stopped=False,
+        stop_request=None,
+        validation=None,
+        test_files=(),
+        pre_mortem=None,
+        evidence=None,
+        findings=(finding,),
+        anchors=(),
+    )
+    driver._persist_review_finding_transitions(
+        opened,
+        fingerprint="d" * 64,
+        round_number=1,
+        previous_findings=(),
+        structured=True,
+    )
+    reaffirmed = replace(
+        finding,
+        status_rationale="The first correction is incomplete; keep this blocker open.",
+    )
+    denied = replace(opened, findings=(reaffirmed,))
+    driver._persist_review_finding_transitions(
+        denied,
+        fingerprint="e" * 64,
+        round_number=2,
+        previous_findings=(finding,),
+        structured=True,
+    )
+
+    replay = replay_artifacts(
+        ArtifactStore(repository, state.run_id).load_chain(), state.run_id
+    )
+    projected = replay_findings(replay, state.current_work_unit_id)
+
+    assert projected == (reaffirmed,)
+    transitions = tuple(
+        record.payload
+        for record in replay.records
+        if isinstance(record.payload, FindingTransitionPayload)
+    )
+    assert tuple(item.action for item in transitions) == (
+        "opened",
+        "status_changed",
+    )
 
 
 def test_native_codex_record_ahead_recovery_completes_finding_responses(
@@ -2680,6 +2817,70 @@ def test_runtime_inherits_exact_prior_test_gate_before_early_resume_return() -> 
     assert resumed.current_work_unit.active_test_paths == (test_path,)
 
 
+def test_runtime_recognizes_exact_reopened_gate_approval_for_plain_resume() -> None:
+    paths = ("src/agent_runtime.py", "tests/test_agent_runtime.py")
+    fingerprint = "a" * 64
+    state = orchestrator.init_workflow_state(
+        run_id="resume-reopened-user-gate",
+        task_file="/repo/inbox/native-review.md",
+        branch="feature/native-review",
+        branch_base="b" * 40,
+        slice_count=1,
+    ).await_user_gate(
+        reason=GateReason.UNEXPECTED_FILE,
+        detail="reviewed diagnostic hotfix",
+        fingerprint=fingerprint,
+        paths=paths,
+    ).record_user_gate_decision(
+        approved=True,
+        fingerprint=fingerprint,
+        paths=paths,
+        decided_by="dieter",
+        decided_at="2026-08-23T10:24:26+00:00",
+        rationale="fingerprint-bound hotfix reviewed",
+    ).await_user_gate(
+        reason=GateReason.UNEXPECTED_FILE,
+        detail="same gate rediscovered after resume",
+        fingerprint=fingerprint,
+        paths=paths,
+    )
+
+    approval = orchestrator._current_gate_approval(state)
+
+    assert approval is state.current_work_unit.gate_decisions[0]
+    assert approval.rationale == "fingerprint-bound hotfix reviewed"
+
+
+def test_runtime_does_not_reuse_gate_approval_for_changed_fingerprint() -> None:
+    paths = ("src/agent_runtime.py", "tests/test_agent_runtime.py")
+    state = orchestrator.init_workflow_state(
+        run_id="resume-changed-user-gate",
+        task_file="/repo/inbox/native-review.md",
+        branch="feature/native-review",
+        branch_base="b" * 40,
+        slice_count=1,
+    ).await_user_gate(
+        reason=GateReason.UNEXPECTED_FILE,
+        detail="first hotfix fingerprint",
+        fingerprint="a" * 64,
+        paths=paths,
+    ).record_user_gate_decision(
+        approved=True,
+        fingerprint="a" * 64,
+        paths=paths,
+        decided_by="dieter",
+        decided_at="2026-08-23T10:24:26+00:00",
+        rationale="first fingerprint reviewed",
+    ).await_user_gate(
+        reason=GateReason.UNEXPECTED_FILE,
+        detail="changed repository fingerprint",
+        fingerprint="c" * 64,
+        paths=paths,
+    )
+
+    assert orchestrator._current_gate_approval(state) is None
+
+
 def test_new_watch_task_does_not_require_a_conventional_base_branch(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -3488,6 +3689,79 @@ def test_plan_only_uses_internal_plan_validation_and_commits_no_product_code(
         item["expected_commands"] == ["internal:work-plan-contract"]
         for item in attestations
     )
+
+
+def test_internal_plan_validation_honors_exact_approved_hotfix_paths(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/approved-plan-hotfix")
+    work_plan = "docs/internal/work-plan.md"
+    plan = repository / work_plan
+    plan.parent.mkdir(parents=True)
+    plan.write_text(
+        "# Work plan\n\n### Slice 1 - Future implementation\n\n"
+        "**Exakter Änderungspfad**\n\n- `src/future.py`\n\n"
+        "#### Akzeptanzkriterien\n\n- Future behavior is covered.\n",  # allowlist:german -- plan contract fixture
+        encoding="utf-8",
+    )
+    hotfix_paths = ("src/orchestrator.py", "tests/test_orchestrator_runtime.py")
+    fingerprint = "a" * 64
+    state = init_workflow_state(
+        run_id="run-approved-plan-hotfix",
+        task_file="/repo/inbox/plan.md",
+        branch="feature/approved-plan-hotfix",
+        branch_base="b" * 40,
+        slice_count=1,
+        task_scope_patterns=(work_plan,),
+    ).bind_slice_plan(
+        (PlannedSlice(1, "create reviewed work plan", (work_plan,)),),
+        first_start_commit="b" * 40,
+    ).await_user_gate(
+        reason=GateReason.UNEXPECTED_FILE,
+        detail="reviewed bootstrap hotfix paths",
+        fingerprint=fingerprint,
+        paths=hotfix_paths,
+    ).record_user_gate_decision(
+        approved=True,
+        fingerprint=fingerprint,
+        paths=hotfix_paths,
+        decided_by="dieter",
+        decided_at="2026-08-23T10:48:28+00:00",
+        rationale="bootstrap hotfixes reviewed",
+    )
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    driver.active_state = state
+    changes = WorkflowChanges(
+        start_commit="b" * 40,
+        fingerprint=fingerprint,
+        paths=(work_plan, *hotfix_paths),
+        full_diff="approved bootstrap changes",
+    )
+
+    attestation = driver.validate_plan(
+        changes,
+        work_plan_path=work_plan,
+        scope_patterns=(work_plan,),
+        plan_only=True,
+    )
+
+    assert attestation.diff_fingerprint == fingerprint
+    with pytest.raises(
+        WorkflowExecutionError,
+        match="out-of-scope planning changes",
+    ):
+        driver.validate_plan(
+            replace(changes, fingerprint="c" * 64),
+            work_plan_path=work_plan,
+            scope_patterns=(work_plan,),
+            plan_only=True,
+        )
 
 
 def test_plan_only_retries_non_handoff_plan_once_then_halts_before_review(
