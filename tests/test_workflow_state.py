@@ -383,6 +383,34 @@ def test_fourth_review_denial_enters_user_gate_without_reset() -> None:
     assert state.current_slice.commit_ref is None
 
 
+def test_review_denial_can_advance_past_return_limit_number_after_stop_rounds() -> None:
+    base = make_state()
+    state = replace(
+        base,
+        current_step=WorkflowStep.CLAUDE_PLAN_REVIEW,
+        work_units=(
+            replace(
+                base.current_work_unit,
+                current_step=WorkflowStep.CLAUDE_PLAN_REVIEW,
+                round_number=DEFAULT_MAX_CODEX_RETURNS,
+                codex_return_count=2,
+            ),
+        ),
+    )
+
+    denied = state.record_review_denial(
+        reviewer=Reviewer.CLAUDE,
+        open_findings=("C-01",),
+        return_step=WorkflowStep.CODEX_PLAN_REVISION,
+    )
+
+    assert denied.current_work_unit.round_number == DEFAULT_MAX_CODEX_RETURNS + 1
+    assert denied.current_work_unit.codex_return_count == 3
+    assert denied.current_work_unit.max_codex_returns == DEFAULT_MAX_CODEX_RETURNS
+    assert denied.current_work_unit.status is WorkUnitStatus.IN_PROGRESS
+    assert denied.current_step is WorkflowStep.CODEX_PLAN_REVISION
+
+
 def test_quota_failure_roundtrips_and_resumes_exact_failed_step() -> None:
     state = make_state()
     failure = InvocationFailureRecord(

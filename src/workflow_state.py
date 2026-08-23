@@ -766,8 +766,10 @@ class WorkUnitRecord:
             raise WorkflowStateValidationError("codex_return_count must be an integer")
         if not 0 <= self.codex_return_count <= self.max_codex_returns:
             raise WorkflowStateValidationError("codex_return_count is outside its configured limit")
-        if self.round_number > self.max_codex_returns:
-            raise WorkflowStateValidationError("round_number exceeds max_codex_returns")
+        # A workflow round is a semantic invocation identity, not a Codex-return
+        # budget counter.  Fingerprint-bound stop/resume transitions may advance
+        # the round without returning work to Codex, so only
+        # ``codex_return_count`` is bounded by ``max_codex_returns``.
         _require_unique_non_empty(self.open_findings, "open_findings")
         _require_unique_non_empty(self.completed_side_effects, "completed_side_effects")
         expected_gate_status = {
