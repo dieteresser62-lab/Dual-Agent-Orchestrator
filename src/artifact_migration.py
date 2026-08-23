@@ -547,26 +547,37 @@ def _recoverable_pending_review_finding_gap(
         WorkflowStep.ANTIGRAVITY_SLICE_REVIEW: "antigravity",
     }
     reviewer = reviewer_by_step.get(state.current_step)
-    if unit.kind is not WorkUnitKind.CORRECTION or reviewer is None:
+    if unit.kind not in {WorkUnitKind.SLICE, WorkUnitKind.CORRECTION} or reviewer is None:
         return False
-    logical_id = f"review-{reviewer}-{unit.work_unit_id}-{unit.round_number}"
-    reviews = tuple(
-        record
-        for record in chain
-        if isinstance(record.payload, ReviewPayload)
-        and record.logical_id == logical_id
-        and record.payload.work_unit_id == str(unit.work_unit_id)
-        and record.payload.reviewer.value == reviewer
-        and record.payload.verdict in {"approved", "denied"}
-    )
-    if len(reviews) != 1 or _state_has_review_event(
-        state,
-        work_unit_id=unit.work_unit_id,
-        reviewer=reviewer,
-        round_number=unit.round_number,
-    ):
+    logical_id_prefix = f"review-{reviewer}-{unit.work_unit_id}-"
+    reviews: list[tuple[int, ArtifactRecord]] = []
+    for record in chain:
+        if (
+            not isinstance(record.payload, ReviewPayload)
+            or not record.logical_id.startswith(logical_id_prefix)
+            or record.payload.work_unit_id != str(unit.work_unit_id)
+            or record.payload.reviewer.value != reviewer
+            or record.payload.verdict not in {"approved", "denied"}
+        ):
+            continue
+        round_text = record.logical_id.removeprefix(logical_id_prefix)
+        if not round_text.isdigit():
+            continue
+        review_round = int(round_text)
+        if (
+            review_round > unit.round_number
+            or _state_has_review_event(
+                state,
+                work_unit_id=unit.work_unit_id,
+                reviewer=reviewer,
+                round_number=review_round,
+            )
+        ):
+            continue
+        reviews.append((review_round, record))
+    if len(reviews) != 1:
         return False
-    review = reviews[0]
+    _review_round, review = reviews[0]
     review_ids = set(review.payload.finding_ids)
     if not set(unit.open_findings).issubset(review_ids):
         return False

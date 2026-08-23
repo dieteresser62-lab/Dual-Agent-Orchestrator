@@ -689,6 +689,33 @@ def test_pending_approved_review_closure_is_admitted_for_exact_local_replay(
     )
 
 
+def test_pending_slice_review_finding_is_admitted_after_gate_advanced_rounds(
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    state, chain, _attestation, prior, _review, current, _correction = (
+        _pending_review_chain(repository)
+    )
+    unit = replace(
+        state.current_work_unit,
+        kind=WorkUnitKind.SLICE,
+        round_number=4,
+        codex_return_count=2,
+    )
+    state = replace(
+        state,
+        work_units=(*state.work_units[:-1], unit),
+    )
+
+    assert artifact_migration._recoverable_pending_review_finding_gap(
+        state,
+        chain,
+        {"C-01": "open"},
+        {"C-01": prior, "C-07": current},
+    )
+
+
 def _append_completed_slice_binding(
     repository: Path,
     state: WorkflowState,
