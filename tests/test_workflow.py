@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from audit_trail import ReviewAuditEvent
 from agent_runtime import (
     AgentInvocationError,
     NativeAgentCodexOutput,
@@ -47,6 +48,7 @@ from workflow import (
     CodexInvocation,
     ContractRepairInvocation,
     EvidenceKind,
+    PersistedNativeReviewerReplay,
     ReviewerInvocation,
     WorkflowChanges,
     WorkflowCommitRequest,
@@ -66,6 +68,7 @@ from workflow_state import (
     GateReason,
     GateStatus,
     WorkflowStep,
+    WorkflowState,
     WorkUnitKind,
     WorkUnitStatus,
     ProtocolBinding,
@@ -5544,3 +5547,99 @@ def test_correction_actual_diff_still_enforces_productive_file_limit() -> None:
     assert "PRODUCTIVE-FILE-LIMIT" in halted.state.current_work_unit.gate.detail
     assert driver.validation_calls == [first_branch.fingerprint]
     assert [call.reviewer for call in driver.reviewer_calls] == [AgentRole.CLAUDE]
+
+
+def test_native_record_ahead_review_is_mirrored_before_next_policy_or_provider() -> None:
+    fingerprint = "f" * 64
+    state = replace(
+        _slice_state().with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW),
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V1,
+            "1",
+            claude_review_transport="native-claude-review-v1",
+        ),
+    )
+    attestation = ValidationAttestation(
+        "validation-record-ahead",
+        fingerprint,
+        ("python3 -m pytest tests/ -v",),
+        (
+            ValidationRecord(
+                ValidationStatus.PASS,
+                "python3 -m pytest tests/ -v",
+                0,
+                "passed",
+            ),
+        ),
+        "a" * 64,
+        "passed",
+    )
+    finding = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="record-ahead finding",
+        acceptance_test="resume without another reviewer invocation",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
+    result = ContractResult(
+        reviewer=AgentRole.CLAUDE,
+        approval=False,
+        stopped=False,
+        stop_request=None,
+        validation=attestation,
+        test_files=(TEST_FILE,),
+        pre_mortem=None,
+        evidence=ReviewEvidence(
+            "record-ahead recovery",
+            "a stale state mirror",
+            "Claude is invoked twice",
+        ),
+        findings=(finding,),
+        anchors=(),
+    )
+    replay = PersistedNativeReviewerReplay(
+        output=NativeAgentReviewOutput(
+            result=result,
+            canonical_json='{"decision":"denied"}',
+            request_id="native-review-request-" + "b" * 64,
+        ),
+        fingerprint=fingerprint,
+        round_number=1,
+    )
+
+    @dataclass
+    class RecoveringDriver(FakeDriver):
+        def recover_pending_native_reviewer_before_policy(
+            self,
+            recovered_state: WorkflowState,
+            context: WorkflowContext,
+            history: WorkflowHistory,
+        ) -> PersistedNativeReviewerReplay:
+            assert recovered_state.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
+            assert not history.events
+            return replay
+
+    driver = RecoveringDriver(
+        snapshots=[],
+        codex_outputs=[
+            "STOP_REQUESTED: UNEXPECTED-PATH | await a bound scope decision\n"
+            "STATUS: DONE"
+        ],
+        reviewer_outputs=[],
+    )
+    outcome = WorkflowEngine(driver).run_current_work_unit(
+        state,
+        _context(),
+        WorkflowHistory(state.current_work_unit_id, attestations=(attestation,)),
+    )
+
+    assert not driver.reviewer_calls
+    assert len(driver.codex_calls) == 1
+    assert outcome.state.current_work_unit.status is WorkUnitStatus.AWAITING_USER_DECISION
+    assert outcome.history.findings == (finding,)
+    reviews = tuple(
+        event for event in outcome.history.events if isinstance(event, ReviewAuditEvent)
+    )
+    assert len(reviews) == 1
+    assert reviews[0].round_number == 1

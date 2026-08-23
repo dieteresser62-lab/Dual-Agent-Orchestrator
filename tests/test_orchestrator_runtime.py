@@ -1477,6 +1477,24 @@ def test_native_review_record_ahead_recovery_reuses_bound_json_without_provider(
     assert len(reviews) == 1
     assert reviews[0].payload.request_id == bundle.bound_context.request_id
 
+    pre_policy = driver.recover_pending_native_reviewer_before_policy(
+        state,
+        WorkflowContext(
+            assignment="Recover the durable native decision.",
+            distilled_plan="Claude reviews the bound response once.",
+            slice_summary="Native reviewer record-ahead recovery.",
+            test_changes_approved=True,
+        ),
+        WorkflowHistory(
+            state.current_work_unit_id,
+            attestations=(attestation,),
+        ),
+    )
+    assert pre_policy is not None
+    assert pre_policy.output == output
+    assert pre_policy.fingerprint == fingerprint
+    assert pre_policy.round_number == 1
+
     log_path.unlink()
     with pytest.raises(
         WorkflowExecutionError,

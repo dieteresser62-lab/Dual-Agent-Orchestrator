@@ -810,6 +810,21 @@ class PersistedReviewerReplay:
 
 
 @dataclass(frozen=True)
+class PersistedNativeReviewerReplay:
+    """One request-bound native decision durable ahead of its state mirror."""
+
+    output: NativeAgentReviewOutput
+    fingerprint: str
+    round_number: int
+
+    def __post_init__(self) -> None:
+        if not SHA256_PATTERN.fullmatch(self.fingerprint):
+            raise ValueError("native reviewer replay requires a SHA-256 fingerprint")
+        if self.round_number < 1:
+            raise ValueError("native reviewer replay round must be 1-based")
+
+
+@dataclass(frozen=True)
 class ContractRepairInvocation:
     reviewer: AgentRole
     rejected_output: str
@@ -1316,6 +1331,37 @@ class WorkflowEngine:
             self._bind_driver_work_unit(state)
         if current.status is not WorkUnitStatus.IN_PROGRESS:
             return WorkflowRunResult(state, active_history)
+
+        pending_native_loader = getattr(
+            self.driver, "recover_pending_native_reviewer_before_policy", None
+        )
+        pending_native = (
+            pending_native_loader(state, context, active_history)
+            if callable(pending_native_loader)
+            else None
+        )
+        if pending_native is not None:
+            if not isinstance(pending_native, PersistedNativeReviewerReplay):
+                raise WorkflowExecutionError(
+                    "pre-policy native reviewer recovery returned an invalid contract"
+                )
+            recovered_step = state.current_step
+            is_plan_review = recovered_step is WorkflowStep.CLAUDE_PLAN_REVIEW
+            is_final_review = recovered_step is WorkflowStep.CLAUDE_FINAL_REVIEW
+            state, active_history = self._apply_review_result(
+                state=state,
+                context=context,
+                history=active_history,
+                reviewer=AgentRole.CLAUDE,
+                result=pending_native.output.result,
+                fingerprint=pending_native.fingerprint,
+                round_number=pending_native.round_number,
+                is_plan_review=is_plan_review,
+                is_final_review=is_final_review,
+            )
+            if state.current_work_unit.status is not WorkUnitStatus.IN_PROGRESS:
+                return WorkflowRunResult(state, active_history)
+            self._bind_driver_work_unit(state)
 
         state, policy_halted = self._apply_pre_agent_policy_gates(state, context)
         if policy_halted:
@@ -2573,15 +2619,41 @@ class WorkflowEngine:
                 "persist_review_contract", result, output, changes.fingerprint,
                 review_round, history.findings
             )
-        # The structured ReviewPayload is already durable at this point. Mirror every
-        # parsed verdict, including STOP_REQUESTED, before checkpointing so a resumed
-        # structured-v1 run cannot observe a chain-ahead reviewer decision.
+        return self._apply_review_result(
+            state=state,
+            context=context,
+            history=history,
+            reviewer=reviewer,
+            result=result,
+            fingerprint=changes.fingerprint,
+            round_number=review_round,
+            is_plan_review=is_plan_review,
+            is_final_review=is_final_review,
+            user_gate_paths=changes.user_gate_paths,
+        )
+
+    def _apply_review_result(
+        self,
+        *,
+        state: WorkflowState,
+        context: WorkflowContext,
+        history: WorkflowHistory,
+        reviewer: AgentRole,
+        result: ContractResult,
+        fingerprint: str,
+        round_number: int,
+        is_plan_review: bool,
+        is_final_review: bool,
+        user_gate_paths: tuple[str, ...] = (),
+    ) -> tuple[WorkflowState, WorkflowHistory]:
+        """Mirror one durable verdict and perform its deterministic transition."""
+        unit = state.current_work_unit
         history = self._record_review(
             history,
             unit.slice_id,
-            review_round,
+            round_number,
             result,
-            changes.fingerprint,
+            fingerprint,
             track_slice_approval=(
                 not is_plan_review or unit.kind is WorkUnitKind.PLAN
             ),
@@ -2636,8 +2708,8 @@ class WorkflowEngine:
                             "PLAN-APPROVAL | Claude and Antigravity approved the bound "
                             "plan; explicit user approval is required before execution"
                         ),
-                        fingerprint=changes.fingerprint,
-                        paths=changes.user_gate_paths,
+                        fingerprint=fingerprint,
+                        paths=user_gate_paths,
                         gate_step=(
                             WorkflowStep.SLICE_COMMIT
                             if context.plan_only
