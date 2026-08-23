@@ -377,6 +377,7 @@ class ArtifactBridge:
         measurement_record: ArtifactRecord,
         binding_fingerprint: str,
         work_unit_id: int | str,
+        operation_instance: str | None = None,
     ) -> ArtifactRecord:
         """Persist one physical provider start after all local preflights pass."""
         chain = self.store.load_chain()
@@ -389,12 +390,15 @@ class ArtifactBridge:
         measurement = measurement_record.payload
         if str(work_unit_id) != measurement.work_unit_id:
             raise ArtifactBridgeError("provider attempt work unit differs from its measurement")
+        if operation_instance is not None and not operation_instance.strip():
+            raise ArtifactBridgeError("provider attempt operation instance must be non-empty")
         logical_operation_id = _logical_provider_operation_id(
             run_id=self.store.run_id,
             work_unit_id=str(work_unit_id),
             provider=measurement.provider,
             operation=measurement.operation,
             binding_fingerprint=binding_fingerprint,
+            operation_instance=operation_instance,
         )
         prior = tuple(
             record
@@ -402,6 +406,34 @@ class ArtifactBridge:
             if isinstance(record.payload, ProviderAttemptPayload)
             and record.payload.logical_operation_id == logical_operation_id
         )
+        if operation_instance is not None and not prior:
+            legacy_operation_id = _logical_provider_operation_id(
+                run_id=self.store.run_id,
+                work_unit_id=str(work_unit_id),
+                provider=measurement.provider,
+                operation=measurement.operation,
+                binding_fingerprint=binding_fingerprint,
+            )
+            legacy_prior = tuple(
+                record
+                for record in chain
+                if isinstance(record.payload, ProviderAttemptPayload)
+                and record.payload.logical_operation_id == legacy_operation_id
+            )
+            if legacy_prior and all(
+                record.payload.provider == measurement.provider
+                and record.payload.role == measurement.role
+                and record.payload.operation == measurement.operation
+                and record.payload.work_unit_id == measurement.work_unit_id
+                and record.payload.binding_fingerprint == binding_fingerprint
+                and record.payload.input_digest == measurement.input_digest
+                for record in legacy_prior
+            ):
+                # Preserve an in-flight pre-instance operation across an upgrade.
+                # A semantically different round cannot inherit it because its
+                # immutable input digest differs.
+                logical_operation_id = legacy_operation_id
+                prior = legacy_prior
         for record in prior:
             payload = record.payload
             if (
@@ -554,11 +586,20 @@ class ArtifactBridge:
 
 def _logical_provider_operation_id(
     *, run_id: str, work_unit_id: str, provider: Role, operation: str,
-    binding_fingerprint: str,
+    binding_fingerprint: str, operation_instance: str | None = None,
 ) -> str:
     digest = hashlib.sha256(
         canonical_json(
-            [run_id, work_unit_id, provider.value, operation, binding_fingerprint]
+            [
+                run_id,
+                work_unit_id,
+                provider.value,
+                operation,
+                binding_fingerprint,
+                operation_instance,
+            ]
+            if operation_instance is not None
+            else [run_id, work_unit_id, provider.value, operation, binding_fingerprint]
         )
     ).hexdigest()
     return f"provider-operation-{digest}"

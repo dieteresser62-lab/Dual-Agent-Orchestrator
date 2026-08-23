@@ -319,6 +319,74 @@ def test_provider_attempt_rejects_changed_digest_for_same_operation(tmp_path: Pa
         )
 
 
+def test_provider_attempt_rounds_have_distinct_immutable_bindings(tmp_path: Path) -> None:
+    bridge = ArtifactBridge(ArtifactStore(tmp_path, "run-rounds"))
+    first_measurement = bridge.append(
+        _measurement(), logical_id="measurement-round-2",
+        idempotency_key="measurement:round:2", fingerprint_sha256=DIGEST,
+    )
+    first = bridge.start_provider_attempt(
+        measurement_record=first_measurement,
+        binding_fingerprint=DIGEST,
+        work_unit_id="1",
+        operation_instance="round:2",
+    )
+    bridge.finish_provider_attempt(
+        first, duration_seconds=1.0, failure_kind=None, usage=None,
+    )
+
+    changed_measurement = bridge.append(
+        replace(_measurement(), input_digest="e" * 64),
+        logical_id="measurement-round-3",
+        idempotency_key="measurement:round:3",
+        fingerprint_sha256=DIGEST,
+    )
+    second_round = bridge.start_provider_attempt(
+        measurement_record=changed_measurement,
+        binding_fingerprint=DIGEST,
+        work_unit_id="1",
+        operation_instance="round:3",
+    )
+
+    assert second_round.payload.attempt_number == 1
+    assert second_round.payload.logical_operation_id != first.payload.logical_operation_id
+    with pytest.raises(ArtifactBridgeError, match="immutable binding"):
+        bridge.start_provider_attempt(
+            measurement_record=changed_measurement,
+            binding_fingerprint=DIGEST,
+            work_unit_id="1",
+            operation_instance="round:2",
+        )
+
+
+def test_provider_attempt_round_scope_reuses_matching_legacy_operation(
+    tmp_path: Path,
+) -> None:
+    bridge = ArtifactBridge(ArtifactStore(tmp_path, "run-legacy-round"))
+    measurement = bridge.append(
+        _measurement(), logical_id="measurement-legacy",
+        idempotency_key="measurement:legacy", fingerprint_sha256=DIGEST,
+    )
+    first = bridge.start_provider_attempt(
+        measurement_record=measurement,
+        binding_fingerprint=DIGEST,
+        work_unit_id="1",
+    )
+    bridge.finish_provider_attempt(
+        first, duration_seconds=1.0, failure_kind="network", usage=None,
+    )
+
+    resumed = bridge.start_provider_attempt(
+        measurement_record=measurement,
+        binding_fingerprint=DIGEST,
+        work_unit_id="1",
+        operation_instance="round:2",
+    )
+
+    assert resumed.payload.logical_operation_id == first.payload.logical_operation_id
+    assert resumed.payload.attempt_number == 2
+
+
 def test_provider_attempt_finish_rejects_start_from_foreign_chain(
     tmp_path: Path,
 ) -> None:

@@ -644,7 +644,11 @@ class ProductionWorkflowDriver(WorkflowDriver):
         return measurement_record
 
     def _start_provider_attempt(
-        self, measurement: ProviderInputMeasurement, bootstrap: object | None
+        self,
+        measurement: ProviderInputMeasurement,
+        bootstrap: object | None,
+        *,
+        operation_instance: str | None = None,
     ) -> ArtifactRecord:
         bridge = self._artifact_bridge
         state = self.active_state
@@ -665,6 +669,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
             measurement_record=bootstrap,
             binding_fingerprint=measurement.binding_fingerprint,
             work_unit_id=state.current_work_unit_id,
+            operation_instance=operation_instance,
         )
 
     def _finish_provider_attempt(
@@ -753,7 +758,11 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 pre_start_callback=self._persist_provider_bootstrap,
                 provider_attempt_lifecycle=(
                     ProviderAttemptLifecycle(
-                        start=self._start_provider_attempt,
+                        start=lambda measurement, bootstrap: self._start_provider_attempt(
+                            measurement,
+                            bootstrap,
+                            operation_instance=f"round:{invocation.round_number}",
+                        ),
                         terminal=self._finish_provider_attempt,
                     )
                     if self._artifact_bridge is not None
@@ -907,7 +916,11 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 pre_start_callback=self._persist_provider_bootstrap,
                 provider_attempt_lifecycle=(
                     ProviderAttemptLifecycle(
-                        start=self._start_provider_attempt,
+                        start=lambda measurement, bootstrap: self._start_provider_attempt(
+                            measurement,
+                            bootstrap,
+                            operation_instance=f"round:{invocation.round_number}",
+                        ),
                         terminal=self._finish_provider_attempt,
                     )
                     if self._artifact_bridge is not None
