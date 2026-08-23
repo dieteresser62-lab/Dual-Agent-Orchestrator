@@ -39,7 +39,9 @@ from native_codex_contract import (
 from native_codex_request import NativeCodexRequestBundle
 from native_review_contract import (
     NativeReviewContractError,
+    NativeReviewErrorCode,
     parse_bound_native_contract_result,
+    validate_native_review_document,
 )
 from native_review_request import NativeReviewRequestBundle
 from validation_matrix import ValidationMatrixRunner, ValidationRequest
@@ -1261,6 +1263,7 @@ def run_native_review_agent(
     binding_fingerprint: str,
     pre_start_callback: Callable[[ProviderInputMeasurement], object | None] | None = None,
     attempt_invocation: _ProviderAttemptInvocation | None = None,
+    validated_response_callback: Callable[[str], None] | None = None,
 ) -> NativeAgentReviewOutput:
     """Run one native Claude review without legacy marker or repair parsing."""
     prepare = getattr(adapter, "prepare_native_provider_input", None)
@@ -1284,6 +1287,14 @@ def run_native_review_agent(
         document = json.loads(canonical)
         if not isinstance(document, dict):
             raise AgentOutputError("native review result must be a JSON object")
+        validate_native_review_document(document)
+        if document.get("request_id") != bundle.bound_context.request_id:
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.REQUEST_MISMATCH,
+                "response request_id does not match bound request",
+            )
+        if validated_response_callback is not None:
+            validated_response_callback(canonical)
         result = parse_bound_native_contract_result(document, bundle.bound_context)
     except json.JSONDecodeError as exc:
         raise AgentOutputError(
@@ -1333,6 +1344,7 @@ def run_native_review_agent_checked(
         if provider_attempt_lifecycle is not None
         else None
     )
+    log_path = log_dir / f"{log_prefix}.attempt-1.log"
     try:
         output = run_native_review_agent(
             adapter,
@@ -1344,9 +1356,10 @@ def run_native_review_agent_checked(
             binding_fingerprint=binding_fingerprint,
             pre_start_callback=pre_start_callback,
             attempt_invocation=attempt_invocation,
+            validated_response_callback=lambda canonical: write_file(
+                log_path, canonical
+            ),
         )
-        log_path = log_dir / f"{log_prefix}.attempt-1.log"
-        write_file(log_path, output.canonical_json)
         print_agent_output(
             adapter.name,
             log_path,
@@ -1384,6 +1397,7 @@ def run_native_review_agent_checked(
                     "invocation_id": failure.invocation_id,
                     "provider_text": failure.provider_text,
                     "provider_diagnostic": failure.provider_data,
+                    "technical_text": failure.technical_text,
                     "received_at": failure.received_at.isoformat(),
                     "process_exit_code": failure.process_exit_code,
                 },
@@ -2046,6 +2060,11 @@ def classify_agent_failure(
         kind = AgentFailureKind.OUTPUT
     elif process_exit_code not in (None, 0) or "execution error" in lowered or "failed:" in lowered:
         kind = AgentFailureKind.PROCESS
+    elif isinstance(exc, AgentOutputError) and provider_text in {
+        "native review result violates its bound contract",
+        "native Codex result violates its bound contract",
+    }:
+        kind = AgentFailureKind.OUTPUT
     else:
         kind = AgentFailureKind.RUNTIME
     return AgentInvocationError(

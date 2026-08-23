@@ -36,6 +36,7 @@ from agent_runtime import (
     run_agent,
     run_agent_checked,
     run_native_review_agent,
+    run_native_review_agent_checked,
     run_native_codex_agent,
     run_native_codex_agent_checked,
     NativeAgentCodexOutput,
@@ -478,6 +479,86 @@ def test_native_review_runtime_returns_bound_contract_without_marker_validation(
         )
     assert "request-mismatch" in raised.value.technical_text
     assert raised.value.provider_data == mismatched
+
+    domain_invalid = {
+        **response,
+        "new_findings": [
+            {
+                "finding_id": "C-01",
+                "finding_class": "BLOCKER",
+                "summary": "Approval still contains an open blocker.",
+                "acceptance_test": {
+                    "kind": "prose",
+                    "text": "Close the blocker before approval.",
+                },
+            }
+        ],
+    }
+    returned["canonical"] = json.dumps(
+        domain_invalid, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    persisted: list[str] = []
+    with pytest.raises(AgentOutputError) as raised:
+        run_native_review_agent(
+            FakeNativeAdapter(),  # type: ignore[arg-type]
+            bundle,
+            config=OrchestratorConfig(),
+            shorten=lambda value, _maximum: value or "",
+            operation="claude_slice_review",
+            binding_fingerprint=fingerprint,
+            validated_response_callback=persisted.append,
+        )
+    assert "approval-invalid" in raised.value.technical_text
+    assert persisted == [returned["canonical"]]
+
+
+def test_native_review_checked_preserves_schema_valid_domain_rejection(
+    monkeypatch, tmp_path: Path
+) -> None:
+    canonical = '{"schema_version":"native-agent-review-result-v1"}'
+
+    def reject_after_persist(*args, **kwargs):  # type: ignore[no-untyped-def]
+        kwargs["validated_response_callback"](canonical)
+        raise AgentOutputError(
+            "native review result violates its bound contract",
+            technical_text="approval-invalid: approval contains an open blocker",
+        )
+
+    monkeypatch.setattr(agent_runtime, "run_native_review_agent", reject_after_persist)
+
+    class Adapter:
+        name = "claude"
+        metadata: dict[str, object] = {}
+
+    with pytest.raises(AgentInvocationError) as raised:
+        run_native_review_agent_checked(
+            adapter=Adapter(),  # type: ignore[arg-type]
+            bundle=object(),  # type: ignore[arg-type]
+            log_prefix="native-review",
+            config=OrchestratorConfig(),
+            log_dir=tmp_path,
+            write_file=lambda path, content: path.write_text(content, encoding="utf-8"),
+            shorten=lambda value, _maximum: value or "",
+            reviewer_manifest_paths=None,
+            operation="claude_plan_review",
+            binding_fingerprint="a" * 64,
+            pre_start_callback=None,
+            provider_attempt_lifecycle=None,
+        )
+
+    assert raised.value.kind is AgentFailureKind.OUTPUT
+    assert (tmp_path / "native-review.attempt-1.log").read_text(
+        encoding="utf-8"
+    ) == canonical
+    failure = json.loads(
+        (tmp_path / "native-review.attempt-1.failure.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert failure["failure_kind"] == "output"
+    assert failure["technical_text"] == (
+        "approval-invalid: approval contains an open blocker"
+    )
 
 
 def test_budget_denial_happens_after_preparation_but_before_capability_or_process(
