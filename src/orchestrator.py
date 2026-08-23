@@ -2049,7 +2049,18 @@ class ProductionWorkflowDriver(WorkflowDriver):
             for path in actual_paths
             if scope_patterns and not matches_path_patterns(path, scope_patterns)
         )
-        if unexpected_actual:
+        approved_actual = any(
+            self.active_state.current_work_unit.has_gate_approval(
+                reason,
+                changes.fingerprint,
+                unexpected_actual,
+            )
+            for reason in (
+                GateReason.UNEXPECTED_FILE,
+                GateReason.QUOTA_RESUME_DIFF,
+            )
+        )
+        if unexpected_actual and not approved_actual:
             raise WorkflowExecutionError(
                 "internal plan validation found out-of-scope planning changes: "
                 + ", ".join(unexpected_actual)

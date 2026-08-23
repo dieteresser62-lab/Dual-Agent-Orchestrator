@@ -3554,6 +3554,79 @@ def test_plan_only_uses_internal_plan_validation_and_commits_no_product_code(
     )
 
 
+def test_internal_plan_validation_honors_exact_approved_hotfix_paths(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/approved-plan-hotfix")
+    work_plan = "docs/internal/work-plan.md"
+    plan = repository / work_plan
+    plan.parent.mkdir(parents=True)
+    plan.write_text(
+        "# Work plan\n\n### Slice 1 - Future implementation\n\n"
+        "**Exakter Änderungspfad**\n\n- `src/future.py`\n\n"
+        "#### Akzeptanzkriterien\n\n- Future behavior is covered.\n",  # allowlist:german -- plan contract fixture
+        encoding="utf-8",
+    )
+    hotfix_paths = ("src/orchestrator.py", "tests/test_orchestrator_runtime.py")
+    fingerprint = "a" * 64
+    state = init_workflow_state(
+        run_id="run-approved-plan-hotfix",
+        task_file="/repo/inbox/plan.md",
+        branch="feature/approved-plan-hotfix",
+        branch_base="b" * 40,
+        slice_count=1,
+        task_scope_patterns=(work_plan,),
+    ).bind_slice_plan(
+        (PlannedSlice(1, "create reviewed work plan", (work_plan,)),),
+        first_start_commit="b" * 40,
+    ).await_user_gate(
+        reason=GateReason.UNEXPECTED_FILE,
+        detail="reviewed bootstrap hotfix paths",
+        fingerprint=fingerprint,
+        paths=hotfix_paths,
+    ).record_user_gate_decision(
+        approved=True,
+        fingerprint=fingerprint,
+        paths=hotfix_paths,
+        decided_by="dieter",
+        decided_at="2026-08-23T10:48:28+00:00",
+        rationale="bootstrap hotfixes reviewed",
+    )
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    driver.active_state = state
+    changes = WorkflowChanges(
+        start_commit="b" * 40,
+        fingerprint=fingerprint,
+        paths=(work_plan, *hotfix_paths),
+        full_diff="approved bootstrap changes",
+    )
+
+    attestation = driver.validate_plan(
+        changes,
+        work_plan_path=work_plan,
+        scope_patterns=(work_plan,),
+        plan_only=True,
+    )
+
+    assert attestation.diff_fingerprint == fingerprint
+    with pytest.raises(
+        WorkflowExecutionError,
+        match="out-of-scope planning changes",
+    ):
+        driver.validate_plan(
+            replace(changes, fingerprint="c" * 64),
+            work_plan_path=work_plan,
+            scope_patterns=(work_plan,),
+            plan_only=True,
+        )
+
+
 def test_plan_only_retries_non_handoff_plan_once_then_halts_before_review(
     tmp_path: Path, monkeypatch
 ) -> None:
