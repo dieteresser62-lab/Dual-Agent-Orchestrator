@@ -816,6 +816,57 @@ def test_failure_classification_uses_technical_network_diagnostic() -> None:
     assert "response" not in (failure.provider_data or {})
 
 
+def test_claude_structured_output_retry_exhaustion_is_bounded_transient() -> None:
+    failure = classify_agent_failure(
+        "claude",
+        agent_runtime.AgentProcessError(
+            "native Claude error",
+            exit_code=1,
+            provider_data={
+                "type": "result",
+                "subtype": "error_max_structured_output_retries",
+            },
+        ),
+        invocation_id="claude-structured-output-1",
+    )
+
+    assert failure.kind is AgentFailureKind.NETWORK
+    assert failure.provider_data == {
+        "type": "result",
+        "subtype": "error_max_structured_output_retries",
+    }
+
+
+@pytest.mark.parametrize(
+    ("agent_key", "provider_data"),
+    (
+        (
+            "codex",
+            {
+                "type": "result",
+                "subtype": "error_max_structured_output_retries",
+            },
+        ),
+        ("claude", {"type": "result", "subtype": "different_error"}),
+        ("claude", {"type": "different", "subtype": "error_max_structured_output_retries"}),
+    ),
+)
+def test_structured_output_retry_classification_rejects_near_misses(
+    agent_key: str, provider_data: dict[str, object]
+) -> None:
+    failure = classify_agent_failure(
+        agent_key,
+        agent_runtime.AgentProcessError(
+            "native provider error",
+            exit_code=1,
+            provider_data=provider_data,
+        ),
+        invocation_id="structured-output-near-miss",
+    )
+
+    assert failure.kind is AgentFailureKind.PROCESS
+
+
 @pytest.mark.parametrize(
     "error_value",
     [

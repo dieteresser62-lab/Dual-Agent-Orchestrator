@@ -1963,6 +1963,21 @@ def _is_antigravity_tool_schema_failure(
     return message == _ANTIGRAVITY_TOOL_SCHEMA_ERROR
 
 
+def _is_claude_structured_output_retry_exhaustion(
+    agent_key: str,
+    exc: BaseException,
+    provider_data: Mapping[str, object] | None,
+) -> bool:
+    """Route only Claude's exact provider-side structured-output exhaustion as transient."""
+    return (
+        agent_key == "claude"
+        and isinstance(exc, AgentProcessError)
+        and isinstance(provider_data, Mapping)
+        and provider_data.get("type") == "result"
+        and provider_data.get("subtype") == "error_max_structured_output_retries"
+    )
+
+
 def classify_agent_failure(
     agent_key: str,
     exc: BaseException,
@@ -2008,6 +2023,11 @@ def classify_agent_failure(
     antigravity_tool_schema_failure = _is_antigravity_tool_schema_failure(
         agent_key, exc, provider_data
     )
+    claude_structured_output_retry_exhaustion = (
+        _is_claude_structured_output_retry_exhaustion(
+            agent_key, exc, provider_data
+        )
+    )
     if (
         is_quota_or_rate_limit_error(technical_text)
         or is_quota_or_rate_limit_error(structured_text)
@@ -2030,6 +2050,12 @@ def classify_agent_failure(
         )
     if antigravity_tool_schema_failure:
         kind = AgentFailureKind.ANTIGRAVITY_TOOL_SCHEMA
+    elif claude_structured_output_retry_exhaustion:
+        # The Claude CLI completed without a model result after exhausting its
+        # provider-internal schema retries. Reuse the existing bounded,
+        # fingerprint-bound transient retry policy instead of treating this
+        # exact provider envelope as a permanent local process defect.
+        kind = AgentFailureKind.NETWORK
     elif isinstance(kind_hint, AgentFailureKind):
         kind = kind_hint
     elif isinstance(exc, subprocess.TimeoutExpired) or "timed out" in lowered or "timeout" in lowered:
