@@ -23,15 +23,19 @@ from gates import detect_anchor_changes
 from native_review_contract import (
     NativeFinding,
     NativeProseAcceptance,
+    NativeReclassification,
     NativeReviewContext,
     NativeReviewContractError,
     NativeReviewErrorCode,
     NativeReviewResult,
+    NativeStatusChange,
     NativeStopResult,
     native_response_to_contract_result,
+    native_review_provider_response_schema,
     parse_native_contract_result,
     parse_native_review_response,
 )
+from schema_validation import SchemaMismatch, validate_schema_document
 from validation_matrix import (
     ValidationCommand,
     ValidationMatrix,
@@ -324,6 +328,107 @@ def test_denial_preserves_omitted_open_finding_but_approval_requires_update() ->
         {"finding_id": "C-01", "status": "OPEN", "rationale": "Still reproducible"}
     ]
     assert parse_native_contract_result(updated, context).findings[0].status is FindingStatus.OPEN
+
+
+def test_closed_own_finding_is_neither_writer_offered_nor_locally_mutable() -> None:
+    closed = _finding("C-01", AgentRole.CLAUDE, status=FindingStatus.CLOSED)
+    open_finding = _finding("C-02", AgentRole.CLAUDE)
+    context = _context(previous=(closed, open_finding))
+    writer = native_review_provider_response_schema(context)
+
+    reopened = _review(context, approved=False)
+    reopened["status_changes"] = [
+        {"finding_id": "C-01", "status": "OPEN", "rationale": "Reopen it"}
+    ]
+    with pytest.raises(SchemaMismatch):
+        validate_schema_document({"result": reopened}, writer)
+
+    reclassified = _review(context, approved=False)
+    reclassified["reclassifications"] = [
+        {
+            "finding_id": "C-01",
+            "finding_class": "BLOCKER",
+            "rationale": "Reclassify it",
+        }
+    ]
+    with pytest.raises(SchemaMismatch):
+        validate_schema_document({"result": reclassified}, writer)
+
+    base = parse_native_review_response(_review(context, approved=False), context)
+    assert isinstance(base, NativeReviewResult)
+    direct_reopen = replace(
+        base,
+        status_changes=(
+            NativeStatusChange("C-01", FindingStatus.OPEN, "Reopen it"),
+        ),
+    )
+    with pytest.raises(NativeReviewContractError) as raised:
+        native_response_to_contract_result(direct_reopen, context)
+    assert raised.value.code is NativeReviewErrorCode.FINDING_REFERENCE_NOT_OPEN
+
+    direct_reclassification = replace(
+        base,
+        reclassifications=(
+            NativeReclassification(
+                "C-01", FindingClass.BLOCKER, "Reclassify it"
+            ),
+        ),
+    )
+    with pytest.raises(NativeReviewContractError) as raised:
+        native_response_to_contract_result(direct_reclassification, context)
+    assert raised.value.code is NativeReviewErrorCode.FINDING_REFERENCE_NOT_OPEN
+
+
+def test_denial_cannot_create_its_required_blocker_by_reopening_closed_blocker() -> None:
+    closed = _finding("C-01", AgentRole.CLAUDE, status=FindingStatus.CLOSED)
+    context = _context(previous=(closed,))
+    writer = native_review_provider_response_schema(context)
+    observation = NativeFinding(
+        "C-02",
+        FindingClass.OBSERVATION,
+        "Future hardening",
+        NativeProseAcceptance("Consider this in a later slice"),
+    )
+
+    document = _review(context, approved=False)
+    document["new_findings"] = [
+        {
+            "finding_id": "C-02",
+            "finding_class": "OBSERVATION",
+            "summary": "Future hardening",
+            "acceptance_test": {
+                "kind": "prose",
+                "text": "Consider this in a later slice",
+            },
+        }
+    ]
+    document["status_changes"] = [
+        {"finding_id": "C-01", "status": "OPEN", "rationale": "Reopen it"}
+    ]
+    with pytest.raises(SchemaMismatch):
+        validate_schema_document({"result": document}, writer)
+
+    direct = NativeReviewResult(
+        request_id=context.request_id,
+        reviewer=AgentRole.CLAUDE,
+        approved=False,
+        new_findings=(observation,),
+        status_changes=(
+            NativeStatusChange("C-01", FindingStatus.OPEN, "Reopen it"),
+        ),
+        reclassifications=(),
+        anchors=(),
+        evidence=None,
+        pre_mortem=None,
+    )
+    with pytest.raises(NativeReviewContractError) as raised:
+        native_response_to_contract_result(direct, context)
+    assert raised.value.code is NativeReviewErrorCode.FINDING_REFERENCE_NOT_OPEN
+
+    control = replace(direct, status_changes=())
+    with pytest.raises(NativeReviewContractError) as raised:
+        native_response_to_contract_result(control, context)
+    assert raised.value.code is NativeReviewErrorCode.APPROVAL_INVALID
 
 
 def test_test_change_and_observation_convergence_guards() -> None:

@@ -257,6 +257,27 @@ def _validate_writer_form_evidence(
 def test_writer_form_manifest_has_exactly_eight_closed_evidence_rows() -> None:
     manifest, rows = _load_corpus()
     _validate_writer_form_evidence(manifest, rows)
+    writer_forms = manifest["writer_forms"]
+    assert sum(
+        item["evidence"]["kind"] == "live_canary" for item in writer_forms
+    ) == 7
+    assert sum(
+        item["evidence"]["kind"] == "request_bound" for item in writer_forms
+    ) == 1
+    initial = next(
+        item
+        for item in writer_forms
+        if item["provider"] == "claude"
+        and item["writer_form"] == "initial_slice"
+    )
+    convergence = next(
+        item
+        for item in writer_forms
+        if item["provider"] == "claude" and item["writer_form"] == "convergence"
+    )
+    assert initial["evidence"]["kind"] == "request_bound"
+    assert convergence["evidence"]["kind"] == "live_canary"
+    assert "status_changes.items.oneOf" in convergence["representative_context"]
 
     schema_only = next(
         item for item in manifest["fixtures"] if item["binding"] == "schema_only"

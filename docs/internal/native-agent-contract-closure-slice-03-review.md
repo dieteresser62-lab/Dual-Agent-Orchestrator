@@ -96,8 +96,8 @@ und Claude-Resultate.
 | Codex | Korrektur | Live-Canary `accepted` | `27fdb65cafdb024fb6a128bc40b41a28023866493c30af0ac29021a907863a6c` | `92a17c5da808554fe1c14d38c3156aab6534d790ae87f4666fa086e1a96bd740` |
 | Codex | Finalbericht | Live-Canary `accepted` | `9456b7aef9f9f644c0c90f2447f3c714a5f026b0bc46d655da52b47891292ce3` | `ae088a3d28ccad758844b1335752dc1b8284b9ef845b477898575949b6612c66` |
 | Claude | Plan | Live-Canary `approved` | `88e268b3d61afd18e86070cd86d8c480e537541e7a4c919b09d3844e0a593083` | `7127bbc70f18a8aba4d2aed81391e4c04f4373a2056b7a0824ae6fbc3ac18d6d` |
-| Claude | initialer Slice | `request_bound` Slice-2-Runde 1 | `fe6fc2ba4b16422c883905be4946baa572256c2d5ed385871fc53ac05999a060` | `a3a749ce1829187b4988064106257ec84293c0b2f5c8547a7c7b737992054ebf` |
-| Claude | Konvergenz | `request_bound` Slice-1-Runde 2 | `9a3db92e0aa6de8e893aae9cfb6888246e2976c583072218691be7c43fc2946c` | `deeddaae2a2070950a9d55b3bc4938bbfac66f10d371d8b4159de22fff6bf4e2` |
+| Claude | initialer Slice | `request_bound` Slice-2-Runde 1 | `011f76845ed21f4f17d0090cf960f626f4277e00eb7c946ce562478a56b5c508` | `a3a749ce1829187b4988064106257ec84293c0b2f5c8547a7c7b737992054ebf` |
+| Claude | Konvergenz | Live-Canary `approved`, einschließlich `status_changes.items.oneOf` | `a86ebb519fc2dcdf4936b01d00397e46452ba7bc8c2591e1523e021b1bf22e04` | `f6a2eff236b5a5b560657eb44b7ec5c932ca4782861e5857c400e932c965953e` |
 | Claude | Finalreview | Live-Canary `approved` | `09049d1bfdc89897c949d2318a7ddad501a3a12cdcd6faf738cd4cdff6f16ffa` | `1c8316db07b57561cacb29e0039e578b4455da4efcac5e945e91e28647601a62` |
 
 Alle erfolgreichen Canaries verwendeten den echten Adapter-/Runtimepfad und
@@ -526,3 +526,30 @@ SLICE_APPROVAL: 03 | YES
 STATUS: DONE
 
 CLAUDE_CORRECTION_REVIEW: YES
+
+## Nachtrag aus Korrekturslice 04
+
+Der unabhängige Gesamtcheck nach Slice 03 hat die Evidenzaussage präzisiert,
+ohne Claudes vorstehendes historisches Slice-03-Urteil umzuschreiben:
+
+- Der freigegebene Arbeitsplan lässt ein verifiziertes `request_bound`-Paar
+  und einen Live-Canary als gleichberechtigte Writerformbelege zu. Die drei
+  historischen Paare bleiben daher unverändert gültige Corpus-,
+  Kompatibilitäts- und Domänennachweise; ihr alter ursprünglicher
+  Provider-Schemadigest ist kein nachträglicher Implementierungsdefekt.
+- Die historische Konvergenzantwort hatte jedoch nicht belegt, dass Claude die
+  tiefere aktuelle Komposition `status_changes.items.oneOf` als
+  Providervertrag akzeptiert. Der direkte Konvergenz-Canary aus Slice 04 hat
+  genau diese Lücke geschlossen.
+- Canaryresultat: `approved`; Request-ID
+  `native-review-request-58e98da53bd078faa2e2e666d9a1549a51435c683709040dab0aa2d26a11d236`;
+  Writerschema-SHA-256
+  `a86ebb519fc2dcdf4936b01d00397e46452ba7bc8c2591e1523e021b1bf22e04`;
+  Antwort-SHA-256
+  `f6a2eff236b5a5b560657eb44b7ec5c932ca4782861e5857c400e932c965953e`.
+- Git-Status und rekursiver Abdruck der geschützten Workflowstores waren vor
+  und nach dem Canary bytegleich. Repositorypfade waren nicht schreibbar.
+
+Die Writerformtabelle am Anfang dieses Dokuments zeigt den daraus folgenden
+aktuellen Evidenzstand: sieben Live-Canaries und ein `request_bound`-Beleg für
+den initialen Claude-Slice.

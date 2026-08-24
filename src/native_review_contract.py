@@ -57,6 +57,7 @@ class NativeReviewErrorCode(StrEnum):
     REVIEWER_MISMATCH = "reviewer-mismatch"
     FINDING_ID_INVALID = "finding-id-invalid"
     FINDING_REFERENCE_UNKNOWN = "finding-reference-unknown"
+    FINDING_REFERENCE_NOT_OPEN = "finding-reference-not-open"
     FINDING_EVENT_CONFLICT = "finding-event-conflict"
     FINDING_UPDATE_MISSING = "missing-own-finding-update"
     FINDING_CONTENT_INVALID = "finding-content-invalid"
@@ -363,7 +364,6 @@ def native_review_provider_response_schema(
         for item in context.previous_findings
         if item.origin.reporter is context.reviewer
     )
-    own_ids = tuple(item.finding_id for item in own_findings)
     own_open = tuple(
         item for item in own_findings if item.status is FindingStatus.OPEN
     )
@@ -426,11 +426,11 @@ def native_review_provider_response_schema(
 
     status = _bound_review_definition(
         definitions["status_change"],
-        finding_ids=own_ids,
+        finding_ids=own_open_ids,
     )
     reclassification = _bound_review_definition(
         definitions["reclassification"],
-        finding_ids=own_ids,
+        finding_ids=own_open_ids,
     )
     status["properties"]["rationale"]["pattern"] = NONBLANK_TEXT_PATTERN
     status["properties"]["rationale"]["maxLength"] = 3000
@@ -542,11 +542,11 @@ def native_review_provider_response_schema(
         items={"$ref": "#/$defs/bound_denied_finding"},
     )
     denied["properties"]["status_changes"].update(
-        maxItems=len(own_ids),
+        maxItems=len(own_open_ids),
         items={"$ref": "#/$defs/bound_status_change"},
     )
     denied["properties"]["reclassifications"].update(
-        maxItems=len(own_ids),
+        maxItems=len(own_open_ids),
         items={"$ref": "#/$defs/bound_reclassification"},
     )
     denied["properties"]["pre_mortem"] = {
@@ -973,6 +973,11 @@ def _validate_response_events(
             raise NativeReviewContractError(
                 NativeReviewErrorCode.FINDING_REFERENCE_UNKNOWN,
                 f"reviewer does not own finding {finding_id}",
+            )
+        if finding.status is not FindingStatus.OPEN:
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.FINDING_REFERENCE_NOT_OPEN,
+                f"finding update references non-open id {finding_id}",
             )
     expected_prefix = "C-" if context.reviewer is AgentRole.CLAUDE else "A-"
     first_id = next_native_finding_id(context)

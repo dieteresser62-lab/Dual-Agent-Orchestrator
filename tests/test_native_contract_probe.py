@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+from dataclasses import replace
+import hashlib
 import importlib.util
+import json
 from pathlib import Path
 import sys
 
 import pytest
+
+from contracts import FindingStatus
+from native_review_contract import native_review_provider_response_schema
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -75,3 +81,62 @@ def test_live_canary_main_fails_when_a_protected_store_changes(
     )
     with pytest.raises(RuntimeError, match="protected workflow store"):
         probe.main()
+
+
+def test_convergence_canary_serializes_status_change_items_one_of() -> None:
+    probe = _probe_module()
+    bundle = probe._claude_canary_bundle("convergence", repo_root=ROOT)
+    schema_text = bundle.provider_response_schema_json
+    schema = json.loads(schema_text)
+    request = json.loads(bundle.canonical_json)
+    manifest = json.loads(
+        (
+            ROOT
+            / "tests"
+            / "fixtures"
+            / "native-contract-corpus"
+            / "manifest.json"
+        ).read_text(encoding="utf-8")
+    )
+    evidence_row = next(
+        item
+        for item in manifest["writer_forms"]
+        if item["provider"] == "claude" and item["writer_form"] == "convergence"
+    )
+    approved = schema["$defs"]["bound_slice_convergence_approved"]
+    status_changes = approved["properties"]["status_changes"]
+
+    schema_digest = hashlib.sha256(schema_text.encode("utf-8")).hexdigest()
+    assert request["response_contract"]["schema_sha256"] == schema_digest
+    assert evidence_row["writer_schema_sha256"] == schema_digest
+    assert evidence_row["evidence"]["kind"] == "live_canary"
+    assert evidence_row["evidence"]["status"] == "passed"
+    assert evidence_row["evidence"]["request_id"] == bundle.bound_context.request_id
+    assert len(evidence_row["evidence"]["response_sha256"]) == 64
+    assert status_changes["minItems"] == 1
+    assert status_changes["maxItems"] == 1
+    options = status_changes["items"]["oneOf"]
+    assert [item["properties"]["finding_id"] for item in options] == [
+        {"type": "string", "const": "C-01"}
+    ]
+    assert [item["properties"]["status"] for item in options] == [
+        {"type": "string", "const": "CLOSED"}
+    ]
+
+    prior = bundle.bound_context.context.previous_findings[0]
+    no_open_context = replace(
+        bundle.bound_context.context,
+        previous_findings=(
+            replace(
+                prior,
+                status=FindingStatus.CLOSED,
+                status_rationale="Resolved before this round.",
+            ),
+        ),
+    )
+    no_open_schema = native_review_provider_response_schema(no_open_context)
+    no_open_status = no_open_schema["$defs"][
+        "bound_slice_convergence_approved"
+    ]["properties"]["status_changes"]
+    assert no_open_status["maxItems"] == 0
+    assert "oneOf" not in no_open_status["items"]

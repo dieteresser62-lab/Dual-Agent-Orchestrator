@@ -72,7 +72,7 @@
       "request_source_path": ".orchestrator/logs/manual-package5-slice1-review/request.json",
       "response_sha256": "dd459bb83613c9f3565d8c5608680ab666d80ccbc87762f0fc34f44810695048",
       "source_path": "docs/internal/archive/native-codex-claude-correction-loop/native-codex-claude-correction-loop-slice1-review-round2.raw.json",
-      "writer_schema_sha256": "9a3db92e0aa6de8e893aae9cfb6888246e2976c583072218691be7c43fc2946c"
+      "writer_schema_sha256": "6ddc236d1d7991d4b9855a85029a897b0a37f0414d10ceed644d40d1735c9c1a"
     },
     {
       "binding": "schema_only",
@@ -97,7 +97,7 @@
       "request_source_path": ".orchestrator/logs/manual-package5-slice2-c05-review/request.json",
       "response_sha256": "3c75fd110cb6be9874dc7e8eba08310e1df524df403a2599cef54db93069394d",
       "source_path": "docs/internal/archive/native-codex-claude-correction-loop/native-codex-claude-correction-loop-slice2-c05-review.raw.json",
-      "writer_schema_sha256": "d441a9f61a0f635e57445bd64f2712e43ffa1909a61b966a3143867f3dd7884e"
+      "writer_schema_sha256": "de2c2a3b60214226784e7339b3934628223907f0e8f1e275f677b2e431232eb9"
     },
     {
       "binding": "request_bound",
@@ -108,7 +108,7 @@
       "request_source_path": ".orchestrator/logs/manual-package5-slice2-review/request.json",
       "response_sha256": "38090cdc202f5629ae001fb8714cf417c94946fb7f73de9cf60aa720cec33ed9",
       "source_path": "docs/internal/archive/native-codex-claude-correction-loop/native-codex-claude-correction-loop-slice2-review.raw.json",
-      "writer_schema_sha256": "fe6fc2ba4b16422c883905be4946baa572256c2d5ed385871fc53ac05999a060"
+      "writer_schema_sha256": "011f76845ed21f4f17d0090cf960f626f4277e00eb7c946ce562478a56b5c508"
     }
   ],
   "inventory": {
@@ -189,17 +189,19 @@
       "provider": "claude",
       "representative_context": "slice round 1 with no prior open findings",
       "writer_form": "initial_slice",
-      "writer_schema_sha256": "fe6fc2ba4b16422c883905be4946baa572256c2d5ed385871fc53ac05999a060"
+      "writer_schema_sha256": "011f76845ed21f4f17d0090cf960f626f4277e00eb7c946ce562478a56b5c508"
     },
     {
       "evidence": {
-        "fixture_id": "claude-native-codex-claude-correction-loop-slice1-review-round2",
-        "kind": "request_bound"
+        "kind": "live_canary",
+        "request_id": "native-review-request-58e98da53bd078faa2e2e666d9a1549a51435c683709040dab0aa2d26a11d236",
+        "response_sha256": "f6a2eff236b5a5b560657eb44b7ec5c932ca4782861e5857c400e932c965953e",
+        "status": "passed"
       },
       "provider": "claude",
-      "representative_context": "slice convergence round 2 with prior findings",
+      "representative_context": "live isolated convergence round with one open own blocker and status_changes.items.oneOf",
       "writer_form": "convergence",
-      "writer_schema_sha256": "9a3db92e0aa6de8e893aae9cfb6888246e2976c583072218691be7c43fc2946c"
+      "writer_schema_sha256": "a86ebb519fc2dcdf4936b01d00397e46452ba7bc8c2591e1523e021b1bf22e04"
     },
     {
       "evidence": {

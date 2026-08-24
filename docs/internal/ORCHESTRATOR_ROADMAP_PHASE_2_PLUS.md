@@ -565,9 +565,13 @@ Stand 24. August 2026:
   Produktion, aber über eine typisierte `read-only`-Grenze mit CWD und
   Evidenzassetziel außerhalb des Repositorys. Erfolgreiche Canaries liegen für
   Plan, Implementierung, Korrektur und Finalbericht vor.
-- Für Claude liegen erfolgreiche direkte Canaries für Plan und Finalreview vor;
-  initiale Slice- und Konvergenzformen sind durch echte `request_bound`-Paare
-  belegt.
+- Für Claude liegen erfolgreiche direkte Canaries für Plan, Konvergenz und
+  Finalreview vor. Der Konvergenz-Canary bindet insbesondere die zuvor nur
+  flacher sondierte Komposition `status_changes.items.oneOf` im tatsächlich
+  serialisierten Requestschema. Der initiale Slice bleibt entsprechend dem
+  freigegebenen Vertrag durch ein echtes `request_bound`-Paar belegt; die
+  historischen Konvergenzpaare bleiben zusätzlich als Kompatibilitäts- und
+  Domänennachweise erhalten.
 - Jeder Canary hat den vollständigen Git-Status vor und nach dem Aufruf
   bytegleich gehalten. Kein Canary schreibt State, Checkpoints, Recordketten,
   Inbox, Outbox oder Index.
