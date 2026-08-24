@@ -327,7 +327,9 @@ def _canary_finding() -> FindingRecord:
     )
 
 
-def _codex_canary_bundle(form: str, *, repo_root: Path):
+def _codex_canary_bundle(
+    form: str, *, repo_root: Path, base_commit: str | None = None
+):
     kind = NativeCodexRequestKind(form)
     work_kind = kind in {
         NativeCodexRequestKind.IMPLEMENTATION,
@@ -382,7 +384,7 @@ def _codex_canary_bundle(form: str, *, repo_root: Path):
         NativeCodexRequestSpec(
             context=context,
             target_branch="canary/native-contract-closure",
-            base_commit=_head(repo_root),
+            base_commit=base_commit or _head(repo_root),
             authorized_paths=(
                 "docs/internal/native-agent-contract-closure-arbeitsplan.md",
             ),
@@ -413,7 +415,9 @@ def _canary_attestation() -> ValidationAttestation:
     )
 
 
-def _claude_canary_bundle(form: str, *, repo_root: Path):
+def _claude_canary_bundle(
+    form: str, *, repo_root: Path, base_commit: str | None = None
+):
     marker = {
         "plan": ApprovalMarker.PLAN,
         "initial_slice": ApprovalMarker.SLICE,
@@ -452,7 +456,7 @@ def _claude_canary_bundle(form: str, *, repo_root: Path):
             context=context,
             review_kind=kind,
             target_branch="canary/native-contract-closure",
-            base_commit=_head(repo_root),
+            base_commit=base_commit or _head(repo_root),
             authorized_paths=(
                 "docs/internal/native-agent-contract-closure-arbeitsplan.md",
             ),
@@ -484,12 +488,15 @@ def _live_canary(provider: str, form: str, *, repo_root: Path) -> dict[str, Any]
         strict_preflight=True,
         agent_output_mode="none",
     )
+    base_commit = _head(repo_root)
     with tempfile.TemporaryDirectory(prefix=f"dao-{provider}-{form}-canary-") as raw:
         canary_root = Path(raw)
         work_root = canary_root / "work"
         work_root.mkdir()
         if provider == "codex":
-            bundle = _codex_canary_bundle(form, repo_root=repo_root)
+            bundle = _codex_canary_bundle(
+                form, repo_root=repo_root, base_commit=base_commit
+            )
             adapter = NativeCodexAdapter(settings["codex"])
             boundary = NativeCodexExecutionBoundary.canary(
                 repo_root,
@@ -515,7 +522,9 @@ def _live_canary(provider: str, form: str, *, repo_root: Path) -> dict[str, Any]
             response_sha256 = output.response_sha256
             decision = "accepted"
         else:
-            bundle = _claude_canary_bundle(form, repo_root=repo_root)
+            bundle = _claude_canary_bundle(
+                form, repo_root=repo_root, base_commit=base_commit
+            )
             adapter = NativeClaudeReviewAdapter(settings["claude"])
             try:
                 output = run_native_review_agent(
@@ -541,6 +550,7 @@ def _live_canary(provider: str, form: str, *, repo_root: Path) -> dict[str, Any]
         return {
             "provider": provider,
             "writer_form": form,
+            "base_commit": base_commit,
             "request_id": bundle.bound_context.request_id,
             "writer_schema_sha256": schema_sha256,
             "response_sha256": response_sha256,

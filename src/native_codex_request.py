@@ -189,6 +189,25 @@ class NativeCodexRequestBundle:
                 NativeCodexRequestErrorCode.REQUEST_INVALID,
                 "bundle request id differs from bound context",
             )
+        binding = {key: value for key, value in document.items() if key != "request_id"}
+        calculated_digest = _sha256_text(_canonical_json(binding))
+        if (
+            calculated_digest != self.bound_context.request_digest
+            or document["request_id"] != "native-codex-request-" + calculated_digest
+        ):
+            raise NativeCodexRequestError(
+                NativeCodexRequestErrorCode.REQUEST_INVALID,
+                "request content differs from its bound digest",
+            )
+        expected_context = _codex_context_request_projection(
+            self.bound_context.context
+        )
+        actual_context = {key: document[key] for key in expected_context}
+        if actual_context != expected_context:
+            raise NativeCodexRequestError(
+                NativeCodexRequestErrorCode.REQUEST_INVALID,
+                "request document differs from its bound Codex context projection",
+            )
         try:
             provider_schema = json.loads(self.provider_response_schema_json)
         except json.JSONDecodeError as exc:
@@ -214,6 +233,46 @@ class NativeCodexRequestBundle:
             raise NativeCodexRequestError(
                 NativeCodexRequestErrorCode.REQUEST_INVALID,
                 "bundle response contract differs from provider schema",
+            )
+        manifest = tuple(document["evidence_manifest"])
+        evidence_ids = tuple(item["evidence_id"] for item in manifest)
+        if evidence_ids != tuple(sorted(set(evidence_ids))):
+            raise NativeCodexRequestError(
+                NativeCodexRequestErrorCode.EVIDENCE_INVALID,
+                "request evidence manifest must be sorted and unique",
+            )
+        expected_assets: dict[str, tuple[str, int]] = {}
+        for item in manifest:
+            if item["delivery"] == "inline":
+                content = item["content"]
+                if (
+                    _sha256_text(content) != item["sha256"]
+                    or len(content.encode("utf-8")) != item["byte_count"]
+                ):
+                    raise NativeCodexRequestError(
+                        NativeCodexRequestErrorCode.EVIDENCE_INVALID,
+                        f"inline evidence {item['evidence_id']} metadata differs from content",
+                    )
+            else:
+                reference = item["content_ref"]
+                if reference in expected_assets:
+                    raise NativeCodexRequestError(
+                        NativeCodexRequestErrorCode.EVIDENCE_INVALID,
+                        "request content references must be unique",
+                    )
+                expected_assets[reference] = (item["sha256"], item["byte_count"])
+        actual_assets = {
+            item.path: (item.sha256, item.byte_count) for item in self.evidence_assets
+        }
+        if len(actual_assets) != len(self.evidence_assets):
+            raise NativeCodexRequestError(
+                NativeCodexRequestErrorCode.EVIDENCE_INVALID,
+                "request evidence asset paths must be unique",
+            )
+        if actual_assets != expected_assets:
+            raise NativeCodexRequestError(
+                NativeCodexRequestErrorCode.EVIDENCE_INVALID,
+                "request evidence assets differ from content references",
             )
 
     @property
@@ -256,6 +315,22 @@ def validate_native_codex_request_document(document: Mapping[str, Any]) -> None:
         ) from None
 
 
+def validate_native_codex_provider_response(
+    document: Mapping[str, Any], bundle: NativeCodexRequestBundle
+) -> None:
+    """Validate one result against the exact writer schema bound to its request."""
+    try:
+        validate_schema_document(
+            {"result": dict(document)}, bundle.provider_response_schema
+        )
+    except SchemaMismatch as exc:
+        location = ".".join(str(part) for part in exc.path) or "<response>"
+        raise NativeCodexRequestError(
+            NativeCodexRequestErrorCode.SCHEMA_INVALID,
+            f"provider response schema failed at {location}: {exc.message}",
+        ) from None
+
+
 def build_native_codex_request(
     spec: NativeCodexRequestSpec,
     *,
@@ -289,34 +364,19 @@ def build_native_codex_request(
             assets.append(NativeCodexEvidenceAsset(path, digest, byte_count, item.content))
 
     context = spec.context
+    context_projection = _codex_context_request_projection(context)
     response_schema = native_codex_provider_response_schema(context)
     response_schema_json = _canonical_json(response_schema)
     response_schema_digest = _sha256_text(response_schema_json)
     binding: dict[str, Any] = {
         "schema_version": REQUEST_SCHEMA_VERSION,
-        "request_type": context.request_kind.value,
         "transport": NATIVE_CODEX_TRANSPORT,
-        "run_id": context.run_id,
-        "work_unit_id": context.work_unit_id,
-        "operation": context.operation,
+        **context_projection,
         "target_branch": spec.target_branch,
         "base_commit": spec.base_commit,
-        "current_fingerprint": context.current_fingerprint,
         "authorized_paths": list(spec.authorized_paths),
         "assignment": spec.assignment,
         "work_context": spec.work_context,
-        "codex_contract": _contract_document(context),
-        "open_findings": [
-            {
-                "finding_id": item.finding_id,
-                "finding_class": item.finding_class.value,
-                "summary": item.summary,
-                "acceptance_test": item.acceptance_test,
-                "reporter": item.origin.reporter.value,
-            }
-            for item in context.previous_findings
-            if item.status is FindingStatus.OPEN
-        ],
         "evidence_manifest": manifest,
         "response_contract": {
             "schema_version": RESPONSE_SCHEMA_VERSION,
@@ -333,6 +393,35 @@ def build_native_codex_request(
         provider_response_schema_json=response_schema_json,
         evidence_assets=tuple(assets),
     )
+
+
+def _codex_context_request_projection(
+    context: NativeCodexContext,
+) -> dict[str, Any]:
+    """Return the complete context projection actually transported to Codex.
+
+    Closed findings deliberately remain authoritative only in the workflow record
+    chain; the native request transports the open subset Codex may disposition.
+    """
+    return {
+        "request_type": context.request_kind.value,
+        "run_id": context.run_id,
+        "work_unit_id": context.work_unit_id,
+        "operation": context.operation,
+        "current_fingerprint": context.current_fingerprint,
+        "codex_contract": _contract_document(context),
+        "open_findings": [
+            {
+                "finding_id": item.finding_id,
+                "finding_class": item.finding_class.value,
+                "summary": item.summary,
+                "acceptance_test": item.acceptance_test,
+                "reporter": item.origin.reporter.value,
+            }
+            for item in context.previous_findings
+            if item.status is FindingStatus.OPEN
+        ],
+    }
 
 
 def canonical_native_codex_request_json(document: Mapping[str, Any]) -> str:

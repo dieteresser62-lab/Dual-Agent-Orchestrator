@@ -232,11 +232,13 @@ Replay-, Fingerprint-, Eigentums- oder Persistenzprüfungen.
      `--disallowedTools=Bash,Edit,Write,NotebookEdit,Grep,Glob`,
      `--permission-mode=dontAsk`, `--setting-sources=user`, `--safe-mode`,
      `--strict-mcp-config`, `--prompt-suggestions=false`,
-     `--no-session-persistence`, `--disable-slash-commands` und, falls
-     konfiguriert, `--max-budget-usd=<configured-value>`.
+     `--no-session-persistence` und `--disable-slash-commands`.
    Modell- und Effortflags sowie das Schemaflag werden ausschließlich in ihren
    eigenen Profilfeldern repräsentiert und nicht doppelt in `semantic_flags`
-   geführt. Ausdrücklich ausgeschlossen sind Codex-Sandboxmodus,
+   geführt. `--max-budget-usd` ist ein ausschließlich kostensteuernder,
+   profilfremder Laufzeitwächter und darf den semantischen Transportdigest
+   ebenso wenig ändern wie ein anderer bloßer Budgetwert. Ausdrücklich
+   ausgeschlossen sind Codex-Sandboxmodus,
    Arbeitsverzeichnis, `--add-dir`, alle temporären Schema-/Last-Message-/
    Manifestpfade sowie Prompt-, Policy- und Directive-Inhalte. Pfadtragende
    Mechanismen werden nur durch ihren stabilen Flag-Namen mit dem genannten

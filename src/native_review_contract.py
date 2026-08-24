@@ -1136,10 +1136,7 @@ def _validate_decision(
             if finding.finding_class is not FindingClass.OBSERVATION:
                 continue
             previous = previous_by_id.get(finding.finding_id)
-            if previous is None or (
-                not context.allow_new_observations
-                and previous.finding_class is not FindingClass.OBSERVATION
-            ):
+            if previous is None or previous.finding_class is not FindingClass.OBSERVATION:
                 raise NativeReviewContractError(
                     NativeReviewErrorCode.APPROVAL_INVALID,
                     "review cannot introduce or reclassify to OBSERVATION",

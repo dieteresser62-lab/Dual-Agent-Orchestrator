@@ -2355,12 +2355,29 @@ def test_combined_native_finding_authority_rejects_state_mirror_drift(
         idempotency_key="finding:C-02:opened:1:claude",
         fingerprint_sha256="c" * 64,
     )
+    closed_second = replace(
+        second_finding,
+        status=FindingStatus.CLOSED,
+        status_rationale="Verified in the authoritative record chain.",
+    )
+    bridge.append(
+        orchestrator.finding_payload(
+            closed_second,
+            actor=AgentRole.CLAUDE,
+            action="status_changed",
+            rationale=closed_second.status_rationale,
+            work_unit_id=state.current_work_unit_id,
+        ),
+        logical_id="finding-C-02",
+        idempotency_key="finding:C-02:status_changed:1:claude",
+        fingerprint_sha256="c" * 64,
+    )
 
     # State-v3 preserves event order while replay deliberately canonicalizes by
     # finding ID. Order-only differences are not semantic mirror drift.
     assert driver.authoritative_native_findings(
-        state, (second_finding, finding)
-    ) == (finding, second_finding)
+        state, (closed_second, finding)
+    ) == (finding, closed_second)
     with pytest.raises(
         WorkflowExecutionError,
         match="differs from the state-v3 mirror",
@@ -2368,7 +2385,7 @@ def test_combined_native_finding_authority_rejects_state_mirror_drift(
         driver.authoritative_native_findings(
             state,
             (
-                second_finding,
+                replace(closed_second, summary="Tampered closed mirror summary."),
                 replace(finding, summary="Tampered state-only summary."),
             ),
         )
@@ -2518,6 +2535,7 @@ def test_native_codex_plan_and_final_recovery_are_raw_and_record_ahead_safe(
         "ready": True,
     }
     if request_kind is NativeCodexRequestKind.PLAN:
+        document["finding_dispositions"] = []
         document["slice_plan"] = [
             {
                 "slice_id": 1,

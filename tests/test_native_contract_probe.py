@@ -85,10 +85,6 @@ def test_live_canary_main_fails_when_a_protected_store_changes(
 
 def test_convergence_canary_serializes_status_change_items_one_of() -> None:
     probe = _probe_module()
-    bundle = probe._claude_canary_bundle("convergence", repo_root=ROOT)
-    schema_text = bundle.provider_response_schema_json
-    schema = json.loads(schema_text)
-    request = json.loads(bundle.canonical_json)
     manifest = json.loads(
         (
             ROOT
@@ -103,6 +99,13 @@ def test_convergence_canary_serializes_status_change_items_one_of() -> None:
         for item in manifest["writer_forms"]
         if item["provider"] == "claude" and item["writer_form"] == "convergence"
     )
+    frozen_base = evidence_row["evidence"]["base_commit"]
+    bundle = probe._claude_canary_bundle(
+        "convergence", repo_root=ROOT, base_commit=frozen_base
+    )
+    schema_text = bundle.provider_response_schema_json
+    schema = json.loads(schema_text)
+    request = json.loads(bundle.canonical_json)
     approved = schema["$defs"]["bound_slice_convergence_approved"]
     status_changes = approved["properties"]["status_changes"]
 
@@ -140,3 +143,36 @@ def test_convergence_canary_serializes_status_change_items_one_of() -> None:
     ]["properties"]["status_changes"]
     assert no_open_status["maxItems"] == 0
     assert "oneOf" not in no_open_status["items"]
+
+
+def test_all_live_canaries_rebuild_from_frozen_base_not_current_head(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    probe = _probe_module()
+    manifest = json.loads(
+        (
+            ROOT
+            / "tests"
+            / "fixtures"
+            / "native-contract-corpus"
+            / "manifest.json"
+        ).read_text(encoding="utf-8")
+    )
+    monkeypatch.setattr(probe, "_head", lambda _root: "f" * 40)
+    for row in manifest["writer_forms"]:
+        evidence = row["evidence"]
+        if evidence["kind"] != "live_canary":
+            continue
+        builder = (
+            probe._codex_canary_bundle
+            if row["provider"] == "codex"
+            else probe._claude_canary_bundle
+        )
+        frozen = builder(
+            row["writer_form"],
+            repo_root=ROOT,
+            base_commit=evidence["base_commit"],
+        )
+        drifting = builder(row["writer_form"], repo_root=ROOT)
+        assert frozen.bound_context.request_id == evidence["request_id"]
+        assert drifting.bound_context.request_id != evidence["request_id"]

@@ -37,14 +37,22 @@ from native_codex_contract import (
     parse_bound_native_codex_contract_result,
     validate_native_codex_document,
 )
-from native_codex_request import NativeCodexRequestBundle
+from native_codex_request import (
+    NativeCodexRequestBundle,
+    NativeCodexRequestError,
+    validate_native_codex_provider_response,
+)
 from native_review_contract import (
     NativeReviewContractError,
     NativeReviewErrorCode,
     parse_bound_native_contract_result,
     validate_native_review_document,
 )
-from native_review_request import NativeReviewRequestBundle
+from native_review_request import (
+    NativeReviewRequestBundle,
+    NativeReviewRequestError,
+    validate_native_review_provider_response,
+)
 from validation_matrix import ValidationMatrixRunner, ValidationRequest
 from workflow_state import AgentFailureKind
 from artifact_models import ProviderUsagePayload
@@ -1298,6 +1306,7 @@ def run_native_review_agent(
         if not isinstance(document, dict):
             raise AgentOutputError("native review result must be a JSON object")
         validate_native_review_document(document)
+        validate_native_review_provider_response(document, bundle)
         if document.get("request_id") != bundle.bound_context.request_id:
             raise NativeReviewContractError(
                 NativeReviewErrorCode.REQUEST_MISMATCH,
@@ -1311,7 +1320,7 @@ def run_native_review_agent(
             "native review result is not valid JSON",
             technical_text=f"native-json-invalid: {exc}",
         ) from exc
-    except NativeReviewContractError as exc:
+    except (NativeReviewContractError, NativeReviewRequestError) as exc:
         raise AgentOutputError(
             "native review result violates its bound contract",
             provider_data=document,
@@ -1467,6 +1476,7 @@ def run_native_codex_agent(
         if not isinstance(document, dict):
             raise AgentOutputError("native Codex result must be a JSON object")
         validate_native_codex_document(document)
+        validate_native_codex_provider_response(document, bundle)
         if document.get("request_id") != bundle.bound_context.request_id:
             raise NativeCodexContractError(
                 NativeCodexErrorCode.REQUEST_MISMATCH,
@@ -1482,7 +1492,7 @@ def run_native_codex_agent(
             "native Codex result is not valid JSON",
             technical_text=f"native-json-invalid: {exc}",
         ) from exc
-    except NativeCodexContractError as exc:
+    except (NativeCodexContractError, NativeCodexRequestError) as exc:
         raise AgentOutputError(
             "native Codex result violates its bound contract",
             provider_data=document,

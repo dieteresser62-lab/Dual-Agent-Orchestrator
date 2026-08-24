@@ -956,6 +956,35 @@ def test_request_bundle_rejects_inconsistent_inline_evidence_metadata() -> None:
         )
 
 
+def test_request_bundle_rejects_bound_context_drift() -> None:
+    bundle = build_native_review_request(_spec())
+    changed_context = replace(bundle.bound_context.context, run_id="run-tampered")
+    with pytest.raises(NativeReviewRequestError, match="bound review context"):
+        replace(
+            bundle,
+            bound_context=replace(
+                bundle.bound_context, context=changed_context
+            ),
+        )
+
+    document = bundle.document
+    wrong_id = "native-review-request-" + "0" * 64
+    document["request_id"] = wrong_id
+    with pytest.raises(NativeReviewRequestError, match="bound digest"):
+        NativeReviewRequestBundle(
+            canonical_json=json.dumps(
+                document, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ),
+            bound_context=replace(
+                bundle.bound_context,
+                request_id=wrong_id,
+                request_digest="0" * 64,
+            ),
+            provider_response_schema_json=bundle.provider_response_schema_json,
+            evidence_assets=bundle.evidence_assets,
+        )
+
+
 def test_compact_repair_request_contains_no_review_evidence() -> None:
     bundle = build_native_review_request(_spec())
     rejected = json.dumps(
@@ -976,3 +1005,11 @@ def test_compact_repair_request_contains_no_review_evidence() -> None:
     assert "evidence_manifest" not in repair.document
     assert "authorized_paths" not in repair.document
     assert "acceptance_criteria" not in repair.document
+    with pytest.raises(NativeReviewRequestError, match="immutable parent"):
+        replace(repair, parent_bundle=None)
+
+    other_parent = build_native_review_request(
+        replace(_spec(), target_branch="feature/other-parent")
+    )
+    with pytest.raises(NativeReviewRequestError, match="bind its parent"):
+        replace(repair, parent_bundle=other_parent)

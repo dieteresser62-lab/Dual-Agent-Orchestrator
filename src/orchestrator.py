@@ -28,6 +28,7 @@ from native_codex_contract import (
     canonical_native_codex_json,
     parse_bound_native_codex_contract_result,
 )
+from native_codex_request import validate_native_codex_provider_response
 from artifact_bridge import (
     ArtifactBridge, agent_result_payload, attestation_payload, finding_payload,
     plan_payload, review_payload, validation_request_payload,
@@ -126,6 +127,10 @@ from native_review_contract import (
     NativeReviewContext,
     NativeReviewContractError,
     parse_bound_native_contract_result,
+)
+from native_review_request import (
+    validate_native_review_provider_response,
+    validate_native_review_provider_response_for_context,
 )
 from workflow import (
     CodexInvocation,
@@ -1043,6 +1048,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 raise ValueError("native Codex raw response is not an object")
             if canonical_native_codex_json(document) != canonical:
                 raise ValueError("native Codex raw response is not canonical JSON")
+            validate_native_codex_provider_response(document, bundle)
             result = parse_bound_native_codex_contract_result(
                 document, bundle.bound_context
             )
@@ -1391,6 +1397,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
             document = json.loads(canonical)
             if not isinstance(document, dict):
                 raise ValueError("native response log must contain a JSON object")
+            validate_native_review_provider_response(document, bundle)
             result = parse_bound_native_contract_result(
                 document, bundle.bound_context
             )
@@ -1601,6 +1608,9 @@ class ProductionWorkflowDriver(WorkflowDriver):
             document = json.loads(canonical)
             if not isinstance(document, dict):
                 raise ValueError("native response log must contain a JSON object")
+            validate_native_review_provider_response_for_context(
+                document, native_context
+            )
             result = parse_bound_native_contract_result(
                 document,
                 BoundNativeReviewContext(

@@ -250,6 +250,11 @@ def _validate_writer_form_evidence(
             assert fixture["writer_schema_sha256"] == item["writer_schema_sha256"]
         else:
             assert evidence["status"] == "passed"
+            assert len(evidence["base_commit"]) == 40
+            assert all(
+                character in "0123456789abcdef"
+                for character in evidence["base_commit"]
+            )
             assert len(evidence["request_id"].removeprefix("native-")) > 64
             assert len(evidence["response_sha256"]) == 64
 

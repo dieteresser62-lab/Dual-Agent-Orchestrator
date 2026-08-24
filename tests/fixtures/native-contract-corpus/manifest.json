@@ -124,6 +124,7 @@
     {
       "evidence": {
         "kind": "live_canary",
+        "base_commit": "7ba867dd246ccb679c3f20ddfc747cf408862c14",
         "request_id": "native-codex-request-37224e4e2064190930469787cdf9de63e791c6626a1bdcdf25be91cd5c592d04",
         "response_sha256": "7075c1ddf324d619148ad3595cab810f48738e64ed083446d9c928d36c4062b7",
         "status": "passed"
@@ -136,6 +137,7 @@
     {
       "evidence": {
         "kind": "live_canary",
+        "base_commit": "7ba867dd246ccb679c3f20ddfc747cf408862c14",
         "request_id": "native-codex-request-38431b6b2015663a0cc596c765f70461a762caabc21f5b7138a025a88e38fa90",
         "response_sha256": "6dab290d1f07aad7aaf511b794b0a93d8d97fa88e7ea42fc787cdb306dcde9d6",
         "status": "passed"
@@ -148,6 +150,7 @@
     {
       "evidence": {
         "kind": "live_canary",
+        "base_commit": "7ba867dd246ccb679c3f20ddfc747cf408862c14",
         "request_id": "native-codex-request-80598bc5e41adc482fd03d25b9e32fae864fc94d9d612099d6f4ba3fd290e625",
         "response_sha256": "92a17c5da808554fe1c14d38c3156aab6534d790ae87f4666fa086e1a96bd740",
         "status": "passed"
@@ -160,6 +163,7 @@
     {
       "evidence": {
         "kind": "live_canary",
+        "base_commit": "7ba867dd246ccb679c3f20ddfc747cf408862c14",
         "request_id": "native-codex-request-555af732faf27fe21d78796ef992730d770d0f2348e72415fb76bbd385b6c6fd",
         "response_sha256": "ae088a3d28ccad758844b1335752dc1b8284b9ef845b477898575949b6612c66",
         "status": "passed"
@@ -172,6 +176,7 @@
     {
       "evidence": {
         "kind": "live_canary",
+        "base_commit": "7ba867dd246ccb679c3f20ddfc747cf408862c14",
         "request_id": "native-review-request-316aebbc369ffdbc30da5e9f39f888ccc75199dae24c436d9bd8931173a2b2a6",
         "response_sha256": "7127bbc70f18a8aba4d2aed81391e4c04f4373a2056b7a0824ae6fbc3ac18d6d",
         "status": "passed"
@@ -194,6 +199,7 @@
     {
       "evidence": {
         "kind": "live_canary",
+        "base_commit": "eb38a316a7ee339add599206c82efcd87477f51c",
         "request_id": "native-review-request-58e98da53bd078faa2e2e666d9a1549a51435c683709040dab0aa2d26a11d236",
         "response_sha256": "f6a2eff236b5a5b560657eb44b7ec5c932ca4782861e5857c400e932c965953e",
         "status": "passed"
@@ -206,6 +212,7 @@
     {
       "evidence": {
         "kind": "live_canary",
+        "base_commit": "7ba867dd246ccb679c3f20ddfc747cf408862c14",
         "request_id": "native-review-request-174bcbd6d7fa76b351fed92e10509858393fcce4f64f13a5a9fa1c4578d15097",
         "response_sha256": "1c8316db07b57561cacb29e0039e578b4455da4efcac5e945e91e28647601a62",
         "status": "passed"

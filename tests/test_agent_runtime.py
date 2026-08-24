@@ -139,6 +139,7 @@ def test_run_native_codex_agent_parses_bound_result_without_text_contract(
         "result_type": "plan_result",
         "request_id": bundle.bound_context.request_id,
         "ready": True,
+        "finding_dispositions": [],
         "slice_plan": [
             {
                 "slice_id": 1,
@@ -199,6 +200,7 @@ def test_native_codex_exposes_schema_valid_bytes_before_domain_rejection(
         "result_type": "plan_result",
         "request_id": bundle.bound_context.request_id,
         "ready": True,
+        "finding_dispositions": [],
         "slice_plan": [
             {
                 "slice_id": 2,
@@ -244,6 +246,59 @@ def test_native_codex_exposes_schema_valid_bytes_before_domain_rejection(
     assert persisted == [canonical]
 
 
+def test_native_codex_writer_invalid_bytes_never_reach_validated_callback(
+    monkeypatch,
+) -> None:
+    bundle = _runtime_native_codex_bundle()
+    response = {
+        "schema_version": "native-agent-codex-result-v1",
+        "result_type": "plan_result",
+        "request_id": bundle.bound_context.request_id,
+        "ready": True,
+        "slice_plan": [
+            {
+                "slice_id": 1,
+                "summary": "Reader-valid but writer-incomplete result.",
+                "scope_paths": ["src/native_codex_contract.py"],
+            }
+        ],
+    }
+    canonical = json.dumps(
+        response, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+
+    class FakeNativeCodex:
+        name = "codex"
+
+        def prepare_native_provider_input(  # type: ignore[no-untyped-def]
+            self, request_bundle, execution_boundary
+        ):
+            return PreparedProviderInput(
+                command=("codex",),
+                stdin_text=request_bundle.canonical_json,
+                components=(
+                    ProviderInputComponent(
+                        "stdin_prompt", request_bundle.canonical_json
+                    ),
+                ),
+            )
+
+    monkeypatch.setattr(agent_runtime, "run_agent", lambda *args, **kwargs: canonical)
+    persisted: list[str] = []
+    with pytest.raises(AgentOutputError) as raised:
+        run_native_codex_agent(
+            FakeNativeCodex(),  # type: ignore[arg-type]
+            bundle,
+            config=OrchestratorConfig(),
+            shorten=lambda value, _maximum: value or "",
+            operation="codex_plan",
+            binding_fingerprint="a" * 64,
+            validated_response_callback=persisted.append,
+        )
+    assert "schema-invalid" in raised.value.technical_text
+    assert persisted == []
+
+
 def test_native_codex_runtime_forwards_canary_execution_root(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -264,6 +319,7 @@ def test_native_codex_runtime_forwards_canary_execution_root(
         "result_type": "plan_result",
         "request_id": bundle.bound_context.request_id,
         "ready": True,
+        "finding_dispositions": [],
         "slice_plan": [
             {
                 "slice_id": 1,
@@ -553,7 +609,7 @@ def test_native_review_runtime_returns_bound_contract_without_marker_validation(
     assert "request-mismatch" in raised.value.technical_text
     assert raised.value.provider_data == mismatched
 
-    domain_invalid = {
+    writer_invalid = {
         **response,
         "new_findings": [
             {
@@ -568,7 +624,7 @@ def test_native_review_runtime_returns_bound_contract_without_marker_validation(
         ],
     }
     returned["canonical"] = json.dumps(
-        domain_invalid, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        writer_invalid, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     )
     persisted: list[str] = []
     with pytest.raises(AgentOutputError) as raised:
@@ -581,8 +637,8 @@ def test_native_review_runtime_returns_bound_contract_without_marker_validation(
             binding_fingerprint=fingerprint,
             validated_response_callback=persisted.append,
         )
-    assert "approval-invalid" in raised.value.technical_text
-    assert persisted == [returned["canonical"]]
+    assert "schema-invalid" in raised.value.technical_text
+    assert persisted == []
 
 
 def test_native_review_checked_preserves_schema_valid_domain_rejection(

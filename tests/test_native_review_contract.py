@@ -41,6 +41,7 @@ from validation_matrix import (
     ValidationMatrix,
     select_validation_request,
 )
+from workflow_state import WorkUnitKind
 
 
 FINGERPRINT = "a" * 64
@@ -430,6 +431,36 @@ def test_denial_cannot_create_its_required_blocker_by_reopening_closed_blocker()
         native_response_to_contract_result(control, context)
     assert raised.value.code is NativeReviewErrorCode.APPROVAL_INVALID
 
+
+def test_production_final_context_cannot_reclassify_blocker_to_observation() -> None:
+    blocker = _finding("C-01", AgentRole.CLAUDE)
+    unit_kind = WorkUnitKind.FINAL_REVIEW
+    context = replace(
+        _context(
+            approval=ApprovalMarker.FINAL,
+            previous=(blocker,),
+            allow_observations=unit_kind is not WorkUnitKind.CORRECTION,
+        ),
+        operation="claude_final_review",
+        slice_id="FINAL",
+    )
+    document = _review(context, approved=False)
+    document["reclassifications"] = [
+        {
+            "finding_id": "C-01",
+            "finding_class": "OBSERVATION",
+            "rationale": "Defer this blocker beyond final review.",
+        }
+    ]
+    writer = native_review_provider_response_schema(context)
+    with pytest.raises(SchemaMismatch):
+        validate_schema_document({"result": document}, writer)
+
+    parsed = parse_native_review_response(document, context)
+    assert isinstance(parsed, NativeReviewResult)
+    with pytest.raises(NativeReviewContractError) as raised:
+        native_response_to_contract_result(parsed, context)
+    assert raised.value.code is NativeReviewErrorCode.APPROVAL_INVALID
 
 def test_test_change_and_observation_convergence_guards() -> None:
     test_context = _context(test_files=("tests/test_native_review_contract.py",))

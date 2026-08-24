@@ -176,6 +176,7 @@ class NativeReviewRequestBundle:
     bound_context: BoundNativeReviewContext
     provider_response_schema_json: str
     evidence_assets: tuple[NativeReviewEvidenceAsset, ...] = ()
+    parent_bundle: NativeReviewRequestBundle | None = None
 
     def __post_init__(self) -> None:
         document = self.document
@@ -195,11 +196,65 @@ class NativeReviewRequestBundle:
         calculated_digest = hashlib.sha256(
             _canonical_json(binding).encode("utf-8")
         ).hexdigest()
-        if calculated_digest != self.bound_context.request_digest:
+        if (
+            calculated_digest != self.bound_context.request_digest
+            or document["request_id"]
+            != f"native-review-request-{calculated_digest}"
+        ):
             raise NativeReviewRequestError(
                 NativeReviewRequestErrorCode.REQUEST_INVALID,
                 "request content differs from its bound digest",
             )
+        request_type = document["request_type"]
+        if request_type == "review_request":
+            if self.parent_bundle is not None:
+                raise NativeReviewRequestError(
+                    NativeReviewRequestErrorCode.REQUEST_INVALID,
+                    "review request cannot carry a repair parent",
+                )
+            expected_context = _review_context_request_projection(
+                self.bound_context.context
+            )
+            actual_context = {
+                key: document[key] for key in expected_context
+            }
+            if actual_context != expected_context:
+                raise NativeReviewRequestError(
+                    NativeReviewRequestErrorCode.REQUEST_INVALID,
+                    "request document differs from its bound review context",
+                )
+        else:
+            if self.parent_bundle is None:
+                raise NativeReviewRequestError(
+                    NativeReviewRequestErrorCode.REPAIR_INVALID,
+                    "repair request requires its immutable parent bundle",
+                )
+            parent = self.parent_bundle
+            if self.bound_context.context != parent.bound_context.context:
+                raise NativeReviewRequestError(
+                    NativeReviewRequestErrorCode.REPAIR_INVALID,
+                    "repair request context differs from its parent",
+                )
+            if document["parent_request_id"] != parent.bound_context.request_id:
+                raise NativeReviewRequestError(
+                    NativeReviewRequestErrorCode.REPAIR_INVALID,
+                    "repair request id does not bind its parent",
+                )
+            if (
+                document["current_fingerprint"]
+                != parent.document["current_fingerprint"]
+                or document["response_contract"]
+                != parent.document["response_contract"]
+            ):
+                raise NativeReviewRequestError(
+                    NativeReviewRequestErrorCode.REPAIR_INVALID,
+                    "repair request fingerprint or response contract differs from parent",
+                )
+            if self.evidence_assets:
+                raise NativeReviewRequestError(
+                    NativeReviewRequestErrorCode.REPAIR_INVALID,
+                    "compact repair request cannot carry evidence assets",
+                )
         try:
             provider_schema = json.loads(self.provider_response_schema_json)
         except (json.JSONDecodeError, TypeError) as exc:
@@ -345,6 +400,37 @@ def validate_native_review_request_document(document: Mapping[str, Any]) -> None
         ) from None
 
 
+def validate_native_review_provider_response(
+    document: Mapping[str, Any], bundle: NativeReviewRequestBundle
+) -> None:
+    """Validate one result against the exact writer schema bound to its request."""
+    _validate_native_review_provider_response_schema(
+        document, bundle.provider_response_schema
+    )
+
+
+def validate_native_review_provider_response_for_context(
+    document: Mapping[str, Any], context: NativeReviewContext
+) -> None:
+    """Validate recovery bytes against the writer deterministically rebuilt from context."""
+    _validate_native_review_provider_response_schema(
+        document, native_review_provider_response_schema(context)
+    )
+
+
+def _validate_native_review_provider_response_schema(
+    document: Mapping[str, Any], schema: Mapping[str, Any]
+) -> None:
+    try:
+        validate_schema_document({"result": dict(document)}, schema)
+    except SchemaMismatch as exc:
+        location = ".".join(str(item) for item in exc.path) or "<response>"
+        raise NativeReviewRequestError(
+            NativeReviewRequestErrorCode.SCHEMA_INVALID,
+            f"provider response schema failed at {location}: {exc.message}",
+        ) from None
+
+
 def build_native_review_request(
     spec: NativeReviewRequestSpec,
     *,
@@ -391,37 +477,17 @@ def build_native_review_request(
                     content=evidence.content,
                 )
             )
-    context_binding = native_review_context_binding(spec.context)
+    context_projection = _review_context_request_projection(spec.context)
     binding: dict[str, Any] = {
         "schema_version": REQUEST_SCHEMA_VERSION,
         "request_type": "review_request",
-        "reviewer": "claude",
         "transport": CLAUDE_REVIEW_TRANSPORT,
         "persistence_protocol": PERSISTENCE_PROTOCOL,
-        "run_id": spec.context.run_id,
-        "work_unit_id": spec.context.work_unit_id,
-        "operation": spec.context.operation,
-        "review_kind": spec.review_kind.value,
+        **context_projection,
         "target_branch": spec.target_branch,
         "base_commit": spec.base_commit,
-        "current_fingerprint": spec.context.diff_fingerprint,
         "authorized_paths": list(spec.authorized_paths),
         "acceptance_criteria": list(spec.acceptance_criteria),
-        "review_contract": {
-            "approval_marker": context_binding["approval_marker"],
-            "slice_id": context_binding["slice_id"],
-            "round_number": context_binding["round_number"],
-            "next_finding_id": next_native_finding_id(spec.context),
-            "previous_findings": context_binding["previous_findings"],
-            "validation_attestation": context_binding["validation_attestation"],
-            "test_files": context_binding["test_files"],
-            "test_changes_approved": context_binding["test_changes_approved"],
-            "allow_new_observations": context_binding["allow_new_observations"],
-            "anchor_origin": context_binding["anchor_origin"],
-            "validation_command_prefixes": context_binding[
-                "validation_command_prefixes"
-            ],
-        },
         "evidence_manifest": manifest,
         "response_contract": {
             "schema_version": RESPONSE_SCHEMA_VERSION,
@@ -501,7 +567,47 @@ def build_native_review_repair_request(
             request_digest=digest,
         ),
         provider_response_schema_json=parent.provider_response_schema_json,
+        parent_bundle=parent,
     )
+
+
+def _review_context_request_projection(
+    context: NativeReviewContext,
+) -> dict[str, Any]:
+    context_binding = native_review_context_binding(context)
+    review_kind = {
+        "claude_plan_review": NativeReviewKind.PLAN.value,
+        "claude_slice_review": NativeReviewKind.SLICE.value,
+        "claude_final_review": NativeReviewKind.FINAL.value,
+    }.get(context.operation)
+    if review_kind is None:
+        raise NativeReviewRequestError(
+            NativeReviewRequestErrorCode.CONTEXT_INVALID,
+            "native review context has no supported review operation",
+        )
+    return {
+        "reviewer": "claude",
+        "run_id": context.run_id,
+        "work_unit_id": context.work_unit_id,
+        "operation": context.operation,
+        "review_kind": review_kind,
+        "current_fingerprint": context.diff_fingerprint,
+        "review_contract": {
+            "approval_marker": context_binding["approval_marker"],
+            "slice_id": context_binding["slice_id"],
+            "round_number": context_binding["round_number"],
+            "next_finding_id": next_native_finding_id(context),
+            "previous_findings": context_binding["previous_findings"],
+            "validation_attestation": context_binding["validation_attestation"],
+            "test_files": context_binding["test_files"],
+            "test_changes_approved": context_binding["test_changes_approved"],
+            "allow_new_observations": context_binding["allow_new_observations"],
+            "anchor_origin": context_binding["anchor_origin"],
+            "validation_command_prefixes": context_binding[
+                "validation_command_prefixes"
+            ],
+        },
+    }
 
 
 def canonical_native_review_request_json(document: Mapping[str, Any]) -> str:

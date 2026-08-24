@@ -5,9 +5,18 @@ from dataclasses import replace
 
 import pytest
 
-from contracts import CodexStepContract, ReadinessMarker
+from contracts import (
+    AgentRole,
+    CodexStepContract,
+    FindingClass,
+    FindingOrigin,
+    FindingRecord,
+    FindingStatus,
+    ReadinessMarker,
+)
 from native_codex_contract import NativeCodexContext, NativeCodexRequestKind
 from native_codex_request import (
+    NativeCodexRequestBundle,
     NativeCodexEvidenceInput,
     NativeCodexRequestError,
     NativeCodexRequestSpec,
@@ -123,6 +132,81 @@ def test_bundle_rejects_schema_bytes_not_derived_from_bound_context() -> None:
         replace(bundle, provider_response_schema_json=tampered)
 
 
+def test_bundle_rejects_context_digest_and_evidence_misbinding() -> None:
+    bundle = build_native_codex_request(_spec())
+    changed_context = replace(bundle.bound_context.context, run_id="run-tampered")
+    with pytest.raises(NativeCodexRequestError, match="context projection"):
+        replace(
+            bundle,
+            bound_context=replace(
+                bundle.bound_context, context=changed_context
+            ),
+        )
+
+    document = dict(bundle.document)
+    document["assignment"] = "Different request bytes."
+    canonical = json.dumps(
+        document, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    with pytest.raises(NativeCodexRequestError, match="bound digest"):
+        NativeCodexRequestBundle(
+            canonical_json=canonical,
+            bound_context=bundle.bound_context,
+            provider_response_schema_json=bundle.provider_response_schema_json,
+            evidence_assets=bundle.evidence_assets,
+        )
+
+    inline = dict(bundle.document)
+    inline["evidence_manifest"][0]["sha256"] = "0" * 64
+    binding = {key: value for key, value in inline.items() if key != "request_id"}
+    digest = __import__("hashlib").sha256(
+        json.dumps(
+            binding, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+    ).hexdigest()
+    inline["request_id"] = "native-codex-request-" + digest
+    with pytest.raises(NativeCodexRequestError, match="metadata differs"):
+        NativeCodexRequestBundle(
+            canonical_json=json.dumps(
+                inline, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ),
+            bound_context=replace(
+                bundle.bound_context,
+                request_id=inline["request_id"],
+                request_digest=digest,
+            ),
+            provider_response_schema_json=bundle.provider_response_schema_json,
+        )
+
+
+def test_closed_findings_are_record_authority_not_codex_request_fields() -> None:
+    base = _spec()
+    closed = FindingRecord(
+        "C-01",
+        FindingClass.BLOCKER,
+        FindingStatus.CLOSED,
+        "Closed finding",
+        "Already fixed",
+        FindingOrigin("01", 1, AgentRole.CLAUDE),
+        status_rationale="Verified closed",
+    )
+    changed_closed = replace(closed, summary="Mirror-only tampering")
+    first = build_native_codex_request(
+        replace(base, context=replace(base.context, previous_findings=(closed,)))
+    )
+    second = build_native_codex_request(
+        replace(
+            base,
+            context=replace(base.context, previous_findings=(changed_closed,)),
+        )
+    )
+    assert first.canonical_json == second.canonical_json
+    assert first.document["open_findings"] == []
+    assert first.bound_context.context.previous_findings != (
+        second.bound_context.context.previous_findings
+    )
+
+
 def test_large_evidence_is_digest_bound_and_uses_internal_artifact_path() -> None:
     spec = _spec()
     large = NativeCodexEvidenceInput(
@@ -151,6 +235,40 @@ def test_large_evidence_is_digest_bound_and_uses_internal_artifact_path() -> Non
     manifest = bundle.document["evidence_manifest"][0]
     assert manifest["content_ref"] == asset.path
     assert manifest["sha256"] == asset.sha256
+
+
+def test_content_ref_assets_reject_missing_extra_duplicate_swapped_and_changed() -> None:
+    spec = _spec()
+    evidence = (
+        NativeCodexEvidenceInput("e01_first", "diff", "a" * 100),
+        NativeCodexEvidenceInput("e02_second", "diff", "b" * 100),
+    )
+    bundle = build_native_codex_request(
+        replace(spec, evidence=evidence), inline_evidence_chars=10
+    )
+    first, second = bundle.evidence_assets
+
+    with pytest.raises(NativeCodexRequestError, match="differ from content references"):
+        replace(bundle, evidence_assets=(first,))
+    with pytest.raises(NativeCodexRequestError, match="paths must be unique"):
+        replace(bundle, evidence_assets=(first, second, second))
+
+    extra_bundle = build_native_codex_request(
+        replace(
+            spec,
+            evidence=(NativeCodexEvidenceInput("e03_extra", "diff", "c" * 100),),
+        ),
+        inline_evidence_chars=10,
+    )
+    with pytest.raises(NativeCodexRequestError, match="differ from content references"):
+        replace(bundle, evidence_assets=(*bundle.evidence_assets, *extra_bundle.evidence_assets))
+
+    swapped = (replace(first, path=second.path), replace(second, path=first.path))
+    with pytest.raises(NativeCodexRequestError, match="differ from content references"):
+        replace(bundle, evidence_assets=swapped)
+
+    with pytest.raises(NativeCodexRequestError, match="byte_count differs"):
+        replace(first, content="changed")
 
 
 def test_context_contract_and_evidence_changes_rebind_request() -> None:

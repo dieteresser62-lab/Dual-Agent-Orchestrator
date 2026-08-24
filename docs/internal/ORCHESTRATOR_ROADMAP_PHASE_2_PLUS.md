@@ -547,7 +547,7 @@ Der native Nutzpfad wird erst wieder als Bootstrap-Smoke-Test eingesetzt,
 nachdem seine allgemeinen Leseschemas und seine request-spezifischen
 Writerschemas nachweislich dieselbe fachliche Ergebnismenge beschreiben. Das
 manuelle Arbeitspaket `native-agent-contract-closure` schließt diese Grenze in
-drei direkt entwickelten und von Claude einzeln geprüften Slices.
+fünf direkt entwickelten und von Claude einzeln geprüften Slices.
 
 Stand 24. August 2026:
 
@@ -575,9 +575,23 @@ Stand 24. August 2026:
 - Jeder Canary hat den vollständigen Git-Status vor und nach dem Aufruf
   bytegleich gehalten. Kein Canary schreibt State, Checkpoints, Recordketten,
   Inbox, Outbox oder Index.
+- Slice 5 setzt das request-spezifische Writerschema auch lokal vor Raw-
+  Callback, aktueller Record-Ahead-Persistierung und Domänenkonvertierung
+  durch. Die Bundle-Selbstprüfung bindet kanonische Requestbytes, Digest,
+  transportierte Kontextprojektion, Responsevertrag und Evidenzassets;
+  geschlossene Codex-Findings bleiben ausdrücklich Autorität der
+  Workflow-Recordkette.
+- Der reguläre Finalreviewpfad setzt derzeit
+  `allow_new_observations=True`. Die lokale Finalregel verbietet deshalb
+  unabhängig von diesem produktiven Kontextflag neue oder aus Blockern
+  reklassifizierte Observations.
+- Alle sieben `live_canary`-Nachweise tragen den bei ihrer Ausführung
+  verwendeten Basiscommit. Ihre gespeicherten Request-IDs werden aus diesem
+  eingefrorenen Commit rekonstruiert und hängen nicht mehr vom späteren
+  Repository-`HEAD` ab.
 
 Der nächste Bootstrap-Smoke-Test ist erst nach grünem vollständigem Testlauf
-und Claudes Slice-3-Freigabe zulässig. Die Contract-Closure-Artefakte ersetzen
+und Claudes Slice-5-Freigabe zulässig. Die Contract-Closure-Artefakte ersetzen
 keine End-to-End-Freigabe; sie beseitigen ausschließlich die zuvor häufige
 Klasse „provider-schema-valide, anschließend lokal wegen einer ebenfalls
 schema-ausdrückbaren Regel ungültig“.
