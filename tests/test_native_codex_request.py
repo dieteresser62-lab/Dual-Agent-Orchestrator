@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -64,6 +65,62 @@ def test_native_codex_request_is_deterministic_and_digest_bound() -> None:
     assert document["response_contract"]["schema_version"] == (
         "native-agent-codex-result-v1"
     )
+    assert json.loads(first.provider_response_schema_json) == (
+        first.provider_response_schema
+    )
+
+
+def test_request_kinds_bind_distinct_writer_schema_digests() -> None:
+    base = _spec()
+    readiness = {
+        NativeCodexRequestKind.PLAN: ReadinessMarker.PLAN,
+        NativeCodexRequestKind.IMPLEMENTATION: ReadinessMarker.IMPLEMENTATION,
+        NativeCodexRequestKind.CORRECTION: ReadinessMarker.IMPLEMENTATION,
+        NativeCodexRequestKind.FINAL_REPORT: ReadinessMarker.FINAL_REPORT,
+    }
+    digests: set[str] = set()
+    for kind in NativeCodexRequestKind:
+        contract = CodexStepContract(
+            name=f"native-{kind.value}",
+            readiness_marker=readiness[kind],
+            slice_id="01",
+            round_number=1,
+            require_test_files_record=kind in {
+                NativeCodexRequestKind.IMPLEMENTATION,
+                NativeCodexRequestKind.CORRECTION,
+            },
+            require_slice_plan=kind is NativeCodexRequestKind.PLAN,
+            plan_artifact_path=(
+                "docs/internal/plan.md"
+                if kind is NativeCodexRequestKind.PLAN
+                else None
+            ),
+        )
+        context = NativeCodexContext(
+            run_id=base.context.run_id,
+            work_unit_id=base.context.work_unit_id,
+            operation=f"codex_{kind.value}",
+            current_fingerprint=base.context.current_fingerprint,
+            request_kind=kind,
+            contract=contract,
+        )
+        bundle = build_native_codex_request(
+            replace(base, context=context)
+        )
+        digests.add(bundle.document["response_contract"]["schema_sha256"])
+    assert len(digests) == 4
+
+
+def test_bundle_rejects_schema_bytes_not_derived_from_bound_context() -> None:
+    bundle = build_native_codex_request(_spec())
+    schema = json.loads(bundle.provider_response_schema_json)
+    schema["title"] = "tampered"
+    tampered = json.dumps(
+        schema, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+
+    with pytest.raises(NativeCodexRequestError, match="differs from bound context"):
+        replace(bundle, provider_response_schema_json=tampered)
 
 
 def test_large_evidence_is_digest_bound_and_uses_internal_artifact_path() -> None:

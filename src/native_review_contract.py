@@ -35,9 +35,14 @@ from contracts import (
     apply_reviewer_finding_update,
 )
 from validation_matrix import FINDING_COMMAND_PREFIX, matches_validation_family
+from native_provider_schema import defensive_provider_projection
 
 
 SCHEMA_VERSION = "native-agent-review-result-v1"
+NONBLANK_TEXT_PATTERN = "^[^\\u0000]*[^\\u0000\\s][^\\u0000]*$"
+NONBLANK_LINE_PATTERN = (
+    "^[^\\u0000\\r\\n]*[^\\u0000\\r\\n\\s][^\\u0000\\r\\n]*$"
+)
 SCHEMA_PATH = (
     Path(__file__).resolve().parents[1]
     / "schemas"
@@ -289,6 +294,377 @@ def load_native_review_schema() -> dict[str, Any]:
             NativeReviewErrorCode.SCHEMA_INVALID, str(exc)
         ) from exc
     return schema
+
+
+def native_review_provider_response_schema(
+    context: NativeReviewContext,
+    *,
+    base_schema: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Project the immutable reader schema into one bound Claude writer schema.
+
+    The projection is selected solely by typed, request-bound review context.
+    In particular, the free-form operation name is deliberately not consulted.
+    The reader schema remains broad for persisted v1 results; live generation is
+    constrained here before the provider is invoked.
+    """
+    if not isinstance(context, NativeReviewContext):
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.CONTEXT_INVALID,
+            "provider schema projection requires NativeReviewContext",
+        )
+    if context.reviewer is not AgentRole.CLAUDE:
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.CONTEXT_INVALID,
+            "native Claude writer schema requires reviewer=claude",
+        )
+    schema = defensive_provider_projection(
+        base_schema if base_schema is not None else load_native_review_schema(),
+        provider="claude",
+        required_features=(
+            "closed_object",
+            "min_max_items",
+            "nested_any_of",
+            "nested_one_of",
+        ),
+    )
+    definitions = schema["$defs"]
+    definitions["finding"]["properties"]["finding_id"] = {
+        "type": "string",
+        "pattern": "^C-(0[1-9]|[1-9][0-9]*)$",
+    }
+    definitions["review_result"]["allOf"][1]["properties"]["anchors"][
+        "maxItems"
+    ] = 64 if context.anchor_origin is not None else 0
+    definitions["prose_acceptance"]["properties"]["text"]["pattern"] = (
+        NONBLANK_TEXT_PATTERN
+    )
+    definitions["prose_acceptance"]["properties"]["text"]["maxLength"] = 2000
+    definitions["validation_acceptance"]["properties"]["argv"]["items"][
+        "pattern"
+    ] = NONBLANK_LINE_PATTERN
+    definitions["validation_acceptance"]["properties"]["argv"]["items"][
+        "maxLength"
+    ] = 512
+    for key in ("dimensions", "largest_residual_risk", "break_condition"):
+        definitions["evidence"]["properties"][key]["pattern"] = (
+            NONBLANK_TEXT_PATTERN
+        )
+        definitions["evidence"]["properties"][key]["maxLength"] = 3000
+    for key in ("input_fixture", "expected", "tolerance"):
+        definitions["anchor"]["properties"][key]["pattern"] = (
+            NONBLANK_TEXT_PATTERN
+        )
+    definitions["anchor"]["properties"]["input_fixture"]["maxLength"] = 2000
+    definitions["anchor"]["properties"]["expected"]["maxLength"] = 2000
+    definitions["anchor"]["properties"]["tolerance"]["maxLength"] = 1000
+    own_findings = tuple(
+        item
+        for item in context.previous_findings
+        if item.origin.reporter is context.reviewer
+    )
+    own_ids = tuple(item.finding_id for item in own_findings)
+    own_open = tuple(
+        item for item in own_findings if item.status is FindingStatus.OPEN
+    )
+    own_open_ids = tuple(item.finding_id for item in own_open)
+    own_open_blockers = tuple(
+        item
+        for item in own_open
+        if item.finding_class is FindingClass.BLOCKER
+    )
+    new_ids = _native_finding_id_window(context, size=32)
+    branch = {
+        ApprovalMarker.PLAN: "plan",
+        ApprovalMarker.SLICE: (
+            "slice_initial"
+            if context.round_number == 1 and context.allow_new_observations
+            else "slice_convergence"
+        ),
+        ApprovalMarker.FINAL: "final",
+    }[context.approval_marker]
+
+    approved_finding = _bound_review_definition(
+        definitions["finding"], finding_ids=new_ids
+    )
+    denied_finding = _bound_review_definition(
+        definitions["finding"], finding_ids=new_ids
+    )
+    approved_finding["properties"]["summary"]["pattern"] = NONBLANK_TEXT_PATTERN
+    denied_finding["properties"]["summary"]["pattern"] = NONBLANK_TEXT_PATTERN
+    approved_finding["properties"]["summary"]["maxLength"] = 3000
+    denied_finding["properties"]["summary"]["maxLength"] = 3000
+    observations_allowed = (
+        context.approval_marker is not ApprovalMarker.FINAL
+        and context.allow_new_observations
+    )
+    approved_finding["properties"]["finding_class"] = (
+        {"type": "string", "const": FindingClass.OBSERVATION.value}
+        if observations_allowed
+        else {"type": "string", "const": FindingClass.BLOCKER.value}
+    )
+    if not observations_allowed:
+        # The approved branch below forbids all new findings.  Keeping a typed
+        # item definition still makes the branch self-contained for providers.
+        approved_new_max = 0
+    else:
+        approved_new_max = len(new_ids)
+    denied_finding["properties"]["finding_class"] = (
+        {
+            "type": "string",
+            "enum": [
+                FindingClass.BLOCKER.value,
+                FindingClass.OBSERVATION.value,
+            ],
+        }
+        if observations_allowed
+        else {
+            "type": "string",
+            "const": FindingClass.BLOCKER.value,
+        }
+    )
+
+    status = _bound_review_definition(
+        definitions["status_change"],
+        finding_ids=own_ids,
+    )
+    reclassification = _bound_review_definition(
+        definitions["reclassification"],
+        finding_ids=own_ids,
+    )
+    status["properties"]["rationale"]["pattern"] = NONBLANK_TEXT_PATTERN
+    status["properties"]["rationale"]["maxLength"] = 3000
+    reclassification["properties"]["rationale"]["pattern"] = (
+        NONBLANK_TEXT_PATTERN
+    )
+    reclassification["properties"]["rationale"]["maxLength"] = 3000
+    if not observations_allowed:
+        reclassification["properties"]["finding_class"] = {
+            "type": "string",
+            "const": FindingClass.BLOCKER.value,
+        }
+
+    definitions["bound_approved_finding"] = approved_finding
+    definitions["bound_denied_finding"] = denied_finding
+    definitions["bound_status_change"] = status
+    definitions["bound_reclassification"] = reclassification
+
+    approved = _bound_review_result_definition(
+        definitions,
+        reviewer=context.reviewer,
+        decision="approved",
+        anchor_count=64 if context.anchor_origin is not None else 0,
+    )
+    approved["properties"]["new_findings"].update(
+        maxItems=approved_new_max,
+        items={"$ref": "#/$defs/bound_approved_finding"},
+    )
+    approved["properties"]["status_changes"].update(
+        minItems=len(own_open_ids),
+        maxItems=len(own_open_ids),
+        items={"$ref": "#/$defs/bound_status_change"},
+    )
+    if own_open_ids:
+        status_options: list[dict[str, Any]] = []
+        for finding in own_open:
+            option = json.loads(json.dumps(status))
+            option["properties"]["finding_id"] = {
+                "type": "string",
+                "const": finding.finding_id,
+            }
+            if (
+                context.approval_marker is ApprovalMarker.FINAL
+                or finding.finding_class is FindingClass.BLOCKER
+            ):
+                option["properties"]["status"] = {
+                    "type": "string",
+                    "const": FindingStatus.CLOSED.value,
+                }
+            status_options.append(option)
+        approved["properties"]["status_changes"]["items"] = {
+            "oneOf": status_options
+        }
+    approved["properties"]["reclassifications"].update(maxItems=0)
+    if observations_allowed and own_open_ids:
+        approved_reclassification = _bound_review_definition(
+            reclassification,
+            finding_ids=own_open_ids,
+        )
+        approved_reclassification["properties"]["finding_class"] = {
+            "type": "string",
+            "const": FindingClass.OBSERVATION.value,
+        }
+        definitions["bound_approved_reclassification"] = (
+            approved_reclassification
+        )
+        approved["properties"]["status_changes"].update(
+            minItems=0,
+            maxItems=len(own_open_ids),
+        )
+        approved["properties"]["reclassifications"].update(
+            minItems=0,
+            maxItems=len(own_open_ids),
+            items={"$ref": "#/$defs/bound_approved_reclassification"},
+        )
+        approved["anyOf"] = [
+            {
+                "properties": {
+                    "status_changes": {
+                        "minItems": status_count,
+                        "maxItems": status_count,
+                    },
+                    "reclassifications": {
+                        "minItems": len(own_open_ids) - status_count,
+                        "maxItems": len(own_open_ids) - status_count,
+                    },
+                }
+            }
+            for status_count in range(len(own_open_ids) + 1)
+        ]
+    approved["properties"]["review_evidence"] = {
+        "$ref": "#/$defs/evidence"
+    }
+    approved["properties"]["pre_mortem"] = {
+        "type": "string",
+        "pattern": NONBLANK_TEXT_PATTERN,
+        "maxLength": 3000,
+    }
+
+    denied = _bound_review_result_definition(
+        definitions,
+        reviewer=context.reviewer,
+        decision="denied",
+        anchor_count=64 if context.anchor_origin is not None else 0,
+    )
+    denied["properties"]["new_findings"].update(
+        minItems=0 if own_open_blockers else 1,
+        maxItems=len(new_ids),
+        items={"$ref": "#/$defs/bound_denied_finding"},
+    )
+    denied["properties"]["status_changes"].update(
+        maxItems=len(own_ids),
+        items={"$ref": "#/$defs/bound_status_change"},
+    )
+    denied["properties"]["reclassifications"].update(
+        maxItems=len(own_ids),
+        items={"$ref": "#/$defs/bound_reclassification"},
+    )
+    denied["properties"]["pre_mortem"] = {
+        "anyOf": [
+            {"type": "null"},
+            {
+                "type": "string",
+                "pattern": NONBLANK_TEXT_PATTERN,
+                "maxLength": 3000,
+            },
+        ]
+    }
+
+    stop = _bound_stop_result_definition(
+        definitions["stop_request"], reviewer=context.reviewer
+    )
+    stop["properties"]["rule_id"]["pattern"] = NONBLANK_TEXT_PATTERN
+    stop["properties"]["rationale"]["pattern"] = NONBLANK_TEXT_PATTERN
+    stop["properties"]["rule_id"]["maxLength"] = 200
+    stop["properties"]["rationale"]["maxLength"] = 3000
+    definitions[f"bound_{branch}_approved"] = approved
+    definitions[f"bound_{branch}_denied"] = denied
+    definitions[f"bound_{branch}_stop"] = stop
+
+    validation = context.validation_attestation
+    approval_possible = (
+        validation is not None
+        and validation.complete
+        and validation.passed
+        and (not context.test_files or context.test_changes_approved)
+    )
+    result_refs: list[dict[str, str]] = []
+    if approval_possible:
+        result_refs.append({"$ref": f"#/$defs/bound_{branch}_approved"})
+    result_refs.extend(
+        (
+            {"$ref": f"#/$defs/bound_{branch}_denied"},
+            {"$ref": f"#/$defs/bound_{branch}_stop"},
+        )
+    )
+    return {
+        "title": f"Native Claude {branch} writer projection",
+        "type": "object",
+        "properties": {"result": {"oneOf": result_refs}},
+        "required": ["result"],
+        "additionalProperties": False,
+        "$defs": definitions,
+    }
+
+
+def _native_finding_id_window(
+    context: NativeReviewContext, *, size: int
+) -> tuple[str, ...]:
+    first = next_native_finding_id(context)
+    prefix, raw_number = first.split("-", 1)
+    start = int(raw_number)
+    return tuple(f"{prefix}-{number:02d}" for number in range(start, start + size))
+
+
+def _bound_review_definition(
+    definition: Mapping[str, Any],
+    *,
+    finding_ids: tuple[str, ...],
+) -> dict[str, Any]:
+    projected = json.loads(json.dumps(definition))
+    if finding_ids and "finding_id" in projected.get("properties", {}):
+        projected["properties"]["finding_id"] = {
+            "type": "string",
+            "enum": list(finding_ids),
+        }
+    return projected
+
+
+def _bound_review_result_definition(
+    definitions: Mapping[str, Any],
+    *,
+    reviewer: AgentRole,
+    decision: str,
+    anchor_count: int,
+) -> dict[str, Any]:
+    projected = json.loads(json.dumps(definitions["review_result"]["allOf"][1]))
+    projected["properties"]["schema_version"] = {
+        "type": "string",
+        "const": SCHEMA_VERSION,
+    }
+    projected["properties"]["result_type"] = {
+        "type": "string",
+        "const": "review_result",
+    }
+    projected["properties"]["reviewer"] = {
+        "type": "string",
+        "const": reviewer.value,
+    }
+    projected["properties"]["decision"] = {
+        "type": "string",
+        "const": decision,
+    }
+    projected["properties"]["anchors"]["maxItems"] = anchor_count
+    return projected
+
+
+def _bound_stop_result_definition(
+    definition: Mapping[str, Any], *, reviewer: AgentRole
+) -> dict[str, Any]:
+    projected = json.loads(json.dumps(definition["allOf"][1]))
+    projected["properties"]["schema_version"] = {
+        "type": "string",
+        "const": SCHEMA_VERSION,
+    }
+    projected["properties"]["result_type"] = {
+        "type": "string",
+        "const": "stop_request",
+    }
+    projected["properties"]["reviewer"] = {
+        "type": "string",
+        "const": reviewer.value,
+    }
+    return projected
 
 
 def validate_native_review_document(document: Mapping[str, Any]) -> None:

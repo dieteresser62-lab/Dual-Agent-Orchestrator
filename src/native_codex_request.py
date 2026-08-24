@@ -167,6 +167,7 @@ class NativeCodexRequestSpec:
 class NativeCodexRequestBundle:
     canonical_json: str
     bound_context: BoundNativeCodexContext
+    provider_response_schema_json: str
     evidence_assets: tuple[NativeCodexEvidenceAsset, ...] = ()
 
     def __post_init__(self) -> None:
@@ -188,10 +189,42 @@ class NativeCodexRequestBundle:
                 NativeCodexRequestErrorCode.REQUEST_INVALID,
                 "bundle request id differs from bound context",
             )
+        try:
+            provider_schema = json.loads(self.provider_response_schema_json)
+        except json.JSONDecodeError as exc:
+            raise NativeCodexRequestError(
+                NativeCodexRequestErrorCode.REQUEST_INVALID,
+                "bundle provider response schema is invalid JSON",
+            ) from exc
+        if not isinstance(provider_schema, dict) or self.provider_response_schema_json != _canonical_json(provider_schema):
+            raise NativeCodexRequestError(
+                NativeCodexRequestErrorCode.REQUEST_INVALID,
+                "bundle provider response schema is not a canonical object",
+            )
+        expected_schema = native_codex_provider_response_schema(
+            self.bound_context.context
+        )
+        if provider_schema != expected_schema:
+            raise NativeCodexRequestError(
+                NativeCodexRequestErrorCode.REQUEST_INVALID,
+                "bundle provider response schema differs from bound context",
+            )
+        schema_digest = _sha256_text(self.provider_response_schema_json)
+        if document["response_contract"]["schema_sha256"] != schema_digest:
+            raise NativeCodexRequestError(
+                NativeCodexRequestErrorCode.REQUEST_INVALID,
+                "bundle response contract differs from provider schema",
+            )
 
     @property
     def document(self) -> Mapping[str, Any]:
         document = json.loads(self.canonical_json)
+        assert isinstance(document, dict)
+        return document
+
+    @property
+    def provider_response_schema(self) -> Mapping[str, Any]:
+        document = json.loads(self.provider_response_schema_json)
         assert isinstance(document, dict)
         return document
 
@@ -255,9 +288,10 @@ def build_native_codex_request(
             manifest.append({**common, "delivery": "content_ref", "content_ref": path})
             assets.append(NativeCodexEvidenceAsset(path, digest, byte_count, item.content))
 
-    response_schema = native_codex_provider_response_schema()
-    response_schema_digest = _sha256_text(_canonical_json(response_schema))
     context = spec.context
+    response_schema = native_codex_provider_response_schema(context)
+    response_schema_json = _canonical_json(response_schema)
+    response_schema_digest = _sha256_text(response_schema_json)
     binding: dict[str, Any] = {
         "schema_version": REQUEST_SCHEMA_VERSION,
         "request_type": context.request_kind.value,
@@ -296,6 +330,7 @@ def build_native_codex_request(
     return NativeCodexRequestBundle(
         canonical_json=canonical,
         bound_context=BoundNativeCodexContext(context, request_id, request_digest),
+        provider_response_schema_json=response_schema_json,
         evidence_assets=tuple(assets),
     )
 

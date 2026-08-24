@@ -1,0 +1,77 @@
+{
+  "schema_version": "native-provider-schema-capabilities-v1",
+  "probed_on": "2026-08-24",
+  "providers": [
+    {
+      "provider": "claude",
+      "binary_name": "claude",
+      "cli_version": "2.1.241 (Claude Code)",
+      "transport_profile": {
+        "provider": "claude",
+        "binary_name": "claude",
+        "model": "sonnet",
+        "reasoning_or_effort": "high",
+        "schema_transport": "json-schema-argument",
+        "semantic_flags": [
+          "-p",
+          "--output-format=json",
+          "--tools=Read",
+          "--allowedTools=Read",
+          "--disallowedTools=Bash,Edit,Write,NotebookEdit,Grep,Glob",
+          "--permission-mode=dontAsk",
+          "--setting-sources=user",
+          "--safe-mode",
+          "--strict-mcp-config",
+          "--prompt-suggestions=false",
+          "--no-session-persistence",
+          "--disable-slash-commands"
+        ]
+      },
+      "features": {
+        "closed_object": true,
+        "const_list": true,
+        "min_max_items": true,
+        "nested_any_of": true,
+        "nested_one_of": true,
+        "positional_tuple": false
+      },
+      "probe_evidence": {
+        "positional_tuple": "Claude Code rejected prefixItems as an unknown strict-mode keyword; all other listed probes exited successfully."
+      }
+    },
+    {
+      "provider": "codex",
+      "binary_name": "codex",
+      "cli_version": "codex-cli 0.147.0",
+      "transport_profile": {
+        "provider": "codex",
+        "binary_name": "codex",
+        "model": "gpt-5.6-sol",
+        "reasoning_or_effort": "medium",
+        "schema_transport": "output-schema-file",
+        "semantic_flags": [
+          "exec",
+          "--skip-git-repo-check",
+          "--ephemeral",
+          "--color=never",
+          "--json",
+          "--output-last-message=<runtime-file>",
+          "stdin=-"
+        ]
+      },
+      "features": {
+        "closed_object": true,
+        "const_list": false,
+        "min_max_items": true,
+        "nested_any_of": true,
+        "nested_one_of": false,
+        "positional_tuple": false
+      },
+      "probe_evidence": {
+        "const_list": "Codex rejected an array-valued const as an unexpected constant value.",
+        "nested_one_of": "Codex rejected nested oneOf as not permitted.",
+        "positional_tuple": "Codex rejected prefixItems/items=false because array items must be an object."
+      }
+    }
+  ]
+}

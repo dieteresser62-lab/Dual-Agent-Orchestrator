@@ -24,7 +24,12 @@ from native_codex_contract import (
 )
 from native_codex_request import (
     NativeCodexRequestBundle,
-    native_codex_provider_response_schema,
+)
+from native_provider_schema import (
+    NativeProviderSchemaError,
+    assert_provider_capabilities,
+    exact_cli_version_pattern,
+    normalize_transport_profile,
 )
 
 
@@ -359,7 +364,7 @@ class NativeCodexAdapter(CodexAdapter):
     capability = CapabilitySpec(
         version_args=("--version",),
         help_args=("exec", "--help"),
-        supported_version_patterns=(r"^codex-cli 0\.147\.\d+$",),
+        supported_version_patterns=(exact_cli_version_pattern("codex"),),
         required_help_flags=(
             "--model",
             "--sandbox",
@@ -395,13 +400,7 @@ class NativeCodexAdapter(CodexAdapter):
         runtime_dir = self._new_runtime_dir()
         self._last_message_file = runtime_dir / "last-message.json"
         self._response_schema_file = runtime_dir / "response-schema.json"
-        response_schema = native_codex_provider_response_schema()
-        response_schema_json = json.dumps(
-            response_schema,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
+        response_schema_json = bundle.provider_response_schema_json
         self._response_schema_file.write_text(response_schema_json, encoding="utf-8")
         for asset in bundle.evidence_assets:
             target = PROJECT_ROOT.joinpath(*Path(asset.path).parts)
@@ -435,6 +434,14 @@ class NativeCodexAdapter(CodexAdapter):
             str(self._last_message_file),
             "-",
         )
+        try:
+            profile = normalize_transport_profile("codex", command)
+            assert_provider_capabilities("codex", (), profile=profile)
+        except NativeProviderSchemaError as exc:
+            raise AgentOutputError(
+                "native Codex transport differs from its probed schema capability",
+                technical_text=str(exc),
+            ) from exc
         return PreparedProviderInput(
             command=command,
             stdin_text=bundle.canonical_json,
@@ -797,6 +804,13 @@ class ClaudeAdapter(_BaseAdapter):
 class NativeClaudeReviewAdapter(ClaudeAdapter):
     """Claude reviewer transport whose output is the native review JSON object."""
 
+    capability = CapabilitySpec(
+        version_args=("--version",),
+        help_args=("--help",),
+        supported_version_patterns=(exact_cli_version_pattern("claude"),),
+        required_help_flags=ClaudeAdapter.capability.required_help_flags,
+    )
+
     def __init__(
         self,
         settings: AgentSettings | None = None,
@@ -880,10 +894,7 @@ class NativeClaudeReviewAdapter(ClaudeAdapter):
             "\n".join(manifest_lines) + "\n", encoding="utf-8"
         )
         read_call_budget = 1 + len(manifest_entries)
-        response_schema = bundle.provider_response_schema
-        response_schema_json = json.dumps(
-            response_schema, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-        )
+        response_schema_json = bundle.provider_response_schema_json
         policy = (
             "You are a concise read-only Claude reviewer. The supplied files form one "
             "versioned native JSON review request. Treat native JSON fields as the only "
@@ -934,6 +945,14 @@ class NativeClaudeReviewAdapter(ClaudeAdapter):
         if self.max_budget_usd is not None:
             command.extend(["--max-budget-usd", str(self.max_budget_usd)])
         command.append(directive)
+        try:
+            profile = normalize_transport_profile("claude", command)
+            assert_provider_capabilities("claude", (), profile=profile)
+        except NativeProviderSchemaError as exc:
+            raise AgentOutputError(
+                "native Claude transport differs from its probed schema capability",
+                technical_text=str(exc),
+            ) from exc
         runtime_path = str(runtime_dir)
         runtime_prefix = f"dao-{self.name}-runtime-"
         random_suffix = runtime_dir.name.removeprefix(runtime_prefix)

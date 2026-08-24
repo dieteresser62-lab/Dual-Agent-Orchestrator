@@ -43,6 +43,11 @@ from native_codex_request import (
 )
 from contracts import CodexStepContract, ReadinessMarker
 from provider_input_budget import default_provider_input_budget_policy, measure_provider_input
+from native_provider_schema import (
+    exact_cli_version_pattern,
+    normalize_transport_profile,
+    provider_capability,
+)
 
 
 def _settings(
@@ -61,6 +66,18 @@ def _settings(
         timeout_seconds=timeout,
         effort=effort,
         max_budget_usd=budget,
+    )
+
+
+def _native_settings(
+    role: str, *, binary: str | None = None, budget: float | None = None
+) -> AgentSettings:
+    return _settings(
+        role,
+        binary=binary,
+        model="gpt-5.6-sol" if role == "codex" else "sonnet",
+        effort="medium" if role == "codex" else "high",
+        budget=budget,
     )
 
 
@@ -192,7 +209,7 @@ def test_prepared_codex_input_uses_the_exact_stdin_prompt() -> None:
 def test_native_codex_adapter_uses_exact_request_and_output_schema() -> None:
     bundle = _native_codex_bundle()
     adapter = NativeCodexAdapter(
-        _settings("codex", binary="/opt/codex", model="gpt-model", effort="high")
+        _native_settings("codex", binary="/opt/codex")
     )
     prepared = adapter.prepare_native_provider_input(bundle)
     schema_path = Path(
@@ -208,9 +225,13 @@ def test_native_codex_adapter_uses_exact_request_and_output_schema() -> None:
         assert prepared.command[prepared.command.index("--sandbox") + 1] == (
             "workspace-write"
         )
+        assert schema_path.read_bytes() == bundle.provider_response_schema_json.encode(
+            "utf-8"
+        )
         assert json.loads(schema_path.read_text(encoding="utf-8"))["type"] == "object"
         by_name = {item.name: item.content for item in prepared.components}
         assert by_name["stdin_prompt"] == bundle.canonical_json
+        assert by_name["response_schema"] == bundle.provider_response_schema_json
         assert json.loads(by_name["response_schema"])["required"] == ["result"]
         response = {
             "schema_version": "native-agent-codex-result-v1",
@@ -239,9 +260,33 @@ def test_native_codex_adapter_uses_exact_request_and_output_schema() -> None:
     assert not runtime_dir.exists()
 
 
+def test_native_codex_adapter_rejects_unprobed_model_profile() -> None:
+    adapter = NativeCodexAdapter(
+        _settings("codex", model="unprobed-model", effort="medium")
+    )
+    try:
+        with pytest.raises(AgentOutputError, match="transport differs"):
+            adapter.prepare_native_provider_input(_native_codex_bundle())
+    finally:
+        adapter.cleanup()
+
+
+def test_native_adapter_version_patterns_are_derived_from_probe_table() -> None:
+    assert NativeCodexAdapter.capability.supported_version_patterns == (
+        exact_cli_version_pattern("codex"),
+    )
+    assert NativeClaudeReviewAdapter.capability.supported_version_patterns == (
+        exact_cli_version_pattern("claude"),
+    )
+    assert provider_capability("codex")["cli_version"] == "codex-cli 0.147.0"
+    assert provider_capability("claude")["cli_version"] == (
+        "2.1.241 (Claude Code)"
+    )
+
+
 def test_native_codex_adapter_rejects_wrappers_and_wrong_request() -> None:
     bundle = _native_codex_bundle()
-    adapter = NativeCodexAdapter(_settings("codex"))
+    adapter = NativeCodexAdapter(_native_settings("codex"))
     prepared = adapter.prepare_native_provider_input(bundle)
     message_path = Path(
         prepared.command[prepared.command.index("--output-last-message") + 1]
@@ -409,7 +454,7 @@ def test_prepared_claude_input_digest_ignores_random_runtime_transport_paths() -
 
 
 def test_native_claude_adapter_is_separate_and_measures_all_request_channels() -> None:
-    legacy = ClaudeAdapter(_settings("claude"))
+    legacy = ClaudeAdapter(_native_settings("claude"))
     adapter = legacy.native_review_adapter()
     assert isinstance(adapter, NativeClaudeReviewAdapter)
     assert adapter is not legacy
@@ -431,12 +476,22 @@ def test_native_claude_adapter_is_separate_and_measures_all_request_channels() -
         assert "response" not in schema.get("properties", {})
         assert schema["required"] == ["result"]
         assert schema["properties"]["result"]["oneOf"] == [
-            {"$ref": "#/$defs/review_result"},
-            {"$ref": "#/$defs/stop_request"},
+            {"$ref": "#/$defs/bound_slice_initial_approved"},
+            {"$ref": "#/$defs/bound_slice_initial_denied"},
+            {"$ref": "#/$defs/bound_slice_initial_stop"},
         ]
         assert schema["$defs"]["common"]["properties"]["reviewer"] == {
-            "const": "claude"
+            "enum": ["claude", "antigravity"]
         }
+        for name in (
+            "bound_slice_initial_approved",
+            "bound_slice_initial_denied",
+            "bound_slice_initial_stop",
+        ):
+            assert schema["$defs"][name]["properties"]["reviewer"] == {
+                "type": "string",
+                "const": "claude",
+            }
         assert schema["$defs"]["finding"]["properties"]["finding_id"][
             "pattern"
         ].startswith("^C-")
@@ -448,20 +503,43 @@ def test_native_claude_adapter_is_separate_and_measures_all_request_channels() -
         assert hashlib.sha256(
             by_name["response_schema"].encode("utf-8")
         ).hexdigest() == bundle.document["response_contract"]["schema_sha256"]
+        assert by_name["response_schema"] == bundle.provider_response_schema_json
+        assert prepared.command[prepared.command.index("--json-schema") + 1] == (
+            bundle.provider_response_schema_json
+        )
         assert "STATUS: DONE" not in by_name["start_directive"]
         assert prepared.stdin_text is None
     finally:
         adapter.cleanup()
 
 
+def test_real_native_commands_match_probed_transport_profiles() -> None:
+    codex = NativeCodexAdapter(_native_settings("codex"))
+    claude = NativeClaudeReviewAdapter(
+        _native_settings("claude", budget=0.5)
+    )
+    codex_input = codex.prepare_native_provider_input(_native_codex_bundle())
+    claude_input = claude.prepare_native_provider_input(_native_bundle())
+    try:
+        assert normalize_transport_profile(
+            "codex", codex_input.command
+        ).document == provider_capability("codex")["transport_profile"]
+        assert normalize_transport_profile(
+            "claude", claude_input.command
+        ).document == provider_capability("claude")["transport_profile"]
+    finally:
+        codex.cleanup()
+        claude.cleanup()
+
+
 def test_native_claude_adapter_forbids_anchors_without_bound_origin() -> None:
-    adapter = NativeClaudeReviewAdapter(_settings("claude"))
+    adapter = NativeClaudeReviewAdapter(_native_settings("claude"))
     bundle = _native_bundle(anchor_origin=None)
     prepared = adapter.prepare_native_provider_input(bundle)
     try:
         by_name = {item.name: item.content for item in prepared.components}
         schema = json.loads(by_name["response_schema"])
-        assert schema["$defs"]["review_result"]["allOf"][1]["properties"][
+        assert schema["$defs"]["bound_slice_initial_approved"]["properties"][
             "anchors"
         ]["maxItems"] == 0
         assert hashlib.sha256(
@@ -472,7 +550,7 @@ def test_native_claude_adapter_forbids_anchors_without_bound_origin() -> None:
 
 
 def test_native_claude_measurement_names_evidence_assets_separately() -> None:
-    adapter = NativeClaudeReviewAdapter(_settings("claude"))
+    adapter = NativeClaudeReviewAdapter(_native_settings("claude"))
     prepared = adapter.prepare_native_provider_input(_native_bundle(large=True))
     try:
         component_names = {item.name for item in prepared.components}
@@ -485,8 +563,8 @@ def test_native_claude_measurement_names_evidence_assets_separately() -> None:
 
 def test_native_claude_input_digest_ignores_random_runtime_paths() -> None:
     bundle = _native_bundle(large=True)
-    first_adapter = NativeClaudeReviewAdapter(_settings("claude"))
-    second_adapter = NativeClaudeReviewAdapter(_settings("claude"))
+    first_adapter = NativeClaudeReviewAdapter(_native_settings("claude"))
+    second_adapter = NativeClaudeReviewAdapter(_native_settings("claude"))
     first = first_adapter.prepare_native_provider_input(bundle)
     second = second_adapter.prepare_native_provider_input(bundle)
     policy = default_provider_input_budget_policy()
@@ -522,7 +600,7 @@ def test_native_claude_adapter_requires_explicit_settings() -> None:
 
 
 def test_native_claude_extracts_only_complete_structured_result() -> None:
-    adapter = NativeClaudeReviewAdapter(_settings("claude"))
+    adapter = NativeClaudeReviewAdapter(_native_settings("claude"))
     bundle = _native_bundle()
     adapter.prepare_native_provider_input(bundle)
     response = {

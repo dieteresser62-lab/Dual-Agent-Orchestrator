@@ -14,7 +14,7 @@ from contracts import AgentRole
 from native_review_contract import (
     BoundNativeReviewContext,
     NativeReviewContext,
-    load_native_review_schema,
+    native_review_provider_response_schema,
     next_native_finding_id,
     native_review_context_binding,
 )
@@ -174,6 +174,7 @@ class NativeReviewRequestSpec:
 class NativeReviewRequestBundle:
     canonical_json: str
     bound_context: BoundNativeReviewContext
+    provider_response_schema_json: str
     evidence_assets: tuple[NativeReviewEvidenceAsset, ...] = ()
 
     def __post_init__(self) -> None:
@@ -199,8 +200,31 @@ class NativeReviewRequestBundle:
                 NativeReviewRequestErrorCode.REQUEST_INVALID,
                 "request content differs from its bound digest",
             )
+        try:
+            provider_schema = json.loads(self.provider_response_schema_json)
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise NativeReviewRequestError(
+                NativeReviewRequestErrorCode.REQUEST_INVALID,
+                "bundle provider response schema is invalid JSON",
+            ) from exc
+        if (
+            not isinstance(provider_schema, dict)
+            or self.provider_response_schema_json != _canonical_json(provider_schema)
+        ):
+            raise NativeReviewRequestError(
+                NativeReviewRequestErrorCode.REQUEST_INVALID,
+                "bundle provider response schema is not a canonical object",
+            )
+        expected_schema = native_review_provider_response_schema(
+            self.bound_context.context
+        )
+        if provider_schema != expected_schema:
+            raise NativeReviewRequestError(
+                NativeReviewRequestErrorCode.REQUEST_INVALID,
+                "bundle provider response schema differs from bound context",
+            )
         expected_response_schema_digest = hashlib.sha256(
-            _canonical_json(self.provider_response_schema).encode("utf-8")
+            self.provider_response_schema_json.encode("utf-8")
         ).hexdigest()
         if document["response_contract"] != {
             "schema_version": RESPONSE_SCHEMA_VERSION,
@@ -278,12 +302,10 @@ class NativeReviewRequestBundle:
 
     @property
     def provider_response_schema(self) -> dict[str, Any]:
-        """Return the provider schema specialized to this request context."""
-        context = self.bound_context.context
-        return native_review_provider_response_schema(
-            reviewer=context.reviewer,
-            allow_anchors=context.anchor_origin is not None,
-        )
+        """Return a detached view of the immutable provider-schema bytes."""
+        parsed = json.loads(self.provider_response_schema_json)
+        assert isinstance(parsed, dict)
+        return parsed
 
 
 @dataclass(frozen=True, slots=True)
@@ -323,63 +345,6 @@ def validate_native_review_request_document(document: Mapping[str, Any]) -> None
         ) from None
 
 
-def native_review_provider_response_schema(
-    reviewer: AgentRole = AgentRole.CLAUDE,
-    *,
-    allow_anchors: bool = True,
-) -> dict[str, Any]:
-    """Return the exact provider-facing schema bound by native requests.
-
-    Claude's CLI does not accept the descriptive ``$schema`` and ``$id``
-    keywords or a top-level union/composition.  A closed transport object
-    therefore carries the unchanged discriminated native result below its
-    required ``result`` property, where Claude accepts the union.  Extraction
-    unwraps only this typed object and immediately repeats full local schema
-    validation.  Exact request/reviewer equality remains a local bound-context
-    invariant, which also avoids a circular digest dependency between
-    request_id and a dynamically specialized schema.
-    """
-    if reviewer not in {AgentRole.CLAUDE, AgentRole.ANTIGRAVITY}:
-        raise NativeReviewRequestError(
-            NativeReviewRequestErrorCode.CONTEXT_INVALID,
-            "native review provider schema requires a reviewer role",
-        )
-    schema = load_native_review_schema()
-    reviewer_value = reviewer.value
-    finding_prefix = "C" if reviewer is AgentRole.CLAUDE else "A"
-    finding_pattern = rf"^{finding_prefix}-(0[1-9]|[1-9][0-9]*)$"
-    definitions = schema["$defs"]
-    definitions["common"]["properties"]["reviewer"] = {"const": reviewer_value}
-    for result_name in ("review_result", "stop_request"):
-        definitions[result_name]["allOf"][1]["properties"]["reviewer"] = {
-            "const": reviewer_value
-        }
-    for definition_name in ("finding", "status_change", "reclassification"):
-        definitions[definition_name]["properties"]["finding_id"] = {
-            "type": "string",
-            "pattern": finding_pattern,
-        }
-    if not allow_anchors:
-        definitions["review_result"]["allOf"][1]["properties"]["anchors"][
-            "maxItems"
-        ] = 0
-    return {
-        "title": "Native agent review result v1 provider projection",
-        "type": "object",
-        "properties": {
-            "result": {
-                "oneOf": [
-                    {"$ref": "#/$defs/review_result"},
-                    {"$ref": "#/$defs/stop_request"},
-                ]
-            },
-        },
-        "required": ["result"],
-        "additionalProperties": False,
-        "$defs": definitions,
-    }
-
-
 def build_native_review_request(
     spec: NativeReviewRequestSpec,
     *,
@@ -390,12 +355,10 @@ def build_native_review_request(
             NativeReviewRequestErrorCode.EVIDENCE_INVALID,
             "inline evidence limit must be positive",
         )
-    response_schema = native_review_provider_response_schema(
-        reviewer=spec.context.reviewer,
-        allow_anchors=spec.context.anchor_origin is not None,
-    )
+    response_schema = native_review_provider_response_schema(spec.context)
+    response_schema_json = _canonical_json(response_schema)
     response_schema_digest = hashlib.sha256(
-        _canonical_json(response_schema).encode("utf-8")
+        response_schema_json.encode("utf-8")
     ).hexdigest()
     manifest: list[dict[str, Any]] = []
     assets: list[NativeReviewEvidenceAsset] = []
@@ -478,6 +441,7 @@ def build_native_review_request(
             request_id=request_id,
             request_digest=request_digest,
         ),
+        provider_response_schema_json=response_schema_json,
         evidence_assets=tuple(assets),
     )
 
@@ -536,6 +500,7 @@ def build_native_review_repair_request(
             request_id=request_id,
             request_digest=digest,
         ),
+        provider_response_schema_json=parent.provider_response_schema_json,
     )
 
 

@@ -27,6 +27,7 @@ from schema_validation import (
     check_schema,
     validate_schema_document,
 )
+from native_provider_schema import defensive_provider_projection
 
 
 SCHEMA_VERSION = "native-agent-codex-result-v1"
@@ -205,8 +206,10 @@ def load_native_codex_schema() -> dict[str, Any]:
     return schema
 
 
-def native_codex_provider_response_schema() -> dict[str, Any]:
-    """Return the live provider schema while keeping historical reads valid.
+def native_codex_provider_response_schema(
+    context: NativeCodexContext,
+) -> dict[str, Any]:
+    """Project the immutable reader schema into one request-specific writer.
 
     The bundled v1 schema accepts an omitted plan disposition list so already
     persisted plan results remain readable.  Every newly invoked provider is
@@ -217,37 +220,107 @@ def native_codex_provider_response_schema() -> dict[str, Any]:
     projection places that union below one required ``result`` property.  The
     adapter unwraps the envelope before applying the unchanged local contract.
     """
-    schema = copy.deepcopy(load_native_codex_schema())
+    if not isinstance(context, NativeCodexContext):
+        raise NativeCodexContractError(
+            NativeCodexErrorCode.CONTEXT_INVALID,
+            "provider schema projection requires NativeCodexContext",
+        )
+    schema = defensive_provider_projection(
+        load_native_codex_schema(),
+        provider="codex",
+        required_features=("closed_object", "min_max_items", "nested_any_of"),
+    )
     required = schema["$defs"]["plan_result"]["required"]
     if "finding_dispositions" not in required:
         required.append("finding_dispositions")
-    # The full local schema retains stricter replay checks.  OpenAI Structured
-    # Outputs does not support ``uniqueItems`` or regex lookarounds.  Those
-    # constraints are enforced again by the bound domain parser before any
-    # result becomes authoritative.
-    pending: list[object] = [schema["$defs"]]
-    while pending:
-        node = pending.pop()
-        if isinstance(node, dict):
-            node.pop("uniqueItems", None)
-            if "(?" in str(node.get("pattern", "")):
-                node.pop("pattern")
-            pending.extend(node.values())
-        elif isinstance(node, list):
-            pending.extend(node)
+    open_ids = tuple(
+        item.finding_id
+        for item in context.previous_findings
+        if item.status is FindingStatus.OPEN
+    )
+    disposition = schema["$defs"]["finding_disposition"]
+    if open_ids:
+        disposition["properties"]["finding_id"] = {
+            "type": "string",
+            "enum": list(open_ids),
+        }
+    for result_name in (
+        "plan_result",
+        "implementation_result",
+        "correction_result",
+        "final_report_result",
+    ):
+        items = schema["$defs"][result_name]["properties"]["finding_dispositions"]
+        items["minItems"] = len(open_ids)
+        items["maxItems"] = len(open_ids)
+
+    contract = context.contract
+    expected_result = {
+        NativeCodexRequestKind.PLAN: "plan_result",
+        NativeCodexRequestKind.IMPLEMENTATION: "implementation_result",
+        NativeCodexRequestKind.CORRECTION: "correction_result",
+        NativeCodexRequestKind.FINAL_REPORT: "final_report_result",
+    }[context.request_kind]
+    if context.request_kind is NativeCodexRequestKind.PLAN and not contract.require_slice_plan:
+        result_refs = [{"$ref": "#/$defs/stop_result"}]
+    else:
+        result_refs = [
+            {"$ref": f"#/$defs/{expected_result}"},
+            {"$ref": "#/$defs/stop_result"},
+        ]
+
+    if context.request_kind in {
+        NativeCodexRequestKind.IMPLEMENTATION,
+        NativeCodexRequestKind.CORRECTION,
+    }:
+        work_result = schema["$defs"][expected_result]
+        test_files = work_result["properties"]["test_files"]
+        if not contract.require_test_files_record:
+            test_files["minItems"] = 0
+            test_files["maxItems"] = 0
+        elif contract.enforce_expected_test_files:
+            expected_tests = tuple(contract.expected_test_files)
+            test_files["minItems"] = len(expected_tests)
+            test_files["maxItems"] = len(expected_tests)
+            if expected_tests:
+                test_files["items"] = {
+                    "type": "string",
+                    "enum": list(expected_tests),
+                }
+        if not contract.test_changes_approved:
+            ready_false_name = f"bound_{expected_result}_ready_false"
+            ready_false = copy.deepcopy(work_result)
+            ready_false["properties"]["ready"] = {
+                "type": "boolean",
+                "const": False,
+            }
+            schema["$defs"][ready_false_name] = ready_false
+            readiness_refs: list[dict[str, str]] = [
+                {"$ref": f"#/$defs/{ready_false_name}"}
+            ]
+            fixed_nonempty_tests = (
+                contract.enforce_expected_test_files
+                and bool(contract.expected_test_files)
+            )
+            if not fixed_nonempty_tests:
+                ready_true_name = f"bound_{expected_result}_ready_true_no_tests"
+                ready_true = copy.deepcopy(work_result)
+                ready_true["properties"]["ready"] = {
+                    "type": "boolean",
+                    "const": True,
+                }
+                ready_true["properties"]["test_files"]["minItems"] = 0
+                ready_true["properties"]["test_files"]["maxItems"] = 0
+                schema["$defs"][ready_true_name] = ready_true
+                readiness_refs.append(
+                    {"$ref": f"#/$defs/{ready_true_name}"}
+                )
+            result_refs[0:1] = readiness_refs
     return {
-        "title": "Native Codex result v1 provider projection",
+        "title": f"Native Codex {context.request_kind.value} writer projection",
         "type": "object",
         "properties": {
-            "result": {
-                "anyOf": [
-                    {"$ref": "#/$defs/plan_result"},
-                    {"$ref": "#/$defs/implementation_result"},
-                    {"$ref": "#/$defs/correction_result"},
-                    {"$ref": "#/$defs/final_report_result"},
-                    {"$ref": "#/$defs/stop_result"},
-                ]
-            }
+            "result": {"anyOf": result_refs}
         },
         "required": ["result"],
         "additionalProperties": False,
