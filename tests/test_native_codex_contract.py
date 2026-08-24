@@ -452,6 +452,18 @@ def test_writer_schema_keeps_slice_path_order_fail_closed_locally() -> None:
         parse_bound_native_codex_contract_result(response, bound)
     assert raised.value.code is NativeCodexErrorCode.SLICE_PLAN_INVALID
 
+    response["slice_plan"] = [
+        {
+            "slice_id": 3,
+            "summary": "Implement the contract.",
+            "scope_paths": ["src/contract.py", "tests/test_contract.py"],
+        }
+    ]
+    validate_schema_document({"result": response}, schema)
+    with pytest.raises(NativeCodexContractError) as raised:
+        parse_bound_native_codex_contract_result(response, bound)
+    assert raised.value.code is NativeCodexErrorCode.SLICE_PLAN_INVALID
+
 
 def test_writer_schema_keeps_stop_path_order_fail_closed_locally() -> None:
     bound = _bound(NativeCodexRequestKind.PLAN)

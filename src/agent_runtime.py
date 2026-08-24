@@ -26,6 +26,7 @@ from agent_adapters import (
     AgentBudgetError,
     AgentPermissionError,
     AgentOutputError,
+    NativeCodexExecutionBoundary,
 )
 from path_policy import PathPolicyError, resolve_repository_path
 from repo_changes import RepositoryChanges
@@ -967,6 +968,7 @@ def run_agent(
     pre_start_callback: Callable[[ProviderInputMeasurement], object | None] | None = None,
     attempt_invocation: _ProviderAttemptInvocation | None = None,
     prepared_provider_input: PreparedProviderInput | None = None,
+    execution_root_override: Path | None = None,
 ) -> str:
     """Run an adapter command once, with optional live streaming and strict output checks."""
     agent_key = adapter.name
@@ -978,7 +980,15 @@ def run_agent(
         )
 
     workspace: ReviewerWorkspace | None = None
-    execution_root = config.repo_root.resolve()
+    execution_root = (
+        execution_root_override.resolve()
+        if execution_root_override is not None
+        else config.repo_root.resolve()
+    )
+    if execution_root_override is not None and adapter.reviewer:
+        raise ValueError("reviewer execution roots are owned by reviewer workspaces")
+    if not execution_root.is_dir():
+        raise ValueError("agent execution root must be an existing directory")
     timeout_seconds = adapter.timeout
     extra_files: dict[str, str] = {}
 
@@ -1429,12 +1439,16 @@ def run_native_codex_agent(
     pre_start_callback: Callable[[ProviderInputMeasurement], object | None] | None = None,
     attempt_invocation: _ProviderAttemptInvocation | None = None,
     validated_response_callback: Callable[[str], None] | None = None,
+    execution_boundary: NativeCodexExecutionBoundary | None = None,
 ) -> NativeAgentCodexOutput:
     """Run native Codex without marker parsing, flag extraction, or repair."""
     prepare = getattr(adapter, "prepare_native_provider_input", None)
     if not callable(prepare):
         raise TypeError("native Codex adapter lacks prepare_native_provider_input")
-    prepared = prepare(bundle)
+    boundary = execution_boundary or NativeCodexExecutionBoundary.production(
+        config.repo_root
+    )
+    prepared = prepare(bundle, boundary)
     canonical = run_agent(
         adapter,
         bundle.canonical_json,
@@ -1446,6 +1460,7 @@ def run_native_codex_agent(
         pre_start_callback=pre_start_callback,
         attempt_invocation=attempt_invocation,
         prepared_provider_input=prepared,
+        execution_root_override=boundary.execution_root,
     )
     try:
         document = json.loads(canonical)
@@ -1494,6 +1509,7 @@ def run_native_codex_agent_checked(
     pre_start_callback: Callable[[ProviderInputMeasurement], object | None] | None,
     provider_attempt_lifecycle: ProviderAttemptLifecycle | None,
     accepted_output_callback: Callable[[NativeAgentCodexOutput], None] | None = None,
+    execution_boundary: NativeCodexExecutionBoundary | None = None,
 ) -> NativeAgentCodexOutput:
     """Persist canonical response bytes before any accepted-result callback."""
     invocation_id = uuid.uuid4().hex
@@ -1512,6 +1528,7 @@ def run_native_codex_agent_checked(
             binding_fingerprint=binding_fingerprint,
             pre_start_callback=pre_start_callback,
             attempt_invocation=attempt_invocation,
+            execution_boundary=execution_boundary,
             validated_response_callback=lambda canonical: write_file(
                 raw_response_path, canonical
             ),

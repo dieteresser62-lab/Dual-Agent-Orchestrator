@@ -8,6 +8,7 @@ import shutil
 import sys
 import tempfile
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
@@ -73,6 +74,83 @@ class CapabilitySpec:
     help_args: tuple[str, ...]
     supported_version_patterns: tuple[str, ...]
     required_help_flags: tuple[str, ...]
+
+
+class NativeCodexExecutionMode(StrEnum):
+    """Execution policy selected before a native Codex provider invocation."""
+
+    PRODUCTION = "production"
+    CANARY = "canary"
+
+
+@dataclass(frozen=True, slots=True)
+class NativeCodexExecutionBoundary:
+    """Typed filesystem and sandbox boundary for one native Codex call."""
+
+    mode: NativeCodexExecutionMode
+    repository_root: Path
+    execution_root: Path
+    evidence_asset_root: Path
+    sandbox_mode: str
+
+    def __post_init__(self) -> None:
+        repository_root = self.repository_root.resolve()
+        execution_root = self.execution_root.resolve()
+        evidence_asset_root = self.evidence_asset_root.resolve()
+        object.__setattr__(self, "repository_root", repository_root)
+        object.__setattr__(self, "execution_root", execution_root)
+        object.__setattr__(self, "evidence_asset_root", evidence_asset_root)
+        if not isinstance(self.mode, NativeCodexExecutionMode):
+            raise TypeError("native Codex execution mode is invalid")
+        if self.sandbox_mode not in {"workspace-write", "read-only"}:
+            raise ValueError("native Codex sandbox mode is invalid")
+        if not execution_root.is_dir() or not evidence_asset_root.is_dir():
+            raise ValueError("native Codex execution and evidence roots must exist")
+        if self.mode is NativeCodexExecutionMode.PRODUCTION:
+            if (
+                execution_root != repository_root
+                or evidence_asset_root != repository_root
+                or self.sandbox_mode != "workspace-write"
+            ):
+                raise ValueError("production native Codex boundary changed its defaults")
+            return
+        if self.sandbox_mode != "read-only":
+            raise ValueError("native Codex canary must use read-only sandboxing")
+        for label, path in (
+            ("execution_root", execution_root),
+            ("evidence_asset_root", evidence_asset_root),
+        ):
+            if path == repository_root or path.is_relative_to(repository_root):
+                raise ValueError(
+                    f"native Codex canary {label} must be outside the repository"
+                )
+
+    @classmethod
+    def production(cls, repository_root: Path) -> "NativeCodexExecutionBoundary":
+        root = repository_root.resolve()
+        return cls(
+            NativeCodexExecutionMode.PRODUCTION,
+            root,
+            root,
+            root,
+            "workspace-write",
+        )
+
+    @classmethod
+    def canary(
+        cls,
+        repository_root: Path,
+        *,
+        execution_root: Path,
+        evidence_asset_root: Path,
+    ) -> "NativeCodexExecutionBoundary":
+        return cls(
+            NativeCodexExecutionMode.CANARY,
+            repository_root,
+            execution_root,
+            evidence_asset_root,
+            "read-only",
+        )
 
 
 def _trim_after_done_marker(text: str) -> str:
@@ -393,17 +471,22 @@ class NativeCodexAdapter(CodexAdapter):
         )
 
     def prepare_native_provider_input(
-        self, bundle: NativeCodexRequestBundle
+        self,
+        bundle: NativeCodexRequestBundle,
+        execution_boundary: NativeCodexExecutionBoundary | None = None,
     ) -> PreparedProviderInput:
         if not isinstance(bundle, NativeCodexRequestBundle):
             raise TypeError("native Codex adapter requires NativeCodexRequestBundle")
+        boundary = execution_boundary or NativeCodexExecutionBoundary.production(
+            PROJECT_ROOT
+        )
         runtime_dir = self._new_runtime_dir()
         self._last_message_file = runtime_dir / "last-message.json"
         self._response_schema_file = runtime_dir / "response-schema.json"
         response_schema_json = bundle.provider_response_schema_json
         self._response_schema_file.write_text(response_schema_json, encoding="utf-8")
         for asset in bundle.evidence_assets:
-            target = PROJECT_ROOT.joinpath(*Path(asset.path).parts)
+            target = boundary.evidence_asset_root.joinpath(*Path(asset.path).parts)
             target.parent.mkdir(parents=True, exist_ok=True)
             if target.exists():
                 existing = target.read_text(encoding="utf-8")
@@ -424,7 +507,7 @@ class NativeCodexAdapter(CodexAdapter):
             "--skip-git-repo-check",
             "--ephemeral",
             "--sandbox",
-            "workspace-write",
+            boundary.sandbox_mode,
             "--color",
             "never",
             "--json",

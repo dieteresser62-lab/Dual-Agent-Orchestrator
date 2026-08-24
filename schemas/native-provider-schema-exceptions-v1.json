@@ -106,9 +106,9 @@
       "provider": "codex",
       "operations": ["plan"],
       "error_code": "slice-plan-invalid",
-      "local_invariant": "Every planned Slice carries repository paths in sorted canonical order.",
-      "missing_schema_feature": "array_lexicographic_order",
-      "provider_evidence": "Codex 0.147.0 rejects prefixItems and array-valued const, so JSON Schema cannot compare adjacent generated path values lexicographically.",
+      "local_invariant": "Planned Slice identifiers are contiguous and one-based, and every Slice carries repository paths in sorted canonical order.",
+      "missing_schema_feature": "positional_tuple_constraints_and_array_lexicographic_order",
+      "provider_evidence": "Codex 0.147.0 rejects prefixItems and array-valued const. A Slice-3 live Canary consequently produced writer-valid Slice ID 03 for a one-Slice plan; the provider subset can neither bind generated array positions to contiguous identifiers nor compare adjacent generated path values lexicographically.",
       "regression_test": "tests/test_native_codex_contract.py::test_writer_schema_keeps_slice_path_order_fail_closed_locally"
     },
     {

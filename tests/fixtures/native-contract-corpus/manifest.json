@@ -1,0 +1,217 @@
+{
+  "fixtures": [
+    {
+      "binding": "schema_only",
+      "fixture_id": "codex-work-unit-0002-codex-correction-round-0002",
+      "provider": "codex",
+      "response_sha256": "30340e3018d9859a76ce498f1fbc2ca414f68fbdc1e2217814ff84cad5de6186",
+      "source_path": ".orchestrator/artifacts/20260823-111816Z/native-codex-responses/work-unit-0002-codex_correction-round-0002.json"
+    },
+    {
+      "binding": "schema_only",
+      "fixture_id": "codex-work-unit-0002-codex-correction-round-0003",
+      "provider": "codex",
+      "response_sha256": "903e15e711a4f06003002b17e9515f8183544751045b4fb6490bf4d5bfe065e3",
+      "source_path": ".orchestrator/artifacts/20260823-111816Z/native-codex-responses/work-unit-0002-codex_correction-round-0003.json"
+    },
+    {
+      "binding": "schema_only",
+      "fixture_id": "codex-work-unit-0002-codex-correction-round-0004",
+      "provider": "codex",
+      "response_sha256": "683ea20af2092ab3048501f9c8130e6f0f90374f3df31953190c204545356389",
+      "source_path": ".orchestrator/artifacts/20260823-111816Z/native-codex-responses/work-unit-0002-codex_correction-round-0004.json"
+    },
+    {
+      "binding": "schema_only",
+      "fixture_id": "codex-work-unit-0002-codex-implementation-round-0001",
+      "provider": "codex",
+      "response_sha256": "52cff02abfd2920b326c7de6f220a84e0e87fb531d3a0ccb24d2c3e085fd21dd",
+      "source_path": ".orchestrator/artifacts/20260823-111816Z/native-codex-responses/work-unit-0002-codex_implementation-round-0001.json"
+    },
+    {
+      "binding": "schema_only",
+      "fixture_id": "codex-work-unit-0001-codex-plan-round-0001",
+      "provider": "codex",
+      "response_sha256": "20c5eba276ce810ded9e961961662c4050d9683adf1dd8725bf0ec203b315cee",
+      "source_path": ".orchestrator/artifacts/watch-20260823-095929.706215Z-8450f2e108cc/native-codex-responses/work-unit-0001-codex_plan-round-0001.json"
+    },
+    {
+      "binding": "schema_only",
+      "fixture_id": "codex-work-unit-0001-codex-plan-round-0001-2",
+      "provider": "codex",
+      "response_sha256": "a05ffb2715f4de107568228f4c9da916e631e28c8e7891c419b4a6337065c190",
+      "source_path": ".orchestrator/artifacts/watch-20260823-170253.999599Z-a7e77c1efad8/native-codex-responses/work-unit-0001-codex_plan-round-0001.json"
+    },
+    {
+      "binding": "schema_only",
+      "fixture_id": "codex-work-unit-0001-codex-plan-revision-round-0002",
+      "provider": "codex",
+      "response_sha256": "06962807cac07a8efd708717d6aed5ede7c6b53d817559582fc26e602f327840",
+      "source_path": ".orchestrator/artifacts/watch-20260823-170253.999599Z-a7e77c1efad8/native-codex-responses/work-unit-0001-codex_plan_revision-round-0002.json"
+    },
+    {
+      "binding": "schema_only",
+      "fixture_id": "codex-work-unit-0002-codex-implementation-round-0001-2",
+      "provider": "codex",
+      "response_sha256": "ce7154613b4ebfbe36d00d6322c3bb94c883c7e7c912cf7f44e1b343cbaee140",
+      "source_path": ".orchestrator/artifacts/watch-20260823-185613.401370Z-ed88fa6c8a98/native-codex-responses/work-unit-0002-codex_implementation-round-0001.json"
+    },
+    {
+      "binding": "schema_only",
+      "fixture_id": "claude-native-codex-claude-correction-loop-plan-review",
+      "provider": "claude",
+      "response_sha256": "f60aed3ecb54327e4a7756b8b3c1150e03a2bc640beee739cfefdcafa752a202",
+      "source_path": "docs/internal/archive/native-codex-claude-correction-loop/native-codex-claude-correction-loop-plan-review.raw.json"
+    },
+    {
+      "binding": "request_bound",
+      "expected_approved": true,
+      "fixture_id": "claude-native-codex-claude-correction-loop-slice1-review-round2",
+      "provider": "claude",
+      "request_id": "native-review-request-86599cdf917208673432f51217a7d3fe931f47daf29d5be720a955051b4fe1d2",
+      "request_source_path": ".orchestrator/logs/manual-package5-slice1-review/request.json",
+      "response_sha256": "dd459bb83613c9f3565d8c5608680ab666d80ccbc87762f0fc34f44810695048",
+      "source_path": "docs/internal/archive/native-codex-claude-correction-loop/native-codex-claude-correction-loop-slice1-review-round2.raw.json",
+      "writer_schema_sha256": "9a3db92e0aa6de8e893aae9cfb6888246e2976c583072218691be7c43fc2946c"
+    },
+    {
+      "binding": "schema_only",
+      "fixture_id": "claude-native-codex-claude-correction-loop-slice1-review",
+      "provider": "claude",
+      "response_sha256": "e8af2a4f7439041c40b2a90e1821e14c0f19a37d472f9b2e5f96bc29e5db4a52",
+      "source_path": "docs/internal/archive/native-codex-claude-correction-loop/native-codex-claude-correction-loop-slice1-review.raw.json"
+    },
+    {
+      "binding": "schema_only",
+      "fixture_id": "claude-phase-2-ap6a-direct-final-review",
+      "provider": "claude",
+      "response_sha256": "1322bbb6ec2f7352cdb1c1ccc92f2dfd9195b18bfa97e8b5314fe16fde1dc3ae",
+      "source_path": "docs/internal/archive/phase-2-ap6a-semantic-evidence-bootstrap-exception/claude-direct-final-review-result.json"
+    },
+    {
+      "binding": "request_bound",
+      "expected_approved": true,
+      "fixture_id": "claude-native-codex-claude-correction-loop-slice2-c05-review",
+      "provider": "claude",
+      "request_id": "native-review-request-f1fc4d5373128184a4fb7dd66dcb4143dc975a9e88863e876d446dea5b3ed58c",
+      "request_source_path": ".orchestrator/logs/manual-package5-slice2-c05-review/request.json",
+      "response_sha256": "3c75fd110cb6be9874dc7e8eba08310e1df524df403a2599cef54db93069394d",
+      "source_path": "docs/internal/archive/native-codex-claude-correction-loop/native-codex-claude-correction-loop-slice2-c05-review.raw.json",
+      "writer_schema_sha256": "d441a9f61a0f635e57445bd64f2712e43ffa1909a61b966a3143867f3dd7884e"
+    },
+    {
+      "binding": "request_bound",
+      "expected_approved": true,
+      "fixture_id": "claude-native-codex-claude-correction-loop-slice2-review",
+      "provider": "claude",
+      "request_id": "native-review-request-bd4411bd33374c06f785446e6e6f4cf57c3bba3842ded186e956d3afb91c6988",
+      "request_source_path": ".orchestrator/logs/manual-package5-slice2-review/request.json",
+      "response_sha256": "38090cdc202f5629ae001fb8714cf417c94946fb7f73de9cf60aa720cec33ed9",
+      "source_path": "docs/internal/archive/native-codex-claude-correction-loop/native-codex-claude-correction-loop-slice2-review.raw.json",
+      "writer_schema_sha256": "fe6fc2ba4b16422c883905be4946baa572256c2d5ed385871fc53ac05999a060"
+    }
+  ],
+  "inventory": {
+    "canonical_requests_found": 12,
+    "native_responses_adopted": 14,
+    "native_responses_found": 14,
+    "request_bound_pairs_adopted": 3,
+    "request_bound_pairs_found": 3,
+    "transport_error_envelopes_catalogued": 3
+  },
+  "schema_version": "native-contract-corpus-v1",
+  "writer_forms": [
+    {
+      "evidence": {
+        "kind": "live_canary",
+        "request_id": "native-codex-request-37224e4e2064190930469787cdf9de63e791c6626a1bdcdf25be91cd5c592d04",
+        "response_sha256": "7075c1ddf324d619148ad3595cab810f48738e64ed083446d9c928d36c4062b7",
+        "status": "passed"
+      },
+      "provider": "codex",
+      "representative_context": "live isolated plan canary",
+      "writer_form": "plan",
+      "writer_schema_sha256": "860182340b070a22294a6cb805822b97dee1ccad90a61de8e5e2fa5b7f761aae"
+    },
+    {
+      "evidence": {
+        "kind": "live_canary",
+        "request_id": "native-codex-request-38431b6b2015663a0cc596c765f70461a762caabc21f5b7138a025a88e38fa90",
+        "response_sha256": "6dab290d1f07aad7aaf511b794b0a93d8d97fa88e7ea42fc787cdb306dcde9d6",
+        "status": "passed"
+      },
+      "provider": "codex",
+      "representative_context": "live isolated implementation canary",
+      "writer_form": "implementation",
+      "writer_schema_sha256": "0413380b7777b33e635f17fc1b85c73f313e6be9bfba4e9f25bf0034e617c31b"
+    },
+    {
+      "evidence": {
+        "kind": "live_canary",
+        "request_id": "native-codex-request-80598bc5e41adc482fd03d25b9e32fae864fc94d9d612099d6f4ba3fd290e625",
+        "response_sha256": "92a17c5da808554fe1c14d38c3156aab6534d790ae87f4666fa086e1a96bd740",
+        "status": "passed"
+      },
+      "provider": "codex",
+      "representative_context": "live isolated correction canary",
+      "writer_form": "correction",
+      "writer_schema_sha256": "27fdb65cafdb024fb6a128bc40b41a28023866493c30af0ac29021a907863a6c"
+    },
+    {
+      "evidence": {
+        "kind": "live_canary",
+        "request_id": "native-codex-request-555af732faf27fe21d78796ef992730d770d0f2348e72415fb76bbd385b6c6fd",
+        "response_sha256": "ae088a3d28ccad758844b1335752dc1b8284b9ef845b477898575949b6612c66",
+        "status": "passed"
+      },
+      "provider": "codex",
+      "representative_context": "live isolated final_report canary",
+      "writer_form": "final_report",
+      "writer_schema_sha256": "9456b7aef9f9f644c0c90f2447f3c714a5f026b0bc46d655da52b47891292ce3"
+    },
+    {
+      "evidence": {
+        "kind": "live_canary",
+        "request_id": "native-review-request-316aebbc369ffdbc30da5e9f39f888ccc75199dae24c436d9bd8931173a2b2a6",
+        "response_sha256": "7127bbc70f18a8aba4d2aed81391e4c04f4373a2056b7a0824ae6fbc3ac18d6d",
+        "status": "passed"
+      },
+      "provider": "claude",
+      "representative_context": "live isolated plan canary",
+      "writer_form": "plan",
+      "writer_schema_sha256": "88e268b3d61afd18e86070cd86d8c480e537541e7a4c919b09d3844e0a593083"
+    },
+    {
+      "evidence": {
+        "fixture_id": "claude-native-codex-claude-correction-loop-slice2-review",
+        "kind": "request_bound"
+      },
+      "provider": "claude",
+      "representative_context": "slice round 1 with no prior open findings",
+      "writer_form": "initial_slice",
+      "writer_schema_sha256": "fe6fc2ba4b16422c883905be4946baa572256c2d5ed385871fc53ac05999a060"
+    },
+    {
+      "evidence": {
+        "fixture_id": "claude-native-codex-claude-correction-loop-slice1-review-round2",
+        "kind": "request_bound"
+      },
+      "provider": "claude",
+      "representative_context": "slice convergence round 2 with prior findings",
+      "writer_form": "convergence",
+      "writer_schema_sha256": "9a3db92e0aa6de8e893aae9cfb6888246e2976c583072218691be7c43fc2946c"
+    },
+    {
+      "evidence": {
+        "kind": "live_canary",
+        "request_id": "native-review-request-174bcbd6d7fa76b351fed92e10509858393fcce4f64f13a5a9fa1c4578d15097",
+        "response_sha256": "1c8316db07b57561cacb29e0039e578b4455da4efcac5e945e91e28647601a62",
+        "status": "passed"
+      },
+      "provider": "claude",
+      "representative_context": "live isolated final-review canary",
+      "writer_form": "final",
+      "writer_schema_sha256": "09049d1bfdc89897c949d2318a7ddad501a3a12cdcd6faf738cd4cdff6f16ffa"
+    }
+  ]
+}

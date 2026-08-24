@@ -2,13 +2,24 @@
 
 ## Status
 
-**Planreview:** technisch blockiert, keine fachliche Claude-Entscheidung
+**Planreview:** nach mehreren Korrekturrunden freigegeben
 
-**Implementierungsfreigabe:** nicht erteilt
+**Implementierungsstand:** Slice 01 und Slice 02 freigegeben; Slice 03 nach
+Claude-Befunden `C-26` bis `C-28` korrigiert und zum Konvergenzreview bereit
 
 Dieses Dokument protokolliert die direkten Reviews des manuellen
 Contract-Closure-Arbeitspakets. Es ist eine menschenlesbare Auditansicht und
 keine technische Workflow- oder Recordquelle.
+
+Die vollständigen, fortgeschriebenen Slice-Reviews stehen in:
+
+- `docs/internal/native-agent-contract-closure-slice-01-review.md`
+- `docs/internal/native-agent-contract-closure-slice-02-review.md`
+- `docs/internal/native-agent-contract-closure-slice-03-review.md`
+
+Die nachfolgende erste Planreviewrunde bleibt als historischer, damals
+ablehnender Befund unverändert erhalten. Der korrigierte Arbeitsplan endet mit
+`PLAN_APPROVAL: YES`.
 
 ## Planreview vom 23. August 2026
 

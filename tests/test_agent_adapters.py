@@ -16,6 +16,8 @@ from agent_adapters import (
     ClaudeAdapter,
     CodexAdapter,
     NativeCodexAdapter,
+    NativeCodexExecutionBoundary,
+    NativeCodexExecutionMode,
     NativeClaudeReviewAdapter,
     build_agent_registry,
 )
@@ -258,6 +260,50 @@ def test_native_codex_adapter_uses_exact_request_and_output_schema() -> None:
         runtime_dir = schema_path.parent
         adapter.cleanup()
     assert not runtime_dir.exists()
+
+
+def test_native_codex_canary_boundary_is_read_only_and_outside_repository(
+    tmp_path: Path,
+) -> None:
+    repository_root = tmp_path / "repository"
+    execution_root = tmp_path / "canary" / "work"
+    evidence_root = tmp_path / "canary" / "evidence"
+    repository_root.mkdir()
+    execution_root.mkdir(parents=True)
+    evidence_root.mkdir(parents=True)
+    boundary = NativeCodexExecutionBoundary.canary(
+        repository_root,
+        execution_root=execution_root,
+        evidence_asset_root=evidence_root,
+    )
+    adapter = NativeCodexAdapter(_native_settings("codex"))
+    prepared = adapter.prepare_native_provider_input(
+        _native_codex_bundle(), boundary
+    )
+    try:
+        assert boundary.mode is NativeCodexExecutionMode.CANARY
+        assert prepared.command[prepared.command.index("--sandbox") + 1] == (
+            "read-only"
+        )
+        assert not boundary.execution_root.is_relative_to(boundary.repository_root)
+        assert not boundary.evidence_asset_root.is_relative_to(
+            boundary.repository_root
+        )
+    finally:
+        adapter.cleanup()
+
+
+def test_native_codex_canary_boundary_rejects_repository_paths(
+    tmp_path: Path,
+) -> None:
+    repository_root = tmp_path / "repository"
+    repository_root.mkdir()
+    with pytest.raises(ValueError, match="outside the repository"):
+        NativeCodexExecutionBoundary.canary(
+            repository_root,
+            execution_root=repository_root,
+            evidence_asset_root=tmp_path,
+        )
 
 
 def test_native_codex_adapter_rejects_unprobed_model_profile() -> None:

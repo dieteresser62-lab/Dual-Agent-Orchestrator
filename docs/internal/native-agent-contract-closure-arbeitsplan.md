@@ -695,6 +695,45 @@ Domänenlücke mehr hinter dem Provideraufruf verbleibt.
   jedem Canary bytegleich.
 - `python3 -m pytest tests/ -v` und `git diff --check` sind erfolgreich.
 
+#### Umsetzungsstand Slice 3 vom 24. August 2026
+
+- Inventur abgeschlossen und nach dem Slice-Review korrigiert: 14 erfolgreiche
+  native Rohantworten, zwölf
+  kanonische Claude-Requestdokumente, drei digestverifizierte und vollständig
+  übernommene `request_bound`-Paare sowie elf `schema_only`-Antworten. Drei
+  technische Failure-Envelopes sind separat katalogisiert und werden nicht als
+  Modellantworten fehlklassifiziert.
+- Alle drei `request_bound`-Paare bestehen das aus ihrem Originalrequest neu
+  erzeugte Writerschema und anschließend die vollständige lokale
+  Domänenbindung.
+- Die Differentialmatrix umfasst alle acht Writerformen, prüft jeden
+  registrierten Provider-Ausnahmeeintrag auf einen existierenden Regressionstest
+  und besitzt eine nachweislich rote Kontrolle mit absichtlich entfernter
+  Nonblank-Writerregel.
+- Die native Codex-Runtime besitzt eine typisierte Ausführungsgrenze. Produktion
+  bleibt bei Repository-CWD, `workspace-write` und Repository-Assetwurzel;
+  Canaries erzwingen `read-only` sowie CWD und Assetwurzel außerhalb des
+  Repositorys.
+- Erfolgreiche Livebelege liegen für Codex Plan, Implementierung, Korrektur und
+  Finalbericht sowie für Claude Plan und Finalreview vor. Initialer
+  Claude-Slice und Konvergenz sind durch echte `request_bound`-Paare belegt.
+- Ein erster Codex-Plan-Canary wurde lokal mit `slice-plan-invalid` abgewiesen,
+  weil das Modell für den einzigen Slice die ID `03` gewählt hatte. Diese
+  nicht über positional tuples ausdrückbare Restinvariante fällt unter den
+  bereits registrierten Fehlercode. Der vorhandene Ausnahmeeintrag wurde um
+  die konkret nachgewiesene 1-basierte Kontiguitätsinvariante und einen
+  Regressionstest erweitert, ohne die Ausnahmemenge zu vergrößern; der
+  präzisierte Canary mit der expliziten numerischen ID `1` bestand. Ein
+  paralleler Claude-Plan-Canary lieferte ein
+  technisches Provider-Envelope und bestand bei serieller, identischer
+  Wiederholung.
+- Alle Canaryaufrufe bestätigten bytegleichen
+  `git status --porcelain=v1 --untracked-files=all` vor und nach dem Aufruf.
+  Der Korrekturstand misst zusätzlich die gitignorierten Workflowstores
+  `.orchestrator/`, `inbox/` und `outbox/` rekursiv und fail-closed.
+  Die vollständige lokale Matrix und das Claude-Slice-Review bleiben die
+  abschließenden Freigabegrenzen.
+
 ## 6. Slice-Reihenfolge und Reviewgrenzen
 
 Die Slices sind absichtlich sequenziell:

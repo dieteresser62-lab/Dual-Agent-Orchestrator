@@ -18,6 +18,7 @@ from agent_adapters import (
     ClaudeAdapter,
     CodexAdapter,
     NativeCodexAdapter,
+    NativeCodexExecutionBoundary,
 )
 from agent_config import AgentSettings
 from agent_runtime import (
@@ -154,8 +155,11 @@ def test_run_native_codex_agent_parses_bound_result_without_text_contract(
     class FakeNativeCodex:
         name = "codex"
 
-        def prepare_native_provider_input(self, request_bundle):  # type: ignore[no-untyped-def]
+        def prepare_native_provider_input(  # type: ignore[no-untyped-def]
+            self, request_bundle, execution_boundary
+        ):
             assert request_bundle is bundle
+            assert execution_boundary.sandbox_mode == "workspace-write"
             return PreparedProviderInput(
                 command=("codex",),
                 stdin_text=bundle.canonical_json,
@@ -210,7 +214,10 @@ def test_native_codex_exposes_schema_valid_bytes_before_domain_rejection(
     class FakeNativeCodex:
         name = "codex"
 
-        def prepare_native_provider_input(self, request_bundle):  # type: ignore[no-untyped-def]
+        def prepare_native_provider_input(  # type: ignore[no-untyped-def]
+            self, request_bundle, execution_boundary
+        ):
+            assert execution_boundary.sandbox_mode == "workspace-write"
             return PreparedProviderInput(
                 command=("codex",),
                 stdin_text=request_bundle.canonical_json,
@@ -235,6 +242,72 @@ def test_native_codex_exposes_schema_valid_bytes_before_domain_rejection(
         )
     assert "slice-plan-invalid" in raised.value.technical_text
     assert persisted == [canonical]
+
+
+def test_native_codex_runtime_forwards_canary_execution_root(
+    monkeypatch, tmp_path: Path
+) -> None:
+    bundle = _runtime_native_codex_bundle()
+    repository_root = tmp_path / "repository"
+    execution_root = tmp_path / "isolated" / "work"
+    evidence_root = tmp_path / "isolated" / "evidence"
+    repository_root.mkdir()
+    execution_root.mkdir(parents=True)
+    evidence_root.mkdir(parents=True)
+    boundary = NativeCodexExecutionBoundary.canary(
+        repository_root,
+        execution_root=execution_root,
+        evidence_asset_root=evidence_root,
+    )
+    response = {
+        "schema_version": "native-agent-codex-result-v1",
+        "result_type": "plan_result",
+        "request_id": bundle.bound_context.request_id,
+        "ready": True,
+        "slice_plan": [
+            {
+                "slice_id": 1,
+                "summary": "Exercise the isolated runtime.",
+                "scope_paths": ["src/native_codex_contract.py"],
+            }
+        ],
+    }
+    captured: dict[str, object] = {}
+
+    class FakeNativeCodex:
+        name = "codex"
+
+        def prepare_native_provider_input(  # type: ignore[no-untyped-def]
+            self, request_bundle, execution_boundary
+        ):
+            captured["boundary"] = execution_boundary
+            return PreparedProviderInput(
+                command=("codex",),
+                stdin_text=request_bundle.canonical_json,
+                components=(
+                    ProviderInputComponent(
+                        "stdin_prompt", request_bundle.canonical_json
+                    ),
+                ),
+            )
+
+    def fake_run_agent(*args, **kwargs):  # type: ignore[no-untyped-def]
+        captured.update(kwargs)
+        return json.dumps(response)
+
+    monkeypatch.setattr(agent_runtime, "run_agent", fake_run_agent)
+    run_native_codex_agent(
+        FakeNativeCodex(),  # type: ignore[arg-type]
+        bundle,
+        config=OrchestratorConfig(repo_root=repository_root),
+        shorten=lambda value, _maximum: value or "",
+        operation="codex_plan",
+        binding_fingerprint="a" * 64,
+        execution_boundary=boundary,
+    )
+
+    assert captured["boundary"] is boundary
+    assert captured["execution_root_override"] == execution_root.resolve()
 
 
 def test_native_codex_checked_writes_raw_before_accepted_callback(

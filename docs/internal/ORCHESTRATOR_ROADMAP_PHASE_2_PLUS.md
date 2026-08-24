@@ -541,6 +541,43 @@ Das Paket ist der erste vollständige native Nutzpfad: Plan beziehungsweise
 Implementierung durch Codex, Review durch Claude, gegebenenfalls Korrektur und
 erneute Claude-Entscheidung müssen ohne textuelle Rollenmarker konvergieren.
 
+### 9.7a Contract Closure vor dem nächsten Bootstrap-Smoke-Test
+
+Der native Nutzpfad wird erst wieder als Bootstrap-Smoke-Test eingesetzt,
+nachdem seine allgemeinen Leseschemas und seine request-spezifischen
+Writerschemas nachweislich dieselbe fachliche Ergebnismenge beschreiben. Das
+manuelle Arbeitspaket `native-agent-contract-closure` schließt diese Grenze in
+drei direkt entwickelten und von Claude einzeln geprüften Slices.
+
+Stand 24. August 2026:
+
+- Slice 1 (Codex-Writerschemas) und Slice 2 (Claude-Writerschemas) sind von
+  Claude freigegeben und lokal committed.
+- Slice 3 hat 14 verfügbare native Rohantworten versioniert; zwölf vorhandene
+  kanonische Claude-Requests ergeben exakt drei digestverifizierte
+  `request_bound`-Paare. Nur diese Paare dürfen historische
+  Writer-/Domänenaussagen belegen; elf weitere Antworten bleiben
+  `schema_only`.
+- Die Differentialmatrix deckt alle acht Writerformen ab, prüft die typisierte
+  Provider-Ausnahmeliste und besitzt eine absichtlich gelockerte Writerregel
+  als rote Kontrolle.
+- Native Codex-Canaries laufen über dieselbe Adapter-/Runtimefunktion wie die
+  Produktion, aber über eine typisierte `read-only`-Grenze mit CWD und
+  Evidenzassetziel außerhalb des Repositorys. Erfolgreiche Canaries liegen für
+  Plan, Implementierung, Korrektur und Finalbericht vor.
+- Für Claude liegen erfolgreiche direkte Canaries für Plan und Finalreview vor;
+  initiale Slice- und Konvergenzformen sind durch echte `request_bound`-Paare
+  belegt.
+- Jeder Canary hat den vollständigen Git-Status vor und nach dem Aufruf
+  bytegleich gehalten. Kein Canary schreibt State, Checkpoints, Recordketten,
+  Inbox, Outbox oder Index.
+
+Der nächste Bootstrap-Smoke-Test ist erst nach grünem vollständigem Testlauf
+und Claudes Slice-3-Freigabe zulässig. Die Contract-Closure-Artefakte ersetzen
+keine End-to-End-Freigabe; sie beseitigen ausschließlich die zuvor häufige
+Klasse „provider-schema-valide, anschließend lokal wegen einer ebenfalls
+schema-ausdrückbaren Regel ungültig“.
+
 ### 9.8 Arbeitspaket 6 – Semantischer Evidence-Builder
 
 - offene Findings, Delta-Hunks und relevante Vertragskanten;
