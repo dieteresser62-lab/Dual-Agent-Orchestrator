@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 from typing import Any, Mapping
@@ -56,6 +57,15 @@ def _load_corpus() -> tuple[dict[str, Any], dict[str, Mapping[str, Any]]]:
         assert row["fixture_id"] not in rows
         rows[row["fixture_id"]] = row
     return manifest, rows
+
+
+def _probe_module():
+    path = ROOT / "scripts" / "native_contract_probe.py"
+    spec = importlib.util.spec_from_file_location("native_contract_probe", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _archive_native_response_paths() -> set[str]:
@@ -224,6 +234,7 @@ def test_native_contract_corpus_reader_writer_and_domain_results() -> None:
 def _validate_writer_form_evidence(
     manifest: Mapping[str, Any], rows: Mapping[str, Mapping[str, Any]]
 ) -> None:
+    probe = _probe_module()
     writer_forms = manifest["writer_forms"]
     fixtures = {item["fixture_id"]: item for item in manifest["fixtures"]}
     expected = {
@@ -257,6 +268,21 @@ def _validate_writer_form_evidence(
             )
             assert len(evidence["request_id"].removeprefix("native-")) > 64
             assert len(evidence["response_sha256"]) == 64
+            builder = (
+                probe._codex_canary_bundle
+                if item["provider"] == "codex"
+                else probe._claude_canary_bundle
+            )
+            bundle = builder(
+                item["writer_form"],
+                repo_root=ROOT,
+                base_commit=evidence["base_commit"],
+            )
+            assert bundle.bound_context.request_id == evidence["request_id"]
+            assert (
+                _sha256(bundle.provider_response_schema_json)
+                == item["writer_schema_sha256"]
+            )
 
 
 def test_writer_form_manifest_has_exactly_eight_closed_evidence_rows() -> None:
@@ -306,3 +332,33 @@ def test_writer_form_manifest_has_exactly_eight_closed_evidence_rows() -> None:
     request_bound_form["writer_schema_sha256"] = "0" * 64
     with pytest.raises(AssertionError):
         _validate_writer_form_evidence(wrong_digest, rows)
+
+
+@pytest.mark.parametrize(
+    ("provider", "writer_form"),
+    (
+        ("codex", "plan"),
+        ("codex", "implementation"),
+        ("codex", "correction"),
+        ("codex", "final_report"),
+        ("claude", "plan"),
+        ("claude", "convergence"),
+        ("claude", "final"),
+    ),
+)
+def test_live_canary_writer_schema_digest_mismatch_fails_closed(
+    provider: str, writer_form: str
+) -> None:
+    manifest, rows = _load_corpus()
+    mutated = copy.deepcopy(manifest)
+    row = next(
+        item
+        for item in mutated["writer_forms"]
+        if item["provider"] == provider and item["writer_form"] == writer_form
+    )
+    assert row["evidence"]["kind"] == "live_canary"
+    original = row["writer_schema_sha256"]
+    row["writer_schema_sha256"] = "0" * 64 if original != "0" * 64 else "1" * 64
+
+    with pytest.raises(AssertionError):
+        _validate_writer_form_evidence(mutated, rows)

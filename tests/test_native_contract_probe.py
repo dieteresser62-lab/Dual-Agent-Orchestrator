@@ -174,5 +174,9 @@ def test_all_live_canaries_rebuild_from_frozen_base_not_current_head(
             base_commit=evidence["base_commit"],
         )
         drifting = builder(row["writer_form"], repo_root=ROOT)
+        writer_schema_sha256 = hashlib.sha256(
+            frozen.provider_response_schema_json.encode("utf-8")
+        ).hexdigest()
         assert frozen.bound_context.request_id == evidence["request_id"]
+        assert writer_schema_sha256 == row["writer_schema_sha256"]
         assert drifting.bound_context.request_id != evidence["request_id"]

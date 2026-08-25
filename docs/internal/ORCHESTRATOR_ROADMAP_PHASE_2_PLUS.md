@@ -547,7 +547,7 @@ Der native Nutzpfad wird erst wieder als Bootstrap-Smoke-Test eingesetzt,
 nachdem seine allgemeinen Leseschemas und seine request-spezifischen
 Writerschemas nachweislich dieselbe fachliche Ergebnismenge beschreiben. Das
 manuelle Arbeitspaket `native-agent-contract-closure` schließt diese Grenze in
-fünf direkt entwickelten und von Claude einzeln geprüften Slices.
+sechs direkt entwickelten und einzeln geprüften Slices.
 
 Stand 24. August 2026:
 
@@ -589,9 +589,16 @@ Stand 24. August 2026:
   verwendeten Basiscommit. Ihre gespeicherten Request-IDs werden aus diesem
   eingefrorenen Commit rekonstruiert und hängen nicht mehr vom späteren
   Repository-`HEAD` ab.
+- Slice 6 bindet für alle sieben `live_canary`-Zeilen zusätzlich den SHA-256
+  der aus dem eingefrorenen Kontext rekonstruierten kanonischen
+  Writerschemabytes bitgenau an `writer_schema_sha256`. Eine siebenfache
+  Negativmatrix beweist, dass ein einzeln manipulierter Schemadigest jeder
+  Writerform fail-closed auffällt; Präfix-, Längen- oder Zeichenmengenprüfungen
+  genügen nicht.
 
 Der nächste Bootstrap-Smoke-Test ist erst nach grünem vollständigem Testlauf
-und Claudes Slice-5-Freigabe zulässig. Die Contract-Closure-Artefakte ersetzen
+und unabhängiger Freigabe des letzten Korrekturslices zulässig. Die
+Contract-Closure-Artefakte ersetzen
 keine End-to-End-Freigabe; sie beseitigen ausschließlich die zuvor häufige
 Klasse „provider-schema-valide, anschließend lokal wegen einer ebenfalls
 schema-ausdrückbaren Regel ungültig“.
