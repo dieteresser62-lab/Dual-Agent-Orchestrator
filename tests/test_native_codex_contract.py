@@ -349,29 +349,6 @@ def test_writer_schema_closes_finding_membership_and_cardinality() -> None:
             )
 
 
-def test_v2_result_schema_rejects_antigravity_finding_before_domain_conversion() -> None:
-    bound = _bound(
-        NativeCodexRequestKind.CORRECTION,
-        findings=(_finding(),),
-        test_changes_approved=True,
-    )
-    document = {
-        **_base(bound, "correction_result"),
-        "ready": True,
-        "test_files": [],
-        "finding_dispositions": [
-            {
-                "finding_id": "A-01",
-                "decision": "accepted",
-                "rationale": "A foreign reviewer finding must not cross v2.",
-            }
-        ],
-    }
-
-    with pytest.raises(SchemaMismatch):
-        validate_schema_document(document, load_native_codex_schema())
-
-
 def test_writer_schema_leaves_only_registered_disposition_order_exception() -> None:
     second = replace(_finding(), finding_id="C-02")
     bound = _bound(

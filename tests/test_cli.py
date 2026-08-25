@@ -96,10 +96,6 @@ def _isolate_process_environment(monkeypatch) -> None:
         "RUN_TASK_CLAUDE_TIMEOUT",
         "RUN_TASK_CLAUDE_EFFORT",
         "RUN_TASK_CLAUDE_MAX_BUDGET_USD",
-        "RUN_TASK_ANTIGRAVITY_BINARY",
-        "RUN_TASK_ANTIGRAVITY_MODEL",
-        "RUN_TASK_ANTIGRAVITY_TIMEOUT",
-        "RUN_TASK_ANTIGRAVITY_EFFORT",
         "RUN_TASK_QUOTA_AUTO_RESUME",
         "RUN_TASK_QUOTA_SAFETY_MARGIN",
         "RUN_TASK_QUOTA_MAX_WAIT",
@@ -374,7 +370,8 @@ def test_agent_setting_precedence_cli_over_environment_and_defaults(tmp_path: Pa
             "RUN_TASK_CLAUDE_TIMEOUT": "999",
             "RUN_TASK_CLAUDE_EFFORT": "low",
             "RUN_TASK_CLAUDE_MAX_BUDGET_USD": "1.0",
-            "RUN_TASK_ANTIGRAVITY_BINARY": "agy.exe",
+            "RUN_TASK_CODEX_MODEL": "gpt-env",
+            "RUN_TASK_CODEX_EFFORT": "high",
         },
     )
 
@@ -384,8 +381,9 @@ def test_agent_setting_precedence_cli_over_environment_and_defaults(tmp_path: Pa
     assert claude.timeout_seconds == 321
     assert claude.effort == "high"
     assert claude.max_budget_usd == 2.5
-    assert args.agent_settings["antigravity"].binary == "agy.exe"
-    assert args.agent_settings["codex"].model == "gpt-5.6-sol"
+    assert set(args.agent_settings) == {"codex", "claude"}
+    assert args.agent_settings["codex"].model == "gpt-env"
+    assert args.agent_settings["codex"].effort == "high"
 
 
 def test_quota_conscious_reviewer_defaults_are_explicit(tmp_path: Path) -> None:
@@ -395,8 +393,8 @@ def test_quota_conscious_reviewer_defaults_are_explicit(tmp_path: Path) -> None:
     assert args.agent_settings["claude"].effort == "high"
     assert args.agent_settings["claude"].timeout_seconds == 1800
     assert args.agent_settings["claude"].max_budget_usd is None
-    assert args.agent_settings["antigravity"].model == "gemini-3.7-flash-high"
-    assert args.agent_settings["antigravity"].effort == "high"
+    assert args.agent_settings["codex"].model == "gpt-5.6-sol"
+    assert args.agent_settings["codex"].effort == "medium"
 
 
 def test_manual_slice_gate_cli_overrides_repository_default(tmp_path: Path) -> None:
@@ -478,7 +476,6 @@ def test_gate_cli_records_explicit_approval_intent(tmp_path: Path) -> None:
         ({"RUN_TASK_CLAUDE_TIMEOUT": "0"}, "claude timeout"),
         ({"RUN_TASK_CLAUDE_EFFORT": "extreme"}, "claude effort"),
         ({"RUN_TASK_CLAUDE_MAX_BUDGET_USD": "free"}, "claude max budget"),
-        ({"RUN_TASK_ANTIGRAVITY_TIMEOUT": "nope"}, "antigravity timeout"),
     ],
 )
 def test_invalid_agent_environment_is_a_configuration_error(

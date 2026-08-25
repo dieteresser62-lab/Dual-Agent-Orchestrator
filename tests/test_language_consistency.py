@@ -276,7 +276,6 @@ def test_readme_defaults_and_environment_names_match_runtime(tmp_path: Path) -> 
         f"| `--transient-retry-max-auto-resumes <count>` | `{args.transient_retry_policy.maximum_auto_resumes}` |",
         "`claude`, `sonnet`, 1800s, `high`",
         "`codex`, `gpt-5.6-sol`, 1800s, `medium`",
-        "erkanntes `agy`, `gemini-3.7-flash-high`, 1800s, `high`",
         "`RUN_TASK_QUOTA_AUTO_RESUME`",
         "`RUN_TASK_QUOTA_SAFETY_MARGIN`",
         "`RUN_TASK_QUOTA_MAX_WAIT`",
@@ -293,7 +292,7 @@ def test_readme_defaults_and_environment_names_match_runtime(tmp_path: Path) -> 
     )
     dynamic_role_names = {
         f"RUN_TASK_{role.upper()}_{field.upper()}"
-        for role in ("codex", "claude", "antigravity")
+        for role in ("codex", "claude")
         for field in ("binary", "model", "timeout", "effort")
     }
     consumed_names = dynamic_role_names | {

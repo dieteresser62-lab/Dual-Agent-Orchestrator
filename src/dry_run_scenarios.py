@@ -181,7 +181,7 @@ class ScriptedAgentEvent:
     failure: ScriptedFailure | None = None
 
     def __post_init__(self) -> None:
-        if self.role not in {AgentRole.CODEX, AgentRole.CLAUDE, AgentRole.ANTIGRAVITY}:
+        if self.role not in {AgentRole.CODEX, AgentRole.CLAUDE}:
             raise ValueError("scripted event requires a workflow role")
         if self.work_unit_id < 1 or self.round_number < 1:
             raise ValueError("scripted event identity must be 1-based")

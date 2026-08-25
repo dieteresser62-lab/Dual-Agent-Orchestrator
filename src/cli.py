@@ -518,8 +518,8 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=None,
         help=(
-            "Require explicit fingerprint-bound approval after Claude and Antigravity "
-            "approve the plan (default: off)."
+            "Require explicit fingerprint-bound approval after Claude approves the "
+            "plan (default: off)."
         ),
     )
     parser.add_argument(
@@ -885,6 +885,13 @@ def parse_args(
         else:
             args.test_command = detect_test_command(repo_root)
 
+    args.agent_profile_overrides = frozenset(
+        (role, field)
+        for role in ("codex", "claude")
+        for field in ("model", "effort")
+        if getattr(args, f"{role}_{field}") is not None
+        or bool(env.get(f"RUN_TASK_{role.upper()}_{field.upper()}", "").strip())
+    )
     try:
         args.agent_settings = resolve_agent_settings(args, env)
     except AgentConfigError as exc:

@@ -63,7 +63,6 @@ class ArtifactBridgeError(RuntimeError):
 
 
 logger = logging.getLogger(__name__)
-_ANTIGRAVITY_TOOL_SCHEMA_FAILURE = "antigravity_tool_schema"
 
 
 def _now() -> str:
@@ -378,6 +377,8 @@ class ArtifactBridge:
         binding_fingerprint: str,
         work_unit_id: int | str,
         operation_instance: str | None = None,
+        model: str = "unknown",
+        effort: str = "unknown",
     ) -> ArtifactRecord:
         """Persist one physical provider start after all local preflights pass."""
         chain = self.store.load_chain()
@@ -459,19 +460,6 @@ class ArtifactBridge:
                 raise ArtifactBridgeError(
                     "provider attempt requires one terminal direct predecessor"
                 )
-            schema_failures = tuple(
-                record for record in prior
-                if record.payload.phase == "failed"
-                and record.payload.failure_kind == _ANTIGRAVITY_TOOL_SCHEMA_FAILURE
-            )
-            if schema_failures and not (
-                len(schema_failures) == 1
-                and schema_failures[0].payload.attempt_number == 1
-                and latest_attempt == 1
-            ):
-                raise ArtifactBridgeError(
-                    "Antigravity tool-schema failure permits only physical attempt 2"
-                )
         attempt_number = max(
             (record.payload.attempt_number for record in prior), default=0
         ) + 1
@@ -492,6 +480,8 @@ class ArtifactBridge:
             duration_seconds=None,
             failure_kind=None,
             usage=None,
+            model=model,
+            effort=effort,
         )
         record = self.append(
             payload,
@@ -566,6 +556,8 @@ class ArtifactBridge:
             duration_seconds=duration_seconds,
             failure_kind=failure_kind,
             usage=usage,
+            model=started.model,
+            effort=started.effort,
         )
         record = self.append(
             payload,

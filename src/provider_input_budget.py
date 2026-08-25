@@ -26,14 +26,6 @@ PROVIDER_OPERATIONS: Mapping[str, frozenset[str]] = {
             "claude_contract_repair",
         }
     ),
-    "antigravity": frozenset(
-        {
-            "antigravity_plan_review",
-            "antigravity_slice_review",
-            "antigravity_final_review",
-            "antigravity_contract_repair",
-        }
-    ),
 }
 PROVIDER_INPUT_COMPONENT_NAMES = frozenset(
     {
@@ -42,7 +34,6 @@ PROVIDER_INPUT_COMPONENT_NAMES = frozenset(
         "system_policy",
         "response_schema",
         "start_directive",
-        "prompt_file",
     }
 )
 INDEXED_COMPONENT_NAME = re.compile(

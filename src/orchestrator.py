@@ -151,6 +151,7 @@ from workflow import (
     normalize_review_contract,
 )
 from workflow_state import (
+    AgentProfileBinding,
     AgentFailureKind,
     GateReason,
     GateDecisionRecord,
@@ -567,7 +568,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
             # yields a completely valid contract. Codex still requires it here.
             validate_done_marker=(
                 (lambda _output: True)
-                if role in (AgentRole.CLAUDE, AgentRole.ANTIGRAVITY)
+                if role is AgentRole.CLAUDE
                 else _has_done
             ),
             reviewer_repository_required=reviewer_repository_required,
@@ -679,6 +680,8 @@ class ProductionWorkflowDriver(WorkflowDriver):
             binding_fingerprint=measurement.binding_fingerprint,
             work_unit_id=state.current_work_unit_id,
             operation_instance=operation_instance,
+            model=self.agents[measurement.provider].model,
+            effort=self.agents[measurement.provider].effort,
         )
 
     def _finish_provider_attempt(
@@ -1137,7 +1140,6 @@ class ProductionWorkflowDriver(WorkflowDriver):
             or step
             not in {
                 WorkflowStep.CLAUDE_SLICE_REVIEW,
-                WorkflowStep.ANTIGRAVITY_SLICE_REVIEW,
             }
         ):
             return None
@@ -3139,7 +3141,7 @@ def _overall_audit_entries(state: WorkflowState) -> tuple[OverallAuditEntry, ...
             )
         elif unit.kind is WorkUnitKind.FINAL_REVIEW:
             label = "Work Unit %02d – Gesamtreview" % unit.work_unit_id
-            summary = "Branchweite Gesamtabnahme durch Codex, Claude und Antigravity"
+            summary = "Branchweite Gesamtabnahme durch Codex und Claude"
             scope = tuple(
                 sorted({path for item in state.planned_slices for path in item.scope_paths})
             )
@@ -3623,6 +3625,8 @@ def _fresh_state(
     audit_report_path: str | None = None,
     native_claude_reviews: bool = False,
     native_codex_results: bool = False,
+    codex_profile: AgentProfileBinding = AgentProfileBinding("gpt-5.6-sol", "medium"),
+    claude_profile: AgentProfileBinding = AgentProfileBinding("sonnet", "high"),
 ) -> WorkflowState:
     identity = inspect_repository(repository_root)
     if identity.branch != task_contract.target_branch:
@@ -3668,6 +3672,8 @@ def _fresh_state(
                 if native_codex_results
                 else None
             ),
+            codex_profile=codex_profile,
+            claude_profile=claude_profile,
         ),
     )
     if task_contract.approved_plan_commit is not None:
@@ -3687,6 +3693,34 @@ def _fresh_state(
             step=WorkflowStep.CODEX_IMPLEMENTATION,
         )
     return state
+
+
+def _apply_resumed_agent_profiles(
+    args: argparse.Namespace, state: WorkflowState
+) -> None:
+    """Use persisted profiles unless the caller explicitly requested an equal value."""
+    binding = state.protocol_binding
+    if binding is None:
+        raise StateSchemaError("structured resume requires persisted agent profiles")
+    explicit = set(getattr(args, "agent_profile_overrides", ()))
+    settings = dict(args.agent_settings)
+    for role, profile in (
+        ("codex", binding.codex_profile),
+        ("claude", binding.claude_profile),
+    ):
+        current = settings[role]
+        for field in ("model", "effort"):
+            if (role, field) in explicit and getattr(current, field) != getattr(profile, field):
+                raise StateSchemaError(
+                    "AGENT-PROFILE-DIFF | explicit "
+                    f"{role} {field} differs from the immutable persisted profile"
+                )
+        settings[role] = replace(
+            current,
+            model=profile.model,
+            effort=profile.effort,
+        )
+    args.agent_settings = settings
 
 
 def _unused_run_id(repository_root: Path, proposed: str) -> str:
@@ -3855,6 +3889,7 @@ def run_production_workflow(
             )
         if state.audit_report_path is None and managed_audit_path is not None:
             state = replace(state, audit_report_path=managed_audit_path)
+        _apply_resumed_agent_profiles(args, state)
     else:
         if loaded is not None and not args.force_overwrite_state and not force_new:
             raise StateSchemaError(
@@ -3872,6 +3907,14 @@ def run_production_workflow(
             ),
             native_codex_results=bool(
                 getattr(args, "native_codex_results", False)
+            ),
+            codex_profile=AgentProfileBinding(
+                args.agent_settings["codex"].model,
+                args.agent_settings["codex"].effort,
+            ),
+            claude_profile=AgentProfileBinding(
+                args.agent_settings["claude"].model,
+                args.agent_settings["claude"].effort,
             ),
         )
     state = _attach_managed_audit_paths(state)

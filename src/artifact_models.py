@@ -65,7 +65,6 @@ class FingerprintKind(StrEnum):
 class Role(StrEnum):
     CODEX = "codex"
     CLAUDE = "claude"
-    ANTIGRAVITY = "antigravity"
     ORCHESTRATOR = "orchestrator"
     USER = "user"
 
@@ -532,6 +531,8 @@ class ProviderAttemptPayload:
     duration_seconds: float | None
     failure_kind: str | None
     usage: ProviderUsagePayload | None
+    model: str = "unknown"
+    effort: str = "unknown"
     record_type: ClassVar[RecordType] = RecordType.PROVIDER_ATTEMPT
 
     @property
@@ -547,6 +548,8 @@ class ProviderAttemptPayload:
         _require_sha256(self.binding_fingerprint, "binding_fingerprint")
         _require_identifier(self.measurement_record_id, "measurement_record_id")
         _require_sha256(self.input_digest, "input_digest")
+        _require_text(self.model, "provider attempt model")
+        _require_text(self.effort, "provider attempt effort")
         _require_positive(self.attempt_number, "attempt_number")
         if self.phase not in {"started", "succeeded", "failed"}:
             raise ArtifactValidationError("provider attempt phase is invalid")
@@ -954,6 +957,7 @@ def _payload_from_dict(record_type: RecordType, raw: Mapping[str, Any]) -> Artif
             data["input_digest"], data["attempt_number"], data["phase"], data["started_at"],
             data["ended_at"], data["duration_seconds"], data["failure_kind"],
             ProviderUsagePayload(**usage) if usage is not None else None,
+            data["model"], data["effort"],
         )
     if record_type is RecordType.FINAL_REVIEW_PREFLIGHT:
         return FinalReviewPreflightPayload(

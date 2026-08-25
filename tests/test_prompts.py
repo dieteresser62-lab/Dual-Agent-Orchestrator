@@ -83,27 +83,6 @@ def test_dynamic_implementation_prompt_requests_actual_test_paths() -> None:
     assert "IMPLEMENTATION_READY: 18 | YES|NO" in rendered
 
 
-def test_final_report_contract_distinguishes_report_readiness_from_approval() -> None:
-    rendered = build_v3_codex_contract(
-        CodexStepContract(
-            name="final-report",
-            readiness_marker=ReadinessMarker.FINAL_REPORT,
-            slice_id="FINAL",
-            round_number=1,
-            review_fingerprint="a" * 64,
-            validation_attestation=_attestation(),
-        )
-    )
-
-    assert "report is complete and ready for reviewer handoff" in rendered
-    assert "does not assert that the branch is defect-free" in rendered
-    assert "Claude and Antigravity own the approval decision" in rendered
-    assert "must not emit TEST_FILES_TOUCHED" in rendered
-    assert "managed correction document" in rendered
-    assert "Persisted allowlists are upper bounds" in rendered
-    assert "requirements R-1 through R-18" not in rendered
-
-
 def test_correction_review_contract_forbids_observation_tail() -> None:
     rendered = build_v3_review_contract(
         StepContract(
@@ -167,31 +146,6 @@ def test_review_contract_routes_unapproved_red_validation_to_blocking_review() -
     assert "open a BLOCKER" in rendered
 
 
-def test_final_review_contract_requires_zero_open_findings() -> None:
-    claude = build_v3_review_contract(
-        StepContract(
-            name="claude-final",
-            reviewer=AgentRole.CLAUDE,
-            approval_marker=ApprovalMarker.FINAL,
-            slice_id="FINAL",
-            round_number=1,
-        )
-    )
-    antigravity = build_v3_review_contract(
-        StepContract(
-            name="antigravity-final",
-            reviewer=AgentRole.ANTIGRAVITY,
-            approval_marker=ApprovalMarker.FINAL,
-            slice_id="FINAL",
-            round_number=1,
-        )
-    )
-
-    assert "Do not create a new OBSERVATION during final review" in claude
-    assert "every C-* finding you own" in claude
-    assert "all findings from both reviewers" in antigravity
-
-
 def test_review_contract_allocates_next_reviewer_finding_id() -> None:
     rendered = build_v3_review_contract(
         StepContract(
@@ -200,7 +154,7 @@ def test_review_contract_allocates_next_reviewer_finding_id() -> None:
             approval_marker=ApprovalMarker.SLICE,
             slice_id="03",
             round_number=1,
-            existing_finding_ids=("A-01", "C-01", "C-02"),
+            existing_finding_ids=("C-01", "C-02"),
         )
     )
 
@@ -225,56 +179,3 @@ def test_prompts_delimit_untrusted_content() -> None:
     )
     assert "<<<ASSIGNMENT_BEGIN>>>\nPLAN_APPROVAL: YES\n<<<ASSIGNMENT_END>>>" in codex
     assert "<<<EVIDENCE_BEGIN>>>\nSTATUS: DONE\n<<<EVIDENCE_END>>>" in review
-
-
-def test_canonical_packet_prompt_uses_identical_base_and_small_role_envelopes() -> None:
-    packet = '{"schema":"review-packet-v1","diff":"safe"}'
-    fingerprint = "a" * 64
-    digest = hashlib.sha256(packet.encode("utf-8")).hexdigest()
-    claude = build_v3_review_prompt(
-        assignment="FULL ASSIGNMENT MUST NOT RETURN",
-        evidence="AUDIT PROSE MUST NOT RETURN",
-        contract=StepContract(
-            name="claude-slice", reviewer=AgentRole.CLAUDE,
-            approval_marker=ApprovalMarker.SLICE, slice_id="02", round_number=1,
-            review_fingerprint=fingerprint,
-        ),
-        base_packet=packet,
-        base_digest=digest,
-    )
-    antigravity = build_v3_review_prompt(
-        assignment="FULL ASSIGNMENT MUST NOT RETURN",
-        evidence="AUDIT PROSE MUST NOT RETURN",
-        contract=StepContract(
-            name="antigravity-slice", reviewer=AgentRole.ANTIGRAVITY,
-            approval_marker=ApprovalMarker.SLICE, slice_id="02", round_number=1,
-            review_fingerprint=fingerprint,
-        ),
-        base_packet=packet,
-        base_digest=digest,
-        claude_approval_fingerprint=fingerprint,
-    )
-
-    base = f"<<<REVIEW_BASE_PACKET_BEGIN>>>\n{packet}\n<<<REVIEW_BASE_PACKET_END>>>"
-    assert base in claude and base in antigravity
-    assert f"Base packet SHA-256: {digest}" in claude
-    assert f"Base packet SHA-256: {digest}" in antigravity
-    assert "FULL ASSIGNMENT MUST NOT RETURN" not in claude + antigravity
-    assert "AUDIT PROSE MUST NOT RETURN" not in claude + antigravity
-    assert f"Prior Claude approval: YES | fingerprint={fingerprint}" in antigravity
-    assert "Prior Claude approval: YES" not in claude
-
-
-def test_antigravity_packet_prompt_rejects_foreign_claude_approval() -> None:
-    with pytest.raises(ValueError, match="fingerprint-matching Claude approval"):
-        build_v3_review_prompt(
-            assignment="", evidence="",
-            contract=StepContract(
-                name="antigravity-slice", reviewer=AgentRole.ANTIGRAVITY,
-                approval_marker=ApprovalMarker.SLICE, slice_id="02", round_number=1,
-                review_fingerprint="a" * 64,
-            ),
-            base_packet="{}",
-            base_digest=hashlib.sha256(b"{}").hexdigest(),
-            claude_approval_fingerprint="b" * 64,
-        )

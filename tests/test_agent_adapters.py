@@ -10,8 +10,6 @@ from agent_adapters import (
     AgentBudgetError,
     AgentOutputError,
     AgentPermissionError,
-    AntigravityAdapter,
-    ANTIGRAVITY_REVIEW_RESPONSE_MAX_CHARS,
     CLAUDE_REVIEW_PACKET_CHUNK_CHARS,
     ClaudeAdapter,
     CodexAdapter,
@@ -163,11 +161,10 @@ def test_registry_contains_exact_role_identities() -> None:
         {
             "codex": _settings("codex"),
             "claude": _settings("claude"),
-            "antigravity": _settings("antigravity", binary="agy"),
         }
     )
 
-    assert set(registry) == {"codex", "claude", "antigravity"}
+    assert set(registry) == {"codex", "claude"}
     assert "gemini" not in registry
 
 
@@ -192,7 +189,6 @@ def test_codex_command_is_configured_workspace_write_jsonl_and_stdin() -> None:
         assert message_path.parent.exists()
     finally:
         adapter.cleanup()
-
     assert not message_path.parent.exists()
 
 
@@ -692,19 +688,6 @@ def test_native_claude_extracts_only_complete_structured_result() -> None:
         adapter.cleanup()
 
 
-def test_prepared_antigravity_input_includes_file_schema_and_directive() -> None:
-    adapter = AntigravityAdapter(_settings("antigravity", binary="agy"))
-    prepared = adapter.prepare_provider_input("complete review request")
-    try:
-        by_name = {item.name: item.content for item in prepared.components}
-        assert by_name["prompt_file"] == "complete review request"
-        assert json.loads(by_name["response_schema"])["required"] == ["response"]
-        assert "Read the complete request" in by_name["start_directive"]
-        assert prepared.stdin_text is None
-    finally:
-        adapter.cleanup()
-
-
 def test_claude_json_envelope_tracks_usage_and_rejects_permission_denials() -> None:
     adapter = ClaudeAdapter(_settings("claude"))
     success = json.dumps(
@@ -852,21 +835,6 @@ def test_capability_smoke_is_explicit_and_binds_harness_into_snapshot(
     finally:
         claude.cleanup()
 
-    antigravity = AntigravityAdapter(
-        _settings("antigravity", binary="agy"), review_harness=harness
-    )
-    antigravity.bind_reviewer_workspace(source, snapshot)
-    antigravity_command, _ = antigravity.build_capability_smoke_command(
-        "diagnose", test_command="python3 -m pytest tests/ -v"
-    )
-    try:
-        assert str(snapshot / "src" / "review_harness.py") in antigravity_command[-1]
-        assert "python3 -m pytest tests/ -v" in antigravity_command[-1]
-        assert "capability diagnostic" in antigravity_command[-1]
-    finally:
-        antigravity.cleanup()
-
-
 def test_claude_review_packet_is_losslessly_chunked_with_dynamic_read_budget() -> None:
     prompt = ("line\n" * 9_000) + ("x" * 30_000)
     adapter = ClaudeAdapter(_settings("claude"))
@@ -904,286 +872,3 @@ def test_claude_review_chunk_bound_is_exclusive_at_newline_edge() -> None:
         )
     finally:
         adapter.cleanup()
-
-
-def test_antigravity_print_is_last_option_and_long_prompt_is_file_backed() -> None:
-    long_prompt = "PRIVATE-PROMPT-" + ("x" * 100_000)
-    adapter = AntigravityAdapter(
-        _settings(
-            "antigravity",
-            binary="agy.exe",
-            model="gemini-model",
-            effort="high",
-            timeout=900,
-        )
-    )
-    command, use_stdin = adapter.build_command(long_prompt)
-    print_index = command.index("--print")
-    add_dir = Path(command[command.index("--add-dir") + 1])
-    prompt_path = add_dir / "review-prompt.md"
-
-    try:
-        assert command[0] == "agy.exe"
-        assert command[command.index("--model") + 1] == "gemini-model"
-        assert command[command.index("--effort") + 1] == "high"
-        assert command[command.index("--output-format") + 1] == "json"
-        schema = json.loads(command[command.index("--json-schema") + 1])
-        assert schema["properties"]["response"]["maxLength"] == (
-            ANTIGRAVITY_REVIEW_RESPONSE_MAX_CHARS
-        )
-        assert command[command.index("--print-timeout") + 1] == "900s"
-        assert "--sandbox" in command
-        assert "--dangerously-skip-permissions" in command
-        assert "--mode" not in command
-        assert print_index == len(command) - 2
-        assert long_prompt not in command
-        assert prompt_path.name in command[-1]
-        assert str(prompt_path.parent) not in command[-1]
-        assert prompt_path.read_text(encoding="utf-8") == long_prompt
-        assert use_stdin is False
-    finally:
-        adapter.cleanup()
-
-    assert not add_dir.exists()
-
-
-def test_antigravity_exposes_bound_snapshot_as_repository_search_root(
-    tmp_path: Path,
-) -> None:
-    source = tmp_path / "source"
-    snapshot = tmp_path / "snapshot" / "repo"
-    source.mkdir()
-    snapshot.mkdir(parents=True)
-    adapter = AntigravityAdapter(_settings("antigravity", binary="agy"))
-    adapter.bind_reviewer_workspace(source, snapshot)
-    command, use_stdin = adapter.build_command("review request")
-    add_dirs = [
-        Path(command[index + 1])
-        for index, value in enumerate(command)
-        if value == "--add-dir"
-    ]
-    runtime_dir = add_dirs[0]
-
-    try:
-        assert add_dirs == [runtime_dir, snapshot.resolve()]
-        assert runtime_dir != snapshot.resolve()
-        assert (runtime_dir / "review-prompt.md").is_file()
-        assert (
-            "Use the supplied read-only repository working directory for every "
-            "repository-relative search or read."
-        ) in command[-1]
-        assert str(snapshot.resolve()) not in command[-1]
-        assert use_stdin is False
-    finally:
-        adapter.cleanup()
-
-    assert not runtime_dir.exists()
-
-
-def test_antigravity_json_envelope_requires_success_and_trims_chatter() -> None:
-    adapter = AntigravityAdapter(_settings("antigravity", binary="agy"))
-    output = adapter.extract_output(
-        json.dumps(
-            {
-                "status": "SUCCESS",
-                "response": "SLICE_APPROVAL: 03 | YES\nSTATUS: DONE\nextra",
-                "num_turns": 1,
-            }
-        ),
-        "",
-        {},
-    )
-
-    assert output.endswith("STATUS: DONE")
-    assert "extra" not in output
-    assert adapter.metadata["num_turns"] == 1
-
-    for opening_fence in ("```text", "```"):
-        fenced = adapter.extract_output(
-            json.dumps(
-                {
-                    "status": "SUCCESS",
-                    "response": (
-                        f"{opening_fence}\n"
-                        "REVIEWER: antigravity\n"
-                        "TEST_FILES_TOUCHED: NONE\n"
-                        "REVIEW_EVIDENCE: scope | risk | break\n"
-                        "PRE_MORTEM: drift\n"
-                        "SLICE_APPROVAL: 04 | YES\n"
-                        "STATUS: DONE\n"
-                        "```"
-                    ),
-                }
-            ),
-            "",
-            {},
-        )
-        assert fenced.startswith("REVIEWER: antigravity")
-        assert fenced.endswith("STATUS: DONE")
-        assert "```" not in fenced
-
-    prefixed_fence = adapter.extract_output(
-        json.dumps(
-            {
-                "status": "SUCCESS",
-                "response": (
-                    "Unexpected preamble\n"
-                    "```text\n"
-                    "REVIEWER: antigravity\n"
-                    "STATUS: DONE\n"
-                    "```"
-                ),
-            }
-        ),
-        "",
-        {},
-    )
-    assert prefixed_fence.startswith("Unexpected preamble\n```text")
-
-    with pytest.raises(AgentOutputError, match="non-success") as exc_info:
-        adapter.extract_output(
-            json.dumps(
-                {
-                    "status": "ERROR",
-                    "error": "temporary network failure",
-                    "response": "REVIEWER: antigravity\nnetwork is a residual risk",
-                }
-            ),
-            "",
-            {},
-        )
-    assert exc_info.value.provider_text == "temporary network failure"
-    assert "response" not in (exc_info.value.provider_data or {})
-
-    with pytest.raises(AgentOutputError) as schema_exc:
-        adapter.extract_output(
-            json.dumps(
-                {
-                    "status": "ERROR",
-                    "error": "additional properties 'LineNumber' not allowed",
-                    "duration_seconds": 1.25,
-                    "num_turns": 2,
-                    "usage": {"input_tokens": 11, "output_tokens": 3},
-                    "response": "SLICE_APPROVAL: 01 | YES\nSTATUS: DONE",
-                    "structured_output": {"response": "NEW_FINDING: A-01"},
-                }
-            ),
-            "",
-            {},
-        )
-    assert schema_exc.value.provider_data == {
-        "status": "ERROR",
-        "error": "additional properties 'LineNumber' not allowed",
-    }
-    assert adapter.metadata["duration_seconds"] == 1.25
-    assert adapter.metadata["num_turns"] == 2
-    assert adapter.metadata["usage"] == {"input_tokens": 11, "output_tokens": 3}
-
-    structured = adapter.extract_output(
-        json.dumps(
-            {
-                "status": "SUCCESS",
-                "response": json.dumps(
-                    {"response": "REVIEWER: antigravity\nSTATUS: DONE"}
-                ),
-            }
-        ),
-        "",
-        {},
-    )
-    assert structured.startswith("REVIEWER: antigravity")
-
-
-@pytest.mark.parametrize(
-    ("response", "preserved"),
-    (
-        (
-            "Here is the corrected output complying with the STATE-V3 CONTRACT:\n"
-            "```text\nREVIEWER: antigravity\nSTATUS: DONE\n```",
-            "REVIEWER: antigravity",
-        ),
-        (
-            "```text\r\n"
-            "REVIEWER: antigravity\r\n"
-            "REVIEW_EVIDENCE: scope | risk | break\r\n"
-            "PRE_MORTEM: drift\r\n"
-            "SLICE_APPROVAL: 04 | YES\r\n"
-            "STATUS: DONE\r\n"
-            "```",
-            "REVIEW_EVIDENCE: scope | risk | break",
-        ),
-        (
-            "```text\nREVIEWER: antigravity\nSTATUS: DONE   \n```",
-            "REVIEWER: antigravity",
-        ),
-        (
-            "```text\nREVIEWER: antigravity\nSTATUS: DONE\n\n```",
-            "REVIEWER: antigravity",
-        ),
-        (
-            "```TEXT\nreviewer: antigravity\nstatus: done\n```",
-            "reviewer: antigravity",
-        ),
-        (
-            "```text\n"
-            "REVIEWER: antigravity\n"
-            "REVIEW_EVIDENCE: discussed a literal marker\n"
-            "STATUS: DONE\n"
-            "PRE_MORTEM: the decoy marker must not truncate this line\n"
-            "SLICE_APPROVAL: 04 | YES\n"
-            "STATUS: DONE\n"
-            "```",
-            "PRE_MORTEM: the decoy marker must not truncate this line",
-        ),
-    ),
-)
-def test_antigravity_unwraps_only_complete_contract_fences(
-    response: str,
-    preserved: str,
-) -> None:
-    adapter = AntigravityAdapter(_settings("antigravity", binary="agy"))
-
-    output = adapter.extract_output(
-        json.dumps({"status": "SUCCESS", "response": response}),
-        "",
-        {},
-    )
-
-    assert output.upper().startswith("REVIEWER: ANTIGRAVITY")
-    assert output.upper().endswith("STATUS: DONE")
-    assert preserved in output
-    assert "```" not in output
-    assert "\r" not in output
-
-
-def test_antigravity_does_not_unwrap_malformed_closing_fence() -> None:
-    adapter = AntigravityAdapter(_settings("antigravity", binary="agy"))
-    response = (
-        "```text\n"
-        "REVIEWER: antigravity\n"
-        "STATUS: DONE\n"
-        "```text"
-    )
-
-    output = adapter.extract_output(
-        json.dumps({"status": "SUCCESS", "response": response}),
-        "",
-        {},
-    )
-
-    assert output.startswith("```text\nREVIEWER: antigravity")
-    assert "```text" in output
-
-
-@pytest.mark.parametrize(
-    "warning",
-    [
-        "Warning: --mode plan has no effect when --disable-slash-commands is set",
-        "Permission request rejected by policy",
-    ],
-)
-def test_incompatible_cli_warnings_are_failures(warning: str) -> None:
-    adapter = AntigravityAdapter(_settings("antigravity", binary="agy"))
-
-    with pytest.raises(AgentOutputError):
-        adapter.validate_process_output(warning)

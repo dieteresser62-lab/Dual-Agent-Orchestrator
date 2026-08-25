@@ -1159,11 +1159,6 @@ def test_final_preflight_denial_exposes_affected_paths_on_resume_gate(
             "CODEX-FINAL-RESULT-MISSING",
             WorkflowStep.CODEX_FINAL_REVIEW,
         ),
-        (
-            WorkflowStep.ANTIGRAVITY_FINAL_REVIEW,
-            "CLAUDE-FINAL-APPROVAL-MISSING",
-            WorkflowStep.CLAUDE_FINAL_REVIEW,
-        ),
     ],
 )
 def test_final_preflight_missing_prerequisite_rewinds_without_manual_resume(

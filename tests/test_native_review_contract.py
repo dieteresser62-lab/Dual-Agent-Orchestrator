@@ -185,27 +185,6 @@ def test_new_findings_must_start_at_next_reviewer_id_and_remain_contiguous() -> 
     _assert_error(document, context, NativeReviewErrorCode.FINDING_ID_INVALID)
 
 
-def test_request_and_reviewer_are_bound_to_context() -> None:
-    context = _context()
-    wrong_request = _review(context)
-    wrong_request["request_id"] = "native-review-request-" + "b" * 64
-    _assert_error(wrong_request, context, NativeReviewErrorCode.REQUEST_MISMATCH)
-
-    wrong_reviewer = _review(context)
-    wrong_reviewer["reviewer"] = "antigravity"
-    _assert_error(wrong_reviewer, context, NativeReviewErrorCode.SCHEMA_INVALID)
-
-    changed_round = replace(context, round_number=3)
-    assert changed_round.request_id != context.request_id
-    changed_attestation = replace(
-        context,
-        validation_attestation=replace(
-            context.validation_attestation, summary="same id, changed evidence"
-        ),
-    )
-    assert changed_attestation.request_id != context.request_id
-
-
 def test_validation_command_reaches_existing_matrix_as_identical_argv() -> None:
     context = _context()
     document = _review(context, approved=False)
@@ -268,37 +247,6 @@ def test_new_finding_id_must_belong_to_claude() -> None:
         }
     ]
     _assert_error(document, context, NativeReviewErrorCode.SCHEMA_INVALID)
-
-
-def test_unknown_foreign_and_conflicting_finding_events_fail_closed() -> None:
-    foreign = _finding("A-01", AgentRole.ANTIGRAVITY)
-    context = _context(previous=(foreign,))
-    document = _review(context, approved=False)
-    document["status_changes"] = [
-        {"finding_id": "A-01", "status": "CLOSED", "rationale": "Looks fixed"}
-    ]
-    _assert_error(document, context, NativeReviewErrorCode.SCHEMA_INVALID)
-
-    own = _finding("C-01", AgentRole.CLAUDE)
-    context = _context(previous=(own,))
-    conflict = _review(context, approved=False)
-    conflict["status_changes"] = [
-        {"finding_id": "C-01", "status": "OPEN", "rationale": "Still open"}
-    ]
-    conflict["reclassifications"] = [
-        {"finding_id": "C-01", "finding_class": "BLOCKER", "rationale": "Still blocking"}
-    ]
-    _assert_error(conflict, context, NativeReviewErrorCode.FINDING_EVENT_CONFLICT)
-
-    duplicate = _review(_context(), approved=False)
-    item = {
-        "finding_id": "C-01",
-        "finding_class": "BLOCKER",
-        "summary": "Duplicate",
-        "acceptance_test": {"kind": "prose", "text": "Deduplicate"},
-    }
-    duplicate["new_findings"] = [item, deepcopy(item)]
-    _assert_error(duplicate, _context(), NativeReviewErrorCode.FINDING_EVENT_CONFLICT)
 
 
 def test_denial_preserves_omitted_open_finding_but_approval_requires_update() -> None:

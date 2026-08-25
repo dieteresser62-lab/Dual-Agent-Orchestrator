@@ -907,7 +907,6 @@ class WorkflowHistory:
     attestations: tuple[ValidationAttestation, ...] = ()
     last_claude_fingerprint: str | None = None
     latest_claude_review: ContractResult | None = None
-    latest_antigravity_review: ContractResult | None = None
     codex_final_report: str | None = None
     active_review_packet: ReviewPacket | None = None
 
@@ -935,7 +934,6 @@ class WorkflowHistory:
             "attestations": [_attestation_to_dict(item) for item in self.attestations],
             "last_claude_fingerprint": self.last_claude_fingerprint,
             "latest_claude_review": _review_to_dict(self.latest_claude_review),
-            "latest_antigravity_review": _review_to_dict(self.latest_antigravity_review),
             "codex_final_report": self.codex_final_report,
         }
         if self.active_review_packet is not None:
@@ -956,7 +954,6 @@ class WorkflowHistory:
         expected = {
             "work_unit_id", "findings", "events", "attestations",
             "last_claude_fingerprint", "latest_claude_review",
-            "latest_antigravity_review",
         }
         allowed = {*expected, "codex_final_report", "active_review_packet"}
         if not expected.issubset(raw) or not set(raw).issubset(allowed):
@@ -991,7 +988,6 @@ class WorkflowHistory:
                 else str(raw["last_claude_fingerprint"])
             ),
             latest_claude_review=_review_from_dict(raw["latest_claude_review"]),
-            latest_antigravity_review=_review_from_dict(raw["latest_antigravity_review"]),
             codex_final_report=(
                 None
                 if raw.get("codex_final_report") is None
@@ -1281,7 +1277,7 @@ class WorkflowRunResult:
 
 
 class WorkflowEngine:
-    """Additive state-v3 engine for the asymmetric Codex/Claude/Antigravity chain."""
+    """Additive state-v3 engine for the Codex/Claude chain."""
 
     def __init__(
         self,
@@ -1391,7 +1387,6 @@ class WorkflowEngine:
                     active_history,
                     last_claude_fingerprint=None,
                     latest_claude_review=None,
-                    latest_antigravity_review=None,
                 )
                 self.driver.checkpoint(state, active_history)
 
@@ -1430,17 +1425,6 @@ class WorkflowEngine:
             ):
                 state, active_history = self._run_review(
                     state, context, active_history, AgentRole.CLAUDE
-                )
-                if state.current_work_unit.status is not WorkUnitStatus.IN_PROGRESS:
-                    return WorkflowRunResult(state, active_history)
-                continue
-            if step in (
-                WorkflowStep.ANTIGRAVITY_PLAN_REVIEW,
-                WorkflowStep.ANTIGRAVITY_SLICE_REVIEW,
-                WorkflowStep.ANTIGRAVITY_FINAL_REVIEW,
-            ):
-                state, active_history = self._run_review(
-                    state, context, active_history, AgentRole.ANTIGRAVITY
                 )
                 if state.current_work_unit.status is not WorkUnitStatus.IN_PROGRESS:
                     return WorkflowRunResult(state, active_history)
@@ -2164,27 +2148,16 @@ class WorkflowEngine:
         reviewer: AgentRole,
     ) -> tuple[WorkflowState, WorkflowHistory]:
         unit = state.current_work_unit
-        is_plan_review = state.current_step in {
-            WorkflowStep.CLAUDE_PLAN_REVIEW,
-            WorkflowStep.ANTIGRAVITY_PLAN_REVIEW,
-        }
-        is_final_review = state.current_step in {
-            WorkflowStep.CLAUDE_FINAL_REVIEW,
-            WorkflowStep.ANTIGRAVITY_FINAL_REVIEW,
-        }
+        if reviewer is not AgentRole.CLAUDE:
+            raise WorkflowExecutionError("only Claude may execute review steps")
+        is_plan_review = state.current_step is WorkflowStep.CLAUDE_PLAN_REVIEW
+        is_final_review = state.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW
         native_claude_review = (
             reviewer is AgentRole.CLAUDE
             and state.protocol_binding is not None
             and state.protocol_binding.claude_review_transport
             == NATIVE_CLAUDE_REVIEW_TRANSPORT
         )
-        if reviewer is AgentRole.ANTIGRAVITY and (
-            history.latest_claude_review is None
-            or history.latest_claude_review.approval is not True
-        ):
-            raise WorkflowExecutionError(
-                "Antigravity cannot run before an approving Claude review"
-            )
         replay_loader = getattr(self.driver, "recover_pending_reviewer", None)
         replay = (
             replay_loader(
@@ -2334,22 +2307,12 @@ class WorkflowEngine:
                         state = state.complete_current_work_unit()
                     else:
                         state = state.with_current_step(WorkflowStep.SLICE_COMMIT)
-                else:
-                    state = state.with_current_step(
-                        WorkflowStep.ANTIGRAVITY_SLICE_REVIEW
-                        if reviewer is AgentRole.CLAUDE
-                        else WorkflowStep.SLICE_COMMIT
-                    )
             else:
                 own_ids = tuple(
                     item.finding_id for item in result.own_open_blockers
                 )
                 state = state.record_review_denial(
-                    reviewer=(
-                        Reviewer.CLAUDE
-                        if reviewer is AgentRole.CLAUDE
-                        else Reviewer.ANTIGRAVITY
-                    ),
+                    reviewer=Reviewer.CLAUDE,
                     open_findings=own_ids,
                     return_step=WorkflowStep.CODEX_FINAL_CORRECTION,
                 )
@@ -2414,19 +2377,6 @@ class WorkflowEngine:
             if context.dynamic_test_scope
             else context.expected_test_files
         )
-        if reviewer is AgentRole.ANTIGRAVITY:
-            claude_validation = history.latest_claude_review.validation
-            if (
-                claude_validation is None
-                or claude_validation.diff_fingerprint != changes.fingerprint
-            ):
-                logger.warning(
-                    "Claude approval does not match the current fingerprint; "
-                    "rewinding automatically from Antigravity to Claude review."
-                )
-                state = state.with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW)
-                self.driver.checkpoint(state, history)
-                return state, history
         try:
             attestation, history = self._attestation(
                 changes,
@@ -2446,8 +2396,7 @@ class WorkflowEngine:
             self.driver.checkpoint(state, history)
             return state, history
         # Persist the state-v3 mirror of a newly appended attestation before
-        # invoking either reviewer.  Antigravity reuses the same attestation,
-        # and the idempotent checkpoint keeps both transitions symmetric.
+        # invoking Claude. The idempotent checkpoint protects record-ahead recovery.
         self.driver.checkpoint(state, history)
         if not attestation.complete:
             raise WorkflowExecutionError(
@@ -2525,52 +2474,41 @@ class WorkflowEngine:
                 if evidence_kind is EvidenceKind.CORRECTION_DELTA
                 else "slice"
             )
-            if reviewer is AgentRole.ANTIGRAVITY:
-                review_packet = history.active_review_packet
-                if (
-                    review_packet is None
-                    or review_packet.fingerprint != changes.fingerprint
-                    or review_packet.purpose != packet_purpose
-                ):
-                    raise WorkflowExecutionError(
-                        "Antigravity requires Claude's fingerprint-matching base packet"
-                    )
-            else:
-                try:
-                    packet_paths = tuple(
-                        path
-                        for path in changes.paths
-                        if path != context.audit_report_path
-                        and not path.startswith(".orchestrator/")
-                        and not path.startswith("docs/internal/slice-")
-                    )
-                    excluded_packet_paths = tuple(
-                        path for path in changes.paths if path not in packet_paths
-                    )
-                    review_packet = build_review_packet(
-                        purpose=packet_purpose,
-                        fingerprint=changes.fingerprint,
-                        start_fingerprint=start_fingerprint,
-                        paths=packet_paths,
-                        review_diff=exclude_review_diff_paths(
-                            review_diff, excluded_packet_paths
-                        ),
-                        plan_text=context.approved_plan_text,
-                        slice_id=unit.slice_id,
-                        attestation=attestation,
-                        findings=history.findings,
-                        affected_finding_ids=(
-                            unit.open_findings
-                            if packet_purpose == "correction"
-                            else ()
-                        ),
-                    )
-                except ReviewPacketError as exc:
-                    raise WorkflowExecutionError(
-                        f"canonical review packet could not be built: {exc}"
-                    ) from exc
-                history = replace(history, active_review_packet=review_packet)
-                self.driver.checkpoint(state, history)
+            try:
+                packet_paths = tuple(
+                    path
+                    for path in changes.paths
+                    if path != context.audit_report_path
+                    and not path.startswith(".orchestrator/")
+                    and not path.startswith("docs/internal/slice-")
+                )
+                excluded_packet_paths = tuple(
+                    path for path in changes.paths if path not in packet_paths
+                )
+                review_packet = build_review_packet(
+                    purpose=packet_purpose,
+                    fingerprint=changes.fingerprint,
+                    start_fingerprint=start_fingerprint,
+                    paths=packet_paths,
+                    review_diff=exclude_review_diff_paths(
+                        review_diff, excluded_packet_paths
+                    ),
+                    plan_text=context.approved_plan_text,
+                    slice_id=unit.slice_id,
+                    attestation=attestation,
+                    findings=history.findings,
+                    affected_finding_ids=(
+                        unit.open_findings
+                        if packet_purpose == "correction"
+                        else ()
+                    ),
+                )
+            except ReviewPacketError as exc:
+                raise WorkflowExecutionError(
+                    f"canonical review packet could not be built: {exc}"
+                ) from exc
+            history = replace(history, active_review_packet=review_packet)
+            self.driver.checkpoint(state, history)
             prompt = (
                 ""
                 if native_claude_review
@@ -2580,11 +2518,7 @@ class WorkflowEngine:
                     contract=contract,
                     base_packet=review_packet.text,
                     base_digest=review_packet.digest,
-                    claude_approval_fingerprint=(
-                        history.last_claude_fingerprint
-                        if reviewer is AgentRole.ANTIGRAVITY
-                        else None
-                    ),
+                    claude_approval_fingerprint=None,
                 )
             )
         else:
@@ -2773,75 +2707,13 @@ class WorkflowEngine:
             return state, history
 
         if result.approval is True:
-            if reviewer is AgentRole.CLAUDE:
-                structured_v2 = (
-                    state.protocol_binding is not None
-                    and state.protocol_binding.mode is ProtocolMode.STRUCTURED_V2
-                )
-                if is_plan_review and unit.kind is WorkUnitKind.PLAN and structured_v2:
-                    if context.plan_gate:
-                        state = state.await_user_gate(
-                            reason=GateReason.PLAN_APPROVAL,
-                            detail=(
-                                "PLAN-APPROVAL | Claude approved the bound plan; "
-                                "explicit user approval is required before execution"
-                            ),
-                            fingerprint=fingerprint,
-                            paths=user_gate_paths,
-                            gate_step=(
-                                WorkflowStep.SLICE_COMMIT
-                                if context.plan_only
-                                else WorkflowStep.COMPLETED
-                            ),
-                        )
-                    elif context.plan_only:
-                        state = state.with_current_step(WorkflowStep.SLICE_COMMIT)
-                    else:
-                        state = state.complete_current_work_unit()
-                elif is_plan_review and unit.kind is WorkUnitKind.PLAN:
-                    state = state.with_current_step(
-                        WorkflowStep.ANTIGRAVITY_PLAN_REVIEW
-                    )
-                elif is_plan_review:
-                    decision = self._latest_anchor_approval(state)
-                    if decision is None or decision.resume_step is None:
-                        raise WorkflowExecutionError(
-                            "anchor plan review has no persisted resume target"
-                        )
-                    key = f"anchor-plan-reviewed:{decision.fingerprint}"
-                    state = state.mark_side_effect_completed(key)
-                    state = state.with_current_step(decision.resume_step)
-                elif is_final_review and structured_v2:
-                    open_findings = tuple(
-                        finding
-                        for finding in history.findings
-                        if finding.status is FindingStatus.OPEN
-                    )
-                    if open_findings:
-                        raise WorkflowExecutionError(
-                            "final review cannot complete with open findings: "
-                            + ", ".join(
-                                finding.finding_id for finding in open_findings
-                            )
-                        )
-                    state = state.complete_current_work_unit()
-                elif is_final_review:
-                    state = state.with_current_step(
-                        WorkflowStep.ANTIGRAVITY_FINAL_REVIEW
-                    )
-                elif structured_v2:
-                    state = state.with_current_step(WorkflowStep.SLICE_COMMIT)
-                else:
-                    state = state.with_current_step(
-                        WorkflowStep.ANTIGRAVITY_SLICE_REVIEW
-                    )
-            elif is_plan_review and unit.kind is WorkUnitKind.PLAN:
+            if is_plan_review and unit.kind is WorkUnitKind.PLAN:
                 if context.plan_gate:
                     state = state.await_user_gate(
                         reason=GateReason.PLAN_APPROVAL,
                         detail=(
-                            "PLAN-APPROVAL | Claude and Antigravity approved the bound "
-                            "plan; explicit user approval is required before execution"
+                            "PLAN-APPROVAL | Claude approved the bound plan; explicit "
+                            "user approval is required before execution"
                         ),
                         fingerprint=fingerprint,
                         paths=user_gate_paths,
@@ -2855,6 +2727,15 @@ class WorkflowEngine:
                     state = state.with_current_step(WorkflowStep.SLICE_COMMIT)
                 else:
                     state = state.complete_current_work_unit()
+            elif is_plan_review:
+                decision = self._latest_anchor_approval(state)
+                if decision is None or decision.resume_step is None:
+                    raise WorkflowExecutionError(
+                        "anchor plan review has no persisted resume target"
+                    )
+                key = f"anchor-plan-reviewed:{decision.fingerprint}"
+                state = state.mark_side_effect_completed(key)
+                state = state.with_current_step(decision.resume_step)
             elif is_final_review:
                 open_findings = tuple(
                     finding
@@ -2904,11 +2785,7 @@ class WorkflowEngine:
                 else WorkflowStep.CODEX_CORRECTION
             )
             state = state.record_review_denial(
-                reviewer=(
-                    Reviewer.CLAUDE
-                    if reviewer is AgentRole.CLAUDE
-                    else Reviewer.ANTIGRAVITY
-                ),
+                reviewer=Reviewer.CLAUDE,
                 open_findings=own_ids,
                 return_step=return_step,
             )
@@ -2949,10 +2826,6 @@ class WorkflowEngine:
                             WorkflowStep.CLAUDE_FINAL_REVIEW,
                             "CODEX-FINAL-RESULT-MISSING",
                         ): WorkflowStep.CODEX_FINAL_REVIEW,
-                        (
-                            WorkflowStep.ANTIGRAVITY_FINAL_REVIEW,
-                            "CLAUDE-FINAL-APPROVAL-MISSING",
-                        ): WorkflowStep.CLAUDE_FINAL_REVIEW,
                     }.get((state.current_step, code))
                     if (
                         rewind_step is not None
@@ -3113,13 +2986,6 @@ class WorkflowEngine:
             and (unit.kind is WorkUnitKind.PLAN or fingerprint is not None)
             and prior_auto_resumes < transient_policy.maximum_auto_resumes
         )
-        automatic_tool_schema = (
-            error.kind is AgentFailureKind.ANTIGRAVITY_TOOL_SCHEMA
-            and transient_policy.automatic
-            and role is AgentRole.ANTIGRAVITY
-            and (unit.kind is WorkUnitKind.PLAN or fingerprint is not None)
-            and not matching_failures
-        )
         transient_delay = min(
             transient_policy.maximum_delay_seconds,
             transient_policy.initial_delay_seconds * (2 ** prior_auto_resumes),
@@ -3127,10 +2993,10 @@ class WorkflowEngine:
         resume_at = (
             quota_resume_at if error.kind is AgentFailureKind.QUOTA else
             now_utc + timedelta(seconds=transient_delay)
-            if automatic_network or automatic_tool_schema else
+            if automatic_network else
             None
         )
-        automatic = automatic_quota or automatic_network or automatic_tool_schema
+        automatic = automatic_quota or automatic_network
         prior_continuations = sum(item.automatic_resume for item in matching_failures)
         record = InvocationFailureRecord(
             invocation_id=error.invocation_id,
@@ -3238,14 +3104,6 @@ class WorkflowEngine:
                 resume_step=failure.step,
             )
             return halted, True
-        if fingerprint_changed:
-            claude_step = {
-                WorkflowStep.ANTIGRAVITY_PLAN_REVIEW: WorkflowStep.CLAUDE_PLAN_REVIEW,
-                WorkflowStep.ANTIGRAVITY_SLICE_REVIEW: WorkflowStep.CLAUDE_SLICE_REVIEW,
-                WorkflowStep.ANTIGRAVITY_FINAL_REVIEW: WorkflowStep.CLAUDE_FINAL_REVIEW,
-            }.get(failure.step)
-            if claude_step is not None:
-                state = state.with_current_step(claude_step)
         return state, False
 
     def _validate_or_repair_review(
@@ -3450,12 +3308,11 @@ class WorkflowEngine:
             "findings": result.findings,
             "events": (*history.events, event),
         }
-        if result.reviewer is AgentRole.CLAUDE:
-            if track_slice_approval:
-                updates["last_claude_fingerprint"] = fingerprint
-                updates["latest_claude_review"] = result
-        else:
-            updates["latest_antigravity_review"] = result
+        if result.reviewer is not AgentRole.CLAUDE:
+            raise WorkflowExecutionError("review history accepts only Claude results")
+        if track_slice_approval:
+            updates["last_claude_fingerprint"] = fingerprint
+            updates["latest_claude_review"] = result
         return replace(history, **updates)
 
     def _commit(
@@ -3541,7 +3398,6 @@ class WorkflowEngine:
                 history,
                 last_claude_fingerprint=None,
                 latest_claude_review=None,
-                latest_antigravity_review=None,
             )
             self.driver.checkpoint(state, history)
             return WorkflowRunResult(state, history)
@@ -3611,7 +3467,6 @@ class WorkflowEngine:
                 history,
                 last_claude_fingerprint=None,
                 latest_claude_review=None,
-                latest_antigravity_review=None,
             )
             self.driver.checkpoint(state, history)
             return state, history, False

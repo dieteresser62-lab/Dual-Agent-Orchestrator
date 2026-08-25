@@ -201,7 +201,8 @@ def test_provider_attempt_start_terminal_and_resume_are_stable(tmp_path: Path) -
     )
 
     first = bridge.start_provider_attempt(
-        measurement_record=measurement, binding_fingerprint=DIGEST, work_unit_id="1"
+        measurement_record=measurement, binding_fingerprint=DIGEST, work_unit_id="1",
+        model="sonnet", effort="high",
     )
     terminal = bridge.finish_provider_attempt(
         first, duration_seconds=1.5, failure_kind=None,
@@ -212,7 +213,8 @@ def test_provider_attempt_start_terminal_and_resume_are_stable(tmp_path: Path) -
         usage=ProviderUsagePayload(input_tokens=0, output_tokens=9),
     )
     second = bridge.start_provider_attempt(
-        measurement_record=measurement, binding_fingerprint=DIGEST, work_unit_id="1"
+        measurement_record=measurement, binding_fingerprint=DIGEST, work_unit_id="1",
+        model="sonnet", effort="high",
     )
 
     assert isinstance(first.payload, ProviderAttemptPayload)
@@ -222,21 +224,9 @@ def test_provider_attempt_start_terminal_and_resume_are_stable(tmp_path: Path) -
     assert terminal.idempotency_key.endswith(":1:terminal")
     assert second.payload.attempt_number == 2
     assert second.payload.phase == "started"
+    assert first.payload.model == terminal.payload.model == "sonnet"
+    assert first.payload.effort == terminal.payload.effort == "high"
     assert bridge.store.load_chain()[-1] == second
-
-
-def test_v2_rejects_antigravity_measurement_before_append(
-    tmp_path: Path,
-) -> None:
-    bridge = ArtifactBridge(ArtifactStore(tmp_path, "run-schema"))
-    with pytest.raises(ArtifactValidationError, match="identify one agent"):
-        replace(
-            _measurement(),
-            provider=Role.ANTIGRAVITY,
-            role=Role.ANTIGRAVITY,
-            operation="antigravity_slice_review",
-        )
-    assert bridge.store.load_chain() == ()
 
 
 def test_provider_attempt_requires_terminal_direct_predecessor(tmp_path: Path) -> None:

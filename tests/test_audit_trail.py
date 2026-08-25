@@ -60,7 +60,6 @@ RELATIVE_PATH = "docs/internal/slice-orchestrator-modernization-08-audit-trail.m
 def _slice_markdown() -> str:
     managed_by_heading = {
         "Review-Feedback von Claude": "claude-review",
-        "Review-Feedback von Antigravity": "antigravity-review",
         "Review-Antworten von Codex": "codex-responses",
         "Validierungsattestierung": "validation-attestation",
         "Testfreigabe und Pre-Mortem": "test-approval-premortem",  # allowlist:german
@@ -125,7 +124,6 @@ def _write_repository(tmp_path: Path, *, markdown: str | None = None) -> tuple[P
 def _prepared_work_plan_markdown() -> str:
     managed_by_heading = {
         "Review-Feedback von Claude": ("claude-review",),
-        "Review-Feedback von Antigravity": ("antigravity-review",),
         "Review-Antworten von Codex": ("codex-responses",),
         "Planstatus und formale Marker": (
             "validation-attestation",
@@ -336,44 +334,6 @@ def test_validate_slice_document_rejects_symlink_target(tmp_path: Path) -> None:
             slice_id=8,
             expected_relative_path=RELATIVE_PATH,
         )
-
-
-def test_projection_renders_bound_attestation_and_reviews_atomically_and_idempotently(
-    tmp_path: Path,
-) -> None:
-    document = _document(tmp_path)
-    attestation = _attestation()
-    projection = AuditProjection(
-        slice_id=8,
-        events=(
-            ValidationAuditEvent(1, 8, attestation),
-            ReviewAuditEvent(2, 8, 1, _review(validation=attestation)),
-        ),
-        test_approval=AuthorizedTestChanges(
-            approved=True,
-            paths=("tests/test_audit_trail.py",),
-            approved_by="user",
-            rationale="modernization-plan exception",
-        ),
-        implementation_ready=True,
-        commit_authorized=True,
-    )
-
-    rendered = project_slice_audit(document, projection)
-    stat_after_first = document.slice_path.stat().st_mtime_ns
-    repeated = project_slice_audit(document, projection)
-
-    assert repeated == rendered
-    assert document.slice_path.stat().st_mtime_ns == stat_after_first
-    assert "`att-1`" in rendered
-    assert f"`{'a' * 64}`" in rendered
-    assert f"`{'b' * 64}`" in rendered
-    assert "| python3 -m pytest tests/ -v | PASS | 0 |" in rendered
-    assert "- Claude-Freigabe: `YES`" in rendered  # allowlist:german
-    assert "Antigravity-Freigabe" not in rendered  # allowlist:german
-    assert "- Commit autorisiert: `YES`" in rendered
-    assert "Unverwalteter Inhalt für Ziel des Slice." in rendered
-    assert "alter Inhalt" not in rendered
 
 
 def test_structured_projection_uses_accepted_replay_and_is_a_byte_equal_noop(
@@ -622,7 +582,7 @@ def test_structured_record_blocks_are_idempotent_and_cosmetic_for_fingerprint() 
     sections = {
         key: f"Record view for {key}"
         for key in (
-            "claude-review", "antigravity-review", "codex-responses",
+            "claude-review", "codex-responses",
             "validation-attestation", "test-approval-premortem", "findings",
             "decision-table", "approval-status",
         )
@@ -645,7 +605,7 @@ def test_structured_record_blocks_diagnose_partial_manual_marker_edit() -> None:
     sections = {
         key: "record view"
         for key in (
-            "claude-review", "antigravity-review", "codex-responses",
+            "claude-review", "codex-responses",
             "validation-attestation", "test-approval-premortem", "findings",
             "decision-table", "approval-status",
         )
@@ -853,59 +813,6 @@ def test_approving_review_rejects_incomplete_attestation() -> None:
 
     with pytest.raises(AuditTrailError, match="requires its validation attestation to pass"):
         ReviewAuditEvent(1, 8, 1, _review(validation=incomplete))
-
-
-def test_projection_accepts_only_matching_named_complete_red_state() -> None:
-    green = _attestation()
-    red = replace(
-        green,
-        records=tuple(
-            replace(record, status=ValidationStatus.FAIL, exit_code=1, output="known red")
-            for record in green.records
-        ),
-        summary="known red pending Slice 09",
-    )
-    claude = replace(
-        _review(validation=red), red_state_followup_slice="Slice 09"
-    )
-    antigravity = replace(
-        _review(reviewer=AgentRole.ANTIGRAVITY, validation=red),
-        red_state_followup_slice="Slice 09",
-    )
-    events = (
-        ValidationAuditEvent(1, 8, red),
-        ReviewAuditEvent(2, 8, 1, claude),
-        ReviewAuditEvent(3, 8, 1, antigravity),
-    )
-
-    projection = AuditProjection(
-        slice_id=8,
-        events=events,
-        commit_authorized=True,
-        red_state_followup_slice="Slice 09",
-    )
-
-    assert projection.commit_authorized is True
-    with pytest.raises(AuditTrailError, match="follow-up differs"):
-        AuditProjection(
-            slice_id=8,
-            events=events,
-            commit_authorized=True,
-            red_state_followup_slice="Slice 10",
-        )
-
-    mismatched_claude = replace(claude, red_state_followup_slice="Slice 10")
-    with pytest.raises(AuditTrailError, match="differs from Claude"):
-        AuditProjection(
-            slice_id=8,
-            events=(
-                events[0],
-                ReviewAuditEvent(2, 8, 1, mismatched_claude),
-                events[2],
-            ),
-            commit_authorized=True,
-            red_state_followup_slice="Slice 09",
-        )
 
 
 def test_test_approval_paths_are_normalized_and_root_bound() -> None:

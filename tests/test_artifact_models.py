@@ -209,7 +209,7 @@ def test_stable_id_binds_run_type_logical_identity_and_positive_revision() -> No
 
 def test_finding_ownership_and_codex_response_do_not_allow_foreign_closure() -> None:
     with pytest.raises(ArtifactValidationError, match="reporting reviewer"):
-        FindingTransitionPayload("C-01", Role.CLAUDE, Role.ANTIGRAVITY, "status_changed", FindingSeverity.BLOCKER, "closed", "fixed")
+        FindingTransitionPayload("C-01", Role.CLAUDE, Role.CODEX, "status_changed", FindingSeverity.BLOCKER, "closed", "fixed")
     with pytest.raises(ArtifactValidationError, match="cannot close"):
         FindingTransitionPayload("C-01", Role.CLAUDE, Role.CODEX, "responded", FindingSeverity.BLOCKER, "closed", "fixed")
 
@@ -321,23 +321,6 @@ def test_native_review_transport_rejects_partial_binding(
         )
 
 
-def test_native_review_transport_rejects_non_claude_reviewer() -> None:
-    with pytest.raises(
-        ArtifactValidationError,
-        match="reviewer must be claude",
-    ):
-        ReviewPayload(
-            Role.ANTIGRAVITY,
-            "work-01",
-            "denied",
-            (),
-            "checked",
-            "native-claude-review-v2",
-            f"native-review-request-{'b' * 64}",
-            "c" * 64,
-        )
-
-
 def test_canonical_json_is_utf8_sorted_compact_and_rejects_nan() -> None:
     assert canonical_json({"z": "ä", "a": ["x y", "x/y"]}) == b'{"a":["x y","x/y"],"z":"\xc3\xa4"}'
     with pytest.raises(ValueError):
@@ -360,15 +343,6 @@ def test_provider_attempt_phase_and_usage_are_fail_closed() -> None:
         )
     with pytest.raises(ArtifactValidationError, match="non-negative"):
         ProviderUsagePayload(output_tokens=-1)
-
-    with pytest.raises(ArtifactValidationError, match="identify one agent"):
-        ProviderAttemptPayload(
-            Role.ANTIGRAVITY, Role.ANTIGRAVITY, "antigravity_slice_review", "1",
-            "provider-operation-schema", DIGEST, "measurement-schema", "b" * 64, 1,
-            "failed", CREATED_AT, "2026-08-18T10:30:01+00:00", 1.0,
-            "antigravity_tool_schema",
-            ProviderUsagePayload(input_tokens=8, output_tokens=1, turns=1),
-        )
 
     failed = _record(
         ProviderAttemptPayload(

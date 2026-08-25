@@ -35,7 +35,6 @@ class ArtifactProjectionError(ValueError):
 
 SECTION_KEYS = (
     "claude-review",
-    "antigravity-review",
     "codex-responses",
     "validation-attestation",
     "test-approval-premortem",
@@ -158,7 +157,6 @@ def render_replay_sections(replay: ArtifactReplayResult) -> Mapping[str, str]:
     digest = replay.semantic_digest
     reviews = {
         Role.CLAUDE: [],
-        Role.ANTIGRAVITY: [],
     }
     responses: list[str] = []
     validations: list[str] = []
@@ -364,7 +362,8 @@ def render_replay_sections(replay: ArtifactReplayResult) -> Mapping[str, str]:
         validations.append(
             f"- Providerattempt-Summe Run `{_safe(replay.expected_run_id)}` / "
             f"Operation `{_safe(logical_operation_id)}` (`{first.provider.value}/"
-            f"{_safe(first.operation)}`): Attempts `{len(attempts)}`, offen `{open_count}`, "
+            f"{_safe(first.operation)}`; Modell `{_safe(first.model)}`; Effort "
+            f"`{_safe(first.effort)}`): Attempts `{len(attempts)}`, offen `{open_count}`, "
             f"Duration `{known_duration:.6f}` (bekannt `{duration_known}`, unbekannt "
             f"`{len(attempts) - duration_known}`); " + "; ".join(summaries)
         )
@@ -381,6 +380,7 @@ def render_replay_sections(replay: ArtifactReplayResult) -> Mapping[str, str]:
             validations.append(
                 f"  - {sequence}. `{record.record_id}`: Attempt `{payload.attempt_number}` "
                 f"= `{payload.phase}`; Messung `{payload.measurement_record_id}`; "
+                f"Modell `{_safe(payload.model)}`; Effort `{_safe(payload.effort)}`; "
                 f"Duration `{payload.duration_seconds if payload.duration_seconds is not None else 'unknown'}`; "
                 f"Fehler `{_safe(payload.failure_kind or 'none')}`; Usage `{usage}`"
             )
@@ -421,7 +421,6 @@ def render_replay_sections(replay: ArtifactReplayResult) -> Mapping[str, str]:
 
     return {
         "claude-review": _block(header, reviews[Role.CLAUDE], "Keine Claude-Review-Records."),
-        "antigravity-review": _block(header, reviews[Role.ANTIGRAVITY], "Keine Antigravity-Review-Records."),
         "codex-responses": _block(header, responses, "Keine Codex-Findingantworten."),
         "validation-attestation": _block(header, validations, "Keine Validierungsrecords."),
         "test-approval-premortem": _block(header, gates, "Keine strukturierten Gates."),

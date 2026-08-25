@@ -70,27 +70,6 @@ operation = "claude_final_review"
 max_chars = 4000000
 max_bytes = 16000000
 
-[[provider_input_budget]]
-provider = "antigravity"
-role = "antigravity"
-operation = "antigravity_plan_review"
-max_chars = 4000000
-max_bytes = 16000000
-
-[[provider_input_budget]]
-provider = "antigravity"
-role = "antigravity"
-operation = "antigravity_slice_review"
-max_chars = 4000000
-max_bytes = 16000000
-
-[[provider_input_budget]]
-provider = "antigravity"
-role = "antigravity"
-operation = "antigravity_final_review"
-max_chars = 4000000
-max_bytes = 16000000
-
 [workflow]
 manual_slice_gate = false
 plan_gate = false

@@ -12,7 +12,7 @@ DELIMITED_SECTION_PATTERN = re.compile(
     r"<<<\s*([A-Z_]+)_BEGIN\s*>>>.*?<<<\s*\1_END\s*>>>",
     re.IGNORECASE | re.DOTALL,
 )
-SOURCE_FINDING_ID_PATTERN = re.compile(r"^(C|A)-(0[1-9]|[1-9][0-9]*)$")
+SOURCE_FINDING_ID_PATTERN = re.compile(r"^C-(0[1-9]|[1-9][0-9]*)$")
 ANCHOR_ID_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]*$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 VALIDATION_RECORD_OUTPUT_MAX_CHARS = 4_000
@@ -25,7 +25,6 @@ class ContractValidationError(ValueError):
 class AgentRole(str, Enum):
     CODEX = "codex"
     CLAUDE = "claude"
-    ANTIGRAVITY = "antigravity"
 
 
 class ApprovalMarker(str, Enum):
@@ -116,8 +115,8 @@ class FindingOrigin:
             raise ValueError("finding origin requires a slice id")
         if self.round_number < 1:
             raise ValueError("finding origin round must be 1-based")
-        if self.reporter not in (AgentRole.CLAUDE, AgentRole.ANTIGRAVITY):
-            raise ValueError("finding reporter must be claude or antigravity")
+        if self.reporter is not AgentRole.CLAUDE:
+            raise ValueError("finding reporter must be claude")
 
 
 @dataclass(frozen=True)
@@ -349,8 +348,8 @@ class StepContract:
     def __post_init__(self) -> None:
         if not self.name.strip():
             raise ValueError("step contract requires a name")
-        if self.reviewer not in (AgentRole.CLAUDE, AgentRole.ANTIGRAVITY):
-            raise ValueError("review step requires claude or antigravity")
+        if self.reviewer is not AgentRole.CLAUDE:
+            raise ValueError("review step requires claude")
         if not self.slice_id.strip():
             raise ValueError("step contract requires a slice id")
         if self.round_number < 1:
@@ -557,9 +556,8 @@ def strip_delimited_sections(text: str) -> str:
 def _validate_finding_id(finding_id: str, reporter: AgentRole) -> None:
     match = SOURCE_FINDING_ID_PATTERN.fullmatch(finding_id)
     if not match:
-        raise ValueError(f"invalid finding id '{finding_id}' (expected C-01 or A-01)")
-    expected_prefix = "C" if reporter is AgentRole.CLAUDE else "A"
-    if match.group(1) != expected_prefix:
+        raise ValueError(f"invalid finding id '{finding_id}' (expected C-01)")
+    if reporter is not AgentRole.CLAUDE:
         raise ValueError(
             f"finding id '{finding_id}' does not match reporter {reporter.value}"
         )
@@ -962,16 +960,6 @@ def validate_review_response(
                 raise ContractValidationError(
                     "final approval is invalid while a finding is open for this reviewer"
                 )
-            if contract.reviewer is AgentRole.ANTIGRAVITY:
-                open_findings = tuple(
-                    finding
-                    for finding in findings
-                    if finding.status is FindingStatus.OPEN
-                )
-                if open_findings:
-                    raise ContractValidationError(
-                        "Antigravity final approval requires zero open findings"
-                    )
     elif not own_open_blockers:
         raise ContractValidationError(
             "negative approval requires an open BLOCKER owned by this reviewer"

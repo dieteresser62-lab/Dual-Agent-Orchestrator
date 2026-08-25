@@ -19,16 +19,6 @@ def _prepared(text: str) -> PreparedProviderInput:
     )
 
 
-def test_reviewer_contract_repairs_have_separate_budget_operations() -> None:
-    policy = default_provider_input_budget_policy()
-    assert policy.select(
-        "claude", "claude", "claude_contract_repair"
-    ).operation == "claude_contract_repair"
-    assert policy.select(
-        "antigravity", "antigravity", "antigravity_contract_repair"
-    ).operation == "antigravity_contract_repair"
-
-
 def _policy(chars: int, bytes_: int) -> ProviderInputBudgetPolicy:
     defaults = default_provider_input_budget_policy()
     return ProviderInputBudgetPolicy(

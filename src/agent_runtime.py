@@ -427,7 +427,7 @@ def _compact_stream_text(
             return None
         text = candidate.strip()
     elif channel == "stdout" and adapter.reviewer:
-        # Claude and Antigravity emit their complete result and usage metadata as
+        # Claude emits its complete result and usage metadata as
         # one JSON line. The extracted contract summary is logged after parsing.
         return None
     # Non-JSON diagnostics (normally stderr warnings) remain visible. Compact
@@ -1028,7 +1028,6 @@ def run_agent(
         effective_operation = operation or {
             "codex": "codex_implementation",
             "claude": "claude_slice_review",
-            "antigravity": "antigravity_slice_review",
         }.get(agent_key)
         if effective_operation is None:
             raise ValueError(f"provider input operation is required for {agent_key}")
@@ -1642,7 +1641,7 @@ def parse_quota_reset(
     local_timezone: tzinfo | None = None,
 ) -> QuotaReset | None:
     """Parse only unambiguous provider reset evidence, normalized to UTC."""
-    if agent_key not in {"codex", "claude", "antigravity"}:
+    if agent_key not in {"codex", "claude"}:
         raise ValueError("quota parser requires a known agent role")
     if received_at.tzinfo is None or received_at.utcoffset() is None:
         raise ValueError("quota parser received_at must be timezone-aware")
@@ -1919,17 +1918,6 @@ _CLAUDE_SESSION_LIMIT_PATTERN = re.compile(
     r"(?i)\byou(?:'ve| have) hit your session limit\b"
 )
 
-_ANTIGRAVITY_TRANSIENT_PROVIDER_PATTERNS = (
-    re.compile(
-        r"(?i)\Athe stream was interrupted\. please continue the task you were "
-        r"working on\.\Z"
-    ),
-    re.compile(
-        r"(?i)\Acontentoffset [0-9]+ exceeds line range size [0-9]+\Z"
-    ),
-)
-
-
 _PROVIDER_DIAGNOSTIC_KEYS = frozenset(
     {
         "status",
@@ -1962,32 +1950,6 @@ def _sanitize_provider_diagnostic(value: object) -> dict[str, object] | None:
         elif isinstance(child, (str, int, float, bool)) or child is None:
             sanitized[str(key)] = child
     return sanitized or None
-
-
-_ANTIGRAVITY_TOOL_SCHEMA_ERROR = "additional properties 'LineNumber' not allowed"
-
-
-def _is_antigravity_tool_schema_failure(
-    agent_key: str,
-    exc: BaseException,
-    provider_data: Mapping[str, object] | None,
-) -> bool:
-    """Match only the known failed agy envelope, never free-form diagnostics."""
-    if (
-        agent_key != "antigravity"
-        or not isinstance(exc, AgentOutputError)
-        or not isinstance(provider_data, Mapping)
-        or provider_data.get("status") != "ERROR"
-    ):
-        return False
-    error = provider_data.get("error")
-    if isinstance(error, str):
-        message: object = error
-    elif isinstance(error, Mapping):
-        message = error.get("message")
-    else:
-        return False
-    return message == _ANTIGRAVITY_TOOL_SCHEMA_ERROR
 
 
 def _is_claude_structured_output_retry_exhaustion(
@@ -2037,19 +1999,6 @@ def classify_agent_failure(
         )
         and _CLAUDE_SESSION_LIMIT_PATTERN.search(technical_text) is not None
     )
-    antigravity_transient_provider_failure = (
-        agent_key == "antigravity"
-        and isinstance(exc, AgentOutputError)
-        and isinstance(provider_data, Mapping)
-        and str(provider_data.get("status") or "").upper() == "ERROR"
-        and any(
-            pattern.fullmatch(technical_text.strip()) is not None
-            for pattern in _ANTIGRAVITY_TRANSIENT_PROVIDER_PATTERNS
-        )
-    )
-    antigravity_tool_schema_failure = _is_antigravity_tool_schema_failure(
-        agent_key, exc, provider_data
-    )
     claude_structured_output_retry_exhaustion = (
         _is_claude_structured_output_retry_exhaustion(
             agent_key, exc, provider_data
@@ -2075,9 +2024,7 @@ def classify_agent_failure(
             exit_code=process_exit_code if isinstance(process_exit_code, int) else None,
             provider_data=provider_data,
         )
-    if antigravity_tool_schema_failure:
-        kind = AgentFailureKind.ANTIGRAVITY_TOOL_SCHEMA
-    elif claude_structured_output_retry_exhaustion:
+    if claude_structured_output_retry_exhaustion:
         # The Claude CLI completed without a model result after exhausting its
         # provider-internal schema retries. Reuse the existing bounded,
         # fingerprint-bound transient retry policy instead of treating this
@@ -2092,20 +2039,6 @@ def classify_agent_failure(
     elif any(marker in lowered for marker in ("unauthorized", "authentication", "invalid api key", "401", "403")):
         kind = AgentFailureKind.AUTH
     elif any(marker in lowered for marker in ("dns", "name resolution", "connection", "network", "econn", "socket", "loopback", "egress")):
-        kind = AgentFailureKind.NETWORK
-    elif antigravity_transient_provider_failure:
-        # agy completed locally but its remote reader/stream failed before a
-        # review contract existed. Retry only these exact technical envelopes
-        # through the existing bounded, fingerprint-bound network policy.
-        kind = AgentFailureKind.NETWORK
-    elif (
-        agent_key == "antigravity"
-        and "remote error: run bash: fork/exec" in lowered
-        and "no such file or directory" in lowered
-    ):
-        # The local agy executable completed and reported a missing shell in its
-        # remote tool runtime. Treat that provider-instance failure as bounded
-        # transient infrastructure, never as a missing local CLI binary.
         kind = AgentFailureKind.NETWORK
     elif isinstance(exc, FileNotFoundError) or "no such file" in lowered or "missing cli binary" in lowered:
         kind = AgentFailureKind.BINARY

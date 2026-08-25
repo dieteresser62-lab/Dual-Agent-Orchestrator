@@ -268,14 +268,16 @@ def test_projection_reduces_attempts_and_keeps_unknown_usage_explicit(tmp_path) 
         fingerprint_sha256="a" * 64,
     )
     first = bridge.start_provider_attempt(
-        measurement_record=measurement, binding_fingerprint="a" * 64, work_unit_id="1"
+        measurement_record=measurement, binding_fingerprint="a" * 64, work_unit_id="1",
+        model="sonnet", effort="high",
     )
     bridge.finish_provider_attempt(
         first, duration_seconds=2.0, failure_kind="network",
         usage=ProviderUsagePayload(input_tokens=0, output_tokens=5),
     )
     bridge.start_provider_attempt(
-        measurement_record=measurement, binding_fingerprint="a" * 64, work_unit_id="1"
+        measurement_record=measurement, binding_fingerprint="a" * 64, work_unit_id="1",
+        model="sonnet", effort="high",
     )
 
     rendered = render_artifact_sections(bridge.store.load_chain())["validation-attestation"]
@@ -283,6 +285,7 @@ def test_projection_reduces_attempts_and_keeps_unknown_usage_explicit(tmp_path) 
     assert "input_tokens=sum:0,known:1,unknown:1" in rendered
     assert "output_tokens=sum:5,known:1,unknown:1" in rendered
     assert "Fehler `network`" in rendered
+    assert "Modell `sonnet`; Effort `high`" in rendered
     assert "local_input_chars" in rendered and "local_input_bytes" in rendered
 
 

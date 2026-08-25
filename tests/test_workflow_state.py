@@ -9,6 +9,7 @@ from native_codex_contract import NativeCodexRequestKind
 from workflow import WorkflowChanges, WorkflowContext, WorkflowEngine, WorkflowHistory
 
 from workflow_state import (
+    AgentProfileBinding,
     AgentFailureKind,
     DEFAULT_MAX_CODEX_RETURNS,
     GateRecord,
@@ -403,6 +404,23 @@ def test_protocol_binding_roundtrips_native_codex_result_transport() -> None:
     assert ProtocolBinding.from_dict(binding.to_dict()) == binding
 
 
+def test_protocol_binding_requires_closed_canonical_agent_profiles() -> None:
+    binding = ProtocolBinding(
+        ProtocolMode.STRUCTURED_V2,
+        "2",
+        codex_profile=AgentProfileBinding("gpt-5.6-sol", "medium"),
+        claude_profile=AgentProfileBinding("sonnet", "high"),
+    )
+    assert ProtocolBinding.from_dict(binding.to_dict()) == binding
+
+    document = binding.to_dict()
+    document.pop("codex_profile")
+    with pytest.raises(WorkflowStateValidationError, match="codex_profile"):
+        ProtocolBinding.from_dict(document)
+    with pytest.raises(WorkflowStateValidationError, match="unsupported"):
+        AgentProfileBinding("sonnet", "extreme")
+
+
 @pytest.mark.parametrize(
     ("mode", "schema_version"),
     [(ProtocolMode.STRUCTURED_V2, "3"), (ProtocolMode.LEGACY_STATE_V3, "1")],
@@ -449,19 +467,6 @@ def test_resume_cursor_preserves_every_persistable_step(step: WorkflowStep) -> N
     assert cursor.slice_id == 1
     assert cursor.step is step
     assert cursor.round_number == 1
-
-
-def test_completed_side_effect_is_persisted_and_idempotent() -> None:
-    state = make_state()
-    updated = state.mark_side_effect_completed("review:claude:round-1", updated_at="later")
-    repeated = updated.mark_side_effect_completed("review:claude:round-1", updated_at="latest")
-    loaded = WorkflowState.from_dict(updated.to_dict())
-
-    assert repeated is updated
-    assert loaded.updated_at == "later"
-    assert loaded.current_work_unit.completed_side_effects == ("review:claude:round-1",)
-    assert loaded.resume_cursor().should_execute("review:claude:round-1") is False
-    assert loaded.resume_cursor().should_execute("review:antigravity:round-1") is True
 
 
 def test_fourth_review_denial_enters_user_gate_without_reset() -> None:
@@ -650,68 +655,6 @@ def test_network_failure_roundtrips_as_bounded_retry_wait() -> None:
     assert loaded.current_work_unit.gate.status is GateStatus.WAITING_FOR_RETRY
     assert loaded.current_work_unit.gate.reason is GateReason.INSTANCE_FAILURE
     assert loaded.resume_after_invocation_halt().current_step is WorkflowStep.CODEX_PLAN
-
-
-def test_antigravity_tool_schema_failure_roundtrips_as_retry_wait() -> None:
-    state = make_state()
-    failure = InvocationFailureRecord(
-        invocation_id="inv-schema-1",
-        idempotency_key="run-1:1:codex_plan:antigravity",
-        role="antigravity",
-        failure_kind=AgentFailureKind.ANTIGRAVITY_TOOL_SCHEMA,
-        provider_text="additional properties 'LineNumber' not allowed",
-        received_at="2026-08-12T10:00:00+00:00",
-        step=WorkflowStep.CODEX_PLAN,
-        slice_id=1,
-        work_unit_id=1,
-        diagnostic_exit_code=3,
-        resume_at_utc="2026-08-12T10:00:05+00:00",
-        auto_resume_count=1,
-        automatic_resume=True,
-    )
-
-    waiting = state.record_invocation_failure(failure, wait_automatically=True)
-    loaded = WorkflowState.from_dict(waiting.to_dict())
-
-    assert loaded.current_work_unit.status is WorkUnitStatus.WAITING_FOR_RETRY
-    assert loaded.current_work_unit.invocation_failures[-1] == failure
-
-
-def test_resume_after_user_decision_keeps_saved_step_and_review_context() -> None:
-    state = make_state()
-    for _ in range(DEFAULT_MAX_CODEX_RETURNS):
-        state = state.record_review_denial(
-            reviewer=Reviewer.ANTIGRAVITY,
-            open_findings=("A-01",),
-            return_step=WorkflowStep.CODEX_CORRECTION,
-        )
-
-    resumed = state.resume_after_user_decision(updated_at="resumed")
-
-    assert resumed.current_step is WorkflowStep.CODEX_CORRECTION
-    assert resumed.current_work_unit.status is WorkUnitStatus.IN_PROGRESS
-    assert resumed.current_work_unit.gate.status is GateStatus.CLEAR
-    assert resumed.current_work_unit.codex_return_count == DEFAULT_MAX_CODEX_RETURNS
-    assert resumed.current_work_unit.round_number == DEFAULT_MAX_CODEX_RETURNS + 1
-    assert resumed.current_work_unit.max_codex_returns == DEFAULT_MAX_CODEX_RETURNS * 2
-    assert resumed.current_work_unit.reviewer is Reviewer.ANTIGRAVITY
-    assert resumed.current_work_unit.open_findings == ("A-01",)
-    assert resumed.current_slice.status is SliceStatus.IN_PROGRESS
-
-    for expected_count in range(
-        DEFAULT_MAX_CODEX_RETURNS + 1,
-        DEFAULT_MAX_CODEX_RETURNS * 2 + 1,
-    ):
-        resumed = resumed.record_review_denial(
-            reviewer=Reviewer.ANTIGRAVITY,
-            open_findings=("A-01",),
-            return_step=WorkflowStep.CODEX_CORRECTION,
-        )
-        assert resumed.current_work_unit.codex_return_count == expected_count
-
-    assert resumed.current_work_unit.status is WorkUnitStatus.AWAITING_USER_DECISION
-    assert resumed.current_work_unit.gate.reason is GateReason.ITERATION_LIMIT
-    assert resumed.current_work_unit.round_number == DEFAULT_MAX_CODEX_RETURNS * 2
 
 
 def test_review_denial_recovers_state_cleared_by_legacy_iteration_resume() -> None:

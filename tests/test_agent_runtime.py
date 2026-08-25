@@ -13,7 +13,6 @@ from agent_adapters import (
     AgentBudgetError,
     AgentOutputError,
     AgentPermissionError,
-    AntigravityAdapter,
     CapabilitySpec,
     ClaudeAdapter,
     CodexAdapter,
@@ -794,13 +793,6 @@ def test_compact_live_output_extracts_codex_text_and_hides_reviewer_envelopes() 
         '{"usage":{"output_tokens":9000},"result":"very large"}',
         {},
     ) is None
-    assert _compact_stream_text(
-        AGENT_REGISTRY["antigravity"],
-        "stdout",
-        '{"usage":{"total_tokens":48000},"response":"very large"}',
-        {},
-    ) is None
-
     warning = "same important warning"
     assert _compact_stream_text(AGENT_REGISTRY["codex"], "stderr", warning, state) == warning
     assert _compact_stream_text(AGENT_REGISTRY["codex"], "stdout", warning, state) == warning
@@ -909,44 +901,6 @@ def test_run_agent_checked_does_not_retry_instance_failure(monkeypatch, tmp_path
     assert exc_info.value.invocation_id in failure_logs[0].read_text(encoding="utf-8")
 
 
-def test_failure_classification_ignores_model_response_prose() -> None:
-    failure = classify_agent_failure(
-        "antigravity",
-        AgentOutputError(
-            "non-success envelope",
-            provider_text="status=ERROR",
-            technical_text="status=ERROR",
-            provider_data={
-                "status": "ERROR",
-                "response": "network quota 429 authentication are review risks",
-            },
-            exit_code=7,
-        ),
-        invocation_id="invocation-1",
-    )
-
-    assert failure.kind.value == "process"
-    assert failure.process_exit_code == 7
-    assert failure.provider_data == {"status": "ERROR"}
-
-
-def test_failure_classification_uses_technical_network_diagnostic() -> None:
-    failure = classify_agent_failure(
-        "antigravity",
-        AgentOutputError(
-            "non-success envelope",
-            provider_text="connection reset by peer",
-            technical_text="connection reset by peer",
-            provider_data={"status": "ERROR", "response": "valid review contract"},
-            exit_code=1,
-        ),
-        invocation_id="invocation-2",
-    )
-
-    assert failure.kind.value == "network"
-    assert "response" not in (failure.provider_data or {})
-
-
 def test_claude_structured_output_retry_exhaustion_is_bounded_transient() -> None:
     failure = classify_agent_failure(
         "claude",
@@ -998,60 +952,6 @@ def test_structured_output_retry_classification_rejects_near_misses(
     assert failure.kind is AgentFailureKind.PROCESS
 
 
-@pytest.mark.parametrize(
-    "error_value",
-    [
-        "additional properties 'LineNumber' not allowed",
-        {"message": "additional properties 'LineNumber' not allowed"},
-        {
-            "message": "additional properties 'LineNumber' not allowed",
-            "code": "INVALID_ARGUMENT",
-        },
-    ],
-)
-def test_antigravity_line_number_schema_failure_is_narrowly_classified(
-    error_value: object,
-) -> None:
-    failure = classify_agent_failure(
-        "antigravity",
-        AgentOutputError(
-            "failed envelope",
-            provider_data={"status": "ERROR", "error": error_value},
-            technical_text="unrelated runtime prose",
-        ),
-        invocation_id="schema-1",
-    )
-
-    assert failure.kind is AgentFailureKind.ANTIGRAVITY_TOOL_SCHEMA
-
-
-@pytest.mark.parametrize(
-    ("provider_data", "technical_text"),
-    [
-        ({"status": "ERROR", "error": "additional properties 'Other' not allowed"}, "runtime"),
-        ({"status": "ERROR", "error": "invalid arguments"}, "runtime"),
-        ({"status": "ERROR", "message": "additional properties 'LineNumber' not allowed"}, "runtime"),
-        ({"status": "SUCCESS", "error": "additional properties 'LineNumber' not allowed"}, "runtime"),
-        ({"status": "ERROR", "response": "additional properties 'LineNumber' not allowed"}, "runtime"),
-        ({"status": "ERROR"}, "additional properties 'LineNumber' not allowed"),
-    ],
-)
-def test_antigravity_schema_failure_rejects_prose_and_envelope_variants(
-    provider_data: dict[str, object], technical_text: str,
-) -> None:
-    failure = classify_agent_failure(
-        "antigravity",
-        AgentOutputError(
-            "failed envelope",
-            provider_data=provider_data,
-            technical_text=technical_text,
-        ),
-        invocation_id="schema-negative",
-    )
-
-    assert failure.kind is not AgentFailureKind.ANTIGRAVITY_TOOL_SCHEMA
-
-
 def test_failed_provider_attempt_uses_injected_clock_and_allowlisted_usage() -> None:
     ticks = iter((10.0, 12.75))
     terminal: list[tuple[float, str | None, object]] = []
@@ -1068,7 +968,7 @@ def test_failed_provider_attempt_uses_injected_clock_and_allowlisted_usage() -> 
 
     invocation.begin(measurement, None)  # type: ignore[arg-type]
     invocation.finish(
-        AgentFailureKind.ANTIGRAVITY_TOOL_SCHEMA,
+        AgentFailureKind.OUTPUT,
         {
             "usage": {"input_tokens": 7, "output_tokens": 2, "raw": "secret"},
             "response": "private provider output",
@@ -1077,7 +977,7 @@ def test_failed_provider_attempt_uses_injected_clock_and_allowlisted_usage() -> 
 
     duration, failure_kind, usage = terminal[0]
     assert duration == 2.75
-    assert failure_kind == "antigravity_tool_schema"
+    assert failure_kind == "output"
     assert usage is not None and usage.input_tokens == 7 and usage.output_tokens == 2
     assert not hasattr(usage, "raw")
 
@@ -1387,12 +1287,6 @@ def test_agent_capability_check_is_lazy_and_cached(monkeypatch) -> None:
             ClaudeAdapter(AgentSettings("claude", "claude", "model", 1800, "high")),
             "2.1.999 (Claude Code)",
         ),
-        (
-            AntigravityAdapter(
-                AgentSettings("antigravity", "agy", "model", 1800, "high")
-            ),
-            "1.1.999",
-        ),
     ],
 )
 def test_agent_capability_check_accepts_patch_updates(
@@ -1428,12 +1322,6 @@ def test_agent_capability_check_accepts_patch_updates(
         (
             ClaudeAdapter(AgentSettings("claude", "claude", "model", 1800, "high")),
             "2.2.0 (Claude Code)",
-        ),
-        (
-            AntigravityAdapter(
-                AgentSettings("antigravity", "agy", "model", 1800, "high")
-            ),
-            "1.2.0",
         ),
     ],
 )

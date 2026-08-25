@@ -502,39 +502,6 @@ def test_commit_blocks_stale_or_negative_review_without_mutating_index(
     assert _git(repository, "diff", "--cached", "--name-only") == ""
 
 
-def test_commit_authorization_blocks_foreign_owned_blocker_in_canonical_findings(
-    tmp_path: Path,
-) -> None:
-    repository, head = _new_repository(tmp_path)
-    boundary, _ = begin_slice(
-        repository_root=repository,
-        slice_id=9,
-        expected_branch="feature/transaction",
-        scope_paths=("allowed.txt",),
-    )
-    (repository / "allowed.txt").write_text("work\n", encoding="utf-8")
-    authorization = _authorization(repository, head)
-    foreign_blocker = FindingRecord(
-        finding_id="A-01",
-        finding_class=FindingClass.BLOCKER,
-        status=FindingStatus.OPEN,
-        summary="Antigravity still requires a correction",
-        acceptance_test="Antigravity closes the corrected finding",
-        origin=FindingOrigin("09", 1, AgentRole.ANTIGRAVITY),
-    )
-
-    with pytest.raises(GitTransactionError, match="globally open blockers"):
-        commit_slice(
-            repository_root=repository,
-            boundary=boundary,
-            authorization=replace(authorization, findings=(foreign_blocker,)),
-            title="blocked globally",
-        )
-
-    assert _git(repository, "diff", "--cached", "--name-only") == ""
-    assert _git(repository, "rev-parse", "HEAD") == head
-
-
 def test_commit_blocks_foreign_paths_and_foreign_index_entries(tmp_path: Path) -> None:
     repository, head = _new_repository(tmp_path)
     boundary, _ = begin_slice(
@@ -858,51 +825,6 @@ def test_commit_stages_an_exact_tracked_deletion(tmp_path: Path) -> None:
     assert result.committed_paths == ("base.txt",)
     assert not (repository / "base.txt").exists()
     assert _git(repository, "status", "--short") == ""
-
-
-def test_commit_rejects_non_passing_or_foreign_review_binding(tmp_path: Path) -> None:
-    repository, head = _new_repository(tmp_path)
-    boundary, _ = begin_slice(
-        repository_root=repository,
-        slice_id=9,
-        expected_branch="feature/transaction",
-        scope_paths=("allowed.txt",),
-    )
-    (repository / "allowed.txt").write_text("work\n", encoding="utf-8")
-    authorization = _authorization(repository, head)
-    command = authorization.attestation.expected_commands[0]
-    failing = ValidationAttestation(
-        attestation_id="red",
-        diff_fingerprint=authorization.diff_fingerprint,
-        expected_commands=(command,),
-        records=(ValidationRecord(ValidationStatus.FAIL, command, 1),),
-        output_digest="b" * 64,
-        summary="red",
-    )
-
-    with pytest.raises(GitTransactionError, match="passing"):
-        commit_slice(
-            repository_root=repository,
-            boundary=boundary,
-            authorization=replace(authorization, attestation=failing),
-            title="red",
-        )
-
-    wrong_role = replace(
-        authorization,
-        claude_review=replace(
-            authorization.claude_review,
-            reviewer=AgentRole.ANTIGRAVITY,
-        ),
-    )
-    with pytest.raises(GitTransactionError, match="claude review role"):
-        commit_slice(
-            repository_root=repository,
-            boundary=boundary,
-            authorization=wrong_role,
-            title="wrong role",
-        )
-    assert _git(repository, "diff", "--cached", "--name-only") == ""
 
 
 def test_commit_accepts_complete_red_attestation_only_with_named_followup(

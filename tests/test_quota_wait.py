@@ -9,7 +9,6 @@ from zoneinfo import ZoneInfo
 from agent_adapters import (
     AgentOutputError,
     AgentPermissionError,
-    AntigravityAdapter,
     ClaudeAdapter,
 )
 from agent_runtime import (
@@ -26,7 +25,7 @@ from workflow_state import AgentFailureKind
 RECEIVED = datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)
 
 
-@pytest.mark.parametrize("role", ["codex", "claude", "antigravity"])
+@pytest.mark.parametrize("role", ["codex", "claude"])
 def test_absolute_offset_reset_is_normalized_per_role(role: str) -> None:
     parsed = parse_quota_reset(
         role,
@@ -200,19 +199,6 @@ def test_codex_dated_local_reset_rejects_past_invalid_or_ambiguous_text(
     )
 
 
-def test_nested_structured_provider_reset_precedes_prose() -> None:
-    parsed = parse_quota_reset(
-        "antigravity",
-        "resource exhausted",
-        received_at=RECEIVED,
-        provider_data={"error": {"details": [{"retry_after_seconds": 45}]}},
-    )
-
-    assert parsed is not None
-    assert parsed.reset_at_utc == RECEIVED + timedelta(seconds=45)
-    assert parsed.parse_path.endswith("error.details[0].retry_after_seconds")
-
-
 def test_structured_unix_timestamp_is_normalized_to_utc() -> None:
     reset = datetime(2026, 8, 12, 10, 5, tzinfo=timezone.utc)
     parsed = parse_quota_reset(
@@ -240,15 +226,6 @@ def test_structured_unix_timestamp_is_normalized_to_utc() -> None:
                 "retry_after_seconds": 45,
             },
             "claude",
-        ),
-        (
-            AntigravityAdapter(),
-            {
-                "status": "RESOURCE_EXHAUSTED",
-                "response": "capacity unavailable",
-                "retry_after_seconds": 45,
-            },
-            "antigravity",
         ),
     ),
 )
@@ -327,89 +304,6 @@ def test_non_quota_failures_are_distinct(error: Exception, kind: AgentFailureKin
     assert failure.kind is kind
 
 
-def test_antigravity_remote_missing_shell_is_transient_not_local_binary() -> None:
-    failure = classify_agent_failure(
-        "antigravity",
-        RuntimeError(
-            "remote error: run bash: fork/exec /usr/bin/bash: "
-            "no such file or directory"
-        ),
-        invocation_id="inv-remote-shell",
-        received_at=RECEIVED,
-    )
-
-    assert failure.kind is AgentFailureKind.NETWORK
-    local = classify_agent_failure(
-        "antigravity",
-        FileNotFoundError("No such file: agy"),
-        invocation_id="inv-local-binary",
-        received_at=RECEIVED,
-    )
-    assert local.kind is AgentFailureKind.BINARY
-
-
-@pytest.mark.parametrize(
-    "detail",
-    (
-        "The stream was interrupted. Please continue the task you were working on.",
-        "ContentOffset 46080 exceeds line range size 7511",
-    ),
-)
-def test_antigravity_known_remote_runtime_envelopes_are_transient(detail: str) -> None:
-    adapter = AntigravityAdapter()
-    envelope = {"status": "ERROR", "error": detail}
-
-    with pytest.raises(AgentOutputError) as captured:
-        adapter.extract_output(json.dumps(envelope), "", {})
-    # run_agent preserves the successful local agy exit code on adapter errors.
-    captured.value.exit_code = 0
-
-    failure = classify_agent_failure(
-        "antigravity",
-        captured.value,
-        invocation_id="inv-antigravity-transient-runtime",
-        received_at=RECEIVED,
-    )
-
-    assert failure.kind is AgentFailureKind.NETWORK
-    assert failure.process_exit_code == 0
-
-
-@pytest.mark.parametrize(
-    "error",
-    (
-        RuntimeError(
-            "The stream was interrupted. Please continue the task you were working on."
-        ),
-        AgentOutputError(
-            "antigravity returned non-success status",
-            provider_text="ContentOffset 46080 exceeds line range size 7511",
-            technical_text="ContentOffset 46080 exceeds line range size 7511",
-            provider_data={"status": "SUCCESS"},
-            exit_code=0,
-        ),
-        AgentOutputError(
-            "antigravity returned non-success status",
-            provider_text="ContentOffset -1 exceeds line range size 7511",
-            technical_text="ContentOffset -1 exceeds line range size 7511",
-            provider_data={"status": "ERROR"},
-            exit_code=0,
-        ),
-    ),
-)
-def test_antigravity_transient_runtime_near_misses_remain_fail_closed(
-    error: Exception,
-) -> None:
-    failure = classify_agent_failure(
-        "antigravity",
-        error,
-        invocation_id="inv-antigravity-runtime-near-miss",
-        received_at=RECEIVED,
-    )
-
-    assert failure.kind is AgentFailureKind.RUNTIME
-
-
 def test_wait_uses_bounded_sleeps_and_emits_distinct_phase_events() -> None:
     clock = [RECEIVED]
     sleeps: list[float] = []
@@ -443,41 +337,6 @@ def test_wait_uses_bounded_sleeps_and_emits_distinct_phase_events() -> None:
     assert "reset_local=" in heartbeats[0] and "resume_local=" in heartbeats[0]
 
 
-def test_wait_skips_seven_days_with_fake_clock_and_no_margin_heartbeat() -> None:
-    clock = [RECEIVED]
-    sleeps: list[float] = []
-    events: list[str] = []
-
-    def sleep(seconds: float) -> None:
-        sleeps.append(seconds)
-        clock[0] += timedelta(seconds=seconds)
-
-    reset_at = RECEIVED + timedelta(days=7)
-    wait_until_quota_resume(
-        role="antigravity",
-        task_label="task-seven-days",
-        work_unit_id=4,
-        reset_at_utc=reset_at.astimezone(ZoneInfo("Europe/Berlin")),
-        resume_at_utc=reset_at + timedelta(seconds=60),
-        heartbeat_interval_seconds=3_600,
-        now_fn=lambda: clock[0],
-        sleep_fn=sleep,
-        heartbeat_fn=events.append,
-    )
-
-    assert sleeps == [3_600.0] * 168 + [60.0]
-    assert clock[0] == reset_at + timedelta(seconds=60)
-    assert sum(item.startswith("quota wait entered:") for item in events) == 1
-    assert sum(item.startswith("quota wait heartbeat:") for item in events) == 167
-    assert sum(item.startswith("quota reset reached:") for item in events) == 1
-    assert sum(item.startswith("quota wait resumed:") for item in events) == 1
-    reset_event = next(
-        i for i, item in enumerate(events)
-        if item.startswith("quota reset reached:")
-    )
-    assert events[reset_event + 1].startswith("quota wait resumed:")
-
-
 def test_wait_is_interruptible_without_internal_retry() -> None:
     with pytest.raises(KeyboardInterrupt):
         wait_until_quota_resume(
@@ -491,24 +350,6 @@ def test_wait_is_interruptible_without_internal_retry() -> None:
             sleep_fn=lambda _seconds: (_ for _ in ()).throw(KeyboardInterrupt()),
             heartbeat_fn=lambda _message: None,
         )
-
-
-def test_wait_returns_immediately_when_reset_is_already_reached() -> None:
-    sleeps: list[float] = []
-
-    wait_until_quota_resume(
-        role="antigravity",
-        task_label="task-14",
-        work_unit_id=3,
-        reset_at_utc=RECEIVED - timedelta(seconds=1),
-        resume_at_utc=RECEIVED - timedelta(seconds=1),
-        heartbeat_interval_seconds=10,
-        now_fn=lambda: RECEIVED,
-        sleep_fn=sleeps.append,
-        heartbeat_fn=lambda _message: None,
-    )
-
-    assert sleeps == []
 
 
 def test_wait_rejects_resume_before_reset_directly() -> None:

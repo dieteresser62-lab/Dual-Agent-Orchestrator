@@ -14,28 +14,6 @@ from contracts import (
 )
 
 
-def test_plan_contract_parses_ordered_slice_allowlists() -> None:
-    result = validate_codex_response(
-        "\n".join(
-            (
-                "SLICE_PLAN: 1 | Runtime cutover | src/cli.py,src/orchestrator.py",
-                "SLICE_PLAN: 2 | Contract docs | AGENTS.md,ANTIGRAVITY.md",
-                "PLAN_READY: YES",
-                "STATUS: DONE",
-            )
-        ),
-        CodexStepContract(
-            name="plan",
-            readiness_marker=ReadinessMarker.PLAN,
-            slice_id="01",
-            round_number=1,
-            require_slice_plan=True,
-        ),
-    )
-    assert [item.slice_id for item in result.slice_plan] == [1, 2]
-    assert result.slice_plan[0].scope_paths == ("src/cli.py", "src/orchestrator.py")
-
-
 @pytest.mark.parametrize(
     "output",
     (

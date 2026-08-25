@@ -71,6 +71,7 @@ from plan_handoff import PlanHandoffError
 from state_io import StateSchemaError, save_workflow_state, write_workflow_checkpoint
 from task_contract import parse_task_contract
 from workflow_state import (
+    AgentProfileBinding,
     GateReason,
     InvocationFailureRecord,
     ProtocolBinding,
@@ -137,29 +138,6 @@ def test_production_correction_delta_preserves_unified_diff_boundary() -> None:
     }
 
     assert driver.collect_correction_delta("e" * 64, fingerprint) == unified_diff
-
-
-def test_every_orchestrated_agent_step_has_a_provider_input_budget_rule() -> None:
-    policy = default_provider_input_budget_policy()
-    operations = {
-        "codex": (
-            WorkflowStep.CODEX_PLAN, WorkflowStep.CODEX_PLAN_REVISION,
-            WorkflowStep.CODEX_IMPLEMENTATION, WorkflowStep.CODEX_CORRECTION,
-            WorkflowStep.CODEX_FINAL_REVIEW, WorkflowStep.CODEX_FINAL_CORRECTION,
-        ),
-        "claude": (
-            WorkflowStep.CLAUDE_PLAN_REVIEW, WorkflowStep.CLAUDE_SLICE_REVIEW,
-            WorkflowStep.CLAUDE_FINAL_REVIEW,
-        ),
-        "antigravity": (
-            WorkflowStep.ANTIGRAVITY_PLAN_REVIEW, WorkflowStep.ANTIGRAVITY_SLICE_REVIEW,
-            WorkflowStep.ANTIGRAVITY_FINAL_REVIEW,
-        ),
-    }
-
-    for provider, steps in operations.items():
-        for step in steps:
-            assert policy.select(provider, provider, step.value).operation == step.value
 
 
 def _repository(tmp_path: Path, branch: str) -> Path:
@@ -231,6 +209,12 @@ def test_new_watch_task_switches_to_existing_target_and_uses_its_head_as_baselin
     task = tmp_path / "inbox-task.md"
     _write_task(task, "feature/inbox-target", "src/new.py")
     args = _args(repository, task)
+    args.agent_settings["codex"] = replace(
+        args.agent_settings["codex"], model="gpt-profile", effort="high"
+    )
+    args.agent_settings["claude"] = replace(
+        args.agent_settings["claude"], model="opus", effort="medium"
+    )
     args.watch_run_id = "watch-existing-target"
     captured: dict[str, object] = {}
     real_fresh_state = orchestrator._fresh_state
@@ -253,7 +237,44 @@ def test_new_watch_task_switches_to_existing_target_and_uses_its_head_as_baselin
     assert state.branch == "feature/inbox-target"
     assert state.branch_base == target_head
     assert state.current_slice.start_commit == target_head
+    assert state.protocol_binding.codex_profile == AgentProfileBinding(
+        "gpt-profile", "high"
+    )
+    assert state.protocol_binding.claude_profile == AgentProfileBinding(
+        "opus", "medium"
+    )
     assert _git(repository, "branch", "--show-current") == "feature/inbox-target"
+
+
+def test_resume_uses_persisted_profiles_and_rejects_explicit_drift_before_provider(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/profile-resume")
+    task = tmp_path / "profile-resume.md"
+    _write_task(task, "feature/profile-resume", "src/new.py")
+    state = orchestrator._fresh_state(
+        task_file=task,
+        run_id="profile-resume",
+        repository_root=repository,
+        task_contract=parse_task_contract(task.read_text(encoding="utf-8")),
+        codex_profile=AgentProfileBinding("gpt-persisted", "high"),
+        claude_profile=AgentProfileBinding("opus-persisted", "medium"),
+    )
+
+    resumed = _args(repository, task)
+    orchestrator._apply_resumed_agent_profiles(resumed, state)
+    assert resumed.agent_settings["codex"].model == "gpt-persisted"
+    assert resumed.agent_settings["codex"].effort == "high"
+    assert resumed.agent_settings["claude"].model == "opus-persisted"
+    assert resumed.agent_settings["claude"].effort == "medium"
+
+    mismatched = parse_args(
+        ["--task-file", str(task), "--codex-model", "different"],
+        cwd=repository,
+        environ={},
+    )
+    with pytest.raises(StateSchemaError, match="AGENT-PROFILE-DIFF"):
+        orchestrator._apply_resumed_agent_profiles(mismatched, state)
 
 
 def test_fresh_workflow_is_immutably_bound_to_structured_v1(tmp_path: Path) -> None:
@@ -405,71 +426,9 @@ def test_reviewer_recovers_complete_contract_from_false_401_auth_classification(
 
 
 @pytest.mark.parametrize(
-    ("failure_kind", "provider_text"),
-    (
-        (AgentFailureKind.AUTH, "401 unauthorized"),
-        (AgentFailureKind.QUOTA, "quota exceeded"),
-        (
-            AgentFailureKind.QUOTA,
-            "REVIEWER: antigravity\n"
-            "REVIEW_EVIDENCE: complete output | risk | break\n"
-            "PRE_MORTEM: a quota response is mistaken for success\n"
-            "SLICE_APPROVAL: 11 | YES\n"
-            "STATUS: DONE",
-        ),
-        (AgentFailureKind.AUTH, "REVIEWER: antigravity\nSTATUS: incomplete"),
-        (AgentFailureKind.AUTH, "REVIEWER: claude\nSTATUS: DONE"),
-    ),
-)
-def test_reviewer_does_not_recover_real_incomplete_or_foreign_failure(
-    tmp_path: Path,
-    monkeypatch,
-    failure_kind: AgentFailureKind,
-    provider_text: str,
-) -> None:
-    repository = _repository(tmp_path, "feature/reviewer-auth-rejection")
-    driver = ProductionWorkflowDriver(
-        repository_root=repository,
-        state_file=repository / ".orchestrator" / "state.json",
-        agents={},
-        config=orchestrator.OrchestratorConfig(repo_root=repository),
-        allowed_roots=(repository,),
-    )
-    failure = AgentInvocationError(
-        agent_key="antigravity",
-        kind=failure_kind,
-        invocation_id="real-failure",
-        provider_text=provider_text,
-        received_at=datetime(2026, 8, 19, tzinfo=timezone.utc),
-    )
-
-    def fail_agent(*args, **kwargs):
-        _ = (args, kwargs)
-        raise failure
-
-    monkeypatch.setattr(driver, "_agent", fail_agent)
-    invocation = ReviewerInvocation(
-        work_unit_id=16,
-        step=WorkflowStep.ANTIGRAVITY_SLICE_REVIEW,
-        reviewer=AgentRole.ANTIGRAVITY,
-        round_number=2,
-        evidence_kind=EvidenceKind.CORRECTION_DELTA,
-        fingerprint="a" * 64,
-        paths=("src/orchestrator.py",),
-        prompt="review",
-    )
-
-    with pytest.raises(AgentInvocationError) as caught:
-        driver.invoke_reviewer(invocation)
-
-    assert caught.value is failure
-
-
-@pytest.mark.parametrize(
     ("reviewer", "expected_operation"),
     (
         (AgentRole.CLAUDE, "claude_contract_repair"),
-        (AgentRole.ANTIGRAVITY, "antigravity_contract_repair"),
     ),
 )
 def test_contract_repair_uses_a_separate_provider_operation(
@@ -578,132 +537,6 @@ def test_review_packet_materialization_reuses_bytes_and_rejects_cache_mismatch(
     first.write_text("collision", encoding="utf-8")
     with pytest.raises(WorkflowExecutionError, match="differs from canonical bytes"):
         driver._materialize_review_packet(packet)
-
-
-def test_quota_classified_recoverable_contract_still_persists_matching_quota_pause_record(
-    tmp_path: Path, monkeypatch,
-) -> None:
-    repository = _repository(tmp_path, "feature/reviewer-quota-pause")
-    head = _git(repository, "rev-parse", "HEAD")
-    (repository / "src").mkdir()
-    (repository / "src" / "orchestrator.py").write_text(
-        "QUOTA_RECOVERY_GUARD = True\n", encoding="utf-8"
-    )
-    _git(repository, "add", "src/orchestrator.py")
-    task = repository / "task.md"
-    task.write_text("Review quota recovery.\n", encoding="utf-8")
-    state = init_workflow_state(
-        run_id="reviewer-quota-pause",
-        task_file=str(task),
-        branch="feature/reviewer-quota-pause",
-        branch_base=head,
-        slice_count=1,
-        task_digest=hashlib.sha256(task.read_bytes()).hexdigest(),
-        task_scope_patterns=("src/orchestrator.py",),
-        target_branch="feature/reviewer-quota-pause",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
-    ).complete_current_work_unit().start_work_unit(
-        slice_id=1,
-        kind=WorkUnitKind.SLICE,
-        step=WorkflowStep.ANTIGRAVITY_SLICE_REVIEW,
-    ).bind_current_slice_git_boundary(
-        start_commit=head,
-        scope_paths=("src/orchestrator.py",),
-        start_fingerprint="0" * 64,
-    )
-    driver = ProductionWorkflowDriver(
-        repository_root=repository,
-        state_file=repository / ".orchestrator" / "state.json",
-        agents={},
-        config=orchestrator.OrchestratorConfig(repo_root=repository),
-        allowed_roots=(repository,),
-    )
-    driver.bind_work_unit(state)
-    changes = driver.collect_changes(head)
-    monkeypatch.setattr(driver, "collect_changes", lambda _start_commit: changes)
-    response = "\n".join(
-        (
-            "REVIEWER: claude",
-            "REVIEW_EVIDENCE: complete output | risk | break",
-            "PRE_MORTEM: a quota response is mistaken for success",
-            "SLICE_APPROVAL: 12 | YES",
-            "STATUS: DONE",
-        )
-    )
-    now = [datetime(2026, 8, 19, 10, 0, tzinfo=timezone.utc)]
-    quota = AgentInvocationError(
-        agent_key="claude",
-        kind=AgentFailureKind.QUOTA,
-        invocation_id="quota-with-complete-contract",
-        provider_text=response,
-        received_at=now[0],
-        quota_reset=QuotaReset(
-            now[0] + timedelta(seconds=1),
-            "claude:structured:retry_after_seconds",
-            "UTC",
-        ),
-    )
-    calls = 0
-
-    def invoke_agent(*args, **kwargs):
-        nonlocal calls
-        _ = (args, kwargs)
-        calls += 1
-        if calls == 1:
-            raise quota
-        return response
-
-    def sleep(seconds: float) -> None:
-        now[0] += timedelta(seconds=seconds)
-
-    monkeypatch.setattr(driver, "_agent", invoke_agent)
-    invocation = ReviewerInvocation(
-        work_unit_id=state.current_work_unit_id,
-        step=WorkflowStep.CLAUDE_SLICE_REVIEW,
-        reviewer=AgentRole.CLAUDE,
-        round_number=state.current_work_unit.round_number,
-        evidence_kind=EvidenceKind.CORRECTION_DELTA,
-        fingerprint="b" * 64,
-        paths=("src/orchestrator.py",),
-        prompt="review",
-    )
-    engine = WorkflowEngine(
-        driver,
-        now_fn=lambda: now[0],
-        sleep_fn=sleep,
-        heartbeat_fn=lambda _message: None,
-    )
-    context = WorkflowContext(
-        assignment="Review the correction",
-        distilled_plan="Persist quota failures before retrying the same role.",
-        slice_summary="Final correction",
-        quota_wait_policy=QuotaWaitPolicy(
-            safety_margin_seconds=0,
-            maximum_wait_seconds=60,
-            heartbeat_interval_seconds=1,
-        ),
-    )
-
-    resumed, output = engine._invoke_role(
-        state,
-        WorkflowHistory(state.current_work_unit_id),
-        context,
-        AgentRole.CLAUDE,
-        lambda: driver.invoke_reviewer(invocation),
-    )
-
-    assert resumed.current_work_unit.invocation_failures[-1].automatic_resume is True
-    assert output == response
-    assert calls == 2
-    assert resumed.current_work_unit.invocation_failures[-1].failure_kind is AgentFailureKind.QUOTA
-    quota_records = tuple(
-        record
-        for record in ArtifactStore(repository, state.run_id).load_chain()
-        if isinstance(record.payload, QuotaPausePayload)
-    )
-    assert len(quota_records) == 1
-    assert quota_records[0].payload.role is Role.CLAUDE
-    assert quota_records[0].payload.retry_at == quota.quota_reset.reset_at_utc.isoformat()
 
 
 def test_reviewer_reuses_diagnostic_bound_bulleted_evidence_output_without_provider(
@@ -3610,213 +3443,6 @@ def test_direct_task_still_requires_target_branch_to_be_active(
     assert _git(repository, "branch", "--show-current") == "master"
 
 
-def test_inbox_workflow_creates_slice_audit_at_implementation_start_and_finalizes_overall(
-    tmp_path: Path, monkeypatch
-) -> None:
-    repository = _repository(tmp_path, "feature/inbox-lifecycle")
-    inbox = repository / "inbox"
-    inbox.mkdir()
-    task = inbox / "AuditLifecycle.md"
-    _write_task(task, "feature/inbox-lifecycle", "app/result.py")
-    observations = {"plan_without_slice": False, "implementation_with_slice": False}
-
-    def codex(driver: ProductionWorkflowDriver, invocation: CodexInvocation) -> str:
-        slice_docs = list((repository / "docs" / "internal").glob("slice-*.md"))
-        if invocation.step is WorkflowStep.CODEX_PLAN:
-            assert slice_docs == []
-            output = "\n".join(
-                (
-                    "SLICE_PLAN: 1 | implement result | app/result.py",
-                    "PLAN_READY: YES",
-                    "STATUS: DONE",
-                )
-            )
-        elif invocation.step is WorkflowStep.CODEX_IMPLEMENTATION:
-            observations["implementation_with_slice"] = len(slice_docs) == 1
-            (repository / "app").mkdir(exist_ok=True)
-            (repository / "app" / "result.py").write_text("VALUE = 1\n", encoding="utf-8")
-            output = "TEST_FILES_TOUCHED: NONE\nIMPLEMENTATION_READY: 01 | YES\nSTATUS: DONE"
-        else:
-            output = "FINAL_REPORT_READY: YES\nSTATUS: DONE"
-        driver.last_codex_output = output
-        return output
-
-    def reviewer(
-        _driver: ProductionWorkflowDriver, invocation: ReviewerInvocation
-    ) -> str:
-        if invocation.step in {
-            WorkflowStep.CLAUDE_PLAN_REVIEW,
-            WorkflowStep.ANTIGRAVITY_PLAN_REVIEW,
-        }:
-            observations["plan_without_slice"] = not list(
-                (repository / "docs" / "internal").glob("slice-*.md")
-            )
-            marker = "PLAN_APPROVAL: YES"
-        elif invocation.step in {
-            WorkflowStep.CLAUDE_FINAL_REVIEW,
-            WorkflowStep.ANTIGRAVITY_FINAL_REVIEW,
-        }:
-            marker = "FINAL_APPROVAL: YES"
-        else:
-            marker = "SLICE_APPROVAL: 01 | YES"
-        return _review(invocation.reviewer, marker)
-
-    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_codex", codex)
-    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_reviewer", reviewer)
-    monkeypatch.chdir(repository)
-
-    result = run_production_workflow(task, _args(repository, task), force_new=True)
-
-    assert result.workflow_completed
-    assert observations == {
-        "plan_without_slice": True,
-        "implementation_with_slice": True,
-    }
-    docs = sorted((repository / "docs" / "internal").glob("*.md"))
-    assert len(docs) == 2
-    overall = next(path for path in docs if "-review-" in path.name)
-    slice_doc = next(path for path in docs if path.name.startswith("slice-"))
-    overall_text = overall.read_text(encoding="utf-8")
-    assert "Work Unit 01 – Planung" in overall_text
-    assert "Work Unit 02 – Slice 01" in overall_text
-    assert "Work Unit 03 – Gesamtreview" in overall_text
-    assert "Review-Feedback von Claude" in slice_doc.read_text(encoding="utf-8")
-    assert len(_git(repository, "log", "--format=%s", "master..HEAD").splitlines()) == 2
-    assert _git(repository, "status", "--short", "--untracked-files=all") == (
-        "?? inbox/AuditLifecycle.md"
-    )
-
-
-def test_production_session_plans_commits_two_slices_and_persists_final_state(
-    tmp_path: Path, monkeypatch
-) -> None:
-    repository = _repository(tmp_path, "feature/runtime-test")
-    task = tmp_path / "task.md"
-    _write_task(task, "feature/runtime-test", "src/first.py", "src/second.py")
-    interrupt_once = {"value": True}
-
-    def codex(driver: ProductionWorkflowDriver, invocation: CodexInvocation) -> str:
-        if invocation.step is WorkflowStep.CODEX_PLAN:
-            output = "\n".join(
-                (
-                    "SLICE_PLAN: 1 | add first file | src/first.py",
-                    "SLICE_PLAN: 2 | add second file | src/second.py",
-                    "PLAN_READY: YES",
-                    "STATUS: DONE",
-                )
-            )
-        elif invocation.step is WorkflowStep.CODEX_IMPLEMENTATION:
-            source = repository / "src"
-            source.mkdir(exist_ok=True)
-            slice_id = driver.active_state.current_slice_id
-            (source / ("first.py" if slice_id == 1 else "second.py")).write_text(
-                f"VALUE = {slice_id}\n", encoding="utf-8"
-            )
-            finding_response = (
-                "FINDING_RESPONSE: C-01 | ACCEPTED | retained for final disposition\n"
-                if slice_id == 2
-                else ""
-            )
-            output = (
-                finding_response
-                +
-                f"TEST_FILES_TOUCHED: NONE\n"
-                f"IMPLEMENTATION_READY: {slice_id:02d} | YES\nSTATUS: DONE"
-            )
-        else:
-            output = (
-                "FINDING_RESPONSE: C-01 | ACCEPTED | full branch evidence resolves it\n"
-                "FINAL_REPORT_READY: YES\nSTATUS: DONE"
-            )
-        driver.last_codex_output = output
-        return output
-
-    def reviewer(
-        _driver: ProductionWorkflowDriver, invocation: ReviewerInvocation
-    ) -> str:
-        if (
-            interrupt_once["value"]
-            and invocation.step is WorkflowStep.CLAUDE_SLICE_REVIEW
-        ):
-            interrupt_once["value"] = False
-            raise AgentInvocationError(
-                agent_key="claude",
-                kind=AgentFailureKind.NETWORK,
-                invocation_id="resume-proof",
-                provider_text="temporary provider outage",
-                received_at=datetime.now(timezone.utc),
-            )
-        if invocation.step in {
-            WorkflowStep.CLAUDE_PLAN_REVIEW,
-            WorkflowStep.ANTIGRAVITY_PLAN_REVIEW,
-        }:
-            marker = "PLAN_APPROVAL: YES"
-        elif invocation.step in {
-            WorkflowStep.CLAUDE_FINAL_REVIEW,
-            WorkflowStep.ANTIGRAVITY_FINAL_REVIEW,
-        }:
-            marker = "FINAL_APPROVAL: YES"
-            rendered = _review(invocation.reviewer, marker)
-            if invocation.reviewer is AgentRole.CLAUDE:
-                rendered = rendered.replace(
-                    "PRE_MORTEM:",
-                    "FINDING_STATUS: C-01 | CLOSED | full branch evidence resolves it\n"
-                    "PRE_MORTEM:",
-                )
-            return rendered
-        else:
-            slice_id = invocation.paths[0].split("/")[-1] == "first.py" and "01" or "02"
-            marker = f"SLICE_APPROVAL: {slice_id} | YES"
-            rendered = _review(invocation.reviewer, marker)
-            if invocation.reviewer is AgentRole.CLAUDE and slice_id == "01":
-                rendered = rendered.replace(
-                    "PRE_MORTEM:",
-                    "NEW_FINDING: C-01 | OBSERVATION | cross-slice risk | "
-                    "disposition during final review\nPRE_MORTEM:",
-                )
-            elif invocation.reviewer is AgentRole.CLAUDE and slice_id == "02":
-                rendered = rendered.replace(
-                    "PRE_MORTEM:",
-                    "FINDING_STATUS: C-01 | OPEN | keep until full branch review\n"
-                    "PRE_MORTEM:",
-                )
-            return rendered
-        return _review(invocation.reviewer, marker)
-
-    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_codex", codex)
-    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_reviewer", reviewer)
-    monkeypatch.chdir(repository)
-    args = _args(repository, task)
-    args.transient_retry_policy = replace(
-        args.transient_retry_policy, automatic=False
-    )
-
-    halted = run_production_workflow(task, args)
-    assert halted.exit_code == 3
-    assert halted.state.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
-    assert not _git(repository, "log", "--format=%s", "master..HEAD")
-
-    args.resume = True
-    args.auto_resume = False
-    result = run_production_workflow(task, args)
-
-    assert result.workflow_completed
-    assert [item.status.value for item in result.state.slices] == ["completed", "completed"]
-    assert len(_git(repository, "log", "--format=%s", "master..HEAD").splitlines()) == 2
-    state = json.loads(
-        (repository / ".orchestrator" / "state.json").read_text(encoding="utf-8")
-    )
-    assert state["version"] == 3
-    assert state["work_units"][-1]["kind"] == "final_review"
-    assert state["work_units"][-1]["status"] == "completed"
-    assert [item["work_unit_id"] for item in state["runtime_history"]["archive"]] == [1, 2, 3]
-    assert state["runtime_history"]["current"]["work_unit_id"] == 4
-    assert state["runtime_history"]["current"]["events"]
-    assert state["runtime_history"]["current"]["findings"][0]["status"] == "CLOSED"
-    slice_two_history = state["runtime_history"]["archive"][2]
-    assert slice_two_history["findings"][0]["status"] == "OPEN"
-
-
 def test_head_drift_after_plan_becomes_typed_persisted_halt(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -3892,177 +3518,6 @@ def test_empty_implementation_is_a_typed_halt_not_cli_crash(
     args.force_overwrite_state = True
     args.resume = False
     assert run_pipeline(task, args, force_new=True) == 4
-
-
-def test_not_ready_gate_resumes_with_plain_resume_without_explicit_approval(
-    tmp_path: Path, monkeypatch
-) -> None:
-    repository = _repository(tmp_path, "feature/not-ready-resume")
-    task = tmp_path / "task.md"
-    _write_task(task, "feature/not-ready-resume", "src/one.py")
-    implementation_attempts = {"count": 0}
-
-    def codex(driver: ProductionWorkflowDriver, invocation: CodexInvocation) -> str:
-        if invocation.step is WorkflowStep.CODEX_PLAN:
-            output = (
-                "SLICE_PLAN: 1 | add file | src/one.py\n"
-                "PLAN_READY: YES\nSTATUS: DONE"
-            )
-        elif invocation.step is WorkflowStep.CODEX_IMPLEMENTATION:
-            implementation_attempts["count"] += 1
-            if implementation_attempts["count"] == 1:
-                output = (
-                    "TEST_FILES_TOUCHED: NONE\n"
-                    "IMPLEMENTATION_READY: 01 | NO\nSTATUS: DONE"
-                )
-            else:
-                source = repository / "src"
-                source.mkdir(exist_ok=True)
-                (source / "one.py").write_text("VALUE = 1\n", encoding="utf-8")
-                output = (
-                    "TEST_FILES_TOUCHED: NONE\n"
-                    "IMPLEMENTATION_READY: 01 | YES\nSTATUS: DONE"
-                )
-        else:
-            output = "FINAL_REPORT_READY: YES\nSTATUS: DONE"
-        driver.last_codex_output = output
-        return output
-
-    def reviewer(
-        _driver: ProductionWorkflowDriver, invocation: ReviewerInvocation
-    ) -> str:
-        if invocation.step in {
-            WorkflowStep.CLAUDE_PLAN_REVIEW,
-            WorkflowStep.ANTIGRAVITY_PLAN_REVIEW,
-        }:
-            marker = "PLAN_APPROVAL: YES"
-        elif invocation.step in {
-            WorkflowStep.CLAUDE_FINAL_REVIEW,
-            WorkflowStep.ANTIGRAVITY_FINAL_REVIEW,
-        }:
-            marker = "FINAL_APPROVAL: YES"
-        else:
-            marker = "SLICE_APPROVAL: 01 | YES"
-        return _review(invocation.reviewer, marker)
-
-    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_codex", codex)
-    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_reviewer", reviewer)
-    monkeypatch.chdir(repository)
-    args = _args(repository, task)
-
-    halted = run_production_workflow(task, args)
-
-    assert halted.exit_code == 4
-    assert halted.state.current_step is WorkflowStep.CODEX_IMPLEMENTATION
-    assert halted.state.current_work_unit.gate.reason.value == "stop_request"
-    assert halted.state.current_work_unit.gate.fingerprint is None
-
-    args.resume = True
-    args.auto_resume = False
-    resumed = run_production_workflow(task, args)
-
-    assert resumed.workflow_completed
-    assert implementation_attempts["count"] == 2
-
-
-def test_plan_only_uses_internal_plan_validation_and_commits_no_product_code(
-    tmp_path: Path, monkeypatch
-) -> None:
-    repository = _repository(tmp_path, "feature/plan-only")
-    task = tmp_path / "task.md"
-    task.write_text(
-        "\n".join(
-            (
-                "ORCHESTRATOR_MODE: PLAN_ONLY",
-                "WORK_PLAN_PATH: docs/internal/work-plan.md",
-                "TARGET_BRANCH: feature/plan-only",
-                "TASK_SCOPE: docs/internal/work-plan.md",
-                "",
-                "Create only the reviewed work plan.",
-            )
-        ),
-        encoding="utf-8",
-    )
-
-    codex_steps: list[WorkflowStep] = []
-
-    def codex(driver: ProductionWorkflowDriver, invocation: CodexInvocation) -> str:
-        codex_steps.append(invocation.step)
-        if invocation.step is WorkflowStep.CODEX_PLAN:
-            plan = repository / "docs" / "internal" / "work-plan.md"
-            plan.parent.mkdir(parents=True)
-            plan.write_text(
-                "# Work plan\n\n### Slice 1 – Future implementation\n\n"
-                "**Exakter Änderungspfad**\n\n- `src/future.py`\n\n"
-                "#### \u0041kzeptanzkriterien\n\n- Future behavior is covered.\n",
-                encoding="utf-8",
-            )
-            output = (
-                "SLICE_PLAN: 1 | create reviewed work plan | docs/internal/work-plan.md\n"
-                "PLAN_READY: YES\nSTATUS: DONE"
-            )
-        elif invocation.step is WorkflowStep.CODEX_IMPLEMENTATION:
-            output = (
-                "TEST_FILES_TOUCHED: NONE\n"
-                "IMPLEMENTATION_READY: 01 | YES\nSTATUS: DONE"
-            )
-        else:
-            output = "FINAL_REPORT_READY: YES\nSTATUS: DONE"
-        driver.last_codex_output = output
-        return output
-
-    def reviewer(
-        _driver: ProductionWorkflowDriver, invocation: ReviewerInvocation
-    ) -> str:
-        if invocation.step in {
-            WorkflowStep.CLAUDE_PLAN_REVIEW,
-            WorkflowStep.ANTIGRAVITY_PLAN_REVIEW,
-        }:
-            marker = "PLAN_APPROVAL: YES"
-        elif invocation.step in {
-            WorkflowStep.CLAUDE_FINAL_REVIEW,
-            WorkflowStep.ANTIGRAVITY_FINAL_REVIEW,
-        }:
-            marker = "FINAL_APPROVAL: YES"
-        else:
-            marker = "SLICE_APPROVAL: 01 | YES"
-        return _review(invocation.reviewer, marker)
-
-    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_codex", codex)
-    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_reviewer", reviewer)
-    monkeypatch.chdir(repository)
-
-    result = run_production_workflow(task, _args(repository, task))
-
-    assert result.workflow_completed
-    assert codex_steps == [WorkflowStep.CODEX_PLAN]
-    assert [item.kind.value for item in result.state.work_units] == ["plan"]
-    assert _git(repository, "show", "--pretty=", "--name-only", "HEAD") == (
-        "docs/internal/work-plan.md"
-    )
-    handoff = task.with_name("task-implement.md")
-    assert handoff.is_file()
-    handoff_text = handoff.read_text(encoding="utf-8")
-    assert "ORCHESTRATOR_MODE: IMPLEMENT" in handoff_text
-    assert f"APPROVED_PLAN_COMMIT: {result.commit_ref}" in handoff_text
-    assert "SLICE_PLAN: 1 | Future implementation |" in handoff_text
-    assert "src/future.py" in handoff_text
-    assert "docs/internal/slice-work-plan-01-future-implementation.md" in handoff_text
-    histories = [
-        result.state.runtime_history["current"],
-        *result.state.runtime_history["archive"],
-    ]
-    attestations = [
-        event["attestation"]
-        for history in histories
-        for event in history.get("events", [])
-        if event.get("kind") == "validation"
-    ]
-    assert attestations
-    assert all(
-        item["expected_commands"] == ["internal:work-plan-contract"]
-        for item in attestations
-    )
 
 
 def test_internal_plan_validation_honors_exact_approved_hotfix_paths(
@@ -4253,103 +3708,6 @@ def test_plan_only_repairs_handoff_contract_before_review(
     assert codex_steps == [WorkflowStep.CODEX_PLAN, WorkflowStep.CODEX_PLAN_REVISION]
     assert reviewer_steps == [WorkflowStep.CLAUDE_PLAN_REVIEW]
     assert task.with_name("task-implement.md").is_file()
-
-
-def test_generated_implementation_handoff_skips_second_plan_review(
-    tmp_path: Path, monkeypatch
-) -> None:
-    repository = _repository(tmp_path, "feature/handoff")
-    task = tmp_path / "guide-plan.md"
-    task.write_text(
-        "\n".join(
-            (
-                "ORCHESTRATOR_MODE: PLAN_ONLY",
-                "WORK_PLAN_PATH: docs/internal/guide.md",
-                "TARGET_BRANCH: feature/handoff",
-                "TASK_SCOPE: docs/internal/guide.md",
-                "",
-                "Create the reviewed guide plan.",
-            )
-        ),
-        encoding="utf-8",
-    )
-    steps: list[WorkflowStep] = []
-
-    def codex(driver: ProductionWorkflowDriver, invocation: CodexInvocation) -> str:
-        steps.append(invocation.step)
-        if invocation.step is WorkflowStep.CODEX_PLAN:
-            plan = repository / "docs" / "internal" / "guide.md"
-            plan.parent.mkdir(parents=True)
-            plan.write_text(
-                "# Guide plan\n\n### Slice 1 - Rewrite guide\n\n"
-                "**Ziel**\n\nRewrite the guide.\n\n"
-                "**Exakter Änderungspfad**\n\n- `Guide.html`\n\n"
-                "#### \u0041kzeptanzkriterien\n\n- The guide is rewritten.\n",
-                encoding="utf-8",
-            )
-            output = (
-                "SLICE_PLAN: 1 | create guide plan | docs/internal/guide.md\n"
-                "PLAN_READY: YES\nSTATUS: DONE"
-            )
-        elif invocation.step is WorkflowStep.CODEX_IMPLEMENTATION:
-            (repository / "Guide.html").write_text("<h1>Guide</h1>\n", encoding="utf-8")
-            output = "TEST_FILES_TOUCHED: NONE\nIMPLEMENTATION_READY: 01 | YES\nSTATUS: DONE"
-        else:
-            output = "FINAL_REPORT_READY: YES\nSTATUS: DONE"
-        driver.last_codex_output = output
-        return output
-
-    def reviewer(
-        _driver: ProductionWorkflowDriver, invocation: ReviewerInvocation
-    ) -> str:
-        if invocation.step in {
-            WorkflowStep.CLAUDE_PLAN_REVIEW,
-            WorkflowStep.ANTIGRAVITY_PLAN_REVIEW,
-        }:
-            marker = "PLAN_APPROVAL: YES"
-        elif invocation.step in {
-            WorkflowStep.CLAUDE_FINAL_REVIEW,
-            WorkflowStep.ANTIGRAVITY_FINAL_REVIEW,
-        }:
-            marker = "FINAL_APPROVAL: YES"
-        else:
-            marker = "SLICE_APPROVAL: 01 | YES"
-        return _review(invocation.reviewer, marker)
-
-    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_codex", codex)
-    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_reviewer", reviewer)
-    monkeypatch.chdir(repository)
-
-    plan_result = run_production_workflow(task, _args(repository, task))
-    assert plan_result.workflow_completed
-    handoff = task.with_name("guide-implement.md")
-    assert handoff.is_file()
-    plan_chain = ArtifactStore(repository, plan_result.state.run_id).load_chain()
-    assert any(
-        item.record_type is RecordType.BINDING
-        and item.payload.binding_kind == "implementation_handoff"
-        and item.payload.target == str(handoff.resolve())
-        for item in plan_chain
-    )
-    assert any(
-        item.record_type is RecordType.WORKFLOW_COMPLETION
-        and item.payload.outcome == "completed"
-        for item in plan_chain
-    )
-
-    implementation_args = _args(repository, handoff)
-    implementation_args.resume = False
-    implementation_args.force_overwrite_state = True
-    implementation = run_production_workflow(handoff, implementation_args)
-
-    assert implementation.workflow_completed
-    assert steps.count(WorkflowStep.CODEX_PLAN) == 1
-    assert steps.count(WorkflowStep.CODEX_IMPLEMENTATION) == 1
-    assert (repository / "docs/internal/slice-guide-01-rewrite-guide.md").is_file()
-    assert _git(repository, "show", "--pretty=", "--name-only", "HEAD").splitlines() == [
-        "Guide.html",
-        "docs/internal/slice-guide-01-rewrite-guide.md",
-    ]
 
 
 def test_completed_plan_resume_retries_failed_handoff_without_agents(

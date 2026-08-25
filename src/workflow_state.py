@@ -64,17 +64,14 @@ class WorkUnitKind(str, Enum):
 class WorkflowStep(str, Enum):
     CODEX_PLAN = "codex_plan"
     CLAUDE_PLAN_REVIEW = "claude_plan_review"
-    ANTIGRAVITY_PLAN_REVIEW = "antigravity_plan_review"
     CODEX_PLAN_REVISION = "codex_plan_revision"
     CODEX_IMPLEMENTATION = "codex_implementation"
     CLAUDE_SLICE_REVIEW = "claude_slice_review"
     CODEX_CORRECTION = "codex_correction"
-    ANTIGRAVITY_SLICE_REVIEW = "antigravity_slice_review"
     SLICE_COMMIT = "slice_commit"
     CODEX_FINAL_REVIEW = "codex_final_review"
     CODEX_FINAL_CORRECTION = "codex_final_correction"
     CLAUDE_FINAL_REVIEW = "claude_final_review"
-    ANTIGRAVITY_FINAL_REVIEW = "antigravity_final_review"
     COMPLETED = "completed"
 
 
@@ -125,7 +122,6 @@ class AgentFailureKind(str, Enum):
     QUOTA = "quota"
     AUTH = "auth"
     NETWORK = "network"
-    ANTIGRAVITY_TOOL_SCHEMA = "antigravity_tool_schema"
     PERMISSION = "permission"
     TIMEOUT = "timeout"
     BINARY = "binary"
@@ -136,7 +132,6 @@ class AgentFailureKind(str, Enum):
 
 class Reviewer(str, Enum):
     CLAUDE = "claude"
-    ANTIGRAVITY = "antigravity"
 
 
 class ProtocolMode(str, Enum):
@@ -150,6 +145,36 @@ NATIVE_CODEX_RESULT_TRANSPORT = "native-codex-v2"
 
 
 @dataclass(frozen=True)
+class AgentProfileBinding:
+    """Immutable model and reasoning selection for one workflow role."""
+
+    model: str
+    effort: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.model, str) or not self.model.strip():
+            raise WorkflowStateValidationError("agent profile model must be non-empty")
+        if not isinstance(self.effort, str) or not self.effort.strip():
+            raise WorkflowStateValidationError("agent profile effort must be non-empty")
+        if self.model != self.model.strip():
+            raise WorkflowStateValidationError("agent profile model must be canonical")
+        if self.effort not in {"low", "medium", "high", "xhigh", "max"}:
+            raise WorkflowStateValidationError("agent profile effort is unsupported")
+
+    def to_dict(self) -> dict[str, str]:
+        return {"model": self.model, "effort": self.effort}
+
+    @classmethod
+    def from_dict(cls, raw: Mapping[str, Any], label: str) -> AgentProfileBinding:
+        if set(raw) != {"model", "effort"}:
+            raise WorkflowStateValidationError(f"{label} has unknown or missing fields")
+        return cls(
+            model=_string(raw["model"], f"{label} model"),
+            effort=_string(raw["effort"], f"{label} effort"),
+        )
+
+
+@dataclass(frozen=True)
 class ProtocolBinding:
     """Immutable selection of the persistence protocol for one workflow."""
 
@@ -157,6 +182,8 @@ class ProtocolBinding:
     schema_version: str
     claude_review_transport: str | None = None
     codex_result_transport: str | None = None
+    codex_profile: AgentProfileBinding = AgentProfileBinding("gpt-5.6-sol", "medium")
+    claude_profile: AgentProfileBinding = AgentProfileBinding("sonnet", "high")
 
     def __post_init__(self) -> None:
         if not isinstance(self.mode, ProtocolMode):
@@ -190,12 +217,14 @@ class ProtocolBinding:
                     "codex_result_transport is unsupported"
                 )
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, object]:
         result = {"mode": self.mode.value, "schema_version": self.schema_version}
         if self.claude_review_transport is not None:
             result["claude_review_transport"] = self.claude_review_transport
         if self.codex_result_transport is not None:
             result["codex_result_transport"] = self.codex_result_transport
+        result["codex_profile"] = self.codex_profile.to_dict()
+        result["claude_profile"] = self.claude_profile.to_dict()
         return result
 
     @classmethod
@@ -207,6 +236,8 @@ class ProtocolBinding:
                 "schema_version",
                 "claude_review_transport",
                 "codex_result_transport",
+                "codex_profile",
+                "claude_profile",
             }
         ):
             raise WorkflowStateValidationError(
@@ -230,6 +261,14 @@ class ProtocolBinding:
                 )
                 if "codex_result_transport" in raw
                 else None
+            ),
+            codex_profile=AgentProfileBinding.from_dict(
+                _mapping(raw.get("codex_profile"), "protocol codex_profile"),
+                "protocol codex_profile",
+            ),
+            claude_profile=AgentProfileBinding.from_dict(
+                _mapping(raw.get("claude_profile"), "protocol claude_profile"),
+                "protocol claude_profile",
             ),
         )
 
@@ -262,16 +301,9 @@ class InvocationFailureRecord:
             (self.provider_text, "invocation failure provider_text"),
         ):
             _require_non_empty(value, label)
-        if self.role not in {"codex", "claude", "antigravity"}:
+        if self.role not in {"codex", "claude"}:
             raise WorkflowStateValidationError(
-                "invocation failure role must be codex, claude, or antigravity"
-            )
-        if (
-            self.failure_kind is AgentFailureKind.ANTIGRAVITY_TOOL_SCHEMA
-            and self.role != "antigravity"
-        ):
-            raise WorkflowStateValidationError(
-                "Antigravity tool-schema failure requires the antigravity role"
+                "invocation failure role must be codex or claude"
             )
         _require_timestamp(self.received_at, "invocation failure received_at")
         _require_positive_int(self.slice_id, "invocation failure slice_id")
@@ -314,10 +346,9 @@ class InvocationFailureRecord:
         if self.automatic_resume and self.failure_kind not in {
             AgentFailureKind.QUOTA,
             AgentFailureKind.NETWORK,
-            AgentFailureKind.ANTIGRAVITY_TOOL_SCHEMA,
         }:
             raise WorkflowStateValidationError(
-                "automatic resume is limited to quota, network, and Antigravity tool-schema failures"
+                "automatic resume is limited to quota and network failures"
             )
         if self.failure_kind is AgentFailureKind.QUOTA and self.automatic_resume and not has_reset:
             raise WorkflowStateValidationError(
@@ -1027,7 +1058,7 @@ class BootstrapCheckFact:
         for value, label in ((self.transition_fingerprint, "bootstrap transition fingerprint"), (self.semantic_digest, "bootstrap semantic digest")):
             if not SHA256_PATTERN.fullmatch(value):
                 raise WorkflowStateValidationError(f"{label} must be a lowercase SHA-256 digest")
-        if self.provider not in {"codex", "claude", "antigravity"} or self.role != self.provider:
+        if self.provider not in {"codex", "claude"} or self.role != self.provider:
             raise WorkflowStateValidationError("bootstrap provider and role are invalid")
         _require_non_empty(self.operation, "bootstrap operation")
         _require_positive_int(self.work_unit_id, "bootstrap work_unit_id")
@@ -1992,15 +2023,13 @@ class WorkflowState:
         if wait_automatically and failure.failure_kind not in {
             AgentFailureKind.QUOTA,
             AgentFailureKind.NETWORK,
-            AgentFailureKind.ANTIGRAVITY_TOOL_SCHEMA,
         }:
             raise WorkflowStateValidationError(
-                "only quota, network, and Antigravity tool-schema failures may wait automatically"
+                "only quota and network failures may wait automatically"
             )
         automatic_quota = wait_automatically and failure.failure_kind is AgentFailureKind.QUOTA
         automatic_transient = wait_automatically and failure.failure_kind in {
             AgentFailureKind.NETWORK,
-            AgentFailureKind.ANTIGRAVITY_TOOL_SCHEMA,
         }
         status = (
             WorkUnitStatus.WAITING_FOR_QUOTA if automatic_quota else

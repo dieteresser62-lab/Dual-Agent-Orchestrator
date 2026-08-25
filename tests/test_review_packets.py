@@ -81,9 +81,9 @@ def _findings() -> tuple[FindingRecord, ...]:
         responses=(FindingResponse(FindingResponseDecision.ACCEPTED, "long response excluded"),),
     )
     closed = FindingRecord(
-        "A-01", FindingClass.BLOCKER, FindingStatus.CLOSED,
+        "C-02", FindingClass.BLOCKER, FindingStatus.CLOSED,
         "old defect", "old acceptance",
-        FindingOrigin("02", 1, AgentRole.ANTIGRAVITY),
+        FindingOrigin("02", 1, AgentRole.CLAUDE),
         status_rationale="  fixed by deterministic   delta  ",
     )
     return open_finding, closed

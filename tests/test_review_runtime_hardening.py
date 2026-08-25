@@ -9,7 +9,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from agent_adapters import AntigravityAdapter
 from agent_config import AgentSettings
 from agent_runtime import create_read_only_reviewer_workspace
 from audit_trail import MANAGED_SECTION_KEYS, prepare_managed_work_plan_document
@@ -100,32 +99,6 @@ def test_reviewer_snapshot_copies_only_git_visible_files(tmp_path: Path) -> None
         assert not (workspace.root / "dist").exists()
     finally:
         workspace.cleanup()
-
-
-def test_antigravity_known_contract_repair_wrapper_is_unwrapped() -> None:
-    adapter = AntigravityAdapter(
-        AgentSettings(
-            name="antigravity",
-            binary="agy",
-            model="gemini-3.1-pro-high",
-            timeout_seconds=30,
-            effort="high",
-        )
-    )
-    wrapped = (
-        "Here is the corrected output complying with the STATE-V3 CONTRACT:\n\n"
-        "```text\nREVIEWER: antigravity\nTEST_FILES_TOUCHED: NONE\n"
-        "REVIEW_EVIDENCE: scope | risk | break\nPRE_MORTEM: drift\n"
-        "PLAN_APPROVAL: YES\nSTATUS: DONE\n```\n"
-    )
-
-    output = adapter.extract_output(
-        json.dumps({"status": "SUCCESS", "response": wrapped}), "", {}
-    )
-
-    assert output.startswith("REVIEWER: antigravity")
-    assert output.endswith("STATUS: DONE")
-    assert "```" not in output
 
 
 def test_saved_em_dash_review_normalizes_without_provider_repair() -> None:
@@ -251,40 +224,6 @@ def test_done_is_not_added_without_confirmed_provider_completion() -> None:
     assert result.diagnostic == "status_not_added:provider_completion_unconfirmed"
 
 
-def test_local_review_normalization_adds_bound_test_marker_without_mutating_findings() -> None:
-    contract = StepContract(
-        name="plan-review",
-        reviewer=AgentRole.ANTIGRAVITY,
-        approval_marker=ApprovalMarker.PLAN,
-        slice_id="01",
-        round_number=1,
-    )
-    claude_finding = FindingRecord(
-        finding_id="C-01",
-        finding_class=FindingClass.OBSERVATION,
-        status=FindingStatus.OPEN,
-        summary="mode",
-        acceptance_test="inspect mode",
-        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
-    )
-    output = "\n".join(
-        (
-            "REVIEWER: antigravity",
-            "FINDING_STATUS: C-01 | OPEN | still applies",
-            "NEW_FINDING: A-01 | OBSERVATION | browser gate late | inspect gate",
-            "PRE_MORTEM: malformed HTML",
-            "PLAN_APPROVAL: YES",
-            "STATUS: DONE",
-        )
-    )
-
-    normalized = normalize_review_contract_output(output, contract, (claude_finding,))
-
-    assert normalized.splitlines()[1] == "TEST_FILES_TOUCHED: NONE"
-    assert "FINDING_STATUS: C-01 | OPEN | still applies" in normalized
-    assert "NEW_FINDING: A-01" in normalized
-
-
 def test_review_normalization_does_not_invent_omitted_owned_finding_status() -> None:
     fingerprint = "a" * 64
     contract = StepContract(
@@ -331,38 +270,6 @@ def test_review_normalization_does_not_invent_omitted_owned_finding_status() -> 
     assert "FINDING_STATUS: C-03" not in normalized
     with pytest.raises(ContractValidationError, match="missing review update.*C-03"):
         validate_review_response(normalized, contract, findings)
-
-
-def test_review_normalization_never_carries_foreign_finding_as_owned_update() -> None:
-    contract = StepContract(
-        name="slice-review",
-        reviewer=AgentRole.ANTIGRAVITY,
-        approval_marker=ApprovalMarker.SLICE,
-        slice_id="02",
-        round_number=1,
-    )
-    finding = FindingRecord(
-        finding_id="C-03",
-        finding_class=FindingClass.OBSERVATION,
-        status=FindingStatus.OPEN,
-        summary="Claude follow-up",
-        acceptance_test="Claude verifies it later",
-        origin=FindingOrigin("01", 2, AgentRole.CLAUDE),
-    )
-    output = "\n".join(
-        (
-            "REVIEWER: antigravity",
-            "TEST_FILES_TOUCHED: NONE",
-            "REVIEW_EVIDENCE: scope | risk | break",
-            "PRE_MORTEM: deferred work is forgotten",
-            "SLICE_APPROVAL: 02 | YES",
-            "STATUS: DONE",
-        )
-    )
-
-    normalized = normalize_review_contract_output(output, contract, (finding,))
-
-    assert "FINDING_STATUS: C-03" not in normalized
 
 
 def test_review_normalization_does_not_guess_unlabeled_dimensions() -> None:

@@ -165,12 +165,13 @@
     },
     "provider_attempt": {
       "type": "object", "additionalProperties": false,
-      "required": ["provider", "role", "operation", "work_unit_id", "logical_operation_id", "binding_fingerprint", "measurement_record_id", "input_digest", "attempt_number", "phase", "started_at", "ended_at", "duration_seconds", "failure_kind", "usage"],
+      "required": ["provider", "role", "operation", "work_unit_id", "logical_operation_id", "binding_fingerprint", "measurement_record_id", "input_digest", "attempt_number", "phase", "started_at", "ended_at", "duration_seconds", "failure_kind", "usage", "model", "effort"],
       "properties": {
         "provider": {"enum": ["codex", "claude"]}, "role": {"enum": ["codex", "claude"]},
         "operation": {"$ref": "#/$defs/identifier"}, "work_unit_id": {"$ref": "#/$defs/identifier"},
         "logical_operation_id": {"$ref": "#/$defs/identifier"}, "binding_fingerprint": {"$ref": "#/$defs/sha256"},
         "measurement_record_id": {"$ref": "#/$defs/identifier"}, "input_digest": {"$ref": "#/$defs/sha256"},
+        "model": {"type": "string", "minLength": 1}, "effort": {"type": "string", "minLength": 1},
         "attempt_number": {"type": "integer", "minimum": 1}, "phase": {"enum": ["started", "succeeded", "failed"]},
         "started_at": {"type": "string", "format": "date-time"}, "ended_at": {"type": ["string", "null"], "format": "date-time"},
         "duration_seconds": {"type": ["number", "null"], "minimum": 0},

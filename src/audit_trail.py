@@ -37,7 +37,6 @@ REQUIRED_SLICE_HEADINGS = (
     "Abweichungen vom Plan",
     "Offene Risiken",  # allowlist:german
     "Review-Feedback von Claude",
-    "Review-Feedback von Antigravity",
     "Review-Antworten von Codex",
     "Validierungsattestierung",
     "Testfreigabe und Pre-Mortem",  # allowlist:german
@@ -58,14 +57,12 @@ REQUIRED_WORK_PLAN_HEADINGS = (
     "Test- und Validierungsplan",
     "Offene Fragen",  # allowlist:german
     "Review-Feedback von Claude",
-    "Review-Feedback von Antigravity",
     "Review-Antworten von Codex",
     "Planstatus und formale Marker",
 )
 
 MANAGED_SECTION_KEYS = (
     "claude-review",
-    "antigravity-review",
     "codex-responses",
     "validation-attestation",
     "test-approval-premortem",
@@ -76,7 +73,6 @@ MANAGED_SECTION_KEYS = (
 
 SLICE_MANAGED_SECTION_HEADINGS = {
     "claude-review": "Review-Feedback von Claude",
-    "antigravity-review": "Review-Feedback von Antigravity",
     "codex-responses": "Review-Antworten von Codex",
     "validation-attestation": "Validierungsattestierung",
     "test-approval-premortem": "Testfreigabe und Pre-Mortem",  # allowlist:german
@@ -87,7 +83,6 @@ SLICE_MANAGED_SECTION_HEADINGS = {
 
 WORK_PLAN_MANAGED_SECTION_HEADINGS = {
     "claude-review": "Review-Feedback von Claude",
-    "antigravity-review": "Review-Feedback von Antigravity",
     "codex-responses": "Review-Antworten von Codex",
     "validation-attestation": "Planstatus und formale Marker",
     "test-approval-premortem": "Planstatus und formale Marker",
@@ -193,8 +188,8 @@ class ReviewAuditEvent:
             raise AuditTrailError(
                 "review audit finding origins must be FINAL or 1-based Slice ids"
             )
-        if self.result.reviewer not in (AgentRole.CLAUDE, AgentRole.ANTIGRAVITY):
-            raise AuditTrailError("review audit event requires claude or antigravity")
+        if self.result.reviewer is not AgentRole.CLAUDE:
+            raise AuditTrailError("review audit event requires claude")
         expected_slice = f"{self.slice_id:02d}"
         allowed_origins = {expected_slice, *self.allowed_finding_origins}
         for finding in self.result.findings:
@@ -1165,7 +1160,6 @@ def _render_managed_sections(projection: AuditProjection) -> dict[str, str]:
     findings = _latest_findings(projection.events)
     return {
         "claude-review": _render_reviews(projection, AgentRole.CLAUDE),
-        "antigravity-review": _render_reviews(projection, AgentRole.ANTIGRAVITY),
         "codex-responses": _render_codex_responses(findings),
         "validation-attestation": _render_validations(projection.events),
         "test-approval-premortem": _render_test_approval(projection),

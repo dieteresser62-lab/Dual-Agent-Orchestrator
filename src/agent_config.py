@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import argparse
-import shutil
 from dataclasses import dataclass
-from typing import Callable, Mapping
+from typing import Mapping
 
 
 DEFAULT_TIMEOUT_SECONDS = 1800
@@ -27,25 +26,12 @@ class AgentSettings:
 _DEFAULT_MODELS = {
     "codex": "gpt-5.6-sol",
     "claude": "sonnet",
-    "antigravity": "gemini-3.7-flash-high",
 }
 
 _DEFAULT_EFFORTS = {
     "codex": "medium",
     "claude": "high",
-    "antigravity": "high",
 }
-
-
-def detect_antigravity_binary(
-    which: Callable[[str], str | None] = shutil.which,
-) -> str:
-    """Prefer the native CLI while keeping the Windows executable opt-in compatible."""
-    if which("agy"):
-        return "agy"
-    if which("agy.exe"):
-        return "agy.exe"
-    return "agy"
 
 
 def _add_role_arguments(parser: argparse.ArgumentParser, role: str) -> None:
@@ -65,14 +51,14 @@ def _add_role_arguments(parser: argparse.ArgumentParser, role: str) -> None:
     )
     parser.add_argument(
         f"--{role}-effort",
-        choices=VALID_EFFORTS if role != "antigravity" else VALID_EFFORTS[:3],
+        choices=VALID_EFFORTS,
         help=f"{label} reasoning effort (default: RUN_TASK_{role.upper()}_EFFORT or role default).",
     )
 
 
 def add_agent_arguments(parser: argparse.ArgumentParser) -> None:
     """Add local, non-repository agent configuration to the public CLI."""
-    for role in ("codex", "claude", "antigravity"):
+    for role in ("codex", "claude"):
         _add_role_arguments(parser, role)
     parser.add_argument(
         "--claude-max-budget-usd",
@@ -129,17 +115,14 @@ def _resolve(
 def resolve_agent_settings(
     args: argparse.Namespace,
     environ: Mapping[str, str],
-    *,
-    which: Callable[[str], str | None] = shutil.which,
 ) -> dict[str, AgentSettings]:
     """Resolve CLI > environment > role defaults without reading repository TOML."""
     default_binaries = {
         "codex": "codex",
         "claude": "claude",
-        "antigravity": detect_antigravity_binary(which),
     }
     settings: dict[str, AgentSettings] = {}
-    for role in ("codex", "claude", "antigravity"):
+    for role in ("codex", "claude"):
         binary = _non_empty(
             _resolve(args, environ, role, "binary", default_binaries[role]),
             f"{role} binary",
@@ -156,10 +139,9 @@ def resolve_agent_settings(
             _resolve(args, environ, role, "effort", _DEFAULT_EFFORTS[role]),
             f"{role} effort",
         ).lower()
-        allowed_efforts = VALID_EFFORTS if role != "antigravity" else VALID_EFFORTS[:3]
-        if effort not in allowed_efforts:
+        if effort not in VALID_EFFORTS:
             raise AgentConfigError(
-                f"{role} effort must be one of {', '.join(allowed_efforts)}; got {effort!r}"
+                f"{role} effort must be one of {', '.join(VALID_EFFORTS)}; got {effort!r}"
             )
         settings[role] = AgentSettings(
             name=role,
@@ -192,7 +174,7 @@ def default_agent_settings() -> dict[str, AgentSettings]:
     namespace = argparse.Namespace(
         **{
             f"{role}_{field}": None
-            for role in ("codex", "claude", "antigravity")
+            for role in ("codex", "claude")
             for field in ("binary", "model", "timeout", "effort")
         },
         claude_max_budget_usd=None,

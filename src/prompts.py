@@ -94,11 +94,6 @@ def build_v3_review_contract(contract: StepContract) -> str:
         )
     final_convergence_rules = ""
     if contract.approval_marker is ApprovalMarker.FINAL:
-        reviewer_scope = (
-            "all findings from both reviewers"
-            if contract.reviewer.value == "antigravity"
-            else "every C-* finding you own"
-        )
         final_convergence_rules = (
             "\n- Final convergence: explicitly disposition every previous open finding "
             "you own. Close it as fixed, non-issue, or outside the authorized scope; "
@@ -107,7 +102,7 @@ def build_v3_review_contract(contract: StepContract) -> str:
             "\n- Do not create a new OBSERVATION during final review. Put non-actionable "
             "future ideas or residual risks in REVIEW_EVIDENCE. Any actionable defect "
             "must be a BLOCKER with FINAL_APPROVAL: NO."
-            f"\n- FINAL_APPROVAL: YES is valid only after {reviewer_scope} are CLOSED."
+            "\n- FINAL_APPROVAL: YES is valid only after every C-* finding you own is CLOSED."
         )
     return textwrap.dedent(
         f"""
@@ -185,7 +180,7 @@ def build_v3_codex_contract(contract: CodexStepContract) -> str:
                 "for reviewer handoff; it does not assert that the branch is defect-free.",
                 "- Report every suspected defect, missing validation dimension, and residual "
                 "risk in prose, then emit FINAL_REPORT_READY: YES when the report itself is "
-                "complete. Claude and Antigravity own the approval decision and findings.",
+                "complete. Claude owns the approval decision and findings.",
                 "- Review the entire supplied branch diff for architecture drift, interface "
                 "consistency, dead transition states, documentation sync, and every "
                 "requirement and acceptance criterion declared by the task and approved plan.",
@@ -262,20 +257,10 @@ def build_v3_review_prompt(
         actual_digest = hashlib.sha256(base_packet.encode("utf-8")).hexdigest()
         if base_digest != actual_digest:
             raise ValueError("canonical review packet digest does not match its bytes")
-        if contract.reviewer is AgentRole.ANTIGRAVITY:
-            if claude_approval_fingerprint != contract.review_fingerprint:
-                raise ValueError(
-                    "Antigravity packet envelope requires fingerprint-matching Claude approval"
-                )
-            ordering = (
-                "Prior Claude approval: YES | fingerprint="
-                f"{claude_approval_fingerprint}"
-            )
-        else:
-            if claude_approval_fingerprint is not None:
-                raise ValueError("Claude packet envelope cannot carry prior Claude approval")
-            ordering = "Prior Claude approval: not applicable to Claude"
-        namespace = "C" if contract.reviewer is AgentRole.CLAUDE else "A"
+        if claude_approval_fingerprint is not None:
+            raise ValueError("Claude packet envelope cannot carry prior Claude approval")
+        ordering = "Prior Claude approval: not applicable to Claude"
+        namespace = "C"
         return textwrap.dedent(
             f"""
             You are the {contract.reviewer.value} reviewer for {contract.name}.
@@ -290,7 +275,7 @@ def build_v3_review_prompt(
             {ordering}
 
             Canonical role-neutral evidence packet (the bytes between the delimiters
-            are shared unchanged by Claude and Antigravity):
+            are supplied unchanged to Claude):
             ---
             {delimit_block("REVIEW_BASE_PACKET", base_packet)}
             ---

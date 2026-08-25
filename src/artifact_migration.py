@@ -546,7 +546,6 @@ def _recoverable_pending_review_finding_gap(
     unit = state.current_work_unit
     reviewer_by_step = {
         WorkflowStep.CLAUDE_SLICE_REVIEW: "claude",
-        WorkflowStep.ANTIGRAVITY_SLICE_REVIEW: "antigravity",
     }
     reviewer = reviewer_by_step.get(state.current_step)
     if unit.kind not in {WorkUnitKind.SLICE, WorkUnitKind.CORRECTION} or reviewer is None:
@@ -628,7 +627,6 @@ def _recoverable_pending_correction_record(
     unit = state.current_work_unit
     reviewer_by_step = {
         WorkflowStep.CLAUDE_SLICE_REVIEW: "claude",
-        WorkflowStep.ANTIGRAVITY_SLICE_REVIEW: "antigravity",
     }
     reviewer = reviewer_by_step.get(state.current_step)
     if (

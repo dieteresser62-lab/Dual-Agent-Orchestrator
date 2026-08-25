@@ -216,7 +216,7 @@ def render_implementation_task(
         f"APPROVED_PLAN_COMMIT: {approved_plan_commit}\n"
         f"TARGET_BRANCH: {target_branch}\n"
         f"TASK_SCOPE: {', '.join(scope)}\n\n"
-        "Der Arbeitsplan ist bereits von Claude und Antigravity geprüft und vom "
+        "Der Arbeitsplan ist bereits von Claude geprüft und vom "
         "Orchestrator lokal commitgebunden freigegeben. Ein konfiguriertes manuelles "
         "Plangate ist gegebenenfalls bereits abgeschlossen. Plane oder reviewe ihn "  # allowlist:german
         "nicht erneut. Verwende ihn als schreibgeschützte fachliche Quelle.\n\n"
