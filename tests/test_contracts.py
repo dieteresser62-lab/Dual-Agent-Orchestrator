@@ -461,7 +461,7 @@ def test_state_v3_rejects_phase_legacy_and_status_string_markers(
 
 
 @pytest.mark.parametrize(
-    "finding_id", ("C-00", "C-0", "F-01", "A-01", "C-001")
+    "finding_id", ("C-00", "C-0", "F-01", "A-01", "C-001")  # retirement-negative-control
 )
 def test_claude_finding_ids_are_source_prefixed_and_canonical(
     finding_id: str,

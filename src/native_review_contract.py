@@ -873,7 +873,7 @@ def parse_bound_native_contract_result(
 
 def next_native_finding_id(context: NativeReviewContext) -> str:
     """Return the first reviewer-owned finding id available in this context."""
-    prefix = "C" if context.reviewer is AgentRole.CLAUDE else "A"
+    prefix = "C"
     number = max(
         (
             int(item.finding_id.split("-", 1)[1])
@@ -979,7 +979,7 @@ def _validate_response_events(
                 NativeReviewErrorCode.FINDING_REFERENCE_NOT_OPEN,
                 f"finding update references non-open id {finding_id}",
             )
-    expected_prefix = "C-" if context.reviewer is AgentRole.CLAUDE else "A-"
+    expected_prefix = "C-"
     first_id = next_native_finding_id(context)
     first_number = int(first_id.split("-", 1)[1])
     expected_new_ids = [

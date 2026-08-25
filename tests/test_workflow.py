@@ -551,6 +551,112 @@ def _invocation_failure(
     )
 
 
+def test_claude_reuses_single_fingerprint_attestation_without_matrix_rerun() -> None:
+    changes = _changes("1", "engine/core.py", TEST_FILE)
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[_review_approval(AgentRole.CLAUDE)],
+    )
+    matrix = ValidationMatrix(
+        default_command=ValidationCommand(argv=("npm", "test")),
+        rules=(
+            ValidationRule(
+                ("engine/**",),
+                ValidationCommand(argv=("npm", "run", "build:engine")),
+            ),
+        ),
+    )
+
+    result = WorkflowEngine(driver).run_current_work_unit(
+        _slice_state(scope_paths=("engine/core.py", TEST_FILE)),
+        replace(_context(), validation_matrix=matrix),
+    )
+
+    assert result.completed
+    assert len(driver.validation_requests) == 1
+    assert driver.validation_requests[0].expected_commands == (
+        "npm test",
+        "npm run build:engine",
+    )
+    assert len(driver.reviewer_calls) == 1
+    assert driver.reviewer_calls[0].fingerprint == changes.fingerprint
+    assert "npm run build:engine | PASS | exit=0" in driver.reviewer_calls[0].prompt
+    assert driver.commit_calls[0].attestation.diff_fingerprint == changes.fingerprint
+
+
+def test_incomplete_attestation_never_reaches_claude_or_commit() -> None:
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[],
+        invalid_attestation="incomplete",
+    )
+
+    with pytest.raises(WorkflowExecutionError, match="incomplete"):
+        WorkflowEngine(driver).run_current_work_unit(
+            _slice_state(),
+            replace(_context(), red_state_followup_slice="Slice 14"),
+        )
+
+    assert driver.reviewer_calls == []
+    assert driver.commit_calls == []
+
+
+def test_slice_commit_with_stale_claude_fingerprint_revalidates_before_commit() -> None:
+    changes = _changes("2", "src/early.py", TEST_FILE)
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[],
+        reviewer_outputs=[_review_approval(AgentRole.CLAUDE)],
+    )
+    state = _slice_state().with_current_step(WorkflowStep.SLICE_COMMIT)
+
+    result = WorkflowEngine(driver).run_current_work_unit(
+        state,
+        _context(),
+        WorkflowHistory(state.current_work_unit_id),
+    )
+
+    assert result.completed
+    assert driver.validation_calls == [changes.fingerprint]
+    assert [call.reviewer for call in driver.reviewer_calls] == [AgentRole.CLAUDE]
+    assert driver.codex_calls == []
+    assert len(driver.commit_calls) == 1
+    assert driver.commit_calls[0].fingerprint == changes.fingerprint
+
+
+def test_resume_from_persisted_claude_step_does_not_repeat_codex() -> None:
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    interrupted = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[_review_approval(AgentRole.CLAUDE)],
+        fail_reviewer_once=True,
+    )
+    with pytest.raises(RuntimeError, match="interruption"):
+        WorkflowEngine(interrupted).run_current_work_unit(_slice_state(), _context())
+    persisted = interrupted.checkpoints[-1]
+    assert persisted.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
+
+    resumed = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[],
+        reviewer_outputs=[_review_approval(AgentRole.CLAUDE)],
+        snapshot_index=0,
+    )
+    result = WorkflowEngine(resumed).run_current_work_unit(
+        persisted,
+        _context(),
+        interrupted.checkpoint_histories[-1],
+    )
+
+    assert result.completed
+    assert resumed.codex_calls == []
+    assert [call.reviewer for call in resumed.reviewer_calls] == [AgentRole.CLAUDE]
+
+
 def _diff_for_paths(*paths: str, content: str = "+corrected") -> str:
     return "".join(
         f"diff --git a/{path} b/{path}\n"

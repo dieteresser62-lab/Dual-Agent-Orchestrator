@@ -1,7 +1,7 @@
 [paths]
-productive = ["src/**/*.py", "run_task", "*.toml"]
+productive = ["src/**/*.py", "scripts/**/*.py", "schemas/**/*.json", "run_task", "*.toml"]
 tests = ["tests/**"]
-documentation = ["docs/**", "*.md"]
+documentation = ["docs/**", "*.md", "*.puml"]
 generated = [".orchestrator/**", "**/__pycache__/**", ".pytest_cache/**"]
 
 [validation]

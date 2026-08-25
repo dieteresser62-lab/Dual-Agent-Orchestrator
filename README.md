@@ -1,28 +1,27 @@
 # Dual-Agent Task Orchestrator
 
-Eine fortsetzbare CLI für klar abgegrenzte Entwicklungsaufgaben mit Codex als Implementierer, Claude als primärem Reviewer und Antigravity als unabhängigem Abschlussreviewer.
+Eine fortsetzbare CLI für klar abgegrenzte Entwicklungsaufgaben mit Codex als Planer und Implementierer sowie Claude als unabhängigem Reviewer.
 
 ## Überblick
 
-Der Orchestrator überführt eine Markdown-Aufgabe in einen geordneten State-v3-Slice-Plan. Jeder Slice besitzt eine exakte Pfad-Allowlist, eine deterministische Validierung, asymmetrische Reviews und einen verifizierten lokalen Git-Commit. Nach dem letzten Slice prüfen alle drei Rollen die vollständige Branchänderung, bevor der Lauf abgeschlossen ist.
+Der Orchestrator überführt eine Markdown-Aufgabe in einen geordneten State-v3-Slice-Plan. Jeder Slice besitzt eine exakte Pfad-Allowlist, eine deterministische Validierung, asymmetrische Reviews und einen verifizierten lokalen Git-Commit. Nach dem letzten Slice prüfen Codex und Claude die vollständige Branchänderung, bevor der Lauf abgeschlossen ist.
 
 ![State-v3-Workflow](https://www.plantuml.com/plantuml/proxy?cache=no&src=https://raw.githubusercontent.com/dieteresser62-lab/Dual-Agent-Orchestrator/master/workflow.puml)
 
 Der normale Ablauf ist:
 
 1. Repository, Branch, Aufgabe, Konfiguration und vorhandenen Zustand prüfen.
-2. Codex geordnete `SLICE_PLAN`-Datensätze erstellen und Claude sowie Antigravity denselben Planfingerprint prüfen lassen.
-3. Den doppelt freigegebenen Plan lokal committen und im Inbox-Watchbetrieb den erzeugten Implementierungs-Handoff automatisch übernehmen. Eine fingerprintgebundene Benutzerfreigabe ist mit `--plan-gate` optional zuschaltbar.
+2. Codex geordnete `SLICE_PLAN`-Datensätze erstellen und Claude den Planfingerprint prüfen lassen.
+3. Den von Claude freigegebenen Plan lokal committen und im Inbox-Watchbetrieb den erzeugten Implementierungs-Handoff automatisch übernehmen. Eine fingerprintgebundene Benutzerfreigabe ist mit `--plan-gate` optional zuschaltbar.
 4. Für jeden geplanten Slice:
    - Codex bearbeitet ausschließlich den persistierten Pfadumfang.
    - Der Orchestrator ermittelt den kanonischen Diff und führt die konfigurierte Validierungsmatrix einmal für diesen Fingerprint aus.
    - Claude prüft in der ersten Runde nur die Slice-Änderungen und in späteren Runden nur das Korrekturdelta.
-   - Antigravity prüft den vollständigen freigegebenen Slice-Diff einmal, nachdem Claude denselben Fingerprint freigegeben hat.
    - Der Orchestrator staged ausschließlich die geprüften Pfade, erstellt einen lokalen Commit `Slice NN: ...` und verifiziert ihn.
 5. Codex einen branchweiten Vollständigkeitsbericht gegen die Branchbasis erstellen
-   lassen und diesen Bericht zusammen mit dem vollständigen Branch-Diff an Claude und
-   Antigravity für die Abschlussentscheidung übergeben.
-6. Im Abschlussreview müssen beide Reviewer ihre offenen Findings schließen oder zu einem Blocker hochstufen. Blocker werden in einem begrenzten Korrekturslice bearbeitet und commitet; anschließend wird der vollständige Abschlussreview wiederholt. Erfolgreich endet der Lauf erst bei null offenen Findings.
+   lassen und diesen Bericht zusammen mit dem vollständigen Branch-Diff an Claude
+   für die Abschlussentscheidung übergeben.
+6. Im Abschlussreview muss Claude alle offenen Findings schließen oder zu einem Blocker hochstufen. Blocker werden in einem begrenzten Korrekturslice bearbeitet und commitet; anschließend wird der vollständige Abschlussreview wiederholt. Erfolgreich endet der Lauf erst bei null offenen Findings.
 
 Erkennt Codex während eines Slices einen konkreten Defekt in einem bereits
 abgeschlossenen Vorgängerslice, kann es mit `REMEDIATION_PATHS` die kleinste
@@ -48,13 +47,12 @@ Unterstützte Ausführungsumgebungen sind:
 - macOS
 - WSL2
 
-Natives Windows wird derzeit nicht unterstützt, weil der vollständige Workflow dort noch nicht verifiziert wurde. Unter WSL2 sollte nach Möglichkeit der native Befehl `agy` verwendet oder `agy.exe` explizit konfiguriert werden.
+Natives Windows wird derzeit nicht unterstützt, weil der vollständige Workflow dort noch nicht verifiziert wurde.
 
-Alle drei Rollen-CLIs müssen installiert und authentifiziert sein. Anschließend müssen sie in `PATH` liegen oder über explizite Binärpfade konfiguriert werden:
+Beide Rollen-CLIs müssen installiert und authentifiziert sein. Anschließend müssen sie in `PATH` liegen oder über explizite Binärpfade konfiguriert werden:
 
 - `codex`
 - `claude`
-- `agy` oder `agy.exe`
 
 Die Laufzeit prüft jedes Programm und seine erforderlichen Fähigkeiten verzögert unmittelbar vor dem ersten Aufruf der jeweiligen Rolle. Freigegebene Major-/Minor-Linien akzeptieren numerische Patchupdates automatisch; ein Major- oder Minor-Wechsel bleibt bis zu einer erneuten Capability-Freigabe gesperrt. Unabhängig von der Patchversion müssen alle erforderlichen CLI-Flags vorhanden sein.
 
@@ -110,7 +108,7 @@ TASK_SCOPE: <comma-separated repository-relative paths or globs>
 
 `WORK_PLAN_PATH` ist bei `PLAN_ONLY` und im automatisch erzeugten Implementierungs-Handoff erforderlich. `APPROVED_PLAN_COMMIT` wird ausschließlich vom Handoff-Erzeuger zusammen mit den übernommenen `SLICE_PLAN`-Datensätzen geschrieben. Alternativ zu `TASK_SCOPE` wird ein Abschnitt `## Erlaubter Scope` oder `## Allowed Scope` mit Aufzählung akzeptiert. Im Einzelaufgabenmodus muss der angegebene Zielbranch vor dem Start existieren und aktiv sein. Im Watch-Modus bereitet der Orchestrator den Zielbranch beim ersten Start einer neuen Inbox-Aufgabe automatisch vor; die Agenten selbst dürfen Branches weiterhin weder erstellen noch wechseln.
 
-`PLAN_ONLY` bildet intern den Planungsteil des automatischen Ablaufs ab; [example-plan-task.md](example-plan-task.md) ist nur für bewusst formale Planaufträge erforderlich. Codex erstellt ausschließlich das deklarierte Arbeitsplan-MD. Die späteren Umsetzungsslices stehen als Überschriften im Dokument, während der ausführbare `SLICE_PLAN` dieses Laufs genau einen Dokumentationsslice enthält. Vor den Planreviews prüft der Orchestrator bereits, ob jede Slice-Überschrift und jeder Abschnitt `**Exakter Änderungspfad**` einen gültigen Implementierungs-Handoff ergeben. Die kompatible Schreibweise `**Exakte Änderungspfade:**` wird ebenfalls gelesen. Scheitert dieser Vertrag, erhält Codex vor Claude automatisch genau einen gezielten Reparaturdurchlauf; ein weiterhin ungültiger Plan hält anschließend als nachvollziehbares, fortsetzbares Gate an. Claude und Antigravity prüfen den Plan; im automatischen Standardpfad wird er danach lokal commitet und die `IMPLEMENT`-Aufgabe erzeugt. Im Watch-Modus wird diese neue Inbox-Aufgabe unmittelbar als Nächstes verarbeitet. `--plan-gate` schaltet eine zusätzliche menschliche Abnahme vor dem Plancommit ein.
+`PLAN_ONLY` bildet intern den Planungsteil des automatischen Ablaufs ab; [example-plan-task.md](example-plan-task.md) ist nur für bewusst formale Planaufträge erforderlich. Codex erstellt ausschließlich das deklarierte Arbeitsplan-MD. Die späteren Umsetzungsslices stehen als Überschriften im Dokument, während der ausführbare `SLICE_PLAN` dieses Laufs genau einen Dokumentationsslice enthält. Vor dem Planreview prüft der Orchestrator bereits, ob jede Slice-Überschrift und jeder Abschnitt `**Exakter Änderungspfad**` einen gültigen Implementierungs-Handoff ergeben. Die kompatible Schreibweise `**Exakte Änderungspfade:**` wird ebenfalls gelesen. Scheitert dieser Vertrag, erhält Codex vor Claude automatisch genau einen gezielten Reparaturdurchlauf; ein weiterhin ungültiger Plan hält anschließend als nachvollziehbares, fortsetzbares Gate an. Claude prüft den Plan; im automatischen Standardpfad wird er danach lokal commitet und die `IMPLEMENT`-Aufgabe erzeugt. Im Watch-Modus wird diese neue Inbox-Aufgabe unmittelbar als Nächstes verarbeitet. `--plan-gate` schaltet eine zusätzliche menschliche Abnahme vor dem Plancommit ein.
 
 Im Modus `IMPLEMENT` überführt Codex den Auftrag in einen oder mehrere persistierte Slices. Jeder ausführbare `SLICE_PLAN`-Datensatz enthält:
 
@@ -128,28 +126,28 @@ Laufzeitdaten werden unterhalb von `.orchestrator/` gespeichert:
 
 | Pfad | Zweck |
 |---|---|
-| `.orchestrator/artifacts/<run-id>/records/ar1-<sha256>.json` | Autoritative, append-only Einzelrecords eines `structured-v1`-Laufs. |
+| `.orchestrator/artifacts/<run-id>/records/ar1-<sha256>.json` | Autoritative, append-only Einzelrecords eines `structured-v2`-Laufs. |
 | `.orchestrator/artifacts/<run-id>/head.json` | Aus den Records rekonstruierbarer Beschleunigungscache; keine Wahrheitsquelle. |
-| `.orchestrator/state.json` | Atomarer State-v3-Betriebszustand; bei `structured-v1` ein gegen die Recordkette geprüfter Spiegel. |
+| `.orchestrator/state.json` | Atomarer State-v3-Betriebszustand; bei `structured-v2` ein gegen die Recordkette geprüfter Spiegel. |
 | `.orchestrator/checkpoints/<run-id>/work-unit-####-slice-####-round-####.json` | Laufgebundene Fortsetzungs-Checkpoints mit einsbasierten Arbeitsblock-, Slice- und Rundenidentitäten. |
 | `.orchestrator/logs/` | Rohe temporäre Agentenaufruf- und Diagnoselogs. |
 | `.orchestrator/runs/<run_id>/work-unit-####-codex.md` | Persistierte Codex-Ausgabe zur Wiederherstellung des Planungs- oder Implementierungskontexts. |
 
 State und Checkpoints dürfen nicht manuell bearbeitet werden.
 
-Neue Workflows werden bei der Initialisierung unveränderlich an den Protokollmodus `structured-v1` gebunden. Ohne Pilotflag bleiben die Textmarker der Agentenantworten der strikt validierte Eingangsadapter. `--native-claude-reviews` und `--native-codex-results` können bei einem neuen Lauf unabhängig voneinander die jeweilige Rolle an einen nativen, geschlossenen JSON-Vertrag binden. Diese Bindung ist Bestandteil des State und kann beim Resume weder still aktiviert noch deaktiviert werden; ein Vertragsfehler fällt niemals auf Markertext zurück. Erst nach Vertragsprüfung, persistiertem Record und semantischem Gleichheitsnachweis zum State-v3-Spiegel darf der Inhalt eine Entscheidung steuern. Für alle in Records abgebildeten Fakten ist die validierte Recordkette die technische Source of Truth. Sie besteht aus kanonischen, digestgeprüften JSON-Einzeldateien und ist weder JSONL noch SQLite.
+Neue Workflows werden bei der Initialisierung unveränderlich an den Protokollmodus `structured-v2` gebunden. Die optionalen Transportflags binden Codex beziehungsweise Claude an ihren nativen, geschlossenen JSON-Vertrag; eine einmal persistierte Bindung kann beim Resume weder still aktiviert noch deaktiviert werden, und ein Vertragsfehler fällt niemals auf Markertext zurück. Erst nach Vertragsprüfung, persistiertem Record und semantischem Gleichheitsnachweis zum State-v3-Spiegel darf der Inhalt eine Entscheidung steuern. Für alle in Records abgebildeten Fakten ist die validierte Recordkette die technische Source of Truth. Sie besteht aus kanonischen, digestgeprüften JSON-Einzeldateien und ist weder JSONL noch SQLite.
 
-Historische State-v3-Läufe ohne Protokollbindung verbleiben dauerhaft im Modus `legacy-state-v3` und lesen weiterhin ihren bisherigen Zustand und Markdown-Fallback. Es gibt keine stille Migration und keinen modusübergreifenden Fallback: Ein bereits gebundener `structured-v1`-Lauf darf nie als Legacy-Lauf weitergeführt werden.
+Historische `legacy-state-v3`- und `structured-v1`-Läufe werden mit `UNSUPPORTED-PROTOCOL` fail-closed abgewiesen. Es gibt weder stille Migration noch modusübergreifenden Fallback.
 
 Beim Resume scannt der Orchestrator die vollständige Recordkette, rekonstruiert bei Bedarf `head.json` und vergleicht die spiegelbaren Fakten symmetrisch mit State-v3. Fehlende, unbekannte, beschädigte oder widersprüchliche Records sowie ein vorausgeeilter Spiegel stoppen fail-closed mit Record-ID beziehungsweise Lauf-ID und Reparaturhinweis. Zur Diagnose dienen die konkrete Fehlermeldung, `.orchestrator/logs/`, der betroffene Recordpfad und der State-Spiegel. Repariert wird durch Wiederherstellen der zusammengehörigen Recordkette oder des passenden Spiegels aus einer vertrauenswürdigen Sicherung – niemals durch manuelles Erfinden von Records, Freigaben oder Finding-Übergängen.
 
-Menschenlesbare Plan- und Slice-Auditdateien im Markdown-Format gehören in das Zielrepository, üblicherweise unter `docs/internal/`, und werden mit ihrem Slice commitet. Für Aufgaben aus `inbox/` erzeugt der Orchestrator beim Taskstart automatisch ein digestgebundenes Gesamtdokument. Es sammelt Plan, Scope, Claude-/Antigravity-Reviews, Findings, Validierungen, Slice-Entscheidungen und das abschließende Gesamtreview. Die zukünftigen Slice-Dokumentpfade werden nach der Planung automatisch in die persistierten Slice-Allowlists aufgenommen; die Dateien selbst entstehen jedoch erst beim tatsächlichen Beginn des jeweiligen Implementierungs- oder Korrekturslices. Eine abgelehnte oder vor Implementierungsbeginn abgebrochene Planung hinterlässt daher keine leeren Slice-Dokumente. Resume verwendet dieselben digestgebundenen Pfade idempotent weiter.
+Menschenlesbare Plan- und Slice-Auditdateien im Markdown-Format gehören in das Zielrepository, üblicherweise unter `docs/internal/`, und werden mit ihrem Slice commitet. Für Aufgaben aus `inbox/` erzeugt der Orchestrator beim Taskstart automatisch ein digestgebundenes Gesamtdokument. Es sammelt Plan, Scope, Claude-Reviews, Findings, Validierungen, Slice-Entscheidungen und das abschließende Gesamtreview. Die zukünftigen Slice-Dokumentpfade werden nach der Planung automatisch in die persistierten Slice-Allowlists aufgenommen; die Dateien selbst entstehen jedoch erst beim tatsächlichen Beginn des jeweiligen Implementierungs- oder Korrekturslices. Eine abgelehnte oder vor Implementierungsbeginn abgebrochene Planung hinterlässt daher keine leeren Slice-Dokumente. Resume verwendet dieselben digestgebundenen Pfade idempotent weiter.
 
 JSON ist dabei die autoritative Wahrheit, Markdown nur die deterministische Ansicht: `artifact_projection` rendert native Review- und Codex-Resultate einschließlich `transport_schema`, `request_id` und `response_sha256` direkt aus der validierten Recordkette. `audit_trail` übernimmt diese Abschnitte ohne Markdown zurückzulesen oder semantisch neu zu interpretieren. Die Rohantwort eines nativen Codex-Aufrufs liegt vor jeder fachlichen Anwendung unter `.orchestrator/artifacts/<run-id>/native-codex-responses/`; ein Record-ahead-Resume prüft Rohdigest, Requestbindung und AgentResult und startet Codex nicht erneut.
 
-Ein kombinierter Codex–Claude-Pilot wird bei einem neuen Lauf durch die gemeinsame Angabe `--native-codex-results --native-claude-reviews` gebunden. Beide Flags sind unveränderlicher Bestandteil des Laufzustands; Resume übernimmt exakt diese Bindung und kennt in keiner Plan-, Implementierungs-, Korrektur- oder Claude-Reviewphase einen Textfallback. Offene Findings und Codex-Dispositionen werden ausschließlich aus der validierten Recordkette rekonstruiert und vor jedem frischen Providerstart symmetrisch gegen den State-v3-Spiegel geprüft. Vollständige Record-ahead-Ergebnisse werden wiederverwendet, bevor ein neuer Agentenprozess gestartet werden darf. Die aus denselben Records erzeugte Markdownansicht enthält zusätzlich eine kompakte native Konvergenzübersicht mit Work-Unit, Runde, Fingerprints, Claude-Entscheidungen, Codex-Dispositionen und Endstatus; sie ist reine Anzeige und niemals Entscheidungs- oder Recoveryquelle. Solange Antigravity noch keinen nativen Vertrag besitzt, endet ein solcher Pilot kontrolliert am nächsten regulären Antigravity-Schritt und stellt keine produktive Gesamtfreigabe dar.
+Ein nativer Codex–Claude-Lauf wird bei einem neuen Lauf durch die gemeinsame Angabe `--native-codex-results --native-claude-reviews` gebunden. Beide Flags sind unveränderlicher Bestandteil des Laufzustands; Resume übernimmt exakt diese Bindung und kennt in keiner Plan-, Implementierungs-, Korrektur- oder Claude-Reviewphase einen Textfallback. Offene Findings und Codex-Dispositionen werden ausschließlich aus der validierten Recordkette rekonstruiert und vor jedem frischen Providerstart symmetrisch gegen den State-v3-Spiegel geprüft. Vollständige Record-ahead-Ergebnisse werden wiederverwendet, bevor ein neuer Agentenprozess gestartet werden darf. Die aus denselben Records erzeugte Markdownansicht enthält zusätzlich eine kompakte native Konvergenzübersicht mit Work-Unit, Runde, Fingerprints, Claude-Entscheidungen, Codex-Dispositionen und Endstatus; sie ist reine Anzeige und niemals Entscheidungs- oder Recoveryquelle.
 
-Bei einem regulär manuell definierten Lauf außerhalb von `inbox/` müssen Auditdateien weiterhin vorbereitet, aus dem Arbeitsplan verlinkt, mit den erforderlichen verwalteten Auditabschnitten versehen und im Umfang des zugehörigen `SLICE_PLAN` enthalten sein. Ein commitgebundener Handoff erzeugt seine deklarierten Slice-Auditdateien ebenfalls automatisch vor dem jeweiligen Slice. Der Orchestrator projiziert strukturierte Findings, Reviews, Validierungsattestierungen und Autorisierungsstatus ausschließlich in die verwalteten Abschnitte. Diese Markdown-Dateien sind deterministische, menschenlesbare Auditansichten der Records und keine Resume- oder Reparaturquelle. Nach jedem lokalen Slice-Commit ist Git die historische Quelle der Wahrheit für den eingecheckten Repositorystand; nach der dreifachen branchweiten Gesamtabnahme wird die abschließende Gesamtprojektion path-genau commitet.
+Bei einem regulär manuell definierten Lauf außerhalb von `inbox/` müssen Auditdateien weiterhin vorbereitet, aus dem Arbeitsplan verlinkt, mit den erforderlichen verwalteten Auditabschnitten versehen und im Umfang des zugehörigen `SLICE_PLAN` enthalten sein. Ein commitgebundener Handoff erzeugt seine deklarierten Slice-Auditdateien ebenfalls automatisch vor dem jeweiligen Slice. Der Orchestrator projiziert strukturierte Findings, Reviews, Validierungsattestierungen und Autorisierungsstatus ausschließlich in die verwalteten Abschnitte. Diese Markdown-Dateien sind deterministische, menschenlesbare Auditansichten der Records und keine Resume- oder Reparaturquelle. Nach jedem lokalen Slice-Commit ist Git die historische Quelle der Wahrheit für den eingecheckten Repositorystand; nach der branchweiten Claude-Gesamtabnahme wird die abschließende Gesamtprojektion path-genau commitet.
 
 Beim automatischen Plan-/Implementierungs-Handoff commitet eine freigegebene `PLAN_ONLY`-Aufgabe den bereits
 geprüften Arbeitsplan unmittelbar; es folgt kein künstlicher Implementierungs-
@@ -167,13 +165,11 @@ Aktive oder eingefrorene Zustände der Version 2 werden unverändert abgelehnt. 
 
 ## Validierung und Reviewisolation
 
-Nur der Orchestrator führt deterministische Validierungen aus. Planreviews verwenden eine interne Vertragsprüfung für Scope, Arbeitsplanpfad und 1-basierte zukünftige Slice-Überschriften; sie führen nicht die Produkttestsuite aus. Implementierungsreviews verwenden die aus kanonisch geänderten Pfaden und offenen Blockern ausgewählte Validierungsmatrix. Nur ein offener `BLOCKER` darf sie mit einem strukturierten `VALIDATE`-Befehl aus einer bereits konfigurierten Befehlsfamilie erweitern. Eine `OBSERVATION` bleibt als Hinweis und Abnahmetext erhalten, erweitert die Matrix aber nicht und kann den Lauf deshalb auch nicht wegen eines fremden Befehls anhalten. Attestierungen werden anhand des Diff-Fingerprints zwischengespeichert, und beide Reviewer erhalten dieselbe gebundene Evidenz.
+Nur der Orchestrator führt deterministische Validierungen aus. Planreviews verwenden eine interne Vertragsprüfung für Scope, Arbeitsplanpfad und 1-basierte zukünftige Slice-Überschriften; sie führen nicht die Produkttestsuite aus. Implementierungsreviews verwenden die aus kanonisch geänderten Pfaden und offenen Blockern ausgewählte Validierungsmatrix. Nur ein offener `BLOCKER` darf sie mit einem strukturierten `VALIDATE`-Befehl aus einer bereits konfigurierten Befehlsfamilie erweitern. Eine `OBSERVATION` bleibt als Hinweis und Abnahmetext erhalten, erweitert die Matrix aber nicht und kann den Lauf deshalb auch nicht wegen eines fremden Befehls anhalten. Attestierungen werden anhand des Diff-Fingerprints zwischengespeichert, und Claude erhält die gebundene Evidenz.
 
-Codex arbeitet mit Schreibzugriff auf den Workspace. Claude und Antigravity erhalten temporäre schreibgeschützte Repositorykopien, während ihre privaten Laufzeit-, Prompt-, Cache- und Logpfade beschreibbar bleiben. Normale Reviews legen das Validierungssystem nicht offen und können den Ziel-Worktree nicht verändern.
+Codex arbeitet mit Schreibzugriff auf den Workspace. Claude erhält eine temporäre schreibgeschützte Repositorykopie, während seine privaten Laufzeit-, Prompt-, Cache- und Logpfade beschreibbar bleiben. Normale Reviews legen das Validierungssystem nicht offen und können den Ziel-Worktree nicht verändern.
 
 Claude verwendet standardmäßig Sonnet mit Effort `high`. Der erste Slice-Review erhält die geänderten Pfade und Hunks des Slice, Akzeptanzkriterien, strukturierte Findings und die gebundene Attestierung. Ein Korrekturreview erhält ausschließlich das Delta seit Claudes zuletzt geprüftem Fingerprint. Eine rein formale Vertragsreparatur erhält die abgelehnte Antwort und den Marker-Vertrag, nicht erneut die Implementierungsevidenz.
-
-Antigravity wird erst ausgeführt, nachdem Claude denselben Fingerprint freigegeben hat. Das gilt für Plan, Slice und Abschlussreview. Antigravity erhält jeweils den vollständigen aktuellen Plan-, Slice- oder Branch-Diff.
 
 Die expliziten Befehlsbuilder des Review-Harness dienen der Diagnose bei Installation, CLI-Versionswechseln oder Fehlersuche. Sie weisen Testausführung und Schreibschutz nachverfolgter Dateien in der isolierten Kopie nach; sie sind nicht Teil eines normalen Reviews.
 
@@ -204,7 +200,7 @@ Die wichtigsten Gates sind:
 - fehlerhafte, fehlende oder widersprüchliche Reviewurteile;
 - Quota-, Authentifizierungs-, Binärprogramm-, Berechtigungs-, Netzwerk-, Prozess- oder Timeoutfehler.
 
-Ein freigebender Slice-Review erfordert eine vollständige erfolgreiche Attestierung für denselben Fingerprint, scopegerechte Teständerungen, keinen reviewer-eigenen offenen Blocker, Reviewevidenz oder konkrete Findings sowie ein Pre-Mortem. Eine offene Observation darf während der Slice-Folge sichtbar bleiben. Der Orchestrator trägt den vollständigen Finding-Lebenszyklus in jeden folgenden Arbeitsblock; bei älteren fortgesetzten States werden zuvor je Slice wiederverwendete IDs deterministisch auf freie reviewer-eigene IDs abgebildet. Im branchweiten Abschlussreview muss Claude jedes eigene offene `C-*`-Finding schließen oder zu einem Blocker hochstufen; Antigravity verfährt ebenso mit `A-*` und darf nur bei global null offenen Findings freigeben. Neue reine Observations sind dort unzulässig: nicht umsetzungsrelevante Ideen und Restrisiken gehören in `REVIEW_EVIDENCE`, handlungsbedürftige Defekte werden Blocker und erzeugen automatisch einen Korrekturslice. Testdateien werden weiterhin im Slice-Report ausgewiesen, vollständig validiert und von beiden Reviewern geprüft; ein zusätzliches menschliches Teständerungs-Gate ist nur mit `--test-change-gate` aktiv. Nur der Reviewer, der ein Finding gemeldet hat, darf es schließen oder neu klassifizieren. Ein versehentlich mit `VALIDATE:` beginnender Abnahmetest einer Observation wird mit Warnung ignoriert; bei einem Blocker bleiben fehlerhafte oder nicht konfigurierte Befehle fail-closed.
+Ein freigebender Slice-Review erfordert eine vollständige erfolgreiche Attestierung für denselben Fingerprint, scopegerechte Teständerungen, keinen reviewer-eigenen offenen Blocker, Reviewevidenz oder konkrete Findings sowie ein Pre-Mortem. Eine offene Observation darf während der Slice-Folge sichtbar bleiben. Der Orchestrator trägt den vollständigen Finding-Lebenszyklus in jeden folgenden Arbeitsblock; bei älteren fortgesetzten States werden zuvor je Slice wiederverwendete IDs deterministisch auf freie reviewer-eigene IDs abgebildet. Im branchweiten Abschlussreview muss Claude jedes eigene offene `C-*`-Finding schließen oder zu einem Blocker hochstufen. Neue reine Observations sind dort unzulässig: nicht umsetzungsrelevante Ideen und Restrisiken gehören in `REVIEW_EVIDENCE`, handlungsbedürftige Defekte werden Blocker und erzeugen automatisch einen Korrekturslice. Testdateien werden weiterhin im Slice-Report ausgewiesen, vollständig validiert und von Claude geprüft; ein zusätzliches menschliches Teständerungs-Gate ist nur mit `--test-change-gate` aktiv. Nur der Reviewer, der ein Finding gemeldet hat, darf es schließen oder neu klassifizieren. Ein versehentlich mit `VALIDATE:` beginnender Abnahmetest einer Observation wird mit Warnung ignoriert; bei einem Blocker bleiben fehlerhafte oder nicht konfigurierte Befehle fail-closed.
 
 Reviewer arbeiten in einem temporären schreibgeschützten Snapshot. Dieser enthält nur Git-sichtbare Quell- und Dokumentationsdateien; Metadaten, Abhängigkeiten und generierte Schwergewichte wie `.git`, `.orchestrator`, `node_modules`, `dist` und Releasearchive werden nicht kopiert. Reine Ausgabevertragskorrekturen erhalten ein leeres schreibgeschütztes Arbeitsverzeichnis. Eindeutig gebundene Formalmarker werden lokal ergänzt, ohne einen zweiten Modellreview auszulösen.
 
@@ -226,7 +222,7 @@ Die Quotabehandlung erfolgt rollenspezifisch. Bei aktivierter automatischer Quot
 
 ## Lokale Commits und externe Git-Aktionen
 
-Nachdem Claude und Antigravity denselben Slice-Fingerprint freigegeben haben, führt der Orchestrator folgende Schritte aus:
+Nachdem Claude den Slice-Fingerprint freigegeben hat, führt der Orchestrator folgende Schritte aus:
 
 1. Repositorystatus und kanonischen Diff erneut ermitteln;
 2. Branch, Slice-Grenze, erlaubte Pfade, Reviews, Findings und Validierungsattestierung prüfen;
@@ -257,7 +253,7 @@ Der Watch-Modus:
 - aktiviert standardmäßig `--skip-git-check`, weil geprüfte Slice-Commits den Worktree absichtlich verändern;
 - verwendet den vollständig automatischen Workflowstandard: Plan-, Teständerungs- und Slice-Commit-Gates sind aus, während echte Stopregeln, Scopeverletzungen, unauflösbare Vertragsfragen und fehlgeschlagene Pflichtvalidierungen weiterhin anhalten;
 - behandelt einen von Codex gemeldeten agentenlokalen `listen`-/Port-Bind-Fehler einmal automatisch als Sandboxgrenze, fordert die normale Readiness erneut an und lässt anschließend die autoritative Validierungsmatrix im Orchestrator laufen;
-- verarbeitet nach dem automatisch geprüften und lokal committeten Plan dessen neu erzeugte `-implement.md` als nächste Inbox-Aufgabe und arbeitet alle Slices bis zum dreifachen Abschlussreview ab;
+- verarbeitet nach dem automatisch geprüften und lokal committeten Plan dessen neu erzeugte `-implement.md` als nächste Inbox-Aufgabe und arbeitet alle Slices bis zum Codex-Vollständigkeitscheck und Claude-Abschlussreview ab;
 - legt die einzelnen Slice-Auditdokumente erst beim tatsächlichen Beginn des jeweiligen Slices an und sammelt alle Plan-, Review-, Finding-, Validierungs- und Abschlussdaten zusätzlich im digestgebundenen Gesamtaudit;
 - streamt standardmäßig `stdout`;
 - verschiebt abgeschlossene Aufgaben mit UTC-Zeitstempel nach `outbox/done/`;
@@ -314,11 +310,11 @@ Für deterministische Negativ- und Fortsetzungsszenarien kann ein State-v3-JSON-
 | `--force-overwrite-state` | automatisch bei abgeschlossenem Zustand | Trotz vorhandenen Zustands einen neuen Lauf beginnen; explizite Verwendung umgeht den normalen Zustandsschutz. |
 | `--strict-preflight` | aus | Einen Fehler der Provider-DNS-Vorabprüfung als fatal behandeln. |
 | `--skip-git-check` / `--no-skip-git-check` | aus; im Watch-Modus an | Prüfung auf einen sauberen Repositoryzustand überschreiben. |
-| `--native-claude-reviews` / `--no-native-claude-reviews` | aus | Nur beim Start eines neuen `structured-v1`-Laufs den experimentellen nativen JSON-Transport für Claude-Reviews unveränderlich binden oder ausdrücklich deaktivieren. Ohne Schalter bleibt auch der Watch-Modus auf dem Texttransport; beim Resume muss eine explizite Angabe der bereits persistierten Bindung entsprechen. |
-| `--native-codex-results` / `--no-native-codex-results` | aus | Nur beim Start eines neuen `structured-v1`-Laufs den experimentellen nativen JSON-Transport für Codex-Planung, Implementierung, Korrektur und Abschlussbericht unveränderlich binden oder ausdrücklich deaktivieren. Default und Watch bleiben ohne Schalter legacy; Resume übernimmt die persistierte Bindung und kennt keinen Textfallback. |
+| `--native-claude-reviews` / `--no-native-claude-reviews` | aus | Nur beim Start eines neuen `structured-v2`-Laufs den nativen JSON-Transport für Claude-Reviews unveränderlich binden oder ausdrücklich deaktivieren. beim Resume muss eine explizite Angabe der bereits persistierten Bindung entsprechen. |
+| `--native-codex-results` / `--no-native-codex-results` | aus | Nur beim Start eines neuen `structured-v2`-Laufs den nativen JSON-Transport für Codex-Planung, Implementierung, Korrektur und Abschlussbericht unveränderlich binden oder ausdrücklich deaktivieren. Resume übernimmt die persistierte Bindung und kennt keinen Textfallback. |
 | `--manual-slice-gate` / `--no-manual-slice-gate` | Repositorykonfiguration oder aus | Vor jedem Slice-Commit eine explizite Freigabe verlangen. |
-| `--plan-gate` / `--no-plan-gate` | Repositorykonfiguration oder aus | Nach Claude-/Antigravity-Planfreigabe eine explizite fingerprintgebundene Benutzerfreigabe vor dem Plancommit verlangen. |
-| `--test-change-gate` / `--no-test-change-gate` | Repositorykonfiguration oder aus | Vor Review und Commit eines Slices mit Testdateiänderungen eine zusätzliche fingerprintgebundene Benutzerfreigabe verlangen. Ohne Gate bleiben Scopeprüfung, Tests und beide KI-Reviews verpflichtend. |
+| `--plan-gate` / `--no-plan-gate` | Repositorykonfiguration oder aus | Nach Claude-Planfreigabe eine explizite fingerprintgebundene Benutzerfreigabe vor dem Plancommit verlangen. |
+| `--test-change-gate` / `--no-test-change-gate` | Repositorykonfiguration oder aus | Vor Review und Commit eines Slices mit Testdateiänderungen eine zusätzliche fingerprintgebundene Benutzerfreigabe verlangen. Ohne Gate bleiben Scopeprüfung, Tests und der Claude-Review verpflichtend. |
 | `--plan-only` / `--no-plan-only` | Aufgabenmarker oder nicht gesetzt | Den Lauf auf das deklarierte Arbeitsplanartefakt begrenzen beziehungsweise explizit als Implementierung ausführen. |
 | `--work-plan <path>` | Aufgabenmarker | Exakter repositoryrelativer `WORK_PLAN_PATH` für `PLAN_ONLY`; darf dem Marker nicht widersprechen. |
 | `--target-branch <branch>` | Aufgabenmarker | Exakter erforderlicher Feature-Branch; darf dem Marker nicht widersprechen. |
@@ -469,7 +465,7 @@ keine technische Fehlerklasse auslösen. Automatische transiente Neuversuche gel
 für belegte Netzwerkdiagnosen; Auth-, Runtime-, Output- und Prozessfehler halten weiterhin
 fortsetzbar an.
 
-Vor jedem der drei branchweiten Finalaufrufe prüft ein lokales, agentenfreies Preflight außerdem Recordkette, State-v3-Spiegel, Findingzustände, aktuelle Validierungsattestierung, autorisierte Pfade und die unmittelbar zuvor persistierte Eingabemessung. Ein Budget- oder Preflightdenial ist kein Providerfehler: Der unveränderte Rollenstep bleibt mit `bootstrap_check` und Exitcode 4 resumierbar. Im Watchbetrieb steigen weder Attempt-Zähler noch entstehen `.poison`-Dateien oder automatische Providerretries. Nach Korrektur von Konfiguration, Record-/State-Spiegel oder Repositoryzustand wird derselbe Auftrag mit `run_task --watch` beziehungsweise `run_task --resume --task-file ...` erneut geprüft; dafür ist keine `--approve-gate`-Entscheidung zulässig oder nötig.
+Vor jedem branchweiten Provideraufruf prüft ein lokales, agentenfreies Preflight außerdem Recordkette, State-v3-Spiegel, Findingzustände, aktuelle Validierungsattestierung, autorisierte Pfade und die unmittelbar zuvor persistierte Eingabemessung. Ein Budget- oder Preflightdenial ist kein Providerfehler: Der unveränderte Rollenstep bleibt mit `bootstrap_check` und Exitcode 4 resumierbar. Im Watchbetrieb steigen weder Attempt-Zähler noch entstehen `.poison`-Dateien oder automatische Providerretries. Nach Korrektur von Konfiguration, Record-/State-Spiegel oder Repositoryzustand wird derselbe Auftrag mit `run_task --watch` beziehungsweise `run_task --resume --task-file ...` erneut geprüft; dafür ist keine `--approve-gate`-Entscheidung zulässig oder nötig.
 
 ## Agentenanweisungen und Ausgabevertrag
 
@@ -480,7 +476,6 @@ Die aktiven Anweisungsdateien des Repositorys sind:
 | `AGENTS.md` | Gemeinsamer Ausführungs-, Sicherheits-, Review- und Marker-Vertrag. |
 | `CODEX.md` | Implementiererrolle und Bereitschaftsdatensätze. |
 | `CLAUDE.md` | Primärer gezielter Reviewer mit persistentem Sonnet-/High-Profil. |
-| `ANTIGRAVITY.md` | Unabhängiger zweiter Plan-, Slice- und Abschlussreviewer. |
 
 Alle Agentenantworten enden mit `STATUS: DONE`. State-v3-Datensätze sind:
 
@@ -489,11 +484,11 @@ Alle Agentenantworten enden mit `STATUS: DONE`. State-v3-Datensätze sind:
 | Codex-Plan | `SLICE_PLAN: <id> \| <summary> \| <paths>` und `PLAN_READY: YES\|NO` |
 | Codex-Implementierung | `TEST_FILES_TOUCHED: NONE\|<paths>` und `IMPLEMENTATION_READY: <slice-id> \| YES\|NO` |
 | Codex-Abschlussbericht | `FINAL_REPORT_READY: YES\|NO` |
-| Jeder Reviewer, erste Zeile | `REVIEWER: claude\|antigravity` |
-| Claude-/Antigravity-Planreview | `PLAN_APPROVAL: YES\|NO` |
+| Reviewer, erste Zeile | `REVIEWER: claude` |
+| Claude-Planreview | `PLAN_APPROVAL: YES\|NO` |
 | Slice-Review | `SLICE_APPROVAL: <slice-id> \| YES\|NO` |
 | Branchweiter Abschlussreview | `FINAL_APPROVAL: YES\|NO` |
-| Neues Finding | `NEW_FINDING: C-01\|A-01 \| BLOCKER\|OBSERVATION \| <description> \| <acceptance test>` |
+| Neues Finding | `NEW_FINDING: C-01 \| BLOCKER\|OBSERVATION \| <description> \| <acceptance test>` |
 | Aktualisierung durch Finding-Eigentümer | `FINDING_STATUS: <id> \| OPEN\|CLOSED \| <rationale>` |
 | Optionale Neuklassifizierung durch Eigentümer | `FINDING_RECLASSIFIED: <id> \| BLOCKER\|OBSERVATION \| <rationale>` |
 | Finding-Antwort von Codex | `FINDING_RESPONSE: <id> \| ACCEPTED\|REJECTED \| <rationale>` |

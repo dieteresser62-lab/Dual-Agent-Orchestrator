@@ -224,6 +224,38 @@ def test_done_is_not_added_without_confirmed_provider_completion() -> None:
     assert result.diagnostic == "status_not_added:provider_completion_unconfirmed"
 
 
+def test_claude_normalization_adds_bound_test_marker_without_mutating_finding() -> None:
+    contract = _validated_slice_contract("02", ("tests/test_workflow.py",))
+    finding = FindingRecord(
+        finding_id="C-09",
+        finding_class=FindingClass.OBSERVATION,
+        status=FindingStatus.OPEN,
+        summary="retain commit and resume regressions",
+        acceptance_test="add focused Claude-only tests",
+        origin=FindingOrigin("02", 1, AgentRole.CLAUDE),
+    )
+    output = "\n".join(
+        (
+            "REVIEWER: claude",
+            "FINDING_STATUS: C-09 | OPEN | covered in the next slice",
+            "PRE_MORTEM: a later cleanup drops the regression again",
+            "SLICE_APPROVAL: 02 | YES",
+            "STATUS: DONE",
+        )
+    )
+
+    normalized = normalize_review_contract_output(output, contract, (finding,))
+
+    assert normalized.splitlines()[1] == "TEST_FILES_TOUCHED: tests/test_workflow.py"
+    assert "FINDING_STATUS: C-09 | OPEN | covered in the next slice" in normalized
+    parsed = validate_review_response(normalized, contract, (finding,))
+    assert parsed.findings[0].finding_id == finding.finding_id
+    assert parsed.findings[0].finding_class is finding.finding_class
+    assert parsed.findings[0].summary == finding.summary
+    assert parsed.findings[0].status is FindingStatus.OPEN
+    assert parsed.findings[0].status_rationale == "covered in the next slice"
+
+
 def test_review_normalization_does_not_invent_omitted_owned_finding_status() -> None:
     fingerprint = "a" * 64
     contract = StepContract(

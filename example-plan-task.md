@@ -48,7 +48,7 @@ repositoryrelative Einzelpfade, keine Globs, Alternativen oder Verzeichnisse.
 - Das Arbeitsplan-MD ist vollständig, widerspruchsfrei und konkret umsetzbar.
 - Die zukünftigen Slice-Überschriften beginnen bei Slice 1 und sind lückenlos nummeriert.
 - Jeder zukünftige Slice enthält genau den kanonischen Abschnitt `**Exakter Änderungspfad**` mit mindestens einem exakten Pfad.
-- Claude und Antigravity haben denselben Planfingerprint freigegeben.
+- Claude hat denselben Planfingerprint freigegeben.
 - Falls `--plan-gate` aktiviert wurde, wird es vor dem Dokumentationscommit fingerprintgebunden freigegeben; im automatischen Standardpfad entfällt dieser zusätzliche Schritt.
 - Keine Datei außerhalb des erlaubten Scope wurde geändert oder commitet.
 

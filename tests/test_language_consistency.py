@@ -4,7 +4,10 @@ import re
 import shutil
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
+
+import pytest
 
 from cli import build_parser, parse_args
 
@@ -12,9 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 THIS_FILE = Path(__file__).resolve()
 SOURCE_DIRS = (ROOT / "src", ROOT / "tests")
 ROOT_FILES = (ROOT / "run_task",)
-ROLE_FILES = (
-    ROOT / "AGENTS.md", ROOT / "CLAUDE.md", ROOT / "CODEX.md", ROOT / "ANTIGRAVITY.md"
-)
+ROLE_FILES = (ROOT / "AGENTS.md", ROOT / "CLAUDE.md", ROOT / "CODEX.md")
 REFERENCE_DOC_FILES = (
     ROOT / "docs" / "reference" / "architecture-and-domain-concept.md",
     ROOT / "docs" / "reference" / "market-comparison.md",
@@ -152,8 +153,9 @@ def test_no_german_terms_in_filenames() -> None:
     assert not hits, "German tokens found in filenames:\n" + "\n".join(hits)
 
 
-def test_root_roles_share_the_state_v3_contract_and_gemini_role_is_gone() -> None:
+def test_root_roles_share_the_state_v3_contract_and_retired_roles_are_gone() -> None:
     assert not (ROOT / "GEMINI.md").exists()
+    assert not (ROOT / ("ANTI" + "GRAVITY.md")).exists()
     for path in ROLE_FILES:
         assert path.is_file(), f"missing role contract: {path.name}"
         text = path.read_text(encoding="utf-8")
@@ -172,13 +174,13 @@ def test_root_roles_share_the_state_v3_contract_and_gemini_role_is_gone() -> Non
 def test_root_roles_share_structured_artifact_authority_contract() -> None:
     required = (
         "## Structured artifact authority",
-        "Agent text markers are ingress-adapter input only",
+        "Native JSON results are validated",
         ".orchestrator/artifacts/<run-id>/records/",
         "technical source of truth",
         "operational mirrors",
         "human audit view rather than a repair source",
-        "legacy-state-v3",
-        "not silently migrated",
+        "UNSUPPORTED-PROTOCOL",
+        "never silently migrated",
         "Resume is fail-closed",
     )
     sections = []
@@ -410,7 +412,7 @@ def test_reference_documents_are_linked_current_and_locally_resolvable() -> None
     for product in (
         "OpenAI Codex",
         "Claude Code Agent Teams",
-        "Google Antigravity 2.0",
+        "Google " + "Anti" + "gravity 2.0",
         "GitHub Copilot Cloud Agent",
         "Cursor Cloud Agents",
         "OpenHands",
@@ -419,6 +421,7 @@ def test_reference_documents_are_linked_current_and_locally_resolvable() -> None
         assert product in comparison
     assert "ausschließlich offizielle Produktseiten und Dokumentationen" in comparison
     assert "in den geprüften offiziellen quellen nicht nachgewiesen" in comparison.lower()
+    assert "kein Bestandteil dieses Orchestrators" in comparison
 
     unresolved = []
     for document in REFERENCE_DOC_FILES:
@@ -458,7 +461,7 @@ def test_workflow_diagram_has_balanced_state_v3_topology() -> None:
         re.findall(r"^\s*endif\b", diagram, re.MULTILINE)
     )
     for term in (
-        "SLICE_PLAN", "PLAN_APPROVAL", "Codex", "Claude", "Antigravity",
+        "SLICE_PLAN", "PLAN_APPROVAL", "Codex", "Claude",
         "canonical diff", "validation", "local Slice NN commit",
         "Branch-wide final review", "correction work unit", "STATUS: DONE",
     ):
@@ -472,8 +475,8 @@ def test_user_docs_and_diagram_explain_structured_artifact_operations() -> None:
 
     common = (
         ".orchestrator/artifacts/<run-id>/records/",
-        "structured-v1",
-        "legacy-state-v3",
+        "structured-v2",
+        "UNSUPPORTED-PROTOCOL",
         "state.json",
         "head.json",
         "Auditansicht",
@@ -482,12 +485,12 @@ def test_user_docs_and_diagram_explain_structured_artifact_operations() -> None:
     for text in (readme, quickstart):
         assert all(fragment in text for fragment in common)
     assert "stille Migration" in readme
-    assert "still migriert" in quickstart
+    assert "weder migriert" in quickstart
 
     for fragment in (
         "authoritative append-only records",
         "State-v3 operational mirror",
-        "Markdown fallback without migration",
+        "UNSUPPORTED-PROTOCOL",
         "Append validated records before any workflow decision",
         "prove semantic equality",
     ):
@@ -499,6 +502,252 @@ def test_user_docs_and_diagram_explain_structured_artifact_operations() -> None:
     )
     for forbidden_claim in ("SQLite", "JSONL", "push", "merge", "external publication"):
         assert forbidden_claim not in authority_sections
+
+
+_RETIREMENT_EVIDENCE_PREFIX = "antigravity-endgueltige-entfernung-"
+_RETIREMENT_ARCHIVE = Path("docs/internal/archive")
+
+
+def _retirement_active_files(root: Path = ROOT) -> tuple[Path, ...]:
+    """Inventory every active path class declared by orchestrator.toml."""
+    with (root / "orchestrator.toml").open("rb") as handle:
+        path_config = tomllib.load(handle)["paths"]
+    active_patterns = tuple(
+        pattern
+        for category in ("productive", "tests", "documentation")
+        for pattern in path_config[category]
+    )
+    generated_patterns = tuple(path_config.get("generated", ()))
+    files: set[Path] = set()
+    for pattern in active_patterns:
+        # pathlib's terminal ** yields directories; append * to include all
+        # declared descendants while keeping the repository pattern canonical.
+        glob_pattern = pattern + "/*" if pattern.endswith("/**") else pattern
+        files.update(path for path in root.glob(glob_pattern) if path.is_file())
+
+    def relative(path: Path) -> Path:
+        return path.relative_to(root)
+
+    def matches(path: Path, pattern: str) -> bool:
+        candidate = relative(path).as_posix()
+        alternatives = (pattern, pattern.replace("/**/", "/"))
+        return any(
+            Path(candidate).match(item)
+            or re.fullmatch(
+                re.escape(item)
+                .replace(r"\*\*", ".*")
+                .replace(r"\*", "[^/]*"),
+                candidate,
+            )
+            is not None
+            for item in alternatives
+        )
+
+    return tuple(
+        sorted(
+            (
+                path
+                for path in files
+                if path != THIS_FILE
+                and not any(matches(path, pattern) for pattern in generated_patterns)
+                and _RETIREMENT_ARCHIVE not in relative(path).parents
+                and not (
+                    relative(path).parent == Path("docs/internal")
+                    and relative(path).name.startswith(_RETIREMENT_EVIDENCE_PREFIX)
+                )
+            ),
+            key=lambda path: relative(path).as_posix(),
+        )
+    )
+
+
+_ALLOWED_MARKET_ANTIGRAVITY_LINES = frozenset(
+    {
+        "Der Dual-Agent Task Orchestrator besetzt eine engere Kategorie als die meisten Produkte in diesem Vergleich. Codex, Claude Code, Google Antigravity, GitHub Copilot, Cursor, OpenHands und aider stellen primär einen Agenten, einen Agenten-Workspace, eine Entwicklungsoberfläche oder eine Agentenplattform bereit. Dieses Projekt ist eine lokale Workflow-Steuerungsebene, die Codex und Claude in festen Rollen aufruft und deterministische Evidenz, unabhängige Reviews, fortsetzbare Gates und eine exakte lokale Commit-Autorisierung ergänzt.",
+        "| Google Antigravity 2.0 | Eigenständige Agenten-Kommandozentrale und CLI-/IDE-Ökosystem | Externes Vergleichsprodukt; unterstützt Projekte, Worktrees und Subagenten, ist aber kein Bestandteil dieses Orchestrators. |",
+        "| Google Antigravity 2.0 | Eigenständige App, CLI und IDE-Ökosystem | Projektbezogene lokale/Worktree-Ausführung plus Managed-Agent-Optionen | Mehrere Unterhaltungen, dynamische Subagenten, Custom Agents, Skills und MCP | Projekt- und subagentenübergreifend integriert | Projekt-/Worktree-Änderungen; externe SCM-Aktionen abhängig von der Oberfläche |",
+        "| Fähigkeit | Dual-Agent Orchestrator | Codex | Claude Teams | Antigravity | GitHub Copilot | Cursor Cloud | OpenHands | aider |",
+        "### 6.3 Google Antigravity 2.0",
+        "Google positioniert Antigravity 2.0 als eigenständige Kommandozentrale für synchrone und asynchrone Agenten. Projekte können mehrere Ordner umfassen, Git-Worktrees verwenden, begrenzte Einstellungen und Berechtigungen anwenden und dynamische Subagenten ausführen. Das breitere Ökosystem enthält CLI- und IDE-Oberflächen, Browserinteraktion, Artefakte, geplante Aufgaben, Skills, Hooks und MCP-Integration.",
+        "Antigravity bietet damit eine reichhaltige Betreiberoberfläche, Parallelität und interaktive Artefakte. Es ist in dieser Tabelle ausschließlich ein externes Vergleichsprodukt und gehört weder zur Laufzeit noch zur Review- oder Freigabetopologie des Dual-Agent Orchestrators.",
+        "Offizielle Quellen: [Antigravity-2.0-Überblick](https://antigravity.google/docs/overview), [Antigravity-2.0-Funktionen](https://antigravity.google/docs/features?app=antigravity), [Antigravity-CLI-Agenten](https://antigravity.google/docs/cli/commands/agents?hl=en), [Google-Entwicklerankündigung](https://developers.googleblog.com/build-with-google-antigravity-our-new-agentic-development-platform/).",
+        "| Ausgereifte Multi-Agenten-Desktop-Kommandozentrale und parallele Worktrees | OpenAI Codex App oder Google Antigravity 2.0 |",
+        "| Paralleler Implementierungsdurchsatz | Codex, Claude Teams, Antigravity, Cursor oder ein OpenHands-basierter Entwurf |",
+    }
+)
+_ALLOWED_INTERNAL_RETIREMENT_LINK_LINES = frozenset(
+    {
+        "- [Arbeitsplan zur endgültigen Providerbereinigung](antigravity-endgueltige-entfernung-arbeitsplan.md)",
+        "[`archive/antigravity-retirement/`](archive/antigravity-retirement/) enthält",
+    }
+)
+
+
+def _allowed_retirement_reference_line(path: Path, line: str) -> bool:
+    stripped = line.strip()
+    if path == ROOT / "docs/reference/market-comparison.md":
+        return stripped in _ALLOWED_MARKET_ANTIGRAVITY_LINES
+    if path == ROOT / "docs/internal/README.md":
+        return stripped in _ALLOWED_INTERNAL_RETIREMENT_LINK_LINES
+    return False
+
+
+def _retirement_hits(path: Path, text: str) -> list[str]:
+    text = "\n".join(
+        line
+        for line in text.splitlines()
+        if "# retirement-negative-control" not in line
+        and not _allowed_retirement_reference_line(path, line)
+    )
+    retired = (
+        "anti" + "gravity",
+        "agy" + ".exe",
+        "ANTI" + "GRAVITY_",
+        "orchestrator-artifact-" + "v1",
+        "native-agent-codex-request-" + "v1",
+        "native-agent-codex-result-" + "v1",
+        "native-agent-review-request-" + "v1",
+        "native-agent-review-result-" + "v1",
+        "native-codex-" + "v1",
+        "native-claude-review-" + "v1",
+    )
+    lowered = text.casefold()
+    hits = [token for token in retired if token.casefold() in lowered]
+    if re.search(r"(?<![A-Za-z0-9_])" + "agy" + r"(?![A-Za-z0-9_])", text, re.I):
+        hits.append("standalone retired binary")
+    if re.search(
+        r"(?:"
+        r"(?<![A-Za-z0-9_])A-(?:[0-9]+|\*)(?![A-Za-z0-9_])"
+        r"|[\"']A-[\"']"
+        r"|\^\[CA\]-"
+        r"|\[CA\].{0,80}(?:finding|-[([])"
+        r")",
+        text,
+        re.I | re.S,
+    ):
+        hits.append("retired finding namespace")
+    label = (
+        path.relative_to(ROOT).as_posix()
+        if path.is_relative_to(ROOT)
+        else path.as_posix()
+    )
+    return [f"{label}: {hit}" for hit in hits]
+
+
+def test_retirement_guard_rejects_every_active_retired_reference() -> None:
+    hits = [
+        hit
+        for path in _retirement_active_files()
+        for hit in _retirement_hits(path, path.read_text(encoding="utf-8"))
+    ]
+    assert not hits, "Retired active references found:\n" + "\n".join(hits)
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "synthetic"),
+    (
+        (
+            "schemas/native-agent-codex-result-v2.schema.json",
+            '{"pattern": "^[CA]-(0[1-9]|[1-9][0-9]*)$"}',
+        ),
+        ("src/workflow.py", 'LEGACY_FINDING = "A-02"'),
+        ("src/workflow.py", "# reviewer may raise A-* findings"),
+        ("run_task", "RUN_TASK_ANTIGRAVITY_BINARY=agy.exe"),
+        (
+            "docs/reference/architecture-and-domain-concept.md",
+            "Antigravity ist die dritte Prozessrolle und finaler Reviewer.",
+        ),
+        ("tests/fixtures/legacy.txt", "reviewer finding A-02"),
+        ("OPERATIONS.md", "Antigravity ist ein produktiver Reviewer."),
+    ),
+)
+def test_retirement_guard_inventory_negative_controls(
+    tmp_path: Path, relative_path: str, synthetic: str
+) -> None:
+    (tmp_path / "orchestrator.toml").write_text(
+        (ROOT / "orchestrator.toml").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    target = tmp_path / relative_path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(synthetic, encoding="utf-8")
+
+    active_files = _retirement_active_files(tmp_path)
+
+    assert target in active_files
+    assert _retirement_hits(target, synthetic)
+
+
+def test_market_comparison_allows_only_exact_external_product_lines() -> None:
+    path = ROOT / "docs/reference/market-comparison.md"
+    current = path.read_text(encoding="utf-8")
+    assert not _retirement_hits(path, current)
+    actual = {
+        line.strip()
+        for line in current.splitlines()
+        if "antigravity" in line.casefold()
+    }
+    assert actual == _ALLOWED_MARKET_ANTIGRAVITY_LINES
+
+
+@pytest.mark.parametrize(
+    ("current_line", "retired_line"),
+    (
+        (
+            "| Google Antigravity 2.0 | Eigenständige Agenten-Kommandozentrale und CLI-/IDE-Ökosystem | Externes Vergleichsprodukt; unterstützt Projekte, Worktrees und Subagenten, ist aber kein Bestandteil dieses Orchestrators. |",
+            "| Google Antigravity 2.0 | Eigenständige Agenten-Kommandozentrale und CLI-/IDE-Ökosystem | Stellt den hier verwendeten unabhängigen Reviewer bereit und unterstützt Projekte, Worktrees und Subagenten. |",
+        ),
+        (
+            "| Dual-Agent Orchestrator | Python-CLI und FIFO-Watcher | Ziel-Worktree plus temporäre lokale Reviewerkopie | Feste Rollen Codex → Claude; Rollen-CLIs unabhängig konfiguriert | Slices sequenziell; providerinterne Parallelität außerhalb seiner Kontrolle | Ausschließlich verifizierte lokale Slice-Commits |",
+            "| Dual-Agent Orchestrator | Python-CLI und FIFO-Watcher | Ziel-Worktree plus temporäre lokale Reviewerkopie | Feste Rollen Codex → Claude → Antigravity; Rollen-CLIs unabhängig konfiguriert | Slices sequenziell; providerinterne Parallelität außerhalb seiner Kontrolle | Ausschließlich verifizierte lokale Slice-Commits |",
+        ),
+        (
+            "Antigravity bietet damit eine reichhaltige Betreiberoberfläche, Parallelität und interaktive Artefakte. Es ist in dieser Tabelle ausschließlich ein externes Vergleichsprodukt und gehört weder zur Laufzeit noch zur Review- oder Freigabetopologie des Dual-Agent Orchestrators.",
+            "Antigravity bietet damit eine reichhaltige Betreiberoberfläche, Parallelität und interaktive Artefakte. In diesem Projekt wird es bewusst auf einen unabhängigen, schreibgeschützten Abschlussreviewer nach Claude begrenzt.",
+        ),
+        (
+            "| Fähigkeit | Dual-Agent Orchestrator | Codex | Claude Teams | Antigravity | GitHub Copilot | Cursor Cloud | OpenHands | aider |",
+            "| Dual-Agent Orchestrator | Rollen | Codex, Claude und Antigravity sind die drei aktiven Prozessrollen dieses Orchestrators |",
+        ),
+    ),
+)
+def test_market_comparison_rejects_retired_role_lines(
+    current_line: str, retired_line: str
+) -> None:
+    path = ROOT / "docs/reference/market-comparison.md"
+    current = path.read_text(encoding="utf-8")
+    assert current_line in current
+
+    mutated = current.replace(current_line, retired_line, 1)
+
+    assert _retirement_hits(path, mutated)
+
+
+def test_internal_archive_link_cannot_hide_a_process_role() -> None:
+    path = ROOT / "docs/internal/README.md"
+    current = path.read_text(encoding="utf-8")
+    link = "[`archive/antigravity-retirement/`](archive/antigravity-retirement/) enthält"
+    assert link in current
+
+    mutated = current.replace(
+        link,
+        link + " Antigravity ist die dritte aktive Prozessrolle.",
+        1,
+    )
+
+    assert _retirement_hits(path, mutated)
+
+
+def test_runtime_and_tests_do_not_read_non_authoritative_archives() -> None:
+    archive_token = "docs/internal/" + "archive/"
+    hits = []
+    for root in (ROOT / "src", ROOT / "tests"):
+        for path in root.rglob("*.py"):
+            if path == THIS_FILE:
+                continue
+            if archive_token in path.read_text(encoding="utf-8"):
+                hits.append(str(path.relative_to(ROOT)))
+    assert not hits
 
 
 def test_example_task_declares_every_required_boundary() -> None:

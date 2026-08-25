@@ -256,8 +256,8 @@ def replay_findings(
 
     Historical finding-transition records remain valid replay inputs, but they
     are unconditionally excluded here: without a persisted work-unit id they
-    cannot safely authorize a new native request when C-/A-identifiers may be
-    reused in another work unit.
+    cannot safely authorize a new native request when finding identifiers may
+    be reused in another work unit.
     """
     target = None if work_unit_id is None else str(work_unit_id)
     findings: dict[str, FindingRecord] = {}

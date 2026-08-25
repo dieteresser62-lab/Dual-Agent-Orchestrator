@@ -240,7 +240,7 @@ def test_new_finding_id_must_belong_to_claude() -> None:
     document = _review(context, approved=False)
     document["new_findings"] = [
         {
-            "finding_id": "A-01",
+            "finding_id": "A-01",  # retirement-negative-control
             "finding_class": "BLOCKER",
             "summary": "Wrong owner",
             "acceptance_test": {"kind": "prose", "text": "Use the correct prefix"},

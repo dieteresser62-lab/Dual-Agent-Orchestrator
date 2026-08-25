@@ -8,53 +8,53 @@ skinparam activity {
   DiamondBorderColor #334155
 }
 
-title Resumable State-v3 Inbox-to-Commit Workflow
+title Resumable Structured-v2 Codex-Claude Workflow
 
 start
 :Watch inbox for stable Markdown task;
 :Read task, repository policy, Git identity, and persisted state;
 
 if (New watch task?) then (yes)
-  :Create, switch to, or extend TARGET_BRANCH under safe worktree rules;
+  :Prepare TARGET_BRANCH under safe worktree rules;
 else (formal single task)
   :Require the declared active target branch;
 endif
 
 if (Only prose plus TARGET_BRANCH?) then (yes)
-  :Derive PLAN_ONLY and exact docs/internal slug work-plan scope;
+  :Derive PLAN_ONLY and exact work-plan scope;
 else (formal contract)
   :Validate every declared contract marker fail-closed;
 endif
 
 if (Unfinished State-v3 run?) then (yes)
-  if (Persisted protocol is structured-v1?) then (yes)
+  if (Persisted protocol is structured-v2?) then (yes)
     :Scan authoritative append-only records and rebuild head cache;
     :Compare record facts with the State-v3 operational mirror;
     if (Chain missing, corrupt, unknown, or divergent?) then (yes)
-      :Halt fail-closed with run/record diagnosis and restoration guidance;
+      :Halt fail-closed with run/record diagnosis;
       stop
     else (consistent)
-      :Resume the persisted work unit, slice, round, and exact role step;
+      :Resume exact work unit, slice, round, role, model, and effort;
     endif
-  else (legacy-state-v3)
-    :Resume historical State-v3 and Markdown fallback without migration;
+  else (unsupported)
+    :Reject legacy-state-v3 or structured-v1 with UNSUPPORTED-PROTOCOL;
+    stop
   endif
 else (no)
-  :Create State-v3 work unit and bind structured-v1 immutably;
+  :Create State-v3 work unit and bind structured-v2 plus agent profiles;
 endif
 
 if (Approved IMPLEMENT handoff?) then (yes)
   :Verify APPROVED_PLAN_COMMIT and imported slices;
 else (plan required)
   partition "Plan" {
-    :Codex produces one plan-artifact SLICE_PLAN and documents future slices;
-    :Orchestrator validates task scope and the internal plan/handoff contract;
-    :Claude reviews the plan;
-    :Antigravity reviews the same plan fingerprint;
+    :Codex returns native JSON SLICE_PLAN result;
+    :Validate task scope and plan/handoff contract;
+    :Run deterministic plan checks;
+    :Claude reviews the bound plan fingerprint;
     while (PLAN_APPROVAL is NO?) is (yes)
-      :Codex revises the plan and answers findings;
-      :Orchestrator refreshes bound evidence;
-      :Claude and Antigravity review the plan correction;
+      :Codex returns a native JSON plan correction;
+      :Refresh bound evidence and Claude reviews again;
     endwhile (no)
     if (Manual plan gate enabled?) then (yes)
       :Persist fingerprint-bound plan gate;
@@ -68,86 +68,36 @@ endif
 
 while (A planned slice remains?) is (yes)
   partition "Bounded slice" {
-    :Create Slice audit document;
-    :Persist slice start commit and exact path scope;
-    :Codex implements within the scope;
-    :Parse agent text markers through the strict ingress adapter;
+    :Create Slice audit document and persist exact scope;
+    :Codex implements and returns native JSON readiness;
     :Append validated records before any workflow decision;
     :Dual-write the State-v3 mirror and prove semantic equality;
-    if (Agent sandbox blocks port/browser validation?) then (yes)
-      :Re-prompt Codex once for normal readiness;
-      :Leave the full matrix to the orchestrator;
-    else (no)
-    endif
-    :Orchestrator collects canonical diff and runs validation once per fingerprint;
-    :Claude reviews changed paths and hunks;
-
+    :Collect canonical diff and run validation once per fingerprint;
+    :Claude reviews the bound diff and attestation;
     while (Claude has an open blocker?) is (yes)
       :Codex corrects and answers findings;
-      :Orchestrator validates the new fingerprint;
-      :Claude reviews only the correction delta;
-    endwhile (no)
-
-    :Antigravity reviews the complete slice diff;
-    while (Antigravity has an open blocker?) is (yes)
-      :Codex corrects and answers findings;
-      :Orchestrator validates the new fingerprint;
+      :Validate the new fingerprint;
       :Claude reviews the correction delta;
-      :Antigravity rechecks its findings;
     endwhile (no)
-
     if (Enabled manual gate or true policy stop?) then (yes)
-      :Persist awaiting_user_decision;
-      :Return exit 4 without changing the reviewed worktree;
-      :User repairs or decides the gate and runs --resume;
+      :Persist awaiting_user_decision and return exit 4;
+      :User repairs or decides the gate and resumes;
       :Revalidate the persisted boundary and fingerprint;
     else (automatic default)
     endif
-    :Orchestrator stages exact reviewed paths;
+    :Stage exact Claude-approved paths;
     :Create and verify local Slice NN commit;
   }
 endwhile (no)
 
 partition "Branch-wide final review" {
-  :Serialize and measure Codex final input losslessly;
-  :Persist measurement and run local Codex-final preflight;
-  if (Budget or preflight denied?) then (yes)
-    :Persist bootstrap_check at the unchanged Codex step;
-    :Return resumable exit 4 without provider/watch retry;
-    stop
-  else (passed)
-  endif
   :Codex checks completeness against the full branch diff;
-  :Orchestrator validates and attests the branch fingerprint;
-  :Serialize and measure Claude final input losslessly;
-  :Persist measurement and run local Claude-final preflight;
-  if (Budget or preflight denied?) then (yes)
-    :Persist bootstrap_check at the unchanged Claude step;
-    :Return resumable exit 4 without provider/watch retry;
-    stop
-  else (passed)
-  endif
-  :Claude reviews the complete branch;
-  :Serialize and measure Antigravity final input losslessly;
-  :Persist measurement and run local Antigravity-final preflight;
-  if (Budget or preflight denied?) then (yes)
-    :Persist bootstrap_check at the unchanged Antigravity step;
-    :Return resumable exit 4 without provider/watch retry;
-    stop
-  else (passed)
-  endif
-  :Antigravity reviews the same complete branch;
-
+  :Validate and attest the branch fingerprint;
+  :Claude reviews the complete branch and pre-mortem;
   while (Any final finding remains open?) is (yes)
-    if (Actionable defect?) then (yes)
-      :Finding owner reclassifies it as a blocker;
-      :Create a bounded correction work unit;
-      :Codex corrects, validation runs, and both slice reviewers approve;
-      :Orchestrator creates a local correction commit;
-    else (no)
-      :Finding owner closes it as resolved,
-      non-issue, or outside authorized scope;
-    endif
+    :Create a bounded correction work unit;
+    :Codex corrects, validation runs, and Claude reviews;
+    :Create a local correction commit;
     :Repeat the complete branch review;
   endwhile (no)
 }

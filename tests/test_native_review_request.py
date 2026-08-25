@@ -588,28 +588,6 @@ def test_request_bundle_binds_exact_immutable_writer_schema_bytes() -> None:
     ).hexdigest() == bundle.document["response_contract"]["schema_sha256"]
 
 
-def test_historical_schema_only_claude_results_are_not_v2_and_remain_byte_stable() -> None:
-    corpus = Path(
-        "docs/internal/archive/native-codex-claude-correction-loop"
-    ).glob("*.raw.json")
-    paths = tuple(sorted(corpus))
-    assert paths
-    before = {
-        path: hashlib.sha256(path.read_bytes()).hexdigest() for path in paths
-    }
-
-    native_review_provider_response_schema(_context())
-    for path in paths:
-        document = json.loads(path.read_text(encoding="utf-8"))
-        with pytest.raises(NativeReviewContractError) as raised:
-            validate_native_review_document(document)
-        assert raised.value.code is NativeReviewErrorCode.SCHEMA_INVALID
-
-    assert {
-        path: hashlib.sha256(path.read_bytes()).hexdigest() for path in paths
-    } == before
-
-
 def test_registered_claude_exceptions_cover_writer_valid_local_rejections() -> None:
     observation_one = _prior_finding(
         "C-01", finding_class=FindingClass.OBSERVATION

@@ -10,7 +10,7 @@
 
 ## 1. Zusammenfassung
 
-Der Dual-Agent Task Orchestrator besetzt eine engere Kategorie als die meisten Produkte in diesem Vergleich. Codex, Claude Code, Google Antigravity, GitHub Copilot, Cursor, OpenHands und aider stellen primär einen Agenten, einen Agenten-Workspace, eine Entwicklungsoberfläche oder eine Agentenplattform bereit. Dieses Projekt ist eine lokale Workflow-Steuerungsebene, die drei dieser Agentenoberflächen in festen Rollen aufruft und deterministische Evidenz, asymmetrische unabhängige Reviews, fortsetzbare Gates und eine exakte lokale Commit-Autorisierung ergänzt.
+Der Dual-Agent Task Orchestrator besetzt eine engere Kategorie als die meisten Produkte in diesem Vergleich. Codex, Claude Code, Google Antigravity, GitHub Copilot, Cursor, OpenHands und aider stellen primär einen Agenten, einen Agenten-Workspace, eine Entwicklungsoberfläche oder eine Agentenplattform bereit. Dieses Projekt ist eine lokale Workflow-Steuerungsebene, die Codex und Claude in festen Rollen aufruft und deterministische Evidenz, unabhängige Reviews, fortsetzbare Gates und eine exakte lokale Commit-Autorisierung ergänzt.
 
 Sein stärkstes Alleinstellungsmerkmal ist die Kombination aus:
 
@@ -45,7 +45,7 @@ Produktnamen beziehen sich auf die in den verlinkten Quellen beschriebenen Oberf
 | Dual-Agent Task Orchestrator | Lokale Multi-Agenten-Workflow-Steuerung | Referenz: begrenzte Implementierung, Review, Validierung, Fortsetzung und Git-Transaktion. |
 | OpenAI Codex | Lokaler/Cloud-Coding-Agent und Multi-Agenten-Kommandozentrale | Stellt den hier verwendeten Implementierer bereit und unterstützt parallele Agentenarbeit. |
 | Claude Code Agent Teams | Terminalzentrierte Multi-Agenten-Entwicklungsumgebung | Stellt den hier verwendeten primären Reviewer bereit und unterstützt explizite Agentenkoordination. |
-| Google Antigravity 2.0 | Eigenständige Agenten-Kommandozentrale und CLI-/IDE-Ökosystem | Stellt den hier verwendeten unabhängigen Reviewer bereit und unterstützt Projekte, Worktrees und Subagenten. |
+| Google Antigravity 2.0 | Eigenständige Agenten-Kommandozentrale und CLI-/IDE-Ökosystem | Externes Vergleichsprodukt; unterstützt Projekte, Worktrees und Subagenten, ist aber kein Bestandteil dieses Orchestrators. |
 | GitHub Copilot Cloud Agent und Code Review | GitHub-native Coding- und Reviewdienste | Automatisiert Issue-zu-PR-Arbeit und Reviews innerhalb der Hostingplattform. |
 | Cursor Cloud Agents | Gehostete Coding-Agenten-Ausführung und PR-Workflow | Bietet parallele Cloud-VMs, umfangreiche Artefakte, Integrationen und Freigabewerkzeuge. |
 | OpenHands | Open-Source-Agenten-SDK, Runtime, CLI und Cloudplattform | Bietet modellunabhängige lokale, selbst gehostete und Cloud-Agenteninfrastruktur. |
@@ -55,7 +55,7 @@ Produktnamen beziehen sich auf die in den verlinkten Quellen beschriebenen Oberf
 
 | Produkt | Ausführungsoberfläche | Ort der Laufzeit | Agenten-/Modelltopologie | Parallele Arbeit | Primäre Git-Übergabe |
 |---|---|---|---|---|---|
-| Dual-Agent Orchestrator | Python-CLI und FIFO-Watcher | Ziel-Worktree plus temporäre lokale Reviewerkopien | Feste Rollen Codex → Claude → Antigravity; Rollen-CLIs unabhängig konfiguriert | Slices sequenziell; providerinterne Parallelität außerhalb seiner Kontrolle | Ausschließlich verifizierte lokale Slice-Commits |
+| Dual-Agent Orchestrator | Python-CLI und FIFO-Watcher | Ziel-Worktree plus temporäre lokale Reviewerkopie | Feste Rollen Codex → Claude; Rollen-CLIs unabhängig konfiguriert | Slices sequenziell; providerinterne Parallelität außerhalb seiner Kontrolle | Ausschließlich verifizierte lokale Slice-Commits |
 | OpenAI Codex | CLI, IDE, Desktop-App und Cloudaufgaben | Lokale Sandbox oder isolierte Cloudumgebungen | OpenAI-Coding-Agenten; mehrere isolierte Threads/Worktrees | Aufgabenübergreifend integriert | Cloud-Commit, lokaler Checkout oder Pull Request |
 | Claude Code Agent Teams | Terminal, Desktop, IDE, Web und Automatisierungsoberflächen | Primär lokale Sitzungen; Web-/Cloudoberfläche ebenfalls verfügbar | Claude-Teamlead, Teammates und Subagenten mit getrennten Kontexten | Integriert; gemeinsame Aufgabenliste und direkte Nachrichten | Repositoryänderungen im Git-Workflow des Benutzers |
 | Google Antigravity 2.0 | Eigenständige App, CLI und IDE-Ökosystem | Projektbezogene lokale/Worktree-Ausführung plus Managed-Agent-Optionen | Mehrere Unterhaltungen, dynamische Subagenten, Custom Agents, Skills und MCP | Projekt- und subagentenübergreifend integriert | Projekt-/Worktree-Änderungen; externe SCM-Aktionen abhängig von der Oberfläche |
@@ -83,7 +83,7 @@ Produktnamen beziehen sich auf die in den verlinkten Quellen beschriebenen Oberf
 
 OpenAI beschreibt Codex als Coding-Agenten für CLI-, IDE-, Desktop- und Cloudoberflächen. Cloudaufgaben laufen in isolierten Umgebungen; die Codex-App unterstützt mehrere Agenten parallel mit integrierten Worktrees. Abgeschlossene Arbeit kann geprüft, überarbeitet, lokal ausgecheckt oder in einen Pull Request überführt werden. Damit ist Codex als Implementierungs-Workspace breiter und ausgereifter als dieser Orchestrator.
 
-Der Orchestrator verwendet Codex für eine engere Verantwortung: Planung, Implementierung, Korrektur und Abschlussbericht innerhalb einer anderswo besessenen Zustandsmaschine. Sein Zusatznutzen ist keine weitere Codex-Ausführungsoberfläche, sondern unabhängige Claude- und Antigravity-Urteile plus deterministische Commit-Autorisierung.
+Der Orchestrator verwendet Codex für eine engere Verantwortung: Planung, Implementierung, Korrektur und Abschlussbericht innerhalb einer anderswo besessenen Zustandsmaschine. Sein Zusatznutzen ist keine weitere Codex-Ausführungsoberfläche, sondern ein unabhängiges Claude-Urteil plus deterministische Commit-Autorisierung.
 
 Offizielle Quellen: [Einführung der Codex-App](https://openai.com/index/introducing-the-codex-app/), [Einführung von Codex](https://openai.com/index/introducing-codex/), [Codex-CLI-Überblick](https://help.openai.com/en/articles/11096431-openai-codex-cli-getting-started).
 
@@ -91,7 +91,7 @@ Offizielle Quellen: [Einführung der Codex-App](https://openai.com/index/introdu
 
 Claude Code Agent Teams koordinieren einen Lead und mehrere unabhängige Claude-Sitzungen über eine gemeinsame Aufgabenliste und direkte Nachrichten. Sie sind stark bei paralleler Recherche, Reviews, konkurrierenden Hypothesen und Implementierungen mit getrennten Dateien. Teams können Planfreigaben verlangen und Lebenszyklusregeln mit Hooks erzwingen. Anthropic kennzeichnet die Funktion derzeit als experimentell und dokumentiert Grenzen bei Fortsetzung, Synchronisation des Aufgabenstatus, Herunterfahren, Verschachtelung und fester Führung.
 
-Diese Topologie begünstigt kollaborative parallele Ausführung. Der Dual-Agent Orchestrator priorisiert dagegen eine sequenzielle Kette mit Providerdiversität und unveränderlichen Rollengrenzen. Claude kann sich nicht selbst vom Reviewer zum Implementierer befördern, und seine Freigabe reicht ohne Antigravitys nachfolgendes Urteil zum selben Fingerprint nicht aus.
+Diese Topologie begünstigt kollaborative parallele Ausführung. Der Dual-Agent Orchestrator priorisiert dagegen eine sequenzielle Kette mit Providerdiversität und unveränderlichen Rollengrenzen. Claude kann sich nicht selbst vom Reviewer zum Implementierer befördern; seine fingerprintgebundene Freigabe autorisiert ausschließlich den nachgelagerten lokalen Orchestratorcommit.
 
 Offizielle Quellen: [Claude Code Agent Teams](https://code.claude.com/docs/en/agent-teams), [Claude Code Subagenten](https://code.claude.com/docs/en/sub-agents), [Funktionsweise von Claude Code](https://code.claude.com/docs/en/how-claude-code-works).
 
@@ -99,7 +99,7 @@ Offizielle Quellen: [Claude Code Agent Teams](https://code.claude.com/docs/en/ag
 
 Google positioniert Antigravity 2.0 als eigenständige Kommandozentrale für synchrone und asynchrone Agenten. Projekte können mehrere Ordner umfassen, Git-Worktrees verwenden, begrenzte Einstellungen und Berechtigungen anwenden und dynamische Subagenten ausführen. Das breitere Ökosystem enthält CLI- und IDE-Oberflächen, Browserinteraktion, Artefakte, geplante Aufgaben, Skills, Hooks und MCP-Integration.
 
-Antigravity bietet damit eine reichhaltigere Betreiberoberfläche, Parallelität und interaktive Artefakte. In diesem Projekt wird es bewusst auf einen unabhängigen, schreibgeschützten Abschlussreviewer nach Claude begrenzt. Feste Reihenfolge und Evidenzvertrag stammen vom Orchestrator, nicht aus Antigravitys allgemeinem Agent Manager.
+Antigravity bietet damit eine reichhaltige Betreiberoberfläche, Parallelität und interaktive Artefakte. Es ist in dieser Tabelle ausschließlich ein externes Vergleichsprodukt und gehört weder zur Laufzeit noch zur Review- oder Freigabetopologie des Dual-Agent Orchestrators.
 
 Offizielle Quellen: [Antigravity-2.0-Überblick](https://antigravity.google/docs/overview), [Antigravity-2.0-Funktionen](https://antigravity.google/docs/features?app=antigravity), [Antigravity-CLI-Agenten](https://antigravity.google/docs/cli/commands/agents?hl=en), [Google-Entwicklerankündigung](https://developers.googleblog.com/build-with-google-antigravity-our-new-agentic-development-platform/).
 
@@ -167,7 +167,7 @@ Der Orchestrator lässt sich am besten als **richtliniendurchsetzende, evidenzge
 
 Die Beziehung ist häufig komplementär:
 
-- Codex, Claude und Antigravity bleiben Reasoning- und Coding-Engines.
+- Codex und Claude bleiben die Reasoning- und Coding-Engines des Orchestrators; weitere Produkte sind ausschließlich Vergleichsgegenstände.
 - Ein Hostingprodukt kann die verifizierten lokalen Commits weiterhin in einem späteren, menschlich gesteuerten PR-Schritt übernehmen.
 - OpenHands könnte eine zukünftige alternative Ausführungsbasis bilden, wenn die feste Adaptergrenze bewusst verallgemeinert würde.
 - Repository-Hooks und CI bleiben als zusätzliche Verteidigung nach der lokalen Validierung des Orchestrators sinnvoll.

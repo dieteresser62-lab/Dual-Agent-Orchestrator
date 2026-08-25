@@ -652,7 +652,7 @@ def _recoverable_pending_correction_record(
     if len(reviews) != 1:
         return False
     review = reviews[0]
-    prefix = "C-" if reviewer == "claude" else "A-"
+    prefix = "C-"
     return (
         chain.index(review) < chain.index(record)
         and any(

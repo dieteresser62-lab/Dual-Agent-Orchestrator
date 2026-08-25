@@ -533,7 +533,7 @@ def test_pending_correction_resume_exception_rejects_near_misses(
     elif failure_mode == "wrong-finding-prefix":
         correction = replace(
             correction,
-            payload=replace(correction.payload, finding_ids=("A-07",)),
+            payload=replace(correction.payload, finding_ids=("F-07",)),
         )
     chain = tuple(
         correction if item.record_id == correction.record_id else

@@ -4,7 +4,7 @@ Claude is the primary read-only reviewer in every round. Use Sonnet with effort 
 
 ## Structured artifact authority
 
-- New workflows are immutably bound to `structured-v1`. Agent text markers are ingress-adapter input only; after parsing and semantic dual-write comparison, the validated append-only records are the technical source of truth for every fact they represent.
+- New workflows are immutably bound to `structured-v2`. Native JSON results are validated against their request-specific writer schema and domain contract before the validated append-only records become the technical source of truth for every fact they represent. There is no text-parser fallback.
 - The authoritative record chain lives in `.orchestrator/artifacts/<run-id>/records/`. `.orchestrator/state.json` and checkpoints are operational mirrors, `head.json` is a reconstructable cache, and projected Markdown is a human audit view rather than a repair source.
-- Historical states without a protocol binding remain on `legacy-state-v3`; they are not silently migrated. A persisted protocol binding never falls back to another mode.
+- Historical `legacy-state-v3` and `structured-v1` states are unsupported and rejected fail-closed with `UNSUPPORTED-PROTOCOL`; they are never silently migrated or used as a fallback.
 - Resume is fail-closed. Missing, corrupt, unknown, or mirror-divergent structured records require restoring the matching chain or mirror before continuation; agents must never invent records, approvals, or migration facts.
