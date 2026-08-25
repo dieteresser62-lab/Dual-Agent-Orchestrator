@@ -171,12 +171,6 @@ def _append_external_path_evidence(
         idempotency_key="slice-claude",
         fingerprint_sha256=EXTERNAL_FINGERPRINT,
     )
-    antigravity = bridge.append(
-        ReviewPayload(Role.ANTIGRAVITY, "2", "approved", (), "checked"),
-        logical_id="slice-antigravity",
-        idempotency_key="slice-antigravity",
-        fingerprint_sha256=EXTERNAL_FINGERPRINT,
-    )
     if include_gate:
         bridge.append(
             GatePayload(
@@ -192,7 +186,7 @@ def _append_external_path_evidence(
             "commit",
             binding_target,
             attestation.record_id,
-            (claude.record_id, antigravity.record_id),
+            (claude.record_id,),
         ),
         logical_id="slice-commit-binding",
         idempotency_key="slice-commit-binding",
@@ -205,7 +199,6 @@ def _append_external_path_evidence(
     [
         (WorkflowStep.CODEX_FINAL_REVIEW, None),
         (WorkflowStep.CLAUDE_FINAL_REVIEW, "codex"),
-        (WorkflowStep.ANTIGRAVITY_FINAL_REVIEW, "claude"),
     ],
 )
 def test_each_final_transition_accepts_only_currently_available_facts(

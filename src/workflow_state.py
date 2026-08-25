@@ -142,10 +142,11 @@ class Reviewer(str, Enum):
 class ProtocolMode(str, Enum):
     LEGACY_STATE_V3 = "legacy-state-v3"
     STRUCTURED_V1 = "structured-v1"
+    STRUCTURED_V2 = "structured-v2"
 
 
-NATIVE_CLAUDE_REVIEW_TRANSPORT = "native-claude-review-v1"
-NATIVE_CODEX_RESULT_TRANSPORT = "native-codex-v1"
+NATIVE_CLAUDE_REVIEW_TRANSPORT = "native-claude-review-v2"
+NATIVE_CODEX_RESULT_TRANSPORT = "native-codex-v2"
 
 
 @dataclass(frozen=True)
@@ -164,24 +165,25 @@ class ProtocolBinding:
         expected = {
             ProtocolMode.LEGACY_STATE_V3: "3",
             ProtocolMode.STRUCTURED_V1: "1",
+            ProtocolMode.STRUCTURED_V2: "2",
         }[self.mode]
         if self.schema_version != expected:
             raise WorkflowStateValidationError(
                 f"protocol mode {self.mode.value} requires schema_version {expected}"
             )
         if self.claude_review_transport is not None:
-            if self.mode is not ProtocolMode.STRUCTURED_V1:
+            if self.mode is not ProtocolMode.STRUCTURED_V2:
                 raise WorkflowStateValidationError(
-                    "native Claude review transport requires structured-v1"
+                    "native Claude review transport requires structured-v2"
                 )
             if self.claude_review_transport != NATIVE_CLAUDE_REVIEW_TRANSPORT:
                 raise WorkflowStateValidationError(
                     "claude_review_transport is unsupported"
                 )
         if self.codex_result_transport is not None:
-            if self.mode is not ProtocolMode.STRUCTURED_V1:
+            if self.mode is not ProtocolMode.STRUCTURED_V2:
                 raise WorkflowStateValidationError(
-                    "native Codex result transport requires structured-v1"
+                    "native Codex result transport requires structured-v2"
                 )
             if self.codex_result_transport != NATIVE_CODEX_RESULT_TRANSPORT:
                 raise WorkflowStateValidationError(

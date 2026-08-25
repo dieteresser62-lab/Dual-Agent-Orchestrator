@@ -100,14 +100,14 @@ def _bound(
 
 def _base(bound: BoundNativeCodexContext, result_type: str) -> dict[str, object]:
     return {
-        "schema_version": "native-agent-codex-result-v1",
+        "schema_version": "native-agent-codex-result-v2",
         "result_type": result_type,
         "request_id": bound.request_id,
     }
 
 
 def test_native_codex_schema_is_checked_and_canonical() -> None:
-    assert load_native_codex_schema()["$id"] == "native-agent-codex-result-v1"
+    assert load_native_codex_schema()["$id"] == "native-agent-codex-result-v2"
     bound = _bound(NativeCodexRequestKind.PLAN)
     document = {
         **_base(bound, "plan_result"),
@@ -119,6 +119,7 @@ def test_native_codex_schema_is_checked_and_canonical() -> None:
                 "scope_paths": ["src/native_codex_contract.py"],
             }
         ],
+        "finding_dispositions": [],
     }
     canonical = canonical_native_codex_json(document)
     assert canonical == json.dumps(
@@ -129,7 +130,7 @@ def test_native_codex_schema_is_checked_and_canonical() -> None:
     assert result.slice_plan[0].slice_id == 1
 
 
-def test_historical_plan_result_without_dispositions_remains_readable() -> None:
+def test_v2_plan_result_without_dispositions_is_rejected() -> None:
     bound = _bound(NativeCodexRequestKind.PLAN)
     historical = {
         **_base(bound, "plan_result"),
@@ -145,12 +146,14 @@ def test_historical_plan_result_without_dispositions_remains_readable() -> None:
 
     provider_schema = native_codex_provider_response_schema(bound.context)
     persisted_schema = load_native_codex_schema()
-    result = parse_bound_native_codex_contract_result(historical, bound)
-
-    assert result.findings == ()
-    assert "finding_dispositions" not in (
-        persisted_schema["$defs"]["plan_result"]["required"]
-    )
+    with pytest.raises(SchemaMismatch):
+        validate_schema_document(historical, persisted_schema)
+    with pytest.raises(NativeCodexContractError) as raised:
+        parse_bound_native_codex_contract_result(historical, bound)
+    assert raised.value.code is NativeCodexErrorCode.SCHEMA_INVALID
+    assert "finding_dispositions" in persisted_schema["$defs"]["plan_result"][
+        "required"
+    ]
     assert provider_schema["type"] == "object"
     assert provider_schema["required"] == ["result"]
     assert "oneOf" not in provider_schema
@@ -344,6 +347,29 @@ def test_writer_schema_closes_finding_membership_and_cardinality() -> None:
             validate_schema_document(
                 {"result": {**base, "finding_dispositions": invalid}}, schema
             )
+
+
+def test_v2_result_schema_rejects_antigravity_finding_before_domain_conversion() -> None:
+    bound = _bound(
+        NativeCodexRequestKind.CORRECTION,
+        findings=(_finding(),),
+        test_changes_approved=True,
+    )
+    document = {
+        **_base(bound, "correction_result"),
+        "ready": True,
+        "test_files": [],
+        "finding_dispositions": [
+            {
+                "finding_id": "A-01",
+                "decision": "accepted",
+                "rationale": "A foreign reviewer finding must not cross v2.",
+            }
+        ],
+    }
+
+    with pytest.raises(SchemaMismatch):
+        validate_schema_document(document, load_native_codex_schema())
 
 
 def test_writer_schema_leaves_only_registered_disposition_order_exception() -> None:
@@ -864,14 +890,14 @@ def test_stop_result_is_exclusive_and_preserves_remediation_paths() -> None:
         **_base(bound, "stop_result"),
         "rule_id": "UNEXPECTED-PATH",
         "rationale": "The schema path is outside scope.",
-        "remediation_paths": ["schemas/native-agent-codex-result-v1.schema.json"],
+        "remediation_paths": ["schemas/native-agent-codex-result-v2.schema.json"],
     }
     result = parse_bound_native_codex_contract_result(document, bound)
     assert result.stopped is True
     assert result.ready is None
     assert result.stop_request is not None
     assert result.stop_request.remediation_paths == (
-        "schemas/native-agent-codex-result-v1.schema.json",
+        "schemas/native-agent-codex-result-v2.schema.json",
     )
 
 

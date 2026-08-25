@@ -25,14 +25,14 @@ from schema_validation import (
 )
 
 
-REQUEST_SCHEMA_VERSION = "native-agent-codex-request-v1"
-RESPONSE_SCHEMA_VERSION = "native-agent-codex-result-v1"
-NATIVE_CODEX_TRANSPORT = "native-codex-v1"
+REQUEST_SCHEMA_VERSION = "native-agent-codex-request-v2"
+RESPONSE_SCHEMA_VERSION = "native-agent-codex-result-v2"
+NATIVE_CODEX_TRANSPORT = "native-codex-v2"
 DEFAULT_INLINE_EVIDENCE_CHARS = 24_000
 REQUEST_SCHEMA_PATH = (
     Path(__file__).resolve().parents[1]
     / "schemas"
-    / "native-agent-codex-request-v1.schema.json"
+    / "native-agent-codex-request-v2.schema.json"
 )
 SAFE_ID_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,199}")
 

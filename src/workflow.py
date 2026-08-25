@@ -106,6 +106,7 @@ from workflow_state import (
     GateReason,
     GateStatus,
     InvocationFailureRecord,
+    ProtocolMode,
     Reviewer,
     SliceStatus,
     WorkflowState,
@@ -838,7 +839,6 @@ class WorkflowCommitRequest:
     fingerprint: str
     attestation: ValidationAttestation
     claude_review: ContractResult
-    antigravity_review: ContractResult
     findings: tuple[FindingRecord, ...]
     red_state_followup_slice: str | None = None
 
@@ -2284,11 +2284,62 @@ class WorkflowEngine:
                 ),
             )
             if result.approval is True:
-                state = state.with_current_step(
-                    WorkflowStep.ANTIGRAVITY_SLICE_REVIEW
-                    if reviewer is AgentRole.CLAUDE
-                    else WorkflowStep.SLICE_COMMIT
-                )
+                if (
+                    reviewer is AgentRole.CLAUDE
+                    and state.protocol_binding is not None
+                    and state.protocol_binding.mode is ProtocolMode.STRUCTURED_V2
+                ):
+                    if is_plan_review and unit.kind is WorkUnitKind.PLAN:
+                        if context.plan_gate:
+                            state = state.await_user_gate(
+                                reason=GateReason.PLAN_APPROVAL,
+                                detail=(
+                                    "PLAN-APPROVAL | Claude approved the bound plan; "
+                                    "explicit user approval is required before execution"
+                                ),
+                                fingerprint=replay.fingerprint,
+                                paths=(),
+                                gate_step=(
+                                    WorkflowStep.SLICE_COMMIT
+                                    if context.plan_only
+                                    else WorkflowStep.COMPLETED
+                                ),
+                            )
+                        elif context.plan_only:
+                            state = state.with_current_step(WorkflowStep.SLICE_COMMIT)
+                        else:
+                            state = state.complete_current_work_unit()
+                    elif is_plan_review:
+                        decision = self._latest_anchor_approval(state)
+                        if decision is None or decision.resume_step is None:
+                            raise WorkflowExecutionError(
+                                "anchor plan review has no persisted resume target"
+                            )
+                        state = state.mark_side_effect_completed(
+                            f"anchor-plan-reviewed:{decision.fingerprint}"
+                        ).with_current_step(decision.resume_step)
+                    elif is_final_review:
+                        open_findings = tuple(
+                            finding
+                            for finding in history.findings
+                            if finding.status is FindingStatus.OPEN
+                        )
+                        if open_findings:
+                            raise WorkflowExecutionError(
+                                "final review cannot complete with open findings: "
+                                + ", ".join(
+                                    finding.finding_id for finding in open_findings
+                                )
+                            )
+                        state = state.complete_current_work_unit()
+                    else:
+                        state = state.with_current_step(WorkflowStep.SLICE_COMMIT)
+                else:
+                    state = state.with_current_step(
+                        WorkflowStep.ANTIGRAVITY_SLICE_REVIEW
+                        if reviewer is AgentRole.CLAUDE
+                        else WorkflowStep.SLICE_COMMIT
+                    )
             else:
                 own_ids = tuple(
                     item.finding_id for item in result.own_open_blockers
@@ -2723,7 +2774,31 @@ class WorkflowEngine:
 
         if result.approval is True:
             if reviewer is AgentRole.CLAUDE:
-                if is_plan_review and unit.kind is WorkUnitKind.PLAN:
+                structured_v2 = (
+                    state.protocol_binding is not None
+                    and state.protocol_binding.mode is ProtocolMode.STRUCTURED_V2
+                )
+                if is_plan_review and unit.kind is WorkUnitKind.PLAN and structured_v2:
+                    if context.plan_gate:
+                        state = state.await_user_gate(
+                            reason=GateReason.PLAN_APPROVAL,
+                            detail=(
+                                "PLAN-APPROVAL | Claude approved the bound plan; "
+                                "explicit user approval is required before execution"
+                            ),
+                            fingerprint=fingerprint,
+                            paths=user_gate_paths,
+                            gate_step=(
+                                WorkflowStep.SLICE_COMMIT
+                                if context.plan_only
+                                else WorkflowStep.COMPLETED
+                            ),
+                        )
+                    elif context.plan_only:
+                        state = state.with_current_step(WorkflowStep.SLICE_COMMIT)
+                    else:
+                        state = state.complete_current_work_unit()
+                elif is_plan_review and unit.kind is WorkUnitKind.PLAN:
                     state = state.with_current_step(
                         WorkflowStep.ANTIGRAVITY_PLAN_REVIEW
                     )
@@ -2736,10 +2811,26 @@ class WorkflowEngine:
                     key = f"anchor-plan-reviewed:{decision.fingerprint}"
                     state = state.mark_side_effect_completed(key)
                     state = state.with_current_step(decision.resume_step)
+                elif is_final_review and structured_v2:
+                    open_findings = tuple(
+                        finding
+                        for finding in history.findings
+                        if finding.status is FindingStatus.OPEN
+                    )
+                    if open_findings:
+                        raise WorkflowExecutionError(
+                            "final review cannot complete with open findings: "
+                            + ", ".join(
+                                finding.finding_id for finding in open_findings
+                            )
+                        )
+                    state = state.complete_current_work_unit()
                 elif is_final_review:
                     state = state.with_current_step(
                         WorkflowStep.ANTIGRAVITY_FINAL_REVIEW
                     )
+                elif structured_v2:
+                    state = state.with_current_step(WorkflowStep.SLICE_COMMIT)
                 else:
                     state = state.with_current_step(
                         WorkflowStep.ANTIGRAVITY_SLICE_REVIEW
@@ -3426,7 +3517,6 @@ class WorkflowEngine:
             None,
         )
         claude = history.latest_claude_review
-        antigravity = history.latest_antigravity_review
         validation_authorized = attestation is not None and (
             attestation.passed
             or (
@@ -3439,9 +3529,6 @@ class WorkflowEngine:
             and claude is not None
             and claude.approval is True
             and claude.validation == attestation
-            and antigravity is not None
-            and antigravity.approval is True
-            and antigravity.validation == attestation
         )
         if not reviews_current:
             review_step = (
@@ -3486,7 +3573,6 @@ class WorkflowEngine:
                 fingerprint=changes.fingerprint,
                 attestation=attestation,
                 claude_review=claude,
-                antigravity_review=antigravity,
                 findings=history.findings,
                 red_state_followup_slice=context.red_state_followup_slice,
             )

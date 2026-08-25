@@ -174,7 +174,7 @@ def _prior_finding(
 
 def _writer_response(*, decision: str = "approved") -> dict[str, object]:
     return {
-        "schema_version": "native-agent-review-result-v1",
+        "schema_version": "native-agent-review-result-v2",
         "result_type": "review_result",
         "request_id": "native-review-request-" + "c" * 64,
         "reviewer": "claude",
@@ -524,7 +524,7 @@ def test_writer_schema_requires_approval_evidence_pre_mortem_and_closed_stop() -
             validate_schema_document({"result": candidate}, schema)
 
     stop = {
-        "schema_version": "native-agent-review-result-v1",
+        "schema_version": "native-agent-review-result-v2",
         "result_type": "stop_request",
         "request_id": "native-review-request-" + "c" * 64,
         "reviewer": "claude",
@@ -588,7 +588,7 @@ def test_request_bundle_binds_exact_immutable_writer_schema_bytes() -> None:
     ).hexdigest() == bundle.document["response_contract"]["schema_sha256"]
 
 
-def test_historical_schema_only_claude_results_remain_readable_and_byte_stable() -> None:
+def test_historical_schema_only_claude_results_are_not_v2_and_remain_byte_stable() -> None:
     corpus = Path(
         "docs/internal/archive/native-codex-claude-correction-loop"
     ).glob("*.raw.json")
@@ -601,7 +601,9 @@ def test_historical_schema_only_claude_results_remain_readable_and_byte_stable()
     native_review_provider_response_schema(_context())
     for path in paths:
         document = json.loads(path.read_text(encoding="utf-8"))
-        validate_native_review_document(document)
+        with pytest.raises(NativeReviewContractError) as raised:
+            validate_native_review_document(document)
+        assert raised.value.code is NativeReviewErrorCode.SCHEMA_INVALID
 
     assert {
         path: hashlib.sha256(path.read_bytes()).hexdigest() for path in paths
@@ -744,7 +746,7 @@ def _legacy_packet_evidence() -> NativeReviewEvidenceInput:
 
 def _response(request_id: str) -> dict[str, object]:
     return {
-        "schema_version": "native-agent-review-result-v1",
+        "schema_version": "native-agent-review-result-v2",
         "result_type": "review_result",
         "request_id": request_id,
         "reviewer": "claude",
@@ -763,7 +765,7 @@ def _response(request_id: str) -> dict[str, object]:
 
 
 def test_request_schema_loads_and_build_is_canonical_and_deterministic() -> None:
-    assert load_native_review_request_schema()["title"] == "Native Agent Review Request v1"
+    assert load_native_review_request_schema()["title"] == "Native Agent Review Request v2"
     first = build_native_review_request(_spec())
     second = build_native_review_request(_spec())
     assert first == second

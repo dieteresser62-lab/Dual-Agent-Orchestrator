@@ -27,15 +27,15 @@ from schema_validation import (
 from review_packets import ReviewPacket, ReviewPacketError
 
 
-REQUEST_SCHEMA_VERSION = "native-agent-review-request-v1"
-RESPONSE_SCHEMA_VERSION = "native-agent-review-result-v1"
-CLAUDE_REVIEW_TRANSPORT = "native-claude-review-v1"
-PERSISTENCE_PROTOCOL = "structured-v1"
+REQUEST_SCHEMA_VERSION = "native-agent-review-request-v2"
+RESPONSE_SCHEMA_VERSION = "native-agent-review-result-v2"
+CLAUDE_REVIEW_TRANSPORT = "native-claude-review-v2"
+PERSISTENCE_PROTOCOL = "structured-v2"
 DEFAULT_INLINE_EVIDENCE_CHARS = 24_000
 REQUEST_SCHEMA_PATH = (
     Path(__file__).resolve().parents[1]
     / "schemas"
-    / "native-agent-review-request-v1.schema.json"
+    / "native-agent-review-request-v2.schema.json"
 )
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 REQUEST_ID_PATTERN = re.compile(r"native-review-request-[0-9a-f]{64}")

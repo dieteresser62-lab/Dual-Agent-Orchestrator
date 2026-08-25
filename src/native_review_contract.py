@@ -38,7 +38,7 @@ from validation_matrix import FINDING_COMMAND_PREFIX, matches_validation_family
 from native_provider_schema import defensive_provider_projection
 
 
-SCHEMA_VERSION = "native-agent-review-result-v1"
+SCHEMA_VERSION = "native-agent-review-result-v2"
 NONBLANK_TEXT_PATTERN = "^[^\\u0000]*[^\\u0000\\s][^\\u0000]*$"
 NONBLANK_LINE_PATTERN = (
     "^[^\\u0000\\r\\n]*[^\\u0000\\r\\n\\s][^\\u0000\\r\\n]*$"
@@ -46,7 +46,7 @@ NONBLANK_LINE_PATTERN = (
 SCHEMA_PATH = (
     Path(__file__).resolve().parents[1]
     / "schemas"
-    / "native-agent-review-result-v1.schema.json"
+    / "native-agent-review-result-v2.schema.json"
 )
 
 
@@ -179,10 +179,10 @@ class NativeReviewContext:
                 NativeReviewErrorCode.CONTEXT_INVALID,
                 "round_number must be 1-based",
             )
-        if self.reviewer not in (AgentRole.CLAUDE, AgentRole.ANTIGRAVITY):
+        if self.reviewer is not AgentRole.CLAUDE:
             raise NativeReviewContractError(
                 NativeReviewErrorCode.CONTEXT_INVALID,
-                "reviewer must be claude or antigravity",
+                "reviewer must be claude",
             )
         if len(self.diff_fingerprint) != 64 or any(
             character not in "0123456789abcdef"
@@ -306,7 +306,7 @@ def native_review_provider_response_schema(
 
     The projection is selected solely by typed, request-bound review context.
     In particular, the free-form operation name is deliberately not consulted.
-    The reader schema remains broad for persisted v1 results; live generation is
+    The reader schema is the closed v2 result contract; live generation is
     constrained here before the provider is invoked.
     """
     if not isinstance(context, NativeReviewContext):
@@ -1193,13 +1193,6 @@ def _validate_decision(
             raise NativeReviewContractError(
                 NativeReviewErrorCode.APPROVAL_INVALID,
                 "final approval is invalid while an own finding is open",
-            )
-        if context.reviewer is AgentRole.ANTIGRAVITY and any(
-            item.status is FindingStatus.OPEN for item in findings
-        ):
-            raise NativeReviewContractError(
-                NativeReviewErrorCode.APPROVAL_INVALID,
-                "Antigravity final approval requires zero open findings",
             )
 
 

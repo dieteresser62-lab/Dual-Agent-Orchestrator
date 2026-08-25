@@ -100,7 +100,6 @@ class CommitAuthorization:
     diff_fingerprint: str
     attestation: ValidationAttestation
     claude_review: ContractResult
-    antigravity_review: ContractResult
     findings: tuple[FindingRecord, ...] = ()
     red_state_followup_slice: str | None = None
     approved_head_commit: str | None = None
@@ -727,10 +726,7 @@ def _validate_authorization(
         for finding in authorization.findings
     ):
         raise GitTransactionError("commit requires no globally open blockers")
-    for expected_role, result in (
-        (AgentRole.CLAUDE, authorization.claude_review),
-        (AgentRole.ANTIGRAVITY, authorization.antigravity_review),
-    ):
+    for expected_role, result in ((AgentRole.CLAUDE, authorization.claude_review),):
         if result.reviewer is not expected_role:
             raise GitTransactionError(f"commit requires the {expected_role.value} review role")
         if (

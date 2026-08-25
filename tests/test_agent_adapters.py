@@ -236,7 +236,7 @@ def test_native_codex_adapter_uses_exact_request_and_output_schema() -> None:
         assert by_name["response_schema"] == bundle.provider_response_schema_json
         assert json.loads(by_name["response_schema"])["required"] == ["result"]
         response = {
-            "schema_version": "native-agent-codex-result-v1",
+            "schema_version": "native-agent-codex-result-v2",
             "result_type": "plan_result",
             "request_id": bundle.bound_context.request_id,
             "ready": True,
@@ -247,6 +247,7 @@ def test_native_codex_adapter_uses_exact_request_and_output_schema() -> None:
                     "scope_paths": ["src/native_codex_contract.py"],
                 }
             ],
+            "finding_dispositions": [],
         }
         message_path.write_text(
             json.dumps({"result": response}, indent=2), encoding="utf-8"
@@ -344,7 +345,7 @@ def test_native_codex_adapter_rejects_wrappers_and_wrong_request() -> None:
         message_path.write_text(
             json.dumps(
                 {"result": {
-                    "schema_version": "native-agent-codex-result-v1",
+                    "schema_version": "native-agent-codex-result-v2",
                     "result_type": "plan_result",
                     "request_id": "native-codex-request-" + "0" * 64,
                     "ready": True,
@@ -527,7 +528,7 @@ def test_native_claude_adapter_is_separate_and_measures_all_request_channels() -
             {"$ref": "#/$defs/bound_slice_initial_stop"},
         ]
         assert schema["$defs"]["common"]["properties"]["reviewer"] == {
-            "enum": ["claude", "antigravity"]
+            "enum": ["claude"]
         }
         for name in (
             "bound_slice_initial_approved",
@@ -650,7 +651,7 @@ def test_native_claude_extracts_only_complete_structured_result() -> None:
     bundle = _native_bundle()
     adapter.prepare_native_provider_input(bundle)
     response = {
-        "schema_version": "native-agent-review-result-v1",
+        "schema_version": "native-agent-review-result-v2",
         "result_type": "review_result",
         "request_id": bundle.bound_context.request_id,
         "reviewer": "claude",

@@ -729,10 +729,10 @@ def test_native_claude_review_bypasses_legacy_marker_parser(
     state = replace(
         _slice_state().with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW),
         protocol_binding=ProtocolBinding(
-            ProtocolMode.STRUCTURED_V1,
-            "1",
-            claude_review_transport="native-claude-review-v1",
-            codex_result_transport="native-codex-v1",
+            ProtocolMode.STRUCTURED_V2,
+            "2",
+            claude_review_transport="native-claude-review-v2",
+            codex_result_transport="native-codex-v2",
         ),
     )
     driver = NativeDriver(
@@ -758,7 +758,7 @@ def test_native_claude_review_bypasses_legacy_marker_parser(
         AgentRole.CLAUDE,
     )
 
-    assert advanced.current_step is WorkflowStep.ANTIGRAVITY_SLICE_REVIEW
+    assert advanced.current_step is WorkflowStep.SLICE_COMMIT
     assert history.latest_claude_review is not None
     assert len(driver.persisted_native) == 1
     invocation = driver.reviewer_calls[0]
@@ -825,9 +825,9 @@ def test_native_codex_result_bypasses_legacy_marker_parser(
     state = replace(
         _slice_state().with_current_step(step),
         protocol_binding=ProtocolBinding(
-            ProtocolMode.STRUCTURED_V1,
-            "1",
-            codex_result_transport="native-codex-v1",
+            ProtocolMode.STRUCTURED_V2,
+            "2",
+            codex_result_transport="native-codex-v2",
         ),
     )
     driver = NativeCodexDriver(
@@ -924,9 +924,9 @@ def test_native_codex_plan_bypasses_legacy_marker_parser(monkeypatch) -> None:
             target_branch="feature/workflow",
         ),
         protocol_binding=ProtocolBinding(
-            ProtocolMode.STRUCTURED_V1,
-            "1",
-            codex_result_transport="native-codex-v1",
+            ProtocolMode.STRUCTURED_V2,
+            "2",
+            codex_result_transport="native-codex-v2",
         ),
     )
     context = replace(
@@ -986,20 +986,20 @@ def test_combined_native_codex_finding_steps_fail_before_provider_on_mirror_drif
             task_scope_patterns=("docs/internal/native-plan.md",),
             target_branch="feature/workflow",
             protocol_binding=ProtocolBinding(
-                ProtocolMode.STRUCTURED_V1,
-                "1",
-                claude_review_transport="native-claude-review-v1",
-                codex_result_transport="native-codex-v1",
+                ProtocolMode.STRUCTURED_V2,
+                "2",
+                claude_review_transport="native-claude-review-v2",
+                codex_result_transport="native-codex-v2",
             ),
         ).with_current_step(step)
     else:
         state = replace(
             _slice_state().with_current_step(step),
             protocol_binding=ProtocolBinding(
-                ProtocolMode.STRUCTURED_V1,
-                "1",
-                claude_review_transport="native-claude-review-v1",
-                codex_result_transport="native-codex-v1",
+                ProtocolMode.STRUCTURED_V2,
+                "2",
+                claude_review_transport="native-claude-review-v2",
+                codex_result_transport="native-codex-v2",
             ),
         )
     driver = FakeDriver(
@@ -1032,10 +1032,10 @@ def test_combined_native_claude_review_fails_before_provider_on_mirror_drift() -
     state = replace(
         _slice_state().with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW),
         protocol_binding=ProtocolBinding(
-            ProtocolMode.STRUCTURED_V1,
-            "1",
-            claude_review_transport="native-claude-review-v1",
-            codex_result_transport="native-codex-v1",
+            ProtocolMode.STRUCTURED_V2,
+            "2",
+            claude_review_transport="native-claude-review-v2",
+            codex_result_transport="native-codex-v2",
         ),
     )
     driver = FakeDriver(
@@ -1188,10 +1188,10 @@ def test_combined_native_slice_converges_without_legacy_parsers(monkeypatch) -> 
     state = replace(
         _slice_state().with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW),
         protocol_binding=ProtocolBinding(
-            ProtocolMode.STRUCTURED_V1,
-            "1",
-            claude_review_transport="native-claude-review-v1",
-            codex_result_transport="native-codex-v1",
+            ProtocolMode.STRUCTURED_V2,
+            "2",
+            claude_review_transport="native-claude-review-v2",
+            codex_result_transport="native-codex-v2",
         ),
     )
     driver = ConvergingNativeDriver(
@@ -1226,7 +1226,7 @@ def test_combined_native_slice_converges_without_legacy_parsers(monkeypatch) -> 
         state, _context(), history, AgentRole.CLAUDE
     )
 
-    assert state.current_step is WorkflowStep.ANTIGRAVITY_SLICE_REVIEW
+    assert state.current_step is WorkflowStep.SLICE_COMMIT
     assert history.findings[0].status is FindingStatus.CLOSED
     assert len(driver.persisted_reviews) == 2
     assert len(driver.persisted_codex) == 1
@@ -1383,10 +1383,10 @@ def test_combined_native_plan_revision_converges_without_legacy_parsers(
         task_scope_patterns=("docs/internal/native-plan.md",),
         target_branch="feature/workflow",
         protocol_binding=ProtocolBinding(
-            ProtocolMode.STRUCTURED_V1,
-            "1",
-            claude_review_transport="native-claude-review-v1",
-            codex_result_transport="native-codex-v1",
+            ProtocolMode.STRUCTURED_V2,
+            "2",
+            claude_review_transport="native-claude-review-v2",
+            codex_result_transport="native-codex-v2",
         ),
     ).with_current_step(WorkflowStep.CLAUDE_PLAN_REVIEW)
     context = replace(
@@ -1426,7 +1426,7 @@ def test_combined_native_plan_revision_converges_without_legacy_parsers(
         state, context, history, AgentRole.CLAUDE
     )
 
-    assert state.current_step is WorkflowStep.ANTIGRAVITY_PLAN_REVIEW
+    assert state.current_step is WorkflowStep.COMPLETED
     assert history.findings[0].status is FindingStatus.CLOSED
     assert len(driver.persisted_reviews) == 2
     assert len(driver.persisted_codex) == 1
@@ -1567,10 +1567,10 @@ def test_combined_native_final_restart_rebinds_codex_and_claude_without_legacy_p
     state = replace(
         _completed_single_slice_state().start_final_review_work_unit(),
         protocol_binding=ProtocolBinding(
-            ProtocolMode.STRUCTURED_V1,
-            "1",
-            claude_review_transport="native-claude-review-v1",
-            codex_result_transport="native-codex-v1",
+            ProtocolMode.STRUCTURED_V2,
+            "2",
+            claude_review_transport="native-claude-review-v2",
+            codex_result_transport="native-codex-v2",
         ),
     )
     history = WorkflowHistory(state.current_work_unit_id, findings=(finding,))
@@ -1598,7 +1598,7 @@ def test_combined_native_final_restart_rebinds_codex_and_claude_without_legacy_p
         state, _context(), history, AgentRole.CLAUDE
     )
 
-    assert state.current_step is WorkflowStep.ANTIGRAVITY_FINAL_REVIEW
+    assert state.current_step is WorkflowStep.COMPLETED
     assert history.findings[0].status is FindingStatus.CLOSED
     assert len(driver.persisted_codex) == 1
     assert len(driver.persisted_reviews) == 1
@@ -1662,10 +1662,10 @@ def test_combined_native_codex_record_ahead_recovery_precedes_mirror_guard() -> 
     state = replace(
         _slice_state().with_current_step(WorkflowStep.CODEX_CORRECTION),
         protocol_binding=ProtocolBinding(
-            ProtocolMode.STRUCTURED_V1,
-            "1",
-            claude_review_transport="native-claude-review-v1",
-            codex_result_transport="native-codex-v1",
+            ProtocolMode.STRUCTURED_V2,
+            "2",
+            claude_review_transport="native-claude-review-v2",
+            codex_result_transport="native-codex-v2",
         ),
     )
     driver = RecoveryDriver(
@@ -1736,9 +1736,9 @@ def test_native_codex_final_report_bypasses_legacy_marker_parser(
     state = replace(
         _completed_single_slice_state().start_final_review_work_unit(),
         protocol_binding=ProtocolBinding(
-            ProtocolMode.STRUCTURED_V1,
-            "1",
-            codex_result_transport="native-codex-v1",
+            ProtocolMode.STRUCTURED_V2,
+            "2",
+            codex_result_transport="native-codex-v2",
         ),
     )
     driver = NativeFinalDriver(
@@ -1782,9 +1782,9 @@ def test_native_codex_request_builder_covers_plan_and_final_report() -> None:
             target_branch="feature/workflow",
         ),
         protocol_binding=ProtocolBinding(
-            ProtocolMode.STRUCTURED_V1,
-            "1",
-            codex_result_transport="native-codex-v1",
+            ProtocolMode.STRUCTURED_V2,
+            "2",
+            codex_result_transport="native-codex-v2",
         ),
     )
     plan_contract = CodexStepContract(
@@ -1807,9 +1807,9 @@ def test_native_codex_request_builder_covers_plan_and_final_report() -> None:
     final_state = replace(
         _completed_single_slice_state().start_final_review_work_unit(),
         protocol_binding=ProtocolBinding(
-            ProtocolMode.STRUCTURED_V1,
-            "1",
-            codex_result_transport="native-codex-v1",
+            ProtocolMode.STRUCTURED_V2,
+            "2",
+            codex_result_transport="native-codex-v2",
         ),
     )
     final_contract = CodexStepContract(
@@ -1843,9 +1843,9 @@ def test_native_final_review_rejects_missing_codex_report_before_request() -> No
     state = replace(
         _slice_state().with_current_step(WorkflowStep.CLAUDE_FINAL_REVIEW),
         protocol_binding=ProtocolBinding(
-            ProtocolMode.STRUCTURED_V1,
-            "1",
-            "native-claude-review-v1",
+            ProtocolMode.STRUCTURED_V2,
+            "2",
+            "native-claude-review-v2",
         ),
     )
     contract = StepContract(
@@ -1908,9 +1908,9 @@ def test_native_request_builder_covers_plan_slice_and_final_reviews(
     state = replace(
         _slice_state().with_current_step(step),
         protocol_binding=ProtocolBinding(
-            ProtocolMode.STRUCTURED_V1,
-            "1",
-            "native-claude-review-v1",
+            ProtocolMode.STRUCTURED_V2,
+            "2",
+            "native-claude-review-v2",
         ),
     )
     history = WorkflowHistory(state.current_work_unit_id)
@@ -1953,9 +1953,9 @@ def test_native_request_reuses_restored_legacy_review_packet_without_semantic_di
     state = replace(
         _slice_state().with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW),
         protocol_binding=ProtocolBinding(
-            ProtocolMode.STRUCTURED_V1,
-            "1",
-            "native-claude-review-v1",
+            ProtocolMode.STRUCTURED_V2,
+            "2",
+            "native-claude-review-v2",
         ),
     )
     canonical = json.dumps(
@@ -2064,9 +2064,9 @@ def test_native_record_ahead_recovery_receives_full_history_and_skips_provider()
     state = replace(
         _slice_state().with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW),
         protocol_binding=ProtocolBinding(
-            ProtocolMode.STRUCTURED_V1,
-            "1",
-            "native-claude-review-v1",
+            ProtocolMode.STRUCTURED_V2,
+            "2",
+            "native-claude-review-v2",
         ),
     )
     history = WorkflowHistory(state.current_work_unit_id)
@@ -2088,7 +2088,7 @@ def test_native_record_ahead_recovery_receives_full_history_and_skips_provider()
     assert len(driver.recovered_history.events) == 1
     assert len(driver.persisted_native) == 1
     assert driver.authoritative_finding_calls == []
-    assert advanced.current_step is WorkflowStep.ANTIGRAVITY_SLICE_REVIEW
+    assert advanced.current_step is WorkflowStep.SLICE_COMMIT
     assert recovered.latest_claude_review is not None
 
 
@@ -5290,10 +5290,7 @@ def test_terminable_quota_resumes_same_final_review_for_watch_completion() -> No
     driver = FakeDriver(
         snapshots=[branch],
         codex_outputs=[_final_report()],
-        reviewer_outputs=[
-            _final_approval(AgentRole.CLAUDE),
-            _final_approval(AgentRole.ANTIGRAVITY),
-        ],
+        reviewer_outputs=[_final_approval(AgentRole.CLAUDE)],
         reviewer_failures=[
             _invocation_failure(
                 AgentRole.CLAUDE,
@@ -5319,7 +5316,10 @@ def test_terminable_quota_resumes_same_final_review_for_watch_completion() -> No
         sleep_fn=sleep,
         heartbeat_fn=heartbeats.append,
     ).run_final_review(
-        _completed_single_slice_state(),
+        replace(
+            _completed_single_slice_state(),
+            protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        ),
         replace(
             _context(),
             quota_wait_policy=QuotaWaitPolicy(
@@ -5339,7 +5339,6 @@ def test_terminable_quota_resumes_same_final_review_for_watch_completion() -> No
     assert [call.step for call in driver.reviewer_calls] == [
         WorkflowStep.CLAUDE_FINAL_REVIEW,
         WorkflowStep.CLAUDE_FINAL_REVIEW,
-        WorkflowStep.ANTIGRAVITY_FINAL_REVIEW,
     ]
     assert sleeps == [1, 1, 1]
     assert heartbeats
@@ -5649,9 +5648,9 @@ def test_native_record_ahead_review_is_mirrored_before_next_policy_or_provider()
     state = replace(
         _slice_state().with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW),
         protocol_binding=ProtocolBinding(
-            ProtocolMode.STRUCTURED_V1,
-            "1",
-            claude_review_transport="native-claude-review-v1",
+            ProtocolMode.STRUCTURED_V2,
+            "2",
+            claude_review_transport="native-claude-review-v2",
         ),
     )
     attestation = ValidationAttestation(

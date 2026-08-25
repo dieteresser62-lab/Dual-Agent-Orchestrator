@@ -1079,7 +1079,7 @@ def build_scenario_state(
         branch=scenario.initial.branch,
         branch_base=first.start_commit,
         slice_count=scenario.initial.slice_count,
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V1, "1"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
         timestamp=scenario.clock_start.isoformat(),
     )
     if scenario.initial.kind is WorkUnitKind.PLAN:

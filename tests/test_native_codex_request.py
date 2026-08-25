@@ -61,7 +61,7 @@ def _spec(*, assignment: str = "Implement the native boundary.") -> NativeCodexR
 
 
 def test_native_codex_request_is_deterministic_and_digest_bound() -> None:
-    assert load_native_codex_request_schema()["$id"] == "native-agent-codex-request-v1"
+    assert load_native_codex_request_schema()["$id"] == "native-agent-codex-request-v2"
     first = build_native_codex_request(_spec())
     second = build_native_codex_request(_spec())
     changed = build_native_codex_request(_spec(assignment="A changed assignment."))
@@ -72,7 +72,7 @@ def test_native_codex_request_is_deterministic_and_digest_bound() -> None:
     assert document["request_id"] == first.bound_context.request_id
     assert document["codex_contract"]["readiness_kind"] == "plan"
     assert document["response_contract"]["schema_version"] == (
-        "native-agent-codex-result-v1"
+        "native-agent-codex-result-v2"
     )
     assert json.loads(first.provider_response_schema_json) == (
         first.provider_response_schema

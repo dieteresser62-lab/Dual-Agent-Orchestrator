@@ -1,4 +1,4 @@
-"""Fail-closed resume resolution for legacy state-v3 and structured-v1 runs."""
+"""Fail-closed resume resolution for structured-v2 runs."""
 
 from __future__ import annotations
 
@@ -69,25 +69,27 @@ class ResumeResolution:
 def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeResolution:
     """Resolve the immutable protocol binding and verify structured mirror facts.
 
-    Historical states without a binding remain on the legacy path and are never
-    imported.  A structured binding, in contrast, makes the append-only record
-    chain mandatory and authoritative for every fact represented by that chain.
+    Only structured-v2 is executable. Historical legacy and structured-v1
+    states remain untouched on disk and are rejected without migration.
     """
     mode = state.effective_protocol_mode
-    if mode is ProtocolMode.LEGACY_STATE_V3:
-        return ResumeResolution(state, mode, None, None)
+    if mode is not ProtocolMode.STRUCTURED_V2:
+        raise ArtifactResumeError(
+            f"protocol {mode.value!r} is historical and cannot be resumed",
+            code=ReplayDiagnosticCode.UNSUPPORTED_PROTOCOL,
+        )
 
     try:
         chain = ArtifactStore(repository_root, state.run_id).load_chain()
     except ArtifactStoreError as exc:
         raise ArtifactResumeError(
-            f"structured-v1 record chain for run {state.run_id!r} is invalid: {exc}; "
+            f"structured-v2 record chain for run {state.run_id!r} is invalid: {exc}; "
             "repair or restore the append-only records before resuming",
             code=ReplayDiagnosticCode.RECORD_UNKNOWN,
         ) from exc
     if not chain:
         raise ArtifactResumeError(
-            f"structured-v1 run {state.run_id!r} has no records; restore its record "
+            f"structured-v2 run {state.run_id!r} has no records; restore its record "
             "directory before resuming",
             code=ReplayDiagnosticCode.RECORD_MISSING,
         )
@@ -113,7 +115,7 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
     ) -> ArtifactResumeError:
         location = record_id or head
         return ArtifactResumeError(
-            f"structured-v1 resume mismatch at record {location}: {message}; "
+            f"structured-v2 resume mismatch at record {location}: {message}; "
             "repair the state mirror or restore the matching record chain before resuming",
             code=code,
             record_id=location,

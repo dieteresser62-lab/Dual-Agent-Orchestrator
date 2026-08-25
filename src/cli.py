@@ -545,7 +545,7 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=None,
         help=(
-            "Bind native JSON Claude reviews for a newly created structured-v1 "
+            "Bind native JSON Claude reviews for a newly created structured-v2 "
             "run. Omission preserves an existing resume binding and keeps new "
             "runs on the legacy text review transport."
         ),
@@ -555,7 +555,7 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=None,
         help=(
-            "Bind native JSON Codex results for a newly created structured-v1 "
+            "Bind native JSON Codex results for a newly created structured-v2 "
             "run. Omission preserves an existing resume binding and keeps new "
             "runs, including watch mode, on the legacy text result transport."
         ),

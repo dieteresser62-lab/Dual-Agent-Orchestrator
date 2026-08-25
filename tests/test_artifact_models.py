@@ -71,9 +71,9 @@ def _record(payload, *, revision: int = 1) -> ArtifactRecord:  # type: ignore[no
     ValidationRequestPayload((CommandSpec("pytest", ("python3", "-m", "pytest", "tests/a b.py")),), Role.ORCHESTRATOR),
     ValidationAttestationPayload((ValidationResult(CommandSpec("pytest", ("pytest", "-q")), "pass", 0, DIGEST),), Role.ORCHESTRATOR),
     GatePayload("manual-plan", "approved", Role.USER, "explicit approval"),
-    BindingPayload("implementation_handoff", "ec40aa3", "attestation-01", ("review-claude", "review-antigravity")),
+    BindingPayload("implementation_handoff", "ec40aa3", "attestation-01", ("review-claude",)),
     QuotaPausePayload(Role.CLAUDE, DIGEST, "2026-08-18T11:30:00Z"),
-    TransientRetryPayload(Role.ANTIGRAVITY, DIGEST, "2026-08-18T11:30:05Z", 1),
+    TransientRetryPayload(Role.CLAUDE, DIGEST, "2026-08-18T11:30:05Z", 1),
     ResumeCheckPayload("head-01", DIGEST, "matched"),
     WorkflowCompletionPayload("completed", "binding-final"),
     ProviderInputMeasurementPayload(
@@ -114,7 +114,7 @@ def test_native_codex_agent_result_roundtrips_with_closed_transport_binding() ->
         "work-01",
         "ready",
         ("tests/test_native_codex_contract.py",),
-        transport_schema="native-codex-v1",
+        transport_schema="native-codex-v2",
         request_id="native-codex-request-" + "b" * 64,
         response_sha256="c" * 64,
     )
@@ -131,7 +131,7 @@ def test_native_codex_agent_result_rejects_partial_or_foreign_bindings() -> None
         "work-01",
         "ready",
         (),
-        transport_schema="native-codex-v1",
+        transport_schema="native-codex-v2",
         request_id="native-codex-request-" + "b" * 64,
         response_sha256="c" * 64,
     )
@@ -165,7 +165,7 @@ def _references(value):  # type: ignore[no-untyped-def]
 @pytest.mark.parametrize("mutation", [
     lambda raw: raw.update(extra="unknown"),
     lambda raw: raw.pop("run_id"),
-    lambda raw: raw.update(schema_version="2"),
+    lambda raw: raw.update(schema_version="1"),
     lambda raw: raw.update(record_type="invented"),
     lambda raw: raw["payload"].update(extra="unknown"),
     lambda raw: raw.update(status="approved"),
@@ -273,7 +273,7 @@ def test_native_review_transport_fields_roundtrip_together() -> None:
         "approved",
         (),
         "checked",
-        "native-claude-review-v1",
+        "native-claude-review-v2",
         f"native-review-request-{'b' * 64}",
         "c" * 64,
     )
@@ -300,7 +300,7 @@ def test_historical_review_record_without_native_fields_remains_readable() -> No
 @pytest.mark.parametrize(
     "native_fields",
     (
-        ("native-claude-review-v1", None, None),
+        ("native-claude-review-v2", None, None),
         (None, f"native-review-request-{'b' * 64}", None),
     ),
 )
@@ -324,7 +324,7 @@ def test_native_review_transport_rejects_partial_binding(
 def test_native_review_transport_rejects_non_claude_reviewer() -> None:
     with pytest.raises(
         ArtifactValidationError,
-        match="requires reviewer=claude",
+        match="reviewer must be claude",
     ):
         ReviewPayload(
             Role.ANTIGRAVITY,
@@ -332,7 +332,7 @@ def test_native_review_transport_rejects_non_claude_reviewer() -> None:
             "denied",
             (),
             "checked",
-            "native-claude-review-v1",
+            "native-claude-review-v2",
             f"native-review-request-{'b' * 64}",
             "c" * 64,
         )
@@ -361,12 +361,21 @@ def test_provider_attempt_phase_and_usage_are_fail_closed() -> None:
     with pytest.raises(ArtifactValidationError, match="non-negative"):
         ProviderUsagePayload(output_tokens=-1)
 
-    failed = _record(
+    with pytest.raises(ArtifactValidationError, match="identify one agent"):
         ProviderAttemptPayload(
             Role.ANTIGRAVITY, Role.ANTIGRAVITY, "antigravity_slice_review", "1",
             "provider-operation-schema", DIGEST, "measurement-schema", "b" * 64, 1,
             "failed", CREATED_AT, "2026-08-18T10:30:01+00:00", 1.0,
             "antigravity_tool_schema",
+            ProviderUsagePayload(input_tokens=8, output_tokens=1, turns=1),
+        )
+
+    failed = _record(
+        ProviderAttemptPayload(
+            Role.CLAUDE, Role.CLAUDE, "claude_slice_review", "1",
+            "provider-operation-failed", DIGEST, "measurement-failed", "b" * 64, 1,
+            "failed", CREATED_AT, "2026-08-18T10:30:01+00:00", 1.0,
+            "network",
             ProviderUsagePayload(input_tokens=8, output_tokens=1, turns=1),
         )
     )
@@ -375,9 +384,6 @@ def test_provider_attempt_phase_and_usage_are_fail_closed() -> None:
 
     failed_without_usage = replace(failed.payload, usage=None)
     assert failed_without_usage.usage is None
-    with pytest.raises(ArtifactValidationError, match="antigravity provider"):
-        replace(failed.payload, provider=Role.CLAUDE, role=Role.CLAUDE)
-
     succeeded = _record(
         ProviderAttemptPayload(
             Role.CODEX, Role.CODEX, "codex_final_review", "work-01",

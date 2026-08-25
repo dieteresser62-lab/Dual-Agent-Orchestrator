@@ -1,0 +1,215 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dual-agent-orchestrator:artifact:v2",
+  "title": "Orchestrator artifact record v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "record_id", "record_type", "run_id", "logical_id", "revision", "status", "fingerprint", "predecessor_ids", "created_at", "idempotency_key", "payload"],
+  "properties": {
+    "schema_version": {"const": "2"},
+    "record_id": {"$ref": "#/$defs/identifier"},
+    "record_type": {"enum": ["task", "plan", "work_unit", "correction_work_unit", "agent_result", "diagnostic", "review", "finding_transition", "validation_request", "validation_attestation", "gate", "binding", "quota_pause", "transient_retry", "resume_check", "workflow_completion", "provider_input_measurement", "provider_attempt", "final_review_preflight"]},
+    "run_id": {"$ref": "#/$defs/identifier"},
+    "logical_id": {"$ref": "#/$defs/identifier"},
+    "revision": {"type": "integer", "minimum": 1},
+    "status": {"type": "string"},
+    "fingerprint": {"$ref": "#/$defs/fingerprint"},
+    "predecessor_ids": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/identifier"}},
+    "created_at": {"type": "string", "format": "date-time"},
+    "idempotency_key": {"$ref": "#/$defs/identifier"},
+    "payload": {"type": "object"}
+  },
+  "allOf": [
+    {"if": {"properties": {"record_type": {"const": "task"}}}, "then": {"properties": {"status": {"const": "accepted"}, "payload": {"$ref": "#/$defs/task"}}}},
+    {"if": {"properties": {"record_type": {"const": "plan"}}}, "then": {"properties": {"status": {"const": "approved"}, "payload": {"$ref": "#/$defs/plan"}}}},
+    {"if": {"properties": {"record_type": {"const": "work_unit"}}}, "then": {"properties": {"status": {"const": "active"}, "payload": {"$ref": "#/$defs/work_unit"}}}},
+    {"if": {"properties": {"record_type": {"const": "correction_work_unit"}}}, "then": {"properties": {"status": {"const": "active"}, "payload": {"$ref": "#/$defs/correction_work_unit"}}}},
+    {"if": {"properties": {"record_type": {"const": "agent_result"}}}, "then": {"properties": {"status": {"const": "ready"}, "payload": {"$ref": "#/$defs/agent_result"}}}},
+    {"if": {"properties": {"record_type": {"const": "diagnostic"}}}, "then": {"properties": {"status": {"const": "failed"}, "payload": {"$ref": "#/$defs/diagnostic"}}}},
+    {"if": {"properties": {"record_type": {"const": "review"}}}, "then": {"properties": {"status": {"const": "decided"}, "payload": {"$ref": "#/$defs/review"}}}},
+    {"if": {"properties": {"record_type": {"const": "finding_transition"}}}, "then": {"properties": {"status": {"const": "recorded"}, "payload": {"$ref": "#/$defs/finding_transition"}}}},
+    {"if": {"properties": {"record_type": {"const": "validation_request"}}}, "then": {"properties": {"status": {"const": "requested"}, "payload": {"$ref": "#/$defs/validation_request"}}}},
+    {"if": {"properties": {"record_type": {"const": "validation_attestation"}}}, "then": {"properties": {"status": {"const": "attested"}, "payload": {"$ref": "#/$defs/validation_attestation"}}}},
+    {"if": {"properties": {"record_type": {"const": "gate"}}}, "then": {"properties": {"status": {"const": "decided"}, "payload": {"$ref": "#/$defs/gate"}}}},
+    {"if": {"properties": {"record_type": {"const": "binding"}}}, "then": {"properties": {"status": {"const": "bound"}, "payload": {"$ref": "#/$defs/binding"}}}},
+    {"if": {"properties": {"record_type": {"const": "quota_pause"}}}, "then": {"properties": {"status": {"const": "paused"}, "payload": {"$ref": "#/$defs/quota_pause"}}}},
+    {"if": {"properties": {"record_type": {"const": "transient_retry"}}}, "then": {"properties": {"status": {"const": "waiting"}, "payload": {"$ref": "#/$defs/transient_retry"}}}},
+    {"if": {"properties": {"record_type": {"const": "resume_check"}}}, "then": {"properties": {"status": {"const": "checked"}, "payload": {"$ref": "#/$defs/resume_check"}}}},
+    {"if": {"properties": {"record_type": {"const": "workflow_completion"}}}, "then": {"properties": {"status": {"const": "completed"}, "payload": {"$ref": "#/$defs/workflow_completion"}}}},
+    {"if": {"properties": {"record_type": {"const": "provider_input_measurement"}}}, "then": {"properties": {"status": {"const": "measured"}, "payload": {"$ref": "#/$defs/provider_input_measurement"}}}},
+    {"if": {"properties": {"record_type": {"const": "provider_attempt"}}}, "then": {"properties": {"status": {"enum": ["started", "succeeded", "failed"]}, "payload": {"$ref": "#/$defs/provider_attempt"}}}},
+    {"if": {"properties": {"record_type": {"const": "provider_attempt"}, "payload": {"properties": {"phase": {"const": "started"}}}}}, "then": {"properties": {"status": {"const": "started"}}}},
+    {"if": {"properties": {"record_type": {"const": "provider_attempt"}, "payload": {"properties": {"phase": {"const": "succeeded"}}}}}, "then": {"properties": {"status": {"const": "succeeded"}}}},
+    {"if": {"properties": {"record_type": {"const": "provider_attempt"}, "payload": {"properties": {"phase": {"const": "failed"}}}}}, "then": {"properties": {"status": {"const": "failed"}}}},
+    {"if": {"properties": {"record_type": {"const": "final_review_preflight"}}}, "then": {"properties": {"status": {"const": "checked"}, "payload": {"$ref": "#/$defs/final_review_preflight"}}}}
+  ],
+  "$defs": {
+    "identifier": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "git_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "non_empty": {"type": "string", "minLength": 1},
+    "role": {"enum": ["codex", "claude", "orchestrator", "user"]},
+    "reviewer": {"enum": ["claude"]},
+    "path": {"type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*\\\\)[^/]+(?:/[^/]+)*$"},
+    "paths": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/path"}},
+    "non_empty_paths": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/path"}},
+    "identifiers": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/identifier"}},
+    "non_empty_identifiers": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/identifier"}},
+    "fingerprint": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "sha256"],
+      "properties": {"kind": {"enum": ["contract", "implementation"]}, "sha256": {"$ref": "#/$defs/sha256"}}
+    },
+    "command": {
+      "type": "object", "additionalProperties": false, "required": ["family", "argv", "mode"],
+      "properties": {"family": {"$ref": "#/$defs/identifier"}, "argv": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1, "pattern": "^[^\\u0000\\r\\n]+$"}}, "mode": {"enum": ["argv", "legacy_shell"]}},
+      "allOf": [{"if": {"properties": {"mode": {"const": "legacy_shell"}}}, "then": {"properties": {"argv": {"maxItems": 1}}}}]
+    },
+    "slice": {
+      "type": "object", "additionalProperties": false, "required": ["slice_id", "summary", "paths"],
+      "properties": {"slice_id": {"$ref": "#/$defs/identifier"}, "summary": {"$ref": "#/$defs/non_empty"}, "paths": {"$ref": "#/$defs/non_empty_paths"}}
+    },
+    "task": {
+      "type": "object", "additionalProperties": false, "required": ["target_branch", "scope_paths", "assignment_sha256"],
+      "properties": {"target_branch": {"$ref": "#/$defs/non_empty"}, "scope_paths": {"$ref": "#/$defs/non_empty_paths"}, "assignment_sha256": {"$ref": "#/$defs/sha256"}}
+    },
+    "plan": {
+      "type": "object", "additionalProperties": false, "required": ["work_plan_path", "approved_plan_commit", "slices"],
+      "properties": {"work_plan_path": {"$ref": "#/$defs/path"}, "approved_plan_commit": {"$ref": "#/$defs/git_sha"}, "slices": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/slice"}}}
+    },
+    "work_unit": {
+      "type": "object", "additionalProperties": false, "required": ["slice_id", "round_number", "paths"],
+      "properties": {"slice_id": {"$ref": "#/$defs/identifier"}, "round_number": {"type": "integer", "minimum": 1}, "paths": {"$ref": "#/$defs/non_empty_paths"}}
+    },
+    "correction_work_unit": {
+      "type": "object", "additionalProperties": false, "required": ["slice_id", "round_number", "paths", "finding_ids"],
+      "properties": {"slice_id": {"$ref": "#/$defs/identifier"}, "round_number": {"type": "integer", "minimum": 1}, "paths": {"$ref": "#/$defs/non_empty_paths"}, "finding_ids": {"$ref": "#/$defs/non_empty_identifiers"}}
+    },
+    "agent_result": {
+      "type": "object", "additionalProperties": false, "required": ["role", "work_unit_id", "outcome", "test_files"],
+      "properties": {"role": {"$ref": "#/$defs/role"}, "work_unit_id": {"$ref": "#/$defs/identifier"}, "outcome": {"enum": ["ready", "not_ready", "stopped"]}, "test_files": {"$ref": "#/$defs/paths"}, "transport_schema": {"type": ["string", "null"]}, "request_id": {"type": ["string", "null"]}, "response_sha256": {"type": ["string", "null"]}},
+      "oneOf": [{"properties": {"transport_schema": {"type": "null"}, "request_id": {"type": "null"}, "response_sha256": {"type": "null"}}}, {"required": ["transport_schema", "request_id", "response_sha256"], "properties": {"role": {"const": "codex"}, "transport_schema": {"const": "native-codex-v2"}, "request_id": {"type": "string", "pattern": "^native-codex-request-[0-9a-f]{64}$"}, "response_sha256": {"$ref": "#/$defs/sha256"}}}]
+    },
+    "diagnostic": {
+      "type": "object", "additionalProperties": false, "required": ["role", "work_unit_id", "attempt", "output_sha256", "reason"],
+      "properties": {"role": {"$ref": "#/$defs/role"}, "work_unit_id": {"$ref": "#/$defs/identifier"}, "attempt": {"type": "integer", "minimum": 1}, "output_sha256": {"$ref": "#/$defs/sha256"}, "reason": {"$ref": "#/$defs/non_empty"}}
+    },
+    "review": {
+      "type": "object", "additionalProperties": false, "required": ["reviewer", "work_unit_id", "verdict", "finding_ids", "evidence"],
+      "properties": {"reviewer": {"$ref": "#/$defs/reviewer"}, "work_unit_id": {"$ref": "#/$defs/identifier"}, "verdict": {"enum": ["approved", "denied", "stop"]}, "finding_ids": {"$ref": "#/$defs/identifiers"}, "evidence": {"type": ["string", "null"], "minLength": 1}, "transport_schema": {"type": ["string", "null"]}, "request_id": {"type": ["string", "null"]}, "response_sha256": {"type": ["string", "null"]}},
+      "allOf": [{"if": {"properties": {"verdict": {"const": "approved"}}}, "then": {"anyOf": [{"properties": {"finding_ids": {"minItems": 1}}}, {"properties": {"evidence": {"type": "string"}}}]}}, {"oneOf": [{"properties": {"transport_schema": {"type": "null"}, "request_id": {"type": "null"}, "response_sha256": {"type": "null"}}}, {"required": ["transport_schema", "request_id", "response_sha256"], "properties": {"reviewer": {"const": "claude"}, "transport_schema": {"const": "native-claude-review-v2"}, "request_id": {"type": "string", "pattern": "^native-review-request-[0-9a-f]{64}$"}, "response_sha256": {"$ref": "#/$defs/sha256"}}}]}]
+    },
+    "finding_transition": {
+      "type": "object", "additionalProperties": false, "required": ["finding_id", "reporter", "actor", "action", "severity", "finding_status", "rationale"],
+      "properties": {"finding_id": {"$ref": "#/$defs/identifier"}, "reporter": {"$ref": "#/$defs/reviewer"}, "actor": {"$ref": "#/$defs/role"}, "action": {"enum": ["opened", "responded", "status_changed", "reclassified"]}, "severity": {"enum": ["BLOCKER", "OBSERVATION"]}, "finding_status": {"enum": ["open", "closed"]}, "rationale": {"$ref": "#/$defs/non_empty"}, "work_unit_id": {"type": ["string", "null"], "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$"}, "summary": {"type": ["string", "null"], "minLength": 1}, "acceptance_test": {"type": ["string", "null"], "minLength": 1}, "origin_slice_id": {"type": ["string", "null"], "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$"}, "origin_round_number": {"type": ["integer", "null"], "minimum": 1}, "response_decision": {"enum": ["accepted", "rejected", null]}}
+    },
+    "validation_request": {
+      "type": "object", "additionalProperties": false, "required": ["commands", "requested_by"],
+      "properties": {"commands": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/command"}}, "requested_by": {"$ref": "#/$defs/role"}}
+    },
+    "validation_result": {
+      "type": "object", "additionalProperties": false, "required": ["command", "outcome", "exit_code", "output_sha256"],
+      "properties": {"command": {"$ref": "#/$defs/command"}, "outcome": {"enum": ["pass", "fail", "unavailable"]}, "exit_code": {"type": "integer"}, "output_sha256": {"$ref": "#/$defs/sha256"}}
+    },
+    "validation_attestation": {
+      "type": "object", "additionalProperties": false, "required": ["results", "attested_by"],
+      "properties": {"results": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/validation_result"}}, "attested_by": {"$ref": "#/$defs/role"}}
+    },
+    "gate": {
+      "type": "object", "additionalProperties": false, "required": ["gate_kind", "decision", "authority", "rationale"],
+      "properties": {"gate_kind": {"$ref": "#/$defs/identifier"}, "decision": {"enum": ["approved", "rejected", "pending"]}, "authority": {"$ref": "#/$defs/role"}, "rationale": {"$ref": "#/$defs/non_empty"}}
+    },
+    "binding": {
+      "type": "object", "additionalProperties": false, "required": ["binding_kind", "target", "attestation_id", "approval_ids"],
+      "properties": {"binding_kind": {"enum": ["commit", "plan_commit", "implementation_handoff"]}, "target": {"$ref": "#/$defs/non_empty"}, "attestation_id": {"$ref": "#/$defs/identifier"}, "approval_ids": {"$ref": "#/$defs/non_empty_identifiers"}}
+    },
+    "quota_pause": {
+      "type": "object", "additionalProperties": false, "required": ["role", "repository_fingerprint", "retry_at"],
+      "properties": {"role": {"$ref": "#/$defs/role"}, "repository_fingerprint": {"$ref": "#/$defs/sha256"}, "retry_at": {"type": "string", "format": "date-time"}}
+    },
+    "provider_input_component": {
+      "type": "object", "additionalProperties": false, "required": ["name", "chars", "bytes"],
+      "properties": {"name": {"$ref": "#/$defs/identifier"}, "chars": {"type": "integer", "minimum": 0}, "bytes": {"type": "integer", "minimum": 0}}
+    },
+    "provider_input_measurement": {
+      "type": "object", "additionalProperties": false,
+      "required": ["provider", "role", "operation", "work_unit_id", "transition_fingerprint", "relevant_record_head", "input_digest", "policy_digest", "components", "total_chars", "total_bytes", "safety_limit_chars", "safety_limit_bytes", "technical_limit_chars", "technical_limit_bytes", "technical_limit_source", "effective_limit_chars", "effective_limit_bytes", "allowed", "violated_dimensions", "char_overage", "byte_overage", "largest_component"],
+      "properties": {
+        "provider": {"enum": ["codex", "claude"]}, "role": {"enum": ["codex", "claude"]},
+        "operation": {"$ref": "#/$defs/identifier"}, "work_unit_id": {"$ref": "#/$defs/identifier"},
+        "transition_fingerprint": {"$ref": "#/$defs/sha256"}, "relevant_record_head": {"$ref": "#/$defs/sha256"},
+        "input_digest": {"$ref": "#/$defs/sha256"}, "policy_digest": {"$ref": "#/$defs/sha256"},
+        "components": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/provider_input_component"}},
+        "total_chars": {"type": "integer", "minimum": 0}, "total_bytes": {"type": "integer", "minimum": 0},
+        "safety_limit_chars": {"type": "integer", "minimum": 1}, "safety_limit_bytes": {"type": "integer", "minimum": 1},
+        "technical_limit_chars": {"type": ["integer", "null"], "minimum": 1}, "technical_limit_bytes": {"type": ["integer", "null"], "minimum": 1},
+        "technical_limit_source": {"type": ["string", "null"], "minLength": 1},
+        "effective_limit_chars": {"type": "integer", "minimum": 1}, "effective_limit_bytes": {"type": "integer", "minimum": 1},
+        "allowed": {"type": "boolean"}, "violated_dimensions": {"type": "array", "uniqueItems": true, "items": {"enum": ["chars", "bytes"]}},
+        "char_overage": {"type": "integer", "minimum": 0}, "byte_overage": {"type": "integer", "minimum": 0}, "largest_component": {"$ref": "#/$defs/identifier"}
+      }
+    },
+    "provider_usage": {
+      "type": "object", "additionalProperties": false,
+      "required": ["input_tokens", "tool_input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "thinking_tokens", "output_tokens", "total_tokens", "turns", "cost_usd"],
+      "properties": {
+        "input_tokens": {"type": ["integer", "null"], "minimum": 0},
+        "tool_input_tokens": {"type": ["integer", "null"], "minimum": 0},
+        "cache_read_input_tokens": {"type": ["integer", "null"], "minimum": 0},
+        "cache_creation_input_tokens": {"type": ["integer", "null"], "minimum": 0},
+        "thinking_tokens": {"type": ["integer", "null"], "minimum": 0},
+        "output_tokens": {"type": ["integer", "null"], "minimum": 0},
+        "total_tokens": {"type": ["integer", "null"], "minimum": 0},
+        "turns": {"type": ["integer", "null"], "minimum": 0},
+        "cost_usd": {"type": ["number", "null"], "minimum": 0}
+      }
+    },
+    "provider_attempt": {
+      "type": "object", "additionalProperties": false,
+      "required": ["provider", "role", "operation", "work_unit_id", "logical_operation_id", "binding_fingerprint", "measurement_record_id", "input_digest", "attempt_number", "phase", "started_at", "ended_at", "duration_seconds", "failure_kind", "usage"],
+      "properties": {
+        "provider": {"enum": ["codex", "claude"]}, "role": {"enum": ["codex", "claude"]},
+        "operation": {"$ref": "#/$defs/identifier"}, "work_unit_id": {"$ref": "#/$defs/identifier"},
+        "logical_operation_id": {"$ref": "#/$defs/identifier"}, "binding_fingerprint": {"$ref": "#/$defs/sha256"},
+        "measurement_record_id": {"$ref": "#/$defs/identifier"}, "input_digest": {"$ref": "#/$defs/sha256"},
+        "attempt_number": {"type": "integer", "minimum": 1}, "phase": {"enum": ["started", "succeeded", "failed"]},
+        "started_at": {"type": "string", "format": "date-time"}, "ended_at": {"type": ["string", "null"], "format": "date-time"},
+        "duration_seconds": {"type": ["number", "null"], "minimum": 0},
+        "failure_kind": {"enum": ["quota", "network", "timeout", "permission", "auth", "binary", "output", "process", "runtime", null]},
+        "usage": {"oneOf": [{"$ref": "#/$defs/provider_usage"}, {"type": "null"}]}
+      },
+      "allOf": [
+        {"if": {"properties": {"provider": {"const": "codex"}}}, "then": {"properties": {"role": {"const": "codex"}}}},
+        {"if": {"properties": {"provider": {"const": "claude"}}}, "then": {"properties": {"role": {"const": "claude"}}}},
+        {"if": {"properties": {"phase": {"const": "started"}}}, "then": {"properties": {"ended_at": {"type": "null"}, "duration_seconds": {"type": "null"}, "failure_kind": {"type": "null"}, "usage": {"type": "null"}}}},
+        {"if": {"properties": {"phase": {"const": "succeeded"}}}, "then": {"properties": {"ended_at": {"type": "string"}, "duration_seconds": {"type": "number"}, "failure_kind": {"type": "null"}}}},
+        {"if": {"properties": {"phase": {"const": "failed"}}}, "then": {"properties": {"ended_at": {"type": "string"}, "duration_seconds": {"type": "number"}, "failure_kind": {"enum": ["quota", "network", "timeout", "permission", "auth", "binary", "output", "process", "runtime"]}}}}
+      ]
+    },
+    "final_review_preflight": {
+      "type": "object", "additionalProperties": false,
+      "required": ["provider", "role", "operation", "work_unit_id", "transition_fingerprint", "relevant_record_head", "measurement_record_id", "outcome", "category", "error_code", "affected_record_ids", "affected_paths", "remediation"],
+      "properties": {
+        "provider": {"enum": ["codex", "claude"]}, "role": {"enum": ["codex", "claude"]},
+        "operation": {"$ref": "#/$defs/identifier"}, "work_unit_id": {"$ref": "#/$defs/identifier"},
+        "transition_fingerprint": {"$ref": "#/$defs/sha256"}, "relevant_record_head": {"$ref": "#/$defs/sha256"},
+        "measurement_record_id": {"$ref": "#/$defs/identifier"}, "outcome": {"enum": ["passed", "denied"]},
+        "category": {"enum": ["technical", "correction_required", null]}, "error_code": {"oneOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]},
+        "affected_record_ids": {"$ref": "#/$defs/identifiers"}, "affected_paths": {"$ref": "#/$defs/paths"},
+        "remediation": {"type": ["string", "null"], "minLength": 1}
+      }
+    },
+    "transient_retry": {
+      "type": "object", "additionalProperties": false, "required": ["role", "repository_fingerprint", "retry_at", "attempt"],
+      "properties": {"role": {"$ref": "#/$defs/role"}, "repository_fingerprint": {"$ref": "#/$defs/sha256"}, "retry_at": {"type": "string", "format": "date-time"}, "attempt": {"type": "integer", "minimum": 1}}
+    },
+    "resume_check": {
+      "type": "object", "additionalProperties": false, "required": ["expected_head_id", "repository_fingerprint", "outcome"],
+      "properties": {"expected_head_id": {"$ref": "#/$defs/identifier"}, "repository_fingerprint": {"$ref": "#/$defs/sha256"}, "outcome": {"enum": ["matched", "mismatch", "incomplete"]}}
+    },
+    "workflow_completion": {
+      "type": "object", "additionalProperties": false, "required": ["outcome", "final_binding_id"],
+      "properties": {"outcome": {"enum": ["completed", "failed", "stopped"]}, "final_binding_id": {"oneOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]}},
+      "allOf": [{"if": {"properties": {"outcome": {"const": "completed"}}}, "then": {"properties": {"final_binding_id": {"$ref": "#/$defs/identifier"}}}}]
+    }
+  }
+}

@@ -212,7 +212,7 @@ def test_projection_renders_native_and_legacy_transport_bindings_symmetrically()
             "12",
             "ready",
             ("tests/test_a.py",),
-            transport_schema="native-codex-v1",
+            transport_schema="native-codex-v2",
             request_id="native-codex-request-" + "b" * 64,
             response_sha256="c" * 64,
         ),
@@ -222,7 +222,7 @@ def test_projection_renders_native_and_legacy_transport_bindings_symmetrically()
             "approved",
             (),
             "contracts checked",
-            transport_schema="native-claude-review-v1",
+            transport_schema="native-claude-review-v2",
             request_id="native-review-request-" + "d" * 64,
             response_sha256="e" * 64,
         ),
@@ -245,9 +245,9 @@ def test_projection_renders_native_and_legacy_transport_bindings_symmetrically()
 
     sections = render_artifact_sections(tuple(records))
 
-    assert "`native-codex-v1`" in sections["approval-status"]
+    assert "`native-codex-v2`" in sections["approval-status"]
     assert "`native-codex-request-" in sections["approval-status"]
-    assert "`native-claude-review-v1`" in sections["claude-review"]
+    assert "`native-claude-review-v2`" in sections["claude-review"]
     assert "`native-review-request-" in sections["claude-review"]
 
 
@@ -259,7 +259,7 @@ def test_projection_reduces_attempts_and_keeps_unknown_usage_explicit(tmp_path) 
     )
     measurement = bridge.append(
         ProviderInputMeasurementPayload(
-            Role.ANTIGRAVITY, Role.ANTIGRAVITY, "antigravity_slice_review", "1", "a" * 64,
+            Role.CLAUDE, Role.CLAUDE, "claude_slice_review", "1", "a" * 64,
             "b" * 64, "c" * 64, "d" * 64,
             (ProviderInputComponentPayload("prompt", 3, 3),),
             3, 3, 10, 10, None, None, None, 10, 10, True, (), 0, 0, "prompt",
@@ -271,7 +271,7 @@ def test_projection_reduces_attempts_and_keeps_unknown_usage_explicit(tmp_path) 
         measurement_record=measurement, binding_fingerprint="a" * 64, work_unit_id="1"
     )
     bridge.finish_provider_attempt(
-        first, duration_seconds=2.0, failure_kind="antigravity_tool_schema",
+        first, duration_seconds=2.0, failure_kind="network",
         usage=ProviderUsagePayload(input_tokens=0, output_tokens=5),
     )
     bridge.start_provider_attempt(
@@ -282,7 +282,7 @@ def test_projection_reduces_attempts_and_keeps_unknown_usage_explicit(tmp_path) 
     assert "Attempts `2`, offen `1`" in rendered
     assert "input_tokens=sum:0,known:1,unknown:1" in rendered
     assert "output_tokens=sum:5,known:1,unknown:1" in rendered
-    assert "Fehler `antigravity_tool_schema`" in rendered
+    assert "Fehler `network`" in rendered
     assert "local_input_chars" in rendered and "local_input_bytes" in rendered
 
 

@@ -96,7 +96,6 @@ def _authorization(
         diff_fingerprint=fingerprint,
         attestation=attestation,
         claude_review=review(AgentRole.CLAUDE, claude_approval),
-        antigravity_review=review(AgentRole.ANTIGRAVITY, True),
     )
 
 
@@ -932,11 +931,6 @@ def test_commit_accepts_complete_red_attestation_only_with_named_followup(
         attestation=failing,
         claude_review=replace(
             authorization.claude_review,
-            validation=failing,
-            red_state_followup_slice="Slice 10",
-        ),
-        antigravity_review=replace(
-            authorization.antigravity_review,
             validation=failing,
             red_state_followup_slice="Slice 10",
         ),

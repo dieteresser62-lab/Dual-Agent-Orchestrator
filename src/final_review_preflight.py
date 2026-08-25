@@ -36,7 +36,7 @@ from workflow_state import (
 
 
 FINAL_REVIEW_OPERATIONS = frozenset(
-    {"codex_final_review", "claude_final_review", "antigravity_final_review"}
+    {"codex_final_review", "claude_final_review"}
 )
 _BOOTSTRAP_TYPES = {
     RecordType.PROVIDER_INPUT_MEASUREMENT,
@@ -215,24 +215,6 @@ def run_final_review_preflight(
         ]
         if not codex or codex[-1].payload.outcome != "ready":
             return _deny("technical", "CODEX-FINAL-RESULT-MISSING", (), (), "persist the ready Codex final report for this fingerprint")
-    else:
-        claude = [
-            item for item in records if isinstance(item.payload, ReviewPayload)
-            and item.payload.reviewer is Role.CLAUDE and item.payload.work_unit_id == payload.work_unit_id
-            and item.fingerprint == measurement_record.fingerprint
-        ]
-        if not claude or claude[-1].payload.verdict != "approved":
-            return _deny("technical", "CLAUDE-FINAL-APPROVAL-MISSING", (), (), "obtain Claude approval for this exact fingerprint")
-        latest_findings: dict[str, FindingTransitionPayload] = {}
-        for item in records:
-            if isinstance(item.payload, FindingTransitionPayload):
-                latest_findings[item.payload.finding_id] = item.payload
-        blockers = tuple(sorted(
-            finding_id for finding_id, finding in latest_findings.items()
-            if finding.reporter is Role.CLAUDE and finding.severity is FindingSeverity.BLOCKER and finding.finding_status == "open"
-        ))
-        if blockers:
-            return _deny("correction_required", "CLAUDE-BLOCKER-OPEN", blockers, (), "close or escalate every Claude blocker before Antigravity")
     return FinalReviewPreflightResult("passed")
 
 

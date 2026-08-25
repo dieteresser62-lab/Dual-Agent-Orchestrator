@@ -1,0 +1,208 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "native-agent-codex-request-v2",
+  "title": "Native Codex request v2",
+  "type": "object",
+  "$defs": {
+    "validation_record": {
+      "type": "object",
+      "properties": {
+        "status": { "enum": ["PASS", "FAIL"] },
+        "command": { "type": "string", "pattern": "^(?=.*\\S)[^\\u0000]{1,3000}$" },
+        "exit_code": { "type": "integer" },
+        "output": { "type": "string" }
+      },
+      "required": ["status", "command", "exit_code", "output"],
+      "additionalProperties": false
+    },
+    "command_spec": {
+      "type": "object",
+      "properties": {
+        "argv": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "legacy_shell": { "type": ["string", "null"] }
+      },
+      "required": ["argv", "legacy_shell"],
+      "additionalProperties": false
+    },
+    "attestation": {
+      "type": ["object", "null"],
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "attestation_id": { "type": "string", "minLength": 1 },
+            "diff_fingerprint": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "expected_commands": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 64,
+              "uniqueItems": true,
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "records": {
+              "type": "array",
+              "maxItems": 64,
+              "items": { "$ref": "#/$defs/validation_record" }
+            },
+            "output_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "summary": { "type": "string", "minLength": 1 },
+            "command_specs": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 64,
+              "items": { "$ref": "#/$defs/command_spec" }
+            }
+          },
+          "required": [
+            "attestation_id", "diff_fingerprint", "expected_commands", "records",
+            "output_digest", "summary", "command_specs"
+          ],
+          "additionalProperties": false
+        },
+        { "type": "null" }
+      ]
+    }
+  },
+  "properties": {
+    "schema_version": { "const": "native-agent-codex-request-v2" },
+    "request_type": { "enum": ["plan", "implementation", "correction", "final_report"] },
+    "transport": { "const": "native-codex-v2" },
+    "request_id": {
+      "type": "string",
+      "pattern": "^native-codex-request-[0-9a-f]{64}$"
+    },
+    "run_id": { "type": "string", "pattern": "^(?=.*\\S)[^\\u0000]{1,300}$" },
+    "work_unit_id": { "type": "string", "pattern": "^(?=.*\\S)[^\\u0000]{1,300}$" },
+    "operation": { "type": "string", "pattern": "^(?=.*\\S)[^\\u0000]{1,300}$" },
+    "target_branch": { "type": "string", "pattern": "^(?=.*\\S)[^\\u0000]{1,300}$" },
+    "base_commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "current_fingerprint": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "authorized_paths": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1000,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\u0000\\r\\n]{1,1000}$"
+      }
+    },
+    "assignment": { "type": "string", "pattern": "^(?=.*\\S)[^\\u0000]{1,120000}$" },
+    "work_context": { "type": "string", "pattern": "^(?=.*\\S)[^\\u0000]{1,1000000}$" },
+    "codex_contract": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "pattern": "^(?=.*\\S)[^\\u0000]{1,300}$" },
+        "readiness_kind": { "enum": ["plan", "implementation", "final_report"] },
+        "slice_id": { "type": "string", "pattern": "^(?=.*\\S)[^\\u0000]{1,100}$" },
+        "round_number": { "type": "integer", "minimum": 1 },
+        "require_test_files_record": { "type": "boolean" },
+        "expected_test_files": {
+          "type": "array",
+          "maxItems": 1000,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\u0000\\r\\n]{1,1000}$" }
+        },
+        "test_changes_approved": { "type": "boolean" },
+        "require_slice_plan": { "type": "boolean" },
+        "plan_artifact_path": {
+          "type": ["string", "null"],
+          "anyOf": [
+            { "type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\u0000\\r\\n]{1,1000}$" },
+            { "type": "null" }
+          ]
+        },
+        "enforce_expected_test_files": { "type": "boolean" },
+        "review_fingerprint": {
+          "type": ["string", "null"],
+          "anyOf": [
+            { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            { "type": "null" }
+          ]
+        },
+        "validation_attestation": { "$ref": "#/$defs/attestation" }
+      },
+      "required": [
+        "name", "readiness_kind", "slice_id", "round_number",
+        "require_test_files_record", "expected_test_files",
+        "test_changes_approved", "require_slice_plan", "plan_artifact_path",
+        "enforce_expected_test_files", "review_fingerprint",
+        "validation_attestation"
+      ],
+      "additionalProperties": false
+    },
+    "open_findings": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "type": "object",
+        "properties": {
+          "finding_id": { "type": "string", "pattern": "^C-(0[1-9]|[1-9][0-9]*)$" },
+          "finding_class": { "enum": ["BLOCKER", "OBSERVATION"] },
+          "summary": { "type": "string", "pattern": "^(?=.*\\S)[^\\u0000]{1,3000}$" },
+          "acceptance_test": { "type": "string", "pattern": "^(?=.*\\S)[^\\u0000]{1,3000}$" },
+          "reporter": { "enum": ["claude"] }
+        },
+        "required": ["finding_id", "finding_class", "summary", "acceptance_test", "reporter"],
+        "additionalProperties": false
+      }
+    },
+    "evidence_manifest": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1000,
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "evidence_id": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,199}$" },
+              "kind": { "type": "string", "pattern": "^(?=.*\\S)[^\\u0000]{1,100}$" },
+              "source_path": { "type": ["string", "null"] },
+              "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+              "byte_count": { "type": "integer", "minimum": 1 },
+              "delivery": { "const": "inline" },
+              "content": { "type": "string", "minLength": 1 }
+            },
+            "required": ["evidence_id", "kind", "source_path", "sha256", "byte_count", "delivery", "content"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "evidence_id": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,199}$" },
+              "kind": { "type": "string", "pattern": "^(?=.*\\S)[^\\u0000]{1,100}$" },
+              "source_path": { "type": ["string", "null"] },
+              "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+              "byte_count": { "type": "integer", "minimum": 1 },
+              "delivery": { "const": "content_ref" },
+              "content_ref": { "type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\u0000\\r\\n]{1,1000}$" }
+            },
+            "required": ["evidence_id", "kind", "source_path", "sha256", "byte_count", "delivery", "content_ref"],
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    "response_contract": {
+      "type": "object",
+      "properties": {
+        "schema_version": { "const": "native-agent-codex-result-v2" },
+        "schema_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      },
+      "required": ["schema_version", "schema_sha256"],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "schema_version", "request_type", "transport", "request_id", "run_id",
+    "work_unit_id", "operation", "target_branch", "base_commit",
+    "current_fingerprint", "authorized_paths", "assignment", "work_context",
+    "codex_contract", "open_findings", "evidence_manifest", "response_contract"
+  ],
+  "additionalProperties": false
+}

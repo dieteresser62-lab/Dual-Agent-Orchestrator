@@ -17,6 +17,8 @@ from inbox_watcher import (
 from workflow import WorkflowHistory, WorkflowRunResult
 from workflow_state import (
     GateReason,
+    ProtocolBinding,
+    ProtocolMode,
     WorkflowStep,
     WorkUnitKind,
     init_workflow_state,
@@ -61,6 +63,7 @@ def _workflow_result(run_id: str, *, final: bool) -> WorkflowRunResult:
         branch_base="a" * 40,
         slice_count=2,
         timestamp="2026-08-13T10:00:00+00:00",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
     ).complete_current_work_unit().start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
@@ -481,7 +484,7 @@ def test_legacy_watch_identity_roundtrip_does_not_add_protocol_binding() -> None
 
 def test_structured_watch_identity_roundtrip_binds_protocol_mode() -> None:
     identity = WatchTaskIdentity(
-        "watch-new", "a" * 64, True, "structured-v1"
+        "watch-new", "a" * 64, True, "structured-v2"
     )
 
     assert WatchTaskIdentity.from_dict(identity.to_dict()) == identity
@@ -671,6 +674,7 @@ def test_workflow_result_requires_commits_and_completed_final_review() -> None:
         branch_base="a" * 40,
         slice_count=1,
         timestamp="2026-08-13T10:00:00+00:00",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
     ).await_policy_gate(
         reason=GateReason.STOP_REQUEST,
         detail="S-001 | operator decision required",
@@ -696,6 +700,7 @@ def test_bootstrap_denial_maps_to_resumable_watch_halt_before_provider_retry() -
         branch_base="a" * 40,
         slice_count=1,
         timestamp="2026-08-13T10:00:00+00:00",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
     ).await_bootstrap_resume(
         detail="PROVIDER-INPUT-BUDGET | chars=101/100",
         fingerprint="b" * 64,

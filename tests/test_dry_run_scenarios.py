@@ -144,11 +144,6 @@ def happy_scenario(*, validation_status: str = "pass", red_state: str | None = N
         agent_events=(
             event(AgentRole.CODEX, WorkflowStep.CODEX_IMPLEMENTATION, codex_ready()),
             event(AgentRole.CLAUDE, WorkflowStep.CLAUDE_SLICE_REVIEW, approval(AgentRole.CLAUDE)),
-            event(
-                AgentRole.ANTIGRAVITY,
-                WorkflowStep.ANTIGRAVITY_SLICE_REVIEW,
-                approval(AgentRole.ANTIGRAVITY),
-            ),
         ),
         changes=(change(),),
         validations=(ScriptedValidation(FP1, validation_status),),
@@ -212,23 +207,11 @@ def test_positive_session_runs_plan_and_multiple_slices(tmp_path: Path) -> None:
                 WorkflowStep.CLAUDE_PLAN_REVIEW,
                 plan_approval,
             ),
-            ScriptedAgentEvent(
-                AgentRole.ANTIGRAVITY,
-                1,
-                1,
-                WorkflowStep.ANTIGRAVITY_PLAN_REVIEW,
-                plan_approval.replace("REVIEWER: claude", "REVIEWER: antigravity"),
-            ),
             event(AgentRole.CODEX, WorkflowStep.CODEX_IMPLEMENTATION, codex_ready()),
             event(
                 AgentRole.CLAUDE,
                 WorkflowStep.CLAUDE_SLICE_REVIEW,
                 approval(AgentRole.CLAUDE),
-            ),
-            event(
-                AgentRole.ANTIGRAVITY,
-                WorkflowStep.ANTIGRAVITY_SLICE_REVIEW,
-                approval(AgentRole.ANTIGRAVITY),
             ),
             ScriptedAgentEvent(
                 AgentRole.CODEX,
@@ -243,13 +226,6 @@ def test_positive_session_runs_plan_and_multiple_slices(tmp_path: Path) -> None:
                 1,
                 WorkflowStep.CLAUDE_SLICE_REVIEW,
                 approval(AgentRole.CLAUDE, slice_id="02"),
-            ),
-            ScriptedAgentEvent(
-                AgentRole.ANTIGRAVITY,
-                3,
-                1,
-                WorkflowStep.ANTIGRAVITY_SLICE_REVIEW,
-                approval(AgentRole.ANTIGRAVITY, slice_id="02"),
             ),
         ),
         changes=(
@@ -343,11 +319,6 @@ def test_scripted_session_runs_plan_slices_correction_and_repeated_final_review(
                 plan_approval,
             ),
             ScriptedAgentEvent(
-                AgentRole.ANTIGRAVITY, 1, 1,
-                WorkflowStep.ANTIGRAVITY_PLAN_REVIEW,
-                plan_approval.replace("REVIEWER: claude", "REVIEWER: antigravity"),
-            ),
-            ScriptedAgentEvent(
                 AgentRole.CODEX, 2, 1, WorkflowStep.CODEX_IMPLEMENTATION,
                 codex_ready(),
             ),
@@ -356,22 +327,12 @@ def test_scripted_session_runs_plan_slices_correction_and_repeated_final_review(
                 approval(AgentRole.CLAUDE),
             ),
             ScriptedAgentEvent(
-                AgentRole.ANTIGRAVITY, 2, 1,
-                WorkflowStep.ANTIGRAVITY_SLICE_REVIEW,
-                approval(AgentRole.ANTIGRAVITY),
-            ),
-            ScriptedAgentEvent(
                 AgentRole.CODEX, 3, 1, WorkflowStep.CODEX_IMPLEMENTATION,
                 codex_ready(slice_id="02"),
             ),
             ScriptedAgentEvent(
                 AgentRole.CLAUDE, 3, 1, WorkflowStep.CLAUDE_SLICE_REVIEW,
                 approval(AgentRole.CLAUDE, slice_id="02"),
-            ),
-            ScriptedAgentEvent(
-                AgentRole.ANTIGRAVITY, 3, 1,
-                WorkflowStep.ANTIGRAVITY_SLICE_REVIEW,
-                approval(AgentRole.ANTIGRAVITY, slice_id="02"),
             ),
             ScriptedAgentEvent(
                 AgentRole.CODEX, 4, 1, WorkflowStep.CODEX_FINAL_REVIEW,
@@ -396,22 +357,12 @@ def test_scripted_session_runs_plan_slices_correction_and_repeated_final_review(
                 ),
             ),
             ScriptedAgentEvent(
-                AgentRole.ANTIGRAVITY, 5, 1,
-                WorkflowStep.ANTIGRAVITY_SLICE_REVIEW,
-                approval(AgentRole.ANTIGRAVITY, slice_id="03"),
-            ),
-            ScriptedAgentEvent(
                 AgentRole.CODEX, 6, 1, WorkflowStep.CODEX_FINAL_REVIEW,
                 final_report(),
             ),
             ScriptedAgentEvent(
                 AgentRole.CLAUDE, 6, 1, WorkflowStep.CLAUDE_FINAL_REVIEW,
                 final_approval(AgentRole.CLAUDE),
-            ),
-            ScriptedAgentEvent(
-                AgentRole.ANTIGRAVITY, 6, 1,
-                WorkflowStep.ANTIGRAVITY_FINAL_REVIEW,
-                final_approval(AgentRole.ANTIGRAVITY),
             ),
         ),
         changes=(
@@ -496,7 +447,6 @@ def test_scripted_session_runs_plan_slices_correction_and_repeated_final_review(
     ]
     assert [item.fingerprint for item in final_reviews] == [
         first_final_fp,
-        second_final_fp,
         second_final_fp,
     ]
     assert "slice one\nslice two\ncorrection" in final_reviews[-1].prompt
@@ -622,36 +572,6 @@ def test_contract_gates_are_negative_scenarios(
     assert error in failure.provider_text
 
 
-def test_antigravity_contract_gate_rejects_a_missing_verdict(tmp_path: Path) -> None:
-    scenario = happy_scenario()
-    invalid = "\n".join(
-        (
-            "REVIEWER: antigravity",
-            f"TEST_FILES_TOUCHED: {TEST_FILE}",
-            "REVIEW_EVIDENCE: dimensions | risk | break",
-            "PRE_MORTEM: drift",
-            "STATUS: DONE",
-        )
-    )
-    broken = replace(
-        scenario,
-        agent_events=(
-            scenario.agent_events[0],
-            scenario.agent_events[1],
-            replace(scenario.agent_events[2], output=invalid),
-        ),
-        repair_outputs=(invalid,),
-        commits=(),
-    )
-
-    report = run(broken, tmp_path)
-    assert report.result.exit_code == 3
-    assert report.result.state.current_step is WorkflowStep.ANTIGRAVITY_SLICE_REVIEW
-    failure = report.result.state.current_work_unit.invocation_failures[-1]
-    assert failure.failure_kind is AgentFailureKind.OUTPUT
-    assert "SLICE_APPROVAL" in failure.provider_text
-
-
 def test_scripted_contract_repair_can_supply_the_only_valid_verdict(
     tmp_path: Path,
 ) -> None:
@@ -662,7 +582,6 @@ def test_scripted_contract_repair_can_supply_the_only_valid_verdict(
         agent_events=(
             scenario.agent_events[0],
             replace(scenario.agent_events[1], output=invalid),
-            scenario.agent_events[2],
         ),
         repair_outputs=(approval(AgentRole.CLAUDE),),
     )
@@ -842,18 +761,6 @@ def quota_failure(role: AgentRole, text: str = "usage cap; retry in 5 seconds") 
             (event(AgentRole.CODEX, WorkflowStep.CODEX_IMPLEMENTATION, codex_ready()),),
             WorkflowStep.CLAUDE_SLICE_REVIEW,
         ),
-        (
-            AgentRole.ANTIGRAVITY,
-            (
-                event(AgentRole.CODEX, WorkflowStep.CODEX_IMPLEMENTATION, codex_ready()),
-                event(
-                    AgentRole.CLAUDE,
-                    WorkflowStep.CLAUDE_SLICE_REVIEW,
-                    approval(AgentRole.CLAUDE),
-                ),
-            ),
-            WorkflowStep.ANTIGRAVITY_SLICE_REVIEW,
-        ),
     ),
 )
 def test_quota_is_scriptable_per_role_without_real_sleep(
@@ -872,12 +779,6 @@ def test_quota_is_scriptable_per_role_without_real_sleep(
                 *good.agent_events,
             ),
             AgentRole.CLAUDE: (
-                *prefix_events,
-                event(role, step, failure=quota_failure(role)),
-                successful,
-                good.agent_events[2],
-            ),
-            AgentRole.ANTIGRAVITY: (
                 *prefix_events,
                 event(role, step, failure=quota_failure(role)),
                 successful,
@@ -1098,18 +999,6 @@ def test_quota_time_evidence_and_wait_policy_are_fully_scriptable(
             (event(AgentRole.CODEX, WorkflowStep.CODEX_IMPLEMENTATION, codex_ready()),),
             WorkflowStep.CLAUDE_SLICE_REVIEW,
         ),
-        (
-            AgentRole.ANTIGRAVITY,
-            (
-                event(AgentRole.CODEX, WorkflowStep.CODEX_IMPLEMENTATION, codex_ready()),
-                event(
-                    AgentRole.CLAUDE,
-                    WorkflowStep.CLAUDE_SLICE_REVIEW,
-                    approval(AgentRole.CLAUDE),
-                ),
-            ),
-            WorkflowStep.ANTIGRAVITY_SLICE_REVIEW,
-        ),
     ),
 )
 def test_process_failure_is_scriptable_for_every_role(
@@ -1174,11 +1063,6 @@ def test_correction_fingerprint_runs_exactly_one_new_validation(tmp_path: Path) 
                 WorkflowStep.CLAUDE_SLICE_REVIEW,
                 corrected,
                 round_number=2,
-            ),
-            event(
-                AgentRole.ANTIGRAVITY,
-                WorkflowStep.ANTIGRAVITY_SLICE_REVIEW,
-                approval(AgentRole.ANTIGRAVITY),
             ),
         ),
         changes=(change(), change(FP2, round_number=2)),

@@ -30,11 +30,11 @@ from schema_validation import (
 from native_provider_schema import defensive_provider_projection
 
 
-SCHEMA_VERSION = "native-agent-codex-result-v1"
+SCHEMA_VERSION = "native-agent-codex-result-v2"
 SCHEMA_PATH = (
     Path(__file__).resolve().parents[1]
     / "schemas"
-    / "native-agent-codex-result-v1.schema.json"
+    / "native-agent-codex-result-v2.schema.json"
 )
 REQUEST_ID_PREFIX = "native-codex-request-"
 
@@ -211,9 +211,9 @@ def native_codex_provider_response_schema(
 ) -> dict[str, Any]:
     """Project the immutable reader schema into one request-specific writer.
 
-    The bundled v1 schema accepts an omitted plan disposition list so already
-    persisted plan results remain readable.  Every newly invoked provider is
-    held to the stronger writer contract and must emit the field explicitly.
+    The bundled v2 reader and every request-specific writer both require the
+    plan disposition list. Historical v1 results are intentionally outside
+    this protocol and are not accepted through this parser.
 
     OpenAI Structured Outputs requires an object at the schema root.  The
     persisted contract is a discriminated top-level union, so the provider

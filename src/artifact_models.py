@@ -25,14 +25,14 @@ from schema_validation import (
     validate_schema_document,
 )
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
-_SCHEMA_PATH = Path(__file__).resolve().parents[1] / "schemas" / "orchestrator-artifact-v1.schema.json"
+_SCHEMA_PATH = Path(__file__).resolve().parents[1] / "schemas" / "orchestrator-artifact-v2.schema.json"
 
 
 class ArtifactValidationError(ValueError):
-    """Raised when an artifact violates the v1 domain contract."""
+    """Raised when an artifact violates the v2 domain contract."""
 
 
 class RecordType(StrEnum):
@@ -210,7 +210,7 @@ class AgentResultPayload:
                 "native agent result transport fields must be present together"
             )
         if self.transport_schema is not None:
-            if self.transport_schema != "native-codex-v1":
+            if self.transport_schema != "native-codex-v2":
                 raise ArtifactValidationError(
                     "agent result transport_schema is unsupported"
                 )
@@ -258,8 +258,8 @@ class ReviewPayload:
     record_type: ClassVar[RecordType] = RecordType.REVIEW
 
     def __post_init__(self) -> None:
-        if self.reviewer not in {Role.CLAUDE, Role.ANTIGRAVITY}:
-            raise ArtifactValidationError("reviewer must be claude or antigravity")
+        if self.reviewer is not Role.CLAUDE:
+            raise ArtifactValidationError("reviewer must be claude")
         _require_identifier(self.work_unit_id, "work_unit_id")
         if self.verdict not in {"approved", "denied", "stop"}:
             raise ArtifactValidationError("review verdict is invalid")
@@ -280,7 +280,7 @@ class ReviewPayload:
                 "native review transport fields must be present together"
             )
         if self.transport_schema is not None:
-            if self.transport_schema != "native-claude-review-v1":
+            if self.transport_schema != "native-claude-review-v2":
                 raise ArtifactValidationError("review transport_schema is unsupported")
             if self.reviewer is not Role.CLAUDE:
                 raise ArtifactValidationError(
@@ -313,8 +313,8 @@ class FindingTransitionPayload:
 
     def __post_init__(self) -> None:
         _require_identifier(self.finding_id, "finding_id")
-        if self.reporter not in {Role.CLAUDE, Role.ANTIGRAVITY}:
-            raise ArtifactValidationError("finding reporter must be claude or antigravity")
+        if self.reporter is not Role.CLAUDE:
+            raise ArtifactValidationError("finding reporter must be claude")
         if self.action not in {"opened", "responded", "status_changed", "reclassified"}:
             raise ArtifactValidationError("finding action is invalid")
         if self.finding_status not in {"open", "closed"}:
@@ -438,7 +438,7 @@ class ProviderInputMeasurementPayload:
     record_type: ClassVar[RecordType] = RecordType.PROVIDER_INPUT_MEASUREMENT
 
     def __post_init__(self) -> None:
-        if self.provider not in {Role.CODEX, Role.CLAUDE, Role.ANTIGRAVITY} or self.role is not self.provider:
+        if self.provider not in {Role.CODEX, Role.CLAUDE} or self.role is not self.provider:
             raise ArtifactValidationError("measurement provider and role must identify one agent")
         _require_identifier(self.operation, "measurement operation")
         _require_identifier(self.work_unit_id, "measurement work_unit_id")
@@ -539,7 +539,7 @@ class ProviderAttemptPayload:
         return self.phase
 
     def __post_init__(self) -> None:
-        if self.provider not in {Role.CODEX, Role.CLAUDE, Role.ANTIGRAVITY} or self.role is not self.provider:
+        if self.provider not in {Role.CODEX, Role.CLAUDE} or self.role is not self.provider:
             raise ArtifactValidationError("attempt provider and role must identify one agent")
         _require_identifier(self.operation, "attempt operation")
         _require_identifier(self.work_unit_id, "attempt work_unit_id")
@@ -572,16 +572,9 @@ class ProviderAttemptPayload:
         if self.phase == "failed":
             if self.failure_kind not in {
                 "quota", "network", "timeout", "permission", "auth", "binary",
-                "output", "process", "runtime", "antigravity_tool_schema",
+                "output", "process", "runtime",
             }:
                 raise ArtifactValidationError("failed provider attempt requires a classified failure_kind")
-            if (
-                self.failure_kind == "antigravity_tool_schema"
-                and self.provider is not Role.ANTIGRAVITY
-            ):
-                raise ArtifactValidationError(
-                    "Antigravity tool-schema failure requires the antigravity provider"
-                )
 
 
 @dataclass(frozen=True, slots=True)
@@ -603,7 +596,7 @@ class FinalReviewPreflightPayload:
     record_type: ClassVar[RecordType] = RecordType.FINAL_REVIEW_PREFLIGHT
 
     def __post_init__(self) -> None:
-        if self.provider not in {Role.CODEX, Role.CLAUDE, Role.ANTIGRAVITY} or self.role is not self.provider:
+        if self.provider not in {Role.CODEX, Role.CLAUDE} or self.role is not self.provider:
             raise ArtifactValidationError("preflight provider and role must identify one agent")
         _require_identifier(self.operation, "preflight operation")
         _require_identifier(self.work_unit_id, "preflight work_unit_id")
@@ -850,7 +843,7 @@ def load_schema() -> dict[str, Any]:
 
 
 def validate_artifact_document(document: Mapping[str, Any]) -> None:
-    """Validate a document against the bundled, closed v1 schema offline.
+    """Validate a document against the bundled, closed v2 schema offline.
 
     The repository intentionally has no runtime dependencies.  This validator
     implements the Draft 2020-12 keywords used by the bundled schema and the

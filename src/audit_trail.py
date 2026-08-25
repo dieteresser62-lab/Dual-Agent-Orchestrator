@@ -322,35 +322,22 @@ class AuditProjection:
                 raise AuditTrailError(
                     "commit authorization requires an approving Claude review"
                 )
-            antigravity = self.latest_review(AgentRole.ANTIGRAVITY)
-            if antigravity is None or antigravity.result.approval is not True:
-                raise AuditTrailError(
-                    "commit authorization requires an approving Antigravity review"
-                )
             if (
-                antigravity.result.validation is None
+                claude.result.validation is None
                 or not (
-                    antigravity.result.validation.passed
+                    claude.result.validation.passed
                     or (
-                        antigravity.result.validation.complete
+                        claude.result.validation.complete
                         and self.red_state_followup_slice is not None
                     )
                 )
             ):
                 raise AuditTrailError(
-                    "commit authorization requires Antigravity to be bound to a passing "
+                    "commit authorization requires Claude to be bound to a passing "
                     "attestation or named complete red-state exception"
                 )
             if (
-                not antigravity.result.validation.passed
-                and antigravity.result.red_state_followup_slice
-                != self.red_state_followup_slice
-            ):
-                raise AuditTrailError(
-                    "commit authorization red-state follow-up differs from Antigravity review"
-                )
-            if (
-                not antigravity.result.validation.passed
+                not claude.result.validation.passed
                 and claude.result.red_state_followup_slice
                 != self.red_state_followup_slice
             ):
@@ -1421,7 +1408,6 @@ def _render_decision_table(findings: tuple[FindingRecord, ...]) -> str:
 
 def _render_approval_status(projection: AuditProjection) -> str:
     claude = projection.latest_review(AgentRole.CLAUDE)
-    antigravity = projection.latest_review(AgentRole.ANTIGRAVITY)
     validations = [
         event for event in projection.events if isinstance(event, ValidationAuditEvent)
     ]
@@ -1431,7 +1417,6 @@ def _render_approval_status(projection: AuditProjection) -> str:
             f"- Implementierung bereit: `{_tri_state(projection.implementation_ready)}`",
             f"- Validierung: `{validation_status}`",
             f"- Claude-Freigabe: `{_review_state(claude)}`",  # allowlist:german
-            f"- Antigravity-Freigabe: `{_review_state(antigravity)}`",  # allowlist:german
             f"- Red-State-Folgeslice: `{_safe(projection.red_state_followup_slice or 'NONE')}`",
             f"- Commit autorisiert: `{_tri_state(projection.commit_authorized)}`",
         )

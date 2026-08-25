@@ -320,7 +320,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
         """Select the immutable persistence backend without changing workflow state."""
         if (
             state.protocol_binding is not None
-            and state.protocol_binding.mode is ProtocolMode.STRUCTURED_V1
+            and state.protocol_binding.mode is ProtocolMode.STRUCTURED_V2
         ):
             if (
                 self._artifact_bridge is None
@@ -1130,7 +1130,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
         if (
             state is None
             or bridge is None
-            or state.effective_protocol_mode is not ProtocolMode.STRUCTURED_V1
+            or state.effective_protocol_mode is not ProtocolMode.STRUCTURED_V2
             or state.current_work_unit.kind is not WorkUnitKind.CORRECTION
             or state.current_work_unit_id != work_unit_id
             or state.current_step is not step
@@ -1672,7 +1672,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
         if (
             state is None
             or bridge is None
-            or state.effective_protocol_mode is not ProtocolMode.STRUCTURED_V1
+            or state.effective_protocol_mode is not ProtocolMode.STRUCTURED_V2
             or state.current_work_unit_id != invocation.work_unit_id
             or state.current_step is not invocation.step
         ):
@@ -2080,7 +2080,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
             return
         if any(not spec.argv for spec in attestation.command_specs):
             raise WorkflowExecutionError(
-                "structured-v1 validation accepts only matrix-provided argv commands"
+                "structured-v2 validation accepts only matrix-provided argv commands"
             )
         self._artifact_bridge.append(
             attestation_payload(attestation),
@@ -2094,7 +2094,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
             return
         if any(not command.argv for command in request.commands):
             raise WorkflowExecutionError(
-                "structured-v1 validation accepts only matrix-provided argv commands"
+                "structured-v2 validation accepts only matrix-provided argv commands"
             )
         self._artifact_bridge.append(
             validation_request_payload(request),
@@ -2552,7 +2552,6 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 diff_fingerprint=request.fingerprint,
                 attestation=request.attestation,
                 claude_review=request.claude_review,
-                antigravity_review=request.antigravity_review,
                 findings=request.findings,
                 red_state_followup_slice=request.red_state_followup_slice,
                 approved_head_commit=(
@@ -2635,7 +2634,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
             self._persist_structured_baseline(persisted)
             self._project_audit(persisted, history)
         except Exception as exc:
-            if persisted.effective_protocol_mode is ProtocolMode.STRUCTURED_V1:
+            if persisted.effective_protocol_mode is ProtocolMode.STRUCTURED_V2:
                 raise WorkflowExecutionError(
                     f"structured audit dual-write mismatch: {exc}"
                 ) from exc
@@ -2661,7 +2660,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
         structured_replay = None
         if (
             state.protocol_binding is not None
-            and state.protocol_binding.mode is ProtocolMode.STRUCTURED_V1
+            and state.protocol_binding.mode is ProtocolMode.STRUCTURED_V2
         ):
             try:
                 structured_replay = resolve_resume_state(
@@ -3179,7 +3178,7 @@ def _context(
         validation_matrix = ValidationMatrix(
             default_command=(
                 ValidationCommand(argv=tuple(shlex.split(raw_command)))
-                if state.effective_protocol_mode is ProtocolMode.STRUCTURED_V1
+                if state.effective_protocol_mode is ProtocolMode.STRUCTURED_V2
                 else ValidationCommand(shell_command=raw_command)
             ),
             rules=validation_matrix.rules,
@@ -3657,10 +3656,10 @@ def _fresh_state(
         audit_report_path=audit_report_path,
         target_branch=task_contract.target_branch,
         protocol_binding=ProtocolBinding(
-            mode=ProtocolMode.STRUCTURED_V1,
-            schema_version="1",
+            mode=ProtocolMode.STRUCTURED_V2,
+            schema_version="2",
             claude_review_transport=(
-                "native-claude-review-v1"
+                NATIVE_CLAUDE_REVIEW_TRANSPORT
                 if native_claude_reviews
                 else None
             ),
@@ -3830,7 +3829,7 @@ def run_production_workflow(
         persisted_native = (
             state.protocol_binding is not None
             and state.protocol_binding.claude_review_transport
-            == "native-claude-review-v1"
+            == NATIVE_CLAUDE_REVIEW_TRANSPORT
         )
         if (
             requested_native is not None
@@ -4247,31 +4246,18 @@ def run_default_dry_run(task_file: Path, *, run_id: str | None = None):
                                "PLAN_READY: YES\nSTATUS: DONE"),
             ScriptedAgentEvent(AgentRole.CLAUDE, 1, 1, WorkflowStep.CLAUDE_PLAN_REVIEW,
                                review(AgentRole.CLAUDE, "PLAN_APPROVAL")),
-            ScriptedAgentEvent(
-                AgentRole.ANTIGRAVITY,
-                1,
-                1,
-                WorkflowStep.ANTIGRAVITY_PLAN_REVIEW,
-                review(AgentRole.ANTIGRAVITY, "PLAN_APPROVAL"),
-            ),
             ScriptedAgentEvent(AgentRole.CODEX, 2, 1, WorkflowStep.CODEX_IMPLEMENTATION,
                                "TEST_FILES_TOUCHED: NONE\nIMPLEMENTATION_READY: 01 | YES\nSTATUS: DONE"),
             ScriptedAgentEvent(AgentRole.CLAUDE, 2, 1, WorkflowStep.CLAUDE_SLICE_REVIEW,
                                slice_approval(AgentRole.CLAUDE, "01")),
-            ScriptedAgentEvent(AgentRole.ANTIGRAVITY, 2, 1, WorkflowStep.ANTIGRAVITY_SLICE_REVIEW,
-                               slice_approval(AgentRole.ANTIGRAVITY, "01")),
             ScriptedAgentEvent(AgentRole.CODEX, 3, 1, WorkflowStep.CODEX_IMPLEMENTATION,
                                "TEST_FILES_TOUCHED: NONE\nIMPLEMENTATION_READY: 02 | YES\nSTATUS: DONE"),
             ScriptedAgentEvent(AgentRole.CLAUDE, 3, 1, WorkflowStep.CLAUDE_SLICE_REVIEW,
                                slice_approval(AgentRole.CLAUDE, "02")),
-            ScriptedAgentEvent(AgentRole.ANTIGRAVITY, 3, 1, WorkflowStep.ANTIGRAVITY_SLICE_REVIEW,
-                               slice_approval(AgentRole.ANTIGRAVITY, "02")),
             ScriptedAgentEvent(AgentRole.CODEX, 4, 1, WorkflowStep.CODEX_FINAL_REVIEW,
                                "FINAL_REPORT_READY: YES\nSTATUS: DONE"),
             ScriptedAgentEvent(AgentRole.CLAUDE, 4, 1, WorkflowStep.CLAUDE_FINAL_REVIEW,
                                review(AgentRole.CLAUDE, "FINAL_APPROVAL")),
-            ScriptedAgentEvent(AgentRole.ANTIGRAVITY, 4, 1, WorkflowStep.ANTIGRAVITY_FINAL_REVIEW,
-                               review(AgentRole.ANTIGRAVITY, "FINAL_APPROVAL")),
         ),
         changes=(
             ScriptedChange(1, 1, base, plan_fp, ("docs/internal/plan.md",), "plan diff"),
@@ -4344,7 +4330,7 @@ def run_pipeline(
                 gate_reason="record_mismatch",
                 failure_detail=f"ArtifactResumeError: {exc}",
                 resume_available=True,
-                protocol_mode="structured-v1",
+                protocol_mode="structured-v2",
             )
         return 1
     except StateSchemaError as exc:

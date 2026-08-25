@@ -115,7 +115,7 @@ def _state(repository: Path, run_id: str = "structured-regression"):
         task_digest="a" * 64,
         task_scope_patterns=("src/runtime.py",),
         target_branch="feature/structured-regression",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V1, "1"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
     )
 
 
@@ -424,21 +424,21 @@ def test_hash_bound_denied_review_replays_after_checkpoint_failure_without_provi
             start_commit=head,
             scope_paths=("src/runtime.py",),
             start_fingerprint="c" * 64,
-            finding_ids=("A-01",),
+            finding_ids=("C-07",),
         )
         .with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW)
     )
     fingerprint = "d" * 64
     prior_finding = FindingRecord(
-        finding_id="A-01",
+        finding_id="C-07",
         finding_class=FindingClass.OBSERVATION,
         status=FindingStatus.OPEN,
-        summary="pre-existing Antigravity observation",
+        summary="pre-existing Claude observation",
         acceptance_test="Carry the observation through the Claude review replay.",
         origin=FindingOrigin(
             str(state.current_slice_id),
             1,
-            AgentRole.ANTIGRAVITY,
+            AgentRole.CLAUDE,
         ),
     )
     attestation = ValidationAttestation(
@@ -477,14 +477,13 @@ def test_hash_bound_denied_review_replays_after_checkpoint_failure_without_provi
             findings=(),
             anchors=(),
         )
-        for reviewer in (AgentRole.CLAUDE, AgentRole.ANTIGRAVITY)
+        for reviewer in (AgentRole.CLAUDE,)
     )
     final_history = WorkflowHistory(
         state.current_work_unit_id - 1,
         events=(
             ValidationAuditEvent(1, 1, attestation),
             ReviewAuditEvent(2, 1, 1, approvals[0]),
-            ReviewAuditEvent(3, 1, 1, approvals[1]),
         ),
         attestations=(attestation,),
     )
@@ -528,8 +527,8 @@ def test_hash_bound_denied_review_replays_after_checkpoint_failure_without_provi
     )
     bridge.append(
         finding_payload(prior_finding),
-        logical_id="finding-A-01",
-        idempotency_key="finding:A-01:opened:1:antigravity",
+        logical_id="finding-C-07",
+        idempotency_key="finding:C-07:opened:1:claude",
         fingerprint_sha256=fingerprint,
     )
     approval_records = tuple(
@@ -567,6 +566,7 @@ def test_hash_bound_denied_review_replays_after_checkpoint_failure_without_provi
             "REVIEWER: claude",
             "NEW_FINDING: C-01 | BLOCKER | checkpoint replay gap | "
             "Add a deterministic replay regression test.",
+            "FINDING_STATUS: C-07 | OPEN | Preserve the prior finding for correction.",
             f"SLICE_APPROVAL: {state.current_slice_id:02d} | NO",
             "STATUS: DONE",
         )
@@ -577,7 +577,7 @@ def test_hash_bound_denied_review_replays_after_checkpoint_failure_without_provi
             reviewer=Role.CLAUDE,
             work_unit_id=str(state.current_work_unit_id),
             verdict="denied",
-            finding_ids=("A-01", "C-01"),
+            finding_ids=("C-01", "C-07"),
             evidence=None,
         ),
         logical_id=logical_id,
@@ -696,7 +696,7 @@ def _pending_reviewer_recovery_case(
             start_commit=head,
             scope_paths=("src/runtime.py",),
             start_fingerprint="c" * 64,
-            finding_ids=("A-01",),
+            finding_ids=("C-07",),
         )
         .with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW)
     )
@@ -719,12 +719,12 @@ def _pending_reviewer_recovery_case(
         ),
     )
     prior_finding = FindingRecord(
-        finding_id="A-01",
+        finding_id="C-07",
         finding_class=FindingClass.OBSERVATION,
         status=FindingStatus.OPEN,
         summary="pre-existing observation",
         acceptance_test="Carry the observation through review.",
-        origin=FindingOrigin("1", 1, AgentRole.ANTIGRAVITY),
+        origin=FindingOrigin("1", 1, AgentRole.CLAUDE),
     )
     events: tuple[object, ...] = (
         ValidationAuditEvent(1, state.current_slice_id, attestation),
@@ -776,6 +776,7 @@ def _pending_reviewer_recovery_case(
                 "REVIEWER: claude",
                 "REVIEW_EVIDENCE: replay identity and binding | stale durable "
                 "verdict | the replay record differs from its provider log",
+                "FINDING_STATUS: C-07 | CLOSED | The correction resolves the prior finding.",
                 "PRE_MORTEM: A future adapter change could weaken replay identity.",
                 f"SLICE_APPROVAL: {state.current_slice_id:02d} | YES",
                 "STATUS: DONE",
@@ -786,6 +787,7 @@ def _pending_reviewer_recovery_case(
             (
                 "REVIEWER: claude",
                 "NEW_FINDING: C-01 | BLOCKER | replay near miss | Keep replay fail closed.",
+                "FINDING_STATUS: C-07 | OPEN | Preserve the prior finding for correction.",
                 f"SLICE_APPROVAL: {state.current_slice_id:02d} | NO",
                 "STATUS: DONE",
             )
@@ -803,8 +805,8 @@ def _pending_reviewer_recovery_case(
     )
     bridge.append(
         finding_payload(prior_finding),
-        logical_id="finding-A-01",
-        idempotency_key="finding:A-01:opened:1:antigravity",
+        logical_id="finding-C-07",
+        idempotency_key="finding:C-07:opened:1:claude",
         fingerprint_sha256=fingerprint,
     )
     bridge.append(
@@ -813,9 +815,9 @@ def _pending_reviewer_recovery_case(
             work_unit_id=str(state.current_work_unit_id),
             verdict=verdict,
             finding_ids=(
-                ("A-01",)
+                ("C-07",)
                 if output_verdict == "approved" and verdict == "approved"
-                else ("A-01", "C-01")
+                else ("C-01", "C-07")
             ),
             evidence=(
                 "replay identity and binding | stale durable verdict | "
@@ -848,7 +850,6 @@ def _pending_reviewer_recovery_case(
 @pytest.mark.parametrize(
     ("failure_mode", "kwargs"),
     (
-        ("reviewer-identity", {"reviewer": Role.ANTIGRAVITY}),
         ("round-number", {"logical_round": 2}),
         ("verdict", {"verdict": "approved"}),
         ("idempotency-prefix", {"malformed_key": True}),
@@ -893,7 +894,7 @@ def test_pending_reviewer_recovery_rejects_non_unique_hash_bound_logs(
         )
 
 
-def test_hash_bound_approved_review_replays_to_antigravity_without_claude_provider(
+def test_hash_bound_approved_review_replays_to_commit_without_claude_provider(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -932,34 +933,9 @@ def test_hash_bound_approved_review_replays_to_antigravity_without_claude_provid
 
     assert provider_roles == []
     assert len(checkpoints) == 1
-    assert recovered_state.current_step is WorkflowStep.ANTIGRAVITY_SLICE_REVIEW
+    assert recovered_state.current_step is WorkflowStep.SLICE_COMMIT
     assert recovered_history.latest_claude_review is not None
     assert recovered_history.latest_claude_review.approval is True
-
-    changed_fingerprint = "f" * 64
-    monkeypatch.setattr(
-        driver,
-        "collect_changes",
-        lambda _start_commit: WorkflowChanges(
-            start_commit=recovered_state.current_slice.start_commit,
-            fingerprint=changed_fingerprint,
-            paths=recovered_state.current_slice.scope_paths,
-            full_diff="diff --git a/src/runtime.py b/src/runtime.py\n+changed",
-        ),
-    )
-    rewound_state, _ = WorkflowEngine(driver)._run_review(
-        recovered_state,
-        WorkflowContext(
-            assignment="Review the changed fingerprint.",
-            distilled_plan="Require a current Claude approval before Antigravity.",
-            slice_summary="Correction review",
-        ),
-        recovered_history,
-        AgentRole.ANTIGRAVITY,
-    )
-    assert len(checkpoints) == 2
-    assert rewound_state.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
-
 
 def test_budget_denial_persists_gate_checkpoint_and_resumes_idempotently(
     tmp_path: Path,
@@ -1487,7 +1463,7 @@ def test_pre_schema_failure_artifact_chain_replays_without_synthesized_facts(
     )
     measurement = bridge.append(
         ProviderInputMeasurementPayload(
-            Role.ANTIGRAVITY, Role.ANTIGRAVITY, "antigravity_slice_review", "1",
+            Role.CLAUDE, Role.CLAUDE, "claude_slice_review", "1",
             "a" * 64, "b" * 64, "c" * 64, "d" * 64,
             (ProviderInputComponentPayload("prompt_file", 3, 3),),
             3, 3, 10, 10, None, None, None, 10, 10, True, (), 0, 0,

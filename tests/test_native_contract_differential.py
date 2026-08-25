@@ -111,7 +111,7 @@ def _codex_bound(kind: NativeCodexRequestKind) -> BoundNativeCodexContext:
 def _codex_response(bound: BoundNativeCodexContext) -> dict[str, object]:
     kind = bound.context.request_kind
     common: dict[str, object] = {
-        "schema_version": "native-agent-codex-result-v1",
+        "schema_version": "native-agent-codex-result-v2",
         "request_id": bound.request_id,
         "ready": True,
         "finding_dispositions": (
@@ -203,7 +203,7 @@ def _review_bound(form: str) -> BoundNativeReviewContext:
 
 def _review_response(bound: BoundNativeReviewContext) -> dict[str, object]:
     return {
-        "schema_version": "native-agent-review-result-v1",
+        "schema_version": "native-agent-review-result-v2",
         "result_type": "review_result",
         "request_id": bound.request_id,
         "reviewer": "claude",

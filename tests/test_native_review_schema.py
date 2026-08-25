@@ -19,7 +19,7 @@ REQUEST_ID = "native-review-request-" + "a" * 64
 
 def _review() -> dict[str, object]:
     return {
-        "schema_version": "native-agent-review-result-v1",
+        "schema_version": "native-agent-review-result-v2",
         "result_type": "review_result",
         "request_id": REQUEST_ID,
         "reviewer": "claude",
@@ -44,17 +44,17 @@ def _assert_schema_error(document: dict[str, object]) -> None:
 
 
 def test_bundled_native_schema_self_checks_and_accepts_review() -> None:
-    assert load_native_review_schema()["$id"] == "native-agent-review-result-v1"
+    assert load_native_review_schema()["$id"] == "native-agent-review-result-v2"
     validate_native_review_document(_review())
 
 
 def test_schema_accepts_minimal_closed_stop_request() -> None:
     validate_native_review_document(
         {
-            "schema_version": "native-agent-review-result-v1",
+            "schema_version": "native-agent-review-result-v2",
             "result_type": "stop_request",
             "request_id": REQUEST_ID,
-            "reviewer": "antigravity",
+            "reviewer": "claude",
             "rule_id": "UNEXPECTED-PATH",
             "rationale": "A path is outside the bound scope.",
         }
@@ -125,7 +125,7 @@ def test_schema_rejects_open_shell_string_and_empty_argv() -> None:
 
 def test_schema_rejects_stop_request_with_review_fields() -> None:
     stop = {
-        "schema_version": "native-agent-review-result-v1",
+        "schema_version": "native-agent-review-result-v2",
         "result_type": "stop_request",
         "request_id": REQUEST_ID,
         "reviewer": "claude",

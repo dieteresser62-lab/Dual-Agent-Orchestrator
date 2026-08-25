@@ -12,7 +12,7 @@ from cli import parse_args
 from inbox_watcher import WatchTaskDisposition, WatchTaskResult
 from orchestrator import run_pipeline
 from workflow import WorkflowExecutionError, WorkflowHistory, WorkflowRunResult
-from workflow_state import GateReason, init_workflow_state
+from workflow_state import GateReason, ProtocolBinding, ProtocolMode, init_workflow_state
 
 
 @pytest.mark.parametrize(
@@ -91,7 +91,7 @@ def test_structured_resume_mismatch_is_resumable_and_not_a_technical_retry(
     assert isinstance(result, WatchTaskResult)
     assert result.disposition is WatchTaskDisposition.RESUMABLE_HALT
     assert result.exit_code == 4
-    assert result.protocol_mode == "structured-v1"
+    assert result.protocol_mode == "structured-v2"
     assert result.gate_reason == "record_mismatch"
 
 
@@ -110,6 +110,7 @@ def test_pipeline_exposes_bootstrap_denial_as_resumable_exit_four(
         branch="feature/bootstrap",
         branch_base="a" * 40,
         slice_count=1,
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
     ).await_bootstrap_resume(
         detail="FINAL-REVIEW-PREFLIGHT | restore the record mirror",
         fingerprint="b" * 64,

@@ -355,17 +355,17 @@ def test_protocol_binding_roundtrips_and_missing_binding_is_legacy() -> None:
 
     structured = replace(
         historical,
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V1, "1"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
     )
     assert WorkflowState.from_dict(structured.to_dict()) == structured
-    assert structured.effective_protocol_mode is ProtocolMode.STRUCTURED_V1
+    assert structured.effective_protocol_mode is ProtocolMode.STRUCTURED_V2
 
     native = replace(
         historical,
         protocol_binding=ProtocolBinding(
-            ProtocolMode.STRUCTURED_V1,
-            "1",
-            "native-claude-review-v1",
+            ProtocolMode.STRUCTURED_V2,
+            "2",
+            "native-claude-review-v2",
         ),
     )
     assert WorkflowState.from_dict(native.to_dict()) == native
@@ -374,30 +374,30 @@ def test_protocol_binding_roundtrips_and_missing_binding_is_legacy() -> None:
 def test_protocol_binding_rejects_native_transport_outside_structured_v1() -> None:
     with pytest.raises(
         WorkflowStateValidationError,
-        match="requires structured-v1",
+        match="requires structured-v2",
     ):
         ProtocolBinding(
             ProtocolMode.LEGACY_STATE_V3,
             "3",
-            "native-claude-review-v1",
+            "native-claude-review-v2",
         )
 
     with pytest.raises(
         WorkflowStateValidationError,
-        match="requires structured-v1",
+        match="requires structured-v2",
     ):
         ProtocolBinding(
             ProtocolMode.LEGACY_STATE_V3,
             "3",
-            codex_result_transport="native-codex-v1",
+            codex_result_transport="native-codex-v2",
         )
 
 
 def test_protocol_binding_roundtrips_native_codex_result_transport() -> None:
     binding = ProtocolBinding(
-        ProtocolMode.STRUCTURED_V1,
-        "1",
-        codex_result_transport="native-codex-v1",
+        ProtocolMode.STRUCTURED_V2,
+        "2",
+        codex_result_transport="native-codex-v2",
     )
 
     assert ProtocolBinding.from_dict(binding.to_dict()) == binding
@@ -405,7 +405,7 @@ def test_protocol_binding_roundtrips_native_codex_result_transport() -> None:
 
 @pytest.mark.parametrize(
     ("mode", "schema_version"),
-    [(ProtocolMode.STRUCTURED_V1, "3"), (ProtocolMode.LEGACY_STATE_V3, "1")],
+    [(ProtocolMode.STRUCTURED_V2, "3"), (ProtocolMode.LEGACY_STATE_V3, "1")],
 )
 def test_protocol_binding_rejects_mode_schema_mismatch(
     mode: ProtocolMode, schema_version: str

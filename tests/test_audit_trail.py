@@ -348,12 +348,6 @@ def test_projection_renders_bound_attestation_and_reviews_atomically_and_idempot
         events=(
             ValidationAuditEvent(1, 8, attestation),
             ReviewAuditEvent(2, 8, 1, _review(validation=attestation)),
-            ReviewAuditEvent(
-                3,
-                8,
-                1,
-                _review(reviewer=AgentRole.ANTIGRAVITY, validation=attestation),
-            ),
         ),
         test_approval=AuthorizedTestChanges(
             approved=True,
@@ -376,7 +370,7 @@ def test_projection_renders_bound_attestation_and_reviews_atomically_and_idempot
     assert f"`{'b' * 64}`" in rendered
     assert "| python3 -m pytest tests/ -v | PASS | 0 |" in rendered
     assert "- Claude-Freigabe: `YES`" in rendered  # allowlist:german
-    assert "- Antigravity-Freigabe: `YES`" in rendered  # allowlist:german
+    assert "Antigravity-Freigabe" not in rendered  # allowlist:german
     assert "- Commit autorisiert: `YES`" in rendered
     assert "Unverwalteter Inhalt für Ziel des Slice." in rendered
     assert "alter Inhalt" not in rendered
@@ -406,7 +400,7 @@ def test_structured_projection_uses_accepted_replay_and_is_a_byte_equal_noop(
             "2",
             "ready",
             (),
-            transport_schema="native-codex-v1",
+            transport_schema="native-codex-v2",
             request_id="native-codex-request-" + "c" * 64,
             response_sha256="d" * 64,
         ),
@@ -449,7 +443,7 @@ def test_structured_projection_uses_accepted_replay_and_is_a_byte_equal_noop(
     assert repeated == rendered
     assert document.slice_path.stat().st_mtime_ns == stat_after_first
     assert replay.semantic_digest in rendered
-    assert "`native-codex-v1`" in rendered
+    assert "`native-codex-v2`" in rendered
     assert "`native-codex-request-" in rendered
     assert "### Native convergence summary" in rendered
     assert "| `C-01` | `2` | `1` |" in rendered
@@ -786,13 +780,17 @@ def test_review_event_accepts_explicit_final_finding_origin_for_correction() -> 
         )
 
 
-def test_projection_rejects_commit_authorization_without_antigravity_approval() -> None:
-    with pytest.raises(AuditTrailError, match="Antigravity"):
-        AuditProjection(
-            slice_id=8,
-            events=(ReviewAuditEvent(1, 8, 1, _review()),),
-            commit_authorized=True,
-        )
+def test_projection_accepts_commit_authorization_with_claude_approval() -> None:
+    attestation = _attestation()
+    projection = AuditProjection(
+        slice_id=8,
+        events=(
+            ValidationAuditEvent(1, 8, attestation),
+            ReviewAuditEvent(2, 8, 1, _review(validation=attestation)),
+        ),
+        commit_authorized=True,
+    )
+    assert projection.commit_authorized is True
 
 
 def test_slice_projection_rejects_approving_review_without_validation(

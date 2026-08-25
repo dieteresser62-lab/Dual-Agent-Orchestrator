@@ -135,7 +135,7 @@ def test_run_native_codex_agent_parses_bound_result_without_text_contract(
 ) -> None:
     bundle = _runtime_native_codex_bundle()
     response = {
-        "schema_version": "native-agent-codex-result-v1",
+        "schema_version": "native-agent-codex-result-v2",
         "result_type": "plan_result",
         "request_id": bundle.bound_context.request_id,
         "ready": True,
@@ -196,7 +196,7 @@ def test_native_codex_exposes_schema_valid_bytes_before_domain_rejection(
 ) -> None:
     bundle = _runtime_native_codex_bundle()
     response = {
-        "schema_version": "native-agent-codex-result-v1",
+        "schema_version": "native-agent-codex-result-v2",
         "result_type": "plan_result",
         "request_id": bundle.bound_context.request_id,
         "ready": True,
@@ -251,7 +251,7 @@ def test_native_codex_writer_invalid_bytes_never_reach_validated_callback(
 ) -> None:
     bundle = _runtime_native_codex_bundle()
     response = {
-        "schema_version": "native-agent-codex-result-v1",
+        "schema_version": "native-agent-codex-result-v2",
         "result_type": "plan_result",
         "request_id": bundle.bound_context.request_id,
         "ready": True,
@@ -315,7 +315,7 @@ def test_native_codex_runtime_forwards_canary_execution_root(
         evidence_asset_root=evidence_root,
     )
     response = {
-        "schema_version": "native-agent-codex-result-v1",
+        "schema_version": "native-agent-codex-result-v2",
         "result_type": "plan_result",
         "request_id": bundle.bound_context.request_id,
         "ready": True,
@@ -373,7 +373,7 @@ def test_native_codex_checked_writes_raw_before_accepted_callback(
     result = parse_bound_native_codex_contract_result_for_test(bundle)
     canonical = json.dumps(
         {
-            "schema_version": "native-agent-codex-result-v1",
+            "schema_version": "native-agent-codex-result-v2",
             "result_type": "plan_result",
             "request_id": bundle.bound_context.request_id,
             "ready": True,
@@ -384,6 +384,7 @@ def test_native_codex_checked_writes_raw_before_accepted_callback(
                     "scope_paths": ["src/native_codex_contract.py"],
                 }
             ],
+            "finding_dispositions": [],
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -476,7 +477,7 @@ def test_native_codex_checked_write_failure_prevents_callback(
 
 def parse_bound_native_codex_contract_result_for_test(bundle):  # type: ignore[no-untyped-def]
     document = {
-        "schema_version": "native-agent-codex-result-v1",
+        "schema_version": "native-agent-codex-result-v2",
         "result_type": "plan_result",
         "request_id": bundle.bound_context.request_id,
         "ready": True,
@@ -487,6 +488,7 @@ def parse_bound_native_codex_contract_result_for_test(bundle):  # type: ignore[n
                 "scope_paths": ["src/native_codex_contract.py"],
             }
         ],
+        "finding_dispositions": [],
     }
     from native_codex_contract import parse_bound_native_codex_contract_result
 
@@ -540,7 +542,7 @@ def test_native_review_runtime_returns_bound_contract_without_marker_validation(
         )
     )
     response = {
-        "schema_version": "native-agent-review-result-v1",
+        "schema_version": "native-agent-review-result-v2",
         "result_type": "review_result",
         "request_id": bundle.bound_context.request_id,
         "reviewer": "claude",
@@ -644,7 +646,7 @@ def test_native_review_runtime_returns_bound_contract_without_marker_validation(
 def test_native_review_checked_preserves_schema_valid_domain_rejection(
     monkeypatch, tmp_path: Path
 ) -> None:
-    canonical = '{"schema_version":"native-agent-review-result-v1"}'
+    canonical = '{"schema_version":"native-agent-review-result-v2"}'
 
     def reject_after_persist(*args, **kwargs):  # type: ignore[no-untyped-def]
         kwargs["validated_response_callback"](canonical)
@@ -2078,7 +2080,7 @@ def test_unknown_agent_version_is_a_non_retryable_gate(monkeypatch, tmp_path: Pa
             max_retries=3,
             required_flags=[],
             output_validator=None,
-            config=OrchestratorConfig(dry_run=False),
+            config=OrchestratorConfig(dry_run=False, repo_root=tmp_path),
             agents={"claude": adapter},
             log_dir=tmp_path,
             write_file=lambda path, content: path.write_text(content, encoding="utf-8"),

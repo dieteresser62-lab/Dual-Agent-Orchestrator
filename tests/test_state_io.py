@@ -7,6 +7,8 @@ from dataclasses import replace
 
 import pytest
 
+from artifact_migration import ArtifactResumeError
+
 from state_io import (
     ActiveV2StateError,
     CompletedV2State,
@@ -416,7 +418,7 @@ def test_workflow_checkpoint_roundtrip_and_missing(tmp_path: Path) -> None:
 
 
 def test_bound_state_and_checkpoint_require_exact_resume_protocol(tmp_path: Path) -> None:
-    binding = ProtocolBinding(ProtocolMode.STRUCTURED_V1, "1")
+    binding = ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2")
     state = replace(make_v3_state(tmp_path), protocol_binding=binding)
     state_file = tmp_path / "state.json"
     checkpoint_dir = tmp_path / "checkpoints"
@@ -447,18 +449,17 @@ def test_bound_state_and_checkpoint_require_exact_resume_protocol(tmp_path: Path
         )
 
 
-def test_resumable_loader_keeps_unbound_v3_state_on_legacy_path(tmp_path: Path) -> None:
+def test_resumable_loader_rejects_unbound_v3_state_as_unsupported(tmp_path: Path) -> None:
     state = make_v3_state(tmp_path)
     state_file = tmp_path / "state.json"
     save_workflow_state(state_file, state, allowed_roots=(tmp_path,))
 
-    loaded = load_resumable_workflow_state(
-        state_file,
-        repository_root=tmp_path,
-        allowed_roots=(tmp_path,),
-    )
-
-    assert loaded == state
+    with pytest.raises(ArtifactResumeError, match="UNSUPPORTED-PROTOCOL"):
+        load_resumable_workflow_state(
+            state_file,
+            repository_root=tmp_path,
+            allowed_roots=(tmp_path,),
+        )
     assert not (tmp_path / ".orchestrator" / "artifacts").exists()
 
 
@@ -471,14 +472,14 @@ def test_existing_state_protocol_binding_cannot_be_added_or_switched(tmp_path: P
             state_file,
             replace(
                 legacy,
-                protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V1, "1"),
+                protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
             ),
             allowed_roots=(tmp_path,),
         )
 
     state_file.unlink()
     structured = replace(
-        legacy, protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V1, "1")
+        legacy, protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2")
     )
     save_workflow_state(state_file, structured, allowed_roots=(tmp_path,))
     with pytest.raises(StateSchemaError, match="add or change"):
@@ -500,7 +501,7 @@ def test_existing_workflow_run_requires_exact_replacement_authorization(
     replacement = replace(
         existing,
         run_id="replacement-run",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V1, "1"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
     )
     save_workflow_state(state_file, existing, allowed_roots=(tmp_path,))
 
@@ -540,7 +541,7 @@ def test_replacement_authorization_never_rebinds_protocol_within_same_run(
             state_file,
             replace(
                 existing,
-                protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V1, "1"),
+                protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
             ),
             allowed_roots=(tmp_path,),
             replace_existing_run_id=existing.run_id,

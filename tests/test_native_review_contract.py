@@ -93,7 +93,7 @@ def _context(
 
 def _review(context: NativeReviewContext, *, approved: bool = True) -> dict[str, object]:
     return {
-        "schema_version": "native-agent-review-result-v1",
+        "schema_version": "native-agent-review-result-v2",
         "result_type": "review_result",
         "request_id": context.request_id,
         "reviewer": context.reviewer.value,
@@ -139,9 +139,8 @@ def _assert_error(
     assert raised.value.code is code
 
 
-@pytest.mark.parametrize("reviewer", (AgentRole.CLAUDE, AgentRole.ANTIGRAVITY))
-def test_minimal_positive_review_converts_deterministically(reviewer: AgentRole) -> None:
-    context = _context(reviewer=reviewer)
+def test_minimal_positive_review_converts_deterministically() -> None:
+    context = _context()
     document = _review(context)
     first = parse_native_contract_result(document, context)
     second = parse_native_contract_result(deepcopy(document), context)
@@ -194,7 +193,7 @@ def test_request_and_reviewer_are_bound_to_context() -> None:
 
     wrong_reviewer = _review(context)
     wrong_reviewer["reviewer"] = "antigravity"
-    _assert_error(wrong_reviewer, context, NativeReviewErrorCode.REVIEWER_MISMATCH)
+    _assert_error(wrong_reviewer, context, NativeReviewErrorCode.SCHEMA_INVALID)
 
     changed_round = replace(context, round_number=3)
     assert changed_round.request_id != context.request_id
@@ -257,24 +256,18 @@ def test_observation_cannot_carry_validation_command() -> None:
     _assert_error(document, context, NativeReviewErrorCode.ACCEPTANCE_INVALID)
 
 
-@pytest.mark.parametrize(
-    ("reviewer", "finding_id"),
-    ((AgentRole.CLAUDE, "A-01"), (AgentRole.ANTIGRAVITY, "C-01")),
-)
-def test_new_finding_id_must_belong_to_reviewer(
-    reviewer: AgentRole, finding_id: str
-) -> None:
-    context = _context(reviewer=reviewer)
+def test_new_finding_id_must_belong_to_claude() -> None:
+    context = _context()
     document = _review(context, approved=False)
     document["new_findings"] = [
         {
-            "finding_id": finding_id,
+            "finding_id": "A-01",
             "finding_class": "BLOCKER",
             "summary": "Wrong owner",
             "acceptance_test": {"kind": "prose", "text": "Use the correct prefix"},
         }
     ]
-    _assert_error(document, context, NativeReviewErrorCode.FINDING_ID_INVALID)
+    _assert_error(document, context, NativeReviewErrorCode.SCHEMA_INVALID)
 
 
 def test_unknown_foreign_and_conflicting_finding_events_fail_closed() -> None:
@@ -284,7 +277,7 @@ def test_unknown_foreign_and_conflicting_finding_events_fail_closed() -> None:
     document["status_changes"] = [
         {"finding_id": "A-01", "status": "CLOSED", "rationale": "Looks fixed"}
     ]
-    _assert_error(document, context, NativeReviewErrorCode.FINDING_REFERENCE_UNKNOWN)
+    _assert_error(document, context, NativeReviewErrorCode.SCHEMA_INVALID)
 
     own = _finding("C-01", AgentRole.CLAUDE)
     context = _context(previous=(own,))
@@ -606,7 +599,7 @@ def test_direct_non_string_pre_mortem_is_a_typed_native_error() -> None:
 def test_whitespace_stop_fields_are_a_typed_native_error() -> None:
     context = _context()
     document = {
-        "schema_version": "native-agent-review-result-v1",
+        "schema_version": "native-agent-review-result-v2",
         "result_type": "stop_request",
         "request_id": context.request_id,
         "reviewer": "claude",
@@ -680,23 +673,6 @@ def test_final_review_rejects_new_observation_and_open_own_observation() -> None
     _assert_error(still_open, prior_context, NativeReviewErrorCode.APPROVAL_INVALID)
 
 
-def test_antigravity_final_approval_requires_global_finding_convergence() -> None:
-    open_claude = _finding("C-01", AgentRole.CLAUDE)
-    context = _context(
-        reviewer=AgentRole.ANTIGRAVITY,
-        approval=ApprovalMarker.FINAL,
-        previous=(open_claude,),
-    )
-    _assert_error(_review(context), context, NativeReviewErrorCode.APPROVAL_INVALID)
-
-    closed_context = _context(
-        reviewer=AgentRole.ANTIGRAVITY,
-        approval=ApprovalMarker.FINAL,
-        previous=(_finding("C-01", AgentRole.CLAUDE, status=FindingStatus.CLOSED),),
-    )
-    assert parse_native_contract_result(_review(closed_context), closed_context).approval is True
-
-
 def test_native_anchors_preserve_context_origin_and_trigger_drift_guard() -> None:
     context = _context()
     document = _review(context)
@@ -742,7 +718,7 @@ def test_native_anchor_requires_bound_origin() -> None:
 def test_stop_request_has_explicit_safe_contract_result_defaults() -> None:
     context = _context(test_files=("tests/test_native_review_contract.py",), tests_approved=True)
     document = {
-        "schema_version": "native-agent-review-result-v1",
+        "schema_version": "native-agent-review-result-v2",
         "result_type": "stop_request",
         "request_id": context.request_id,
         "reviewer": "claude",

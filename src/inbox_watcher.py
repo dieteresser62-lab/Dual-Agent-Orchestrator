@@ -55,7 +55,7 @@ class WatchTaskResult:
             raise ValueError("watch task result requires a 1-based work unit id")
         if not isinstance(self.resume_available, bool):
             raise ValueError("watch task resume availability must be boolean")
-        if self.protocol_mode not in {None, "legacy-state-v3", "structured-v1"}:
+        if self.protocol_mode not in {None, "structured-v2"}:
             raise ValueError("watch task protocol mode is invalid")
         if self.disposition is WatchTaskDisposition.COMPLETED and self.exit_code != 0:
             raise ValueError("completed watch task result requires exit code zero")
@@ -138,7 +138,7 @@ class WatchTaskIdentity:
             character not in "0123456789abcdef" for character in self.task_digest
         ):
             raise ValueError("watch task identity requires a SHA-256 task digest")
-        if self.protocol_mode not in {None, "legacy-state-v3", "structured-v1"}:
+        if self.protocol_mode not in {None, "structured-v2"}:
             raise ValueError("watch task identity protocol mode is invalid")
         if self.sidecar_version not in {1, 2}:
             raise ValueError("watch task identity sidecar version is invalid")

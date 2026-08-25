@@ -56,7 +56,7 @@ def _state(repository: Path, *, structured: bool = True):
         task_scope_patterns=("src/resume.py",),
         target_branch="feature/resume",
         protocol_binding=(
-            ProtocolBinding(ProtocolMode.STRUCTURED_V1, "1") if structured else None
+            ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2") if structured else None
         ),
     ).complete_current_work_unit().start_work_unit(
         slice_id=1,
@@ -128,7 +128,7 @@ def _authorization_records(
     return attestation, review
 
 
-def test_legacy_state_without_records_remains_on_legacy_path(
+def test_legacy_state_without_records_is_rejected_without_store_access(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     state = _state(tmp_path, structured=False)
@@ -140,12 +140,8 @@ def test_legacy_state_without_records_remains_on_legacy_path(
         ),
     )
 
-    resolved = resolve_resume_state(tmp_path, state)
-
-    assert resolved.state == state
-    assert resolved.mode is ProtocolMode.LEGACY_STATE_V3
-    assert resolved.record_head_id is None
-    assert resolved.replay_result is None
+    with pytest.raises(ArtifactResumeError, match="UNSUPPORTED-PROTOCOL"):
+        resolve_resume_state(tmp_path, state)
     assert not (tmp_path / ".orchestrator" / "artifacts").exists()
 
 
@@ -156,7 +152,7 @@ def test_structured_state_rehydrates_from_matching_complete_chain(tmp_path: Path
     resolved = resolve_resume_state(tmp_path, state)
 
     assert resolved.state == state
-    assert resolved.mode is ProtocolMode.STRUCTURED_V1
+    assert resolved.mode is ProtocolMode.STRUCTURED_V2
     assert resolved.record_head_id is not None
     assert resolved.replay_result is not None
     assert resolved.replay_result.head_record_id == resolved.record_head_id
@@ -499,7 +495,6 @@ def _pending_review_chain(
     "failure_mode",
     (
         "wrong-round",
-        "wrong-reviewer",
         "approved-verdict",
         "finding-outside-review",
         "wrong-finding-prefix",
@@ -520,11 +515,6 @@ def test_pending_correction_resume_exception_rejects_near_misses(
         correction = replace(
             correction,
             payload=replace(correction.payload, round_number=3),
-        )
-    elif failure_mode == "wrong-reviewer":
-        review = replace(
-            review,
-            payload=replace(review.payload, reviewer=Role.ANTIGRAVITY),
         )
     elif failure_mode == "approved-verdict":
         review = replace(
@@ -570,11 +560,9 @@ def test_pending_correction_resume_exception_rejects_near_misses(
 @pytest.mark.parametrize(
     "failure_mode",
     (
-        "wrong-reviewer",
         "approved-verdict",
         "missing-attestation",
         "finding-outside-review",
-        "wrong-transition-actor",
         "transition-before-review",
         "duplicate-review",
     ),
@@ -588,12 +576,7 @@ def test_pending_review_finding_resume_exception_rejects_near_misses(
     state, chain, attestation, prior, review, current, _correction = (
         _pending_review_chain(repository)
     )
-    if failure_mode == "wrong-reviewer":
-        review = replace(
-            review,
-            payload=replace(review.payload, reviewer=Role.ANTIGRAVITY),
-        )
-    elif failure_mode == "approved-verdict":
+    if failure_mode == "approved-verdict":
         review = replace(
             review,
             payload=replace(
@@ -606,15 +589,6 @@ def test_pending_review_finding_resume_exception_rejects_near_misses(
         current = replace(
             current,
             payload=replace(current.payload, finding_id="C-08"),
-        )
-    elif failure_mode == "wrong-transition-actor":
-        current = replace(
-            current,
-            payload=replace(
-                current.payload,
-                reporter=Role.ANTIGRAVITY,
-                actor=Role.ANTIGRAVITY,
-            ),
         )
     chain = tuple(
         review if item.record_id == review.record_id else

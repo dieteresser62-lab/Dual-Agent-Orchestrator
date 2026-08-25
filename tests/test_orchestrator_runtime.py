@@ -28,6 +28,7 @@ from artifact_models import (
     Role,
 )
 from artifact_store import ArtifactStore
+from artifact_migration import ArtifactResumeError
 from cli import parse_args
 from contracts import (
     AgentRole,
@@ -267,7 +268,7 @@ def test_fresh_workflow_is_immutably_bound_to_structured_v1(tmp_path: Path) -> N
         task_contract=parse_task_contract(task.read_text(encoding="utf-8")),
     )
     assert state.protocol_binding == ProtocolBinding(
-        ProtocolMode.STRUCTURED_V1, "1"
+        ProtocolMode.STRUCTURED_V2, "2"
     )
 
     native = orchestrator._fresh_state(
@@ -278,9 +279,9 @@ def test_fresh_workflow_is_immutably_bound_to_structured_v1(tmp_path: Path) -> N
         native_claude_reviews=True,
     )
     assert native.protocol_binding == ProtocolBinding(
-        ProtocolMode.STRUCTURED_V1,
-        "1",
-        "native-claude-review-v1",
+        ProtocolMode.STRUCTURED_V2,
+        "2",
+        "native-claude-review-v2",
     )
 
     native_codex = orchestrator._fresh_state(
@@ -291,9 +292,9 @@ def test_fresh_workflow_is_immutably_bound_to_structured_v1(tmp_path: Path) -> N
         native_codex_results=True,
     )
     assert native_codex.protocol_binding == ProtocolBinding(
-        ProtocolMode.STRUCTURED_V1,
-        "1",
-        codex_result_transport="native-codex-v1",
+        ProtocolMode.STRUCTURED_V2,
+        "2",
+        codex_result_transport="native-codex-v2",
     )
 
 
@@ -369,7 +370,7 @@ def test_reviewer_recovers_complete_contract_from_false_401_auth_classification(
     )
     response = "\n".join(
         (
-            "REVIEWER: antigravity",
+            "REVIEWER: claude",
             "REVIEW_EVIDENCE: checked src/orchestrator.py#L401-L433 | risk | break",
             "PRE_MORTEM: a future lifecycle step drifts",
             "SLICE_APPROVAL: 11 | YES",
@@ -377,7 +378,7 @@ def test_reviewer_recovers_complete_contract_from_false_401_auth_classification(
         )
     )
     failure = AgentInvocationError(
-        agent_key="antigravity",
+        agent_key="claude",
         kind=AgentFailureKind.AUTH,
         invocation_id="false-401-link",
         provider_text=response,
@@ -391,8 +392,8 @@ def test_reviewer_recovers_complete_contract_from_false_401_auth_classification(
     monkeypatch.setattr(driver, "_agent", fail_agent)
     invocation = ReviewerInvocation(
         work_unit_id=16,
-        step=WorkflowStep.ANTIGRAVITY_SLICE_REVIEW,
-        reviewer=AgentRole.ANTIGRAVITY,
+        step=WorkflowStep.CLAUDE_SLICE_REVIEW,
+        reviewer=AgentRole.CLAUDE,
         round_number=2,
         evidence_kind=EvidenceKind.CORRECTION_DELTA,
         fingerprint="a" * 64,
@@ -600,7 +601,7 @@ def test_quota_classified_recoverable_contract_still_persists_matching_quota_pau
         task_digest=hashlib.sha256(task.read_bytes()).hexdigest(),
         task_scope_patterns=("src/orchestrator.py",),
         target_branch="feature/reviewer-quota-pause",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V1, "1"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
     ).complete_current_work_unit().start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
@@ -622,7 +623,7 @@ def test_quota_classified_recoverable_contract_still_persists_matching_quota_pau
     monkeypatch.setattr(driver, "collect_changes", lambda _start_commit: changes)
     response = "\n".join(
         (
-            "REVIEWER: antigravity",
+            "REVIEWER: claude",
             "REVIEW_EVIDENCE: complete output | risk | break",
             "PRE_MORTEM: a quota response is mistaken for success",
             "SLICE_APPROVAL: 12 | YES",
@@ -631,14 +632,14 @@ def test_quota_classified_recoverable_contract_still_persists_matching_quota_pau
     )
     now = [datetime(2026, 8, 19, 10, 0, tzinfo=timezone.utc)]
     quota = AgentInvocationError(
-        agent_key="antigravity",
+        agent_key="claude",
         kind=AgentFailureKind.QUOTA,
         invocation_id="quota-with-complete-contract",
         provider_text=response,
         received_at=now[0],
         quota_reset=QuotaReset(
             now[0] + timedelta(seconds=1),
-            "antigravity:structured:retry_after_seconds",
+            "claude:structured:retry_after_seconds",
             "UTC",
         ),
     )
@@ -658,8 +659,8 @@ def test_quota_classified_recoverable_contract_still_persists_matching_quota_pau
     monkeypatch.setattr(driver, "_agent", invoke_agent)
     invocation = ReviewerInvocation(
         work_unit_id=state.current_work_unit_id,
-        step=WorkflowStep.ANTIGRAVITY_SLICE_REVIEW,
-        reviewer=AgentRole.ANTIGRAVITY,
+        step=WorkflowStep.CLAUDE_SLICE_REVIEW,
+        reviewer=AgentRole.CLAUDE,
         round_number=state.current_work_unit.round_number,
         evidence_kind=EvidenceKind.CORRECTION_DELTA,
         fingerprint="b" * 64,
@@ -687,7 +688,7 @@ def test_quota_classified_recoverable_contract_still_persists_matching_quota_pau
         state,
         WorkflowHistory(state.current_work_unit_id),
         context,
-        AgentRole.ANTIGRAVITY,
+        AgentRole.CLAUDE,
         lambda: driver.invoke_reviewer(invocation),
     )
 
@@ -701,7 +702,7 @@ def test_quota_classified_recoverable_contract_still_persists_matching_quota_pau
         if isinstance(record.payload, QuotaPausePayload)
     )
     assert len(quota_records) == 1
-    assert quota_records[0].payload.role is Role.ANTIGRAVITY
+    assert quota_records[0].payload.role is Role.CLAUDE
     assert quota_records[0].payload.retry_at == quota.quota_reset.reset_at_utc.isoformat()
 
 
@@ -747,7 +748,7 @@ def test_reviewer_reuses_diagnostic_bound_bulleted_evidence_output_without_provi
     )
     state = replace(
         state,
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V1, "1"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
     )
     failure = InvocationFailureRecord(
         invocation_id="contract-2-claude_slice_review-1",
@@ -977,7 +978,6 @@ def test_commit_backstop_rejects_yes_reviews_bound_to_failed_attestation(
         fingerprint=changes.fingerprint,
         attestation=attestation,
         claude_review=approving_review(AgentRole.CLAUDE),
-        antigravity_review=approving_review(AgentRole.ANTIGRAVITY),
         findings=(),
     )
 
@@ -1306,7 +1306,7 @@ def test_structured_bind_persists_contract_and_active_work_unit_once(
         task_digest="a" * 64,
         task_scope_patterns=("src/runtime.py",),
         target_branch="feature/structured-bind",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V1, "1"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
     ).complete_current_work_unit().start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
@@ -1352,9 +1352,9 @@ def test_native_review_record_ahead_recovery_reuses_bound_json_without_provider(
         task_scope_patterns=("src/runtime.py",),
         target_branch="feature/native-record-ahead",
         protocol_binding=ProtocolBinding(
-            ProtocolMode.STRUCTURED_V1,
-            "1",
-            "native-claude-review-v1",
+            ProtocolMode.STRUCTURED_V2,
+            "2",
+            "native-claude-review-v2",
         ),
     ).complete_current_work_unit().start_work_unit(
         slice_id=1,
@@ -1416,7 +1416,7 @@ def test_native_review_record_ahead_recovery_reuses_bound_json_without_provider(
         )
     )
     response = {
-        "schema_version": "native-agent-review-result-v1",
+        "schema_version": "native-agent-review-result-v2",
         "result_type": "review_result",
         "request_id": bundle.bound_context.request_id,
         "reviewer": "claude",
@@ -1536,9 +1536,9 @@ def test_native_codex_record_ahead_recovery_reuses_raw_json_without_provider(
         task_scope_patterns=("src/runtime.py",),
         target_branch="feature/native-codex-record-ahead",
         protocol_binding=ProtocolBinding(
-            ProtocolMode.STRUCTURED_V1,
-            "1",
-            codex_result_transport="native-codex-v1",
+            ProtocolMode.STRUCTURED_V2,
+            "2",
+            codex_result_transport="native-codex-v2",
         ),
     ).complete_current_work_unit().start_work_unit(
         slice_id=1,
@@ -1590,7 +1590,7 @@ def test_native_codex_record_ahead_recovery_reuses_raw_json_without_provider(
         )
     )
     document = {
-        "schema_version": "native-agent-codex-result-v1",
+        "schema_version": "native-agent-codex-result-v2",
         "result_type": "implementation_result",
         "request_id": bundle.bound_context.request_id,
         "ready": True,
@@ -1662,10 +1662,10 @@ def test_native_review_persists_open_status_rationale_for_authoritative_replay(
         branch_base=head,
         slice_count=1,
         protocol_binding=ProtocolBinding(
-            ProtocolMode.STRUCTURED_V1,
-            "1",
-            codex_result_transport="native-codex-v1",
-            claude_review_transport="native-claude-review-v1",
+            ProtocolMode.STRUCTURED_V2,
+            "2",
+            codex_result_transport="native-codex-v2",
+            claude_review_transport="native-claude-review-v2",
         ),
     ).bind_current_slice_git_boundary(
         start_commit=head,
@@ -1749,9 +1749,9 @@ def _finding_transition_driver(
         branch_base=head,
         slice_count=1,
         protocol_binding=ProtocolBinding(
-            ProtocolMode.STRUCTURED_V1,
-            "1",
-            claude_review_transport="native-claude-review-v1",
+            ProtocolMode.STRUCTURED_V2,
+            "2",
+            claude_review_transport="native-claude-review-v2",
         ),
     ).bind_current_slice_git_boundary(
         start_commit=head,
@@ -2113,9 +2113,9 @@ def test_native_codex_record_ahead_recovery_completes_finding_responses(
             task_scope_patterns=("src/runtime.py",),
             target_branch="feature/native-codex-finding-recovery",
             protocol_binding=ProtocolBinding(
-                ProtocolMode.STRUCTURED_V1,
-                "1",
-                codex_result_transport="native-codex-v1",
+                ProtocolMode.STRUCTURED_V2,
+                "2",
+                codex_result_transport="native-codex-v2",
             ),
         )
         .complete_current_work_unit()
@@ -2180,7 +2180,7 @@ def test_native_codex_record_ahead_recovery_completes_finding_responses(
         )
     )
     document = {
-        "schema_version": "native-agent-codex-result-v1",
+        "schema_version": "native-agent-codex-result-v2",
         "result_type": "correction_result",
         "request_id": bundle.bound_context.request_id,
         "ready": True,
@@ -2293,10 +2293,10 @@ def test_combined_native_finding_authority_rejects_state_mirror_drift(
             task_scope_patterns=("src/runtime.py",),
             target_branch="feature/combined-native-authority",
             protocol_binding=ProtocolBinding(
-                ProtocolMode.STRUCTURED_V1,
-                "1",
-                claude_review_transport="native-claude-review-v1",
-                codex_result_transport="native-codex-v1",
+                ProtocolMode.STRUCTURED_V2,
+                "2",
+                claude_review_transport="native-claude-review-v2",
+                codex_result_transport="native-codex-v2",
             ),
         )
         .complete_current_work_unit()
@@ -2439,9 +2439,9 @@ def test_native_codex_plan_and_final_recovery_are_raw_and_record_ahead_safe(
         task_scope_patterns=("src/runtime.py",),
         target_branch=branch,
         protocol_binding=ProtocolBinding(
-            ProtocolMode.STRUCTURED_V1,
-            "1",
-            codex_result_transport="native-codex-v1",
+            ProtocolMode.STRUCTURED_V2,
+            "2",
+            codex_result_transport="native-codex-v2",
         ),
     )
     current_fingerprint = task_digest
@@ -2529,7 +2529,7 @@ def test_native_codex_plan_and_final_recovery_are_raw_and_record_ahead_safe(
         )
     )
     document: dict[str, object] = {
-        "schema_version": "native-agent-codex-result-v1",
+        "schema_version": "native-agent-codex-result-v2",
         "result_type": result_type,
         "request_id": bundle.bound_context.request_id,
         "ready": True,
@@ -2607,7 +2607,7 @@ def test_structured_bind_survives_round_number_increase_within_same_work_unit(
         task_digest="a" * 64,
         task_scope_patterns=("src/runtime.py",),
         target_branch="feature/structured-round-transition",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V1, "1"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
     ).complete_current_work_unit().start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
@@ -2673,7 +2673,7 @@ def test_multi_slice_plan_binding_pins_original_approved_commit_not_slice_start(
         work_plan_path="docs/internal/approved-plan.md",
         approved_plan_commit=approved_plan_commit,
         target_branch="feature/structured-plan-binding",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V1, "1"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
     ).bind_slice_plan(
         planned_slices,
         first_start_commit=approved_plan_commit,
@@ -2735,7 +2735,7 @@ def test_correction_work_unit_persists_correction_work_unit_payload_with_finding
         task_digest="a" * 64,
         task_scope_patterns=("src/runtime.py",),
         target_branch="feature/structured-correction",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V1, "1"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
     ).complete_current_work_unit().start_work_unit(
         slice_id=1,
         kind=WorkUnitKind.SLICE,
@@ -2790,7 +2790,7 @@ def test_structured_checkpoint_projects_record_chain_into_slice_and_overall_audi
         task_scope_patterns=(slice_path, "src/runtime.py"),
         audit_report_path="docs/internal/structured-audit-review-12345678.md",
         target_branch="feature/structured-audit",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V1, "1"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
     ).bind_slice_plan(
         (PlannedSlice(1, "Runtime", (slice_path, "src/runtime.py")),),
         first_start_commit=head,
@@ -2840,7 +2840,7 @@ def test_structured_checkpoint_stops_before_audit_on_mirror_mismatch(
         task_digest="a" * 64,
         task_scope_patterns=("src/runtime.py",),
         target_branch="feature/structured-audit-mismatch",
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V1, "1"),
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
     )
     driver = ProductionWorkflowDriver(
         repository_root=repository,
@@ -3436,7 +3436,7 @@ def test_watch_pipeline_failure_before_state_disables_resume(
     assert not (repository / ".orchestrator" / "state.json").exists()
 
 
-def test_watch_resume_does_not_switch_back_after_branch_drift(
+def test_legacy_watch_resume_is_rejected_before_branch_switch(
     tmp_path: Path, monkeypatch
 ) -> None:
     repository = _repository(tmp_path, "feature/persisted-target")
@@ -3473,10 +3473,9 @@ def test_watch_resume_does_not_switch_back_after_branch_drift(
     )
     monkeypatch.chdir(repository)
 
-    result = run_production_workflow(task, args)
+    with pytest.raises(ArtifactResumeError, match="UNSUPPORTED-PROTOCOL"):
+        run_production_workflow(task, args)
 
-    assert result.exit_code == 4
-    assert "BRANCH-MISMATCH" in result.state.current_work_unit.gate.detail
     assert _git(repository, "branch", "--show-current") == "master"
 
 
@@ -3549,7 +3548,7 @@ def test_force_new_watch_task_intentionally_replaces_unrelated_existing_state(
     assert captured["state"].run_id == "new-watch-run"
     assert captured["state"].branch == "feature/new-watch-target"
     assert captured["state"].protocol_binding == ProtocolBinding(
-        ProtocolMode.STRUCTURED_V1, "1"
+        ProtocolMode.STRUCTURED_V2, "2"
     )
     assert orchestrator.load_workflow_state(
         old_checkpoint,
@@ -3737,11 +3736,11 @@ def test_production_session_plans_commits_two_slices_and_persists_final_state(
     ) -> str:
         if (
             interrupt_once["value"]
-            and invocation.step is WorkflowStep.ANTIGRAVITY_SLICE_REVIEW
+            and invocation.step is WorkflowStep.CLAUDE_SLICE_REVIEW
         ):
             interrupt_once["value"] = False
             raise AgentInvocationError(
-                agent_key="antigravity",
+                agent_key="claude",
                 kind=AgentFailureKind.NETWORK,
                 invocation_id="resume-proof",
                 provider_text="temporary provider outage",
@@ -3794,7 +3793,7 @@ def test_production_session_plans_commits_two_slices_and_persists_final_state(
 
     halted = run_production_workflow(task, args)
     assert halted.exit_code == 3
-    assert halted.state.current_step is WorkflowStep.ANTIGRAVITY_SLICE_REVIEW
+    assert halted.state.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
     assert not _git(repository, "log", "--format=%s", "master..HEAD")
 
     args.resume = True
@@ -4252,10 +4251,7 @@ def test_plan_only_repairs_handoff_contract_before_review(
 
     assert result.workflow_completed
     assert codex_steps == [WorkflowStep.CODEX_PLAN, WorkflowStep.CODEX_PLAN_REVISION]
-    assert reviewer_steps == [
-        WorkflowStep.CLAUDE_PLAN_REVIEW,
-        WorkflowStep.ANTIGRAVITY_PLAN_REVIEW,
-    ]
+    assert reviewer_steps == [WorkflowStep.CLAUDE_PLAN_REVIEW]
     assert task.with_name("task-implement.md").is_file()
 
 
