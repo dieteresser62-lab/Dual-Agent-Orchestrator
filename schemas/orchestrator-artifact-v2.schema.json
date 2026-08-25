@@ -45,6 +45,7 @@
   ],
   "$defs": {
     "identifier": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$"},
+    "finding_id": {"type": "string", "pattern": "^C-(0[1-9]|[1-9][0-9]*)(?![\\s\\S])"},
     "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "git_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
     "non_empty": {"type": "string", "minLength": 1},
@@ -55,6 +56,8 @@
     "non_empty_paths": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/path"}},
     "identifiers": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/identifier"}},
     "non_empty_identifiers": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/identifier"}},
+    "finding_ids": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/finding_id"}},
+    "non_empty_finding_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/finding_id"}},
     "fingerprint": {
       "type": "object", "additionalProperties": false, "required": ["kind", "sha256"],
       "properties": {"kind": {"enum": ["contract", "implementation"]}, "sha256": {"$ref": "#/$defs/sha256"}}
@@ -82,7 +85,7 @@
     },
     "correction_work_unit": {
       "type": "object", "additionalProperties": false, "required": ["slice_id", "round_number", "paths", "finding_ids"],
-      "properties": {"slice_id": {"$ref": "#/$defs/identifier"}, "round_number": {"type": "integer", "minimum": 1}, "paths": {"$ref": "#/$defs/non_empty_paths"}, "finding_ids": {"$ref": "#/$defs/non_empty_identifiers"}}
+      "properties": {"slice_id": {"$ref": "#/$defs/identifier"}, "round_number": {"type": "integer", "minimum": 1}, "paths": {"$ref": "#/$defs/non_empty_paths"}, "finding_ids": {"$ref": "#/$defs/non_empty_finding_ids"}}
     },
     "agent_result": {
       "type": "object", "additionalProperties": false, "required": ["role", "work_unit_id", "outcome", "test_files"],
@@ -95,12 +98,12 @@
     },
     "review": {
       "type": "object", "additionalProperties": false, "required": ["reviewer", "work_unit_id", "verdict", "finding_ids", "evidence"],
-      "properties": {"reviewer": {"$ref": "#/$defs/reviewer"}, "work_unit_id": {"$ref": "#/$defs/identifier"}, "verdict": {"enum": ["approved", "denied", "stop"]}, "finding_ids": {"$ref": "#/$defs/identifiers"}, "evidence": {"type": ["string", "null"], "minLength": 1}, "transport_schema": {"type": ["string", "null"]}, "request_id": {"type": ["string", "null"]}, "response_sha256": {"type": ["string", "null"]}},
+      "properties": {"reviewer": {"$ref": "#/$defs/reviewer"}, "work_unit_id": {"$ref": "#/$defs/identifier"}, "verdict": {"enum": ["approved", "denied", "stop"]}, "finding_ids": {"$ref": "#/$defs/finding_ids"}, "evidence": {"type": ["string", "null"], "minLength": 1}, "transport_schema": {"type": ["string", "null"]}, "request_id": {"type": ["string", "null"]}, "response_sha256": {"type": ["string", "null"]}},
       "allOf": [{"if": {"properties": {"verdict": {"const": "approved"}}}, "then": {"anyOf": [{"properties": {"finding_ids": {"minItems": 1}}}, {"properties": {"evidence": {"type": "string"}}}]}}, {"oneOf": [{"properties": {"transport_schema": {"type": "null"}, "request_id": {"type": "null"}, "response_sha256": {"type": "null"}}}, {"required": ["transport_schema", "request_id", "response_sha256"], "properties": {"reviewer": {"const": "claude"}, "transport_schema": {"const": "native-claude-review-v2"}, "request_id": {"type": "string", "pattern": "^native-review-request-[0-9a-f]{64}$"}, "response_sha256": {"$ref": "#/$defs/sha256"}}}]}]
     },
     "finding_transition": {
       "type": "object", "additionalProperties": false, "required": ["finding_id", "reporter", "actor", "action", "severity", "finding_status", "rationale"],
-      "properties": {"finding_id": {"$ref": "#/$defs/identifier"}, "reporter": {"$ref": "#/$defs/reviewer"}, "actor": {"$ref": "#/$defs/role"}, "action": {"enum": ["opened", "responded", "status_changed", "reclassified"]}, "severity": {"enum": ["BLOCKER", "OBSERVATION"]}, "finding_status": {"enum": ["open", "closed"]}, "rationale": {"$ref": "#/$defs/non_empty"}, "work_unit_id": {"type": ["string", "null"], "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$"}, "summary": {"type": ["string", "null"], "minLength": 1}, "acceptance_test": {"type": ["string", "null"], "minLength": 1}, "origin_slice_id": {"type": ["string", "null"], "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$"}, "origin_round_number": {"type": ["integer", "null"], "minimum": 1}, "response_decision": {"enum": ["accepted", "rejected", null]}}
+      "properties": {"finding_id": {"$ref": "#/$defs/finding_id"}, "reporter": {"$ref": "#/$defs/reviewer"}, "actor": {"$ref": "#/$defs/role"}, "action": {"enum": ["opened", "responded", "status_changed", "reclassified"]}, "severity": {"enum": ["BLOCKER", "OBSERVATION"]}, "finding_status": {"enum": ["open", "closed"]}, "rationale": {"$ref": "#/$defs/non_empty"}, "work_unit_id": {"type": ["string", "null"], "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$"}, "summary": {"type": ["string", "null"], "minLength": 1}, "acceptance_test": {"type": ["string", "null"], "minLength": 1}, "origin_slice_id": {"type": ["string", "null"], "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$"}, "origin_round_number": {"type": ["integer", "null"], "minimum": 1}, "response_decision": {"enum": ["accepted", "rejected", null]}}
     },
     "validation_request": {
       "type": "object", "additionalProperties": false, "required": ["commands", "requested_by"],

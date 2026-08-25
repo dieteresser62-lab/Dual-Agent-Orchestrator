@@ -626,6 +626,13 @@ def _retirement_hits(path: Path, text: str) -> list[str]:
         re.I | re.S,
     ):
         hits.append("retired finding namespace")
+    if re.search(r"\belse\s+[\"']A[\"']", text):
+        hits.append("retired finding prefix fallback")
+    if re.search(
+        r"\bfor\s+[A-Za-z_][A-Za-z0-9_]*\s+in\s+\(\s*[\"']C[\"']\s*,\s*[\"']A[\"']\s*\)",
+        text,
+    ):
+        hits.append("retired finding prefix inventory")
     label = (
         path.relative_to(ROOT).as_posix()
         if path.is_relative_to(ROOT)
@@ -652,6 +659,14 @@ def test_retirement_guard_rejects_every_active_retired_reference() -> None:
         ),
         ("src/workflow.py", 'LEGACY_FINDING = "A-02"'),
         ("src/workflow.py", "# reviewer may raise A-* findings"),
+        (
+            "src/prompts.py",
+            'prefix = "C" if reviewer == "claude" else "A"',
+        ),
+        (
+            "src/orchestrator.py",
+            'for prefix in ("C", "A")',
+        ),
         ("run_task", "RUN_TASK_ANTIGRAVITY_BINARY=agy.exe"),
         (
             "docs/reference/architecture-and-domain-concept.md",

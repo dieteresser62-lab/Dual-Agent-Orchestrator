@@ -50,16 +50,15 @@ def build_v3_review_contract(contract: StepContract) -> str:
             for command in attestation.expected_commands
         )
         validation_details += f"\noutput_digest={attestation.output_digest}"
-    prefix = "C" if contract.reviewer.value == "claude" else "A"
     next_finding_number = max(
         (
             int(finding_id.split("-", 1)[1])
             for finding_id in contract.existing_finding_ids
-            if finding_id.startswith(prefix + "-")
+            if finding_id.startswith("C-")
         ),
         default=0,
     ) + 1
-    next_finding_id = f"{prefix}-{next_finding_number:02d}"
+    next_finding_id = f"C-{next_finding_number:02d}"
     new_finding_classes = (
         "BLOCKER|OBSERVATION" if contract.allow_new_observations else "BLOCKER"
     )

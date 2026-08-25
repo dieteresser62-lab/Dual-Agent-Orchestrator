@@ -159,6 +159,7 @@ def test_review_contract_allocates_next_reviewer_finding_id() -> None:
     )
 
     assert "NEW_FINDING: C-03" in rendered
+    assert "NEW_FINDING: A-" not in rendered
 
 
 def test_prompts_delimit_untrusted_content() -> None:

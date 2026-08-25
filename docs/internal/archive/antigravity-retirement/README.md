@@ -10,6 +10,15 @@ historischen Entwicklungsstand. Neue Läufe verwenden nur die aktiven
 `structured-v2`-Schemata unter `schemas/`; historische Protokollzustände werden
 mit `UNSUPPORTED-PROTOCOL` abgewiesen.
 
+## Abgeschlossenes Entfernungspaket
+
+Der Unterordner [`final-package/`](final-package/) enthält den freigegebenen
+Arbeitsplan zur endgültigen Entfernung von Antigravity, die vier
+Sliceberichte, die historischen negativen Codex-Abschlusschecks und die
+abschließenden positiven Codex- und Claude-Gesamtreviews. Diese Unterlagen
+sind ebenfalls nichtautoritative Entwicklungsevidenz und besitzen keine
+Runtime-, Resume- oder Freigabewirkung.
+
 Die unabhängig versionierten aktiven Provider-Subset-Register
 `native-provider-schema-capabilities-v1` und
 `native-provider-schema-exceptions-v1` gehören nicht zu diesem Archiv. Sie

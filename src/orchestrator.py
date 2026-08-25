@@ -3036,28 +3036,23 @@ def _carry_forward_findings(
             latest_by_identity[identity] = finding
             all_ids.append(finding.finding_id)
 
-    next_number = {
-        prefix: max(
-            (
-                int(finding_id.split("-", 1)[1])
-                for finding_id in all_ids
-                if finding_id.startswith(prefix + "-")
-            ),
-            default=0,
-        )
-        + 1
-        for prefix in ("C", "A")
-    }
+    next_number = max(
+        (
+            int(finding_id.split("-", 1)[1])
+            for finding_id in all_ids
+            if finding_id.startswith("C-")
+        ),
+        default=0,
+    ) + 1
     used_ids: set[str] = set()
     carried: list[FindingRecord] = []
     for identity in identity_order:
         finding = latest_by_identity[identity]
         finding_id = finding.finding_id
         if finding_id in used_ids:
-            prefix = "C" if finding.origin.reporter is AgentRole.CLAUDE else "A"
             while True:
-                finding_id = f"{prefix}-{next_number[prefix]:02d}"
-                next_number[prefix] += 1
+                finding_id = f"C-{next_number:02d}"
+                next_number += 1
                 if finding_id not in used_ids:
                     break
             finding = replace(finding, finding_id=finding_id)

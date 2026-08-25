@@ -890,6 +890,7 @@ def test_carry_forward_findings_migrates_reused_legacy_ids_stably() -> None:
     migrated = orchestrator._carry_forward_findings(state, second_history)
 
     assert [finding.finding_id for finding in migrated] == ["C-01", "C-02"]
+    assert all(finding.finding_id.startswith("C-") for finding in migrated)
     carried_history = WorkflowHistory(3, findings=migrated)
     state = replace(
         state,

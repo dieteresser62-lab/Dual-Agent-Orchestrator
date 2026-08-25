@@ -28,6 +28,7 @@ from schema_validation import (
 SCHEMA_VERSION = "2"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
+_FINDING_ID_RE = re.compile(r"^C-(0[1-9]|[1-9][0-9]*)$")
 _SCHEMA_PATH = Path(__file__).resolve().parents[1] / "schemas" / "orchestrator-artifact-v2.schema.json"
 
 
@@ -177,7 +178,7 @@ class CorrectionWorkUnitPayload:
         _require_identifier(self.slice_id, "slice_id")
         _require_positive(self.round_number, "round_number")
         _require_paths(self.paths)
-        _require_unique_identifiers(self.finding_ids, "finding_ids")
+        _require_unique_finding_ids(self.finding_ids, "finding_ids")
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,7 +263,7 @@ class ReviewPayload:
         _require_identifier(self.work_unit_id, "work_unit_id")
         if self.verdict not in {"approved", "denied", "stop"}:
             raise ArtifactValidationError("review verdict is invalid")
-        _require_unique_identifiers(self.finding_ids, "finding_ids", allow_empty=True)
+        _require_unique_finding_ids(self.finding_ids, "finding_ids", allow_empty=True)
         if self.evidence is not None:
             _require_text(self.evidence, "evidence")
         if self.verdict == "approved" and not self.finding_ids and self.evidence is None:
@@ -311,7 +312,7 @@ class FindingTransitionPayload:
     record_type: ClassVar[RecordType] = RecordType.FINDING_TRANSITION
 
     def __post_init__(self) -> None:
-        _require_identifier(self.finding_id, "finding_id")
+        _require_finding_id(self.finding_id, "finding_id")
         if self.reporter is not Role.CLAUDE:
             raise ArtifactValidationError("finding reporter must be claude")
         if self.action not in {"opened", "responded", "status_changed", "reclassified"}:
@@ -993,6 +994,11 @@ def _require_identifier(value: str, name: str) -> None:
         raise ArtifactValidationError(f"{name} is not a canonical identifier")
 
 
+def _require_finding_id(value: str, name: str) -> None:
+    if not isinstance(value, str) or _FINDING_ID_RE.fullmatch(value) is None:
+        raise ArtifactValidationError(f"{name} must be a canonical C-* finding ID")
+
+
 def _require_sha256(value: str, name: str) -> None:
     if not isinstance(value, str) or _SHA256_RE.fullmatch(value) is None:
         raise ArtifactValidationError(f"{name} must be a lowercase SHA-256 digest")
@@ -1037,5 +1043,16 @@ def _require_unique_identifiers(
         raise ArtifactValidationError(f"{name} must be a non-empty list")
     for value in values:
         _require_identifier(value, name)
+    if len(values) != len(set(values)):
+        raise ArtifactValidationError(f"{name} must contain unique values")
+
+
+def _require_unique_finding_ids(
+    values: Sequence[str], name: str, *, allow_empty: bool = False,
+) -> None:
+    if isinstance(values, (str, bytes)) or (not values and not allow_empty):
+        raise ArtifactValidationError(f"{name} must be a non-empty list")
+    for value in values:
+        _require_finding_id(value, name)
     if len(values) != len(set(values)):
         raise ArtifactValidationError(f"{name} must contain unique values")

@@ -214,6 +214,149 @@ def test_finding_ownership_and_codex_response_do_not_allow_foreign_closure() -> 
         FindingTransitionPayload("C-01", Role.CLAUDE, Role.CODEX, "responded", FindingSeverity.BLOCKER, "closed", "fixed")
 
 
+@pytest.mark.parametrize(
+    "factory",
+    (
+        lambda: FindingTransitionPayload(
+            "A-01",  # retirement-negative-control
+            Role.CLAUDE,
+            Role.CLAUDE,
+            "opened",
+            FindingSeverity.BLOCKER,
+            "open",
+            "retired namespace",
+        ),
+        lambda: ReviewPayload(
+            Role.CLAUDE,
+            "work-01",
+            "denied",
+            ("A-01",),  # retirement-negative-control
+            "retired namespace",
+        ),
+        lambda: CorrectionWorkUnitPayload(
+            "01",
+            2,
+            ("src/a.py",),
+            ("A-01",),  # retirement-negative-control
+        ),
+    ),
+)
+def test_v2_models_reject_retired_finding_namespace(factory) -> None:  # type: ignore[no-untyped-def]
+    with pytest.raises(ArtifactValidationError, match=r"canonical C-\* finding ID"):
+        factory()
+
+
+@pytest.mark.parametrize(
+    ("record", "field"),
+    (
+        (
+            _record(
+                FindingTransitionPayload(
+                    "C-01",
+                    Role.CLAUDE,
+                    Role.CLAUDE,
+                    "opened",
+                    FindingSeverity.BLOCKER,
+                    "open",
+                    "valid namespace",
+                )
+            ),
+            "finding_id",
+        ),
+        (
+            _record(
+                ReviewPayload(
+                    Role.CLAUDE,
+                    "work-01",
+                    "denied",
+                    ("C-01",),
+                    "valid namespace",
+                )
+            ),
+            "finding_ids",
+        ),
+        (
+            _record(
+                CorrectionWorkUnitPayload(
+                    "01",
+                    2,
+                    ("src/a.py",),
+                    ("C-01",),
+                )
+            ),
+            "finding_ids",
+        ),
+    ),
+)
+def test_v2_schema_and_deserializer_reject_retired_finding_namespace(
+    record: ArtifactRecord,
+    field: str,
+) -> None:
+    assert ArtifactRecord.from_dict(record.to_dict()) == record
+    raw = record.to_dict()
+    raw["payload"][field] = "A-01" if field == "finding_id" else ["A-01"]  # retirement-negative-control
+
+    with pytest.raises(ArtifactValidationError, match="schema validation failed"):
+        validate_artifact_document(raw)
+    with pytest.raises(ArtifactValidationError, match="schema validation failed"):
+        ArtifactRecord.from_dict(raw)
+
+
+@pytest.mark.parametrize(
+    ("record", "field"),
+    (
+        (
+            _record(
+                FindingTransitionPayload(
+                    "C-01",
+                    Role.CLAUDE,
+                    Role.CLAUDE,
+                    "opened",
+                    FindingSeverity.BLOCKER,
+                    "open",
+                    "valid namespace",
+                )
+            ),
+            "finding_id",
+        ),
+        (
+            _record(
+                ReviewPayload(
+                    Role.CLAUDE,
+                    "work-01",
+                    "denied",
+                    ("C-01",),
+                    "valid namespace",
+                )
+            ),
+            "finding_ids",
+        ),
+        (
+            _record(
+                CorrectionWorkUnitPayload(
+                    "01",
+                    2,
+                    ("src/a.py",),
+                    ("C-01",),
+                )
+            ),
+            "finding_ids",
+        ),
+    ),
+)
+def test_v2_schema_and_deserializer_reject_finding_id_with_trailing_newline(
+    record: ArtifactRecord,
+    field: str,
+) -> None:
+    raw = record.to_dict()
+    raw["payload"][field] = "C-01\n" if field == "finding_id" else ["C-01\n"]
+
+    with pytest.raises(ArtifactValidationError, match="schema validation failed"):
+        validate_artifact_document(raw)
+    with pytest.raises(ArtifactValidationError, match="schema validation failed"):
+        ArtifactRecord.from_dict(raw)
+
+
 def test_structured_finding_transition_roundtrips_and_legacy_fields_stay_optional() -> None:
     structured = _record(
         FindingTransitionPayload(

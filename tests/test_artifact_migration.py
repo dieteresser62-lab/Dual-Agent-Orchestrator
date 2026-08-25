@@ -9,6 +9,7 @@ import artifact_migration
 from artifact_bridge import ArtifactBridge
 from artifact_migration import ArtifactResumeError, resolve_resume_state
 from artifact_models import (
+    ArtifactValidationError,
     BindingPayload,
     CommandSpec,
     CorrectionWorkUnitPayload,
@@ -497,7 +498,6 @@ def _pending_review_chain(
         "wrong-round",
         "approved-verdict",
         "finding-outside-review",
-        "wrong-finding-prefix",
         "correction-before-review",
         "duplicate-review",
     ),
@@ -530,11 +530,6 @@ def test_pending_correction_resume_exception_rejects_near_misses(
             correction,
             payload=replace(correction.payload, finding_ids=("C-08",)),
         )
-    elif failure_mode == "wrong-finding-prefix":
-        correction = replace(
-            correction,
-            payload=replace(correction.payload, finding_ids=("F-07",)),
-        )
     chain = tuple(
         correction if item.record_id == correction.record_id else
         review if item.record_id == review.record_id else item
@@ -555,6 +550,19 @@ def test_pending_correction_resume_exception_rejects_near_misses(
     assert not artifact_migration._recoverable_pending_correction_record(
         state, chain, correction
     ), failure_mode
+
+
+def test_wrong_finding_prefix_is_rejected_before_correction_migration() -> None:
+    with pytest.raises(
+        ArtifactValidationError,
+        match=r"canonical C-\* finding ID",
+    ):
+        CorrectionWorkUnitPayload(
+            slice_id="01",
+            round_number=2,
+            paths=("src/core.py",),
+            finding_ids=("F-07",),
+        )
 
 
 @pytest.mark.parametrize(
