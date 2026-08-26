@@ -717,16 +717,24 @@ class ProductionWorkflowDriver(WorkflowDriver):
                     if isinstance(record.payload, CorrectionWorkUnitPayload)
                     and record.logical_id
                     == f"work-unit-{state.current_work_unit_id}"
-                    and record.payload.round_number == 1
                 )
-                if len(correction_records) != 1:
+                if not correction_records:
                     raise WorkflowExecutionError(
-                        "correction finding replay requires exactly one bound "
-                        "correction work-unit record"
+                        "correction finding replay requires a bound correction "
+                        "work-unit record"
                     )
+                correction_finding_ids = tuple(
+                    sorted(
+                        {
+                            finding_id
+                            for record in correction_records
+                            for finding_id in record.payload.finding_ids
+                        }
+                    )
+                )
                 projected = replay_findings(
                     replay,
-                    finding_ids=correction_records[0].payload.finding_ids,
+                    finding_ids=correction_finding_ids,
                 )
             else:
                 projected = replay_findings(replay)
@@ -3573,7 +3581,9 @@ def run_production_workflow(
                 return WorkflowRunResult(state, _history(state), commit_ref)
             if not state.planned_slices:
                 raise WorkflowExecutionError("completed plan has no persisted SLICE_PLAN")
-            carried_findings = _carry_forward_findings(state, history)
+            carried_findings = driver.carry_forward_native_findings(
+                state, history.findings
+            )
             state = state.start_work_unit(
                 slice_id=1,
                 kind=WorkUnitKind.SLICE,
@@ -3594,7 +3604,9 @@ def run_production_workflow(
         )
         if pending is not None:
             identity = inspect_repository(root)
-            carried_findings = _carry_forward_findings(state, history)
+            carried_findings = driver.carry_forward_native_findings(
+                state, history.findings
+            )
             state = state.start_work_unit(
                 slice_id=pending.slice_id,
                 kind=WorkUnitKind.SLICE,
@@ -3611,7 +3623,9 @@ def run_production_workflow(
             state = driver.active_state or state
             continue
 
-        carried_findings = _carry_forward_findings(state, history)
+        carried_findings = driver.carry_forward_native_findings(
+            state, history.findings
+        )
         state = state.start_final_review_work_unit()
         carried_attestations = history.attestations[-1:]
         driver.checkpoint(

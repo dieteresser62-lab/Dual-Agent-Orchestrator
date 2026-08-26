@@ -2070,15 +2070,32 @@ def test_combined_native_finding_authority_rejects_state_mirror_drift(
     assert driver.authoritative_native_findings(
         correction_state, (closed_second, finding)
     ) == (finding, closed_second)
+    later_blocker = FindingRecord(
+        finding_id="C-03",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="A later correction review found another actionable defect.",
+        acceptance_test="Later correction rounds carry newly opened blockers.",
+        origin=FindingOrigin("FINAL", 2, AgentRole.CLAUDE),
+    )
+    bridge.append(
+        orchestrator.finding_payload(
+            later_blocker,
+            work_unit_id=correction_state.current_work_unit_id,
+        ),
+        logical_id="finding-C-03",
+        idempotency_key="finding:C-03:opened:work_unit:4:2:claude",
+        fingerprint_sha256="d" * 64,
+    )
     round_two = correction_state.record_review_denial(
         reviewer=Reviewer.CLAUDE,
-        open_findings=("C-01",),
+        open_findings=("C-01", "C-03"),
         return_step=WorkflowStep.CODEX_FINAL_CORRECTION,
     )
     driver.bind_work_unit(round_two)
     assert driver.authoritative_native_findings(
-        round_two, (closed_second, finding)
-    ) == (finding, closed_second)
+        round_two, (later_blocker, closed_second, finding)
+    ) == (finding, closed_second, later_blocker)
     correction_records = tuple(
         record
         for record in bridge.store.load_chain()
@@ -2086,9 +2103,13 @@ def test_combined_native_finding_authority_rejects_state_mirror_drift(
         and record.logical_id == f"work-unit-{round_two.current_work_unit_id}"
     )
     assert tuple(record.payload.round_number for record in correction_records) == (1, 2)
+    assert tuple(record.payload.finding_ids for record in correction_records) == (
+        ("C-01", "C-02"),
+        ("C-01", "C-03"),
+    )
     assert driver.carry_forward_native_findings(
-        round_two, (closed_second, finding)
-    ) == (finding, closed_second, historical_finding)
+        round_two, (later_blocker, closed_second, finding)
+    ) == (finding, closed_second, later_blocker, historical_finding)
     with pytest.raises(
         WorkflowExecutionError,
         match="differs from the state-v3 mirror",
