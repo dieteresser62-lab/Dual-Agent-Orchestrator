@@ -396,6 +396,12 @@ class WorkflowDriver(Protocol):
         mirror_findings: tuple[FindingRecord, ...],
     ) -> tuple[FindingRecord, ...]: ...
 
+    def carry_forward_native_findings(
+        self,
+        state: WorkflowState,
+        current_findings: tuple[FindingRecord, ...],
+    ) -> tuple[FindingRecord, ...]: ...
+
     def invoke_codex(
         self, invocation: CodexInvocation
     ) -> str | NativeAgentCodexOutput: ...
@@ -982,13 +988,10 @@ class WorkflowEngine:
                     or not committed.completed
                 ):
                     return committed
-                state = committed.state.start_final_review_work_unit()
-                active_history = WorkflowHistory(
-                    state.current_work_unit_id,
-                    findings=committed.history.findings,
+                state, active_history = self._start_final_review_work_unit(
+                    committed.state,
+                    committed.history,
                 )
-                self._bind_driver_work_unit(state)
-                self.driver.checkpoint(state, active_history)
                 continue
             if step is WorkflowStep.COMPLETED:
                 if (
@@ -1011,14 +1014,10 @@ class WorkflowEngine:
     ) -> WorkflowRunResult:
         """Start or resume the branch-wide final review on the production engine."""
         if state.current_work_unit.kind is not WorkUnitKind.FINAL_REVIEW:
-            carried_findings = history.findings if history is not None else ()
-            state = state.start_final_review_work_unit()
-            history = WorkflowHistory(
-                state.current_work_unit_id,
-                findings=carried_findings,
+            state, history = self._start_final_review_work_unit(
+                state,
+                history or WorkflowHistory(state.current_work_unit_id),
             )
-            self._bind_driver_work_unit(state)
-            self.driver.checkpoint(state, history)
         return self.run_current_work_unit(state, context, history)
 
     def decide_current_gate(
@@ -2970,6 +2969,52 @@ class WorkflowEngine:
                 "authoritative finding replay returned an invalid projection"
             )
         return replace(history, findings=findings)
+
+    def _carry_forward_native_findings(
+        self,
+        state: WorkflowState,
+        current_findings: tuple[FindingRecord, ...],
+    ) -> tuple[FindingRecord, ...]:
+        """Carry the complete native ledger into a newly started work unit."""
+        binding = state.protocol_binding
+        if (
+            binding is None
+            or binding.codex_result_transport != NATIVE_CODEX_RESULT_TRANSPORT
+            or binding.claude_review_transport != NATIVE_CLAUDE_REVIEW_TRANSPORT
+        ):
+            return current_findings
+        carrier = getattr(self.driver, "carry_forward_native_findings", None)
+        if not callable(carrier):
+            raise WorkflowExecutionError(
+                "combined native workflow has no finding carry-forward"
+            )
+        findings = carrier(state, current_findings)
+        if not isinstance(findings, tuple) or any(
+            not isinstance(item, FindingRecord) for item in findings
+        ):
+            raise WorkflowExecutionError(
+                "native finding carry-forward returned an invalid projection"
+            )
+        return findings
+
+    def _start_final_review_work_unit(
+        self,
+        state: WorkflowState,
+        history: WorkflowHistory,
+    ) -> tuple[WorkflowState, WorkflowHistory]:
+        """Start final review with the complete cross-work-unit finding ledger."""
+        carried_findings = self._carry_forward_native_findings(
+            state,
+            history.findings,
+        )
+        state = state.start_final_review_work_unit()
+        history = WorkflowHistory(
+            state.current_work_unit_id,
+            findings=carried_findings,
+        )
+        self._bind_driver_work_unit(state)
+        self.driver.checkpoint(state, history)
+        return state, history
 
     @staticmethod
     def _review_evidence(

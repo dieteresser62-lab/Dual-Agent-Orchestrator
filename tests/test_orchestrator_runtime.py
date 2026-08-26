@@ -1962,21 +1962,39 @@ def test_combined_native_finding_authority_rejects_state_mirror_drift(
     driver.bind_work_unit(final_state)
     historical_finding = FindingRecord(
         finding_id="C-99",
-        finding_class=FindingClass.BLOCKER,
-        status=FindingStatus.OPEN,
+        finding_class=FindingClass.OBSERVATION,
+        status=FindingStatus.CLOSED,
         summary="An unrelated finding from the final review.",
         acceptance_test="Correction authority must ignore this finding.",
         origin=FindingOrigin("FINAL", 1, AgentRole.CLAUDE),
+        status_rationale="The unrelated observation was already resolved.",
+    )
+    opened_historical = replace(
+        historical_finding,
+        status=FindingStatus.OPEN,
+        status_rationale=None,
     )
     bridge = driver._artifact_bridge
     assert bridge is not None
     bridge.append(
         orchestrator.finding_payload(
-            historical_finding,
+            opened_historical,
             work_unit_id=final_state.current_work_unit_id,
         ),
         logical_id="finding-C-99",
         idempotency_key="finding:C-99:opened:work_unit:3:1:claude",
+        fingerprint_sha256="b" * 64,
+    )
+    bridge.append(
+        orchestrator.finding_payload(
+            historical_finding,
+            actor=AgentRole.CLAUDE,
+            action="status_changed",
+            rationale=historical_finding.status_rationale,
+            work_unit_id=final_state.current_work_unit_id,
+        ),
+        logical_id="finding-C-99",
+        idempotency_key="finding:C-99:status_changed:work_unit:3:1:claude",
         fingerprint_sha256="b" * 64,
     )
     finding = FindingRecord(
@@ -2018,6 +2036,15 @@ def test_combined_native_finding_authority_rejects_state_mirror_drift(
         status=FindingStatus.CLOSED,
         status_rationale="Verified in the authoritative record chain.",
     )
+    final_history = WorkflowHistory(
+        final_state.current_work_unit_id,
+        findings=(finding, second_finding, historical_finding),
+    )
+    final_state = replace(
+        final_state,
+        runtime_history={"current": final_history.to_dict(), "archive": []},
+    )
+    driver.bind_work_unit(final_state)
     correction_state = final_state.complete_current_work_unit().start_correction_work_unit(
         start_commit=head,
         scope_paths=("src/runtime.py",),
@@ -2043,6 +2070,25 @@ def test_combined_native_finding_authority_rejects_state_mirror_drift(
     assert driver.authoritative_native_findings(
         correction_state, (closed_second, finding)
     ) == (finding, closed_second)
+    round_two = correction_state.record_review_denial(
+        reviewer=Reviewer.CLAUDE,
+        open_findings=("C-01",),
+        return_step=WorkflowStep.CODEX_FINAL_CORRECTION,
+    )
+    driver.bind_work_unit(round_two)
+    assert driver.authoritative_native_findings(
+        round_two, (closed_second, finding)
+    ) == (finding, closed_second)
+    correction_records = tuple(
+        record
+        for record in bridge.store.load_chain()
+        if isinstance(record.payload, CorrectionWorkUnitPayload)
+        and record.logical_id == f"work-unit-{round_two.current_work_unit_id}"
+    )
+    assert tuple(record.payload.round_number for record in correction_records) == (1, 2)
+    assert driver.carry_forward_native_findings(
+        round_two, (closed_second, finding)
+    ) == (finding, closed_second, historical_finding)
     with pytest.raises(
         WorkflowExecutionError,
         match="differs from the state-v3 mirror",

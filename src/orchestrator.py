@@ -717,6 +717,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
                     if isinstance(record.payload, CorrectionWorkUnitPayload)
                     and record.logical_id
                     == f"work-unit-{state.current_work_unit_id}"
+                    and record.payload.round_number == 1
                 )
                 if len(correction_records) != 1:
                     raise WorkflowExecutionError(
@@ -741,6 +742,34 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 "authoritative finding replay differs from the state-v3 mirror"
             )
         return projected
+
+    def carry_forward_native_findings(
+        self,
+        state: WorkflowState,
+        current_findings: tuple[FindingRecord, ...],
+    ) -> tuple[FindingRecord, ...]:
+        """Restore the complete record-native ledger at a work-unit boundary."""
+        active = self.active_state
+        bridge = self._artifact_bridge
+        if (
+            active is None
+            or bridge is None
+            or active.run_id != state.run_id
+            or active.current_work_unit_id != state.current_work_unit_id
+        ):
+            raise WorkflowExecutionError(
+                "native finding carry-forward lacks its immutable state binding"
+            )
+        _ = current_findings
+        try:
+            replay = replay_artifacts(
+                bridge.store.load_chain(), state.run_id, allow_empty=True
+            )
+            return replay_findings(replay)
+        except ArtifactReplayError as exc:
+            raise WorkflowExecutionError(
+                f"native finding carry-forward failed: {exc}"
+            ) from exc
 
     def _native_codex_response_path(self, invocation: CodexInvocation) -> Path:
         state = self.active_state
