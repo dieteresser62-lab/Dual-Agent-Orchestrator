@@ -53,6 +53,10 @@ from native_review_request import (
     NativeReviewRequestError,
     validate_native_review_provider_response,
 )
+from native_provider_schema import (
+    NativeProviderSchemaError,
+    assert_provider_capabilities,
+)
 from validation_matrix import ValidationMatrixRunner, ValidationRequest
 from workflow_state import AgentFailureKind
 from artifact_models import ProviderUsagePayload
@@ -735,14 +739,21 @@ def verify_agent_capabilities(adapter: AgentAdapter, *, strict_dns: bool = False
             f"Cannot determine {adapter.name} version using {resolved_binary}: "
             f"{(version_err or version_out).strip() or 'empty output'}"
         )
-    if not any(
+    version_matches_static_pattern = any(
         re.fullmatch(pattern, version_text)
         for pattern in adapter.capability.supported_version_patterns
-    ):
-        raise AgentCompatibilityError(
-            f"Unsupported {adapter.name} CLI version {version_text!r}; "
-            "run the documented capability matrix and approve this version before retrying."
-        )
+    )
+    if not version_matches_static_pattern:
+        try:
+            assert_provider_capabilities(
+                adapter.name,
+                (),
+                cli_version=version_text,
+            )
+        except NativeProviderSchemaError as exc:
+            raise AgentCompatibilityError(
+                f"Unsupported {adapter.name} CLI version {version_text!r}: {exc}"
+            ) from exc
 
     help_rc, help_out, help_err = run_local_command(
         [resolved_binary, *adapter.capability.help_args]

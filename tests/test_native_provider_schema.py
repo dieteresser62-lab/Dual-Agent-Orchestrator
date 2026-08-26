@@ -7,6 +7,7 @@ import pytest
 from native_provider_schema import (
     NativeProviderSchemaError,
     assert_provider_capabilities,
+    compatible_cli_version,
     defensive_provider_projection,
     load_capability_table,
     load_exception_table,
@@ -95,10 +96,22 @@ def test_capability_and_exception_tables_are_typed_and_versioned() -> None:
 def test_unprobed_feature_and_stale_version_fail_closed() -> None:
     with pytest.raises(NativeProviderSchemaError, match="not positively probed"):
         assert_provider_capabilities("codex", ("positional_tuple",))
-    with pytest.raises(NativeProviderSchemaError, match="CLI version differs"):
-        assert_provider_capabilities(
-            "codex", (), cli_version="codex-cli 0.147.1"
-        )
+    assert compatible_cli_version("claude", "2.1.246 (Claude Code)") is True
+    assert compatible_cli_version("claude", "2.9.0 (Claude Code)") is True
+    assert compatible_cli_version("codex", "codex-cli 0.147.1") is True
+    for provider, version in (
+        ("claude", "2.1.240 (Claude Code)"),
+        ("claude", "3.0.0 (Claude Code)"),
+        ("codex", "codex-cli 0.146.9"),
+        ("codex", "codex-cli 0.148.0"),
+    ):
+        with pytest.raises(NativeProviderSchemaError, match="CLI version differs"):
+            assert_provider_capabilities(provider, (), cli_version=version)
+
+
+def test_unknown_cli_version_format_fails_closed() -> None:
+    with pytest.raises(NativeProviderSchemaError, match="unsupported format"):
+        compatible_cli_version("claude", "Claude Code development build")
 
 
 def test_codex_transport_profile_ignores_only_isolation_and_runtime_paths() -> None:

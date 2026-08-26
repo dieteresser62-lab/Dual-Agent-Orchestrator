@@ -6,6 +6,7 @@
       "provider": "claude",
       "binary_name": "claude",
       "cli_version": "2.1.241 (Claude Code)",
+      "version_policy": "same-major-forward",
       "transport_profile": {
         "provider": "claude",
         "binary_name": "claude",
@@ -43,6 +44,7 @@
       "provider": "codex",
       "binary_name": "codex",
       "cli_version": "codex-cli 0.147.0",
+      "version_policy": "same-minor-forward",
       "transport_profile": {
         "provider": "codex",
         "binary_name": "codex",
