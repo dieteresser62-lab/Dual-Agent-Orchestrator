@@ -637,9 +637,17 @@ def _context() -> WorkflowContext:
         assignment="Implement Slice 10",
         distilled_plan="Codex implements; Claude reviews and approves each round.",
         slice_summary="Asymmetric state-v3 workflow engine.",
+        work_plan_path="docs/internal/plan.md",
         expected_test_files=(TEST_FILE,),
         test_changes_approved=True,
     )
+
+
+def _with_open_findings(
+    state: WorkflowState, finding_ids: tuple[str, ...]
+) -> WorkflowState:
+    current = replace(state.current_work_unit, open_findings=finding_ids)
+    return replace(state, work_units=(*state.work_units[:-1], current))
 
 
 def _invocation_failure(
@@ -946,6 +954,33 @@ def test_native_claude_review_bypasses_legacy_marker_parser(
 def test_native_codex_result_bypasses_legacy_marker_parser(
     monkeypatch, step: WorkflowStep, request_type: str
 ) -> None:
+    finding = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="The native correction stays structured.",
+        acceptance_test="No text result parser is invoked.",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
+    previous_findings = (
+        (finding,) if step is WorkflowStep.CODEX_CORRECTION else ()
+    )
+    result_findings = (
+        (
+            replace(
+                finding,
+                responses=(
+                    FindingResponse(
+                        FindingResponseDecision.ACCEPTED,
+                        "The native correction remains parser-free.",
+                    ),
+                ),
+            ),
+        )
+        if previous_findings
+        else ()
+    )
+
     @dataclass
     class NativeCodexDriver(FakeDriver):
         persisted: list[NativeAgentCodexOutput] = field(default_factory=list)
@@ -963,7 +998,7 @@ def test_native_codex_result_bypasses_legacy_marker_parser(
                 stop_request=None,
                 validation=None,
                 test_files=(TEST_FILE,),
-                findings=(),
+                findings=result_findings,
                 slice_plan=(),
             )
             canonical = json.dumps(
@@ -986,7 +1021,7 @@ def test_native_codex_result_bypasses_legacy_marker_parser(
             output: NativeAgentCodexOutput,
             previous_findings: tuple[FindingRecord, ...],
         ) -> None:
-            assert previous_findings == ()
+            assert previous_findings == previous_findings_expected
             self.persisted.append(output)
 
     state = replace(
@@ -997,17 +1032,25 @@ def test_native_codex_result_bypasses_legacy_marker_parser(
             codex_result_transport="native-codex-v2",
         ),
     )
+    if previous_findings:
+        state = _with_open_findings(state, ("C-01",))
+    previous_findings_expected = previous_findings
     driver = NativeCodexDriver(
         snapshots=[_changes("b", "src/early.py", TEST_FILE)],
         codex_outputs=[],
         reviewer_outputs=[],
     )
     advanced, history = WorkflowEngine(driver)._run_codex(
-        state, _context(), WorkflowHistory(state.current_work_unit_id)
+        state,
+        _context(),
+        WorkflowHistory(
+            state.current_work_unit_id,
+            findings=previous_findings,
+        ),
     )
 
     assert advanced.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
-    assert history.findings == ()
+    assert history.findings == result_findings
     assert len(driver.persisted) == 1
     invocation = driver.codex_calls[0]
     assert invocation.native_request is not None
@@ -1015,6 +1058,109 @@ def test_native_codex_result_bypasses_legacy_marker_parser(
     assert invocation.native_request.document["authorized_paths"] == sorted(
         state.current_slice.scope_paths
     )
+
+
+def test_native_codex_execution_packages_exclude_sibling_and_unaffected_evidence() -> None:
+    plan = """# Approved multi-Slice plan
+
+### Slice 1 - Target Slice
+
+**Ziel**
+
+Implement TARGET-GOAL-SENTINEL only.
+
+**Exakter Änderungspfad**
+
+- `src/early.py`
+- `tests/test_workflow.py`
+
+**Querverweise**
+
+- `README.md#native-transport`
+
+**\u0041kzeptanzkriterien**
+
+- Preserve TARGET-CRITERION-SENTINEL.
+
+### Slice 2 - SIBLING-TWO-SENTINEL
+
+**\u0041kzeptanzkriterien**
+
+- SECOND-CRITERION-SENTINEL
+
+### Slice 3 - SIBLING-THREE-SENTINEL
+
+**\u0041kzeptanzkriterien**
+
+- THIRD-CRITERION-SENTINEL
+"""
+    implementation_state = _slice_state(
+        scope_paths=("src/early.py", TEST_FILE)
+    )
+    implementation_contract = CodexStepContract(
+        name="compact-implementation",
+        readiness_marker=ReadinessMarker.IMPLEMENTATION,
+        slice_id="01",
+        round_number=1,
+        require_test_files_record=True,
+    )
+    implementation = WorkflowEngine._native_codex_request(
+        state=implementation_state,
+        context=replace(_context(), approved_plan_text=plan),
+        history=WorkflowHistory(implementation_state.current_work_unit_id),
+        contract=implementation_contract,
+        request_kind=NativeCodexRequestKind.IMPLEMENTATION,
+    )
+    implementation_json = implementation.canonical_json
+
+    assert "TARGET-GOAL-SENTINEL" in implementation_json
+    assert "TARGET-CRITERION-SENTINEL" in implementation_json
+    assert "SIBLING-TWO-SENTINEL" not in implementation_json
+    assert "SIBLING-THREE-SENTINEL" not in implementation_json
+    assert plan not in implementation_json
+    assert implementation.document["work_context"] == _context().distilled_context
+
+    affected = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="AFFECTED-FINDING-SENTINEL",
+        acceptance_test="AFFECTED-ACCEPTANCE-SENTINEL",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
+    unrelated = FindingRecord(
+        finding_id="C-02",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.CLOSED,
+        summary="UNRELATED-CLOSED-SENTINEL",
+        acceptance_test="UNRELATED-ACCEPTANCE-SENTINEL",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+        status_rationale="Already closed.",
+    )
+    correction_state = _with_open_findings(
+        implementation_state.with_current_step(WorkflowStep.CODEX_CORRECTION),
+        ("C-01",),
+    )
+    correction_contract = replace(implementation_contract, round_number=2)
+    correction = WorkflowEngine._native_codex_request(
+        state=correction_state,
+        context=_context(),
+        history=WorkflowHistory(
+            correction_state.current_work_unit_id,
+            findings=(affected, unrelated),
+        ),
+        contract=correction_contract,
+        request_kind=NativeCodexRequestKind.CORRECTION,
+        correction_delta="CURRENT-DELTA-SENTINEL",
+        correction_fingerprint="c" * 64,
+    )
+    correction_json = correction.canonical_json
+
+    assert correction.document["current_fingerprint"] == "c" * 64
+    assert "CURRENT-DELTA-SENTINEL" in correction_json
+    assert "AFFECTED-FINDING-SENTINEL" in correction_json
+    assert "UNRELATED-CLOSED-SENTINEL" not in correction_json
+    assert "PRIOR-FULL-DIFF-SENTINEL" not in correction_json
 
 
 def test_native_codex_plan_bypasses_legacy_marker_parser(monkeypatch) -> None:
@@ -1143,6 +1289,7 @@ def test_combined_native_codex_finding_steps_fail_before_provider_on_mirror_drif
                 codex_result_transport="native-codex-v2",
             ),
         )
+        state = _with_open_findings(state, ("C-01",))
     driver = FakeDriver(
         snapshots=[_changes("b", "src/early.py", TEST_FILE)],
         codex_outputs=[],
@@ -1179,6 +1326,7 @@ def test_combined_native_claude_review_fails_before_provider_on_mirror_drift() -
             codex_result_transport="native-codex-v2",
         ),
     )
+    state = _with_open_findings(state, ("C-01",))
     driver = FakeDriver(
         snapshots=[_changes("b", "src/early.py", TEST_FILE)],
         codex_outputs=[],
@@ -1770,6 +1918,7 @@ def test_combined_native_codex_record_ahead_recovery_precedes_mirror_guard() -> 
             codex_result_transport="native-codex-v2",
         ),
     )
+    state = _with_open_findings(state, ("C-01",))
     driver = RecoveryDriver(
         snapshots=[_changes("b", "src/early.py", TEST_FILE)],
         codex_outputs=[],
@@ -3742,7 +3891,7 @@ def test_native_record_ahead_review_is_mirrored_before_next_policy_or_provider()
             return replay
 
     driver = RecoveringDriver(
-        snapshots=[],
+        snapshots=[_changes("f", "src/early.py", TEST_FILE)],
         codex_outputs=[
             "STOP_REQUESTED: UNEXPECTED-PATH | await a bound scope decision\n"
             "STATUS: DONE"

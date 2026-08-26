@@ -886,6 +886,26 @@ def test_request_rejects_unsafe_duplicate_or_unsorted_paths(paths: tuple[str, ..
         replace(_spec(), authorized_paths=paths)
 
 
+@pytest.mark.parametrize(
+    "evidence",
+    (
+        (
+            NativeReviewEvidenceInput("e01_first", "diff", "same"),
+            NativeReviewEvidenceInput("e02_second", "diff", "same"),
+        ),
+        (
+            NativeReviewEvidenceInput("e01_first", "diff", "first", "src/a.py"),
+            NativeReviewEvidenceInput("e02_second", "diff", "second", "src/a.py"),
+        ),
+    ),
+)
+def test_request_rejects_duplicate_evidence_content_or_source_path(
+    evidence: tuple[NativeReviewEvidenceInput, ...],
+) -> None:
+    with pytest.raises(NativeReviewRequestError, match="unique"):
+        replace(_spec(), evidence=evidence)
+
+
 def test_bound_parser_rejects_legacy_narrow_request_id() -> None:
     bundle = build_native_review_request(_spec())
     result = parse_bound_native_contract_result(

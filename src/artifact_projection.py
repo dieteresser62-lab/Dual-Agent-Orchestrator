@@ -164,6 +164,7 @@ def render_replay_sections(replay: ArtifactReplayResult) -> Mapping[str, str]:
     findings: list[str] = []
     bindings_and_units: list[str] = []
     latest_attempts: dict[tuple[str, int], tuple[int, ArtifactRecord]] = {}
+    input_measurements: dict[str, ProviderInputMeasurementPayload] = {}
     work_unit_rounds: dict[str, int] = {}
     for record in chain:
         if (
@@ -186,6 +187,8 @@ def render_replay_sections(replay: ArtifactReplayResult) -> Mapping[str, str]:
             latest_attempts[(payload.logical_operation_id, payload.attempt_number)] = (
                 sequence, record
             )
+        elif isinstance(payload, ProviderInputMeasurementPayload):
+            input_measurements[record.record_id] = payload
         if isinstance(payload, AgentResultPayload):
             transport = (
                 f"; Transport `{_safe(payload.transport_schema)}`; Request "
@@ -349,9 +352,9 @@ def render_replay_sections(replay: ArtifactReplayResult) -> Mapping[str, str]:
                 and item.payload.usage is not None
                 and getattr(item.payload.usage, field_name) is not None
             ]
-            total = sum(values) if values else 0
+            rendered_total = str(sum(values)) if values else "unknown"
             summaries.append(
-                f"{field_name}=sum:{total},known:{len(values)},unknown:{len(attempts) - len(values)}"
+                f"{field_name}=sum:{rendered_total},known:{len(values)},unknown:{len(attempts) - len(values)}"
             )
         first = attempts[0][1].payload
         assert isinstance(first, ProviderAttemptPayload)
@@ -359,13 +362,40 @@ def render_replay_sections(replay: ArtifactReplayResult) -> Mapping[str, str]:
             item.payload.phase == "started" for _, item in attempts
             if isinstance(item.payload, ProviderAttemptPayload)
         )
+        measurements = [
+            input_measurements.get(item.payload.measurement_record_id)
+            for _, item in attempts
+            if isinstance(item.payload, ProviderAttemptPayload)
+        ]
+        known_measurements = tuple(item for item in measurements if item is not None)
+        input_chars = (
+            str(known_measurements[0].total_chars)
+            if known_measurements
+            and all(item.total_chars == known_measurements[0].total_chars for item in known_measurements)
+            else "unknown"
+        )
+        input_bytes = (
+            str(known_measurements[0].total_bytes)
+            if known_measurements
+            and all(item.total_bytes == known_measurements[0].total_bytes for item in known_measurements)
+            else "unknown"
+        )
+        retry_status = (
+            "open"
+            if open_count
+            else "retried"
+            if len(attempts) > 1
+            else "single-attempt"
+        )
         validations.append(
             f"- Providerattempt-Summe Run `{_safe(replay.expected_run_id)}` / "
             f"Operation `{_safe(logical_operation_id)}` (`{first.provider.value}/"
             f"{_safe(first.operation)}`; Modell `{_safe(first.model)}`; Effort "
             f"`{_safe(first.effort)}`): Attempts `{len(attempts)}`, offen `{open_count}`, "
             f"Duration `{known_duration:.6f}` (bekannt `{duration_known}`, unbekannt "
-            f"`{len(attempts) - duration_known}`); " + "; ".join(summaries)
+            f"`{len(attempts) - duration_known}`); Inputzeichen `{input_chars}`, "
+            f"Inputbytes `{input_bytes}`; Retrystatus `{retry_status}`; "
+            + "; ".join(summaries)
         )
         for sequence, record in attempts:
             payload = record.payload
@@ -377,10 +407,13 @@ def render_replay_sections(replay: ArtifactReplayResult) -> Mapping[str, str]:
                 )
                 if payload.usage is not None else "unknown"
             )
+            measurement = input_measurements.get(payload.measurement_record_id)
             validations.append(
                 f"  - {sequence}. `{record.record_id}`: Attempt `{payload.attempt_number}` "
                 f"= `{payload.phase}`; Messung `{payload.measurement_record_id}`; "
                 f"Modell `{_safe(payload.model)}`; Effort `{_safe(payload.effort)}`; "
+                f"Inputzeichen `{measurement.total_chars if measurement is not None else 'unknown'}`; "
+                f"Inputbytes `{measurement.total_bytes if measurement is not None else 'unknown'}`; "
                 f"Duration `{payload.duration_seconds if payload.duration_seconds is not None else 'unknown'}`; "
                 f"Fehler `{_safe(payload.failure_kind or 'none')}`; Usage `{usage}`"
             )

@@ -157,6 +157,7 @@ class NativeReviewRequestSpec:
                 NativeReviewRequestErrorCode.EVIDENCE_INVALID,
                 "evidence must be non-empty, sorted, and unique by evidence_id",
             )
+        _require_distinct_evidence(self.evidence)
         expected_operation = {
             NativeReviewKind.PLAN: "claude_plan_review",
             NativeReviewKind.SLICE: "claude_slice_review",
@@ -610,6 +611,23 @@ def _require_repository_path(value: str, label: str) -> None:
         raise NativeReviewRequestError(
             NativeReviewRequestErrorCode.EVIDENCE_INVALID,
             f"{label} must be a canonical repository-relative path",
+        )
+
+
+def _require_distinct_evidence(
+    evidence: tuple[NativeReviewEvidenceInput, ...],
+) -> None:
+    source_paths = tuple(item.source_path for item in evidence if item.source_path is not None)
+    if len(source_paths) != len(set(source_paths)):
+        raise NativeReviewRequestError(
+            NativeReviewRequestErrorCode.EVIDENCE_INVALID,
+            "evidence source_path values must be unique",
+        )
+    content_digests = tuple(_sha256_text(item.content) for item in evidence)
+    if len(content_digests) != len(set(content_digests)):
+        raise NativeReviewRequestError(
+            NativeReviewRequestErrorCode.EVIDENCE_INVALID,
+            "evidence content and digests must be unique within one request",
         )
 
 

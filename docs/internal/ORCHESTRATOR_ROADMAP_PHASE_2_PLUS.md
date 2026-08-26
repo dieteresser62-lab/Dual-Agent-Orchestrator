@@ -51,16 +51,17 @@ Logzeilen, ohne rohe Provider-JSON-Zeilen im normalen Watch-Output anzuzeigen
 oder weitere Providerkosten zu erzeugen. Der Vollmodus und die unveränderte
 Rohantwortpersistenz bleiben für Diagnosen erhalten.
 
-### 3.2 Native-only-Cutover, Textparser-Retirement und Evidenzeffizienz
+### 3.2 Erreicht: Native-only-Cutover, Textparser-Retirement und strukturelle Eingabereduktion
 
-Das aktive Arbeitspaket
+Das umgesetzte Arbeitspaket
 [`native-only-transport-parser-retirement-und-evidenzeffizienz-arbeitsplan.md`](native-only-transport-parser-retirement-und-evidenzeffizienz-arbeitsplan.md)
 macht die nativen Codex- und Claude-Verträge verpflichtend, entfernt die noch
 produktive Textresultat-, Marker- und LLM-Reparaturarchitektur und ersetzt
 redundante Vollplan-/Prompt-/Korrekturevidenz durch digestgebundene
 operationsspezifische Pakete. Die Einsparung wird strukturell und über
 kanonische Zeichen-/Bytezahlen nachgewiesen; tatsächliche Tokens werden nur aus
-persistierter Providerusage berichtet.
+persistierter Providerusage berichtet. Die Recordprojektion weist außerdem
+Attemptanzahl, Laufzeit und Retrystatus aus; fehlende Usage bleibt `unknown`.
 
 ### 3.3 Contract- und Corpuspflege
 
@@ -74,9 +75,10 @@ persistierter Providerusage berichtet.
 
 ### 3.4 Betriebsbeobachtbarkeit
 
-- Attempt-, Quota- und Retrytelemetrie in der Markdownprojektion verdichten;
+- Kosten- und Laufzeittrends über mehrere Runs aus den bestehenden
+  operationenbezogenen Attemptprojektionen ableiten;
 - Resumeursachen und Profilabweichungen menschenlesbar erklären;
-- Kosten- und Laufzeittrends aus strukturierten Records ableiten, ohne die
+- weitergehende Trends aus strukturierten Records ableiten, ohne die
   Recordkette als Datenquelle zu ersetzen.
 
 ### 3.5 Bootstrap-Smoke- und Langläufe

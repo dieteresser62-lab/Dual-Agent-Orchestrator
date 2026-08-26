@@ -35,6 +35,11 @@ from native_review_request import (
     build_native_review_request,
 )
 from provider_input_budget import ProviderInputBudgetExceeded
+from provider_input_efficiency import (
+    ProviderInputEfficiencyError,
+    build_correction_execution_package,
+    build_slice_execution_package,
+)
 from final_review_preflight import FinalReviewPreflightDenied
 
 from audit_trail import (
@@ -1151,6 +1156,23 @@ class WorkflowEngine:
         additional_authorized_paths = self._fingerprint_bound_codex_scope_paths(
             state
         )
+        correction_delta: str | None = None
+        correction_fingerprint: str | None = None
+        if request_kind is NativeCodexRequestKind.CORRECTION:
+            correction_start = state.current_slice.start_fingerprint
+            if correction_start is None:
+                raise WorkflowExecutionError(
+                    "native Codex correction requires a persisted start fingerprint"
+                )
+            correction_changes = self.driver.collect_changes(
+                state.current_slice.start_commit or state.branch_base
+            )
+            correction_fingerprint = correction_changes.fingerprint
+            # collect_changes() is already bound to the persisted Slice start
+            # commit. Its full diff is therefore the canonical current delta;
+            # asking the driver to reconstruct the same delta a second time
+            # would add another mutable input surface.
+            correction_delta = correction_changes.full_diff
         native_request = self._native_codex_request(
             state=state,
             context=context,
@@ -1158,6 +1180,8 @@ class WorkflowEngine:
             contract=contract,
             request_kind=request_kind,
             additional_authorized_paths=additional_authorized_paths,
+            correction_delta=correction_delta,
+            correction_fingerprint=correction_fingerprint,
         )
         invocation = CodexInvocation(
             unit.work_unit_id,
@@ -1174,7 +1198,31 @@ class WorkflowEngine:
             else None
         )
         if recovered is None and native_request is not None:
-            history = self._bind_authoritative_native_findings(state, history)
+            authoritative_history = self._bind_authoritative_native_findings(
+                state, history
+            )
+            if authoritative_history.findings != history.findings:
+                history = authoritative_history
+                native_request = self._native_codex_request(
+                    state=state,
+                    context=context,
+                    history=history,
+                    contract=contract,
+                    request_kind=request_kind,
+                    additional_authorized_paths=additional_authorized_paths,
+                    correction_delta=correction_delta,
+                    correction_fingerprint=correction_fingerprint,
+                )
+                invocation = CodexInvocation(
+                    unit.work_unit_id,
+                    state.current_step,
+                    unit.round_number,
+                    "",
+                    native_request=native_request,
+                    previous_findings=history.findings,
+                )
+            else:
+                history = authoritative_history
         state, output = self._invoke_role(
             state,
             history,
@@ -2968,6 +3016,8 @@ class WorkflowEngine:
         request_kind: NativeCodexRequestKind,
         work_context: str | None = None,
         additional_authorized_paths: tuple[str, ...] = (),
+        correction_delta: str | None = None,
+        correction_fingerprint: str | None = None,
     ) -> NativeCodexRequestBundle:
         """Build one Codex request exclusively from orchestrator-owned values."""
         if request_kind is NativeCodexRequestKind.FINAL_REPORT:
@@ -2988,7 +3038,11 @@ class WorkflowEngine:
             base_commit = state.branch_base
             authorized_paths = state.task_scope_patterns
         else:
-            current_fingerprint = state.current_slice.start_fingerprint
+            current_fingerprint = (
+                correction_fingerprint
+                if request_kind is NativeCodexRequestKind.CORRECTION
+                else state.current_slice.start_fingerprint
+            )
             base_commit = state.current_slice.start_commit or state.branch_base
             authorized_paths = state.current_slice.scope_paths
         if current_fingerprint is None:
@@ -3002,7 +3056,10 @@ class WorkflowEngine:
         authorized_paths = tuple(
             sorted({*authorized_paths, *additional_authorized_paths})
         )
-        effective_work_context = NATIVE_CODEX_SYSTEM_POLICY + "\n\n" + (
+        # The policy is a separately digested evidence item. Repeating it in the
+        # work context would make one logical input appear twice in the same
+        # provider request and would weaken component-level accounting.
+        effective_work_context = (
             context.distilled_context if work_context is None else work_context
         )
         if additional_authorized_paths:
@@ -3014,6 +3071,18 @@ class WorkflowEngine:
                 "allowlist even when absent from the original plan. Their presence is "
                 "not an UNEXPECTED-PATH condition."
             )
+        native_findings = history.findings
+        if request_kind is NativeCodexRequestKind.CORRECTION:
+            affected_ids = set(state.current_work_unit.open_findings)
+            native_findings = tuple(
+                item
+                for item in history.findings
+                if item.finding_id in affected_ids and item.status is FindingStatus.OPEN
+            )
+            if {item.finding_id for item in native_findings} != affected_ids:
+                raise WorkflowExecutionError(
+                    "native Codex correction lacks its exact affected open finding set"
+                )
         native_context = NativeCodexContext(
             run_id=state.run_id,
             work_unit_id=str(state.current_work_unit_id),
@@ -3021,29 +3090,71 @@ class WorkflowEngine:
             current_fingerprint=current_fingerprint,
             request_kind=request_kind,
             contract=contract,
-            previous_findings=history.findings,
+            previous_findings=native_findings,
         )
         evidence = [
             NativeCodexEvidenceInput(
                 "native-policy", "system_policy", NATIVE_CODEX_SYSTEM_POLICY
             )
         ]
-        if context.approved_plan_text is not None:
-            evidence.append(
-                NativeCodexEvidenceInput(
-                    "approved-plan",
-                    "approved_work_plan",
-                    context.approved_plan_text,
-                    source_path=context.work_plan_path,
+        request_assignment = context.assignment
+        try:
+            if (
+                request_kind is NativeCodexRequestKind.IMPLEMENTATION
+                and context.approved_plan_text is not None
+            ):
+                if context.work_plan_path is None:
+                    raise WorkflowExecutionError(
+                        "native implementation request lacks its source plan path"
+                    )
+                package = build_slice_execution_package(
+                    plan_text=context.approved_plan_text,
+                    source_plan_path=context.work_plan_path,
+                    slice_id=state.current_slice_id,
+                    authorized_paths=tuple(sorted(set(authorized_paths))),
                 )
-            )
+                evidence.append(
+                    NativeCodexEvidenceInput(
+                        "slice-execution-package",
+                        "slice_execution_package",
+                        package.canonical_json,
+                        source_path=context.work_plan_path,
+                    )
+                )
+                request_assignment = "Implement only the bound Slice execution package."
+            elif request_kind is NativeCodexRequestKind.CORRECTION:
+                if correction_delta is None or correction_fingerprint is None:
+                    raise WorkflowExecutionError(
+                        "native correction request lacks its current delta binding"
+                    )
+                package = build_correction_execution_package(
+                    current_fingerprint=correction_fingerprint,
+                    authorized_paths=tuple(sorted(set(authorized_paths))),
+                    findings=native_findings,
+                    current_delta=correction_delta,
+                )
+                evidence.append(
+                    NativeCodexEvidenceInput(
+                        "correction-execution-package",
+                        "correction_execution_package",
+                        package.canonical_json,
+                    )
+                )
+                request_assignment = (
+                    "Correct only the affected findings and current delta in the "
+                    "bound correction execution package."
+                )
+        except ProviderInputEfficiencyError as exc:
+            raise WorkflowExecutionError(
+                f"native Codex execution package is invalid: {exc}"
+            ) from exc
         return build_native_codex_request(
             NativeCodexRequestSpec(
                 context=native_context,
                 target_branch=context.current_branch or state.branch,
                 base_commit=base_commit,
                 authorized_paths=tuple(sorted(set(authorized_paths))),
-                assignment=context.assignment,
+                assignment=request_assignment,
                 work_context=effective_work_context,
                 evidence=tuple(sorted(evidence, key=lambda item: item.evidence_id)),
             )

@@ -290,6 +290,10 @@ def test_projection_reduces_attempts_and_keeps_unknown_usage_explicit(tmp_path) 
     assert "Fehler `network`" in rendered
     assert "Modell `sonnet`; Effort `high`" in rendered
     assert "local_input_chars" in rendered and "local_input_bytes" in rendered
+    assert "Inputzeichen `3`" in rendered
+    assert "Inputbytes `3`" in rendered
+    assert "Duration `2.000000`" in rendered
+    assert "Retrystatus `open`" in rendered
 
 
 def test_projection_can_render_an_accepted_replay_without_reduction_drift() -> None:

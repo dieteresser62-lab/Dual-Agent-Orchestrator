@@ -237,6 +237,26 @@ def test_large_evidence_is_digest_bound_and_uses_internal_artifact_path() -> Non
     assert manifest["sha256"] == asset.sha256
 
 
+@pytest.mark.parametrize(
+    "evidence",
+    (
+        (
+            NativeCodexEvidenceInput("e01_first", "diff", "same"),
+            NativeCodexEvidenceInput("e02_second", "diff", "same"),
+        ),
+        (
+            NativeCodexEvidenceInput("e01_first", "diff", "first", "src/a.py"),
+            NativeCodexEvidenceInput("e02_second", "diff", "second", "src/a.py"),
+        ),
+    ),
+)
+def test_request_rejects_duplicate_evidence_content_or_source_path(
+    evidence: tuple[NativeCodexEvidenceInput, ...],
+) -> None:
+    with pytest.raises(NativeCodexRequestError, match="unique"):
+        replace(_spec(), evidence=evidence)
+
+
 def test_content_ref_assets_reject_missing_extra_duplicate_swapped_and_changed() -> None:
     spec = _spec()
     evidence = (

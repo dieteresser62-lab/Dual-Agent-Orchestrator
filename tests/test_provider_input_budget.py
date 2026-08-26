@@ -116,3 +116,15 @@ def test_provider_input_component_accepts_closed_indexed_names(name: str) -> Non
 def test_provider_input_component_rejects_unknown_indexed_name() -> None:
     with pytest.raises(ValueError, match="unknown provider input component"):
         ProviderInputComponent("arbitrary_chunk_001", "payload")
+
+
+def test_prepared_provider_input_rejects_content_equal_components() -> None:
+    with pytest.raises(ValueError, match="unique content"):
+        PreparedProviderInput(
+            ("provider",),
+            None,
+            (
+                ProviderInputComponent("stdin_prompt", "same bytes"),
+                ProviderInputComponent("response_schema", "same bytes"),
+            ),
+        )

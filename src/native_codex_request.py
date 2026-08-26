@@ -161,6 +161,10 @@ class NativeCodexRequestSpec:
                 NativeCodexRequestErrorCode.EVIDENCE_INVALID,
                 "evidence must be non-empty, sorted, and unique",
             )
+        _require_distinct_evidence(
+            self.evidence,
+            NativeCodexRequestErrorCode.EVIDENCE_INVALID,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -547,6 +551,21 @@ def _require_sorted_paths(
         )
     for value in values:
         _require_repository_path(value, label, code)
+
+
+def _require_distinct_evidence(
+    evidence: tuple[NativeCodexEvidenceInput, ...],
+    code: NativeCodexRequestErrorCode,
+) -> None:
+    source_paths = tuple(item.source_path for item in evidence if item.source_path is not None)
+    if len(source_paths) != len(set(source_paths)):
+        raise NativeCodexRequestError(code, "evidence source_path values must be unique")
+    content_digests = tuple(_sha256_text(item.content) for item in evidence)
+    if len(content_digests) != len(set(content_digests)):
+        raise NativeCodexRequestError(
+            code,
+            "evidence content and digests must be unique within one request",
+        )
 
 
 def _require_internal_asset_path(value: str) -> None:
