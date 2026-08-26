@@ -1,4 +1,4 @@
-"""Closed, canonical native Claude review requests and compact repair requests."""
+"""Closed, canonical native Claude review requests."""
 
 from __future__ import annotations
 
@@ -47,7 +47,6 @@ class NativeReviewRequestErrorCode(StrEnum):
     CONTEXT_INVALID = "context-invalid"
     EVIDENCE_INVALID = "evidence-invalid"
     REQUEST_INVALID = "request-invalid"
-    REPAIR_INVALID = "repair-invalid"
 
 
 class NativeReviewRequestError(ValueError):
@@ -176,7 +175,6 @@ class NativeReviewRequestBundle:
     bound_context: BoundNativeReviewContext
     provider_response_schema_json: str
     evidence_assets: tuple[NativeReviewEvidenceAsset, ...] = ()
-    parent_bundle: NativeReviewRequestBundle | None = None
 
     def __post_init__(self) -> None:
         document = self.document
@@ -205,56 +203,20 @@ class NativeReviewRequestBundle:
                 NativeReviewRequestErrorCode.REQUEST_INVALID,
                 "request content differs from its bound digest",
             )
-        request_type = document["request_type"]
-        if request_type == "review_request":
-            if self.parent_bundle is not None:
-                raise NativeReviewRequestError(
-                    NativeReviewRequestErrorCode.REQUEST_INVALID,
-                    "review request cannot carry a repair parent",
-                )
-            expected_context = _review_context_request_projection(
-                self.bound_context.context
+        if document["request_type"] != "review_request":
+            raise NativeReviewRequestError(
+                NativeReviewRequestErrorCode.REQUEST_INVALID,
+                "only regular native review requests are supported",
             )
-            actual_context = {
-                key: document[key] for key in expected_context
-            }
-            if actual_context != expected_context:
-                raise NativeReviewRequestError(
-                    NativeReviewRequestErrorCode.REQUEST_INVALID,
-                    "request document differs from its bound review context",
-                )
-        else:
-            if self.parent_bundle is None:
-                raise NativeReviewRequestError(
-                    NativeReviewRequestErrorCode.REPAIR_INVALID,
-                    "repair request requires its immutable parent bundle",
-                )
-            parent = self.parent_bundle
-            if self.bound_context.context != parent.bound_context.context:
-                raise NativeReviewRequestError(
-                    NativeReviewRequestErrorCode.REPAIR_INVALID,
-                    "repair request context differs from its parent",
-                )
-            if document["parent_request_id"] != parent.bound_context.request_id:
-                raise NativeReviewRequestError(
-                    NativeReviewRequestErrorCode.REPAIR_INVALID,
-                    "repair request id does not bind its parent",
-                )
-            if (
-                document["current_fingerprint"]
-                != parent.document["current_fingerprint"]
-                or document["response_contract"]
-                != parent.document["response_contract"]
-            ):
-                raise NativeReviewRequestError(
-                    NativeReviewRequestErrorCode.REPAIR_INVALID,
-                    "repair request fingerprint or response contract differs from parent",
-                )
-            if self.evidence_assets:
-                raise NativeReviewRequestError(
-                    NativeReviewRequestErrorCode.REPAIR_INVALID,
-                    "compact repair request cannot carry evidence assets",
-                )
+        expected_context = _review_context_request_projection(
+            self.bound_context.context
+        )
+        actual_context = {key: document[key] for key in expected_context}
+        if actual_context != expected_context:
+            raise NativeReviewRequestError(
+                NativeReviewRequestErrorCode.REQUEST_INVALID,
+                "request document differs from its bound review context",
+            )
         try:
             provider_schema = json.loads(self.provider_response_schema_json)
         except (json.JSONDecodeError, TypeError) as exc:
@@ -361,16 +323,6 @@ class NativeReviewRequestBundle:
         parsed = json.loads(self.provider_response_schema_json)
         assert isinstance(parsed, dict)
         return parsed
-
-
-@dataclass(frozen=True, slots=True)
-class NativeReviewRepairError:
-    code: str
-    detail: str
-
-    def __post_init__(self) -> None:
-        _require_text(self.code, "repair error code", maximum=200)
-        _require_text(self.detail, "repair error detail", maximum=3000)
 
 
 def load_native_review_request_schema() -> dict[str, Any]:
@@ -509,65 +461,6 @@ def build_native_review_request(
         ),
         provider_response_schema_json=response_schema_json,
         evidence_assets=tuple(assets),
-    )
-
-
-def build_native_review_repair_request(
-    *,
-    parent: NativeReviewRequestBundle,
-    rejected_response_json: str,
-    errors: tuple[NativeReviewRepairError, ...],
-) -> NativeReviewRequestBundle:
-    _require_text(
-        rejected_response_json,
-        "rejected_response_json",
-        maximum=120_000,
-        code=NativeReviewRequestErrorCode.REPAIR_INVALID,
-    )
-    if not errors:
-        raise NativeReviewRequestError(
-            NativeReviewRequestErrorCode.REPAIR_INVALID,
-            "repair request requires at least one typed error",
-        )
-    try:
-        decoded = json.loads(rejected_response_json)
-    except json.JSONDecodeError as exc:
-        raise NativeReviewRequestError(
-            NativeReviewRequestErrorCode.REPAIR_INVALID,
-            "rejected response must be canonical JSON",
-        ) from exc
-    canonical_rejected = _canonical_json(decoded)
-    if rejected_response_json != canonical_rejected:
-        raise NativeReviewRequestError(
-            NativeReviewRequestErrorCode.REPAIR_INVALID,
-            "rejected response must be canonical JSON",
-        )
-    binding: dict[str, Any] = {
-        "schema_version": REQUEST_SCHEMA_VERSION,
-        "request_type": "review_contract_repair_request",
-        "reviewer": "claude",
-        "transport": CLAUDE_REVIEW_TRANSPORT,
-        "parent_request_id": parent.bound_context.request_id,
-        "current_fingerprint": parent.document["current_fingerprint"],
-        "rejected_response_sha256": _sha256_text(rejected_response_json),
-        "rejected_response_json": rejected_response_json,
-        "errors": [
-            {"code": item.code, "detail": item.detail} for item in errors
-        ],
-        "response_contract": parent.document["response_contract"],
-    }
-    digest = hashlib.sha256(_canonical_json(binding).encode("utf-8")).hexdigest()
-    request_id = f"native-review-request-{digest}"
-    document = {**binding, "request_id": request_id}
-    return NativeReviewRequestBundle(
-        canonical_json=canonical_native_review_request_json(document),
-        bound_context=BoundNativeReviewContext(
-            context=parent.bound_context.context,
-            request_id=request_id,
-            request_digest=digest,
-        ),
-        provider_response_schema_json=parent.provider_response_schema_json,
-        parent_bundle=parent,
     )
 
 

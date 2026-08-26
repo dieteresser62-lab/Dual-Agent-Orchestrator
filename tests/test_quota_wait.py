@@ -9,8 +9,9 @@ from zoneinfo import ZoneInfo
 from agent_adapters import (
     AgentOutputError,
     AgentPermissionError,
-    ClaudeAdapter,
+    NativeClaudeReviewAdapter,
 )
+from agent_config import AgentSettings
 from agent_runtime import (
     AgentInvocationError,
     AgentProcessError,
@@ -23,6 +24,12 @@ from workflow_state import AgentFailureKind
 
 
 RECEIVED = datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)
+
+
+def _claude_adapter() -> NativeClaudeReviewAdapter:
+    return NativeClaudeReviewAdapter(
+        AgentSettings("claude", "claude", "sonnet", 1800, "high")
+    )
 
 
 @pytest.mark.parametrize("role", ["codex", "claude"])
@@ -99,7 +106,7 @@ def test_claude_session_limit_error_envelope_is_quota_with_automatic_reset() -> 
         "is_error": True,
         "result": "You've hit your session limit · resets 8:40pm (Europe/Berlin)",
     }
-    adapter = ClaudeAdapter()
+    adapter = _claude_adapter()
 
     with pytest.raises(AgentOutputError) as captured:
         adapter.extract_output(json.dumps(envelope), "", {})
@@ -218,7 +225,7 @@ def test_structured_unix_timestamp_is_normalized_to_utc() -> None:
     ("adapter", "envelope", "role"),
     (
         (
-            ClaudeAdapter(),
+            _claude_adapter(),
             {
                 "is_error": True,
                 "subtype": "rate_limit",

@@ -16,6 +16,33 @@ from workflow_state import ProtocolBinding, WorkflowStateValidationError
 
 
 ROOT = Path(__file__).resolve().parents[1]
+RETIRED_RUNTIME_SYMBOLS = (
+    "validate_codex_response",
+    "validate_review_response",
+    "parse_finding_responses",
+    "parse_anchors",
+    "normalize_codex_contract_output",
+    "normalize_review_contract_output",
+    "repair_review_contract",
+    "recover_failed_reviewer_output",
+    "claude_contract_repair",
+    "class CodexAdapter",
+    "class ClaudeAdapter",
+    '"workflow-prompt"',
+)
+RETIRED_ROOT_RESULT_MARKERS = (
+    "PLAN_READY:",
+    "IMPLEMENTATION_READY:",
+    "FINAL_REPORT_READY:",
+    "REVIEWER:",
+    "NEW_FINDING:",
+    "FINDING_STATUS:",
+    "FINDING_RESPONSE:",
+    "PLAN_APPROVAL:",
+    "SLICE_APPROVAL:",
+    "FINAL_APPROVAL:",
+    "STATUS: DONE",
+)
 REQUIRED_FIELDS = {
     "AgentResultPayload": ("transport_schema", "request_id", "response_sha256"),
     "ReviewPayload": ("transport_schema", "request_id", "response_sha256"),
@@ -89,6 +116,26 @@ def test_runtime_registry_contains_only_native_transports() -> None:
 
     assert type(registry["codex"]) is NativeCodexAdapter
     assert type(registry["claude"]) is NativeClaudeReviewAdapter
+
+
+def test_retired_result_grammar_and_repair_symbols_cannot_reenter_runtime() -> None:
+    runtime_source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted((ROOT / "src").rglob("*.py"))
+    )
+    assert [
+        symbol for symbol in RETIRED_RUNTIME_SYMBOLS if symbol in runtime_source
+    ] == []
+
+
+def test_active_root_contracts_do_not_describe_retired_result_markers() -> None:
+    root_contracts = "\n".join(
+        (ROOT / name).read_text(encoding="utf-8")
+        for name in ("AGENTS.md", "CLAUDE.md", "CODEX.md", "README.md")
+    )
+    assert [
+        marker for marker in RETIRED_ROOT_RESULT_MARKERS if marker in root_contracts
+    ] == []
 
 
 @pytest.mark.parametrize(

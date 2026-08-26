@@ -23,7 +23,6 @@ PROVIDER_OPERATIONS: Mapping[str, frozenset[str]] = {
             "claude_plan_review",
             "claude_slice_review",
             "claude_final_review",
-            "claude_contract_repair",
         }
     ),
 }

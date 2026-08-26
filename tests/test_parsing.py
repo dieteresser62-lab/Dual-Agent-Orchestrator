@@ -1,73 +1,25 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
-from contracts import (
-    AgentRole,
-    ApprovalMarker,
-    CodexStepContract,
-    ContractValidationError,
-    ReadinessMarker,
-    StepContract,
-    validate_codex_response,
-    validate_review_response,
-)
+from native_codex_contract import NativeCodexContractError, validate_native_codex_document
+from native_review_contract import NativeReviewContractError, validate_native_review_document
 
 
 @pytest.mark.parametrize(
-    "output",
+    "validator,error",
     (
-        "PLAN_READY: YES\nSTATUS: DONE",
-        "SLICE_PLAN: 2 | gap | src/a.py\nPLAN_READY: YES\nSTATUS: DONE",
-        "SLICE_PLAN: 1 | escape | ../a.py\nPLAN_READY: YES\nSTATUS: DONE",
-        "SLICE_PLAN: 1 | internal state | .orchestrator/state.json\nPLAN_READY: YES\nSTATUS: DONE",
+        (validate_native_codex_document, NativeCodexContractError),
+        (validate_native_review_document, NativeReviewContractError),
     ),
 )
-def test_plan_contract_fails_closed_on_missing_or_invalid_slice_plan(output: str) -> None:
-    with pytest.raises(ContractValidationError):
-        validate_codex_response(
-            output,
-            CodexStepContract(
-                name="plan",
-                readiness_marker=ReadinessMarker.PLAN,
-                slice_id="01",
-                round_number=1,
-                require_slice_plan=True,
-            ),
-        )
+def test_agent_result_decoders_reject_marker_text(validator, error) -> None:
+    with pytest.raises(error):
+        validator(json.loads('{"response":"STATUS: DONE"}'))
 
 
-@pytest.mark.parametrize(
-    "legacy",
-    ("PHASE1_APPROVAL: YES", "PHASE2_APPROVAL: YES", "CODEX_APPROVAL: YES", "OPEN_FINDINGS: NONE"),
-)
-def test_state_v3_rejects_every_legacy_marker(legacy: str) -> None:
-    with pytest.raises(ContractValidationError, match="rejects"):
-        validate_codex_response(
-            f"{legacy}\nPLAN_READY: YES\nSTATUS: DONE",
-            CodexStepContract(
-                name="plan", readiness_marker=ReadinessMarker.PLAN,
-                slice_id="01", round_number=1,
-            ),
-        )
-
-
-def test_reviewer_cannot_claim_validation_result() -> None:
-    with pytest.raises(ContractValidationError, match="cannot emit VALIDATION_RESULT"):
-        validate_review_response(
-            "\n".join(
-                (
-                    "REVIEWER: claude",
-                    "VALIDATION_RESULT: PASS | pytest | 0",
-                    "TEST_FILES_TOUCHED: NONE",
-                    "REVIEW_EVIDENCE: five dimensions | drift | provider change",
-                    "PRE_MORTEM: stale evidence",
-                    "PLAN_APPROVAL: YES",
-                    "STATUS: DONE",
-                )
-            ),
-            StepContract(
-                name="plan", reviewer=AgentRole.CLAUDE,
-                approval_marker=ApprovalMarker.PLAN, slice_id="01", round_number=1,
-            ),
-        )
+def test_invalid_json_never_reaches_a_result_decoder() -> None:
+    with pytest.raises(json.JSONDecodeError):
+        json.loads("REVIEWER: claude")

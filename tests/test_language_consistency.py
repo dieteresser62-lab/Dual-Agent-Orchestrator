@@ -160,15 +160,18 @@ def test_root_roles_share_the_state_v3_contract_and_retired_roles_are_gone() -> 
         assert path.is_file(), f"missing role contract: {path.name}"
         text = path.read_text(encoding="utf-8")
         assert "AGENTS.md" in text or path.name == "AGENTS.md"
-        assert "VALIDATION_RESULT" in text
+        assert "validation" in text.lower()
     shared = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
-    for marker in (
-        "PLAN_READY", "SLICE_PLAN", "IMPLEMENTATION_READY", "FINAL_REPORT_READY",
-        "PLAN_APPROVAL", "SLICE_APPROVAL", "FINAL_APPROVAL", "NEW_FINDING",
-        "FINDING_STATUS", "FINDING_RESPONSE", "REVIEW_EVIDENCE", "PRE_MORTEM",
-        "STOP_REQUESTED", "STATUS: DONE",
+    for native_contract_term in (
+        "native-agent-codex-request-v2",
+        "native-agent-codex-result-v2",
+        "native-agent-review-request-v2",
+        "native-agent-review-result-v2",
+        "request binding",
+        "domain validation",
+        "Plain-text result markers",
     ):
-        assert marker in shared
+        assert native_contract_term in shared
 
 
 def test_root_roles_share_structured_artifact_authority_contract() -> None:
@@ -435,19 +438,19 @@ def test_reference_documents_are_linked_current_and_locally_resolvable() -> None
     assert not unresolved, "Broken local reference links:\n" + "\n".join(unresolved)
 
 
-def test_readme_markers_match_the_active_root_contract() -> None:
+def test_readme_native_json_contract_matches_the_active_root_contract() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
-    active_markers = (
-        "SLICE_PLAN", "PLAN_READY", "IMPLEMENTATION_READY", "FINAL_REPORT_READY",
-        "REVIEWER", "PLAN_APPROVAL", "SLICE_APPROVAL", "FINAL_APPROVAL",
-        "NEW_FINDING", "FINDING_STATUS", "FINDING_RECLASSIFIED",
-        "FINDING_RESPONSE", "REVIEW_EVIDENCE", "PRE_MORTEM",
-        "STOP_REQUESTED", "STATUS: DONE",
+    native_contract_terms = (
+        "native-agent-codex-request-v2",
+        "native-agent-codex-result-v2",
+        "native-agent-review-request-v2",
+        "native-agent-review-result-v2",
+        "native JSON",
     )
-    for marker in active_markers:
-        assert marker in readme
-        assert marker in agents
+    for term in native_contract_terms:
+        assert term in readme
+        assert term in agents
 
 
 def test_workflow_diagram_has_balanced_state_v3_topology() -> None:

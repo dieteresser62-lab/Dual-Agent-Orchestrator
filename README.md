@@ -204,19 +204,12 @@ Ein freigebender Slice-Review erfordert eine vollständige erfolgreiche Attestie
 
 Reviewer arbeiten in einem temporären schreibgeschützten Snapshot. Dieser enthält nur Git-sichtbare Quell- und Dokumentationsdateien; Metadaten, Abhängigkeiten und generierte Schwergewichte wie `.git`, `.orchestrator`, `node_modules`, `dist` und Releasearchive werden nicht kopiert. Reine Ausgabevertragskorrekturen erhalten ein leeres schreibgeschütztes Arbeitsverzeichnis. Eindeutig gebundene Formalmarker werden lokal ergänzt, ohne einen zweiten Modellreview auszulösen.
 
-Formuliert ein Reviewer `REVIEW_EVIDENCE` mit den eindeutigen Bezeichnungen
-`Largest residual risk:` und `Break condition:` statt mit den vorgeschriebenen
-Pipe-Trennzeichen, überführt der Orchestrator genau diese vorhandenen drei
-Inhalte lokal und verlustfrei in das Vertragsformat. Mehrdeutige oder bereits
-Pipe-haltige Varianten bleiben unverändert und durchlaufen die normale formale
-Reparatur; Präambeln werden nicht abgeschnitten.
-
-Umschließt ein Provider die vollständige Vertragsantwort ausschließlich mit
-einem Markdown-Codezaun (wahlweise mit Sprachangabe `text`), entfernt der
-Adapter nur diesen äußeren Zaun. Das gilt ausschließlich, wenn der Inhalt mit
-`REVIEWER:` beginnt und mit `STATUS: DONE` endet; Text vor oder nach dem Zaun
-verhindert das Entpacken und scheitert weiterhin an der strikten
-Vertragsprüfung.
+Codex und Claude liefern ausschließlich requestgebundene native JSON-Resultate.
+Der jeweilige Provider erhält ein kontextspezifisches Writerschema; anschließend
+prüft der Orchestrator zusätzlich Requestbindung und Domänenregeln. Textmarker,
+Markdown-Codezäune, lokale Textnormalisierung und ein LLM-Reparaturturn gehören
+nicht mehr zum produktiven Transport. Eine fehlende oder ungültige JSON-Antwort
+endet fail-closed als Provider-Outputfehler.
 
 Die Quotabehandlung erfolgt rollenspezifisch. Bei aktivierter automatischer Quotafortsetzung wird ein eindeutiger Reset innerhalb der konfigurierten Wartegrenze persistiert, unter Ausgabe von Heartbeats abgewartet und am exakt fehlgeschlagenen Schritt einmal fortgesetzt. Neben Zeitstempeln, relativen Angaben und ausdrücklich benannten Zeitzonen wird auch Codex' englische Datumsangabe wie `Aug 20th, 2026 5:36 AM` erkannt; da sie selbst keine Zeitzone enthält, wird sie ausschließlich für Codex in der lokalen IANA-Zeitzone des Orchestrator-Rechners ausgewertet. Andernfalls endet der Prozess mit Exitcode 2 und bleibt fortsetzbar. Es gibt keine Ersatzrolle. Ändert sich das Repository während einer Quota-Pause, erzeugt die Fortsetzung ein `QUOTA-RESUME-DIFF`-Gate für den aktuellen Fingerprint und die betroffenen Pfade. Ein weiteres gewöhnliches `--resume` genehmigt diese Änderung bewusst nicht; erst `--resume --approve-gate` mit Akteur und Begründung setzt denselben Rollenschritt fort.
 
@@ -465,37 +458,27 @@ fortsetzbar an.
 
 Vor jedem branchweiten Provideraufruf prüft ein lokales, agentenfreies Preflight außerdem Recordkette, State-v3-Spiegel, Findingzustände, aktuelle Validierungsattestierung, autorisierte Pfade und die unmittelbar zuvor persistierte Eingabemessung. Ein Budget- oder Preflightdenial ist kein Providerfehler: Der unveränderte Rollenstep bleibt mit `bootstrap_check` und Exitcode 4 resumierbar. Im Watchbetrieb steigen weder Attempt-Zähler noch entstehen `.poison`-Dateien oder automatische Providerretries. Nach Korrektur von Konfiguration, Record-/State-Spiegel oder Repositoryzustand wird derselbe Auftrag mit `run_task --watch` beziehungsweise `run_task --resume --task-file ...` erneut geprüft; dafür ist keine `--approve-gate`-Entscheidung zulässig oder nötig.
 
-## Agentenanweisungen und Ausgabevertrag
+## Agentenanweisungen und nativer Ausgabevertrag
 
 Die aktiven Anweisungsdateien des Repositorys sind:
 
 | Datei | Verantwortung |
 |---|---|
-| `AGENTS.md` | Gemeinsamer Ausführungs-, Sicherheits-, Review- und Marker-Vertrag. |
-| `CODEX.md` | Implementiererrolle und Bereitschaftsdatensätze. |
+| `AGENTS.md` | Gemeinsamer Ausführungs-, Sicherheits-, Review- und JSON-Vertrag. |
+| `CODEX.md` | Implementiererrolle und native Ergebnisvarianten. |
 | `CLAUDE.md` | Primärer gezielter Reviewer mit persistentem Sonnet-/High-Profil. |
 
-Alle Agentenantworten enden mit `STATUS: DONE`. State-v3-Datensätze sind:
-
-| Erzeuger oder Schritt | Erforderlicher Datensatz |
-|---|---|
-| Codex-Plan | `SLICE_PLAN: <id> \| <summary> \| <paths>` und `PLAN_READY: YES\|NO` |
-| Codex-Implementierung | `TEST_FILES_TOUCHED: NONE\|<paths>` und `IMPLEMENTATION_READY: <slice-id> \| YES\|NO` |
-| Codex-Abschlussbericht | `FINAL_REPORT_READY: YES\|NO` |
-| Reviewer, erste Zeile | `REVIEWER: claude` |
-| Claude-Planreview | `PLAN_APPROVAL: YES\|NO` |
-| Slice-Review | `SLICE_APPROVAL: <slice-id> \| YES\|NO` |
-| Branchweiter Abschlussreview | `FINAL_APPROVAL: YES\|NO` |
-| Neues Finding | `NEW_FINDING: C-01 \| BLOCKER\|OBSERVATION \| <description> \| <acceptance test>` |
-| Aktualisierung durch Finding-Eigentümer | `FINDING_STATUS: <id> \| OPEN\|CLOSED \| <rationale>` |
-| Optionale Neuklassifizierung durch Eigentümer | `FINDING_RECLASSIFIED: <id> \| BLOCKER\|OBSERVATION \| <rationale>` |
-| Finding-Antwort von Codex | `FINDING_RESPONSE: <id> \| ACCEPTED\|REJECTED \| <rationale>` |
-| Review ohne konkrete Schwachstelle | `REVIEW_EVIDENCE: <dimensions> \| <largest residual risk> \| <break condition>` |
-| Voraussetzung einer positiven Freigabe | `PRE_MORTEM: <most likely failure cause in three months>` |
-| Stopp durch beliebige Rolle | `STOP_REQUESTED: <rule-id> \| <rationale>` anstelle von Bereitschaft oder Freigabe |
-| Automatische Vorgängerslice-Reparatur durch Codex | zusätzlich `REMEDIATION_PATHS: <comma-separated exact paths>` bei einem rein technischen, bereits planfreigegebenen Scope-Rückläufer |
-
-Der Orchestrator besitzt die Validierungsattestierungen; Agenten dürfen `VALIDATION_RESULT` nicht ausgeben. State-v2-Freigabe- und aggregierte Finding-Marker sind ungültig.
+Die Maschinenkommunikation verwendet keine zeilenbasierten Ergebnismarker. Codex
+erhält `native-agent-codex-request-v2` und antwortet gemäß
+`native-agent-codex-result-v2` mit einer der strikt
+getrennten Varianten `plan_result`, `implementation_result`,
+`correction_result`, `final_report_result` oder `stop_result`. Claude erhält
+`native-agent-review-request-v2` und antwortet gemäß
+`native-agent-review-result-v2`; sein request-spezifisches Writerschema bindet
+Freigabe, Findings, Statusänderungen, Reklassifizierungen, Reviewevidenz,
+Pre-Mortem und Stop an den aktuellen Kontext. Der Orchestrator besitzt und
+persistiert die Validierungsattestierungen; Providerresultate dürfen sie weder
+erfinden noch ersetzen.
 
 ## Exitcodes
 

@@ -14,8 +14,6 @@ from agent_adapters import (
     AgentOutputError,
     AgentPermissionError,
     CapabilitySpec,
-    ClaudeAdapter,
-    CodexAdapter,
     NativeCodexAdapter,
     NativeCodexExecutionBoundary,
 )
@@ -34,7 +32,6 @@ from agent_runtime import (
     preflight,
     repo_snapshot,
     run_agent,
-    run_agent_checked,
     run_native_review_agent,
     run_native_review_agent_checked,
     run_native_codex_agent,
@@ -799,23 +796,24 @@ def test_compact_live_output_extracts_codex_text_and_hides_reviewer_envelopes() 
 
 
 def test_compact_result_and_usage_keep_decisions_without_nested_json() -> None:
-    output = "\n".join(
-        (
-            "REVIEWER: claude",
-            "Long evidence paragraph that stays in the log only.",
-            "NEW_FINDING: C-01 | BLOCKER | gate is red | npm test",
-            "REMEDIATION_PATHS: src/prior.py, tests/prior.py",
-            "SLICE_APPROVAL: 01 | NO",
-            "STATUS: DONE",
-        )
+    output = json.dumps(
+        {
+            "result_type": "review_result",
+            "request_id": "native-review-request-" + "a" * 64,
+            "decision": "denied",
+            "new_findings": [{"finding_id": "C-01"}],
+            "status_changes": [],
+            "reclassifications": [],
+        }
     )
 
     assert _compact_result_lines(output) == (
-        "REVIEWER: claude",
-        "NEW_FINDING: C-01 | BLOCKER | gate is red | npm test",
-        "REMEDIATION_PATHS: src/prior.py, tests/prior.py",
-        "SLICE_APPROVAL: 01 | NO",
-        "STATUS: DONE",
+        "result_type=review_result",
+        "decision=denied",
+        "request_id=native-review-request-" + "a" * 64,
+        "new_findings=1",
+        "status_changes=0",
+        "reclassifications=0",
     )
     summary = _compact_usage_metadata(
         {
@@ -863,42 +861,6 @@ def test_runtime_executes_structured_validation_request(tmp_path: Path) -> None:
     assert attestation.records[0].output == "matrix-ok"
 
 
-def test_run_agent_checked_does_not_retry_instance_failure(monkeypatch, tmp_path: Path) -> None:
-    calls: list[str] = []
-    sleeps: list[int] = []
-
-    def fake_run_agent(adapter, *args, **kwargs):  # type: ignore[no-untyped-def]
-        calls.append(adapter.name)
-        if len(calls) == 1:
-            raise RuntimeError("temporary network glitch")
-        return "CODEX_APPROVAL: YES\nOPEN_FINDINGS: NONE\nSTATUS: DONE"
-
-    monkeypatch.setattr(agent_runtime, "run_agent", fake_run_agent)
-    monkeypatch.setattr(agent_runtime.time, "sleep", lambda sec: sleeps.append(sec))
-
-    with pytest.raises(AgentInvocationError) as exc_info:
-        run_agent_checked(
-            agent_key="codex",
-            prompt="prompt",
-            log_prefix="unit",
-            max_retries=1,
-            required_flags=["CODEX_APPROVAL"],
-            output_validator=None,
-            config=OrchestratorConfig(dry_run=False),
-            agents={"codex": AGENT_REGISTRY["codex"]},
-            log_dir=tmp_path,
-            write_file=lambda path, content: path.write_text(content, encoding="utf-8"),
-            shorten=lambda text, limit=1800: (text or "")[:limit],
-            parse_flag=lambda text, key: "YES" if f"{key}: YES" in text else None,
-            validate_done_marker=lambda text: text.strip().endswith("STATUS: DONE"),
-        )
-
-    assert exc_info.value.kind.value == "network"
-    assert calls == ["codex"]
-    assert sleeps == []
-    failure_logs = tuple(tmp_path.glob("unit.attempt-1.failure.json"))
-    assert len(failure_logs) == 1
-    assert exc_info.value.invocation_id in failure_logs[0].read_text(encoding="utf-8")
 
 
 def test_claude_structured_output_retry_exhaustion_is_bounded_transient() -> None:
@@ -982,152 +944,12 @@ def test_failed_provider_attempt_uses_injected_clock_and_allowlisted_usage() -> 
     assert not hasattr(usage, "raw")
 
 
-def test_run_agent_checked_validation_error_backoff(monkeypatch, tmp_path: Path) -> None:
-    sleeps: list[int] = []
-    prompts: list[str] = []
-
-    def fake_run_agent(_adapter, prompt, **kwargs):  # type: ignore[no-untyped-def]
-        prompts.append(prompt)
-        return "CODEX_APPROVAL: YES\nSTATUS: DONE"
-
-    monkeypatch.setattr(agent_runtime, "run_agent", fake_run_agent)
-    monkeypatch.setattr(agent_runtime.time, "sleep", lambda sec: sleeps.append(sec))
-
-    output = run_agent_checked(
-        agent_key="codex",
-        prompt=(
-            "SENSITIVE_FULL_REVIEW_EVIDENCE\n\n"
-            "Output format (Markdown):\n"
-            "- Marker line: CODEX_APPROVAL: YES|NO\n"
-            "- Final line: STATUS: DONE"
-        ),
-        log_prefix="unit",
-        max_retries=1,
-        required_flags=[],
-        output_validator=lambda _output: "not valid" if len(prompts) == 1 else None,
-        config=OrchestratorConfig(dry_run=False),
-        agents={"codex": AGENT_REGISTRY["codex"]},
-        log_dir=tmp_path,
-        write_file=lambda path, content: path.write_text(content, encoding="utf-8"),
-        shorten=lambda text, limit=1800: (text or "")[:limit],
-        parse_flag=lambda text, key: "YES",
-        validate_done_marker=lambda text: True,
-    )
-
-    assert "STATUS: DONE" in output
-    assert len(prompts) == 2
-    assert sleeps == [2]
-    assert "SENSITIVE_FULL_REVIEW_EVIDENCE" in prompts[0]
-    assert "SENSITIVE_FULL_REVIEW_EVIDENCE" not in prompts[1]
-    assert "not valid" in prompts[1]
-    assert "Rejected answer to repair" in prompts[1]
-    assert "CODEX_APPROVAL: YES\nSTATUS: DONE" in prompts[1]
-    assert "Output format (Markdown)" in prompts[1]
 
 
-@pytest.mark.parametrize(
-    "failure",
-    [
-        AgentPermissionError("denied Bash(find /)"),
-        AgentBudgetError("budget guard stopped the call"),
-    ],
-)
-def test_run_agent_checked_does_not_retry_policy_failure(
-    monkeypatch, tmp_path: Path, failure: Exception
-) -> None:
-    calls: list[int] = []
-
-    def fake_run_agent(*args, **kwargs):  # type: ignore[no-untyped-def]
-        calls.append(1)
-        raise failure
-
-    monkeypatch.setattr(agent_runtime, "run_agent", fake_run_agent)
-
-    with pytest.raises(AgentInvocationError) as exc_info:
-        run_agent_checked(
-            agent_key="claude",
-            prompt="prompt",
-            log_prefix="unit",
-            max_retries=3,
-            required_flags=[],
-            output_validator=None,
-            config=OrchestratorConfig(dry_run=False),
-            agents={"claude": AGENT_REGISTRY["claude"]},
-            log_dir=tmp_path,
-            write_file=lambda path, content: path.write_text(content, encoding="utf-8"),
-            shorten=lambda text, limit=1800: (text or "")[:limit],
-            parse_flag=lambda text, key: None,
-            validate_done_marker=lambda text: True,
-        )
-
-    assert calls == [1]
-    assert exc_info.value.kind.value in {"permission", "runtime"}
 
 
-def test_run_agent_checked_accepts_alternative_required_flags(monkeypatch, tmp_path: Path) -> None:
-    def fake_run_agent(*args, **kwargs):  # type: ignore[no-untyped-def]
-        _ = args
-        _ = kwargs
-        return "CODEX_APPROVAL: YES\nOPEN_FINDINGS: NONE\nSTATUS: DONE"
-
-    monkeypatch.setattr(agent_runtime, "run_agent", fake_run_agent)
-
-    output = run_agent_checked(
-        agent_key="codex",
-        prompt="prompt",
-        log_prefix="unit",
-        max_retries=0,
-        required_flags=["PHASE1_APPROVAL|CODEX_APPROVAL"],
-        output_validator=None,
-        config=OrchestratorConfig(dry_run=False),
-        agents={"codex": AGENT_REGISTRY["codex"]},
-        log_dir=tmp_path,
-        write_file=lambda path, content: path.write_text(content, encoding="utf-8"),
-        shorten=lambda text, limit=1800: (text or "")[:limit],
-        parse_flag=lambda text, key: "YES" if f"{key}: YES" in text else None,
-        validate_done_marker=lambda text: text.strip().endswith("STATUS: DONE"),
-    )
-
-    assert "STATUS: DONE" in output
 
 
-@pytest.mark.parametrize("agent_key", ["claude", "codex"])
-def test_run_agent_checked_quota_errors_stop_requested_agent_without_substitution(
-    monkeypatch, tmp_path: Path, agent_key: str
-) -> None:
-    calls: list[str] = []
-    sleeps: list[int] = []
-
-    def fake_run_agent(adapter, *args, **kwargs):  # type: ignore[no-untyped-def]
-        _ = args
-        _ = kwargs
-        calls.append(adapter.name)
-        raise RuntimeError("usage cap exceeded")
-
-    monkeypatch.setattr(agent_runtime, "run_agent", fake_run_agent)
-    monkeypatch.setattr(agent_runtime.time, "sleep", lambda sec: sleeps.append(sec))
-
-    with pytest.raises(QuotaReachedError) as exc_info:
-        run_agent_checked(
-            agent_key=agent_key,
-            prompt="prompt",
-            log_prefix="unit",
-            max_retries=3,
-            required_flags=[],
-            output_validator=None,
-            config=OrchestratorConfig(dry_run=False),
-            agents={agent_key: AGENT_REGISTRY[agent_key]},
-            log_dir=tmp_path,
-            write_file=lambda path, content: path.write_text(content, encoding="utf-8"),
-            shorten=lambda text, limit=1800: (text or "")[:limit],
-            parse_flag=lambda text, key: "YES",
-            validate_done_marker=lambda text: True,
-        )
-
-    assert exc_info.value.agent_key == agent_key
-    assert agent_key in str(exc_info.value)
-    assert calls == [agent_key]
-    assert sleeps == []
 
 
 def test_check_git_clean_skips_when_git_missing(monkeypatch) -> None:
@@ -1250,95 +1072,10 @@ def test_preflight_fails_when_git_not_clean(monkeypatch) -> None:
     assert ok is False
 
 
-def test_agent_capability_check_is_lazy_and_cached(monkeypatch) -> None:
-    adapter = CodexAdapter(
-        AgentSettings("codex", "codex", "gpt-5.6-sol", 1800, "medium")
-    )
-    calls: list[list[str]] = []
-
-    def fake_local(args, timeout=20):  # type: ignore[no-untyped-def]
-        _ = timeout
-        calls.append(args)
-        if args[-1] == "--version":
-            return 0, "codex-cli 0.147.0\n", ""
-        return 0, " ".join(adapter.capability.required_help_flags), ""
-
-    monkeypatch.setattr(agent_runtime, "_resolve_agent_binary", lambda _binary: "/bin/codex")
-    monkeypatch.setattr(agent_runtime, "run_local_command", fake_local)
-
-    verify_agent_capabilities(adapter)
-    verify_agent_capabilities(adapter)
-
-    assert adapter.capability_verified is True
-    assert calls == [
-        ["/bin/codex", "--version"],
-        ["/bin/codex", "exec", "--help"],
-    ]
 
 
-@pytest.mark.parametrize(
-    ("adapter", "version_text"),
-    [
-        (
-            CodexAdapter(AgentSettings("codex", "codex", "model", 1800, "medium")),
-            "codex-cli 0.147.99",
-        ),
-        (
-            ClaudeAdapter(AgentSettings("claude", "claude", "model", 1800, "high")),
-            "2.1.999 (Claude Code)",
-        ),
-    ],
-)
-def test_agent_capability_check_accepts_patch_updates(
-    monkeypatch, adapter, version_text: str
-) -> None:
-    calls: list[list[str]] = []
-
-    def fake_local(args, timeout=20):  # type: ignore[no-untyped-def]
-        _ = timeout
-        calls.append(args)
-        if args[-1] == "--version":
-            return 0, f"{version_text}\n", ""
-        return 0, " ".join(adapter.capability.required_help_flags), ""
-
-    monkeypatch.setattr(
-        agent_runtime, "_resolve_agent_binary", lambda _binary: f"/bin/{adapter.name}"
-    )
-    monkeypatch.setattr(agent_runtime, "run_local_command", fake_local)
-
-    verify_agent_capabilities(adapter)
-
-    assert adapter.capability_verified is True
-    assert len(calls) == 2
 
 
-@pytest.mark.parametrize(
-    ("adapter", "version_text"),
-    [
-        (
-            CodexAdapter(AgentSettings("codex", "codex", "model", 1800, "medium")),
-            "codex-cli 0.148.0",
-        ),
-        (
-            ClaudeAdapter(AgentSettings("claude", "claude", "model", 1800, "high")),
-            "2.2.0 (Claude Code)",
-        ),
-    ],
-)
-def test_agent_capability_check_rejects_minor_updates(
-    monkeypatch, adapter, version_text: str
-) -> None:
-    monkeypatch.setattr(
-        agent_runtime, "_resolve_agent_binary", lambda _binary: f"/bin/{adapter.name}"
-    )
-    monkeypatch.setattr(
-        agent_runtime,
-        "run_local_command",
-        lambda _args, timeout=20: (0, f"{version_text}\n", ""),
-    )
-
-    with pytest.raises(AgentCompatibilityError, match="Unsupported .* CLI version"):
-        verify_agent_capabilities(adapter)
 
 
 def test_collect_file_snapshots_truncates_limits_and_handles_missing(tmp_path: Path) -> None:
@@ -1722,7 +1459,7 @@ def test_reviewer_process_pwd_matches_disposable_working_directory(
         "prompt",
         config=OrchestratorConfig(repo_root=source, agent_live_stream=False),
         shorten=lambda text, limit: (text or "")[:limit],
-        operation="claude_contract_repair",
+        operation="claude_slice_review",
     )
 
     working_directory = captured["cwd"]
@@ -1737,7 +1474,7 @@ def test_reviewer_process_pwd_matches_disposable_working_directory(
     assert captured["bound_snapshot"] == working_directory
     assert not working_directory.exists()
     assert output == "STATUS: DONE"
-    assert "operation=claude_contract_repair" in caplog.text
+    assert "operation=claude_slice_review" in caplog.text
     assert "input_tokens=10 output_tokens=20 turns=2" in caplog.text
 
 
@@ -1764,218 +1501,3 @@ def test_provider_usage_normalization_is_closed_and_preserves_unknown() -> None:
     )
     assert normalize_provider_usage({"conversation_id": "secret"}) is None
     assert _compact_usage_metadata(None) == "unknown"
-
-
-def test_provider_attempt_lifecycle_starts_after_preflight_and_terminalizes_success(
-    monkeypatch, tmp_path: Path
-) -> None:
-    events: list[object] = []
-
-    class Adapter:
-        name = "codex"
-        cli_binary = "codex"
-        model = "model"
-        effort = "medium"
-        timeout = 1
-        reviewer = False
-        env: dict[str, str] = {}
-        required_hosts: tuple[str, ...] = ()
-        capability = CapabilitySpec((), (), (r".*",), ())
-        capability_verified = True
-        metadata: dict[str, object] = {}
-
-        def build_command(self, prompt: str) -> tuple[list[str], bool]:
-            return ["codex"], True
-
-        def validate_process_output(self, stderr: str) -> None:
-            return None
-
-        def extract_output(self, stdout: str, stderr: str, extra_files: dict[str, str]) -> str:
-            self.metadata = {
-                "conversation_id": "excluded",
-                "usage": {"input_tokens": 0, "output_tokens": 3},
-            }
-            return stdout
-
-        def cleanup(self) -> None:
-            events.append("cleanup")
-
-    class Result:
-        returncode = 0
-        stdout = "STATUS: DONE"
-        stderr = ""
-
-    monkeypatch.setattr(
-        agent_runtime, "verify_agent_capabilities", lambda *args, **kwargs: events.append("preflight")
-    )
-    monkeypatch.setattr(
-        agent_runtime.subprocess, "run",
-        lambda *args, **kwargs: (events.append("process") or Result()),
-    )
-    lifecycle = ProviderAttemptLifecycle(
-        start=lambda measurement, bootstrap: (
-            events.append(("start", bootstrap, measurement.input_digest)) or "attempt-1"
-        ),
-        terminal=lambda handle, duration, failure, usage: events.append(
-            ("terminal", handle, failure, usage)
-        ),
-    )
-
-    output = run_agent_checked(
-        agent_key="codex", prompt="prompt", log_prefix="lifecycle", max_retries=0,
-        required_flags=[], output_validator=None, config=OrchestratorConfig(),
-        agents={"codex": Adapter()}, log_dir=tmp_path,
-        write_file=lambda path, content: path.write_text(content, encoding="utf-8"),
-        shorten=lambda text, limit=1800: (text or "")[:limit],
-        parse_flag=lambda text, key: None, validate_done_marker=lambda text: True,
-        operation="codex_implementation", binding_fingerprint="a" * 64,
-        pre_start_callback=lambda measurement: "measurement-1",
-        provider_attempt_lifecycle=lifecycle,
-    )
-
-    assert output == "STATUS: DONE"
-    assert events[0] == "preflight"
-    assert events[1][0:2] == ("start", "measurement-1")  # type: ignore[index]
-    assert events[2] == "process"
-    terminal = next(
-        event
-        for event in events
-        if isinstance(event, tuple) and event[0] == "terminal"
-    )
-    assert terminal[0:3] == ("terminal", "attempt-1", None)  # type: ignore[index]
-    assert terminal[3].input_tokens == 0  # type: ignore[index,union-attr]
-
-
-def test_provider_attempt_rejected_output_is_durably_failed_not_succeeded(
-    monkeypatch, tmp_path: Path
-) -> None:
-    class Adapter:
-        name = "codex"
-        cli_binary = "codex"
-        model = "model"
-        effort = "medium"
-        timeout = 1
-        reviewer = False
-        env: dict[str, str] = {}
-        required_hosts: tuple[str, ...] = ()
-        capability = CapabilitySpec((), (), (r".*",), ())
-        capability_verified = True
-        metadata: dict[str, object] = {}
-
-        def build_command(self, prompt: str) -> tuple[list[str], bool]:
-            return ["codex"], True
-
-        def validate_process_output(self, stderr: str) -> None:
-            return None
-
-        def extract_output(
-            self, stdout: str, stderr: str, extra_files: dict[str, str]
-        ) -> str:
-            self.metadata = {"usage": {"output_tokens": 5}}
-            return stdout
-
-        def cleanup(self) -> None:
-            return None
-
-    class Result:
-        returncode = 0
-        stderr = ""
-
-        def __init__(self, stdout: str) -> None:
-            self.stdout = stdout
-
-    monkeypatch.setattr(
-        agent_runtime, "verify_agent_capabilities", lambda *args, **kwargs: None
-    )
-    monkeypatch.setattr(
-        agent_runtime.subprocess, "run", lambda *args, **kwargs: Result("invalid output")
-    )
-    bridge = ArtifactBridge(ArtifactStore(tmp_path, "rejected-output"))
-
-    def persist_measurement(measurement):  # type: ignore[no-untyped-def]
-        payload = provider_input_measurement_payload(
-            measurement,
-            work_unit_id=1,
-            transition_fingerprint="b" * 64,
-            relevant_record_head="0" * 64,
-        )
-        return bridge.append(
-            payload,
-            logical_id="measurement-1",
-            idempotency_key="measurement:1",
-            fingerprint_sha256="a" * 64,
-        )
-
-    with pytest.raises(AgentInvocationError) as exc_info:
-        run_agent_checked(
-            agent_key="codex", prompt="prompt", log_prefix="rejected", max_retries=0,
-            required_flags=["READY"], output_validator=None, config=OrchestratorConfig(),
-            agents={"codex": Adapter()}, log_dir=tmp_path,
-            write_file=lambda path, content: path.write_text(content, encoding="utf-8"),
-            shorten=lambda text, limit=1800: (text or "")[:limit],
-            parse_flag=lambda text, key: key if key in text else None,
-            validate_done_marker=lambda text: text.endswith("STATUS: DONE"),
-            operation="codex_implementation", binding_fingerprint="a" * 64,
-            pre_start_callback=persist_measurement,
-            provider_attempt_lifecycle=ProviderAttemptLifecycle(
-                start=lambda _measurement, bootstrap: bridge.start_provider_attempt(
-                    measurement_record=bootstrap,
-                    binding_fingerprint="a" * 64,
-                    work_unit_id=1,
-                ),
-                terminal=(
-                    lambda started, duration, failure, usage:
-                    bridge.finish_provider_attempt(
-                        started,
-                        duration_seconds=duration,
-                        failure_kind=failure,
-                        usage=usage,
-                    )
-                ),
-            ),
-        )
-
-    assert exc_info.value.kind is AgentFailureKind.OUTPUT
-    attempts = tuple(
-        record.payload
-        for record in bridge.store.load_chain()
-        if isinstance(record.payload, ProviderAttemptPayload)
-    )
-    assert [attempt.phase for attempt in attempts] == ["started", "failed"]
-    assert attempts[-1].failure_kind == AgentFailureKind.OUTPUT.value
-    assert all(attempt.phase != "succeeded" for attempt in attempts)
-
-
-def test_unknown_agent_version_is_a_non_retryable_gate(monkeypatch, tmp_path: Path) -> None:
-    adapter = ClaudeAdapter(
-        AgentSettings("claude", "claude", "sonnet", 1800, "medium")
-    )
-    calls: list[list[str]] = []
-
-    def fake_local(args, timeout=20):  # type: ignore[no-untyped-def]
-        _ = timeout
-        calls.append(args)
-        return 0, "9.9.9 (Claude Code)\n", ""
-
-    monkeypatch.setattr(agent_runtime, "_resolve_agent_binary", lambda _binary: "/bin/claude")
-    monkeypatch.setattr(agent_runtime, "run_local_command", fake_local)
-
-    with pytest.raises(AgentInvocationError, match="Unsupported claude CLI version") as exc_info:
-        run_agent_checked(
-            agent_key="claude",
-            prompt="prompt",
-            log_prefix="unit",
-            max_retries=3,
-            required_flags=[],
-            output_validator=None,
-            config=OrchestratorConfig(dry_run=False, repo_root=tmp_path),
-            agents={"claude": adapter},
-            log_dir=tmp_path,
-            write_file=lambda path, content: path.write_text(content, encoding="utf-8"),
-            shorten=lambda text, limit=1800: (text or "")[:limit],
-            parse_flag=lambda text, key: None,
-            validate_done_marker=lambda text: True,
-        )
-
-    assert calls == [["/bin/claude", "--version"]]
-    assert exc_info.value.kind.value == "runtime"

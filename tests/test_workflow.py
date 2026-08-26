@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 
@@ -23,7 +24,6 @@ from contracts import (
     ApprovalMarker,
     CodexContractResult,
     CodexStepContract,
-    ContractValidationError,
     FindingClass,
     FindingOrigin,
     FindingRecord,
@@ -38,7 +38,9 @@ from contracts import (
     ValidationAttestation,
     ValidationRecord,
     ValidationStatus,
-    validate_review_response,
+    StopRequest,
+    apply_finding_response,
+    apply_reviewer_finding_update,
 )
 from gates import PathClasses, StopRule, TestChangeEvidence as GateTestChangeEvidence
 from native_codex_contract import NativeCodexRequestKind
@@ -48,7 +50,6 @@ from review_packets import ReviewPacket
 from validation_matrix import ValidationCommand, ValidationMatrix, ValidationRequest, ValidationRule
 from workflow import (
     CodexInvocation,
-    ContractRepairInvocation,
     EvidenceKind,
     PersistedNativeReviewerReplay,
     ReviewerInvocation,
@@ -62,8 +63,6 @@ from workflow import (
     WorkflowHistory,
     ValidationExecutionError,
     authorized_test_changes_from_state,
-    normalize_codex_contract_output,
-    normalize_review_contract,
 )
 from workflow_state import (
     AgentFailureKind,
@@ -81,6 +80,124 @@ from workflow_state import (
 
 TEST_FILE = "tests/test_workflow.py"
 START_COMMIT = "a" * 40
+
+
+def _test_native_codex_output(
+    invocation: CodexInvocation, text: str
+) -> NativeAgentCodexOutput:
+    assert invocation.native_request is not None
+    findings = list(invocation.previous_findings)
+    for finding_id, decision, rationale in re.findall(
+        r"^FINDING_RESPONSE: (C-\d+) \| (ACCEPTED|REJECTED) \| (.+)$",
+        text,
+        re.MULTILINE,
+    ):
+        index = next(i for i, item in enumerate(findings) if item.finding_id == finding_id)
+        findings[index] = apply_finding_response(
+            findings[index], FindingResponseDecision(decision), rationale
+        )
+    stop = re.search(r"^STOP_REQUESTED: ([^|]+) \| (.+)$", text, re.MULTILINE)
+    remediation = re.search(r"^REMEDIATION_PATHS: (.+)$", text, re.MULTILINE)
+    stop_request = (
+        StopRequest(
+            stop.group(1).strip(),
+            stop.group(2).strip(),
+            tuple(sorted(part.strip() for part in remediation.group(1).split(",")))
+            if remediation
+            else (),
+        )
+        if stop
+        else None
+    )
+    ready_match = re.search(
+        r"^(?:PLAN_READY:|IMPLEMENTATION_READY: \d+ \||FINAL_REPORT_READY:) (YES|NO)$",
+        text,
+        re.MULTILINE,
+    )
+    tests = re.search(r"^TEST_FILES_TOUCHED: (.+)$", text, re.MULTILINE)
+    test_files = () if tests is None or tests.group(1) == "NONE" else tuple(
+        sorted(part.strip() for part in tests.group(1).split(","))
+    )
+    slices = tuple(
+        PlannedSlice(
+            int(slice_id),
+            summary.strip(),
+            tuple(sorted(part.strip() for part in paths.split(","))),
+        )
+        for slice_id, summary, paths in re.findall(
+            r"^SLICE_PLAN: (\d+) \| ([^|]+) \| (.+)$", text, re.MULTILINE
+        )
+    )
+    result = CodexContractResult(
+        ready=None if stop else bool(ready_match and ready_match.group(1) == "YES"),
+        stopped=stop is not None,
+        stop_request=stop_request,
+        validation=None,
+        test_files=test_files,
+        findings=tuple(findings),
+        slice_plan=slices,
+    )
+    request_id = invocation.native_request.bound_context.request_id
+    canonical = json.dumps({"request_id": request_id}, sort_keys=True)
+    return NativeAgentCodexOutput(
+        result, canonical, request_id, hashlib.sha256(canonical.encode()).hexdigest()
+    )
+
+
+def _test_native_review_output(
+    invocation: ReviewerInvocation, text: str
+) -> NativeAgentReviewOutput:
+    assert invocation.native_request is not None
+    context = invocation.native_request.bound_context.context
+    findings = list(invocation.previous_findings)
+    for finding_id, kind, summary, acceptance in re.findall(
+        r"^NEW_FINDING: (C-\d+) \| (BLOCKER|OBSERVATION) \| ([^|]+) \| (.+)$",
+        text,
+        re.MULTILINE,
+    ):
+        findings.append(
+            FindingRecord(
+                finding_id,
+                FindingClass(kind),
+                FindingStatus.OPEN,
+                summary.strip(),
+                acceptance.strip(),
+                FindingOrigin(context.slice_id, context.round_number, AgentRole.CLAUDE),
+            )
+        )
+    for finding_id, status, rationale in re.findall(
+        r"^FINDING_STATUS: (C-\d+) \| (OPEN|CLOSED) \| (.+)$",
+        text,
+        re.MULTILINE,
+    ):
+        index = next(i for i, item in enumerate(findings) if item.finding_id == finding_id)
+        findings[index] = apply_reviewer_finding_update(
+            findings[index], reviewer=AgentRole.CLAUDE,
+            status=FindingStatus(status), rationale=rationale,
+        )
+    stop = re.search(r"^STOP_REQUESTED: ([^|]+) \| (.+)$", text, re.MULTILINE)
+    approval = re.search(
+        r"^(?:PLAN_APPROVAL:|SLICE_APPROVAL: \d+ \||FINAL_APPROVAL:) (YES|NO)$",
+        text,
+        re.MULTILINE,
+    )
+    evidence_match = re.search(r"^REVIEW_EVIDENCE: ([^|]+) \| ([^|]+) \| (.+)$", text, re.MULTILINE)
+    evidence = ReviewEvidence(*(part.strip() for part in evidence_match.groups())) if evidence_match else None
+    pre_mortem = re.search(r"^PRE_MORTEM: (.+)$", text, re.MULTILINE)
+    result = ContractResult(
+        reviewer=AgentRole.CLAUDE,
+        approval=None if stop else bool(approval and approval.group(1) == "YES"),
+        stopped=stop is not None,
+        stop_request=StopRequest(stop.group(1).strip(), stop.group(2).strip()) if stop else None,
+        validation=context.validation_attestation,
+        test_files=context.test_files,
+        pre_mortem=pre_mortem.group(1) if pre_mortem else None,
+        evidence=evidence,
+        findings=tuple(findings),
+        anchors=(),
+    )
+    request_id = invocation.native_request.bound_context.request_id
+    return NativeAgentReviewOutput(result, json.dumps({"request_id": request_id}), request_id)
 
 
 def _changes(
@@ -277,7 +394,6 @@ class FakeDriver:
     reviewer_outputs: list[str]
     codex_failures: list[AgentInvocationError | None] = field(default_factory=list)
     reviewer_failures: list[AgentInvocationError | None] = field(default_factory=list)
-    repair_outputs: list[str] = field(default_factory=list)
     correction_boundaries: list[WorkflowCorrectionBoundary] = field(default_factory=list)
     commit_refs: list[str] = field(default_factory=list)
     deltas: dict[tuple[str, str], str] = field(default_factory=dict)
@@ -289,7 +405,6 @@ class FakeDriver:
     )
     codex_calls: list[CodexInvocation] = field(default_factory=list)
     reviewer_calls: list[ReviewerInvocation] = field(default_factory=list)
-    repair_calls: list[ContractRepairInvocation] = field(default_factory=list)
     validation_calls: list[str] = field(default_factory=list)
     validation_requests: list[ValidationRequest] = field(default_factory=list)
     commit_calls: list[WorkflowCommitRequest] = field(default_factory=list)
@@ -321,7 +436,7 @@ class FakeDriver:
             for item in self.checkpoint_histories[-1].attestations
         )
 
-    def invoke_codex(self, invocation: CodexInvocation) -> str:
+    def invoke_codex(self, invocation: CodexInvocation) -> NativeAgentCodexOutput:
         if invocation.step is WorkflowStep.CODEX_FINAL_REVIEW:
             self._assert_checkpointed_attestation(
                 self.snapshots[max(self.snapshot_index, 0)].fingerprint
@@ -332,7 +447,12 @@ class FakeDriver:
             failure = self.codex_failures.pop(0)
             if failure is not None:
                 raise failure
-        return self.codex_outputs.pop(0)
+        output = self.codex_outputs.pop(0)
+        return (
+            output
+            if isinstance(output, NativeAgentCodexOutput)
+            else _test_native_codex_output(invocation, output)
+        )
 
     def collect_changes(self, start_commit: str) -> WorkflowChanges:
         index = max(self.snapshot_index, 0)
@@ -436,7 +556,7 @@ class FakeDriver:
             ),
         )
 
-    def invoke_reviewer(self, invocation: ReviewerInvocation) -> str:
+    def invoke_reviewer(self, invocation: ReviewerInvocation) -> NativeAgentReviewOutput:
         self._assert_checkpointed_attestation(invocation.fingerprint)
         self.reviewer_calls.append(invocation)
         if self.reviewer_failures:
@@ -446,11 +566,12 @@ class FakeDriver:
         if self.fail_reviewer_once:
             self.fail_reviewer_once = False
             raise RuntimeError("simulated process interruption")
-        return self.reviewer_outputs.pop(0)
-
-    def repair_review_contract(self, invocation: ContractRepairInvocation) -> str:
-        self.repair_calls.append(invocation)
-        return self.repair_outputs.pop(0) if self.repair_outputs else invocation.rejected_output
+        output = self.reviewer_outputs.pop(0)
+        return (
+            output
+            if isinstance(output, NativeAgentReviewOutput)
+            else _test_native_review_output(invocation, output)
+        )
 
     def prepare_correction(
         self, findings
@@ -581,7 +702,8 @@ def test_claude_reuses_single_fingerprint_attestation_without_matrix_rerun() -> 
     )
     assert len(driver.reviewer_calls) == 1
     assert driver.reviewer_calls[0].fingerprint == changes.fingerprint
-    assert "npm run build:engine | PASS | exit=0" in driver.reviewer_calls[0].prompt
+    assert driver.reviewer_calls[0].native_request is not None
+    assert "npm run build:engine" in driver.reviewer_calls[0].native_request.canonical_json
     assert driver.commit_calls[0].attestation.diff_fingerprint == changes.fingerprint
 
 
@@ -796,19 +918,6 @@ def test_native_claude_review_bypasses_legacy_marker_parser(
     driver = NativeDriver(
         snapshots=[changes], codex_outputs=[], reviewer_outputs=[]
     )
-    monkeypatch.setattr(
-        "workflow.normalize_review_contract_output",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("legacy normalizer was called")
-        ),
-    )
-    monkeypatch.setattr(
-        "workflow.validate_review_response",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("legacy parser was called")
-        ),
-    )
-
     advanced, history = WorkflowEngine(driver)._run_review(
         state,
         _context(),
@@ -893,19 +1002,6 @@ def test_native_codex_result_bypasses_legacy_marker_parser(
         codex_outputs=[],
         reviewer_outputs=[],
     )
-    monkeypatch.setattr(
-        "workflow.normalize_codex_contract_output",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("legacy normalizer was called")
-        ),
-    )
-    monkeypatch.setattr(
-        "workflow.validate_codex_response",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("legacy parser was called")
-        ),
-    )
-
     advanced, history = WorkflowEngine(driver)._run_codex(
         state, _context(), WorkflowHistory(state.current_work_unit_id)
     )
@@ -993,19 +1089,6 @@ def test_native_codex_plan_bypasses_legacy_marker_parser(monkeypatch) -> None:
         task_scope_patterns=("docs/internal/native-codex-plan.md",),
     )
     driver = NativePlanDriver(snapshots=[], codex_outputs=[], reviewer_outputs=[])
-    monkeypatch.setattr(
-        "workflow.normalize_codex_contract_output",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("legacy normalizer was called")
-        ),
-    )
-    monkeypatch.setattr(
-        "workflow.validate_codex_response",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("legacy parser was called")
-        ),
-    )
-
     advanced, history = WorkflowEngine(driver)._run_codex(
         state, context, WorkflowHistory(state.current_work_unit_id)
     )
@@ -1258,19 +1341,6 @@ def test_combined_native_slice_converges_without_legacy_parsers(monkeypatch) -> 
         reviewer_outputs=[],
         deltas={(changes.fingerprint, changes.fingerprint): changes.full_diff},
     )
-    for name in (
-        "normalize_codex_contract_output",
-        "validate_codex_response",
-        "normalize_review_contract_output",
-        "validate_review_response",
-    ):
-        monkeypatch.setattr(
-            f"workflow.{name}",
-            lambda *_args, _name=name, **_kwargs: (_ for _ in ()).throw(
-                AssertionError(f"legacy parser was called: {_name}")
-            ),
-        )
-
     state, history = WorkflowEngine(driver)._run_review(
         state,
         _context(),
@@ -1458,19 +1528,6 @@ def test_combined_native_plan_revision_converges_without_legacy_parsers(
         reviewer_outputs=[],
         deltas={(changes.fingerprint, changes.fingerprint): changes.full_diff},
     )
-    for name in (
-        "normalize_codex_contract_output",
-        "validate_codex_response",
-        "normalize_review_contract_output",
-        "validate_review_response",
-    ):
-        monkeypatch.setattr(
-            f"workflow.{name}",
-            lambda *_args, _name=name, **_kwargs: (_ for _ in ()).throw(
-                AssertionError(f"legacy parser was called: {_name}")
-            ),
-        )
-
     state, history = WorkflowEngine(driver)._run_review(
         state,
         context,
@@ -1635,19 +1692,6 @@ def test_combined_native_final_restart_rebinds_codex_and_claude_without_legacy_p
     driver = RestartedNativeFinalDriver(
         snapshots=[changes], codex_outputs=[], reviewer_outputs=[]
     )
-    for name in (
-        "normalize_codex_contract_output",
-        "validate_codex_response",
-        "normalize_review_contract_output",
-        "validate_review_response",
-    ):
-        monkeypatch.setattr(
-            f"workflow.{name}",
-            lambda *_args, _name=name, **_kwargs: (_ for _ in ()).throw(
-                AssertionError(f"legacy parser was called: {_name}")
-            ),
-        )
-
     state, history = WorkflowEngine(driver)._run_final_codex_report(
         state, _context(), history
     )
@@ -1802,19 +1846,6 @@ def test_native_codex_final_report_bypasses_legacy_marker_parser(
     driver = NativeFinalDriver(
         snapshots=[changes], codex_outputs=[], reviewer_outputs=[]
     )
-    monkeypatch.setattr(
-        "workflow.normalize_codex_contract_output",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("legacy normalizer was called")
-        ),
-    )
-    monkeypatch.setattr(
-        "workflow.validate_codex_response",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("legacy parser was called")
-        ),
-    )
-
     advanced, history = WorkflowEngine(driver)._run_final_codex_report(
         state, _context(), WorkflowHistory(state.current_work_unit_id)
     )
@@ -1858,7 +1889,6 @@ def test_native_codex_request_builder_covers_plan_and_final_report() -> None:
         context=_context(),
         history=WorkflowHistory(plan_state.current_work_unit_id),
         contract=plan_contract,
-        prompt="Create the bound plan.",
         request_kind=NativeCodexRequestKind.PLAN,
     )
 
@@ -1882,7 +1912,6 @@ def test_native_codex_request_builder_covers_plan_and_final_report() -> None:
         context=_context(),
         history=WorkflowHistory(final_state.current_work_unit_id),
         contract=final_contract,
-        prompt="Report the bound branch self-check.",
         request_kind=NativeCodexRequestKind.FINAL_REPORT,
     )
 
@@ -2158,6 +2187,9 @@ def test_managed_audit_paths_are_added_after_codex_plan_only() -> None:
         branch_base=START_COMMIT,
         slice_count=1,
         timestamp="2026-08-12T10:00:00+00:00",
+        task_digest="a" * 64,
+        task_scope_patterns=("docs/internal/bug-review-12345678.md",),
+        target_branch="feature/workflow",
     )
     output = "\n".join(
         (
@@ -2251,6 +2283,9 @@ def test_plan_only_rejects_future_product_slices_as_executable_records() -> None
         branch_base=START_COMMIT,
         slice_count=1,
         timestamp="2026-08-12T10:00:00+00:00",
+        task_digest="a" * 64,
+        task_scope_patterns=("docs/internal/plan.md",),
+        target_branch="feature/workflow",
     )
     output = "\n".join(
         (
@@ -2752,197 +2787,6 @@ def test_invalid_unified_diff_prevents_any_reviewer_invocation() -> None:
     assert driver.reviewer_calls == []
 
 
-def test_empty_findings_heading_is_normalized_without_contract_repair() -> None:
-    changes = _changes("1", "src/early.py", TEST_FILE)
-    output = _review_approval(AgentRole.CLAUDE).replace(
-        f"TEST_FILES_TOUCHED: {TEST_FILE}",
-        f"TEST_FILES_TOUCHED: {TEST_FILE}\n\nFINDINGS:",
-    )
-    contract = StepContract(
-        name="work-unit-2-claude_slice_review",
-        reviewer=AgentRole.CLAUDE,
-        approval_marker=ApprovalMarker.SLICE,
-        slice_id="01",
-        round_number=1,
-        review_fingerprint=changes.fingerprint,
-        validation_attestation=_attestation(changes),
-        expected_test_files=(TEST_FILE,),
-        test_changes_approved=True,
-    )
-
-    normalized = normalize_review_contract(
-        output, contract, (), provider_completed=True
-    )
-    result = validate_review_response(normalized.output, contract, ())
-
-    assert normalized.changes == ("removed_empty_findings_heading",)
-    assert "FINDINGS:" not in normalized.output
-    assert result.approval is True
-
-
-def test_empty_finding_status_is_removed_without_losing_new_blocker() -> None:
-    changes = _changes("1", "src/early.py", TEST_FILE)
-    output = _review_denial(AgentRole.CLAUDE, "C-01").replace(
-        "SLICE_APPROVAL: 01 | NO",
-        "FINDING_STATUS: none reported by claude previously in this packet.\n"
-        "SLICE_APPROVAL: 01 | NO",
-    )
-    contract = StepContract(
-        name="work-unit-2-claude_slice_review",
-        reviewer=AgentRole.CLAUDE,
-        approval_marker=ApprovalMarker.SLICE,
-        slice_id="01",
-        round_number=1,
-        review_fingerprint=changes.fingerprint,
-        validation_attestation=_attestation(changes),
-        expected_test_files=(TEST_FILE,),
-        test_changes_approved=True,
-    )
-
-    normalized = normalize_review_contract(
-        output, contract, (), provider_completed=True
-    )
-    result = validate_review_response(normalized.output, contract, ())
-
-    assert normalized.changes == ("removed_empty_finding_status",)
-    assert "FINDING_STATUS:" not in normalized.output
-    assert result.approval is False
-    assert tuple(item.finding_id for item in result.own_open_blockers) == ("C-01",)
-
-
-def test_empty_finding_status_remains_fail_closed_with_own_previous_finding() -> None:
-    changes = _changes("1", "src/early.py", TEST_FILE)
-    previous = FindingRecord(
-        finding_id="C-01",
-        finding_class=FindingClass.BLOCKER,
-        status=FindingStatus.OPEN,
-        summary="stale usage attribution",
-        acceptance_test="add a retry regression",
-        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
-    )
-    output = _review_approval(AgentRole.CLAUDE).replace(
-        "REVIEW_EVIDENCE: reviewed invariants | residual concurrency risk | parallel mutation",
-        "FINDING_STATUS: none reported by claude previously in this packet.",
-    )
-    contract = StepContract(
-        name="work-unit-2-claude_slice_review",
-        reviewer=AgentRole.CLAUDE,
-        approval_marker=ApprovalMarker.SLICE,
-        slice_id="01",
-        round_number=1,
-        review_fingerprint=changes.fingerprint,
-        validation_attestation=_attestation(changes),
-        expected_test_files=(TEST_FILE,),
-        test_changes_approved=True,
-    )
-
-    normalized = normalize_review_contract(
-        output, contract, (previous,), provider_completed=True
-    )
-
-    assert normalized.changes == ()
-    assert "FINDING_STATUS: none reported" in normalized.output
-    with pytest.raises(ContractValidationError, match="invalid FINDING_STATUS record"):
-        validate_review_response(normalized.output, contract, (previous,))
-
-
-def test_standalone_validate_is_folded_for_one_open_reclassified_blocker() -> None:
-    changes = _changes("1", "src/early.py", TEST_FILE)
-    previous = FindingRecord(
-        finding_id="C-02",
-        finding_class=FindingClass.OBSERVATION,
-        status=FindingStatus.OPEN,
-        summary="failed attempts with usage lack a general regression",
-        acceptance_test="add a network failure usage round-trip test",
-        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
-    )
-    output = "\n".join(
-        (
-            "REVIEWER: claude",
-            f"TEST_FILES_TOUCHED: {TEST_FILE}",
-            "FINDING_RECLASSIFIED: C-02 | BLOCKER | gap remains actionable",
-            "FINDING_STATUS: C-02 | OPEN | regression is still missing",
-            'VALIDATE: ["python3", "-m", "pytest", "tests/test_agent_runtime.py", "-v"]',
-            "REVIEW_EVIDENCE: usage contract | stale attribution | failed retry",
-            "FINAL_APPROVAL: NO",
-            "STATUS: DONE",
-        )
-    )
-    contract = StepContract(
-        name="work-unit-3-claude_final_review",
-        reviewer=AgentRole.CLAUDE,
-        approval_marker=ApprovalMarker.FINAL,
-        slice_id="FINAL",
-        round_number=1,
-        review_fingerprint=changes.fingerprint,
-        validation_attestation=_attestation(changes),
-        expected_test_files=(TEST_FILE,),
-        test_changes_approved=True,
-        existing_finding_ids=("C-02",),
-    )
-
-    normalized = normalize_review_contract(
-        output, contract, (previous,), provider_completed=True
-    )
-    result = validate_review_response(normalized.output, contract, (previous,))
-
-    assert normalized.changes == (
-        "folded_standalone_validate_into_reclassification",
-    )
-    assert "\nVALIDATE:" not in normalized.output
-    assert "Focused validation requested: VALIDATE:" in normalized.output
-    updated = next(item for item in result.findings if item.finding_id == "C-02")
-    assert updated.finding_class is FindingClass.BLOCKER
-    assert updated.status is FindingStatus.OPEN
-    assert updated.acceptance_test == previous.acceptance_test
-    assert result.approval is False
-
-
-def test_standalone_validate_remains_fail_closed_when_binding_is_ambiguous() -> None:
-    changes = _changes("1", "src/early.py", TEST_FILE)
-    previous = FindingRecord(
-        finding_id="C-02",
-        finding_class=FindingClass.OBSERVATION,
-        status=FindingStatus.OPEN,
-        summary="failed attempts with usage lack a general regression",
-        acceptance_test="add a network failure usage round-trip test",
-        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
-    )
-    output = "\n".join(
-        (
-            "REVIEWER: claude",
-            f"TEST_FILES_TOUCHED: {TEST_FILE}",
-            "FINDING_STATUS: C-02 | OPEN | regression is still missing",
-            'VALIDATE: ["python3", "-m", "pytest", "tests/test_agent_runtime.py", "-v"]',
-            "REVIEW_EVIDENCE: usage contract | stale attribution | failed retry",
-            "FINAL_APPROVAL: NO",
-            "STATUS: DONE",
-        )
-    )
-    contract = StepContract(
-        name="work-unit-3-claude_final_review",
-        reviewer=AgentRole.CLAUDE,
-        approval_marker=ApprovalMarker.FINAL,
-        slice_id="FINAL",
-        round_number=1,
-        review_fingerprint=changes.fingerprint,
-        validation_attestation=_attestation(changes),
-        expected_test_files=(TEST_FILE,),
-        test_changes_approved=True,
-        existing_finding_ids=("C-02",),
-    )
-
-    normalized = normalize_review_contract(
-        output, contract, (previous,), provider_completed=True
-    )
-
-    assert normalized.changes == ()
-    with pytest.raises(
-        ContractValidationError, match="unknown state-v3 contract marker VALIDATE"
-    ):
-        validate_review_response(normalized.output, contract, (previous,))
-
-
 @pytest.mark.parametrize("invalid", ["foreign", "incomplete"])
 def test_invalid_attestation_stops_before_any_reviewer(invalid: str) -> None:
     changes = _changes("1", "src/early.py", TEST_FILE)
@@ -2974,8 +2818,8 @@ def test_complete_failing_attestation_reaches_reviewer_without_red_state() -> No
         WorkflowEngine(driver).run_current_work_unit(_slice_state(), _context())
 
     assert [call.reviewer for call in driver.reviewer_calls] == [AgentRole.CLAUDE]
-    assert "validation failed" in driver.reviewer_calls[0].prompt
-    assert "approval MUST be NO" in driver.reviewer_calls[0].prompt
+    assert driver.reviewer_calls[0].native_request is not None
+    assert "validation failed" in driver.reviewer_calls[0].native_request.canonical_json
     assert driver.commit_calls == []
 
 
@@ -3010,7 +2854,8 @@ Keep complete failed validation evidence reviewable.
     packet = driver.reviewer_calls[0].review_packet
     assert packet is not None
     assert json.loads(packet.canonical_bytes)["attestation"]["status"] == "FAIL"
-    assert "approval MUST be NO" in driver.reviewer_calls[0].prompt
+    assert driver.reviewer_calls[0].native_request is not None
+    assert '"const":"denied"' in driver.reviewer_calls[0].native_request.provider_response_schema_json
     assert driver.commit_calls == []
 
 
@@ -3107,7 +2952,7 @@ def test_codex_stop_request_halts_same_step_without_retry_or_repair() -> None:
         "DOMAIN-001 | domain semantics require user direction"
     )
     assert len(driver.codex_calls) == 1
-    assert driver.repair_calls == []
+    assert not hasattr(driver, "repair_review_contract")
     assert result.history.findings == (finding,)
     assert driver.checkpoint_histories[-1].findings == (finding,)
 
@@ -3133,8 +2978,9 @@ def test_codex_agent_sandbox_validation_stop_is_handed_back_automatically() -> N
 
     assert advanced.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
     assert len(driver.codex_calls) == 2
-    assert "AUTOMATIC ORCHESTRATOR VALIDATION HANDOFF" in driver.codex_calls[1].prompt
-    assert "Do not rerun the configured full validation matrix" in driver.codex_calls[1].prompt
+    assert driver.codex_calls[1].native_request is not None
+    assert "AUTOMATIC ORCHESTRATOR VALIDATION HANDOFF" in driver.codex_calls[1].native_request.canonical_json
+    assert "Do not rerun the configured full validation matrix" in driver.codex_calls[1].native_request.canonical_json
     assert advanced.current_work_unit.has_completed_side_effect(
         "agent-sandbox-validation-handoff"
     )
@@ -3224,8 +3070,9 @@ def test_codex_validation_stop_auto_extends_scope_from_completed_approved_slice(
         "tests/prior.py",
     )
     assert len(driver.codex_calls) == 2
-    assert "AUTOMATIC PRIOR-SLICE REMEDIATION" in driver.codex_calls[1].prompt
-    assert "src/prior.py" in driver.codex_calls[1].prompt
+    assert driver.codex_calls[1].native_request is not None
+    assert "AUTOMATIC PRIOR-SLICE REMEDIATION" in driver.codex_calls[1].native_request.canonical_json
+    assert "src/prior.py" in driver.codex_calls[1].native_request.canonical_json
 
 
 def test_codex_reprompts_once_when_remediation_path_is_already_authorized() -> None:
@@ -3291,8 +3138,9 @@ def test_codex_reprompts_once_when_remediation_path_is_already_authorized() -> N
 
     assert advanced.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
     assert len(driver.codex_calls) == 2
-    assert "ALREADY AUTHORIZED" in driver.codex_calls[1].prompt
-    assert "Do not emit STOP_REQUESTED" in driver.codex_calls[1].prompt
+    assert driver.codex_calls[1].native_request is not None
+    assert "ALREADY AUTHORIZED" in driver.codex_calls[1].native_request.canonical_json
+    assert "Do not emit STOP_REQUESTED" in driver.codex_calls[1].native_request.canonical_json
     assert any(
         key.startswith("authorized-remediation-reprompt:")
         for key in advanced.current_work_unit.completed_side_effects
@@ -3401,7 +3249,7 @@ def test_codex_not_ready_persists_gate_and_resumes_same_step() -> None:
         "resolve the documented blocker before resuming the same step"
     )
     assert driver.reviewer_calls == []
-    assert driver.repair_calls == []
+    assert not hasattr(driver, "repair_review_contract")
     assert result.history.findings[0].responses[0].decision is FindingResponseDecision.ACCEPTED
     assert driver.checkpoint_histories[-1].findings == result.history.findings
 
@@ -3418,6 +3266,9 @@ def test_plan_not_ready_persists_gate_and_resumes_plan_step() -> None:
         branch_base=START_COMMIT,
         slice_count=1,
         timestamp="2026-08-12T10:00:00+00:00",
+        task_digest="a" * 64,
+        task_scope_patterns=("docs/internal/plan.md",),
+        target_branch="feature/workflow",
     )
     driver = FakeDriver(
         snapshots=[],
@@ -3453,7 +3304,7 @@ def test_reviewer_stop_request_halts_without_contract_repair() -> None:
     assert result.exit_code == 4
     assert result.state.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
     assert len(driver.reviewer_calls) == 1
-    assert driver.repair_calls == []
+    assert not hasattr(driver, "repair_review_contract")
     assert len(result.history.events) == 2
     stopped_review = result.history.events[-1]
     assert stopped_review.result.stopped is True
@@ -3472,7 +3323,7 @@ def test_unknown_stop_rule_is_rejected_instead_of_becoming_a_gate() -> None:
         WorkflowEngine(driver).run_current_work_unit(_slice_state(), _context())
 
     assert len(driver.codex_calls) == 1
-    assert driver.repair_calls == []
+    assert not hasattr(driver, "repair_review_contract")
 
 
 def test_unavailable_validation_uses_policy_gate_before_reviewer() -> None:
@@ -3690,32 +3541,6 @@ def test_codex_final_report_not_ready_is_resumable_without_review() -> None:
         "CODEX-FINAL-REPORT-NOT-READY |"
     )
     assert driver.reviewer_calls == []
-
-
-def test_codex_final_marker_normalization_is_exact_and_final_only() -> None:
-    contract = CodexStepContract(
-        name="final-report",
-        readiness_marker=ReadinessMarker.FINAL_REPORT,
-        slice_id="FINAL",
-        round_number=1,
-    )
-    output = (
-        "Report complete.\nTEST_FILES_TOUCHED: NONE\n"
-        "FINAL_REPORT_READY: YES\nSTATUS: DONE"
-    )
-
-    normalized = normalize_codex_contract_output(output, contract)
-
-    assert "TEST_FILES_TOUCHED" not in normalized
-    assert "Report complete." in normalized
-    assert normalize_codex_contract_output(
-        output.replace("NONE", "tests/new.test.mjs"), contract
-    ) == output.replace("NONE", "tests/new.test.mjs")
-    duplicated = output.replace(
-        "TEST_FILES_TOUCHED: NONE",
-        "TEST_FILES_TOUCHED: NONE\nTEST_FILES_TOUCHED: NONE",
-    )
-    assert normalize_codex_contract_output(duplicated, contract) == duplicated
 
 
 def test_workflow_history_roundtrips_final_report_and_loads_legacy_shape() -> None:
