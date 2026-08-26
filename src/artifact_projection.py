@@ -227,7 +227,7 @@ def render_replay_sections(replay: ArtifactReplayResult) -> Mapping[str, str]:
             line = (
                 f"| {prefix} | `{_safe(payload.finding_id)}` | `{payload.actor.value}` | "
                 f"`{round_number}` | `{_safe(payload.action)}` | `{payload.severity.value}` | "
-                f"`{_safe(payload.finding_status)}` | {_prose(payload.rationale)} |"
+                f"`{_safe(payload.finding_status)}` | {_table_prose(payload.rationale)} |"
             )
             if not findings:
                 findings.extend((
@@ -345,7 +345,7 @@ def render_replay_sections(replay: ArtifactReplayResult) -> Mapping[str, str]:
             gates.append(
                 f"| {prefix} | `{_safe(payload.gate_kind)}` | `{_safe(payload.decision)}` | "
                 f"`{payload.authority.value}` | `{record.fingerprint.sha256}` | "
-                f"{_prose(payload.rationale)} |"
+                f"{_table_prose(payload.rationale)} |"
             )
         elif isinstance(payload, (WorkUnitPayload, CorrectionWorkUnitPayload)):
             kind = "Korrektur-Work-Unit" if isinstance(payload, CorrectionWorkUnitPayload) else "Work-Unit"
@@ -723,6 +723,11 @@ def _prose(value: object) -> str:
         _INLINE_PROSE_BOUNDARY.sub("\n", line) for line in normalized.split("\n")
     )
     return _safe(structured)
+
+
+def _table_prose(value: object) -> str:
+    """Render structured prose without introducing a physical Markdown table row break."""
+    return _prose(value).replace("\r\n", "<br>").replace("\r", "<br>").replace("\n", "<br>")
 
 
 __all__ = [

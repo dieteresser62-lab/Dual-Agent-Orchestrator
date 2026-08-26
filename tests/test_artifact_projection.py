@@ -366,6 +366,68 @@ def test_projection_preserves_argv_boundaries_and_escapes_markdown_data() -> Non
     assert "<!-- audit:" not in findings
 
 
+def test_projection_keeps_structured_prose_inside_finding_response_and_gate_rows(
+    tmp_path,
+) -> None:  # type: ignore[no-untyped-def]
+    bridge = ArtifactBridge(ArtifactStore(tmp_path, "run-table-prose"))
+    bridge.append(
+        CorrectionWorkUnitPayload(
+            slice_id="2",
+            round_number=1,
+            paths=("src/a.py",),
+            finding_ids=("C-02",),
+        ),
+        logical_id="work-unit-4",
+        idempotency_key="work-unit:4",
+        fingerprint_sha256="a" * 64,
+    )
+    rationale = "First sentence. Second sentence! Third question? - list item"
+    bridge.append(
+        FindingTransitionPayload(
+            finding_id="C-02",
+            reporter=Role.CLAUDE,
+            actor=Role.CODEX,
+            action="responded",
+            severity=FindingSeverity.BLOCKER,
+            finding_status="open",
+            rationale=rationale,
+            work_unit_id="4",
+            response_decision="accepted",
+        ),
+        logical_id="finding-C-02",
+        idempotency_key="finding-response:C-02:1",
+        fingerprint_sha256="a" * 64,
+    )
+    bridge.append(
+        GatePayload(
+            gate_kind="unexpected-file",
+            decision="approved",
+            authority=Role.USER,
+            rationale=rationale,
+        ),
+        logical_id="gate-unexpected-file",
+        idempotency_key="gate:unexpected-file:1",
+        fingerprint_sha256="a" * 64,
+    )
+
+    sections = render_artifact_sections(bridge.store.load_chain())
+    expected_prose = (
+        "First sentence.<br>Second sentence!<br>Third question?<br>- list item"
+    )
+    assert "### Gate-Ereignisse" in sections["test-approval-premortem"]
+    assert "`unexpected-file`" in sections["test-approval-premortem"]
+    for section_key in ("findings", "codex-responses", "test-approval-premortem"):
+        matching_rows = [
+            line
+            for line in sections[section_key].splitlines()
+            if "First sentence." in line
+        ]
+        assert len(matching_rows) == 1
+        assert expected_prose in matching_rows[0]
+        assert matching_rows[0].startswith("|")
+        assert matching_rows[0].endswith("|")
+
+
 def test_projection_rejects_non_chain_order() -> None:
     chain = _chain()
     with pytest.raises(ArtifactProjectionError, match="append order|chain root"):
