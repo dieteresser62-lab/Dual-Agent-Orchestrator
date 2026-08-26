@@ -1,5 +1,7 @@
 # Slice 03 – Digestgebundene Evidenzminimierung und messbare Betriebswirkung
 
+> Archiviert nach Abschluss des Arbeitspakets; nichtautoritative historische Entwicklungsevidenz.
+
 ## Gegenstand
 
 Slice 03 ersetzt redundante Vollplan- und Korrekturevidenz durch kanonische,

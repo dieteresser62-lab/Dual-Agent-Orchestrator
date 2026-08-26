@@ -54,7 +54,7 @@ Rohantwortpersistenz bleiben für Diagnosen erhalten.
 ### 3.2 Erreicht: Native-only-Cutover, Textparser-Retirement und strukturelle Eingabereduktion
 
 Das umgesetzte Arbeitspaket
-[`native-only-transport-parser-retirement-und-evidenzeffizienz-arbeitsplan.md`](native-only-transport-parser-retirement-und-evidenzeffizienz-arbeitsplan.md)
+[`native-only-transport-parser-retirement-und-evidenzeffizienz-arbeitsplan.md`](archive/native-only-transport-parser-retirement-und-evidenzeffizienz/native-only-transport-parser-retirement-und-evidenzeffizienz-arbeitsplan.md)
 macht die nativen Codex- und Claude-Verträge verpflichtend, entfernt die noch
 produktive Textresultat-, Marker- und LLM-Reparaturarchitektur und ersetzt
 redundante Vollplan-/Prompt-/Korrekturevidenz durch digestgebundene

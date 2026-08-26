@@ -1,5 +1,7 @@
 # Slice 02 – Entfernung der Markerparser und Textvertragsreparatur
 
+> Archiviert nach Abschluss des Arbeitspakets; nichtautoritative historische Entwicklungsevidenz.
+
 ## Reviewgrenze
 
 - Arbeitsplan: `docs/internal/native-only-transport-parser-retirement-und-evidenzeffizienz-arbeitsplan.md`

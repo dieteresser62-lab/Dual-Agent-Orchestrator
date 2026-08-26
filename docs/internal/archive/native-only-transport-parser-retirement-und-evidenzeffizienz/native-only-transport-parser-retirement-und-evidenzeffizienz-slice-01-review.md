@@ -1,5 +1,7 @@
 # Native-only Transport, Parser-Retirement und Evidenzeffizienz – Slice 01
 
+> Archiviert nach Abschluss des Arbeitspakets; nichtautoritative historische Entwicklungsevidenz.
+
 ## Implementierungsübergabe
 
 **Slice:** 01 – Native Pflichtbindung und fail-closed Protokollcutover

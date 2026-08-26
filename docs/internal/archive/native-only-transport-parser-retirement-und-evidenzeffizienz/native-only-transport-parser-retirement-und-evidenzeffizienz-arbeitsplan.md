@@ -1,5 +1,7 @@
 # Arbeitsplan – Native-only-Transport, Textparser-Retirement und Evidenzeffizienz
 
+> Archiviert nach Abschluss des Arbeitspakets; nichtautoritative historische Entwicklungsevidenz.
+
 TARGET_BRANCH: feature/native-only-transport-and-efficiency
 
 BASE_COMMIT: 9a7da9c66ee187a9044fbf3ff3e92a6b24e216cd
