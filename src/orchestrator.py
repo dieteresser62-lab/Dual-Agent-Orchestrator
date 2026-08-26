@@ -710,7 +710,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
             replay = replay_artifacts(
                 bridge.store.load_chain(), state.run_id, allow_empty=True
             )
-            projected = replay_findings(replay)
+            projected = replay_findings(replay, state.current_work_unit_id)
         except ArtifactReplayError as exc:
             raise WorkflowExecutionError(
                 f"authoritative finding replay failed: {exc}"

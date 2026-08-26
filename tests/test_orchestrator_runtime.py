@@ -1958,6 +1958,25 @@ def test_combined_native_finding_authority_rejects_state_mirror_drift(
         allowed_roots=(repository,),
     )
     driver.bind_work_unit(state)
+    historical_finding = FindingRecord(
+        finding_id="C-99",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="A finding from the completed planning work unit.",
+        acceptance_test="Current work-unit authority must ignore this finding.",
+        origin=FindingOrigin("PLAN", 1, AgentRole.CLAUDE),
+    )
+    bridge = driver._artifact_bridge
+    assert bridge is not None
+    bridge.append(
+        orchestrator.finding_payload(
+            historical_finding,
+            work_unit_id=1,
+        ),
+        logical_id="finding-C-99",
+        idempotency_key="finding:C-99:opened:work_unit:1:1:claude",
+        fingerprint_sha256="b" * 64,
+    )
     finding = FindingRecord(
         finding_id="C-01",
         finding_class=FindingClass.BLOCKER,
@@ -1966,8 +1985,6 @@ def test_combined_native_finding_authority_rejects_state_mirror_drift(
         acceptance_test="Mirror-only changes stop before provider invocation.",
         origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
     )
-    bridge = driver._artifact_bridge
-    assert bridge is not None
     bridge.append(
         orchestrator.finding_payload(
             finding,
