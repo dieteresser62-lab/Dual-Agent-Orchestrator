@@ -37,6 +37,31 @@ from contracts import FindingResponseDecision, FindingStatus
 FP = Fingerprint(FingerprintKind.IMPLEMENTATION, "a" * 64)
 
 
+def _agent_result(work_unit_id: str, test_files: tuple[str, ...] = ()) -> AgentResultPayload:
+    return AgentResultPayload(
+        Role.CODEX,
+        work_unit_id,
+        "ready",
+        test_files,
+        "native-codex-v2",
+        "native-codex-request-" + "b" * 64,
+        "c" * 64,
+    )
+
+
+def _review(work_unit_id: str, evidence: str) -> ReviewPayload:
+    return ReviewPayload(
+        Role.CLAUDE,
+        work_unit_id,
+        "approved",
+        (),
+        evidence,
+        "native-claude-review-v2",
+        "native-review-request-" + "b" * 64,
+        "c" * 64,
+    )
+
+
 def _append(
     records: list[ArtifactRecord],
     logical_id: str,
@@ -67,7 +92,7 @@ def _chain() -> tuple[ArtifactRecord, ...]:
     _append(
         records,
         "agent-1",
-        AgentResultPayload(Role.CODEX, "1", "ready", ("tests/test_a.py",)),
+        _agent_result("1", ("tests/test_a.py",)),
     )
     attestation = _append(
         records,
@@ -87,7 +112,7 @@ def _chain() -> tuple[ArtifactRecord, ...]:
     review = _append(
         records,
         "review-1",
-        ReviewPayload(Role.CLAUDE, "1", "approved", (), "checked replay"),
+        _review("1", "checked replay"),
     )
     _append(
         records,
@@ -284,7 +309,7 @@ def test_replay_reports_missing_reference_and_fingerprint_mismatch() -> None:
     _append(
         records,
         "agent-orphan",
-        AgentResultPayload(Role.CODEX, "404", "ready", ()),
+        _agent_result("404"),
     )
     _assert_code(tuple(records), ReplayDiagnosticCode.RECORD_REFERENCE_MISSING)
 
@@ -301,7 +326,7 @@ def test_replay_allows_plan_activity_before_the_first_work_unit_record() -> None
     _append(
         records,
         "agent-plan",
-        AgentResultPayload(Role.CODEX, "1", "ready", ()),
+        _agent_result("1"),
         fingerprint=Fingerprint(FingerprintKind.IMPLEMENTATION, "c" * 64),
     )
 
@@ -314,7 +339,7 @@ def test_replay_rejects_activity_that_references_a_later_work_unit() -> None:
     _append(
         records,
         "agent-future-work-unit",
-        AgentResultPayload(Role.CODEX, "2", "ready", ()),
+        _agent_result("2"),
     )
     _append(records, "work-unit-2", WorkUnitPayload("2", 2, ("src/b.py",)))
 
@@ -366,7 +391,7 @@ def test_replay_uses_first_work_unit_revision_as_reference_boundary() -> None:
     _append(
         records,
         "agent-orphan-between-revisions",
-        AgentResultPayload(Role.CODEX, "404", "ready", ()),
+        _agent_result("404"),
     )
     _append(
         records,

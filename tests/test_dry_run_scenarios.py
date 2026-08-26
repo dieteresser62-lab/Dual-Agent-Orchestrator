@@ -449,7 +449,12 @@ def test_scripted_session_runs_plan_slices_correction_and_repeated_final_review(
         first_final_fp,
         second_final_fp,
     ]
-    assert "slice one\nslice two\ncorrection" in final_reviews[-1].prompt
+    assert final_reviews[-1].prompt == ""
+    assert final_reviews[-1].native_request is not None
+    assert (
+        final_reviews[-1].native_request.bound_context.context.diff_fingerprint
+        == second_final_fp
+    )
     assert final.remaining_agent_events == 0
 
 

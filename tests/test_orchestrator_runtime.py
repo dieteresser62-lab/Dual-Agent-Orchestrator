@@ -117,6 +117,69 @@ def _git(root: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
+def _native_plan_output(
+    invocation: CodexInvocation,
+    *,
+    summary: str,
+    scope_paths: tuple[str, ...],
+) -> NativeAgentCodexOutput:
+    bundle = invocation.native_request
+    assert bundle is not None
+    document = {
+        "schema_version": "native-agent-codex-result-v2",
+        "result_type": "plan_result",
+        "request_id": bundle.bound_context.request_id,
+        "ready": True,
+        "finding_dispositions": [],
+        "slice_plan": [
+            {
+                "slice_id": 1,
+                "summary": summary,
+                "scope_paths": list(scope_paths),
+            }
+        ],
+    }
+    canonical = canonical_native_codex_json(document)
+    return NativeAgentCodexOutput(
+        result=parse_bound_native_codex_contract_result(
+            document, bundle.bound_context
+        ),
+        canonical_json=canonical,
+        request_id=bundle.bound_context.request_id,
+        response_sha256=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+    )
+
+
+def _native_review_approval(
+    invocation: ReviewerInvocation,
+) -> NativeAgentReviewOutput:
+    bundle = invocation.native_request
+    assert bundle is not None
+    document = {
+        "schema_version": "native-agent-review-result-v2",
+        "result_type": "review_result",
+        "request_id": bundle.bound_context.request_id,
+        "reviewer": "claude",
+        "decision": "approved",
+        "new_findings": [],
+        "status_changes": [],
+        "reclassifications": [],
+        "anchors": [],
+        "review_evidence": {
+            "dimensions": "plan correctness and handoff contract",
+            "largest_residual_risk": "post-commit handoff interruption",
+            "break_condition": "the reviewed plan differs from the committed plan",
+        },
+        "pre_mortem": "A handoff failure could leave a committed plan awaiting resume.",
+    }
+    canonical = canonical_native_review_json(document)
+    return NativeAgentReviewOutput(
+        result=parse_bound_native_contract_result(document, bundle.bound_context),
+        canonical_json=canonical,
+        request_id=bundle.bound_context.request_id,
+    )
+
+
 def test_production_correction_delta_preserves_unified_diff_boundary() -> None:
     fingerprint = "f" * 64
     unified_diff = (
@@ -277,7 +340,9 @@ def test_resume_uses_persisted_profiles_and_rejects_explicit_drift_before_provid
         orchestrator._apply_resumed_agent_profiles(mismatched, state)
 
 
-def test_fresh_workflow_is_immutably_bound_to_structured_v1(tmp_path: Path) -> None:
+def test_fresh_workflow_is_immutably_bound_to_complete_native_transport(
+    tmp_path: Path,
+) -> None:
     repository = _repository(tmp_path, "feature/structured-cutover")
     task = tmp_path / "structured-cutover.md"
     _write_task(task, "feature/structured-cutover", "src/new.py")
@@ -291,32 +356,8 @@ def test_fresh_workflow_is_immutably_bound_to_structured_v1(tmp_path: Path) -> N
     assert state.protocol_binding == ProtocolBinding(
         ProtocolMode.STRUCTURED_V2, "2"
     )
-
-    native = orchestrator._fresh_state(
-        task_file=task,
-        run_id="structured-native-cutover",
-        repository_root=repository,
-        task_contract=parse_task_contract(task.read_text(encoding="utf-8")),
-        native_claude_reviews=True,
-    )
-    assert native.protocol_binding == ProtocolBinding(
-        ProtocolMode.STRUCTURED_V2,
-        "2",
-        "native-claude-review-v2",
-    )
-
-    native_codex = orchestrator._fresh_state(
-        task_file=task,
-        run_id="structured-native-codex-cutover",
-        repository_root=repository,
-        task_contract=parse_task_contract(task.read_text(encoding="utf-8")),
-        native_codex_results=True,
-    )
-    assert native_codex.protocol_binding == ProtocolBinding(
-        ProtocolMode.STRUCTURED_V2,
-        "2",
-        codex_result_transport="native-codex-v2",
-    )
+    assert state.protocol_binding.claude_review_transport == "native-claude-review-v2"
+    assert state.protocol_binding.codex_result_transport == "native-codex-v2"
 
 
 def test_final_review_structured_records_use_branch_wide_fingerprint(
@@ -3451,7 +3492,9 @@ def test_head_drift_after_plan_becomes_typed_persisted_halt(
     task = tmp_path / "task.md"
     _write_task(task, "feature/head-drift", "src/one.py")
 
-    def codex(driver: ProductionWorkflowDriver, invocation: CodexInvocation) -> str:
+    def codex(
+        driver: ProductionWorkflowDriver, invocation: CodexInvocation
+    ) -> NativeAgentCodexOutput:
         _git(repository, "commit", "--allow-empty", "-m", "external drift")
         output = (
             "SLICE_PLAN: 1 | add file | src/one.py\n"
@@ -3676,8 +3719,13 @@ def test_plan_only_repairs_handoff_contract_before_review(
         if invocation.step is WorkflowStep.CODEX_PLAN:
             body = "No exact path section.\n"
         else:
-            assert "AUTOMATIC PLAN CONTRACT REPAIR" in invocation.prompt
-            assert "Slice 1 has no exact change-path section" in invocation.prompt
+            assert invocation.native_request is not None
+            assert "AUTOMATIC PLAN CONTRACT REPAIR" in (
+                invocation.native_request.canonical_json
+            )
+            assert "Slice 1 has no exact change-path section" in (
+                invocation.native_request.canonical_json
+            )
             body = (
                 "**Exakter Änderungspfad**\n\n- `src/future.py`\n\n"
                 "#### \u0041kzeptanzkriterien\n\n- Future behavior is covered.\n"
@@ -3686,21 +3734,25 @@ def test_plan_only_repairs_handoff_contract_before_review(
             "# Work plan\n\n### Slice 1 - Future implementation\n\n" + body,
             encoding="utf-8",
         )
-        output = (
-            "SLICE_PLAN: 1 | create reviewed work plan | docs/internal/work-plan.md\n"
-            "PLAN_READY: YES\nSTATUS: DONE"
+        return _native_plan_output(
+            invocation,
+            summary="create reviewed work plan",
+            scope_paths=("docs/internal/work-plan.md",),
         )
-        driver.last_codex_output = output
-        return output
 
     def reviewer(
         _driver: ProductionWorkflowDriver, invocation: ReviewerInvocation
-    ) -> str:
+    ) -> NativeAgentReviewOutput:
         reviewer_steps.append(invocation.step)
-        return _review(invocation.reviewer, "PLAN_APPROVAL: YES")
+        return _native_review_approval(invocation)
 
     monkeypatch.setattr(ProductionWorkflowDriver, "invoke_codex", codex)
     monkeypatch.setattr(ProductionWorkflowDriver, "invoke_reviewer", reviewer)
+    monkeypatch.setattr(
+        ProductionWorkflowDriver,
+        "assert_structured_decision_context",
+        lambda _driver: None,
+    )
     monkeypatch.chdir(repository)
 
     result = run_production_workflow(task, _args(repository, task))
@@ -3731,7 +3783,9 @@ def test_completed_plan_resume_retries_failed_handoff_without_agents(
     )
     agent_steps: list[WorkflowStep] = []
 
-    def codex(driver: ProductionWorkflowDriver, invocation: CodexInvocation) -> str:
+    def codex(
+        driver: ProductionWorkflowDriver, invocation: CodexInvocation
+    ) -> NativeAgentCodexOutput:
         agent_steps.append(invocation.step)
         plan = repository / "docs" / "internal" / "resume.md"
         plan.parent.mkdir(parents=True, exist_ok=True)
@@ -3741,18 +3795,17 @@ def test_completed_plan_resume_retries_failed_handoff_without_agents(
             "#### \u0041kzeptanzkriterien\n\n- Resume behavior is covered.\n",
             encoding="utf-8",
         )
-        output = (
-            "SLICE_PLAN: 1 | create resume plan | docs/internal/resume.md\n"
-            "PLAN_READY: YES\nSTATUS: DONE"
+        return _native_plan_output(
+            invocation,
+            summary="create resume plan",
+            scope_paths=("docs/internal/resume.md",),
         )
-        driver.last_codex_output = output
-        return output
 
     def reviewer(
         _driver: ProductionWorkflowDriver, invocation: ReviewerInvocation
-    ) -> str:
+    ) -> NativeAgentReviewOutput:
         agent_steps.append(invocation.step)
-        return _review(invocation.reviewer, "PLAN_APPROVAL: YES")
+        return _native_review_approval(invocation)
 
     real_handoff = orchestrator.write_implementation_handoff
     handoff_calls = 0
@@ -3766,6 +3819,11 @@ def test_completed_plan_resume_retries_failed_handoff_without_agents(
 
     monkeypatch.setattr(ProductionWorkflowDriver, "invoke_codex", codex)
     monkeypatch.setattr(ProductionWorkflowDriver, "invoke_reviewer", reviewer)
+    monkeypatch.setattr(
+        ProductionWorkflowDriver,
+        "assert_structured_decision_context",
+        lambda _driver: None,
+    )
     monkeypatch.setattr(orchestrator, "write_implementation_handoff", fail_once)
     monkeypatch.chdir(repository)
 

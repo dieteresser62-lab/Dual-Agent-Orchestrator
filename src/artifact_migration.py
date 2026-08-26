@@ -35,6 +35,8 @@ from artifact_replay import (
 )
 from workflow_state import (
     AgentFailureKind,
+    NATIVE_CLAUDE_REVIEW_TRANSPORT,
+    NATIVE_CODEX_RESULT_TRANSPORT,
     ProtocolMode,
     WorkflowState,
     WorkflowStep,
@@ -76,6 +78,16 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
     if mode is not ProtocolMode.STRUCTURED_V2:
         raise ArtifactResumeError(
             f"protocol {mode.value!r} is historical and cannot be resumed",
+            code=ReplayDiagnosticCode.UNSUPPORTED_PROTOCOL,
+        )
+    binding = state.protocol_binding
+    if (
+        binding is None
+        or binding.claude_review_transport != NATIVE_CLAUDE_REVIEW_TRANSPORT
+        or binding.codex_result_transport != NATIVE_CODEX_RESULT_TRANSPORT
+    ):
+        raise ArtifactResumeError(
+            "structured-v2 state lacks the complete native Codex-Claude transport binding",
             code=ReplayDiagnosticCode.UNSUPPORTED_PROTOCOL,
         )
 

@@ -444,7 +444,7 @@ def test_bound_state_and_checkpoint_require_exact_resume_protocol(tmp_path: Path
             round_number=1,
             allowed_roots=(tmp_path,),
             expected_protocol_binding=ProtocolBinding(
-                ProtocolMode.LEGACY_STATE_V3, "3"
+                ProtocolMode.LEGACY_STATE_V3, "3", None, None
             ),
         )
 
@@ -487,7 +487,9 @@ def test_existing_state_protocol_binding_cannot_be_added_or_switched(tmp_path: P
             state_file,
             replace(
                 structured,
-                protocol_binding=ProtocolBinding(ProtocolMode.LEGACY_STATE_V3, "3"),
+                protocol_binding=ProtocolBinding(
+                    ProtocolMode.LEGACY_STATE_V3, "3", None, None
+                ),
             ),
             allowed_roots=(tmp_path,),
         )

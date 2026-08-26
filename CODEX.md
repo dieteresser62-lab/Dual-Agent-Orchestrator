@@ -5,6 +5,7 @@ Codex owns planning, implementation, and correction. Follow the shared state-v3 
 ## Structured artifact authority
 
 - New workflows are immutably bound to `structured-v2`. Native JSON results are validated against their request-specific writer schema and domain contract before the validated append-only records become the technical source of truth for every fact they represent. There is no text-parser fallback.
+- Codex results and Claude reviews always use their native JSON transports. The former transport-selection CLI flags are retired and cannot weaken or alter this binding.
 - The authoritative record chain lives in `.orchestrator/artifacts/<run-id>/records/`. `.orchestrator/state.json` and checkpoints are operational mirrors, `head.json` is a reconstructable cache, and projected Markdown is a human audit view rather than a repair source.
 - Historical `legacy-state-v3` and `structured-v1` states are unsupported and rejected fail-closed with `UNSUPPORTED-PROTOCOL`; they are never silently migrated or used as a fallback.
 - Resume is fail-closed. Missing, corrupt, unknown, or mirror-divergent structured records require restoring the matching chain or mirror before continuation; agents must never invent records, approvals, or migration facts.

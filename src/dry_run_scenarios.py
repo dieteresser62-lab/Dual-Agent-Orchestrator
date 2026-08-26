@@ -728,6 +728,13 @@ class ScriptedWorkflowDriver:
             state.current_work_unit.round_number,
         )
 
+    def authoritative_native_findings(
+        self, state: WorkflowState, findings: tuple[FindingRecord, ...]
+    ) -> tuple[FindingRecord, ...]:
+        """Provide the provider-free replay boundary used by native dry-runs."""
+        _ = state
+        return findings
+
     def _consume_agent(
         self,
         *,
@@ -1079,6 +1086,9 @@ def build_scenario_state(
         branch=scenario.initial.branch,
         branch_base=first.start_commit,
         slice_count=scenario.initial.slice_count,
+        task_digest=first.fingerprint,
+        task_scope_patterns=scenario.initial.scope_paths or first.paths,
+        target_branch=scenario.initial.branch,
         protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
         timestamp=scenario.clock_start.isoformat(),
     )
@@ -1130,6 +1140,7 @@ def build_scenario_context(scenario: DryRunScenario) -> WorkflowContext:
         red_state_followup_slice=configured.red_state_followup_slice,
         quota_wait_policy=configured.quota_wait_policy,
         transient_retry_policy=configured.transient_retry_policy,
+        task_scope_patterns=scenario.initial.scope_paths or scenario.changes[0].paths,
     )
 
 

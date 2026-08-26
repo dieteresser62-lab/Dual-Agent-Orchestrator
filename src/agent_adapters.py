@@ -1134,8 +1134,8 @@ def build_agent_registry(
     if set(resolved) != {"codex", "claude"}:
         raise ValueError("agent settings must contain exactly codex and claude")
     return {
-        "codex": CodexAdapter(resolved["codex"]),
-        "claude": ClaudeAdapter(resolved["claude"]),
+        "codex": NativeCodexAdapter(resolved["codex"]),
+        "claude": NativeClaudeReviewAdapter(resolved["claude"]),
     }
 
 

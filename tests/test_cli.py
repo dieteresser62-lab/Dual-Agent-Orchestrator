@@ -129,38 +129,20 @@ def test_validation_retries_require_explicit_cli_flags(tmp_path: Path) -> None:
     assert requested.retry_failed_validation is True
 
 
-def test_native_claude_review_flag_is_explicit_and_watch_default_is_legacy(
-    tmp_path: Path,
-) -> None:
-    default = parse_args([], cwd=tmp_path, environ={})
-    enabled = parse_args(
-        ["--native-claude-reviews"], cwd=tmp_path, environ={}
-    )
-    disabled = parse_args(
-        ["--no-native-claude-reviews"], cwd=tmp_path, environ={}
-    )
-    watch = parse_args(["--watch"], cwd=tmp_path, environ={})
+@pytest.mark.parametrize(
+    "flag",
+    (
+        "--native-claude-reviews",
+        "--no-native-claude-reviews",
+        "--native-codex-results",
+        "--no-native-codex-results",
+    ),
+)
+def test_native_transport_flags_are_retired(tmp_path: Path, flag: str) -> None:
+    with pytest.raises(SystemExit) as caught:
+        parse_args([flag], cwd=tmp_path, environ={})
 
-    assert default.native_claude_reviews is None
-    assert enabled.native_claude_reviews is True
-    assert disabled.native_claude_reviews is False
-    assert watch.native_claude_reviews is None
-
-
-def test_native_codex_result_flag_is_explicit_and_watch_default_is_legacy(
-    tmp_path: Path,
-) -> None:
-    default = parse_args([], cwd=tmp_path, environ={})
-    enabled = parse_args(["--native-codex-results"], cwd=tmp_path, environ={})
-    disabled = parse_args(
-        ["--no-native-codex-results"], cwd=tmp_path, environ={}
-    )
-    watch = parse_args(["--watch"], cwd=tmp_path, environ={})
-
-    assert default.native_codex_results is None
-    assert enabled.native_codex_results is True
-    assert disabled.native_codex_results is False
-    assert watch.native_codex_results is None
+    assert caught.value.code == 2
 
 
 def test_quota_wait_policy_defaults_and_explicit_disable(tmp_path: Path) -> None:

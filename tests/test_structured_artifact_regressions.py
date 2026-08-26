@@ -106,13 +106,15 @@ def _repository(tmp_path: Path, branch: str) -> Path:
 
 def _state(repository: Path, run_id: str = "structured-regression"):
     head = _git(repository, "rev-parse", "HEAD")
+    task = repository / "task.md"
+    task.write_text("structured regression task\n", encoding="utf-8")
     return init_workflow_state(
         run_id=run_id,
-        task_file=str(repository / "task.md"),
+        task_file=str(task),
         branch="feature/structured-regression",
         branch_base=head,
         slice_count=1,
-        task_digest="a" * 64,
+        task_digest=hashlib.sha256(task.read_bytes()).hexdigest(),
         task_scope_patterns=("src/runtime.py",),
         target_branch="feature/structured-regression",
         protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
@@ -198,6 +200,9 @@ def test_external_side_effect_guard_rejects_review_record_ahead_of_mirror(
             verdict="approved",
             finding_ids=(),
             evidence="complete evidence",
+            transport_schema="native-claude-review-v2",
+            request_id="native-review-request-" + "b" * 64,
+            response_sha256="c" * 64,
         ),
         logical_id="review-claude-1-1",
         idempotency_key="review-drift",
@@ -278,6 +283,9 @@ def _legacy_final_denial_recovery_case(
             verdict="denied",
             finding_ids=signature[4],
             evidence="legacy final denial",
+            transport_schema="native-claude-review-v2",
+            request_id="native-review-request-" + "b" * 64,
+            response_sha256="c" * 64,
         ),
         logical_id=f"review-claude-{signature[0]}-1",
         idempotency_key="legacy-final-denial-review",
@@ -394,7 +402,7 @@ def test_external_side_effect_guard_rejects_near_miss_final_denial_recovery(
     ) == Counter()
 
 
-def test_hash_bound_denied_review_replays_after_checkpoint_failure_without_provider(
+def test_legacy_text_denial_is_not_replayed_as_native_after_checkpoint_failure(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -533,7 +541,13 @@ def test_hash_bound_denied_review_replays_after_checkpoint_failure_without_provi
     )
     approval_records = tuple(
         bridge.append(
-            review_payload(result, work_unit_id=state.current_work_unit_id - 1),
+            review_payload(
+                result,
+                work_unit_id=state.current_work_unit_id - 1,
+                transport_schema="native-claude-review-v2",
+                request_id="native-review-request-" + "a" * 64,
+                response_sha256="b" * 64,
+            ),
             logical_id=(
                 f"review-{result.reviewer.value}-{state.current_work_unit_id - 1}-1"
             ),
@@ -579,6 +593,9 @@ def test_hash_bound_denied_review_replays_after_checkpoint_failure_without_provi
             verdict="denied",
             finding_ids=("C-01", "C-07"),
             evidence=None,
+            transport_schema="native-claude-review-v2",
+            request_id="native-review-request-" + "b" * 64,
+            response_sha256="c" * 64,
         ),
         logical_id=logical_id,
         idempotency_key=(
@@ -639,8 +656,8 @@ def test_hash_bound_denied_review_replays_after_checkpoint_failure_without_provi
 
     monkeypatch.setattr(driver, "_agent", provider_must_not_review)
     with pytest.raises(
-        AssertionError,
-        match="next Codex correction was intentionally not executed",
+        WorkflowExecutionError,
+        match="no unique response-digest-bound log",
     ):
         WorkflowEngine(driver).run_current_work_unit(
             state,
@@ -652,12 +669,7 @@ def test_hash_bound_denied_review_replays_after_checkpoint_failure_without_provi
             history,
         )
 
-    assert provider_roles == [AgentRole.CODEX]
-    assert driver.active_state is not None
-    assert driver.active_state.current_step is WorkflowStep.CODEX_FINAL_CORRECTION
-    assert driver.active_state.current_work_unit.round_number == 2
-    assert driver.active_state.current_work_unit.open_findings == ("C-01",)
-    driver.assert_structured_decision_context()
+    assert provider_roles == []
 
 
 def _pending_reviewer_recovery_case(
@@ -827,6 +839,9 @@ def _pending_reviewer_recovery_case(
                 if verdict == "approved"
                 else None
             ),
+            transport_schema="native-claude-review-v2",
+            request_id="native-review-request-" + "b" * 64,
+            response_sha256="c" * 64,
         ),
         logical_id=logical_id,
         idempotency_key=(
@@ -894,7 +909,7 @@ def test_pending_reviewer_recovery_rejects_non_unique_hash_bound_logs(
         )
 
 
-def test_hash_bound_approved_review_replays_to_commit_without_claude_provider(
+def test_legacy_text_review_is_not_replayed_by_native_workflow(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -933,9 +948,8 @@ def test_hash_bound_approved_review_replays_to_commit_without_claude_provider(
 
     assert provider_roles == []
     assert len(checkpoints) == 1
-    assert recovered_state.current_step is WorkflowStep.SLICE_COMMIT
-    assert recovered_history.latest_claude_review is not None
-    assert recovered_history.latest_claude_review.approval is True
+    assert recovered_state.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
+    assert recovered_history.latest_claude_review is None
 
 def test_budget_denial_persists_gate_checkpoint_and_resumes_idempotently(
     tmp_path: Path,
@@ -1411,6 +1425,9 @@ def test_structured_resume_accepts_mirrored_stopped_review(tmp_path: Path) -> No
             verdict="stop",
             finding_ids=(),
             evidence="owner decision required",
+            transport_schema="native-claude-review-v2",
+            request_id="native-review-request-" + "b" * 64,
+            response_sha256="c" * 64,
         ),
         logical_id="review-claude-1-1",
         idempotency_key="review-stop",

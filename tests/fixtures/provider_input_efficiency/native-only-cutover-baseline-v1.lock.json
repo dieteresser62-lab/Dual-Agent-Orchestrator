@@ -1,0 +1,1 @@
+{"base_commit":"bdb955d4ca56ca292dd8bcbd4d1e776a2acb7a1b","baseline_sha256":"3f07b52b79badf1340998973c4145b20a93892ea0f174942cd21ab1331c7adfc","expected_removed_evidence_ids":["approved-plan","workflow-prompt"],"fixture_version":"native-only-cutover-baseline-v1"}

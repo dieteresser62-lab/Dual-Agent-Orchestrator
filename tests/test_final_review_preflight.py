@@ -166,7 +166,7 @@ def _append_external_path_evidence(
         fingerprint_sha256=EXTERNAL_FINGERPRINT,
     )
     claude = bridge.append(
-        ReviewPayload(Role.CLAUDE, "2", "approved", (), "checked"),
+        ReviewPayload(Role.CLAUDE, "2", "approved", (), "checked", "native-claude-review-v2", "native-review-request-" + "b" * 64, "c" * 64),
         logical_id="slice-claude",
         idempotency_key="slice-claude",
         fingerprint_sha256=EXTERNAL_FINGERPRINT,
@@ -209,12 +209,12 @@ def test_each_final_transition_accepts_only_currently_available_facts(
     _attest(bridge)
     if prior_kind == "codex":
         bridge.append(
-            AgentResultPayload(Role.CODEX, str(state.current_work_unit_id), "ready", ()),
+            AgentResultPayload(Role.CODEX, str(state.current_work_unit_id), "ready", (), "native-codex-v2", "native-codex-request-" + "b" * 64, "c" * 64),
             logical_id="codex-final", idempotency_key="codex-final", fingerprint_sha256=FINGERPRINT,
         )
     elif prior_kind == "claude":
         bridge.append(
-            ReviewPayload(Role.CLAUDE, str(state.current_work_unit_id), "approved", (), "checked"),
+            ReviewPayload(Role.CLAUDE, str(state.current_work_unit_id), "approved", (), "checked", "native-claude-review-v2", "native-review-request-" + "b" * 64, "c" * 64),
             logical_id="claude-final", idempotency_key="claude-final", fingerprint_sha256=FINGERPRINT,
         )
     measurement = _measurement(bridge, state, step.value)
@@ -447,13 +447,13 @@ def test_preflight_rejects_binding_reference_with_wrong_payload_type(
         fingerprint_sha256=FINGERPRINT,
     )
     approval = bridge.append(
-        ReviewPayload(Role.CLAUDE, "2", "approved", (), "checked"),
+        ReviewPayload(Role.CLAUDE, "2", "approved", (), "checked", "native-claude-review-v2", "native-review-request-" + "b" * 64, "c" * 64),
         logical_id="binding-approval",
         idempotency_key="binding-approval",
         fingerprint_sha256=FINGERPRINT,
     )
     wrong_type = bridge.append(
-        AgentResultPayload(Role.CODEX, "2", "ready", ()),
+        AgentResultPayload(Role.CODEX, "2", "ready", (), "native-codex-v2", "native-codex-request-" + "b" * 64, "c" * 64),
         logical_id="binding-wrong-type",
         idempotency_key="binding-wrong-type",
         fingerprint_sha256=FINGERPRINT,

@@ -541,26 +541,6 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--native-claude-reviews",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help=(
-            "Bind native JSON Claude reviews for a newly created structured-v2 "
-            "run. Omission preserves an existing resume binding and keeps new "
-            "runs on the legacy text review transport."
-        ),
-    )
-    parser.add_argument(
-        "--native-codex-results",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help=(
-            "Bind native JSON Codex results for a newly created structured-v2 "
-            "run. Omission preserves an existing resume binding and keeps new "
-            "runs, including watch mode, on the legacy text result transport."
-        ),
-    )
-    parser.add_argument(
         "--work-plan",
         help="Repository-relative WORK_PLAN_PATH override for a PLAN_ONLY task.",
     )

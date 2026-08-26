@@ -12,7 +12,12 @@ import time
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
 
-from agent_adapters import AgentAdapter, build_agent_registry
+from agent_adapters import (
+    AgentAdapter,
+    NativeClaudeReviewAdapter,
+    NativeCodexAdapter,
+    build_agent_registry,
+)
 from agent_runtime import (
     AgentInvocationError,
     NativeAgentCodexOutput,
@@ -748,16 +753,14 @@ class ProductionWorkflowDriver(WorkflowDriver):
                     "native Codex invocation lacks its immutable state binding"
                 )
             self.assert_structured_decision_context()
-            native_factory = getattr(
-                self.agents[AgentRole.CODEX.value], "native_codex_adapter", None
-            )
-            if not callable(native_factory):
+            native_adapter = self.agents[AgentRole.CODEX.value]
+            if not isinstance(native_adapter, NativeCodexAdapter):
                 raise WorkflowExecutionError(
-                    "configured Codex adapter has no native result transport"
+                    "configured Codex adapter is not the native result transport"
                 )
             raw_path = self._native_codex_response_path(invocation)
             output = run_native_codex_agent_checked(
-                adapter=native_factory(),
+                adapter=native_adapter,
                 bundle=invocation.native_request,
                 raw_response_path=raw_path,
                 config=self.config,
@@ -904,15 +907,13 @@ class ProductionWorkflowDriver(WorkflowDriver):
                     "native Claude invocation lacks its immutable state binding"
                 )
             self.assert_structured_decision_context()
-            native_factory = getattr(
-                self.agents[AgentRole.CLAUDE.value], "native_review_adapter", None
-            )
-            if not callable(native_factory):
+            native_adapter = self.agents[AgentRole.CLAUDE.value]
+            if not isinstance(native_adapter, NativeClaudeReviewAdapter):
                 raise WorkflowExecutionError(
-                    "configured Claude adapter has no native review transport"
+                    "configured Claude adapter is not the native review transport"
                 )
             return run_native_review_agent_checked(
-                adapter=native_factory(),
+                adapter=native_adapter,
                 bundle=invocation.native_request,
                 log_prefix=(
                     f"work-unit-{invocation.work_unit_id:04d}-"
@@ -1773,45 +1774,10 @@ class ProductionWorkflowDriver(WorkflowDriver):
         output: str,
         previous_findings: tuple[FindingRecord, ...],
     ) -> None:
-        if self._artifact_bridge is None or self.active_state is None:
-            return
-        state = self.active_state
-        unit = state.current_work_unit
-        fingerprint = self._artifact_fingerprint()
-        logical = f"agent-{unit.work_unit_id}-{state.current_step.value}-{unit.round_number}"
-        self._artifact_bridge.append(
-            agent_result_payload(result, role=AgentRole.CODEX, work_unit_id=unit.work_unit_id),
-            logical_id=logical,
-            idempotency_key=(
-                f"parsed:{logical}:{fingerprint}:"
-                f"{hashlib.sha256(output.encode('utf-8')).hexdigest()}"
-            ),
-            fingerprint_sha256=fingerprint,
-            fingerprint_kind=(
-                FingerprintKind.CONTRACT
-                if unit.kind is WorkUnitKind.PLAN
-                else FingerprintKind.IMPLEMENTATION
-            ),
-        )
-        previous_by_id = {item.finding_id: item for item in previous_findings}
-        for finding in result.findings:
-            prior_count = len(previous_by_id.get(finding.finding_id, finding).responses)
-            if finding.finding_id not in previous_by_id:
-                prior_count = 0
-            for index, response in enumerate(
-                finding.responses[prior_count:], start=prior_count + 1
-            ):
-                self._artifact_bridge.append(
-                    finding_payload(
-                        finding,
-                        actor=AgentRole.CODEX,
-                        action="responded",
-                        rationale=f"{response.decision.value}: {response.rationale}",
-                    ),
-                    logical_id=f"finding-{finding.finding_id}",
-                    idempotency_key=f"finding-response:{finding.finding_id}:{index}",
-                    fingerprint_sha256=fingerprint,
-                )
+        # Kept only until Slice 2 removes the text-contract branch itself.  The
+        # production registry can no longer return this shape, and a legacy
+        # result cannot be represented by the now native-bound artifact model.
+        _ = (result, output, previous_findings)
 
     def persist_native_codex_contract(
         self,
@@ -1885,26 +1851,9 @@ class ProductionWorkflowDriver(WorkflowDriver):
         round_number: int,
         previous_findings: tuple[FindingRecord, ...],
     ) -> None:
-        if self._artifact_bridge is None or self.active_state is None:
-            return
-        unit = self.active_state.current_work_unit
-        logical = f"review-{result.reviewer.value}-{unit.work_unit_id}-{round_number}"
-        self._artifact_bridge.append(
-            review_payload(result, work_unit_id=unit.work_unit_id),
-            logical_id=logical,
-            idempotency_key=(
-                f"parsed:{logical}:{fingerprint}:"
-                f"{hashlib.sha256(output.encode('utf-8')).hexdigest()}"
-            ),
-            fingerprint_sha256=fingerprint,
-        )
-        self._persist_review_finding_transitions(
-            result,
-            fingerprint=fingerprint,
-            round_number=round_number,
-            previous_findings=previous_findings,
-            structured=False,
-        )
+        # Transitional dead sink; removed together with the text parser in
+        # Slice 2.  Native production adapters never call this method.
+        _ = (result, output, fingerprint, round_number, previous_findings)
 
     def persist_native_review_contract(
         self,
@@ -3618,8 +3567,6 @@ def _fresh_state(
     task_contract: TaskContract,
     branch_base_override: str | None = None,
     audit_report_path: str | None = None,
-    native_claude_reviews: bool = False,
-    native_codex_results: bool = False,
     codex_profile: AgentProfileBinding = AgentProfileBinding("gpt-5.6-sol", "medium"),
     claude_profile: AgentProfileBinding = AgentProfileBinding("sonnet", "high"),
 ) -> WorkflowState:
@@ -3657,16 +3604,8 @@ def _fresh_state(
         protocol_binding=ProtocolBinding(
             mode=ProtocolMode.STRUCTURED_V2,
             schema_version="2",
-            claude_review_transport=(
-                NATIVE_CLAUDE_REVIEW_TRANSPORT
-                if native_claude_reviews
-                else None
-            ),
-            codex_result_transport=(
-                NATIVE_CODEX_RESULT_TRANSPORT
-                if native_codex_results
-                else None
-            ),
+            claude_review_transport=NATIVE_CLAUDE_REVIEW_TRANSPORT,
+            codex_result_transport=NATIVE_CODEX_RESULT_TRANSPORT,
             codex_profile=codex_profile,
             claude_profile=claude_profile,
         ),
@@ -3854,34 +3793,6 @@ def run_production_workflow(
             raise StateSchemaError("persisted task contract differs from --resume task")
         if getattr(args, "watch_run_id", None) and state.run_id != args.watch_run_id:
             raise StateSchemaError("persisted watch run identity differs from inbox task")
-        requested_native = getattr(args, "native_claude_reviews", None)
-        persisted_native = (
-            state.protocol_binding is not None
-            and state.protocol_binding.claude_review_transport
-            == NATIVE_CLAUDE_REVIEW_TRANSPORT
-        )
-        if (
-            requested_native is not None
-            and bool(requested_native) is not persisted_native
-        ):
-            raise StateSchemaError(
-                "--native-claude-reviews differs from the immutable persisted "
-                "review transport binding"
-            )
-        requested_native_codex = getattr(args, "native_codex_results", None)
-        persisted_native_codex = (
-            state.protocol_binding is not None
-            and state.protocol_binding.codex_result_transport
-            == NATIVE_CODEX_RESULT_TRANSPORT
-        )
-        if (
-            requested_native_codex is not None
-            and bool(requested_native_codex) is not persisted_native_codex
-        ):
-            raise StateSchemaError(
-                "--native-codex-results differs from the immutable persisted "
-                "Codex result transport binding"
-            )
         if state.audit_report_path is None and managed_audit_path is not None:
             state = replace(state, audit_report_path=managed_audit_path)
         _apply_resumed_agent_profiles(args, state)
@@ -3897,12 +3808,6 @@ def run_production_workflow(
             task_contract=task_contract,
             branch_base_override=prepared_branch_base,
             audit_report_path=managed_audit_path,
-            native_claude_reviews=bool(
-                getattr(args, "native_claude_reviews", False)
-            ),
-            native_codex_results=bool(
-                getattr(args, "native_codex_results", False)
-            ),
             codex_profile=AgentProfileBinding(
                 args.agent_settings["codex"].model,
                 args.agent_settings["codex"].effort,
