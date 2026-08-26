@@ -2030,6 +2030,12 @@ def test_combined_native_finding_authority_rejects_state_mirror_drift(
     assert driver.authoritative_native_findings(
         correction_state, (closed_second, finding)
     ) == (finding, closed_second)
+    # The state-v3 history remains a complete cross-work-unit ledger. Closed
+    # findings outside the correction record's affected IDs must neither enter
+    # the Codex correction request nor create a false mirror divergence.
+    assert driver.authoritative_native_findings(
+        correction_state, (historical_finding, closed_second, finding)
+    ) == (finding, closed_second)
     later_blocker = FindingRecord(
         finding_id="C-03",
         finding_class=FindingClass.BLOCKER,

@@ -740,6 +740,12 @@ class ProductionWorkflowDriver(WorkflowDriver):
                     replay,
                     finding_ids=correction_finding_ids,
                 )
+                correction_ids = frozenset(correction_finding_ids)
+                mirror_findings = tuple(
+                    finding
+                    for finding in mirror_findings
+                    if finding.finding_id in correction_ids
+                )
             else:
                 projected = replay_findings(replay)
         except ArtifactReplayError as exc:
