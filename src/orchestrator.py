@@ -756,7 +756,13 @@ class ProductionWorkflowDriver(WorkflowDriver):
         state: WorkflowState,
         current_findings: tuple[FindingRecord, ...],
     ) -> tuple[FindingRecord, ...]:
-        """Restore the complete record-native ledger at a work-unit boundary."""
+        """Restore the complete record-native ledger at a work-unit boundary.
+
+        The replay may add findings from earlier work units, but it must contain
+        every finding already present in the current state mirror with identical
+        semantics.  Otherwise carrying the replay into the next work unit would
+        silently bless a damaged or incomplete record chain as the new mirror.
+        """
         active = self.active_state
         bridge = self._artifact_bridge
         if (
@@ -768,16 +774,28 @@ class ProductionWorkflowDriver(WorkflowDriver):
             raise WorkflowExecutionError(
                 "native finding carry-forward lacks its immutable state binding"
             )
-        _ = current_findings
         try:
             replay = replay_artifacts(
                 bridge.store.load_chain(), state.run_id, allow_empty=True
             )
-            return replay_findings(replay)
+            projected = replay_findings(replay)
         except ArtifactReplayError as exc:
             raise WorkflowExecutionError(
                 f"native finding carry-forward failed: {exc}"
             ) from exc
+        current_ids = {finding.finding_id for finding in current_findings}
+        carried_current = tuple(
+            finding for finding in projected if finding.finding_id in current_ids
+        )
+        canonical_current = tuple(
+            sorted(current_findings, key=lambda finding: finding.finding_id)
+        )
+        if carried_current != canonical_current:
+            raise WorkflowExecutionError(
+                "record-native finding carry-forward differs from the "
+                "state-v3 mirror"
+            )
+        return projected
 
     def _native_codex_response_path(self, invocation: CodexInvocation) -> Path:
         state = self.active_state
@@ -2555,61 +2573,6 @@ def _historical_correction_attribution_matches(
             set(review.payload.finding_ids)
         )
     )
-
-
-def _carry_forward_findings(
-    state: WorkflowState,
-    current_history: WorkflowHistory,
-) -> tuple[FindingRecord, ...]:
-    """Build a stable cross-work-unit ledger, including pre-upgrade archives.
-
-    Older runs allowed each work unit to reuse IDs such as C-01. When such a run is
-    resumed, distinct historical records are deterministically assigned the next free
-    reviewer ID while their origin, content, responses, and status remain unchanged.
-    Subsequent work units then preserve those assigned IDs through the same identity.
-    """
-    histories = _persisted_histories(state)
-    histories[current_history.work_unit_id] = current_history
-    latest_by_identity: dict[tuple[object, ...], FindingRecord] = {}
-    identity_order: list[tuple[object, ...]] = []
-    all_ids: list[str] = []
-    for history in (histories[unit_id] for unit_id in sorted(histories)):
-        for finding in history.findings:
-            identity = (
-                finding.origin.reporter,
-                finding.origin.slice_id,
-                finding.origin.round_number,
-                finding.summary,
-                finding.acceptance_test,
-            )
-            if identity not in latest_by_identity:
-                identity_order.append(identity)
-            latest_by_identity[identity] = finding
-            all_ids.append(finding.finding_id)
-
-    next_number = max(
-        (
-            int(finding_id.split("-", 1)[1])
-            for finding_id in all_ids
-            if finding_id.startswith("C-")
-        ),
-        default=0,
-    ) + 1
-    used_ids: set[str] = set()
-    carried: list[FindingRecord] = []
-    for identity in identity_order:
-        finding = latest_by_identity[identity]
-        finding_id = finding.finding_id
-        if finding_id in used_ids:
-            while True:
-                finding_id = f"C-{next_number:02d}"
-                next_number += 1
-                if finding_id not in used_ids:
-                    break
-            finding = replace(finding, finding_id=finding_id)
-        used_ids.add(finding_id)
-        carried.append(finding)
-    return tuple(sorted(carried, key=lambda finding: finding.finding_id))
 
 
 def _recover_final_review_attestation(

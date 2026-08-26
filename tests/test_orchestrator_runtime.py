@@ -659,54 +659,6 @@ def test_runtime_context_auto_authorizes_scoped_test_changes_unless_gate_enabled
     assert gated.test_changes_approved is False
 
 
-def test_carry_forward_findings_migrates_reused_legacy_ids_stably() -> None:
-    first = FindingRecord(
-        finding_id="C-01",
-        finding_class=FindingClass.OBSERVATION,
-        status=FindingStatus.OPEN,
-        summary="first slice observation",
-        acceptance_test="disposition first observation",
-        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
-    )
-    second = replace(
-        first,
-        summary="second slice observation",
-        acceptance_test="disposition second observation",
-        origin=FindingOrigin("02", 1, AgentRole.CLAUDE),
-    )
-    first_history = WorkflowHistory(1, findings=(first,))
-    second_history = WorkflowHistory(2, findings=(second,))
-    state = init_workflow_state(
-        run_id="legacy-findings",
-        task_file="task.md",
-        branch="feature/findings",
-        branch_base="a" * 40,
-        slice_count=1,
-        timestamp="2026-08-16T12:00:00+00:00",
-    )
-    state = replace(
-        state,
-        runtime_history={
-            "archive": [first_history.to_dict()],
-            "current": second_history.to_dict(),
-        },
-    )
-
-    migrated = orchestrator._carry_forward_findings(state, second_history)
-
-    assert [finding.finding_id for finding in migrated] == ["C-01", "C-02"]
-    assert all(finding.finding_id.startswith("C-") for finding in migrated)
-    carried_history = WorkflowHistory(3, findings=migrated)
-    state = replace(
-        state,
-        runtime_history={
-            "archive": [first_history.to_dict(), second_history.to_dict()],
-            "current": carried_history.to_dict(),
-        },
-    )
-    assert orchestrator._carry_forward_findings(state, carried_history) == migrated
-
-
 def test_final_review_recovers_latest_prior_attestation_after_transition_checkpoint() -> None:
     attestation = ValidationAttestation(
         "validation-a",
@@ -2110,6 +2062,19 @@ def test_combined_native_finding_authority_rejects_state_mirror_drift(
     assert driver.carry_forward_native_findings(
         round_two, (later_blocker, closed_second, finding)
     ) == (finding, closed_second, later_blocker, historical_finding)
+    missing_record_finding = replace(
+        later_blocker,
+        finding_id="C-04",
+        summary="This mirror finding has no authoritative record.",
+    )
+    with pytest.raises(
+        WorkflowExecutionError,
+        match="record-native finding carry-forward differs from the state-v3 mirror",
+    ):
+        driver.carry_forward_native_findings(
+            round_two,
+            (later_blocker, closed_second, finding, missing_record_finding),
+        )
     with pytest.raises(
         WorkflowExecutionError,
         match="differs from the state-v3 mirror",
