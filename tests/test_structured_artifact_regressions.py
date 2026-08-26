@@ -106,13 +106,15 @@ def _repository(tmp_path: Path, branch: str) -> Path:
 
 def _state(repository: Path, run_id: str = "structured-regression"):
     head = _git(repository, "rev-parse", "HEAD")
+    task = repository / "task.md"
+    task.write_text("structured regression task\n", encoding="utf-8")
     return init_workflow_state(
         run_id=run_id,
-        task_file=str(repository / "task.md"),
+        task_file=str(task),
         branch="feature/structured-regression",
         branch_base=head,
         slice_count=1,
-        task_digest="a" * 64,
+        task_digest=hashlib.sha256(task.read_bytes()).hexdigest(),
         task_scope_patterns=("src/runtime.py",),
         target_branch="feature/structured-regression",
         protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
@@ -198,6 +200,9 @@ def test_external_side_effect_guard_rejects_review_record_ahead_of_mirror(
             verdict="approved",
             finding_ids=(),
             evidence="complete evidence",
+            transport_schema="native-claude-review-v2",
+            request_id="native-review-request-" + "b" * 64,
+            response_sha256="c" * 64,
         ),
         logical_id="review-claude-1-1",
         idempotency_key="review-drift",
@@ -278,6 +283,9 @@ def _legacy_final_denial_recovery_case(
             verdict="denied",
             finding_ids=signature[4],
             evidence="legacy final denial",
+            transport_schema="native-claude-review-v2",
+            request_id="native-review-request-" + "b" * 64,
+            response_sha256="c" * 64,
         ),
         logical_id=f"review-claude-{signature[0]}-1",
         idempotency_key="legacy-final-denial-review",
@@ -392,272 +400,6 @@ def test_external_side_effect_guard_rejects_near_miss_final_denial_recovery(
             else chain
         ),
     ) == Counter()
-
-
-def test_hash_bound_denied_review_replays_after_checkpoint_failure_without_provider(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    repository = _repository(tmp_path, "feature/structured-regression")
-    head = _git(repository, "rev-parse", "HEAD")
-    state = (
-        _state(repository, "structured-review-checkpoint-replay")
-        .bind_slice_plan(
-            (PlannedSlice(1, "implementation", ("src/runtime.py",)),),
-            first_start_commit=head,
-        )
-        .complete_current_work_unit()
-        .start_work_unit(
-            slice_id=1,
-            kind=WorkUnitKind.SLICE,
-            step=WorkflowStep.CODEX_IMPLEMENTATION,
-        )
-        .bind_current_slice_git_boundary(
-            start_commit=head,
-            scope_paths=("src/runtime.py",),
-            start_fingerprint="b" * 64,
-        )
-        .complete_current_slice(commit_ref=head)
-        .start_final_review_work_unit()
-        .complete_current_work_unit()
-        .start_correction_work_unit(
-            start_commit=head,
-            scope_paths=("src/runtime.py",),
-            start_fingerprint="c" * 64,
-            finding_ids=("C-07",),
-        )
-        .with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW)
-    )
-    fingerprint = "d" * 64
-    prior_finding = FindingRecord(
-        finding_id="C-07",
-        finding_class=FindingClass.OBSERVATION,
-        status=FindingStatus.OPEN,
-        summary="pre-existing Claude observation",
-        acceptance_test="Carry the observation through the Claude review replay.",
-        origin=FindingOrigin(
-            str(state.current_slice_id),
-            1,
-            AgentRole.CLAUDE,
-        ),
-    )
-    attestation = ValidationAttestation(
-        attestation_id="validation-checkpoint-replay",
-        diff_fingerprint=fingerprint,
-        expected_commands=("python3 -m pytest tests/ -v",),
-        records=(
-            ValidationRecord(
-                ValidationStatus.PASS,
-                "python3 -m pytest tests/ -v",
-                0,
-            ),
-        ),
-        output_digest="e" * 64,
-        summary="validation completed before the interrupted review checkpoint",
-        command_specs=(
-            ValidationCommandSpec(
-                argv=("python3", "-m", "pytest", "tests/", "-v")
-            ),
-        ),
-    )
-    approvals = tuple(
-        ContractResult(
-            reviewer=reviewer,
-            approval=True,
-            stopped=False,
-            stop_request=None,
-            validation=attestation,
-            test_files=(),
-            pre_mortem="A future transition could invalidate the replay binding.",
-            evidence=ReviewEvidence(
-                "commit binding",
-                "stale approval identity",
-                "the commit fingerprint changes after approval",
-            ),
-            findings=(),
-            anchors=(),
-        )
-        for reviewer in (AgentRole.CLAUDE,)
-    )
-    final_history = WorkflowHistory(
-        state.current_work_unit_id - 1,
-        events=(
-            ValidationAuditEvent(1, 1, attestation),
-            ReviewAuditEvent(2, 1, 1, approvals[0]),
-        ),
-        attestations=(attestation,),
-    )
-    history = WorkflowHistory(
-        state.current_work_unit_id,
-        events=(ValidationAuditEvent(1, state.current_slice_id, attestation),),
-        attestations=(attestation,),
-        findings=(prior_finding,),
-    )
-    state = replace(
-        state,
-        runtime_history={
-            "archive": [final_history.to_dict()],
-            "current": history.to_dict(),
-        },
-    )
-    driver = _driver(repository)
-    driver.bind_work_unit(state)
-    driver.persist_validation_attestation(attestation)
-    bridge = ArtifactBridge(ArtifactStore(repository, state.run_id))
-    final_unit = next(
-        item
-        for item in state.work_units
-        if item.work_unit_id == state.current_work_unit_id - 1
-    )
-    final_slice = next(
-        item for item in state.slices if item.slice_id == final_unit.slice_id
-    )
-    bridge.append(
-        WorkUnitPayload(
-            slice_id=str(final_unit.slice_id),
-            round_number=final_unit.round_number,
-            paths=final_slice.scope_paths,
-        ),
-        logical_id=f"work-unit-{state.current_work_unit_id - 1}",
-        idempotency_key=(
-            f"work-unit:{state.current_work_unit_id - 1}:round:{final_unit.round_number}"
-        ),
-        fingerprint_sha256=state.task_digest,
-        fingerprint_kind=FingerprintKind.CONTRACT,
-    )
-    bridge.append(
-        finding_payload(prior_finding),
-        logical_id="finding-C-07",
-        idempotency_key="finding:C-07:opened:1:claude",
-        fingerprint_sha256=fingerprint,
-    )
-    approval_records = tuple(
-        bridge.append(
-            review_payload(result, work_unit_id=state.current_work_unit_id - 1),
-            logical_id=(
-                f"review-{result.reviewer.value}-{state.current_work_unit_id - 1}-1"
-            ),
-            idempotency_key=(
-                f"review:{result.reviewer.value}:"
-                f"{state.current_work_unit_id - 1}:1"
-            ),
-            fingerprint_sha256=fingerprint,
-        )
-        for result in approvals
-    )
-    bridge.append(
-        BindingPayload(
-            binding_kind="commit",
-            target=head,
-            attestation_id=next(
-                item.record_id
-                for item in bridge.store.load_chain()
-                if item.logical_id == attestation.attestation_id
-            ),
-            approval_ids=tuple(item.record_id for item in approval_records),
-        ),
-        logical_id="commit-1",
-        idempotency_key="commit:1",
-        fingerprint_sha256=fingerprint,
-    )
-    driver.checkpoint(state, history)
-    output = "\n".join(
-        (
-            "REVIEWER: claude",
-            "NEW_FINDING: C-01 | BLOCKER | checkpoint replay gap | "
-            "Add a deterministic replay regression test.",
-            "FINDING_STATUS: C-07 | OPEN | Preserve the prior finding for correction.",
-            f"SLICE_APPROVAL: {state.current_slice_id:02d} | NO",
-            "STATUS: DONE",
-        )
-    )
-    logical_id = f"review-claude-{state.current_work_unit_id}-1"
-    bridge.append(
-        ReviewPayload(
-            reviewer=Role.CLAUDE,
-            work_unit_id=str(state.current_work_unit_id),
-            verdict="denied",
-            finding_ids=("C-01", "C-07"),
-            evidence=None,
-        ),
-        logical_id=logical_id,
-        idempotency_key=(
-            f"parsed:{logical_id}:{fingerprint}:"
-            f"{hashlib.sha256(output.encode('utf-8')).hexdigest()}"
-        ),
-        fingerprint_sha256=fingerprint,
-    )
-    new_finding = FindingRecord(
-        finding_id="C-01",
-        finding_class=FindingClass.BLOCKER,
-        status=FindingStatus.OPEN,
-        summary="checkpoint replay gap",
-        acceptance_test="Add a deterministic replay regression test.",
-        origin=FindingOrigin(
-            str(state.current_slice_id),
-            1,
-            AgentRole.CLAUDE,
-        ),
-    )
-    bridge.append(
-        finding_payload(new_finding),
-        logical_id="finding-C-01",
-        idempotency_key="finding:C-01:opened:1:claude",
-        fingerprint_sha256=fingerprint,
-    )
-    bridge.append(
-        CorrectionWorkUnitPayload(
-            slice_id=str(state.current_slice_id),
-            round_number=2,
-            paths=state.current_slice.scope_paths,
-            finding_ids=("C-01",),
-        ),
-        logical_id=f"work-unit-{state.current_work_unit_id}",
-        idempotency_key=(
-            f"correction-work-unit:{state.current_work_unit_id}:round:2"
-        ),
-        fingerprint_sha256=state.task_digest,
-        fingerprint_kind=FingerprintKind.CONTRACT,
-    )
-    driver.log_dir.mkdir(parents=True, exist_ok=True)
-    (
-        driver.log_dir
-        / (
-            f"work-unit-{state.current_work_unit_id:04d}-"
-            "claude_slice_review.attempt-1.log"
-        )
-    ).write_text(output + "\n", encoding="utf-8")
-
-    resolution = resolve_resume_state(repository, state)
-    assert resolution.record_head_id is not None
-
-    provider_roles: list[AgentRole] = []
-
-    def provider_must_not_review(role, *_args, **_kwargs):
-        provider_roles.append(role)
-        raise AssertionError("the next Codex correction was intentionally not executed")
-
-    monkeypatch.setattr(driver, "_agent", provider_must_not_review)
-    with pytest.raises(
-        AssertionError,
-        match="next Codex correction was intentionally not executed",
-    ):
-        WorkflowEngine(driver).run_current_work_unit(
-            state,
-            WorkflowContext(
-                assignment="Recover the interrupted correction review.",
-                distilled_plan="Replay only an exactly hash-bound reviewer decision.",
-                slice_summary="Correction review",
-            ),
-            history,
-        )
-
-    assert provider_roles == [AgentRole.CODEX]
-    assert driver.active_state is not None
-    assert driver.active_state.current_step is WorkflowStep.CODEX_FINAL_CORRECTION
-    assert driver.active_state.current_work_unit.round_number == 2
-    assert driver.active_state.current_work_unit.open_findings == ("C-01",)
-    driver.assert_structured_decision_context()
 
 
 def _pending_reviewer_recovery_case(
@@ -827,6 +569,9 @@ def _pending_reviewer_recovery_case(
                 if verdict == "approved"
                 else None
             ),
+            transport_schema="native-claude-review-v2",
+            request_id="native-review-request-" + "b" * 64,
+            response_sha256="c" * 64,
         ),
         logical_id=logical_id,
         idempotency_key=(
@@ -846,96 +591,6 @@ def _pending_reviewer_recovery_case(
     ).write_text(output + "\n", encoding="utf-8")
     return driver, state, output
 
-
-@pytest.mark.parametrize(
-    ("failure_mode", "kwargs"),
-    (
-        ("round-number", {"logical_round": 2}),
-        ("verdict", {"verdict": "approved"}),
-        ("idempotency-prefix", {"malformed_key": True}),
-        ("partial-state-mirror", {"mirrored_partial_review": True}),
-        ("attestation-fingerprint", {"attestation_fingerprint": "f" * 64}),
-    ),
-)
-def test_pending_reviewer_recovery_rejects_record_and_mirror_near_misses(
-    tmp_path: Path,
-    failure_mode: str,
-    kwargs: dict[str, object],
-) -> None:
-    repository = _repository(tmp_path, "feature/structured-regression")
-    driver, state, _output = _pending_reviewer_recovery_case(repository, **kwargs)
-
-    recovered = driver.recover_pending_reviewer(
-        reviewer=AgentRole.CLAUDE,
-        work_unit_id=state.current_work_unit_id,
-        step=WorkflowStep.CLAUDE_SLICE_REVIEW,
-        round_number=1,
-    )
-
-    assert recovered is None, failure_mode
-
-
-def test_pending_reviewer_recovery_rejects_non_unique_hash_bound_logs(
-    tmp_path: Path,
-) -> None:
-    repository = _repository(tmp_path, "feature/structured-regression")
-    driver, state, output = _pending_reviewer_recovery_case(repository)
-    (
-        driver.log_dir
-        / f"work-unit-{state.current_work_unit_id:04d}-claude_slice_review.attempt-2.log"
-    ).write_text(output + "\n", encoding="utf-8")
-
-    with pytest.raises(WorkflowExecutionError, match="no unique hash-bound provider log"):
-        driver.recover_pending_reviewer(
-            reviewer=AgentRole.CLAUDE,
-            work_unit_id=state.current_work_unit_id,
-            step=WorkflowStep.CLAUDE_SLICE_REVIEW,
-            round_number=1,
-        )
-
-
-def test_hash_bound_approved_review_replays_to_commit_without_claude_provider(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    repository = _repository(tmp_path, "feature/structured-regression")
-    driver, state, _output = _pending_reviewer_recovery_case(
-        repository,
-        verdict="approved",
-        output_verdict="approved",
-    )
-    history = WorkflowHistory.from_dict(state.runtime_history["current"])
-    provider_roles: list[AgentRole] = []
-    checkpoints: list[tuple[WorkflowState, WorkflowHistory]] = []
-
-    def provider_must_not_run(role, *_args, **_kwargs):
-        provider_roles.append(role)
-        raise AssertionError("Claude provider must not run during approved replay")
-
-    monkeypatch.setattr(driver, "_agent", provider_must_not_run)
-    monkeypatch.setattr(
-        driver,
-        "checkpoint",
-        lambda checkpoint_state, checkpoint_history: checkpoints.append(
-            (checkpoint_state, checkpoint_history)
-        ),
-    )
-    recovered_state, recovered_history = WorkflowEngine(driver)._run_review(
-        state,
-        WorkflowContext(
-            assignment="Recover the interrupted approved review.",
-            distilled_plan="Replay only an exactly hash-bound reviewer decision.",
-            slice_summary="Correction review",
-        ),
-        history,
-        AgentRole.CLAUDE,
-    )
-
-    assert provider_roles == []
-    assert len(checkpoints) == 1
-    assert recovered_state.current_step is WorkflowStep.SLICE_COMMIT
-    assert recovered_history.latest_claude_review is not None
-    assert recovered_history.latest_claude_review.approval is True
 
 def test_budget_denial_persists_gate_checkpoint_and_resumes_idempotently(
     tmp_path: Path,
@@ -1411,6 +1066,9 @@ def test_structured_resume_accepts_mirrored_stopped_review(tmp_path: Path) -> No
             verdict="stop",
             finding_ids=(),
             evidence="owner decision required",
+            transport_schema="native-claude-review-v2",
+            request_id="native-review-request-" + "b" * 64,
+            response_sha256="c" * 64,
         ),
         logical_id="review-claude-1-1",
         idempotency_key="review-stop",

@@ -88,18 +88,17 @@
       "properties": {"slice_id": {"$ref": "#/$defs/identifier"}, "round_number": {"type": "integer", "minimum": 1}, "paths": {"$ref": "#/$defs/non_empty_paths"}, "finding_ids": {"$ref": "#/$defs/non_empty_finding_ids"}}
     },
     "agent_result": {
-      "type": "object", "additionalProperties": false, "required": ["role", "work_unit_id", "outcome", "test_files"],
-      "properties": {"role": {"$ref": "#/$defs/role"}, "work_unit_id": {"$ref": "#/$defs/identifier"}, "outcome": {"enum": ["ready", "not_ready", "stopped"]}, "test_files": {"$ref": "#/$defs/paths"}, "transport_schema": {"type": ["string", "null"]}, "request_id": {"type": ["string", "null"]}, "response_sha256": {"type": ["string", "null"]}},
-      "oneOf": [{"properties": {"transport_schema": {"type": "null"}, "request_id": {"type": "null"}, "response_sha256": {"type": "null"}}}, {"required": ["transport_schema", "request_id", "response_sha256"], "properties": {"role": {"const": "codex"}, "transport_schema": {"const": "native-codex-v2"}, "request_id": {"type": "string", "pattern": "^native-codex-request-[0-9a-f]{64}$"}, "response_sha256": {"$ref": "#/$defs/sha256"}}}]
+      "type": "object", "additionalProperties": false, "required": ["role", "work_unit_id", "outcome", "test_files", "transport_schema", "request_id", "response_sha256"],
+      "properties": {"role": {"const": "codex"}, "work_unit_id": {"$ref": "#/$defs/identifier"}, "outcome": {"enum": ["ready", "not_ready", "stopped"]}, "test_files": {"$ref": "#/$defs/paths"}, "transport_schema": {"const": "native-codex-v2"}, "request_id": {"type": "string", "pattern": "^native-codex-request-[0-9a-f]{64}$"}, "response_sha256": {"$ref": "#/$defs/sha256"}}
     },
     "diagnostic": {
       "type": "object", "additionalProperties": false, "required": ["role", "work_unit_id", "attempt", "output_sha256", "reason"],
       "properties": {"role": {"$ref": "#/$defs/role"}, "work_unit_id": {"$ref": "#/$defs/identifier"}, "attempt": {"type": "integer", "minimum": 1}, "output_sha256": {"$ref": "#/$defs/sha256"}, "reason": {"$ref": "#/$defs/non_empty"}}
     },
     "review": {
-      "type": "object", "additionalProperties": false, "required": ["reviewer", "work_unit_id", "verdict", "finding_ids", "evidence"],
-      "properties": {"reviewer": {"$ref": "#/$defs/reviewer"}, "work_unit_id": {"$ref": "#/$defs/identifier"}, "verdict": {"enum": ["approved", "denied", "stop"]}, "finding_ids": {"$ref": "#/$defs/finding_ids"}, "evidence": {"type": ["string", "null"], "minLength": 1}, "transport_schema": {"type": ["string", "null"]}, "request_id": {"type": ["string", "null"]}, "response_sha256": {"type": ["string", "null"]}},
-      "allOf": [{"if": {"properties": {"verdict": {"const": "approved"}}}, "then": {"anyOf": [{"properties": {"finding_ids": {"minItems": 1}}}, {"properties": {"evidence": {"type": "string"}}}]}}, {"oneOf": [{"properties": {"transport_schema": {"type": "null"}, "request_id": {"type": "null"}, "response_sha256": {"type": "null"}}}, {"required": ["transport_schema", "request_id", "response_sha256"], "properties": {"reviewer": {"const": "claude"}, "transport_schema": {"const": "native-claude-review-v2"}, "request_id": {"type": "string", "pattern": "^native-review-request-[0-9a-f]{64}$"}, "response_sha256": {"$ref": "#/$defs/sha256"}}}]}]
+      "type": "object", "additionalProperties": false, "required": ["reviewer", "work_unit_id", "verdict", "finding_ids", "evidence", "transport_schema", "request_id", "response_sha256"],
+      "properties": {"reviewer": {"const": "claude"}, "work_unit_id": {"$ref": "#/$defs/identifier"}, "verdict": {"enum": ["approved", "denied", "stop"]}, "finding_ids": {"$ref": "#/$defs/finding_ids"}, "evidence": {"type": ["string", "null"], "minLength": 1}, "transport_schema": {"const": "native-claude-review-v2"}, "request_id": {"type": "string", "pattern": "^native-review-request-[0-9a-f]{64}$"}, "response_sha256": {"$ref": "#/$defs/sha256"}},
+      "allOf": [{"if": {"properties": {"verdict": {"const": "approved"}}}, "then": {"anyOf": [{"properties": {"finding_ids": {"minItems": 1}}}, {"properties": {"evidence": {"type": "string"}}}]}}]
     },
     "finding_transition": {
       "type": "object", "additionalProperties": false, "required": ["finding_id", "reporter", "actor", "action", "severity", "finding_status", "rationale"],

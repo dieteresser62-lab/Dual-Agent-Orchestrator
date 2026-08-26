@@ -23,7 +23,6 @@ PROVIDER_OPERATIONS: Mapping[str, frozenset[str]] = {
             "claude_plan_review",
             "claude_slice_review",
             "claude_final_review",
-            "claude_contract_repair",
         }
     ),
 }
@@ -87,6 +86,14 @@ class PreparedProviderInput:
         names = tuple(item.name for item in self.components)
         if not names or len(names) != len(set(names)):
             raise ValueError("prepared provider components must have unique names")
+        content_digests = tuple(
+            hashlib.sha256(item.content.encode("utf-8")).hexdigest()
+            for item in self.components
+        )
+        if len(content_digests) != len(set(content_digests)):
+            raise ValueError(
+                "prepared provider components must have unique content"
+            )
 
 
 @dataclass(frozen=True)

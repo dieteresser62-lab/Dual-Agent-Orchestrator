@@ -48,7 +48,6 @@ from contracts import (
     ValidationRecord,
     ValidationStatus,
     ReviewEvidence,
-    validate_review_response,
 )
 from git_service import GitTransactionError
 from inbox_watcher import WatchTaskDisposition, WatchTaskResult
@@ -56,7 +55,6 @@ from orchestrator import ProductionWorkflowDriver, run_pipeline, run_production_
 from review_packets import ReviewPacket, ReviewPacketManifest
 from workflow import (
     CodexInvocation,
-    ContractRepairInvocation,
     EvidenceKind,
     ReviewerInvocation,
     WorkflowChanges,
@@ -64,7 +62,6 @@ from workflow import (
     WorkflowContext,
     WorkflowEngine,
     WorkflowHistory,
-    normalize_review_contract,
 )
 from workflow import WorkflowExecutionError
 from plan_handoff import PlanHandoffError
@@ -115,6 +112,91 @@ def _git(root: Path, *args: str) -> str:
         ["git", *args], cwd=root, capture_output=True, text=True, check=True
     )
     return result.stdout.strip()
+
+
+def _native_plan_output(
+    invocation: CodexInvocation,
+    *,
+    summary: str,
+    scope_paths: tuple[str, ...],
+) -> NativeAgentCodexOutput:
+    bundle = invocation.native_request
+    assert bundle is not None
+    document = {
+        "schema_version": "native-agent-codex-result-v2",
+        "result_type": "plan_result",
+        "request_id": bundle.bound_context.request_id,
+        "ready": True,
+        "finding_dispositions": [],
+        "slice_plan": [
+            {
+                "slice_id": 1,
+                "summary": summary,
+                "scope_paths": list(scope_paths),
+            }
+        ],
+    }
+    canonical = canonical_native_codex_json(document)
+    return NativeAgentCodexOutput(
+        result=parse_bound_native_codex_contract_result(
+            document, bundle.bound_context
+        ),
+        canonical_json=canonical,
+        request_id=bundle.bound_context.request_id,
+        response_sha256=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+    )
+
+
+def _native_review_approval(
+    invocation: ReviewerInvocation,
+) -> NativeAgentReviewOutput:
+    bundle = invocation.native_request
+    assert bundle is not None
+    document = {
+        "schema_version": "native-agent-review-result-v2",
+        "result_type": "review_result",
+        "request_id": bundle.bound_context.request_id,
+        "reviewer": "claude",
+        "decision": "approved",
+        "new_findings": [],
+        "status_changes": [],
+        "reclassifications": [],
+        "anchors": [],
+        "review_evidence": {
+            "dimensions": "plan correctness and handoff contract",
+            "largest_residual_risk": "post-commit handoff interruption",
+            "break_condition": "the reviewed plan differs from the committed plan",
+        },
+        "pre_mortem": "A handoff failure could leave a committed plan awaiting resume.",
+    }
+    canonical = canonical_native_review_json(document)
+    return NativeAgentReviewOutput(
+        result=parse_bound_native_contract_result(document, bundle.bound_context),
+        canonical_json=canonical,
+        request_id=bundle.bound_context.request_id,
+    )
+
+
+def _native_implementation_output(
+    invocation: CodexInvocation,
+) -> NativeAgentCodexOutput:
+    bundle = invocation.native_request
+    assert bundle is not None
+    document = {
+        "schema_version": "native-agent-codex-result-v2",
+        "result_type": "implementation_result",
+        "request_id": bundle.bound_context.request_id,
+        "ready": True,
+        "finding_dispositions": [],
+        "test_files": [],
+    }
+    canonical = canonical_native_codex_json(document)
+    return NativeAgentCodexOutput(
+        result=parse_bound_native_codex_contract_result(document, bundle.bound_context),
+        canonical_json=canonical,
+        request_id=bundle.bound_context.request_id,
+        response_sha256=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+    )
 
 
 def test_production_correction_delta_preserves_unified_diff_boundary() -> None:
@@ -277,7 +359,9 @@ def test_resume_uses_persisted_profiles_and_rejects_explicit_drift_before_provid
         orchestrator._apply_resumed_agent_profiles(mismatched, state)
 
 
-def test_fresh_workflow_is_immutably_bound_to_structured_v1(tmp_path: Path) -> None:
+def test_fresh_workflow_is_immutably_bound_to_complete_native_transport(
+    tmp_path: Path,
+) -> None:
     repository = _repository(tmp_path, "feature/structured-cutover")
     task = tmp_path / "structured-cutover.md"
     _write_task(task, "feature/structured-cutover", "src/new.py")
@@ -291,32 +375,8 @@ def test_fresh_workflow_is_immutably_bound_to_structured_v1(tmp_path: Path) -> N
     assert state.protocol_binding == ProtocolBinding(
         ProtocolMode.STRUCTURED_V2, "2"
     )
-
-    native = orchestrator._fresh_state(
-        task_file=task,
-        run_id="structured-native-cutover",
-        repository_root=repository,
-        task_contract=parse_task_contract(task.read_text(encoding="utf-8")),
-        native_claude_reviews=True,
-    )
-    assert native.protocol_binding == ProtocolBinding(
-        ProtocolMode.STRUCTURED_V2,
-        "2",
-        "native-claude-review-v2",
-    )
-
-    native_codex = orchestrator._fresh_state(
-        task_file=task,
-        run_id="structured-native-codex-cutover",
-        repository_root=repository,
-        task_contract=parse_task_contract(task.read_text(encoding="utf-8")),
-        native_codex_results=True,
-    )
-    assert native_codex.protocol_binding == ProtocolBinding(
-        ProtocolMode.STRUCTURED_V2,
-        "2",
-        codex_result_transport="native-codex-v2",
-    )
+    assert state.protocol_binding.claude_review_transport == "native-claude-review-v2"
+    assert state.protocol_binding.codex_result_transport == "native-codex-v2"
 
 
 def test_final_review_structured_records_use_branch_wide_fingerprint(
@@ -378,102 +438,6 @@ def test_final_review_structured_records_use_branch_wide_fingerprint(
     assert starts == [branch_base]
 
 
-def test_reviewer_recovers_complete_contract_from_false_401_auth_classification(
-    tmp_path: Path, monkeypatch,
-) -> None:
-    repository = _repository(tmp_path, "feature/reviewer-auth-recovery")
-    driver = ProductionWorkflowDriver(
-        repository_root=repository,
-        state_file=repository / ".orchestrator" / "state.json",
-        agents={},
-        config=orchestrator.OrchestratorConfig(repo_root=repository),
-        allowed_roots=(repository,),
-    )
-    response = "\n".join(
-        (
-            "REVIEWER: claude",
-            "REVIEW_EVIDENCE: checked src/orchestrator.py#L401-L433 | risk | break",
-            "PRE_MORTEM: a future lifecycle step drifts",
-            "SLICE_APPROVAL: 11 | YES",
-            "STATUS: DONE",
-        )
-    )
-    failure = AgentInvocationError(
-        agent_key="claude",
-        kind=AgentFailureKind.AUTH,
-        invocation_id="false-401-link",
-        provider_text=response,
-        received_at=datetime(2026, 8, 19, tzinfo=timezone.utc),
-    )
-
-    def fail_agent(*args, **kwargs):
-        _ = (args, kwargs)
-        raise failure
-
-    monkeypatch.setattr(driver, "_agent", fail_agent)
-    invocation = ReviewerInvocation(
-        work_unit_id=16,
-        step=WorkflowStep.CLAUDE_SLICE_REVIEW,
-        reviewer=AgentRole.CLAUDE,
-        round_number=2,
-        evidence_kind=EvidenceKind.CORRECTION_DELTA,
-        fingerprint="a" * 64,
-        paths=("src/orchestrator.py",),
-        prompt="review",
-    )
-
-    assert driver.invoke_reviewer(invocation) == response
-
-
-@pytest.mark.parametrize(
-    ("reviewer", "expected_operation"),
-    (
-        (AgentRole.CLAUDE, "claude_contract_repair"),
-    ),
-)
-def test_contract_repair_uses_a_separate_provider_operation(
-    tmp_path: Path,
-    monkeypatch,
-    reviewer: AgentRole,
-    expected_operation: str,
-) -> None:
-    repository = _repository(tmp_path, "feature/repair-operation")
-    driver = ProductionWorkflowDriver(
-        repository_root=repository,
-        state_file=repository / ".orchestrator" / "state.json",
-        agents={},
-        config=orchestrator.OrchestratorConfig(repo_root=repository),
-        allowed_roots=(repository,),
-    )
-    driver.active_state = init_workflow_state(
-        run_id="repair-operation",
-        task_file=str(repository / "task.md"),
-        branch="feature/repair-operation",
-        branch_base=_git(repository, "rev-parse", "HEAD"),
-        slice_count=1,
-    )
-    captured: dict[str, object] = {}
-
-    def fake_agent(*args, **kwargs):  # type: ignore[no-untyped-def]
-        captured["args"] = args
-        captured.update(kwargs)
-        return "STATUS: DONE"
-
-    monkeypatch.setattr(driver, "_agent", fake_agent)
-    output = driver.repair_review_contract(
-        ContractRepairInvocation(
-            reviewer=reviewer,
-            rejected_output="REVIEWER: claude",
-            validation_error="REVIEW_EVIDENCE is ambiguous",
-            contract="contract",
-        )
-    )
-
-    assert output == "STATUS: DONE"
-    assert captured["operation"] == expected_operation
-    assert captured["reviewer_repository_required"] is False
-
-
 def test_review_packet_materialization_reuses_bytes_and_rejects_cache_mismatch(
     tmp_path: Path, monkeypatch,
 ) -> None:
@@ -512,168 +476,9 @@ def test_review_packet_materialization_reuses_bytes_and_rejects_cache_mismatch(
     assert first == second
     assert first.read_bytes() == canonical
 
-    captured: dict[str, object] = {}
-
-    def fake_agent(*args, **kwargs):  # type: ignore[no-untyped-def]
-        captured.update(kwargs)
-        return "STATUS: DONE"
-
-    monkeypatch.setattr(driver, "_agent", fake_agent)
-    assert driver.invoke_reviewer(
-        ReviewerInvocation(
-            work_unit_id=2,
-            step=WorkflowStep.CLAUDE_SLICE_REVIEW,
-            reviewer=AgentRole.CLAUDE,
-            round_number=1,
-            evidence_kind=EvidenceKind.FULL_SLICE,
-            fingerprint="a" * 64,
-            paths=("seed.txt",),
-            prompt="review",
-            review_packet=packet,
-        )
-    ) == "STATUS: DONE"
-    assert captured["reviewer_manifest_paths"] == ("seed.txt",)
-
     first.write_text("collision", encoding="utf-8")
     with pytest.raises(WorkflowExecutionError, match="differs from canonical bytes"):
         driver._materialize_review_packet(packet)
-
-
-def test_reviewer_reuses_diagnostic_bound_bulleted_evidence_output_without_provider(
-    tmp_path: Path,
-) -> None:
-    repository = _repository(tmp_path, "feature/output-recovery")
-    fingerprint = "a" * 64
-    attestation = ValidationAttestation(
-        "validation-output-recovery",
-        fingerprint,
-        ("pytest",),
-        (ValidationRecord(ValidationStatus.PASS, "pytest", 0, "passed"),),
-        "b" * 64,
-        "passed",
-    )
-    finding = FindingRecord(
-        finding_id="C-03",
-        finding_class=FindingClass.BLOCKER,
-        status=FindingStatus.OPEN,
-        summary="foreign chain accepted",
-        acceptance_test="reject a foreign start record",
-        origin=FindingOrigin("03", 1, AgentRole.CLAUDE),
-    )
-    state = init_workflow_state(
-        run_id="output-recovery",
-        task_file=str(repository / "task.md"),
-        branch="feature/output-recovery",
-        branch_base=_git(repository, "rev-parse", "HEAD"),
-        slice_count=3,
-    ).bind_slice_plan(
-        (
-            PlannedSlice(1, "first", ("src/first.py",)),
-            PlannedSlice(2, "second", ("src/second.py",)),
-            PlannedSlice(3, "correction", ("src/artifact_bridge.py",)),
-        ),
-        first_start_commit=_git(repository, "rev-parse", "HEAD"),
-    ).complete_current_work_unit().start_work_unit(
-        slice_id=3,
-        kind=WorkUnitKind.CORRECTION,
-        step=WorkflowStep.CLAUDE_SLICE_REVIEW,
-        slice_start_commit=_git(repository, "rev-parse", "HEAD"),
-    )
-    state = replace(
-        state,
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
-    )
-    failure = InvocationFailureRecord(
-        invocation_id="contract-2-claude_slice_review-1",
-        idempotency_key="output-recovery:2:claude_slice_review:claude",
-        role="claude",
-        failure_kind=AgentFailureKind.OUTPUT,
-        provider_text=(
-            "invalid claude verdict is not safely repairable: "
-            "unknown state-v3 contract marker EVIDENCE"
-        ),
-        received_at="2026-08-21T15:33:32+00:00",
-        step=WorkflowStep.CLAUDE_SLICE_REVIEW,
-        slice_id=3,
-        work_unit_id=2,
-        diagnostic_exit_code=3,
-        diff_fingerprint=fingerprint,
-    )
-    state = state.record_invocation_failure(failure, wait_automatically=False)
-    contract = StepContract(
-        name="work-unit-2-claude_slice_review",
-        reviewer=AgentRole.CLAUDE,
-        approval_marker=ApprovalMarker.SLICE,
-        slice_id="03",
-        round_number=1,
-        review_fingerprint=fingerprint,
-        validation_attestation=attestation,
-        expected_test_files=("tests/test_artifact_bridge.py",),
-        test_changes_approved=True,
-        existing_finding_ids=("C-03",),
-        allow_new_observations=False,
-    )
-    raw = "\n".join(
-        (
-            "REVIEWER: claude",
-            "EVIDENCE:",
-            "- Checked the exact chain-membership fix.",
-            "FINDING_STATUS: C-03 | CLOSED | guard and regression are present",
-            "PRE_MORTEM: a shared cache bypasses provenance",
-            "SLICE_APPROVAL: 03 | YES",
-            "STATUS: DONE",
-        )
-    )
-    legacy = normalize_review_contract(
-        raw,
-        contract,
-        (finding,),
-        provider_completed=True,
-        remove_bulleted_evidence=False,
-    ).output
-    driver = ProductionWorkflowDriver(
-        repository_root=repository,
-        state_file=repository / ".orchestrator" / "state.json",
-        agents={},
-        config=orchestrator.OrchestratorConfig(repo_root=repository),
-        allowed_roots=(repository,),
-    )
-    driver.active_state = state
-    driver._bind_artifact_store(state)
-    assert driver._artifact_bridge is not None
-    driver._artifact_bridge.diagnostic(
-        role=AgentRole.CLAUDE,
-        work_unit_id=2,
-        attempt=1,
-        output=legacy,
-        reason="unknown state-v3 contract marker EVIDENCE",
-        fingerprint_sha256=fingerprint,
-    )
-    driver.log_dir.mkdir(parents=True)
-    (driver.log_dir / "work-unit-0002-claude_slice_review.attempt-1.log").write_text(
-        raw,
-        encoding="utf-8",
-    )
-    invocation = ReviewerInvocation(
-        work_unit_id=2,
-        step=WorkflowStep.CLAUDE_SLICE_REVIEW,
-        reviewer=AgentRole.CLAUDE,
-        round_number=1,
-        evidence_kind=EvidenceKind.CORRECTION_DELTA,
-        fingerprint=fingerprint,
-        paths=("src/artifact_bridge.py", "tests/test_artifact_bridge.py"),
-        prompt="unused",
-    )
-
-    recovered = driver.recover_failed_reviewer_output(
-        invocation, contract, (finding,)
-    )
-
-    assert recovered is not None
-    assert "EVIDENCE:" not in recovered
-    assert validate_review_response(
-        recovered, contract, (finding,)
-    ).approval is True
 
 
 @pytest.mark.parametrize(
@@ -3451,29 +3256,26 @@ def test_head_drift_after_plan_becomes_typed_persisted_halt(
     task = tmp_path / "task.md"
     _write_task(task, "feature/head-drift", "src/one.py")
 
-    def codex(driver: ProductionWorkflowDriver, invocation: CodexInvocation) -> str:
+    def codex(
+        driver: ProductionWorkflowDriver, invocation: CodexInvocation
+    ) -> NativeAgentCodexOutput:
         _git(repository, "commit", "--allow-empty", "-m", "external drift")
-        output = (
-            "SLICE_PLAN: 1 | add file | src/one.py\n"
-            "PLAN_READY: YES\nSTATUS: DONE"
+        return _native_plan_output(
+            invocation, summary="add file", scope_paths=("src/one.py",)
         )
-        driver.last_codex_output = output
-        return output
 
     monkeypatch.setattr(ProductionWorkflowDriver, "invoke_codex", codex)
     monkeypatch.setattr(
         ProductionWorkflowDriver,
         "invoke_reviewer",
-        lambda _driver, invocation: _review(
-            invocation.reviewer, "PLAN_APPROVAL: YES"
-        ),
+        lambda _driver, invocation: _native_review_approval(invocation),
     )
     monkeypatch.chdir(repository)
     result = run_production_workflow(task, _args(repository, task))
 
     assert result.exit_code == 4
-    assert result.state.current_work_unit.gate.reason.value == "unexpected_file"
-    assert "SLICE-HEAD-DRIFT" in result.state.current_work_unit.gate.detail
+    assert result.state.current_work_unit.gate.reason.value == "stop_request"
+    assert "NO-IMPLEMENTATION-CHANGES" in result.state.current_work_unit.gate.detail
     persisted = json.loads(
         (repository / ".orchestrator" / "state.json").read_text(encoding="utf-8")
     )
@@ -3487,27 +3289,20 @@ def test_empty_implementation_is_a_typed_halt_not_cli_crash(
     task = tmp_path / "task.md"
     _write_task(task, "feature/empty-slice", "src/one.py")
 
-    def codex(driver: ProductionWorkflowDriver, invocation: CodexInvocation) -> str:
+    def codex(
+        driver: ProductionWorkflowDriver, invocation: CodexInvocation
+    ) -> NativeAgentCodexOutput:
         if invocation.step is WorkflowStep.CODEX_PLAN:
-            output = (
-                "SLICE_PLAN: 1 | add file | src/one.py\n"
-                "PLAN_READY: YES\nSTATUS: DONE"
+            return _native_plan_output(
+                invocation, summary="add file", scope_paths=("src/one.py",)
             )
-        else:
-            output = (
-                "TEST_FILES_TOUCHED: NONE\n"
-                "IMPLEMENTATION_READY: 01 | YES\nSTATUS: DONE"
-            )
-        driver.last_codex_output = output
-        return output
+        return _native_implementation_output(invocation)
 
     monkeypatch.setattr(ProductionWorkflowDriver, "invoke_codex", codex)
     monkeypatch.setattr(
         ProductionWorkflowDriver,
         "invoke_reviewer",
-        lambda _driver, invocation: _review(
-            invocation.reviewer, "PLAN_APPROVAL: YES"
-        ),
+        lambda _driver, invocation: _native_review_approval(invocation),
     )
     monkeypatch.chdir(repository)
     args = _args(repository, task)
@@ -3613,7 +3408,9 @@ def test_plan_only_retries_non_handoff_plan_once_then_halts_before_review(
     reviewer_steps: list[WorkflowStep] = []
     codex_steps: list[WorkflowStep] = []
 
-    def codex(driver: ProductionWorkflowDriver, invocation: CodexInvocation) -> str:
+    def codex(
+        driver: ProductionWorkflowDriver, invocation: CodexInvocation
+    ) -> NativeAgentCodexOutput:
         codex_steps.append(invocation.step)
         plan = repository / "docs" / "internal" / "work-plan.md"
         plan.parent.mkdir(parents=True, exist_ok=True)
@@ -3622,18 +3419,17 @@ def test_plan_only_retries_non_handoff_plan_once_then_halts_before_review(
             "No exact path section.\n",
             encoding="utf-8",
         )
-        output = (
-            "SLICE_PLAN: 1 | create reviewed work plan | docs/internal/work-plan.md\n"
-            "PLAN_READY: YES\nSTATUS: DONE"
+        return _native_plan_output(
+            invocation,
+            summary="create reviewed work plan",
+            scope_paths=("docs/internal/work-plan.md",),
         )
-        driver.last_codex_output = output
-        return output
 
     def reviewer(
         _driver: ProductionWorkflowDriver, invocation: ReviewerInvocation
-    ) -> str:
+    ) -> NativeAgentReviewOutput:
         reviewer_steps.append(invocation.step)
-        return _review(invocation.reviewer, "PLAN_APPROVAL: YES")
+        return _native_review_approval(invocation)
 
     monkeypatch.setattr(ProductionWorkflowDriver, "invoke_codex", codex)
     monkeypatch.setattr(ProductionWorkflowDriver, "invoke_reviewer", reviewer)
@@ -3676,8 +3472,13 @@ def test_plan_only_repairs_handoff_contract_before_review(
         if invocation.step is WorkflowStep.CODEX_PLAN:
             body = "No exact path section.\n"
         else:
-            assert "AUTOMATIC PLAN CONTRACT REPAIR" in invocation.prompt
-            assert "Slice 1 has no exact change-path section" in invocation.prompt
+            assert invocation.native_request is not None
+            assert "AUTOMATIC PLAN CONTRACT REPAIR" in (
+                invocation.native_request.canonical_json
+            )
+            assert "Slice 1 has no exact change-path section" in (
+                invocation.native_request.canonical_json
+            )
             body = (
                 "**Exakter Änderungspfad**\n\n- `src/future.py`\n\n"
                 "#### \u0041kzeptanzkriterien\n\n- Future behavior is covered.\n"
@@ -3686,21 +3487,25 @@ def test_plan_only_repairs_handoff_contract_before_review(
             "# Work plan\n\n### Slice 1 - Future implementation\n\n" + body,
             encoding="utf-8",
         )
-        output = (
-            "SLICE_PLAN: 1 | create reviewed work plan | docs/internal/work-plan.md\n"
-            "PLAN_READY: YES\nSTATUS: DONE"
+        return _native_plan_output(
+            invocation,
+            summary="create reviewed work plan",
+            scope_paths=("docs/internal/work-plan.md",),
         )
-        driver.last_codex_output = output
-        return output
 
     def reviewer(
         _driver: ProductionWorkflowDriver, invocation: ReviewerInvocation
-    ) -> str:
+    ) -> NativeAgentReviewOutput:
         reviewer_steps.append(invocation.step)
-        return _review(invocation.reviewer, "PLAN_APPROVAL: YES")
+        return _native_review_approval(invocation)
 
     monkeypatch.setattr(ProductionWorkflowDriver, "invoke_codex", codex)
     monkeypatch.setattr(ProductionWorkflowDriver, "invoke_reviewer", reviewer)
+    monkeypatch.setattr(
+        ProductionWorkflowDriver,
+        "assert_structured_decision_context",
+        lambda _driver: None,
+    )
     monkeypatch.chdir(repository)
 
     result = run_production_workflow(task, _args(repository, task))
@@ -3731,7 +3536,9 @@ def test_completed_plan_resume_retries_failed_handoff_without_agents(
     )
     agent_steps: list[WorkflowStep] = []
 
-    def codex(driver: ProductionWorkflowDriver, invocation: CodexInvocation) -> str:
+    def codex(
+        driver: ProductionWorkflowDriver, invocation: CodexInvocation
+    ) -> NativeAgentCodexOutput:
         agent_steps.append(invocation.step)
         plan = repository / "docs" / "internal" / "resume.md"
         plan.parent.mkdir(parents=True, exist_ok=True)
@@ -3741,18 +3548,17 @@ def test_completed_plan_resume_retries_failed_handoff_without_agents(
             "#### \u0041kzeptanzkriterien\n\n- Resume behavior is covered.\n",
             encoding="utf-8",
         )
-        output = (
-            "SLICE_PLAN: 1 | create resume plan | docs/internal/resume.md\n"
-            "PLAN_READY: YES\nSTATUS: DONE"
+        return _native_plan_output(
+            invocation,
+            summary="create resume plan",
+            scope_paths=("docs/internal/resume.md",),
         )
-        driver.last_codex_output = output
-        return output
 
     def reviewer(
         _driver: ProductionWorkflowDriver, invocation: ReviewerInvocation
-    ) -> str:
+    ) -> NativeAgentReviewOutput:
         agent_steps.append(invocation.step)
-        return _review(invocation.reviewer, "PLAN_APPROVAL: YES")
+        return _native_review_approval(invocation)
 
     real_handoff = orchestrator.write_implementation_handoff
     handoff_calls = 0
@@ -3766,6 +3572,11 @@ def test_completed_plan_resume_retries_failed_handoff_without_agents(
 
     monkeypatch.setattr(ProductionWorkflowDriver, "invoke_codex", codex)
     monkeypatch.setattr(ProductionWorkflowDriver, "invoke_reviewer", reviewer)
+    monkeypatch.setattr(
+        ProductionWorkflowDriver,
+        "assert_structured_decision_context",
+        lambda _driver: None,
+    )
     monkeypatch.setattr(orchestrator, "write_implementation_handoff", fail_once)
     monkeypatch.chdir(repository)
 

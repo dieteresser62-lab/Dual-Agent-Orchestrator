@@ -180,8 +180,8 @@ class ProtocolBinding:
 
     mode: ProtocolMode
     schema_version: str
-    claude_review_transport: str | None = None
-    codex_result_transport: str | None = None
+    claude_review_transport: str | None = NATIVE_CLAUDE_REVIEW_TRANSPORT
+    codex_result_transport: str | None = NATIVE_CODEX_RESULT_TRANSPORT
     codex_profile: AgentProfileBinding = AgentProfileBinding("gpt-5.6-sol", "medium")
     claude_profile: AgentProfileBinding = AgentProfileBinding("sonnet", "high")
 
@@ -216,6 +216,13 @@ class ProtocolBinding:
                 raise WorkflowStateValidationError(
                     "codex_result_transport is unsupported"
                 )
+        if self.mode is ProtocolMode.STRUCTURED_V2 and (
+            self.claude_review_transport != NATIVE_CLAUDE_REVIEW_TRANSPORT
+            or self.codex_result_transport != NATIVE_CODEX_RESULT_TRANSPORT
+        ):
+            raise WorkflowStateValidationError(
+                "structured-v2 requires the complete native Codex-Claude transport binding"
+            )
 
     def to_dict(self) -> dict[str, object]:
         result = {"mode": self.mode.value, "schema_version": self.schema_version}

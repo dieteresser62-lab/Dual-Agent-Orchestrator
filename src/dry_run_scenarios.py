@@ -10,17 +10,18 @@ from typing import Mapping
 from agent_runtime import (
     AgentInvocationError,
     AgentProcessError,
+    NativeAgentCodexOutput,
+    NativeAgentReviewOutput,
     QuotaWaitPolicy,
     TransientRetryPolicy,
     classify_agent_failure,
 )
 from audit_trail import ReviewAuditEvent, ValidationAuditEvent
-from contracts import AgentRole, ValidationAttestation, ValidationRecord, ValidationStatus
+from contracts import AgentRole, FindingRecord, ValidationAttestation, ValidationRecord, ValidationStatus
 from gates import TestChangeEvidence
 from validation_matrix import ValidationCommand, ValidationRequest
 from workflow import (
     CodexInvocation,
-    ContractRepairInvocation,
     ReviewerInvocation,
     ValidationExecutionError,
     WorkflowChanges,
@@ -31,6 +32,16 @@ from workflow import (
     WorkflowHistory,
     WorkflowRunResult,
 )
+from native_codex_contract import (
+    canonical_native_codex_json,
+    parse_bound_native_codex_contract_result,
+)
+from native_codex_request import validate_native_codex_provider_response
+from native_review_contract import (
+    canonical_native_review_json,
+    parse_bound_native_contract_result,
+)
+from native_review_request import validate_native_review_provider_response
 from workflow_state import (
     AgentFailureKind,
     GateReason,
@@ -177,7 +188,7 @@ class ScriptedAgentEvent:
     work_unit_id: int
     round_number: int
     step: WorkflowStep
-    output: str | None = None
+    output: Mapping[str, object] | None = None
     failure: ScriptedFailure | None = None
 
     def __post_init__(self) -> None:
@@ -204,7 +215,7 @@ class ScriptedAgentEvent:
             raise DryRunScenarioError(f"{label} has an unknown role or step") from exc
         output = raw.get("output")
         if output is not None:
-            output = _string(output, f"{label}.output")
+            output = _mapping(output, f"{label}.output")
         failure_raw = raw.get("failure")
         failure = (
             ScriptedFailure.from_dict(_mapping(failure_raw, f"{label}.failure"), f"{label}.failure")
@@ -578,7 +589,6 @@ class DryRunScenario:
     validations: tuple[ScriptedValidation, ...] = ()
     commits: tuple[ScriptedCommit, ...] = ()
     test_changes: tuple[ScriptedTestChange, ...] = ()
-    repair_outputs: tuple[str, ...] = ()
     clock_start: datetime = datetime(2026, 1, 1, tzinfo=timezone.utc)
     interrupt_on_sleep: int | None = None
     initial: ScriptedInitialState = ScriptedInitialState()
@@ -597,7 +607,7 @@ class DryRunScenario:
             raw,
             {"version", "name", "agent_events", "changes"},
             {
-                "validations", "commits", "test_changes", "repair_outputs",
+                "validations", "commits", "test_changes",
                 "clock_start", "interrupt_on_sleep",
                 "initial", "context", "expect",
             },
@@ -618,9 +628,6 @@ class DryRunScenario:
             raise DryRunScenarioError("scenario validations must be an array")
         if not isinstance(commits_raw, list) or not isinstance(test_changes_raw, list):
             raise DryRunScenarioError("scenario commits and test_changes must be arrays")
-        repair_raw = raw.get("repair_outputs", [])
-        if not isinstance(repair_raw, list):
-            raise DryRunScenarioError("scenario repair_outputs must be an array")
         interrupt = raw.get("interrupt_on_sleep")
         if interrupt is not None:
             interrupt = _positive_int(interrupt, "scenario.interrupt_on_sleep")
@@ -652,10 +659,6 @@ class DryRunScenario:
                         _mapping(item, f"test_changes[{index}]"), index
                     )
                     for index, item in enumerate(test_changes_raw)
-                ),
-                repair_outputs=tuple(
-                    _string(item, f"repair_outputs[{index}]")
-                    for index, item in enumerate(repair_raw)
                 ),
                 clock_start=_timestamp(
                     raw.get("clock_start", "2026-01-01T00:00:00Z"),
@@ -717,7 +720,6 @@ class ScriptedWorkflowDriver:
     reviewer_invocations: list[ReviewerInvocation] = field(default_factory=list)
     _agent_index: int = 0
     _validation_index: int = 0
-    _repair_index: int = 0
     _commit_index: int = 0
     _active_identity: tuple[int, int] | None = None
     _change_positions: dict[tuple[int, int], int] = field(default_factory=dict)
@@ -728,6 +730,13 @@ class ScriptedWorkflowDriver:
             state.current_work_unit.round_number,
         )
 
+    def authoritative_native_findings(
+        self, state: WorkflowState, findings: tuple[FindingRecord, ...]
+    ) -> tuple[FindingRecord, ...]:
+        """Provide the provider-free replay boundary used by native dry-runs."""
+        _ = state
+        return findings
+
     def _consume_agent(
         self,
         *,
@@ -735,7 +744,7 @@ class ScriptedWorkflowDriver:
         work_unit_id: int,
         round_number: int,
         step: WorkflowStep,
-    ) -> str:
+    ) -> Mapping[str, object]:
         if self._agent_index >= len(self.scenario.agent_events):
             raise DryRunScenarioError(
                 f"missing scripted response for {role.value}/{work_unit_id}/{round_number}/{step.value}"
@@ -762,22 +771,51 @@ class ScriptedWorkflowDriver:
         assert event.output is not None
         return event.output
 
-    def invoke_codex(self, invocation: CodexInvocation) -> str:
+    def invoke_codex(self, invocation: CodexInvocation) -> NativeAgentCodexOutput:
         self.codex_invocations.append(invocation)
-        return self._consume_agent(
+        document = self._consume_agent(
             role=AgentRole.CODEX,
             work_unit_id=invocation.work_unit_id,
             round_number=invocation.round_number,
             step=invocation.step,
         )
+        if invocation.native_request is None:
+            raise DryRunScenarioError("scripted Codex event has no native request")
+        document = dict(document)
+        if document.get("request_id") == "$BOUND_REQUEST_ID":
+            document["request_id"] = invocation.native_request.bound_context.request_id
+        validate_native_codex_provider_response(document, invocation.native_request)
+        canonical = canonical_native_codex_json(document)
+        return NativeAgentCodexOutput(
+            result=parse_bound_native_codex_contract_result(
+                document, invocation.native_request.bound_context
+            ),
+            canonical_json=canonical,
+            request_id=invocation.native_request.bound_context.request_id,
+            response_sha256=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+        )
 
-    def invoke_reviewer(self, invocation: ReviewerInvocation) -> str:
+    def invoke_reviewer(self, invocation: ReviewerInvocation) -> NativeAgentReviewOutput:
         self.reviewer_invocations.append(invocation)
-        return self._consume_agent(
+        document = self._consume_agent(
             role=invocation.reviewer,
             work_unit_id=invocation.work_unit_id,
             round_number=invocation.round_number,
             step=invocation.step,
+        )
+        if invocation.native_request is None:
+            raise DryRunScenarioError("scripted reviewer event has no native request")
+        document = dict(document)
+        if document.get("request_id") == "$BOUND_REQUEST_ID":
+            document["request_id"] = invocation.native_request.bound_context.request_id
+        validate_native_review_provider_response(document, invocation.native_request)
+        canonical = canonical_native_review_json(document)
+        return NativeAgentReviewOutput(
+            result=parse_bound_native_contract_result(
+                document, invocation.native_request.bound_context
+            ),
+            canonical_json=canonical,
+            request_id=invocation.native_request.bound_context.request_id,
         )
 
     def collect_changes(self, start_commit: str) -> WorkflowChanges:
@@ -896,16 +934,6 @@ class ScriptedWorkflowDriver:
                 commands=(ValidationCommand(argv=("internal:plan-contract",)),),
             ),
         )
-
-    def repair_review_contract(self, invocation: ContractRepairInvocation) -> str:
-        self.calls.append(f"repair:{invocation.reviewer.value}")
-        if self._repair_index >= len(self.scenario.repair_outputs):
-            raise DryRunScenarioError(
-                f"missing scripted contract repair for {invocation.reviewer.value}"
-            )
-        output = self.scenario.repair_outputs[self._repair_index]
-        self._repair_index += 1
-        return output
 
     def prepare_correction(
         self, findings
@@ -1079,6 +1107,9 @@ def build_scenario_state(
         branch=scenario.initial.branch,
         branch_base=first.start_commit,
         slice_count=scenario.initial.slice_count,
+        task_digest=first.fingerprint,
+        task_scope_patterns=scenario.initial.scope_paths or first.paths,
+        target_branch=scenario.initial.branch,
         protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
         timestamp=scenario.clock_start.isoformat(),
     )
@@ -1130,6 +1161,8 @@ def build_scenario_context(scenario: DryRunScenario) -> WorkflowContext:
         red_state_followup_slice=configured.red_state_followup_slice,
         quota_wait_policy=configured.quota_wait_policy,
         transient_retry_policy=configured.transient_retry_policy,
+        task_scope_patterns=scenario.initial.scope_paths or scenario.changes[0].paths,
+        require_slice_plan=scenario.initial.kind is WorkUnitKind.PLAN,
     )
 
 

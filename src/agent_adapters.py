@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 import shlex
 import shutil
 import sys
@@ -14,6 +13,7 @@ from typing import Protocol
 
 from agent_config import AgentSettings, default_agent_settings
 from provider_input_budget import PreparedProviderInput, ProviderInputComponent
+from prompts import NATIVE_CLAUDE_SYSTEM_POLICY
 from native_review_contract import (
     NativeReviewContractError,
     canonical_native_review_json,
@@ -150,31 +150,6 @@ class NativeCodexExecutionBoundary:
             evidence_asset_root,
             "read-only",
         )
-
-
-def _trim_after_done_marker(text: str) -> str:
-    stripped = text.strip()
-    fenced = re.fullmatch(
-        r"(?:Here is the corrected output complying with the STATE-V3 CONTRACT:\s*)?"
-        r"```(?:text)?[ \t]*\r?\n"
-        r"(?P<body>REVIEWER:[\s\S]*?^STATUS: DONE)[ \t]*\r?\n"
-        r"(?:[ \t]*\r?\n)*```",
-        stripped,
-        re.IGNORECASE | re.MULTILINE,
-    )
-    if fenced is not None:
-        text = fenced.group("body").replace("\r\n", "\n")
-    matches = list(re.finditer(r"(?m)^STATUS: DONE[ \t]*\r?$", text))
-    if matches:
-        return text[: matches[-1].end()].strip()
-    # Claude Code 2.1.227 can leak its internal closing wrapper into the
-    # structured `response` field. Normalize only that exact terminal shape;
-    # arbitrary text after STATUS: DONE must continue to fail closed.
-    wrapped = re.search(
-        r"(?m)^STATUS: DONE(?=</response>[ \t]*(?:\r?\n</invoke>)?[ \t]*(?:\r?\n)?\Z)",
-        text,
-    )
-    return text[: wrapped.end()].strip() if wrapped else text.strip()
 
 
 def _json_object(text: str, role: str) -> dict[str, object]:
@@ -326,84 +301,35 @@ class _BaseAdapter:
         self._runtime_dir = None
 
 
-class CodexAdapter(_BaseAdapter):
-    """Implementer adapter for Codex CLI with JSONL and a final-message file."""
+class NativeCodexAdapter(_BaseAdapter):
+    """Codex transport whose last message is one schema-bound JSON object."""
 
     required_hosts = ("chatgpt.com", "api.openai.com")
     capability = CapabilitySpec(
         version_args=("--version",),
         help_args=("exec", "--help"),
-        supported_version_patterns=(r"^codex-cli 0\.147\.\d+$",),
+        supported_version_patterns=(exact_cli_version_pattern("codex"),),
         required_help_flags=(
             "--model",
             "--sandbox",
             "--ephemeral",
             "--json",
             "--output-last-message",
+            "--output-schema",
         ),
     )
 
     def __init__(self, settings: AgentSettings | None = None) -> None:
         super().__init__(settings or default_agent_settings()["codex"])
         self._last_message_file: Path | None = None
-
-    def build_command(self, prompt: str) -> tuple[list[str], bool]:
-        _ = prompt
-        runtime_dir = self._new_runtime_dir()
-        self._last_message_file = runtime_dir / "last-message.txt"
-        return (
-            [
-                self.cli_binary,
-                "exec",
-                "--model",
-                self.model,
-                "--config",
-                f'model_reasoning_effort="{self.effort}"',
-                "--skip-git-repo-check",
-                "--ephemeral",
-                "--sandbox",
-                "workspace-write",
-                "--color",
-                "never",
-                "--json",
-                "--output-last-message",
-                str(self._last_message_file),
-                "-",
-            ],
-            True,
-        )
+        self._native_request_id: str | None = None
+        self._response_schema_file: Path | None = None
 
     def _provider_input_components(
         self, prompt: str, command: list[str]
     ) -> tuple[ProviderInputComponent, ...]:
         _ = command
         return (ProviderInputComponent("stdin_prompt", prompt),)
-
-    def extract_output(self, stdout: str, stderr: str, extra_files: dict[str, str]) -> str:
-        _ = stderr
-        _ = extra_files
-        if self._last_message_file and self._last_message_file.is_file():
-            content = self._last_message_file.read_text(encoding="utf-8").strip()
-            if content:
-                return content
-
-        messages: list[str] = []
-        for raw_line in (stdout or "").splitlines():
-            try:
-                event = json.loads(raw_line)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(event, dict):
-                continue
-            item = event.get("item")
-            if isinstance(item, dict):
-                text = item.get("text") or item.get("content")
-                if isinstance(text, str) and text.strip():
-                    messages.append(text.strip())
-            direct = event.get("message")
-            if isinstance(direct, str) and direct.strip():
-                messages.append(direct.strip())
-        return messages[-1] if messages else ""
 
     def stream_filter(self, channel: str, line: str, state: dict[str, str | bool]) -> bool:
         txt = line.strip()
@@ -425,37 +351,6 @@ class CodexAdapter(_BaseAdapter):
             if not txt or txt.startswith("{"):
                 return False
         return super().stream_filter(channel, line, state)
-
-    def cleanup(self) -> None:
-        super().cleanup()
-        self._last_message_file = None
-
-    def native_codex_adapter(self) -> "NativeCodexAdapter":
-        """Create an isolated native transport with identical Codex settings."""
-        return NativeCodexAdapter(self.settings)
-
-
-class NativeCodexAdapter(CodexAdapter):
-    """Codex transport whose last message is one schema-bound JSON object."""
-
-    capability = CapabilitySpec(
-        version_args=("--version",),
-        help_args=("exec", "--help"),
-        supported_version_patterns=(exact_cli_version_pattern("codex"),),
-        required_help_flags=(
-            "--model",
-            "--sandbox",
-            "--ephemeral",
-            "--json",
-            "--output-last-message",
-            "--output-schema",
-        ),
-    )
-
-    def __init__(self, settings: AgentSettings | None = None) -> None:
-        super().__init__(settings or default_agent_settings()["codex"])
-        self._native_request_id: str | None = None
-        self._response_schema_file: Path | None = None
 
     def build_command(self, prompt: str) -> tuple[list[str], bool]:
         _ = prompt
@@ -581,15 +476,15 @@ class NativeCodexAdapter(CodexAdapter):
         self._response_schema_file = None
 
 
-class ClaudeAdapter(_BaseAdapter):
-    """Read-only reviewer adapter using a strict JSON envelope and one harness."""
+class NativeClaudeReviewAdapter(_BaseAdapter):
+    """Claude reviewer transport whose output is the native review JSON object."""
 
     reviewer = True
     required_hosts = ("api.anthropic.com",)
     capability = CapabilitySpec(
         version_args=("--version",),
         help_args=("--help",),
-        supported_version_patterns=(r"^2\.1\.\d+ \(Claude Code\)$",),
+        supported_version_patterns=(exact_cli_version_pattern("claude"),),
         required_help_flags=(
             "--add-dir",
             "--json-schema",
@@ -614,11 +509,17 @@ class ClaudeAdapter(_BaseAdapter):
         *,
         review_harness: Path = REVIEW_HARNESS,
     ) -> None:
-        super().__init__(settings or default_agent_settings()["claude"])
+        if settings is None:
+            raise TypeError(
+                "NativeClaudeReviewAdapter requires explicit Claude AgentSettings"
+            )
+        super().__init__(settings)
         self.review_harness = review_harness.resolve()
         self._bound_review_harness: Path | None = None
         self._review_manifest_file: Path | None = None
         self._review_packet_files: tuple[Path, ...] = ()
+        self._native_evidence_files: tuple[Path, ...] = ()
+        self._native_request_id: str | None = None
 
     def bind_reviewer_workspace(self, source_root: Path, snapshot_root: Path) -> None:
         try:
@@ -628,101 +529,6 @@ class ClaudeAdapter(_BaseAdapter):
         else:
             self._bound_review_harness = snapshot_root / relative_harness
 
-    def build_command(self, prompt: str) -> tuple[list[str], bool]:
-        runtime_dir = self._new_runtime_dir()
-        chunks = _split_text_at_lines(prompt, CLAUDE_REVIEW_PACKET_CHUNK_CHARS)
-        self._review_packet_files = tuple(
-            runtime_dir / f"review-packet-{index:03d}.md"
-            for index in range(1, len(chunks) + 1)
-        )
-        manifest_lines = [
-            "# Review packet manifest",
-            "",
-            "Read every chunk below exactly once, in order. Their concatenation is the complete review packet.",
-            "",
-        ]
-        for packet_file, chunk in zip(self._review_packet_files, chunks, strict=True):
-            packet_file.write_text(chunk, encoding="utf-8")
-            digest = hashlib.sha256(chunk.encode("utf-8")).hexdigest()
-            manifest_lines.append(
-                f"- `{packet_file}` | chars={len(chunk)} | sha256={digest}"
-            )
-        self._review_manifest_file = runtime_dir / "review-manifest.md"
-        self._review_manifest_file.write_text(
-            "\n".join(manifest_lines) + "\n", encoding="utf-8"
-        )
-        read_call_budget = len(chunks) + 1
-        policy = (
-            "You are a concise read-only reviewer. Use only the supplied manifest and "
-            "numbered review-packet chunks; "
-            "do not explore the repository and do not run validation commands. Authoritative "
-            "validation evidence is supplied by the orchestrator as either a legacy test "
-            "snapshot or a fingerprint-bound v3 attestation. Use the "
-            "available reasoning budget for adversarial implementation analysis: invariants, "
-            "failure paths, security boundaries, resume/idempotency risks, and missing tests. "
-            f"Use exactly {read_call_budget} Read calls: the manifest once, then every listed "
-            "chunk once in order. Return only evidence, findings, decisions, and mandatory contract "
-            f"markers, within {CLAUDE_REVIEW_RESPONSE_MAX_CHARS} characters."
-        )
-        response_schema = json.dumps(
-            {
-                "type": "object",
-                "properties": {
-                    "response": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": CLAUDE_REVIEW_RESPONSE_MAX_CHARS,
-                    }
-                },
-                "required": ["response"],
-                "additionalProperties": False,
-            },
-            separators=(",", ":"),
-        )
-        directive = (
-            f"Read {self._review_manifest_file} exactly once, then read every listed packet "
-            f"chunk exactly once in order ({read_call_budget} Read calls total), and follow "
-            "the concatenated request. Do not run tests or the review harness; inspect the "
-            "supplied validation evidence and focus on the implementation. Return the answer "
-            "in the response field."
-        )
-        command = [
-            self.cli_binary,
-            "-p",
-            "--output-format",
-            "json",
-            "--model",
-            self.model,
-            "--effort",
-            self.effort,
-            "--tools",
-            "Read",
-            "--allowedTools",
-            "Read",
-            "--disallowedTools",
-            "Bash,Edit,Write,NotebookEdit,Grep,Glob",
-            "--permission-mode",
-            "dontAsk",
-            "--setting-sources",
-            "user",
-            "--safe-mode",
-            "--strict-mcp-config",
-            "--prompt-suggestions",
-            "false",
-            "--add-dir",
-            str(runtime_dir),
-            "--system-prompt",
-            policy,
-            "--json-schema",
-            response_schema,
-            "--no-session-persistence",
-            "--disable-slash-commands",
-        ]
-        if self.max_budget_usd is not None:
-            command.extend(["--max-budget-usd", str(self.max_budget_usd)])
-        command.append(directive)
-        return command, False
-
     def build_capability_smoke_command(
         self,
         prompt: str,
@@ -731,8 +537,8 @@ class ClaudeAdapter(_BaseAdapter):
         probe_path: str = "README.md",
         timeout: int = 1800,
     ) -> tuple[list[str], bool]:
-        """Build an explicit opt-in diagnostic command; never used by normal reviews."""
-        command, use_stdin = self.build_command(prompt)
+        """Build the explicit reviewer-harness diagnostic without a text contract."""
+        runtime_dir = self._new_runtime_dir()
         harness = self._bound_review_harness or self.review_harness
         harness_command = shlex.join(
             [
@@ -748,164 +554,63 @@ class ClaudeAdapter(_BaseAdapter):
                 str(timeout),
             ]
         )
-        command[command.index("--tools") + 1] = "Bash,Read"
-        command[command.index("--allowedTools") + 1] = (
-            f"Read,Bash({harness_command})"
+        schema = json.dumps(
+            {
+                "type": "object",
+                "properties": {"ok": {"type": "boolean"}},
+                "required": ["ok"],
+                "additionalProperties": False,
+            },
+            separators=(",", ":"),
         )
-        command[command.index("--disallowedTools") + 1] = (
-            "Edit,Write,NotebookEdit,Grep,Glob"
-        )
-        command[command.index("--system-prompt") + 1] = (
-            "This is an explicit adapter/version capability diagnostic, not a normal "
-            "implementation review. Read only the supplied manifest and packet chunks, "
-            "then run the exact allowlisted review harness once. Do not try alternatives."
-        )
-        command[-1] = (
-            f"Read {self._review_manifest_file}, then every listed packet chunk exactly "
-            "once. Run this exact capability diagnostic once and no alternative: "
-            f"{harness_command}. Return the answer in the response field."
-        )
-        return command, use_stdin
+        command = [
+            self.cli_binary,
+            "-p",
+            "--output-format",
+            "json",
+            "--model",
+            self.model,
+            "--effort",
+            self.effort,
+            "--tools",
+            "Bash,Read",
+            "--allowedTools",
+            f"Read,Bash({harness_command})",
+            "--disallowedTools",
+            "Edit,Write,NotebookEdit,Grep,Glob",
+            "--permission-mode",
+            "dontAsk",
+            "--setting-sources",
+            "user",
+            "--safe-mode",
+            "--strict-mcp-config",
+            "--prompt-suggestions",
+            "false",
+            "--add-dir",
+            str(runtime_dir),
+            "--system-prompt",
+            "Run the exact allowlisted reviewer-harness diagnostic once.",
+            "--json-schema",
+            schema,
+            "--no-session-persistence",
+            "--disable-slash-commands",
+            f"{prompt.strip()} Run exactly: {harness_command}",
+        ]
+        return command, False
 
     def _provider_input_components(
         self, prompt: str, command: list[str]
     ) -> tuple[ProviderInputComponent, ...]:
         _ = prompt
-        if (
-            self._runtime_dir is None
-            or self._review_manifest_file is None
-            or not self._review_packet_files
-        ):
-            raise RuntimeError("claude provider input was not prepared")
-        runtime_path = str(self._runtime_dir)
-        runtime_prefix = f"dao-{self.name}-runtime-"
-        random_suffix = self._runtime_dir.name.removeprefix(runtime_prefix)
-        stable_runtime_path = str(
-            self._runtime_dir.with_name(runtime_prefix + "_" * len(random_suffix))
-        )
-
-        def stable_transport_paths(content: str) -> str:
-            # The path is required by Claude's Read tool, but its random mkdtemp
-            # suffix is transport metadata rather than part of the logical request.
-            return content.replace(runtime_path, stable_runtime_path)
-
-        components = [
+        return (
             ProviderInputComponent(
-                f"packet_chunk_{index:03d}", packet.read_text(encoding="utf-8")
-            )
-            for index, packet in enumerate(self._review_packet_files, start=1)
-        ]
-        components.extend(
-            (
-                ProviderInputComponent(
-                    "packet_manifest",
-                    stable_transport_paths(
-                        self._review_manifest_file.read_text(encoding="utf-8")
-                    ),
-                ),
-                ProviderInputComponent(
-                    "system_policy", command[command.index("--system-prompt") + 1]
-                ),
-                ProviderInputComponent(
-                    "response_schema", command[command.index("--json-schema") + 1]
-                ),
-                ProviderInputComponent(
-                    "start_directive", stable_transport_paths(command[-1])
-                ),
-            )
+                "system_policy", command[command.index("--system-prompt") + 1]
+            ),
+            ProviderInputComponent(
+                "response_schema", command[command.index("--json-schema") + 1]
+            ),
+            ProviderInputComponent("start_directive", command[-1]),
         )
-        return tuple(components)
-
-    def extract_output(self, stdout: str, stderr: str, extra_files: dict[str, str]) -> str:
-        _ = extra_files
-        envelope = _json_object(stdout or "", self.name)
-        self.metadata = {
-            key: envelope[key]
-            for key in (
-                "duration_api_ms",
-                "num_turns",
-                "total_cost_usd",
-                "usage",
-                "modelUsage",
-                "permission_denials",
-                "subtype",
-            )
-            if key in envelope
-        }
-        if envelope.get("is_error") is not False:
-            subtype = str(envelope.get("subtype") or "").strip()
-            detail = envelope.get("result") or envelope.get("error") or subtype
-            if not detail:
-                detail = json.dumps(envelope, ensure_ascii=False, sort_keys=True)[:1200]
-            if "budget" in subtype.lower():
-                raise AgentBudgetError(f"claude budget guard stopped the call: {detail}")
-            raise AgentOutputError(
-                f"claude returned is_error=true: {detail}",
-                provider_text=str(detail),
-                provider_data=envelope,
-            )
-        denials = envelope.get("permission_denials")
-        if isinstance(denials, list) and denials:
-            denial_detail = json.dumps(denials, ensure_ascii=False, sort_keys=True)
-            raise AgentPermissionError(
-                f"claude attempted {len(denials)} non-allowlisted tool call(s): "
-                f"{denial_detail[:1200]}"
-            )
-        result: object = envelope.get("result")
-        structured_output = envelope.get("structured_output")
-        if isinstance(structured_output, dict):
-            result = structured_output.get("response")
-        elif isinstance(result, dict):
-            result = result.get("response")
-        elif isinstance(result, str):
-            try:
-                decoded_result = json.loads(result)
-            except json.JSONDecodeError:
-                pass
-            else:
-                if isinstance(decoded_result, dict):
-                    result = decoded_result.get("response")
-        if not isinstance(result, str) or not result.strip():
-            raise AgentOutputError("claude JSON envelope has no non-empty result")
-        return _trim_after_done_marker(result)
-
-    def cleanup(self) -> None:
-        super().cleanup()
-        self._bound_review_harness = None
-        self._review_manifest_file = None
-        self._review_packet_files = ()
-
-    def native_review_adapter(self) -> "NativeClaudeReviewAdapter":
-        """Return a separate immutable native-output adapter instance."""
-        return NativeClaudeReviewAdapter(
-            self.settings,
-            review_harness=self.review_harness,
-        )
-
-
-class NativeClaudeReviewAdapter(ClaudeAdapter):
-    """Claude reviewer transport whose output is the native review JSON object."""
-
-    capability = CapabilitySpec(
-        version_args=("--version",),
-        help_args=("--help",),
-        supported_version_patterns=(exact_cli_version_pattern("claude"),),
-        required_help_flags=ClaudeAdapter.capability.required_help_flags,
-    )
-
-    def __init__(
-        self,
-        settings: AgentSettings | None = None,
-        *,
-        review_harness: Path = REVIEW_HARNESS,
-    ) -> None:
-        if settings is None:
-            raise TypeError(
-                "NativeClaudeReviewAdapter requires explicit Claude AgentSettings"
-            )
-        super().__init__(settings, review_harness=review_harness)
-        self._native_evidence_files: tuple[Path, ...] = ()
-        self._native_request_id: str | None = None
 
     def build_command(self, prompt: str) -> tuple[list[str], bool]:
         _ = prompt
@@ -977,16 +682,7 @@ class NativeClaudeReviewAdapter(ClaudeAdapter):
         )
         read_call_budget = 1 + len(manifest_entries)
         response_schema_json = bundle.provider_response_schema_json
-        policy = (
-            "You are a concise read-only Claude reviewer. The supplied files form one "
-            "versioned native JSON review request. Treat native JSON fields as the only "
-            "technical contract; do not emit STATE-V3 markers, Markdown wrappers, or a "
-            "free-text response envelope. Inspect correctness, contracts, failure paths, "
-            "security boundaries, and resume/idempotency behavior. Do not run tests or "
-            "explore paths outside the supplied manifest. When reporting new findings, "
-            "start at review_contract.next_finding_id and increment contiguously. Return exactly one JSON value "
-            "matching the response schema."
-        )
+        policy = NATIVE_CLAUDE_SYSTEM_POLICY
         directive = (
             f"Read {self._review_manifest_file} exactly once, then every listed file "
             f"exactly once in order ({read_call_budget} Read calls total). Review the "
@@ -1123,6 +819,9 @@ class NativeClaudeReviewAdapter(ClaudeAdapter):
 
     def cleanup(self) -> None:
         super().cleanup()
+        self._bound_review_harness = None
+        self._review_manifest_file = None
+        self._review_packet_files = ()
         self._native_evidence_files = ()
         self._native_request_id = None
 
@@ -1134,8 +833,8 @@ def build_agent_registry(
     if set(resolved) != {"codex", "claude"}:
         raise ValueError("agent settings must contain exactly codex and claude")
     return {
-        "codex": CodexAdapter(resolved["codex"]),
-        "claude": ClaudeAdapter(resolved["claude"]),
+        "codex": NativeCodexAdapter(resolved["codex"]),
+        "claude": NativeClaudeReviewAdapter(resolved["claude"]),
     }
 
 

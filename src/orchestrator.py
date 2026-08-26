@@ -12,14 +12,18 @@ import time
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
 
-from agent_adapters import AgentAdapter, build_agent_registry
+from agent_adapters import (
+    AgentAdapter,
+    NativeClaudeReviewAdapter,
+    NativeCodexAdapter,
+    build_agent_registry,
+)
 from agent_runtime import (
     AgentInvocationError,
     NativeAgentCodexOutput,
     NativeAgentReviewOutput,
     OrchestratorConfig,
     ProviderAttemptLifecycle,
-    run_agent_checked,
     run_native_codex_agent_checked,
     run_native_review_agent_checked,
     run_validation_matrix,
@@ -77,7 +81,6 @@ from contracts import (
     CodexContractResult,
     CodexStepContract,
     ContractResult,
-    ContractValidationError,
     FindingRecord,
     PlannedSlice,
     StepContract,
@@ -85,8 +88,6 @@ from contracts import (
     ValidationCommandSpec,
     ValidationRecord,
     ValidationStatus,
-    validate_codex_response,
-    validate_review_response,
 )
 from gates import TestChangeEvidence, detect_test_changes, matches_path_patterns
 from git_service import (
@@ -134,9 +135,7 @@ from native_review_request import (
 )
 from workflow import (
     CodexInvocation,
-    ContractRepairInvocation,
     PersistedNativeReviewerReplay,
-    PersistedReviewerReplay,
     ReviewerInvocation,
     NoWorkflowChangesError,
     WorkflowChanges,
@@ -148,7 +147,6 @@ from workflow import (
     WorkflowExecutionError,
     WorkflowHistory,
     WorkflowRunResult,
-    normalize_review_contract,
 )
 from workflow_state import (
     AgentProfileBinding,
@@ -184,40 +182,6 @@ from inbox_watcher import (
 logger = logging.getLogger(__name__)
 
 
-def _recover_completed_reviewer_contract(
-    reviewer: AgentRole,
-    error: AgentInvocationError,
-) -> str | None:
-    """Recover only a complete role-bound contract from a false auth classification."""
-    if error.kind is not AgentFailureKind.AUTH:
-        return None
-    text = error.provider_text.strip()
-    lines = tuple(line.strip() for line in text.splitlines() if line.strip())
-    if (
-        not lines
-        or lines[0] != f"REVIEWER: {reviewer.value}"
-        or lines[-1] != "STATUS: DONE"
-    ):
-        return None
-    return text
-
-
-def validate_v3_review_contract(
-    output: str,
-    contract: StepContract,
-    previous_findings: tuple[FindingRecord, ...] = (),
-) -> ContractResult:
-    return validate_review_response(output, contract, previous_findings)
-
-
-def validate_v3_codex_contract(
-    output: str,
-    contract: CodexStepContract,
-    previous_findings: tuple[FindingRecord, ...] = (),
-) -> CodexContractResult:
-    return validate_codex_response(output, contract, previous_findings)
-
-
 def run_v3_work_unit(
     engine: WorkflowEngine,
     state: WorkflowState,
@@ -251,16 +215,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def _shorten(value: str | None, maximum: int) -> str:
     text = value or ""
     return text if len(text) <= maximum else text[: max(0, maximum - 3)] + "..."
-
-
-def _parse_flag(text: str, marker: str) -> str | None:
-    match = re.search(rf"^\s*{re.escape(marker)}\s*:\s*(.+?)\s*$", text, re.MULTILINE)
-    return match.group(1).strip() if match else None
-
-
-def _has_done(text: str) -> bool:
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    return bool(lines and lines[-1] == "STATUS: DONE")
 
 
 class ProductionWorkflowDriver(WorkflowDriver):
@@ -538,56 +492,6 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 fingerprint_sha256=final_binding.fingerprint.sha256,
             )
 
-    def _agent(
-        self,
-        role: AgentRole,
-        prompt: str,
-        label: str,
-        *,
-        reviewer_repository_required: bool = True,
-        reviewer_manifest_paths: tuple[str, ...] | None = None,
-        operation: WorkflowStep | str,
-        binding_fingerprint: str,
-    ) -> str:
-        self.assert_structured_decision_context()
-        output = run_agent_checked(
-            agent_key=role.value,
-            prompt=prompt,
-            log_prefix=label,
-            max_retries=0,
-            required_flags=[],
-            output_validator=None,
-            config=self.config,
-            agents=self.agents,
-            log_dir=self.log_dir,
-            write_file=write_file,
-            shorten=_shorten,
-            parse_flag=_parse_flag,
-            # A successfully exited reviewer process may omit only STATUS: DONE;
-            # the workflow's bound local normalizer decides whether appending it
-            # yields a completely valid contract. Codex still requires it here.
-            validate_done_marker=(
-                (lambda _output: True)
-                if role is AgentRole.CLAUDE
-                else _has_done
-            ),
-            reviewer_repository_required=reviewer_repository_required,
-            reviewer_manifest_paths=reviewer_manifest_paths,
-            operation=(
-                operation.value if isinstance(operation, WorkflowStep) else operation
-            ),
-            binding_fingerprint=binding_fingerprint,
-            pre_start_callback=self._persist_provider_bootstrap,
-            provider_attempt_lifecycle=(
-                ProviderAttemptLifecycle(
-                    start=self._start_provider_attempt,
-                    terminal=self._finish_provider_attempt,
-                )
-                if self._artifact_bridge is not None else None
-            ),
-        )
-        return output
-
     def _persist_provider_bootstrap(self, measurement: ProviderInputMeasurement) -> ArtifactRecord | None:
         """Dual-write a lossless measurement and final-transition preflight."""
         state = self.active_state
@@ -726,38 +630,29 @@ class ProductionWorkflowDriver(WorkflowDriver):
         self._replace_existing_run_id = None
         self.active_state = state
 
-    def invoke_codex(
-        self, invocation: CodexInvocation
-    ) -> str | NativeAgentCodexOutput:
-        state_binding = (
-            self.active_state.task_digest
-            if self.active_state is not None and self.active_state.task_digest is not None
-            else "unbound"
-        )
-        if invocation.native_request is not None:
-            state = self.active_state
-            if (
-                state is None
-                or state.protocol_binding is None
-                or state.protocol_binding.codex_result_transport
-                != NATIVE_CODEX_RESULT_TRANSPORT
-                or state.current_work_unit_id != invocation.work_unit_id
-                or state.current_step is not invocation.step
-            ):
-                raise WorkflowExecutionError(
-                    "native Codex invocation lacks its immutable state binding"
-                )
-            self.assert_structured_decision_context()
-            native_factory = getattr(
-                self.agents[AgentRole.CODEX.value], "native_codex_adapter", None
+    def invoke_codex(self, invocation: CodexInvocation) -> NativeAgentCodexOutput:
+        state = self.active_state
+        if (
+            state is None
+            or invocation.native_request is None
+            or state.protocol_binding is None
+            or state.protocol_binding.codex_result_transport
+            != NATIVE_CODEX_RESULT_TRANSPORT
+            or state.current_work_unit_id != invocation.work_unit_id
+            or state.current_step is not invocation.step
+        ):
+            raise WorkflowExecutionError(
+                "native Codex invocation lacks its immutable state binding"
             )
-            if not callable(native_factory):
-                raise WorkflowExecutionError(
-                    "configured Codex adapter has no native result transport"
-                )
-            raw_path = self._native_codex_response_path(invocation)
-            output = run_native_codex_agent_checked(
-                adapter=native_factory(),
+        self.assert_structured_decision_context()
+        native_adapter = self.agents[AgentRole.CODEX.value]
+        if not isinstance(native_adapter, NativeCodexAdapter):
+            raise WorkflowExecutionError(
+                "configured Codex adapter is not the native result transport"
+            )
+        raw_path = self._native_codex_response_path(invocation)
+        output = run_native_codex_agent_checked(
+                adapter=native_adapter,
                 bundle=invocation.native_request,
                 raw_response_path=raw_path,
                 config=self.config,
@@ -785,23 +680,8 @@ class ProductionWorkflowDriver(WorkflowDriver):
                         accepted, invocation.previous_findings
                     )
                 ),
-            )
-            self.last_codex_output = output.canonical_json
-            return output
-        output = self._agent(
-            AgentRole.CODEX,
-            invocation.prompt,
-            f"work-unit-{invocation.work_unit_id:04d}-{invocation.step.value}",
-            operation=invocation.step,
-            binding_fingerprint=state_binding,
         )
-        self.last_codex_output = output
-        if self.active_state is not None:
-            run_dir = self.root / ".orchestrator" / "runs" / self.active_state.run_id
-            write_file(
-                run_dir / f"work-unit-{invocation.work_unit_id:04d}-codex.md",
-                output,
-            )
+        self.last_codex_output = output.canonical_json
         return output
 
     def authoritative_native_findings(
@@ -884,35 +764,31 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 "native Codex raw response verification failed"
             )
 
-    def invoke_reviewer(
-        self, invocation: ReviewerInvocation
-    ) -> str | NativeAgentReviewOutput:
+    def invoke_reviewer(self, invocation: ReviewerInvocation) -> NativeAgentReviewOutput:
         manifest_paths: tuple[str, ...] | None = None
         if invocation.review_packet is not None:
             self._materialize_review_packet(invocation.review_packet)
             manifest_paths = invocation.review_packet.manifest.paths
-        if invocation.native_request is not None:
-            state = self.active_state
-            if (
-                state is None
-                or invocation.reviewer is not AgentRole.CLAUDE
-                or state.protocol_binding is None
-                or state.protocol_binding.claude_review_transport
-                != NATIVE_CLAUDE_REVIEW_TRANSPORT
-            ):
-                raise WorkflowExecutionError(
-                    "native Claude invocation lacks its immutable state binding"
-                )
-            self.assert_structured_decision_context()
-            native_factory = getattr(
-                self.agents[AgentRole.CLAUDE.value], "native_review_adapter", None
+        state = self.active_state
+        if (
+            state is None
+            or invocation.native_request is None
+            or invocation.reviewer is not AgentRole.CLAUDE
+            or state.protocol_binding is None
+            or state.protocol_binding.claude_review_transport
+            != NATIVE_CLAUDE_REVIEW_TRANSPORT
+        ):
+            raise WorkflowExecutionError(
+                "native Claude invocation lacks its immutable state binding"
             )
-            if not callable(native_factory):
-                raise WorkflowExecutionError(
-                    "configured Claude adapter has no native review transport"
-                )
-            return run_native_review_agent_checked(
-                adapter=native_factory(),
+        self.assert_structured_decision_context()
+        native_adapter = self.agents[AgentRole.CLAUDE.value]
+        if not isinstance(native_adapter, NativeClaudeReviewAdapter):
+            raise WorkflowExecutionError(
+                "configured Claude adapter is not the native review transport"
+            )
+        return run_native_review_agent_checked(
+                adapter=native_adapter,
                 bundle=invocation.native_request,
                 log_prefix=(
                     f"work-unit-{invocation.work_unit_id:04d}-"
@@ -946,29 +822,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
                         invocation.previous_findings,
                     )
                 ),
-            )
-        try:
-            return self._agent(
-                invocation.reviewer,
-                invocation.prompt,
-                f"work-unit-{invocation.work_unit_id:04d}-{invocation.step.value}",
-                operation=invocation.step,
-                binding_fingerprint=invocation.fingerprint,
-                reviewer_manifest_paths=manifest_paths,
-            )
-        except AgentInvocationError as exc:
-            recovered = _recover_completed_reviewer_contract(
-                invocation.reviewer, exc
-            )
-            if recovered is None:
-                raise
-            logger.warning(
-                "Recovered complete %s reviewer contract from a falsely classified "
-                "authentication failure: invocation=%s",
-                invocation.reviewer.value,
-                exc.invocation_id,
-            )
-            return recovered
+        )
 
     def _materialize_review_packet(self, packet: ReviewPacket) -> Path:
         """Write or verify the reconstructable content-addressed packet cache."""
@@ -1118,179 +972,6 @@ class ProductionWorkflowDriver(WorkflowDriver):
         )
         self.last_codex_output = canonical
         return output
-
-    def recover_pending_reviewer(
-        self,
-        *,
-        reviewer: AgentRole,
-        work_unit_id: int,
-        step: WorkflowStep,
-        round_number: int,
-    ) -> PersistedReviewerReplay | None:
-        """Replay one hash-bound review left ahead by a failed checkpoint."""
-        state = self.active_state
-        bridge = self._artifact_bridge
-        if (
-            state is None
-            or bridge is None
-            or state.effective_protocol_mode is not ProtocolMode.STRUCTURED_V2
-            or state.current_work_unit.kind is not WorkUnitKind.CORRECTION
-            or state.current_work_unit_id != work_unit_id
-            or state.current_step is not step
-            or step
-            not in {
-                WorkflowStep.CLAUDE_SLICE_REVIEW,
-            }
-        ):
-            return None
-        chain = bridge.store.load_chain()
-        record_reviews = Counter(
-            (
-                item.payload.work_unit_id,
-                item.payload.reviewer.value,
-                item.fingerprint.sha256,
-                item.payload.verdict,
-                item.payload.finding_ids,
-            )
-            for item in chain
-            if isinstance(item.payload, ReviewPayload)
-        )
-        mirror_reviews: Counter[tuple[object, ...]] = Counter()
-        for persisted_work_unit_id, history in _persisted_histories(state).items():
-            for event in history.events:
-                if not isinstance(event, ReviewAuditEvent):
-                    continue
-                result = event.result
-                if result.validation is None:
-                    return None
-                mirror_reviews[
-                    (
-                        str(persisted_work_unit_id),
-                        result.reviewer.value,
-                        result.validation.diff_fingerprint,
-                        (
-                            "stop"
-                            if result.stopped
-                            else "approved"
-                            if result.approval is True
-                            else "denied"
-                        ),
-                        tuple(item.finding_id for item in result.findings),
-                    )
-                ] += 1
-        pending_logical_id = (
-            f"review-{reviewer.value}-{work_unit_id}-{round_number}"
-        )
-        current_pending = Counter(
-            (
-                item.payload.work_unit_id,
-                item.payload.reviewer.value,
-                item.fingerprint.sha256,
-                item.payload.verdict,
-                item.payload.finding_ids,
-            )
-            for item in chain
-            if isinstance(item.payload, ReviewPayload)
-            and item.logical_id == pending_logical_id
-            and item.payload.verdict in {"approved", "denied"}
-        )
-        if sum(current_pending.values()) != 1:
-            return None
-        historical_record_reviews = record_reviews - current_pending
-        mirror_reviews.update(
-            _recoverable_final_denial_mirror_gap(
-                state,
-                historical_record_reviews,
-                mirror_reviews,
-                chain=chain,
-            )
-        )
-        missing = record_reviews - mirror_reviews
-        if mirror_reviews - record_reviews or sum(missing.values()) != 1:
-            return None
-        signature, count = next(iter(missing.items()))
-        missing_unit, missing_reviewer, fingerprint, verdict, finding_ids = signature
-        if (
-            count != 1
-            or missing_unit != str(work_unit_id)
-            or missing_reviewer != reviewer.value
-            or verdict not in {"approved", "denied"}
-        ):
-            return None
-        logical_id = f"review-{reviewer.value}-{work_unit_id}-{round_number}"
-        matching_records = tuple(
-            item
-            for item in chain
-            if isinstance(item.payload, ReviewPayload)
-            and item.logical_id == logical_id
-            and item.payload.work_unit_id == str(work_unit_id)
-            and item.payload.reviewer.value == reviewer.value
-            and item.payload.verdict == verdict
-            and item.payload.finding_ids == finding_ids
-            and item.fingerprint.sha256 == fingerprint
-        )
-        if len(matching_records) != 1:
-            return None
-        record = matching_records[0]
-        matching_attestations = tuple(
-            item
-            for item in chain
-            if isinstance(item.payload, ValidationAttestationPayload)
-            and item.fingerprint.sha256 == fingerprint
-            and item.payload.attested_by is Role.ORCHESTRATOR
-        )
-        if len(matching_attestations) != 1:
-            return None
-        key_prefix = f"parsed:{logical_id}:{fingerprint}:"
-        if not record.idempotency_key.startswith(key_prefix):
-            return None
-        output_digest = record.idempotency_key.removeprefix(key_prefix)
-        if not re.fullmatch(r"[0-9a-f]{64}", output_digest):
-            return None
-        log_pattern = (
-            f"work-unit-{work_unit_id:04d}-{step.value}.attempt-*.log"
-        )
-        matching_outputs = []
-        for path in sorted(self.log_dir.glob(log_pattern)):
-            if not path.is_file():
-                continue
-            output = path.read_text(encoding="utf-8").strip()
-            if hashlib.sha256(output.encode("utf-8")).hexdigest() == output_digest:
-                matching_outputs.append(output)
-        if len(matching_outputs) != 1:
-            raise WorkflowExecutionError(
-                "pending structured reviewer decision has no unique hash-bound "
-                "provider log for deterministic replay"
-            )
-        approval_matches = re.findall(
-            r"^SLICE_APPROVAL\s*:\s*\d+\s*\|\s*(YES|NO)\s*$",
-            matching_outputs[0],
-            flags=re.MULTILINE,
-        )
-        output_verdict = (
-            "approved"
-            if approval_matches == ["YES"]
-            else "denied"
-            if approval_matches == ["NO"]
-            else None
-        )
-        if output_verdict != verdict:
-            return None
-        logger.warning(
-            "Replaying hash-bound %s %s review after its state checkpoint failed: "
-            "work-unit=%s round=%s fingerprint=%s",
-            reviewer.value,
-            verdict,
-            work_unit_id,
-            round_number,
-            fingerprint,
-        )
-        return PersistedReviewerReplay(
-            output=matching_outputs[0],
-            fingerprint=str(fingerprint),
-            round_number=round_number,
-            verdict=str(verdict),
-        )
 
     def recover_pending_native_reviewer(
         self,
@@ -1658,92 +1339,6 @@ class ProductionWorkflowDriver(WorkflowDriver):
             round_number=round_number,
         )
 
-    def recover_failed_reviewer_output(
-        self,
-        invocation: ReviewerInvocation,
-        contract: StepContract,
-        previous_findings: tuple[FindingRecord, ...],
-    ) -> str | None:
-        """Reuse one diagnostic-bound provider log after local syntax hardening.
-
-        No verdict is inferred here.  The caller still runs the complete strict
-        review parser before persisting any decision.
-        """
-        state = self.active_state
-        bridge = self._artifact_bridge
-        if (
-            state is None
-            or bridge is None
-            or state.effective_protocol_mode is not ProtocolMode.STRUCTURED_V2
-            or state.current_work_unit_id != invocation.work_unit_id
-            or state.current_step is not invocation.step
-        ):
-            return None
-        failures = tuple(
-            failure
-            for failure in state.current_work_unit.invocation_failures
-            if failure.failure_kind is AgentFailureKind.OUTPUT
-            and failure.role == invocation.reviewer.value
-            and failure.work_unit_id == invocation.work_unit_id
-            and failure.step is invocation.step
-            and failure.diff_fingerprint == invocation.fingerprint
-        )
-        if not failures:
-            return None
-        failure = failures[-1]
-        diagnostics = tuple(
-            item
-            for item in bridge.store.load_chain()
-            if isinstance(item.payload, DiagnosticPayload)
-            and item.payload.role.value == invocation.reviewer.value
-            and item.payload.work_unit_id == str(invocation.work_unit_id)
-            and item.fingerprint.sha256 == invocation.fingerprint
-            and item.payload.reason in failure.provider_text
-        )
-        if len(diagnostics) != 1:
-            return None
-        diagnostic = diagnostics[0].payload
-        assert isinstance(diagnostic, DiagnosticPayload)
-        log_pattern = (
-            f"work-unit-{invocation.work_unit_id:04d}-"
-            f"{invocation.step.value}.attempt-*.log"
-        )
-        matches: list[str] = []
-        for path in sorted(self.log_dir.glob(log_pattern)):
-            if not path.is_file():
-                continue
-            raw = path.read_text(encoding="utf-8").strip()
-            legacy = normalize_review_contract(
-                raw,
-                contract,
-                previous_findings,
-                provider_completed=True,
-                remove_bulleted_evidence=False,
-            ).output
-            if hashlib.sha256(legacy.encode("utf-8")).hexdigest() != diagnostic.output_sha256:
-                continue
-            repaired = normalize_review_contract(
-                raw,
-                contract,
-                previous_findings,
-                provider_completed=True,
-            ).output
-            try:
-                validate_review_response(repaired, contract, previous_findings)
-            except ContractValidationError:
-                continue
-            matches.append(repaired)
-        if len(matches) != 1:
-            return None
-        logger.warning(
-            "Reusing diagnostic-bound %s reviewer output after deterministic local "
-            "contract normalization: work-unit=%s fingerprint=%s",
-            invocation.reviewer.value,
-            invocation.work_unit_id,
-            invocation.fingerprint,
-        )
-        return matches[0]
-
     def _artifact_fingerprint(self) -> str:
         if self.active_state is None:
             raise WorkflowExecutionError("structured persistence has no active state")
@@ -1766,52 +1361,6 @@ class ProductionWorkflowDriver(WorkflowDriver):
             if state.current_slice.start_fingerprint is not None:
                 return state.current_slice.start_fingerprint
             raise
-
-    def persist_codex_contract(
-        self,
-        result: CodexContractResult,
-        output: str,
-        previous_findings: tuple[FindingRecord, ...],
-    ) -> None:
-        if self._artifact_bridge is None or self.active_state is None:
-            return
-        state = self.active_state
-        unit = state.current_work_unit
-        fingerprint = self._artifact_fingerprint()
-        logical = f"agent-{unit.work_unit_id}-{state.current_step.value}-{unit.round_number}"
-        self._artifact_bridge.append(
-            agent_result_payload(result, role=AgentRole.CODEX, work_unit_id=unit.work_unit_id),
-            logical_id=logical,
-            idempotency_key=(
-                f"parsed:{logical}:{fingerprint}:"
-                f"{hashlib.sha256(output.encode('utf-8')).hexdigest()}"
-            ),
-            fingerprint_sha256=fingerprint,
-            fingerprint_kind=(
-                FingerprintKind.CONTRACT
-                if unit.kind is WorkUnitKind.PLAN
-                else FingerprintKind.IMPLEMENTATION
-            ),
-        )
-        previous_by_id = {item.finding_id: item for item in previous_findings}
-        for finding in result.findings:
-            prior_count = len(previous_by_id.get(finding.finding_id, finding).responses)
-            if finding.finding_id not in previous_by_id:
-                prior_count = 0
-            for index, response in enumerate(
-                finding.responses[prior_count:], start=prior_count + 1
-            ):
-                self._artifact_bridge.append(
-                    finding_payload(
-                        finding,
-                        actor=AgentRole.CODEX,
-                        action="responded",
-                        rationale=f"{response.decision.value}: {response.rationale}",
-                    ),
-                    logical_id=f"finding-{finding.finding_id}",
-                    idempotency_key=f"finding-response:{finding.finding_id}:{index}",
-                    fingerprint_sha256=fingerprint,
-                )
 
     def persist_native_codex_contract(
         self,
@@ -1876,35 +1425,6 @@ class ProductionWorkflowDriver(WorkflowDriver):
                     idempotency_key=f"finding-response:{finding.finding_id}:{index}",
                     fingerprint_sha256=fingerprint,
                 )
-
-    def persist_review_contract(
-        self,
-        result: ContractResult,
-        output: str,
-        fingerprint: str,
-        round_number: int,
-        previous_findings: tuple[FindingRecord, ...],
-    ) -> None:
-        if self._artifact_bridge is None or self.active_state is None:
-            return
-        unit = self.active_state.current_work_unit
-        logical = f"review-{result.reviewer.value}-{unit.work_unit_id}-{round_number}"
-        self._artifact_bridge.append(
-            review_payload(result, work_unit_id=unit.work_unit_id),
-            logical_id=logical,
-            idempotency_key=(
-                f"parsed:{logical}:{fingerprint}:"
-                f"{hashlib.sha256(output.encode('utf-8')).hexdigest()}"
-            ),
-            fingerprint_sha256=fingerprint,
-        )
-        self._persist_review_finding_transitions(
-            result,
-            fingerprint=fingerprint,
-            round_number=round_number,
-            previous_findings=previous_findings,
-            structured=False,
-        )
 
     def persist_native_review_contract(
         self,
@@ -2156,30 +1676,6 @@ class ProductionWorkflowDriver(WorkflowDriver):
             logical_id=f"implementation-handoff-{approved_plan_commit[:12]}",
             idempotency_key=f"implementation-handoff:{approved_plan_commit}",
             fingerprint_sha256=commit_binding.fingerprint.sha256,
-        )
-
-    def repair_review_contract(self, invocation: ContractRepairInvocation) -> str:
-        if self.active_state is None:
-            raise WorkflowExecutionError("contract repair requires an active workflow state")
-        prompt = (
-            "Repair only the formal output contract of the rejected review. Preserve its "
-            "verdict, findings, evidence, and rationale. Return only the complete corrected "
-            "answer without commentary, introduction, or Markdown fences. The first non-empty "
-            f"line must be exactly REVIEWER: {invocation.reviewer.value}. Correct every formal "
-            "contract violation, including a FINDING_STATUS record for every previous open "
-            "finding owned by this reviewer, even when the validation error names only the "
-            "first missing record.\n\n"
-            f"Validation error:\n{invocation.validation_error}\n\n"
-            f"Contract:\n{invocation.contract}\n\n"
-            f"Rejected output:\n{invocation.rejected_output}"
-        )
-        return self._agent(
-            invocation.reviewer,
-            prompt,
-            "review-contract-repair",
-            reviewer_repository_required=False,
-            operation=f"{invocation.reviewer.value}_contract_repair",
-            binding_fingerprint=self.active_state.task_digest or "unbound",
         )
 
     def collect_changes(self, start_commit: str) -> WorkflowChanges:
@@ -3618,8 +3114,6 @@ def _fresh_state(
     task_contract: TaskContract,
     branch_base_override: str | None = None,
     audit_report_path: str | None = None,
-    native_claude_reviews: bool = False,
-    native_codex_results: bool = False,
     codex_profile: AgentProfileBinding = AgentProfileBinding("gpt-5.6-sol", "medium"),
     claude_profile: AgentProfileBinding = AgentProfileBinding("sonnet", "high"),
 ) -> WorkflowState:
@@ -3657,16 +3151,8 @@ def _fresh_state(
         protocol_binding=ProtocolBinding(
             mode=ProtocolMode.STRUCTURED_V2,
             schema_version="2",
-            claude_review_transport=(
-                NATIVE_CLAUDE_REVIEW_TRANSPORT
-                if native_claude_reviews
-                else None
-            ),
-            codex_result_transport=(
-                NATIVE_CODEX_RESULT_TRANSPORT
-                if native_codex_results
-                else None
-            ),
+            claude_review_transport=NATIVE_CLAUDE_REVIEW_TRANSPORT,
+            codex_result_transport=NATIVE_CODEX_RESULT_TRANSPORT,
             codex_profile=codex_profile,
             claude_profile=claude_profile,
         ),
@@ -3854,34 +3340,6 @@ def run_production_workflow(
             raise StateSchemaError("persisted task contract differs from --resume task")
         if getattr(args, "watch_run_id", None) and state.run_id != args.watch_run_id:
             raise StateSchemaError("persisted watch run identity differs from inbox task")
-        requested_native = getattr(args, "native_claude_reviews", None)
-        persisted_native = (
-            state.protocol_binding is not None
-            and state.protocol_binding.claude_review_transport
-            == NATIVE_CLAUDE_REVIEW_TRANSPORT
-        )
-        if (
-            requested_native is not None
-            and bool(requested_native) is not persisted_native
-        ):
-            raise StateSchemaError(
-                "--native-claude-reviews differs from the immutable persisted "
-                "review transport binding"
-            )
-        requested_native_codex = getattr(args, "native_codex_results", None)
-        persisted_native_codex = (
-            state.protocol_binding is not None
-            and state.protocol_binding.codex_result_transport
-            == NATIVE_CODEX_RESULT_TRANSPORT
-        )
-        if (
-            requested_native_codex is not None
-            and bool(requested_native_codex) is not persisted_native_codex
-        ):
-            raise StateSchemaError(
-                "--native-codex-results differs from the immutable persisted "
-                "Codex result transport binding"
-            )
         if state.audit_report_path is None and managed_audit_path is not None:
             state = replace(state, audit_report_path=managed_audit_path)
         _apply_resumed_agent_profiles(args, state)
@@ -3897,12 +3355,6 @@ def run_production_workflow(
             task_contract=task_contract,
             branch_base_override=prepared_branch_base,
             audit_report_path=managed_audit_path,
-            native_claude_reviews=bool(
-                getattr(args, "native_claude_reviews", False)
-            ),
-            native_codex_results=bool(
-                getattr(args, "native_codex_results", False)
-            ),
             codex_profile=AgentProfileBinding(
                 args.agent_settings["codex"].model,
                 args.agent_settings["codex"].effort,
@@ -4250,52 +3702,73 @@ def run_default_dry_run(task_file: Path, *, run_id: str | None = None):
     commit2 = "c" * 40
     plan_fp, first_fp, second_fp, final_fp = (value * 64 for value in "1234")
 
-    def review(role: AgentRole, marker: str) -> str:
-        return "\n".join(
-            (
-                f"REVIEWER: {role.value}",
-                "TEST_FILES_TOUCHED: NONE",
-                "REVIEW_EVIDENCE: correctness, contracts, failure paths, security, resume | "
-                "runtime drift | a provider changes its output envelope",
-                "PRE_MORTEM: a resumed invocation uses stale evidence",
-                f"{marker}: YES",
-                "STATUS: DONE",
-            )
-        )
+    def review() -> dict[str, object]:
+        return {
+            "schema_version": "native-agent-review-result-v2",
+            "result_type": "review_result",
+            "request_id": "$BOUND_REQUEST_ID",
+            "reviewer": "claude",
+            "decision": "approved",
+            "new_findings": [],
+            "status_changes": [],
+            "reclassifications": [],
+            "anchors": [],
+            "review_evidence": {
+                "dimensions": "correctness, contracts, failure paths, security, resume",
+                "largest_residual_risk": "runtime drift",
+                "break_condition": "a provider changes its output envelope",
+            },
+            "pre_mortem": "A resumed invocation uses stale evidence.",
+        }
 
-    def slice_approval(role: AgentRole, slice_id: str) -> str:
-        return "\n".join(
-            (
-                f"REVIEWER: {role.value}",
-                "TEST_FILES_TOUCHED: NONE",
-                "REVIEW_EVIDENCE: correctness, contracts, failure paths, security, resume | "
-                "runtime drift | a provider changes its output envelope",
-                "PRE_MORTEM: a resumed invocation uses stale evidence",
-                f"SLICE_APPROVAL: {slice_id} | YES",
-                "STATUS: DONE",
-            )
-        )
+    def codex_result(result_type: str, **fields: object) -> dict[str, object]:
+        return {
+            "schema_version": "native-agent-codex-result-v2",
+            "request_id": "$BOUND_REQUEST_ID",
+            "result_type": result_type,
+            "ready": True,
+            "finding_dispositions": [],
+            **fields,
+        }
 
     scenario = DryRunScenario(
         name="default-v3-cutover",
-        initial=ScriptedInitialState(kind=WorkUnitKind.PLAN, slice_count=2),
+        initial=ScriptedInitialState(
+            kind=WorkUnitKind.PLAN,
+            slice_count=2,
+            scope_paths=("docs/internal/plan.md", "src/first.py", "src/second.py"),
+        ),
         agent_events=(
             ScriptedAgentEvent(AgentRole.CODEX, 1, 1, WorkflowStep.CODEX_PLAN,
-                               "PLAN_READY: YES\nSTATUS: DONE"),
+                               codex_result("plan_result", slice_plan=[
+                                   {
+                                       "slice_id": 1,
+                                       "summary": "Execute the first native Slice.",
+                                       "scope_paths": ["src/first.py"],
+                                   },
+                                   {
+                                       "slice_id": 2,
+                                       "summary": "Execute the second native Slice.",
+                                       "scope_paths": ["src/second.py"],
+                                   },
+                               ])),
             ScriptedAgentEvent(AgentRole.CLAUDE, 1, 1, WorkflowStep.CLAUDE_PLAN_REVIEW,
-                               review(AgentRole.CLAUDE, "PLAN_APPROVAL")),
+                               review()),
             ScriptedAgentEvent(AgentRole.CODEX, 2, 1, WorkflowStep.CODEX_IMPLEMENTATION,
-                               "TEST_FILES_TOUCHED: NONE\nIMPLEMENTATION_READY: 01 | YES\nSTATUS: DONE"),
+                               codex_result("implementation_result", test_files=[])),
             ScriptedAgentEvent(AgentRole.CLAUDE, 2, 1, WorkflowStep.CLAUDE_SLICE_REVIEW,
-                               slice_approval(AgentRole.CLAUDE, "01")),
+                               review()),
             ScriptedAgentEvent(AgentRole.CODEX, 3, 1, WorkflowStep.CODEX_IMPLEMENTATION,
-                               "TEST_FILES_TOUCHED: NONE\nIMPLEMENTATION_READY: 02 | YES\nSTATUS: DONE"),
+                               codex_result("implementation_result", test_files=[])),
             ScriptedAgentEvent(AgentRole.CLAUDE, 3, 1, WorkflowStep.CLAUDE_SLICE_REVIEW,
-                               slice_approval(AgentRole.CLAUDE, "02")),
+                               review()),
             ScriptedAgentEvent(AgentRole.CODEX, 4, 1, WorkflowStep.CODEX_FINAL_REVIEW,
-                               "FINAL_REPORT_READY: YES\nSTATUS: DONE"),
+                               codex_result(
+                                   "final_report_result",
+                                   self_check="The scripted branch passed its bound final self-check.",
+                               )),
             ScriptedAgentEvent(AgentRole.CLAUDE, 4, 1, WorkflowStep.CLAUDE_FINAL_REVIEW,
-                               review(AgentRole.CLAUDE, "FINAL_APPROVAL")),
+                               review()),
         ),
         changes=(
             ScriptedChange(1, 1, base, plan_fp, ("docs/internal/plan.md",), "plan diff"),

@@ -115,9 +115,9 @@ def agent_result_payload(
     *,
     role: AgentRole,
     work_unit_id: int | str,
-    transport_schema: str | None = None,
-    request_id: str | None = None,
-    response_sha256: str | None = None,
+    transport_schema: str,
+    request_id: str,
+    response_sha256: str,
 ) -> AgentResultPayload:
     outcome = "stopped" if result.stopped else "ready" if result.ready else "not_ready"
     return AgentResultPayload(
@@ -135,9 +135,9 @@ def review_payload(
     result: ContractResult,
     *,
     work_unit_id: int | str,
-    transport_schema: str | None = None,
-    request_id: str | None = None,
-    response_sha256: str | None = None,
+    transport_schema: str,
+    request_id: str,
+    response_sha256: str,
 ) -> ReviewPayload:
     verdict = "stop" if result.stopped else "approved" if result.approval else "denied"
     evidence = None

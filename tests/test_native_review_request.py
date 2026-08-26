@@ -33,15 +33,14 @@ from native_review_contract import (
 from native_review_request import (
     NativeReviewEvidenceInput,
     NativeReviewKind,
-    NativeReviewRepairError,
     NativeReviewRequestError,
     NativeReviewRequestBundle,
     NativeReviewRequestSpec,
-    build_native_review_repair_request,
     build_native_review_request,
     canonical_native_review_request_json,
     load_native_review_request_schema,
     native_review_provider_response_schema,
+    validate_native_review_request_document,
 )
 from review_packets import ReviewPacket, build_review_packet
 from schema_validation import SchemaMismatch, validate_schema_document
@@ -887,6 +886,26 @@ def test_request_rejects_unsafe_duplicate_or_unsorted_paths(paths: tuple[str, ..
         replace(_spec(), authorized_paths=paths)
 
 
+@pytest.mark.parametrize(
+    "evidence",
+    (
+        (
+            NativeReviewEvidenceInput("e01_first", "diff", "same"),
+            NativeReviewEvidenceInput("e02_second", "diff", "same"),
+        ),
+        (
+            NativeReviewEvidenceInput("e01_first", "diff", "first", "src/a.py"),
+            NativeReviewEvidenceInput("e02_second", "diff", "second", "src/a.py"),
+        ),
+    ),
+)
+def test_request_rejects_duplicate_evidence_content_or_source_path(
+    evidence: tuple[NativeReviewEvidenceInput, ...],
+) -> None:
+    with pytest.raises(NativeReviewRequestError, match="unique"):
+        replace(_spec(), evidence=evidence)
+
+
 def test_bound_parser_rejects_legacy_narrow_request_id() -> None:
     bundle = build_native_review_request(_spec())
     result = parse_bound_native_contract_result(
@@ -965,31 +984,10 @@ def test_request_bundle_rejects_bound_context_drift() -> None:
         )
 
 
-def test_compact_repair_request_contains_no_review_evidence() -> None:
+def test_retired_repair_request_is_rejected_by_the_active_reader_schema() -> None:
     bundle = build_native_review_request(_spec())
-    rejected = json.dumps(
-        _response(bundle.bound_context.request_id),
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    repair = build_native_review_repair_request(
-        parent=bundle,
-        rejected_response_json=rejected,
-        errors=(NativeReviewRepairError("approval-invalid", "pre_mortem is blank"),),
-    )
-    assert repair.document["request_type"] == "review_contract_repair_request"
-    assert repair.document["parent_request_id"] == bundle.bound_context.request_id
-    assert repair.bound_context.context is bundle.bound_context.context
-    assert repair.bound_context.request_id != bundle.bound_context.request_id
-    assert "evidence_manifest" not in repair.document
-    assert "authorized_paths" not in repair.document
-    assert "acceptance_criteria" not in repair.document
-    with pytest.raises(NativeReviewRequestError, match="immutable parent"):
-        replace(repair, parent_bundle=None)
-
-    other_parent = build_native_review_request(
-        replace(_spec(), target_branch="feature/other-parent")
-    )
-    with pytest.raises(NativeReviewRequestError, match="bind its parent"):
-        replace(repair, parent_bundle=other_parent)
+    document = dict(bundle.document)
+    document["request_type"] = "review_contract_repair_request"
+    with pytest.raises(NativeReviewRequestError) as caught:
+        validate_native_review_request_document(document)
+    assert caught.value.code.value == "schema-invalid"

@@ -7,9 +7,6 @@ Unterlagen.
 
 - [Roadmap für Phase 2 und Folgephasen](ORCHESTRATOR_ROADMAP_PHASE_2_PLUS.md)
 
-Ein neuer Arbeitsplan wird erst nach Auswahl des nächsten Roadmap-Pakets als
-aktives Dokument ergänzt.
-
 Aktive Orchestratorläufe dürfen ihre gebundenen Arbeitsplan-, Slice- und
 Auditpfade nicht manuell verschieben. Die Archivierung erfolgt erst nach dem
 fachlichen Abschluss.
@@ -29,3 +26,9 @@ freigegebenen Arbeitsplan, alle Sliceberichte und die abschließenden Codex- und
 Claude-Reviews der endgültigen Providerentfernung. Die beiden weiterhin
 aktiven Provider-Subset-Register unter `schemas/` sind davon unabhängig und
 bleiben absichtlich auf ihrer eigenen Registerversion 1.
+
+Der Ordner
+[`archive/native-only-transport-parser-retirement-und-evidenzeffizienz/`](archive/native-only-transport-parser-retirement-und-evidenzeffizienz/)
+enthält den abgeschlossenen Arbeitsplan, alle drei Slice-Berichte sowie die
+getrennten Claude- und Codex-Gesamtreviews des Native-only-Cutovers,
+Parser-Retirements und der strukturellen Eingabereduktion.

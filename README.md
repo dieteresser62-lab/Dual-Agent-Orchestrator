@@ -135,7 +135,7 @@ Laufzeitdaten werden unterhalb von `.orchestrator/` gespeichert:
 
 State und Checkpoints dürfen nicht manuell bearbeitet werden.
 
-Neue Workflows werden bei der Initialisierung unveränderlich an den Protokollmodus `structured-v2` gebunden. Die optionalen Transportflags binden Codex beziehungsweise Claude an ihren nativen, geschlossenen JSON-Vertrag; eine einmal persistierte Bindung kann beim Resume weder still aktiviert noch deaktiviert werden, und ein Vertragsfehler fällt niemals auf Markertext zurück. Erst nach Vertragsprüfung, persistiertem Record und semantischem Gleichheitsnachweis zum State-v3-Spiegel darf der Inhalt eine Entscheidung steuern. Für alle in Records abgebildeten Fakten ist die validierte Recordkette die technische Source of Truth. Sie besteht aus kanonischen, digestgeprüften JSON-Einzeldateien und ist weder JSONL noch SQLite.
+Neue Workflows werden bei der Initialisierung unveränderlich an den Protokollmodus `structured-v2` sowie an die nativen, geschlossenen JSON-Verträge von Codex und Claude gebunden. Es gibt keine Transportflags mehr und ein Vertragsfehler fällt niemals auf Markertext zurück. Erst nach Vertragsprüfung, persistiertem Record und semantischem Gleichheitsnachweis zum State-v3-Spiegel darf der Inhalt eine Entscheidung steuern. Für alle in Records abgebildeten Fakten ist die validierte Recordkette die technische Source of Truth. Sie besteht aus kanonischen, digestgeprüften JSON-Einzeldateien und ist weder JSONL noch SQLite.
 
 Historische `legacy-state-v3`- und `structured-v1`-Läufe werden mit `UNSUPPORTED-PROTOCOL` fail-closed abgewiesen. Es gibt weder stille Migration noch modusübergreifenden Fallback.
 
@@ -145,7 +145,11 @@ Menschenlesbare Plan- und Slice-Auditdateien im Markdown-Format gehören in das 
 
 JSON ist dabei die autoritative Wahrheit, Markdown nur die deterministische Ansicht: `artifact_projection` rendert native Review- und Codex-Resultate einschließlich `transport_schema`, `request_id` und `response_sha256` direkt aus der validierten Recordkette. `audit_trail` übernimmt diese Abschnitte ohne Markdown zurückzulesen oder semantisch neu zu interpretieren. Die Rohantwort eines nativen Codex-Aufrufs liegt vor jeder fachlichen Anwendung unter `.orchestrator/artifacts/<run-id>/native-codex-responses/`; ein Record-ahead-Resume prüft Rohdigest, Requestbindung und AgentResult und startet Codex nicht erneut.
 
-Ein nativer Codex–Claude-Lauf wird bei einem neuen Lauf durch die gemeinsame Angabe `--native-codex-results --native-claude-reviews` gebunden. Beide Flags sind unveränderlicher Bestandteil des Laufzustands; Resume übernimmt exakt diese Bindung und kennt in keiner Plan-, Implementierungs-, Korrektur- oder Claude-Reviewphase einen Textfallback. Offene Findings und Codex-Dispositionen werden ausschließlich aus der validierten Recordkette rekonstruiert und vor jedem frischen Providerstart symmetrisch gegen den State-v3-Spiegel geprüft. Vollständige Record-ahead-Ergebnisse werden wiederverwendet, bevor ein neuer Agentenprozess gestartet werden darf. Die aus denselben Records erzeugte Markdownansicht enthält zusätzlich eine kompakte native Konvergenzübersicht mit Work-Unit, Runde, Fingerprints, Claude-Entscheidungen, Codex-Dispositionen und Endstatus; sie ist reine Anzeige und niemals Entscheidungs- oder Recoveryquelle.
+Jeder neue Codex–Claude-Lauf verwendet ohne zusätzliche CLI-Optionen den nativen JSON-Transport. Resume übernimmt exakt diese vollständige Bindung und kennt in keiner Plan-, Implementierungs-, Korrektur- oder Claude-Reviewphase einen Textfallback. Offene Findings und Codex-Dispositionen werden ausschließlich aus der validierten Recordkette rekonstruiert und vor jedem frischen Providerstart symmetrisch gegen den State-v3-Spiegel geprüft. Vollständige Record-ahead-Ergebnisse werden wiederverwendet, bevor ein neuer Agentenprozess gestartet werden darf. Die aus denselben Records erzeugte Markdownansicht enthält zusätzlich eine kompakte native Konvergenzübersicht mit Work-Unit, Runde, Fingerprints, Claude-Entscheidungen, Codex-Dispositionen und Endstatus; sie ist reine Anzeige und niemals Entscheidungs- oder Recoveryquelle.
+
+Implementierungsaufrufe transportieren nicht mehr den vollständigen Mehrslice-Plan. Der Orchestrator projiziert daraus ein kanonisches, digestgebundenes Slice-Ausführungspaket mit Ziel, Akzeptanzkriterien, exakten Pfaden und ausdrücklich benannten Querverweisen. Korrekturaufrufe erhalten entsprechend nur die betroffenen offenen Findings, deren Abnahmekriterien, das aktuelle Diff und die fingerprintgebundene Pfadgrenze. Doppelte Evidenz-IDs, Quellpfade, Inhaltsdigests oder inhaltsgleiche Providerkomponenten werden vor dem Providerstart abgewiesen.
+
+Die Markdownprojektion verdichtet Providerattempts pro Operation mit Inputzeichen, UTF-8-Bytes, Laufzeit, Attemptanzahl, Retrystatus und – sofern tatsächlich persistiert – Input-/Outputtokens. Fehlende Usage bleibt ausdrücklich `unknown`; Zeichen- und Bytezahlen werden nicht als Tokenwerte ausgegeben. Die eingefrorene Vor-Cutover-Baseline dient ausschließlich als read-only Vergleich und wird im normalen Lauf weder importiert noch regeneriert.
 
 Bei einem regulär manuell definierten Lauf außerhalb von `inbox/` müssen Auditdateien weiterhin vorbereitet, aus dem Arbeitsplan verlinkt, mit den erforderlichen verwalteten Auditabschnitten versehen und im Umfang des zugehörigen `SLICE_PLAN` enthalten sein. Ein commitgebundener Handoff erzeugt seine deklarierten Slice-Auditdateien ebenfalls automatisch vor dem jeweiligen Slice. Der Orchestrator projiziert strukturierte Findings, Reviews, Validierungsattestierungen und Autorisierungsstatus ausschließlich in die verwalteten Abschnitte. Diese Markdown-Dateien sind deterministische, menschenlesbare Auditansichten der Records und keine Resume- oder Reparaturquelle. Nach jedem lokalen Slice-Commit ist Git die historische Quelle der Wahrheit für den eingecheckten Repositorystand; nach der branchweiten Claude-Gesamtabnahme wird die abschließende Gesamtprojektion path-genau commitet.
 
@@ -204,19 +208,12 @@ Ein freigebender Slice-Review erfordert eine vollständige erfolgreiche Attestie
 
 Reviewer arbeiten in einem temporären schreibgeschützten Snapshot. Dieser enthält nur Git-sichtbare Quell- und Dokumentationsdateien; Metadaten, Abhängigkeiten und generierte Schwergewichte wie `.git`, `.orchestrator`, `node_modules`, `dist` und Releasearchive werden nicht kopiert. Reine Ausgabevertragskorrekturen erhalten ein leeres schreibgeschütztes Arbeitsverzeichnis. Eindeutig gebundene Formalmarker werden lokal ergänzt, ohne einen zweiten Modellreview auszulösen.
 
-Formuliert ein Reviewer `REVIEW_EVIDENCE` mit den eindeutigen Bezeichnungen
-`Largest residual risk:` und `Break condition:` statt mit den vorgeschriebenen
-Pipe-Trennzeichen, überführt der Orchestrator genau diese vorhandenen drei
-Inhalte lokal und verlustfrei in das Vertragsformat. Mehrdeutige oder bereits
-Pipe-haltige Varianten bleiben unverändert und durchlaufen die normale formale
-Reparatur; Präambeln werden nicht abgeschnitten.
-
-Umschließt ein Provider die vollständige Vertragsantwort ausschließlich mit
-einem Markdown-Codezaun (wahlweise mit Sprachangabe `text`), entfernt der
-Adapter nur diesen äußeren Zaun. Das gilt ausschließlich, wenn der Inhalt mit
-`REVIEWER:` beginnt und mit `STATUS: DONE` endet; Text vor oder nach dem Zaun
-verhindert das Entpacken und scheitert weiterhin an der strikten
-Vertragsprüfung.
+Codex und Claude liefern ausschließlich requestgebundene native JSON-Resultate.
+Der jeweilige Provider erhält ein kontextspezifisches Writerschema; anschließend
+prüft der Orchestrator zusätzlich Requestbindung und Domänenregeln. Textmarker,
+Markdown-Codezäune, lokale Textnormalisierung und ein LLM-Reparaturturn gehören
+nicht mehr zum produktiven Transport. Eine fehlende oder ungültige JSON-Antwort
+endet fail-closed als Provider-Outputfehler.
 
 Die Quotabehandlung erfolgt rollenspezifisch. Bei aktivierter automatischer Quotafortsetzung wird ein eindeutiger Reset innerhalb der konfigurierten Wartegrenze persistiert, unter Ausgabe von Heartbeats abgewartet und am exakt fehlgeschlagenen Schritt einmal fortgesetzt. Neben Zeitstempeln, relativen Angaben und ausdrücklich benannten Zeitzonen wird auch Codex' englische Datumsangabe wie `Aug 20th, 2026 5:36 AM` erkannt; da sie selbst keine Zeitzone enthält, wird sie ausschließlich für Codex in der lokalen IANA-Zeitzone des Orchestrator-Rechners ausgewertet. Andernfalls endet der Prozess mit Exitcode 2 und bleibt fortsetzbar. Es gibt keine Ersatzrolle. Ändert sich das Repository während einer Quota-Pause, erzeugt die Fortsetzung ein `QUOTA-RESUME-DIFF`-Gate für den aktuellen Fingerprint und die betroffenen Pfade. Ein weiteres gewöhnliches `--resume` genehmigt diese Änderung bewusst nicht; erst `--resume --approve-gate` mit Akteur und Begründung setzt denselben Rollenschritt fort.
 
@@ -310,8 +307,6 @@ Für deterministische Negativ- und Fortsetzungsszenarien kann ein State-v3-JSON-
 | `--force-overwrite-state` | automatisch bei abgeschlossenem Zustand | Trotz vorhandenen Zustands einen neuen Lauf beginnen; explizite Verwendung umgeht den normalen Zustandsschutz. |
 | `--strict-preflight` | aus | Einen Fehler der Provider-DNS-Vorabprüfung als fatal behandeln. |
 | `--skip-git-check` / `--no-skip-git-check` | aus; im Watch-Modus an | Prüfung auf einen sauberen Repositoryzustand überschreiben. |
-| `--native-claude-reviews` / `--no-native-claude-reviews` | aus | Nur beim Start eines neuen `structured-v2`-Laufs den nativen JSON-Transport für Claude-Reviews unveränderlich binden oder ausdrücklich deaktivieren. beim Resume muss eine explizite Angabe der bereits persistierten Bindung entsprechen. |
-| `--native-codex-results` / `--no-native-codex-results` | aus | Nur beim Start eines neuen `structured-v2`-Laufs den nativen JSON-Transport für Codex-Planung, Implementierung, Korrektur und Abschlussbericht unveränderlich binden oder ausdrücklich deaktivieren. Resume übernimmt die persistierte Bindung und kennt keinen Textfallback. |
 | `--manual-slice-gate` / `--no-manual-slice-gate` | Repositorykonfiguration oder aus | Vor jedem Slice-Commit eine explizite Freigabe verlangen. |
 | `--plan-gate` / `--no-plan-gate` | Repositorykonfiguration oder aus | Nach Claude-Planfreigabe eine explizite fingerprintgebundene Benutzerfreigabe vor dem Plancommit verlangen. |
 | `--test-change-gate` / `--no-test-change-gate` | Repositorykonfiguration oder aus | Vor Review und Commit eines Slices mit Testdateiänderungen eine zusätzliche fingerprintgebundene Benutzerfreigabe verlangen. Ohne Gate bleiben Scopeprüfung, Tests und der Claude-Review verpflichtend. |
@@ -467,37 +462,27 @@ fortsetzbar an.
 
 Vor jedem branchweiten Provideraufruf prüft ein lokales, agentenfreies Preflight außerdem Recordkette, State-v3-Spiegel, Findingzustände, aktuelle Validierungsattestierung, autorisierte Pfade und die unmittelbar zuvor persistierte Eingabemessung. Ein Budget- oder Preflightdenial ist kein Providerfehler: Der unveränderte Rollenstep bleibt mit `bootstrap_check` und Exitcode 4 resumierbar. Im Watchbetrieb steigen weder Attempt-Zähler noch entstehen `.poison`-Dateien oder automatische Providerretries. Nach Korrektur von Konfiguration, Record-/State-Spiegel oder Repositoryzustand wird derselbe Auftrag mit `run_task --watch` beziehungsweise `run_task --resume --task-file ...` erneut geprüft; dafür ist keine `--approve-gate`-Entscheidung zulässig oder nötig.
 
-## Agentenanweisungen und Ausgabevertrag
+## Agentenanweisungen und nativer Ausgabevertrag
 
 Die aktiven Anweisungsdateien des Repositorys sind:
 
 | Datei | Verantwortung |
 |---|---|
-| `AGENTS.md` | Gemeinsamer Ausführungs-, Sicherheits-, Review- und Marker-Vertrag. |
-| `CODEX.md` | Implementiererrolle und Bereitschaftsdatensätze. |
+| `AGENTS.md` | Gemeinsamer Ausführungs-, Sicherheits-, Review- und JSON-Vertrag. |
+| `CODEX.md` | Implementiererrolle und native Ergebnisvarianten. |
 | `CLAUDE.md` | Primärer gezielter Reviewer mit persistentem Sonnet-/High-Profil. |
 
-Alle Agentenantworten enden mit `STATUS: DONE`. State-v3-Datensätze sind:
-
-| Erzeuger oder Schritt | Erforderlicher Datensatz |
-|---|---|
-| Codex-Plan | `SLICE_PLAN: <id> \| <summary> \| <paths>` und `PLAN_READY: YES\|NO` |
-| Codex-Implementierung | `TEST_FILES_TOUCHED: NONE\|<paths>` und `IMPLEMENTATION_READY: <slice-id> \| YES\|NO` |
-| Codex-Abschlussbericht | `FINAL_REPORT_READY: YES\|NO` |
-| Reviewer, erste Zeile | `REVIEWER: claude` |
-| Claude-Planreview | `PLAN_APPROVAL: YES\|NO` |
-| Slice-Review | `SLICE_APPROVAL: <slice-id> \| YES\|NO` |
-| Branchweiter Abschlussreview | `FINAL_APPROVAL: YES\|NO` |
-| Neues Finding | `NEW_FINDING: C-01 \| BLOCKER\|OBSERVATION \| <description> \| <acceptance test>` |
-| Aktualisierung durch Finding-Eigentümer | `FINDING_STATUS: <id> \| OPEN\|CLOSED \| <rationale>` |
-| Optionale Neuklassifizierung durch Eigentümer | `FINDING_RECLASSIFIED: <id> \| BLOCKER\|OBSERVATION \| <rationale>` |
-| Finding-Antwort von Codex | `FINDING_RESPONSE: <id> \| ACCEPTED\|REJECTED \| <rationale>` |
-| Review ohne konkrete Schwachstelle | `REVIEW_EVIDENCE: <dimensions> \| <largest residual risk> \| <break condition>` |
-| Voraussetzung einer positiven Freigabe | `PRE_MORTEM: <most likely failure cause in three months>` |
-| Stopp durch beliebige Rolle | `STOP_REQUESTED: <rule-id> \| <rationale>` anstelle von Bereitschaft oder Freigabe |
-| Automatische Vorgängerslice-Reparatur durch Codex | zusätzlich `REMEDIATION_PATHS: <comma-separated exact paths>` bei einem rein technischen, bereits planfreigegebenen Scope-Rückläufer |
-
-Der Orchestrator besitzt die Validierungsattestierungen; Agenten dürfen `VALIDATION_RESULT` nicht ausgeben. State-v2-Freigabe- und aggregierte Finding-Marker sind ungültig.
+Die Maschinenkommunikation verwendet keine zeilenbasierten Ergebnismarker. Codex
+erhält `native-agent-codex-request-v2` und antwortet gemäß
+`native-agent-codex-result-v2` mit einer der strikt
+getrennten Varianten `plan_result`, `implementation_result`,
+`correction_result`, `final_report_result` oder `stop_result`. Claude erhält
+`native-agent-review-request-v2` und antwortet gemäß
+`native-agent-review-result-v2`; sein request-spezifisches Writerschema bindet
+Freigabe, Findings, Statusänderungen, Reklassifizierungen, Reviewevidenz,
+Pre-Mortem und Stop an den aktuellen Kontext. Der Orchestrator besitzt und
+persistiert die Validierungsattestierungen; Providerresultate dürfen sie weder
+erfinden noch ersetzen.
 
 ## Exitcodes
 

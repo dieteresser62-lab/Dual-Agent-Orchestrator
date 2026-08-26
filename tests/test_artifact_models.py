@@ -44,6 +44,42 @@ from artifact_models import (
 
 DIGEST = "a" * 64
 CREATED_AT = "2026-08-18T10:30:00+00:00"
+CODEX_REQUEST_ID = "native-codex-request-" + "b" * 64
+CLAUDE_REQUEST_ID = "native-review-request-" + "b" * 64
+
+
+def _agent_result(
+    work_unit_id: str = "work-01",
+    outcome: str = "ready",
+    test_files: tuple[str, ...] = (),
+) -> AgentResultPayload:
+    return AgentResultPayload(
+        Role.CODEX,
+        work_unit_id,
+        outcome,
+        test_files,
+        "native-codex-v2",
+        CODEX_REQUEST_ID,
+        "c" * 64,
+    )
+
+
+def _review(
+    work_unit_id: str = "work-01",
+    verdict: str = "approved",
+    finding_ids: tuple[str, ...] = (),
+    evidence: str | None = "contracts checked",
+) -> ReviewPayload:
+    return ReviewPayload(
+        Role.CLAUDE,
+        work_unit_id,
+        verdict,
+        finding_ids,
+        evidence,
+        "native-claude-review-v2",
+        CLAUDE_REQUEST_ID,
+        "c" * 64,
+    )
 
 
 def _record(payload, *, revision: int = 1) -> ArtifactRecord:  # type: ignore[no-untyped-def]
@@ -64,9 +100,9 @@ def _record(payload, *, revision: int = 1) -> ArtifactRecord:  # type: ignore[no
     PlanPayload("docs/internal/plan.md", "b" * 40, (SliceSpec("1", "models", ("src/a.py",)),)),
     WorkUnitPayload("1", 1, ("src/a.py",)),
     CorrectionWorkUnitPayload("1", 2, ("src/a.py",), ("C-01",)),
-    AgentResultPayload(Role.CODEX, "work-01", "ready", ("tests/test_a.py",)),
+    _agent_result(test_files=("tests/test_a.py",)),
     DiagnosticPayload(Role.CLAUDE, "work-01", 1, DIGEST, "malformed verdict"),
-    ReviewPayload(Role.CLAUDE, "work-01", "approved", (), "contracts checked"),
+    _review(),
     FindingTransitionPayload("C-01", Role.CLAUDE, Role.CLAUDE, "opened", FindingSeverity.BLOCKER, "open", "broken"),
     ValidationRequestPayload((CommandSpec("pytest", ("python3", "-m", "pytest", "tests/a b.py")),), Role.ORCHESTRATOR),
     ValidationAttestationPayload((ValidationResult(CommandSpec("pytest", ("pytest", "-q")), "pass", 0, DIGEST),), Role.ORCHESTRATOR),
@@ -136,7 +172,7 @@ def test_native_codex_agent_result_rejects_partial_or_foreign_bindings() -> None
         response_sha256="c" * 64,
     )
 
-    with pytest.raises(ArtifactValidationError, match="present together"):
+    with pytest.raises(ArtifactValidationError, match="response_sha256"):
         replace(payload, response_sha256=None)
     with pytest.raises(ArtifactValidationError, match="role=codex"):
         replace(payload, role=Role.CLAUDE)
@@ -226,12 +262,10 @@ def test_finding_ownership_and_codex_response_do_not_allow_foreign_closure() -> 
             "open",
             "retired namespace",
         ),
-        lambda: ReviewPayload(
-            Role.CLAUDE,
-            "work-01",
-            "denied",
-            ("A-01",),  # retirement-negative-control
-            "retired namespace",
+        lambda: _review(
+            verdict="denied",
+            finding_ids=("A-01",),  # retirement-negative-control
+            evidence="retired namespace",
         ),
         lambda: CorrectionWorkUnitPayload(
             "01",
@@ -265,12 +299,10 @@ def test_v2_models_reject_retired_finding_namespace(factory) -> None:  # type: i
         ),
         (
             _record(
-                ReviewPayload(
-                    Role.CLAUDE,
-                    "work-01",
-                    "denied",
-                    ("C-01",),
-                    "valid namespace",
+                _review(
+                    verdict="denied",
+                    finding_ids=("C-01",),
+                    evidence="valid namespace",
                 )
             ),
             "finding_ids",
@@ -321,12 +353,10 @@ def test_v2_schema_and_deserializer_reject_retired_finding_namespace(
         ),
         (
             _record(
-                ReviewPayload(
-                    Role.CLAUDE,
-                    "work-01",
-                    "denied",
-                    ("C-01",),
-                    "valid namespace",
+                _review(
+                    verdict="denied",
+                    finding_ids=("C-01",),
+                    evidence="valid namespace",
                 )
             ),
             "finding_ids",
@@ -401,9 +431,9 @@ def test_structured_finding_transition_roundtrips_and_legacy_fields_stay_optiona
 
 def test_approval_requires_fingerprint_and_positive_evidence() -> None:
     with pytest.raises(ArtifactValidationError, match="findings or review evidence"):
-        ReviewPayload(Role.CLAUDE, "work-01", "approved", (), None)
+        _review(evidence=None)
 
-    raw = _record(ReviewPayload(Role.CLAUDE, "work-01", "approved", (), "checked")).to_dict()
+    raw = _record(_review(evidence="checked")).to_dict()
     raw.pop("fingerprint")
     with pytest.raises(ArtifactValidationError, match="fingerprint"):
         validate_artifact_document(raw)
@@ -425,19 +455,18 @@ def test_native_review_transport_fields_roundtrip_together() -> None:
     assert ArtifactRecord.from_dict(record.to_dict()) == record
 
 
-def test_historical_review_record_without_native_fields_remains_readable() -> None:
-    raw = _record(
-        ReviewPayload(Role.CLAUDE, "work-01", "approved", (), "checked")
-    ).to_dict()
+def test_native_review_transport_rejects_foreign_reviewer() -> None:
+    with pytest.raises(ArtifactValidationError, match="reviewer must be claude"):
+        replace(_review(), reviewer=Role.CODEX)
+
+
+def test_review_record_without_native_fields_is_rejected() -> None:
+    raw = _record(_review(evidence="checked")).to_dict()
     for field_name in ("transport_schema", "request_id", "response_sha256"):
         raw["payload"].pop(field_name)
 
-    validate_artifact_document(raw)
-    restored = ArtifactRecord.from_dict(raw)
-
-    assert restored.payload == ReviewPayload(
-        Role.CLAUDE, "work-01", "approved", (), "checked"
-    )
+    with pytest.raises(ArtifactValidationError, match="schema validation"):
+        validate_artifact_document(raw)
 
 
 @pytest.mark.parametrize(
@@ -452,7 +481,7 @@ def test_native_review_transport_rejects_partial_binding(
 ) -> None:
     with pytest.raises(
         ArtifactValidationError,
-        match="must be present together",
+        match="unsupported|request_id",
     ):
         ReviewPayload(
             Role.CLAUDE,

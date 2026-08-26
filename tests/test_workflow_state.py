@@ -160,7 +160,6 @@ def test_native_codex_request_projects_fingerprint_bound_paths_and_explanation()
         context=context,
         history=WorkflowHistory(state.current_work_unit_id),
         contract=contract,
-        prompt="Create the bound plan.",
         request_kind=NativeCodexRequestKind.PLAN,
         additional_authorized_paths=("src/runtime-hotfix.py",),
     )

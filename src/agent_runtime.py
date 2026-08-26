@@ -373,27 +373,6 @@ class ReviewerWorkspace:
         shutil.rmtree(self.container, ignore_errors=True)
 
 
-_COMPACT_RESULT_MARKERS = (
-    "REVIEWER:",
-    "SLICE_PLAN:",
-    "NEW_FINDING:",
-    "FINDING_STATUS:",
-    "FINDING_RESPONSE:",
-    "OPEN_FINDINGS:",
-    "PLAN_APPROVAL:",
-    "SLICE_APPROVAL:",
-    "FINAL_APPROVAL:",
-    "PHASE1_APPROVAL:",
-    "PHASE2_APPROVAL:",
-    "IMPLEMENTATION_READY:",
-    "PLAN_READY:",
-    "TEST_FILES_TOUCHED:",
-    "STOP_REQUESTED:",
-    "REMEDIATION_PATHS:",
-    "STATUS:",
-)
-
-
 def _compact_text(text: str, *, max_chars: int = 900) -> str:
     compact = " ".join(text.split())
     if len(compact) <= max_chars:
@@ -443,13 +422,31 @@ def _compact_stream_text(
 
 
 def _compact_result_lines(output: str) -> tuple[str, ...]:
-    """Select contract decisions and findings from a completed agent response."""
-    selected: list[str] = []
-    for raw_line in output.splitlines():
-        line = raw_line.strip()
-        if line.upper().startswith(_COMPACT_RESULT_MARKERS):
-            selected.append(_compact_text(line, max_chars=480))
-    return tuple(selected)
+    """Render a compact human view from one completed native JSON result."""
+    try:
+        document = json.loads(output)
+    except json.JSONDecodeError:
+        return ()
+    if not isinstance(document, dict):
+        return ()
+    lines: list[str] = []
+    result_type = document.get("result_type")
+    if isinstance(result_type, str):
+        lines.append(f"result_type={result_type}")
+    for field in ("ready", "approved", "decision", "request_id"):
+        value = document.get(field)
+        if isinstance(value, (str, bool)):
+            lines.append(f"{field}={value}")
+    for field in (
+        "new_findings",
+        "status_changes",
+        "reclassifications",
+        "finding_dispositions",
+    ):
+        value = document.get(field)
+        if isinstance(value, list):
+            lines.append(f"{field}={len(value)}")
+    return tuple(_compact_text(line, max_chars=480) for line in lines)
 
 
 def normalize_provider_usage(metadata: Mapping[str, object] | None) -> ProviderUsagePayload | None:
@@ -913,31 +910,11 @@ def run_validation_matrix(
 
 
 def build_dry_run_agent_output(agent_key: str, prompt: str) -> str:
-    if _contract_repair_excerpt(prompt).startswith("STATE-V3 CONTRACT"):
-        raise AgentProcessError(
-            "state-v3 dry-run requires an explicit --dry-run-scenario; "
-            "implicit approval is forbidden",
-            kind_hint=AgentFailureKind.OUTPUT,
-        )
-    lines = [
-        f"# Dry Run Output ({agent_key})",
-        "",
-        "This response was simulated by the orchestrator.",
-    ]
-    if "CODEX_APPROVAL:" in prompt:
-        lines.append("CODEX_APPROVAL: YES")
-    if "PHASE1_APPROVAL:" in prompt:
-        lines.append("PHASE1_APPROVAL: YES")
-    if "OPEN_FINDINGS:" in prompt:
-        lines.append("OPEN_FINDINGS: NONE")
-    if "CLAUDE_APPROVAL:" in prompt:
-        lines.append("CLAUDE_APPROVAL: YES")
-    if "PHASE2_APPROVAL:" in prompt:
-        lines.append("PHASE2_APPROVAL: YES")
-    if "IMPLEMENTATION_READY:" in prompt:
-        lines.append("IMPLEMENTATION_READY: YES")
-    lines.append("STATUS: DONE")
-    return "\n".join(lines)
+    _ = (agent_key, prompt)
+    raise AgentProcessError(
+        "native dry-run requires an explicit scripted JSON scenario via --dry-run-scenario",
+        kind_hint=AgentFailureKind.OUTPUT,
+    )
 
 
 def print_agent_output(
@@ -2071,208 +2048,6 @@ def compute_retry_backoff_seconds(error_text: str, attempt: int) -> int:
         # Quota/rate issues usually need more time to recover than transient CLI errors.
         return max(10, exponential)
     return exponential
-
-
-def _contract_repair_excerpt(prompt: str) -> str:
-    """Return contract instructions without resending implementation evidence."""
-    markers = (
-        "STATE-V3 CONTRACT (mandatory",
-        "CONTRACT (mandatory):",
-        "Output format (Markdown):",
-    )
-    start = max(prompt.rfind(marker) for marker in markers)
-    if start >= 0:
-        return prompt[start:].strip()
-    return (
-        "Preserve all semantic content and finish with the exact final line "
-        "STATUS: DONE."
-    )
-
-
-def build_contract_repair_prompt(
-    *,
-    original_prompt: str,
-    rejected_output: str,
-    validation_error: str,
-) -> str:
-    """Build a format-only retry that cannot trigger a second evidence review."""
-    return (
-        "Your previous answer was rejected only by the output-contract validator.\n"
-        "Repair the answer's formal contract without reviewing the implementation again.\n"
-        "Do not change its semantic verdict, findings, classifications, evidence, or rationale.\n"
-        "Return the complete corrected answer and no commentary about this repair.\n\n"
-        f"Validation error:\n{validation_error}\n\n"
-        "Applicable output contract:\n"
-        f"{_contract_repair_excerpt(original_prompt)}\n\n"
-        "Rejected answer to repair:\n"
-        f"{rejected_output}"
-    )
-
-
-def run_agent_checked(
-    *,
-    agent_key: str,
-    prompt: str,
-    log_prefix: str,
-    max_retries: int,
-    required_flags: list[str] | None,
-    output_validator: Callable[[str], str | None] | None,
-    config: OrchestratorConfig,
-    agents: dict[str, AgentAdapter],
-    log_dir: Path,
-    write_file: Callable[[Path, str], None],
-    shorten: Callable[[str | None, int], str],
-    parse_flag: Callable[[str, str], str | None],
-    validate_done_marker: Callable[[str], bool],
-    reviewer_repository_required: bool = True,
-    reviewer_manifest_paths: tuple[str, ...] | None = None,
-    operation: str | None = None,
-    binding_fingerprint: str = "unbound",
-    pre_start_callback: Callable[[ProviderInputMeasurement], object | None] | None = None,
-    provider_attempt_lifecycle: ProviderAttemptLifecycle | None = None,
-) -> str:
-    """Run the requested agent with retries and contract validation."""
-    required_flags = required_flags or []
-    errors: list[str] = []
-    rejected_output: str | None = None
-
-    def validate_output_contract(output: str) -> str | None:
-        if not validate_done_marker(output):
-            return "missing required final completion marker 'STATUS: DONE'"
-        missing_flags: list[str] = []
-        for flag in required_flags:
-            candidates = [part.strip() for part in str(flag).split("|") if part.strip()]
-            if not candidates:
-                continue
-            if all(parse_flag(output, candidate) is None for candidate in candidates):
-                missing_flags.append("|".join(candidates))
-        if missing_flags:
-            return f"missing required flags: {', '.join(missing_flags)}"
-        if output_validator:
-            validation_error = output_validator(output)
-            if validation_error:
-                return validation_error
-        return None
-
-    for attempt in range(1, max_retries + 2):
-        has_next_attempt = attempt < (max_retries + 1)
-        invocation_id = uuid.uuid4().hex
-        prompt_to_send = prompt
-        if rejected_output is not None:
-            prompt_to_send = build_contract_repair_prompt(
-                original_prompt=prompt,
-                rejected_output=rejected_output,
-                validation_error=errors[-1],
-            )
-        elif attempt > 1:
-            # A technical failure produced no review result, so the original task remains necessary.
-            prompt_to_send = (
-                f"{prompt}\n\n"
-                "The previous invocation failed before producing a usable response.\n"
-                f"Error context:\n{chr(10).join(errors[-2:])}\n"
-            )
-
-        attempt_invocation = (
-            _ProviderAttemptInvocation(provider_attempt_lifecycle)
-            if provider_attempt_lifecycle is not None else None
-        )
-        try:
-            output = run_agent(
-                agents[agent_key],
-                prompt_to_send,
-                config=config,
-                shorten=shorten,
-                reviewer_repository_required=reviewer_repository_required,
-                reviewer_manifest_paths=reviewer_manifest_paths,
-                operation=operation,
-                binding_fingerprint=binding_fingerprint,
-                pre_start_callback=pre_start_callback,
-                attempt_invocation=attempt_invocation,
-            )
-            log_path = log_dir / f"{log_prefix}.attempt-{attempt}.log"
-            write_file(log_path, output)
-            print_agent_output(
-                agent_key, log_path, attempt, output, config=config, shorten=shorten
-            )
-            validation_error = validate_output_contract(output)
-            if validation_error:
-                if attempt_invocation is not None:
-                    attempt_invocation.finish(
-                        AgentFailureKind.OUTPUT, agents[agent_key].metadata
-                    )
-                errors.append(validation_error)
-                rejected_output = output
-            else:
-                if attempt_invocation is not None:
-                    attempt_invocation.finish(None, agents[agent_key].metadata)
-                return output
-        except AgentInvocationError as failure:
-            if attempt_invocation is not None:
-                attempt_invocation.finish(failure.kind, agents[agent_key].metadata)
-            raise
-        except ProviderInputBudgetExceeded:
-            raise
-        except Exception as exc:
-            failure = classify_agent_failure(
-                agent_key,
-                exc,
-                invocation_id=invocation_id,
-            )
-            if attempt_invocation is not None:
-                attempt_invocation.finish(failure.kind, agents[agent_key].metadata)
-            failure_path = log_dir / f"{log_prefix}.attempt-{attempt}.failure.json"
-            write_file(
-                failure_path,
-                json.dumps(
-                    {
-                        "agent": failure.agent_key,
-                        "failure_kind": failure.kind.value,
-                        "invocation_id": failure.invocation_id,
-                        "provider_text": failure.provider_text,
-                        "provider_diagnostic": failure.provider_data,
-                        "received_at": failure.received_at.isoformat(),
-                        "process_exit_code": failure.process_exit_code,
-                        "quota_reset_at_utc": (
-                            failure.quota_reset.reset_at_utc.isoformat()
-                            if failure.quota_reset is not None
-                            else None
-                        ),
-                        "quota_parse_path": (
-                            failure.quota_reset.parse_path
-                            if failure.quota_reset is not None
-                            else None
-                        ),
-                    },
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    indent=2,
-                )
-                + "\n",
-            )
-            raise failure from exc
-
-        if has_next_attempt:
-            delay_seconds = compute_retry_backoff_seconds(errors[-1], attempt)
-            logger.info(
-                "[RETRY] %s attempt=%s failed. Reason: %s. Waiting %ss before retry.",
-                agent_key,
-                attempt,
-                shorten(errors[-1], 400),
-                delay_seconds,
-            )
-            time.sleep(delay_seconds)
-
-    detail = (
-        f"{agent_key} did not produce valid output after {max_retries + 1} attempts: "
-        f"{shorten(chr(10).join(errors), ERROR_TRUNCATION_LIMIT)}"
-    )
-    raise AgentInvocationError(
-        agent_key=agent_key,
-        kind=AgentFailureKind.OUTPUT,
-        invocation_id=invocation_id,
-        provider_text=detail,
-        received_at=datetime.now(timezone.utc),
-    )
 
 
 def preflight(

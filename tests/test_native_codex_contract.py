@@ -8,14 +8,12 @@ import pytest
 from contracts import (
     AgentRole,
     CodexStepContract,
-    ContractValidationError,
     FindingClass,
     FindingOrigin,
     FindingRecord,
     FindingResponseDecision,
     FindingStatus,
     ReadinessMarker,
-    validate_codex_response,
 )
 from native_codex_contract import (
     BoundNativeCodexContext,
@@ -736,22 +734,6 @@ def test_native_and_legacy_corrections_share_open_finding_completeness() -> None
     with pytest.raises(NativeCodexContractError) as native_error:
         parse_bound_native_codex_contract_result(native_document, bound)
     assert native_error.value.code is NativeCodexErrorCode.FINDING_REFERENCE_INVALID
-
-    legacy_output = "\n".join(
-        (
-            "TEST_FILES_TOUCHED: NONE",
-            "IMPLEMENTATION_READY: 01 | YES",
-            "STATUS: DONE",
-        )
-    )
-    with pytest.raises(
-        ContractValidationError,
-        match="missing FINDING_RESPONSE for open finding C-01",
-    ):
-        validate_codex_response(
-            legacy_output, bound.context.contract, bound.context.previous_findings
-        )
-
 
 def test_correction_result_roundtrips_ready_tests_and_finding_response() -> None:
     bound = _bound(

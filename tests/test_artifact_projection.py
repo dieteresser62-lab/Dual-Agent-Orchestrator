@@ -75,6 +75,9 @@ def _chain() -> tuple[ArtifactRecord, ...]:
             verdict="approved",
             finding_ids=("C-01",),
             evidence=None,
+            transport_schema="native-claude-review-v2",
+            request_id="native-review-request-" + "b" * 64,
+            response_sha256="c" * 64,
         ),
         GatePayload(
             gate_kind="test-change",
@@ -287,6 +290,10 @@ def test_projection_reduces_attempts_and_keeps_unknown_usage_explicit(tmp_path) 
     assert "Fehler `network`" in rendered
     assert "Modell `sonnet`; Effort `high`" in rendered
     assert "local_input_chars" in rendered and "local_input_bytes" in rendered
+    assert "Inputzeichen `3`" in rendered
+    assert "Inputbytes `3`" in rendered
+    assert "Duration `2.000000`" in rendered
+    assert "Retrystatus `open`" in rendered
 
 
 def test_projection_can_render_an_accepted_replay_without_reduction_drift() -> None:
@@ -355,6 +362,9 @@ def test_slice_projection_accepts_chain_subsequence_and_excludes_other_work_unit
             verdict="approved",
             finding_ids=("C-02",),
             evidence=None,
+            transport_schema="native-claude-review-v2",
+            request_id="native-review-request-" + "b" * 64,
+            response_sha256="c" * 64,
         ),
     )
     chain.append(review)
@@ -416,6 +426,9 @@ def test_slice_projection_excludes_other_slice_gate_validation_and_binding_recor
             verdict="approved",
             finding_ids=(),
             evidence="slice 6 review evidence",
+            transport_schema="native-claude-review-v2",
+            request_id="native-review-request-" + "b" * 64,
+            response_sha256="c" * 64,
         ),
     )
     request = append(
@@ -506,6 +519,9 @@ def test_slice_projection_includes_own_round_gate_and_validation_records_before_
             work_unit_id="14",
             outcome="ready",
             test_files=("tests/test_c.py",),
+            transport_schema="native-codex-v2",
+            request_id="native-codex-request-" + "b" * 64,
+            response_sha256="c" * 64,
         ),
     )
     request = append(
