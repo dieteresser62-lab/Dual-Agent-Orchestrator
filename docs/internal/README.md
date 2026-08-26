@@ -6,9 +6,11 @@ Unterlagen.
 ## Aktive Dokumente
 
 - [Roadmap für Phase 2 und Folgephasen](ORCHESTRATOR_ROADMAP_PHASE_2_PLUS.md)
+- [Arbeitsplan für Native-only-Transport, Textparser-Retirement und Evidenzeffizienz](native-only-transport-parser-retirement-und-evidenzeffizienz-arbeitsplan.md)
 
-Ein neuer Arbeitsplan wird erst nach Auswahl des nächsten Roadmap-Pakets als
-aktives Dokument ergänzt.
+Der aktive Arbeitsplan schließt zuerst den nativen Codex-Claude-Transport,
+entfernt danach die produktive Textresultatarchitektur und reduziert erst auf
+dieser geschlossenen Grundlage redundante Providerevidenz.
 
 Aktive Orchestratorläufe dürfen ihre gebundenen Arbeitsplan-, Slice- und
 Auditpfade nicht manuell verschieben. Die Archivierung erfolgt erst nach dem

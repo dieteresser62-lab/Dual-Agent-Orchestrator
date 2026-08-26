@@ -23,13 +23,13 @@ Orchestrator validiert, attestiert und erstellt freigegebene lokale Commits.
   unveränderlich gebunden. Defaults: Codex `gpt-5.6-sol`/`medium`, Claude
   `sonnet`/`high`.
 
-## 2. Aktueller Abschlussmeilenstein
+## 2. Letzter Abschlussmeilenstein
 
-Das laufende Retirement-Paket entfernt die frühere dritte Providerrolle
-endgültig aus Produktcode, Konfiguration, Tests und aktiver Dokumentation. Es
-archiviert abgelöste Workflow-v1-Schemata und Übergangsdokumente, führt einen
-statischen Retirementguard ein und schließt verlorene allgemeine
-Attestierungs-, Commit- und Resume-Regressionsbelege.
+Das abgeschlossene Retirement-Paket hat die frühere dritte Providerrolle
+endgültig aus Produktcode, Konfiguration, Tests und aktiver Dokumentation
+entfernt. Es archivierte abgelöste Workflow-v1-Schemata und
+Übergangsdokumente, führte einen statischen Retirementguard ein und schloss
+verlorene allgemeine Attestierungs-, Commit- und Resume-Regressionsbelege.
 
 Nach Freigabe gelten folgende Endbedingungen:
 
@@ -43,14 +43,26 @@ Nach Freigabe gelten folgende Endbedingungen:
 
 ## 3. Nächste priorisierte Arbeitspakete
 
-### 3.1 Menschenlesbarer Live-Output für native JSON-Ergebnisse
+### 3.1 Bereits erreicht: Menschenlesbarer Live-Output
 
-Die Providerbytes bleiben unverändert autoritativ. Ein lokaler Pythonprojektor
-rendert Fortschritt, Entscheidungen, Findings, Modell, Effort und Usage als
-kompakte Logzeilen, ohne JSON erneut semantisch auszulegen oder Providerkosten
-zu erzeugen.
+Die Providerbytes bleiben unverändert autoritativ. Der lokale Kompaktmodus
+rendert Fortschritt, Entscheidungen, Findings und Nutzungshinweise als lesbare
+Logzeilen, ohne rohe Provider-JSON-Zeilen im normalen Watch-Output anzuzeigen
+oder weitere Providerkosten zu erzeugen. Der Vollmodus und die unveränderte
+Rohantwortpersistenz bleiben für Diagnosen erhalten.
 
-### 3.2 Contract- und Corpuspflege
+### 3.2 Native-only-Cutover, Textparser-Retirement und Evidenzeffizienz
+
+Das aktive Arbeitspaket
+[`native-only-transport-parser-retirement-und-evidenzeffizienz-arbeitsplan.md`](native-only-transport-parser-retirement-und-evidenzeffizienz-arbeitsplan.md)
+macht die nativen Codex- und Claude-Verträge verpflichtend, entfernt die noch
+produktive Textresultat-, Marker- und LLM-Reparaturarchitektur und ersetzt
+redundante Vollplan-/Prompt-/Korrekturevidenz durch digestgebundene
+operationsspezifische Pakete. Die Einsparung wird strukturell und über
+kanonische Zeichen-/Bytezahlen nachgewiesen; tatsächliche Tokens werden nur aus
+persistierter Providerusage berichtet.
+
+### 3.3 Contract- und Corpuspflege
 
 - request-spezifische Writerschemas weiterhin gegen lokale Domänenregeln
   differenziell prüfen;
@@ -60,14 +72,14 @@ zu erzeugen.
 - stille Überpermissivität und unerwartete lokale Ablehnung gleichermaßen
   fail-closed testen.
 
-### 3.3 Betriebsbeobachtbarkeit
+### 3.4 Betriebsbeobachtbarkeit
 
 - Attempt-, Quota- und Retrytelemetrie in der Markdownprojektion verdichten;
 - Resumeursachen und Profilabweichungen menschenlesbar erklären;
 - Kosten- und Laufzeittrends aus strukturierten Records ableiten, ohne die
   Recordkette als Datenquelle zu ersetzen.
 
-### 3.4 Bootstrap-Smoke- und Langläufe
+### 3.5 Bootstrap-Smoke- und Langläufe
 
 Nach Abschluss der Retirementguards folgen kleine reale Inbox-Aufgaben und
 anschließend längere Mehrslice-Läufe. Erfolgskriterien sind null Textfallback,
