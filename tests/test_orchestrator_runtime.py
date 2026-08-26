@@ -1919,7 +1919,7 @@ def test_combined_native_finding_authority_rejects_state_mirror_drift(
     task = repository / "task.md"
     _write_task(task, "feature/combined-native-authority", "src/runtime.py")
     head = _git(repository, "rev-parse", "HEAD")
-    state = (
+    final_state = (
         init_workflow_state(
             run_id="combined-native-authority",
             task_file=str(task),
@@ -1942,13 +1942,15 @@ def test_combined_native_finding_authority_rejects_state_mirror_drift(
         .start_work_unit(
             slice_id=1,
             kind=WorkUnitKind.SLICE,
-            step=WorkflowStep.CODEX_CORRECTION,
+            step=WorkflowStep.CODEX_IMPLEMENTATION,
         )
         .bind_current_slice_git_boundary(
             start_commit=head,
             scope_paths=("src/runtime.py",),
             start_fingerprint="c" * 64,
         )
+        .complete_current_slice(commit_ref=head)
+        .start_final_review_work_unit()
     )
     driver = ProductionWorkflowDriver(
         repository_root=repository,
@@ -1957,24 +1959,24 @@ def test_combined_native_finding_authority_rejects_state_mirror_drift(
         config=orchestrator.OrchestratorConfig(repo_root=repository),
         allowed_roots=(repository,),
     )
-    driver.bind_work_unit(state)
+    driver.bind_work_unit(final_state)
     historical_finding = FindingRecord(
         finding_id="C-99",
         finding_class=FindingClass.BLOCKER,
         status=FindingStatus.OPEN,
-        summary="A finding from the completed planning work unit.",
-        acceptance_test="Current work-unit authority must ignore this finding.",
-        origin=FindingOrigin("PLAN", 1, AgentRole.CLAUDE),
+        summary="An unrelated finding from the final review.",
+        acceptance_test="Correction authority must ignore this finding.",
+        origin=FindingOrigin("FINAL", 1, AgentRole.CLAUDE),
     )
     bridge = driver._artifact_bridge
     assert bridge is not None
     bridge.append(
         orchestrator.finding_payload(
             historical_finding,
-            work_unit_id=1,
+            work_unit_id=final_state.current_work_unit_id,
         ),
         logical_id="finding-C-99",
-        idempotency_key="finding:C-99:opened:work_unit:1:1:claude",
+        idempotency_key="finding:C-99:opened:work_unit:3:1:claude",
         fingerprint_sha256="b" * 64,
     )
     finding = FindingRecord(
@@ -1988,7 +1990,7 @@ def test_combined_native_finding_authority_rejects_state_mirror_drift(
     bridge.append(
         orchestrator.finding_payload(
             finding,
-            work_unit_id=state.current_work_unit_id,
+            work_unit_id=final_state.current_work_unit_id,
         ),
         logical_id="finding-C-01",
         idempotency_key="finding:C-01:opened:1:claude",
@@ -2005,7 +2007,7 @@ def test_combined_native_finding_authority_rejects_state_mirror_drift(
     bridge.append(
         orchestrator.finding_payload(
             second_finding,
-            work_unit_id=state.current_work_unit_id,
+            work_unit_id=final_state.current_work_unit_id,
         ),
         logical_id="finding-C-02",
         idempotency_key="finding:C-02:opened:1:claude",
@@ -2016,30 +2018,37 @@ def test_combined_native_finding_authority_rejects_state_mirror_drift(
         status=FindingStatus.CLOSED,
         status_rationale="Verified in the authoritative record chain.",
     )
+    correction_state = final_state.complete_current_work_unit().start_correction_work_unit(
+        start_commit=head,
+        scope_paths=("src/runtime.py",),
+        start_fingerprint="d" * 64,
+        finding_ids=("C-01", "C-02"),
+    )
+    driver.bind_work_unit(correction_state)
     bridge.append(
         orchestrator.finding_payload(
             closed_second,
             actor=AgentRole.CLAUDE,
             action="status_changed",
             rationale=closed_second.status_rationale,
-            work_unit_id=state.current_work_unit_id,
+            work_unit_id=correction_state.current_work_unit_id,
         ),
         logical_id="finding-C-02",
         idempotency_key="finding:C-02:status_changed:1:claude",
         fingerprint_sha256="c" * 64,
     )
 
-    # State-v3 preserves event order while replay deliberately canonicalizes by
-    # finding ID. Order-only differences are not semantic mirror drift.
+    # Correction authority follows the selected finding lineages across the
+    # final-review boundary, excludes unrelated findings, and canonicalizes by ID.
     assert driver.authoritative_native_findings(
-        state, (closed_second, finding)
+        correction_state, (closed_second, finding)
     ) == (finding, closed_second)
     with pytest.raises(
         WorkflowExecutionError,
         match="differs from the state-v3 mirror",
     ):
         driver.authoritative_native_findings(
-            state,
+            correction_state,
             (
                 replace(closed_second, summary="Tampered closed mirror summary."),
                 replace(finding, summary="Tampered state-only summary."),

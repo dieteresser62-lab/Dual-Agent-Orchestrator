@@ -710,7 +710,25 @@ class ProductionWorkflowDriver(WorkflowDriver):
             replay = replay_artifacts(
                 bridge.store.load_chain(), state.run_id, allow_empty=True
             )
-            projected = replay_findings(replay, state.current_work_unit_id)
+            if state.current_work_unit.kind is WorkUnitKind.CORRECTION:
+                correction_records = tuple(
+                    record
+                    for record in replay.records
+                    if isinstance(record.payload, CorrectionWorkUnitPayload)
+                    and record.logical_id
+                    == f"work-unit-{state.current_work_unit_id}"
+                )
+                if len(correction_records) != 1:
+                    raise WorkflowExecutionError(
+                        "correction finding replay requires exactly one bound "
+                        "correction work-unit record"
+                    )
+                projected = replay_findings(
+                    replay,
+                    finding_ids=correction_records[0].payload.finding_ids,
+                )
+            else:
+                projected = replay_findings(replay)
         except ArtifactReplayError as exc:
             raise WorkflowExecutionError(
                 f"authoritative finding replay failed: {exc}"
