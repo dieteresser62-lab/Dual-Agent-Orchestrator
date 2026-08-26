@@ -427,7 +427,7 @@ def test_work_plan_uses_same_safe_projection_without_parallel_raw_log(tmp_path: 
     rendered = project_work_plan_audit(document, projection)
 
     assert "Planinhalt Zielbild in eigenen Worten." in rendered
-    assert "### Ereignis 1: Runde 1" in rendered
+    assert "### Claude · Runde 1 · approved" in rendered
     assert "alter Planinhalt" not in rendered
     assert project_work_plan_audit(document, projection) == rendered
 
@@ -464,7 +464,7 @@ def test_overall_audit_aggregates_plan_and_slice_reviews(tmp_path: Path) -> None
 
     assert "Work Unit 01 – Planung" in rendered
     assert "Work Unit 02 – Slice 01" in rendered
-    assert "### Ereignis 1: Runde 1" in rendered
+    assert "### Claude · Runde 1 · approved" in rendered
     assert project_overall_audit(document, entries) == rendered
 
 

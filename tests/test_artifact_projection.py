@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import re
 
 import pytest
 
@@ -127,10 +128,46 @@ def test_same_chain_renders_byte_identically_in_record_sequence() -> None:
 
     assert first == second
     table = first["decision-table"]
-    assert table.index(chain[0].record_id) < table.index(chain[-1].record_id)
+    assert table.index(chain[0].record_id[:16]) < table.index(chain[-1].record_id[:16])
     assert "Korrektur-Work-Unit" in first["approval-status"]
     assert "`src/a.py`" in first["approval-status"]
-    assert "Binding `commit`" in first["approval-status"]
+    assert "### Binding · commit" in first["approval-status"]
+    assert "### Nachweis vollständiger Bindungswerte" in table
+
+
+def test_projection_has_one_deduplicated_full_value_evidence_table() -> None:
+    sections = render_artifact_sections(_chain())
+    document = "\n".join(sections[key] for key in sections)
+    heading = "### Nachweis vollständiger Bindungswerte"
+    assert document.count(heading) == 1
+    before, evidence = document.split(heading, 1)
+    assert re.search(r"(?<![0-9a-f])[0-9a-f]{40,64}(?![0-9a-f])", before) is None
+    full_values = re.findall(
+        r"\| `[0-9a-f]{12}` \| `([0-9a-f]{40}|[0-9a-f]{64})` \|",
+        evidence,
+    )
+    assert full_values
+    assert len(full_values) == len(set(full_values))
+    assert "Record-ID" in evidence
+    assert "Fingerprint" in evidence
+
+
+@pytest.mark.parametrize(
+    ("key", "human_readable_form"),
+    (
+        ("claude-review", "### Claude · Runde 2 · approved"),
+        ("codex-responses", "Keine Codex-Findingantworten."),
+        ("validation-attestation", "| Status | Exit | Output-Digest |"),
+        ("test-approval-premortem", "| Seq/Record | Gate | Status |"),
+        ("findings", "| Seq/Record | Finding | Rolle | Runde |"),
+        ("decision-table", "### Nachweis vollständiger Bindungswerte"),
+        ("approval-status", "| Seq/Record | Art | Ziel | Attestierung |"),
+    ),
+)
+def test_every_projection_section_has_a_human_readable_event_or_table_form(
+    key: str, human_readable_form: str
+) -> None:
+    assert human_readable_form in render_artifact_sections(_chain())[key]
 
 
 def test_projection_renders_native_finding_convergence_from_records(tmp_path) -> None:  # type: ignore[no-untyped-def]
@@ -203,8 +240,8 @@ def test_projection_renders_native_finding_convergence_from_records(tmp_path) ->
     assert "| `C-01` | `7` | `2` |" in rendered
     assert "`opened:open`<br>`status_changed:closed`" in rendered
     assert "`accepted` | `closed` |" in rendered
-    assert "a" * 64 in rendered
-    assert "b" * 64 in rendered
+    assert "a" * 64 not in rendered
+    assert "b" * 64 not in rendered
 
 
 def test_projection_renders_native_and_legacy_transport_bindings_symmetrically() -> None:
@@ -475,7 +512,7 @@ def test_slice_projection_excludes_other_slice_gate_validation_and_binding_recor
     ledger = rendered["decision-table"]
 
     for record in (chain[2], chain[4], chain[5]):
-        assert record.record_id in ledger
+        assert record.record_id[:16] in ledger
     for record in (request, attestation, gate, binding):
         assert record.record_id not in ledger
     assert "slice-6" not in rendered["validation-attestation"]
@@ -564,6 +601,6 @@ def test_slice_projection_includes_own_round_gate_and_validation_records_before_
         for record in projection.selected_records
     )
     for record in (request, attestation, gate):
-        assert record.record_id in ledger
+        assert record.record_id[:16] in ledger
     assert "slice-7" in rendered["validation-attestation"]
     assert "slice 7 before review" in rendered["test-approval-premortem"]
