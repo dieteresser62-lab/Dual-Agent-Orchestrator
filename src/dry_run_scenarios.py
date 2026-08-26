@@ -737,6 +737,13 @@ class ScriptedWorkflowDriver:
         _ = state
         return findings
 
+    def carry_forward_native_findings(
+        self, state: WorkflowState, findings: tuple[FindingRecord, ...]
+    ) -> tuple[FindingRecord, ...]:
+        """Carry the scripted ledger unchanged across dry-run work units."""
+        _ = state
+        return findings
+
     def _consume_agent(
         self,
         *,

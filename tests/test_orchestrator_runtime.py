@@ -659,54 +659,6 @@ def test_runtime_context_auto_authorizes_scoped_test_changes_unless_gate_enabled
     assert gated.test_changes_approved is False
 
 
-def test_carry_forward_findings_migrates_reused_legacy_ids_stably() -> None:
-    first = FindingRecord(
-        finding_id="C-01",
-        finding_class=FindingClass.OBSERVATION,
-        status=FindingStatus.OPEN,
-        summary="first slice observation",
-        acceptance_test="disposition first observation",
-        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
-    )
-    second = replace(
-        first,
-        summary="second slice observation",
-        acceptance_test="disposition second observation",
-        origin=FindingOrigin("02", 1, AgentRole.CLAUDE),
-    )
-    first_history = WorkflowHistory(1, findings=(first,))
-    second_history = WorkflowHistory(2, findings=(second,))
-    state = init_workflow_state(
-        run_id="legacy-findings",
-        task_file="task.md",
-        branch="feature/findings",
-        branch_base="a" * 40,
-        slice_count=1,
-        timestamp="2026-08-16T12:00:00+00:00",
-    )
-    state = replace(
-        state,
-        runtime_history={
-            "archive": [first_history.to_dict()],
-            "current": second_history.to_dict(),
-        },
-    )
-
-    migrated = orchestrator._carry_forward_findings(state, second_history)
-
-    assert [finding.finding_id for finding in migrated] == ["C-01", "C-02"]
-    assert all(finding.finding_id.startswith("C-") for finding in migrated)
-    carried_history = WorkflowHistory(3, findings=migrated)
-    state = replace(
-        state,
-        runtime_history={
-            "archive": [first_history.to_dict(), second_history.to_dict()],
-            "current": carried_history.to_dict(),
-        },
-    )
-    assert orchestrator._carry_forward_findings(state, carried_history) == migrated
-
-
 def test_final_review_recovers_latest_prior_attestation_after_transition_checkpoint() -> None:
     attestation = ValidationAttestation(
         "validation-a",
@@ -1919,7 +1871,7 @@ def test_combined_native_finding_authority_rejects_state_mirror_drift(
     task = repository / "task.md"
     _write_task(task, "feature/combined-native-authority", "src/runtime.py")
     head = _git(repository, "rev-parse", "HEAD")
-    state = (
+    final_state = (
         init_workflow_state(
             run_id="combined-native-authority",
             task_file=str(task),
@@ -1942,13 +1894,15 @@ def test_combined_native_finding_authority_rejects_state_mirror_drift(
         .start_work_unit(
             slice_id=1,
             kind=WorkUnitKind.SLICE,
-            step=WorkflowStep.CODEX_CORRECTION,
+            step=WorkflowStep.CODEX_IMPLEMENTATION,
         )
         .bind_current_slice_git_boundary(
             start_commit=head,
             scope_paths=("src/runtime.py",),
             start_fingerprint="c" * 64,
         )
+        .complete_current_slice(commit_ref=head)
+        .start_final_review_work_unit()
     )
     driver = ProductionWorkflowDriver(
         repository_root=repository,
@@ -1957,7 +1911,44 @@ def test_combined_native_finding_authority_rejects_state_mirror_drift(
         config=orchestrator.OrchestratorConfig(repo_root=repository),
         allowed_roots=(repository,),
     )
-    driver.bind_work_unit(state)
+    driver.bind_work_unit(final_state)
+    historical_finding = FindingRecord(
+        finding_id="C-99",
+        finding_class=FindingClass.OBSERVATION,
+        status=FindingStatus.CLOSED,
+        summary="An unrelated finding from the final review.",
+        acceptance_test="Correction authority must ignore this finding.",
+        origin=FindingOrigin("FINAL", 1, AgentRole.CLAUDE),
+        status_rationale="The unrelated observation was already resolved.",
+    )
+    opened_historical = replace(
+        historical_finding,
+        status=FindingStatus.OPEN,
+        status_rationale=None,
+    )
+    bridge = driver._artifact_bridge
+    assert bridge is not None
+    bridge.append(
+        orchestrator.finding_payload(
+            opened_historical,
+            work_unit_id=final_state.current_work_unit_id,
+        ),
+        logical_id="finding-C-99",
+        idempotency_key="finding:C-99:opened:work_unit:3:1:claude",
+        fingerprint_sha256="b" * 64,
+    )
+    bridge.append(
+        orchestrator.finding_payload(
+            historical_finding,
+            actor=AgentRole.CLAUDE,
+            action="status_changed",
+            rationale=historical_finding.status_rationale,
+            work_unit_id=final_state.current_work_unit_id,
+        ),
+        logical_id="finding-C-99",
+        idempotency_key="finding:C-99:status_changed:work_unit:3:1:claude",
+        fingerprint_sha256="b" * 64,
+    )
     finding = FindingRecord(
         finding_id="C-01",
         finding_class=FindingClass.BLOCKER,
@@ -1966,12 +1957,10 @@ def test_combined_native_finding_authority_rejects_state_mirror_drift(
         acceptance_test="Mirror-only changes stop before provider invocation.",
         origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
     )
-    bridge = driver._artifact_bridge
-    assert bridge is not None
     bridge.append(
         orchestrator.finding_payload(
             finding,
-            work_unit_id=state.current_work_unit_id,
+            work_unit_id=final_state.current_work_unit_id,
         ),
         logical_id="finding-C-01",
         idempotency_key="finding:C-01:opened:1:claude",
@@ -1988,7 +1977,7 @@ def test_combined_native_finding_authority_rejects_state_mirror_drift(
     bridge.append(
         orchestrator.finding_payload(
             second_finding,
-            work_unit_id=state.current_work_unit_id,
+            work_unit_id=final_state.current_work_unit_id,
         ),
         logical_id="finding-C-02",
         idempotency_key="finding:C-02:opened:1:claude",
@@ -1999,30 +1988,99 @@ def test_combined_native_finding_authority_rejects_state_mirror_drift(
         status=FindingStatus.CLOSED,
         status_rationale="Verified in the authoritative record chain.",
     )
+    final_history = WorkflowHistory(
+        final_state.current_work_unit_id,
+        findings=(finding, second_finding, historical_finding),
+    )
+    final_state = replace(
+        final_state,
+        runtime_history={"current": final_history.to_dict(), "archive": []},
+    )
+    driver.bind_work_unit(final_state)
+    correction_state = final_state.complete_current_work_unit().start_correction_work_unit(
+        start_commit=head,
+        scope_paths=("src/runtime.py",),
+        start_fingerprint="d" * 64,
+        finding_ids=("C-01", "C-02"),
+    )
+    driver.bind_work_unit(correction_state)
     bridge.append(
         orchestrator.finding_payload(
             closed_second,
             actor=AgentRole.CLAUDE,
             action="status_changed",
             rationale=closed_second.status_rationale,
-            work_unit_id=state.current_work_unit_id,
+            work_unit_id=correction_state.current_work_unit_id,
         ),
         logical_id="finding-C-02",
         idempotency_key="finding:C-02:status_changed:1:claude",
         fingerprint_sha256="c" * 64,
     )
 
-    # State-v3 preserves event order while replay deliberately canonicalizes by
-    # finding ID. Order-only differences are not semantic mirror drift.
+    # Correction authority follows the selected finding lineages across the
+    # final-review boundary, excludes unrelated findings, and canonicalizes by ID.
     assert driver.authoritative_native_findings(
-        state, (closed_second, finding)
+        correction_state, (closed_second, finding)
     ) == (finding, closed_second)
+    later_blocker = FindingRecord(
+        finding_id="C-03",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="A later correction review found another actionable defect.",
+        acceptance_test="Later correction rounds carry newly opened blockers.",
+        origin=FindingOrigin("FINAL", 2, AgentRole.CLAUDE),
+    )
+    bridge.append(
+        orchestrator.finding_payload(
+            later_blocker,
+            work_unit_id=correction_state.current_work_unit_id,
+        ),
+        logical_id="finding-C-03",
+        idempotency_key="finding:C-03:opened:work_unit:4:2:claude",
+        fingerprint_sha256="d" * 64,
+    )
+    round_two = correction_state.record_review_denial(
+        reviewer=Reviewer.CLAUDE,
+        open_findings=("C-01", "C-03"),
+        return_step=WorkflowStep.CODEX_FINAL_CORRECTION,
+    )
+    driver.bind_work_unit(round_two)
+    assert driver.authoritative_native_findings(
+        round_two, (later_blocker, closed_second, finding)
+    ) == (finding, closed_second, later_blocker)
+    correction_records = tuple(
+        record
+        for record in bridge.store.load_chain()
+        if isinstance(record.payload, CorrectionWorkUnitPayload)
+        and record.logical_id == f"work-unit-{round_two.current_work_unit_id}"
+    )
+    assert tuple(record.payload.round_number for record in correction_records) == (1, 2)
+    assert tuple(record.payload.finding_ids for record in correction_records) == (
+        ("C-01", "C-02"),
+        ("C-01", "C-03"),
+    )
+    assert driver.carry_forward_native_findings(
+        round_two, (later_blocker, closed_second, finding)
+    ) == (finding, closed_second, later_blocker, historical_finding)
+    missing_record_finding = replace(
+        later_blocker,
+        finding_id="C-04",
+        summary="This mirror finding has no authoritative record.",
+    )
+    with pytest.raises(
+        WorkflowExecutionError,
+        match="record-native finding carry-forward differs from the state-v3 mirror",
+    ):
+        driver.carry_forward_native_findings(
+            round_two,
+            (later_blocker, closed_second, finding, missing_record_finding),
+        )
     with pytest.raises(
         WorkflowExecutionError,
         match="differs from the state-v3 mirror",
     ):
         driver.authoritative_native_findings(
-            state,
+            correction_state,
             (
                 replace(closed_second, summary="Tampered closed mirror summary."),
                 replace(finding, summary="Tampered state-only summary."),

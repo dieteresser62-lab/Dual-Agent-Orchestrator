@@ -126,6 +126,50 @@ def test_compute_retry_backoff_seconds_rate_limit_floor() -> None:
     assert compute_retry_backoff_seconds("rate limit", 5) == 30
 
 
+def test_capability_verification_accepts_forward_compatible_claude_patch(
+    monkeypatch,
+) -> None:
+    class FakeClaude:
+        name = "claude"
+        cli_binary = "claude"
+        model = "sonnet"
+        effort = "high"
+        timeout = 30
+        reviewer = True
+        required_hosts: tuple[str, ...] = ()
+        capability = CapabilitySpec(
+            ("--version",),
+            ("--help",),
+            (r"^2\.1\.241 \(Claude Code\)$",),
+            ("--json-schema", "--effort"),
+        )
+        capability_verified = False
+
+        @staticmethod
+        def validate_process_output(stderr: str) -> None:
+            assert stderr == ""
+
+    adapter = FakeClaude()
+    monkeypatch.setattr(
+        agent_runtime,
+        "_resolve_agent_binary",
+        lambda binary: "/opt/bin/claude",
+    )
+
+    def fake_run(args: list[str], timeout: int = 20) -> tuple[int, str, str]:
+        assert timeout == 20
+        if args[-1] == "--version":
+            return 0, "2.1.246 (Claude Code)\n", ""
+        assert args[-1] == "--help"
+        return 0, "--json-schema\n--effort\n", ""
+
+    monkeypatch.setattr(agent_runtime, "run_local_command", fake_run)
+
+    verify_agent_capabilities(adapter)
+
+    assert adapter.capability_verified is True
+
+
 def test_run_native_codex_agent_parses_bound_result_without_text_contract(
     monkeypatch,
 ) -> None:

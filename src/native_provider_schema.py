@@ -20,6 +20,11 @@ EXCEPTION_PATH = (
 )
 CAPABILITY_SCHEMA_VERSION = "native-provider-schema-capabilities-v1"
 EXCEPTION_SCHEMA_VERSION = "native-provider-schema-exceptions-v1"
+VERSION_POLICIES = {"same-major-forward", "same-minor-forward"}
+CLI_VERSION_PATTERNS = {
+    "claude": re.compile(r"^(\d+)\.(\d+)\.(\d+) \(Claude Code\)$"),
+    "codex": re.compile(r"^codex-cli (\d+)\.(\d+)\.(\d+)$"),
+}
 
 
 class NativeProviderSchemaError(ValueError):
@@ -71,7 +76,13 @@ def load_capability_table() -> dict[str, Any]:
         name = _required_text(item, "provider")
         names.append(name)
         _required_text(item, "binary_name")
-        _required_text(item, "cli_version")
+        cli_version = _required_text(item, "cli_version")
+        version_policy = _required_text(item, "version_policy")
+        if version_policy not in VERSION_POLICIES:
+            raise NativeProviderSchemaError(
+                f"provider {name} has an unsupported version policy"
+            )
+        _parse_cli_version(name, cli_version)
         _profile_from_document(item.get("transport_profile"))
         features = item.get("features")
         if not isinstance(features, dict) or not features or any(
@@ -130,6 +141,38 @@ def exact_cli_version_pattern(provider: str) -> str:
     return rf"^{re.escape(version)}$"
 
 
+def compatible_cli_version(provider: str, cli_version: str) -> bool:
+    """Return whether a runtime is forward-compatible with the probe baseline."""
+    capability = provider_capability(provider)
+    baseline = _parse_cli_version(provider, capability["cli_version"])
+    actual = _parse_cli_version(provider, cli_version)
+    if actual < baseline:
+        return False
+    policy = capability["version_policy"]
+    if policy == "same-major-forward":
+        return actual[0] == baseline[0]
+    if policy == "same-minor-forward":
+        return actual[:2] == baseline[:2]
+    raise NativeProviderSchemaError(
+        f"provider {provider} has an unsupported version policy"
+    )
+
+
+def _parse_cli_version(provider: str, cli_version: str) -> tuple[int, int, int]:
+    pattern = CLI_VERSION_PATTERNS.get(provider)
+    if pattern is None:
+        raise NativeProviderSchemaError(
+            f"no CLI version grammar for provider {provider}"
+        )
+    matched = pattern.fullmatch(cli_version)
+    if matched is None:
+        raise NativeProviderSchemaError(
+            f"{provider} CLI version has an unsupported format"
+        )
+    major, minor, patch = (int(part) for part in matched.groups())
+    return major, minor, patch
+
+
 def assert_provider_capabilities(
     provider: str,
     required_features: Iterable[str],
@@ -138,10 +181,17 @@ def assert_provider_capabilities(
     profile: ProviderTransportProfile | None = None,
 ) -> None:
     capability = provider_capability(provider)
-    if cli_version is not None and cli_version != capability["cli_version"]:
-        raise NativeProviderSchemaError(
-            f"{provider} CLI version differs from the probed capability"
-        )
+    if cli_version is not None:
+        try:
+            compatible = compatible_cli_version(provider, cli_version)
+        except NativeProviderSchemaError as exc:
+            raise NativeProviderSchemaError(
+                f"{provider} CLI version differs from the probed capability: {exc}"
+            ) from exc
+        if not compatible:
+            raise NativeProviderSchemaError(
+                f"{provider} CLI version differs from the probed capability policy"
+            )
     if profile is not None and profile.document != capability["transport_profile"]:
         raise NativeProviderSchemaError(
             f"{provider} transport profile differs from the probed capability"

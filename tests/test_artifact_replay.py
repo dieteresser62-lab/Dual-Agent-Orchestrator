@@ -268,6 +268,10 @@ def test_structured_finding_projection_carries_findings_across_work_units() -> N
     replay = replay_artifacts(records, "run-replay")
 
     assert replay_findings(replay, "1")[0].responses == ()
+    with pytest.raises(ArtifactReplayError) as caught:
+        replay_findings(replay, "2")
+    assert caught.value.code is ReplayDiagnosticCode.RECORD_REFERENCE_MISSING
+    assert len(replay_findings(replay, finding_ids=("C-01",))[0].responses) == 1
     assert len(replay_findings(replay)[0].responses) == 1
 
 

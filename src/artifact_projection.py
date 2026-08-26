@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import html
+import re
 from typing import Any, Mapping, Sequence
 
 from artifact_models import (
@@ -190,39 +191,60 @@ def render_replay_sections(replay: ArtifactReplayResult) -> Mapping[str, str]:
         elif isinstance(payload, ProviderInputMeasurementPayload):
             input_measurements[record.record_id] = payload
         if isinstance(payload, AgentResultPayload):
-            transport = (
-                f"; Transport `{_safe(payload.transport_schema)}`; Request "
-                f"`{_safe(payload.request_id)}`; Response `{payload.response_sha256}`"
-                if payload.transport_schema is not None
-                else "; Transport `legacy-text`"
-            )
-            bindings_and_units.append(
-                f"- {prefix}: Agentresult `{payload.role.value}` / "
-                f"`{_safe(payload.outcome)}`; Work-Unit "
-                f"`{_safe(payload.work_unit_id)}`; Tests {_codes(payload.test_files)}"
-                f"{transport}; Fingerprint `{record.fingerprint.sha256}`"
-            )
+            transport_schema = _safe(payload.transport_schema or "legacy-text")
+            request_id = _safe(payload.request_id or "–")
+            response_sha256 = payload.response_sha256 or "–"
+            round_number = work_unit_rounds.get(payload.work_unit_id, "–")
+            bindings_and_units.extend((
+                f"### {payload.role.value.title()} · Runde {round_number} · {_safe(payload.outcome)}",
+                "",
+                "| Seq/Record | Rolle | Runde | Status | Work-Unit | Tests | Transport | Request | Response | Fingerprint |",
+                "|---|---|---:|---|---|---|---|---|---|---|",
+                f"| {prefix} | `{payload.role.value}` | `{round_number}` | `{_safe(payload.outcome)}` | "
+                f"`{_safe(payload.work_unit_id)}` | {_codes(payload.test_files)} | "
+                f"`{transport_schema}` | `{request_id}` | `{response_sha256}` | "
+                f"`{record.fingerprint.sha256}` |",
+                "",
+            ))
         elif isinstance(payload, ReviewPayload):
-            transport = (
-                f"; Transport `{_safe(payload.transport_schema)}`; Request "
-                f"`{_safe(payload.request_id)}`; Response `{payload.response_sha256}`"
-                if payload.transport_schema is not None
-                else "; Transport `legacy-text`"
-            )
-            reviews[payload.reviewer].append(
-                f"- {prefix}: `{_safe(payload.verdict)}`; Work-Unit "
-                f"`{_safe(payload.work_unit_id)}`; Findings {_codes(payload.finding_ids)}; "
-                f"Fingerprint `{record.fingerprint.sha256}`{transport}"
-            )
+            transport_schema = _safe(payload.transport_schema or "legacy-text")
+            request_id = _safe(payload.request_id or "–")
+            response_sha256 = payload.response_sha256 or "–"
+            round_number = work_unit_rounds.get(payload.work_unit_id, "–")
+            reviews[payload.reviewer].extend((
+                f"### {payload.reviewer.value.title()} · Runde {round_number} · {_safe(payload.verdict)}",
+                "",
+                "| Seq/Record | Rolle | Runde | Status | Work-Unit | Findings | Fingerprint | Transport | Request | Response |",
+                "|---|---|---:|---|---|---|---|---|---|---|",
+                f"| {prefix} | `{payload.reviewer.value}` | `{round_number}` | `{_safe(payload.verdict)}` | "
+                f"`{_safe(payload.work_unit_id)}` | {_codes(payload.finding_ids)} | "
+                f"`{record.fingerprint.sha256}` | `{transport_schema}` | `{request_id}` | "
+                f"`{response_sha256}` |",
+                "",
+            ))
         elif isinstance(payload, FindingTransitionPayload):
+            round_number = work_unit_rounds.get(payload.work_unit_id or "", "–")
             line = (
-                f"- {prefix}: `{_safe(payload.finding_id)}` "
-                f"`{_safe(payload.action)}` durch `{payload.actor.value}`; "
-                f"`{payload.severity.value}` / `{_safe(payload.finding_status)}` — "
-                f"{_safe(payload.rationale)}"
+                f"| {prefix} | `{_safe(payload.finding_id)}` | `{payload.actor.value}` | "
+                f"`{round_number}` | `{_safe(payload.action)}` | `{payload.severity.value}` | "
+                f"`{_safe(payload.finding_status)}` | {_table_prose(payload.rationale)} |"
             )
+            if not findings:
+                findings.extend((
+                    "### Finding-Ereignisse",
+                    "",
+                    "| Seq/Record | Finding | Rolle | Runde | Aktion | Klasse | Status | Begründung |",
+                    "|---|---|---|---:|---|---|---|---|",
+                ))
             findings.append(line)
             if payload.action == "responded":
+                if not responses:
+                    responses.extend((
+                        "### Codex · Findingantworten",
+                        "",
+                        "| Seq/Record | Finding | Rolle | Runde | Aktion | Klasse | Status | Begründung |",
+                        "|---|---|---|---:|---|---|---|---|",
+                    ))
                 responses.append(line)
             if payload.work_unit_id is not None:
                 row = convergence.setdefault(
@@ -255,16 +277,29 @@ def render_replay_sections(replay: ArtifactReplayResult) -> Mapping[str, str]:
                 row["status"] = payload.finding_status
         elif isinstance(payload, ValidationRequestPayload):
             commands = "; ".join(_command(item.argv, item.mode) for item in payload.commands)
-            validations.append(f"- {prefix}: Anforderung durch `{payload.requested_by.value}`: {commands}")
+            validations.extend((
+                "### Validierungsanforderung",
+                "",
+                "| Seq/Record | Rolle | Befehle mit argv-Grenzen |",
+                "|---|---|---|",
+                f"| {prefix} | `{payload.requested_by.value}` | {commands} |",
+                "",
+            ))
         elif isinstance(payload, ValidationAttestationPayload):
-            validations.append(
-                f"- {prefix}: Attestierung durch `{payload.attested_by.value}`; "
-                f"Fingerprint `{record.fingerprint.sha256}`"
-            )
+            validations.extend((
+                "### Validierungsattestierung",
+                "",
+                "| Seq/Record | Rolle | Fingerprint |",
+                "|---|---|---|",
+                f"| {prefix} | `{payload.attested_by.value}` | `{record.fingerprint.sha256}` |",
+                "",
+                "| Status | Exit | Output-Digest | Befehl mit argv-Grenzen |",
+                "|---|---:|---|---|",
+            ))
             for result in payload.results:
                 validations.append(
-                    f"  - `{_safe(result.outcome)}` / Exit `{result.exit_code}` / "
-                    f"Output `{result.output_sha256}`: {_command(result.command.argv, result.command.mode)}"
+                    f"| `{_safe(result.outcome)}` | `{result.exit_code}` | "
+                    f"`{result.output_sha256}` | {_command(result.command.argv, result.command.mode)} |"
                 )
         elif isinstance(payload, ProviderInputMeasurementPayload):
             components = ", ".join(
@@ -300,28 +335,40 @@ def render_replay_sections(replay: ArtifactReplayResult) -> Mapping[str, str]:
                 f"`{payload.measurement_record_id}`"
             )
         elif isinstance(payload, GatePayload):
+            if not gates:
+                gates.extend((
+                    "### Gate-Ereignisse",
+                    "",
+                    "| Seq/Record | Gate | Status | Autorität | Fingerprint | Begründung |",
+                    "|---|---|---|---|---|---|",
+                ))
             gates.append(
-                f"- {prefix}: `{_safe(payload.gate_kind)}` = `{_safe(payload.decision)}` "
-                f"durch `{payload.authority.value}`; Fingerprint `{record.fingerprint.sha256}` — "
-                f"{_safe(payload.rationale)}"
+                f"| {prefix} | `{_safe(payload.gate_kind)}` | `{_safe(payload.decision)}` | "
+                f"`{payload.authority.value}` | `{record.fingerprint.sha256}` | "
+                f"{_table_prose(payload.rationale)} |"
             )
         elif isinstance(payload, (WorkUnitPayload, CorrectionWorkUnitPayload)):
             kind = "Korrektur-Work-Unit" if isinstance(payload, CorrectionWorkUnitPayload) else "Work-Unit"
-            extra = (
-                f"; Findings {_codes(payload.finding_ids)}"
-                if isinstance(payload, CorrectionWorkUnitPayload)
-                else ""
-            )
-            bindings_and_units.append(
-                f"- {prefix}: {kind} Slice `{_safe(payload.slice_id)}`, Runde "
-                f"`{payload.round_number}`; Pfade {_codes(payload.paths)}{extra}"
-            )
+            bindings_and_units.extend((
+                f"### {kind} · Slice {_safe(payload.slice_id)} · Runde {payload.round_number}",
+                "",
+                "| Seq/Record | Typ | Slice | Runde | Pfade | Findings |",
+                "|---|---|---|---:|---|---|",
+                f"| {prefix} | {kind} | `{_safe(payload.slice_id)}` | `{payload.round_number}` | "
+                f"{_codes(payload.paths)} | "
+                f"{_codes(payload.finding_ids) if isinstance(payload, CorrectionWorkUnitPayload) else 'keine'} |",
+                "",
+            ))
         elif isinstance(payload, BindingPayload):
-            bindings_and_units.append(
-                f"- {prefix}: Binding `{_safe(payload.binding_kind)}` auf "
-                f"`{_safe(payload.target)}`; Attestierung `{_safe(payload.attestation_id)}`; "
-                f"Approvals {_codes(payload.approval_ids)}"
-            )
+            bindings_and_units.extend((
+                f"### Binding · {_safe(payload.binding_kind)}",
+                "",
+                "| Seq/Record | Art | Ziel | Attestierung | Approvals |",
+                "|---|---|---|---|---|",
+                f"| {prefix} | `{_safe(payload.binding_kind)}` | `{_safe(payload.target)}` | "
+                f"`{_safe(payload.attestation_id)}` | {_codes(payload.approval_ids)} |",
+                "",
+            ))
 
     attempts_by_operation: dict[str, list[tuple[int, ArtifactRecord]]] = {}
     for (logical_operation_id, _attempt_number), value in latest_attempts.items():
@@ -452,7 +499,7 @@ def render_replay_sections(replay: ArtifactReplayResult) -> Mapping[str, str]:
                 f"{_table_values(row['codex'])} | `{_safe(row['status'])}` |"
             )
 
-    return {
+    sections = {
         "claude-review": _block(header, reviews[Role.CLAUDE], "Keine Claude-Review-Records."),
         "codex-responses": _block(header, responses, "Keine Codex-Findingantworten."),
         "validation-attestation": _block(header, validations, "Keine Validierungsrecords."),
@@ -461,6 +508,165 @@ def render_replay_sections(replay: ArtifactReplayResult) -> Mapping[str, str]:
         "decision-table": "\n\n".join((header, "\n".join(ledger))),
         "approval-status": _block(header, bindings_and_units, "Keine Work-Unit- oder Binding-Records."),
     }
+    return finalize_projection_bindings(sections)
+
+
+_FULL_HEX_PATTERN = re.compile(r"(?<![0-9A-Fa-f])([0-9a-f]{64}|[0-9a-f]{40})(?![0-9A-Fa-f])")
+_EVIDENCE_HEADING = "### Nachweis vollst\u00e4ndiger Bindungswerte"
+_EVIDENCE_PATTERN = re.compile(
+    rf"(?:\r?\n){{2}}{re.escape(_EVIDENCE_HEADING)}\r?\n\r?\n"
+    r"\| Kurzreferenz \| Vollwert \| Feldarten \|\r?\n"
+    r"\|---\|---\|---\|\r?\n"
+    r"(?P<rows>(?:\|[^\r\n]*\|\r?\n?)*)"
+)
+
+
+@dataclass(slots=True)
+class _BindingRegistry:
+    """Document-local, first-seen registry for reproducible technical values."""
+
+    values: dict[str, list[str]] = field(default_factory=dict)
+    short_to_full: dict[str, str] = field(default_factory=dict)
+
+    def add(self, value: str, field_type: str) -> str:
+        short = value[:12]
+        previous = self.short_to_full.setdefault(short, value)
+        if previous != value:
+            raise ArtifactProjectionError(
+                f"technical short reference {short} maps to multiple full values"
+            )
+        kinds = self.values.setdefault(value, [])
+        if field_type not in kinds:
+            kinds.append(field_type)
+        return short
+
+
+def _field_type(text: str, start: int) -> str:
+    context = text[max(0, start - 80):start].lower()
+    for token, label in (
+        ("record", "Record-ID"),
+        ("request", "Request-ID"),
+        ("response", "Response-Digest"),
+        ("output", "Output-Digest"),
+        ("ausgabe", "Output-Digest"),
+        ("policy", "Policy-Digest"),
+        ("fingerprint", "Fingerprint"),
+        ("\u00fcbergang", "\u00dcbergangsfingerprint"),
+        ("transition", "\u00dcbergangsfingerprint"),
+        ("binding", "Bindingziel"),
+        ("target", "Bindingziel"),
+        ("digest", "Digest"),
+        ("attest", "Attestierungsreferenz"),
+        ("approval", "Approval-Referenz"),
+        ("messung", "Messungsreferenz"),
+    ):
+        if token in context:
+            return label
+    return "Technischer Wert"
+
+
+def _remove_and_seed_evidence(text: str, registry: _BindingRegistry) -> str:
+    def remove(match: re.Match[str]) -> str:
+        for row in match.group("rows").splitlines():
+            cells = [cell.strip().strip("`") for cell in row.strip().strip("|").split("|")]
+            if len(cells) != 3 or not _FULL_HEX_PATTERN.fullmatch(cells[1]):
+                continue
+            for field_type in (part.strip() for part in cells[2].split(",")):
+                registry.add(cells[1], field_type or "Technischer Wert")
+        return ""
+
+    return _EVIDENCE_PATTERN.sub(remove, text)
+
+
+def _shorten_bindings(text: str, registry: _BindingRegistry) -> str:
+    return _FULL_HEX_PATTERN.sub(
+        lambda match: registry.add(match.group(1), _field_type(text, match.start())),
+        text,
+    )
+
+
+def _binding_evidence(registry: _BindingRegistry) -> str:
+    rows = [
+        _EVIDENCE_HEADING,
+        "",
+        "| Kurzreferenz | Vollwert | Feldarten |",
+        "|---|---|---|",
+    ]
+    rows.extend(
+        f"| `{value[:12]}` | `{value}` | {', '.join(types)} |"
+        for value, types in registry.values.items()
+    )
+    if not registry.values:
+        rows.append("| – | – | – |")
+    return "\n".join(rows)
+
+
+def finalize_projection_bindings(sections: Mapping[str, str]) -> Mapping[str, str]:
+    """Shorten technical values and emit exactly one document-local evidence table."""
+    if set(sections) != set(SECTION_KEYS):
+        raise ArtifactProjectionError("projection does not cover every managed section")
+    registry = _BindingRegistry()
+    cleaned = {
+        key: _remove_and_seed_evidence(str(sections[key]), registry)
+        for key in SECTION_KEYS
+    }
+    rendered = {
+        key: _shorten_bindings(cleaned[key], registry)
+        for key in SECTION_KEYS
+    }
+    rendered["decision-table"] = (
+        rendered["decision-table"].rstrip("\r\n")
+        + "\n\n"
+        + _binding_evidence(registry)
+    )
+    outside = "\n".join(
+        value for key, value in rendered.items() if key != "decision-table"
+    )
+    decision_without_evidence = _remove_and_seed_evidence(
+        rendered["decision-table"], _BindingRegistry()
+    )
+    if _FULL_HEX_PATTERN.search(outside + "\n" + decision_without_evidence):
+        raise ArtifactProjectionError("full technical value remains outside binding evidence")
+    evidence = _EVIDENCE_PATTERN.search("\n\n" + rendered["decision-table"] + "\n")
+    if evidence is None:
+        raise ArtifactProjectionError("binding evidence is missing")
+    evidence_values = _FULL_HEX_PATTERN.findall(evidence.group(0))
+    if evidence_values != list(registry.values):
+        raise ArtifactProjectionError("binding evidence must contain each full value exactly once")
+    return rendered
+
+
+def finalize_projection_document(markdown: str) -> str:
+    """Apply the same binding policy after State-v3 and record views are merged."""
+    prior = _BindingRegistry()
+    cleaned = _remove_and_seed_evidence(markdown, prior)
+    # Record sections arrive already shortened. Rehydrate their exact technical
+    # values so the combined State-v3/record document can establish one true
+    # first-occurrence order before shortening the whole view again.
+    for value in prior.values:
+        short = value[:12]
+        cleaned = re.sub(
+            rf"(?<![0-9A-Fa-f]){re.escape(short)}(?![0-9A-Fa-f])",
+            value,
+            cleaned,
+        )
+    registry = _BindingRegistry()
+    rendered = _shorten_bindings(cleaned, registry)
+    for value, types in prior.values.items():
+        for field_type in types:
+            registry.add(value, field_type)
+    marker = "<!-- artifact-records:decision-table:end -->"
+    if rendered.count(marker) != 1:
+        raise ArtifactProjectionError("document requires one decision-table record marker")
+    rendered = rendered.replace(
+        marker, "\n\n" + _binding_evidence(registry) + "\n" + marker, 1
+    )
+    without_evidence = _remove_and_seed_evidence(rendered, _BindingRegistry())
+    if _FULL_HEX_PATTERN.search(without_evidence):
+        raise ArtifactProjectionError("full technical value remains outside binding evidence")
+    if _FULL_HEX_PATTERN.findall(rendered) != list(registry.values):
+        raise ArtifactProjectionError("document must contain each full value exactly once")
+    return rendered
 
 
 def _replay_for_projection(records: tuple[ArtifactRecord, ...]) -> ArtifactReplayResult:
@@ -505,10 +711,31 @@ def _safe(value: object) -> str:
     )
 
 
+_INLINE_PROSE_BOUNDARY = re.compile(
+    r"(?<=[.!?])[ \t]+|(?<=\S)[ \t]+(?=(?:[-*+\u2022]|[0-9]+[.)])[ \t]+\S)"
+)
+
+
+def _prose(value: object) -> str:
+    """Escape prose and expose only documented, language-neutral boundaries."""
+    normalized = str(value).replace("\r\n", "\n").replace("\r", "\n")
+    structured = "\n".join(
+        _INLINE_PROSE_BOUNDARY.sub("\n", line) for line in normalized.split("\n")
+    )
+    return _safe(structured)
+
+
+def _table_prose(value: object) -> str:
+    """Render structured prose without introducing a physical Markdown table row break."""
+    return _prose(value).replace("\r\n", "<br>").replace("\r", "<br>").replace("\n", "<br>")
+
+
 __all__ = [
     "ArtifactAuditProjection",
     "ArtifactProjectionError",
     "SECTION_KEYS",
+    "finalize_projection_bindings",
+    "finalize_projection_document",
     "render_artifact_sections",
     "render_replay_sections",
     "semantic_artifact_digest",

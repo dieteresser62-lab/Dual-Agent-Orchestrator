@@ -251,21 +251,28 @@ def replay_artifacts(
 def replay_findings(
     replay: ArtifactReplayResult,
     work_unit_id: int | str | None = None,
+    *,
+    finding_ids: Sequence[str] | None = None,
 ) -> tuple[FindingRecord, ...]:
     """Project native finding authority from accepted structured transitions.
 
     Historical finding-transition records remain valid replay inputs, but they
     are unconditionally excluded here: without a persisted work-unit id they
     cannot safely authorize a new native request when finding identifiers may
-    be reused in another work unit.
+    be reused in another work unit. ``finding_ids`` selects complete finding
+    lineages across work-unit boundaries, as required when an authoritative
+    correction record carries findings opened by the preceding final review.
     """
     target = None if work_unit_id is None else str(work_unit_id)
+    selected_ids = None if finding_ids is None else frozenset(finding_ids)
     findings: dict[str, FindingRecord] = {}
     for record in replay.records:
         payload = record.payload
         if not isinstance(payload, FindingTransitionPayload):
             continue
         if payload.work_unit_id is None:
+            continue
+        if selected_ids is not None and payload.finding_id not in selected_ids:
             continue
         if target is not None and payload.work_unit_id != target:
             continue

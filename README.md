@@ -145,6 +145,8 @@ Menschenlesbare Plan- und Slice-Auditdateien im Markdown-Format gehören in das 
 
 JSON ist dabei die autoritative Wahrheit, Markdown nur die deterministische Ansicht: `artifact_projection` rendert native Review- und Codex-Resultate einschließlich `transport_schema`, `request_id` und `response_sha256` direkt aus der validierten Recordkette. `audit_trail` übernimmt diese Abschnitte ohne Markdown zurückzulesen oder semantisch neu zu interpretieren. Die Rohantwort eines nativen Codex-Aufrufs liegt vor jeder fachlichen Anwendung unter `.orchestrator/artifacts/<run-id>/native-codex-responses/`; ein Record-ahead-Resume prüft Rohdigest, Requestbindung und AgentResult und startet Codex nicht erneut.
 
+Die Auditansicht zeigt technische Record-, Request-, Fingerprint- und Digestbindungen im Ereignistext als stabile zwölfstellige Hexreferenzen. Jeder unterschiedliche Vollwert steht genau einmal im Unterabschnitt `Nachweis vollständiger Bindungswerte` des bestehenden `decision-table`-Blocks; identische Werte aus mehreren Feldern teilen dort eine Zeile und nennen alle erkannten Feldarten. Rollen, Runden, Ergebnisse, argv-Grenzen und Findingstatus bleiben direkt in den jeweiligen Ereignistabellen sichtbar. Prosa wird ausschließlich an vorhandenen Zeilenenden, an Listenmarkern (`-`, `*`, `+`, `•`, Dezimalzahl mit `.` oder `)`) nach horizontalem Leerraum sowie an `.`, `!` oder `?` mit folgendem horizontalem Leerraum gegliedert. Nur dieser Leerraum wird durch den sichtbaren Zeilenwechsel ersetzt; Zeichenfolge, Marker, Sprache und Reihenfolge werden nicht interpretiert oder umformuliert. Diese Projektion ändert weder Recordfakten noch den semantischen Artifact-Digest.
+
 Jeder neue Codex–Claude-Lauf verwendet ohne zusätzliche CLI-Optionen den nativen JSON-Transport. Resume übernimmt exakt diese vollständige Bindung und kennt in keiner Plan-, Implementierungs-, Korrektur- oder Claude-Reviewphase einen Textfallback. Offene Findings und Codex-Dispositionen werden ausschließlich aus der validierten Recordkette rekonstruiert und vor jedem frischen Providerstart symmetrisch gegen den State-v3-Spiegel geprüft. Vollständige Record-ahead-Ergebnisse werden wiederverwendet, bevor ein neuer Agentenprozess gestartet werden darf. Die aus denselben Records erzeugte Markdownansicht enthält zusätzlich eine kompakte native Konvergenzübersicht mit Work-Unit, Runde, Fingerprints, Claude-Entscheidungen, Codex-Dispositionen und Endstatus; sie ist reine Anzeige und niemals Entscheidungs- oder Recoveryquelle.
 
 Implementierungsaufrufe transportieren nicht mehr den vollständigen Mehrslice-Plan. Der Orchestrator projiziert daraus ein kanonisches, digestgebundenes Slice-Ausführungspaket mit Ziel, Akzeptanzkriterien, exakten Pfaden und ausdrücklich benannten Querverweisen. Korrekturaufrufe erhalten entsprechend nur die betroffenen offenen Findings, deren Abnahmekriterien, das aktuelle Diff und die fingerprintgebundene Pfadgrenze. Doppelte Evidenz-IDs, Quellpfade, Inhaltsdigests oder inhaltsgleiche Providerkomponenten werden vor dem Providerstart abgewiesen.
@@ -174,6 +176,15 @@ Nur der Orchestrator führt deterministische Validierungen aus. Planreviews verw
 Codex arbeitet mit Schreibzugriff auf den Workspace. Claude erhält eine temporäre schreibgeschützte Repositorykopie, während seine privaten Laufzeit-, Prompt-, Cache- und Logpfade beschreibbar bleiben. Normale Reviews legen das Validierungssystem nicht offen und können den Ziel-Worktree nicht verändern.
 
 Claude verwendet standardmäßig Sonnet mit Effort `high`. Der erste Slice-Review erhält die geänderten Pfade und Hunks des Slice, Akzeptanzkriterien, strukturierte Findings und die gebundene Attestierung. Ein Korrekturreview erhält ausschließlich das Delta seit Claudes zuletzt geprüftem Fingerprint. Eine rein formale Vertragsreparatur erhält die abgelehnte Antwort und den Marker-Vertrag, nicht erneut die Implementierungsevidenz.
+
+Die versionierte Provider-Capability-Matrix bindet je CLI eine empirisch
+geprüfte Mindestversion und eine Vorwärtskompatibilitätsgrenze. Neuere
+Claude-Versionen desselben Majors und neuere Codex-Patchversionen derselben
+`0.x`-Minorlinie benötigen keinen Repositoryeintrag. Vor dem ersten echten
+Aufruf prüft der Orchestrator weiterhin Versionsformat, Mindestgrenze,
+Pflichtflags und das exakte Transportprofil; Downgrades, unbekannte Formate und
+Versionssprünge außerhalb der gebundenen Grenze halten fail-closed an. Die
+schema-validierte Provideranfrage bleibt der abschließende Live-Nachweis.
 
 Die expliziten Befehlsbuilder des Review-Harness dienen der Diagnose bei Installation, CLI-Versionswechseln oder Fehlersuche. Sie weisen Testausführung und Schreibschutz nachverfolgter Dateien in der isolierten Kopie nach; sie sind nicht Teil eines normalen Reviews.
 

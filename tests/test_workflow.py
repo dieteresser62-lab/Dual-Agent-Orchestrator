@@ -61,6 +61,7 @@ from workflow import (
     WorkflowEngine,
     WorkflowExecutionError,
     WorkflowHistory,
+    WorkflowRunResult,
     ValidationExecutionError,
     authorized_test_changes_from_state,
 )
@@ -426,6 +427,13 @@ class FakeDriver:
         if self.authoritative_finding_error is not None:
             raise WorkflowExecutionError(self.authoritative_finding_error)
         return mirror_findings
+
+    def carry_forward_native_findings(
+        self,
+        _state: WorkflowState,
+        current_findings: tuple[FindingRecord, ...],
+    ) -> tuple[FindingRecord, ...]:
+        return current_findings
 
     def _assert_checkpointed_attestation(self, fingerprint: str) -> None:
         if not self.require_checkpointed_attestation:
@@ -1856,6 +1864,80 @@ def test_combined_native_final_restart_rebinds_codex_and_claude_without_legacy_p
         WorkflowStep.CODEX_FINAL_REVIEW.value,
         WorkflowStep.CLAUDE_FINAL_REVIEW.value,
     ]
+
+
+def test_combined_native_post_correction_final_transition_carries_complete_ledger(
+    monkeypatch,
+) -> None:
+    corrected = FindingRecord(
+        finding_id="C-02",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="The correction addresses the final-review blocker.",
+        acceptance_test="The next final review receives the complete ledger.",
+        origin=FindingOrigin("FINAL", 1, AgentRole.CLAUDE),
+    )
+    historical = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.OBSERVATION,
+        status=FindingStatus.CLOSED,
+        summary="A prior finding remains part of the branch-wide ledger.",
+        acceptance_test="The completed finding is carried into final review.",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+        status_rationale="Verified before the correction work unit.",
+    )
+
+    @dataclass
+    class CarryingDriver(FakeDriver):
+        def carry_forward_native_findings(
+            self,
+            _state: WorkflowState,
+            current_findings: tuple[FindingRecord, ...],
+        ) -> tuple[FindingRecord, ...]:
+            assert current_findings == (corrected,)
+            return (historical, corrected)
+
+    state = (
+        _completed_single_slice_state()
+        .start_final_review_work_unit()
+        .complete_current_work_unit()
+        .start_correction_work_unit(
+            start_commit="b" * 40,
+            scope_paths=("src/early.py", TEST_FILE),
+            start_fingerprint="c" * 64,
+            finding_ids=("C-02",),
+        )
+        .complete_current_slice(commit_ref="d" * 40)
+    )
+    state = replace(
+        state,
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V2,
+            "2",
+            claude_review_transport="native-claude-review-v2",
+            codex_result_transport="native-codex-v2",
+        ),
+    )
+    history = WorkflowHistory(state.current_work_unit_id, findings=(corrected,))
+    driver = CarryingDriver(snapshots=[], codex_outputs=[], reviewer_outputs=[])
+    engine = WorkflowEngine(driver)
+    captured: list[tuple[WorkflowState, WorkflowHistory]] = []
+
+    def capture(
+        current_state: WorkflowState,
+        _context: WorkflowContext,
+        current_history: WorkflowHistory | None = None,
+    ) -> WorkflowRunResult:
+        assert current_history is not None
+        captured.append((current_state, current_history))
+        return WorkflowRunResult(current_state, current_history)
+
+    monkeypatch.setattr(engine, "run_current_work_unit", capture)
+    result = engine.run_final_review(state, _context(), history)
+
+    assert result.state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
+    assert result.history.findings == (historical, corrected)
+    assert driver.checkpoint_histories[-1].findings == (historical, corrected)
 
 
 def test_combined_native_codex_record_ahead_recovery_precedes_mirror_guard() -> None:

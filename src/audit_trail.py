@@ -7,7 +7,12 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Mapping, TypeAlias
 
-from artifact_projection import ArtifactAuditProjection, SECTION_KEYS
+from artifact_projection import (
+    ArtifactAuditProjection,
+    ArtifactProjectionError,
+    SECTION_KEYS,
+    finalize_projection_document,
+)
 from artifact_replay import ArtifactReplayResult
 
 from contracts import (
@@ -839,7 +844,10 @@ def merge_structured_record_sections(
         )
         replacement = "\n\n".join(part for part in (body, projected) if part)
         rendered = _replace_managed_body(rendered, key, replacement)
-    return rendered
+    try:
+        return finalize_projection_document(rendered)
+    except ArtifactProjectionError as exc:
+        raise AuditTrailError(str(exc)) from exc
 
 
 def strip_managed_audit_sections(markdown: str) -> str:
@@ -1186,7 +1194,9 @@ def _render_reviews(projection: AuditProjection, reviewer: AgentRole) -> str:
         )
         blocks.extend(
             (
-                f"### Ereignis {event.event_id}: Runde {event.round_number}",
+                f"### {reviewer.value.title()} · Runde {event.round_number} · "
+                f"{'stopped' if result.stopped else 'approved' if result.approval else 'denied'} "
+                f"(Ereignis {event.event_id})",
                 "",
                 f"- Reviewer: `{reviewer.value}`",
                 f"- Freigabe: `{decision}`",  # allowlist:german
@@ -1202,14 +1212,14 @@ def _render_reviews(projection: AuditProjection, reviewer: AgentRole) -> str:
         if result.stop_request is not None:
             blocks.append(
                 f"- Stop-Regel: `{_safe(result.stop_request.rule_id)}` — "
-                f"{_safe(result.stop_request.rationale)}"
+                f"{_prose_safe(result.stop_request.rationale)}"
             )
         if result.evidence is not None:
             blocks.extend(
                 (
-                    f"- Prüfdimensionen: {_safe(result.evidence.dimensions)}",
-                    f"- Größtes Restrisiko: {_safe(result.evidence.largest_residual_risk)}",
-                    f"- Realistische Bruchbedingung: {_safe(result.evidence.break_condition)}",
+                    f"- Prüfdimensionen: {_prose_safe(result.evidence.dimensions)}",
+                    f"- Größtes Restrisiko: {_prose_safe(result.evidence.largest_residual_risk)}",
+                    f"- Realistische Bruchbedingung: {_prose_safe(result.evidence.break_condition)}",
                 )
             )
         own_findings = [
@@ -1237,7 +1247,7 @@ def _render_validations(events: tuple[AuditEvent, ...]) -> str:
                 f"- Diff-Fingerprint: `{item.diff_fingerprint}`",
                 f"- Status: `{item.status.value}`",
                 f"- Vollständig: `{'YES' if item.complete else 'NO'}`",
-                f"- Kurzresultat: {_safe(item.summary)}",
+                f"- Kurzresultat: {_prose_safe(item.summary)}",
                 f"- Ausgabedigest: `{item.output_digest}`",
                 "",
                 "| Matrixbefehl | Status | Exitcode | Kompaktausgabe |",
@@ -1269,7 +1279,7 @@ def _render_test_approval(projection: AuditProjection) -> str:
                 f"- Freigebende Stelle: {_safe(approval.approved_by)}",
                 f"- Freigabezeitpunkt: {_safe(approval.approved_at or 'nicht erfasst')}",  # allowlist:german
                 f"- Test-Diff-Fingerprint: `{_safe(approval.diff_fingerprint or 'nicht erfasst')}`",
-                f"- Begründung: {_safe(approval.rationale)}",
+                f"- Begründung: {_prose_safe(approval.rationale)}",
                 "- Pfade: "
                 + (
                     ", ".join(f"`{_safe(path)}`" for path in approval.paths)
@@ -1286,7 +1296,7 @@ def _render_test_approval(projection: AuditProjection) -> str:
     if pre_mortems:
         blocks.append("- Pre-Mortems:")
         blocks.extend(
-            f"  - Ereignis {event_id}: {_safe(text)}"
+            f"  - Ereignis {event_id}: {_prose_safe(text)}"
             for event_id, text in pre_mortems
             if text is not None
         )
@@ -1334,10 +1344,10 @@ def _render_findings(findings: tuple[FindingRecord, ...]) -> str:
                 "",
                 f"- Quelle: `{finding.origin.reporter.value}`; Runde {finding.origin.round_number}",
                 f"- Klasse: `{finding.finding_class.value}`",
-                f"- Finding: {_safe(finding.summary)}",
-                f"- Akzeptanztest: {_safe(finding.acceptance_test)}",
+                f"- Finding: {_prose_safe(finding.summary)}",
+                f"- Akzeptanztest: {_prose_safe(finding.acceptance_test)}",
                 "- Statusbegründung: "
-                + (_safe(finding.status_rationale) if finding.status_rationale else "–"),
+                + (_prose_safe(finding.status_rationale) if finding.status_rationale else "–"),
                 "",
             )
         )
@@ -1355,7 +1365,7 @@ def _render_codex_responses(findings: tuple[FindingRecord, ...]) -> str:
             )
             rows.append(
                 f"- `{finding.finding_id}` Antwort {index}: **{decision}** — "
-                f"{_safe(response.rationale)}"
+                f"{_prose_safe(response.rationale)}"
             )
     return "\n".join(rows) if rows else "Noch keine strukturierten Codex-Antworten."
 
@@ -1438,6 +1448,19 @@ def _safe(value: str) -> str:
         .replace("\r", "<br>")
         .replace("\n", "<br>")
     )
+
+
+_INLINE_PROSE_BOUNDARY = re.compile(
+    r"(?<=[.!?])[ \t]+|(?<=\S)[ \t]+(?=(?:[-*+\u2022]|[0-9]+[.)])[ \t]+\S)"
+)
+
+
+def _prose_safe(value: str) -> str:
+    normalized = str(value).replace("\r\n", "\n").replace("\r", "\n")
+    structured = "\n".join(
+        _INLINE_PROSE_BOUNDARY.sub("\n", line) for line in normalized.split("\n")
+    )
+    return _safe(structured)
 
 
 def _require_event_identity(event_id: int, slice_id: int) -> None:
