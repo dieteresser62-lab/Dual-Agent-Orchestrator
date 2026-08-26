@@ -928,6 +928,28 @@ def test_claude_structured_output_retry_exhaustion_is_bounded_transient() -> Non
     }
 
 
+def test_claude_adapter_structured_output_retry_exhaustion_is_bounded_transient() -> None:
+    failure = classify_agent_failure(
+        "claude",
+        agent_runtime.AgentOutputError(
+            "claude returned is_error=true: native Claude error",
+            provider_text="native Claude error",
+            exit_code=1,
+            provider_data={
+                "type": "result",
+                "subtype": "error_max_structured_output_retries",
+            },
+        ),
+        invocation_id="claude-adapter-structured-output-1",
+    )
+
+    assert failure.kind is AgentFailureKind.NETWORK
+    assert failure.provider_data == {
+        "type": "result",
+        "subtype": "error_max_structured_output_retries",
+    }
+
+
 @pytest.mark.parametrize(
     ("agent_key", "provider_data"),
     (

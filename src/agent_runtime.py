@@ -1948,7 +1948,7 @@ def _is_claude_structured_output_retry_exhaustion(
     """Route only Claude's exact provider-side structured-output exhaustion as transient."""
     return (
         agent_key == "claude"
-        and isinstance(exc, AgentProcessError)
+        and isinstance(exc, (AgentProcessError, AgentOutputError))
         and isinstance(provider_data, Mapping)
         and provider_data.get("type") == "result"
         and provider_data.get("subtype") == "error_max_structured_output_retries"
