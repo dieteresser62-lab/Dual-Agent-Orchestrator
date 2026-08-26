@@ -8,9 +8,14 @@ from pathlib import Path
 
 import pytest
 from inbox_watcher import (
+    QueueFinalizationDisposition,
     WatchTaskDisposition,
     WatchTaskIdentity,
     WatchTaskResult,
+    attempt_sidecar_path,
+    finalize_queue_success,
+    success_marker_path,
+    save_watch_identity,
     watch_identity_path,
     watch_inbox,
 )
@@ -98,6 +103,132 @@ class _InterruptingSleep:
         self.calls += 1
         if self.calls >= self._interrupt_after:
             raise KeyboardInterrupt
+
+
+def _bound_queue_task(tmp_path: Path) -> tuple[Path, Path, Path, WatchTaskIdentity]:
+    inbox = tmp_path / "inbox"
+    outbox = tmp_path / "outbox"
+    inbox.mkdir()
+    task = inbox / "bound.md"
+    task.write_text("bound payload", encoding="utf-8")
+    digest = __import__("hashlib").sha256(task.read_bytes()).hexdigest()
+    identity = WatchTaskIdentity(
+        "watch-bound", digest, True, "structured-v2", 2
+    )
+    save_watch_identity(task, identity)
+    return inbox, outbox, task, identity
+
+
+def test_bound_queue_success_reserves_once_and_recovers_after_move(tmp_path: Path) -> None:
+    inbox, outbox, task, identity = _bound_queue_task(tmp_path)
+    attempt_sidecar_path(task).write_text("2", encoding="utf-8")
+
+    first = finalize_queue_success(
+        task,
+        inbox_dir=inbox,
+        outbox_dir=outbox,
+        run_id=identity.run_id,
+        task_digest=identity.task_digest,
+        publish=True,
+    )
+
+    assert first.disposition is QueueFinalizationDisposition.COMPLETED
+    assert first.destination is not None
+    assert first.destination.read_text(encoding="utf-8") == "bound payload"
+    assert len(list((outbox / "done").glob("*.md"))) == 1
+    assert not attempt_sidecar_path(task).exists()
+    assert not success_marker_path(task).exists()
+    assert not watch_identity_path(task).exists()
+
+
+@pytest.mark.parametrize(
+    "boundary",
+    ("before_move", "after_move", "attempt_cleanup", "identity_cleanup", "marker_cleanup"),
+)
+def test_bound_queue_success_converges_after_each_interruption_boundary(
+    tmp_path: Path, monkeypatch, boundary: str
+) -> None:
+    inbox, outbox, task, identity = _bound_queue_task(tmp_path)
+    attempt_sidecar_path(task).write_text("1", encoding="utf-8")
+    import inbox_watcher as watcher
+
+    target_name = {
+        "before_move": "move_to_reserved_outbox",
+        "after_move": "move_to_reserved_outbox",
+        "attempt_cleanup": "delete_attempt_sidecar",
+        "identity_cleanup": "delete_watch_identity",
+        "marker_cleanup": "delete_success_marker",
+    }[boundary]
+    original = getattr(watcher, target_name)
+    interrupted = {"done": False}
+
+    def interrupt_once(*args, **kwargs):
+        if interrupted["done"]:
+            return original(*args, **kwargs)
+        interrupted["done"] = True
+        if boundary == "after_move":
+            original(*args, **kwargs)
+        raise OSError(f"interrupted at {boundary}")
+
+    monkeypatch.setattr(watcher, target_name, interrupt_once)
+    first = finalize_queue_success(
+        task,
+        inbox_dir=inbox,
+        outbox_dir=outbox,
+        run_id=identity.run_id,
+        task_digest=identity.task_digest,
+        publish=True,
+    )
+    second = finalize_queue_success(task, inbox_dir=inbox, outbox_dir=outbox)
+
+    assert first.disposition is QueueFinalizationDisposition.FAILED
+    assert second.disposition is QueueFinalizationDisposition.COMPLETED
+    assert len(list((outbox / "done").glob("*.md"))) == 1
+    assert not task.exists()
+    assert not attempt_sidecar_path(task).exists()
+    assert not success_marker_path(task).exists()
+    assert not watch_identity_path(task).exists()
+
+
+@pytest.mark.parametrize("field", ("run_id", "task_digest", "protocol_mode", "source", "destination"))
+def test_bound_queue_success_rejects_tampered_evidence(
+    tmp_path: Path, field: str, monkeypatch
+) -> None:
+    inbox, outbox, task, identity = _bound_queue_task(tmp_path)
+    monkeypatch.setattr(
+        "inbox_watcher.delete_attempt_sidecar",
+        lambda _task: (_ for _ in ()).throw(OSError("interrupt cleanup")),
+    )
+    published = finalize_queue_success(
+        task,
+        inbox_dir=inbox,
+        outbox_dir=outbox,
+        run_id=identity.run_id,
+        task_digest=identity.task_digest,
+        publish=True,
+    )
+    assert published.disposition is QueueFinalizationDisposition.FAILED
+    destination = published.destination
+    document = json.loads(success_marker_path(task).read_text(encoding="utf-8"))
+    destination = Path(document["destination"])
+    assert destination.exists()
+
+    marker = success_marker_path(task)
+    replacements = {
+        "run_id": "watch-other",
+        "task_digest": "f" * 64,
+        "protocol_mode": "legacy",
+        "source": str((tmp_path / "outside.md").resolve()),
+        "destination": str((tmp_path / "outside-done.md").resolve()),
+    }
+    document[field] = replacements[field]
+    marker.write_text(json.dumps(document), encoding="utf-8")
+
+    recovered = finalize_queue_success(task, inbox_dir=inbox, outbox_dir=outbox)
+
+    assert recovered.disposition is QueueFinalizationDisposition.FAILED
+    assert marker.exists()
+    assert destination.exists()
 
 
 def test_watch_picks_up_md_file_and_moves_to_outbox(tmp_path: Path) -> None:

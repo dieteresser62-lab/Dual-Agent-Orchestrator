@@ -732,7 +732,13 @@ def parse_args(
     repo_root = (cwd or Path.cwd()).resolve()
     env = os.environ if environ is None else environ
     parser = build_parser()
-    args = parser.parse_args(argv)
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    args = parser.parse_args(raw_argv)
+    args.resume_explicit = "--resume" in raw_argv
+    args.task_file_explicit = any(
+        token == "--task-file" or token.startswith("--task-file=")
+        for token in raw_argv
+    )
 
     if args.task_path and args.task_file:
         parser.error("task file must be provided either positionally or with --task-file, not both")
@@ -984,7 +990,15 @@ def run_cli(
         )
     if args.watch_max_retries != 3:
         logger.warning("--watch-max-retries is only used in --watch mode.")
-    task_file = find_task_file_fn(args.task_file)
+    task_path = Path(args.task_file)
+    missing_bound_recovery = bool(
+        args.resume
+        and args.resume_explicit
+        and args.task_file_explicit
+        and not task_path.exists()
+        and task_path.with_name(f"{task_path.name}.success").exists()
+    )
+    task_file = task_path if missing_bound_recovery else find_task_file_fn(args.task_file)
     return run_pipeline_fn(task_file, args)
 
 

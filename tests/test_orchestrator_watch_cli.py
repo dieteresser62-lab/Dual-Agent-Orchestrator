@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import hashlib
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -9,7 +11,14 @@ import pytest
 import orchestrator
 from artifact_migration import ArtifactResumeError
 from cli import parse_args
-from inbox_watcher import WatchTaskDisposition, WatchTaskResult
+from inbox_watcher import (
+    WatchTaskDisposition,
+    WatchTaskIdentity,
+    WatchTaskResult,
+    save_watch_identity,
+    success_marker_path,
+    watch_identity_path,
+)
 from orchestrator import run_pipeline
 from workflow import WorkflowExecutionError, WorkflowHistory, WorkflowRunResult
 from workflow_state import GateReason, ProtocolBinding, ProtocolMode, init_workflow_state
@@ -49,6 +58,93 @@ def test_watch_dry_run_returns_typed_terminal_result(tmp_path: Path, monkeypatch
     assert isinstance(result, WatchTaskResult)
     assert result.disposition is WatchTaskDisposition.COMPLETED
     assert result.run_id == "watch-slice-18"
+
+
+def test_explicit_direct_resume_finalizes_bound_watch_task(
+    tmp_path: Path, monkeypatch
+) -> None:
+    inbox = tmp_path / "inbox"
+    outbox = tmp_path / "outbox"
+    inbox.mkdir()
+    task = inbox / "resume.md"
+    task.write_text("bound resume", encoding="utf-8")
+    digest = hashlib.sha256(task.read_bytes()).hexdigest()
+    identity = WatchTaskIdentity(
+        "watch-direct-resume", digest, True, "structured-v2", 2
+    )
+    save_watch_identity(task, identity)
+    completed, _, _ = orchestrator.run_default_dry_run(
+        task, run_id=identity.run_id
+    )
+    completed = WorkflowRunResult(
+        replace(completed.state, task_digest=digest), completed.history
+    )
+    monkeypatch.setattr(
+        orchestrator, "run_production_workflow", lambda *_args, **_kwargs: completed
+    )
+    args = parse_args(
+        [
+            "--resume",
+            "--task-file",
+            str(task),
+            "--inbox-dir",
+            str(inbox),
+            "--outbox-dir",
+            str(outbox),
+        ],
+        cwd=tmp_path,
+        environ={},
+    )
+
+    assert run_pipeline(task, args) == 0
+    moved = list((outbox / "done").glob("*.md"))
+    assert len(moved) == 1
+    assert moved[0].read_text(encoding="utf-8") == "bound resume"
+    assert not task.exists()
+    assert not success_marker_path(task).exists()
+    assert not watch_identity_path(task).exists()
+
+
+def test_nonterminal_direct_resume_keeps_bound_watch_task_in_inbox(
+    tmp_path: Path, monkeypatch
+) -> None:
+    inbox = tmp_path / "inbox"
+    outbox = tmp_path / "outbox"
+    inbox.mkdir()
+    task = inbox / "resume.md"
+    task.write_text("bound resume", encoding="utf-8")
+    digest = hashlib.sha256(task.read_bytes()).hexdigest()
+    identity = WatchTaskIdentity("watch-halt", digest, True, "structured-v2", 2)
+    save_watch_identity(task, identity)
+    state = init_workflow_state(
+        run_id=identity.run_id,
+        task_file=str(task.resolve()),
+        branch="feature/resume",
+        branch_base="a" * 40,
+        slice_count=1,
+        task_digest=digest,
+        task_scope_patterns=("src/**",),
+        target_branch="feature/resume",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+    ).await_bootstrap_resume(detail="repair", fingerprint="b" * 64)
+    monkeypatch.setattr(
+        orchestrator,
+        "run_production_workflow",
+        lambda *_args, **_kwargs: WorkflowRunResult(state, WorkflowHistory(1)),
+    )
+    args = parse_args(
+        [
+            "--resume", "--task-file", str(task),
+            "--inbox-dir", str(inbox), "--outbox-dir", str(outbox),
+        ],
+        cwd=tmp_path,
+        environ={},
+    )
+
+    assert run_pipeline(task, args) == 4
+    assert task.exists()
+    assert not success_marker_path(task).exists()
+    assert list((outbox / "done").glob("*")) == []
 
 
 def test_watch_pipeline_failure_returns_diagnostic_typed_result(

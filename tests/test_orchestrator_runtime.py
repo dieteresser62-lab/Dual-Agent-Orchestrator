@@ -50,7 +50,14 @@ from contracts import (
     ReviewEvidence,
 )
 from git_service import GitTransactionError
-from inbox_watcher import WatchTaskDisposition, WatchTaskResult
+from inbox_watcher import (
+    WatchTaskDisposition,
+    WatchTaskIdentity,
+    WatchTaskResult,
+    save_watch_identity,
+    success_marker_path,
+    watch_identity_path,
+)
 from orchestrator import ProductionWorkflowDriver, run_pipeline, run_production_workflow
 from review_packets import ReviewPacket, ReviewPacketManifest
 from workflow import (
@@ -62,6 +69,7 @@ from workflow import (
     WorkflowContext,
     WorkflowEngine,
     WorkflowHistory,
+    WorkflowRunResult,
 )
 from workflow import WorkflowExecutionError
 from plan_handoff import PlanHandoffError
@@ -3651,3 +3659,46 @@ def test_completed_plan_resume_retries_failed_handoff_without_agents(
     assert tuple(agent_steps) == steps_after_commit
     assert handoff_calls == 2
     assert task.with_name("resume-implement.md").is_file()
+
+
+def test_explicit_resume_of_watch_origin_runs_terminal_workflow_once_then_finalizes_queue(
+    tmp_path: Path, monkeypatch
+) -> None:
+    inbox = tmp_path / "inbox"
+    outbox = tmp_path / "outbox"
+    inbox.mkdir()
+    task = inbox / "runtime-resume.md"
+    task.write_text("runtime-bound resume", encoding="utf-8")
+    digest = hashlib.sha256(task.read_bytes()).hexdigest()
+    identity = WatchTaskIdentity(
+        "watch-runtime-resume", digest, True, "structured-v2", 2
+    )
+    save_watch_identity(task, identity)
+    terminal, _, _ = orchestrator.run_default_dry_run(task, run_id=identity.run_id)
+    terminal = WorkflowRunResult(
+        replace(terminal.state, task_digest=digest), terminal.history
+    )
+    calls = {"workflow": 0}
+
+    def completed_workflow(*_args, **_kwargs) -> WorkflowRunResult:
+        calls["workflow"] += 1
+        return terminal
+
+    monkeypatch.setattr(orchestrator, "run_production_workflow", completed_workflow)
+    args = parse_args(
+        [
+            "--resume", "--task-file", str(task),
+            "--inbox-dir", str(inbox), "--outbox-dir", str(outbox),
+        ],
+        cwd=tmp_path,
+        environ={},
+    )
+
+    assert run_pipeline(task, args) == 0
+    assert calls == {"workflow": 1}
+    moved = list((outbox / "done").glob("*.md"))
+    assert len(moved) == 1
+    assert moved[0].read_text(encoding="utf-8") == "runtime-bound resume"
+    assert not task.exists()
+    assert not success_marker_path(task).exists()
+    assert not watch_identity_path(task).exists()
