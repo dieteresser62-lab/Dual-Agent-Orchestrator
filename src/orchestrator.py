@@ -139,6 +139,7 @@ from workflow import (
     ReviewerInvocation,
     NoWorkflowChangesError,
     WorkflowChanges,
+    WorkflowCommitApprovalRequired,
     WorkflowCommitRequest,
     WorkflowContext,
     WorkflowCorrectionBoundary,
@@ -2119,12 +2120,22 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 )
                 if decision.approved
                 and decision.fingerprint == request.fingerprint
+                and decision.paths == (unexpected_paths or reviewed_changes.paths)
                 and decision.reason
                 in {GateReason.UNEXPECTED_FILE, GateReason.QUOTA_RESUME_DIFF}
             ),
             None,
         )
         identity = inspect_repository(self.root)
+        if identity.head != current.start_commit and head_approval is None:
+            raise WorkflowCommitApprovalRequired(
+                (
+                    "HEAD-DRIFT | the Slice HEAD changed after its persisted start; "
+                    f"approve the exact reviewed fingerprint {request.fingerprint} "
+                    f"and current HEAD {identity.head} before committing"
+                ),
+                unexpected_paths or reviewed_changes.paths,
+            )
         result = commit_slice(
             repository_root=self.root,
             boundary=boundary,
