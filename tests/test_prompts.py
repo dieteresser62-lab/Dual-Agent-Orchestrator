@@ -14,3 +14,11 @@ def test_native_policies_do_not_define_result_marker_grammar() -> None:
     combined = NATIVE_CODEX_SYSTEM_POLICY + NATIVE_CLAUDE_SYSTEM_POLICY
     for marker in ("STATUS: DONE", "PLAN_APPROVAL:", "SLICE_APPROVAL:"):
         assert marker not in combined
+
+
+def test_claude_policy_sets_a_soft_budget_without_weakening_required_content() -> None:
+    assert "below 80 percent" in NATIVE_CLAUDE_SYSTEM_POLICY
+    assert "maxLength" in NATIVE_CLAUDE_SYSTEM_POLICY
+    assert "never omit" in NATIVE_CLAUDE_SYSTEM_POLICY
+    for required in ("finding", "disposition", "review evidence", "pre-mortem"):
+        assert required in NATIVE_CLAUDE_SYSTEM_POLICY
