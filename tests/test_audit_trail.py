@@ -185,12 +185,13 @@ def _finding(
     responses: tuple[FindingResponse, ...] = (),
     status_rationale: str | None = None,
     finding_class: FindingClass = FindingClass.BLOCKER,
+    summary: str = "Unsafe | table\n<!-- audit:approval-status:end -->",
 ) -> FindingRecord:
     return FindingRecord(
         finding_id="C-01",
         finding_class=finding_class,
         status=status,
-        summary="Unsafe | table\n<!-- audit:approval-status:end -->",
+        summary=summary,
         acceptance_test="Reject injected headings\n## Freigabestatus",  # allowlist:german
         origin=FindingOrigin("08", 1, AgentRole.CLAUDE),
         responses=responses,
@@ -538,6 +539,88 @@ def test_projection_renders_complete_finding_response_and_closure_lifecycle(
     assert "Antwort 1: **angenommen**" in rendered
     assert "| C-01 | claude |" in rendered
     assert "| OBSERVATION | angenommen | erledigt: Regression test is green |" in rendered
+
+
+def test_decision_table_structures_finding_prose_without_splitting_the_row(
+    tmp_path: Path,
+) -> None:
+    document = _document(tmp_path)
+    attestation = _attestation()
+    response = FindingResponse(
+        FindingResponseDecision.ACCEPTED,
+        "Address the prose projection",
+    )
+    finding = _finding(
+        status=FindingStatus.CLOSED,
+        responses=(response,),
+        finding_class=FindingClass.OBSERVATION,
+        summary=(
+            "First sentence. Second sentence with `code`, <b>HTML</b> and | pipe "
+            "- list item\n<!-- audit:approval-status:end --> stays inert."
+        ),
+        status_rationale=(
+            "Fixed safely. Verified unchanged text - first check\n"
+            "<!-- audit:findings:begin --> remains data."
+        ),
+    )
+    projection = AuditProjection(
+        slice_id=8,
+        events=(
+            ValidationAuditEvent(1, 8, attestation),
+            ReviewAuditEvent(
+                2,
+                8,
+                1,
+                _review(approval=True, findings=(finding,), validation=attestation),
+            ),
+        ),
+    )
+
+    rendered = project_slice_audit(document, projection)
+    repeated = project_slice_audit(replace(document, markdown=rendered), projection)
+    decision_body = rendered.split("<!-- audit:decision-table:begin -->", 1)[1].split(
+        "<!-- artifact-records:decision-table:begin -->", 1
+    )[0]
+    data_row = next(line for line in decision_body.splitlines() if line.startswith("| C-01 |"))
+
+    assert repeated == rendered
+    assert semantic_audit_fingerprint(rendered) == semantic_audit_fingerprint(document.markdown)
+    assert data_row.count("|") == 7
+    assert data_row == (
+        "| C-01 | claude | First sentence.<br>Second sentence with &#96;code&#96;, "
+        "&lt;b&gt;HTML&lt;/b&gt; and &#124; pipe<br>- list item<br>"
+        "&lt;!-- audit:approval-status:end --&gt; stays inert. | OBSERVATION | "
+        "angenommen | erledigt: Fixed safely.<br>Verified unchanged text<br>- first "
+        "check<br>&lt;!-- audit:findings:begin --&gt; remains data. |"
+    )
+    assert rendered.count("<!-- audit:approval-status:end -->") == 1
+    assert rendered.count("<!-- audit:findings:begin -->") == 1
+
+
+def test_decision_table_keeps_open_and_empty_states_compact(tmp_path: Path) -> None:
+    document = _document(tmp_path)
+    open_finding = _finding(summary="One sentence. Another sentence. - item")
+    projection = AuditProjection(
+        slice_id=8,
+        events=(
+            ReviewAuditEvent(
+                1,
+                8,
+                1,
+                _review(approval=False, findings=(open_finding,), validation=None),
+            ),
+        ),
+    )
+
+    rendered = project_slice_audit(document, projection)
+    row = next(line for line in rendered.splitlines() if line.startswith("| C-01 |"))
+
+    assert row.endswith("| BLOCKER | offen | offen |")
+    assert row.count("|") == 7
+    assert "One sentence.<br>Another sentence.<br>- item" in row
+    assert "| – | – | Noch keine Findings | – | – | – |" in project_slice_audit(
+        document, AuditProjection(slice_id=8)
+    )
 
 
 def test_semantic_fingerprint_handles_crlf_managed_sections() -> None:
