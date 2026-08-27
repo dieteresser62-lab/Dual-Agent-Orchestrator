@@ -115,6 +115,29 @@ def test_task_file_accepts_positional_compatibility_path(tmp_path: Path) -> None
     assert args.task_file == "work.md"
 
 
+@pytest.mark.parametrize(
+    ("argv", "resume_explicit", "task_explicit"),
+    (
+        (("--resume", "--task-file", "work.md"), True, True),
+        (("--resume", "work.md"), True, False),
+        (("--no-resume", "--task-file", "work.md"), False, True),
+        (("--task-file", "work.md"), False, True),
+        ((), False, False),
+        (("--watch",), False, False),
+    ),
+)
+def test_queue_finalization_origin_flags_are_only_explicit_cli_options(
+    tmp_path: Path,
+    argv: tuple[str, ...],
+    resume_explicit: bool,
+    task_explicit: bool,
+) -> None:
+    args = parse_args(list(argv), cwd=tmp_path, environ={})
+
+    assert args.resume_explicit is resume_explicit
+    assert args.task_file_explicit is task_explicit
+
+
 def test_validation_retries_require_explicit_cli_flags(tmp_path: Path) -> None:
     default = parse_args([], cwd=tmp_path, environ={})
     requested = parse_args(

@@ -6,7 +6,9 @@ import contextlib
 import hashlib
 import json
 import logging
+import os
 import shutil
+import stat
 import time
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -31,6 +33,102 @@ class WatchTaskDisposition(str, Enum):
     COMPLETED = "completed"
     RESUMABLE_HALT = "resumable_halt"
     TECHNICAL_FAILURE = "technical_failure"
+
+
+class QueueFinalizationDisposition(str, Enum):
+    NOT_APPLICABLE = "not_applicable"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class QueueFinalizationResult:
+    disposition: QueueFinalizationDisposition
+    destination: Path | None = None
+    detail: str | None = None
+
+
+@dataclass(frozen=True)
+class QueueSuccessEvidence:
+    run_id: str
+    task_digest: str
+    protocol_mode: str
+    source: str
+    destination: str
+    evidence_digest: str
+    version: int = 1
+
+    def __post_init__(self) -> None:
+        if self.version != 1:
+            raise ValueError("queue success evidence version is invalid")
+        if not self.run_id.strip():
+            raise ValueError("queue success evidence requires a run id")
+        if len(self.task_digest) != 64 or any(
+            character not in "0123456789abcdef" for character in self.task_digest
+        ):
+            raise ValueError("queue success evidence requires a SHA-256 task digest")
+        if self.protocol_mode != "structured-v2":
+            raise ValueError("queue success evidence protocol mode is invalid")
+        if not self.source or not self.destination:
+            raise ValueError("queue success evidence requires source and destination")
+        if self.evidence_digest != self.calculate_digest(
+            run_id=self.run_id,
+            task_digest=self.task_digest,
+            protocol_mode=self.protocol_mode,
+            source=self.source,
+            destination=self.destination,
+        ):
+            raise ValueError("queue success evidence binding digest differs")
+
+    @staticmethod
+    def calculate_digest(
+        *, run_id: str, task_digest: str, protocol_mode: str, source: str, destination: str
+    ) -> str:
+        payload = json.dumps(
+            {
+                "destination": destination,
+                "protocol_mode": protocol_mode,
+                "run_id": run_id,
+                "source": source,
+                "task_digest": task_digest,
+                "version": 1,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "version": self.version,
+            "run_id": self.run_id,
+            "task_digest": self.task_digest,
+            "protocol_mode": self.protocol_mode,
+            "source": self.source,
+            "destination": self.destination,
+            "evidence_digest": self.evidence_digest,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: object) -> QueueSuccessEvidence:
+        expected = {
+            "version", "run_id", "task_digest", "protocol_mode", "source", "destination",
+            "evidence_digest",
+        }
+        if not isinstance(raw, dict) or set(raw) != expected:
+            raise ValueError("queue success evidence has an invalid schema")
+        if raw.get("version") != 1 or any(
+            not isinstance(raw.get(field), str) for field in expected - {"version"}
+        ):
+            raise ValueError("queue success evidence has invalid field types")
+        return cls(
+            run_id=raw["run_id"],
+            task_digest=raw["task_digest"],
+            protocol_mode=raw["protocol_mode"],
+            source=raw["source"],
+            destination=raw["destination"],
+            evidence_digest=raw["evidence_digest"],
+        )
 
 
 @dataclass(frozen=True)
@@ -182,7 +280,25 @@ def watch_identity_path(task_file: Path) -> Path:
 
 
 def _task_digest(task_file: Path) -> str:
-    return hashlib.sha256(task_file.read_bytes()).hexdigest()
+    path_stat = task_file.lstat()
+    if not stat.S_ISREG(path_stat.st_mode):
+        raise ValueError("queue task source must be a regular non-symlink file")
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(task_file, flags)
+    try:
+        descriptor_stat = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(descriptor_stat.st_mode)
+            or (path_stat.st_dev, path_stat.st_ino)
+            != (descriptor_stat.st_dev, descriptor_stat.st_ino)
+        ):
+            raise ValueError("queue task source must be a regular non-symlink file")
+        digest = hashlib.sha256()
+        while chunk := os.read(descriptor, 1024 * 1024):
+            digest.update(chunk)
+        return digest.hexdigest()
+    finally:
+        os.close(descriptor)
 
 
 def _new_watch_run_id(task_file: Path) -> str:
@@ -263,6 +379,18 @@ def build_outbox_destination(outbox_subdir: Path, source_name: str) -> Path:
 
 def move_to_outbox(task_file: Path, outbox_subdir: Path, *, source_name: str | None = None) -> Path:
     destination = build_outbox_destination(outbox_subdir, source_name or task_file.name)
+    return move_to_reserved_outbox(task_file, destination)
+
+
+def move_to_reserved_outbox(task_file: Path, destination: Path) -> Path:
+    # Re-check at the filesystem mutation boundary. Digest reads use O_NOFOLLOW,
+    # while this guard prevents a path swapped afterward from being moved.
+    try:
+        source_mode = task_file.lstat().st_mode
+    except FileNotFoundError as exc:
+        raise ValueError("queue task source must be a regular non-symlink file") from exc
+    if not stat.S_ISREG(source_mode):
+        raise ValueError("queue task source must be a regular non-symlink file")
     shutil.move(str(task_file), str(destination))
     return destination
 
@@ -279,9 +407,172 @@ def has_success_marker(task_file: Path) -> bool:
     return success_marker_path(task_file).exists()
 
 
+def has_bound_queue_success_marker(task_file: Path) -> bool:
+    try:
+        return isinstance(
+            json.loads(success_marker_path(task_file).read_text(encoding="utf-8")), dict
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return False
+
+
 def write_success_marker(task_file: Path) -> None:
     marker = success_marker_path(task_file)
     marker.write_text(datetime.now(timezone.utc).isoformat(), encoding="utf-8")
+
+
+def _canonical(path: Path) -> Path:
+    return path.expanduser().resolve(strict=False)
+
+
+def _validate_queue_paths(task_file: Path, inbox_dir: Path, outbox_dir: Path) -> tuple[Path, Path]:
+    source = _canonical(task_file)
+    inbox = _canonical(inbox_dir)
+    done = _canonical(outbox_dir) / "done"
+    if source.parent != inbox or source.suffix.casefold() != ".md":
+        raise ValueError("queue task source is not a direct Markdown child of the configured inbox")
+    if task_file.is_symlink():
+        raise ValueError("queue task source must not be a symlink")
+    return source, done
+
+
+def load_watch_identity(
+    task_file: Path, *, expected_digest: str | None = None
+) -> WatchTaskIdentity:
+    path = watch_identity_path(task_file)
+    try:
+        identity = WatchTaskIdentity.from_dict(json.loads(path.read_text(encoding="utf-8")))
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+        raise ValueError(f"cannot load watch identity {path.name}: {exc}") from exc
+    digest = expected_digest
+    if task_file.exists():
+        if task_file.is_symlink() or not task_file.is_file():
+            raise ValueError("watch task source must be a regular non-symlink file")
+        digest = _task_digest(task_file)
+    if digest is None or identity.task_digest != digest:
+        raise ValueError("watch identity task digest differs from queue task")
+    if not identity.started or identity.sidecar_version != 2:
+        raise ValueError("watch identity is not a started version-2 identity")
+    if identity.protocol_mode != "structured-v2":
+        raise ValueError("watch identity is not bound to structured-v2")
+    return identity
+
+
+def load_queue_success_evidence(
+    task_file: Path,
+    *,
+    inbox_dir: Path,
+    outbox_dir: Path,
+    expected_run_id: str | None = None,
+    expected_task_digest: str | None = None,
+    expected_protocol_mode: str = "structured-v2",
+) -> QueueSuccessEvidence:
+    source, done = _validate_queue_paths(task_file, inbox_dir, outbox_dir)
+    marker = success_marker_path(task_file)
+    try:
+        evidence = QueueSuccessEvidence.from_dict(
+            json.loads(marker.read_text(encoding="utf-8"))
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+        raise ValueError(f"cannot load bound queue success evidence: {exc}") from exc
+    destination = _canonical(Path(evidence.destination))
+    if Path(evidence.source) != source or _canonical(Path(evidence.source)) != source:
+        raise ValueError("queue success evidence source binding differs")
+    if destination.parent != done or Path(evidence.destination) != destination:
+        raise ValueError("queue success evidence destination escapes configured done outbox")
+    if expected_run_id is not None and evidence.run_id != expected_run_id:
+        raise ValueError("queue success evidence run id differs")
+    if expected_task_digest is not None and evidence.task_digest != expected_task_digest:
+        raise ValueError("queue success evidence task digest differs")
+    if evidence.protocol_mode != expected_protocol_mode:
+        raise ValueError("queue success evidence protocol mode differs")
+    identity_path = watch_identity_path(task_file)
+    if identity_path.exists():
+        identity = load_watch_identity(task_file, expected_digest=evidence.task_digest)
+        if identity.run_id != evidence.run_id or identity.protocol_mode != evidence.protocol_mode:
+            raise ValueError("queue success evidence differs from watch identity")
+    return evidence
+
+
+def finalize_queue_success(
+    task_file: Path,
+    *,
+    inbox_dir: Path,
+    outbox_dir: Path,
+    run_id: str | None = None,
+    task_digest: str | None = None,
+    protocol_mode: str = "structured-v2",
+    publish: bool = False,
+) -> QueueFinalizationResult:
+    """Publish or recover a bound, idempotent successful queue finalization."""
+    try:
+        source, done = _validate_queue_paths(task_file, inbox_dir, outbox_dir)
+        marker = success_marker_path(task_file)
+        if marker.exists():
+            evidence = load_queue_success_evidence(
+                task_file,
+                inbox_dir=inbox_dir,
+                outbox_dir=outbox_dir,
+                expected_run_id=run_id,
+                expected_task_digest=task_digest,
+                expected_protocol_mode=protocol_mode,
+            )
+        else:
+            if not publish:
+                return QueueFinalizationResult(QueueFinalizationDisposition.NOT_APPLICABLE)
+            if run_id is None or task_digest is None:
+                raise ValueError("publishing queue success requires run and task bindings")
+            identity = load_watch_identity(task_file, expected_digest=task_digest)
+            if identity.run_id != run_id or identity.protocol_mode != protocol_mode:
+                raise ValueError("terminal workflow result differs from watch identity")
+            if not task_file.is_file():
+                raise ValueError("queue source is absent before success evidence publication")
+            done.mkdir(parents=True, exist_ok=True)
+            destination = _canonical(build_outbox_destination(done, task_file.name))
+            evidence = QueueSuccessEvidence(
+                run_id=run_id,
+                task_digest=task_digest,
+                protocol_mode=protocol_mode,
+                source=str(source),
+                destination=str(destination),
+                evidence_digest=QueueSuccessEvidence.calculate_digest(
+                    run_id=run_id,
+                    task_digest=task_digest,
+                    protocol_mode=protocol_mode,
+                    source=str(source),
+                    destination=str(destination),
+                ),
+            )
+            atomic_write_file(marker, json.dumps(evidence.to_dict(), sort_keys=True) + "\n")
+
+        destination = Path(evidence.destination)
+        source_exists = task_file.exists()
+        destination_exists = destination.exists()
+        if source_exists and destination_exists:
+            raise ValueError("queue source and bound destination both exist")
+        if not source_exists and not destination_exists:
+            raise ValueError("queue source and bound destination are both absent")
+        if source_exists:
+            if _task_digest(task_file) != evidence.task_digest:
+                raise ValueError("queue source digest differs from success evidence")
+            move_to_reserved_outbox(task_file, destination)
+        elif not destination.is_file() or destination.is_symlink():
+            raise ValueError("bound queue destination is not a regular file")
+        if _task_digest(destination) != evidence.task_digest:
+            raise ValueError("bound queue destination digest differs from success evidence")
+
+        # The marker remains until last, so every partial cleanup is safely resumable.
+        delete_attempt_sidecar(task_file)
+        delete_watch_identity(task_file)
+        delete_success_marker(task_file)
+        return QueueFinalizationResult(
+            QueueFinalizationDisposition.COMPLETED, destination=destination
+        )
+    except Exception as exc:
+        return QueueFinalizationResult(
+            QueueFinalizationDisposition.FAILED,
+            detail=f"{type(exc).__name__}: {exc}",
+        )
 
 
 def delete_success_marker(task_file: Path) -> None:
@@ -620,13 +911,79 @@ def watch_inbox(
                 logger.error("Task %s returned no terminal watch result.", task_file.name)
                 return 1
 
-            if not task_succeeded_already:
+            bound_failure: str | None = None
+            bound_completion = bool(
+                not task_succeeded_already
+                and task_result is not None
+                and task_result.protocol_mode == "structured-v2"
+            )
+            if bound_completion:
+                assert task_result is not None
+                assert identity is not None
+                queue_result = finalize_queue_success(
+                    task_file,
+                    inbox_dir=inbox_dir,
+                    outbox_dir=outbox_dir,
+                    run_id=identity.run_id,
+                    task_digest=identity.task_digest,
+                    protocol_mode=identity.protocol_mode or "structured-v2",
+                    publish=True,
+                )
+                if queue_result.disposition is QueueFinalizationDisposition.COMPLETED:
+                    logger.info("Moved task to done outbox: %s", queue_result.destination)
+                    logger.info(
+                        "Task finished with exit code %s: %s",
+                        task_result.exit_code,
+                        task_file.name,
+                    )
+                    continue
+                logger.error(
+                    "Bound queue finalization failed for %s: %s",
+                    task_file.name,
+                    queue_result.detail,
+                )
+                bound_failure = queue_result.detail or "bound queue finalization failed"
+            elif not task_succeeded_already:
+                # Legacy integer callbacks retain the historical timestamp marker and
+                # move primitive; production structured results use bound evidence.
                 try:
                     write_success_marker(task_file)
-                except Exception:
-                    logger.exception("Failed to write success marker for %s.", task_file)
+                except Exception as exc:
+                    bound_failure = f"{type(exc).__name__}: {exc}"
+            elif has_bound_queue_success_marker(task_file):
+                queue_result = finalize_queue_success(
+                    task_file,
+                    inbox_dir=inbox_dir,
+                    outbox_dir=outbox_dir,
+                )
+                if queue_result.disposition is QueueFinalizationDisposition.COMPLETED:
+                    logger.info(
+                        "Task bookkeeping completed for previously succeeded task: %s",
+                        task_file.name,
+                    )
+                    continue
+                if queue_result.disposition is QueueFinalizationDisposition.FAILED:
+                    logger.error(
+                        "Bound queue recovery failed for %s: %s",
+                        task_file.name,
+                        queue_result.detail,
+                    )
+                    bound_failure = queue_result.detail or "bound queue recovery failed"
+
+            if bound_failure is not None and has_bound_queue_success_marker(task_file):
+                # Bound evidence must never be redirected to failed/stuck: it names the
+                # sole safe destination and is the recovery authority for a direct resume.
+                logger.error(
+                    "Pausing watch queue with recoverable bound success evidence for %s: %s",
+                    task_file.name,
+                    bound_failure,
+                )
+                return 1
 
             try:
+                # Compatibility for timestamp-only success markers from older watchers.
+                if bound_failure is not None:
+                    raise RuntimeError(bound_failure)
                 destination = move_to_outbox(task_file, outbox_done_dir)
                 delete_attempt_sidecar(task_file)
                 delete_success_marker(task_file)

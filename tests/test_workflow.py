@@ -55,6 +55,7 @@ from workflow import (
     ReviewerInvocation,
     WorkflowChanges,
     WorkflowCommitRequest,
+    WorkflowCommitApprovalRequired,
     WorkflowCorrectionBoundary,
     WorkflowContext,
     WorkflowContractError,
@@ -397,6 +398,7 @@ class FakeDriver:
     reviewer_failures: list[AgentInvocationError | None] = field(default_factory=list)
     correction_boundaries: list[WorkflowCorrectionBoundary] = field(default_factory=list)
     commit_refs: list[str] = field(default_factory=list)
+    commit_failure: WorkflowCommitApprovalRequired | None = None
     deltas: dict[tuple[str, str], str] = field(default_factory=dict)
     invalid_attestation: str | None = None
     fail_reviewer_once: bool = False
@@ -589,6 +591,10 @@ class FakeDriver:
 
     def commit_slice(self, request: WorkflowCommitRequest) -> str:
         self.commit_calls.append(request)
+        if self.commit_failure is not None:
+            failure = self.commit_failure
+            self.commit_failure = None
+            raise failure
         return self.commit_refs.pop(0) if self.commit_refs else "b" * 40
 
     def checkpoint(self, state, history) -> None:
@@ -763,6 +769,34 @@ def test_slice_commit_with_stale_claude_fingerprint_revalidates_before_commit() 
     assert driver.codex_calls == []
     assert len(driver.commit_calls) == 1
     assert driver.commit_calls[0].fingerprint == changes.fingerprint
+
+
+def test_slice_head_drift_is_persisted_as_exact_resume_gate() -> None:
+    changes = _changes("2", "src/early.py", TEST_FILE)
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[],
+        reviewer_outputs=[_review_approval(AgentRole.CLAUDE)],
+        commit_failure=WorkflowCommitApprovalRequired(
+            "HEAD-DRIFT | approve the reviewed descendant HEAD",
+            changes.paths,
+        ),
+    )
+    state = _slice_state().with_current_step(WorkflowStep.SLICE_COMMIT)
+
+    result = WorkflowEngine(driver).run_current_work_unit(
+        state,
+        _context(),
+        WorkflowHistory(state.current_work_unit_id),
+    )
+
+    assert not result.completed
+    assert result.state.current_work_unit.status is WorkUnitStatus.AWAITING_USER_DECISION
+    assert result.state.current_work_unit.gate.reason is GateReason.UNEXPECTED_FILE
+    assert result.state.current_work_unit.gate.fingerprint == changes.fingerprint
+    assert result.state.current_work_unit.gate.paths == changes.paths
+    assert result.state.current_work_unit.gate.resume_step is WorkflowStep.SLICE_COMMIT
+    assert driver.checkpoints[-1] == result.state
 
 
 def test_resume_from_persisted_claude_step_does_not_repeat_codex() -> None:

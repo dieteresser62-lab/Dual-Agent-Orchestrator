@@ -143,6 +143,15 @@ class WorkflowContractError(WorkflowExecutionError):
     """Raised after a reviewer response and its compact format repair both fail."""
 
 
+class WorkflowCommitApprovalRequired(WorkflowExecutionError):
+    """Requests an exact user gate before committing across a changed Slice HEAD."""
+
+    def __init__(self, detail: str, paths: tuple[str, ...]) -> None:
+        super().__init__(detail)
+        self.detail = detail
+        self.paths = tuple(sorted(set(paths)))
+
+
 class ValidationExecutionError(WorkflowExecutionError):
     """Raised by a v3 driver when required validation cannot be executed."""
 
@@ -2618,16 +2627,27 @@ class WorkflowEngine:
             )
             self.driver.checkpoint(state, history)
             return WorkflowRunResult(state, history)
-        commit_ref = self.driver.commit_slice(
-            WorkflowCommitRequest(
-                slice_id=state.current_slice_id,
-                fingerprint=changes.fingerprint,
-                attestation=attestation,
-                claude_review=claude,
-                findings=history.findings,
-                red_state_followup_slice=context.red_state_followup_slice,
+        try:
+            commit_ref = self.driver.commit_slice(
+                WorkflowCommitRequest(
+                    slice_id=state.current_slice_id,
+                    fingerprint=changes.fingerprint,
+                    attestation=attestation,
+                    claude_review=claude,
+                    findings=history.findings,
+                    red_state_followup_slice=context.red_state_followup_slice,
+                )
             )
-        )
+        except WorkflowCommitApprovalRequired as exc:
+            state = state.await_user_gate(
+                reason=GateReason.UNEXPECTED_FILE,
+                detail=exc.detail,
+                fingerprint=changes.fingerprint,
+                paths=exc.paths,
+                resume_step=WorkflowStep.SLICE_COMMIT,
+            )
+            self.driver.checkpoint(state, history)
+            return WorkflowRunResult(state, history)
         if not isinstance(commit_ref, str) or not commit_ref.strip():
             raise WorkflowExecutionError("slice commit did not return a commit reference")
         state = state.complete_current_slice(commit_ref=commit_ref)

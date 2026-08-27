@@ -139,6 +139,7 @@ from workflow import (
     ReviewerInvocation,
     NoWorkflowChangesError,
     WorkflowChanges,
+    WorkflowCommitApprovalRequired,
     WorkflowCommitRequest,
     WorkflowContext,
     WorkflowCorrectionBoundary,
@@ -169,9 +170,13 @@ from workflow_state import (
 )
 from validation_matrix import ValidationCommand, ValidationMatrix
 from inbox_watcher import (
+    QueueFinalizationDisposition,
     WatchTaskDisposition,
     WatchTaskResult,
     attempt_sidecar_path,
+    finalize_queue_success,
+    load_queue_success_evidence,
+    load_watch_identity,
     move_to_outbox,
     success_marker_path,
     watch_identity_path,
@@ -735,6 +740,12 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 projected = replay_findings(
                     replay,
                     finding_ids=correction_finding_ids,
+                )
+                correction_ids = frozenset(correction_finding_ids)
+                mirror_findings = tuple(
+                    finding
+                    for finding in mirror_findings
+                    if finding.finding_id in correction_ids
                 )
             else:
                 projected = replay_findings(replay)
@@ -2109,12 +2120,22 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 )
                 if decision.approved
                 and decision.fingerprint == request.fingerprint
+                and decision.paths == (unexpected_paths or reviewed_changes.paths)
                 and decision.reason
                 in {GateReason.UNEXPECTED_FILE, GateReason.QUOTA_RESUME_DIFF}
             ),
             None,
         )
         identity = inspect_repository(self.root)
+        if identity.head != current.start_commit and head_approval is None:
+            raise WorkflowCommitApprovalRequired(
+                (
+                    "HEAD-DRIFT | the Slice HEAD changed after its persisted start; "
+                    f"approve the exact reviewed fingerprint {request.fingerprint} "
+                    f"and current HEAD {identity.head} before committing"
+                ),
+                unexpected_paths or reviewed_changes.paths,
+            )
         result = commit_slice(
             repository_root=self.root,
             boundary=boundary,
@@ -3838,6 +3859,77 @@ def run_pipeline(
     args: argparse.Namespace,
     force_new: bool = False,
 ) -> int | WatchTaskResult:
+    direct_queue_resume = bool(
+        not bool(getattr(args, "watch", False))
+        and getattr(args, "resume_explicit", False)
+        and getattr(args, "task_file_explicit", False)
+        and getattr(args, "resume", False)
+    )
+    watch_invocation = bool(
+        getattr(args, "watch_run_id", None) is not None and not direct_queue_resume
+    )
+    queue_identity = None
+    if direct_queue_resume:
+        inbox_dir = Path(args.inbox_dir)
+        outbox_dir = Path(args.outbox_dir)
+        marker = success_marker_path(task_file)
+        if marker.exists():
+            try:
+                evidence = load_queue_success_evidence(
+                    task_file, inbox_dir=inbox_dir, outbox_dir=outbox_dir
+                )
+                repository_root = Path.cwd().resolve()
+                resumed = load_resumable_workflow_state(
+                    repository_root / ".orchestrator" / "state.json",
+                    repository_root=repository_root,
+                    allowed_roots=tuple(
+                        dict.fromkeys((repository_root, task_file.parent.resolve()))
+                    ),
+                )
+                if not isinstance(resumed, WorkflowState):
+                    raise ValueError("bound queue recovery requires version-3 state")
+                terminal = WorkflowRunResult(resumed, _history(resumed))
+                if (
+                    not terminal.workflow_completed
+                    or resumed.run_id != evidence.run_id
+                    or Path(resumed.task_file).resolve() != task_file.resolve()
+                    or resumed.task_digest != evidence.task_digest
+                    or resumed.effective_protocol_mode.value != evidence.protocol_mode
+                ):
+                    raise ValueError("bound success evidence differs from terminal workflow state")
+            except (ArtifactResumeError, StateSchemaError, ValueError) as exc:
+                logger.error("Direct queue recovery rejected: %s", exc)
+                return 1
+            args.watch_run_id = evidence.run_id
+            queue_result = finalize_queue_success(
+                task_file,
+                inbox_dir=inbox_dir,
+                outbox_dir=outbox_dir,
+                run_id=evidence.run_id,
+                task_digest=evidence.task_digest,
+                protocol_mode=evidence.protocol_mode,
+            )
+            if queue_result.disposition is QueueFinalizationDisposition.COMPLETED:
+                logger.info("Completed pending queue bookkeeping: %s", queue_result.destination)
+                return 0
+            logger.error("Direct queue recovery failed: %s", queue_result.detail)
+            return 1
+        if task_file.exists() and watch_identity_path(task_file).exists():
+            path_check = finalize_queue_success(
+                task_file, inbox_dir=inbox_dir, outbox_dir=outbox_dir
+            )
+            if path_check.disposition is QueueFinalizationDisposition.FAILED:
+                logger.error("Direct watch-origin resume rejected: %s", path_check.detail)
+                return 1
+            try:
+                queue_identity = load_watch_identity(task_file)
+            except ValueError as exc:
+                logger.error("Direct watch-origin resume rejected: %s", exc)
+                return 1
+            args.watch_run_id = queue_identity.run_id
+        elif not task_file.exists():
+            logger.error("Direct queue recovery source is missing without bound success evidence")
+            return 1
     try:
         if args.dry_run:
             result, calls, validations = run_default_dry_run(
@@ -3854,7 +3946,7 @@ def run_pipeline(
     except ArtifactResumeError as exc:
         logger.error("Structured resume halted: %s", exc)
         watch_run_id = getattr(args, "watch_run_id", None)
-        if watch_run_id is not None:
+        if watch_invocation and watch_run_id is not None:
             return WatchTaskResult(
                 exit_code=4,
                 run_id=watch_run_id,
@@ -3871,7 +3963,7 @@ def run_pipeline(
     except StateSchemaError as exc:
         logger.error("State-v3 workflow failed: %s", exc)
         watch_run_id = getattr(args, "watch_run_id", None)
-        if watch_run_id is not None:
+        if watch_invocation and watch_run_id is not None:
             return WatchTaskResult(
                 exit_code=4,
                 run_id=watch_run_id,
@@ -3895,7 +3987,7 @@ def run_pipeline(
     ) as exc:
         logger.error("State-v3 workflow failed: %s", exc)
         watch_run_id = getattr(args, "watch_run_id", None)
-        if watch_run_id is not None:
+        if watch_invocation and watch_run_id is not None:
             return WatchTaskResult(
                 exit_code=1,
                 run_id=watch_run_id,
@@ -3911,8 +4003,33 @@ def run_pipeline(
             )
         return 1
 
-    if getattr(args, "watch_run_id", None) is not None:
+    if watch_invocation and getattr(args, "watch_run_id", None) is not None:
         return WatchTaskResult.from_workflow(result)
+    if queue_identity is not None and result.workflow_completed:
+        state = result.state
+        state_protocol = state.effective_protocol_mode.value
+        if (
+            state.run_id != queue_identity.run_id
+            or Path(state.task_file).resolve() != task_file.resolve()
+            or state.task_digest != queue_identity.task_digest
+            or state_protocol != queue_identity.protocol_mode
+        ):
+            logger.error("Terminal workflow result differs from bound watch task identity")
+            return 1
+        queue_result = finalize_queue_success(
+            task_file,
+            inbox_dir=Path(args.inbox_dir),
+            outbox_dir=Path(args.outbox_dir),
+            run_id=state.run_id,
+            task_digest=state.task_digest,
+            protocol_mode=state_protocol,
+            publish=True,
+        )
+        if queue_result.disposition is not QueueFinalizationDisposition.COMPLETED:
+            logger.error("Terminal workflow succeeded but queue finalization failed: %s", queue_result.detail)
+            return 1
+        logger.info("Moved directly resumed watch task to done outbox: %s", queue_result.destination)
+        return 0
     bootstrap_halt = (
         result.state.current_work_unit.status is WorkUnitStatus.AWAITING_RESUME
         and result.state.current_work_unit.gate.reason is GateReason.BOOTSTRAP_CHECK

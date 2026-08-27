@@ -50,7 +50,16 @@ from contracts import (
     ReviewEvidence,
 )
 from git_service import GitTransactionError
-from inbox_watcher import WatchTaskDisposition, WatchTaskResult
+from inbox_watcher import (
+    QueueFinalizationDisposition,
+    WatchTaskDisposition,
+    WatchTaskIdentity,
+    WatchTaskResult,
+    finalize_queue_success,
+    save_watch_identity,
+    success_marker_path,
+    watch_identity_path,
+)
 from orchestrator import ProductionWorkflowDriver, run_pipeline, run_production_workflow
 from review_packets import ReviewPacket, ReviewPacketManifest
 from workflow import (
@@ -62,6 +71,7 @@ from workflow import (
     WorkflowContext,
     WorkflowEngine,
     WorkflowHistory,
+    WorkflowRunResult,
 )
 from workflow import WorkflowExecutionError
 from plan_handoff import PlanHandoffError
@@ -2022,6 +2032,12 @@ def test_combined_native_finding_authority_rejects_state_mirror_drift(
     assert driver.authoritative_native_findings(
         correction_state, (closed_second, finding)
     ) == (finding, closed_second)
+    # The state-v3 history remains a complete cross-work-unit ledger. Closed
+    # findings outside the correction record's affected IDs must neither enter
+    # the Codex correction request nor create a false mirror divergence.
+    assert driver.authoritative_native_findings(
+        correction_state, (historical_finding, closed_second, finding)
+    ) == (finding, closed_second)
     later_blocker = FindingRecord(
         finding_id="C-03",
         finding_class=FindingClass.BLOCKER,
@@ -3651,3 +3667,96 @@ def test_completed_plan_resume_retries_failed_handoff_without_agents(
     assert tuple(agent_steps) == steps_after_commit
     assert handoff_calls == 2
     assert task.with_name("resume-implement.md").is_file()
+
+
+def test_explicit_resume_of_watch_origin_runs_terminal_workflow_once_then_finalizes_queue(
+    tmp_path: Path, monkeypatch
+) -> None:
+    inbox = tmp_path / "inbox"
+    outbox = tmp_path / "outbox"
+    inbox.mkdir()
+    task = inbox / "runtime-resume.md"
+    task.write_text("runtime-bound resume", encoding="utf-8")
+    digest = hashlib.sha256(task.read_bytes()).hexdigest()
+    identity = WatchTaskIdentity(
+        "watch-runtime-resume", digest, True, "structured-v2", 2
+    )
+    save_watch_identity(task, identity)
+    terminal, _, _ = orchestrator.run_default_dry_run(task, run_id=identity.run_id)
+    terminal = WorkflowRunResult(
+        replace(terminal.state, task_digest=digest), terminal.history
+    )
+    calls = {"workflow": 0}
+
+    def completed_workflow(*_args, **_kwargs) -> WorkflowRunResult:
+        calls["workflow"] += 1
+        return terminal
+
+    monkeypatch.setattr(orchestrator, "run_production_workflow", completed_workflow)
+    args = parse_args(
+        [
+            "--resume", "--task-file", str(task),
+            "--inbox-dir", str(inbox), "--outbox-dir", str(outbox),
+        ],
+        cwd=tmp_path,
+        environ={},
+    )
+
+    assert run_pipeline(task, args) == 0
+    assert calls == {"workflow": 1}
+    moved = list((outbox / "done").glob("*.md"))
+    assert len(moved) == 1
+    assert moved[0].read_text(encoding="utf-8") == "runtime-bound resume"
+    assert not task.exists()
+    assert not success_marker_path(task).exists()
+    assert not watch_identity_path(task).exists()
+
+
+def test_explicit_resume_with_bound_success_and_corrupt_state_returns_one(
+    tmp_path: Path, monkeypatch, caplog
+) -> None:
+    repository = _repository(tmp_path, "feature/bound-corrupt-state")
+    inbox = repository / "inbox"
+    outbox = repository / "outbox"
+    inbox.mkdir()
+    task = inbox / "bound-corrupt-state.md"
+    task.write_text("bound payload", encoding="utf-8")
+    digest = hashlib.sha256(task.read_bytes()).hexdigest()
+    identity = WatchTaskIdentity(
+        "watch-bound-corrupt-state", digest, True, "structured-v2", 2
+    )
+    save_watch_identity(task, identity)
+
+    def interrupt_move(*_args, **_kwargs):
+        raise OSError("leave bound success evidence pending")
+
+    monkeypatch.setattr("inbox_watcher.move_to_reserved_outbox", interrupt_move)
+    published = finalize_queue_success(
+        task,
+        inbox_dir=inbox,
+        outbox_dir=outbox,
+        run_id=identity.run_id,
+        task_digest=identity.task_digest,
+        publish=True,
+    )
+    assert published.disposition is QueueFinalizationDisposition.FAILED
+    assert success_marker_path(task).is_file()
+
+    state_path = repository / ".orchestrator" / "state.json"
+    state_path.parent.mkdir(exist_ok=True)
+    state_path.write_text("{not-json", encoding="utf-8")
+    args = parse_args(
+        [
+            "--resume", "--task-file", str(task),
+            "--inbox-dir", str(inbox), "--outbox-dir", str(outbox),
+        ],
+        cwd=repository,
+        environ={},
+    )
+    monkeypatch.chdir(repository)
+
+    with caplog.at_level("ERROR"):
+        result = run_pipeline(task, args)
+
+    assert result == 1
+    assert "Direct queue recovery rejected" in caplog.text
