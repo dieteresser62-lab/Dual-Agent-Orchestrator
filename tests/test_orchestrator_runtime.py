@@ -51,9 +51,11 @@ from contracts import (
 )
 from git_service import GitTransactionError
 from inbox_watcher import (
+    QueueFinalizationDisposition,
     WatchTaskDisposition,
     WatchTaskIdentity,
     WatchTaskResult,
+    finalize_queue_success,
     save_watch_identity,
     success_marker_path,
     watch_identity_path,
@@ -3708,3 +3710,53 @@ def test_explicit_resume_of_watch_origin_runs_terminal_workflow_once_then_finali
     assert not task.exists()
     assert not success_marker_path(task).exists()
     assert not watch_identity_path(task).exists()
+
+
+def test_explicit_resume_with_bound_success_and_corrupt_state_returns_one(
+    tmp_path: Path, monkeypatch, caplog
+) -> None:
+    repository = _repository(tmp_path, "feature/bound-corrupt-state")
+    inbox = repository / "inbox"
+    outbox = repository / "outbox"
+    inbox.mkdir()
+    task = inbox / "bound-corrupt-state.md"
+    task.write_text("bound payload", encoding="utf-8")
+    digest = hashlib.sha256(task.read_bytes()).hexdigest()
+    identity = WatchTaskIdentity(
+        "watch-bound-corrupt-state", digest, True, "structured-v2", 2
+    )
+    save_watch_identity(task, identity)
+
+    def interrupt_move(*_args, **_kwargs):
+        raise OSError("leave bound success evidence pending")
+
+    monkeypatch.setattr("inbox_watcher.move_to_reserved_outbox", interrupt_move)
+    published = finalize_queue_success(
+        task,
+        inbox_dir=inbox,
+        outbox_dir=outbox,
+        run_id=identity.run_id,
+        task_digest=identity.task_digest,
+        publish=True,
+    )
+    assert published.disposition is QueueFinalizationDisposition.FAILED
+    assert success_marker_path(task).is_file()
+
+    state_path = repository / ".orchestrator" / "state.json"
+    state_path.parent.mkdir(exist_ok=True)
+    state_path.write_text("{not-json", encoding="utf-8")
+    args = parse_args(
+        [
+            "--resume", "--task-file", str(task),
+            "--inbox-dir", str(inbox), "--outbox-dir", str(outbox),
+        ],
+        cwd=repository,
+        environ={},
+    )
+    monkeypatch.chdir(repository)
+
+    with caplog.at_level("ERROR"):
+        result = run_pipeline(task, args)
+
+    assert result == 1
+    assert "Direct queue recovery rejected" in caplog.text

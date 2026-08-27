@@ -3897,7 +3897,7 @@ def run_pipeline(
                     or resumed.effective_protocol_mode.value != evidence.protocol_mode
                 ):
                     raise ValueError("bound success evidence differs from terminal workflow state")
-            except ValueError as exc:
+            except (ArtifactResumeError, StateSchemaError, ValueError) as exc:
                 logger.error("Direct queue recovery rejected: %s", exc)
                 return 1
             args.watch_run_id = evidence.run_id

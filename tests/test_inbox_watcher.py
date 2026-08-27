@@ -190,6 +190,39 @@ def test_bound_queue_success_converges_after_each_interruption_boundary(
     assert not watch_identity_path(task).exists()
 
 
+def test_bound_queue_success_rejects_source_swapped_to_symlink_before_move(
+    tmp_path: Path, monkeypatch
+) -> None:
+    inbox, outbox, task, identity = _bound_queue_task(tmp_path)
+    outside = tmp_path / "outside.md"
+    outside.write_text("attacker-controlled payload", encoding="utf-8")
+    import inbox_watcher as watcher
+
+    original_move = watcher.move_to_reserved_outbox
+
+    def swap_then_move(source: Path, destination: Path) -> Path:
+        source.unlink()
+        source.symlink_to(outside)
+        return original_move(source, destination)
+
+    monkeypatch.setattr(watcher, "move_to_reserved_outbox", swap_then_move)
+
+    result = finalize_queue_success(
+        task,
+        inbox_dir=inbox,
+        outbox_dir=outbox,
+        run_id=identity.run_id,
+        task_digest=identity.task_digest,
+        publish=True,
+    )
+
+    assert result.disposition is QueueFinalizationDisposition.FAILED
+    assert "regular non-symlink file" in (result.detail or "")
+    assert task.is_symlink()
+    assert outside.read_text(encoding="utf-8") == "attacker-controlled payload"
+    assert not list((outbox / "done").glob("*.md"))
+
+
 @pytest.mark.parametrize("field", ("run_id", "task_digest", "protocol_mode", "source", "destination"))
 def test_bound_queue_success_rejects_tampered_evidence(
     tmp_path: Path, field: str, monkeypatch

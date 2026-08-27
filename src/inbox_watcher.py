@@ -6,7 +6,9 @@ import contextlib
 import hashlib
 import json
 import logging
+import os
 import shutil
+import stat
 import time
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -278,7 +280,25 @@ def watch_identity_path(task_file: Path) -> Path:
 
 
 def _task_digest(task_file: Path) -> str:
-    return hashlib.sha256(task_file.read_bytes()).hexdigest()
+    path_stat = task_file.lstat()
+    if not stat.S_ISREG(path_stat.st_mode):
+        raise ValueError("queue task source must be a regular non-symlink file")
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(task_file, flags)
+    try:
+        descriptor_stat = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(descriptor_stat.st_mode)
+            or (path_stat.st_dev, path_stat.st_ino)
+            != (descriptor_stat.st_dev, descriptor_stat.st_ino)
+        ):
+            raise ValueError("queue task source must be a regular non-symlink file")
+        digest = hashlib.sha256()
+        while chunk := os.read(descriptor, 1024 * 1024):
+            digest.update(chunk)
+        return digest.hexdigest()
+    finally:
+        os.close(descriptor)
 
 
 def _new_watch_run_id(task_file: Path) -> str:
@@ -363,6 +383,14 @@ def move_to_outbox(task_file: Path, outbox_subdir: Path, *, source_name: str | N
 
 
 def move_to_reserved_outbox(task_file: Path, destination: Path) -> Path:
+    # Re-check at the filesystem mutation boundary. Digest reads use O_NOFOLLOW,
+    # while this guard prevents a path swapped afterward from being moved.
+    try:
+        source_mode = task_file.lstat().st_mode
+    except FileNotFoundError as exc:
+        raise ValueError("queue task source must be a regular non-symlink file") from exc
+    if not stat.S_ISREG(source_mode):
+        raise ValueError("queue task source must be a regular non-symlink file")
     shutil.move(str(task_file), str(destination))
     return destination
 
