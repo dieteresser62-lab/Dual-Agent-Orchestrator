@@ -1389,7 +1389,7 @@ def _render_decision_table(findings: tuple[FindingRecord, ...]) -> str:
         else:
             decision = "offen"
         implementation = (
-            "erledigt: " + _safe(finding.status_rationale)
+            "erledigt: " + _prose_safe(finding.status_rationale)
             if finding.status is FindingStatus.CLOSED and finding.status_rationale
             else "offen"
         )
@@ -1399,7 +1399,7 @@ def _render_decision_table(findings: tuple[FindingRecord, ...]) -> str:
                 (
                     finding.finding_id,
                     finding.origin.reporter.value,
-                    _safe(finding.summary),
+                    _prose_safe(finding.summary),
                     finding.finding_class.value,
                     decision,
                     implementation,
