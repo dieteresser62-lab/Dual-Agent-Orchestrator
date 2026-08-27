@@ -78,8 +78,24 @@ Noch kein strukturiertes Reviewereignis.
 - Realistische Bruchbedingung: If a future refactor removes either the O_NOFOLLOW/dev-inode fstat identity cross-check in _task_digest or the immediate pre-move lstat re-check in move_to_reserved_outbox (e.g.<br>while consolidating the two functions or optimizing the hot path), the TOCTOU protection for C-03 silently regresses; the existing test_bound_queue_success_rejects_source_swapped_to_symlink_before_move regression must keep failing against any such regression before it can be merged.<br>Likewise, if the ArtifactResumeError/StateSchemaError tuple in run_pipeline's bound-marker branch is narrowed again to plain ValueError, test_explicit_resume_with_bound_success_and_corrupt_state_returns_one must catch the reintroduced uncaught-exception path.
 - Eigene Findings: `C-01`, `C-03`, `C-04`, `C-05`
 
+#### Work Unit 05 – Gesamtreview
+
+- Auftrag: Branchweite Gesamtabnahme durch Codex und Claude
+- Scope: `docs/internal/resume-abschluss-verschiebt-task-in-outbox-implement-review-a9c0a538.md`, `docs/internal/slice-resume-abschluss-verschiebt-task-in-outbox-arbeitsplan-01-gebundene-gemeinsam-genutzte-queue-finalisierung-fur-direkten-resume.md`, `src/cli.py`, `src/inbox_watcher.py`, `src/orchestrator.py`, `tests/test_cli.py`, `tests/test_inbox_watcher.py`, `tests/test_orchestrator_runtime.py`, `tests/test_orchestrator_watch_cli.py`
+
+### Claude · Runde 1 · approved (Ereignis 2)
+
+- Reviewer: `claude`
+- Freigabe: `YES`
+- Validierungsbindung: `validation-fce5a466dd4d`
+- Testdateien: `tests/test_agent_runtime.py`, `tests/test_cli.py`, `tests/test_inbox_watcher.py`, `tests/test_orchestrator_runtime.py`, `tests/test_orchestrator_watch_cli.py`, `tests/test_workflow.py`
+- Prüfdimensionen: Checked at the final gate for fingerprint fce5a466dd4d: (1) correctness/failure-path closure of C-01/C-04 — run_pipeline's direct-queue bound-marker recovery branch now catches (ArtifactResumeError, StateSchemaError, ValueError) matching the sibling structured-v2 load/resume call site, with the dedicated regression test_explicit_resume_with_bound_success_and_corrupt_state_returns_one asserting exit code 1 and a logged 'Direct queue recovery rejected' diagnostic instead of an uncaught exception; (2) security-boundary closure of C-03/C-05 — inbox_watcher._task_digest now opens the queue source with O_NOFOLLOW where available plus an independent pre-open lstat vs post-open fstat dev/inode identity cross-check, and move_to_reserved_outbox re-validates task_file.lstat() immediately before shutil.move, with test_bound_queue_success_rejects_source_swapped_to_symlink_before_move confirming a mid-finalization symlink swap yields a FAILED disposition, an untouched target, an intact symlink, and an empty outbox/done; (3) contract adherence — every changed/added path (docs Slice artifacts, src/cli.py, src/inbox_watcher.py, src/orchestrator.py, src/agent_runtime.py, src/workflow.py and matching tests) is contained within the request's authorized_paths allowlist, and the Slice docs correctly record the Codex-facing Slice/Arbeitsplan contract without touching orchestrator-managed audit blocks outside the granted authority; (4) resume/idempotency — bound success-marker recovery, sidecar cleanup ordering, and repeated direct-resume plus subsequent watch-pass behavior are exercised by the accepted regression suite, and the diff_fingerprint recorded in the supplied validation_attestation (fce5a466dd4d) exactly matches current_fingerprint, with the full command &#96;python3 -m pytest tests/ -v&#96; recorded PASS at 1042/1042; (5) finding lifecycle — C-01 through C-05 are all recorded CLOSED with specific, technically consistent status_rationale citing the exact code paths and named regression tests, Codex's own final_report self_check independently corroborates no open findings and full authorized-path containment, and no reviewer-owned open BLOCKER remains at this gate.
+- Größtes Restrisiko: An inherent, drastically narrowed but not fully eliminated TOCTOU window remains between move_to_reserved_outbox's final pre-move lstat re-check and the shutil.move syscall itself, since check-then-act filesystem operations without an fd-anchored atomic rename/replace cannot close that instant fully; on platforms lacking O_NOFOLLOW support, _task_digest's protection degrades from kernel-enforced non-follow semantics to the dev/inode identity comparison alone (still effective against most swaps but weaker than the POSIX path).<br>Separately, cli.py's manual sidecar-path computation (&#96;task_path.with_name(f"{task_path.name}.success")&#96;, closed finding C-02) remains a duplicated convention that could silently diverge from inbox_watcher.success_marker_path() if that helper's naming scheme changes in a future, unrelated slice.
+- Realistische Bruchbedingung: This approval must be revisited if a follow-up run shows: run_pipeline's bound-marker recovery branch reverting to a bare &#96;except ValueError&#96;, letting ArtifactResumeError/StateSchemaError propagate uncaught; the O_NOFOLLOW/dev-inode identity check in _task_digest or the pre-move lstat re-validation in move_to_reserved_outbox being removed, reordered, or bypassed such that test_bound_queue_success_rejects_source_swapped_to_symlink_before_move stops failing against a reintroduced symlink swap; any regression test named in the C-01/C-03/C-04/C-05 closures being deleted or weakened; or any future validation_attestation showing a diff_fingerprint mismatch against current_fingerprint, a failing full-suite run, or a test count materially below the attested 1042.
+- Eigene Findings: `C-01`, `C-02`, `C-03`, `C-04`, `C-05`
+
 <!-- artifact-records:claude-review:begin -->
-Semantischer Record-Digest: `674b4932ac2f`
+Semantischer Record-Digest: `91c2f4bece7b`
 
 ### Claude · Runde 1 · approved
 
@@ -104,6 +120,12 @@ Semantischer Record-Digest: `674b4932ac2f`
 | Seq/Record | Rolle | Runde | Status | Work-Unit | Findings | Fingerprint | Transport | Request | Response |
 |---|---|---:|---|---|---|---|---|---|---|
 | 71. `ar1-70605a1d06a2` | `claude` | `1` | `approved` | `4` | `C-01`, `C-03`, `C-04`, `C-05` | `c52a7e8c9ab6` | `native-claude-review-v2` | `native-review-request-6bd8f24607ac` | `8cf72880f495` |
+
+### Claude · Runde 1 · approved
+
+| Seq/Record | Rolle | Runde | Status | Work-Unit | Findings | Fingerprint | Transport | Request | Response |
+|---|---|---:|---|---|---|---|---|---|---|
+| 95. `ar1-4949971d8f81` | `claude` | `1` | `approved` | `5` | `C-01`, `C-02`, `C-03`, `C-04`, `C-05` | `fce5a466dd4d` | `native-claude-review-v2` | `native-review-request-31a0e1140bf6` | `37b08f15d7a5` |
 <!-- artifact-records:claude-review:end -->
 <!-- audit:claude-review:end -->
 
@@ -145,8 +167,21 @@ Noch keine strukturierten Codex-Antworten.
 - `C-04` Antwort 1: **angenommen** — Resolved by the same controlled structured-resume exception handling and orchestrator runtime regression as C-01.
 - `C-05` Antwort 1: **angenommen** — Resolved by the same no-follow queue-source hardening and symlink-swap regression as C-03.<br>The full suite passed with 1041 tests.
 
+#### Work Unit 05 – Gesamtreview
+
+- Auftrag: Branchweite Gesamtabnahme durch Codex und Claude
+- Scope: `docs/internal/resume-abschluss-verschiebt-task-in-outbox-implement-review-a9c0a538.md`, `docs/internal/slice-resume-abschluss-verschiebt-task-in-outbox-arbeitsplan-01-gebundene-gemeinsam-genutzte-queue-finalisierung-fur-direkten-resume.md`, `src/cli.py`, `src/inbox_watcher.py`, `src/orchestrator.py`, `tests/test_cli.py`, `tests/test_inbox_watcher.py`, `tests/test_orchestrator_runtime.py`, `tests/test_orchestrator_watch_cli.py`
+
+- `C-01` Antwort 1: **angenommen** — The bound-marker recovery branch catches only ValueError although load_resumable_workflow_state can raise ArtifactResumeError or StateSchemaError.<br>The finding correctly identifies an inconsistent fail-closed error path that should be covered by a direct-resume regression test.
+- `C-01` Antwort 2: **angenommen** — The direct bound-marker resume branch now catches ArtifactResumeError and StateSchemaError and returns a logged exit code<br>1.<br>A literal --resume --task-file regression test covers corrupt state.
+- `C-02` Antwort 1: **angenommen** — The CLI duplicates the success-marker naming convention instead of using the shared inbox_watcher helper.<br>Centralizing this computation or binding it with a regression test would prevent silent naming drift.
+- `C-03` Antwort 1: **angenommen** — The source symlink check occurs before later digest and move operations, leaving a genuine TOCTOU window.<br>A test that swaps the source after initial validation would establish the required fail-closed behavior.
+- `C-03` Antwort 2: **angenommen** — Queue digest reads now reject symlinks and path/descriptor identity changes, and the move boundary revalidates a regular non-symlink source.<br>A mid-finalization symlink-swap regression confirms FAILED disposition.
+- `C-04` Antwort 1: **angenommen** — Resolved by the same controlled structured-resume exception handling and orchestrator runtime regression as C-01.
+- `C-05` Antwort 1: **angenommen** — Resolved by the same no-follow queue-source hardening and symlink-swap regression as C-03.<br>The full suite passed with 1041 tests.
+
 <!-- artifact-records:codex-responses:begin -->
-Semantischer Record-Digest: `674b4932ac2f`
+Semantischer Record-Digest: `91c2f4bece7b`
 
 ### Codex · Findingantworten
 
@@ -249,8 +284,25 @@ Noch keine strukturierte Validierungsattestierung.
 |---|---|---:|---|
 | python3 -m pytest tests/ -v | PASS | 0 | ============================= test session starts ==============================<br>platform linux -- Python 3.12.3, pytest-7.4.4, pluggy-1.4.0 -- /usr/bin/python3<br>cachedir: .pytest_cache<br>rootdir: /mnt/c/Users/Diete/Sync/DE_Privat/Rente/ChatGPT CLI/Dual-Agent-Orchestrator<br>configfile: pyproject.toml<br>collecting ... collected 1042 items<br><br>tests/test_agent_adapters.py::test_registry_constructs_only_native_adapters PASSED [  0%]<br>tests/test_agent_adapters.py::test_native_adapter_api_and_mro_are_closed PASSED [  0%]<br>tests/test_agent_adapters.py::test_native_codex_prepares_schema_request_and_assets PASSED [  0%]<br>tests/test_agent_adapters.py::test_native_codex_extracts_only_bound_result PASSED [  0%]<br>tests/test_agent_adapters.py::test_native_claude_workspace_binding_and_capability_smoke PASSED [  0%]<br>tests/test_agent_adapters.py::test_native_claude_prepares_request_components_and_bound_output PASSED [  0%]<br>tests/test_agent_runtime.py::test_compute_retry_backoff_seconds_exponential PASSED [  0%]<br>tes<br>...[120266 characters omitted]...<br>_pre_slice11_v3_gate_and_work_unit_shapes_load_with_empty_new_fields PASSED [ 99%]<br>tests/test_workflow_state.py::test_early_slice11_work_unit_shape_loads_without_active_test_evidence PASSED [ 99%]<br>tests/test_workflow_state.py::test_policy_gate_roundtrips_and_resumes_at_same_step PASSED [ 99%]<br>tests/test_workflow_state.py::test_managed_audit_path_roundtrips_and_rejects_unsafe_locations PASSED [ 99%]<br>tests/test_workflow_state.py::test_policy_gate_rejects_fingerprint_bound_reason_and_unsafe_path PASSED [ 99%]<br>tests/test_workflow_state.py::test_unexpected_file_user_gate_decision_roundtrips PASSED [ 99%]<br>tests/test_workflow_state.py::test_plan_time_slice_one_start_commit_cannot_be_rebound_after_resume PASSED [ 99%]<br>tests/test_workflow_state.py::test_in_progress_slice_can_extend_exact_remediation_scope PASSED [ 99%]<br>tests/test_workflow_state.py::test_state_scope_rejects_orchestrator_internal_paths PASSED [100%]<br><br>======================= 1042 passed in 65.15s (0:01:05) ======================== |
 
+#### Work Unit 05 – Gesamtreview
+
+- Auftrag: Branchweite Gesamtabnahme durch Codex und Claude
+- Scope: `docs/internal/resume-abschluss-verschiebt-task-in-outbox-implement-review-a9c0a538.md`, `docs/internal/slice-resume-abschluss-verschiebt-task-in-outbox-arbeitsplan-01-gebundene-gemeinsam-genutzte-queue-finalisierung-fur-direkten-resume.md`, `src/cli.py`, `src/inbox_watcher.py`, `src/orchestrator.py`, `tests/test_cli.py`, `tests/test_inbox_watcher.py`, `tests/test_orchestrator_runtime.py`, `tests/test_orchestrator_watch_cli.py`
+
+### Ereignis 1: `validation-fce5a466dd4d`
+
+- Diff-Fingerprint: `fce5a466dd4d`
+- Status: `PASS`
+- Vollständig: `YES`
+- Kurzresultat: 1 passed; 0 failed; 0 unavailable; 1 required
+- Ausgabedigest: `acda8eba49d1`
+
+| Matrixbefehl | Status | Exitcode | Kompaktausgabe |
+|---|---|---:|---|
+| python3 -m pytest tests/ -v | PASS | 0 | ============================= test session starts ==============================<br>platform linux -- Python 3.12.3, pytest-7.4.4, pluggy-1.4.0 -- /usr/bin/python3<br>cachedir: .pytest_cache<br>rootdir: /mnt/c/Users/Diete/Sync/DE_Privat/Rente/ChatGPT CLI/Dual-Agent-Orchestrator<br>configfile: pyproject.toml<br>collecting ... collected 1042 items<br><br>tests/test_agent_adapters.py::test_registry_constructs_only_native_adapters PASSED [  0%]<br>tests/test_agent_adapters.py::test_native_adapter_api_and_mro_are_closed PASSED [  0%]<br>tests/test_agent_adapters.py::test_native_codex_prepares_schema_request_and_assets PASSED [  0%]<br>tests/test_agent_adapters.py::test_native_codex_extracts_only_bound_result PASSED [  0%]<br>tests/test_agent_adapters.py::test_native_claude_workspace_binding_and_capability_smoke PASSED [  0%]<br>tests/test_agent_adapters.py::test_native_claude_prepares_request_components_and_bound_output PASSED [  0%]<br>tests/test_agent_runtime.py::test_compute_retry_backoff_seconds_exponential PASSED [  0%]<br>tes<br>...[120266 characters omitted]...<br>_pre_slice11_v3_gate_and_work_unit_shapes_load_with_empty_new_fields PASSED [ 99%]<br>tests/test_workflow_state.py::test_early_slice11_work_unit_shape_loads_without_active_test_evidence PASSED [ 99%]<br>tests/test_workflow_state.py::test_policy_gate_roundtrips_and_resumes_at_same_step PASSED [ 99%]<br>tests/test_workflow_state.py::test_managed_audit_path_roundtrips_and_rejects_unsafe_locations PASSED [ 99%]<br>tests/test_workflow_state.py::test_policy_gate_rejects_fingerprint_bound_reason_and_unsafe_path PASSED [ 99%]<br>tests/test_workflow_state.py::test_unexpected_file_user_gate_decision_roundtrips PASSED [ 99%]<br>tests/test_workflow_state.py::test_plan_time_slice_one_start_commit_cannot_be_rebound_after_resume PASSED [ 99%]<br>tests/test_workflow_state.py::test_in_progress_slice_can_extend_exact_remediation_scope PASSED [ 99%]<br>tests/test_workflow_state.py::test_state_scope_rejects_orchestrator_internal_paths PASSED [100%]<br><br>======================= 1042 passed in 63.88s (0:01:03) ======================== |
+
 <!-- artifact-records:validation-attestation:begin -->
-Semantischer Record-Digest: `674b4932ac2f`
+Semantischer Record-Digest: `91c2f4bece7b`
 
 - 4. `ar1-aed901106565`: Providerinput `codex/codex_implementation` = `allowed`; local_input_chars `10686/4000000`, local_input_bytes `10726/16000000`; local_input_digest `7ecbbdb37604`, Policy `9edf600f09ac`, Übergang `d36379b52918`; technisches Limit `None/None` (Quelle `unknown`); Verletzung `none`, Überhang `0/0`, local_input_largest_component `stdin_prompt`; local_input_component_count `2`; Komponenten `stdin_prompt=6877/6917, response_schema=3809/3809`
 ### Validierungsanforderung
@@ -325,6 +377,29 @@ Semantischer Record-Digest: `674b4932ac2f`
 | `pass` | `0` | `83a1acbe8a23` | `argv` [`python3`, `-m`, `pytest`, `tests/`, `-v`] |
 - 65. `ar1-ff13ddc0a17b`: Providerinput `claude/claude_slice_review` = `allowed`; local_input_chars `60648/4000000`, local_input_bytes `60669/16000000`; local_input_digest `c3cbdc3d4656`, Policy `9edf600f09ac`, Übergang `22ef47e1b114`; technisches Limit `None/None` (Quelle `unknown`); Verletzung `none`, Überhang `0/0`, local_input_largest_component `request_chunk_001`; local_input_component_count `7`; Komponenten `request_chunk_001=24000/24013, request_chunk_002=24000/24008, request_chunk_003=1067/1067, packet_manifest=779/779, system_policy=217/217, response_schema=10355/10355, start_directive=230/230`
 - 69. `ar1-b69666e6676b`: Providerinput `claude/claude_slice_review` = `allowed`; local_input_chars `60648/4000000`, local_input_bytes `60669/16000000`; local_input_digest `c3cbdc3d4656`, Policy `9edf600f09ac`, Übergang `5ce5839c724e`; technisches Limit `None/None` (Quelle `unknown`); Verletzung `none`, Überhang `0/0`, local_input_largest_component `request_chunk_001`; local_input_component_count `7`; Komponenten `request_chunk_001=24000/24013, request_chunk_002=24000/24008, request_chunk_003=1067/1067, packet_manifest=779/779, system_policy=217/217, response_schema=10355/10355, start_directive=230/230`
+### Validierungsanforderung
+
+| Seq/Record | Rolle | Befehle mit argv-Grenzen |
+|---|---|---|
+| 75. `ar1-b21935f0fb52` | `orchestrator` | `argv` [`python3`, `-m`, `pytest`, `tests/`, `-v`] |
+
+### Validierungsattestierung
+
+| Seq/Record | Rolle | Fingerprint |
+|---|---|---|
+| 76. `ar1-dd67d5623ec3` | `orchestrator` | `fce5a466dd4d` |
+
+| Status | Exit | Output-Digest | Befehl mit argv-Grenzen |
+|---|---:|---|---|
+| `pass` | `0` | `818cfdaa927b` | `argv` [`python3`, `-m`, `pytest`, `tests/`, `-v`] |
+- 77. `ar1-fee328c4dffd`: Providerinput `codex/codex_final_review` = `allowed`; local_input_chars `181423/4000000`, local_input_bytes `181584/16000000`; local_input_digest `210281bdfd59`, Policy `9edf600f09ac`, Übergang `d1c1a9accbc6`; technisches Limit `None/None` (Quelle `unknown`); Verletzung `none`, Überhang `0/0`, local_input_largest_component `stdin_prompt`; local_input_component_count `2`; Komponenten `stdin_prompt=177618/177779, response_schema=3805/3805`
+- 78. `ar1-acbf3c52d5e2`: Finalreview-Preflight `codex_final_review` = `passed`; Fehler `none`; Kategorie `none`; Records keine; Pfade keine; Abhilfe `none`; Übergang `d1c1a9accbc6`; Messung `ar1-fee328c4dffd`
+- 82. `ar1-be43ac698348`: Providerinput `claude/claude_final_review` = `allowed`; local_input_chars `198989/4000000`, local_input_bytes `199152/16000000`; local_input_digest `903f30f3bc20`, Policy `9edf600f09ac`, Übergang `6a35380f7b45`; technisches Limit `None/None` (Quelle `unknown`); Verletzung `none`, Überhang `0/0`, local_input_largest_component `evidence_asset_001`; local_input_component_count `7`; Komponenten `request_chunk_001=24000/24013, request_chunk_002=6150/6150, evidence_asset_001=157327/157477, packet_manifest=794/794, system_policy=217/217, response_schema=10271/10271, start_directive=230/230`
+- 83. `ar1-4352e3cfec18`: Finalreview-Preflight `claude_final_review` = `passed`; Fehler `none`; Kategorie `none`; Records keine; Pfade keine; Abhilfe `none`; Übergang `6a35380f7b45`; Messung `ar1-be43ac698348`
+- 87. `ar1-da8b02c2fdcc`: Providerinput `claude/claude_final_review` = `allowed`; local_input_chars `198989/4000000`, local_input_bytes `199152/16000000`; local_input_digest `903f30f3bc20`, Policy `9edf600f09ac`, Übergang `db2ace599d1a`; technisches Limit `None/None` (Quelle `unknown`); Verletzung `none`, Überhang `0/0`, local_input_largest_component `evidence_asset_001`; local_input_component_count `7`; Komponenten `request_chunk_001=24000/24013, request_chunk_002=6150/6150, evidence_asset_001=157327/157477, packet_manifest=794/794, system_policy=217/217, response_schema=10271/10271, start_directive=230/230`
+- 88. `ar1-f2cda5f7f6d6`: Finalreview-Preflight `claude_final_review` = `passed`; Fehler `none`; Kategorie `none`; Records keine; Pfade keine; Abhilfe `none`; Übergang `db2ace599d1a`; Messung `ar1-da8b02c2fdcc`
+- 92. `ar1-178b38affc52`: Providerinput `claude/claude_final_review` = `allowed`; local_input_chars `198989/4000000`, local_input_bytes `199152/16000000`; local_input_digest `903f30f3bc20`, Policy `9edf600f09ac`, Übergang `ae35290f989a`; technisches Limit `None/None` (Quelle `unknown`); Verletzung `none`, Überhang `0/0`, local_input_largest_component `evidence_asset_001`; local_input_component_count `7`; Komponenten `request_chunk_001=24000/24013, request_chunk_002=6150/6150, evidence_asset_001=157327/157477, packet_manifest=794/794, system_policy=217/217, response_schema=10271/10271, start_directive=230/230`
+- 93. `ar1-bc5b44ee2c48`: Finalreview-Preflight `claude_final_review` = `passed`; Fehler `none`; Kategorie `none`; Records keine; Pfade keine; Abhilfe `none`; Übergang `ae35290f989a`; Messung `ar1-178b38affc52`
 - Providerattempt-Summe Run `watch-20260826-202634.812746Z-f4353362bc49` / Operation `provider-operation-28186d1d802f` (`codex/codex_final_correction`; Modell `gpt-5.6-sol`; Effort `medium`): Attempts `1`, offen `0`, Duration `286.282981` (bekannt `1`, unbekannt `0`); Inputzeichen `94516`, Inputbytes `94658`; Retrystatus `single-attempt`; input_tokens=sum:unknown,known:0,unknown:1; tool_input_tokens=sum:unknown,known:0,unknown:1; cache_read_input_tokens=sum:unknown,known:0,unknown:1; cache_creation_input_tokens=sum:unknown,known:0,unknown:1; thinking_tokens=sum:unknown,known:0,unknown:1; output_tokens=sum:unknown,known:0,unknown:1; total_tokens=sum:unknown,known:0,unknown:1; turns=sum:unknown,known:0,unknown:1; cost_usd=sum:unknown,known:0,unknown:1
   - 51. `ar1-79b89d4ee362`: Attempt `1` = `succeeded`; Messung `ar1-1d7c11cbca41`; Modell `gpt-5.6-sol`; Effort `medium`; Inputzeichen `94516`; Inputbytes `94658`; Duration `286.28298104705755`; Fehler `none`; Usage `unknown`
 - Providerattempt-Summe Run `watch-20260826-202634.812746Z-f4353362bc49` / Operation `provider-operation-2916abc6b521` (`claude/claude_slice_review`; Modell `sonnet`; Effort `high`): Attempts `1`, offen `0`, Duration `270.879164` (bekannt `1`, unbekannt `0`); Inputzeichen `76646`, Inputbytes `76696`; Retrystatus `single-attempt`; input_tokens=sum:8,known:1,unknown:0; tool_input_tokens=sum:unknown,known:0,unknown:1; cache_read_input_tokens=sum:36139,known:1,unknown:0; cache_creation_input_tokens=sum:29246,known:1,unknown:0; thinking_tokens=sum:unknown,known:0,unknown:1; output_tokens=sum:25260,known:1,unknown:0; total_tokens=sum:unknown,known:0,unknown:1; turns=sum:5,known:1,unknown:0; cost_usd=sum:0.37785179999999996,known:1,unknown:0
@@ -340,8 +415,14 @@ Semantischer Record-Digest: `674b4932ac2f`
   - 7. `ar1-ac36e4f6ddbd`: Attempt `1` = `succeeded`; Messung `ar1-aed901106565`; Modell `gpt-5.6-sol`; Effort `medium`; Inputzeichen `10686`; Inputbytes `10726`; Duration `810.8514091731049`; Fehler `none`; Usage `unknown`
 - Providerattempt-Summe Run `watch-20260826-202634.812746Z-f4353362bc49` / Operation `provider-operation-cb5f636a87a8` (`claude/claude_slice_review`; Modell `sonnet`; Effort `high`): Attempts `1`, offen `0`, Duration `415.960792` (bekannt `1`, unbekannt `0`); Inputzeichen `74030`, Inputbytes `74080`; Retrystatus `single-attempt`; input_tokens=sum:12,known:1,unknown:0; tool_input_tokens=sum:unknown,known:0,unknown:1; cache_read_input_tokens=sum:178615,known:1,unknown:0; cache_creation_input_tokens=sum:66829,known:1,unknown:0; thinking_tokens=sum:unknown,known:0,unknown:1; output_tokens=sum:38882,known:1,unknown:0; total_tokens=sum:unknown,known:0,unknown:1; turns=sum:9,known:1,unknown:0; cost_usd=sum:0.6929029999999999,known:1,unknown:0
   - 12. `ar1-a48dfe144fc9`: Attempt `1` = `failed`; Messung `ar1-361179babdbb`; Modell `sonnet`; Effort `high`; Inputzeichen `74030`; Inputbytes `74080`; Duration `415.9607923340518`; Fehler `process`; Usage `input_tokens=12, tool_input_tokens=unknown, cache_read_input_tokens=178615, cache_creation_input_tokens=66829, thinking_tokens=unknown, output_tokens=38882, total_tokens=unknown, turns=9, cost_usd=0.6929029999999999`
+- Providerattempt-Summe Run `watch-20260826-202634.812746Z-f4353362bc49` / Operation `provider-operation-ceb333c3165c` (`claude/claude_final_review`; Modell `sonnet`; Effort `high`): Attempts `3`, offen `0`, Duration `568.317386` (bekannt `3`, unbekannt `0`); Inputzeichen `198989`, Inputbytes `199152`; Retrystatus `retried`; input_tokens=sum:54,known:3,unknown:0; tool_input_tokens=sum:unknown,known:0,unknown:3; cache_read_input_tokens=sum:1369560,known:3,unknown:0; cache_creation_input_tokens=sum:195107,known:3,unknown:0; thinking_tokens=sum:unknown,known:0,unknown:3; output_tokens=sum:44418,known:3,unknown:0; total_tokens=sum:unknown,known:0,unknown:3; turns=sum:36,known:3,unknown:0; cost_usd=sum:1.5016720000000001,known:3,unknown:0
+  - 85. `ar1-97c200f46686`: Attempt `1` = `failed`; Messung `ar1-be43ac698348`; Modell `sonnet`; Effort `high`; Inputzeichen `198989`; Inputbytes `199152`; Duration `147.28533650096506`; Fehler `network`; Usage `input_tokens=12, tool_input_tokens=unknown, cache_read_input_tokens=157441, cache_creation_input_tokens=51441, thinking_tokens=unknown, output_tokens=12162, total_tokens=unknown, turns=10, cost_usd=0.35991120000000004`
+  - 90. `ar1-f7500ffc6e92`: Attempt `2` = `failed`; Messung `ar1-da8b02c2fdcc`; Modell `sonnet`; Effort `high`; Inputzeichen `198989`; Inputbytes `199152`; Duration `309.1250578099862`; Fehler `network`; Usage `input_tokens=34, tool_input_tokens=unknown, cache_read_input_tokens=1170498, cache_creation_input_tokens=106575, thinking_tokens=unknown, output_tokens=22647, total_tokens=unknown, turns=20, cost_usd=0.8879426`
+  - 96. `ar1-3d851bb25f61`: Attempt `3` = `succeeded`; Messung `ar1-178b38affc52`; Modell `sonnet`; Effort `high`; Inputzeichen `198989`; Inputbytes `199152`; Duration `111.90699183801189`; Fehler `none`; Usage `input_tokens=8, tool_input_tokens=unknown, cache_read_input_tokens=41621, cache_creation_input_tokens=37091, thinking_tokens=unknown, output_tokens=9609, total_tokens=unknown, turns=6, cost_usd=0.25381820000000005`
 - Providerattempt-Summe Run `watch-20260826-202634.812746Z-f4353362bc49` / Operation `provider-operation-e0fd2c88e0d8` (`codex/codex_final_review`; Modell `gpt-5.6-sol`; Effort `medium`): Attempts `1`, offen `0`, Duration `32.709111` (bekannt `1`, unbekannt `0`); Inputzeichen `105599`, Inputbytes `105681`; Retrystatus `single-attempt`; input_tokens=sum:unknown,known:0,unknown:1; tool_input_tokens=sum:unknown,known:0,unknown:1; cache_read_input_tokens=sum:unknown,known:0,unknown:1; cache_creation_input_tokens=sum:unknown,known:0,unknown:1; thinking_tokens=sum:unknown,known:0,unknown:1; output_tokens=sum:unknown,known:0,unknown:1; total_tokens=sum:unknown,known:0,unknown:1; turns=sum:unknown,known:0,unknown:1; cost_usd=sum:unknown,known:0,unknown:1
   - 32. `ar1-acd8c11be35a`: Attempt `1` = `succeeded`; Messung `ar1-a9566d467caa`; Modell `gpt-5.6-sol`; Effort `medium`; Inputzeichen `105599`; Inputbytes `105681`; Duration `32.70911077398341`; Fehler `none`; Usage `unknown`
+- Providerattempt-Summe Run `watch-20260826-202634.812746Z-f4353362bc49` / Operation `provider-operation-eee65b84b10d` (`codex/codex_final_review`; Modell `gpt-5.6-sol`; Effort `medium`): Attempts `1`, offen `0`, Duration `29.526401` (bekannt `1`, unbekannt `0`); Inputzeichen `181423`, Inputbytes `181584`; Retrystatus `single-attempt`; input_tokens=sum:unknown,known:0,unknown:1; tool_input_tokens=sum:unknown,known:0,unknown:1; cache_read_input_tokens=sum:unknown,known:0,unknown:1; cache_creation_input_tokens=sum:unknown,known:0,unknown:1; thinking_tokens=sum:unknown,known:0,unknown:1; output_tokens=sum:unknown,known:0,unknown:1; total_tokens=sum:unknown,known:0,unknown:1; turns=sum:unknown,known:0,unknown:1; cost_usd=sum:unknown,known:0,unknown:1
+  - 81. `ar1-db3146873ac4`: Attempt `1` = `succeeded`; Messung `ar1-fee328c4dffd`; Modell `gpt-5.6-sol`; Effort `medium`; Inputzeichen `181423`; Inputbytes `181584`; Duration `29.526400589034893`; Fehler `none`; Usage `unknown`
 <!-- artifact-records:validation-attestation:end -->
 <!-- audit:validation-attestation:end -->
 
@@ -384,8 +465,17 @@ Semantischer Record-Digest: `674b4932ac2f`
   - Ereignis 2: This approval could prove wrong if: (1) the dev/inode identity comparison in _task_digest is defeated by inode reuse on a filesystem that recycles inode numbers within the attack window, letting a swapped symlink pass fstat verification undetected; (2) a platform lacking O_NOFOLLOW is in scope for production deployment and the reduced identity-only check is insufficient against a determined local attacker with inbox write access; (3) the still-open TOCTOU between move_to_reserved_outbox's final lstat and the actual shutil.move call is exploited by a sufficiently fast concurrent writer, since the mitigation narrows rather than eliminates the race; (4) the unrelated mirror_findings correction-id filtering change in orchestrator.py, while covered by one new assertion, has untested interactions with multi-round correction histories beyond the single scenario exercised.<br>All four reviewer-owned findings (C-01, C-03, C-04, C-05) have concrete regression tests matching their stated acceptance criteria and are recorded PASS inside a validation_attestation whose diff_fingerprint equals the current review fingerprint, every changed path is inside the authorized allowlist for this slice, and no reviewer-owned BLOCKER remains open, so approval is warranted despite the narrow residual risks documented above.
   - Ereignis 4: If this approval turns out wrong, the most likely cause is the narrow residual TOCTOU window between move_to_reserved_outbox's pre-move lstat check and the actual shutil.move call: a sufficiently fast concurrent writer with inbox filesystem access could still, in principle, swap the source in that instant and have a symlinked or substituted file moved into outbox/done, even though every currently-tested swap point (before digest, before move) is now rejected.<br>A second, lower-probability failure mode is the new HEAD-drift commit gate (WorkflowCommitApprovalRequired) or the mirror_findings correction-id filtering introducing a subtle resume/idempotency edge case outside the exact scenarios exercised by their new unit tests (e.g.<br>a Slice whose HEAD legitimately advances between rounds for unrelated administrative reasons, or a correction whose finding_ids scope inadvertently drops a still-relevant historical finding from a future authoritative comparison); both are well covered by dedicated new tests and the full 1042-test suite passes at the exact reviewed fingerprint, but neither was part of the specific findings this correction round was scoped to resolve, so their broader interaction surface has necessarily received less adversarial scrutiny here than C-01/C-03 themselves.
 
+#### Work Unit 05 – Gesamtreview
+
+- Auftrag: Branchweite Gesamtabnahme durch Codex und Claude
+- Scope: `docs/internal/resume-abschluss-verschiebt-task-in-outbox-implement-review-a9c0a538.md`, `docs/internal/slice-resume-abschluss-verschiebt-task-in-outbox-arbeitsplan-01-gebundene-gemeinsam-genutzte-queue-finalisierung-fur-direkten-resume.md`, `src/cli.py`, `src/inbox_watcher.py`, `src/orchestrator.py`, `tests/test_cli.py`, `tests/test_inbox_watcher.py`, `tests/test_orchestrator_runtime.py`, `tests/test_orchestrator_watch_cli.py`
+
+- Teständerungsfreigabe: nicht erfasst.
+- Pre-Mortems:
+  - Ereignis 2: If this final approval turns out wrong, the most likely cause is that the fingerprint-bound validation attestation (1042 passed at fce5a466dd4d) and the detailed C-01/C-03/C-04/C-05 closure rationale accurately describe intent but a later, unreviewed edit inside the authorized paths silently reverted the except-clause widening in run_pipeline or dropped the O_NOFOLLOW/pre-move lstat guard in inbox_watcher without a corresponding fingerprint change being caught before this gate, letting a fail-closed resume error surface as an unhandled crash or letting a TOCTOU symlink swap slip through into outbox/done.<br>A secondary cause would be the cli.py sidecar-naming duplication (C-02) drifting from inbox_watcher.success_marker_path() in a change outside this slice's visible diff, producing missed or false-positive bound-recovery detection at the CLI boundary before the stricter orchestrator-side validation runs.
+
 <!-- artifact-records:test-approval-premortem:begin -->
-Semantischer Record-Digest: `674b4932ac2f`
+Semantischer Record-Digest: `91c2f4bece7b`
 
 ### Gate-Ereignisse
 
@@ -517,8 +607,53 @@ Noch keine strukturierten Findings.
 - Akzeptanztest: VALIDATE: ["python3","-m","pytest","tests/test_inbox_watcher.py","-v"]
 - Statusbegründung: C-05 restates C-03 at the final gate.<br>The same O_NOFOLLOW/fstat-identity digest hardening plus pre-move lstat re-check, and the same symlink-swap regression test, resolve it; the required VALIDATE command &#96;python3 -m pytest tests/test_inbox_watcher.py -v&#96; is recorded PASS (44 passed) in the diff-fingerprint-bound validation_attestation for this exact fingerprint a9fa36d46c24, and the full suite command (&#96;python3 -m pytest tests/ -v&#96;, 1041 passed) also PASSED at the same fingerprint.
 
+#### Work Unit 05 – Gesamtreview
+
+- Auftrag: Branchweite Gesamtabnahme durch Codex und Claude
+- Scope: `docs/internal/resume-abschluss-verschiebt-task-in-outbox-implement-review-a9c0a538.md`, `docs/internal/slice-resume-abschluss-verschiebt-task-in-outbox-arbeitsplan-01-gebundene-gemeinsam-genutzte-queue-finalisierung-fur-direkten-resume.md`, `src/cli.py`, `src/inbox_watcher.py`, `src/orchestrator.py`, `tests/test_cli.py`, `tests/test_inbox_watcher.py`, `tests/test_orchestrator_runtime.py`, `tests/test_orchestrator_watch_cli.py`
+
+### `C-01` — `CLOSED`
+
+- Quelle: `claude`; Runde 1
+- Klasse: `BLOCKER`
+- Finding: src/orchestrator.py run_pipeline: in the new direct-queue-resume branch that recovers a pending bound success marker, the call to load_resumable_workflow_state(...) is guarded only by &#96;except ValueError as exc:&#96;.<br>Every other call site in the same function that can fail while loading/resuming Structured-v2 state (the try block around run_default_dry_run_fn/run_production_workflow_fn a few lines below) explicitly treats ArtifactResumeError and StateSchemaError as the fail-closed signal and converts them into a logged diagnostic plus &#96;return 1&#96;.<br>If state.json is missing, corrupted, or bound to an unsupported protocol while a bound &#96;.success&#96; marker exists (a plausible resume scenario per the repo's fail-closed resume contract), this narrower except clause may let ArtifactResumeError/StateSchemaError propagate uncaught out of the bound-recovery path instead of producing the same controlled diagnostic, weakening the resume/idempotency and failure-path guarantees this slice is meant to add.
+- Akzeptanztest: Add an orchestrator test that leaves a bound (dict) &#96;.success&#96; marker in place while making &#96;.orchestrator/state.json&#96; unreadable, corrupt, or bound to an unsupported/legacy protocol, then invokes run_pipeline through the literal &#96;--resume --task-file&#96; direct path; assert it returns exit code 1 with a logged error rather than raising ArtifactResumeError/StateSchemaError uncaught, matching the handling used for the same exception classes elsewhere in run_pipeline.
+- Statusbegründung: src/orchestrator.py run_pipeline's direct-queue bound-marker recovery branch now catches &#96;(ArtifactResumeError, StateSchemaError, ValueError)&#96; instead of &#96;ValueError&#96; alone, matching the fail-closed handling used at the sibling load_resumable_workflow_state call site in the same function.<br>The new regression test test_explicit_resume_with_bound_success_and_corrupt_state_returns_one (tests/test_orchestrator_runtime.py) leaves a bound success marker, corrupts .orchestrator/state.json, invokes run_pipeline via the literal --resume --task-file path, and asserts exit code 1 with 'Direct queue recovery rejected' logged; it is present and PASSED in the fingerprint-bound attestation output.
+
+### `C-02` — `CLOSED`
+
+- Quelle: `claude`; Runde 1
+- Klasse: `OBSERVATION`
+- Finding: src/cli.py run_cli computes the bound-recovery sidecar path manually as &#96;task_path.with_name(f"{task_path.name}.success")&#96; instead of importing and reusing inbox_watcher.success_marker_path()/has_success_marker().<br>This duplicates the marker-naming convention across two modules; if the convention in inbox_watcher.py ever changes, cli.py's &#96;missing_bound_recovery&#96; detection will silently diverge from the authoritative helper, either bypassing find_task_file_fn incorrectly or failing to recognize a legitimate post-move recovery case.
+- Akzeptanztest: Add a regression test (or refactor) asserting cli.py's missing_bound_recovery marker-path computation stays identical to inbox_watcher.success_marker_path()/has_success_marker() for the same task file, so any future change to the marker naming convention in inbox_watcher.py is caught by a failing test rather than silently drifting.
+- Statusbegründung: src/cli.py's manual &#96;task_path.with_name(f"{task_path.name}.success")&#96; computation is currently byte-for-byte identical to inbox_watcher.success_marker_path()'s convention, and the branch evidence shows no behavioral divergence today; both this final review and the accepted round-1 disposition confirm current correctness.<br>The residual concern is a purely hypothetical future-drift risk (if the naming convention in inbox_watcher.py ever changes without a corresponding cli.py update), which is non-actionable against the code as it stands and is recorded as a residual risk in review_evidence rather than escalated as a present defect.
+
+### `C-03` — `CLOSED`
+
+- Quelle: `claude`; Runde 1
+- Klasse: `BLOCKER`
+- Finding: In inbox_watcher.py, _validate_queue_paths() checks &#96;task_file.is_symlink()&#96; exactly once before finalize_queue_success() later performs _task_digest(task_file) and move_to_reserved_outbox(task_file, destination).<br>Between that single check and the later filesystem operations there is a TOCTOU window in which the queue source path could be swapped for a symlink (e.g., by a concurrent process with inbox write access), causing the digest read and/or move to follow attacker- or bug-controlled content instead of the validated regular file.
+- Akzeptanztest: Add a regression test that replaces the queue task source with a symlink between the initial _validate_queue_paths() symlink check and the subsequent digest/move step inside finalize_queue_success() (e.g., via a monkeypatched hook invoked mid-function), and assert finalize_queue_success() still returns a FAILED disposition instead of following the symlink.
+- Statusbegründung: inbox_watcher._task_digest now opens the task file with O_NOFOLLOW (where available) and compares the pre-open lstat dev/inode against the post-open fstat dev/inode, rejecting any path that was swapped to a symlink between validation and digesting.<br>move_to_reserved_outbox additionally re-validates task_file.lstat() immediately before shutil.move and raises if it is no longer a regular file.<br>The new regression test test_bound_queue_success_rejects_source_swapped_to_symlink_before_move swaps the source to a symlink inside move_to_reserved_outbox (mid-finalization) and asserts finalize_queue_success returns FAILED, the symlink is left untouched, the outside target content is unread/unmoved, and outbox/done stays empty.<br>It is present and PASSED in the fingerprint-bound attestation output.
+
+### `C-04` — `CLOSED`
+
+- Quelle: `claude`; Runde 1
+- Klasse: `BLOCKER`
+- Finding: src/orchestrator.py run_pipeline's new direct-queue-resume bound-marker recovery branch wraps load_resumable_workflow_state(...) in &#96;except ValueError as exc:&#96; only.<br>Every sibling call site in the same function that can fail loading/resuming structured-v2 state explicitly also catches ArtifactResumeError and StateSchemaError and converts them into a logged diagnostic plus &#96;return 1&#96;.<br>A bound &#96;.success&#96; marker can legitimately exist while &#96;.orchestrator/state.json&#96; is missing, corrupted, or bound to an unsupported/legacy protocol -- exactly the conditions load_resumable_workflow_state raises ArtifactResumeError/StateSchemaError for -- so this narrower except clause already merged in this diff lets a genuine fail-closed resume error propagate uncaught out of the very recovery path this slice exists to harden, instead of the controlled diagnostic used everywhere else.<br>This is a live, present defect in the merged code (not a hypothetical future regression) and directly weakens the resume/idempotency and failure-path guarantees this slice is required to deliver; it was already reported at round 1 as C-01, accepted by Codex, and remains unfixed at the current fingerprint under final review.
+- Akzeptanztest: VALIDATE: ["python3","-m","pytest","tests/test_orchestrator_runtime.py","-v"]
+- Statusbegründung: C-04 restates C-01 at the final gate.<br>The same except-clause widening in run_pipeline and the same test_explicit_resume_with_bound_success_and_corrupt_state_returns_one regression resolve it; the required VALIDATE command &#96;python3 -m pytest tests/test_orchestrator_runtime.py -v&#96; is recorded PASS (69 passed) in the diff-fingerprint-bound validation_attestation for this exact fingerprint a9fa36d46c24.
+
+### `C-05` — `CLOSED`
+
+- Quelle: `claude`; Runde 1
+- Klasse: `BLOCKER`
+- Finding: In src/inbox_watcher.py, _validate_queue_paths() checks task_file.is_symlink() exactly once before finalize_queue_success() later performs _task_digest(task_file) and move_to_reserved_outbox(task_file, destination).<br>This leaves a TOCTOU window, already present in the merged code, in which the queue source path can be swapped for a symlink between the single upfront check and the later digest/move filesystem operations (e.g.<br>by a concurrent process with inbox write access), causing the digest computation and/or the move-to-outbox/done step to follow attacker- or bug-controlled content instead of the validated regular file.<br>This is a genuine security-boundary gap in the queue-finalization path this slice introduces, not a documentation-only residual risk; it was already reported at round 1 as C-03, accepted by Codex, and remains unfixed at the current fingerprint under final review.
+- Akzeptanztest: VALIDATE: ["python3","-m","pytest","tests/test_inbox_watcher.py","-v"]
+- Statusbegründung: C-05 restates C-03 at the final gate.<br>The same O_NOFOLLOW/fstat-identity digest hardening plus pre-move lstat re-check, and the same symlink-swap regression test, resolve it; the required VALIDATE command &#96;python3 -m pytest tests/test_inbox_watcher.py -v&#96; is recorded PASS (44 passed) in the diff-fingerprint-bound validation_attestation for this exact fingerprint a9fa36d46c24, and the full suite command (&#96;python3 -m pytest tests/ -v&#96;, 1041 passed) also PASSED at the same fingerprint.
+
 <!-- artifact-records:findings:begin -->
-Semantischer Record-Digest: `674b4932ac2f`
+Semantischer Record-Digest: `91c2f4bece7b`
 
 ### Finding-Ereignisse
 
@@ -604,8 +739,21 @@ Semantischer Record-Digest: `674b4932ac2f`
 | C-04 | claude | src/orchestrator.py run_pipeline's new direct-queue-resume bound-marker recovery branch wraps load_resumable_workflow_state(...) in &#96;except ValueError as exc:&#96; only. Every sibling call site in the same function that can fail loading/resuming structured-v2 state explicitly also catches ArtifactResumeError and StateSchemaError and converts them into a logged diagnostic plus &#96;return 1&#96;. A bound &#96;.success&#96; marker can legitimately exist while &#96;.orchestrator/state.json&#96; is missing, corrupted, or bound to an unsupported/legacy protocol -- exactly the conditions load_resumable_workflow_state raises ArtifactResumeError/StateSchemaError for -- so this narrower except clause already merged in this diff lets a genuine fail-closed resume error propagate uncaught out of the very recovery path this slice exists to harden, instead of the controlled diagnostic used everywhere else. This is a live, present defect in the merged code (not a hypothetical future regression) and directly weakens the resume/idempotency and failure-path guarantees this slice is required to deliver; it was already reported at round 1 as C-01, accepted by Codex, and remains unfixed at the current fingerprint under final review. | BLOCKER | angenommen | erledigt: C-04 restates C-01 at the final gate. The same except-clause widening in run_pipeline and the same test_explicit_resume_with_bound_success_and_corrupt_state_returns_one regression resolve it; the required VALIDATE command &#96;python3 -m pytest tests/test_orchestrator_runtime.py -v&#96; is recorded PASS (69 passed) in the diff-fingerprint-bound validation_attestation for this exact fingerprint a9fa36d46c24. |
 | C-05 | claude | In src/inbox_watcher.py, _validate_queue_paths() checks task_file.is_symlink() exactly once before finalize_queue_success() later performs _task_digest(task_file) and move_to_reserved_outbox(task_file, destination). This leaves a TOCTOU window, already present in the merged code, in which the queue source path can be swapped for a symlink between the single upfront check and the later digest/move filesystem operations (e.g. by a concurrent process with inbox write access), causing the digest computation and/or the move-to-outbox/done step to follow attacker- or bug-controlled content instead of the validated regular file. This is a genuine security-boundary gap in the queue-finalization path this slice introduces, not a documentation-only residual risk; it was already reported at round 1 as C-03, accepted by Codex, and remains unfixed at the current fingerprint under final review. | BLOCKER | angenommen | erledigt: C-05 restates C-03 at the final gate. The same O_NOFOLLOW/fstat-identity digest hardening plus pre-move lstat re-check, and the same symlink-swap regression test, resolve it; the required VALIDATE command &#96;python3 -m pytest tests/test_inbox_watcher.py -v&#96; is recorded PASS (44 passed) in the diff-fingerprint-bound validation_attestation for this exact fingerprint a9fa36d46c24, and the full suite command (&#96;python3 -m pytest tests/ -v&#96;, 1041 passed) also PASSED at the same fingerprint. |
 
+#### Work Unit 05 – Gesamtreview
+
+- Auftrag: Branchweite Gesamtabnahme durch Codex und Claude
+- Scope: `docs/internal/resume-abschluss-verschiebt-task-in-outbox-implement-review-a9c0a538.md`, `docs/internal/slice-resume-abschluss-verschiebt-task-in-outbox-arbeitsplan-01-gebundene-gemeinsam-genutzte-queue-finalisierung-fur-direkten-resume.md`, `src/cli.py`, `src/inbox_watcher.py`, `src/orchestrator.py`, `tests/test_cli.py`, `tests/test_inbox_watcher.py`, `tests/test_orchestrator_runtime.py`, `tests/test_orchestrator_watch_cli.py`
+
+| ID | Quelle | Finding | Klasse | Entscheidung | Umsetzung |
+|---|---|---|---|---|---|
+| C-01 | claude | src/orchestrator.py run_pipeline: in the new direct-queue-resume branch that recovers a pending bound success marker, the call to load_resumable_workflow_state(...) is guarded only by &#96;except ValueError as exc:&#96;. Every other call site in the same function that can fail while loading/resuming Structured-v2 state (the try block around run_default_dry_run_fn/run_production_workflow_fn a few lines below) explicitly treats ArtifactResumeError and StateSchemaError as the fail-closed signal and converts them into a logged diagnostic plus &#96;return 1&#96;. If state.json is missing, corrupted, or bound to an unsupported protocol while a bound &#96;.success&#96; marker exists (a plausible resume scenario per the repo's fail-closed resume contract), this narrower except clause may let ArtifactResumeError/StateSchemaError propagate uncaught out of the bound-recovery path instead of producing the same controlled diagnostic, weakening the resume/idempotency and failure-path guarantees this slice is meant to add. | BLOCKER | angenommen | erledigt: src/orchestrator.py run_pipeline's direct-queue bound-marker recovery branch now catches &#96;(ArtifactResumeError, StateSchemaError, ValueError)&#96; instead of &#96;ValueError&#96; alone, matching the fail-closed handling used at the sibling load_resumable_workflow_state call site in the same function. The new regression test test_explicit_resume_with_bound_success_and_corrupt_state_returns_one (tests/test_orchestrator_runtime.py) leaves a bound success marker, corrupts .orchestrator/state.json, invokes run_pipeline via the literal --resume --task-file path, and asserts exit code 1 with 'Direct queue recovery rejected' logged; it is present and PASSED in the fingerprint-bound attestation output. |
+| C-02 | claude | src/cli.py run_cli computes the bound-recovery sidecar path manually as &#96;task_path.with_name(f"{task_path.name}.success")&#96; instead of importing and reusing inbox_watcher.success_marker_path()/has_success_marker(). This duplicates the marker-naming convention across two modules; if the convention in inbox_watcher.py ever changes, cli.py's &#96;missing_bound_recovery&#96; detection will silently diverge from the authoritative helper, either bypassing find_task_file_fn incorrectly or failing to recognize a legitimate post-move recovery case. | OBSERVATION | angenommen | erledigt: src/cli.py's manual &#96;task_path.with_name(f"{task_path.name}.success")&#96; computation is currently byte-for-byte identical to inbox_watcher.success_marker_path()'s convention, and the branch evidence shows no behavioral divergence today; both this final review and the accepted round-1 disposition confirm current correctness. The residual concern is a purely hypothetical future-drift risk (if the naming convention in inbox_watcher.py ever changes without a corresponding cli.py update), which is non-actionable against the code as it stands and is recorded as a residual risk in review_evidence rather than escalated as a present defect. |
+| C-03 | claude | In inbox_watcher.py, _validate_queue_paths() checks &#96;task_file.is_symlink()&#96; exactly once before finalize_queue_success() later performs _task_digest(task_file) and move_to_reserved_outbox(task_file, destination). Between that single check and the later filesystem operations there is a TOCTOU window in which the queue source path could be swapped for a symlink (e.g., by a concurrent process with inbox write access), causing the digest read and/or move to follow attacker- or bug-controlled content instead of the validated regular file. | BLOCKER | angenommen | erledigt: inbox_watcher._task_digest now opens the task file with O_NOFOLLOW (where available) and compares the pre-open lstat dev/inode against the post-open fstat dev/inode, rejecting any path that was swapped to a symlink between validation and digesting. move_to_reserved_outbox additionally re-validates task_file.lstat() immediately before shutil.move and raises if it is no longer a regular file. The new regression test test_bound_queue_success_rejects_source_swapped_to_symlink_before_move swaps the source to a symlink inside move_to_reserved_outbox (mid-finalization) and asserts finalize_queue_success returns FAILED, the symlink is left untouched, the outside target content is unread/unmoved, and outbox/done stays empty. It is present and PASSED in the fingerprint-bound attestation output. |
+| C-04 | claude | src/orchestrator.py run_pipeline's new direct-queue-resume bound-marker recovery branch wraps load_resumable_workflow_state(...) in &#96;except ValueError as exc:&#96; only. Every sibling call site in the same function that can fail loading/resuming structured-v2 state explicitly also catches ArtifactResumeError and StateSchemaError and converts them into a logged diagnostic plus &#96;return 1&#96;. A bound &#96;.success&#96; marker can legitimately exist while &#96;.orchestrator/state.json&#96; is missing, corrupted, or bound to an unsupported/legacy protocol -- exactly the conditions load_resumable_workflow_state raises ArtifactResumeError/StateSchemaError for -- so this narrower except clause already merged in this diff lets a genuine fail-closed resume error propagate uncaught out of the very recovery path this slice exists to harden, instead of the controlled diagnostic used everywhere else. This is a live, present defect in the merged code (not a hypothetical future regression) and directly weakens the resume/idempotency and failure-path guarantees this slice is required to deliver; it was already reported at round 1 as C-01, accepted by Codex, and remains unfixed at the current fingerprint under final review. | BLOCKER | angenommen | erledigt: C-04 restates C-01 at the final gate. The same except-clause widening in run_pipeline and the same test_explicit_resume_with_bound_success_and_corrupt_state_returns_one regression resolve it; the required VALIDATE command &#96;python3 -m pytest tests/test_orchestrator_runtime.py -v&#96; is recorded PASS (69 passed) in the diff-fingerprint-bound validation_attestation for this exact fingerprint a9fa36d46c24. |
+| C-05 | claude | In src/inbox_watcher.py, _validate_queue_paths() checks task_file.is_symlink() exactly once before finalize_queue_success() later performs _task_digest(task_file) and move_to_reserved_outbox(task_file, destination). This leaves a TOCTOU window, already present in the merged code, in which the queue source path can be swapped for a symlink between the single upfront check and the later digest/move filesystem operations (e.g. by a concurrent process with inbox write access), causing the digest computation and/or the move-to-outbox/done step to follow attacker- or bug-controlled content instead of the validated regular file. This is a genuine security-boundary gap in the queue-finalization path this slice introduces, not a documentation-only residual risk; it was already reported at round 1 as C-03, accepted by Codex, and remains unfixed at the current fingerprint under final review. | BLOCKER | angenommen | erledigt: C-05 restates C-03 at the final gate. The same O_NOFOLLOW/fstat-identity digest hardening plus pre-move lstat re-check, and the same symlink-swap regression test, resolve it; the required VALIDATE command &#96;python3 -m pytest tests/test_inbox_watcher.py -v&#96; is recorded PASS (44 passed) in the diff-fingerprint-bound validation_attestation for this exact fingerprint a9fa36d46c24, and the full suite command (&#96;python3 -m pytest tests/ -v&#96;, 1041 passed) also PASSED at the same fingerprint. |
+
 <!-- artifact-records:decision-table:begin -->
-Semantischer Record-Digest: `674b4932ac2f`
+Semantischer Record-Digest: `91c2f4bece7b`
 
 | Seq | Record | Typ | Status | Logische ID | Revision | Fingerprint |
 |---:|---|---|---|---|---:|---|
@@ -681,6 +829,31 @@ Semantischer Record-Digest: `674b4932ac2f`
 | 70 | `ar1-a9b2ffe60eb4` | `provider_attempt` | `started` | `provider-operation-72d74c1b7970-2` | 1 | `implementation:c52a7e8c9ab6` |
 | 71 | `ar1-70605a1d06a2` | `review` | `decided` | `review-claude-4-2` | 1 | `implementation:c52a7e8c9ab6` |
 | 72 | `ar1-a93ae3255c70` | `provider_attempt` | `succeeded` | `provider-operation-72d74c1b7970-2` | 2 | `implementation:c52a7e8c9ab6` |
+| 73 | `ar1-df19f3a855ec` | `binding` | `bound` | `commit-2-1c70f27d683d` | 1 | `implementation:c52a7e8c9ab6` |
+| 74 | `ar1-41cc2bbdadf1` | `work_unit` | `active` | `work-unit-5` | 1 | `contract:a9c0a53867bf` |
+| 75 | `ar1-b21935f0fb52` | `validation_request` | `requested` | `validation-request-fce5a466dd4d` | 1 | `implementation:fce5a466dd4d` |
+| 76 | `ar1-dd67d5623ec3` | `validation_attestation` | `attested` | `validation-fce5a466dd4d` | 1 | `implementation:fce5a466dd4d` |
+| 77 | `ar1-fee328c4dffd` | `provider_input_measurement` | `measured` | `provider-input-5-codex_final_review` | 1 | `implementation:fce5a466dd4d` |
+| 78 | `ar1-acbf3c52d5e2` | `final_review_preflight` | `checked` | `final-preflight-5-codex_final_review` | 1 | `implementation:fce5a466dd4d` |
+| 79 | `ar1-a258f80afe17` | `provider_attempt` | `started` | `provider-operation-eee65b84b10d-1` | 1 | `implementation:fce5a466dd4d` |
+| 80 | `ar1-51f9080d7efe` | `agent_result` | `ready` | `agent-5-codex_final_review-1` | 1 | `implementation:fce5a466dd4d` |
+| 81 | `ar1-db3146873ac4` | `provider_attempt` | `succeeded` | `provider-operation-eee65b84b10d-1` | 2 | `implementation:fce5a466dd4d` |
+| 82 | `ar1-be43ac698348` | `provider_input_measurement` | `measured` | `provider-input-5-claude_final_review` | 1 | `implementation:fce5a466dd4d` |
+| 83 | `ar1-4352e3cfec18` | `final_review_preflight` | `checked` | `final-preflight-5-claude_final_review` | 1 | `implementation:fce5a466dd4d` |
+| 84 | `ar1-e45922e51179` | `provider_attempt` | `started` | `provider-operation-ceb333c3165c-1` | 1 | `implementation:fce5a466dd4d` |
+| 85 | `ar1-97c200f46686` | `provider_attempt` | `failed` | `provider-operation-ceb333c3165c-1` | 2 | `implementation:fce5a466dd4d` |
+| 86 | `ar1-5b9de6c5b1ee` | `transient_retry` | `waiting` | `transient-retry-a75439c763c04a02ac80c9d06cfa67a5` | 1 | `implementation:fce5a466dd4d` |
+| 87 | `ar1-da8b02c2fdcc` | `provider_input_measurement` | `measured` | `provider-input-5-claude_final_review` | 2 | `implementation:fce5a466dd4d` |
+| 88 | `ar1-f2cda5f7f6d6` | `final_review_preflight` | `checked` | `final-preflight-5-claude_final_review` | 2 | `implementation:fce5a466dd4d` |
+| 89 | `ar1-bccec457172d` | `provider_attempt` | `started` | `provider-operation-ceb333c3165c-2` | 1 | `implementation:fce5a466dd4d` |
+| 90 | `ar1-f7500ffc6e92` | `provider_attempt` | `failed` | `provider-operation-ceb333c3165c-2` | 2 | `implementation:fce5a466dd4d` |
+| 91 | `ar1-f8585f9f4cd5` | `transient_retry` | `waiting` | `transient-retry-5489bd97d01241f6aec735cbc8392f0d` | 1 | `implementation:fce5a466dd4d` |
+| 92 | `ar1-178b38affc52` | `provider_input_measurement` | `measured` | `provider-input-5-claude_final_review` | 3 | `implementation:fce5a466dd4d` |
+| 93 | `ar1-bc5b44ee2c48` | `final_review_preflight` | `checked` | `final-preflight-5-claude_final_review` | 3 | `implementation:fce5a466dd4d` |
+| 94 | `ar1-1c48be0becf7` | `provider_attempt` | `started` | `provider-operation-ceb333c3165c-3` | 1 | `implementation:fce5a466dd4d` |
+| 95 | `ar1-4949971d8f81` | `review` | `decided` | `review-claude-5-1` | 1 | `implementation:fce5a466dd4d` |
+| 96 | `ar1-3d851bb25f61` | `provider_attempt` | `succeeded` | `provider-operation-ceb333c3165c-3` | 2 | `implementation:fce5a466dd4d` |
+| 97 | `ar1-78de071091d8` | `workflow_completion` | `completed` | `workflow-completion` | 1 | `implementation:c52a7e8c9ab6` |
 
 ### Nachweis vollständiger Bindungswerte
 
@@ -688,8 +861,9 @@ Semantischer Record-Digest: `674b4932ac2f`
 |---|---|---|
 | `521f40758812` | `521f40758812ecaefe41644d286324f20565e03dd44a1e11af290afbe7dea0e1` | Technischer Wert, Fingerprint, Request-ID, Attestierungsreferenz, Record-ID, Bindingziel |
 | `a9fa36d46c24` | `a9fa36d46c2413b0eaed49041e347aac99263b4c761ffd7c7b338bfb806c3bf5` | Technischer Wert, Fingerprint, Record-ID, Request-ID, Attestierungsreferenz |
-| `c52a7e8c9ab6` | `c52a7e8c9ab68f05513cca12deafac6366b23be9a2e6d3f13d957678f7f9b17f` | Technischer Wert, Request-ID, Fingerprint, Attestierungsreferenz |
-| `674b4932ac2f` | `674b4932ac2f38a5df7ae4a6e333da1a6484823ae7e0f8979e3052b974090898` | Record-ID |
+| `c52a7e8c9ab6` | `c52a7e8c9ab68f05513cca12deafac6366b23be9a2e6d3f13d957678f7f9b17f` | Technischer Wert, Request-ID, Fingerprint, Attestierungsreferenz, Bindingziel |
+| `fce5a466dd4d` | `fce5a466dd4db9b6ff9cfae78a7933e3a7de3094a3d6023148c2111be9f06661` | Technischer Wert, Fingerprint, Record-ID, Request-ID, Attestierungsreferenz |
+| `91c2f4bece7b` | `91c2f4bece7b1fc1d5d9f92d45d7cf4073cd59ba267095c2ade9b17560bdc5c5` | Record-ID |
 | `5b4a83b1d138` | `5b4a83b1d13806730b04ef13b2aa06f69277599a4b98c78a43868761cea793aa` | Request-ID, Technischer Wert |
 | `a5fdc87f56ae` | `a5fdc87f56ae686f9a9c107374295b9e7fb72a4fd0474127ff73f271f82d24b3` | Request-ID |
 | `d5658e88b814` | `d5658e88b8148e9b29293f156ac4bfb376ae9488e254cb90fec066d01aca30f1` | Request-ID |
@@ -702,6 +876,9 @@ Semantischer Record-Digest: `674b4932ac2f`
 | `70605a1d06a2` | `70605a1d06a29847d44b483b0cff9831dd0e0e0e42e090fc90b7622710de2378` | Request-ID, Technischer Wert |
 | `6bd8f24607ac` | `6bd8f24607ac3dcdba55d17db7c7efe96d36351a4eb8f661f27dff14efda9258` | Request-ID |
 | `8cf72880f495` | `8cf72880f4957c1e6b0f4ef9da39f45479f153f10ff8428c410a4f1aeed6c24d` | Request-ID |
+| `4949971d8f81` | `4949971d8f8105f652adaf07d200ec03bcf0317d2da23979d6ae81d0de7990f4` | Request-ID, Technischer Wert |
+| `31a0e1140bf6` | `31a0e1140bf61e0ea9110265bbd6dd160eb3eb845178450f16f477c97030021c` | Request-ID |
+| `37b08f15d7a5` | `37b08f15d7a567f9642195c22021278072ffa29d8eb4f7b52b52f4fe406221da` | Request-ID |
 | `41bf25644384` | `41bf256443846f21f1170cd4c5e1ab57fc4c82232ff9d51245b8cb50b1b63658` | Technischer Wert |
 | `5734728fe34a` | `5734728fe34a279259b928f59c7e6c16450180deceb73e2b77287f838c8f9dec` | Technischer Wert |
 | `90eb60444d5c` | `90eb60444d5c6283f3f7e26158b0ece8e4b0729eabe7613a76d123172b7fdb4e` | Technischer Wert |
@@ -714,6 +891,7 @@ Semantischer Record-Digest: `674b4932ac2f`
 | `e64a51dc7d24` | `e64a51dc7d24dc9544ddc63420935be6800d290578e1a32ef2d1f5b07583a479` | Output-Digest |
 | `835718911103` | `8357189111039ae8d8ef9e76e418329df9b70be3b3ac3d12b9b8894df41a27a4` | Output-Digest |
 | `7cca8a99c212` | `7cca8a99c212597b44aa807e39815767c7ed992314ee87cc5b4798241eb6355b` | Output-Digest |
+| `acda8eba49d1` | `acda8eba49d124d33cae3f9e286f2632238ca40531e70635d7b1b5fd0c2126d7` | Output-Digest |
 | `aed901106565` | `aed901106565128870b88dbbef27813d4a0f01c13e2b1a8fd5430d7faa1708b0` | Technischer Wert, Messungsreferenz |
 | `7ecbbdb37604` | `7ecbbdb376048c4992b41fb3e752a643620f4b539670ce61c017a57bb56cb239` | Digest |
 | `9edf600f09ac` | `9edf600f09ac1b36a30675cc91b1f6769c4545f8f200a4fba413b4b9a4c9bc1e` | Policy-Digest |
@@ -757,6 +935,23 @@ Semantischer Record-Digest: `674b4932ac2f`
 | `22ef47e1b114` | `22ef47e1b114c220e468ab8bc6acb22c0d30640bc6869c38ce829dcaf09e55f5` | Übergangsfingerprint |
 | `b69666e6676b` | `b69666e6676b2b9be604e88a382c121fe14423be146e205a0534880bcaf421cd` | Response-Digest, Messungsreferenz, Technischer Wert |
 | `5ce5839c724e` | `5ce5839c724e6e7aa7c99dfbaf6e654822d65a13c24f3ed1cfb7c52ccd63d0b0` | Übergangsfingerprint |
+| `b21935f0fb52` | `b21935f0fb524fc75424fcf1721fce8143b6f852f0d0029fd16c7cefef27ea17` | Record-ID, Technischer Wert |
+| `dd67d5623ec3` | `dd67d5623ec369eff36e4eb39d871c05b402f6ef85c1ec87853466f57177b89f` | Record-ID, Technischer Wert |
+| `818cfdaa927b` | `818cfdaa927bcf9b636efb48aac9d8f7481a02343380e09a657d9432e2204ef9` | Output-Digest |
+| `fee328c4dffd` | `fee328c4dffdbcf63f6a04cadcdee988b580e417a9f75755a3b207a6c33c073f` | Technischer Wert, Messungsreferenz |
+| `210281bdfd59` | `210281bdfd59e3d3e007cf662d8b7b2e9ad48e6a4088dfe81e656e2c30f254f7` | Digest |
+| `d1c1a9accbc6` | `d1c1a9accbc681fa8af79fa1479620d49a31c37895467c28c9aa8c943cb57a6e` | Übergangsfingerprint, Record-ID |
+| `acbf3c52d5e2` | `acbf3c52d5e2cd8cc10e01a52b6eb386574e193329c31f80289a79368c5c57de` | Response-Digest, Technischer Wert |
+| `be43ac698348` | `be43ac6983488b29e85ae558691bf0a4ebb1fe8b90485f398cf4aaad05dfef2c` | Technischer Wert, Messungsreferenz |
+| `903f30f3bc20` | `903f30f3bc20ee71b436eb1f2ab88f619c6b9b12c2f89f0b763cf6e8d20aaa12` | Digest |
+| `6a35380f7b45` | `6a35380f7b45b2769da708c328e91f8be9b370480a8cd16eda3fa451eafa5437` | Übergangsfingerprint, Record-ID |
+| `4352e3cfec18` | `4352e3cfec18e8ca5ab157a14058fd8f567868c12abc1994115cf64f6d5ba8d9` | Response-Digest, Technischer Wert |
+| `da8b02c2fdcc` | `da8b02c2fdcc2d379eb5260cf066b01ef587c013f7badcd3bb73eb2dbf5bcc2f` | Technischer Wert, Messungsreferenz |
+| `db2ace599d1a` | `db2ace599d1a41d1df6085f464470bc11313d88cd5cabbdf51cf9e15e88f79d5` | Übergangsfingerprint, Record-ID |
+| `f2cda5f7f6d6` | `f2cda5f7f6d6041b2160b1550f28e370c6279b61167fb1ebcfb9b7ea49ca8d5e` | Response-Digest, Technischer Wert |
+| `178b38affc52` | `178b38affc525692481b2c96b7636c20df2fa07febdea2f9fc4e67aa1c814d03` | Technischer Wert, Messungsreferenz |
+| `ae35290f989a` | `ae35290f989a76eafe76e76a5f7a9891219d00dec7ac9682469a995ef830f2cd` | Übergangsfingerprint, Record-ID |
+| `bc5b44ee2c48` | `bc5b44ee2c486d74dbfca0644a8776cd5da1a511a070627eb873f22663b5464a` | Response-Digest, Technischer Wert |
 | `28186d1d802f` | `28186d1d802ffb7200496944769cf08a6bd87d2cd83a4c9176ea6de0758e42f0` | Technischer Wert |
 | `79b89d4ee362` | `79b89d4ee3620e98daa77d6e454ea26415a149e837f445b6f7ba9a8c71bfa684` | Technischer Wert |
 | `2916abc6b521` | `2916abc6b5212b7a63f0ca8b2c2b51125b2f9e27f0f8a65197ffd3fb54fb9d00` | Technischer Wert |
@@ -772,8 +967,14 @@ Semantischer Record-Digest: `674b4932ac2f`
 | `ac36e4f6ddbd` | `ac36e4f6ddbdc9f26fd152971c23d35cad8f3e828358943a7216b640cf0a3d8b` | Technischer Wert |
 | `cb5f636a87a8` | `cb5f636a87a8d60493b6cbc8f012f53fac50a33c83da76140050c371a72fca48` | Technischer Wert |
 | `a48dfe144fc9` | `a48dfe144fc9fdbeae6dd40a35025f677417161d4edc5f58e9be71d367d61866` | Technischer Wert |
+| `ceb333c3165c` | `ceb333c3165c853bf9410ce5bdb4a76cb6723249c249b8bbe66eaea0cebeca8a` | Technischer Wert |
+| `97c200f46686` | `97c200f46686b6b0a34bb88ab78bb405b95bd42d949a8ca130980f15c99df963` | Technischer Wert |
+| `f7500ffc6e92` | `f7500ffc6e92da57278c64b1250ea609cfe96c8350189b60f0ae1b5dab44b390` | Technischer Wert |
+| `3d851bb25f61` | `3d851bb25f614dff0a762f6436a5987fc1827a01a38dbdcc6961c104d6aee836` | Technischer Wert |
 | `e0fd2c88e0d8` | `e0fd2c88e0d817c874110f1a93e2b034d0a0e8abff311178bcd65182da7956dc` | Technischer Wert |
 | `acd8c11be35a` | `acd8c11be35aee879cd5be2542f28ccb4054b275bfc9d12290c8a5eb6b712555` | Technischer Wert |
+| `eee65b84b10d` | `eee65b84b10d7cf2ffbe38a70c6b7d928bf186882a91af9a4a07f2569ce61f89` | Technischer Wert |
+| `db3146873ac4` | `db3146873ac49c78cf6246b56f12185c275bc1aef52f83f6a684851864590430` | Technischer Wert |
 | `1740032da33d` | `1740032da33dbc9234b592348abbb937f436d8c7c9f1f6a07a60af01d2fcb270` | Fingerprint, Technischer Wert |
 | `2f96188b8d89` | `2f96188b8d89b20ccd0e369f94d63893e57d42adec08ca36a077e839c04d9af9` | Technischer Wert |
 | `b7a023b35309` | `b7a023b35309f377aaa1a71542fe752076aa56081da1a16b7cf6f0725dcbd7d7` | Technischer Wert |
@@ -811,12 +1012,25 @@ Semantischer Record-Digest: `674b4932ac2f`
 | `f82cd471743e` | `f82cd471743e3aabd423e64161affc7fd241fb590aa430ff79f0ea7f9f5bfe2a` | Technischer Wert |
 | `4fa5dc63793f` | `4fa5dc63793f7433aa8028aec4a61f93d652c1310c7998dcf432955ca11934dd` | Technischer Wert |
 | `a9b2ffe60eb4` | `a9b2ffe60eb4c20ee73dc20ef4dfce2bebf9442e22f2c66f5dc947ac23eb8a9f` | Technischer Wert |
+| `df19f3a855ec` | `df19f3a855ec25366a48af29525de6a39bbcc148dfea3395656abfa7290f1e63` | Technischer Wert, Attestierungsreferenz |
+| `1c70f27d683d` | `1c70f27d683d1e129c90d7c00e66515da9b81768` | Bindingziel, Technischer Wert |
+| `41cc2bbdadf1` | `41cc2bbdadf17563d9de73a82a6962438986bf9d9d4d8fcf16f7ef91961cfada` | Technischer Wert |
+| `a258f80afe17` | `a258f80afe17366b563ceeb2ad1203277cc75830e10e5730d0c99ddcc040b53c` | Technischer Wert |
+| `51f9080d7efe` | `51f9080d7efed51ac245f671f06859a7fb10ecab2bd53a33707532d1a3173804` | Technischer Wert, Response-Digest |
+| `e45922e51179` | `e45922e511791cd8599f5a93b01baef522fadddfdcc2cebce325c48ea9af5b9c` | Technischer Wert |
+| `5b9de6c5b1ee` | `5b9de6c5b1eef460d5b58a26d1f75140e1df0c48afb4e554201ff91be5275d32` | Technischer Wert |
+| `bccec457172d` | `bccec457172dc64f37c9e251df4f762434b216955c8c884f7eec5d885e7dc878` | Technischer Wert |
+| `f8585f9f4cd5` | `f8585f9f4cd5d2eaa5c4ec96689531dd320878cb273bd38936fa475051750ea7` | Technischer Wert |
+| `1c48be0becf7` | `1c48be0becf77282a0e86ffd96e92ea931ebd209db3f56f0c2db960917c7c7a3` | Technischer Wert |
+| `78de071091d8` | `78de071091d89c1da8b59feaca71f5704b2c05fdeaffd3dde251d8a40c0c1731` | Technischer Wert |
 | `259010c770bf` | `259010c770bfd50768bd5ac5d926f6fcf64910e7207920e8ba3a847f6a5f86e5` | Request-ID |
 | `6507787e17a8` | `6507787e17a84f00880b17c6083abd4592eac4c6734309c34ec6e61652f6cb73` | Request-ID |
 | `fcae19077e75` | `fcae19077e75cfd8427abb3c22fc9af726ba17f0c71f85670380e5f23a7e091e` | Request-ID |
 | `a8f01da5ec95` | `a8f01da5ec9510c3eed777b29f956e67f708fc34a61dbbeac67fe4c91e402de8` | Request-ID |
 | `4d75c85d4036` | `4d75c85d4036cca7ab1059cc1a3a404256edfb3a871066732640db7aa755a8ec` | Request-ID |
 | `631553b89ccd` | `631553b89ccddc6e837ac068a6215380c9251f28cbcda818be107690d224e673` | Request-ID |
+| `22fa7ba1c355` | `22fa7ba1c355df4c50beb6307516f221853b774bea42769eae171deb0f7ce229` | Request-ID |
+| `f6a3dbc2a5a7` | `f6a3dbc2a5a7a11da9f8469cf0e30ba732efd6d130608c1c19c6a9e892a85bff` | Request-ID |
 <!-- artifact-records:decision-table:end -->
 <!-- audit:decision-table:end -->
 
@@ -867,8 +1081,19 @@ Semantischer Record-Digest: `674b4932ac2f`
 - Red-State-Folgeslice: `NONE`
 - Commit autorisiert: `YES`
 
+#### Work Unit 05 – Gesamtreview
+
+- Auftrag: Branchweite Gesamtabnahme durch Codex und Claude
+- Scope: `docs/internal/resume-abschluss-verschiebt-task-in-outbox-implement-review-a9c0a538.md`, `docs/internal/slice-resume-abschluss-verschiebt-task-in-outbox-arbeitsplan-01-gebundene-gemeinsam-genutzte-queue-finalisierung-fur-direkten-resume.md`, `src/cli.py`, `src/inbox_watcher.py`, `src/orchestrator.py`, `tests/test_cli.py`, `tests/test_inbox_watcher.py`, `tests/test_orchestrator_runtime.py`, `tests/test_orchestrator_watch_cli.py`
+
+- Implementierung bereit: `YES`
+- Validierung: `PASS`
+- Claude-Freigabe: `YES`
+- Red-State-Folgeslice: `NONE`
+- Commit autorisiert: `NO`
+
 <!-- artifact-records:approval-status:begin -->
-Semantischer Record-Digest: `674b4932ac2f`
+Semantischer Record-Digest: `91c2f4bece7b`
 
 ### Work-Unit · Slice 1 · Runde 1
 
@@ -911,5 +1136,23 @@ Semantischer Record-Digest: `674b4932ac2f`
 | Seq/Record | Rolle | Runde | Status | Work-Unit | Tests | Transport | Request | Response | Fingerprint |
 |---|---|---:|---|---|---|---|---|---|---|
 | 46. `ar1-460ead36f754` | `codex` | `1` | `ready` | `4` | `tests/test_inbox_watcher.py`, `tests/test_orchestrator_runtime.py` | `native-codex-v2` | `native-codex-request-4d75c85d4036` | `631553b89ccd` | `a9fa36d46c24` |
+
+### Binding · commit
+
+| Seq/Record | Art | Ziel | Attestierung | Approvals |
+|---|---|---|---|---|
+| 73. `ar1-df19f3a855ec` | `commit` | `1c70f27d683d` | `ar1-cb3ef35479c0` | `ar1-70605a1d06a2` |
+
+### Work-Unit · Slice 2 · Runde 1
+
+| Seq/Record | Typ | Slice | Runde | Pfade | Findings |
+|---|---|---|---:|---|---|
+| 74. `ar1-41cc2bbdadf1` | Work-Unit | `2` | `1` | `docs/internal/resume-abschluss-verschiebt-task-in-outbox-implement-review-a9c0a538.md`, `docs/internal/slice-resume-abschluss-verschiebt-task-in-outbox-implement-02-abschlusskorrektur.md`, `src/cli.py`, `src/inbox_watcher.py`, `src/orchestrator.py`, `tests/test_cli.py`, `tests/test_inbox_watcher.py`, `tests/test_orchestrator_runtime.py`, `tests/test_orchestrator_watch_cli.py` | keine |
+
+### Codex · Runde 1 · ready
+
+| Seq/Record | Rolle | Runde | Status | Work-Unit | Tests | Transport | Request | Response | Fingerprint |
+|---|---|---:|---|---|---|---|---|---|---|
+| 80. `ar1-51f9080d7efe` | `codex` | `1` | `ready` | `5` | keine | `native-codex-v2` | `native-codex-request-22fa7ba1c355` | `f6a3dbc2a5a7` | `fce5a466dd4d` |
 <!-- artifact-records:approval-status:end -->
 <!-- audit:approval-status:end -->
