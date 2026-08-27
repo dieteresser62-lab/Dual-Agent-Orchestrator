@@ -464,7 +464,7 @@ Die vollständige Suite wird nicht in jedem Review erneut ausgeführt. Reviewer 
 - keine Abschwächung der Recordkette oder Mirrorprüfung,
 - keine manuelle Reparatur von State, Checkpoints oder Recorddateien,
 - keine stille Migration historischer Protokolle,
-- keine Wiedereinführung von Antigravity,
+- keine Wiedereinführung einer ausgemusterten dritten Reviewerrolle,
 - keine Persistenz verworfener Modellinhalte,
 - keine allgemeine UI- oder Auditprojektionsarbeit,
 - keine flakey zeit-, kosten- oder providerabhängige Testschwelle,
