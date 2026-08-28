@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -45,6 +46,7 @@ from native_review_request import validate_native_review_provider_response
 from workflow_state import (
     AgentFailureKind,
     GateReason,
+    GateStatus,
     ProtocolBinding,
     ProtocolMode,
     WorkUnitKind,
@@ -55,6 +57,52 @@ from workflow_state import (
 
 
 SCENARIO_VERSION = 1
+GATE_RULE_PREFIX = re.compile(r"^([A-Z][A-Z0-9_-]*) \| ")
+PREFIXLESS_GATE_RULES = (
+    (
+        GateReason.ITERATION_LIMIT,
+        "PREFIXLESS:REVIEW-DENIAL",
+        re.compile(r"review denied by claude after [1-9][0-9]* Codex returns"),
+    ),
+    (
+        GateReason.ANCHOR_CHANGE,
+        "PREFIXLESS:ANCHOR-CHANGE",
+        re.compile(r"approved plan anchors changed and require plan review reset"),
+    ),
+    (
+        GateReason.MANUAL_SLICE,
+        "PREFIXLESS:MANUAL-SLICE",
+        re.compile(r"manual slice approval is required before commit"),
+    ),
+    (
+        GateReason.TEST_CHANGE,
+        "PREFIXLESS:TEST-CHANGE",
+        re.compile(r"test changes require explicit approval before review"),
+    ),
+    *(
+        (
+            reason,
+            "PREFIXLESS:INVOCATION-FAILURE",
+            re.compile(
+                r"role=(?:codex|claude) step=[a-z_]+ invocation=[A-Za-z0-9._:-]+ "
+                r"kind=[a-z_]+ resume=.+ auto=(?:true|false) continuations=[0-9]+ "
+                r"provider=.+"
+            ),
+        )
+        for reason in (GateReason.INSTANCE_FAILURE, GateReason.QUOTA)
+    ),
+    *(
+        (
+            reason,
+            "PREFIXLESS:LEGACY-QUOTA-REVALIDATION",
+            re.compile(
+                r"legacy QUOTA-RESUME-DIFF requires fingerprint-bound "
+                r"repository revalidation"
+            ),
+        )
+        for reason in (GateReason.INSTANCE_FAILURE, GateReason.QUOTA)
+    ),
+)
 
 
 class DryRunScenarioError(RuntimeError):
@@ -499,11 +547,75 @@ class ScriptedContext:
 
 
 @dataclass(frozen=True)
+class ScenarioGateExpectation:
+    status: GateStatus
+    reason: GateReason
+    rule_id: str
+    kind: str
+    fingerprint: str | None = None
+    paths: tuple[str, ...] = ()
+    resume_step: WorkflowStep | None = None
+
+    def __post_init__(self) -> None:
+        if self.kind not in {"policy", "resume", "user"}:
+            raise ValueError("scenario gate kind must be policy, resume, or user")
+        prefixed = GATE_RULE_PREFIX.fullmatch(f"{self.rule_id} | ") is not None
+        prefixless = re.fullmatch(r"PREFIXLESS:[A-Z][A-Z0-9-]*", self.rule_id)
+        if not self.rule_id or (not prefixed and prefixless is None):
+            raise ValueError("scenario gate rule_id must be an exact uppercase rule id")
+        if self.paths != tuple(sorted(set(self.paths))):
+            raise ValueError("scenario gate paths must be sorted and unique")
+
+    @classmethod
+    def from_dict(cls, raw: Mapping[str, object]) -> ScenarioGateExpectation:
+        _require_exact_keys(
+            raw,
+            {"status", "reason", "rule_id", "kind", "paths"},
+            {"fingerprint", "resume_step"},
+            "scenario.expect.gate",
+        )
+        try:
+            status = GateStatus(
+                _string(raw["status"], "scenario.expect.gate.status")
+            )
+            reason = GateReason(_string(raw["reason"], "scenario.expect.gate.reason"))
+            resume_raw = raw.get("resume_step")
+            resume_step = (
+                None
+                if resume_raw is None
+                else WorkflowStep(
+                    _string(resume_raw, "scenario.expect.gate.resume_step")
+                )
+            )
+        except ValueError as exc:
+            raise DryRunScenarioError(
+                "scenario.expect.gate has an unknown status, reason, or resume step"
+            ) from exc
+        fingerprint_raw = raw.get("fingerprint")
+        return cls(
+            status=status,
+            reason=reason,
+            rule_id=_string(raw["rule_id"], "scenario.expect.gate.rule_id"),
+            kind=_string(raw["kind"], "scenario.expect.gate.kind"),
+            fingerprint=(
+                None
+                if fingerprint_raw is None
+                else _string(fingerprint_raw, "scenario.expect.gate.fingerprint")
+            ),
+            paths=_string_tuple(
+                raw["paths"], "scenario.expect.gate.paths", allow_empty=True
+            ),
+            resume_step=resume_step,
+        )
+
+
+@dataclass(frozen=True)
 class ScenarioExpectations:
     exit_code: int
     status: str | None = None
     step: WorkflowStep | None = None
     gate_reason: GateReason | None = None
+    gate: ScenarioGateExpectation | None = None
     commit_count: int | None = None
     remaining_agent_events: int | None = 0
     audit_contains: tuple[str, ...] = ()
@@ -516,7 +628,7 @@ class ScenarioExpectations:
             raw,
             {"exit_code"},
             {
-                "status", "step", "gate_reason", "commit_count",
+                "status", "step", "gate_reason", "gate", "commit_count",
                 "remaining_agent_events", "audit_contains",
                 "agent_order", "validation_counts",
             },
@@ -575,6 +687,13 @@ class ScenarioExpectations:
             ),
             step=step,
             gate_reason=reason,
+            gate=(
+                ScenarioGateExpectation.from_dict(
+                    _mapping(raw["gate"], "scenario.expect.gate")
+                )
+                if "gate" in raw
+                else None
+            ),
             commit_count=commit_count,
             remaining_agent_events=remaining,
             audit_contains=audit,
@@ -718,6 +837,7 @@ class ScriptedWorkflowDriver:
     commit_requests: list[WorkflowCommitRequest] = field(default_factory=list)
     codex_invocations: list[CodexInvocation] = field(default_factory=list)
     reviewer_invocations: list[ReviewerInvocation] = field(default_factory=list)
+    durable_findings: tuple[FindingRecord, ...] = ()
     _agent_index: int = 0
     _validation_index: int = 0
     _commit_index: int = 0
@@ -735,14 +855,37 @@ class ScriptedWorkflowDriver:
     ) -> tuple[FindingRecord, ...]:
         """Provide the provider-free replay boundary used by native dry-runs."""
         _ = state
-        return findings
+        return self.durable_findings or findings
 
     def carry_forward_native_findings(
         self, state: WorkflowState, findings: tuple[FindingRecord, ...]
     ) -> tuple[FindingRecord, ...]:
         """Carry the scripted ledger unchanged across dry-run work units."""
         _ = state
-        return findings
+        return self.durable_findings or findings
+
+    def persist_native_codex_contract(
+        self,
+        output: NativeAgentCodexOutput,
+        previous_findings: tuple[FindingRecord, ...],
+    ) -> None:
+        """Emulate record replay by retaining lines absent from a narrowed request."""
+        ledger = {item.finding_id: item for item in self.durable_findings or previous_findings}
+        ledger.update({item.finding_id: item for item in output.result.findings})
+        self.durable_findings = tuple(ledger[key] for key in sorted(ledger))
+
+    def persist_native_review_contract(
+        self,
+        output: NativeAgentReviewOutput,
+        fingerprint: str,
+        round_number: int,
+        previous_findings: tuple[FindingRecord, ...],
+    ) -> None:
+        """Mirror the complete reviewer result as the scripted durable ledger."""
+        _ = (fingerprint, round_number)
+        ledger = {item.finding_id: item for item in self.durable_findings or previous_findings}
+        ledger.update({item.finding_id: item for item in output.result.findings})
+        self.durable_findings = tuple(ledger[key] for key in sorted(ledger))
 
     def _consume_agent(
         self,
@@ -1054,6 +1197,57 @@ class ScriptedRunReport:
     remaining_agent_events: int
 
 
+@dataclass(frozen=True)
+class ResilienceEvidenceRow:
+    """Stable provider-free evidence reference used by the Slice-3 report."""
+
+    scenario_id: str
+    dimension: str
+    expected_result: str
+    evidence_test: str
+
+    def __post_init__(self) -> None:
+        for value, label in (
+            (self.scenario_id, "scenario_id"),
+            (self.expected_result, "expected_result"),
+            (self.evidence_test, "evidence_test"),
+        ):
+            if not value.strip():
+                raise ValueError(f"resilience evidence {label} must not be empty")
+        if self.dimension not in {"security", "availability", "autonomy"}:
+            raise ValueError(
+                "resilience evidence dimension must be security, availability, or autonomy"
+            )
+
+
+def render_resilience_evidence(rows: tuple[ResilienceEvidenceRow, ...]) -> str:
+    """Render byte-stable evidence without timing, token, cost, or provider data."""
+
+    identities = tuple(item.scenario_id for item in rows)
+    if len(identities) != len(set(identities)):
+        raise DryRunScenarioError("resilience evidence scenario ids must be unique")
+    order = {"security": 0, "availability": 1, "autonomy": 2}
+    sorted_rows = tuple(
+        sorted(rows, key=lambda item: (order[item.dimension], item.scenario_id))
+    )
+    lines = ["# Providerfreier Resilienznachweis", ""]
+    for dimension in ("security", "availability", "autonomy"):
+        lines.extend((f"## {dimension.title()}", ""))
+        dimension_rows = tuple(
+            item for item in sorted_rows if item.dimension == dimension
+        )
+        if not dimension_rows:
+            lines.append("- Kein Szenario registriert.")
+        else:
+            for item in dimension_rows:
+                lines.append(
+                    f"- `{item.scenario_id}`: {item.expected_result} "
+                    f"(Nachweis: `{item.evidence_test}`)"
+                )
+        lines.append("")
+    return "\n".join(lines)
+
+
 @dataclass
 class ScriptedWorkflowSession:
     scenario: DryRunScenario
@@ -1091,6 +1285,18 @@ class ScriptedWorkflowSession:
                 self.driver.checkpoints[-1], self.driver.checkpoint_histories[-1]
             )
             self.driver.calls.append("interrupt:quota-wait")
+        return ScriptedRunReport(
+            result=result,
+            calls=tuple(self.driver.calls),
+            validation_counts=dict(self.driver.validation_counts),
+            audit_document=self.driver.audit_document(result, self.clock),
+            heartbeats=tuple(self.clock.heartbeats),
+            sleeps=tuple(self.clock.sleeps),
+            remaining_agent_events=self.driver.remaining_agent_events,
+        )
+
+    def report(self, result: WorkflowRunResult) -> ScriptedRunReport:
+        """Project a result from the same scripted session without rerunning it."""
         return ScriptedRunReport(
             result=result,
             calls=tuple(self.driver.calls),
@@ -1192,6 +1398,30 @@ def verify_scenario_expectations(
         failures.append(
             f"gate expected {expected.gate_reason.value}, got {unit.gate.reason.value}"
         )
+    if expected.gate is not None:
+        gate = unit.gate
+        actual_rule_id = _gate_rule_id(gate.reason, gate.detail)
+        actual_kind = _gate_kind(gate.status, gate.reason, gate.fingerprint)
+        actual = (
+            gate.status.value,
+            gate.reason,
+            actual_rule_id,
+            actual_kind,
+            gate.fingerprint,
+            gate.paths,
+            gate.resume_step,
+        )
+        wanted = (
+            expected.gate.status.value,
+            expected.gate.reason,
+            expected.gate.rule_id,
+            expected.gate.kind,
+            expected.gate.fingerprint,
+            expected.gate.paths,
+            expected.gate.resume_step,
+        )
+        if actual != wanted:
+            failures.append(f"gate identity expected {wanted!r}, got {actual!r}")
     if expected.commit_count is not None:
         actual_commits = sum(call.startswith("commit:") for call in report.calls)
         if actual_commits != expected.commit_count:
@@ -1243,6 +1473,67 @@ def run_dry_run_scenario_file(
     return report
 
 
+def run_scripted_workflow(
+    *, scenario: DryRunScenario, task_file: Path
+) -> ScriptedRunReport:
+    """Run plan/slices/final review as one provider-free workflow journey."""
+
+    session = ScriptedWorkflowSession(scenario)
+    context = build_scenario_context(scenario)
+    state = build_scenario_state(scenario, task_file=task_file)
+    if state.current_work_unit.kind is WorkUnitKind.PLAN:
+        plan_report = session.run(state, context)
+        if not plan_report.result.completed:
+            return plan_report
+        state = plan_report.result.state
+        planned_slices = state.planned_slices
+    else:
+        planned_slices = ()
+
+    if state.current_work_unit.kind is WorkUnitKind.SLICE:
+        slice_report = session.run(state, context)
+        if not slice_report.result.completed:
+            return slice_report
+        state = slice_report.result.state
+    else:
+        for planned in planned_slices:
+            next_work_unit_id = len(state.work_units) + 1
+            first_change = next(
+                (
+                    item
+                    for item in scenario.changes
+                    if item.work_unit_id == next_work_unit_id
+                    and item.round_number == 1
+                ),
+                None,
+            )
+            if first_change is None:
+                raise DryRunScenarioError(
+                    f"missing scripted Slice boundary for work unit {next_work_unit_id}"
+                )
+            state = state.start_work_unit(
+                slice_id=planned.slice_id,
+                kind=WorkUnitKind.SLICE,
+                step=WorkflowStep.CODEX_IMPLEMENTATION,
+                slice_start_commit=(
+                    None if planned.slice_id == 1 else first_change.start_commit
+                ),
+            ).bind_current_slice_git_boundary(
+                start_commit=first_change.start_commit,
+                scope_paths=planned.scope_paths,
+                start_fingerprint="0" * 64,
+            )
+            slice_report = session.run(state, context)
+            if not slice_report.result.completed:
+                return slice_report
+            state = slice_report.result.state
+
+    final_result = session.engine.run_final_review(
+        state, context, slice_report.result.history
+    )
+    return session.report(final_result)
+
+
 def run_scripted_work_unit(
     *,
     scenario: DryRunScenario,
@@ -1252,3 +1543,48 @@ def run_scripted_work_unit(
 ) -> ScriptedRunReport:
     """Run the real v3 state machine with only agent/command/time backends replaced."""
     return ScriptedWorkflowSession(scenario).run(state, context, history)
+
+
+def _gate_rule_id(reason: GateReason, detail: str | None) -> str | None:
+    if detail is None:
+        return None
+    match = GATE_RULE_PREFIX.match(detail)
+    if match is not None:
+        return match.group(1)
+    matches = tuple(
+        rule_id
+        for expected_reason, rule_id, grammar in PREFIXLESS_GATE_RULES
+        if expected_reason is reason and grammar.fullmatch(detail)
+    )
+    return matches[0] if len(matches) == 1 else None
+
+
+def _gate_kind(
+    status: GateStatus, reason: GateReason, fingerprint: str | None
+) -> str:
+    if status in {
+        GateStatus.AWAITING_RESUME,
+        GateStatus.WAITING_FOR_QUOTA,
+        GateStatus.WAITING_FOR_RETRY,
+    }:
+        return "resume"
+    if status is not GateStatus.AWAITING_USER_DECISION:
+        raise DryRunScenarioError(
+            f"gate status {status.value} has no non-clear gate kind"
+        )
+    if reason in {
+        GateReason.ITERATION_LIMIT,
+        GateReason.TEST_CHANGE,
+        GateReason.ANCHOR_CHANGE,
+        GateReason.MANUAL_SLICE,
+        GateReason.PLAN_APPROVAL,
+        GateReason.QUOTA_RESUME_DIFF,
+    }:
+        return "user"
+    if reason is GateReason.UNEXPECTED_FILE:
+        return "user" if fingerprint is not None else "policy"
+    if reason is GateReason.STOP_REQUEST:
+        return "policy"
+    raise DryRunScenarioError(
+        f"gate reason {reason.value} has no awaiting-user gate kind"
+    )

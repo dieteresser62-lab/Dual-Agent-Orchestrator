@@ -352,6 +352,42 @@ GATE_SOURCE_MAP = (
         ("provider-input-budget-resume",),
     ),
     GateSourceRow(
+        "FINAL-REVIEW-PREFLIGHT",
+        "bootstrap_check",
+        "resume",
+        "workflow._invoke_role",
+        ("workflow._invoke_role",),
+        ("final-review-preflight-fallback-resume",),
+        direct_emission_count=1,
+    ),
+    *(
+        GateSourceRow(
+            rule_id,
+            "bootstrap_check",
+            "resume",
+            "workflow._invoke_role",
+            ("final_review_preflight.run_final_review_preflight",),
+            (case_id,),
+            direct_emission_count=1,
+        )
+        for rule_id, case_id in (
+            ("MEASUREMENT-TYPE", "measurement-type-resume"),
+            ("OPERATION-NOT-FINAL", "operation-not-final-resume"),
+            ("STATE-TRANSITION-MISMATCH", "state-transition-mismatch-resume"),
+            ("MEASUREMENT-RUN-MISMATCH", "measurement-run-mismatch-resume"),
+            ("MEASUREMENT-DENIED", "measurement-denied-resume"),
+            ("PREMATURE-COMPLETION", "premature-completion-resume"),
+            ("FOREIGN-RUN-RECORD", "foreign-run-record-resume"),
+            ("MISSING-REFERENCE", "missing-reference-resume"),
+            ("FINGERPRINT-MISMATCH", "fingerprint-mismatch-resume"),
+            ("UNAUTHORIZED-PATH", "unauthorized-path-resume"),
+            ("ATTESTATION-MISSING", "attestation-missing-resume"),
+            ("ATTESTATION-FAILED", "attestation-failed-resume"),
+            ("SLICE-BINDING-MISSING", "slice-binding-missing-resume"),
+            ("CODEX-FINAL-RESULT-MISSING", "codex-final-result-missing-resume"),
+        )
+    ),
+    GateSourceRow(
         "BRANCH-MISMATCH",
         "stop_request",
         "policy",
@@ -510,6 +546,81 @@ GATE_CASE_ORACLE = (
     ("slice-boundary-policy-gate", "unexpected_file", "SLICE-HEAD-DRIFT", "policy"),
     ("scope-user-gate", "unexpected_file", "UNEXPECTED-PATH", "user"),
     ("provider-input-budget-resume", "bootstrap_check", "PROVIDER-INPUT-BUDGET", "resume"),
+    (
+        "final-review-preflight-fallback-resume",
+        "bootstrap_check",
+        "FINAL-REVIEW-PREFLIGHT",
+        "resume",
+    ),
+    ("measurement-type-resume", "bootstrap_check", "MEASUREMENT-TYPE", "resume"),
+    (
+        "operation-not-final-resume",
+        "bootstrap_check",
+        "OPERATION-NOT-FINAL",
+        "resume",
+    ),
+    (
+        "state-transition-mismatch-resume",
+        "bootstrap_check",
+        "STATE-TRANSITION-MISMATCH",
+        "resume",
+    ),
+    (
+        "measurement-run-mismatch-resume",
+        "bootstrap_check",
+        "MEASUREMENT-RUN-MISMATCH",
+        "resume",
+    ),
+    (
+        "measurement-denied-resume",
+        "bootstrap_check",
+        "MEASUREMENT-DENIED",
+        "resume",
+    ),
+    (
+        "premature-completion-resume",
+        "bootstrap_check",
+        "PREMATURE-COMPLETION",
+        "resume",
+    ),
+    (
+        "foreign-run-record-resume",
+        "bootstrap_check",
+        "FOREIGN-RUN-RECORD",
+        "resume",
+    ),
+    ("missing-reference-resume", "bootstrap_check", "MISSING-REFERENCE", "resume"),
+    (
+        "fingerprint-mismatch-resume",
+        "bootstrap_check",
+        "FINGERPRINT-MISMATCH",
+        "resume",
+    ),
+    ("unauthorized-path-resume", "bootstrap_check", "UNAUTHORIZED-PATH", "resume"),
+    (
+        "attestation-missing-resume",
+        "bootstrap_check",
+        "ATTESTATION-MISSING",
+        "resume",
+    ),
+    (
+        "attestation-failed-resume",
+        "bootstrap_check",
+        "ATTESTATION-FAILED",
+        "resume",
+    ),
+    (
+        "slice-binding-missing-resume",
+        "bootstrap_check",
+        "SLICE-BINDING-MISSING",
+        "resume",
+    ),
+    (
+        "codex-final-result-missing-resume",
+        "bootstrap_check",
+        "CODEX-FINAL-RESULT-MISSING",
+        "resume",
+    ),
     ("branch-mismatch", "stop_request", "BRANCH-MISMATCH", "policy"),
     ("productive-file-limit", "stop_request", "PRODUCTIVE-FILE-LIMIT", "policy"),
     ("validation-unavailable", "stop_request", "VALIDATION-UNAVAILABLE", "policy"),
@@ -750,37 +861,19 @@ def _literal_prefix_inventory(trees: dict[str, ast.Module]) -> set[str]:
 
 
 def _assigned_prefixes_reaching_gate(trees: dict[str, ast.Module]) -> set[str]:
-    """Follow simple local-name producers into f-string gate details.
-
-    This intentionally covers the production shape used by _invoke_role: a local
-    ``code`` assignment is later interpolated into the await_bootstrap_resume
-    detail.  New assignment branches therefore enlarge the discovered set.
-    """
+    """Follow every closed local producer into f-string gate details."""
 
     prefixes: set[str] = set()
+    preflight_codes = _final_review_preflight_error_codes(trees)
     for tree in trees.values():
         for function in (
             node
             for node in ast.walk(tree)
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         ):
-            assignments: dict[str, set[str]] = {}
-            for node in ast.walk(function):
-                if not isinstance(node, (ast.Assign, ast.AnnAssign)):
-                    continue
-                targets = (
-                    node.targets
-                    if isinstance(node, ast.Assign)
-                    else (node.target,)
-                )
-                value = node.value
-                if not isinstance(value, ast.Constant) or not isinstance(value.value, str):
-                    continue
-                if re.fullmatch(r"[A-Z][A-Z0-9_-]*", value.value) is None:
-                    continue
-                for target in targets:
-                    if isinstance(target, ast.Name):
-                        assignments.setdefault(target.id, set()).add(value.value)
+            assignments = _assigned_rule_ids(
+                function, preflight_error_codes=preflight_codes
+            )
             for node in ast.walk(function):
                 if not isinstance(node, ast.Call) or _call_name(node) not in GATE_CALLS:
                     continue
@@ -799,6 +892,48 @@ def _assigned_prefixes_reaching_gate(trees: dict[str, ast.Module]) -> set[str]:
                 for name in interpolated_names:
                     prefixes.update(assignments.get(name, ()))
     return prefixes
+
+
+def _final_review_preflight_error_codes(
+    trees: dict[str, ast.Module],
+) -> set[str]:
+    """Derive the exact typed preflight denial codes that can feed ``error_code``."""
+
+    tree = trees.get("final_review_preflight.py")
+    if tree is None:
+        return set()
+    function = next(
+        (
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "run_final_review_preflight"
+        ),
+        None,
+    )
+    if function is None:
+        return set()
+    codes: set[str] = set()
+    for call in (
+        node
+        for node in ast.walk(function)
+        if isinstance(node, ast.Call) and _call_name(node) == "_deny"
+    ):
+        code = (
+            call.args[1]
+            if len(call.args) > 1
+            else next(
+                (keyword.value for keyword in call.keywords if keyword.arg == "code"),
+                None,
+            )
+        )
+        if (
+            isinstance(code, ast.Constant)
+            and isinstance(code.value, str)
+            and re.fullmatch(r"[A-Z][A-Z0-9_-]*", code.value)
+        ):
+            codes.add(code.value)
+    return codes
 
 
 def _unknown_gate_prefixes(trees: dict[str, ast.Module]) -> set[str]:
@@ -839,7 +974,9 @@ def _function_for_symbol(
     )
 
 
-def _assigned_rule_ids(node: ast.AST) -> dict[str, set[str]]:
+def _assigned_rule_ids(
+    node: ast.AST, *, preflight_error_codes: set[str] | None = None
+) -> dict[str, set[str]]:
     assigned: dict[str, set[str]] = {}
     for assignment in ast.walk(node):
         if not isinstance(assignment, (ast.Assign, ast.AnnAssign)):
@@ -858,6 +995,11 @@ def _assigned_rule_ids(node: ast.AST) -> dict[str, set[str]]:
             and isinstance(value.value, str)
             and re.fullmatch(r"[A-Z][A-Z0-9_-]*", value.value)
         }
+        if preflight_error_codes and any(
+            isinstance(value, ast.Attribute) and value.attr == "error_code"
+            for value in ast.walk(assignment.value)
+        ):
+            values.update(preflight_error_codes)
         for target in targets:
             if isinstance(target, ast.Name) and values:
                 assigned.setdefault(target.id, set()).update(values)
@@ -1068,7 +1210,13 @@ def _production_gate_pairs(
         return set()
     module = row.emission.partition(".")[0]
     assignments = _module_rule_ids(trees, module)
-    _merge_rule_ids(assignments, _assigned_rule_ids(function))
+    _merge_rule_ids(
+        assignments,
+        _assigned_rule_ids(
+            function,
+            preflight_error_codes=_final_review_preflight_error_codes(trees),
+        ),
+    )
     forwarded_pairs = _forwarded_exception_gate_pairs(row, trees)
     if forwarded_pairs:
         return forwarded_pairs
@@ -1105,7 +1253,13 @@ def _direct_gate_triples(
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         ):
             assignments = {name: set(values) for name, values in module_assignments.items()}
-            _merge_rule_ids(assignments, _assigned_rule_ids(function))
+            _merge_rule_ids(
+                assignments,
+                _assigned_rule_ids(
+                    function,
+                    preflight_error_codes=_final_review_preflight_error_codes(trees),
+                ),
+            )
             for reason, kind, rule_ids, _detail in _gate_call_facts(
                 function, assignments
             ):
@@ -1315,7 +1469,7 @@ def _source_map_errors(
     direct_triples = _direct_gate_triples(trees)
     for reason, rule_id, kind, _emission in direct_triples:
         triple = (reason, rule_id, kind)
-        if rule_id in concrete_rows and triple not in declared_triples:
+        if rule_id not in GATE_FOREIGN_PREFIXES and triple not in declared_triples:
             errors.add(f"unclassified-triplet:{reason}:{rule_id}:{kind}")
     authorized_origins: dict[str, set[str]] = {}
     for row in rows:
@@ -1775,6 +1929,26 @@ def test_gate_source_map_rejects_orphans_and_per_emission_prefix_moves() -> None
     case_results = {
         case[0]: _execute_gate_case(case) for case in GATE_CASE_ORACLE
     }
+    expected_preflight_codes = {
+        "ATTESTATION-FAILED",
+        "ATTESTATION-MISSING",
+        "CODEX-FINAL-RESULT-MISSING",
+        "FINGERPRINT-MISMATCH",
+        "FOREIGN-RUN-RECORD",
+        "MEASUREMENT-DENIED",
+        "MEASUREMENT-RUN-MISMATCH",
+        "MEASUREMENT-TYPE",
+        "MISSING-REFERENCE",
+        "OPERATION-NOT-FINAL",
+        "PREMATURE-COMPLETION",
+        "SLICE-BINDING-MISSING",
+        "STATE-TRANSITION-MISMATCH",
+        "UNAUTHORIZED-PATH",
+    }
+    assert _final_review_preflight_error_codes(trees) == expected_preflight_codes
+    assert expected_preflight_codes | {"FINAL-REVIEW-PREFLIGHT"} <= (
+        _assigned_prefixes_reaching_gate(trees)
+    )
     invented = GateSourceRow(
         "HEAD-DRIFT",
         "unexpected_file",
@@ -1826,6 +2000,32 @@ def test_gate_source_map_rejects_orphans_and_per_emission_prefix_moves() -> None
     assert "ZZZ-DYNAMIC" in _unknown_gate_prefixes(dynamic)
     errors = _source_map_errors(GATE_SOURCE_MAP, dynamic, case_results)
     assert "unclassified-rule:ZZZ-DYNAMIC" in errors
+
+    # BoolOp fallbacks at the same real producer are equally authoritative; a
+    # new ``error_code or literal`` identity cannot escape the constant branch
+    # mutation above.
+    boolop_escape = dict(trees)
+    boolop_escape["workflow.py"] = ast.parse(
+        workflow_source.replace(
+            'error.result.error_code or "FINAL-REVIEW-PREFLIGHT"',
+            'error.result.error_code or "ZZZ-ESCAPE"',
+            1,
+        )
+    )
+    assert "ZZZ-ESCAPE" in _unknown_gate_prefixes(boolop_escape)
+    errors = _source_map_errors(GATE_SOURCE_MAP, boolop_escape, case_results)
+    assert "unclassified-rule:ZZZ-ESCAPE" in errors
+    assert "unclassified-triplet:bootstrap_check:ZZZ-ESCAPE:resume" in errors
+
+    without_fallback_row = tuple(
+        row for row in GATE_SOURCE_MAP if row.rule_id != "FINAL-REVIEW-PREFLIGHT"
+    )
+    errors = _source_map_errors(without_fallback_row, trees, case_results)
+    assert "unclassified-rule:FINAL-REVIEW-PREFLIGHT" in errors
+    assert (
+        "unclassified-triplet:bootstrap_check:FINAL-REVIEW-PREFLIGHT:resume"
+        in errors
+    )
 
     # Even if expectation and executable-case literals are changed together,
     # the kind remains bound to the production API used by the emitter.
