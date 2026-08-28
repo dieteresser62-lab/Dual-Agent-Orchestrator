@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from audit_trail import strip_managed_audit_sections
 from cli import build_parser, parse_args
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -687,6 +688,8 @@ def _allowed_retirement_reference_line(path: Path, line: str) -> bool:
 
 
 def _retirement_hits(path: Path, text: str) -> list[str]:
+    if path.suffix.casefold() == ".md":
+        text = strip_managed_audit_sections(text)
     text = "\n".join(
         line
         for line in text.splitlines()
@@ -858,6 +861,23 @@ def test_retirement_guard_rejects_every_active_retired_reference() -> None:
         for hit in _retirement_hits(path, path.read_text(encoding="utf-8"))
     ]
     assert not hits, "Retired active references found:\n" + "\n".join(hits)
+
+
+def test_retirement_guard_ignores_only_managed_audit_projection() -> None:
+    retired_name = "anti" + "gravity"
+    internal_document = ROOT / "docs" / "internal" / "synthetic-audit.md"
+    projected = (
+        "# Active evidence\n\n"
+        "<!-- audit:validation-attestation:begin -->\n"
+        f"pytest negative control: {retired_name}\n"
+        "<!-- audit:validation-attestation:end -->\n"
+    )
+
+    assert _retirement_hits(internal_document, projected) == []
+    assert _retirement_hits(
+        internal_document,
+        f"# Active declaration\n\n{retired_name} is an active reviewer.\n",
+    ) == ["docs/internal/synthetic-audit.md: antigravity"]
 
 
 @pytest.mark.parametrize(
