@@ -126,7 +126,7 @@ def test_compute_retry_backoff_seconds_rate_limit_floor() -> None:
     assert compute_retry_backoff_seconds("rate limit", 5) == 30
 
 
-def test_capability_verification_accepts_forward_compatible_claude_patch(
+def test_capability_verification_accepts_forward_compatible_claude_minor(
     monkeypatch,
 ) -> None:
     class FakeClaude:
@@ -159,9 +159,53 @@ def test_capability_verification_accepts_forward_compatible_claude_patch(
     def fake_run(args: list[str], timeout: int = 20) -> tuple[int, str, str]:
         assert timeout == 20
         if args[-1] == "--version":
-            return 0, "2.1.246 (Claude Code)\n", ""
+            return 0, "2.9.0 (Claude Code)\n", ""
         assert args[-1] == "--help"
         return 0, "--json-schema\n--effort\n", ""
+
+    monkeypatch.setattr(agent_runtime, "run_local_command", fake_run)
+
+    verify_agent_capabilities(adapter)
+
+    assert adapter.capability_verified is True
+
+
+def test_capability_verification_accepts_forward_compatible_codex_minor(
+    monkeypatch,
+) -> None:
+    class FakeCodex:
+        name = "codex"
+        cli_binary = "codex"
+        model = "gpt-5.6-sol"
+        effort = "medium"
+        timeout = 30
+        reviewer = False
+        required_hosts: tuple[str, ...] = ()
+        capability = CapabilitySpec(
+            ("--version",),
+            ("exec", "--help"),
+            (r"^codex-cli 0\.147\.0$",),
+            ("--output-schema", "--output-last-message"),
+        )
+        capability_verified = False
+
+        @staticmethod
+        def validate_process_output(stderr: str) -> None:
+            assert stderr == ""
+
+    adapter = FakeCodex()
+    monkeypatch.setattr(
+        agent_runtime,
+        "_resolve_agent_binary",
+        lambda binary: "/opt/bin/codex",
+    )
+
+    def fake_run(args: list[str], timeout: int = 20) -> tuple[int, str, str]:
+        assert timeout == 20
+        if args[-1] == "--version":
+            return 0, "codex-cli 0.150.1\n", ""
+        assert args[-2:] == ["exec", "--help"]
+        return 0, "--output-schema\n--output-last-message\n", ""
 
     monkeypatch.setattr(agent_runtime, "run_local_command", fake_run)
 

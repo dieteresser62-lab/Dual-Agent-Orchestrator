@@ -38,3 +38,9 @@ Der Ordner
 enthält den freigegebenen Arbeitsplan, alle drei Slice-Reviews, den
 providerfreien Resilienz- und Abschlussnachweis sowie die vollständige Codex-
 und Claude-Reviewkette einschließlich der Schließung von `C-01` bis `C-20`.
+
+Der Ordner
+[`archive/provider-wide-version-policy-hotfix/`](archive/provider-wide-version-policy-hotfix/)
+enthält die vollständige Claude-Reviewkette des providerweiten
+Versionspolicy-Hotfixes: die erste fingerprintgebundene Verweigerung wegen
+Snapshotdrift und die abschließende Freigabe des stabilen Korrekturstands.

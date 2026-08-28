@@ -20,7 +20,7 @@ EXCEPTION_PATH = (
 )
 CAPABILITY_SCHEMA_VERSION = "native-provider-schema-capabilities-v1"
 EXCEPTION_SCHEMA_VERSION = "native-provider-schema-exceptions-v1"
-VERSION_POLICIES = {"same-major-forward", "same-minor-forward"}
+PROVIDER_VERSION_POLICY = "same-major-forward"
 CLI_VERSION_PATTERNS = {
     "claude": re.compile(r"^(\d+)\.(\d+)\.(\d+) \(Claude Code\)$"),
     "codex": re.compile(r"^codex-cli (\d+)\.(\d+)\.(\d+)$"),
@@ -78,9 +78,10 @@ def load_capability_table() -> dict[str, Any]:
         _required_text(item, "binary_name")
         cli_version = _required_text(item, "cli_version")
         version_policy = _required_text(item, "version_policy")
-        if version_policy not in VERSION_POLICIES:
+        if version_policy != PROVIDER_VERSION_POLICY:
             raise NativeProviderSchemaError(
-                f"provider {name} has an unsupported version policy"
+                f"provider {name} must use the provider-wide version policy "
+                f"{PROVIDER_VERSION_POLICY}"
             )
         _parse_cli_version(name, cli_version)
         _profile_from_document(item.get("transport_profile"))
@@ -148,14 +149,7 @@ def compatible_cli_version(provider: str, cli_version: str) -> bool:
     actual = _parse_cli_version(provider, cli_version)
     if actual < baseline:
         return False
-    policy = capability["version_policy"]
-    if policy == "same-major-forward":
-        return actual[0] == baseline[0]
-    if policy == "same-minor-forward":
-        return actual[:2] == baseline[:2]
-    raise NativeProviderSchemaError(
-        f"provider {provider} has an unsupported version policy"
-    )
+    return actual[0] == baseline[0]
 
 
 def _parse_cli_version(provider: str, cli_version: str) -> tuple[int, int, int]:
