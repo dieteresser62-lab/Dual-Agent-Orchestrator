@@ -1,0 +1,71 @@
+{
+  "schema_version": "orchestrator-resilience-evidence-v1",
+  "scenarios": [
+    {
+      "dimension": "autonomy",
+      "evidence_test": "tests/test_orchestrator_resilience_evidence.py::test_provider_free_resilience_scenario[happy-path]",
+      "expected_result": "Plan, zwei Slices und Finalreview terminieren ohne Gate; vier Validierungen und zwei Commits laufen genau einmal.",
+      "scenario_id": "happy-path"
+    },
+    {
+      "dimension": "autonomy",
+      "evidence_test": "tests/test_orchestrator_resilience_evidence.py::test_provider_free_resilience_scenario[slice-correction]",
+      "expected_result": "Slice-Denial führt über Codex-Korrektur und Reviewrunde zwei zur gebundenen Folgekante.",
+      "scenario_id": "slice-correction"
+    },
+    {
+      "dimension": "autonomy",
+      "evidence_test": "tests/test_orchestrator_resilience_evidence.py::test_provider_free_resilience_scenario[final-correction]",
+      "expected_result": "Final-Denial führt in Korrekturrunde eins und danach in ein erneutes Finalreview.",
+      "scenario_id": "final-correction"
+    },
+    {
+      "dimension": "autonomy",
+      "evidence_test": "tests/test_orchestrator_resilience_evidence.py::test_provider_free_resilience_scenario[second-correction-new-blocker]",
+      "expected_result": "Ein neuer Blocker in Korrekturrunde zwei erweitert den vollständigen Ledger ohne frühere Linien zu verlieren.",
+      "scenario_id": "second-correction-new-blocker"
+    },
+    {
+      "dimension": "availability",
+      "evidence_test": "tests/test_orchestrator_resilience_evidence.py::test_provider_free_resilience_scenario[exact-structured-output-retry]",
+      "expected_result": "Nur der exakte Claude-Diagnoseenvelope wird transient klassifiziert und ohne verworfenen Modellinhalt wiederholbar.",
+      "scenario_id": "exact-structured-output-retry"
+    },
+    {
+      "dimension": "security",
+      "evidence_test": "tests/test_orchestrator_resilience_evidence.py::test_provider_free_resilience_scenario[structured-output-near-miss]",
+      "expected_result": "Provider-, Typ-, Subtyp- und Vollständigkeits-Near-Misses bleiben fail-closed.",
+      "scenario_id": "structured-output-near-miss"
+    },
+    {
+      "dimension": "availability",
+      "evidence_test": "tests/test_orchestrator_resilience_evidence.py::test_provider_free_resilience_scenario[record-ahead-resume]",
+      "expected_result": "Ein persistiertes natives Review wird vor Policy und Provider gespiegelt; Claude wird beim Resume nicht erneut aufgerufen.",
+      "scenario_id": "record-ahead-resume"
+    },
+    {
+      "dimension": "security",
+      "evidence_test": "tests/test_orchestrator_resilience_evidence.py::test_provider_free_resilience_scenario[commit-head-drift]",
+      "expected_result": "Commit-HEAD-Drift erzeugt ein fingerprint- und pfadgebundenes Nutzergate mit HEAD-DRIFT und Resume bei slice_commit.",
+      "scenario_id": "commit-head-drift"
+    },
+    {
+      "dimension": "security",
+      "evidence_test": "tests/test_orchestrator_resilience_evidence.py::test_provider_free_resilience_scenario[slice-boundary-drift]",
+      "expected_result": "Slice-Boundary-Drift erzeugt ein pfadloses Policygate mit SLICE-HEAD-DRIFT und ohne Resume-Schritt.",
+      "scenario_id": "slice-boundary-drift"
+    },
+    {
+      "dimension": "security",
+      "evidence_test": "tests/test_orchestrator_resilience_evidence.py::test_provider_free_resilience_scenario[scope-violation]",
+      "expected_result": "Eine Scopeverletzung erzeugt ein fingerprintgebundenes Nutzergate mit UNEXPECTED-PATH und exakt dem betroffenen Pfadsatz.",
+      "scenario_id": "scope-violation"
+    },
+    {
+      "dimension": "autonomy",
+      "evidence_test": "tests/test_orchestrator_resilience_evidence.py::test_provider_free_resilience_scenario[direct-resume-queue-finalization]",
+      "expected_result": "Ein direkter Watch-Origin-Resume führt den terminalen Workflow und die Outbox-Finalisierung genau einmal aus.",
+      "scenario_id": "direct-resume-queue-finalization"
+    }
+  ]
+}

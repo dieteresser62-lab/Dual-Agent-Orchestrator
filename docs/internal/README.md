@@ -32,3 +32,9 @@ Der Ordner
 enthält den abgeschlossenen Arbeitsplan, alle drei Slice-Berichte sowie die
 getrennten Claude- und Codex-Gesamtreviews des Native-only-Cutovers,
 Parser-Retirements und der strukturellen Eingabereduktion.
+
+Der Ordner
+[`archive/orchestrator-transition-matrix-output-resilience/`](archive/orchestrator-transition-matrix-output-resilience/)
+enthält den freigegebenen Arbeitsplan, alle drei Slice-Reviews, den
+providerfreien Resilienz- und Abschlussnachweis sowie die vollständige Codex-
+und Claude-Reviewkette einschließlich der Schließung von `C-01` bis `C-20`.

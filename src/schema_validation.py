@@ -29,7 +29,7 @@ class SchemaMismatch(Exception):
 _SCHEMA_ANNOTATIONS = {"$schema", "$id", "title", "description"}
 _SCHEMA_KEYWORDS = {
     "$ref", "$defs", "type", "enum", "const", "pattern", "format",
-    "minLength", "minimum", "required", "properties",
+    "minLength", "maxLength", "minimum", "required", "properties",
     "additionalProperties", "items", "minItems", "maxItems", "uniqueItems",
     "allOf", "anyOf", "oneOf", "if", "then", "else",
 }
@@ -142,6 +142,10 @@ def _validate_schema_node(
     if isinstance(value, str):
         if len(value) < schema.get("minLength", 0):
             raise SchemaMismatch(path, "must not be empty")
+        if "maxLength" in schema and len(value) > schema["maxLength"]:
+            raise SchemaMismatch(
+                path, f"must contain at most {schema['maxLength']} character(s)"
+            )
         pattern = schema.get("pattern")
         if pattern is not None and re.search(pattern, value) is None:
             raise SchemaMismatch(path, f"does not match pattern {pattern!r}")

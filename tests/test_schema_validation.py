@@ -31,6 +31,18 @@ def test_public_schema_validator_preserves_closed_object_error_path() -> None:
     assert raised.value.message == "is not an allowed property"
 
 
+def test_public_schema_validator_enforces_writer_max_length() -> None:
+    schema = {"type": "string", "minLength": 1, "maxLength": 3}
+    check_schema(schema)
+    validate_schema_document("abc", schema)
+
+    with pytest.raises(SchemaMismatch) as raised:
+        validate_schema_document("abcd", schema)
+
+    assert raised.value.path == ()
+    assert raised.value.message == "must contain at most 3 character(s)"
+
+
 @pytest.mark.parametrize(
     ("value", "valid"),
     (("2026-08-22T10:00:00+02:00", True), ("2026-08-22T10:00:00", False)),

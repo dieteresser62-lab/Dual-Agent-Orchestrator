@@ -1,6 +1,6 @@
 # Orchestrator-Roadmap – Phase 2 und Folgephasen
 
-**Stand:** 25. August 2026
+**Stand:** 27. August 2026
 **Aktive Topologie:** Codex plant und implementiert; Claude reviewt; der
 Orchestrator validiert, attestiert und erstellt freigegebene lokale Commits.
 
@@ -83,10 +83,22 @@ Attemptanzahl, Laufzeit und Retrystatus aus; fehlende Usage bleibt `unknown`.
 
 ### 3.5 Bootstrap-Smoke- und Langläufe
 
-Nach Abschluss der Retirementguards folgen kleine reale Inbox-Aufgaben und
-anschließend längere Mehrslice-Läufe. Erfolgskriterien sind null Textfallback,
-keine doppelten Providerstarts oder Commits, stabile Resumegrenzen und eine
-vollständig reproduzierbare Markdownansicht.
+Vor weiteren realen Langläufen sichert das Paket
+„Orchestrator-Stabilisierung: Übergangsmatrix und Structured-Output-Resilienz“
+die schwierigen Kanten providerfrei ab. Der Nachweis trennt Sicherheit,
+Verfügbarkeit und Autonomie, bindet Driftgates an ihre vollständige
+Gateidentität und führt Korrektur-, Replay-, Retry- und Queuebelege in einem
+geschlossenen Szenarioinventar zusammen. Ein realer Provider-Canary bleibt
+bewusst ein nachgelagerter Produktionsnachweis und ist kein Bestandteil der
+Repositorysuite. Der vollständig freigegebene Arbeits- und Reviewnachweis ist
+unter
+[`archive/orchestrator-transition-matrix-output-resilience/`](archive/orchestrator-transition-matrix-output-resilience/)
+archiviert.
+
+Danach folgen kleine reale Inbox-Aufgaben und anschließend längere
+Mehrslice-Läufe. Erfolgskriterien sind null Textfallback, keine doppelten
+Providerstarts oder Commits, stabile Resumegrenzen und eine vollständig
+reproduzierbare Markdownansicht.
 
 ## 4. Dauerhafte Grenzen
 
