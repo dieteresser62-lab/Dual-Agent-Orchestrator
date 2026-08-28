@@ -64,11 +64,12 @@ Blocker zu verlieren.
 ## 5. Providerfreie Validierung
 
 Der fokussierte Harnesslauf für Parser, Gateidentität und die elf wirklich
-ausgeführten Szenarien bestand nach der Nacharbeit mit `28 passed`. Der
+ausgeführten Szenarien bestand am finalen Paketstand mit `29 passed`. Der
 Verbund mit Übergangsmatrix und Structured-Output-Druck blieb ebenfalls grün.
 
-Die vollständige Repositorymatrix bestand nach Abschluss aller
-Slice-3-Nacharbeiten mit `1091 passed in 120.17s`. Externe Provider-Canaries blieben
+Die vollständige Repositorymatrix bestand am selben finalen Paketstand mit
+`1092 passed`. Beide Angaben sind agent-lokale Validierungsevidenz von Codex
+und keine Orchestrator-Attestierung. Externe Provider-Canaries blieben
 deaktiviert.
 
 ## 6. Nachgelagerter Produktionsnachweis
