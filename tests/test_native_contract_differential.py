@@ -5,6 +5,9 @@ from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
+import shutil
+import subprocess
+import sys
 
 import pytest
 
@@ -29,7 +32,7 @@ from native_codex_contract import (
     native_codex_provider_response_schema,
     parse_bound_native_codex_contract_result,
 )
-from native_provider_schema import registered_exceptions
+from native_provider_schema import defensive_provider_projection, registered_exceptions
 from native_review_contract import (
     BoundNativeReviewContext,
     NativeReviewContext,
@@ -43,10 +46,133 @@ from schema_validation import SchemaMismatch, validate_schema_document
 
 ROOT = Path(__file__).resolve().parents[1]
 FINGERPRINT = "a" * 64
+PROJECTION_BASELINE = ROOT / "tests/fixtures/native-provider-projection-baseline-v1.json"
+EXCEPTION_TABLE = ROOT / "schemas/native-provider-schema-exceptions-v1.json"
+
+_PROVIDER_FEATURES = {
+    "codex": ("closed_object", "min_max_items", "nested_any_of"),
+    "claude": ("closed_object", "min_max_items", "nested_any_of", "nested_one_of"),
+}
+_EXPECTED_PROJECTION_COMPENSATIONS = {
+    ("codex", "/$defs/correction_result/properties/test_files/uniqueItems", "uniqueItems"):
+        ("regex_lookaround_and_unique_items", True),
+    ("codex", "/$defs/implementation_result/properties/test_files/uniqueItems", "uniqueItems"):
+        ("regex_lookaround_and_unique_items", True),
+    ("codex", "/$defs/planned_slice/properties/scope_paths/uniqueItems", "uniqueItems"):
+        ("regex_lookaround_and_unique_items", True),
+    ("codex", "/$defs/safe_path/pattern", "pattern"):
+        (
+            "regex_lookaround_and_unique_items",
+            r"^(?!/)(?!.*(?:^|/)\.\.(?:/|$))[^\u0000\r\n]{1,1000}$",
+        ),
+    ("codex", "/$defs/safe_text/pattern", "pattern"): (
+        "regex_lookaround",
+        r"^(?=.*\S)[^\u0000]{1,12000}$",
+    ),
+    ("codex", "/$defs/stop_result/properties/remediation_paths/uniqueItems", "uniqueItems"):
+        ("regex_lookaround_and_unique_items", True),
+}
 
 
 def _canonical(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _projection_losses(
+    reader: object, writer: object, pointer: str = ""
+) -> list[tuple[str, str, object]]:
+    losses: list[tuple[str, str, object]] = []
+    if isinstance(reader, dict) and isinstance(writer, dict):
+        additions = writer.keys() - reader.keys()
+        assert not additions, f"projection added keys at {pointer or '/'}: {sorted(additions)}"
+        for key in sorted(reader.keys() - writer.keys()):
+            escaped = key.replace("~", "~0").replace("/", "~1")
+            losses.append((f"{pointer}/{escaped}", key, reader[key]))
+        for key in sorted(reader.keys() & writer.keys()):
+            escaped = key.replace("~", "~0").replace("/", "~1")
+            losses.extend(_projection_losses(reader[key], writer[key], f"{pointer}/{escaped}"))
+        return losses
+    if isinstance(reader, list) and isinstance(writer, list):
+        assert len(reader) == len(writer), f"projection changed array length at {pointer}"
+        for index, (reader_item, writer_item) in enumerate(zip(reader, writer, strict=True)):
+            losses.extend(_projection_losses(reader_item, writer_item, f"{pointer}/{index}"))
+        return losses
+    assert type(reader) is type(writer) and reader == writer, (
+        f"projection changed value at {pointer}: {reader!r} -> {writer!r}"
+    )
+    return losses
+
+
+def _collect_registered_regression(node_id: str, root: Path) -> None:
+    completed = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", "-q", node_id],
+        cwd=root,
+        env={
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONPATH": str(root / "src"),
+        },
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert completed.returncode == 0 and node_id in completed.stdout, (
+        f"registered regression is not collectable: {node_id}\n"
+        f"{completed.stdout}\n{completed.stderr}"
+    )
+
+
+def _assert_projection_compensated(
+    readers: dict[str, Path], exception_path: Path, *, collect_root: Path | None
+) -> dict[str, list[tuple[str, str, object]]]:
+    exception_document = json.loads(exception_path.read_text(encoding="utf-8"))
+    exceptions = exception_document["exceptions"]
+    actual: dict[str, list[tuple[str, str, object]]] = {}
+    collected: set[str] = set()
+    for provider in ("claude", "codex"):
+        reader = json.loads(readers[provider].read_text(encoding="utf-8"))
+        writer = defensive_provider_projection(
+            reader,
+            provider=provider,
+            required_features=_PROVIDER_FEATURES[provider],
+        )
+        losses = _projection_losses(reader, writer)
+        actual[provider] = losses
+        for pointer, keyword, original in losses:
+            compensation = _EXPECTED_PROJECTION_COMPENSATIONS.get(
+                (provider, pointer, keyword)
+            )
+            assert compensation is not None, (
+                f"unregistered provider projection loss: {provider} {pointer} {keyword}"
+            )
+            feature, expected_original = compensation
+            assert original == expected_original, (
+                f"projection loss changed its reader value: {provider} {pointer} "
+                f"{expected_original!r} -> {original!r}"
+            )
+            matching = [
+                item
+                for item in exceptions
+                if item["provider"] == provider
+                and item["missing_schema_feature"] == feature
+            ]
+            assert matching, (
+                f"projection loss has no provider-identical compensation: "
+                f"{provider} {pointer} {feature}"
+            )
+            if collect_root is not None:
+                for item in matching:
+                    node_id = str(item["regression_test"])
+                    if node_id not in collected:
+                        _collect_registered_regression(node_id, collect_root)
+                        collected.add(node_id)
+    actual_keys = {
+        (provider, pointer, keyword)
+        for provider, losses in actual.items()
+        for pointer, keyword, _original in losses
+    }
+    assert actual_keys == set(_EXPECTED_PROJECTION_COMPENSATIONS), actual_keys
+    return actual
 
 
 def _finding() -> FindingRecord:
@@ -232,22 +358,85 @@ def _review_response(bound: BoundNativeReviewContext) -> dict[str, object]:
 
 
 def test_all_eight_writer_forms_accept_their_local_domain_result() -> None:
-    digests: set[str] = set()
+    actual: list[dict[str, str]] = []
     for kind in NativeCodexRequestKind:
         bound = _codex_bound(kind)
         response = _codex_response(bound)
         writer = native_codex_provider_response_schema(bound.context)
         validate_schema_document({"result": response}, writer)
         parse_bound_native_codex_contract_result(response, bound)
-        digests.add(_canonical(writer))
+        actual.append(
+            {
+                "provider": "codex",
+                "form": kind.value,
+                "sha256": hashlib.sha256(_canonical(writer).encode("utf-8")).hexdigest(),
+            }
+        )
     for form in ("plan", "initial_slice", "convergence", "final"):
         bound = _review_bound(form)
         response = _review_response(bound)
         writer = native_review_provider_response_schema(bound.context)
         validate_schema_document({"result": response}, writer)
         parse_bound_native_contract_result(response, bound)
-        digests.add(_canonical(writer))
-    assert len(digests) == 8
+        actual.append(
+            {
+                "provider": "claude",
+                "form": form,
+                "sha256": hashlib.sha256(_canonical(writer).encode("utf-8")).hexdigest(),
+            }
+        )
+    baseline = json.loads(PROJECTION_BASELINE.read_text(encoding="utf-8"))
+    assert baseline["schema_version"] == "native-provider-projection-baseline-v1"
+    expected = baseline["writers"]
+    assert expected == sorted(expected, key=lambda item: (item["provider"], item["form"]))
+    assert sorted(actual, key=lambda item: (item["provider"], item["form"])) == expected
+
+
+def test_provider_projection_losses_are_exact_and_locally_compensated() -> None:
+    actual = _assert_projection_compensated(
+        {
+            "codex": ROOT / "schemas/native-agent-codex-result-v2.schema.json",
+            "claude": ROOT / "schemas/native-agent-review-result-v2.schema.json",
+        },
+        EXCEPTION_TABLE,
+        collect_root=ROOT,
+    )
+    assert len(actual["codex"]) == 6
+    assert actual["claude"] == []
+
+
+def test_seventh_projection_loss_is_rejected_without_compensation(
+    tmp_path: Path,
+) -> None:
+    copied_schemas = tmp_path / "schemas"
+    copied_schemas.mkdir()
+    readers = {
+        "codex": copied_schemas / "native-agent-codex-result-v2.schema.json",
+        "claude": copied_schemas / "native-agent-review-result-v2.schema.json",
+    }
+    real_readers = {
+        "codex": ROOT / "schemas/native-agent-codex-result-v2.schema.json",
+        "claude": ROOT / "schemas/native-agent-review-result-v2.schema.json",
+    }
+    real_bytes = {
+        path: path.read_bytes() for path in (*real_readers.values(), EXCEPTION_TABLE)
+    }
+    for provider, source in real_readers.items():
+        shutil.copyfile(source, readers[provider])
+    copied_exceptions = copied_schemas / EXCEPTION_TABLE.name
+    shutil.copyfile(EXCEPTION_TABLE, copied_exceptions)
+
+    mutated = json.loads(readers["codex"].read_text(encoding="utf-8"))
+    mutated["$defs"]["finding_disposition"]["properties"]["finding_id"][
+        "uniqueItems"
+    ] = True
+    readers["codex"].write_text(json.dumps(mutated), encoding="utf-8")
+
+    with pytest.raises(AssertionError, match="unregistered provider projection loss"):
+        _assert_projection_compensated(
+            readers, copied_exceptions, collect_root=None
+        )
+    assert all(path.read_bytes() == content for path, content in real_bytes.items())
 
 
 def test_exception_table_is_closed_and_every_entry_names_a_real_regression() -> None:

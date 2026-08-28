@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import subprocess
@@ -509,6 +510,96 @@ def test_user_docs_and_diagram_explain_structured_artifact_operations() -> None:
 
 _RETIREMENT_EVIDENCE_PREFIX = "antigravity-endgueltige-entfernung-"
 _RETIREMENT_ARCHIVE = Path("docs/internal/archive")
+_PROVIDER_NAMES = ("codex", "claude")
+_PROVIDER_COUPLING_BASELINE = (
+    ROOT / "tests/fixtures/provider-name-coupling-baseline-v1.json"
+)
+
+
+def _matches_config_path(root: Path, path: Path, pattern: str) -> bool:
+    candidate = path.relative_to(root).as_posix()
+    alternatives = (pattern, pattern.replace("/**/", "/"))
+    return any(
+        Path(candidate).match(item)
+        or re.fullmatch(
+            re.escape(item).replace(r"\*\*", ".*").replace(r"\*", "[^/]*"),
+            candidate,
+        )
+        is not None
+        for item in alternatives
+    )
+
+
+def _provider_productive_files(root: Path = ROOT) -> tuple[Path, ...]:
+    with (root / "orchestrator.toml").open("rb") as handle:
+        path_config = tomllib.load(handle)["paths"]
+    generated_patterns = tuple(path_config.get("generated", ()))
+    files: set[Path] = set()
+    resolved_root = root.resolve()
+    for pattern in path_config["productive"]:
+        glob_pattern = pattern + "/*" if pattern.endswith("/**") else pattern
+        for path in root.glob(glob_pattern):
+            resolved = path.resolve()
+            if not resolved.is_file():
+                continue
+            resolved.relative_to(resolved_root)
+            files.add(resolved)
+    return tuple(
+        sorted(
+            (
+                path
+                for path in files
+                if not any(
+                    _matches_config_path(resolved_root, path, pattern)
+                    for pattern in generated_patterns
+                )
+            ),
+            key=lambda path: path.relative_to(resolved_root).as_posix(),
+        )
+    )
+
+
+def _provider_name_counts(text: str) -> dict[str, int]:
+    return {
+        name: sum(1 for _match in re.finditer(re.escape(name), text, re.I))
+        for name in _PROVIDER_NAMES
+    }
+
+
+def _provider_coupling_hits(
+    root: Path = ROOT, baseline_path: Path = _PROVIDER_COUPLING_BASELINE
+) -> list[str]:
+    baseline_document = json.loads(baseline_path.read_text(encoding="utf-8"))
+    assert baseline_document["schema_version"] == "provider-name-coupling-baseline-v1"
+    baseline = baseline_document["counts"]
+    assert list(baseline) == sorted(baseline)
+    assert all(
+        set(counts) <= set(_PROVIDER_NAMES)
+        and counts
+        and all(isinstance(value, int) and value > 0 for value in counts.values())
+        for counts in baseline.values()
+    )
+    resolved_root = root.resolve()
+    files = _provider_productive_files(root)
+    current_paths = {
+        path.relative_to(resolved_root).as_posix() for path in files
+    }
+    hits = [
+        f"stale provider-name baseline path: {path}"
+        for path in baseline
+        if path not in current_paths
+    ]
+    for path in files:
+        relative = path.relative_to(resolved_root).as_posix()
+        actual = _provider_name_counts(path.read_text(encoding="utf-8"))
+        expected = baseline.get(relative, {})
+        for name in _PROVIDER_NAMES:
+            limit = expected.get(name, 0)
+            if actual[name] > limit:
+                hits.append(
+                    f"{relative}: {name} baseline={limit} actual={actual[name]}"
+                )
+    return hits
 
 
 def _retirement_active_files(root: Path = ROOT) -> tuple[Path, ...]:
@@ -642,6 +733,122 @@ def _retirement_hits(path: Path, text: str) -> list[str]:
         else path.as_posix()
     )
     return [f"{label}: {hit}" for hit in hits]
+
+
+def test_provider_name_coupling_stays_at_or_below_fixed_baseline() -> None:
+    hits = _provider_coupling_hits()
+    assert not hits, "Provider-name coupling increased:\n" + "\n".join(hits)
+
+
+def test_provider_name_counting_is_literal_embedded_case_insensitive_and_nonoverlapping() -> None:
+    assert _provider_name_counts("xCoDeXcodex CLAUDEclaude") == {
+        "codex": 2,
+        "claude": 2,
+    }
+    assert _provider_name_counts("codexcodex") == {"codex": 2, "claude": 0}
+
+
+def test_provider_name_ratchet_rejects_only_a_temporary_copy_increase(
+    tmp_path: Path,
+) -> None:
+    real_config = ROOT / "orchestrator.toml"
+    real_target = ROOT / "src/cli.py"
+    real_paths = (real_config, _PROVIDER_COUPLING_BASELINE, real_target)
+    real_bytes = {path: path.read_bytes() for path in real_paths}
+
+    copied_config = tmp_path / "orchestrator.toml"
+    copied_baseline = tmp_path / "provider-name-coupling-baseline-v1.json"
+    copied_target = tmp_path / "src/cli.py"
+    copied_target.parent.mkdir(parents=True)
+    shutil.copyfile(real_config, copied_config)
+    shutil.copyfile(_PROVIDER_COUPLING_BASELINE, copied_baseline)
+    shutil.copyfile(real_target, copied_target)
+
+    copied_config.write_text(
+        '[paths]\nproductive = ["src/cli.py"]\ngenerated = []\n',
+        encoding="utf-8",
+    )
+    original_counts = _provider_name_counts(
+        copied_target.read_text(encoding="utf-8")
+    )
+    original_count = original_counts["codex"]
+    copied_baseline.write_text(
+        json.dumps(
+            {
+                "schema_version": "provider-name-coupling-baseline-v1",
+                "counts": {
+                    "src/cli.py": {
+                        name: count
+                        for name, count in original_counts.items()
+                        if count > 0
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    with copied_target.open("a", encoding="utf-8") as handle:
+        handle.write("\n# CoDeX temporary ratchet control\n")
+
+    hits = _provider_coupling_hits(tmp_path, copied_baseline)
+    assert hits == [
+        f"src/cli.py: codex baseline={original_count} actual={original_count + 1}"
+    ]
+    assert all(path.read_bytes() == content for path, content in real_bytes.items())
+
+
+def test_provider_name_ratchet_accepts_decrease_and_rejects_a_new_file_first_hit(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "orchestrator.toml").write_text(
+        '[paths]\nproductive = ["src/**/*.py"]\ngenerated = []\n',
+        encoding="utf-8",
+    )
+    source = tmp_path / "src/existing.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("codex\n", encoding="utf-8")
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(
+        json.dumps(
+            {
+                "schema_version": "provider-name-coupling-baseline-v1",
+                "counts": {"src/existing.py": {"codex": 2}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert _provider_coupling_hits(tmp_path, baseline) == []
+
+    new_file = tmp_path / "src/new.py"
+    new_file.write_text("embedded-CLAUDE-name\n", encoding="utf-8")
+    assert _provider_coupling_hits(tmp_path, baseline) == [
+        "src/new.py: claude baseline=0 actual=1"
+    ]
+
+
+def test_provider_name_inventory_excludes_generated_productive_matches(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "orchestrator.toml").write_text(
+        '[paths]\nproductive = ["src/**/*.py"]\n'
+        'generated = ["src/generated/**"]\n',
+        encoding="utf-8",
+    )
+    generated = tmp_path / "src/generated/cache.py"
+    generated.parent.mkdir(parents=True)
+    generated.write_text("codex claude\n", encoding="utf-8")
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(
+        json.dumps(
+            {
+                "schema_version": "provider-name-coupling-baseline-v1",
+                "counts": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert _provider_productive_files(tmp_path) == ()
+    assert _provider_coupling_hits(tmp_path, baseline) == []
 
 
 def test_retirement_guard_rejects_every_active_retired_reference() -> None:
