@@ -90,7 +90,10 @@ Verfügbarkeit und Autonomie, bindet Driftgates an ihre vollständige
 Gateidentität und führt Korrektur-, Replay-, Retry- und Queuebelege in einem
 geschlossenen Szenarioinventar zusammen. Ein realer Provider-Canary bleibt
 bewusst ein nachgelagerter Produktionsnachweis und ist kein Bestandteil der
-Repositorysuite.
+Repositorysuite. Der vollständig freigegebene Arbeits- und Reviewnachweis ist
+unter
+[`archive/orchestrator-transition-matrix-output-resilience/`](archive/orchestrator-transition-matrix-output-resilience/)
+archiviert.
 
 Danach folgen kleine reale Inbox-Aufgaben und anschließend längere
 Mehrslice-Läufe. Erfolgskriterien sind null Textfallback, keine doppelten
