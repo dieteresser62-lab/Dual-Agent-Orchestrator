@@ -21,8 +21,13 @@ from artifact_models import (
     DiagnosticPayload,
     FinalReviewPreflightPayload,
     FindingTransitionPayload,
+    FindingHandoffExportPayload,
+    FindingHandoffImportPayload,
+    ImportedFindingTransition,
+    finding_transition_sequence_sha256,
     ProviderInputMeasurementPayload,
     ProviderAttemptPayload,
+    PlanPayload,
     RecordType,
     ResumeCheckPayload,
     ReviewPayload,
@@ -195,6 +200,8 @@ def replay_artifacts(
             RecordType.TASK,
             RecordType.PLAN,
             RecordType.WORKFLOW_COMPLETION,
+            RecordType.FINDING_HANDOFF_EXPORT,
+            RecordType.FINDING_HANDOFF_IMPORT,
         }:
             if record.record_type in singleton_types:
                 _fail(
@@ -266,15 +273,20 @@ def replay_findings(
     target = None if work_unit_id is None else str(work_unit_id)
     selected_ids = None if finding_ids is None else frozenset(finding_ids)
     findings: dict[str, FindingRecord] = {}
+    transitions: list[tuple[ArtifactRecord, FindingTransitionPayload, bool]] = []
     for record in replay.records:
-        payload = record.payload
-        if not isinstance(payload, FindingTransitionPayload):
-            continue
+        if isinstance(record.payload, FindingHandoffImportPayload):
+            transitions.extend(
+                (record, item.payload, True) for item in record.payload.transitions
+            )
+        elif isinstance(record.payload, FindingTransitionPayload):
+            transitions.append((record, record.payload, False))
+    for record, payload, imported in transitions:
         if payload.work_unit_id is None:
             continue
         if selected_ids is not None and payload.finding_id not in selected_ids:
             continue
-        if target is not None and payload.work_unit_id != target:
+        if target is not None and not imported and payload.work_unit_id != target:
             continue
         if payload.action == "opened":
             if payload.finding_id in findings:
@@ -388,8 +400,127 @@ def _validate_payload_references(
         (positions[record.record_id] for record in work_units.values()),
         default=None,
     )
+    import_records = [
+        record for record in chain
+        if isinstance(record.payload, FindingHandoffImportPayload)
+    ]
+    if len(import_records) > 1:
+        _fail(
+            ReplayDiagnosticCode.RECORD_DUPLICATE,
+            "a run may contain only one finding handoff import",
+            import_records[-1],
+        )
     for record in chain:
         payload = record.payload
+        if isinstance(payload, FindingHandoffExportPayload):
+            if (
+                payload.source_run_id != record.run_id
+                or not record.predecessor_ids
+                or payload.source_head_record_id != record.predecessor_ids[0]
+            ):
+                _fail(
+                    ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+                    "finding export source run or pre-export head differs",
+                    record,
+                )
+            review = records_by_id.get(payload.approval_review_record_id)
+            if (
+                review is None
+                or not isinstance(review.payload, ReviewPayload)
+                or review.payload.verdict != "approved"
+                or positions[review.record_id] >= positions[record.record_id]
+            ):
+                _fail(
+                    ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+                    "finding export approval review is not present",
+                    record,
+                )
+            source_records = tuple(
+                records_by_id.get(record_id)
+                for record_id in payload.finding_transition_record_ids
+            )
+            if any(
+                source is None
+                or not isinstance(source.payload, FindingTransitionPayload)
+                or positions[source.record_id] >= positions[record.record_id]
+                for source in source_records
+            ):
+                _fail(
+                    ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+                    "finding export transition sequence is not present",
+                    record,
+                )
+            actual = tuple(
+                ImportedFindingTransition(source.record_id, source.payload)
+                for source in source_records
+                if source is not None and isinstance(source.payload, FindingTransitionPayload)
+            )
+            ordered_ids = tuple(
+                source.record_id for source in chain[:positions[record.record_id]]
+                if isinstance(source.payload, FindingTransitionPayload)
+            )
+            if (
+                payload.finding_transition_record_ids != ordered_ids
+                or finding_transition_sequence_sha256(actual)
+                != payload.finding_transitions_sha256
+            ):
+                _fail(
+                    ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+                    "finding export transition order or digest differs",
+                    record,
+                )
+            if not any(
+                isinstance(candidate.payload, PlanPayload)
+                and candidate.payload.approved_plan_commit == payload.approved_plan_commit
+                for candidate in chain[:positions[record.record_id]]
+            ):
+                _fail(
+                    ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+                    "finding export approved plan commit is not present",
+                    record,
+                )
+        elif isinstance(payload, FindingHandoffImportPayload):
+            if payload.target_run_id != record.run_id:
+                _fail(
+                    ReplayDiagnosticCode.RECORD_RUN_MISMATCH,
+                    "finding import target run differs",
+                    record,
+                )
+            if payload.source_run_id == record.run_id:
+                _fail(
+                    ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+                    "finding import must retain foreign provenance",
+                    record,
+                )
+            # An import is atomic authority: validate its entire embedded
+            # lifecycle now, not only when a later consumer asks for findings.
+            replay_findings(_result(record.run_id, (record,)))
+        if isinstance(payload, WorkUnitPayload) and payload.finding_import_record_id is not None:
+            imported = records_by_id.get(payload.finding_import_record_id)
+            if (
+                imported is None
+                or not isinstance(imported.payload, FindingHandoffImportPayload)
+                or positions[imported.record_id] >= positions[record.record_id]
+            ):
+                _fail(
+                    ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+                    "work unit finding import is not present",
+                    record,
+                )
+            imported_findings = replay_findings(_result(record.run_id, (imported,)))
+            expected_open = tuple(
+                sorted(
+                    finding.finding_id
+                    for finding in imported_findings
+                    if finding.status is FindingStatus.OPEN
+                )
+            )
+            if payload.open_finding_ids != expected_open:
+                _fail(
+                    ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+                    "work unit open findings differ from its finding import",
+                    record,
+                )
         # Planning work units intentionally have no WorkUnitPayload: the plan
         # record is their authoritative result. Once the first implementation
         # work unit appears, later work-unit-owned activity must resolve to one

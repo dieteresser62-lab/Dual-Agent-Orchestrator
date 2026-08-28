@@ -13,6 +13,9 @@ from artifact_models import (
     CorrectionWorkUnitPayload,
     FindingSeverity,
     FindingTransitionPayload,
+    FindingHandoffImportPayload,
+    ImportedFindingTransition,
+    finding_transition_sequence_sha256,
     Fingerprint,
     FingerprintKind,
     GatePayload,
@@ -133,6 +136,41 @@ def test_same_chain_renders_byte_identically_in_record_sequence() -> None:
     assert "`src/a.py`" in first["approval-status"]
     assert "### Binding · commit" in first["approval-status"]
     assert "### Nachweis vollständiger Bindungswerte" in table
+
+
+def test_projection_shows_import_origin_and_source_lifecycle_as_history() -> None:
+    source = ImportedFindingTransition(
+        "ar1-" + "1" * 64,
+        FindingTransitionPayload(
+            "C-01", Role.CLAUDE, Role.CLAUDE, "opened", FindingSeverity.OBSERVATION,
+            "open", "Plan review history.", "plan-review", "Carry it.",
+            "Implementation sees it.", "plan", 1,
+        ),
+    )
+    imported_payload = FindingHandoffImportPayload(
+        "source-run", "ar1-" + "2" * 64, "3" * 40,
+        "ar1-" + "4" * 64, "ar1-" + "5" * 64, "target-run", "6" * 64,
+        finding_transition_sequence_sha256((source,)), (source,), Role.ORCHESTRATOR,
+    )
+    imported = ArtifactRecord.create(
+        run_id="target-run", logical_id="finding-import", revision=1,
+        fingerprint=Fingerprint(FingerprintKind.CONTRACT, "a" * 64),
+        predecessor_ids=(), created_at="2026-08-28T10:00:00+00:00",
+        idempotency_key="finding-import", payload=imported_payload,
+    )
+    unit = ArtifactRecord.create(
+        run_id="target-run", logical_id="work-unit-1", revision=1,
+        fingerprint=Fingerprint(FingerprintKind.CONTRACT, "a" * 64),
+        predecessor_ids=(imported.record_id,), created_at="2026-08-28T10:00:01+00:00",
+        idempotency_key="work-unit-1",
+        payload=WorkUnitPayload("1", 1, ("src/a.py",), ("C-01",), imported.record_id),
+    )
+
+    sections = render_artifact_sections((imported, unit))
+    assert "Finding-Import · fremde Vorgeschichte" in sections["approval-status"]
+    assert "source-run" in sections["approval-status"]
+    assert "imported:opened" in sections["findings"]
+    assert "Plan review history." in sections["findings"]
 
 
 def test_projection_has_one_deduplicated_full_value_evidence_table() -> None:

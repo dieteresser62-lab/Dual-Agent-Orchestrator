@@ -45,6 +45,8 @@ class RecordType(StrEnum):
     DIAGNOSTIC = "diagnostic"
     REVIEW = "review"
     FINDING_TRANSITION = "finding_transition"
+    FINDING_HANDOFF_EXPORT = "finding_handoff_export"
+    FINDING_HANDOFF_IMPORT = "finding_handoff_import"
     VALIDATION_REQUEST = "validation_request"
     VALIDATION_ATTESTATION = "validation_attestation"
     GATE = "gate"
@@ -156,6 +158,8 @@ class WorkUnitPayload:
     slice_id: str
     round_number: int
     paths: tuple[str, ...]
+    open_finding_ids: tuple[str, ...] = ()
+    finding_import_record_id: str | None = None
     status: ClassVar[str] = "active"
     record_type: ClassVar[RecordType] = RecordType.WORK_UNIT
 
@@ -163,6 +167,15 @@ class WorkUnitPayload:
         _require_identifier(self.slice_id, "slice_id")
         _require_positive(self.round_number, "round_number")
         _require_paths(self.paths)
+        _require_unique_finding_ids(
+            self.open_finding_ids, "open_finding_ids", allow_empty=True
+        )
+        if tuple(sorted(self.open_finding_ids)) != self.open_finding_ids:
+            raise ArtifactValidationError("open_finding_ids must be sorted")
+        if self.finding_import_record_id is not None:
+            _require_identifier(
+                self.finding_import_record_id, "finding_import_record_id"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -327,6 +340,95 @@ class FindingTransitionPayload:
                 raise ArtifactValidationError(
                     "response_decision must describe a responded transition"
                 )
+
+
+@dataclass(frozen=True, slots=True)
+class ImportedFindingTransition:
+    """One source transition with its immutable source-record identity."""
+
+    record_id: str
+    payload: FindingTransitionPayload
+
+    def __post_init__(self) -> None:
+        _require_identifier(self.record_id, "record_id")
+        if not self.record_id.startswith("ar1-"):
+            raise ArtifactValidationError("imported transition record_id must be an artifact ID")
+        if self.payload.work_unit_id is None:
+            raise ArtifactValidationError("imported transitions must be structured")
+
+
+def finding_transition_sequence_sha256(
+    transitions: Sequence[ImportedFindingTransition],
+) -> str:
+    """Digest the ordered canonical source documents, including their IDs."""
+    return hashlib.sha256(canonical_json(tuple(transitions))).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class FindingHandoffExportPayload:
+    source_run_id: str
+    source_head_record_id: str
+    approved_plan_commit: str
+    approval_review_record_id: str
+    finding_transition_record_ids: tuple[str, ...]
+    finding_transitions_sha256: str
+    target_task_path: str
+    target_task_sha256: str
+    authority: Role
+    status: ClassVar[str] = "exported"
+    record_type: ClassVar[RecordType] = RecordType.FINDING_HANDOFF_EXPORT
+
+    def __post_init__(self) -> None:
+        _require_identifier(self.source_run_id, "source_run_id")
+        _require_identifier(self.source_head_record_id, "source_head_record_id")
+        if not re.fullmatch(r"[0-9a-f]{40}", self.approved_plan_commit):
+            raise ArtifactValidationError("approved_plan_commit must be a lowercase 40-character Git SHA")
+        _require_identifier(self.approval_review_record_id, "approval_review_record_id")
+        _require_unique_identifiers(
+            self.finding_transition_record_ids,
+            "finding_transition_record_ids",
+        )
+        _require_sha256(self.finding_transitions_sha256, "finding_transitions_sha256")
+        _require_path(self.target_task_path)
+        _require_sha256(self.target_task_sha256, "target_task_sha256")
+        if self.authority is not Role.ORCHESTRATOR:
+            raise ArtifactValidationError("finding handoff export authority must be orchestrator")
+
+
+@dataclass(frozen=True, slots=True)
+class FindingHandoffImportPayload:
+    source_run_id: str
+    source_head_record_id: str
+    approved_plan_commit: str
+    approval_review_record_id: str
+    export_record_id: str
+    target_run_id: str
+    target_task_sha256: str
+    finding_transitions_sha256: str
+    transitions: tuple[ImportedFindingTransition, ...]
+    authority: Role
+    status: ClassVar[str] = "imported"
+    record_type: ClassVar[RecordType] = RecordType.FINDING_HANDOFF_IMPORT
+
+    def __post_init__(self) -> None:
+        _require_identifier(self.source_run_id, "source_run_id")
+        _require_identifier(self.source_head_record_id, "source_head_record_id")
+        if not re.fullmatch(r"[0-9a-f]{40}", self.approved_plan_commit):
+            raise ArtifactValidationError("approved_plan_commit must be a lowercase 40-character Git SHA")
+        _require_identifier(self.approval_review_record_id, "approval_review_record_id")
+        _require_identifier(self.export_record_id, "export_record_id")
+        _require_identifier(self.target_run_id, "target_run_id")
+        _require_sha256(self.target_task_sha256, "target_task_sha256")
+        _require_sha256(self.finding_transitions_sha256, "finding_transitions_sha256")
+        if not self.transitions:
+            raise ArtifactValidationError("finding handoff import transitions must not be empty")
+        ids = tuple(item.record_id for item in self.transitions)
+        if len(ids) != len(set(ids)):
+            raise ArtifactValidationError("imported transition record IDs must be unique")
+        if finding_transition_sequence_sha256(self.transitions) != self.finding_transitions_sha256:
+            raise ArtifactValidationError("imported finding transition digest does not match")
+        if self.authority is not Role.ORCHESTRATOR:
+            raise ArtifactValidationError("finding handoff import authority must be orchestrator")
 
 
 @dataclass(frozen=True, slots=True)
@@ -691,6 +793,7 @@ class WorkflowCompletionPayload:
 ArtifactPayload: TypeAlias = (
     TaskPayload | PlanPayload | WorkUnitPayload | CorrectionWorkUnitPayload
     | AgentResultPayload | DiagnosticPayload | ReviewPayload | FindingTransitionPayload
+    | FindingHandoffExportPayload | FindingHandoffImportPayload
     | ValidationRequestPayload | ValidationAttestationPayload | GatePayload | BindingPayload
     | QuotaPausePayload | TransientRetryPayload | ResumeCheckPayload
     | WorkflowCompletionPayload
@@ -844,7 +947,10 @@ def _payload_from_dict(record_type: RecordType, raw: Mapping[str, Any]) -> Artif
         slices = tuple(SliceSpec(item["slice_id"], item["summary"], tuple(item["paths"])) for item in data["slices"])
         return PlanPayload(data["work_plan_path"], data["approved_plan_commit"], slices)
     if record_type is RecordType.WORK_UNIT:
-        return WorkUnitPayload(data["slice_id"], data["round_number"], tuple(data["paths"]))
+        return WorkUnitPayload(
+            data["slice_id"], data["round_number"], tuple(data["paths"]),
+            tuple(data.get("open_finding_ids", ())), data.get("finding_import_record_id"),
+        )
     if record_type is RecordType.CORRECTION_WORK_UNIT:
         return CorrectionWorkUnitPayload(data["slice_id"], data["round_number"], tuple(data["paths"]), tuple(data["finding_ids"]))
     if record_type is RecordType.AGENT_RESULT:
@@ -885,6 +991,29 @@ def _payload_from_dict(record_type: RecordType, raw: Mapping[str, Any]) -> Artif
             origin_slice_id=data.get("origin_slice_id"),
             origin_round_number=data.get("origin_round_number"),
             response_decision=data.get("response_decision"),
+        )
+    if record_type is RecordType.FINDING_HANDOFF_EXPORT:
+        return FindingHandoffExportPayload(
+            data["source_run_id"], data["source_head_record_id"],
+            data["approved_plan_commit"], data["approval_review_record_id"],
+            tuple(data["finding_transition_record_ids"]),
+            data["finding_transitions_sha256"], data["target_task_path"],
+            data["target_task_sha256"], Role(data["authority"]),
+        )
+    if record_type is RecordType.FINDING_HANDOFF_IMPORT:
+        return FindingHandoffImportPayload(
+            data["source_run_id"], data["source_head_record_id"],
+            data["approved_plan_commit"], data["approval_review_record_id"],
+            data["export_record_id"], data["target_run_id"],
+            data["target_task_sha256"], data["finding_transitions_sha256"],
+            tuple(
+                ImportedFindingTransition(
+                    item["record_id"],
+                    _payload_from_dict(RecordType.FINDING_TRANSITION, item["payload"]),
+                )
+                for item in data["transitions"]
+            ),
+            Role(data["authority"]),
         )
     if record_type is RecordType.VALIDATION_REQUEST:
         commands = tuple(CommandSpec(item["family"], tuple(item["argv"]), item["mode"]) for item in data["commands"])

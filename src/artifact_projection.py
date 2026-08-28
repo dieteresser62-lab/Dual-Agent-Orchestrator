@@ -14,6 +14,8 @@ from artifact_models import (
     CorrectionWorkUnitPayload,
     DiagnosticPayload,
     FindingTransitionPayload,
+    FindingHandoffExportPayload,
+    FindingHandoffImportPayload,
     GatePayload,
     PlanPayload,
     ReviewPayload,
@@ -115,7 +117,10 @@ class ArtifactAuditProjection:
             elif owned_unit is not None:
                 if str(owned_unit) in unit_ids:
                     selected.append(record)
-            elif isinstance(payload, (TaskPayload, PlanPayload, FindingTransitionPayload)):
+            elif isinstance(payload, (
+                TaskPayload, PlanPayload, FindingTransitionPayload,
+                FindingHandoffExportPayload, FindingHandoffImportPayload,
+            )):
                 selected.append(record)
             elif record.fingerprint in slice_fingerprints:
                 selected.append(record)
@@ -275,6 +280,44 @@ def render_replay_sections(replay: ArtifactReplayResult) -> Mapping[str, str]:
                         row["codex"], payload.response_decision or "legacy-text"
                     )
                 row["status"] = payload.finding_status
+        elif isinstance(payload, FindingHandoffImportPayload):
+            bindings_and_units.extend((
+                "### Finding-Import · fremde Vorgeschichte",
+                "",
+                "| Seq/Record | Quell-Run | Quell-Head | Export | Plancommit | Review | Taskdigest |",
+                "|---|---|---|---|---|---|---|",
+                f"| {prefix} | `{_safe(payload.source_run_id)}` | `{payload.source_head_record_id}` | "
+                f"`{payload.export_record_id}` | `{payload.approved_plan_commit}` | "
+                f"`{payload.approval_review_record_id}` | `{payload.target_task_sha256}` |",
+                "",
+            ))
+            if not findings:
+                findings.extend((
+                    "### Finding-Ereignisse",
+                    "",
+                    "| Seq/Record | Finding | Rolle | Runde | Aktion | Klasse | Status | Begründung |",
+                    "|---|---|---|---:|---|---|---|---|",
+                ))
+            for imported in payload.transitions:
+                transition = imported.payload
+                findings.append(
+                    f"| {prefix} / `{imported.record_id}` | `{_safe(transition.finding_id)}` | "
+                    f"`{transition.actor.value}` | `{transition.origin_round_number or '–'}` | "
+                    f"`imported:{_safe(transition.action)}` | `{transition.severity.value}` | "
+                    f"`{_safe(transition.finding_status)}` | {_table_prose(transition.rationale)} |"
+                )
+        elif isinstance(payload, FindingHandoffExportPayload):
+            bindings_and_units.extend((
+                "### Finding-Handoff-Export",
+                "",
+                "| Seq/Record | Quell-Run | Prä-Export-Head | Plancommit | Review | Findingrecords | Zieltask | Taskdigest |",
+                "|---|---|---|---|---|---|---|---|",
+                f"| {prefix} | `{_safe(payload.source_run_id)}` | `{payload.source_head_record_id}` | "
+                f"`{payload.approved_plan_commit}` | `{payload.approval_review_record_id}` | "
+                f"{_codes(payload.finding_transition_record_ids)} | `{_safe(payload.target_task_path)}` | "
+                f"`{payload.target_task_sha256}` |",
+                "",
+            ))
         elif isinstance(payload, ValidationRequestPayload):
             commands = "; ".join(_command(item.argv, item.mode) for item in payload.commands)
             validations.extend((
@@ -356,7 +399,7 @@ def render_replay_sections(replay: ArtifactReplayResult) -> Mapping[str, str]:
                 "|---|---|---|---:|---|---|",
                 f"| {prefix} | {kind} | `{_safe(payload.slice_id)}` | `{payload.round_number}` | "
                 f"{_codes(payload.paths)} | "
-                f"{_codes(payload.finding_ids) if isinstance(payload, CorrectionWorkUnitPayload) else 'keine'} |",
+                f"{_codes(payload.finding_ids) if isinstance(payload, CorrectionWorkUnitPayload) else _codes(payload.open_finding_ids)} |",
                 "",
             ))
         elif isinstance(payload, BindingPayload):

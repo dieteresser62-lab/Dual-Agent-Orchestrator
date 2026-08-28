@@ -24,6 +24,9 @@ from artifact_models import (
     Fingerprint,
     FingerprintKind,
     FindingSeverity,
+    FindingHandoffExportPayload,
+    FindingHandoffImportPayload,
+    ImportedFindingTransition,
     FindingTransitionPayload,
     ProviderInputComponentPayload,
     ProviderInputMeasurementPayload,
@@ -40,6 +43,7 @@ from artifact_models import (
     ValidationResult,
     WorkUnitPayload,
     canonical_json,
+    finding_transition_sequence_sha256,
 )
 from artifact_store import ArtifactStore
 from contracts import (
@@ -55,7 +59,7 @@ from contracts import (
 from task_contract import TaskContract
 from validation_matrix import ValidationRequest
 from provider_input_budget import ProviderInputMeasurement
-from artifact_replay import replay_artifacts
+from artifact_replay import ArtifactReplayResult, replay_artifacts
 
 
 class ArtifactBridgeError(RuntimeError):
@@ -194,6 +198,100 @@ def finding_payload(
         response_decision=(
             response_decision.value.lower() if response_decision is not None else None
         ),
+    )
+
+
+def finding_handoff_export_payload(
+    replay: ArtifactReplayResult,
+    *,
+    approved_plan_commit: str,
+    approval_review_record_id: str,
+    target_task_path: str,
+    target_task_bytes: bytes,
+) -> FindingHandoffExportPayload:
+    """Build an export only from the ordered facts of an accepted replay."""
+    if replay.head_record_id is None:
+        raise ArtifactBridgeError("finding export requires a non-empty accepted replay")
+    review = next(
+        (record for record in replay.records if record.record_id == approval_review_record_id),
+        None,
+    )
+    if (
+        review is None
+        or not isinstance(review.payload, ReviewPayload)
+        or review.payload.verdict != "approved"
+    ):
+        raise ArtifactBridgeError("finding export requires its approved reviewer record")
+    plans = [record.payload for record in replay.records if isinstance(record.payload, PlanPayload)]
+    if not plans or not any(plan.approved_plan_commit == approved_plan_commit for plan in plans):
+        raise ArtifactBridgeError("finding export plan commit is not present in accepted replay")
+    transitions = tuple(
+        ImportedFindingTransition(record.record_id, record.payload)
+        for record in replay.records
+        if isinstance(record.payload, FindingTransitionPayload)
+    )
+    if not transitions:
+        raise ArtifactBridgeError("finding export requires at least one source transition")
+    return FindingHandoffExportPayload(
+        source_run_id=replay.expected_run_id,
+        source_head_record_id=replay.head_record_id,
+        approved_plan_commit=approved_plan_commit,
+        approval_review_record_id=approval_review_record_id,
+        finding_transition_record_ids=tuple(item.record_id for item in transitions),
+        finding_transitions_sha256=finding_transition_sequence_sha256(transitions),
+        target_task_path=target_task_path,
+        target_task_sha256=hashlib.sha256(target_task_bytes).hexdigest(),
+        authority=Role.ORCHESTRATOR,
+    )
+
+
+def finding_handoff_import_payload(
+    source_replay: ArtifactReplayResult,
+    export_record: ArtifactRecord,
+    *,
+    target_run_id: str,
+    target_task_bytes: bytes,
+) -> FindingHandoffImportPayload:
+    """Verify an export against its source replay and copy its ordered history."""
+    export = export_record.payload
+    if not isinstance(export, FindingHandoffExportPayload):
+        raise ArtifactBridgeError("finding import requires a finding handoff export record")
+    accepted_export = next(
+        (record for record in source_replay.records if record.record_id == export_record.record_id),
+        None,
+    )
+    if accepted_export != export_record:
+        raise ArtifactBridgeError("finding export record is not in the accepted source replay")
+    if export_record.run_id != source_replay.expected_run_id:
+        raise ArtifactBridgeError("finding export record belongs to another source run")
+    transitions = tuple(
+        ImportedFindingTransition(record.record_id, record.payload)
+        for record in source_replay.records
+        if isinstance(record.payload, FindingTransitionPayload)
+    )
+    if (
+        export.source_run_id != source_replay.expected_run_id
+        or not export_record.predecessor_ids
+        or export.source_head_record_id != export_record.predecessor_ids[0]
+        or export.finding_transition_record_ids != tuple(item.record_id for item in transitions)
+        or export.finding_transitions_sha256
+        != finding_transition_sequence_sha256(transitions)
+    ):
+        raise ArtifactBridgeError("finding export differs from its accepted source replay")
+    target_digest = hashlib.sha256(target_task_bytes).hexdigest()
+    if target_digest != export.target_task_sha256:
+        raise ArtifactBridgeError("finding import task bytes differ from the export binding")
+    return FindingHandoffImportPayload(
+        source_run_id=export.source_run_id,
+        source_head_record_id=export.source_head_record_id,
+        approved_plan_commit=export.approved_plan_commit,
+        approval_review_record_id=export.approval_review_record_id,
+        export_record_id=export_record.record_id,
+        target_run_id=target_run_id,
+        target_task_sha256=target_digest,
+        finding_transitions_sha256=export.finding_transitions_sha256,
+        transitions=transitions,
+        authority=Role.ORCHESTRATOR,
     )
 
 
@@ -599,7 +697,8 @@ def _logical_provider_operation_id(
 
 __all__ = [
     "ArtifactBridge", "ArtifactBridgeError", "agent_result_payload",
-    "attestation_payload", "command_payload", "finding_payload", "plan_payload",
+    "attestation_payload", "command_payload", "finding_payload",
+    "finding_handoff_export_payload", "finding_handoff_import_payload", "plan_payload",
     "review_payload", "task_payload", "validation_request_payload",
     "provider_input_measurement_payload",
     "BindingPayload", "GatePayload", "ProviderUsagePayload",

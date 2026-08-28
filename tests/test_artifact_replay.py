@@ -13,6 +13,9 @@ from artifact_models import (
     FingerprintKind,
     FindingSeverity,
     FindingTransitionPayload,
+    FindingHandoffImportPayload,
+    ImportedFindingTransition,
+    finding_transition_sequence_sha256,
     RecordType,
     ReviewPayload,
     Role,
@@ -200,6 +203,86 @@ def test_structured_finding_projection_rebuilds_reviewer_owned_history() -> None
     assert findings[0].status is FindingStatus.CLOSED
     assert findings[0].acceptance_test == "A third physical start is rejected."
     assert findings[0].responses[0].decision is FindingResponseDecision.ACCEPTED
+
+
+def test_import_replays_source_order_then_accepts_local_reviewer_transition() -> None:
+    source = (
+        ImportedFindingTransition(
+            "ar1-" + "1" * 64,
+            FindingTransitionPayload(
+                "C-02", Role.CLAUDE, Role.CLAUDE, "opened",
+                FindingSeverity.OBSERVATION, "open", "Second opened first.", "plan-review",
+                "Second finding.", "It is preserved.", "plan", 1,
+            ),
+        ),
+        ImportedFindingTransition(
+            "ar1-" + "2" * 64,
+            FindingTransitionPayload(
+                "C-01", Role.CLAUDE, Role.CLAUDE, "opened",
+                FindingSeverity.BLOCKER, "open", "First opened second.", "plan-review",
+                "First finding.", "It is preserved too.", "plan", 1,
+            ),
+        ),
+        ImportedFindingTransition(
+            "ar1-" + "3" * 64,
+            FindingTransitionPayload(
+                "C-02", Role.CLAUDE, Role.CODEX, "responded",
+                FindingSeverity.OBSERVATION, "open", "Handled.", "plan-review",
+                response_decision="accepted",
+            ),
+        ),
+        ImportedFindingTransition(
+            "ar1-" + "4" * 64,
+            FindingTransitionPayload(
+                "C-02", Role.CLAUDE, Role.CLAUDE, "reclassified",
+                FindingSeverity.BLOCKER, "open", "Now actionable.", "plan-review",
+            ),
+        ),
+    )
+    digest = finding_transition_sequence_sha256(source)
+    records: list[ArtifactRecord] = []
+    imported = _append(records, "finding-import", FindingHandoffImportPayload(
+        "source-run", "ar1-" + "5" * 64, "6" * 40,
+        "ar1-" + "7" * 64, "ar1-" + "8" * 64, "run-replay", "9" * 64,
+        digest, source, Role.ORCHESTRATOR,
+    ))
+    _append(records, "work-unit-1", WorkUnitPayload(
+        "1", 1, ("src/a.py",), ("C-01", "C-02"), imported.record_id,
+    ))
+    _append(records, "finding-C-02", FindingTransitionPayload(
+        "C-02", Role.CLAUDE, Role.CLAUDE, "status_changed",
+        FindingSeverity.BLOCKER, "closed", "Verified locally.", "1",
+    ))
+
+    findings = replay_findings(replay_artifacts(records, "run-replay"), finding_ids=("C-02",))
+    assert findings[0].finding_class.value == "BLOCKER"
+    assert findings[0].responses[0].decision is FindingResponseDecision.ACCEPTED
+    assert findings[0].status is FindingStatus.CLOSED
+
+
+def test_import_tampering_and_partial_work_unit_binding_fail_with_stable_codes() -> None:
+    opened = ImportedFindingTransition(
+        "ar1-" + "1" * 64,
+        FindingTransitionPayload(
+            "C-01", Role.CLAUDE, Role.CLAUDE, "opened", FindingSeverity.OBSERVATION,
+            "open", "Carry.", "plan-review", "Carry.", "Still open.", "plan", 1,
+        ),
+    )
+    digest = finding_transition_sequence_sha256((opened,))
+    records: list[ArtifactRecord] = []
+    imported = _append(records, "finding-import", FindingHandoffImportPayload(
+        "source-run", "ar1-" + "2" * 64, "3" * 40,
+        "ar1-" + "4" * 64, "ar1-" + "5" * 64, "run-replay", "6" * 64,
+        digest, (opened,), Role.ORCHESTRATOR,
+    ))
+    _append(records, "work-unit-1", WorkUnitPayload(
+        "1", 1, ("src/a.py",), (), imported.record_id,
+    ))
+    _assert_code(tuple(records), ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH)
+
+    wrong_target = replace(imported.payload, target_run_id="other-run")
+    object.__setattr__(records[0], "payload", wrong_target)
+    _assert_code((records[0],), ReplayDiagnosticCode.RECORD_RUN_MISMATCH)
 
 
 def test_structured_finding_projection_rejects_legacy_incomplete_opening() -> None:

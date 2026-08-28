@@ -15,6 +15,10 @@ from artifact_models import (
     DiagnosticPayload,
     FindingSeverity,
     FindingTransitionPayload,
+    FindingHandoffExportPayload,
+    FindingHandoffImportPayload,
+    ImportedFindingTransition,
+    finding_transition_sequence_sha256,
     Fingerprint,
     FingerprintKind,
     GatePayload,
@@ -427,6 +431,51 @@ def test_structured_finding_transition_roundtrips_and_legacy_fields_stay_optiona
     ):
         historical["payload"].pop(key)
     assert ArtifactRecord.from_dict(historical).payload.work_unit_id is None
+
+
+def test_finding_handoff_payloads_roundtrip_ordered_source_lifecycle() -> None:
+    opened = ImportedFindingTransition(
+        "ar1-" + "1" * 64,
+        FindingTransitionPayload(
+            "C-02", Role.CLAUDE, Role.CLAUDE, "opened",
+            FindingSeverity.OBSERVATION, "open", "Observe it.", "plan-review",
+            "Observe it.", "The follow-up preserves it.", "plan", 1,
+        ),
+    )
+    response = ImportedFindingTransition(
+        "ar1-" + "2" * 64,
+        FindingTransitionPayload(
+            "C-02", Role.CLAUDE, Role.CODEX, "responded",
+            FindingSeverity.OBSERVATION, "open", "Addressed.", "plan-review",
+            response_decision="accepted",
+        ),
+    )
+    transitions = (opened, response)
+    digest = finding_transition_sequence_sha256(transitions)
+    export = _record(FindingHandoffExportPayload(
+        "source-run", "ar1-" + "3" * 64, "4" * 40,
+        "ar1-" + "5" * 64, tuple(item.record_id for item in transitions),
+        digest, "inbox/implement.md", "6" * 64, Role.ORCHESTRATOR,
+    ))
+    imported = _record(FindingHandoffImportPayload(
+        "source-run", "ar1-" + "3" * 64, "4" * 40,
+        "ar1-" + "5" * 64, "ar1-" + "7" * 64, "run-01", "6" * 64,
+        digest, transitions, Role.ORCHESTRATOR,
+    ))
+
+    assert ArtifactRecord.from_dict(export.to_dict()) == export
+    assert ArtifactRecord.from_dict(imported.to_dict()) == imported
+    with pytest.raises(ArtifactValidationError, match="digest does not match"):
+        replace(imported.payload, transitions=tuple(reversed(transitions)))
+
+
+def test_work_unit_finding_entry_binding_is_sorted_and_roundtrips() -> None:
+    payload = WorkUnitPayload(
+        "1", 1, ("src/a.py",), ("C-01", "C-02"), "ar1-" + "8" * 64
+    )
+    assert ArtifactRecord.from_dict(_record(payload).to_dict()).payload == payload
+    with pytest.raises(ArtifactValidationError, match="must be sorted"):
+        replace(payload, open_finding_ids=("C-02", "C-01"))
 
 
 def test_approval_requires_fingerprint_and_positive_evidence() -> None:
