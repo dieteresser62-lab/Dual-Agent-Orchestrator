@@ -91,6 +91,7 @@ def build_slice_execution_package(
     source_plan_path: str,
     slice_id: int,
     authorized_paths: tuple[str, ...],
+    findings: tuple[FindingRecord, ...] = (),
 ) -> CanonicalExecutionPackage:
     """Project one approved Slice without transporting sibling Slice content."""
     _require_repository_path(source_plan_path, "source plan path")
@@ -100,6 +101,20 @@ def build_slice_execution_package(
     except PlanHandoffError as exc:
         raise ProviderInputEfficiencyError(str(exc)) from exc
     references = _extract_explicit_references(plan_text, slice_id)
+    finding_by_id = {item.finding_id: item for item in findings}
+    if len(finding_by_id) != len(findings):
+        raise ProviderInputEfficiencyError("slice findings must be unique")
+    open_findings = [
+        {
+            "finding_id": item.finding_id,
+            "finding_class": item.finding_class.value,
+            "reporter": item.origin.reporter.value,
+            "summary": item.summary,
+            "acceptance_test": item.acceptance_test,
+        }
+        for item in sorted(findings, key=lambda value: value.finding_id)
+        if item.status is FindingStatus.OPEN
+    ]
     document = {
         "schema_version": SLICE_PACKAGE_SCHEMA,
         "source_plan": {
@@ -112,6 +127,7 @@ def build_slice_execution_package(
             "acceptance_criteria": list(criteria),
             "authorized_paths": list(authorized_paths),
             "cross_references": list(references),
+            "open_findings": open_findings,
         },
     }
     return _package(SLICE_PACKAGE_SCHEMA, document)

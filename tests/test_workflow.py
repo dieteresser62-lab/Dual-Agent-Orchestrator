@@ -7,6 +7,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 
 import pytest
+import plan_handoff
 
 from audit_trail import ReviewAuditEvent
 from agent_runtime import (
@@ -662,6 +663,120 @@ def _with_open_findings(
 ) -> WorkflowState:
     current = replace(state.current_work_unit, open_findings=finding_ids)
     return replace(state, work_units=(*state.work_units[:-1], current))
+
+
+def test_native_work_unit_mirrors_carried_open_ledger_before_provider_resume() -> None:
+    open_finding = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.OBSERVATION,
+        status=FindingStatus.OPEN,
+        summary="Imported finding remains open.",
+        acceptance_test="The next Slice binds the same identity.",
+        origin=FindingOrigin("PLAN", 1, AgentRole.CLAUDE),
+    )
+    closed_finding = FindingRecord(
+        finding_id="C-02",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.CLOSED,
+        summary="Imported finding was already closed.",
+        acceptance_test="The closure stays in the complete ledger.",
+        origin=FindingOrigin("PLAN", 1, AgentRole.CLAUDE),
+        status_rationale="Closed by the source reviewer.",
+    )
+    state = replace(
+        _slice_state().await_policy_gate(
+            reason=GateReason.STOP_REQUEST,
+            detail="TECHNICAL-RESUME | wait before provider restart",
+        ),
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V2,
+            "2",
+            claude_review_transport="native-claude-review-v2",
+            codex_result_transport="native-codex-v2",
+        ),
+    )
+    history = WorkflowHistory(
+        state.current_work_unit_id,
+        findings=(open_finding, closed_finding),
+    )
+    driver = FakeDriver(snapshots=[], codex_outputs=[], reviewer_outputs=[])
+
+    result = WorkflowEngine(driver).run_current_work_unit(state, _context(), history)
+
+    assert result.state.current_work_unit.open_findings == ("C-01",)
+    assert result.history.findings == (open_finding, closed_finding)
+    assert driver.checkpoints[-1].current_work_unit.open_findings == ("C-01",)
+
+
+def test_native_implementation_package_matches_request_open_findings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        plan_handoff,
+        "_ACCEPTANCE_HEADINGS",
+        (*plan_handoff._ACCEPTANCE_HEADINGS, "**Acceptance Criteria**"),
+    )
+    open_finding = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.OBSERVATION,
+        status=FindingStatus.OPEN,
+        summary="Imported lifecycle reaches Codex.",
+        acceptance_test="Codex dispositions bind this exact finding.",
+        origin=FindingOrigin("PLAN", 1, AgentRole.CLAUDE),
+    )
+    closed_finding = FindingRecord(
+        finding_id="C-02",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.CLOSED,
+        summary="Closed lifecycle remains reviewer-only context.",
+        acceptance_test="Do not offer a closed finding to Codex.",
+        origin=FindingOrigin("PLAN", 1, AgentRole.CLAUDE),
+        status_rationale="Closed before implementation.",
+    )
+    state = _slice_state()
+    context = replace(
+        _context(),
+        approved_plan_text=(
+            "### Slice 1 - Imported finding contract\n\n"
+            "**Ziel**\n\nPreserve the imported lifecycle.\n\n"
+            "**Exakter Änderungspfad**\n\n- `src/early.py`\n\n"
+            "**Acceptance Criteria**\n\n- Keep one finding identity.\n"
+        ),
+    )
+    contract = CodexStepContract(
+        name="work-unit-2-codex_implementation",
+        readiness_marker=ReadinessMarker.IMPLEMENTATION,
+        slice_id="01",
+        round_number=1,
+        require_test_files_record=True,
+        test_changes_approved=True,
+    )
+
+    bundle = WorkflowEngine._native_codex_request(
+        state=state,
+        context=context,
+        history=WorkflowHistory(
+            state.current_work_unit_id,
+            findings=(open_finding, closed_finding),
+        ),
+        contract=contract,
+        request_kind=NativeCodexRequestKind.IMPLEMENTATION,
+    )
+
+    manifest_item = next(
+        item
+        for item in bundle.document["evidence_manifest"]
+        if item["evidence_id"] == "slice-execution-package"
+    )
+    package = json.loads(manifest_item["content"])
+    assert package["slice"]["open_findings"] == bundle.document["open_findings"]
+    assert [item["finding_id"] for item in bundle.document["open_findings"]] == [
+        "C-01"
+    ]
+    assert bundle.bound_context.context.previous_findings == (
+        open_finding,
+        closed_finding,
+    )
 
 
 def _invocation_failure(

@@ -899,6 +899,12 @@ class WorkflowEngine:
         if active_history.work_unit_id != current.work_unit_id:
             raise WorkflowExecutionError("workflow history belongs to a different work unit")
         self._bind_driver_work_unit(state)
+        bound_state = self._bind_current_open_findings(state, active_history)
+        if bound_state is not state:
+            state = bound_state
+            self._bind_driver_work_unit(state)
+            self.driver.checkpoint(state, active_history)
+        current = state.current_work_unit
         if (
             current.status is WorkUnitStatus.AWAITING_USER_DECISION
             and current.gate.reason is GateReason.TEST_CHANGE
@@ -3029,6 +3035,35 @@ class WorkflowEngine:
             )
         return replace(history, findings=findings)
 
+    def _bind_current_open_findings(
+        self, state: WorkflowState, history: WorkflowHistory
+    ) -> WorkflowState:
+        """Mirror the carried open ledger into each non-correction work unit."""
+        binding = state.protocol_binding
+        unit = state.current_work_unit
+        if (
+            binding is None
+            or binding.mode is not ProtocolMode.STRUCTURED_V2
+            or unit.kind in {WorkUnitKind.PLAN, WorkUnitKind.CORRECTION}
+        ):
+            return state
+        open_ids = tuple(
+            sorted(
+                item.finding_id
+                for item in history.findings
+                if item.status is FindingStatus.OPEN
+            )
+        )
+        if unit.open_findings == open_ids:
+            return state
+        work_units = tuple(
+            replace(item, open_findings=open_ids)
+            if item.work_unit_id == unit.work_unit_id
+            else item
+            for item in state.work_units
+        )
+        return replace(state, work_units=work_units)
+
     def _carry_forward_native_findings(
         self,
         state: WorkflowState,
@@ -3216,7 +3251,26 @@ class WorkflowEngine:
                     source_plan_path=context.work_plan_path,
                     slice_id=state.current_slice_id,
                     authorized_paths=tuple(sorted(set(authorized_paths))),
+                    findings=native_findings,
                 )
+                package_findings = json.loads(package.canonical_json)["slice"][
+                    "open_findings"
+                ]
+                request_findings = [
+                    {
+                        "finding_id": item.finding_id,
+                        "finding_class": item.finding_class.value,
+                        "reporter": item.origin.reporter.value,
+                        "summary": item.summary,
+                        "acceptance_test": item.acceptance_test,
+                    }
+                    for item in native_findings
+                    if item.status is FindingStatus.OPEN
+                ]
+                if package_findings != request_findings:
+                    raise WorkflowExecutionError(
+                        "slice execution package differs from the native request open finding set"
+                    )
                 evidence.append(
                     NativeCodexEvidenceInput(
                         "slice-execution-package",

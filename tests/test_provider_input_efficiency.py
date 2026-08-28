@@ -4,6 +4,8 @@ import hashlib
 import json
 from pathlib import Path
 
+import pytest
+
 from contracts import (
     AgentRole,
     CodexStepContract,
@@ -150,7 +152,66 @@ def test_slice_package_excludes_sibling_sentinels_and_binds_source_plan() -> Non
             "`docs/internal/contract.md#binding`",
             "`README.md#native-transport`",
         ],
+        "open_findings": [],
     }
+
+
+def test_slice_package_projects_only_open_findings_in_id_order() -> None:
+    closed = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.CLOSED,
+        summary="Closed imported finding",
+        acceptance_test="The closed lifecycle remains review authority.",
+        origin=FindingOrigin("PLAN", 1, AgentRole.CLAUDE),
+        status_rationale="Closed in the source run.",
+    )
+    open_finding = FindingRecord(
+        finding_id="C-02",
+        finding_class=FindingClass.OBSERVATION,
+        status=FindingStatus.OPEN,
+        summary="Open imported finding",
+        acceptance_test="Codex receives the exact imported acceptance test.",
+        origin=FindingOrigin("PLAN", 2, AgentRole.CLAUDE),
+    )
+
+    package = build_slice_execution_package(
+        plan_text=_three_slice_plan(),
+        source_plan_path="docs/internal/plan.md",
+        slice_id=2,
+        authorized_paths=("src/target.py", "tests/test_target.py"),
+        findings=(closed, open_finding),
+    )
+
+    assert json.loads(package.canonical_json)["slice"]["open_findings"] == [
+        {
+            "finding_id": "C-02",
+            "finding_class": "OBSERVATION",
+            "reporter": "claude",
+            "summary": "Open imported finding",
+            "acceptance_test": "Codex receives the exact imported acceptance test.",
+        }
+    ]
+
+
+def test_slice_package_rejects_duplicate_finding_identity() -> None:
+    finding = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="Duplicated imported finding",
+        acceptance_test="Reject before provider construction.",
+        origin=FindingOrigin("PLAN", 1, AgentRole.CLAUDE),
+    )
+
+    with pytest.raises(ValueError, match="slice findings must be unique"):
+        build_slice_execution_package(
+            plan_text=_three_slice_plan(),
+            source_plan_path="docs/internal/plan.md",
+            slice_id=2,
+            authorized_paths=("src/target.py", "tests/test_target.py"),
+            findings=(finding, finding),
+        )
 
 
 def _current_components(operation: str) -> tuple[tuple[str, str], ...]:
