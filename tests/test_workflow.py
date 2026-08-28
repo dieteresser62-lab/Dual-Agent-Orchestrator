@@ -1102,6 +1102,88 @@ def test_native_codex_result_bypasses_legacy_marker_parser(
     )
 
 
+def test_native_codex_correction_merges_offered_blocker_into_complete_ledger() -> None:
+    findings = tuple(
+        FindingRecord(
+            finding_id=f"C-{index:02d}",
+            finding_class=(
+                FindingClass.BLOCKER if index == 3 else FindingClass.OBSERVATION
+            ),
+            status=FindingStatus.OPEN,
+            summary=f"Finding {index}",
+            acceptance_test=f"Acceptance {index}",
+            origin=FindingOrigin("02", 1, AgentRole.CLAUDE),
+        )
+        for index in range(1, 5)
+    )
+    answered = apply_finding_response(
+        findings[2],
+        FindingResponseDecision.ACCEPTED,
+        "The bounded blocker was corrected.",
+    )
+
+    @dataclass
+    class SubsetCorrectionDriver(FakeDriver):
+        persisted_previous: tuple[FindingRecord, ...] = ()
+
+        def invoke_codex(
+            self, invocation: CodexInvocation
+        ) -> NativeAgentCodexOutput:
+            self.codex_calls.append(invocation)
+            assert invocation.native_request is not None
+            assert tuple(
+                item.finding_id
+                for item in invocation.native_request.bound_context.context.previous_findings
+            ) == ("C-03",)
+            return NativeAgentCodexOutput(
+                result=CodexContractResult(
+                    ready=True,
+                    stopped=False,
+                    stop_request=None,
+                    validation=None,
+                    test_files=(TEST_FILE,),
+                    findings=(answered,),
+                    slice_plan=(),
+                ),
+                canonical_json='{"result_type":"correction_result"}',
+                request_id=invocation.native_request.bound_context.request_id,
+                response_sha256="b" * 64,
+            )
+
+        def persist_native_codex_contract(
+            self,
+            output: NativeAgentCodexOutput,
+            previous_findings: tuple[FindingRecord, ...],
+        ) -> None:
+            _ = output
+            self.persisted_previous = previous_findings
+
+    state = replace(
+        _slice_state().with_current_step(WorkflowStep.CODEX_CORRECTION),
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V2,
+            "2",
+            codex_result_transport="native-codex-v2",
+        ),
+    )
+    state = _with_open_findings(state, ("C-03",))
+    driver = SubsetCorrectionDriver(
+        snapshots=[_changes("b", "src/early.py", TEST_FILE)],
+        codex_outputs=[],
+        reviewer_outputs=[],
+    )
+
+    advanced, history = WorkflowEngine(driver)._run_codex(
+        state,
+        _context(),
+        WorkflowHistory(state.current_work_unit_id, findings=findings),
+    )
+
+    assert advanced.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
+    assert history.findings == (findings[0], findings[1], answered, findings[3])
+    assert driver.persisted_previous == findings
+
+
 def test_native_codex_execution_packages_exclude_sibling_and_unaffected_evidence() -> None:
     plan = """# Approved multi-Slice plan
 

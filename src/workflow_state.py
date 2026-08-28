@@ -1118,6 +1118,8 @@ class WorkflowState:
     task_scope_patterns: tuple[str, ...] = ()
     work_plan_path: str | None = None
     approved_plan_commit: str | None = None
+    finding_handoff_source_run_id: str | None = None
+    finding_handoff_export_record_id: str | None = None
     audit_report_path: str | None = None
     target_branch: str | None = None
     protocol_binding: ProtocolBinding | None = None
@@ -1225,6 +1227,30 @@ class WorkflowState:
                 raise WorkflowStateValidationError(
                     "approved_plan_commit requires work_plan_path"
                 )
+        handoff_values = (
+            self.finding_handoff_source_run_id,
+            self.finding_handoff_export_record_id,
+        )
+        if any(value is None for value in handoff_values) != all(
+            value is None for value in handoff_values
+        ):
+            raise WorkflowStateValidationError(
+                "finding handoff requires source run and export record"
+            )
+        if self.finding_handoff_source_run_id is not None:
+            if self.approved_plan_commit is None:
+                raise WorkflowStateValidationError(
+                    "finding handoff requires approved_plan_commit"
+                )
+            if re.fullmatch(
+                r"[A-Za-z0-9][A-Za-z0-9._:-]{0,199}",
+                self.finding_handoff_source_run_id,
+            ) is None:
+                raise WorkflowStateValidationError("finding handoff source run is invalid")
+            if re.fullmatch(
+                r"ar1-[0-9a-f]{64}", self.finding_handoff_export_record_id or ""
+            ) is None:
+                raise WorkflowStateValidationError("finding handoff export record is invalid")
         if self.audit_report_path is not None:
             path = PurePosixPath(self.audit_report_path)
             if (
@@ -2257,6 +2283,8 @@ class WorkflowState:
             "task_scope_patterns": list(self.task_scope_patterns),
             "work_plan_path": self.work_plan_path,
             "approved_plan_commit": self.approved_plan_commit,
+            "finding_handoff_source_run_id": self.finding_handoff_source_run_id,
+            "finding_handoff_export_record_id": self.finding_handoff_export_record_id,
             "audit_report_path": self.audit_report_path,
             "target_branch": self.target_branch,
             "protocol_binding": (
@@ -2295,6 +2323,22 @@ class WorkflowState:
         plan_commit_keys = {*audit_keys, "approved_plan_commit"}
         plan_binding_keys = {*plan_commit_keys, "protocol_binding"}
         bootstrap_keys = {*plan_binding_keys, "bootstrap_checks"}
+        handoff_shape_keys = {
+            *plan_binding_keys,
+            "finding_handoff_source_run_id",
+            "finding_handoff_export_record_id",
+        }
+        handoff_plan_commit_shape_keys = {
+            *plan_commit_keys,
+            "finding_handoff_source_run_id",
+            "finding_handoff_export_record_id",
+        }
+        handoff_protocol_shape_keys = {
+            *protocol_keys,
+            "finding_handoff_source_run_id",
+            "finding_handoff_export_record_id",
+        }
+        handoff_keys = {*handoff_shape_keys, "bootstrap_checks"}
         if set(raw) == legacy_keys:
             planned_slices: tuple[PlannedSlice, ...] = ()
             runtime_history = None
@@ -2303,6 +2347,8 @@ class WorkflowState:
             task_scope_patterns: tuple[str, ...] = ()
             work_plan_path = None
             approved_plan_commit = None
+            finding_handoff_source_run_id = None
+            finding_handoff_export_record_id = None
             audit_report_path = None
             target_branch = None
             protocol_binding = None
@@ -2320,9 +2366,11 @@ class WorkflowState:
                     frozenset(plan_commit_keys),
                     frozenset(plan_binding_keys),
                     frozenset(bootstrap_keys),
+                    frozenset(handoff_shape_keys),
+                    frozenset(handoff_plan_commit_shape_keys),
+                    frozenset(handoff_protocol_shape_keys),
                 }:
-                    if raw_keys != frozenset(bootstrap_keys):
-                        _require_exact_keys(raw, plan_binding_keys, "workflow state")
+                    _require_exact_keys(raw, handoff_keys, "workflow state")
             raw_plan = _list(raw["planned_slices"], "planned_slices")
             planned: list[PlannedSlice] = []
             for index, item in enumerate(raw_plan):
@@ -2360,6 +2408,8 @@ class WorkflowState:
                 task_scope_patterns = ()
                 work_plan_path = None
                 approved_plan_commit = None
+                finding_handoff_source_run_id = None
+                finding_handoff_export_record_id = None
                 audit_report_path = None
                 target_branch = None
             else:
@@ -2379,12 +2429,23 @@ class WorkflowState:
                         frozenset(plan_commit_keys),
                         frozenset(plan_binding_keys),
                         frozenset(bootstrap_keys),
+                        frozenset(handoff_shape_keys),
+                        frozenset(handoff_plan_commit_shape_keys),
+                        frozenset(handoff_protocol_shape_keys),
                     }
                     else None
                 )
                 target_branch = _optional_string(raw["target_branch"], "target_branch")
                 approved_plan_commit = _optional_string(
                     raw.get("approved_plan_commit"), "approved_plan_commit"
+                )
+                finding_handoff_source_run_id = _optional_string(
+                    raw.get("finding_handoff_source_run_id"),
+                    "finding_handoff_source_run_id",
+                )
+                finding_handoff_export_record_id = _optional_string(
+                    raw.get("finding_handoff_export_record_id"),
+                    "finding_handoff_export_record_id",
                 )
             binding_raw = raw.get("protocol_binding")
             protocol_binding = (
@@ -2426,6 +2487,8 @@ class WorkflowState:
             task_scope_patterns=task_scope_patterns,
             work_plan_path=work_plan_path,
             approved_plan_commit=approved_plan_commit,
+            finding_handoff_source_run_id=finding_handoff_source_run_id,
+            finding_handoff_export_record_id=finding_handoff_export_record_id,
             audit_report_path=audit_report_path,
             target_branch=target_branch,
             protocol_binding=protocol_binding,
@@ -2446,6 +2509,8 @@ def init_workflow_state(
     task_scope_patterns: tuple[str, ...] = (),
     work_plan_path: str | None = None,
     approved_plan_commit: str | None = None,
+    finding_handoff_source_run_id: str | None = None,
+    finding_handoff_export_record_id: str | None = None,
     audit_report_path: str | None = None,
     target_branch: str | None = None,
     protocol_binding: ProtocolBinding | None = None,
@@ -2486,6 +2551,8 @@ def init_workflow_state(
         task_scope_patterns=task_scope_patterns,
         work_plan_path=work_plan_path,
         approved_plan_commit=approved_plan_commit,
+        finding_handoff_source_run_id=finding_handoff_source_run_id,
+        finding_handoff_export_record_id=finding_handoff_export_record_id,
         audit_report_path=audit_report_path,
         target_branch=target_branch,
         protocol_binding=protocol_binding,

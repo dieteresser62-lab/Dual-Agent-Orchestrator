@@ -354,6 +354,37 @@ class CodexInvocation:
     previous_findings: tuple[FindingRecord, ...] = ()
 
 
+def _merge_request_finding_subset(
+    authoritative: tuple[FindingRecord, ...],
+    offered: tuple[FindingRecord, ...],
+    returned: tuple[FindingRecord, ...],
+) -> tuple[FindingRecord, ...]:
+    """Merge one request-bounded result back into the complete finding ledger."""
+    authoritative_by_id = {item.finding_id: item for item in authoritative}
+    offered_by_id = {item.finding_id: item for item in offered}
+    returned_by_id = {item.finding_id: item for item in returned}
+    if len(authoritative_by_id) != len(authoritative):
+        raise WorkflowExecutionError(
+            "native result merge received duplicate authoritative finding IDs"
+        )
+    if len(offered_by_id) != len(offered) or len(returned_by_id) != len(returned):
+        raise WorkflowExecutionError(
+            "native result merge received duplicate request-bounded finding IDs"
+        )
+    if set(offered_by_id) != set(returned_by_id):
+        raise WorkflowExecutionError(
+            "native result differs from its exact offered finding subset"
+        )
+    for finding_id, offered_finding in offered_by_id.items():
+        if authoritative_by_id.get(finding_id) != offered_finding:
+            raise WorkflowExecutionError(
+                "offered finding subset differs from the complete ledger"
+            )
+    return tuple(
+        returned_by_id.get(item.finding_id, item) for item in authoritative
+    )
+
+
 @dataclass(frozen=True)
 class ReviewerInvocation:
     work_unit_id: int
@@ -1247,7 +1278,15 @@ class WorkflowEngine:
         self._persist_structured(
             "persist_native_codex_contract", output, history.findings
         )
-        history = replace(history, findings=result.findings)
+        assert invocation.native_request is not None
+        history = replace(
+            history,
+            findings=_merge_request_finding_subset(
+                history.findings,
+                invocation.native_request.bound_context.context.previous_findings,
+                result.findings,
+            ),
+        )
         if result.stopped:
             if result.stop_request is None:
                 raise WorkflowExecutionError("Codex stop has no structured stop request")

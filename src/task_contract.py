@@ -13,7 +13,8 @@ from gates import matches_path_patterns, normalize_path_patterns
 
 FEATURE_BRANCH_PATTERN = re.compile(r"^(?:feature|codex)/[A-Za-z0-9._-]+$")
 MARKER_PATTERN = re.compile(
-    r"^[ \t]*(ORCHESTRATOR_MODE|WORK_PLAN_PATH|APPROVED_PLAN_COMMIT|TARGET_BRANCH|TASK_SCOPE)"
+    r"^[ \t]*(ORCHESTRATOR_MODE|WORK_PLAN_PATH|APPROVED_PLAN_COMMIT|TARGET_BRANCH|TASK_SCOPE|"
+    r"FINDING_HANDOFF_SOURCE_RUN|FINDING_HANDOFF_EXPORT)"
     r"[ \t]*:[ \t]*(.+?)[ \t]*$",
     re.MULTILINE | re.IGNORECASE,
 )
@@ -41,6 +42,8 @@ class TaskContract:
     work_plan_path: str | None = None
     approved_plan_commit: str | None = None
     approved_slices: tuple[PlannedSlice, ...] = ()
+    finding_handoff_source_run_id: str | None = None
+    finding_handoff_export_record_id: str | None = None
     informal_intake: bool = False
 
     def __post_init__(self) -> None:
@@ -65,6 +68,23 @@ class TaskContract:
                 )
             if self.approved_plan_commit is not None or self.approved_slices:
                 raise TaskContractError("PLAN_ONLY cannot consume an approved-plan handoff")
+            if self.finding_handoff_source_run_id is not None:
+                raise TaskContractError("PLAN_ONLY cannot consume a finding handoff")
+        handoff_values = (
+            self.finding_handoff_source_run_id,
+            self.finding_handoff_export_record_id,
+        )
+        if any(value is None for value in handoff_values) != all(
+            value is None for value in handoff_values
+        ):
+            raise TaskContractError("finding handoff requires both source run and export record")
+        if self.finding_handoff_source_run_id is not None:
+            if self.approved_plan_commit is None:
+                raise TaskContractError("finding handoff requires an approved-plan IMPLEMENT task")
+            if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,199}", self.finding_handoff_source_run_id) is None:
+                raise TaskContractError("FINDING_HANDOFF_SOURCE_RUN is invalid")
+            if re.fullmatch(r"ar1-[0-9a-f]{64}", self.finding_handoff_export_record_id or "") is None:
+                raise TaskContractError("FINDING_HANDOFF_EXPORT must be an artifact record ID")
         if self.approved_plan_commit is not None:
             if self.mode is not TaskMode.IMPLEMENT or self.work_plan_path is None:
                 raise TaskContractError(
@@ -263,6 +283,12 @@ def parse_task_contract(
 
     approved_plan_commit = _single_marker(markers, "APPROVED_PLAN_COMMIT")
     approved_slices = _parse_embedded_slice_plan(text)
+    finding_handoff_source_run_id = _single_marker(
+        markers, "FINDING_HANDOFF_SOURCE_RUN"
+    )
+    finding_handoff_export_record_id = _single_marker(
+        markers, "FINDING_HANDOFF_EXPORT"
+    )
 
     return TaskContract(
         digest=digest,
@@ -272,6 +298,8 @@ def parse_task_contract(
         work_plan_path=work_plan_path,
         approved_plan_commit=approved_plan_commit,
         approved_slices=approved_slices,
+        finding_handoff_source_run_id=finding_handoff_source_run_id,
+        finding_handoff_export_record_id=finding_handoff_export_record_id,
         informal_intake=informal_intake,
     )
 

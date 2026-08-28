@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import pytest
 
-from plan_handoff import PlanHandoffError, extract_implementation_slices
+from contracts import PlannedSlice
+from plan_handoff import (
+    PlanHandoffError,
+    extract_implementation_slices,
+    render_implementation_task,
+)
 
 
 @pytest.mark.parametrize(
@@ -113,3 +118,17 @@ def test_handoff_rejects_slice_without_acceptance_criteria() -> None:
 
     with pytest.raises(PlanHandoffError, match="acceptance-criteria"):
         extract_implementation_slices(markdown, plan_stem="work-plan")
+
+
+def test_render_implementation_task_binds_finding_export_without_finding_prose() -> None:
+    rendered = render_implementation_task(
+        work_plan_path="docs/internal/plan.md",
+        target_branch="feature/finding-handoff",
+        approved_plan_commit="a" * 40,
+        slices=(PlannedSlice(1, "implement", ("src/core.py",)),),
+        finding_handoff=("source-run", "ar1-" + "b" * 64),
+    )
+
+    assert "FINDING_HANDOFF_SOURCE_RUN: source-run\n" in rendered
+    assert f"FINDING_HANDOFF_EXPORT: ar1-{'b' * 64}\n" in rendered
+    assert "C-01" not in rendered

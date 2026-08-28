@@ -201,6 +201,7 @@ def render_implementation_task(
     target_branch: str,
     approved_plan_commit: str,
     slices: tuple[PlannedSlice, ...],
+    finding_handoff: tuple[str, str] | None = None,
 ) -> str:
     if not slices:
         raise PlanHandoffError("implementation handoff requires at least one Slice")
@@ -209,11 +210,23 @@ def render_implementation_task(
         f"SLICE_PLAN: {item.slice_id} | {item.summary} | {', '.join(item.scope_paths)}"
         for item in slices
     )
+    handoff_markers = ""
+    if finding_handoff is not None:
+        source_run_id, export_record_id = finding_handoff
+        if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,199}", source_run_id) is None:
+            raise PlanHandoffError("finding handoff source run is invalid")
+        if re.fullmatch(r"ar1-[0-9a-f]{64}", export_record_id) is None:
+            raise PlanHandoffError("finding handoff export is invalid")
+        handoff_markers = (
+            f"FINDING_HANDOFF_SOURCE_RUN: {source_run_id}\n"
+            f"FINDING_HANDOFF_EXPORT: {export_record_id}\n"
+        )
     return (
         "Setze den freigegebenen Arbeitsplan Slice für Slice um.\n\n"
         "ORCHESTRATOR_MODE: IMPLEMENT\n"
         f"WORK_PLAN_PATH: {work_plan_path}\n"
         f"APPROVED_PLAN_COMMIT: {approved_plan_commit}\n"
+        f"{handoff_markers}"
         f"TARGET_BRANCH: {target_branch}\n"
         f"TASK_SCOPE: {', '.join(scope)}\n\n"
         "Der Arbeitsplan ist bereits von Claude geprüft und vom "
@@ -233,6 +246,7 @@ def write_implementation_handoff(
     work_plan_path: str,
     target_branch: str,
     approved_plan_commit: str,
+    finding_handoff: tuple[str, str] | None = None,
 ) -> Path:
     plan = repository_root / PurePosixPath(work_plan_path)
     try:
@@ -245,6 +259,7 @@ def write_implementation_handoff(
         target_branch=target_branch,
         approved_plan_commit=approved_plan_commit,
         slices=slices,
+        finding_handoff=finding_handoff,
     )
     target = implementation_task_path(plan_task_path)
     if target.exists():

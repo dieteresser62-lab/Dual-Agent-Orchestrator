@@ -6,7 +6,11 @@ from pathlib import Path
 import pytest
 
 import artifact_migration
-from artifact_bridge import ArtifactBridge
+from artifact_bridge import (
+    ArtifactBridge,
+    finding_handoff_export_payload,
+    finding_handoff_import_payload,
+)
 from artifact_migration import ArtifactResumeError, resolve_resume_state
 from artifact_models import (
     ArtifactValidationError,
@@ -14,6 +18,7 @@ from artifact_models import (
     CommandSpec,
     CorrectionWorkUnitPayload,
     FindingSeverity,
+    FindingHandoffImportPayload,
     FindingTransitionPayload,
     FingerprintKind,
     PlanPayload,
@@ -28,7 +33,7 @@ from artifact_models import (
     WorkflowCompletionPayload,
 )
 from artifact_store import ArtifactStore
-from artifact_replay import ReplayDiagnosticCode
+from artifact_replay import ReplayDiagnosticCode, replay_artifacts
 from contracts import PlannedSlice
 from workflow_state import (
     AgentFailureKind,
@@ -130,6 +135,193 @@ def _authorization_records(
         fingerprint_sha256=review_fingerprint,
     )
     return attestation, review
+
+
+def _finding_handoff_resume_fixture(repository: Path):
+    state = replace(
+        _state(repository),
+        approved_plan_commit="b" * 40,
+        work_plan_path="docs/internal/plan.md",
+    )
+    source = ArtifactBridge(ArtifactStore(repository, "source-plan-run"))
+    source.append(
+        PlanPayload(
+            "docs/internal/plan.md",
+            "b" * 40,
+            (SliceSpec("1", "implementation", ("src/resume.py",)),),
+        ),
+        logical_id="approved-plan",
+        idempotency_key="approved-plan",
+        fingerprint_sha256="b" * 64,
+    )
+    source.append(
+        FindingTransitionPayload(
+            "C-01", Role.CLAUDE, Role.CLAUDE, "opened",
+            FindingSeverity.BLOCKER, "open", "Carry it.", "plan-review",
+            "Carry it.", "It must remain open.", "plan", 1,
+        ),
+        logical_id="finding-C-01",
+        idempotency_key="finding-C-01",
+        fingerprint_sha256="b" * 64,
+    )
+    review = source.append(
+        ReviewPayload(
+            Role.CLAUDE, "plan-review", "approved", ("C-01",), None,
+            "native-claude-review-v2", "native-review-request-" + "c" * 64,
+            "d" * 64,
+        ),
+        logical_id="plan-review",
+        idempotency_key="plan-review",
+        fingerprint_sha256="b" * 64,
+    )
+    source_replay = replay_artifacts(source.store.load_chain(), "source-plan-run")
+    export = source.append(
+        finding_handoff_export_payload(
+            source_replay,
+            approved_plan_commit="b" * 40,
+            approval_review_record_id=review.record_id,
+            target_task_path="task.md",
+            target_task_bytes=Path(state.task_file).read_bytes(),
+        ),
+        logical_id="finding-handoff-export-bbbbbbbbbbbb",
+        idempotency_key="finding-handoff-export:" + "b" * 40,
+        fingerprint_sha256="b" * 64,
+    )
+    state = replace(
+        state,
+        finding_handoff_source_run_id="source-plan-run",
+        finding_handoff_export_record_id=export.record_id,
+        work_units=tuple(
+            replace(unit, open_findings=("C-01",))
+            if unit.work_unit_id == state.current_work_unit_id else unit
+            for unit in state.work_units
+        ),
+    )
+    source_replay = replay_artifacts(source.store.load_chain(), "source-plan-run")
+    local = ArtifactBridge(ArtifactStore(repository, state.run_id))
+    local.append(
+        TaskPayload("feature/resume", ("src/resume.py",), "a" * 64),
+        logical_id="task-contract",
+        idempotency_key="task-contract",
+        fingerprint_sha256="a" * 64,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    imported = local.append(
+        finding_handoff_import_payload(
+            source_replay,
+            export,
+            target_run_id=state.run_id,
+            target_task_bytes=Path(state.task_file).read_bytes(),
+        ),
+        logical_id="finding-handoff-import",
+        idempotency_key=f"finding-handoff-import:{export.record_id}",
+        fingerprint_sha256="a" * 64,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    local.append(
+        WorkUnitPayload(
+            "1", 1, ("src/resume.py",), ("C-01",), imported.record_id
+        ),
+        logical_id="work-unit-2",
+        idempotency_key="work-unit:2:round:1",
+        fingerprint_sha256="a" * 64,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    return state, source, local, export, imported
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        ("incomplete-mirror", "mirror is incomplete"),
+        ("unbound-import", "unbound finding import"),
+        ("missing-source", "source is no longer valid"),
+        ("missing-export", "source is no longer valid"),
+        ("wrong-record-type", "source is no longer valid"),
+        ("wrong-plan-commit", "source is no longer valid"),
+        ("divergent-import", "differs from its revalidated source"),
+        ("work-unit-binding", "finding import binding differs"),
+        ("status-mirror", "imported finding status differs"),
+    ),
+)
+def test_finding_handoff_resume_rejects_tampered_source_import_or_mirror(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+    message: str,
+) -> None:
+    state, source, local, export, imported = _finding_handoff_resume_fixture(tmp_path)
+    if mutation == "incomplete-mirror":
+        object.__setattr__(state, "finding_handoff_export_record_id", None)
+    elif mutation == "unbound-import":
+        state = replace(
+            state,
+            finding_handoff_source_run_id=None,
+            finding_handoff_export_record_id=None,
+        )
+    elif mutation == "missing-source":
+        state = replace(state, finding_handoff_source_run_id="missing-source-run")
+    elif mutation == "missing-export":
+        state = replace(state, finding_handoff_export_record_id="ar1-" + "f" * 64)
+    elif mutation == "wrong-record-type":
+        state = replace(
+            state,
+            finding_handoff_export_record_id=source.store.load_chain()[0].record_id,
+        )
+    elif mutation == "wrong-plan-commit":
+        state = replace(state, approved_plan_commit="c" * 40)
+    elif mutation == "divergent-import":
+        original = finding_handoff_import_payload
+
+        def divergent_payload(*args, **kwargs):
+            return replace(
+                original(*args, **kwargs), target_task_sha256="e" * 64
+            )
+
+        monkeypatch.setattr(
+            "artifact_bridge.finding_handoff_import_payload", divergent_payload
+        )
+    elif mutation == "work-unit-binding":
+        local.append(
+            WorkUnitPayload("1", 1, ("src/resume.py",), (), None),
+            logical_id="work-unit-2",
+            idempotency_key="work-unit:2:round:1:tampered",
+            fingerprint_sha256="a" * 64,
+            fingerprint_kind=FingerprintKind.CONTRACT,
+        )
+    elif mutation == "status-mirror":
+        state = replace(
+            state,
+            runtime_history={
+                "current": {
+                    "findings": [{"finding_id": "C-01", "status": "closed"}]
+                },
+                "archive": [],
+            },
+        )
+
+    with pytest.raises(ArtifactResumeError, match=message):
+        resolve_resume_state(tmp_path, state)
+
+
+def test_finding_handoff_resume_rejects_duplicate_import_before_mirror_use(
+    tmp_path: Path,
+) -> None:
+    state, _source, local, _export, imported = _finding_handoff_resume_fixture(tmp_path)
+    payload = imported.payload
+    assert isinstance(payload, FindingHandoffImportPayload)
+    local.append(
+        payload,
+        logical_id="finding-handoff-import-duplicate",
+        idempotency_key="finding-handoff-import:duplicate",
+        fingerprint_sha256="a" * 64,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+
+    with pytest.raises(ArtifactResumeError) as error:
+        resolve_resume_state(tmp_path, state)
+
+    assert error.value.code is ReplayDiagnosticCode.RECORD_DUPLICATE
 
 
 def test_legacy_state_without_records_is_rejected_without_store_access(

@@ -6,6 +6,7 @@ import subprocess
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import orchestrator
 import pytest
@@ -19,13 +20,23 @@ from agent_runtime import (
 from audit_trail import ValidationAuditEvent
 from artifact_models import (
     AgentResultPayload,
+    BindingPayload,
+    CommandSpec,
     CorrectionWorkUnitPayload,
     FindingTransitionPayload,
+    FindingSeverity,
     PlanPayload,
+    ProviderAttemptPayload,
+    ProviderInputComponentPayload,
+    ProviderInputMeasurementPayload,
     QuotaPausePayload,
     RecordType,
     ReviewPayload,
     Role,
+    SliceSpec,
+    ValidationAttestationPayload,
+    ValidationResult,
+    WorkUnitPayload,
 )
 from artifact_store import ArtifactStore
 from artifact_migration import ArtifactResumeError
@@ -103,7 +114,13 @@ from native_review_request import (
     build_native_review_request,
 )
 from artifact_replay import replay_artifacts, replay_findings
-from artifact_bridge import ArtifactBridgeError, finding_payload
+from artifact_bridge import (
+    ArtifactBridge,
+    ArtifactBridgeError,
+    finding_handoff_export_payload,
+    finding_payload,
+)
+from plan_handoff import render_implementation_task
 from native_codex_contract import (
     NativeCodexContext,
     NativeCodexRequestKind,
@@ -1119,7 +1136,7 @@ def test_native_review_record_ahead_recovery_reuses_bound_json_without_provider(
 
 
 def test_native_codex_record_ahead_recovery_reuses_raw_json_without_provider(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository = _repository(tmp_path, "feature/native-codex-record-ahead")
     task = repository / "task.md"
@@ -1175,6 +1192,7 @@ def test_native_codex_record_ahead_recovery_reuses_raw_json_without_provider(
         request_kind=NativeCodexRequestKind.IMPLEMENTATION,
         contract=contract,
     )
+    large_evidence = "Implement the bound recovery request. " * 1_000
     bundle = build_native_codex_request(
         NativeCodexRequestSpec(
             context=native_context,
@@ -1185,7 +1203,7 @@ def test_native_codex_record_ahead_recovery_reuses_raw_json_without_provider(
             work_context="Use the bound native contract.",
             evidence=(
                 NativeCodexEvidenceInput(
-                    "workflow-prompt", "orchestrator_instruction", "Implement."
+                    "workflow-prompt", "orchestrator_instruction", large_evidence
                 ),
             ),
         )
@@ -1215,16 +1233,63 @@ def test_native_codex_record_ahead_recovery_reuses_raw_json_without_provider(
         "",
         native_request=bundle,
     )
+    driver._persist_native_agent_request_bundle(invocation)
     raw_path = driver._native_codex_response_path(invocation)
     driver._write_native_codex_raw_response(raw_path, canonical)
+    rebuilt_bundle = build_native_codex_request(
+        NativeCodexRequestSpec(
+            context=replace(native_context, current_fingerprint="d" * 64),
+            target_branch=state.branch,
+            base_commit=head,
+            authorized_paths=("src/runtime.py",),
+            assignment="Implement runtime.",
+            work_context="Use the bound native contract.",
+            evidence=(
+                NativeCodexEvidenceInput(
+                    "workflow-prompt", "orchestrator_instruction", large_evidence
+                ),
+            ),
+        )
+    )
+    rebuilt_invocation = replace(invocation, native_request=rebuilt_bundle)
+    with pytest.raises(
+        WorkflowExecutionError,
+        match="request differs from its persisted recovery artifact",
+    ):
+        driver._persist_native_agent_request_bundle(rebuilt_invocation)
+    bridge = driver._artifact_bridge
+    assert bridge is not None
+    bridge.append(
+        ProviderAttemptPayload(
+            provider=Role.CODEX,
+            role=Role.CODEX,
+            operation=WorkflowStep.CODEX_IMPLEMENTATION.value,
+            work_unit_id=str(state.current_work_unit_id),
+            logical_operation_id="provider-operation-" + "1" * 64,
+            binding_fingerprint="c" * 64,
+            measurement_record_id="ar1-" + "2" * 64,
+            input_digest="3" * 64,
+            attempt_number=1,
+            phase="started",
+            started_at="2026-08-28T12:00:00+00:00",
+            ended_at=None,
+            duration_seconds=None,
+            failure_kind=None,
+            usage=None,
+        ),
+        logical_id="provider-operation-legacy-recovery-1",
+        idempotency_key="provider-attempt:legacy-recovery:started",
+        fingerprint_sha256="c" * 64,
+    )
 
     raw_ahead_recovered = driver.recover_pending_native_codex(
-        invocation,
+        rebuilt_invocation,
         contract,
         WorkflowHistory(state.current_work_unit_id),
     )
+    monkeypatch.setattr(driver, "_artifact_fingerprint", lambda: "f" * 64)
     recovered = driver.recover_pending_native_codex(
-        invocation,
+        rebuilt_invocation,
         contract,
         WorkflowHistory(state.current_work_unit_id),
     )
@@ -1239,13 +1304,59 @@ def test_native_codex_record_ahead_recovery_reuses_raw_json_without_provider(
     assert len(results) == 1
     assert results[0].payload.request_id == bundle.bound_context.request_id
 
+    request_path = driver._native_agent_request_path(invocation)
+    persisted_request = request_path.read_text(encoding="utf-8")
+    tampered_request = json.loads(persisted_request)
+    assert tampered_request["evidence_assets"]
+    tampered_request["evidence_assets"][0]["content"] += "tampered"
+    request_path.write_text(
+        json.dumps(
+            tampered_request,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(
+        WorkflowExecutionError,
+        match="evidence asset.*differs from content",
+    ):
+        driver.recover_pending_native_codex(
+            rebuilt_invocation,
+            contract,
+            WorkflowHistory(state.current_work_unit_id),
+        )
+    request_path.write_text(persisted_request, encoding="utf-8")
+    request_path.unlink()
+    legacy_rebuilt_bundle = build_native_codex_request(
+        NativeCodexRequestSpec(
+            context=replace(native_context, current_fingerprint="e" * 64),
+            target_branch=state.branch,
+            base_commit=head,
+            authorized_paths=("src/runtime.py",),
+            assignment="Implement runtime.",
+            work_context="Use the bound native contract.",
+            evidence=(
+                NativeCodexEvidenceInput(
+                    "workflow-prompt", "orchestrator_instruction", large_evidence
+                ),
+            ),
+        )
+    )
+    assert driver.recover_pending_native_codex(
+        replace(invocation, native_request=legacy_rebuilt_bundle),
+        contract,
+        WorkflowHistory(state.current_work_unit_id),
+    ) == output
+
     raw_path.write_text("{}", encoding="utf-8")
     with pytest.raises(
         WorkflowExecutionError,
         match="raw response digest differs",
     ):
         driver.recover_pending_native_codex(
-            invocation,
+            rebuilt_invocation,
             contract,
             WorkflowHistory(state.current_work_unit_id),
         )
@@ -1815,6 +1926,70 @@ def test_native_codex_record_ahead_recovery_completes_finding_responses(
     driver._write_native_codex_raw_response(raw_path, canonical)
     bridge = driver._artifact_bridge
     assert bridge is not None
+    opening_record = bridge.append(
+        finding_payload(
+            finding,
+            actor=AgentRole.CLAUDE,
+            action="opened",
+            rationale="Opened for recovery coverage.",
+            work_unit_id=state.current_work_unit_id,
+        ),
+        logical_id="finding-C-01",
+        idempotency_key="finding:C-01:opened:recovery-test",
+        fingerprint_sha256="c" * 64,
+    )
+    measurement_record = bridge.append(
+        ProviderInputMeasurementPayload(
+            provider=Role.CODEX,
+            role=Role.CODEX,
+            operation=WorkflowStep.CODEX_CORRECTION.value,
+            work_unit_id=str(state.current_work_unit_id),
+            transition_fingerprint="c" * 64,
+            relevant_record_head="8" * 64,
+            input_digest="6" * 64,
+            policy_digest="7" * 64,
+            components=(ProviderInputComponentPayload("stdin_prompt", 1, 1),),
+            total_chars=1,
+            total_bytes=1,
+            safety_limit_chars=2,
+            safety_limit_bytes=2,
+            technical_limit_chars=None,
+            technical_limit_bytes=None,
+            technical_limit_source=None,
+            effective_limit_chars=2,
+            effective_limit_bytes=2,
+            allowed=True,
+            violated_dimensions=(),
+            char_overage=0,
+            byte_overage=0,
+            largest_component="stdin_prompt",
+        ),
+        logical_id="provider-input-finding-recovery",
+        idempotency_key="provider-input:finding-recovery",
+        fingerprint_sha256="c" * 64,
+    )
+    bridge.append(
+        ProviderAttemptPayload(
+            provider=Role.CODEX,
+            role=Role.CODEX,
+            operation=WorkflowStep.CODEX_CORRECTION.value,
+            work_unit_id=str(state.current_work_unit_id),
+            logical_operation_id="provider-operation-" + "4" * 64,
+            binding_fingerprint="c" * 64,
+            measurement_record_id=measurement_record.record_id,
+            input_digest="6" * 64,
+            attempt_number=1,
+            phase="started",
+            started_at="2026-08-28T12:00:00+00:00",
+            ended_at=None,
+            duration_seconds=None,
+            failure_kind=None,
+            usage=None,
+        ),
+        logical_id="provider-operation-finding-recovery-1",
+        idempotency_key="provider-attempt:finding-recovery:started",
+        fingerprint_sha256="c" * 64,
+    )
     original_append = type(bridge).append
     crash_once = {"pending": True}
 
@@ -1849,9 +2024,98 @@ def test_native_codex_record_ahead_recovery_completes_finding_responses(
     )
 
     assert recovered == output
+    (repository / "README.md").write_text(
+        "recovered tree now has a different fingerprint\n", encoding="utf-8"
+    )
+    driver.persist_native_codex_contract(recovered, (finding,))
+    after_engine_persistence = ArtifactStore(repository, state.run_id).load_chain()
+    assert sum(
+        isinstance(item.payload, AgentResultPayload)
+        for item in after_engine_persistence
+    ) == 1
+    replayed_finding = replay_findings(
+        replay_artifacts(
+            ArtifactStore(repository, state.run_id).load_chain(), state.run_id
+        )
+    )[0]
+    canonical_agent_result = next(
+        item
+        for item in after_engine_persistence
+        if isinstance(item.payload, AgentResultPayload)
+    )
+    with pytest.raises(
+        WorkflowExecutionError,
+        match="native agent recovery has divergent agent-result records",
+    ):
+        driver._canonical_native_agent_result(
+            (
+                canonical_agent_result,
+                replace(
+                    canonical_agent_result,
+                    payload=replace(
+                        canonical_agent_result.payload,
+                        outcome="not_ready",
+                    ),
+                ),
+            ),
+            canonical_agent_result.logical_id,
+        )
+    duplicate_fingerprint = "d" * 64
+    duplicate_binding_digest = hashlib.sha256(
+        (
+            f"{duplicate_fingerprint}:{output.request_id}:"
+            f"{output.response_sha256}"
+        ).encode("utf-8")
+    ).hexdigest()
+    bridge.append(
+        canonical_agent_result.payload,
+        logical_id=canonical_agent_result.logical_id,
+        idempotency_key=(
+            f"native:{canonical_agent_result.logical_id}:"
+            f"{duplicate_binding_digest}"
+        ),
+        fingerprint_sha256=duplicate_fingerprint,
+    )
+    resumed_context = replace(
+        native_context,
+        previous_findings=(replayed_finding,),
+    )
+    resumed_bundle = build_native_codex_request(
+        NativeCodexRequestSpec(
+            context=resumed_context,
+            target_branch=state.branch,
+            base_commit=head,
+            authorized_paths=("src/runtime.py",),
+            assignment="Correct the open finding.",
+            work_context="Use the bound native contract.",
+            evidence=(
+                NativeCodexEvidenceInput(
+                    "workflow-prompt", "orchestrator_instruction", "Correct."
+                ),
+            ),
+        )
+    )
+    assert resumed_bundle.bound_context.request_id == bundle.bound_context.request_id
+    recovered_after_response = driver.recover_pending_native_codex(
+        replace(
+            invocation,
+            native_request=resumed_bundle,
+            previous_findings=(replayed_finding,),
+        ),
+        contract,
+        WorkflowHistory(
+            state.current_work_unit_id,
+            findings=(replayed_finding,),
+        ),
+    )
+
+    assert recovered_after_response.result.findings == (replayed_finding,)
     replay = replay_artifacts(
         ArtifactStore(repository, state.run_id).load_chain(), state.run_id
     )
+    assert sum(
+        isinstance(item.payload, AgentResultPayload) for item in replay.records
+    ) == 2
     response = output.result.findings[0].responses[-1]
     durable_responses = tuple(
         (
@@ -3667,6 +3931,312 @@ def test_completed_plan_resume_retries_failed_handoff_without_agents(
     assert tuple(agent_steps) == steps_after_commit
     assert handoff_calls == 2
     assert task.with_name("resume-implement.md").is_file()
+
+
+def test_finding_handoff_import_precedes_baseline_and_binds_first_work_unit(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/finding-import")
+    source = ArtifactBridge(ArtifactStore(repository, "source-plan-run"))
+    source.append(
+        PlanPayload(
+            "docs/internal/plan.md",
+            "b" * 40,
+            (SliceSpec("1", "implementation", ("src/core.py",)),),
+        ),
+        logical_id="approved-plan",
+        idempotency_key="approved-plan",
+        fingerprint_sha256="a" * 64,
+    )
+    source.append(
+        FindingTransitionPayload(
+            "C-01", Role.CLAUDE, Role.CLAUDE, "opened",
+            FindingSeverity.OBSERVATION, "open", "Carry it.",
+            "plan-review", "Carry the finding.", "It remains visible.", "plan", 1,
+        ),
+        logical_id="finding-C-01",
+        idempotency_key="finding-C-01",
+        fingerprint_sha256="a" * 64,
+    )
+    review = source.append(
+        ReviewPayload(
+            Role.CLAUDE, "plan-review", "approved", ("C-01",), None,
+            "native-claude-review-v2", "native-review-request-" + "c" * 64,
+            "d" * 64,
+        ),
+        logical_id="plan-review",
+        idempotency_key="plan-review",
+        fingerprint_sha256="a" * 64,
+    )
+    export_id = orchestrator.stable_record_id(
+        "source-plan-run", RecordType.FINDING_HANDOFF_EXPORT,
+        "finding-handoff-export-bbbbbbbbbbbb", 1,
+    )
+    task = repository / "inbox" / "implement.md"
+    task.parent.mkdir()
+    task_text = render_implementation_task(
+        work_plan_path="docs/internal/plan.md",
+        target_branch="feature/finding-import",
+        approved_plan_commit="b" * 40,
+        slices=(PlannedSlice(1, "implementation", ("src/core.py",)),),
+        finding_handoff=("source-plan-run", export_id),
+    )
+    task.write_text(task_text, encoding="utf-8")
+    source_replay = replay_artifacts(source.store.load_chain(), "source-plan-run")
+    export = source.append(
+        finding_handoff_export_payload(
+            source_replay,
+            approved_plan_commit="b" * 40,
+            approval_review_record_id=review.record_id,
+            target_task_path="inbox/implement.md",
+            target_task_bytes=task.read_bytes(),
+        ),
+        logical_id="finding-handoff-export-bbbbbbbbbbbb",
+        idempotency_key="finding-handoff-export:" + "b" * 40,
+        fingerprint_sha256="a" * 64,
+    )
+    assert export.record_id == export_id
+    contract = parse_task_contract(task_text)
+    state = init_workflow_state(
+        run_id="target-implement-run",
+        task_file=str(task),
+        branch="feature/finding-import",
+        branch_base=_git(repository, "rev-parse", "HEAD"),
+        slice_count=1,
+        task_digest=contract.digest,
+        execution_mode="IMPLEMENT",
+        task_scope_patterns=contract.scope_patterns,
+        work_plan_path=contract.work_plan_path,
+        approved_plan_commit=contract.approved_plan_commit,
+        finding_handoff_source_run_id=contract.finding_handoff_source_run_id,
+        finding_handoff_export_record_id=contract.finding_handoff_export_record_id,
+        target_branch=contract.target_branch,
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+    ).bind_slice_plan(
+        contract.approved_slices,
+        first_start_commit=_git(repository, "rev-parse", "HEAD"),
+    ).complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    )
+
+    imported_state = orchestrator._initialize_finding_handoff(
+        repository, state, contract, task.read_bytes()
+    ).bind_current_slice_git_boundary(
+        start_commit=_git(repository, "rev-parse", "HEAD"),
+        scope_paths=contract.approved_slices[0].scope_paths,
+        start_fingerprint="e" * 64,
+    )
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    driver.bind_work_unit(imported_state)
+    local = ArtifactStore(repository, imported_state.run_id).load_chain()
+    imports = tuple(
+        record for record in local
+        if record.record_type is RecordType.FINDING_HANDOFF_IMPORT
+    )
+    unit = next(record.payload for record in local if isinstance(record.payload, WorkUnitPayload))
+
+    assert len(imports) == 1
+    assert imported_state.current_work_unit.open_findings == ("C-01",)
+    assert replay_findings(replay_artifacts(local, imported_state.run_id))[0].finding_id == "C-01"
+    assert unit.finding_import_record_id == imports[0].record_id
+    assert unit.open_finding_ids == ("C-01",)
+    assert orchestrator.resolve_resume_state(repository, imported_state).record_head_id
+
+
+def _finding_export_driver(
+    tmp_path: Path, *, review_verdict: str = "approved", bind_commit: bool = True
+):
+    repository = _repository(tmp_path, "feature/finding-export")
+    plan = repository / "docs" / "internal" / "plan.md"
+    plan.parent.mkdir(parents=True)
+    plan.write_text(
+        "# Plan\n\n### Slice 1 - implementation\n\n"
+        "**Exakter Änderungspfad**\n\n- `src/core.py`\n\n"
+        "#### Akzeptanz" "kriterien\n\n- The behavior is covered.\n",
+        encoding="utf-8",
+    )
+    task = repository / "inbox" / "plan.md"
+    task.parent.mkdir()
+    task.write_text("plan task", encoding="utf-8")
+    state = init_workflow_state(
+        run_id="source-plan-run",
+        task_file=str(task),
+        branch="feature/finding-export",
+        branch_base=_git(repository, "rev-parse", "HEAD"),
+        slice_count=1,
+        task_digest="a" * 64,
+        execution_mode="PLAN_ONLY",
+        task_scope_patterns=("docs/internal/plan.md",),
+        work_plan_path="docs/internal/plan.md",
+        target_branch="feature/finding-export",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+    )
+    bridge = ArtifactBridge(ArtifactStore(repository, state.run_id))
+    bridge.append(
+        PlanPayload(
+            "docs/internal/plan.md",
+            "b" * 40,
+            (SliceSpec("1", "implementation", ("src/core.py",)),),
+        ),
+        logical_id="approved-plan",
+        idempotency_key="approved-plan",
+        fingerprint_sha256="b" * 64,
+    )
+    bridge.append(
+        FindingTransitionPayload(
+            "C-01", Role.CLAUDE, Role.CLAUDE, "opened",
+            FindingSeverity.OBSERVATION, "open", "Carry it.", "plan-review",
+            "Carry it.", "It stays visible.", "plan", 1,
+        ),
+        logical_id="finding-C-01",
+        idempotency_key="finding-C-01",
+        fingerprint_sha256="b" * 64,
+    )
+    review = bridge.append(
+        ReviewPayload(
+            Role.CLAUDE, "plan-review", review_verdict, ("C-01",), None,
+            "native-claude-review-v2", "native-review-request-" + "c" * 64,
+            "d" * 64,
+        ),
+        logical_id="plan-review",
+        idempotency_key=f"plan-review:{review_verdict}",
+        fingerprint_sha256="b" * 64,
+    )
+    if bind_commit:
+        attestation = bridge.append(
+            ValidationAttestationPayload(
+                (
+                    ValidationResult(
+                        CommandSpec("pytest", ("python3", "-m", "pytest")),
+                        "pass", 0, "e" * 64,
+                    ),
+                ),
+                Role.ORCHESTRATOR,
+            ),
+            logical_id="validation-plan",
+            idempotency_key="validation-plan",
+            fingerprint_sha256="b" * 64,
+        )
+        bridge.append(
+            BindingPayload(
+                "commit", "b" * 40, attestation.record_id, (review.record_id,)
+            ),
+            logical_id="commit-binding",
+            idempotency_key="commit-binding",
+            fingerprint_sha256="b" * 64,
+        )
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    driver.active_state = state
+    driver._artifact_bridge = bridge
+    return repository, plan, task, driver, bridge
+
+
+@pytest.mark.parametrize(
+    ("review_verdict", "bind_commit", "message"),
+    (
+        ("approved", False, "reviewed plan commit binding"),
+        ("denied", True, "positive bound plan review"),
+    ),
+)
+def test_prepare_finding_handoff_rejects_missing_or_nonpositive_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    review_verdict: str,
+    bind_commit: bool,
+    message: str,
+) -> None:
+    _repository, _plan, task, driver, bridge = _finding_export_driver(
+        tmp_path, review_verdict=review_verdict, bind_commit=bind_commit
+    )
+    if review_verdict == "denied":
+        chain = bridge.store.load_chain()
+        monkeypatch.setattr(
+            orchestrator,
+            "replay_artifacts",
+            lambda _chain, run_id: SimpleNamespace(
+                records=chain, expected_run_id=run_id, head_record_id=chain[-1].record_id
+            ),
+        )
+
+    with pytest.raises(WorkflowExecutionError, match=message):
+        driver.prepare_finding_handoff(
+            plan_task_path=task,
+            work_plan_path="docs/internal/plan.md",
+            target_branch="feature/finding-export",
+            approved_plan_commit="b" * 40,
+        )
+
+
+def test_prepare_finding_handoff_replays_post_export_crash_idempotently(
+    tmp_path: Path,
+) -> None:
+    _repository, _plan, task, driver, bridge = _finding_export_driver(tmp_path)
+    arguments = {
+        "plan_task_path": task,
+        "work_plan_path": "docs/internal/plan.md",
+        "target_branch": "feature/finding-export",
+        "approved_plan_commit": "b" * 40,
+    }
+
+    first = driver.prepare_finding_handoff(**arguments)
+    second = driver.prepare_finding_handoff(**arguments)
+    exports = tuple(
+        record for record in bridge.store.load_chain()
+        if record.record_type is RecordType.FINDING_HANDOFF_EXPORT
+    )
+
+    assert second == first
+    assert len(exports) == 1
+    assert first == ("source-plan-run", exports[0].record_id)
+
+
+def test_prepare_finding_handoff_rejects_changed_task_after_export_crash(
+    tmp_path: Path,
+) -> None:
+    _repository, plan, task, driver, _bridge = _finding_export_driver(tmp_path)
+    arguments = {
+        "plan_task_path": task,
+        "work_plan_path": "docs/internal/plan.md",
+        "target_branch": "feature/finding-export",
+        "approved_plan_commit": "b" * 40,
+    }
+    driver.prepare_finding_handoff(**arguments)
+    plan.write_text(
+        plan.read_text(encoding="utf-8").replace("implementation", "changed summary"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowExecutionError, match="differs from the prepared task"):
+        driver.prepare_finding_handoff(**arguments)
+
+
+def test_prepare_finding_handoff_rejects_unstable_export_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _repository, _plan, task, driver, _bridge = _finding_export_driver(tmp_path)
+    monkeypatch.setattr(orchestrator, "stable_record_id", lambda *_args: "ar1-" + "f" * 64)
+
+    with pytest.raises(WorkflowExecutionError, match="identity is unstable"):
+        driver.prepare_finding_handoff(
+            plan_task_path=task,
+            work_plan_path="docs/internal/plan.md",
+            target_branch="feature/finding-export",
+            approved_plan_commit="b" * 40,
+        )
 
 
 def test_explicit_resume_of_watch_origin_runs_terminal_workflow_once_then_finalizes_queue(

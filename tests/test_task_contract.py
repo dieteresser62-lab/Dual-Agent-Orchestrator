@@ -124,6 +124,37 @@ SLICE_PLAN: 1 | App umsetzen | src/app.py, docs/internal/slice-plan-01-app.md
     )
 
 
+def test_approved_plan_contract_accepts_closed_finding_handoff_reference() -> None:
+    text = """ORCHESTRATOR_MODE: IMPLEMENT
+WORK_PLAN_PATH: docs/internal/plan.md
+APPROVED_PLAN_COMMIT: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+FINDING_HANDOFF_SOURCE_RUN: plan-run
+FINDING_HANDOFF_EXPORT: ar1-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+TARGET_BRANCH: feature/x
+TASK_SCOPE: src/x.py
+SLICE_PLAN: 1 | implementation | src/x.py
+"""
+
+    contract = parse_task_contract(text)
+
+    assert contract.finding_handoff_source_run_id == "plan-run"
+    assert contract.finding_handoff_export_record_id == "ar1-" + "b" * 64
+
+
+def test_finding_handoff_reference_is_all_or_nothing() -> None:
+    text = """ORCHESTRATOR_MODE: IMPLEMENT
+WORK_PLAN_PATH: docs/internal/plan.md
+APPROVED_PLAN_COMMIT: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+FINDING_HANDOFF_SOURCE_RUN: plan-run
+TARGET_BRANCH: feature/x
+TASK_SCOPE: src/x.py
+SLICE_PLAN: 1 | implementation | src/x.py
+"""
+
+    with pytest.raises(TaskContractError, match="requires both"):
+        parse_task_contract(text)
+
+
 @pytest.mark.parametrize(
     ("text", "message"),
     (

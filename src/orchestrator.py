@@ -11,6 +11,7 @@ import shlex
 import time
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
+from typing import get_args, get_type_hints
 
 from agent_adapters import (
     AgentAdapter,
@@ -34,9 +35,10 @@ from native_codex_contract import (
 )
 from native_codex_request import validate_native_codex_provider_response
 from artifact_bridge import (
-    ArtifactBridge, agent_result_payload, attestation_payload, finding_payload,
+    ArtifactBridge, ArtifactBridgeError, agent_result_payload, attestation_payload, finding_payload,
     plan_payload, review_payload, validation_request_payload,
     provider_input_measurement_payload,
+    finding_handoff_export_payload, finding_handoff_import_payload,
 )
 from artifact_migration import ArtifactResumeError, resolve_resume_state
 from artifact_models import (
@@ -47,7 +49,10 @@ from artifact_models import (
     WorkUnitPayload,
     WorkflowCompletionPayload,
     ProviderInputMeasurementPayload, canonical_json,
-    ProviderUsagePayload,
+    ProviderAttemptPayload, ProviderUsagePayload,
+    FindingHandoffExportPayload, FindingHandoffImportPayload,
+    FindingTransitionPayload,
+    RecordType, stable_record_id,
 )
 from artifact_store import ArtifactStore
 from artifact_replay import ArtifactReplayError, replay_artifacts, replay_findings
@@ -103,6 +108,8 @@ from git_service import (
 from plan_handoff import (
     PlanHandoffError,
     extract_implementation_slices,
+    implementation_task_path,
+    render_implementation_task,
     write_implementation_handoff,
 )
 from repo_changes import (
@@ -389,6 +396,22 @@ class ProductionWorkflowDriver(WorkflowDriver):
             )
         unit = state.current_work_unit
         if unit.kind is not WorkUnitKind.PLAN and state.current_slice.scope_paths:
+            chain = bridge.store.load_chain()
+            finding_import = next(
+                (
+                    record for record in chain
+                    if isinstance(record.payload, FindingHandoffImportPayload)
+                ),
+                None,
+            )
+            first_implementation_unit_id = next(
+                item.work_unit_id for item in state.work_units
+                if item.kind is not WorkUnitKind.PLAN
+            )
+            bound_import = (
+                finding_import
+                if unit.work_unit_id == first_implementation_unit_id else None
+            )
             work_unit_payload = (
                 CorrectionWorkUnitPayload(
                     slice_id=str(unit.slice_id),
@@ -401,6 +424,13 @@ class ProductionWorkflowDriver(WorkflowDriver):
                     slice_id=str(unit.slice_id),
                     round_number=unit.round_number,
                     paths=state.current_slice.scope_paths,
+                    open_finding_ids=(
+                        tuple(sorted(unit.open_findings))
+                        if bound_import is not None else ()
+                    ),
+                    finding_import_record_id=(
+                        bound_import.record_id if bound_import is not None else None
+                    ),
                 )
             )
             bridge.append(
@@ -655,6 +685,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
             raise WorkflowExecutionError(
                 "configured Codex adapter is not the native result transport"
             )
+        self._persist_native_agent_request_bundle(invocation)
         raw_path = self._native_codex_response_path(invocation)
         output = run_native_codex_agent_checked(
                 adapter=native_adapter,
@@ -824,6 +855,140 @@ class ProductionWorkflowDriver(WorkflowDriver):
             )
         )
 
+    def _native_agent_request_path(self, invocation: object) -> Path:
+        state = self.active_state
+        if state is None:
+            raise WorkflowExecutionError("native agent request has no active state")
+        return (
+            self.root
+            / ".orchestrator"
+            / "artifacts"
+            / state.run_id
+            / "native-agent-requests"
+            / (
+                f"work-unit-{invocation.work_unit_id:04d}-"
+                f"{invocation.step.value}-round-{invocation.round_number:04d}.json"
+            )
+        )
+
+    @staticmethod
+    def _native_agent_request_bundle_json(bundle: object) -> str:
+        return canonical_json(
+            {
+                "schema_version": "native-agent-request-bundle-v1",
+                "canonical_request": bundle.canonical_json,
+                "provider_response_schema": bundle.provider_response_schema_json,
+                "evidence_assets": [
+                    {
+                        "path": item.path,
+                        "sha256": item.sha256,
+                        "byte_count": item.byte_count,
+                        "content": item.content,
+                    }
+                    for item in bundle.evidence_assets
+                ],
+            }
+        ).decode("utf-8")
+
+    def _persist_native_agent_request_bundle(
+        self, invocation: object
+    ) -> None:
+        bundle = invocation.native_request
+        if bundle is None:
+            raise WorkflowExecutionError("native agent invocation has no request bundle")
+        path = self._native_agent_request_path(invocation)
+        content = self._native_agent_request_bundle_json(bundle)
+        if path.exists():
+            if not path.is_file() or path.read_text(encoding="utf-8") != content:
+                raise WorkflowExecutionError(
+                    "native agent request differs from its persisted recovery artifact"
+                )
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with path.open("x", encoding="utf-8", newline="") as stream:
+                stream.write(content)
+        except FileExistsError:
+            if not path.is_file() or path.read_text(encoding="utf-8") != content:
+                raise WorkflowExecutionError(
+                    "native agent request differs from its persisted recovery artifact"
+                )
+        if path.read_text(encoding="utf-8") != content:
+            raise WorkflowExecutionError(
+                "native agent request recovery artifact verification failed"
+            )
+
+    def _load_native_agent_request_bundle(
+        self,
+        invocation: object,
+        rebuilt: object,
+    ) -> object | None:
+        path = self._native_agent_request_path(invocation)
+        if not path.is_file():
+            return None
+        raw = path.read_text(encoding="utf-8")
+        try:
+            document = json.loads(raw)
+            if (
+                not isinstance(document, dict)
+                or set(document)
+                != {
+                    "schema_version",
+                    "canonical_request",
+                    "provider_response_schema",
+                    "evidence_assets",
+                }
+                or document["schema_version"] != "native-agent-request-bundle-v1"
+                or canonical_json(document).decode("utf-8") != raw
+                or not isinstance(document["canonical_request"], str)
+                or not isinstance(document["provider_response_schema"], str)
+                or not isinstance(document["evidence_assets"], list)
+            ):
+                raise ValueError("native agent request recovery artifact is invalid")
+            request_document = json.loads(document["canonical_request"])
+            if not isinstance(request_document, dict):
+                raise ValueError("persisted native agent request is not an object")
+            request_id = request_document.get("request_id")
+            fingerprint = request_document.get("current_fingerprint")
+            if (
+                not isinstance(request_id, str)
+                or not isinstance(fingerprint, str)
+            ):
+                raise ValueError("persisted native agent request binding is invalid")
+            asset_annotation = get_type_hints(type(rebuilt))["evidence_assets"]
+            asset_type = get_args(asset_annotation)[0]
+            assets = tuple(
+                asset_type(
+                    path=item["path"],
+                    sha256=item["sha256"],
+                    byte_count=item["byte_count"],
+                    content=item["content"],
+                )
+                for item in document["evidence_assets"]
+                if isinstance(item, dict)
+                and set(item) == {"path", "sha256", "byte_count", "content"}
+            )
+            if len(assets) != len(document["evidence_assets"]):
+                raise ValueError("persisted native agent evidence assets are invalid")
+            context = replace(
+                rebuilt.bound_context.context,
+                current_fingerprint=fingerprint,
+            )
+            return type(rebuilt)(
+                canonical_json=document["canonical_request"],
+                bound_context=type(rebuilt.bound_context)(
+                    context=context,
+                    request_id=request_id,
+                    request_digest=request_id.rsplit("-", 1)[-1],
+                ),
+                provider_response_schema_json=document["provider_response_schema"],
+                evidence_assets=assets,
+            )
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise WorkflowExecutionError(
+                f"native agent request recovery artifact no longer validates: {exc}"
+            ) from exc
+
     @staticmethod
     def _write_native_codex_raw_response(path: Path, content: str) -> None:
         """Create or verify one immutable raw response artifact."""
@@ -931,6 +1096,45 @@ class ProductionWorkflowDriver(WorkflowDriver):
             raise WorkflowExecutionError("review packet cache verification failed")
         return target
 
+    @staticmethod
+    def _canonical_native_agent_result(
+        candidates: tuple[ArtifactRecord, ...],
+        logical: str,
+    ) -> ArtifactRecord | None:
+        """Return one durable Codex fact, tolerating only exact legacy duplicates."""
+        if not candidates:
+            return None
+        canonical = candidates[0]
+        assert isinstance(canonical.payload, AgentResultPayload)
+        for record in candidates:
+            payload = record.payload
+            if (
+                not isinstance(payload, AgentResultPayload)
+                or payload != canonical.payload
+                or record.logical_id != logical
+            ):
+                raise WorkflowExecutionError(
+                    "native agent recovery has divergent agent-result records"
+                )
+            binding_digest = hashlib.sha256(
+                (
+                    f"{record.fingerprint.sha256}:{payload.request_id}:"
+                    f"{payload.response_sha256}"
+                ).encode("utf-8")
+            ).hexdigest()
+            if record.idempotency_key != f"native:{logical}:{binding_digest}":
+                raise WorkflowExecutionError(
+                    "native agent recovery result idempotency binding differs"
+                )
+        if len(candidates) > 1:
+            logger.warning(
+                "Native agent recovery found %s semantically identical result "
+                "records; retaining the earliest durable binding for %s.",
+                len(candidates),
+                logical,
+            )
+        return canonical
+
     def recover_pending_native_codex(
         self,
         invocation: CodexInvocation,
@@ -957,19 +1161,17 @@ class ProductionWorkflowDriver(WorkflowDriver):
             f"agent-{invocation.work_unit_id}-{invocation.step.value}-"
             f"{invocation.round_number}"
         )
+        chain = bridge.store.load_chain()
         candidates = tuple(
             item
-            for item in bridge.store.load_chain()
+            for item in chain
             if isinstance(item.payload, AgentResultPayload)
             and item.logical_id == logical
         )
-        if len(candidates) > 1:
-            raise WorkflowExecutionError(
-                "native Codex recovery has multiple agent-result records"
-            )
+        candidate = self._canonical_native_agent_result(candidates, logical)
         raw_path = self._native_codex_response_path(invocation)
         if not raw_path.is_file():
-            if not candidates:
+            if candidate is None:
                 return None
             raise WorkflowExecutionError(
                 "native Codex recovery record has no raw response artifact"
@@ -977,11 +1179,97 @@ class ProductionWorkflowDriver(WorkflowDriver):
         canonical = raw_path.read_text(encoding="utf-8")
         response_sha256 = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
         if (
-            candidates
-            and candidates[0].payload.response_sha256 != response_sha256
+            candidate is not None
+            and candidate.payload.response_sha256 != response_sha256
         ):
             raise WorkflowExecutionError(
                 "native Codex recovery raw response digest differs from its record"
+            )
+        recovery_bundle = self._load_native_agent_request_bundle(invocation, bundle)
+        recovery_bound = (
+            recovery_bundle.bound_context if recovery_bundle is not None else bundle.bound_context
+        )
+        validate_against_bundle = recovery_bundle is not None or candidate is None
+        original_attempt_record = None
+        if candidate is not None and recovery_bound.context.previous_findings:
+            candidate_index = chain.index(candidate)
+            prior_attempts = tuple(
+                item
+                for item in chain[:candidate_index]
+                if isinstance(item.payload, ProviderAttemptPayload)
+                and item.payload.provider is candidate.payload.role
+                and item.payload.work_unit_id == str(invocation.work_unit_id)
+                and item.payload.operation == invocation.step.value
+                and item.payload.phase == "started"
+            )
+            if not prior_attempts:
+                raise WorkflowExecutionError(
+                    "native agent recovery has no durable original request binding"
+                )
+            original_attempt_record = prior_attempts[-1]
+        if (
+            recovery_bundle is None
+            and candidate is not None
+            and candidate.payload.request_id != bundle.bound_context.request_id
+        ):
+            if original_attempt_record is None:
+                candidate_index = chain.index(candidate)
+                prior_attempts = tuple(
+                    item
+                    for item in chain[:candidate_index]
+                    if isinstance(item.payload, ProviderAttemptPayload)
+                    and item.payload.provider is candidate.payload.role
+                    and item.payload.work_unit_id == str(invocation.work_unit_id)
+                    and item.payload.operation == invocation.step.value
+                    and item.payload.phase == "started"
+                )
+                if not prior_attempts:
+                    raise WorkflowExecutionError(
+                        "native agent recovery has no durable original request binding"
+                    )
+                original_attempt_record = prior_attempts[-1]
+            original_request_id = candidate.payload.request_id
+            recovery_bound = type(bundle.bound_context)(
+                context=replace(
+                    bundle.bound_context.context,
+                    current_fingerprint=(
+                        original_attempt_record.payload.binding_fingerprint
+                    ),
+                ),
+                request_id=original_request_id,
+                request_digest=original_request_id.rsplit("-", 1)[-1],
+            )
+            validate_against_bundle = False
+        if original_attempt_record is not None:
+            try:
+                request_replay = replay_artifacts(
+                    chain[: chain.index(original_attempt_record)], state.run_id
+                )
+                request_findings_by_id = {
+                    item.finding_id: item for item in replay_findings(request_replay)
+                }
+            except ArtifactReplayError as exc:
+                raise WorkflowExecutionError(
+                    f"native agent request-time finding replay failed: {exc}"
+                ) from exc
+            offered_ids = tuple(
+                item.finding_id
+                for item in recovery_bound.context.previous_findings
+            )
+            if any(finding_id not in request_findings_by_id for finding_id in offered_ids):
+                raise WorkflowExecutionError(
+                    "native agent request-time finding subset is incomplete"
+                )
+            recovery_bound = type(recovery_bound)(
+                context=replace(
+                    recovery_bound.context,
+                    previous_findings=tuple(
+                        request_findings_by_id[finding_id]
+                        for finding_id in offered_ids
+                    ),
+                ),
+                request_id=recovery_bound.request_id,
+                request_digest=recovery_bound.request_digest,
             )
         try:
             document = json.loads(canonical)
@@ -989,9 +1277,12 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 raise ValueError("native Codex raw response is not an object")
             if canonical_native_codex_json(document) != canonical:
                 raise ValueError("native Codex raw response is not canonical JSON")
-            validate_native_codex_provider_response(document, bundle)
+            if validate_against_bundle:
+                validate_native_codex_provider_response(
+                    document, recovery_bundle or bundle
+                )
             result = parse_bound_native_codex_contract_result(
-                document, bundle.bound_context
+                document, recovery_bound
             )
         except (ValueError, TypeError) as exc:
             raise WorkflowExecutionError(
@@ -1000,10 +1291,10 @@ class ProductionWorkflowDriver(WorkflowDriver):
         output = NativeAgentCodexOutput(
             result=result,
             canonical_json=canonical,
-            request_id=bundle.bound_context.request_id,
+            request_id=recovery_bound.request_id,
             response_sha256=response_sha256,
         )
-        if not candidates:
+        if candidate is None:
             self.persist_native_codex_contract(
                 output, invocation.previous_findings
             )
@@ -1015,26 +1306,24 @@ class ProductionWorkflowDriver(WorkflowDriver):
             )
             self.last_codex_output = canonical
             return output
-        record = candidates[0]
+        record = candidate
         payload = record.payload
-        expected_fingerprint = self._artifact_fingerprint()
         if (
             payload.role is not Role.CODEX
             or payload.work_unit_id != str(invocation.work_unit_id)
             or payload.transport_schema != NATIVE_CODEX_RESULT_TRANSPORT
-            or payload.request_id != bundle.bound_context.request_id
+            or payload.request_id != recovery_bound.request_id
             or payload.response_sha256 != response_sha256
-            or record.fingerprint.sha256 != expected_fingerprint
         ):
             raise WorkflowExecutionError(
-                "native Codex recovery record differs from the rebuilt request"
+                "native Codex recovery record differs from its durable binding"
             )
         expected_payload = agent_result_payload(
             result,
             role=AgentRole.CODEX,
             work_unit_id=invocation.work_unit_id,
             transport_schema=NATIVE_CODEX_RESULT_TRANSPORT,
-            request_id=bundle.bound_context.request_id,
+            request_id=recovery_bound.request_id,
             response_sha256=response_sha256,
         )
         if payload != expected_payload:
@@ -1046,7 +1335,9 @@ class ProductionWorkflowDriver(WorkflowDriver):
         # a crash after AgentResult publication cannot make an incomplete
         # finding-disposition set look fully recovered.
         self.persist_native_codex_contract(
-            output, invocation.previous_findings
+            output,
+            invocation.previous_findings,
+            recovery_fingerprint=record.fingerprint.sha256,
         )
         logger.warning(
             "Recovered native Codex result from record-ahead persistence: "
@@ -1450,6 +1741,8 @@ class ProductionWorkflowDriver(WorkflowDriver):
         self,
         output: NativeAgentCodexOutput,
         previous_findings: tuple[FindingRecord, ...],
+        *,
+        recovery_fingerprint: str | None = None,
     ) -> None:
         if self._artifact_bridge is None or self.active_state is None:
             return
@@ -1463,24 +1756,44 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 "native Codex persistence lacks its immutable transport binding"
             )
         unit = state.current_work_unit
-        fingerprint = self._artifact_fingerprint()
         logical = f"agent-{unit.work_unit_id}-{state.current_step.value}-{unit.round_number}"
-        binding_digest = hashlib.sha256(
-            (
-                f"{fingerprint}:{output.request_id}:{output.response_sha256}"
-            ).encode("utf-8")
-        ).hexdigest()
-        self._artifact_bridge.append(
-            agent_result_payload(
-                output.result,
-                role=AgentRole.CODEX,
-                work_unit_id=unit.work_unit_id,
-                transport_schema=NATIVE_CODEX_RESULT_TRANSPORT,
-                request_id=output.request_id,
-                response_sha256=output.response_sha256,
+        payload = agent_result_payload(
+            output.result,
+            role=AgentRole.CODEX,
+            work_unit_id=unit.work_unit_id,
+            transport_schema=NATIVE_CODEX_RESULT_TRANSPORT,
+            request_id=output.request_id,
+            response_sha256=output.response_sha256,
+        )
+        chain = self._artifact_bridge.store.load_chain()
+        canonical = self._canonical_native_agent_result(
+            tuple(
+                record
+                for record in chain
+                if isinstance(record.payload, AgentResultPayload)
+                and record.logical_id == logical
             ),
+            logical,
+        )
+        if canonical is not None:
+            if canonical.payload != payload:
+                raise WorkflowExecutionError(
+                    "native agent result logical binding differs"
+                )
+            fingerprint = canonical.fingerprint.sha256
+            idempotency_key = canonical.idempotency_key
+        else:
+            fingerprint = recovery_fingerprint or self._artifact_fingerprint()
+            binding_digest = hashlib.sha256(
+                (
+                    f"{fingerprint}:{output.request_id}:{output.response_sha256}"
+                ).encode("utf-8")
+            ).hexdigest()
+            idempotency_key = f"native:{logical}:{binding_digest}"
+        self._artifact_bridge.append(
+            payload,
             logical_id=logical,
-            idempotency_key=f"native:{logical}:{binding_digest}",
+            idempotency_key=idempotency_key,
             fingerprint_sha256=fingerprint,
             fingerprint_kind=(
                 FingerprintKind.CONTRACT
@@ -1761,6 +2074,110 @@ class ProductionWorkflowDriver(WorkflowDriver):
             idempotency_key=f"implementation-handoff:{approved_plan_commit}",
             fingerprint_sha256=commit_binding.fingerprint.sha256,
         )
+
+    def prepare_finding_handoff(
+        self,
+        *,
+        plan_task_path: Path,
+        work_plan_path: str,
+        target_branch: str,
+        approved_plan_commit: str,
+    ) -> tuple[str, str] | None:
+        """Append the export before publishing task bytes, or recover it exactly."""
+        bridge = self._artifact_bridge
+        state = self.active_state
+        if bridge is None or state is None:
+            return None
+        chain = bridge.store.load_chain()
+        replay = replay_artifacts(chain, state.run_id)
+        transitions = tuple(
+            record for record in replay.records
+            if isinstance(record.payload, FindingTransitionPayload)
+        )
+        if not transitions:
+            return None
+        commit_binding = next(
+            (
+                record for record in reversed(replay.records)
+                if isinstance(record.payload, BindingPayload)
+                and record.payload.binding_kind == "commit"
+                and record.payload.target == approved_plan_commit
+            ),
+            None,
+        )
+        if commit_binding is None:
+            raise WorkflowExecutionError(
+                "finding handoff requires the reviewed plan commit binding"
+            )
+        approval_id = next(
+            (
+                record_id for record_id in commit_binding.payload.approval_ids
+                if any(
+                    candidate.record_id == record_id
+                    and isinstance(candidate.payload, ReviewPayload)
+                    and candidate.payload.verdict == "approved"
+                    for candidate in replay.records
+                )
+            ),
+            None,
+        )
+        if approval_id is None:
+            raise WorkflowExecutionError(
+                "finding handoff requires a positive bound plan review"
+            )
+        logical_id = f"finding-handoff-export-{approved_plan_commit[:12]}"
+        export_id = stable_record_id(
+            state.run_id, RecordType.FINDING_HANDOFF_EXPORT, logical_id, 1
+        )
+        target = implementation_task_path(plan_task_path)
+        try:
+            target_relative = target.resolve().relative_to(self.root).as_posix()
+        except ValueError as exc:
+            raise WorkflowExecutionError(
+                "finding-bearing implementation handoff must be inside the repository"
+            ) from exc
+        plan = self.root / PurePosixPath(work_plan_path)
+        slices = extract_implementation_slices(
+            plan.read_text(encoding="utf-8"), plan_stem=plan.stem
+        )
+        task_bytes = render_implementation_task(
+            work_plan_path=work_plan_path,
+            target_branch=target_branch,
+            approved_plan_commit=approved_plan_commit,
+            slices=slices,
+            finding_handoff=(state.run_id, export_id),
+        ).encode("utf-8")
+        existing = next(
+            (record for record in replay.records if record.record_id == export_id), None
+        )
+        if existing is not None:
+            payload = existing.payload
+            if (
+                not isinstance(payload, FindingHandoffExportPayload)
+                or payload.target_task_path != target_relative
+                or payload.target_task_sha256 != hashlib.sha256(task_bytes).hexdigest()
+            ):
+                raise WorkflowExecutionError(
+                    "persisted finding handoff export differs from the prepared task"
+                )
+            return state.run_id, export_id
+        payload = finding_handoff_export_payload(
+            replay,
+            approved_plan_commit=approved_plan_commit,
+            approval_review_record_id=approval_id,
+            target_task_path=target_relative,
+            target_task_bytes=task_bytes,
+        )
+        record = bridge.append(
+            payload,
+            logical_id=logical_id,
+            idempotency_key=f"finding-handoff-export:{approved_plan_commit}",
+            fingerprint_sha256=commit_binding.fingerprint.sha256,
+            fingerprint_kind=commit_binding.fingerprint.kind,
+        )
+        if record.record_id != export_id:
+            raise WorkflowExecutionError("finding handoff export identity is unstable")
+        return state.run_id, export_id
 
     def collect_changes(self, start_commit: str) -> WorkflowChanges:
         semantic_paths: tuple[str, ...] = ()
@@ -3185,6 +3602,8 @@ def _fresh_state(
         task_scope_patterns=task_contract.scope_patterns,
         work_plan_path=task_contract.work_plan_path,
         approved_plan_commit=task_contract.approved_plan_commit,
+        finding_handoff_source_run_id=task_contract.finding_handoff_source_run_id,
+        finding_handoff_export_record_id=task_contract.finding_handoff_export_record_id,
         audit_report_path=audit_report_path,
         target_branch=task_contract.target_branch,
         protocol_binding=ProtocolBinding(
@@ -3213,6 +3632,70 @@ def _fresh_state(
             step=WorkflowStep.CODEX_IMPLEMENTATION,
         )
     return state
+
+
+def _initialize_finding_handoff(
+    repository_root: Path,
+    state: WorkflowState,
+    task_contract: TaskContract,
+    task_bytes: bytes,
+) -> WorkflowState:
+    """Import foreign finding authority before the first ordinary checkpoint."""
+    source_run_id = task_contract.finding_handoff_source_run_id
+    export_record_id = task_contract.finding_handoff_export_record_id
+    if source_run_id is None or export_record_id is None:
+        return state
+    try:
+        source_chain = ArtifactStore(repository_root, source_run_id).load_chain()
+        source_replay = replay_artifacts(source_chain, source_run_id)
+        export_record = next(
+            (record for record in source_replay.records if record.record_id == export_record_id),
+            None,
+        )
+        if export_record is None:
+            raise ArtifactBridgeError("referenced finding export record is missing")
+        export_payload = export_record.payload
+        if (
+            not isinstance(export_payload, FindingHandoffExportPayload)
+            or export_payload.approved_plan_commit != task_contract.approved_plan_commit
+        ):
+            raise ArtifactBridgeError("finding export plan commit differs from the task")
+        payload = finding_handoff_import_payload(
+            source_replay,
+            export_record,
+            target_run_id=state.run_id,
+            target_task_bytes=task_bytes,
+        )
+        bridge = ArtifactBridge(ArtifactStore(repository_root, state.run_id))
+        imported = bridge.append(
+            payload,
+            logical_id="finding-handoff-import",
+            idempotency_key=f"finding-handoff-import:{source_run_id}:{export_record_id}",
+            fingerprint_sha256=task_contract.digest,
+            fingerprint_kind=FingerprintKind.CONTRACT,
+        )
+        local_replay = replay_artifacts(bridge.store.load_chain(), state.run_id)
+        findings = replay_findings(local_replay)
+    except (ArtifactBridgeError, ArtifactReplayError, ValueError) as exc:
+        raise StateSchemaError(f"FINDING-HANDOFF-INVALID: {exc}") from exc
+    open_ids = tuple(
+        sorted(
+            finding.finding_id
+            for finding in findings
+            if finding.status.value == "OPEN"
+        )
+    )
+    current = replace(state.current_work_unit, open_findings=open_ids)
+    units = tuple(
+        current if unit.work_unit_id == current.work_unit_id else unit
+        for unit in state.work_units
+    )
+    history = WorkflowHistory(state.current_work_unit_id, findings=findings)
+    return replace(
+        state,
+        work_units=units,
+        runtime_history=_history_payload(None, history),
+    )
 
 
 def _apply_resumed_agent_profiles(
@@ -3375,6 +3858,10 @@ def run_production_workflow(
             or state.task_scope_patterns != task_contract.scope_patterns
             or state.work_plan_path != task_contract.work_plan_path
             or state.target_branch != task_contract.target_branch
+            or state.finding_handoff_source_run_id
+            != task_contract.finding_handoff_source_run_id
+            or state.finding_handoff_export_record_id
+            != task_contract.finding_handoff_export_record_id
         ):
             raise StateSchemaError("persisted task contract differs from --resume task")
         if getattr(args, "watch_run_id", None) and state.run_id != args.watch_run_id:
@@ -3402,6 +3889,9 @@ def run_production_workflow(
                 args.agent_settings["claude"].model,
                 args.agent_settings["claude"].effort,
             ),
+        )
+        state = _initialize_finding_handoff(
+            root, state, task_contract, task_file.read_bytes()
         )
     state = _attach_managed_audit_paths(state)
     state = _recover_legacy_plan_only_post_gate(state)
@@ -3549,12 +4039,19 @@ def run_production_workflow(
                     )
                 driver.assert_structured_decision_context()
                 try:
+                    finding_handoff = driver.prepare_finding_handoff(
+                        plan_task_path=task_file,
+                        work_plan_path=state.work_plan_path or "",
+                        target_branch=state.target_branch or state.branch,
+                        approved_plan_commit=commit_ref,
+                    )
                     handoff = write_implementation_handoff(
                         plan_task_path=task_file,
                         repository_root=root,
                         work_plan_path=state.work_plan_path or "",
                         target_branch=state.target_branch or state.branch,
                         approved_plan_commit=commit_ref,
+                        finding_handoff=finding_handoff,
                     )
                 except PlanHandoffError as exc:
                     raise WorkflowExecutionError(

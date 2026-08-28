@@ -24,6 +24,8 @@ from artifact_models import (
     WorkflowCompletionPayload,
     ProviderInputMeasurementPayload,
     FinalReviewPreflightPayload,
+    FindingHandoffExportPayload,
+    FindingHandoffImportPayload,
     canonical_json,
 )
 from artifact_store import ArtifactStore, ArtifactStoreError
@@ -32,6 +34,7 @@ from artifact_replay import (
     ArtifactReplayResult,
     ReplayDiagnosticCode,
     replay_artifacts,
+    replay_findings,
 )
 from workflow_state import (
     AgentFailureKind,
@@ -119,6 +122,67 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
     head = replay.head_record_id
     assert head is not None
 
+    import_records = tuple(
+        record for record in chain
+        if isinstance(record.payload, FindingHandoffImportPayload)
+    )
+    source_run_id = state.finding_handoff_source_run_id
+    export_record_id = state.finding_handoff_export_record_id
+    if (source_run_id is None) != (export_record_id is None):
+        raise ArtifactResumeError(
+            "finding handoff mirror is incomplete",
+            code=ReplayDiagnosticCode.MIRROR_AMBIGUOUS,
+        )
+    if source_run_id is None:
+        if import_records:
+            raise ArtifactResumeError(
+                "record chain contains an unbound finding import",
+                code=ReplayDiagnosticCode.MIRROR_AMBIGUOUS,
+                record_id=import_records[0].record_id,
+            )
+    else:
+        if len(import_records) != 1:
+            raise ArtifactResumeError(
+                f"finding handoff requires exactly one import, found {len(import_records)}",
+                code=ReplayDiagnosticCode.RECORD_MISSING,
+            )
+        try:
+            # Lazy import avoids the state_io -> artifact_migration -> bridge ->
+            # task_contract -> audit_trail -> state_io initialization cycle.
+            from artifact_bridge import (
+                ArtifactBridgeError,
+                finding_handoff_import_payload,
+            )
+
+            source_chain = ArtifactStore(repository_root, source_run_id).load_chain()
+            source_replay = replay_artifacts(source_chain, source_run_id)
+            export_record = next(
+                record for record in source_replay.records
+                if record.record_id == export_record_id
+            )
+            if not isinstance(export_record.payload, FindingHandoffExportPayload):
+                raise ArtifactBridgeError("referenced source record is not a finding export")
+            if export_record.payload.approved_plan_commit != state.approved_plan_commit:
+                raise ArtifactBridgeError("source export plan commit differs from state-v3")
+            expected_import = finding_handoff_import_payload(
+                source_replay,
+                export_record,
+                target_run_id=state.run_id,
+                target_task_bytes=Path(state.task_file).read_bytes(),
+            )
+        except (ArtifactStoreError, ArtifactReplayError, RuntimeError, OSError, StopIteration) as exc:
+            raise ArtifactResumeError(
+                f"finding handoff source is no longer valid: {exc}",
+                code=ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+                record_id=export_record_id,
+            ) from exc
+        if import_records[0].payload != expected_import:
+            raise ArtifactResumeError(
+                "finding import differs from its revalidated source",
+                code=ReplayDiagnosticCode.MIRROR_AMBIGUOUS,
+                record_id=import_records[0].record_id,
+            )
+
     def mismatch(
         message: str,
         record_id: str | None = None,
@@ -152,6 +216,13 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
         for item in chain
         if item.record_type in {RecordType.WORK_UNIT, RecordType.CORRECTION_WORK_UNIT}
     ]
+    first_implementation_unit_id = next(
+        (
+            str(unit.work_unit_id) for unit in state.work_units
+            if unit.kind is not WorkUnitKind.PLAN
+        ),
+        None,
+    )
     latest_work_record_by_id = {}
     for record in work_records:
         payload = record.payload
@@ -178,6 +249,23 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
                 "correction work-unit finding attribution differs from state-v3",
                 record.record_id,
             )
+        if isinstance(payload, WorkUnitPayload):
+            expected_import_id = (
+                import_records[0].record_id
+                if import_records and unit_id == first_implementation_unit_id
+                else None
+            )
+            if (
+                payload.finding_import_record_id != expected_import_id
+                or (
+                    expected_import_id is not None
+                    and payload.open_finding_ids != tuple(sorted(unit.open_findings))
+                )
+            ):
+                raise mismatch(
+                    "work-unit finding import binding differs from state-v3",
+                    record.record_id,
+                )
 
     for unit_id, record in latest_work_record_by_id.items():
         unit = unit_by_id[unit_id]
@@ -289,19 +377,25 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
     for record in chain:
         if isinstance(record.payload, FindingTransitionPayload):
             latest_findings[record.payload.finding_id] = record
+    imported_statuses = {
+        finding.finding_id: finding.status.value.lower()
+        for finding in replay_findings(replay)
+        if finding.finding_id not in latest_findings
+    }
     pending_review_finding_gap = _recoverable_pending_review_finding_gap(
         state,
         chain,
         finding_statuses,
         latest_findings,
     )
-    if set(latest_findings) != set(finding_statuses) and not pending_review_finding_gap:
-        differing = next(iter(set(latest_findings) ^ set(finding_statuses)), None)
+    record_finding_ids = set(latest_findings) | set(imported_statuses)
+    if record_finding_ids != set(finding_statuses) and not pending_review_finding_gap:
+        differing = next(iter(record_finding_ids ^ set(finding_statuses)), None)
         record = latest_findings.get(differing) if differing is not None else None
         raise mismatch(
             "finding transitions differ from state-v3",
             None if record is None else record.record_id,
-            code=_mirror_difference_code(set(latest_findings), set(finding_statuses)),
+            code=_mirror_difference_code(record_finding_ids, set(finding_statuses)),
         )
     for finding_id, record in latest_findings.items():
         assert isinstance(record.payload, FindingTransitionPayload)
@@ -311,6 +405,12 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
             and not pending_review_finding_gap
         ):
             raise mismatch("finding status differs from state-v3", record.record_id)
+    for finding_id, status in imported_statuses.items():
+        if finding_statuses.get(finding_id) != status and not pending_review_finding_gap:
+            raise mismatch(
+                "imported finding status differs from state-v3",
+                import_records[0].record_id if import_records else None,
+            )
 
     attestation_facts = _attestation_facts(state)
     attestation_records = {
