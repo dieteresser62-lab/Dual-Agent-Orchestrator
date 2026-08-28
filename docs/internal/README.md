@@ -44,3 +44,10 @@ Der Ordner
 enthält die vollständige Claude-Reviewkette des providerweiten
 Versionspolicy-Hotfixes: die erste fingerprintgebundene Verweigerung wegen
 Snapshotdrift und die abschließende Freigabe des stabilen Korrekturstands.
+
+Der Ordner
+[`archive/projektionsgarantie-und-kopplungsbremse-941f04403b23/`](archive/projektionsgarantie-und-kopplungsbremse-941f04403b23/)
+enthält den freigegebenen Arbeitsplan, den Slicebericht und das vollständige
+Gesamtaudit der providerfreien Projektionsgarantie und Providernamen-Ratsche.
+Die Kennung bindet das Archiv an den von Claude freigegebenen und vom
+Orchestrator vollständig validierten Branchfingerprint.
