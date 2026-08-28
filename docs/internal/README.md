@@ -51,3 +51,11 @@ enthält den freigegebenen Arbeitsplan, den Slicebericht und das vollständige
 Gesamtaudit der providerfreien Projektionsgarantie und Providernamen-Ratsche.
 Die Kennung bindet das Archiv an den von Claude freigegebenen und vom
 Orchestrator vollständig validierten Branchfingerprint.
+
+Der Ordner
+[`archive/plan-only-finding-handoffverlust-52ec2aa1d203/`](archive/plan-only-finding-handoffverlust-52ec2aa1d203/)
+enthält den freigegebenen Arbeitsplan, alle drei Sliceberichte, das
+branchweite Gesamtaudit sowie die vollständige Reviewkette der beiden während
+des Hochlaufs erforderlichen Recovery-Hotfixes. Die Kennung bindet das Archiv
+an den von Claude freigegebenen und vom Orchestrator mit 1132 bestandenen
+Tests attestierten Abschlussfingerprint.
