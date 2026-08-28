@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import copy
+import json
 
 import pytest
 
+import native_provider_schema
 from native_provider_schema import (
     NativeProviderSchemaError,
     assert_provider_capabilities,
@@ -88,22 +90,43 @@ def test_capability_and_exception_tables_are_typed_and_versioned() -> None:
         "claude",
         "codex",
     ]
+    assert {
+        item["version_policy"] for item in capabilities["providers"]
+    } == {"same-major-forward"}
     assert exceptions["schema_version"] == "native-provider-schema-exceptions-v1"
     assert len(registered_exceptions("codex")) == 7
     assert len(registered_exceptions("claude")) == 6
 
 
-def test_unprobed_feature_and_stale_version_fail_closed() -> None:
+def test_every_provider_must_use_the_shared_forward_version_policy(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    capabilities = load_capability_table()
+    capabilities["providers"][0]["version_policy"] = "same-minor-forward"
+    capability_path = tmp_path / "capabilities.json"
+    capability_path.write_text(json.dumps(capabilities), encoding="utf-8")
+    monkeypatch.setattr(native_provider_schema, "CAPABILITY_PATH", capability_path)
+
+    with pytest.raises(NativeProviderSchemaError, match="provider-wide version policy"):
+        native_provider_schema.load_capability_table()
+
+
+def test_unprobed_feature_and_out_of_policy_version_fail_closed() -> None:
     with pytest.raises(NativeProviderSchemaError, match="not positively probed"):
         assert_provider_capabilities("codex", ("positional_tuple",))
     assert compatible_cli_version("claude", "2.1.246 (Claude Code)") is True
     assert compatible_cli_version("claude", "2.9.0 (Claude Code)") is True
+    assert compatible_cli_version("claude", "2.999.0 (Claude Code)") is True
     assert compatible_cli_version("codex", "codex-cli 0.147.1") is True
+    assert compatible_cli_version("codex", "codex-cli 0.148.0") is True
+    assert compatible_cli_version("codex", "codex-cli 0.150.1") is True
+    assert compatible_cli_version("codex", "codex-cli 0.999.0") is True
     for provider, version in (
         ("claude", "2.1.240 (Claude Code)"),
         ("claude", "3.0.0 (Claude Code)"),
         ("codex", "codex-cli 0.146.9"),
-        ("codex", "codex-cli 0.148.0"),
+        ("codex", "codex-cli 1.0.0"),
     ):
         with pytest.raises(NativeProviderSchemaError, match="CLI version differs"):
             assert_provider_capabilities(provider, (), cli_version=version)
