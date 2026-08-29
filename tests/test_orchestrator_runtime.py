@@ -3426,7 +3426,8 @@ def test_watch_pipeline_failure_before_state_disables_resume(
     result = run_pipeline(task, args, force_new=True)
 
     assert isinstance(result, WatchTaskResult)
-    assert result.disposition is WatchTaskDisposition.TECHNICAL_FAILURE
+    assert result.disposition is WatchTaskDisposition.RESUMABLE_HALT
+    assert result.gate_reason == "GIT-TRANSACTION"
     assert result.step == "pipeline"
     assert result.resume_available is False
     assert not (repository / ".orchestrator" / "state.json").exists()
@@ -3584,7 +3585,7 @@ def test_watch_state_schema_error_is_a_single_non_retryable_policy_halt(
     assert isinstance(result, WatchTaskResult)
     assert result.exit_code == 4
     assert result.disposition is WatchTaskDisposition.RESUMABLE_HALT
-    assert result.gate_reason == "state_contract"
+    assert result.gate_reason == "STATE-SCHEMA"
     assert result.resume_available is False
     assert result.failure_detail == (
         "StateSchemaError: deterministic state conflict"

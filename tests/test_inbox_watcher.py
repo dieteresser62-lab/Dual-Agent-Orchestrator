@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+from agent_runtime import AgentProcessError
+from error_classification import classify_exception
 from inbox_watcher import (
     QueueFinalizationDisposition,
     WatchTaskDisposition,
@@ -14,12 +16,14 @@ from inbox_watcher import (
     WatchTaskResult,
     attempt_sidecar_path,
     finalize_queue_success,
+    rejection_marker_path,
     success_marker_path,
     save_watch_identity,
     watch_identity_path,
     watch_inbox,
 )
 from workflow import WorkflowHistory, WorkflowRunResult
+from task_contract import TaskContractError
 from workflow_state import (
     GateReason,
     ProtocolBinding,
@@ -202,7 +206,10 @@ def test_bound_queue_success_rejects_source_swapped_to_symlink_before_move(
 
     def swap_then_move(source: Path, destination: Path) -> Path:
         source.unlink()
-        source.symlink_to(outside)
+        try:
+            source.symlink_to(outside)
+        except OSError as exc:
+            pytest.skip(f"symlink creation is unavailable on this host: {exc}")
         return original_move(source, destination)
 
     monkeypatch.setattr(watcher, "move_to_reserved_outbox", swap_then_move)
@@ -403,7 +410,7 @@ def test_outbox_name_collision_is_resolved(tmp_path: Path, monkeypatch) -> None:
     assert moved[1] == "20260222T093000.123Z_job_1.md"
 
 
-def test_watch_continues_after_pipeline_failure_exit_code(tmp_path: Path) -> None:
+def test_watch_continues_after_typed_transient_process_failure(tmp_path: Path) -> None:
     inbox = tmp_path / "inbox"
     outbox = tmp_path / "outbox"
     inbox.mkdir()
@@ -412,7 +419,7 @@ def test_watch_continues_after_pipeline_failure_exit_code(tmp_path: Path) -> Non
 
     def process_task(task_file: Path, _: Namespace, _force_new: bool) -> int:
         calls.append(task_file.name)
-        return 1
+        raise AgentProcessError("temporary provider process failure")
 
     sleeper = _InterruptingSleep(interrupt_after=1)
     result = watch_inbox(
@@ -505,7 +512,7 @@ def test_failure_retries_then_poison(tmp_path: Path) -> None:
 
     def process_task(task_file: Path, _: Namespace, _force_new: bool) -> int:
         calls.append(task_file.name)
-        return 1
+        raise AgentProcessError("temporary provider process failure")
 
     sleeper = _InterruptingSleep(interrupt_after=1)
     result = watch_inbox(
@@ -528,7 +535,11 @@ def test_failure_retries_then_poison(tmp_path: Path) -> None:
     report_data = json.loads(report.read_text(encoding="utf-8"))
     assert report_data["attempts"] == 3
     assert report_data["exit_code"] == 1
-    assert report_data["failure_detail"] == "legacy exit code 1"
+    assert report_data["failure_detail"] == (
+        "AgentProcessError: temporary provider process failure"
+    )
+    assert report_data["failure_class"] == "transient"
+    assert report_data["diagnostic_code"] == "AGENT-PROCESS"
     assert not task.exists()
     assert not (inbox / "bad.md.attempts").exists()
 
@@ -547,7 +558,7 @@ def test_retry_count_survives_restart(tmp_path: Path) -> None:
 
     def first_process(_: Path, __: Namespace, ___: bool) -> int:
         first_run_calls["count"] += 1
-        return 1
+        raise AgentProcessError("temporary provider process failure")
 
     first_result = watch_inbox(
         inbox_dir=inbox,
@@ -568,7 +579,7 @@ def test_retry_count_survives_restart(tmp_path: Path) -> None:
 
     def second_process(task_file: Path, _: Namespace, _force_new: bool) -> int:
         second_calls.append(task_file.name)
-        return 1
+        raise AgentProcessError("temporary provider process failure")
 
     second_result = watch_inbox(
         inbox_dir=inbox,
@@ -587,7 +598,7 @@ def test_retry_count_survives_restart(tmp_path: Path) -> None:
     assert not (inbox / "restart.md.attempts").exists()
 
 
-def test_typed_technical_failure_detail_is_preserved_in_poison_report(
+def test_typed_transient_failure_detail_is_preserved_in_poison_report(
     tmp_path: Path,
 ) -> None:
     inbox = tmp_path / "inbox"
@@ -599,15 +610,10 @@ def test_typed_technical_failure_detail_is_preserved_in_poison_report(
     def process_task(
         _task: Path, args: Namespace, _force_new: bool
     ) -> WatchTaskResult:
-        return WatchTaskResult(
-            exit_code=1,
+        return WatchTaskResult.from_failure(
+            classify_exception(AgentProcessError("provider process stopped")),
             run_id=args.watch_run_id,
-            disposition=WatchTaskDisposition.TECHNICAL_FAILURE,
-            status="technical_failure",
-            step="claude_plan_review",
-            work_unit_id=1,
-            gate_reason="technical_failure",
-            failure_detail="WorkflowExecutionError: invalid plan contract",
+            records_written=False,
         )
 
     result = watch_inbox(
@@ -625,10 +631,9 @@ def test_typed_technical_failure_detail_is_preserved_in_poison_report(
     report = next((outbox / "failed").glob("*.poison.error.json"))
     data = json.loads(report.read_text(encoding="utf-8"))
     assert data["run_id"]
-    assert data["step"] == "claude_plan_review"
-    assert data["failure_detail"] == (
-        "WorkflowExecutionError: invalid plan contract"
-    )
+    assert data["step"] == "pipeline"
+    assert data["failure_detail"] == "AgentProcessError: provider process stopped"
+    assert data["failure_class"] == "transient"
 
 
 def test_legacy_watch_identity_roundtrip_does_not_add_protocol_binding() -> None:
@@ -847,8 +852,10 @@ def test_workflow_result_requires_commits_and_completed_final_review() -> None:
         WorkflowRunResult(gate_state, WorkflowHistory(1))
     )
 
-    assert slice_only.disposition is WatchTaskDisposition.TECHNICAL_FAILURE
-    assert slice_only.exit_code == 1
+    assert slice_only.disposition is WatchTaskDisposition.RESUMABLE_HALT
+    assert slice_only.exit_code == 4
+    assert slice_only.classified_failure is not None
+    assert slice_only.classified_failure.explicitly_mapped is False
     assert completed.disposition is WatchTaskDisposition.COMPLETED
     assert completed.exit_code == 0
     assert halted.disposition is WatchTaskDisposition.RESUMABLE_HALT
@@ -937,6 +944,118 @@ def test_resumable_v3_halt_stops_queue_without_retry_or_poison(
     assert not (inbox / "first.md.attempts").exists()
     assert watch_identity_path(first).exists()
     assert list((outbox / "failed").glob("*")) == []
+
+
+def test_terminal_input_rejection_is_archived_once_and_queue_continues(
+    tmp_path: Path,
+) -> None:
+    inbox = tmp_path / "inbox"
+    outbox = tmp_path / "outbox"
+    inbox.mkdir()
+    rejected = inbox / "first.md"
+    accepted = inbox / "second.md"
+    rejected.write_text("invalid", encoding="utf-8")
+    accepted.write_text("valid", encoding="utf-8")
+    first_mtime = rejected.stat().st_mtime - 10
+    os.utime(rejected, (first_mtime, first_mtime))
+    calls: list[str] = []
+
+    def process(task: Path, args: Namespace, _force_new: bool) -> WatchTaskResult:
+        calls.append(task.name)
+        if task.name == "first.md":
+            return WatchTaskResult.from_failure(
+                classify_exception(TaskContractError("invalid target branch")),
+                run_id=args.watch_run_id,
+                records_written=False,
+            )
+        return WatchTaskResult.from_workflow(
+            _workflow_result(args.watch_run_id, final=True)
+        )
+
+    result = watch_inbox(
+        inbox_dir=inbox,
+        outbox_dir=outbox,
+        poll_interval=0.01,
+        args=_args(),
+        process_task=process,
+        max_retries=3,
+        sleep_fn=_InterruptingSleep(interrupt_after=1),
+        time_fn=lambda: 10_000_000_000.0,
+    )
+
+    assert result == 0
+    assert calls == ["first.md", "second.md"]
+    rejected_task = next((outbox / "failed").glob("*.rejected"))
+    report = json.loads(
+        Path(str(rejected_task) + ".error.json").read_text(encoding="utf-8")
+    )
+    assert report["attempts"] == 0
+    assert report["failure_class"] == "terminal_rejection"
+    assert report["diagnostic_code"] == "TASK-CONTRACT"
+    assert not (inbox / "first.md.attempts").exists()
+    assert not watch_identity_path(rejected).exists()
+    assert len(list((outbox / "done").glob("*.md"))) == 1
+
+
+def test_terminal_rejection_move_retry_does_not_execute_task_twice(
+    tmp_path: Path, monkeypatch
+) -> None:
+    inbox = tmp_path / "inbox"
+    outbox = tmp_path / "outbox"
+    inbox.mkdir()
+    task = inbox / "invalid.md"
+    task.write_text("invalid", encoding="utf-8")
+    calls = 0
+
+    def process(_task: Path, args: Namespace, _force_new: bool) -> WatchTaskResult:
+        nonlocal calls
+        calls += 1
+        return WatchTaskResult.from_failure(
+            classify_exception(TaskContractError("invalid target branch")),
+            run_id=args.watch_run_id,
+            records_written=False,
+        )
+
+    import inbox_watcher as watcher
+
+    real_move = watcher.move_to_outbox
+    move_calls = 0
+
+    def fail_first_rejected_move(*args, **kwargs):
+        nonlocal move_calls
+        move_calls += 1
+        if move_calls == 1:
+            raise OSError("temporary outbox failure")
+        return real_move(*args, **kwargs)
+
+    monkeypatch.setattr(watcher, "move_to_outbox", fail_first_rejected_move)
+
+    assert watch_inbox(
+        inbox_dir=inbox,
+        outbox_dir=outbox,
+        poll_interval=0.01,
+        args=_args(),
+        process_task=process,
+        time_fn=lambda: 10_000_000_000.0,
+    ) == 1
+    assert calls == 1
+    assert task.exists()
+    assert rejection_marker_path(task).exists()
+
+    assert watch_inbox(
+        inbox_dir=inbox,
+        outbox_dir=outbox,
+        poll_interval=0.01,
+        args=_args(),
+        process_task=process,
+        sleep_fn=_InterruptingSleep(interrupt_after=1),
+        time_fn=lambda: 10_000_000_000.0,
+    ) == 0
+    assert calls == 1
+    assert move_calls == 2
+    assert not task.exists()
+    assert not rejection_marker_path(task).exists()
+    assert len(list((outbox / "failed").glob("*.rejected"))) == 1
 
 
 def test_watch_restart_resumes_same_run_id_and_moves_only_final_workflow(
@@ -1189,7 +1308,9 @@ def test_process_interruption_preserves_identity_for_next_watch_process(
     assert len(list((outbox / "done").glob("*.md"))) == 1
 
 
-def test_technical_retry_uses_stable_run_id_and_resume_context(tmp_path: Path) -> None:
+def test_typed_transient_retry_uses_stable_run_id_and_resume_context(
+    tmp_path: Path,
+) -> None:
     inbox = tmp_path / "inbox"
     outbox = tmp_path / "outbox"
     inbox.mkdir()
@@ -1197,9 +1318,17 @@ def test_technical_retry_uses_stable_run_id_and_resume_context(tmp_path: Path) -
     task.write_text("retry", encoding="utf-8")
     calls: list[tuple[str, bool, bool]] = []
 
-    def process(_task: Path, args: Namespace, force_new: bool) -> int:
+    def process(
+        _task: Path, args: Namespace, force_new: bool
+    ) -> int | WatchTaskResult:
         calls.append((args.watch_run_id, args.resume, force_new))
-        return 1 if len(calls) == 1 else 0
+        if len(calls) == 1:
+            return WatchTaskResult.from_failure(
+                classify_exception(AgentProcessError("temporary process failure")),
+                run_id=args.watch_run_id,
+                records_written=True,
+            )
+        return 0
 
     assert watch_inbox(
         inbox_dir=inbox,
@@ -1233,16 +1362,10 @@ def test_pre_state_technical_retry_restarts_fresh_with_same_run_id(
     ) -> WatchTaskResult:
         calls.append((args.watch_run_id, args.resume, force_new))
         if len(calls) == 1:
-            return WatchTaskResult(
-                exit_code=1,
+            return WatchTaskResult.from_failure(
+                classify_exception(AgentProcessError("preflight process failed")),
                 run_id=args.watch_run_id,
-                disposition=WatchTaskDisposition.TECHNICAL_FAILURE,
-                status="technical_failure",
-                step="pipeline",
-                work_unit_id=1,
-                gate_reason="technical_failure",
-                failure_detail="GitTransactionError: preflight failed",
-                resume_available=False,
+                records_written=False,
             )
         return WatchTaskResult.from_workflow(
             _workflow_result(args.watch_run_id, final=True)
@@ -1334,7 +1457,7 @@ def test_changed_paused_task_halts_without_retry_or_poison(tmp_path: Path) -> No
         process_task=lambda *_: calls.append("called") or 0,
         max_retries=1,
         time_fn=lambda: 10_000_000_000.0,
-    ) == 1
+    ) == 4
 
     assert calls == []
     assert task.exists()

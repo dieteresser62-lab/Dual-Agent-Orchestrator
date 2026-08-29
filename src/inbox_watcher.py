@@ -7,6 +7,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import stat
 import time
@@ -16,6 +17,12 @@ from enum import Enum
 from pathlib import Path
 from typing import Callable, TextIO
 
+from error_classification import (
+    ClassifiedFailure,
+    FailureClass,
+    classify_exception,
+    enforce_record_start_boundary,
+)
 from state_io import atomic_write_file
 from workflow import WorkflowRunResult
 from workflow_state import GateReason, WorkUnitStatus
@@ -27,11 +34,13 @@ except ImportError:  # pragma: no cover - non-Unix fallback
 
 logger = logging.getLogger(__name__)
 STUCK_RETRY_MULTIPLIER = 3
+WATCH_RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
 
 
 class WatchTaskDisposition(str, Enum):
     COMPLETED = "completed"
     RESUMABLE_HALT = "resumable_halt"
+    REJECTED = "rejected"
     TECHNICAL_FAILURE = "technical_failure"
 
 
@@ -143,12 +152,13 @@ class WatchTaskResult:
     failure_detail: str | None = None
     resume_available: bool = True
     protocol_mode: str | None = None
+    classified_failure: ClassifiedFailure | None = None
 
     def __post_init__(self) -> None:
         if self.exit_code < 0:
             raise ValueError("watch task exit code must be non-negative")
-        if not self.run_id.strip():
-            raise ValueError("watch task result requires a run id")
+        if WATCH_RUN_ID_PATTERN.fullmatch(self.run_id) is None:
+            raise ValueError("watch task result requires a safe run id")
         if self.work_unit_id < 1:
             raise ValueError("watch task result requires a 1-based work unit id")
         if not isinstance(self.resume_available, bool):
@@ -158,10 +168,46 @@ class WatchTaskResult:
         if self.disposition is WatchTaskDisposition.COMPLETED and self.exit_code != 0:
             raise ValueError("completed watch task result requires exit code zero")
         if (
+            self.disposition is WatchTaskDisposition.COMPLETED
+            and self.classified_failure is not None
+        ):
+            raise ValueError("completed watch task result cannot carry a failure")
+        if (
             self.disposition is WatchTaskDisposition.RESUMABLE_HALT
             and self.exit_code not in {2, 3, 4}
         ):
             raise ValueError("resumable watch halt requires exit code 2, 3, or 4")
+        if (
+            self.disposition is WatchTaskDisposition.REJECTED
+            and (
+                self.exit_code != 5
+                or self.resume_available
+                or self.classified_failure is None
+                or self.classified_failure.failure_class
+                is not FailureClass.TERMINAL_REJECTION
+            )
+        ):
+            raise ValueError(
+                "rejected watch task requires an exit-5 terminal classification"
+            )
+        if (
+            self.disposition is WatchTaskDisposition.TECHNICAL_FAILURE
+            and (
+                self.classified_failure is None
+                or self.classified_failure.failure_class
+                is not FailureClass.TRANSIENT
+            )
+        ):
+            raise ValueError(
+                "technical watch failure requires a typed transient classification"
+            )
+        if (
+            self.disposition is WatchTaskDisposition.RESUMABLE_HALT
+            and self.classified_failure is not None
+            and self.classified_failure.failure_class
+            is not FailureClass.RESUMABLE_HALT
+        ):
+            raise ValueError("resumable watch halt carries a conflicting classification")
         if self.gate_reason == GateReason.BOOTSTRAP_CHECK.value:
             if (
                 self.disposition is not WatchTaskDisposition.RESUMABLE_HALT
@@ -200,8 +246,18 @@ class WatchTaskResult:
             disposition = WatchTaskDisposition.RESUMABLE_HALT
             exit_code = result.exit_code
         else:
-            disposition = WatchTaskDisposition.TECHNICAL_FAILURE
-            exit_code = result.exit_code or 1
+            # A non-terminal workflow result without an acknowledged halt has no
+            # retry authorization.  Treat the missing classification as a
+            # fail-closed operator halt instead of manufacturing a transient.
+            disposition = WatchTaskDisposition.RESUMABLE_HALT
+            exit_code = 4
+        classified_failure = (
+            classify_exception(
+                RuntimeError("workflow returned a non-resumable, non-terminal result")
+            )
+            if not result.workflow_completed and not resumable and not bootstrap_halt
+            else None
+        )
         return cls(
             exit_code=exit_code,
             run_id=state.run_id,
@@ -209,15 +265,63 @@ class WatchTaskResult:
             status=status.value,
             step=state.current_step.value,
             work_unit_id=state.current_work_unit_id,
-            gate_reason=state.current_work_unit.gate.reason.value,
+            gate_reason=(
+                classified_failure.diagnostic_code
+                if classified_failure is not None
+                else state.current_work_unit.gate.reason.value
+            ),
             failure_detail=(
-                state.current_work_unit.gate.detail
+                classified_failure.detail
+                if classified_failure is not None
+                else state.current_work_unit.gate.detail
                 if disposition is WatchTaskDisposition.RESUMABLE_HALT
-                else "workflow returned a non-resumable, non-terminal result"
-                if disposition is WatchTaskDisposition.TECHNICAL_FAILURE
                 else None
             ),
             protocol_mode=state.effective_protocol_mode.value,
+            classified_failure=classified_failure,
+        )
+
+    @classmethod
+    def from_failure(
+        cls,
+        failure: ClassifiedFailure,
+        *,
+        run_id: str,
+        records_written: bool,
+        protocol_mode: str | None = None,
+    ) -> WatchTaskResult:
+        """Translate a classified exception into one typed Watch outcome."""
+
+        failure = enforce_record_start_boundary(
+            failure, records_written=records_written
+        )
+        if failure.failure_class is FailureClass.TRANSIENT:
+            disposition = WatchTaskDisposition.TECHNICAL_FAILURE
+            exit_code = 1
+            status = "technical_failure"
+            resume_available = records_written
+        elif failure.failure_class is FailureClass.TERMINAL_REJECTION:
+            disposition = WatchTaskDisposition.REJECTED
+            exit_code = 5
+            status = "rejected"
+            resume_available = False
+        else:
+            disposition = WatchTaskDisposition.RESUMABLE_HALT
+            exit_code = 4
+            status = "awaiting_resume" if records_written else "awaiting_user_decision"
+            resume_available = records_written
+        return cls(
+            exit_code=exit_code,
+            run_id=run_id,
+            disposition=disposition,
+            status=status,
+            step="pipeline",
+            work_unit_id=1,
+            gate_reason=failure.diagnostic_code,
+            failure_detail=failure.detail,
+            resume_available=resume_available,
+            protocol_mode=protocol_mode,
+            classified_failure=failure,
         )
 
 
@@ -230,8 +334,8 @@ class WatchTaskIdentity:
     sidecar_version: int = 2
 
     def __post_init__(self) -> None:
-        if not self.run_id.strip():
-            raise ValueError("watch task identity requires a run id")
+        if WATCH_RUN_ID_PATTERN.fullmatch(self.run_id) is None:
+            raise ValueError("watch task identity requires a safe run id")
         if len(self.task_digest) != 64 or any(
             character not in "0123456789abcdef" for character in self.task_digest
         ):
@@ -277,6 +381,10 @@ class WatchTaskIdentity:
 
 def watch_identity_path(task_file: Path) -> Path:
     return task_file.with_name(f".{task_file.name}.watch.json")
+
+
+def rejection_marker_path(task_file: Path) -> Path:
+    return task_file.with_name(f".{task_file.name}.rejection.json")
 
 
 def _task_digest(task_file: Path) -> str:
@@ -343,6 +451,116 @@ def save_watch_identity(task_file: Path, identity: WatchTaskIdentity) -> None:
 def delete_watch_identity(task_file: Path) -> None:
     with contextlib.suppress(FileNotFoundError):
         watch_identity_path(task_file).unlink()
+
+
+def _rejection_evidence_digest(document: dict[str, object]) -> str:
+    payload = {key: value for key, value in document.items() if key != "evidence_digest"}
+    canonical = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def save_rejection_marker(
+    task_file: Path, task_result: WatchTaskResult
+) -> None:
+    """Durably bind a terminal result before its queue move is attempted."""
+
+    failure = task_result.classified_failure
+    if (
+        task_result.disposition is not WatchTaskDisposition.REJECTED
+        or failure is None
+        or failure.failure_class is not FailureClass.TERMINAL_REJECTION
+    ):
+        raise ValueError("rejection marker requires a terminally rejected task")
+    document: dict[str, object] = {
+        "version": 1,
+        "run_id": task_result.run_id,
+        "task_digest": _task_digest(task_file),
+        "protocol_mode": task_result.protocol_mode,
+        "failure_class": failure.failure_class.value,
+        "diagnostic_code": failure.diagnostic_code,
+        "exception_type": failure.exception_type,
+        "detail": failure.detail,
+        "cause_depth": failure.cause_depth,
+        "explicitly_mapped": failure.explicitly_mapped,
+        "promoted_after_record_start": failure.promoted_after_record_start,
+    }
+    document["evidence_digest"] = _rejection_evidence_digest(document)
+    atomic_write_file(
+        rejection_marker_path(task_file),
+        json.dumps(document, indent=2, sort_keys=True) + "\n",
+    )
+
+
+def load_rejection_marker(task_file: Path) -> WatchTaskResult:
+    """Recover a prior terminal result without executing the task again."""
+
+    path = rejection_marker_path(task_file)
+    expected = {
+        "version",
+        "run_id",
+        "task_digest",
+        "protocol_mode",
+        "failure_class",
+        "diagnostic_code",
+        "exception_type",
+        "detail",
+        "cause_depth",
+        "explicitly_mapped",
+        "promoted_after_record_start",
+        "evidence_digest",
+    }
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot load rejection marker {path.name}: {exc}") from exc
+    if not isinstance(raw, dict) or set(raw) != expected or raw.get("version") != 1:
+        raise ValueError("rejection marker has an invalid schema")
+    string_fields = {
+        "run_id", "task_digest", "failure_class", "diagnostic_code",
+        "exception_type", "detail", "evidence_digest",
+    }
+    if any(not isinstance(raw.get(field), str) for field in string_fields):
+        raise ValueError("rejection marker has invalid string fields")
+    if raw.get("protocol_mode") not in {None, "structured-v2"}:
+        raise ValueError("rejection marker has an invalid protocol mode")
+    if (
+        not isinstance(raw.get("cause_depth"), int)
+        or isinstance(raw.get("cause_depth"), bool)
+        or raw["cause_depth"] < 0
+        or raw.get("explicitly_mapped") is not True
+        or raw.get("promoted_after_record_start") is not False
+    ):
+        raise ValueError("rejection marker has invalid classification fields")
+    if raw["task_digest"] != _task_digest(task_file):
+        raise ValueError("rejection marker task digest differs")
+    if raw["evidence_digest"] != _rejection_evidence_digest(raw):
+        raise ValueError("rejection marker evidence digest differs")
+    try:
+        failure_class = FailureClass(raw["failure_class"])
+    except ValueError as exc:
+        raise ValueError("rejection marker failure class is invalid") from exc
+    if failure_class is not FailureClass.TERMINAL_REJECTION:
+        raise ValueError("rejection marker is not terminal")
+    failure = ClassifiedFailure(
+        failure_class=failure_class,
+        diagnostic_code=raw["diagnostic_code"],
+        exception_type=raw["exception_type"],
+        detail=raw["detail"],
+        cause_depth=raw["cause_depth"],
+        explicitly_mapped=True,
+    )
+    records_written = watch_run_has_records(Path.cwd(), raw["run_id"])
+    return WatchTaskResult.from_failure(
+        failure,
+        run_id=raw["run_id"],
+        records_written=records_written,
+        protocol_mode=raw["protocol_mode"],
+    )
+
+
+def delete_rejection_marker(task_file: Path) -> None:
+    with contextlib.suppress(FileNotFoundError):
+        rejection_marker_path(task_file).unlink()
 
 
 def list_inbox_tasks(inbox_dir: Path) -> list[Path]:
@@ -564,6 +782,7 @@ def finalize_queue_success(
         # The marker remains until last, so every partial cleanup is safely resumable.
         delete_attempt_sidecar(task_file)
         delete_watch_identity(task_file)
+        delete_rejection_marker(task_file)
         delete_success_marker(task_file)
         return QueueFinalizationResult(
             QueueFinalizationDisposition.COMPLETED, destination=destination
@@ -632,9 +851,73 @@ def write_poison_failure_report(
             if task_result is None
             else task_result.failure_detail
         ),
+        "failure_class": (
+            None
+            if task_result is None or task_result.classified_failure is None
+            else task_result.classified_failure.failure_class.value
+        ),
+        "diagnostic_code": (
+            None
+            if task_result is None or task_result.classified_failure is None
+            else task_result.classified_failure.diagnostic_code
+        ),
     }
     atomic_write_file(report_path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
     return report_path
+
+
+def write_rejected_failure_report(
+    destination: Path, *, task_result: WatchTaskResult
+) -> Path:
+    """Persist one typed terminal rejection next to its rejected task."""
+
+    failure = task_result.classified_failure
+    if (
+        task_result.disposition is not WatchTaskDisposition.REJECTED
+        or failure is None
+        or failure.failure_class is not FailureClass.TERMINAL_REJECTION
+    ):
+        raise ValueError("rejection report requires a terminally rejected task")
+    report_path = destination.with_name(destination.name + ".error.json")
+    payload = {
+        "version": 1,
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+        "rejected_task": destination.name,
+        "attempts": 0,
+        "exit_code": task_result.exit_code,
+        "run_id": task_result.run_id,
+        "status": task_result.status,
+        "step": task_result.step,
+        "work_unit_id": task_result.work_unit_id,
+        "gate_reason": task_result.gate_reason,
+        "protocol_mode": task_result.protocol_mode,
+        "failure_class": failure.failure_class.value,
+        "diagnostic_code": failure.diagnostic_code,
+        "failure_detail": task_result.failure_detail,
+    }
+    atomic_write_file(report_path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    return report_path
+
+
+def watch_run_has_records(repository_root: Path, run_id: str) -> bool:
+    """Conservatively report whether a Watch run has started its record chain."""
+
+    if WATCH_RUN_ID_PATTERN.fullmatch(run_id) is None:
+        return True
+    records_dir = (
+        Path(repository_root).resolve()
+        / ".orchestrator"
+        / "artifacts"
+        / run_id
+        / "records"
+    )
+    try:
+        if not records_dir.is_dir():
+            return False
+        return any(records_dir.iterdir())
+    except OSError:
+        # An unreadable record directory cannot prove that the run is pristine.
+        return True
 
 
 def acquire_inbox_lock(inbox_dir: Path) -> TextIO | None:
@@ -729,21 +1012,35 @@ def watch_inbox(
                         delete_attempt_sidecar(task_file)
                         delete_success_marker(task_file)
                         delete_watch_identity(task_file)
+                        delete_rejection_marker(task_file)
                     except Exception:
                         logger.exception("Failed to rename stuck task %s.", task_file)
                     continue
 
             exit_code: int | None = None
             task_result: WatchTaskResult | None = None
-            failed_with_exception = False
-            exception_detail: str | None = None
             task_succeeded_already = has_success_marker(task_file)
+            task_rejected_already = rejection_marker_path(task_file).exists()
 
             if task_succeeded_already:
                 logger.info(
                     "Skipping re-execution for already-succeeded task; retrying move only: %s",
                     task_file.name,
                 )
+            elif task_rejected_already:
+                logger.info(
+                    "Skipping re-execution for already-rejected task; retrying move only: %s",
+                    task_file.name,
+                )
+                try:
+                    task_result = load_rejection_marker(task_file)
+                except ValueError as exc:
+                    logger.error(
+                        "Cannot safely finalize rejected watch task %s: %s",
+                        task_file.name,
+                        exc,
+                    )
+                    return 4
             else:
                 try:
                     identity = load_or_create_watch_identity(task_file)
@@ -753,7 +1050,7 @@ def watch_inbox(
                         task_file.name,
                         exc,
                     )
-                    return 1
+                    return 4
                 task_args = copy.copy(args)
                 task_args.watch_run_id = identity.run_id
                 task_args.resume = identity.started
@@ -774,7 +1071,7 @@ def watch_inbox(
                                 identity.run_id,
                                 task_file.name,
                             )
-                            return 1
+                            return 4
                         if (
                             identity.protocol_mode is not None
                             and task_result.protocol_mode is not None
@@ -787,7 +1084,7 @@ def watch_inbox(
                                 identity.protocol_mode,
                                 task_file.name,
                             )
-                            return 1
+                            return 4
                         if (
                             identity.sidecar_version == 2
                             and identity.protocol_mode is None
@@ -804,32 +1101,109 @@ def watch_inbox(
                             save_watch_identity(task_file, identity)
                     else:
                         exit_code = int(raw_result)
-                        task_result = WatchTaskResult(
-                            exit_code=exit_code,
-                            run_id=identity.run_id,
-                            disposition=(
-                                WatchTaskDisposition.COMPLETED
-                                if exit_code == 0
-                                else WatchTaskDisposition.RESUMABLE_HALT
-                                if exit_code in {2, 3, 4}
-                                else WatchTaskDisposition.TECHNICAL_FAILURE
-                            ),
-                            status="legacy",
-                            step="legacy",
-                            work_unit_id=1,
-                            gate_reason="legacy",
-                            failure_detail=(
-                                None if exit_code == 0 else f"legacy exit code {exit_code}"
-                            ),
-                        )
+                        if exit_code == 0 or exit_code in {2, 3, 4}:
+                            task_result = WatchTaskResult(
+                                exit_code=exit_code,
+                                run_id=identity.run_id,
+                                disposition=(
+                                    WatchTaskDisposition.COMPLETED
+                                    if exit_code == 0
+                                    else WatchTaskDisposition.RESUMABLE_HALT
+                                ),
+                                status="legacy",
+                                step="legacy",
+                                work_unit_id=1,
+                                gate_reason="legacy",
+                                failure_detail=(
+                                    None
+                                    if exit_code == 0
+                                    else f"legacy exit code {exit_code}"
+                                ),
+                            )
+                        else:
+                            task_result = WatchTaskResult.from_failure(
+                                classify_exception(
+                                    RuntimeError(f"legacy exit code {exit_code}")
+                                ),
+                                run_id=identity.run_id,
+                                records_written=watch_run_has_records(
+                                    Path.cwd(), identity.run_id
+                                ),
+                            )
                 except Exception as exc:
-                    failed_with_exception = True
-                    exception_detail = f"{type(exc).__name__}: {exc}"
+                    classified = enforce_record_start_boundary(
+                        classify_exception(exc),
+                        records_written=watch_run_has_records(
+                            Path.cwd(), identity.run_id
+                        ),
+                    )
+                    task_result = WatchTaskResult.from_failure(
+                        classified,
+                        run_id=identity.run_id,
+                        records_written=watch_run_has_records(
+                            Path.cwd(), identity.run_id
+                        ),
+                    )
                     logger.exception("Task processing crashed for %s.", task_file)
 
             if (
-                not failed_with_exception
-                and task_result is not None
+                task_result is not None
+                and task_result.disposition is WatchTaskDisposition.REJECTED
+            ):
+                # Re-check the lifecycle boundary immediately before publishing a
+                # terminal rejection. A concurrently visible record can only
+                # strengthen the result into an operator halt.
+                assert task_result.classified_failure is not None
+                task_result = WatchTaskResult.from_failure(
+                    task_result.classified_failure,
+                    run_id=task_result.run_id,
+                    records_written=watch_run_has_records(
+                        Path.cwd(), task_result.run_id
+                    ),
+                    protocol_mode=task_result.protocol_mode,
+                )
+
+            if (
+                task_result is not None
+                and task_result.disposition is WatchTaskDisposition.REJECTED
+            ):
+                rejected_name = f"{task_file.name}.rejected"
+                try:
+                    if not task_rejected_already:
+                        save_rejection_marker(task_file, task_result)
+                    destination = move_to_outbox(
+                        task_file, outbox_failed_dir, source_name=rejected_name
+                    )
+                    try:
+                        report = write_rejected_failure_report(
+                            destination, task_result=task_result
+                        )
+                    except Exception:
+                        report = None
+                        logger.exception(
+                            "Failed to write rejection report for %s.", destination
+                        )
+                    delete_attempt_sidecar(task_file)
+                    delete_success_marker(task_file)
+                    delete_watch_identity(task_file)
+                    delete_rejection_marker(task_file)
+                    logger.warning(
+                        "Task rejected without retry and moved to failed outbox: %s "
+                        "diagnostic=%s",
+                        destination,
+                        task_result.gate_reason,
+                    )
+                    if report is not None:
+                        logger.warning("Rejection report written: %s", report)
+                except Exception:
+                    logger.exception(
+                        "Failed to move rejected task %s to outbox.", task_file
+                    )
+                    return 1
+                continue
+
+            if (
+                task_result is not None
                 and task_result.disposition is WatchTaskDisposition.RESUMABLE_HALT
             ):
                 if not task_result.resume_available:
@@ -849,7 +1223,7 @@ def watch_inbox(
                 )
                 return task_result.exit_code
 
-            failed = failed_with_exception or (
+            failed = (
                 task_result is not None
                 and task_result.disposition is WatchTaskDisposition.TECHNICAL_FAILURE
             )
@@ -867,7 +1241,7 @@ def watch_inbox(
                                 destination,
                                 attempts=attempts,
                                 task_result=task_result,
-                                exception_detail=exception_detail,
+                                exception_detail=None,
                             )
                         except Exception:
                             logger.exception(
@@ -877,6 +1251,7 @@ def watch_inbox(
                         delete_attempt_sidecar(task_file)
                         delete_success_marker(task_file)
                         delete_watch_identity(task_file)
+                        delete_rejection_marker(task_file)
                         logger.warning(
                             "Task marked poison after %s/%s failures and moved to failed outbox: %s",
                             attempts,
@@ -894,8 +1269,6 @@ def watch_inbox(
                         max_retries,
                         task_file.name,
                     )
-                if failed_with_exception:
-                    continue
                 assert task_result is not None
                 logger.info(
                     "Task finished with exit code %s: %s",
@@ -988,6 +1361,7 @@ def watch_inbox(
                 delete_attempt_sidecar(task_file)
                 delete_success_marker(task_file)
                 delete_watch_identity(task_file)
+                delete_rejection_marker(task_file)
                 logger.info("Moved task to done outbox: %s", destination)
             except Exception:
                 # Keep retry accounting symmetrical with processing failures.
@@ -1001,6 +1375,7 @@ def watch_inbox(
                         delete_attempt_sidecar(task_file)
                         delete_success_marker(task_file)
                         delete_watch_identity(task_file)
+                        delete_rejection_marker(task_file)
                         if marker_exists:
                             logger.warning(
                                 "Task SUCCEEDED (exit 0) but move to done/ failed (%s/%s). "

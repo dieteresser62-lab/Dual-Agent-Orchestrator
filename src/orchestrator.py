@@ -177,6 +177,11 @@ from workflow_state import (
     managed_correction_slice_report_path,
 )
 from validation_matrix import ValidationCommand, ValidationMatrix
+from error_classification import (
+    FailureClass,
+    classify_exception,
+    enforce_record_start_boundary,
+)
 from inbox_watcher import (
     QueueFinalizationDisposition,
     WatchTaskDisposition,
@@ -187,6 +192,7 @@ from inbox_watcher import (
     load_watch_identity,
     move_to_outbox,
     success_marker_path,
+    watch_run_has_records,
     watch_identity_path,
     watch_inbox,
 )
@@ -3486,19 +3492,6 @@ def _new_watch_task_preserved_paths(
     return (task_contract.work_plan_path,)
 
 
-def _watch_run_has_persisted_state(task_file: Path, run_id: str) -> bool:
-    """Return whether a failed Watch invocation created resumable state for this run."""
-    state_file = Path.cwd().resolve() / ".orchestrator" / "state.json"
-    try:
-        raw = json.loads(state_file.read_text(encoding="utf-8"))
-        persisted_task = Path(raw["task_file"]).resolve()
-    except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError, ValueError):
-        return False
-    return raw.get("version") == 3 and raw.get("run_id") == run_id and (
-        persisted_task == task_file.resolve()
-    )
-
-
 def _is_planned_slice_document(state: WorkflowState, path: str) -> bool:
     candidate = PurePosixPath(path)
     if not path.startswith("docs/internal/slice-") or candidate.suffix != ".md":
@@ -4474,62 +4467,30 @@ def run_pipeline(
             )
         else:
             result = run_production_workflow(task_file, args, force_new=force_new)
-    except ArtifactResumeError as exc:
-        logger.error("Structured resume halted: %s", exc)
+    except Exception as exc:
+        failure = classify_exception(exc)
         watch_run_id = getattr(args, "watch_run_id", None)
+        records_written = False
         if watch_invocation and watch_run_id is not None:
-            return WatchTaskResult(
-                exit_code=4,
-                run_id=watch_run_id,
-                disposition=WatchTaskDisposition.RESUMABLE_HALT,
-                status="awaiting_resume",
-                step="resume_reader",
-                work_unit_id=1,
-                gate_reason="record_mismatch",
-                failure_detail=f"ArtifactResumeError: {exc}",
-                resume_available=True,
-                protocol_mode="structured-v2",
+            records_written = watch_run_has_records(Path.cwd(), watch_run_id)
+            failure = enforce_record_start_boundary(
+                failure, records_written=records_written
             )
-        return 1
-    except StateSchemaError as exc:
-        logger.error("State-v3 workflow failed: %s", exc)
-        watch_run_id = getattr(args, "watch_run_id", None)
+        logger.error(
+            "State-v3 workflow failed: class=%s diagnostic=%s detail=%s",
+            failure.failure_class.value,
+            failure.diagnostic_code,
+            exc,
+        )
         if watch_invocation and watch_run_id is not None:
-            return WatchTaskResult(
-                exit_code=4,
+            return WatchTaskResult.from_failure(
+                failure,
                 run_id=watch_run_id,
-                disposition=WatchTaskDisposition.RESUMABLE_HALT,
-                status="awaiting_user_decision",
-                step="pipeline",
-                work_unit_id=1,
-                gate_reason="state_contract",
-                failure_detail=f"StateSchemaError: {exc}",
-                resume_available=_watch_run_has_persisted_state(
-                    task_file, watch_run_id
-                ),
-            )
-        return 1
-    except (
-        OSError,
-        GitTransactionError,
-        RepositoryChangeError,
-        WorkflowExecutionError,
-        ValueError,
-    ) as exc:
-        logger.error("State-v3 workflow failed: %s", exc)
-        watch_run_id = getattr(args, "watch_run_id", None)
-        if watch_invocation and watch_run_id is not None:
-            return WatchTaskResult(
-                exit_code=1,
-                run_id=watch_run_id,
-                disposition=WatchTaskDisposition.TECHNICAL_FAILURE,
-                status="technical_failure",
-                step="pipeline",
-                work_unit_id=1,
-                gate_reason="technical_failure",
-                failure_detail=f"{type(exc).__name__}: {exc}",
-                resume_available=_watch_run_has_persisted_state(
-                    task_file, watch_run_id
+                records_written=records_written,
+                protocol_mode=(
+                    None
+                    if failure.failure_class is FailureClass.TERMINAL_REJECTION
+                    else "structured-v2"
                 ),
             )
         return 1

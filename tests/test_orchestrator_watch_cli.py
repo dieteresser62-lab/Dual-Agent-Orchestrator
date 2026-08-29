@@ -20,6 +20,7 @@ from inbox_watcher import (
     watch_identity_path,
 )
 from orchestrator import run_pipeline
+from task_contract import TaskContractError
 from workflow import WorkflowExecutionError, WorkflowHistory, WorkflowRunResult
 from workflow_state import GateReason, ProtocolBinding, ProtocolMode, init_workflow_state
 
@@ -163,10 +164,76 @@ def test_watch_pipeline_failure_returns_diagnostic_typed_result(
     result = run_pipeline(task, args)
 
     assert isinstance(result, WatchTaskResult)
-    assert result.disposition is WatchTaskDisposition.TECHNICAL_FAILURE
+    assert result.disposition is WatchTaskDisposition.RESUMABLE_HALT
+    assert result.exit_code == 4
+    assert result.gate_reason == "WORKFLOW-EXECUTION"
+    assert result.classified_failure is not None
+    assert result.classified_failure.explicitly_mapped is True
     assert result.failure_detail == (
         "WorkflowExecutionError: plan parser rejected heading"
     )
+
+
+def test_invalid_task_contract_is_terminally_rejected_before_run_start(
+    tmp_path: Path, monkeypatch
+) -> None:
+    task = tmp_path / "invalid.md"
+    task.write_text(
+        "\n".join(
+            (
+                "ORCHESTRATOR_MODE: IMPLEMENT",
+                "TARGET_BRANCH: main",
+                "TASK_SCOPE: src/**",
+            )
+        ),
+        encoding="utf-8",
+    )
+    args = parse_args(["--task-file", str(task)], cwd=tmp_path, environ={})
+    args.watch_run_id = "watch-invalid-contract"
+    monkeypatch.chdir(tmp_path)
+
+    result = run_pipeline(task, args)
+
+    assert isinstance(result, WatchTaskResult)
+    assert result.disposition is WatchTaskDisposition.REJECTED
+    assert result.exit_code == 5
+    assert result.gate_reason == "TASK-CONTRACT"
+    assert result.resume_available is False
+    assert not (tmp_path / ".orchestrator").exists()
+
+
+def test_terminal_error_after_record_start_is_promoted_to_resumable_halt(
+    tmp_path: Path, monkeypatch
+) -> None:
+    task = tmp_path / "task.md"
+    task.write_text("Implement the bounded task", encoding="utf-8")
+    args = parse_args(["--task-file", str(task)], cwd=tmp_path, environ={})
+    args.watch_run_id = "watch-record-started"
+    records = (
+        tmp_path
+        / ".orchestrator"
+        / "artifacts"
+        / args.watch_run_id
+        / "records"
+    )
+    records.mkdir(parents=True)
+    sentinel = records / ("ar1-" + "a" * 64 + ".json")
+    sentinel.write_text("persisted record bytes", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    def fail(*_args, **_kwargs):
+        raise TaskContractError("late contract conflict")
+
+    monkeypatch.setattr(orchestrator, "run_production_workflow", fail)
+
+    result = run_pipeline(task, args)
+
+    assert isinstance(result, WatchTaskResult)
+    assert result.disposition is WatchTaskDisposition.RESUMABLE_HALT
+    assert result.exit_code == 4
+    assert result.resume_available is True
+    assert result.gate_reason == "TASK-CONTRACT-AFTER-RECORD-START"
+    assert sentinel.read_text(encoding="utf-8") == "persisted record bytes"
 
 
 def test_structured_resume_mismatch_is_resumable_and_not_a_technical_retry(
@@ -187,8 +254,9 @@ def test_structured_resume_mismatch_is_resumable_and_not_a_technical_retry(
     assert isinstance(result, WatchTaskResult)
     assert result.disposition is WatchTaskDisposition.RESUMABLE_HALT
     assert result.exit_code == 4
-    assert result.protocol_mode == "structured-v2"
-    assert result.gate_reason == "record_mismatch"
+    assert result.gate_reason == "ARTIFACT-RESUME"
+    assert result.classified_failure is not None
+    assert result.classified_failure.exception_type == "ArtifactResumeError"
 
 
 @pytest.mark.parametrize("watch_mode", (False, True))

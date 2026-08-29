@@ -265,7 +265,9 @@ Der Watch-Modus:
 - legt die einzelnen Slice-Auditdokumente erst beim tatsächlichen Beginn des jeweiligen Slices an und sammelt alle Plan-, Review-, Finding-, Validierungs- und Abschlussdaten zusätzlich im digestgebundenen Gesamtaudit;
 - streamt standardmäßig `stdout`;
 - verschiebt abgeschlossene Aufgaben mit UTC-Zeitstempel nach `outbox/done/`;
-- wiederholt technische Fehler und verschiebt ausgeschöpfte Aufgaben als Poison Tasks nach `outbox/failed/`; daneben bleibt eine gleichnamige `.error.json` mit Lauf-ID, Step und letzter technischer Ursache erhalten;
+- wiederholt nur typisierte transiente Provider-, Netz- oder Prozessfehler und verschiebt erst ausgeschöpfte transiente Aufgaben als Poison Tasks nach `outbox/failed/`; daneben bleibt eine gleichnamige `.error.json` mit Fehlerklasse, Diagnosecode, Lauf-ID, Step und letzter Ursache erhalten;
+- hält bei deterministischen Record-, Mirror-, Schema-, Fingerprint-, Bindungs- oder Recoveryfehlern sofort mit Exitcode 4 an, ohne den Retryzähler zu erhöhen oder die Watch-Identität zu verlieren; nicht zentral zugeordnete Fehler fallen ebenfalls sicher in diesen Halt;
+- legt einen vor dem ersten Record erkannten terminalen Aufgabenvertragsfehler einmalig als `*.rejected` mit Diagnosebericht in `outbox/failed/` ab und verarbeitet die nächste Queue-Aufgabe weiter; nach Recordbeginn wird dieselbe Ablehnung zwingend zum resumierbaren Halt;
 - hält die Warteschlange bei Exitcode 2, 3 oder 4 an, damit die erste fortsetzbare Aufgabe ihre FIFO-Zuständigkeit behält;
 - führt eine erfolgreich abgeschlossene Aufgabe nicht erneut aus, wenn nur das Verschieben in die Outbox wiederholt werden muss.
 
