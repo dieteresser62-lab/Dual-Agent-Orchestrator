@@ -507,7 +507,22 @@ def _validate_payload_references(
                     "work unit finding import is not present",
                     record,
                 )
-            imported_findings = replay_findings(_result(record.run_id, (imported,)))
+            # The import establishes the initial ledger, not an immutable view
+            # of every later round.  Derive the expected open set from the
+            # complete authoritative prefix so reviewer transitions written
+            # before a new work-unit revision are reflected without weakening
+            # the import provenance binding.
+            finding_prefix = tuple(
+                candidate
+                for candidate in chain[:positions[record.record_id]]
+                if isinstance(
+                    candidate.payload,
+                    (FindingHandoffImportPayload, FindingTransitionPayload),
+                )
+            )
+            imported_findings = replay_findings(
+                _result(record.run_id, finding_prefix)
+            )
             expected_open = tuple(
                 sorted(
                     finding.finding_id
@@ -518,7 +533,7 @@ def _validate_payload_references(
             if payload.open_finding_ids != expected_open:
                 _fail(
                     ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
-                    "work unit open findings differ from its finding import",
+                    "work unit open findings differ from its authoritative finding prefix",
                     record,
                 )
         # Planning work units intentionally have no WorkUnitPayload: the plan

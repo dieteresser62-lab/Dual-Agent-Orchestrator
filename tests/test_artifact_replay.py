@@ -260,6 +260,83 @@ def test_import_replays_source_order_then_accepts_local_reviewer_transition() ->
     assert findings[0].status is FindingStatus.CLOSED
 
 
+def test_import_bound_work_unit_revisions_follow_authoritative_finding_prefix() -> None:
+    opened = ImportedFindingTransition(
+        "ar1-" + "1" * 64,
+        FindingTransitionPayload(
+            "C-01", Role.CLAUDE, Role.CLAUDE, "opened",
+            FindingSeverity.OBSERVATION, "open", "Carry it.", "plan-review",
+            "Imported observation.", "It remains visible.", "plan", 1,
+        ),
+    )
+    digest = finding_transition_sequence_sha256((opened,))
+    records: list[ArtifactRecord] = []
+    imported = _append(records, "finding-import", FindingHandoffImportPayload(
+        "source-run", "ar1-" + "2" * 64, "3" * 40,
+        "ar1-" + "4" * 64, "ar1-" + "5" * 64, "run-replay", "6" * 64,
+        digest, (opened,), Role.ORCHESTRATOR,
+    ))
+    _append(
+        records,
+        "work-unit-2",
+        WorkUnitPayload("1", 1, ("src/a.py",), ("C-01",), imported.record_id),
+    )
+    _append(records, "finding-C-01", FindingTransitionPayload(
+        "C-01", Role.CLAUDE, Role.CLAUDE, "status_changed",
+        FindingSeverity.OBSERVATION, "closed", "Verified.", "2",
+    ))
+    _append(records, "finding-C-02", FindingTransitionPayload(
+        "C-02", Role.CLAUDE, Role.CLAUDE, "opened",
+        FindingSeverity.BLOCKER, "open", "Correction required.", "2",
+        "New blocker.", "The regression test passes.", "1", 1,
+    ))
+    _append(
+        records,
+        "work-unit-2",
+        WorkUnitPayload("1", 2, ("src/a.py",), ("C-02",), imported.record_id),
+        revision=2,
+    )
+
+    replay = replay_artifacts(records, "run-replay")
+
+    assert tuple(
+        finding.finding_id
+        for finding in replay_findings(replay)
+        if finding.status is FindingStatus.OPEN
+    ) == ("C-02",)
+
+
+def test_import_bound_work_unit_revision_rejects_unproven_open_finding() -> None:
+    opened = ImportedFindingTransition(
+        "ar1-" + "1" * 64,
+        FindingTransitionPayload(
+            "C-01", Role.CLAUDE, Role.CLAUDE, "opened",
+            FindingSeverity.OBSERVATION, "open", "Carry it.", "plan-review",
+            "Imported observation.", "It remains visible.", "plan", 1,
+        ),
+    )
+    digest = finding_transition_sequence_sha256((opened,))
+    records: list[ArtifactRecord] = []
+    imported = _append(records, "finding-import", FindingHandoffImportPayload(
+        "source-run", "ar1-" + "2" * 64, "3" * 40,
+        "ar1-" + "4" * 64, "ar1-" + "5" * 64, "run-replay", "6" * 64,
+        digest, (opened,), Role.ORCHESTRATOR,
+    ))
+    _append(
+        records,
+        "work-unit-2",
+        WorkUnitPayload("1", 1, ("src/a.py",), ("C-01",), imported.record_id),
+    )
+    _append(
+        records,
+        "work-unit-2",
+        WorkUnitPayload("1", 2, ("src/a.py",), ("C-02",), imported.record_id),
+        revision=2,
+    )
+
+    _assert_code(tuple(records), ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH)
+
+
 def test_import_tampering_and_partial_work_unit_binding_fail_with_stable_codes() -> None:
     opened = ImportedFindingTransition(
         "ar1-" + "1" * 64,

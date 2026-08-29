@@ -231,14 +231,12 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
         latest_work_record_by_id[unit_id] = record
         unit = unit_by_id.get(unit_id)
         slice_record = slice_by_id.get(payload.slice_id)
-        pending_correction = _recoverable_pending_correction_record(
-            state, chain, record
-        )
+        pending_work_record = _recoverable_pending_work_record(state, chain, record)
         if unit is None or slice_record is None:
             raise mismatch("work-unit record has no state-v3 counterpart", record.record_id)
         if (
             str(unit.slice_id) != payload.slice_id
-            or (payload.round_number > unit.round_number and not pending_correction)
+            or (payload.round_number > unit.round_number and not pending_work_record)
             or payload.paths != slice_record.scope_paths
         ):
             raise mismatch("work-unit round, slice, or path allowlist differs", record.record_id)
@@ -255,13 +253,7 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
                 if import_records and unit_id == first_implementation_unit_id
                 else None
             )
-            if (
-                payload.finding_import_record_id != expected_import_id
-                or (
-                    expected_import_id is not None
-                    and payload.open_finding_ids != tuple(sorted(unit.open_findings))
-                )
-            ):
+            if payload.finding_import_record_id != expected_import_id:
                 raise mismatch(
                     "work-unit finding import binding differs from state-v3",
                     record.record_id,
@@ -271,18 +263,25 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
         unit = unit_by_id[unit_id]
         payload = record.payload
         assert isinstance(payload, (WorkUnitPayload, CorrectionWorkUnitPayload))
-        pending_correction = _recoverable_pending_correction_record(
-            state, chain, record
-        )
-        if payload.round_number != unit.round_number and not pending_correction:
+        pending_work_record = _recoverable_pending_work_record(state, chain, record)
+        if payload.round_number != unit.round_number and not pending_work_record:
             raise mismatch(
                 "latest work-unit round differs from state-v3",
                 record.record_id,
             )
         if (
+            isinstance(payload, WorkUnitPayload)
+            and payload.open_finding_ids != tuple(sorted(unit.open_findings))
+            and not pending_work_record
+        ):
+            raise mismatch(
+                "latest work-unit finding state differs from state-v3",
+                record.record_id,
+            )
+        if (
             isinstance(payload, CorrectionWorkUnitPayload)
             and payload.finding_ids != unit.open_findings
-            and not pending_correction
+            and not pending_work_record
         ):
             raise mismatch(
                 "latest correction finding attribution differs from state-v3",
@@ -306,7 +305,7 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
         assert isinstance(payload, (WorkUnitPayload, CorrectionWorkUnitPayload))
         if (
             payload.round_number != current.round_number
-            and not _recoverable_pending_correction_record(state, chain, latest)
+            and not _recoverable_pending_work_record(state, chain, latest)
         ):
             raise mismatch("current work-unit round differs from the record chain", latest.record_id)
 
@@ -737,13 +736,8 @@ def _recoverable_pending_correction_record(
     """Recognize the next correction round durably written before its mirror."""
     payload = record.payload
     unit = state.current_work_unit
-    reviewer_by_step = {
-        WorkflowStep.CLAUDE_SLICE_REVIEW: "claude",
-    }
-    reviewer = reviewer_by_step.get(state.current_step)
     if (
-        reviewer is None
-        or unit.kind is not WorkUnitKind.CORRECTION
+        unit.kind is not WorkUnitKind.CORRECTION
         or not isinstance(payload, CorrectionWorkUnitPayload)
         or record.logical_id != f"work-unit-{unit.work_unit_id}"
         or payload.slice_id != str(unit.slice_id)
@@ -751,6 +745,79 @@ def _recoverable_pending_correction_record(
         or not payload.finding_ids
     ):
         return False
+    review = _pending_denied_review(state, chain, record)
+    if review is None:
+        return False
+    prefix = "C-"
+    return (
+        any(
+            isinstance(candidate.payload, ValidationAttestationPayload)
+            and candidate.fingerprint == review.fingerprint
+            for candidate in chain
+        )
+        and set(payload.finding_ids).issubset(review.payload.finding_ids)
+        and all(item.startswith(prefix) for item in payload.finding_ids)
+    )
+
+
+def _recoverable_pending_slice_denial_record(
+    state: WorkflowState,
+    chain: tuple[ArtifactRecord, ...],
+    record: ArtifactRecord,
+) -> bool:
+    """Recognize a denied Slice review whose next round is record-ahead."""
+    payload = record.payload
+    unit = state.current_work_unit
+    if (
+        unit.kind is not WorkUnitKind.SLICE
+        or not isinstance(payload, WorkUnitPayload)
+        or record.logical_id != f"work-unit-{unit.work_unit_id}"
+        or payload.slice_id != str(unit.slice_id)
+        or payload.round_number != unit.round_number + 1
+        or not payload.open_finding_ids
+        or not all(item.startswith("C-") for item in payload.open_finding_ids)
+    ):
+        return False
+    review = _pending_denied_review(state, chain, record)
+    if review is None:
+        return False
+    positions = {candidate.record_id: index for index, candidate in enumerate(chain)}
+    review_position = positions[review.record_id]
+    return (
+        any(
+            isinstance(candidate.payload, ValidationAttestationPayload)
+            and candidate.fingerprint == review.fingerprint
+            and positions[candidate.record_id] < review_position
+            for candidate in chain
+        )
+        and set(payload.open_finding_ids).issubset(review.payload.finding_ids)
+    )
+
+
+def _recoverable_pending_work_record(
+    state: WorkflowState,
+    chain: tuple[ArtifactRecord, ...],
+    record: ArtifactRecord,
+) -> bool:
+    """Recognize the two bounded record-ahead work-unit transitions."""
+    return _recoverable_pending_correction_record(
+        state, chain, record
+    ) or _recoverable_pending_slice_denial_record(state, chain, record)
+
+
+def _pending_denied_review(
+    state: WorkflowState,
+    chain: tuple[ArtifactRecord, ...],
+    record: ArtifactRecord,
+) -> ArtifactRecord | None:
+    """Return the unique prior denial bound to the mirror's current round."""
+    unit = state.current_work_unit
+    reviewer_by_step = {
+        WorkflowStep.CLAUDE_SLICE_REVIEW: "claude",
+    }
+    reviewer = reviewer_by_step.get(state.current_step)
+    if reviewer is None:
+        return None
     logical_id = f"review-{reviewer}-{unit.work_unit_id}-{unit.round_number}"
     reviews = tuple(
         candidate
@@ -760,21 +827,9 @@ def _recoverable_pending_correction_record(
         and candidate.payload.work_unit_id == str(unit.work_unit_id)
         and candidate.payload.reviewer.value == reviewer
         and candidate.payload.verdict == "denied"
+        and chain.index(candidate) < chain.index(record)
     )
-    if len(reviews) != 1:
-        return False
-    review = reviews[0]
-    prefix = "C-"
-    return (
-        chain.index(review) < chain.index(record)
-        and any(
-            isinstance(candidate.payload, ValidationAttestationPayload)
-            and candidate.fingerprint == review.fingerprint
-            for candidate in chain
-        )
-        and set(payload.finding_ids).issubset(review.payload.finding_ids)
-        and all(item.startswith(prefix) for item in payload.finding_ids)
-    )
+    return reviews[0] if len(reviews) == 1 else None
 
 
 def _state_has_review_event(

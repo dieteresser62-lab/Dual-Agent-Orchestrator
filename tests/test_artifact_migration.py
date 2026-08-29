@@ -324,6 +324,98 @@ def test_finding_handoff_resume_rejects_duplicate_import_before_mirror_use(
     assert error.value.code is ReplayDiagnosticCode.RECORD_DUPLICATE
 
 
+def test_finding_import_denial_round_converges_from_record_ahead_state(
+    tmp_path: Path,
+) -> None:
+    state, _source, local, _export, imported = _finding_handoff_resume_fixture(
+        tmp_path
+    )
+    state = state.with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW)
+    attestation = local.append(
+        ValidationAttestationPayload(
+            results=(
+                ValidationResult(
+                    command=CommandSpec("pytest", ("python3", "-m", "pytest")),
+                    outcome="pass",
+                    exit_code=0,
+                    output_sha256="e" * 64,
+                ),
+            ),
+            attested_by=Role.ORCHESTRATOR,
+        ),
+        logical_id="validation-slice-round-1",
+        idempotency_key="validation-slice-round-1",
+        fingerprint_sha256="d" * 64,
+    )
+    review = local.append(
+        ReviewPayload(
+            reviewer=Role.CLAUDE,
+            work_unit_id=str(state.current_work_unit_id),
+            verdict="denied",
+            finding_ids=("C-01", "C-02"),
+            evidence=None,
+            transport_schema="native-claude-review-v2",
+            request_id="native-review-request-" + "b" * 64,
+            response_sha256="c" * 64,
+        ),
+        logical_id=f"review-claude-{state.current_work_unit_id}-1",
+        idempotency_key="slice-review-round-1",
+        fingerprint_sha256="d" * 64,
+    )
+    local.append(
+        FindingTransitionPayload(
+            "C-01", Role.CLAUDE, Role.CLAUDE, "status_changed",
+            FindingSeverity.BLOCKER, "closed", "Imported finding verified.",
+            str(state.current_work_unit_id),
+        ),
+        logical_id="finding-C-01",
+        idempotency_key="finding-C-01-closed",
+        fingerprint_sha256="d" * 64,
+    )
+    local.append(
+        FindingTransitionPayload(
+            "C-02", Role.CLAUDE, Role.CLAUDE, "opened",
+            FindingSeverity.BLOCKER, "open", "Correction required.",
+            str(state.current_work_unit_id), "New Slice blocker.",
+            "The correction remains resumable.", "1", 1,
+        ),
+        logical_id="finding-C-02",
+        idempotency_key="finding-C-02-opened",
+        fingerprint_sha256="d" * 64,
+    )
+    next_round = local.append(
+        WorkUnitPayload(
+            "1", 2, ("src/resume.py",), ("C-02",), imported.record_id
+        ),
+        logical_id="work-unit-2",
+        idempotency_key="work-unit:2:round:2",
+        fingerprint_sha256="a" * 64,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    state = replace(
+        state,
+        runtime_history={
+            "current": {
+                "findings": [{"finding_id": "C-01", "status": "open"}],
+                "attestations": [
+                    {
+                        "attestation_id": attestation.logical_id,
+                        "diff_fingerprint": attestation.fingerprint.sha256,
+                    }
+                ],
+            },
+            "archive": [],
+        },
+    )
+
+    resolution = resolve_resume_state(tmp_path, state)
+
+    assert resolution.record_head_id == next_round.record_id
+    assert review.record_id in {
+        record.record_id for record in resolution.replay_result.records
+    }
+
+
 def test_legacy_state_without_records_is_rejected_without_store_access(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -747,6 +839,139 @@ def test_pending_correction_resume_exception_rejects_near_misses(
 
     assert not artifact_migration._recoverable_pending_correction_record(
         state, chain, correction
+    ), failure_mode
+
+
+def _pending_slice_denial_chain(
+    repository: Path,
+) -> tuple[WorkflowState, tuple[object, ...], object, object, object]:
+    state = _state(repository).with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW)
+    bridge = ArtifactBridge(ArtifactStore(repository, state.run_id))
+    bridge.append(
+        WorkUnitPayload(
+            str(state.current_slice_id),
+            1,
+            state.current_slice.scope_paths,
+        ),
+        logical_id=f"work-unit-{state.current_work_unit_id}",
+        idempotency_key="slice-round-1",
+        fingerprint_sha256=state.task_digest,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    attestation = bridge.append(
+        ValidationAttestationPayload(
+            results=(
+                ValidationResult(
+                    command=CommandSpec("pytest", ("python3", "-m", "pytest")),
+                    outcome="pass",
+                    exit_code=0,
+                    output_sha256="e" * 64,
+                ),
+            ),
+            attested_by=Role.ORCHESTRATOR,
+        ),
+        logical_id="validation-slice-round-1",
+        idempotency_key="validation-slice-round-1",
+        fingerprint_sha256="d" * 64,
+    )
+    review = bridge.append(
+        ReviewPayload(
+            reviewer=Role.CLAUDE,
+            work_unit_id=str(state.current_work_unit_id),
+            verdict="denied",
+            finding_ids=("C-02",),
+            evidence=None,
+            transport_schema="native-claude-review-v2",
+            request_id="native-review-request-" + "b" * 64,
+            response_sha256="c" * 64,
+        ),
+        logical_id=f"review-claude-{state.current_work_unit_id}-1",
+        idempotency_key="slice-review-round-1",
+        fingerprint_sha256="d" * 64,
+    )
+    next_round = bridge.append(
+        WorkUnitPayload(
+            str(state.current_slice_id),
+            2,
+            state.current_slice.scope_paths,
+            ("C-02",),
+        ),
+        logical_id=f"work-unit-{state.current_work_unit_id}",
+        idempotency_key="slice-round-2",
+        fingerprint_sha256=state.task_digest,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    return state, bridge.store.load_chain(), attestation, review, next_round
+
+
+def test_pending_slice_denial_round_is_admitted_for_record_ahead_resume(
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    state, chain, _attestation, _review, next_round = (
+        _pending_slice_denial_chain(repository)
+    )
+
+    assert artifact_migration._recoverable_pending_slice_denial_record(
+        state, chain, next_round
+    )
+
+
+@pytest.mark.parametrize(
+    "failure_mode",
+    (
+        "wrong-round",
+        "approved-verdict",
+        "finding-outside-review",
+        "record-before-review",
+        "missing-attestation",
+    ),
+)
+def test_pending_slice_denial_round_rejects_near_misses(
+    tmp_path: Path,
+    failure_mode: str,
+) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    state, chain, attestation, review, next_round = _pending_slice_denial_chain(
+        repository
+    )
+    if failure_mode == "wrong-round":
+        next_round = replace(
+            next_round,
+            payload=replace(next_round.payload, round_number=3),
+        )
+    elif failure_mode == "approved-verdict":
+        review = replace(
+            review,
+            payload=replace(
+                review.payload,
+                verdict="approved",
+                evidence="review evidence | residual risk | break condition",
+            ),
+        )
+    elif failure_mode == "finding-outside-review":
+        next_round = replace(
+            next_round,
+            payload=replace(next_round.payload, open_finding_ids=("C-03",)),
+        )
+    chain = tuple(
+        review if item.record_id == review.record_id else
+        next_round if item.record_id == next_round.record_id else item
+        for item in chain
+    )
+    if failure_mode == "record-before-review":
+        items = list(chain)
+        review_index = items.index(review)
+        record_index = items.index(next_round)
+        items[review_index], items[record_index] = items[record_index], items[review_index]
+        chain = tuple(items)
+    elif failure_mode == "missing-attestation":
+        chain = tuple(item for item in chain if item.record_id != attestation.record_id)
+
+    assert not artifact_migration._recoverable_pending_slice_denial_record(
+        state, chain, next_round
     ), failure_mode
 
 
