@@ -1516,14 +1516,29 @@ class WorkflowEngine:
                 state = state.mark_side_effect_completed(repair_key)
                 state = state.with_current_step(WorkflowStep.CODEX_PLAN_REVISION)
                 self.driver.checkpoint(state, history)
+                if missing_plan_artifact:
+                    repair_action = (
+                        "The previous response returned its native JSON record without "
+                        "writing the required repository artifact. Create the missing "
+                        f"file {state.work_plan_path} in the repository now, write the "
+                        "complete executable work plan into it, then reread and verify "
+                        "the file before returning `ready: true`. The JSON result is only "
+                        "a receipt and does not replace the file."
+                    )
+                else:
+                    repair_action = (
+                        f"Update the existing file {state.work_plan_path} in the "
+                        "repository now so it satisfies the declared work-plan contract, "
+                        "then reread and verify it before returning `ready: true`."
+                    )
                 repair_context = replace(
                     context,
                     slice_summary=(
                         f"{context.slice_summary}\n\n"
                         "AUTOMATIC PLAN CONTRACT REPAIR\n"
                         f"Validator error: {detail}\n"
-                        "Repair only the declared work-plan artifact so it can produce "
-                        "the IMPLEMENT handoff. Keep the approved task scope unchanged, "
+                        f"{repair_action}\n"
+                        "Keep the approved task scope unchanged, "
                         "use contiguous `### Slice N - title` sections, and put the "
                         "standalone heading `**Exakter Änderungspfad**` before bullet-listed "
                         "exact paths in every future Slice. Emit the normal PLAN_READY and "

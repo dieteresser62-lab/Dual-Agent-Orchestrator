@@ -3186,7 +3186,18 @@ def _context(
     active_remediation_paths = tuple(
         sorted(set(state.current_slice.scope_paths).difference(planned_scope))
     )
-    slice_summary = planned.summary if planned is not None else "Plan the requested work."
+    if planned is not None:
+        slice_summary = planned.summary
+    elif (
+        state.execution_mode == TaskMode.PLAN_ONLY.value
+        and state.current_work_unit.kind is WorkUnitKind.PLAN
+    ):
+        slice_summary = (
+            f"Create the executable work-plan artifact now at {state.work_plan_path}; "
+            "do not merely describe the planned work in the native JSON result."
+        )
+    else:
+        slice_summary = "Plan the requested work."
     if active_remediation_paths:
         rendered_remediation_paths = ", ".join(active_remediation_paths)
         effective_assignment += (
@@ -3238,8 +3249,15 @@ def _plan_only_step_boundary(state: WorkflowState) -> str:
         return ""
     if state.current_work_unit.kind is WorkUnitKind.PLAN:
         step_rule = (
-            "- PLAN_ONLY planning step: emit exactly one executable SLICE_PLAN record "
-            f"for creating or updating {state.work_plan_path}.\n"
+            f"- Create or update the file {state.work_plan_path} in the repository now. "
+            "Its complete content is the deliverable of this step.\n"
+            "- Before returning `ready: true`, reread that file and verify that it "
+            "exists, is non-empty, and contains the executable work plan.\n"
+            "- Then emit exactly one executable PLAN_ONLY SLICE_PLAN record for that "
+            "artifact. The native JSON record is only a receipt for the written file; "
+            "it does not contain or replace the work-plan document.\n"
+            "- If you cannot write and verify the work-plan file, do not return "
+            "`ready: true`; return the typed stop result instead.\n"
         )
     else:
         scope = ", ".join(state.current_slice.scope_paths)
@@ -3254,7 +3272,8 @@ def _plan_only_step_boundary(state: WorkflowState) -> str:
         + "- Future product implementation Slices belong only as human-readable "
         "sections inside the work-plan document; do not emit them as executable "
         "SLICE_PLAN records in this run.\n"
-        "- Do not modify product code, tests, configuration, or generated artifacts."
+        "- Do not modify product code, tests, configuration, or generated artifacts. "
+        "The declared work-plan document is the one repository file you must write."
     )
 
 

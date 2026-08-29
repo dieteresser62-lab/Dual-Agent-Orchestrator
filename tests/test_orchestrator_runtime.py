@@ -3807,15 +3807,27 @@ def test_plan_only_repairs_missing_work_plan_before_review(
         _driver: ProductionWorkflowDriver, invocation: CodexInvocation
     ) -> NativeAgentCodexOutput:
         codex_steps.append(invocation.step)
+        assert invocation.native_request is not None
+        request_json = invocation.native_request.canonical_json
+        assert (
+            "Create or update the file docs/internal/work-plan.md in the repository "
+            "now. Its complete content is the deliverable of this step."
+            in request_json
+        )
+        assert "native JSON record is only a receipt" in request_json
+        assert "one repository file you must write" in request_json
+        assert "Plan the requested work." not in request_json
         if invocation.step is WorkflowStep.CODEX_PLAN_REVISION:
-            assert invocation.native_request is not None
-            assert "AUTOMATIC PLAN CONTRACT REPAIR" in (
-                invocation.native_request.canonical_json
-            )
+            assert "AUTOMATIC PLAN CONTRACT REPAIR" in request_json
             assert (
                 "PLAN_ONLY Codex planning must create or update WORK_PLAN_PATH"
-                in invocation.native_request.canonical_json
+                in request_json
             )
+            assert (
+                "Create the missing file docs/internal/work-plan.md in the repository now"
+                in request_json
+            )
+            assert "Repair only the declared work-plan artifact" not in request_json
             plan = repository / "docs" / "internal" / "work-plan.md"
             plan.parent.mkdir(parents=True, exist_ok=True)
             plan.write_text(
@@ -3939,12 +3951,14 @@ def test_plan_only_repairs_handoff_contract_before_review(
             body = "No exact path section.\n"
         else:
             assert invocation.native_request is not None
-            assert "AUTOMATIC PLAN CONTRACT REPAIR" in (
-                invocation.native_request.canonical_json
+            request_json = invocation.native_request.canonical_json
+            assert "AUTOMATIC PLAN CONTRACT REPAIR" in request_json
+            assert "Slice 1 has no exact change-path section" in request_json
+            assert (
+                "Update the existing file docs/internal/work-plan.md in the repository now"
+                in request_json
             )
-            assert "Slice 1 has no exact change-path section" in (
-                invocation.native_request.canonical_json
-            )
+            assert "Create the missing file" not in request_json
             body = (
                 "**Exakter Änderungspfad**\n\n- `src/future.py`\n\n"
                 "#### \u0041kzeptanzkriterien\n\n- Future behavior is covered.\n"
