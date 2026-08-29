@@ -1,4 +1,4 @@
-# Hotfix: fehlendes PLAN_ONLY-Artefakt korrekt nachbessern
+# Hotfix: fehlendes PLAN_ONLY-Artefakt korrekt nachbessern (Archiv)
 
 Datum: 28. August 2026  
 Branch: `feature/plan-only-missing-artifact-hotfix`  

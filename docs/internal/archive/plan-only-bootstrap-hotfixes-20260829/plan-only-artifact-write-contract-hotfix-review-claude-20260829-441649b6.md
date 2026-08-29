@@ -1,4 +1,4 @@
-# Claude-Review: PLAN_ONLY-Schreibvertrag-Hotfix
+# Claude-Review: PLAN_ONLY-Schreibvertrag-Hotfix (Archiv)
 
 **Reviewer:** Claude (manuell, adversarial, read-only) · **Datum:** 29. August 2026
 **Diff-SHA-256:** `441649b693601b95e13ed04e81df56cd541b27b34837cbd4fbca6c0db39d309b`

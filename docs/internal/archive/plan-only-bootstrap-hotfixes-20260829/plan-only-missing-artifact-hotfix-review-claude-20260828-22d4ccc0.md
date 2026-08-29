@@ -1,4 +1,4 @@
-# Claude-Review: Hotfix „fehlendes PLAN_ONLY-Artefakt"
+# Claude-Review: Hotfix „fehlendes PLAN_ONLY-Artefakt" (Archiv)
 
 **Reviewer:** Claude (manuell, adversarial, read-only) · **Datum:** 28. August 2026
 **Kontrollhash des geprüften Pakets:** `22d4ccc05979aab2dcaaa1db3cfa42445583e1abae14833045f168fe56e56ed0`

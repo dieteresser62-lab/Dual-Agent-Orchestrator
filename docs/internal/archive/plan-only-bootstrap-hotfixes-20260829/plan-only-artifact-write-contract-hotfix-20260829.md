@@ -1,4 +1,4 @@
-# Hotfix: Expliziter Schreibvertrag für PLAN_ONLY-Artefakte
+# Hotfix: Expliziter Schreibvertrag für PLAN_ONLY-Artefakte (Archiv)
 
 Datum: 29. August 2026
 
