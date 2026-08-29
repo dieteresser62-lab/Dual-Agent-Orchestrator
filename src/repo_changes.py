@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 import os
@@ -10,11 +11,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Iterable, Mapping, Sequence
 
-from audit_trail import (
-    AuditTrailError,
-    strip_managed_audit_sections,
-    strip_managed_work_plan_audit_appendix,
-)
+from semantic_markdown import SemanticMarkdownError, canonical_semantic_markdown
 from path_policy import PathPolicyError, resolve_path_within_roots
 
 
@@ -401,17 +398,21 @@ def _read_path_payload(
     if markdown_content is not None:
         try:
             decoded = bytes(markdown_content).decode("utf-8")
-            semantic = (
-                strip_managed_work_plan_audit_appendix(decoded)
-                if relative_path in semantic_markdown_paths
-                else strip_managed_audit_sections(decoded)
+            semantic = canonical_semantic_markdown(
+                decoded,
+                path=relative_path,
+                remove_appendix=relative_path in semantic_markdown_paths,
             ).encode("utf-8")
-        except (UnicodeError, AuditTrailError) as exc:
+        except (UnicodeError, SemanticMarkdownError) as exc:
             raise RepositoryChangeError(
                 f"could not canonicalize managed audit sections in {relative_path!r}: {exc}"
             ) from exc
         fingerprint_size = len(semantic)
         fingerprint_digest = hashlib.sha256(semantic).hexdigest()
+        preview = bytearray(semantic)
+        opened_size_for_preview = len(semantic)
+    else:
+        opened_size_for_preview = opened_size
     return _UntrackedPayload(
         content_type="regular",
         size=opened_size,
@@ -419,7 +420,7 @@ def _read_path_payload(
         fingerprint_size=fingerprint_size,
         fingerprint_digest=fingerprint_digest,
         preview=bytes(preview),
-        truncated=opened_size > len(preview),
+        truncated=opened_size_for_preview > len(preview),
         mode=normalized_mode,
     )
 
@@ -432,6 +433,68 @@ def _uses_semantic_markdown_digest(relative_path: str) -> bool:
         path.name == "orchestrator-modernization-work-plan.md"
         or _SLICE_AUDIT_MARKDOWN_PATTERN.fullmatch(path.name) is not None
     )
+
+
+def _render_semantic_tracked_diff(
+    repository_root: Path,
+    merge_base: str,
+    entry: ChangedPath,
+    *,
+    remove_appendix: bool,
+) -> str:
+    if entry.old_path is not None and entry.old_path != entry.path:
+        raise RepositoryChangeError(
+            f"managed Markdown rename is unsupported: {entry.old_path!r} -> {entry.path!r}"
+        )
+    if entry.kind == "added":
+        old_text = ""
+    else:
+        raw_old = _git(repository_root, ("show", f"{merge_base}:{entry.path}")).stdout
+        try:
+            old_text = canonical_semantic_markdown(
+                raw_old.decode("utf-8"),
+                path=entry.path,
+                remove_appendix=remove_appendix,
+            )
+        except (UnicodeError, SemanticMarkdownError) as exc:
+            raise RepositoryChangeError(
+                f"could not canonicalize base Markdown {entry.path!r}: {exc}"
+            ) from exc
+    if entry.kind == "deleted":
+        new_text = ""
+    else:
+        try:
+            new_text = canonical_semantic_markdown(
+                (repository_root / PurePosixPath(entry.path)).read_text(encoding="utf-8"),
+                path=entry.path,
+                remove_appendix=remove_appendix,
+            )
+        except (OSError, UnicodeError, SemanticMarkdownError) as exc:
+            raise RepositoryChangeError(
+                f"could not canonicalize working Markdown {entry.path!r}: {exc}"
+            ) from exc
+    display = _display_path(entry.path)
+    old_label = "/dev/null" if entry.kind == "added" else f"a/{display}"
+    new_label = "/dev/null" if entry.kind == "deleted" else f"b/{display}"
+    body = "".join(
+        difflib.unified_diff(
+            old_text.splitlines(keepends=True),
+            new_text.splitlines(keepends=True),
+            fromfile=old_label,
+            tofile=new_label,
+            n=3,
+        )
+    ).rstrip("\n")
+    if not body:
+        return ""
+    metadata = (
+        "new file mode 100644\n"
+        if entry.kind == "added"
+        else "deleted file mode 100644\n"
+        if entry.kind == "deleted"
+        else ""
+    )
+    return f"diff --git a/{display} b/{display}\n{metadata}{body}"
 
 
 def _render_untracked_diff(path: str, payload: _UntrackedPayload) -> str:
@@ -546,6 +609,18 @@ def collect_repository_changes(
             }
         )
     )
+    semantic_tracked_paths = {
+        entry.path
+        for entry in entries
+        if entry.tracked
+        and (
+            entry.path in semantic_paths
+            or _uses_semantic_markdown_digest(entry.path)
+        )
+    }
+    raw_tracked_paths = tuple(
+        path for path in tracked_paths if path not in semantic_tracked_paths
+    )
     tracked_diff = (
         _git(
             root,
@@ -556,10 +631,10 @@ def collect_repository_changes(
                 "--find-renames",
                 canonical_merge_base,
                 "--",
-                *(f":(top,literal){path}" for path in tracked_paths),
+                *(f":(top,literal){path}" for path in raw_tracked_paths),
             ),
         ).stdout
-        if tracked_paths
+        if raw_tracked_paths
         else b""
     )
 
@@ -590,6 +665,16 @@ def collect_repository_changes(
     diff_parts: list[str] = []
     if tracked_diff.strip():
         diff_parts.append(tracked_diff.decode("utf-8", errors="replace").rstrip())
+    diff_parts.extend(
+        _render_semantic_tracked_diff(
+            root,
+            canonical_merge_base,
+            entry,
+            remove_appendix=entry.path in semantic_paths,
+        )
+        for entry in entries
+        if entry.tracked and entry.path in semantic_tracked_paths
+    )
     diff_parts.extend(
         _render_untracked_diff(entry.path, payloads[entry.path])
         for entry in entries

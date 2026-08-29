@@ -25,6 +25,12 @@ from contracts import (
 )
 from path_policy import PathPolicyError, resolve_repository_path
 from state_io import atomic_write_file
+from semantic_markdown import (
+    SemanticMarkdownError,
+    SemanticMarkdownKind,
+    canonical_semantic_markdown,
+    parse_semantic_markdown,
+)
 
 
 class AuditTrailError(ValueError):
@@ -86,22 +92,9 @@ SLICE_MANAGED_SECTION_HEADINGS = {
     "approval-status": "Freigabestatus",  # allowlist:german
 }
 
-WORK_PLAN_MANAGED_SECTION_HEADINGS = {
-    "claude-review": "Review-Feedback von Claude",
-    "codex-responses": "Review-Antworten von Codex",
-    "validation-attestation": "Planstatus und formale Marker",
-    "test-approval-premortem": "Planstatus und formale Marker",
-    "findings": "Planstatus und formale Marker",
-    "decision-table": "Planstatus und formale Marker",
-    "approval-status": "Planstatus und formale Marker",
-}
-
 _SLICE_FILE_PATTERN = re.compile(
     r"^slice-[a-z0-9]+(?:-[a-z0-9]+)*-(?P<slice_id>\d{2})-"
     r"[a-z0-9]+(?:-[a-z0-9]+)*\.md$"
-)
-_MARKER_PATTERN = re.compile(
-    r"^<!-- audit:(?P<key>[a-z0-9-]+):(?P<edge>begin|end) -->[ \t]*$"
 )
 
 
@@ -155,14 +148,6 @@ class OverallAuditEntry:
 
 
 GENERIC_WORK_PLAN_AUDIT_HEADING = "Orchestrator-Prüfprotokoll"
-
-
-@dataclass(frozen=True)
-class _ManagedMarker:
-    key: str
-    edge: str
-    start: int
-    end: int
 
 
 @dataclass(frozen=True)
@@ -397,7 +382,6 @@ def validate_slice_document(
     )
     _validate_slice_structure(markdown)
     _managed_ranges(markdown, require_all=True)
-    _validate_marker_ownership(markdown, SLICE_MANAGED_SECTION_HEADINGS)
     return SliceDocument(
         slice_id=slice_id,
         repository_root=root,
@@ -434,7 +418,6 @@ def validate_work_plan_document(
         raise AuditTrailError(f"work plan could not be read: {exc}") from exc
     _validate_work_plan_structure(markdown)
     _managed_ranges(markdown, require_all=True)
-    _validate_marker_ownership(markdown, WORK_PLAN_MANAGED_SECTION_HEADINGS)
     return WorkPlanDocument(
         repository_root=root,
         work_plan_path=plan_path,
@@ -660,7 +643,6 @@ def validate_managed_slice_document(
         raise AuditTrailError(f"slice document could not be read: {exc}") from exc
     _validate_slice_structure(markdown)
     _managed_ranges(markdown, require_all=True)
-    _validate_marker_ownership(markdown, SLICE_MANAGED_SECTION_HEADINGS)
     return SliceDocument(slice_id, root, plan, target, relative, markdown)
 
 
@@ -852,40 +834,25 @@ def merge_structured_record_sections(
 
 def strip_managed_audit_sections(markdown: str) -> str:
     """Return stable semantic text with managed projection bodies removed."""
-    ranges = _managed_ranges(markdown, require_all=False)
-    if not ranges:
-        return markdown
-    stripped = markdown
-    for key in sorted(ranges, key=lambda item: ranges[item][0], reverse=True):
-        start, end = ranges[key]
-        replacement = (
-            f"<!-- audit:{key}:begin -->\n"
-            f"<!-- audit:{key}:end -->"
-        )
-        stripped = stripped[:start] + replacement + stripped[end:]
-    return stripped
+    try:
+        return canonical_semantic_markdown(markdown)
+    except SemanticMarkdownError as exc:
+        raise AuditTrailError(str(exc)) from exc
 
 
 def strip_managed_work_plan_audit_appendix(markdown: str) -> str:
     """Remove the generic orchestrator appendix while preserving plan semantics."""
-    visible = _lines_outside_code_fences(markdown)
-    heading = f"## {GENERIC_WORK_PLAN_AUDIT_HEADING}"
-    if heading not in visible:
-        return strip_managed_audit_sections(markdown).rstrip("\r\n") + "\n"
-    if visible.count(heading) != 1:
-        raise AuditTrailError("work plan contains duplicate managed audit appendices")
-    _managed_ranges(markdown, require_all=True)
-    match = re.search(
-        rf"(?m)^## {re.escape(GENERIC_WORK_PLAN_AUDIT_HEADING)}[ \t]*\r?$",
-        markdown,
-    )
-    if match is None:
-        raise AuditTrailError("managed work-plan appendix heading is not top-level")
-    if any(start < match.start() for start, _end in _managed_ranges(
-        markdown, require_all=True
-    ).values()):
-        raise AuditTrailError("managed work-plan blocks must stay inside the appendix")
-    return markdown[: match.start()].rstrip("\r\n") + "\n"
+    try:
+        document = parse_semantic_markdown(markdown)
+        if not document.sections:
+            return markdown.rstrip("\r\n") + "\n"
+        if document.kind is not SemanticMarkdownKind.AUDIT_APPENDIX:
+            raise SemanticMarkdownError(
+                "<markdown>", "classification", "work plan has no managed appendix"
+            )
+        return document.semantic_text(remove_appendix=True)
+    except SemanticMarkdownError as exc:
+        raise AuditTrailError(str(exc)) from exc
 
 
 def semantic_audit_fingerprint(markdown: str) -> str:
@@ -1056,83 +1023,14 @@ def _lines_outside_code_fences(markdown: str) -> list[str]:
     return visible
 
 
-def _validate_marker_ownership(
-    markdown: str,
-    expected_headings: dict[str, str],
-) -> None:
-    heading: str | None = None
-    fence: tuple[str, int] | None = None
-    for line in markdown.splitlines():
-        fence, boundary = _advance_fence_state(line, fence)
-        if boundary:
-            continue
-        if fence is not None:
-            continue
-        if line.startswith("## "):
-            heading = re.sub(r"^\d+\.\s+", "", line[3:].strip())
-        for marker in _MARKER_PATTERN.finditer(line):
-            key = marker.group("key")
-            expected = expected_headings.get(key)
-            if expected is not None and heading != expected:
-                raise AuditTrailError(
-                    f"managed audit section {key} belongs below '## {expected}'"
-                )
-
-
 def _managed_ranges(markdown: str, *, require_all: bool) -> dict[str, tuple[int, int]]:
-    edges: dict[str, dict[str, _ManagedMarker]] = {}
-    for marker in _managed_markers_outside_code_fences(markdown):
-        key = marker.key
-        edge = marker.edge
-        if key not in MANAGED_SECTION_KEYS:
-            raise AuditTrailError(f"unknown managed audit section {key!r}")
-        bucket = edges.setdefault(key, {})
-        if edge in bucket:
-            raise AuditTrailError(f"duplicate {edge} marker for audit section {key}")
-        bucket[edge] = marker
-    if require_all and set(edges) != set(MANAGED_SECTION_KEYS):
-        missing = sorted(set(MANAGED_SECTION_KEYS) - set(edges))
-        raise AuditTrailError(f"slice document is missing managed sections: {missing}")
-    ranges: dict[str, tuple[int, int]] = {}
-    for key, pair in edges.items():
-        if set(pair) != {"begin", "end"}:
-            raise AuditTrailError(f"incomplete managed audit section {key}")
-        begin = pair["begin"]
-        end = pair["end"]
-        if begin.start >= end.start:
-            raise AuditTrailError(f"reversed managed audit section {key}")
-        ranges[key] = (begin.start, end.end)
-    ordered = sorted((start, end, key) for key, (start, end) in ranges.items())
-    for (_, previous_end, previous_key), (start, _, key) in zip(ordered, ordered[1:]):
-        if start < previous_end:
-            raise AuditTrailError(
-                f"managed audit sections {previous_key} and {key} overlap"
-            )
-    return ranges
-
-
-def _managed_markers_outside_code_fences(markdown: str) -> tuple[_ManagedMarker, ...]:
-    records: list[_ManagedMarker] = []
-    fence: tuple[str, int] | None = None
-    offset = 0
-    for line in markdown.splitlines(keepends=True):
-        logical_line = line.rstrip("\r\n")
-        fence, boundary = _advance_fence_state(logical_line, fence)
-        if boundary:
-            offset += len(line)
-            continue
-        if fence is None:
-            records.extend(
-                _ManagedMarker(
-                    key=match.group("key"),
-                    edge=match.group("edge"),
-                    start=offset + match.start(),
-                    end=offset + match.end(),
-                )
-                for match in _MARKER_PATTERN.finditer(logical_line)
-            )
-        offset += len(line)
-    return tuple(records)
+    try:
+        document = parse_semantic_markdown(
+            markdown, require_managed=require_all
+        )
+    except SemanticMarkdownError as exc:
+        raise AuditTrailError(str(exc)) from exc
+    return {section.key: (section.start, section.end) for section in document.sections}
 
 
 def _advance_fence_state(

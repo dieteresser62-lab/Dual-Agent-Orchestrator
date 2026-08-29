@@ -624,16 +624,10 @@ def test_decision_table_keeps_open_and_empty_states_compact(tmp_path: Path) -> N
 
 
 def test_semantic_fingerprint_handles_crlf_managed_sections() -> None:
-    first = (
-        "# Audit\r\n"
-        "<!-- audit:findings:begin -->\r\n"
-        "first projected body\r\n"
-        "<!-- audit:findings:end -->\r\n"
-        "semantic body\r\n"
-    )
-    second = first.replace("first projected body", "different projected body")
+    first = _slice_markdown().replace("\n", "\r\n")
+    second = first.replace("alter Inhalt findings", "different projected body")
 
-    assert strip_managed_audit_sections(first).endswith("semantic body\r\n")
+    assert "different projected body" not in strip_managed_audit_sections(second)
     assert semantic_audit_fingerprint(first) == semantic_audit_fingerprint(second)
 
 

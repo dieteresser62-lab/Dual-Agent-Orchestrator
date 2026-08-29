@@ -15,6 +15,23 @@ from repo_changes import (
     merge_reported_paths,
     resolve_merge_base,
 )
+from semantic_markdown import MANAGED_SECTION_HEADINGS, MANAGED_SECTION_KEYS
+
+
+def _managed_slice_markdown(projected: str = "initial") -> str:
+    lines = ["# Slice 08 – Audit", "", "semantic body", ""]
+    for key in MANAGED_SECTION_KEYS:
+        lines.extend(
+            (
+                f"## {MANAGED_SECTION_HEADINGS[key]}",
+                "",
+                f"<!-- audit:{key}:begin -->",
+                projected if key == "claude-review" else f"projection {key}",
+                f"<!-- audit:{key}:end -->",
+                "",
+            )
+        )
+    return "\n".join(lines)
 
 
 def _git(repository: Path, *arguments: str) -> str:
@@ -125,26 +142,14 @@ def test_collect_changes_excludes_ignored_untracked_but_keeps_tracked_ignored_fi
     assert "still tracked" in changes.diff_text
 
 
-def test_internal_managed_audit_body_is_visible_but_not_self_invalidating(
+def test_internal_managed_audit_body_is_excluded_from_diff_and_fingerprint(
     tmp_path: Path,
 ) -> None:
     repository, base_commit = _new_repository(tmp_path)
     _git(repository, "switch", "-c", "feature/audit")
     audit = repository / "docs" / "internal" / "slice-example-08-audit.md"
     audit.parent.mkdir(parents=True)
-    audit.write_text(
-        "\n".join(
-            (
-                "# Audit",
-                "<!-- audit:claude-review:begin -->",
-                "initial",
-                "<!-- audit:claude-review:end -->",
-                "semantic body",
-                "",
-            )
-        ),
-        encoding="utf-8",
-    )
+    audit.write_text(_managed_slice_markdown(), encoding="utf-8")
     _commit_all(repository, "add audit document")
 
     audit.write_text(
@@ -161,8 +166,9 @@ def test_internal_managed_audit_body_is_visible_but_not_self_invalidating(
     second = collect_repository_changes(repository, base_commit)
 
     assert first.fingerprint == second.fingerprint
-    assert "first projected review" in first.diff_text
-    assert "second and much longer projected review" in second.diff_text
+    assert first.diff_text == second.diff_text
+    assert "first projected review" not in first.diff_text
+    assert "second and much longer projected review" not in second.diff_text
 
     audit.write_text(
         audit.read_text(encoding="utf-8").replace("semantic body", "changed semantic body"),

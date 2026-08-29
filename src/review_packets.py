@@ -249,6 +249,9 @@ def build_review_packet(
 
 _DIFF_HEADER = re.compile(r"^diff --git a/([^\s]+) b/([^\s]+)$")
 _HUNK_HEADER = re.compile(r"^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@(?: .*)?$")
+_AUDIT_EDGE = re.compile(
+    r"^<!-- audit:(?P<key>[a-z0-9-]+):(?P<edge>begin|end) -->$"
+)
 
 
 def _canonicalize_diff(
@@ -310,6 +313,8 @@ def _canonicalize_diff(
         hunk_headers = tuple(line for line in text_lines if line.startswith("@@"))
         if not hunk_headers or any(_HUNK_HEADER.fullmatch(line) is None for line in hunk_headers):
             raise ReviewPacketError("text diff section requires valid hunk headers")
+        if path.startswith("docs/internal/") and path.endswith(".md"):
+            _validate_semantic_marker_hunks(text_lines[hunk_indexes[0] :])
         section = "".join(section_lines).rstrip("\n") + "\n"
         entry = DiffCoverageEntry(
             path=path,
@@ -324,6 +329,31 @@ def _canonicalize_diff(
     sections.sort(key=lambda item: item[0])
     canonical_diff = "".join(item[1] for item in sections)
     return canonical_diff, tuple(item[2] for item in sections)
+
+
+def _validate_semantic_marker_hunks(lines: list[str]) -> None:
+    """Reject review diffs that expose bytes inside a managed projection body."""
+    for prefixes in ((" ", "-"), (" ", "+")):
+        active: str | None = None
+        for line in lines:
+            if line.startswith("@@"):
+                active = None
+                continue
+            if not line.startswith(prefixes) or line.startswith(("+++ ", "--- ")):
+                continue
+            content = line[1:]
+            marker = _AUDIT_EDGE.fullmatch(content)
+            if marker is not None:
+                key = marker.group("key")
+                if marker.group("edge") == "begin":
+                    active = key
+                elif active == key:
+                    active = None
+                continue
+            if active is not None and content.strip():
+                raise ReviewPacketError(
+                    "review diff contains non-semantic managed audit projection bytes"
+                )
 
 
 def exclude_review_diff_paths(review_diff: str, excluded_paths: tuple[str, ...]) -> str:

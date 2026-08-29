@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from audit_trail import strip_managed_audit_sections
+from semantic_markdown import MANAGED_SECTION_HEADINGS, MANAGED_SECTION_KEYS
 from cli import build_parser, parse_args
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -561,6 +562,9 @@ def _provider_productive_files(root: Path = ROOT) -> tuple[Path, ...]:
 
 
 def _provider_name_counts(text: str) -> dict[str, int]:
+    text = "\n".join(
+        line for line in text.splitlines() if "# allowlist:provider" not in line
+    )
     return {
         name: sum(1 for _match in re.finditer(re.escape(name), text, re.I))
         for name in _PROVIDER_NAMES
@@ -751,6 +755,13 @@ def test_provider_name_counting_is_literal_embedded_case_insensitive_and_nonover
     assert _provider_name_counts("codexcodex") == {"codex": 2, "claude": 0}
 
 
+def test_provider_name_counting_ignores_only_explicitly_allowlisted_lines() -> None:
+    assert _provider_name_counts(
+        '"claude-review"  # allowlist:provider -- canonical marker\n'
+        '"codex-responses"\n'
+    ) == {"codex": 1, "claude": 0}
+
+
 def test_provider_name_ratchet_rejects_only_a_temporary_copy_increase(
     tmp_path: Path,
 ) -> None:
@@ -866,12 +877,21 @@ def test_retirement_guard_rejects_every_active_retired_reference() -> None:
 def test_retirement_guard_ignores_only_managed_audit_projection() -> None:
     retired_name = "anti" + "gravity"
     internal_document = ROOT / "docs" / "internal" / "synthetic-audit.md"
-    projected = (
-        "# Active evidence\n\n"
-        "<!-- audit:validation-attestation:begin -->\n"
-        f"pytest negative control: {retired_name}\n"
-        "<!-- audit:validation-attestation:end -->\n"
-    )
+    projected_lines = ["# Slice 01 – Active evidence", ""]
+    for key in MANAGED_SECTION_KEYS:
+        projected_lines.extend(
+            (
+                f"## {MANAGED_SECTION_HEADINGS[key]}",
+                "",
+                f"<!-- audit:{key}:begin -->",
+                f"pytest negative control: {retired_name}"
+                if key == "validation-attestation"
+                else "green projection",
+                f"<!-- audit:{key}:end -->",
+                "",
+            )
+        )
+    projected = "\n".join(projected_lines)
 
     assert _retirement_hits(internal_document, projected) == []
     assert _retirement_hits(

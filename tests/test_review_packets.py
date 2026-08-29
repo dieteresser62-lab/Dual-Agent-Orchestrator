@@ -281,6 +281,45 @@ def test_hunk_content_cannot_impersonate_file_headers_or_diff_sections() -> None
     assert packet.manifest.diff_coverage[0].path == "src/core.py"
 
 
+def test_internal_markdown_diff_accepts_empty_managed_projection_body() -> None:
+    path = "docs/internal/slice-example-01-audit.md"
+    diff = (
+        f"diff --git a/{path} b/{path}\n"
+        f"--- a/{path}\n+++ b/{path}\n"
+        "@@ -1,2 +1,3 @@\n"
+        " <!-- audit:findings:begin -->\n"
+        " <!-- audit:findings:end -->\n"
+        "+authored text\n"
+    )
+
+    packet = build_review_packet(
+        purpose="slice", fingerprint="a" * 64, start_fingerprint="0" * 64,
+        paths=(path,), review_diff=diff, plan_text=PLAN, slice_id=2,
+        attestation=_attestation(), findings=(),
+    )
+    assert packet.manifest.diff_coverage[0].path == path
+
+
+def test_internal_markdown_diff_rejects_managed_projection_bytes() -> None:
+    path = "docs/internal/slice-example-01-audit.md"
+    diff = (
+        f"diff --git a/{path} b/{path}\n"
+        f"--- a/{path}\n+++ b/{path}\n"
+        "@@ -1,3 +1,3 @@\n"
+        " <!-- audit:findings:begin -->\n"
+        "-old projected output\n"
+        "+new projected output\n"
+        " <!-- audit:findings:end -->\n"
+    )
+
+    with pytest.raises(ReviewPacketError, match="non-semantic managed audit"):
+        build_review_packet(
+            purpose="slice", fingerprint="a" * 64, start_fingerprint="0" * 64,
+            paths=(path,), review_diff=diff, plan_text=PLAN, slice_id=2,
+            attestation=_attestation(), findings=(),
+        )
+
+
 @pytest.mark.parametrize(
     ("metadata", "old_header", "new_header", "expected"),
     (
