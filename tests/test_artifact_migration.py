@@ -416,6 +416,148 @@ def test_finding_import_denial_round_converges_from_record_ahead_state(
     }
 
 
+def test_later_work_unit_can_carry_open_finding_without_import_snapshot(
+    tmp_path: Path,
+) -> None:
+    task = tmp_path / "task.md"
+    task.write_text("task", encoding="utf-8")
+    state = (
+        init_workflow_state(
+            run_id="carried-finding-run",
+            task_file=str(task),
+            branch="feature/carried-finding",
+            branch_base="b" * 40,
+            slice_count=2,
+            task_digest="a" * 64,
+            task_scope_patterns=("src/one.py", "src/two.py"),
+            target_branch="feature/carried-finding",
+            protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        )
+        .complete_current_work_unit()
+        .start_work_unit(
+            slice_id=1,
+            kind=WorkUnitKind.SLICE,
+            step=WorkflowStep.CODEX_IMPLEMENTATION,
+        )
+        .bind_current_slice_git_boundary(
+            start_commit="b" * 40,
+            scope_paths=("src/one.py",),
+            start_fingerprint="c" * 64,
+        )
+        .complete_current_slice(commit_ref="d" * 40)
+        .start_work_unit(
+            slice_id=2,
+            kind=WorkUnitKind.SLICE,
+            step=WorkflowStep.CODEX_IMPLEMENTATION,
+            slice_start_commit="d" * 40,
+        )
+        .bind_current_slice_git_boundary(
+            start_commit="d" * 40,
+            scope_paths=("src/two.py",),
+            start_fingerprint="f" * 64,
+        )
+    )
+    carried_unit = replace(state.current_work_unit, open_findings=("C-04",))
+    state = replace(
+        state,
+        work_units=(*state.work_units[:-1], carried_unit),
+    )
+    bridge = ArtifactBridge(ArtifactStore(tmp_path, state.run_id))
+    bridge.append(
+        TaskPayload(
+            "feature/carried-finding",
+            ("src/one.py", "src/two.py"),
+            "a" * 64,
+        ),
+        logical_id="task-contract",
+        idempotency_key="task-contract",
+        fingerprint_sha256="a" * 64,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    bridge.append(
+        WorkUnitPayload("1", 1, ("src/one.py",)),
+        logical_id="work-unit-2",
+        idempotency_key="work-unit:2:round:1",
+        fingerprint_sha256="a" * 64,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    attestation, review = _authorization_records(
+        tmp_path,
+        state,
+        attestation_fingerprint="d" * 64,
+        review_fingerprint="d" * 64,
+    )
+    bridge.append(
+        FindingTransitionPayload(
+            "C-04", Role.CLAUDE, Role.CLAUDE, "opened",
+            FindingSeverity.OBSERVATION, "open", "Carry to the next Slice.",
+            "2", "Cross-Slice observation.", "It remains in the ledger.", "1", 1,
+        ),
+        logical_id="finding-C-04",
+        idempotency_key="finding-C-04-opened",
+        fingerprint_sha256="d" * 64,
+    )
+    bridge.append(
+        BindingPayload(
+            binding_kind="commit",
+            target="d" * 40,
+            attestation_id=attestation.record_id,
+            approval_ids=(review.record_id,),
+        ),
+        logical_id="commit-1",
+        idempotency_key="commit:1",
+        fingerprint_sha256="d" * 64,
+    )
+    latest = bridge.append(
+        WorkUnitPayload("2", 1, ("src/two.py",)),
+        logical_id="work-unit-3",
+        idempotency_key="work-unit:3:round:1",
+        fingerprint_sha256="a" * 64,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    state = replace(
+        state,
+        runtime_history={
+            "current": {
+                "findings": [{"finding_id": "C-04", "status": "open"}],
+                "attestations": [
+                    {
+                        "attestation_id": attestation.logical_id,
+                        "diff_fingerprint": attestation.fingerprint.sha256,
+                    }
+                ],
+            },
+            "archive": [],
+        },
+    )
+
+    resolution = resolve_resume_state(tmp_path, state)
+
+    assert resolution.record_head_id == latest.record_id
+    assert state.current_work_unit.open_findings == ("C-04",)
+    assert latest.payload.finding_import_record_id is None
+    assert latest.payload.open_finding_ids == ()
+
+
+def test_import_bound_latest_work_unit_still_rejects_mirror_open_set_drift(
+    tmp_path: Path,
+) -> None:
+    state, _source, _local, _export, _imported = _finding_handoff_resume_fixture(
+        tmp_path
+    )
+    drifted_unit = replace(state.current_work_unit, open_findings=("C-02",))
+    state = replace(
+        state,
+        work_units=(*state.work_units[:-1], drifted_unit),
+    )
+
+    with pytest.raises(
+        ArtifactResumeError,
+        match="latest work-unit finding state differs",
+    ):
+        resolve_resume_state(tmp_path, state)
+
+
 def test_legacy_state_without_records_is_rejected_without_store_access(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

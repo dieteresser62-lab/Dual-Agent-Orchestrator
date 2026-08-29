@@ -271,6 +271,7 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
             )
         if (
             isinstance(payload, WorkUnitPayload)
+            and payload.finding_import_record_id is not None
             and payload.open_finding_ids != tuple(sorted(unit.open_findings))
             and not pending_work_record
         ):
