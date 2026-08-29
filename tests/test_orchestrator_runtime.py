@@ -3784,6 +3784,134 @@ def test_plan_only_retries_non_handoff_plan_once_then_halts_before_review(
     assert _git(repository, "status", "--short") == "?? docs/"
 
 
+def test_plan_only_repairs_missing_work_plan_before_review(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repository = _repository(tmp_path, "feature/repaired-missing-plan")
+    task = tmp_path / "task.md"
+    task.write_text(
+        "\n".join(
+            (
+                "ORCHESTRATOR_MODE: PLAN_ONLY",
+                "WORK_PLAN_PATH: docs/internal/work-plan.md",
+                "TARGET_BRANCH: feature/repaired-missing-plan",
+                "TASK_SCOPE: docs/internal/work-plan.md",
+            )
+        ),
+        encoding="utf-8",
+    )
+    codex_steps: list[WorkflowStep] = []
+    reviewer_steps: list[WorkflowStep] = []
+
+    def codex(
+        _driver: ProductionWorkflowDriver, invocation: CodexInvocation
+    ) -> NativeAgentCodexOutput:
+        codex_steps.append(invocation.step)
+        if invocation.step is WorkflowStep.CODEX_PLAN_REVISION:
+            assert invocation.native_request is not None
+            assert "AUTOMATIC PLAN CONTRACT REPAIR" in (
+                invocation.native_request.canonical_json
+            )
+            assert (
+                "PLAN_ONLY Codex planning must create or update WORK_PLAN_PATH"
+                in invocation.native_request.canonical_json
+            )
+            plan = repository / "docs" / "internal" / "work-plan.md"
+            plan.parent.mkdir(parents=True, exist_ok=True)
+            plan.write_text(
+                "# Work plan\n\n### Slice 1 - Future implementation\n\n"
+                "**Exakter Änderungspfad**\n\n- `src/future.py`\n\n"
+                "#### \u0041kzeptanzkriterien\n\n- Future behavior is covered.\n",
+                encoding="utf-8",
+            )
+        output = _native_plan_output(
+            invocation,
+            summary="create reviewed work plan",
+            scope_paths=("docs/internal/work-plan.md",),
+        )
+        _driver.last_codex_output = output.canonical_json
+        return output
+
+    def reviewer(
+        _driver: ProductionWorkflowDriver, invocation: ReviewerInvocation
+    ) -> NativeAgentReviewOutput:
+        reviewer_steps.append(invocation.step)
+        return _native_review_approval(invocation)
+
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_codex", codex)
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_reviewer", reviewer)
+    monkeypatch.setattr(
+        ProductionWorkflowDriver,
+        "assert_structured_decision_context",
+        lambda _driver: None,
+    )
+    monkeypatch.chdir(repository)
+
+    result = run_production_workflow(task, _args(repository, task))
+
+    assert result.workflow_completed
+    assert codex_steps == [WorkflowStep.CODEX_PLAN, WorkflowStep.CODEX_PLAN_REVISION]
+    assert reviewer_steps == [WorkflowStep.CLAUDE_PLAN_REVIEW]
+    assert task.with_name("task-implement.md").is_file()
+
+
+def test_plan_only_missing_work_plan_halts_after_one_repair_before_review(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repository = _repository(tmp_path, "feature/missing-plan")
+    task = tmp_path / "task.md"
+    task.write_text(
+        "\n".join(
+            (
+                "ORCHESTRATOR_MODE: PLAN_ONLY",
+                "WORK_PLAN_PATH: docs/internal/work-plan.md",
+                "TARGET_BRANCH: feature/missing-plan",
+                "TASK_SCOPE: docs/internal/work-plan.md",
+            )
+        ),
+        encoding="utf-8",
+    )
+    codex_steps: list[WorkflowStep] = []
+    reviewer_steps: list[WorkflowStep] = []
+
+    def codex(
+        _driver: ProductionWorkflowDriver, invocation: CodexInvocation
+    ) -> NativeAgentCodexOutput:
+        codex_steps.append(invocation.step)
+        output = _native_plan_output(
+            invocation,
+            summary="create reviewed work plan",
+            scope_paths=("docs/internal/work-plan.md",),
+        )
+        _driver.last_codex_output = output.canonical_json
+        return output
+
+    def reviewer(
+        _driver: ProductionWorkflowDriver, invocation: ReviewerInvocation
+    ) -> NativeAgentReviewOutput:
+        reviewer_steps.append(invocation.step)
+        return _native_review_approval(invocation)
+
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_codex", codex)
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_reviewer", reviewer)
+    monkeypatch.chdir(repository)
+
+    result = run_production_workflow(task, _args(repository, task))
+
+    assert result.exit_code == 4
+    assert result.state.current_work_unit.status is WorkUnitStatus.AWAITING_USER_DECISION
+    assert result.state.current_work_unit.gate.reason is GateReason.STOP_REQUEST
+    assert "PLAN-CONTRACT-INVALID" in result.state.current_work_unit.gate.detail
+    assert (
+        "PLAN_ONLY Codex planning must create or update WORK_PLAN_PATH"
+        in result.state.current_work_unit.gate.detail
+    )
+    assert result.state.current_work_unit.gate.paths == ()
+    assert codex_steps == [WorkflowStep.CODEX_PLAN, WorkflowStep.CODEX_PLAN_REVISION]
+    assert reviewer_steps == []
+    assert _git(repository, "status", "--short") == ""
+
+
 def test_plan_only_repairs_handoff_contract_before_review(
     tmp_path: Path, monkeypatch
 ) -> None:

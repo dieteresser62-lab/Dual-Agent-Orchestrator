@@ -1495,8 +1495,14 @@ class WorkflowEngine:
             )
         except WorkflowExecutionError as exc:
             detail = str(exc)
-            repairable = detail.startswith(
-                "WORK_PLAN_PATH cannot produce an IMPLEMENT handoff:"
+            missing_plan_artifact = detail.startswith("PLAN_ONLY ") and detail.endswith(
+                " planning must create or update WORK_PLAN_PATH"
+            )
+            repairable = (
+                missing_plan_artifact
+                or detail.startswith(
+                    "WORK_PLAN_PATH cannot produce an IMPLEMENT handoff:"
+                )
             )
             repair_key = "automatic-plan-contract-repair"
             if repairable and not state.current_work_unit.has_completed_side_effect(
@@ -2922,9 +2928,12 @@ class WorkflowEngine:
                 return ()
             if (
                 context is not None
-                and not context.plan_only
                 and changes.paths == (".orchestrator/plan-output.md",)
             ):
+                # The driver renders this virtual path only when the planner
+                # returned a result without changing the repository. PLAN_ONLY
+                # must let its validator diagnose that missing artifact instead of
+                # presenting the virtual evidence path as a user-approved file.
                 return ()
             unexpected = tuple(
                 path
