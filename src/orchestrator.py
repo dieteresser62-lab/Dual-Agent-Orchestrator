@@ -165,6 +165,7 @@ from workflow_state import (
     ProtocolBinding,
     ProtocolMode,
     WorkflowState,
+    WorkflowStateValidationError,
     WorkflowStep,
     WorkUnitRecord,
     WorkUnitKind,
@@ -4056,6 +4057,20 @@ def run_production_workflow(
                     raise WorkflowExecutionError(
                         "completed PLAN_ONLY run has no reviewed plan commit"
                     )
+                try:
+                    recovered = state.bind_completed_plan_commit(commit_ref=commit_ref)
+                except WorkflowStateValidationError as exc:
+                    raise WorkflowExecutionError(
+                        f"could not bind completed PLAN_ONLY commit: {exc}"
+                    ) from exc
+                if recovered is not state:
+                    logger.warning(
+                        "Backfilling the approved-plan state and structured record "
+                        "for a completed PLAN_ONLY run before IMPLEMENT handoff."
+                    )
+                    state = recovered
+                    driver.checkpoint(state, history)
+                    state = driver.active_state or state
                 driver.assert_structured_decision_context()
                 try:
                     finding_handoff = driver.prepare_finding_handoff(
@@ -4072,7 +4087,7 @@ def run_production_workflow(
                         approved_plan_commit=commit_ref,
                         finding_handoff=finding_handoff,
                     )
-                except PlanHandoffError as exc:
+                except (ArtifactBridgeError, ArtifactReplayError, PlanHandoffError) as exc:
                     raise WorkflowExecutionError(
                         f"could not create IMPLEMENT handoff: {exc}"
                     ) from exc

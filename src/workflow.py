@@ -2717,6 +2717,8 @@ class WorkflowEngine:
         if not isinstance(commit_ref, str) or not commit_ref.strip():
             raise WorkflowExecutionError("slice commit did not return a commit reference")
         state = state.complete_current_slice(commit_ref=commit_ref)
+        if context.plan_only and state.current_work_unit.kind is WorkUnitKind.PLAN:
+            state = state.bind_completed_plan_commit(commit_ref=commit_ref)
         self.driver.checkpoint(state, history)
         return WorkflowRunResult(state, history, commit_ref)
 

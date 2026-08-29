@@ -23,6 +23,7 @@ from artifact_models import (
     BindingPayload,
     CommandSpec,
     CorrectionWorkUnitPayload,
+    FindingHandoffExportPayload,
     FindingTransitionPayload,
     FindingSeverity,
     PlanPayload,
@@ -37,6 +38,7 @@ from artifact_models import (
     ValidationAttestationPayload,
     ValidationResult,
     WorkUnitPayload,
+    WorkflowCompletionPayload,
 )
 from artifact_store import ArtifactStore
 from artifact_migration import ArtifactResumeError
@@ -95,6 +97,7 @@ from workflow_state import (
     ProtocolBinding,
     ProtocolMode,
     Reviewer,
+    WorkflowState,
     WorkflowStep,
     WorkUnitKind,
     WorkUnitStatus,
@@ -176,6 +179,8 @@ def _native_plan_output(
 
 def _native_review_approval(
     invocation: ReviewerInvocation,
+    *,
+    observation_id: str | None = None,
 ) -> NativeAgentReviewOutput:
     bundle = invocation.native_request
     assert bundle is not None
@@ -185,7 +190,21 @@ def _native_review_approval(
         "request_id": bundle.bound_context.request_id,
         "reviewer": "claude",
         "decision": "approved",
-        "new_findings": [],
+        "new_findings": (
+            []
+            if observation_id is None
+            else [
+                {
+                    "finding_id": observation_id,
+                    "finding_class": "OBSERVATION",
+                    "summary": "Carry the approved-plan follow-up into implementation.",
+                    "acceptance_test": {
+                        "kind": "prose",
+                        "text": "The IMPLEMENT handoff preserves this finding.",
+                    },
+                }
+            ]
+        ),
         "status_changes": [],
         "reclassifications": [],
         "anchors": [],
@@ -3994,6 +4013,183 @@ def test_plan_only_repairs_handoff_contract_before_review(
     assert codex_steps == [WorkflowStep.CODEX_PLAN, WorkflowStep.CODEX_PLAN_REVISION]
     assert reviewer_steps == [WorkflowStep.CLAUDE_PLAN_REVIEW]
     assert task.with_name("task-implement.md").is_file()
+
+
+def test_plan_only_approval_with_observation_persists_plan_before_finding_export(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repository = _repository(tmp_path, "feature/plan-finding-export")
+    inbox = repository / "inbox"
+    inbox.mkdir()
+    task = inbox / "plan.md"
+    task.write_text(
+        "\n".join(
+            (
+                "ORCHESTRATOR_MODE: PLAN_ONLY",
+                "WORK_PLAN_PATH: docs/internal/work-plan.md",
+                "TARGET_BRANCH: feature/plan-finding-export",
+                "TASK_SCOPE: docs/internal/work-plan.md",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    def codex(
+        _driver: ProductionWorkflowDriver, invocation: CodexInvocation
+    ) -> NativeAgentCodexOutput:
+        plan = repository / "docs" / "internal" / "work-plan.md"
+        plan.parent.mkdir(parents=True, exist_ok=True)
+        plan.write_text(
+            "# Work plan\n\n### Slice 1 - Future implementation\n\n"
+            "**Exakter Änderungspfad**\n\n- `src/future.py`\n\n"
+            "#### \u0041kzeptanzkriterien\n\n- Future behavior is covered.\n",
+            encoding="utf-8",
+        )
+        return _native_plan_output(
+            invocation,
+            summary="create reviewed work plan",
+            scope_paths=("docs/internal/work-plan.md",),
+        )
+
+    def reviewer(
+        _driver: ProductionWorkflowDriver, invocation: ReviewerInvocation
+    ) -> NativeAgentReviewOutput:
+        return _native_review_approval(invocation, observation_id="C-01")
+
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_codex", codex)
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_reviewer", reviewer)
+    monkeypatch.setattr(
+        ProductionWorkflowDriver,
+        "assert_structured_decision_context",
+        lambda _driver: None,
+    )
+    monkeypatch.chdir(repository)
+
+    result = run_production_workflow(task, _args(repository, task))
+
+    assert result.workflow_completed
+    assert result.commit_ref is not None
+    assert result.state.approved_plan_commit == result.commit_ref
+    handoff = task.with_name("plan-implement.md")
+    contract = parse_task_contract(handoff.read_text(encoding="utf-8"))
+    assert contract.approved_plan_commit == result.commit_ref
+    assert contract.finding_handoff_source_run_id == result.state.run_id
+    assert contract.finding_handoff_export_record_id is not None
+    chain = ArtifactStore(repository, result.state.run_id).load_chain()
+    plan_position = next(
+        index for index, record in enumerate(chain)
+        if isinstance(record.payload, PlanPayload)
+    )
+    completion_position = next(
+        index for index, record in enumerate(chain)
+        if isinstance(record.payload, WorkflowCompletionPayload)
+    )
+    export_position = next(
+        index for index, record in enumerate(chain)
+        if isinstance(record.payload, FindingHandoffExportPayload)
+    )
+    assert plan_position < completion_position < export_position
+
+
+def test_completed_plan_with_observation_backfills_plan_record_without_agents(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repository = _repository(tmp_path, "feature/legacy-plan-finding-export")
+    inbox = repository / "inbox"
+    inbox.mkdir()
+    task = inbox / "plan.md"
+    task.write_text(
+        "\n".join(
+            (
+                "ORCHESTRATOR_MODE: PLAN_ONLY",
+                "WORK_PLAN_PATH: docs/internal/work-plan.md",
+                "TARGET_BRANCH: feature/legacy-plan-finding-export",
+                "TASK_SCOPE: docs/internal/work-plan.md",
+            )
+        ),
+        encoding="utf-8",
+    )
+    agent_steps: list[WorkflowStep] = []
+
+    def codex(
+        _driver: ProductionWorkflowDriver, invocation: CodexInvocation
+    ) -> NativeAgentCodexOutput:
+        agent_steps.append(invocation.step)
+        plan = repository / "docs" / "internal" / "work-plan.md"
+        plan.parent.mkdir(parents=True, exist_ok=True)
+        plan.write_text(
+            "# Work plan\n\n### Slice 1 - Future implementation\n\n"
+            "**Exakter Änderungspfad**\n\n- `src/future.py`\n\n"
+            "#### \u0041kzeptanzkriterien\n\n- Future behavior is covered.\n",
+            encoding="utf-8",
+        )
+        return _native_plan_output(
+            invocation,
+            summary="create reviewed work plan",
+            scope_paths=("docs/internal/work-plan.md",),
+        )
+
+    def reviewer(
+        _driver: ProductionWorkflowDriver, invocation: ReviewerInvocation
+    ) -> NativeAgentReviewOutput:
+        agent_steps.append(invocation.step)
+        return _native_review_approval(invocation, observation_id="C-01")
+
+    real_bind = WorkflowState.bind_completed_plan_commit
+    suppress_binding = True
+
+    def legacy_bind(
+        state: WorkflowState, *, commit_ref: str, updated_at: str | None = None
+    ) -> WorkflowState:
+        if suppress_binding:
+            return state
+        return real_bind(state, commit_ref=commit_ref, updated_at=updated_at)
+
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_codex", codex)
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_reviewer", reviewer)
+    monkeypatch.setattr(
+        ProductionWorkflowDriver,
+        "assert_structured_decision_context",
+        lambda _driver: None,
+    )
+    monkeypatch.setattr(WorkflowState, "bind_completed_plan_commit", legacy_bind)
+    monkeypatch.chdir(repository)
+    args = _args(repository, task)
+
+    with pytest.raises(
+        WorkflowExecutionError,
+        match="finding export plan commit is not present in accepted replay",
+    ):
+        run_production_workflow(task, args)
+
+    persisted = orchestrator.load_workflow_state(
+        repository / ".orchestrator" / "state.json",
+        allowed_roots=(repository,),
+    )
+    assert isinstance(persisted, WorkflowState)
+    assert persisted.approved_plan_commit is None
+    before_resume = ArtifactStore(repository, persisted.run_id).load_chain()
+    assert any(
+        isinstance(record.payload, WorkflowCompletionPayload)
+        for record in before_resume
+    )
+    assert not any(isinstance(record.payload, PlanPayload) for record in before_resume)
+    steps_before_resume = tuple(agent_steps)
+
+    suppress_binding = False
+    args.resume = True
+    resumed = run_production_workflow(task, args)
+
+    assert resumed.workflow_completed
+    assert tuple(agent_steps) == steps_before_resume
+    assert resumed.state.approved_plan_commit == resumed.commit_ref
+    assert task.with_name("plan-implement.md").is_file()
+    after_resume = ArtifactStore(repository, resumed.state.run_id).load_chain()
+    assert sum(isinstance(record.payload, PlanPayload) for record in after_resume) == 1
+    assert sum(
+        isinstance(record.payload, FindingHandoffExportPayload)
+        for record in after_resume
+    ) == 1
 
 
 def test_completed_plan_resume_retries_failed_handoff_without_agents(

@@ -769,6 +769,41 @@ def test_multi_slice_transition_persists_start_and_commit_references() -> None:
     assert resumed.step is WorkflowStep.CODEX_IMPLEMENTATION
 
 
+def test_completed_plan_commit_binding_is_exact_and_idempotent() -> None:
+    commit = "b" * 40
+    state = init_workflow_state(
+        run_id="run-plan-only-binding",
+        task_file="/repo/plan.md",
+        branch="feature/plan-only-binding",
+        branch_base="a" * 40,
+        slice_count=1,
+        execution_mode="PLAN_ONLY",
+        work_plan_path="docs/internal/work-plan.md",
+        timestamp="2026-08-29T10:00:00+00:00",
+    ).bind_slice_plan(
+        (PlannedSlice(1, "plan artifact", ("docs/internal/work-plan.md",)),),
+        first_start_commit="a" * 40,
+    ).bind_current_slice_git_boundary(
+        start_commit="a" * 40,
+        scope_paths=("docs/internal/work-plan.md",),
+        start_fingerprint="1" * 64,
+    ).complete_current_slice(
+        commit_ref=commit,
+    )
+
+    bound = state.bind_completed_plan_commit(
+        commit_ref=commit,
+        updated_at="bound",
+    )
+
+    assert bound.approved_plan_commit == commit
+    assert bound.updated_at == "bound"
+    assert bound.bind_completed_plan_commit(commit_ref=commit) is bound
+    assert WorkflowState.from_dict(bound.to_dict()) == bound
+    with pytest.raises(WorkflowStateValidationError, match="persisted Slice commit"):
+        state.bind_completed_plan_commit(commit_ref="c" * 40)
+
+
 def test_final_review_references_committed_slice_and_appends_bounded_correction() -> None:
     state = init_workflow_state(
         run_id="run-final",

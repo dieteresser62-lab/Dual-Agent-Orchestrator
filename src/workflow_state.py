@@ -1549,6 +1549,46 @@ class WorkflowState:
             updated_at=updated_at,
         )
 
+    def bind_completed_plan_commit(
+        self,
+        *,
+        commit_ref: str,
+        updated_at: str | None = None,
+    ) -> WorkflowState:
+        """Bind the reviewed PLAN_ONLY commit for export and exact resume."""
+        _require_non_empty(commit_ref, "commit_ref")
+        if self.execution_mode != "PLAN_ONLY":
+            raise WorkflowStateValidationError(
+                "only a PLAN_ONLY workflow can bind its completed plan commit"
+            )
+        if self.current_work_unit.kind is not WorkUnitKind.PLAN:
+            raise WorkflowStateValidationError(
+                "completed plan commit binding requires the plan work unit"
+            )
+        if self.current_work_unit.status is not WorkUnitStatus.COMPLETED:
+            raise WorkflowStateValidationError(
+                "completed plan commit binding requires a completed plan work unit"
+            )
+        if self.current_slice.commit_ref != commit_ref:
+            raise WorkflowStateValidationError(
+                "completed plan commit binding must match the persisted Slice commit"
+            )
+        if self.work_plan_path is None or not self.planned_slices:
+            raise WorkflowStateValidationError(
+                "completed plan commit binding requires the persisted plan contract"
+            )
+        if self.approved_plan_commit is not None:
+            if self.approved_plan_commit != commit_ref:
+                raise WorkflowStateValidationError(
+                    "cannot replace the approved plan commit binding"
+                )
+            return self
+        return replace(
+            self,
+            approved_plan_commit=commit_ref,
+            updated_at=updated_at or _now_iso(),
+        )
+
     def bind_current_slice_git_boundary(
         self,
         *,
