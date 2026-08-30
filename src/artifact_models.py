@@ -41,6 +41,7 @@ class RecordType(StrEnum):
     RUN_PROFILE = "run_profile"
     WORKFLOW_TRANSITION = "workflow_transition"
     WORKFLOW_POLICY = "workflow_policy"
+    SLICE_BOUNDARY = "slice_boundary"
     TASK = "task"
     PLAN = "plan"
     WORK_UNIT = "work_unit"
@@ -248,6 +249,51 @@ class WorkflowPolicyPayload:
             raise ArtifactValidationError(
                 "implementer_return_count exceeds max_implementer_returns"
             )
+
+
+@dataclass(frozen=True, slots=True)
+class SliceBoundaryPayload:
+    slice_id: str
+    start_commit: str
+    scope_change_groups: tuple[tuple[str, ...], ...]
+    start_fingerprint: str
+    status: ClassVar[str] = "bound"
+    record_type: ClassVar[RecordType] = RecordType.SLICE_BOUNDARY
+
+    def __post_init__(self) -> None:
+        _require_identifier(self.slice_id, "slice boundary slice_id")
+        if not re.fullmatch(r"[0-9a-f]{40}", self.start_commit):
+            raise ArtifactValidationError(
+                "slice boundary start_commit must be a lowercase 40-character Git SHA"
+            )
+        if (
+            not self.scope_change_groups
+            or any(not group for group in self.scope_change_groups)
+        ):
+            raise ArtifactValidationError(
+                "slice boundary scope_change_groups must be non-empty"
+            )
+        for group in self.scope_change_groups:
+            _require_paths(group)
+            if tuple(sorted(group)) != group:
+                raise ArtifactValidationError(
+                    "slice boundary scope_change_groups entries must be sorted"
+                )
+        if (
+            tuple(sorted(self.scope_change_groups)) != self.scope_change_groups
+            or len(set(self.scope_change_groups)) != len(self.scope_change_groups)
+        ):
+            raise ArtifactValidationError(
+                "slice boundary scope_change_groups must be sorted and unique"
+            )
+        flattened = tuple(
+            path for group in self.scope_change_groups for path in group
+        )
+        if len(flattened) != len(set(flattened)):
+            raise ArtifactValidationError(
+                "slice boundary scope_change_groups must partition unique paths"
+            )
+        _require_sha256(self.start_fingerprint, "slice boundary start_fingerprint")
 
 
 @dataclass(frozen=True, slots=True)
@@ -964,7 +1010,7 @@ class WorkflowCompletionPayload:
 
 ArtifactPayload: TypeAlias = (
     RunIdentityPayload | RunProfilePayload
-    | WorkflowTransitionPayload | WorkflowPolicyPayload
+    | WorkflowTransitionPayload | WorkflowPolicyPayload | SliceBoundaryPayload
     | TaskPayload | PlanPayload | WorkUnitPayload | CorrectionWorkUnitPayload
     | AgentResultPayload | DiagnosticPayload | ReviewPayload | FindingTransitionPayload
     | FindingHandoffExportPayload | FindingHandoffImportPayload
@@ -1141,6 +1187,13 @@ def _payload_from_dict(record_type: RecordType, raw: Mapping[str, Any]) -> Artif
         return WorkflowPolicyPayload(
             data["work_unit_id"], data["implementer_return_count"],
             data["max_implementer_returns"],
+        )
+    if record_type is RecordType.SLICE_BOUNDARY:
+        return SliceBoundaryPayload(
+            data["slice_id"],
+            data["start_commit"],
+            tuple(tuple(group) for group in data["scope_change_groups"]),
+            data["start_fingerprint"],
         )
     if record_type is RecordType.TASK:
         return TaskPayload(data["target_branch"], tuple(data["scope_paths"]), data["assignment_sha256"])

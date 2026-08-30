@@ -1,8 +1,8 @@
 # S2 – Übergangs- und Divergenzmatrix
 
-Stand: 2026-08-29. Untersucht ist `structured-v2` auf dem S1-Stand des
+Stand: 2026-08-30. Untersucht ist `structured-v2` auf dem R3-Stand des
 Branches `feature/state-authority-consolidation`. Die Matrix beschreibt den
-Istzustand; sie ändert weder Authority noch Recovery-Verhalten. Normativ sind
+Istzustand; der spätere Authority-Cutover bleibt ausdrücklich aus. Normativ sind
 heute die append-only Records zusammen mit dem noch autoritativen
 `state-v3`-Mirror. `head.json`, Checkpoints, Audit-Markdown, Request-/Response-
 Dateien und Review-Pakete sind Caches beziehungsweise Projektionen.
@@ -27,8 +27,8 @@ Dateien und Review-Pakete sind Caches beziehungsweise Projektionen.
 - **bleibt bewusst** ist für Record-interne Kausalität, unveränderliche
   Provider-Bindungen und irreversible externe Side Effects reserviert.
 
-Die Inventur ergibt 26 Kanten, 32 `mismatch(...)`-Stellen in
-`artifact_migration.py`, 12 direkte `ArtifactResumeError`-Stellen dort, 22
+Die Inventur ergibt 26 Kanten, 33 `mismatch(...)`-Stellen in
+`artifact_migration.py`, 20 direkte `ArtifactResumeError`-Stellen dort, 22
 `ArtifactBridgeError`-Stellen in Migration, Bridge und Orchestrator sowie fünf
 `_recoverable_*`-Prädikate (vier in `artifact_migration.py`, eines für den
 finalen Review-Mirror in `orchestrator.py`).
@@ -664,7 +664,7 @@ Die folgenden Meldungsstämme sind nicht die Quelle der Inventur, sondern ein
 prüfbarer Index auf jede aktuelle Raise-Stelle. Mehrere Stämme gehören bewusst
 zu derselben semantischen Kante.
 
-### 32 Migration-`mismatch(...)`-Stellen
+### 33 Migration-`mismatch(...)`-Stellen
 
 | Meldungsstamm | Kante |
 |---|---|
@@ -674,6 +674,7 @@ zu derselben semantischen Kante.
 | `work-unit round, slice, or path allowlist differs` | A04 |
 | `correction work-unit finding attribution differs from state-v3` | A04 |
 | `work-unit finding import binding differs from state-v3` | A04/A02 |
+| `latest work-unit path allowlist differs from state-v3` | A04 |
 | `latest work-unit round differs from state-v3` | A04 |
 | `latest work-unit finding state differs from state-v3` | A04/A07 |
 | `latest correction finding attribution differs from state-v3` | A04/A07 |
@@ -701,14 +702,16 @@ zu derselben semantischen Kante.
 | `workflow completion differs from state-v3` | A15 |
 | `workflow completion references an unknown, invalid, or fingerprint-mismatched final binding` | A15/A13 |
 
-Damit sind die fünfzehn wörtlichen Vorkommen von `differs from state-v3`
+Damit sind die sechzehn wörtlichen Vorkommen von `differs from state-v3`
 abgedeckt: Runidentität; Runprofil; Workflowcursor; Task; Correction-Attribution;
-Work-unit-Importbindung; letzte Runde;
+Work-unit-Importbindung; letzter Work-unit-Scope; letzte Runde;
 letzter Findingzustand; letzte Correction-Attribution; Planbindung;
 Findingstatus; importierter Findingstatus; Bootstrap-Payload; Completion sowie
-die Export-Planbindung in A02/B03.
+die Export-Planbindung in A02/B03. Die grammatisch plurale R3-Meldung
+`slice boundaries differ from state-v3` ist zusätzlich in der direkten
+Resume-Fehlerliste gebunden.
 
-### 18 direkte `ArtifactResumeError`-Stellen
+### 20 direkte `ArtifactResumeError`-Stellen
 
 | Meldungsstamm | Kante |
 |---|---|
@@ -720,6 +723,8 @@ die Export-Planbindung in A02/B03.
 | `slice statuses differ from state-v3` | R2 Slice-Statusprojektion |
 | `work-unit statuses or steps differ from state-v3` | R2 Work-unit-Status-/Stepprojektion |
 | `workflow policies differ from state-v3` | R2 Returncount-/Limitprojektion |
+| `structured-v2 run has no slice boundary prefix` | R3 Slicegrenzenpräfix fehlt für einen bereits gebundenen Slice; fail-closed vor Resume |
+| `slice boundaries differ from state-v3` | R3 Start-Commit, exakte Scopegruppen und gemessener Startfingerprint |
 | `is historical and cannot be resumed` | A01 |
 | `structured-v2 state lacks the complete native Codex-Claude transport binding` | A01 |
 | `record chain for run` / `is invalid` | A01 |
@@ -868,6 +873,22 @@ Cursor, beide Statusarten und die rollenbasierten Returnpolicy-Fakten. Beide
 Grenzen sind ebenfalls mit AST-Vergleichszahl und vollständigem Funktionsdigest
 inventarisiert; keine neue `_recoverable_*`-Ausnahme beteiligt sich daran.
 
+`assert_slice_boundary_mirror()` weist Vor-R3-Ketten für bereits gebundene
+Slices ohne Boundaryrecord ab und vergleicht `start_commit`, die verschachtelte
+`scope_change_groups`-Partition sowie den am Bindezeitpunkt gemessenen
+`start_fingerprint`. Der Start-Commit und Fingerprint bleiben über monotone
+Scope-Erweiterungsrevisionen unveränderlich. Die Boundary bleibt bewusst in der
+Fingerprint-Eingabemenge des Finalreview-Preflights: Sie ist keine volatile
+Halt-/Resume-Transition, sondern die stabile Dispatch- und Scopegrenze. Ein neuer
+Slice oder eine autorisierte Scopeerweiterung ändert diese Identität genau
+einmal; ein unveränderter Resume tut es nicht. Auch diese Grenze ist per
+AST-Vergleichszahl und vollständigem Funktionsdigest inventarisiert.
+Bei einer autorisierten Scopeerweiterung dürfen ältere Work-unit-Revisionen
+eine echte Teilmenge des aktuellen Slice-Scopes tragen; ausschließlich die
+neueste Revision muss exakt mit dem State-Mirror übereinstimmen. Replay lässt
+neue Pfade nur monoton und innerhalb derselben Runde zu, sodass eine Revision
+weder Scope entfernen noch die Slice-/Rundengrenze verschieben kann.
+
 Die Recovery-Prädikate stützen sich zusätzlich auf
 `_pending_denied_review()` (eindeutiger, fingerprint-gebundener Denial),
 `_state_has_review_event()` (Review bereits im History-Mirror),
@@ -902,9 +923,9 @@ dem normativen Zustand entfernt.
 | `slices[*].slice_id` | Plan/State-Initialisierung | Routing, Work-unit-Zuordnung | **ja** aus `PlanPayload.slices[*].slice_id` | ableitbar |
 | `slices[*].scope_paths` | Plan-/Work-unit-Bindung | Scopeprüfung/Preflight | **ja** aus `PlanPayload.slices[*].paths` und bestätigendem `WorkUnitPayload.paths` | ableitbar |
 | `slices[*].status` | WorkflowEngine | Routing, Completion, Commit | **ja seit R2** aus der letzten Transition je `slice_id`, einschließlich Slice-only-Initialisierung | **in R2 gedeckt** durch `WorkflowTransitionPayload.slice_status` |
-| `slices[*].start_commit` | Initialisierung/Slicewechsel | Scopefingerprint, Commit | **nein** | **STOP** |
-| `slices[*].scope_change_groups` | Plan-/Scopebindung | Scopevalidation | **nein**; `Plan`/`WorkUnit` tragen flache Pfade | **STOP** |
-| `slices[*].start_fingerprint` | Repositorymessung | Change-/Resumeprüfung | **nein** | **STOP** |
+| `slices[*].start_commit` | Initialisierung/Slicewechsel | Scopefingerprint, Commit | **ja seit R3** aus `SliceBoundaryPayload.start_commit` | **in R3 gedeckt** durch die unveränderliche Slicegrenze |
+| `slices[*].scope_change_groups` | Plan-/Scopebindung | Scopevalidation | **ja seit R3** aus der verschachtelten `SliceBoundaryPayload.scope_change_groups`-Partition; keine Rekonstruktion aus flachen Pfaden | **in R3 gedeckt** einschließlich monotoner Scopeerweiterungsrevisionen |
+| `slices[*].start_fingerprint` | Repositorymessung | Change-/Resumeprüfung | **ja seit R3** aus `SliceBoundaryPayload.start_fingerprint`; Replay liest den historischen Messwert ohne Repositoryzugriff | **in R3 gedeckt** durch die Bindezeitmessung |
 | `slices[*].commit_ref` | Commitübergang | Resume/Completion | **ja** für gebundene Commits aus `Binding.target`; Slicezuordnung muss über Work-unit/Bindingkontext eindeutig bleiben | Projektion erst nach expliziter Zuordnungsregel |
 | `work_units[*].status` | WorkflowEngine | Dispatch/Resume | **ja seit R2** aus der letzten Transition je `work_unit_id`, einschließlich Waiting und Completed | **in R2 gedeckt** durch `WorkflowTransitionPayload.work_unit_status` |
 | `work_units[*].current_step` | WorkflowEngine | Dispatch | **ja seit R2** aus der letzten Transition je `work_unit_id` | **in R2 gedeckt** durch `WorkflowTransitionPayload.step` |
@@ -971,9 +992,9 @@ keinen fett markierten STOP enthält.
 | `created_at`, `updated_at` | B | Leser sind `WorkflowState.to_dict()/from_dict()`, `state_io` sowie die Diagnoseausgabe; `orchestrator` verwendet `updated_at` nur als Anzeigewert für das ebenfalls nicht normative `decided_at`. Kein Routing-, Authority-, Retry- oder Side-effect-Entscheid hängt von beiden Zeiten ab. Nach S4b sind sie volatile Projektionsmetadaten aus Recordzeiten und nicht Teil semantischer Gleichheit. |
 | `current_slice_id`, `current_work_unit_id`, `current_step` | A | **In R2 geschlossen:** `WorkflowTransitionPayload.slice_id/work_unit_id/step`; Schreiber: `WorkflowEngine` über den Treiber an jeder Dispatch-, Gate-, Resume- und Completionkante vor dem nächsten Leser. Der globale Step ist die benannte Projektion des Steps der aktuellen Work-unit und kein zweiter Fakt. |
 | `slices[*].status` | A | **In R2 geschlossen:** `WorkflowTransitionPayload.slice_status`; Schreiber: `WorkflowState`-Transitionsmethoden über den Engine-Treiber. Routing, Commit und Completion lesen die letzte Transition je Slice. |
-| `slices[*].start_commit` | A | `SliceBoundaryPayload.start_commit`; Schreiber: `begin_slice()`/Sliceinitialisierung vor Scopeprüfung und Side Effect. |
-| `slices[*].scope_change_groups` | A | `SliceBoundaryPayload.scope_change_groups`; Schreiber: Plan-/Scopebindung in `WorkflowState`. Die Gruppen sind Eingabe der Scopevalidation und nicht aus der flachen Pfadmenge rekonstruierbar. |
-| `slices[*].start_fingerprint` | A | `SliceBoundaryPayload.start_fingerprint`; Schreiber: Repositorymessung beim Binden der Slice-Git-Grenze. Change-, Correction- und Resumeprüfung lesen ihn. |
+| `slices[*].start_commit` | A | **In R3 geschlossen:** `SliceBoundaryPayload.start_commit`; Schreiber: `_persist_slice_boundaries()` nach der Cursortransition und vor Work-unit-Bindung, Scopeprüfung und Side Effect. Replay erzwingt denselben Start-Commit in jeder späteren Scopeerweiterungsrevision. |
+| `slices[*].scope_change_groups` | A | **In R3 geschlossen:** `SliceBoundaryPayload.scope_change_groups`; Schreiber: die Git-/Scopebindung aus `WorkflowState`. Die verschachtelte, sortierte Partition bleibt verlustfrei erhalten; gleiche Pfadmengen mit anderer Gruppierung bleiben verschieden. Genehmigte Erweiterungen fügen Gruppen monoton in einer Revision derselben logischen Slicegrenze hinzu. |
+| `slices[*].start_fingerprint` | A | **In R3 geschlossen:** `SliceBoundaryPayload.start_fingerprint`; Schreiber: `_persist_slice_boundaries()` übernimmt die zuvor gemessene Repositorygrenze aus dem State und berechnet sie beim Lesen nie neu. Change-, Correction- und Resumeprüfung lesen den historischen Wert. |
 | `work_units[*].status` | A | **In R2 geschlossen:** `WorkflowTransitionPayload.work_unit_status`; Schreiber: Engine an Dispatch-, Wait-, Gate-, Resume- und Completionkanten. |
 | `work_units[*].current_step` | A | **In R2 geschlossen:** `WorkflowTransitionPayload.step`; Schreiber: Engine unmittelbar vor beziehungsweise nach jeder ausführbaren Operation. |
 | `work_units[*].codex_return_count` | A | **In R2 geschlossen:** `WorkflowPolicyPayload.implementer_return_count`; Schreiber: Work-unit-Initialisierung und `record_review_denial()` bei jedem normalen Rücklauf. Die benannte Projektion `project_implementer_return_policy()` bildet den unveränderten State-v3-Mirrornamen auf die Rolle ab. |

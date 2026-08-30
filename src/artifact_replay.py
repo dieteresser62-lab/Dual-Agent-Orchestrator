@@ -32,6 +32,7 @@ from artifact_models import (
     Role,
     RunIdentityPayload,
     RunProfilePayload,
+    SliceBoundaryPayload,
     WorkflowPolicyPayload,
     WorkflowTransitionPayload,
     ResumeCheckPayload,
@@ -173,6 +174,7 @@ class ArtifactReplayResult:
     slice_statuses: tuple[tuple[str, str], ...] = ()
     work_unit_states: tuple[ReplayedWorkUnitState, ...] = ()
     workflow_policies: tuple[WorkflowPolicyPayload, ...] = ()
+    slice_boundaries: tuple[SliceBoundaryPayload, ...] = ()
     work_unit_reviewers: tuple[tuple[str, Role | None], ...] = ()
 
     def subset(self, records: Sequence[ArtifactRecord]) -> "ArtifactReplayResult":
@@ -322,17 +324,21 @@ def _validate_payload_references(
 
     positions = {record.record_id: index for index, record in enumerate(chain)}
     transition_units: dict[str, ArtifactRecord] = {}
+    transition_slices: set[str] = set()
+    slice_boundaries: dict[str, SliceBoundaryPayload] = {}
     for record in chain:
         payload = record.payload
-        if isinstance(payload, WorkflowTransitionPayload) and payload.work_unit_id is not None:
-            prior = transition_units.setdefault(payload.work_unit_id, record)
-            assert isinstance(prior.payload, WorkflowTransitionPayload)
-            if prior.payload.slice_id != payload.slice_id:
-                _fail(
-                    ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
-                    "workflow transition moves a work unit to another slice",
-                    record,
-                )
+        if isinstance(payload, WorkflowTransitionPayload):
+            transition_slices.add(payload.slice_id)
+            if payload.work_unit_id is not None:
+                prior = transition_units.setdefault(payload.work_unit_id, record)
+                assert isinstance(prior.payload, WorkflowTransitionPayload)
+                if prior.payload.slice_id != payload.slice_id:
+                    _fail(
+                        ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+                        "workflow transition moves a work unit to another slice",
+                        record,
+                    )
         elif isinstance(payload, WorkflowPolicyPayload):
             transition = transition_units.get(payload.work_unit_id)
             if transition is None or positions[transition.record_id] >= positions[record.record_id]:
@@ -341,16 +347,64 @@ def _validate_payload_references(
                     "workflow policy precedes its work-unit transition",
                     record,
                 )
+        elif isinstance(payload, SliceBoundaryPayload):
+            if payload.slice_id not in transition_slices:
+                _fail(
+                    ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+                    "slice boundary precedes its workflow transition",
+                    record,
+                )
+            prior = slice_boundaries.get(payload.slice_id)
+            if prior is not None:
+                if (
+                    payload.start_commit != prior.start_commit
+                    or payload.start_fingerprint != prior.start_fingerprint
+                    or not set(prior.scope_change_groups).issubset(
+                        payload.scope_change_groups
+                    )
+                ):
+                    _fail(
+                        ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+                        "slice boundary revision changes its immutable start or removes scope groups",
+                        record,
+                    )
+            slice_boundaries[payload.slice_id] = payload
     work_units: dict[str, ArtifactRecord] = {}
+    latest_work_units: dict[str, ArtifactRecord] = {}
     for record in chain:
         if isinstance(record.payload, (WorkUnitPayload, CorrectionWorkUnitPayload)) and (
             record.logical_id.startswith("work-unit-")
         ):
+            work_unit_id = record.logical_id.removeprefix("work-unit-")
+            prior = latest_work_units.get(work_unit_id)
+            if prior is not None:
+                prior_payload = prior.payload
+                payload = record.payload
+                assert isinstance(
+                    prior_payload, (WorkUnitPayload, CorrectionWorkUnitPayload)
+                )
+                if (
+                    type(payload) is not type(prior_payload)
+                    or payload.slice_id != prior_payload.slice_id
+                    or payload.round_number < prior_payload.round_number
+                    or not set(prior_payload.paths).issubset(payload.paths)
+                    or (
+                        payload.paths != prior_payload.paths
+                        and payload.round_number != prior_payload.round_number
+                    )
+                ):
+                    _fail(
+                        ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+                        "work-unit revision changes its type or slice, rewinds its round, "
+                        "or does not extend scope within the same round",
+                        record,
+                    )
+            latest_work_units[work_unit_id] = record
             # The first revision establishes authority for this logical work
             # unit.  Later revisions must not move the global implementation
             # boundary forward or make intervening activity look like a
             # forward reference.
-            work_units.setdefault(record.logical_id.removeprefix("work-unit-"), record)
+            work_units.setdefault(work_unit_id, record)
     first_work_unit_position = min(
         (positions[record.record_id] for record in work_units.values()),
         default=None,
@@ -703,6 +757,7 @@ def _result(expected_run_id: str, records: tuple[ArtifactRecord, ...]) -> Artifa
     slice_statuses: dict[str, str] = {}
     work_unit_states: dict[str, ReplayedWorkUnitState] = {}
     workflow_policies: dict[str, WorkflowPolicyPayload] = {}
+    slice_boundaries: dict[str, SliceBoundaryPayload] = {}
     for record in records:
         payload = record.payload
         if isinstance(payload, WorkflowTransitionPayload):
@@ -721,6 +776,8 @@ def _result(expected_run_id: str, records: tuple[ArtifactRecord, ...]) -> Artifa
                 )
         elif isinstance(payload, WorkflowPolicyPayload):
             workflow_policies[payload.work_unit_id] = payload
+        elif isinstance(payload, SliceBoundaryPayload):
+            slice_boundaries[payload.slice_id] = payload
 
     def identifier_order(value: str) -> tuple[int, int | str]:
         return (0, int(value)) if value.isdigit() else (1, value)
@@ -752,6 +809,10 @@ def _result(expected_run_id: str, records: tuple[ArtifactRecord, ...]) -> Artifa
         workflow_policies=tuple(
             workflow_policies[key]
             for key in sorted(workflow_policies, key=identifier_order)
+        ),
+        slice_boundaries=tuple(
+            slice_boundaries[key]
+            for key in sorted(slice_boundaries, key=identifier_order)
         ),
         work_unit_reviewers=project_work_unit_reviewers(records),
     )

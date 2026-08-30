@@ -22,6 +22,7 @@ from artifact_models import (
     Role,
     RunIdentityPayload,
     RunProfilePayload,
+    SliceBoundaryPayload,
     WorkflowPolicyPayload,
     WorkflowTransitionPayload,
     TaskPayload,
@@ -286,6 +287,82 @@ def test_replay_projects_r2_cursor_status_policy_and_reviewer_without_external_s
     assert project_work_unit_reviewers(tuple(records)) == (
         ("1", None),
         ("2", Role.CLAUDE),
+    )
+
+
+def test_replay_projects_r3_slice_boundaries_without_flattening_groups() -> None:
+    records: list[ArtifactRecord] = []
+    _append(
+        records,
+        "workflow-transition",
+        WorkflowTransitionPayload(
+            "1", "in_progress", "1", "codex_implementation", "in_progress"
+        ),
+    )
+    grouped = SliceBoundaryPayload(
+        "1",
+        "b" * 40,
+        (("src/new.py", "src/old.py"),),
+        "c" * 64,
+    )
+    _append(records, "slice-boundary-1", grouped)
+    _append(
+        records,
+        "workflow-transition",
+        WorkflowTransitionPayload(
+            "2", "in_progress", "2", "codex_implementation", "in_progress"
+        ),
+        revision=2,
+    )
+    flat = SliceBoundaryPayload(
+        "2",
+        "d" * 40,
+        (("src/new.py",), ("src/old.py",)),
+        "e" * 64,
+    )
+    _append(records, "slice-boundary-2", flat)
+
+    replay = replay_artifacts(tuple(records), "run-replay")
+
+    assert replay.slice_boundaries == (grouped, flat)
+    assert set(grouped.scope_change_groups[0]) == {
+        path for group in flat.scope_change_groups for path in group
+    }
+    assert grouped.scope_change_groups != flat.scope_change_groups
+
+
+def test_slice_boundary_revision_preserves_start_and_monotonically_extends_groups() -> None:
+    records: list[ArtifactRecord] = []
+    _append(
+        records,
+        "workflow-transition",
+        WorkflowTransitionPayload(
+            "1", "in_progress", "1", "codex_implementation", "in_progress"
+        ),
+    )
+    _append(
+        records,
+        "slice-boundary-1",
+        SliceBoundaryPayload("1", "b" * 40, (("src/a.py",),), "c" * 64),
+    )
+    expanded = SliceBoundaryPayload(
+        "1", "b" * 40, (("src/a.py",), ("tests/a.py",)), "c" * 64
+    )
+    _append(records, "slice-boundary-1", expanded, revision=2)
+
+    assert replay_artifacts(tuple(records), "run-replay").slice_boundaries == (
+        expanded,
+    )
+
+    changed = list(records[:-1])
+    _append(
+        changed,
+        "slice-boundary-1",
+        SliceBoundaryPayload("1", "b" * 40, (("src/a.py",),), "d" * 64),
+        revision=2,
+    )
+    _assert_code(
+        tuple(changed), ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH
     )
 
 
@@ -760,6 +837,36 @@ def test_replay_uses_first_work_unit_revision_as_reference_boundary() -> None:
     )
 
     _assert_code(tuple(records), ReplayDiagnosticCode.RECORD_REFERENCE_MISSING)
+
+
+def test_work_unit_revisions_extend_scope_only_within_the_same_round() -> None:
+    records: list[ArtifactRecord] = []
+    _append(records, "work-unit-1", WorkUnitPayload("1", 1, ("src/a.py",)))
+    _append(
+        records,
+        "work-unit-1",
+        WorkUnitPayload("1", 1, ("src/a.py", "tests/a.py")),
+        revision=2,
+    )
+    assert replay_artifacts(tuple(records), "run-replay").records == tuple(records)
+
+    shrunk = list(records[:1])
+    _append(
+        shrunk,
+        "work-unit-1",
+        WorkUnitPayload("1", 1, ("tests/a.py",)),
+        revision=2,
+    )
+    _assert_code(tuple(shrunk), ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH)
+
+    moved_round = list(records[:1])
+    _append(
+        moved_round,
+        "work-unit-1",
+        WorkUnitPayload("1", 2, ("src/a.py", "tests/a.py")),
+        revision=2,
+    )
+    _assert_code(tuple(moved_round), ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH)
 
 
 def test_subset_accepts_equal_redeserialized_records_but_rejects_same_id_tampering() -> None:

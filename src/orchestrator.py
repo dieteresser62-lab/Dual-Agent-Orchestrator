@@ -44,6 +44,7 @@ from artifact_bridge import (
 from artifact_migration import (
     ArtifactResumeError,
     assert_run_binding_mirror,
+    assert_slice_boundary_mirror,
     assert_workflow_status_mirror,
     require_workflow_status_prefix,
     resolve_resume_state,
@@ -60,6 +61,7 @@ from artifact_models import (
     FindingHandoffExportPayload, FindingHandoffImportPayload,
     FindingTransitionPayload,
     RunIdentityPayload, RunProfilePayload,
+    SliceBoundaryPayload,
     WorkflowPolicyPayload, WorkflowTransitionPayload,
     RecordType, stable_record_id,
 )
@@ -451,6 +453,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
             fingerprint_kind=FingerprintKind.CONTRACT,
         )
         self._persist_workflow_snapshot(state)
+        self._persist_slice_boundaries(state)
         if state.task_scope_patterns:
             bridge.append(
                 TaskPayload(
@@ -502,16 +505,31 @@ class ProductionWorkflowDriver(WorkflowDriver):
                     ),
                 )
             )
-            bridge.append(
-                work_unit_payload,
-                logical_id=f"work-unit-{unit.work_unit_id}",
-                idempotency_key=(
-                    f"{'correction-' if unit.kind is WorkUnitKind.CORRECTION else ''}"
-                    f"work-unit:{unit.work_unit_id}:round:{unit.round_number}"
-                ),
-                fingerprint_sha256=contract_fingerprint,
-                fingerprint_kind=FingerprintKind.CONTRACT,
+            logical_id = f"work-unit-{unit.work_unit_id}"
+            base_idempotency_key = (
+                f"{'correction-' if unit.kind is WorkUnitKind.CORRECTION else ''}"
+                f"work-unit:{unit.work_unit_id}:round:{unit.round_number}"
             )
+            prior = next(
+                (
+                    record for record in reversed(chain)
+                    if record.record_type is work_unit_payload.record_type
+                    and record.logical_id == logical_id
+                ),
+                None,
+            )
+            if prior is None or prior.payload != work_unit_payload:
+                bridge.append(
+                    work_unit_payload,
+                    logical_id=logical_id,
+                    idempotency_key=(
+                        base_idempotency_key
+                        if prior is None
+                        else f"{base_idempotency_key}:revision:{prior.revision + 1}"
+                    ),
+                    fingerprint_sha256=contract_fingerprint,
+                    fingerprint_kind=FingerprintKind.CONTRACT,
+                )
         self._persist_structured_tail(state)
 
     def _persist_workflow_snapshot(self, state: WorkflowState) -> None:
@@ -628,6 +646,47 @@ class ProductionWorkflowDriver(WorkflowDriver):
             )
 
         assert_workflow_status_mirror(
+            replay_artifacts(bridge.store.load_chain(), state.run_id), state
+        )
+
+    def _persist_slice_boundaries(self, state: WorkflowState) -> None:
+        """Append exact Slice Git/scope facts before any guarded side effect."""
+        bridge = self._artifact_bridge
+        if bridge is None or state.task_digest is None:
+            return
+        replay = replay_artifacts(bridge.store.load_chain(), state.run_id)
+        recorded = {item.slice_id: item for item in replay.slice_boundaries}
+        for item in state.slices:
+            if item.start_commit is None or item.start_fingerprint is None:
+                continue
+            payload = SliceBoundaryPayload(
+                str(item.slice_id),
+                item.start_commit,
+                item.scope_change_groups,
+                item.start_fingerprint,
+            )
+            if recorded.get(payload.slice_id) == payload:
+                continue
+            logical_id = f"slice-boundary-{payload.slice_id}"
+            chain = bridge.store.load_chain()
+            revision = 1 + max(
+                (
+                    record.revision for record in chain
+                    if record.record_type is RecordType.SLICE_BOUNDARY
+                    and record.logical_id == logical_id
+                ),
+                default=0,
+            )
+            bridge.append(
+                payload,
+                logical_id=logical_id,
+                idempotency_key=f"slice-boundary:{payload.slice_id}:{revision}",
+                fingerprint_sha256=state.task_digest,
+                fingerprint_kind=FingerprintKind.CONTRACT,
+            )
+            recorded[payload.slice_id] = payload
+
+        assert_slice_boundary_mirror(
             replay_artifacts(bridge.store.load_chain(), state.run_id), state
         )
 

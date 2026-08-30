@@ -14,6 +14,7 @@ from artifact_models import (
     ProviderInputMeasurementPayload,
     ReviewPayload,
     Role,
+    SliceBoundaryPayload,
     ValidationAttestationPayload,
     ValidationResult,
     CommandSpec,
@@ -520,7 +521,7 @@ def test_preflight_rejects_binding_reference_that_is_not_a_predecessor(
     assert set(result.affected_record_ids[1:]) == set(binding.payload.approval_ids)
 
 
-def test_relevant_record_head_excludes_bootstrap_and_r2_dispatch_context_records(
+def test_relevant_record_head_excludes_r2_dispatch_context_but_includes_r3_boundary(
     tmp_path: Path,
 ) -> None:
     state = _state(WorkflowStep.CODEX_FINAL_REVIEW)
@@ -547,3 +548,15 @@ def test_relevant_record_head_excludes_bootstrap_and_r2_dispatch_context_records
         fingerprint_sha256=FINGERPRINT,
     )
     assert relevant_record_head(bridge.store.load_chain()) == before
+    bridge.append(
+        SliceBoundaryPayload(
+            str(state.current_slice_id),
+            state.current_slice.start_commit or SLICE_COMMIT,
+            state.current_slice.scope_change_groups,
+            state.current_slice.start_fingerprint or FINGERPRINT,
+        ),
+        logical_id=f"slice-boundary-{state.current_slice_id}",
+        idempotency_key=f"slice-boundary:{state.current_slice_id}:1",
+        fingerprint_sha256=FINGERPRINT,
+    )
+    assert relevant_record_head(bridge.store.load_chain()) != before

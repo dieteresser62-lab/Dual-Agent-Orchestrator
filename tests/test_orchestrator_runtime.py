@@ -36,6 +36,7 @@ from artifact_models import (
     Role,
     RunIdentityPayload,
     RunProfilePayload,
+    SliceBoundaryPayload,
     SliceSpec,
     ValidationAttestationPayload,
     ValidationResult,
@@ -45,7 +46,7 @@ from artifact_models import (
     WorkflowTransitionPayload,
 )
 from artifact_store import ArtifactStore
-from artifact_migration import ArtifactResumeError
+from artifact_migration import ArtifactResumeError, resolve_resume_state
 from cli import parse_args
 from contracts import (
     AgentRole,
@@ -1151,6 +1152,7 @@ def test_structured_bind_persists_contract_and_active_work_unit_once(
         RecordType.WORKFLOW_TRANSITION,
         RecordType.WORKFLOW_POLICY,
         RecordType.WORKFLOW_POLICY,
+        RecordType.SLICE_BOUNDARY,
         RecordType.TASK,
         RecordType.WORK_UNIT,
     )
@@ -1309,6 +1311,214 @@ def test_r2_policy_records_denial_count_and_limit_extension_as_separate_facts(
     assert len(policies()) == before_resume + 1
     driver.bind_work_unit(resumed)
     assert len(policies()) == before_resume + 1
+
+
+def test_r3_slice_boundary_precedes_reader_and_keeps_measured_start_after_tree_change(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/r3-boundary-order")
+    task = repository / "task.md"
+    _write_task(task, "feature/r3-boundary-order", "src/one.py", "src/old.py")
+    head = _git(repository, "rev-parse", "HEAD")
+    measured = orchestrator.collect_repository_changes(
+        repository, head, excluded_paths=("task.md",)
+    )
+    state = init_workflow_state(
+        run_id="r3-boundary-order",
+        task_file=str(task),
+        branch="feature/r3-boundary-order",
+        branch_base=head,
+        slice_count=1,
+        task_digest="a" * 64,
+        task_scope_patterns=("src/one.py", "src/old.py"),
+        target_branch="feature/r3-boundary-order",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+    ).complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    ).bind_current_slice_git_boundary(
+        start_commit=head,
+        scope_paths=("src/one.py", "src/old.py"),
+        scope_change_groups=(("src/one.py", "src/old.py"),),
+        start_fingerprint=measured.fingerprint,
+    )
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+
+    driver.bind_work_unit(state)
+    driver.assert_structured_decision_context()
+    chain = ArtifactStore(repository, state.run_id).load_chain()
+    boundary_index = next(
+        index for index, record in enumerate(chain)
+        if isinstance(record.payload, SliceBoundaryPayload)
+    )
+    work_unit_index = next(
+        index for index, record in enumerate(chain)
+        if isinstance(record.payload, WorkUnitPayload)
+    )
+    assert boundary_index < work_unit_index
+    assert sum(
+        isinstance(record.payload, SliceBoundaryPayload) for record in chain
+    ) == 1
+
+    source = repository / "src" / "one.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("changed after boundary bind\n", encoding="utf-8")
+    changed = orchestrator.collect_repository_changes(
+        repository, head, excluded_paths=("task.md",)
+    )
+    assert changed.fingerprint != measured.fingerprint
+    replay = replay_artifacts(
+        ArtifactStore(repository, state.run_id).load_chain(), state.run_id
+    )
+    assert replay.slice_boundaries == (
+        SliceBoundaryPayload(
+            "1",
+            head,
+            state.current_slice.scope_change_groups,
+            measured.fingerprint,
+        ),
+    )
+    driver.assert_structured_decision_context()
+
+
+def test_r3_each_slice_start_writes_one_boundary_and_scope_extension_is_revisioned(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/r3-boundary-count")
+    task = repository / "task.md"
+    _write_task(task, "feature/r3-boundary-count", "src/shared.py", "tests/shared.py")
+    head = _git(repository, "rev-parse", "HEAD")
+    state = init_workflow_state(
+        run_id="r3-boundary-count",
+        task_file=str(task),
+        branch="feature/r3-boundary-count",
+        branch_base=head,
+        slice_count=2,
+        task_digest="a" * 64,
+        task_scope_patterns=("src/shared.py", "tests/shared.py"),
+        target_branch="feature/r3-boundary-count",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+    ).complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    ).bind_current_slice_git_boundary(
+        start_commit=head,
+        scope_paths=("src/shared.py",),
+        start_fingerprint="b" * 64,
+    )
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    driver.bind_work_unit(state)
+    second = state.complete_current_slice(commit_ref="d" * 40).start_work_unit(
+        slice_id=2,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+        slice_start_commit="d" * 40,
+    ).bind_current_slice_git_boundary(
+        start_commit="d" * 40,
+        scope_paths=("src/shared.py", "tests/shared.py"),
+        scope_change_groups=(("src/shared.py", "tests/shared.py"),),
+        start_fingerprint="c" * 64,
+    )
+    driver.bind_work_unit(second)
+    boundaries = tuple(
+        record for record in ArtifactStore(repository, state.run_id).load_chain()
+        if isinstance(record.payload, SliceBoundaryPayload)
+    )
+    assert tuple(record.payload.slice_id for record in boundaries) == ("1", "2")
+    assert tuple(record.revision for record in boundaries) == (1, 1)
+
+    expanded = second.extend_current_slice_scope(("docs/extra.md",))
+    driver.bind_work_unit(expanded)
+    replay = replay_artifacts(
+        ArtifactStore(repository, state.run_id).load_chain(), state.run_id
+    )
+    assert replay.slice_boundaries[-1].start_commit == "d" * 40
+    assert replay.slice_boundaries[-1].start_fingerprint == "c" * 64
+    assert replay.slice_boundaries[-1].scope_change_groups == (
+        ("docs/extra.md",),
+        ("src/shared.py", "tests/shared.py"),
+    )
+    boundary_two = tuple(
+        record for record in ArtifactStore(repository, state.run_id).load_chain()
+        if isinstance(record.payload, SliceBoundaryPayload)
+        and record.payload.slice_id == "2"
+    )
+    assert tuple(record.revision for record in boundary_two) == (1, 2)
+
+
+
+def test_r3_scope_extension_checkpoint_accepts_older_subset_revision(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/r3-scope-extension-resume")
+    task = repository / "task.md"
+    _write_task(task, "feature/r3-scope-extension-resume", "src/runtime.py")
+    head = _git(repository, "rev-parse", "HEAD")
+    state = init_workflow_state(
+        run_id="r3-scope-extension-resume",
+        task_file=str(task),
+        branch="feature/r3-scope-extension-resume",
+        branch_base=head,
+        slice_count=1,
+        task_digest="a" * 64,
+        task_scope_patterns=("docs/extra.md", "src/runtime.py"),
+        target_branch="feature/r3-scope-extension-resume",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+    ).complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    ).bind_current_slice_git_boundary(
+        start_commit=head,
+        scope_paths=("src/runtime.py",),
+        start_fingerprint="b" * 64,
+    )
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    driver.bind_work_unit(state)
+
+    expanded = state.extend_current_slice_scope(("docs/extra.md",))
+    driver.checkpoint(
+        expanded,
+        WorkflowHistory(expanded.current_work_unit_id),
+    )
+
+    assert driver.active_state is not None
+    resolution = resolve_resume_state(repository, driver.active_state)
+    assert resolution.state.current_slice.scope_paths == (
+        "docs/extra.md",
+        "src/runtime.py",
+    )
+    work_revisions = tuple(
+        record
+        for record in resolution.replay_result.records
+        if record.logical_id == f"work-unit-{expanded.current_work_unit_id}"
+    )
+    assert tuple(record.revision for record in work_revisions) == (1, 2)
+    assert work_revisions[0].payload.paths == ("src/runtime.py",)
+    assert work_revisions[1].payload.paths == (
+        "docs/extra.md",
+        "src/runtime.py",
+    )
 
 
 def test_native_review_record_ahead_recovery_reuses_bound_json_without_provider(

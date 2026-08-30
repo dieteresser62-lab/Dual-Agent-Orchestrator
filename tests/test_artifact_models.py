@@ -31,6 +31,7 @@ from artifact_models import (
     Role,
     RunIdentityPayload,
     RunProfilePayload,
+    SliceBoundaryPayload,
     SliceSpec,
     TaskPayload,
     TransientRetryPayload,
@@ -119,6 +120,12 @@ def _record(payload, *, revision: int = 1) -> ArtifactRecord:  # type: ignore[no
         "1", "in_progress", "2", "codex_implementation", "in_progress"
     ),
     WorkflowPolicyPayload("2", 1, 4),
+    SliceBoundaryPayload(
+        "1",
+        "b" * 40,
+        (("src/a.py", "src/old-a.py"), ("tests/test_a.py",)),
+        "c" * 64,
+    ),
     TaskPayload("feature/records", ("src/a.py",), DIGEST),
     PlanPayload("docs/internal/plan.md", "b" * 40, (SliceSpec("1", "models", ("src/a.py",)),)),
     WorkUnitPayload("1", 1, ("src/a.py",)),
@@ -165,6 +172,17 @@ def test_every_record_family_roundtrips_through_model_and_schema(payload) -> Non
 
     assert restored == record
     assert restored.canonical_json() == encoded
+
+
+def test_slice_boundary_rejects_lossy_or_noncanonical_grouping() -> None:
+    with pytest.raises(ArtifactValidationError, match="sorted and unique"):
+        SliceBoundaryPayload(
+            "1", "b" * 40, (("src/a.py",), ("src/a.py",)), "c" * 64
+        )
+    with pytest.raises(ArtifactValidationError, match="entries must be sorted"):
+        SliceBoundaryPayload(
+            "1", "b" * 40, (("src/z.py", "src/a.py"),), "c" * 64
+        )
 
 
 def test_native_codex_agent_result_roundtrips_with_closed_transport_binding() -> None:

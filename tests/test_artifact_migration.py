@@ -27,6 +27,7 @@ from artifact_models import (
     Role,
     RunIdentityPayload,
     RunProfilePayload,
+    SliceBoundaryPayload,
     SliceSpec,
     TaskPayload,
     TransientRetryPayload,
@@ -139,7 +140,12 @@ def _run_records(
     )
 
 
-def _status_records(bridge: ArtifactBridge, state: WorkflowState) -> None:
+def _status_records(
+    bridge: ArtifactBridge,
+    state: WorkflowState,
+    *,
+    include_slice_boundaries: bool = True,
+) -> None:
     chain = bridge.store.load_chain()
     denied_units = {
         record.payload.work_unit_id
@@ -228,6 +234,23 @@ def _status_records(bridge: ArtifactBridge, state: WorkflowState) -> None:
             ),
             logical_id=logical_id,
             idempotency_key=f"workflow-policy:{unit.work_unit_id}:{policy_revision}",
+            fingerprint_sha256="a" * 64,
+            fingerprint_kind=FingerprintKind.CONTRACT,
+        )
+    if not include_slice_boundaries:
+        return
+    for item in state.slices:
+        if item.start_commit is None or item.start_fingerprint is None:
+            continue
+        bridge.append(
+            SliceBoundaryPayload(
+                str(item.slice_id),
+                item.start_commit,
+                item.scope_change_groups,
+                item.start_fingerprint,
+            ),
+            logical_id=f"slice-boundary-{item.slice_id}",
+            idempotency_key=f"slice-boundary:{item.slice_id}:1",
             fingerprint_sha256="a" * 64,
             fingerprint_kind=FingerprintKind.CONTRACT,
         )
@@ -679,7 +702,7 @@ def test_later_work_unit_can_carry_open_finding_without_import_snapshot(
     assert latest.record_id in {
         record.record_id for record in resolution.replay_result.records
     }
-    assert resolution.replay_result.records[-1].record_type is RecordType.WORKFLOW_POLICY
+    assert resolution.replay_result.records[-1].record_type is RecordType.SLICE_BOUNDARY
     assert state.current_work_unit.open_findings == ("C-04",)
     assert latest.payload.finding_import_record_id is None
     assert latest.payload.open_finding_ids == ()
@@ -811,6 +834,63 @@ def test_pre_r2_chain_without_complete_status_prefix_is_rejected(
         resolve_resume_state(tmp_path, state)
 
     assert caught.value.code is ReplayDiagnosticCode.RECORD_MISSING
+
+
+def test_pre_r3_chain_without_slice_boundary_prefix_is_rejected(
+    tmp_path: Path,
+) -> None:
+    state = _state(tmp_path)
+    bridge = ArtifactBridge(ArtifactStore(tmp_path, state.run_id))
+    bridge.append(
+        TaskPayload("feature/resume", ("src/resume.py",), "a" * 64),
+        logical_id="task-contract",
+        idempotency_key="task-contract",
+        fingerprint_sha256="a" * 64,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    bridge.append(
+        WorkUnitPayload("1", 1, ("src/resume.py",)),
+        logical_id="work-unit-2",
+        idempotency_key="work-unit:2:round:1",
+        fingerprint_sha256="a" * 64,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    _status_records(bridge, state, include_slice_boundaries=False)
+
+    with pytest.raises(ArtifactResumeError, match="slice boundary prefix") as caught:
+        resolve_resume_state(tmp_path, state)
+
+    assert caught.value.code is ReplayDiagnosticCode.RECORD_MISSING
+
+
+@pytest.mark.parametrize("field", ("start_commit", "start_fingerprint", "groups"))
+def test_structured_resume_rejects_slice_boundary_mirror_drift(
+    tmp_path: Path,
+    field: str,
+) -> None:
+    state = _state(tmp_path)
+    _records(tmp_path, state)
+    current = state.current_slice
+    if field == "start_commit":
+        changed_slice = replace(current, start_commit="d" * 40)
+    elif field == "start_fingerprint":
+        changed_slice = replace(current, start_fingerprint="e" * 64)
+    else:
+        changed_slice = replace(
+            current,
+            scope_paths=("src/extra.py", "src/resume.py"),
+            scope_change_groups=(("src/extra.py",), ("src/resume.py",)),
+        )
+    changed = replace(
+        state,
+        slices=tuple(
+            changed_slice if item.slice_id == current.slice_id else item
+            for item in state.slices
+        ),
+    )
+
+    with pytest.raises(ArtifactResumeError, match="slice boundaries differ"):
+        resolve_resume_state(tmp_path, changed)
 
 
 def test_structured_state_rejects_a_stale_round_with_record_id(tmp_path: Path) -> None:

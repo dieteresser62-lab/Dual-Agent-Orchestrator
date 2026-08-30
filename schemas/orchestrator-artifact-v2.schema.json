@@ -8,7 +8,7 @@
   "properties": {
     "schema_version": {"const": "2"},
     "record_id": {"$ref": "#/$defs/identifier"},
-    "record_type": {"enum": ["run_identity", "run_profile", "workflow_transition", "workflow_policy", "task", "plan", "work_unit", "correction_work_unit", "agent_result", "diagnostic", "review", "finding_transition", "finding_handoff_export", "finding_handoff_import", "validation_request", "validation_attestation", "gate", "binding", "quota_pause", "transient_retry", "resume_check", "workflow_completion", "provider_input_measurement", "provider_attempt", "final_review_preflight"]},
+    "record_type": {"enum": ["run_identity", "run_profile", "workflow_transition", "workflow_policy", "slice_boundary", "task", "plan", "work_unit", "correction_work_unit", "agent_result", "diagnostic", "review", "finding_transition", "finding_handoff_export", "finding_handoff_import", "validation_request", "validation_attestation", "gate", "binding", "quota_pause", "transient_retry", "resume_check", "workflow_completion", "provider_input_measurement", "provider_attempt", "final_review_preflight"]},
     "run_id": {"$ref": "#/$defs/identifier"},
     "logical_id": {"$ref": "#/$defs/identifier"},
     "revision": {"type": "integer", "minimum": 1},
@@ -24,6 +24,7 @@
     {"if": {"properties": {"record_type": {"const": "run_profile"}}}, "then": {"properties": {"status": {"const": "bound"}, "payload": {"$ref": "#/$defs/run_profile"}}}},
     {"if": {"properties": {"record_type": {"const": "workflow_transition"}}}, "then": {"properties": {"status": {"const": "transitioned"}, "payload": {"$ref": "#/$defs/workflow_transition"}}}},
     {"if": {"properties": {"record_type": {"const": "workflow_policy"}}}, "then": {"properties": {"status": {"const": "bound"}, "payload": {"$ref": "#/$defs/workflow_policy"}}}},
+    {"if": {"properties": {"record_type": {"const": "slice_boundary"}}}, "then": {"properties": {"status": {"const": "bound"}, "payload": {"$ref": "#/$defs/slice_boundary"}}}},
     {"if": {"properties": {"record_type": {"const": "task"}}}, "then": {"properties": {"status": {"const": "accepted"}, "payload": {"$ref": "#/$defs/task"}}}},
     {"if": {"properties": {"record_type": {"const": "plan"}}}, "then": {"properties": {"status": {"const": "approved"}, "payload": {"$ref": "#/$defs/plan"}}}},
     {"if": {"properties": {"record_type": {"const": "work_unit"}}}, "then": {"properties": {"status": {"const": "active"}, "payload": {"$ref": "#/$defs/work_unit"}}}},
@@ -120,6 +121,19 @@
         "work_unit_id": {"$ref": "#/$defs/identifier"},
         "implementer_return_count": {"type": "integer", "minimum": 0},
         "max_implementer_returns": {"type": "integer", "minimum": 1}
+      }
+    },
+    "slice_boundary": {
+      "type": "object", "additionalProperties": false,
+      "required": ["slice_id", "start_commit", "scope_change_groups", "start_fingerprint"],
+      "properties": {
+        "slice_id": {"$ref": "#/$defs/identifier"},
+        "start_commit": {"$ref": "#/$defs/git_sha"},
+        "scope_change_groups": {
+          "type": "array", "minItems": 1, "uniqueItems": true,
+          "items": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/path"}}
+        },
+        "start_fingerprint": {"$ref": "#/$defs/sha256"}
       }
     },
     "task": {

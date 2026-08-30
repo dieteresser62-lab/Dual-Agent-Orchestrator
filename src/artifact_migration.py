@@ -19,6 +19,7 @@ from artifact_models import (
     ResumeCheckPayload,
     RunIdentityPayload,
     RunProfilePayload,
+    SliceBoundaryPayload,
     TaskPayload,
     TransientRetryPayload,
     ValidationAttestationPayload,
@@ -210,6 +211,37 @@ def assert_workflow_status_mirror(
         )
 
 
+def assert_slice_boundary_mirror(
+    replay: ArtifactReplayResult,
+    state: WorkflowState,
+) -> None:
+    """Require every bound Slice boundary and compare its exact grouped facts."""
+    expected = tuple(
+        SliceBoundaryPayload(
+            str(item.slice_id),
+            item.start_commit,
+            item.scope_change_groups,
+            item.start_fingerprint,
+        )
+        for item in state.slices
+        if item.start_commit is not None and item.start_fingerprint is not None
+    )
+    boundary_records = tuple(
+        record for record in replay.records
+        if record.record_type is RecordType.SLICE_BOUNDARY
+    )
+    if expected and not boundary_records:
+        raise ArtifactResumeError(
+            "structured-v2 run has no slice boundary prefix",
+            code=ReplayDiagnosticCode.RECORD_MISSING,
+        )
+    if replay.slice_boundaries != expected:
+        raise ArtifactResumeError(
+            "slice boundaries differ from state-v3",
+            record_id=(boundary_records[-1].record_id if boundary_records else None),
+        )
+
+
 def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeResolution:
     """Resolve the immutable protocol binding and verify structured mirror facts.
 
@@ -259,6 +291,7 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
     chain = replay.records
     assert_run_binding_mirror(replay, state, binding)
     assert_workflow_status_mirror(replay, state)
+    assert_slice_boundary_mirror(replay, state)
 
     head = replay.head_record_id
     assert head is not None
@@ -378,7 +411,7 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
         if (
             str(unit.slice_id) != payload.slice_id
             or (payload.round_number > unit.round_number and not pending_work_record)
-            or payload.paths != slice_record.scope_paths
+            or not set(payload.paths).issubset(slice_record.scope_paths)
         ):
             raise mismatch("work-unit round, slice, or path allowlist differs", record.record_id)
         if isinstance(payload, CorrectionWorkUnitPayload) != (
@@ -405,6 +438,11 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
         payload = record.payload
         assert isinstance(payload, (WorkUnitPayload, CorrectionWorkUnitPayload))
         pending_work_record = _recoverable_pending_work_record(state, chain, record)
+        if payload.paths != slice_by_id[payload.slice_id].scope_paths:
+            raise mismatch(
+                "latest work-unit path allowlist differs from state-v3",
+                record.record_id,
+            )
         if payload.round_number != unit.round_number and not pending_work_record:
             raise mismatch(
                 "latest work-unit round differs from state-v3",
