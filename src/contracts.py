@@ -397,11 +397,12 @@ class ContractResult:
 
     @property
     def open_blockers(self) -> tuple[FindingRecord, ...]:
+        from finding_reducer import project_open_set
+
         return tuple(
             finding
-            for finding in self.findings
-            if finding.status is FindingStatus.OPEN
-            and finding.finding_class is FindingClass.BLOCKER
+            for finding in project_open_set(self.findings).findings
+            if finding.finding_class is FindingClass.BLOCKER
         )
 
     @property
@@ -415,11 +416,9 @@ class ContractResult:
 
     @property
     def open_findings(self) -> tuple[FindingRecord, ...]:
-        return tuple(
-            finding
-            for finding in self.findings
-            if finding.status is FindingStatus.OPEN
-        )
+        from finding_reducer import project_open_set
+
+        return project_open_set(self.findings).findings
 
     @property
     def own_open_findings(self) -> tuple[FindingRecord, ...]:

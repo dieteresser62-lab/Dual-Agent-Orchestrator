@@ -19,6 +19,7 @@ from agent_runtime import (
 )
 from audit_trail import ReviewAuditEvent, ValidationAuditEvent
 from contracts import AgentRole, FindingRecord, ValidationAttestation, ValidationRecord, ValidationStatus
+from finding_reducer import project_open_set
 from gates import TestChangeEvidence
 from validation_matrix import ValidationCommand, ValidationRequest
 from workflow import (
@@ -1088,7 +1089,7 @@ class ScriptedWorkflowDriver:
     def prepare_correction(
         self, findings
     ) -> WorkflowCorrectionBoundary:
-        if not any(item.status.value == "OPEN" for item in findings):
+        if not project_open_set(findings).findings:
             raise DryRunScenarioError(
                 "scripted final-review correction requires an open finding"
             )

@@ -30,6 +30,7 @@ from artifact_models import (
     WorkUnitPayload,
 )
 from artifact_replay import ArtifactReplayError, ArtifactReplayResult, replay_artifacts
+from finding_reducer import project_record_finding_statuses
 
 
 class ArtifactProjectionError(ValueError):
@@ -161,6 +162,7 @@ def render_replay_sections(replay: ArtifactReplayResult) -> Mapping[str, str]:
     """Render directly from one accepted, immutable replay result."""
     chain = replay.records
     digest = replay.semantic_digest
+    final_finding_statuses = dict(project_record_finding_statuses(replay))
     reviews = {
         Role.CLAUDE: [],
     }
@@ -279,7 +281,9 @@ def render_replay_sections(replay: ArtifactReplayResult) -> Mapping[str, str]:
                     _append_unique(
                         row["codex"], payload.response_decision or "legacy-text"
                     )
-                row["status"] = payload.finding_status
+                row["status"] = final_finding_statuses.get(
+                    payload.finding_id, payload.finding_status
+                )
         elif isinstance(payload, FindingHandoffImportPayload):
             bindings_and_units.extend((
                 "### Finding-Import · fremde Vorgeschichte",

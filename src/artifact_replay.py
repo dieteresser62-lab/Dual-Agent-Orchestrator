@@ -38,14 +38,7 @@ from artifact_models import (
     canonical_json,
 )
 from contracts import (
-    AgentRole,
-    FindingClass,
-    FindingOrigin,
     FindingRecord,
-    FindingResponseDecision,
-    FindingStatus,
-    apply_finding_response,
-    apply_reviewer_finding_update,
 )
 
 
@@ -261,130 +254,20 @@ def replay_findings(
     *,
     finding_ids: Sequence[str] | None = None,
 ) -> tuple[FindingRecord, ...]:
-    """Project native finding authority from accepted structured transitions.
+    """Compatibility delegate to the single canonical finding reducer."""
+    from finding_reducer import reduce_findings
 
-    Historical finding-transition records remain valid replay inputs, but they
-    are unconditionally excluded here: without a persisted work-unit id they
-    cannot safely authorize a new native request when finding identifiers may
-    be reused in another work unit. ``finding_ids`` selects complete finding
-    lineages across work-unit boundaries, as required when an authoritative
-    correction record carries findings opened by the preceding final review.
-    """
-    target = None if work_unit_id is None else str(work_unit_id)
-    selected_ids = None if finding_ids is None else frozenset(finding_ids)
-    findings: dict[str, FindingRecord] = {}
-    transitions: list[tuple[ArtifactRecord, FindingTransitionPayload, bool]] = []
-    for record in replay.records:
-        if isinstance(record.payload, FindingHandoffImportPayload):
-            transitions.extend(
-                (record, item.payload, True) for item in record.payload.transitions
-            )
-        elif isinstance(record.payload, FindingTransitionPayload):
-            transitions.append((record, record.payload, False))
-    for record, payload, imported in transitions:
-        if payload.work_unit_id is None:
-            continue
-        if selected_ids is not None and payload.finding_id not in selected_ids:
-            continue
-        if target is not None and not imported and payload.work_unit_id != target:
-            continue
-        if payload.action == "opened":
-            if payload.finding_id in findings:
-                _fail(
-                    ReplayDiagnosticCode.RECORD_DUPLICATE,
-                    f"finding {payload.finding_id!r} is opened more than once",
-                    record,
-                )
-            if (
-                payload.summary is None
-                or payload.acceptance_test is None
-                or payload.origin_slice_id is None
-                or payload.origin_round_number is None
-                or payload.finding_status != "open"
-            ):
-                _fail(
-                    ReplayDiagnosticCode.RECORD_TYPE_MISMATCH,
-                    "structured finding opening metadata is incomplete",
-                    record,
-                )
-            try:
-                findings[payload.finding_id] = FindingRecord(
-                    finding_id=payload.finding_id,
-                    finding_class=FindingClass(payload.severity.value),
-                    status=FindingStatus.OPEN,
-                    summary=payload.summary,
-                    acceptance_test=payload.acceptance_test,
-                    origin=FindingOrigin(
-                        payload.origin_slice_id,
-                        payload.origin_round_number,
-                        AgentRole(payload.reporter.value),
-                    ),
-                )
-            except ValueError as exc:
-                _fail(
-                    ReplayDiagnosticCode.RECORD_TYPE_MISMATCH,
-                    f"structured finding opening is invalid: {exc}",
-                    record,
-                )
-            continue
-        finding = findings.get(payload.finding_id)
-        if finding is None:
-            _fail(
-                ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
-                f"finding transition references unopened finding {payload.finding_id!r}",
-                record,
-            )
-        if payload.reporter.value != finding.origin.reporter.value or (
-            payload.action != "reclassified"
-            and payload.severity.value != finding.finding_class.value
-        ):
-            _fail(
-                ReplayDiagnosticCode.RECORD_TYPE_MISMATCH,
-                "finding transition changes immutable reviewer ownership",
-                record,
-            )
-        try:
-            if payload.action == "responded":
-                if payload.response_decision is None:
-                    _fail(
-                        ReplayDiagnosticCode.RECORD_TYPE_MISMATCH,
-                        "structured finding response lacks response_decision",
-                        record,
-                    )
-                finding = apply_finding_response(
-                    finding,
-                    FindingResponseDecision(payload.response_decision.upper()),
-                    payload.rationale,
-                )
-            elif payload.action == "reclassified":
-                finding = apply_reviewer_finding_update(
-                    finding,
-                    reviewer=finding.origin.reporter,
-                    status=finding.status,
-                    rationale=payload.rationale,
-                    finding_class=FindingClass(payload.severity.value),
-                )
-            elif payload.action == "status_changed":
-                finding = apply_reviewer_finding_update(
-                    finding,
-                    reviewer=finding.origin.reporter,
-                    status=FindingStatus(payload.finding_status.upper()),
-                    rationale=payload.rationale,
-                    finding_class=FindingClass(payload.severity.value),
-                )
-        except ValueError as exc:
-            _fail(
-                ReplayDiagnosticCode.RECORD_TYPE_MISMATCH,
-                f"structured finding transition is invalid: {exc}",
-                record,
-            )
-        findings[payload.finding_id] = finding
-    return tuple(sorted(findings.values(), key=lambda item: item.finding_id))
+    return reduce_findings(replay).request_subset(
+        work_unit_id=work_unit_id,
+        finding_ids=finding_ids,
+    ).findings
 
 
 def _validate_payload_references(
     chain: tuple[ArtifactRecord, ...], records_by_id: dict[str, ArtifactRecord]
 ) -> None:
+    from finding_reducer import reduce_findings
+
     positions = {record.record_id: index for index, record in enumerate(chain)}
     work_units: dict[str, ArtifactRecord] = {}
     for record in chain:
@@ -494,7 +377,7 @@ def _validate_payload_references(
                 )
             # An import is atomic authority: validate its entire embedded
             # lifecycle now, not only when a later consumer asks for findings.
-            replay_findings(_result(record.run_id, (record,)))
+            reduce_findings(_result(record.run_id, (record,)))
         if isinstance(payload, WorkUnitPayload) and payload.finding_import_record_id is not None:
             imported = records_by_id.get(payload.finding_import_record_id)
             if (
@@ -520,16 +403,9 @@ def _validate_payload_references(
                     (FindingHandoffImportPayload, FindingTransitionPayload),
                 )
             )
-            imported_findings = replay_findings(
+            expected_open = reduce_findings(
                 _result(record.run_id, finding_prefix)
-            )
-            expected_open = tuple(
-                sorted(
-                    finding.finding_id
-                    for finding in imported_findings
-                    if finding.status is FindingStatus.OPEN
-                )
-            )
+            ).open_set.finding_ids
             if payload.open_finding_ids != expected_open:
                 _fail(
                     ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,

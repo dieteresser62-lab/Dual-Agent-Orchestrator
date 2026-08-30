@@ -32,7 +32,12 @@ from contracts import (
     ReviewEvidence,
     StopRequest,
     ValidationAttestation,
-    apply_reviewer_finding_update,
+)
+from finding_reducer import (
+    ReviewerReclassification,
+    ReviewerStatusChange,
+    apply_reviewer_events,
+    project_open_set,
 )
 from validation_matrix import FINDING_COMMAND_PREFIX, matches_validation_family
 from native_provider_schema import defensive_provider_projection
@@ -364,9 +369,7 @@ def native_review_provider_response_schema(
         for item in context.previous_findings
         if item.origin.reporter is context.reviewer
     )
-    own_open = tuple(
-        item for item in own_findings if item.status is FindingStatus.OPEN
-    )
+    own_open = project_open_set(own_findings).findings
     own_open_ids = tuple(item.finding_id for item in own_open)
     own_open_blockers = tuple(
         item
@@ -948,6 +951,9 @@ def _validate_response_events(
             code=NativeReviewErrorCode.FINDING_CONTENT_INVALID,
         )
     previous = {item.finding_id: item for item in context.previous_findings}
+    previous_open_ids = frozenset(
+        project_open_set(context.previous_findings).finding_ids
+    )
     new_ids = [item.finding_id for item in response.new_findings]
     status_ids = [item.finding_id for item in response.status_changes]
     class_ids = [item.finding_id for item in response.reclassifications]
@@ -974,7 +980,7 @@ def _validate_response_events(
                 NativeReviewErrorCode.FINDING_REFERENCE_UNKNOWN,
                 f"reviewer does not own finding {finding_id}",
             )
-        if finding.status is not FindingStatus.OPEN:
+        if finding_id not in previous_open_ids:
             raise NativeReviewContractError(
                 NativeReviewErrorCode.FINDING_REFERENCE_NOT_OPEN,
                 f"finding update references non-open id {finding_id}",
@@ -1018,7 +1024,7 @@ def _validate_response_events(
     for finding in context.previous_findings:
         if (
             response.approved
-            and finding.status is FindingStatus.OPEN
+            and finding.finding_id in previous_open_ids
             and finding.origin.reporter is context.reviewer
             and finding.finding_id not in touched
         ):
@@ -1036,7 +1042,7 @@ def _validate_response_events(
 def _merge_findings(
     response: NativeReviewResult, context: NativeReviewContext
 ) -> tuple[FindingRecord, ...]:
-    findings = {item.finding_id: item for item in context.previous_findings}
+    opened: list[FindingRecord] = []
     for native in response.new_findings:
         acceptance = (
             native.acceptance_test.text
@@ -1050,49 +1056,48 @@ def _merge_findings(
             )
         )
         try:
-            findings[native.finding_id] = FindingRecord(
-                finding_id=native.finding_id,
-                finding_class=native.finding_class,
-                status=FindingStatus.OPEN,
-                summary=native.summary,
-                acceptance_test=acceptance,
-                origin=FindingOrigin(
-                    slice_id=context.slice_id,
-                    round_number=context.round_number,
-                    reporter=context.reviewer,
+            opened.append(
+                FindingRecord(
+                    finding_id=native.finding_id,
+                    finding_class=native.finding_class,
+                    status=FindingStatus.OPEN,
+                    summary=native.summary,
+                    acceptance_test=acceptance,
+                    origin=FindingOrigin(
+                        slice_id=context.slice_id,
+                        round_number=context.round_number,
+                        reporter=context.reviewer,
+                    ),
                 ),
             )
         except ValueError as exc:
             raise NativeReviewContractError(
                 NativeReviewErrorCode.FINDING_ID_INVALID, str(exc)
             ) from exc
-    for update in response.status_changes:
-        try:
-            findings[update.finding_id] = apply_reviewer_finding_update(
-                findings[update.finding_id],
-                reviewer=context.reviewer,
-                status=update.status,
-                rationale=update.rationale,
-            )
-        except ValueError as exc:
-            raise NativeReviewContractError(
-                NativeReviewErrorCode.FINDING_REFERENCE_UNKNOWN, str(exc)
-            ) from exc
-    for update in response.reclassifications:
-        current = findings[update.finding_id]
-        try:
-            findings[update.finding_id] = apply_reviewer_finding_update(
-                current,
-                reviewer=context.reviewer,
-                status=current.status,
-                rationale=update.rationale,
-                finding_class=update.finding_class,
-            )
-        except ValueError as exc:
-            raise NativeReviewContractError(
-                NativeReviewErrorCode.FINDING_REFERENCE_UNKNOWN, str(exc)
-            ) from exc
-    return tuple(findings[key] for key in sorted(findings))
+    try:
+        return apply_reviewer_events(
+            context.previous_findings,
+            reviewer=context.reviewer,
+            opened=tuple(opened),
+            status_changes=tuple(
+                ReviewerStatusChange(
+                    update.finding_id, update.status, update.rationale
+                )
+                for update in response.status_changes
+            ),
+            reclassifications=tuple(
+                ReviewerReclassification(
+                    update.finding_id,
+                    update.finding_class,
+                    update.rationale,
+                )
+                for update in response.reclassifications
+            ),
+        )
+    except ValueError as exc:
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.FINDING_REFERENCE_UNKNOWN, str(exc)
+        ) from exc
 
 
 def _convert_anchors(
@@ -1141,11 +1146,11 @@ def _validate_decision(
                     NativeReviewErrorCode.APPROVAL_INVALID,
                     "review cannot introduce or reclassify to OBSERVATION",
                 )
+    open_findings = project_open_set(findings).findings
     own_open_blockers = tuple(
         item
-        for item in findings
-        if item.status is FindingStatus.OPEN
-        and item.finding_class is FindingClass.BLOCKER
+        for item in open_findings
+        if item.finding_class is FindingClass.BLOCKER
         and item.origin.reporter is context.reviewer
     )
     if not response.approved:
@@ -1185,9 +1190,8 @@ def _validate_decision(
     if context.approval_marker is ApprovalMarker.FINAL:
         own_open = tuple(
             item
-            for item in findings
-            if item.status is FindingStatus.OPEN
-            and item.origin.reporter is context.reviewer
+            for item in open_findings
+            if item.origin.reporter is context.reviewer
         )
         if own_open:
             raise NativeReviewContractError(

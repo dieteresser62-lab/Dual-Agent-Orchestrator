@@ -20,9 +20,9 @@ from contracts import (
     ContractResult,
     FindingRecord,
     FindingResponseDecision,
-    FindingStatus,
     ValidationAttestation,
 )
+from finding_reducer import merge_history_snapshots, project_open_set
 from path_policy import PathPolicyError, resolve_repository_path
 from state_io import atomic_write_file
 from semantic_markdown import (
@@ -1204,31 +1204,16 @@ def _render_test_approval(projection: AuditProjection) -> str:
 
 
 def _latest_findings(events: tuple[AuditEvent, ...]) -> tuple[FindingRecord, ...]:
-    latest: dict[str, FindingRecord] = {}
-    for event in events:
-        if not isinstance(event, ReviewAuditEvent):
-            continue
-        for finding in event.result.findings:
-            previous = latest.get(finding.finding_id)
-            if previous is not None:
-                if (
-                    previous.origin != finding.origin
-                    or previous.summary != finding.summary
-                    or previous.acceptance_test != finding.acceptance_test
-                ):
-                    raise AuditTrailError(
-                        f"finding identity changed during lifecycle: {finding.finding_id}"
-                    )
-                if finding.responses[: len(previous.responses)] != previous.responses:
-                    raise AuditTrailError(
-                        f"finding response history regressed: {finding.finding_id}"
-                    )
-                if finding.class_history[: len(previous.class_history)] != previous.class_history:
-                    raise AuditTrailError(
-                        f"finding class history regressed: {finding.finding_id}"
-                    )
-            latest[finding.finding_id] = finding
-    return tuple(latest[key] for key in sorted(latest))
+    try:
+        return merge_history_snapshots(
+            tuple(
+                event.result.findings
+                for event in events
+                if isinstance(event, ReviewAuditEvent)
+            )
+        )
+    except ValueError as exc:
+        raise AuditTrailError(str(exc)) from exc
 
 
 def _render_findings(findings: tuple[FindingRecord, ...]) -> str:
@@ -1277,6 +1262,7 @@ def _render_decision_table(findings: tuple[FindingRecord, ...]) -> str:
     if not findings:
         rows.append("| – | – | Noch keine Findings | – | – | – |")
         return "\n".join(rows)
+    open_ids = frozenset(project_open_set(findings).finding_ids)
     for finding in findings:
         if finding.responses:
             decision = (
@@ -1288,7 +1274,7 @@ def _render_decision_table(findings: tuple[FindingRecord, ...]) -> str:
             decision = "offen"
         implementation = (
             "erledigt: " + _prose_safe(finding.status_rationale)
-            if finding.status is FindingStatus.CLOSED and finding.status_rationale
+            if finding.finding_id not in open_ids and finding.status_rationale
             else "offen"
         )
         rows.append(

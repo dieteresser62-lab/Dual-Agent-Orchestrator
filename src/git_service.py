@@ -12,9 +12,9 @@ from contracts import (
     ContractResult,
     FindingClass,
     FindingRecord,
-    FindingStatus,
     ValidationAttestation,
 )
+from finding_reducer import project_open_set
 from repo_changes import RepositoryChanges, collect_repository_changes
 
 
@@ -721,9 +721,8 @@ def _validate_authorization(
             "commit requires a passing current attestation or named complete red-state exception"
         )
     if any(
-        finding.status is FindingStatus.OPEN
-        and finding.finding_class is FindingClass.BLOCKER
-        for finding in authorization.findings
+        finding.finding_class is FindingClass.BLOCKER
+        for finding in project_open_set(authorization.findings).findings
     ):
         raise GitTransactionError("commit requires no globally open blockers")
     for expected_role, result in ((AgentRole.CLAUDE, authorization.claude_review),):

@@ -1179,8 +1179,10 @@ def test_pending_review_finding_resume_exception_rejects_near_misses(
     elif failure_mode == "duplicate-review":
         chain = (*chain, review)
     latest = {
-        "C-01": prior,
-        current.payload.finding_id: current,
+        item.finding_id: item
+        for item in artifact_migration.project_latest_recorded_statuses(
+            chain, imported=False, bound_only=False
+        )
     }
 
     assert not artifact_migration._recoverable_pending_review_finding_gap(
@@ -1232,7 +1234,12 @@ def test_pending_approved_review_closure_is_admitted_for_exact_local_replay(
         state,
         chain,
         {"C-01": "open"},
-        {"C-01": transition},
+        {
+            item.finding_id: item
+            for item in artifact_migration.project_latest_recorded_statuses(
+                chain, imported=False, bound_only=False
+            )
+        },
     )
 
 
@@ -1259,7 +1266,12 @@ def test_pending_slice_review_finding_is_admitted_after_gate_advanced_rounds(
         state,
         chain,
         {"C-01": "open"},
-        {"C-01": prior, "C-07": current},
+        {
+            item.finding_id: item
+            for item in artifact_migration.project_latest_recorded_statuses(
+                chain, imported=False, bound_only=False
+            )
+        },
     )
 
 

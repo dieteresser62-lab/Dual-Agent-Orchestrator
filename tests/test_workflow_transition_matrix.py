@@ -2693,7 +2693,16 @@ def test_record_replay_matrix_has_independent_literal_oracle_and_failure_windows
 def test_replay_and_carry_forward_mutations_turn_matrix_cases_red(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(orchestrator, "replay_findings", lambda *_args, **_kwargs: ())
+    real_reduce_findings = orchestrator.reduce_findings
+
+    def empty_ledger(replay):  # type: ignore[no-untyped-def]
+        reduction = real_reduce_findings(replay)
+        return replace(
+            reduction,
+            ledger=replace(reduction.ledger, findings=()),
+        )
+
+    monkeypatch.setattr(orchestrator, "reduce_findings", empty_ledger)
     with pytest.raises(
         WorkflowExecutionError,
         match="record-native finding carry-forward differs from the state-v3 mirror",

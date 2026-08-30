@@ -19,7 +19,11 @@ from contracts import (
     PlannedSlice,
     ReadinessMarker,
     StopRequest,
-    apply_finding_response,
+)
+from finding_reducer import (
+    FindingResponseEvent,
+    apply_finding_responses,
+    project_open_set,
 )
 from schema_validation import (
     SchemaDefinitionError,
@@ -233,11 +237,7 @@ def native_codex_provider_response_schema(
     required = schema["$defs"]["plan_result"]["required"]
     if "finding_dispositions" not in required:
         required.append("finding_dispositions")
-    open_ids = tuple(
-        item.finding_id
-        for item in context.previous_findings
-        if item.status is FindingStatus.OPEN
-    )
+    open_ids = project_open_set(context.previous_findings).finding_ids
     disposition = schema["$defs"]["finding_disposition"]
     if open_ids:
         disposition["properties"]["finding_id"] = {
@@ -548,34 +548,20 @@ def _apply_dispositions(
     prior: tuple[FindingRecord, ...],
     dispositions: tuple[NativeFindingDisposition, ...],
 ) -> tuple[FindingRecord, ...]:
-    open_ids = tuple(
-        item.finding_id for item in prior if item.status is FindingStatus.OPEN
-    )
-    disposition_ids = tuple(item.finding_id for item in dispositions)
-    if disposition_ids != tuple(sorted(open_ids)):
-        missing = sorted(set(open_ids) - set(disposition_ids))
-        unexpected = sorted(set(disposition_ids) - set(open_ids))
-        detail = (
-            f"missing disposition for {missing[0]}"
-            if missing
-            else f"disposition references non-open finding {unexpected[0]}"
+    try:
+        return apply_finding_responses(
+            prior,
+            tuple(
+                FindingResponseEvent(
+                    item.finding_id, item.decision, item.rationale
+                )
+                for item in dispositions
+            ),
         )
+    except ValueError as exc:
         raise NativeCodexContractError(
-            NativeCodexErrorCode.FINDING_REFERENCE_INVALID, detail
-        )
-    by_id = {item.finding_id: item for item in prior}
-    for disposition in dispositions:
-        try:
-            by_id[disposition.finding_id] = apply_finding_response(
-                by_id[disposition.finding_id],
-                disposition.decision,
-                disposition.rationale,
-            )
-        except ValueError as exc:
-            raise NativeCodexContractError(
-                NativeCodexErrorCode.FINDING_REFERENCE_INVALID, str(exc)
-            ) from exc
-    return tuple(by_id[key] for key in sorted(by_id))
+            NativeCodexErrorCode.FINDING_REFERENCE_INVALID, str(exc)
+        ) from exc
 
 
 def _validate_test_files(

@@ -10,7 +10,8 @@ from pathlib import Path, PurePosixPath
 import re
 from typing import Any, Mapping
 
-from contracts import FindingStatus, ReadinessMarker, ValidationAttestation
+from contracts import ReadinessMarker, ValidationAttestation
+from finding_reducer import project_open_set
 from native_codex_contract import (
     BoundNativeCodexContext,
     NativeCodexContext,
@@ -422,8 +423,7 @@ def _codex_context_request_projection(
                 "acceptance_test": item.acceptance_test,
                 "reporter": item.origin.reporter.value,
             }
-            for item in context.previous_findings
-            if item.status is FindingStatus.OPEN
+            for item in project_open_set(context.previous_findings).findings
         ],
     }
 

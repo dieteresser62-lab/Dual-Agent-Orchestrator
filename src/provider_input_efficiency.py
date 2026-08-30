@@ -9,7 +9,8 @@ from pathlib import PurePosixPath
 import re
 from typing import Mapping, Sequence
 
-from contracts import FindingRecord, FindingStatus
+from contracts import FindingRecord
+from finding_reducer import project_open_set
 from plan_handoff import PlanHandoffError, extract_slice_requirements
 
 
@@ -112,8 +113,7 @@ def build_slice_execution_package(
             "summary": item.summary,
             "acceptance_test": item.acceptance_test,
         }
-        for item in sorted(findings, key=lambda value: value.finding_id)
-        if item.status is FindingStatus.OPEN
+        for item in project_open_set(findings).findings
     ]
     document = {
         "schema_version": SLICE_PACKAGE_SCHEMA,
@@ -145,11 +145,18 @@ def build_correction_execution_package(
     _require_sorted_paths(authorized_paths, "authorized paths")
     if not current_delta.strip():
         raise ProviderInputEfficiencyError("correction package requires a current delta")
-    ordered = tuple(sorted(findings, key=lambda item: item.finding_id))
-    if not ordered or len({item.finding_id for item in ordered}) != len(ordered):
+    try:
+        ordered = project_open_set(findings).findings
+    except ValueError as exc:
+        raise ProviderInputEfficiencyError(
+            "correction findings must be non-empty and unique"
+        ) from exc
+    if not findings:
         raise ProviderInputEfficiencyError("correction findings must be non-empty and unique")
-    if any(item.status is not FindingStatus.OPEN for item in ordered):
-        raise ProviderInputEfficiencyError("correction package accepts only open findings")
+    if len(ordered) != len(findings):
+        raise ProviderInputEfficiencyError(
+            "correction package accepts only open findings"
+        )
     document = {
         "schema_version": CORRECTION_PACKAGE_SCHEMA,
         "current_fingerprint": current_fingerprint,

@@ -41,6 +41,11 @@ from provider_input_efficiency import (
     build_slice_execution_package,
 )
 from final_review_preflight import FinalReviewPreflightDenied
+from finding_reducer import (
+    merge_request_result,
+    project_open_set,
+    project_request_subset,
+)
 
 from audit_trail import (
     AuditEvent,
@@ -359,30 +364,11 @@ def _merge_request_finding_subset(
     offered: tuple[FindingRecord, ...],
     returned: tuple[FindingRecord, ...],
 ) -> tuple[FindingRecord, ...]:
-    """Merge one request-bounded result back into the complete finding ledger."""
-    authoritative_by_id = {item.finding_id: item for item in authoritative}
-    offered_by_id = {item.finding_id: item for item in offered}
-    returned_by_id = {item.finding_id: item for item in returned}
-    if len(authoritative_by_id) != len(authoritative):
-        raise WorkflowExecutionError(
-            "native result merge received duplicate authoritative finding IDs"
-        )
-    if len(offered_by_id) != len(offered) or len(returned_by_id) != len(returned):
-        raise WorkflowExecutionError(
-            "native result merge received duplicate request-bounded finding IDs"
-        )
-    if set(offered_by_id) != set(returned_by_id):
-        raise WorkflowExecutionError(
-            "native result differs from its exact offered finding subset"
-        )
-    for finding_id, offered_finding in offered_by_id.items():
-        if authoritative_by_id.get(finding_id) != offered_finding:
-            raise WorkflowExecutionError(
-                "offered finding subset differs from the complete ledger"
-            )
-    return tuple(
-        returned_by_id.get(item.finding_id, item) for item in authoritative
-    )
+    """Compatibility boundary around the canonical reducer merge."""
+    try:
+        return merge_request_result(authoritative, offered, returned)
+    except ValueError as exc:
+        raise WorkflowExecutionError(str(exc)) from exc
 
 
 @dataclass(frozen=True)
@@ -2083,11 +2069,7 @@ class WorkflowEngine:
                 state = state.mark_side_effect_completed(key)
                 state = state.with_current_step(decision.resume_step)
             elif is_final_review:
-                open_findings = tuple(
-                    finding
-                    for finding in history.findings
-                    if finding.status is FindingStatus.OPEN
-                )
+                open_findings = project_open_set(history.findings).findings
                 if open_findings:
                     raise WorkflowExecutionError(
                         "final review cannot complete with open findings: "
@@ -2110,11 +2092,7 @@ class WorkflowEngine:
                     scope_paths=boundary.scope_paths,
                     scope_change_groups=boundary.scope_change_groups or None,
                     start_fingerprint=boundary.start_fingerprint,
-                    finding_ids=tuple(
-                        finding.finding_id
-                        for finding in history.findings
-                        if finding.status is FindingStatus.OPEN
-                    ),
+                    finding_ids=project_open_set(history.findings).finding_ids,
                 )
                 history = WorkflowHistory(
                     state.current_work_unit_id,
@@ -2672,9 +2650,8 @@ class WorkflowEngine:
             self.driver.checkpoint(state, history)
             return WorkflowRunResult(state, history)
         if any(
-            finding.status is FindingStatus.OPEN
-            and finding.finding_class is FindingClass.BLOCKER
-            for finding in history.findings
+            finding.finding_class is FindingClass.BLOCKER
+            for finding in project_open_set(history.findings).findings
         ):
             raise WorkflowExecutionError("slice commit requires no open blockers")
         gate_paths = changes.user_gate_paths
@@ -3073,13 +3050,7 @@ class WorkflowEngine:
             or unit.kind in {WorkUnitKind.PLAN, WorkUnitKind.CORRECTION}
         ):
             return state
-        open_ids = tuple(
-            sorted(
-                item.finding_id
-                for item in history.findings
-                if item.status is FindingStatus.OPEN
-            )
-        )
+        open_ids = project_open_set(history.findings).finding_ids
         if unit.open_findings == open_ids:
             return state
         work_units = tuple(
@@ -3238,13 +3209,19 @@ class WorkflowEngine:
             )
         native_findings = history.findings
         if request_kind is NativeCodexRequestKind.CORRECTION:
-            affected_ids = set(state.current_work_unit.open_findings)
-            native_findings = tuple(
-                item
-                for item in history.findings
-                if item.finding_id in affected_ids and item.status is FindingStatus.OPEN
-            )
-            if {item.finding_id for item in native_findings} != affected_ids:
+            affected_ids = tuple(sorted(state.current_work_unit.open_findings))
+            try:
+                request_projection = project_request_subset(
+                    history.findings,
+                    finding_ids=affected_ids,
+                    open_only=True,
+                )
+            except ValueError as exc:
+                raise WorkflowExecutionError(
+                    "native correction request lacks its exact affected open finding set"
+                ) from exc
+            native_findings = request_projection.findings
+            if request_projection.finding_ids != affected_ids:
                 raise WorkflowExecutionError(
                     "native Codex correction lacks its exact affected open finding set"
                 )
@@ -3290,8 +3267,7 @@ class WorkflowEngine:
                         "summary": item.summary,
                         "acceptance_test": item.acceptance_test,
                     }
-                    for item in native_findings
-                    if item.status is FindingStatus.OPEN
+                    for item in project_open_set(native_findings).findings
                 ]
                 if package_findings != request_findings:
                     raise WorkflowExecutionError(

@@ -34,7 +34,13 @@ from artifact_replay import (
     ArtifactReplayResult,
     ReplayDiagnosticCode,
     replay_artifacts,
-    replay_findings,
+)
+from finding_reducer import (
+    FindingRecordedStatusProjection,
+    project_finding_statuses,
+    project_latest_recorded_statuses,
+    project_legacy_mirror_statuses,
+    reduce_findings,
 )
 from workflow_state import (
     AgentFailureKind,
@@ -373,14 +379,19 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
         )
 
     finding_statuses = _finding_statuses(state)
-    latest_findings: dict[str, ArtifactRecord] = {}
-    for record in chain:
-        if isinstance(record.payload, FindingTransitionPayload):
-            latest_findings[record.payload.finding_id] = record
+    latest_findings = {
+        item.finding_id: item
+        for item in project_latest_recorded_statuses(
+            chain, imported=False, bound_only=False
+        )
+    }
+    reduced_findings = reduce_findings(replay)
     imported_statuses = {
-        finding.finding_id: finding.status.value.lower()
-        for finding in replay_findings(replay)
-        if finding.finding_id not in latest_findings
+        finding_id: status
+        for finding_id, status in project_finding_statuses(
+            reduced_findings.ledger.findings
+        )
+        if finding_id not in latest_findings
     }
     pending_review_finding_gap = _recoverable_pending_review_finding_gap(
         state,
@@ -391,20 +402,21 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
     record_finding_ids = set(latest_findings) | set(imported_statuses)
     if record_finding_ids != set(finding_statuses) and not pending_review_finding_gap:
         differing = next(iter(record_finding_ids ^ set(finding_statuses)), None)
-        record = latest_findings.get(differing) if differing is not None else None
+        recorded = latest_findings.get(differing) if differing is not None else None
         raise mismatch(
             "finding transitions differ from state-v3",
-            None if record is None else record.record_id,
+            None if recorded is None else recorded.record_id,
             code=_mirror_difference_code(record_finding_ids, set(finding_statuses)),
         )
-    for finding_id, record in latest_findings.items():
-        assert isinstance(record.payload, FindingTransitionPayload)
+    for finding_id, recorded in latest_findings.items():
         if (
             finding_id in finding_statuses
-            and record.payload.finding_status != finding_statuses[finding_id]
+            and not recorded.matches(finding_statuses[finding_id])
             and not pending_review_finding_gap
         ):
-            raise mismatch("finding status differs from state-v3", record.record_id)
+            raise mismatch(
+                "finding status differs from state-v3", recorded.record_id
+            )
     for finding_id, status in imported_statuses.items():
         if finding_statuses.get(finding_id) != status and not pending_review_finding_gap:
             raise mismatch(
@@ -616,7 +628,6 @@ def _mirror_difference_code(
 
 
 def _finding_statuses(state: WorkflowState) -> dict[str, str]:
-    statuses: dict[str, str] = {}
     raw = state.runtime_history
     candidates: list[object] = []
     if isinstance(raw, dict) and set(raw) == {"current", "archive"}:
@@ -626,35 +637,32 @@ def _finding_statuses(state: WorkflowState) -> dict[str, str]:
         candidates.append(raw.get("current"))
     elif raw is not None:
         candidates.append(raw)
-    for candidate in candidates:
-        if not isinstance(candidate, dict) or not isinstance(candidate.get("findings"), list):
-            continue
-        for finding in candidate["findings"]:
-            if not isinstance(finding, dict):
-                continue
-            finding_id = finding.get("finding_id")
-            status = finding.get("status")
-            if isinstance(finding_id, str) and isinstance(status, str):
-                statuses[finding_id] = status.lower()
-    for unit in state.work_units:
-        for finding_id in unit.open_findings:
-            # ``open_findings`` records the immutable attribution carried into a
-            # correction work unit.  It is not the live finding mirror: an
-            # approving reviewer may close that finding while the same work unit
-            # remains current.  Prefer the status projected from runtime_history
-            # and use the work-unit tuple only to recover legacy mirrors which do
-            # not contain a finding entry yet.
-            statuses.setdefault(finding_id, "open")
-    return statuses
+    attributed_open_ids = tuple(
+        finding_id
+        for unit in state.work_units
+        for finding_id in unit.open_findings
+    )
+    return dict(
+        project_legacy_mirror_statuses(
+            tuple(candidates), attributed_open_ids=attributed_open_ids
+        )
+    )
 
 
 def _recoverable_pending_review_finding_gap(
     state: WorkflowState,
     chain: tuple[ArtifactRecord, ...],
     mirror_statuses: dict[str, str],
-    latest_findings: dict[str, ArtifactRecord],
+    latest_findings: dict[str, FindingRecordedStatusProjection] | None = None,
 ) -> bool:
     """Admit one durable review for exact local replay after a failed checkpoint."""
+    if latest_findings is None:
+        latest_findings = {
+            item.finding_id: item
+            for item in project_latest_recorded_statuses(
+                chain, imported=False, bound_only=False
+            )
+        }
     unit = state.current_work_unit
     reviewer_by_step = {
         WorkflowStep.CLAUDE_SLICE_REVIEW: "claude",
@@ -705,13 +713,12 @@ def _recoverable_pending_review_finding_gap(
         for finding_id in set(mirror_statuses) | set(latest_findings)
         if finding_id not in mirror_statuses
         or finding_id not in latest_findings
-        or latest_findings[finding_id].payload.finding_status
-        != mirror_statuses[finding_id]
+        or not latest_findings[finding_id].matches(mirror_statuses[finding_id])
     }
     if not changed_ids or not changed_ids.issubset(review_ids):
         return False
     if review.payload.verdict == "approved" and any(
-        latest_findings[finding_id].payload.finding_status != "closed"
+        not latest_findings[finding_id].is_closed
         for finding_id in changed_ids
         if finding_id in latest_findings
     ):
@@ -722,7 +729,7 @@ def _recoverable_pending_review_finding_gap(
         transition = latest_findings.get(finding_id)
         if (
             transition is None
-            or transition.payload.actor.value != reviewer
+            or transition.actor != reviewer
             or record_positions[transition.record_id] <= review_position
         ):
             return False

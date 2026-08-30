@@ -13,13 +13,13 @@ from typing import Iterable
 from contracts import (
     FindingClass,
     FindingRecord,
-    FindingStatus,
     SHA256_PATTERN,
     ValidationAttestation,
     ValidationCommandSpec,
     ValidationRecord,
     ValidationStatus,
 )
+from finding_reducer import project_open_set
 from gates import matches_path_patterns, normalize_path_patterns
 
 
@@ -274,9 +274,7 @@ def _finding_validation_commands(
     allowed_prefixes: tuple[tuple[str, ...], ...],
 ) -> tuple[ValidationCommand, ...]:
     commands: list[ValidationCommand] = []
-    for finding in sorted(findings, key=lambda item: item.finding_id):
-        if finding.status is not FindingStatus.OPEN:
-            continue
+    for finding in project_open_set(tuple(findings)).findings:
         acceptance = finding.acceptance_test.strip()
         if not acceptance.startswith(FINDING_COMMAND_PREFIX):
             continue

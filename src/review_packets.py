@@ -5,7 +5,8 @@ import json
 import re
 from dataclasses import dataclass
 
-from contracts import FindingRecord, FindingStatus, ValidationAttestation
+from contracts import FindingRecord, ValidationAttestation
+from finding_reducer import project_open_set
 from plan_handoff import (
     PlanHandoffError,
     extract_slice_requirements as extract_plan_slice_requirements,
@@ -183,6 +184,7 @@ def build_review_packet(
         )
     else:
         goal, criteria = extract_slice_requirements(plan_text, slice_id)
+    open_projection = project_open_set(selected)
     active = [
         {
             "id": item.finding_id,
@@ -192,12 +194,12 @@ def build_review_packet(
             "summary": item.summary,
             "acceptance_test": item.acceptance_test,
         }
-        for item in sorted(selected, key=lambda value: value.finding_id)
-        if item.status is FindingStatus.OPEN
+        for item in open_projection.findings
     ]
     closures = []
+    open_ids = frozenset(open_projection.finding_ids)
     for item in sorted(selected, key=lambda value: value.finding_id):
-        if item.status is not FindingStatus.CLOSED:
+        if item.finding_id in open_ids:
             continue
         fact = f"{item.finding_id}|CLOSED|{item.status_rationale or ''}"
         closures.append(

@@ -355,10 +355,10 @@ STRICT_BODY_TARGETS = tuple(
 # non-divergence comparison added inside one of these boundaries forces S2's
 # inventory to be reviewed instead of silently aging.
 EXPECTED_COMPARISON_COUNTS = {
-    "src/artifact_migration.py:resolve_resume_state": 90,
+    "src/artifact_migration.py:resolve_resume_state": 89,
     "src/artifact_migration.py:_mirror_difference_code": 0,
     "src/artifact_migration.py:_finding_statuses": 2,
-    "src/artifact_migration.py:_recoverable_pending_review_finding_gap": 17,
+    "src/artifact_migration.py:_recoverable_pending_review_finding_gap": 16,
     "src/artifact_migration.py:_recoverable_pending_correction_record": 6,
     "src/artifact_migration.py:_recoverable_pending_slice_denial_record": 7,
     "src/artifact_migration.py:_recoverable_pending_work_record": 0,
@@ -389,7 +389,7 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/orchestrator.py:ProductionWorkflowDriver.recover_pending_native_codex": 37,
     "src/orchestrator.py:ProductionWorkflowDriver.recover_pending_native_reviewer": 30,
     "src/orchestrator.py:ProductionWorkflowDriver.recover_pending_native_reviewer_before_policy": 35,
-    "src/orchestrator.py:ProductionWorkflowDriver.persist_native_codex_contract": 9,
+    "src/orchestrator.py:ProductionWorkflowDriver.persist_native_codex_contract": 8,
     "src/orchestrator.py:ProductionWorkflowDriver.prepare_finding_handoff": 13,
     "src/orchestrator.py:ProductionWorkflowDriver.checkpoint": 4,
     "src/orchestrator.py:ProductionWorkflowDriver._project_audit": 25,
@@ -406,8 +406,8 @@ EXPECTED_COMPARISON_COUNTS = {
 
 EXPECTED_STRICT_BODY_DIGESTS = {
     "src/artifact_migration.py:_mirror_difference_code": "9433c6d83367347145eebab39e8fc4e3a989062ff9864bec6752710065ffbbc7",
-    "src/artifact_migration.py:_finding_statuses": "5a9bbfc12d54b166f63a94de943c9a1fd1b0e6a5245b2a3d5198e5fb5287644b",
-    "src/artifact_migration.py:_recoverable_pending_review_finding_gap": "e85684aa48fbf6274531101b642480c0c9e6437bf88703b757dabb5cad2ad0a8",
+    "src/artifact_migration.py:_finding_statuses": "cc4a0460cf13d1fbeba70deb2ae66dd19771bb31e8c56907139506ba3421c758",
+    "src/artifact_migration.py:_recoverable_pending_review_finding_gap": "dbdbf286f9c1d85bcb53e7e3e2e716f052e60a318b51d5176088d382b4819468",
     "src/artifact_migration.py:_recoverable_pending_correction_record": "2ccc8845cec0e65d669837cb5d64a4dbe5877b1e68d814ee255e57575032a08a",
     "src/artifact_migration.py:_recoverable_pending_slice_denial_record": "dbc94b37591451b1ea7d668cb54df91e945f957b4752a205e23cc8178acc8629",
     "src/artifact_migration.py:_recoverable_pending_work_record": "b9359c5e9abeac81d260e58a1e4f0d74c44ccaf740a772d06d71e32e6a333934",
@@ -418,7 +418,7 @@ EXPECTED_STRICT_BODY_DIGESTS = {
     "src/final_review_preflight.py:_approved_external_paths": "24a9647addbf8df21fba7ecd0e25164e7237b00eb9c831bd7ee7b9ce1b8f5439",
     "src/orchestrator.py:_persisted_histories": "3f95d7d8d626305fc14dd90ea12be8d9baf8c4a2de0faf6c808989809c7879ea",
     "src/orchestrator.py:_recoverable_final_denial_mirror_gap": "3b78ce8c3861bfd62f8fd8728f7346b5cff5e1b6c12ab8b3b6c0f78bdc394331",
-    "src/orchestrator.py:_historical_correction_attribution_matches": "b2d79f866c64ccaafc85fb79632bf596c5101bf9b267415c5a8cf2f8e4ee098e",
+    "src/orchestrator.py:_historical_correction_attribution_matches": "9ca739a787d60da279c0bbd10a22d29f6a1c583d05434e704b616e5925afec35",
     "src/orchestrator.py:ProductionWorkflowDriver.finalize_audit": "5a8f451d2aed43e838616c786a3e1b1a382465e7a37d19e9912dc2c28cde80c4",
     "src/git_service.py:commit_managed_audit_report": "ec161c2eafd7369d9eb9ab30b1724ca01815f08ce669e94c4b322770556bc717",
 }

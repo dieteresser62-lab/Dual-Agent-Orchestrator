@@ -55,7 +55,12 @@ from artifact_models import (
     RecordType, stable_record_id,
 )
 from artifact_store import ArtifactStore
-from artifact_replay import ArtifactReplayError, replay_artifacts, replay_findings
+from artifact_replay import ArtifactReplayError, replay_artifacts
+from finding_reducer import (
+    project_finding_response_delta,
+    project_reviewer_persistence_transitions,
+    reduce_findings,
+)
 from final_review_preflight import (
     FINAL_REVIEW_OPERATIONS, FinalReviewPreflightDenied, preflight_payload,
     relevant_record_head, run_final_review_preflight, transition_fingerprint,
@@ -753,41 +758,28 @@ class ProductionWorkflowDriver(WorkflowDriver):
             replay = replay_artifacts(
                 bridge.store.load_chain(), state.run_id, allow_empty=True
             )
+            reduced = reduce_findings(replay)
             if state.current_work_unit.kind is WorkUnitKind.CORRECTION:
-                correction_records = tuple(
-                    record
-                    for record in replay.records
-                    if isinstance(record.payload, CorrectionWorkUnitPayload)
-                    and record.logical_id
-                    == f"work-unit-{state.current_work_unit_id}"
+                attribution = reduced.correction_for(
+                    state.current_work_unit_id
                 )
-                if not correction_records:
+                if attribution is None:
                     raise WorkflowExecutionError(
                         "correction finding replay requires a bound correction "
                         "work-unit record"
                     )
-                correction_finding_ids = tuple(
-                    sorted(
-                        {
-                            finding_id
-                            for record in correction_records
-                            for finding_id in record.payload.finding_ids
-                        }
-                    )
-                )
-                projected = replay_findings(
-                    replay,
-                    finding_ids=correction_finding_ids,
-                )
-                correction_ids = frozenset(correction_finding_ids)
+                projected = reduced.request_subset(
+                    finding_ids=attribution.finding_ids
+                ).findings
+                correction_ids = frozenset(attribution.finding_ids)
                 mirror_findings = tuple(
                     finding
                     for finding in mirror_findings
                     if finding.finding_id in correction_ids
                 )
             else:
-                projected = replay_findings(replay)
-        except ArtifactReplayError as exc:
+                projected = reduced.ledger.findings
+        except (ArtifactReplayError, ValueError) as exc:
             raise WorkflowExecutionError(
                 f"authoritative finding replay failed: {exc}"
             ) from exc
@@ -827,7 +819,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
             replay = replay_artifacts(
                 bridge.store.load_chain(), state.run_id, allow_empty=True
             )
-            projected = replay_findings(replay)
+            projected = reduce_findings(replay).ledger.findings
         except ArtifactReplayError as exc:
             raise WorkflowExecutionError(
                 f"native finding carry-forward failed: {exc}"
@@ -1253,7 +1245,8 @@ class ProductionWorkflowDriver(WorkflowDriver):
                     chain[: chain.index(original_attempt_record)], state.run_id
                 )
                 request_findings_by_id = {
-                    item.finding_id: item for item in replay_findings(request_replay)
+                    item.finding_id: item
+                    for item in reduce_findings(request_replay).ledger.findings
                 }
             except ArtifactReplayError as exc:
                 raise WorkflowExecutionError(
@@ -1808,27 +1801,33 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 else FingerprintKind.IMPLEMENTATION
             ),
         )
-        previous_by_id = {item.finding_id: item for item in previous_findings}
-        for finding in output.result.findings:
-            prior_count = len(previous_by_id.get(finding.finding_id, finding).responses)
-            if finding.finding_id not in previous_by_id:
-                prior_count = 0
-            for index, response in enumerate(
-                finding.responses[prior_count:], start=prior_count + 1
-            ):
-                self._artifact_bridge.append(
-                    finding_payload(
-                        finding,
-                        actor=AgentRole.CODEX,
-                        action="responded",
-                        rationale=response.rationale,
-                        work_unit_id=unit.work_unit_id,
-                        response_decision=response.decision,
-                    ),
-                    logical_id=f"finding-{finding.finding_id}",
-                    idempotency_key=f"finding-response:{finding.finding_id}:{index}",
-                    fingerprint_sha256=fingerprint,
-                )
+        try:
+            response_delta = project_finding_response_delta(
+                previous_findings, output.result.findings
+            )
+        except ValueError as exc:
+            raise WorkflowExecutionError(
+                f"native implementer finding response delta is invalid: {exc}"
+            ) from exc
+        for item in response_delta:
+            finding = item.finding
+            response = item.response
+            self._artifact_bridge.append(
+                finding_payload(
+                    finding,
+                    actor=AgentRole.CODEX,
+                    action="responded",
+                    rationale=response.rationale,
+                    work_unit_id=unit.work_unit_id,
+                    response_decision=response.decision,
+                ),
+                logical_id=f"finding-{finding.finding_id}",
+                idempotency_key=(
+                    f"finding-response:{finding.finding_id}:"
+                    f"{item.response_index}"
+                ),
+                fingerprint_sha256=fingerprint,
+            )
 
     def persist_native_review_contract(
         self,
@@ -1897,93 +1896,63 @@ class ProductionWorkflowDriver(WorkflowDriver):
                     "structured finding persistence lacks an active work unit"
                 )
             work_unit_id = str(self.active_state.current_work_unit_id)
-        previous_by_id = {item.finding_id: item for item in previous_findings}
-        for finding in result.findings:
-            previous = previous_by_id.get(finding.finding_id)
-            transitions: list[tuple[str, str, str]] = []
-            if previous is None:
-                transitions.append(("opened", finding.summary, "opened"))
-            else:
-                class_changed = previous.finding_class is not finding.finding_class
-                rationale_changed = (
-                    previous.status_rationale != finding.status_rationale
-                )
-                if class_changed:
-                    transitions.append(
-                        (
-                            "reclassified",
-                            finding.status_rationale or finding.summary,
-                            "reclassified",
-                        )
-                    )
-                if previous.status is not finding.status:
-                    transitions.append(
-                        (
-                            "status_changed",
-                            finding.status_rationale or finding.summary,
-                            "status_changed",
-                        )
-                    )
-                elif rationale_changed and not class_changed:
-                    transitions.append(
-                        (
-                            "status_changed",
-                            finding.status_rationale or finding.summary,
-                            (
-                                f"status_rationale:{work_unit_id}"
-                                if structured
-                                else "status_rationale"
-                            ),
-                        )
-                    )
-            for action, rationale, transition_identity in transitions:
-                payload = finding_payload(
-                    finding,
-                    action=action,
-                    rationale=rationale,
-                    work_unit_id=work_unit_id,
-                )
-                logical_id = f"finding-{finding.finding_id}"
-                legacy_key = (
+        transitions = project_reviewer_persistence_transitions(
+            previous_findings,
+            result.findings,
+            work_unit_id=work_unit_id,
+        )
+        for transition in transitions:
+            finding = transition.finding
+            action = transition.action
+            rationale = transition.rationale
+            transition_identity = transition.identity
+            payload = finding_payload(
+                finding,
+                action=action,
+                rationale=rationale,
+                work_unit_id=work_unit_id,
+            )
+            logical_id = f"finding-{finding.finding_id}"
+            legacy_key = (
+                f"finding:{finding.finding_id}:{transition_identity}:"
+                f"{round_number}:{result.reviewer.value}"
+            )
+            idempotency_key = legacy_key
+            if structured and not transition_identity.startswith(
+                "status_rationale:"
+            ):
+                assert work_unit_id is not None
+                idempotency_key = (
                     f"finding:{finding.finding_id}:{transition_identity}:"
-                    f"{round_number}:{result.reviewer.value}"
+                    f"work_unit:{work_unit_id}:{round_number}:"
+                    f"{result.reviewer.value}"
                 )
-                idempotency_key = legacy_key
-                if structured and not transition_identity.startswith(
-                    "status_rationale:"
+                legacy_record = next(
+                    (
+                        record
+                        for record in self._artifact_bridge.store.load_chain()
+                        if record.idempotency_key == legacy_key
+                    ),
+                    None,
+                )
+                if (
+                    legacy_record is not None
+                    and getattr(legacy_record.payload, "work_unit_id", None)
+                    == work_unit_id
                 ):
-                    assert work_unit_id is not None
-                    idempotency_key = (
-                        f"finding:{finding.finding_id}:{transition_identity}:"
-                        f"work_unit:{work_unit_id}:{round_number}:"
-                        f"{result.reviewer.value}"
+                    self._artifact_bridge.append(
+                        payload,
+                        logical_id=logical_id,
+                        idempotency_key=legacy_key,
+                        fingerprint_sha256=fingerprint,
                     )
-                    legacy_record = next(
-                        (
-                            record
-                            for record in self._artifact_bridge.store.load_chain()
-                            if record.idempotency_key == legacy_key
-                        ),
-                        None,
-                    )
-                    if (
-                        legacy_record is not None
-                        and getattr(legacy_record.payload, "work_unit_id", None)
-                        == work_unit_id
-                    ):
-                        self._artifact_bridge.append(
-                            payload,
-                            logical_id=logical_id,
-                            idempotency_key=legacy_key,
-                            fingerprint_sha256=fingerprint,
-                        )
-                        continue
-                self._artifact_bridge.append(
-                    payload,
-                    logical_id=logical_id,
-                    idempotency_key=idempotency_key,
-                    fingerprint_sha256=fingerprint,
-                )
+                    continue
+            self._artifact_bridge.append(
+                payload,
+                logical_id=logical_id,
+                idempotency_key=idempotency_key,
+                fingerprint_sha256=fingerprint,
+            )
 
     def persist_contract_diagnostic(
         self, role: AgentRole, output: str, reason: str, attempt: int
@@ -3000,21 +2969,29 @@ def _historical_correction_attribution_matches(
         == review_signature
         and record.payload.work_unit_id == str(reviewed_work_unit_id)
     )
-    correction_records = tuple(
-        record
-        for record in chain
-        if isinstance(record.payload, CorrectionWorkUnitPayload)
-        and record.logical_id == f"work-unit-{correction_work_unit_id}"
-        and record.payload.round_number == 1
+    try:
+        replay = replay_artifacts(chain, chain[0].run_id)
+        attribution = reduce_findings(replay).correction_for(
+            correction_work_unit_id
+        )
+    except ArtifactReplayError:
+        return False
+    first_rounds = (
+        ()
+        if attribution is None
+        else tuple(
+            item for item in attribution.rounds if item.round_number == 1
+        )
     )
-    if len(review_records) != 1 or len(correction_records) != 1:
+    if len(review_records) != 1 or len(first_rounds) != 1:
         return False
     review = review_records[0]
-    correction = correction_records[0]
+    correction_round = first_rounds[0]
+    positions = {record.record_id: index for index, record in enumerate(chain)}
     return (
-        chain.index(review) < chain.index(correction)
-        and bool(correction.payload.finding_ids)
-        and set(correction.payload.finding_ids).issubset(
+        positions[review.record_id] < positions[correction_round.record_id]
+        and bool(correction_round.finding_ids)
+        and set(correction_round.finding_ids).issubset(
             set(review.payload.finding_ids)
         )
     )
@@ -3688,16 +3665,11 @@ def _initialize_finding_handoff(
             fingerprint_kind=FingerprintKind.CONTRACT,
         )
         local_replay = replay_artifacts(bridge.store.load_chain(), state.run_id)
-        findings = replay_findings(local_replay)
+        reduction = reduce_findings(local_replay)
+        findings = reduction.ledger.findings
     except (ArtifactBridgeError, ArtifactReplayError, ValueError) as exc:
         raise StateSchemaError(f"FINDING-HANDOFF-INVALID: {exc}") from exc
-    open_ids = tuple(
-        sorted(
-            finding.finding_id
-            for finding in findings
-            if finding.status.value == "OPEN"
-        )
-    )
+    open_ids = reduction.open_set.finding_ids
     current = replace(state.current_work_unit, open_findings=open_ids)
     units = tuple(
         current if unit.work_unit_id == current.work_unit_id else unit
