@@ -39,6 +39,8 @@ class ArtifactValidationError(ValueError):
 class RecordType(StrEnum):
     RUN_IDENTITY = "run_identity"
     RUN_PROFILE = "run_profile"
+    WORKFLOW_TRANSITION = "workflow_transition"
+    WORKFLOW_POLICY = "workflow_policy"
     TASK = "task"
     PLAN = "plan"
     WORK_UNIT = "work_unit"
@@ -165,6 +167,87 @@ class RunProfilePayload:
         ):
             if value not in {"low", "medium", "high", "xhigh", "max"}:
                 raise ArtifactValidationError(f"{name} is unsupported")
+
+
+_WORKFLOW_STEPS = {
+    "codex_plan",  # allowlist:provider -- persisted protocol vocabulary
+    "claude_plan_review",  # allowlist:provider -- persisted protocol vocabulary
+    "codex_plan_revision",  # allowlist:provider -- persisted protocol vocabulary
+    "codex_implementation",  # allowlist:provider -- persisted protocol vocabulary
+    "claude_slice_review",  # allowlist:provider -- persisted protocol vocabulary
+    "codex_correction",  # allowlist:provider -- persisted protocol vocabulary
+    "slice_commit",
+    "codex_final_review",  # allowlist:provider -- persisted protocol vocabulary
+    "codex_final_correction",  # allowlist:provider -- persisted protocol vocabulary
+    "claude_final_review",  # allowlist:provider -- persisted protocol vocabulary
+    "completed",
+}
+_SLICE_STATUSES = {
+    "pending",
+    "in_progress",
+    "awaiting_user_decision",
+    "waiting_for_quota",
+    "waiting_for_retry",
+    "awaiting_resume",
+    "completed",
+}
+_WORK_UNIT_STATUSES = _SLICE_STATUSES
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowTransitionPayload:
+    slice_id: str
+    slice_status: str
+    work_unit_id: str | None
+    step: str | None
+    work_unit_status: str | None
+    status: ClassVar[str] = "transitioned"
+    record_type: ClassVar[RecordType] = RecordType.WORKFLOW_TRANSITION
+
+    def __post_init__(self) -> None:
+        _require_identifier(self.slice_id, "transition slice_id")
+        if self.slice_status not in _SLICE_STATUSES:
+            raise ArtifactValidationError("transition slice_status is invalid")
+        work_unit_values = (self.work_unit_id, self.step, self.work_unit_status)
+        if all(value is None for value in work_unit_values):
+            return
+        if any(value is None for value in work_unit_values):
+            raise ArtifactValidationError(
+                "transition work-unit cursor fields must be all present or all null"
+            )
+        assert self.work_unit_id is not None
+        assert self.step is not None
+        assert self.work_unit_status is not None
+        _require_identifier(self.work_unit_id, "transition work_unit_id")
+        if self.step not in _WORKFLOW_STEPS:
+            raise ArtifactValidationError("transition step is invalid")
+        if self.work_unit_status not in _WORK_UNIT_STATUSES:
+            raise ArtifactValidationError("transition work_unit_status is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowPolicyPayload:
+    work_unit_id: str
+    implementer_return_count: int
+    max_implementer_returns: int
+    status: ClassVar[str] = "bound"
+    record_type: ClassVar[RecordType] = RecordType.WORKFLOW_POLICY
+
+    def __post_init__(self) -> None:
+        _require_identifier(self.work_unit_id, "policy work_unit_id")
+        if (
+            isinstance(self.implementer_return_count, bool)
+            or not isinstance(self.implementer_return_count, int)
+            or self.implementer_return_count < 0
+        ):
+            raise ArtifactValidationError(
+                "implementer_return_count must be a non-negative integer"
+            )
+        _require_positive(self.max_implementer_returns, "max_implementer_returns")
+        if self.implementer_return_count > self.max_implementer_returns:
+            raise ArtifactValidationError(
+                "implementer_return_count exceeds max_implementer_returns"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -881,6 +964,7 @@ class WorkflowCompletionPayload:
 
 ArtifactPayload: TypeAlias = (
     RunIdentityPayload | RunProfilePayload
+    | WorkflowTransitionPayload | WorkflowPolicyPayload
     | TaskPayload | PlanPayload | WorkUnitPayload | CorrectionWorkUnitPayload
     | AgentResultPayload | DiagnosticPayload | ReviewPayload | FindingTransitionPayload
     | FindingHandoffExportPayload | FindingHandoffImportPayload
@@ -1047,6 +1131,16 @@ def _payload_from_dict(record_type: RecordType, raw: Mapping[str, Any]) -> Artif
         return RunProfilePayload(
             data["codex_model"], data["codex_effort"],
             data["claude_model"], data["claude_effort"],
+        )
+    if record_type is RecordType.WORKFLOW_TRANSITION:
+        return WorkflowTransitionPayload(
+            data["slice_id"], data["slice_status"], data["work_unit_id"],
+            data["step"], data["work_unit_status"],
+        )
+    if record_type is RecordType.WORKFLOW_POLICY:
+        return WorkflowPolicyPayload(
+            data["work_unit_id"], data["implementer_return_count"],
+            data["max_implementer_returns"],
         )
     if record_type is RecordType.TASK:
         return TaskPayload(data["target_branch"], tuple(data["scope_paths"]), data["assignment_sha256"])

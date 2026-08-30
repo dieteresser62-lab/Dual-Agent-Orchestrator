@@ -18,6 +18,8 @@ from artifact_models import (
     ValidationResult,
     CommandSpec,
     WorkflowCompletionPayload,
+    WorkflowPolicyPayload,
+    WorkflowTransitionPayload,
 )
 from artifact_store import ArtifactStore
 from contracts import PlannedSlice
@@ -518,9 +520,30 @@ def test_preflight_rejects_binding_reference_that_is_not_a_predecessor(
     assert set(result.affected_record_ids[1:]) == set(binding.payload.approval_ids)
 
 
-def test_relevant_record_head_excludes_bootstrap_records(tmp_path: Path) -> None:
+def test_relevant_record_head_excludes_bootstrap_and_r2_dispatch_context_records(
+    tmp_path: Path,
+) -> None:
     state = _state(WorkflowStep.CODEX_FINAL_REVIEW)
     bridge = ArtifactBridge(ArtifactStore(tmp_path, state.run_id))
     before = relevant_record_head(bridge.store.load_chain())
     _measurement(bridge, state, state.current_step.value)
+    assert relevant_record_head(bridge.store.load_chain()) == before
+    bridge.append(
+        WorkflowTransitionPayload(
+            str(state.current_slice_id),
+            state.current_slice.status.value,
+            str(state.current_work_unit_id),
+            state.current_step.value,
+            state.current_work_unit.status.value,
+        ),
+        logical_id="workflow-transition",
+        idempotency_key="workflow-transition:1",
+        fingerprint_sha256=FINGERPRINT,
+    )
+    bridge.append(
+        WorkflowPolicyPayload(str(state.current_work_unit_id), 0, 4),
+        logical_id=f"workflow-policy-{state.current_work_unit_id}",
+        idempotency_key=f"workflow-policy:{state.current_work_unit_id}:1",
+        fingerprint_sha256=FINGERPRINT,
+    )
     assert relevant_record_head(bridge.store.load_chain()) == before

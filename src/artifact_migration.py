@@ -24,6 +24,7 @@ from artifact_models import (
     ValidationAttestationPayload,
     WorkUnitPayload,
     WorkflowCompletionPayload,
+    WorkflowPolicyPayload,
     ProviderInputMeasurementPayload,
     FinalReviewPreflightPayload,
     FindingHandoffExportPayload,
@@ -34,6 +35,8 @@ from artifact_store import ArtifactStore, ArtifactStoreError
 from artifact_replay import (
     ArtifactReplayError,
     ArtifactReplayResult,
+    ReplayedWorkflowCursor,
+    ReplayedWorkUnitState,
     ReplayDiagnosticCode,
     replay_artifacts,
 )
@@ -53,6 +56,7 @@ from workflow_state import (
     WorkflowState,
     WorkflowStep,
     WorkUnitKind,
+    project_implementer_return_policy,
 )
 
 
@@ -125,6 +129,87 @@ def assert_run_binding_mirror(
             )
 
 
+def require_workflow_status_prefix(
+    replay: ArtifactReplayResult,
+) -> tuple[tuple[ArtifactRecord, ...], tuple[ArtifactRecord, ...]]:
+    """Reject every pre-R2 chain before it can be silently backfilled."""
+    transition_records = tuple(
+        record for record in replay.records
+        if record.record_type is RecordType.WORKFLOW_TRANSITION
+    )
+    policy_records = tuple(
+        record for record in replay.records
+        if record.record_type is RecordType.WORKFLOW_POLICY
+    )
+    if not transition_records or replay.workflow_cursor is None:
+        raise ArtifactResumeError(
+            "structured-v2 run has no workflow transition prefix",
+            code=ReplayDiagnosticCode.RECORD_MISSING,
+        )
+    if not policy_records:
+        raise ArtifactResumeError(
+            "structured-v2 run has no workflow policy prefix",
+            code=ReplayDiagnosticCode.RECORD_MISSING,
+        )
+    return transition_records, policy_records
+
+
+def assert_workflow_status_mirror(
+    replay: ArtifactReplayResult,
+    state: WorkflowState,
+) -> None:
+    """Require the R2 cursor/status prefix and compare it with state-v3."""
+    transition_records, policy_records = require_workflow_status_prefix(replay)
+
+    expected_cursor = ReplayedWorkflowCursor(
+        str(state.current_slice_id),
+        str(state.current_work_unit_id),
+        state.current_step.value,
+    )
+    if replay.workflow_cursor != expected_cursor:
+        raise ArtifactResumeError(
+            "workflow cursor differs from state-v3",
+            record_id=transition_records[-1].record_id,
+        )
+
+    expected_slice_statuses = tuple(
+        (str(item.slice_id), item.status.value) for item in state.slices
+    )
+    if replay.slice_statuses != expected_slice_statuses:
+        raise ArtifactResumeError(
+            "slice statuses differ from state-v3",
+            record_id=transition_records[-1].record_id,
+        )
+
+    expected_work_unit_states = tuple(
+        ReplayedWorkUnitState(
+            str(item.work_unit_id),
+            str(item.slice_id),
+            item.status.value,
+            item.current_step.value,
+        )
+        for item in state.work_units
+    )
+    if replay.work_unit_states != expected_work_unit_states:
+        raise ArtifactResumeError(
+            "work-unit statuses or steps differ from state-v3",
+            record_id=transition_records[-1].record_id,
+        )
+
+    expected_policies = tuple(
+        WorkflowPolicyPayload(
+            str(item.work_unit_id),
+            *project_implementer_return_policy(item),
+        )
+        for item in state.work_units
+    )
+    if replay.workflow_policies != expected_policies:
+        raise ArtifactResumeError(
+            "workflow policies differ from state-v3",
+            record_id=policy_records[-1].record_id,
+        )
+
+
 def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeResolution:
     """Resolve the immutable protocol binding and verify structured mirror facts.
 
@@ -173,6 +258,7 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
         ) from exc
     chain = replay.records
     assert_run_binding_mirror(replay, state, binding)
+    assert_workflow_status_mirror(replay, state)
 
     head = replay.head_record_id
     assert head is not None

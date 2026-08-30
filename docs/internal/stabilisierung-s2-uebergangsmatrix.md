@@ -701,19 +701,25 @@ zu derselben semantischen Kante.
 | `workflow completion differs from state-v3` | A15 |
 | `workflow completion references an unknown, invalid, or fingerprint-mismatched final binding` | A15/A13 |
 
-Damit sind die vierzehn wörtlichen Vorkommen von `differs from state-v3`
-abgedeckt: Runidentität; Runprofil; Task; Correction-Attribution;
+Damit sind die fünfzehn wörtlichen Vorkommen von `differs from state-v3`
+abgedeckt: Runidentität; Runprofil; Workflowcursor; Task; Correction-Attribution;
 Work-unit-Importbindung; letzte Runde;
 letzter Findingzustand; letzte Correction-Attribution; Planbindung;
 Findingstatus; importierter Findingstatus; Bootstrap-Payload; Completion sowie
 die Export-Planbindung in A02/B03.
 
-### 12 direkte `ArtifactResumeError`-Stellen
+### 18 direkte `ArtifactResumeError`-Stellen
 
 | Meldungsstamm | Kante |
 |---|---|
 | `run identity differs from state-v3` | A01/A03 |
 | `run profile differs from state-v3` | A01/B04 |
+| `structured-v2 run has no workflow transition prefix` | R2 Cursor-/Statuspräfix fehlt; fail-closed vor Resume |
+| `structured-v2 run has no workflow policy prefix` | R2 Policypräfix fehlt; fail-closed vor Resume |
+| `workflow cursor differs from state-v3` | R2 Cursor (`slice_id`, `work_unit_id`, `step`) |
+| `slice statuses differ from state-v3` | R2 Slice-Statusprojektion |
+| `work-unit statuses or steps differ from state-v3` | R2 Work-unit-Status-/Stepprojektion |
+| `workflow policies differ from state-v3` | R2 Returncount-/Limitprojektion |
 | `is historical and cannot be resumed` | A01 |
 | `structured-v2 state lacks the complete native Codex-Claude transport binding` | A01 |
 | `record chain for run` / `is invalid` | A01 |
@@ -856,6 +862,12 @@ ist einfach der Eingabestand, aus dem die Projektion neu entsteht.
 Runidentity-/Profilrecords gegen ihren Mirror und ist mit Vergleichszahl und
 vollständigem Funktionsdigest eingefroren.
 
+`require_workflow_status_prefix()` weist Vor-R2-Ketten ohne vollständigen
+Transition-/Policyprefix ab. `assert_workflow_status_mirror()` vergleicht
+Cursor, beide Statusarten und die rollenbasierten Returnpolicy-Fakten. Beide
+Grenzen sind ebenfalls mit AST-Vergleichszahl und vollständigem Funktionsdigest
+inventarisiert; keine neue `_recoverable_*`-Ausnahme beteiligt sich daran.
+
 Die Recovery-Prädikate stützen sich zusätzlich auf
 `_pending_denied_review()` (eindeutiger, fingerprint-gebundener Denial),
 `_state_has_review_event()` (Review bereits im History-Mirror),
@@ -886,19 +898,19 @@ dem normativen Zustand entfernt.
 | `execution_mode` | Taskparser/Initialisierung | Workflowrouting | **ja seit R1** aus `RunIdentityPayload.execution_mode` | **in R1 gedeckt** durch `RunIdentityPayload` |
 | `audit_report_path` | Taskparser/Initialisierung | Auditprojektion, Correction-Reportpfad | **ja seit R1** aus `RunIdentityPayload.audit_report_path` | **in R1 gedeckt** durch `RunIdentityPayload` |
 | `created_at`, `updated_at` | Initialisierung/State-Mutatoren | Diagnose/Serialisierung | **teilweise**; Recordzeiten geben Ereigniszeit, nicht exakt dieselben Statezeiten | kein STOP, falls als nicht normative Projektionsmetadaten neu definiert; sonst Record nötig |
-| `current_slice_id`, `current_work_unit_id`, `current_step` | WorkflowEngine | Dispatch/Resume/Checkpoint | **nicht vollständig**; Work-unit-Records enthalten IDs/Runde, aber keinen vollständigen Stepcursor | **STOP**: Cursor-/Transitionrecord |
+| `current_slice_id`, `current_work_unit_id`, `current_step` | WorkflowEngine | Dispatch/Resume/Checkpoint | **ja seit R2** aus dem letzten Work-unit-bezogenen `WorkflowTransitionPayload`; der globale Step ist ausdrücklich die Projektion von `work_units[current_work_unit_id].current_step` und wird nur einmal recordet | **in R2 gedeckt** durch `WorkflowTransitionPayload` |
 | `slices[*].slice_id` | Plan/State-Initialisierung | Routing, Work-unit-Zuordnung | **ja** aus `PlanPayload.slices[*].slice_id` | ableitbar |
 | `slices[*].scope_paths` | Plan-/Work-unit-Bindung | Scopeprüfung/Preflight | **ja** aus `PlanPayload.slices[*].paths` und bestätigendem `WorkUnitPayload.paths` | ableitbar |
-| `slices[*].status` | WorkflowEngine | Routing, Completion, Commit | **nein**; Commit/Completion decken nur Teilzustände | **STOP** |
+| `slices[*].status` | WorkflowEngine | Routing, Completion, Commit | **ja seit R2** aus der letzten Transition je `slice_id`, einschließlich Slice-only-Initialisierung | **in R2 gedeckt** durch `WorkflowTransitionPayload.slice_status` |
 | `slices[*].start_commit` | Initialisierung/Slicewechsel | Scopefingerprint, Commit | **nein** | **STOP** |
 | `slices[*].scope_change_groups` | Plan-/Scopebindung | Scopevalidation | **nein**; `Plan`/`WorkUnit` tragen flache Pfade | **STOP** |
 | `slices[*].start_fingerprint` | Repositorymessung | Change-/Resumeprüfung | **nein** | **STOP** |
 | `slices[*].commit_ref` | Commitübergang | Resume/Completion | **ja** für gebundene Commits aus `Binding.target`; Slicezuordnung muss über Work-unit/Bindingkontext eindeutig bleiben | Projektion erst nach expliziter Zuordnungsregel |
-| `work_units[*].status` | WorkflowEngine | Dispatch/Resume | **nein**; aktive Work-unit ist recordbar, Waiting/Completed nicht vollständig | **STOP** |
-| `work_units[*].current_step` | WorkflowEngine | Dispatch | **nein** | **STOP** |
-| `work_units[*].codex_return_count` | Return-/Correctionpolicy | Iterationsgate | **nein** | **STOP**: Policycounter recorden/aus AgentResultfolge formal ableiten |
-| `work_units[*].max_codex_returns` | Initialisierung/Policy | Iterationsgate | **nein** | **STOP**: Policybindung recorden |
-| `work_units[*].reviewer` | Initialisierung/Engine | Reviewerdispatch | **teilweise**; vorhandene Reviews zeigen Claude, vor Review fehlt die Auswahl | **STOP** für generische Profile/Rollenbindung |
+| `work_units[*].status` | WorkflowEngine | Dispatch/Resume | **ja seit R2** aus der letzten Transition je `work_unit_id`, einschließlich Waiting und Completed | **in R2 gedeckt** durch `WorkflowTransitionPayload.work_unit_status` |
+| `work_units[*].current_step` | WorkflowEngine | Dispatch | **ja seit R2** aus der letzten Transition je `work_unit_id` | **in R2 gedeckt** durch `WorkflowTransitionPayload.step` |
+| `work_units[*].codex_return_count` | Return-/Correctionpolicy | Iterationsgate | **ja seit R2** über die benannte Mirrorprojektion auf `WorkflowPolicyPayload.implementer_return_count`; nicht aus denied Reviews gezählt | **in R2 gedeckt** durch rollenbasierten Policyrecord |
+| `work_units[*].max_codex_returns` | Initialisierung/Policy | Iterationsgate | **ja seit R2** über die benannte Mirrorprojektion auf `WorkflowPolicyPayload.max_implementer_returns`; Iteration-limit-Fortsetzung ändert diesen Fakt unabhängig vom Zähler | **in R2 gedeckt** durch rollenbasierten Policyrecord |
+| `work_units[*].reviewer` | Initialisierung/Engine | Reviewerdispatch | **ja seit R2 als Gruppe-C-Projektion**: `None` vor dem ersten denied Review, danach die Rolle des letzten denied `ReviewPayload` derselben Work-unit | ableitbar; kein eigener Record |
 | `work_units[*].completed_side_effects` | Engine nach Side Effect | Idempotenz/Resume | **nein** | **STOP**: Intent-/Resultatrecord je Side Effect |
 | `work_units[*].active_test_fingerprint`, `active_test_paths` | Testchange-Gate | Testscope/Resume | **nicht vollständig**; Gatepayload trägt weder Pfade noch Resume-Step | **STOP** |
 | aktueller `gate.status/reason/detail/fingerprint/paths/resume_step` | Gatepolicy | Resume/CLI/Dispatch | **nein**; `Gate` bildet nur abgeschlossene Entscheidung mit Kind, Entscheidung und Rationale ab | **STOP**: Pending-/Cleared-Gatetransitionen |
@@ -957,16 +969,16 @@ keinen fett markierten STOP enthält.
 | `execution_mode` | A | **In R1 geschlossen:** `RunIdentityPayload.execution_mode`; Schreiber: derselbe frühe Checkpoint nach Taskparser/Initialisierung und vor dem ersten Workflowdispatch. |
 | `audit_report_path` | A | **In R1 geschlossen:** `RunIdentityPayload.audit_report_path`; Schreiber: derselbe frühe Checkpoint nach Taskparser/Initialisierung. Auditprojektion und Correction-Reportrouting führen davon Dateischreibziele und Scope ab. |
 | `created_at`, `updated_at` | B | Leser sind `WorkflowState.to_dict()/from_dict()`, `state_io` sowie die Diagnoseausgabe; `orchestrator` verwendet `updated_at` nur als Anzeigewert für das ebenfalls nicht normative `decided_at`. Kein Routing-, Authority-, Retry- oder Side-effect-Entscheid hängt von beiden Zeiten ab. Nach S4b sind sie volatile Projektionsmetadaten aus Recordzeiten und nicht Teil semantischer Gleichheit. |
-| `current_slice_id`, `current_work_unit_id`, `current_step` | A | `WorkflowTransitionPayload.slice_id/work_unit_id/step`; Schreiber: `WorkflowEngine` an jeder Dispatch-, Gate-, Resume- und Completionkante. Der Cursor steuert den nächsten Aufruf. |
-| `slices[*].status` | A | `WorkflowTransitionPayload.slice_status`; Schreiber: `WorkflowState`-Transitionsmethoden über den Engine-Treiber. Routing, Commit und Completion lesen den Status. |
+| `current_slice_id`, `current_work_unit_id`, `current_step` | A | **In R2 geschlossen:** `WorkflowTransitionPayload.slice_id/work_unit_id/step`; Schreiber: `WorkflowEngine` über den Treiber an jeder Dispatch-, Gate-, Resume- und Completionkante vor dem nächsten Leser. Der globale Step ist die benannte Projektion des Steps der aktuellen Work-unit und kein zweiter Fakt. |
+| `slices[*].status` | A | **In R2 geschlossen:** `WorkflowTransitionPayload.slice_status`; Schreiber: `WorkflowState`-Transitionsmethoden über den Engine-Treiber. Routing, Commit und Completion lesen die letzte Transition je Slice. |
 | `slices[*].start_commit` | A | `SliceBoundaryPayload.start_commit`; Schreiber: `begin_slice()`/Sliceinitialisierung vor Scopeprüfung und Side Effect. |
 | `slices[*].scope_change_groups` | A | `SliceBoundaryPayload.scope_change_groups`; Schreiber: Plan-/Scopebindung in `WorkflowState`. Die Gruppen sind Eingabe der Scopevalidation und nicht aus der flachen Pfadmenge rekonstruierbar. |
 | `slices[*].start_fingerprint` | A | `SliceBoundaryPayload.start_fingerprint`; Schreiber: Repositorymessung beim Binden der Slice-Git-Grenze. Change-, Correction- und Resumeprüfung lesen ihn. |
-| `work_units[*].status` | A | `WorkflowTransitionPayload.work_unit_status`; Schreiber: Engine an Dispatch-, Wait-, Gate-, Resume- und Completionkanten. |
-| `work_units[*].current_step` | A | `WorkflowTransitionPayload.step`; Schreiber: Engine unmittelbar vor beziehungsweise nach jeder ausführbaren Operation. |
-| `work_units[*].codex_return_count` | A | `WorkflowPolicyPayload.codex_return_count`; Schreiber: `record_review_denial()` bei jedem normalen Rücklauf sowie die Iteration-limit-Fortsetzung mit ihrem unveränderten Zählerstand. Denied Reviews allein reichen nicht, weil die Fortsetzung `max_codex_returns` erhöht, ohne diesen Zähler mitzuerhöhen. |
-| `work_units[*].max_codex_returns` | A | `WorkflowPolicyPayload.max_codex_returns`; Schreiber: Work-unit-Initialisierung und explizite Iteration-limit-Fortsetzung. Der Wert autorisiert oder sperrt einen weiteren Codex-Rücklauf. |
-| `work_units[*].reviewer` | C | Vor dem ersten Review ist der Wert `None`; danach ist er die Rolle des ersten beziehungsweise letzten denied `ReviewPayload` derselben Work-unit. Schema 2 erlaubt dafür ausschließlich `Role.CLAUDE`; `record_review_denial()` übernimmt genau diese Rolle. |
+| `work_units[*].status` | A | **In R2 geschlossen:** `WorkflowTransitionPayload.work_unit_status`; Schreiber: Engine an Dispatch-, Wait-, Gate-, Resume- und Completionkanten. |
+| `work_units[*].current_step` | A | **In R2 geschlossen:** `WorkflowTransitionPayload.step`; Schreiber: Engine unmittelbar vor beziehungsweise nach jeder ausführbaren Operation. |
+| `work_units[*].codex_return_count` | A | **In R2 geschlossen:** `WorkflowPolicyPayload.implementer_return_count`; Schreiber: Work-unit-Initialisierung und `record_review_denial()` bei jedem normalen Rücklauf. Die benannte Projektion `project_implementer_return_policy()` bildet den unveränderten State-v3-Mirrornamen auf die Rolle ab. |
+| `work_units[*].max_codex_returns` | A | **In R2 geschlossen:** `WorkflowPolicyPayload.max_implementer_returns`; Schreiber: Work-unit-Initialisierung und explizite Iteration-limit-Fortsetzung. Diese Fortsetzung erhöht nur die Obergrenze und lässt `implementer_return_count` unverändert. |
+| `work_units[*].reviewer` | C | **In R2 geschlossen:** Die benannte und vor/nach einem Denial gegen den State-v3-Mirror getestete Projektion `project_work_unit_reviewers()` liefert vor dem ersten Review `None`, danach die Rolle des letzten denied `ReviewPayload` derselben Work-unit. Schema 2 erlaubt dafür ausschließlich `Role.CLAUDE`; ein eigener Reviewerrecord existiert nicht. |
 | `work_units[*].completed_side_effects` | A | `SideEffectPayload.effect_key/phase/result`; Schreiber: jeweiliger Side-effect-Wrapper vor und nach Git-, Provider-, Datei- oder Queueoperation. Resume und Idempotenz lesen das Ledger. |
 | `work_units[*].active_test_fingerprint`, `active_test_paths` | A | `GateTransitionPayload.active_test_fingerprint/paths`; Schreiber: Testchange-Gate nach exakter Scopeentscheidung. Testscope und Resume lesen beide Werte gemeinsam. |
 | aktueller `gate.status/reason/detail/fingerprint/paths/resume_step` | A | `GateTransitionPayload.status/reason/detail/fingerprint/paths/resume_step`; Schreiber: Gatepolicy bei Pending, Clear und Resume. Der aktuelle Dispatch hängt unmittelbar davon ab. |
@@ -1003,6 +1015,24 @@ Runrecords fail-closed mit dem State-v3-Mirror. Vor R1 geschriebene Ketten ohne
 beide Recordtypen bleiben gültig und liefern für diese Projektionen `None`.
 `protocol_binding.mode/schema/transports` bleibt Gruppe C und erhält keinen
 eigenen Record. Schema- und Transportversionen bleiben unverändert bei 2.
+
+R2 ergänzt `WorkflowTransitionPayload` und `WorkflowPolicyPayload` ebenfalls
+additiv in Schema 2, ändert aber bewusst die Lesepolicy: Jede fortsetzbare
+Kette muss nun einen vollständigen Transition-/Policyprefix besitzen;
+Vor-R2-Ketten werden fail-closed abgewiesen und niemals nachträglich
+aufgefüllt. Der Treiber schreibt die Delta-Records vor jedem folgenden
+Dispatch-Guard, während `state.json` und Checkpoints unverändert als Mirror
+weitergeschrieben werden. Das ist ausdrücklich noch kein Cutover.
+
+`current_step` ist genau ein Fakt: die Projektion von
+`work_units[current_work_unit_id].current_step`. Deshalb trägt der
+Work-unit-bezogene Transitionrecord nur ein `step`-Feld. Die Returnpolicy ist
+dagegen nicht aus Reviews ableitbar und besitzt die rollenbasierten Felder
+`implementer_return_count` und `max_implementer_returns`; die
+Iteration-limit-Fortsetzung erhöht ausschließlich die Obergrenze. Der Reviewer
+bleibt Gruppe C: Replay liefert vor dem ersten denied Review `None` und danach
+die Rolle des letzten denied `ReviewPayload`. Dafür wurde kein Recordtyp
+ergänzt. Record-Schema, State-Schema und Registerversionen bleiben unverändert.
 
 S4a erweitert den geschlossenen `ReviewPayload` additiv um die optionalen Felder
 `review_evidence` und `red_state_followup_slice`; `schema_version` und beide

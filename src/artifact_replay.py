@@ -29,8 +29,11 @@ from artifact_models import (
     ProviderAttemptPayload,
     PlanPayload,
     RecordType,
+    Role,
     RunIdentityPayload,
     RunProfilePayload,
+    WorkflowPolicyPayload,
+    WorkflowTransitionPayload,
     ResumeCheckPayload,
     ReviewPayload,
     ValidationAttestationPayload,
@@ -117,6 +120,44 @@ class ReplayFact:
 
 
 @dataclass(frozen=True, slots=True)
+class ReplayedWorkflowCursor:
+    slice_id: str
+    work_unit_id: str
+    step: str
+
+
+@dataclass(frozen=True, slots=True)
+class ReplayedWorkUnitState:
+    work_unit_id: str
+    slice_id: str
+    status: str
+    step: str
+
+
+def project_work_unit_reviewers(
+    records: Sequence[ArtifactRecord],
+) -> tuple[tuple[str, Role | None], ...]:
+    """Project the reviewer mirror without introducing a reviewer record."""
+    reviewers: dict[str, Role | None] = {}
+    for record in records:
+        payload = record.payload
+        if (
+            isinstance(payload, WorkflowTransitionPayload)
+            and payload.work_unit_id is not None
+        ):
+            reviewers.setdefault(payload.work_unit_id, None)
+        elif isinstance(payload, ReviewPayload) and payload.verdict == "denied":
+            reviewers[payload.work_unit_id] = payload.reviewer
+
+    def identifier_order(value: str) -> tuple[int, int | str]:
+        return (0, int(value)) if value.isdigit() else (1, value)
+
+    return tuple(
+        (key, reviewers[key]) for key in sorted(reviewers, key=identifier_order)
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class ArtifactReplayResult:
     """Immutable result of reducing one chain."""
 
@@ -128,6 +169,11 @@ class ArtifactReplayResult:
     audit_events: tuple[ReplayAuditEvent, ...]
     run_identity: RunIdentityPayload | None = None
     run_profile: RunProfilePayload | None = None
+    workflow_cursor: ReplayedWorkflowCursor | None = None
+    slice_statuses: tuple[tuple[str, str], ...] = ()
+    work_unit_states: tuple[ReplayedWorkUnitState, ...] = ()
+    workflow_policies: tuple[WorkflowPolicyPayload, ...] = ()
+    work_unit_reviewers: tuple[tuple[str, Role | None], ...] = ()
 
     def subset(self, records: Sequence[ArtifactRecord]) -> "ArtifactReplayResult":
         """Derive a presentation-only subsequence from an accepted replay.
@@ -275,6 +321,26 @@ def _validate_payload_references(
     from finding_reducer import reduce_findings
 
     positions = {record.record_id: index for index, record in enumerate(chain)}
+    transition_units: dict[str, ArtifactRecord] = {}
+    for record in chain:
+        payload = record.payload
+        if isinstance(payload, WorkflowTransitionPayload) and payload.work_unit_id is not None:
+            prior = transition_units.setdefault(payload.work_unit_id, record)
+            assert isinstance(prior.payload, WorkflowTransitionPayload)
+            if prior.payload.slice_id != payload.slice_id:
+                _fail(
+                    ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+                    "workflow transition moves a work unit to another slice",
+                    record,
+                )
+        elif isinstance(payload, WorkflowPolicyPayload):
+            transition = transition_units.get(payload.work_unit_id)
+            if transition is None or positions[transition.record_id] >= positions[record.record_id]:
+                _fail(
+                    ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+                    "workflow policy precedes its work-unit transition",
+                    record,
+                )
     work_units: dict[str, ArtifactRecord] = {}
     for record in chain:
         if isinstance(record.payload, (WorkUnitPayload, CorrectionWorkUnitPayload)) and (
@@ -633,6 +699,32 @@ def _result(expected_run_id: str, records: tuple[ArtifactRecord, ...]) -> Artifa
         ),
         None,
     )
+    workflow_cursor: ReplayedWorkflowCursor | None = None
+    slice_statuses: dict[str, str] = {}
+    work_unit_states: dict[str, ReplayedWorkUnitState] = {}
+    workflow_policies: dict[str, WorkflowPolicyPayload] = {}
+    for record in records:
+        payload = record.payload
+        if isinstance(payload, WorkflowTransitionPayload):
+            slice_statuses[payload.slice_id] = payload.slice_status
+            if payload.work_unit_id is not None:
+                assert payload.step is not None
+                assert payload.work_unit_status is not None
+                workflow_cursor = ReplayedWorkflowCursor(
+                    payload.slice_id, payload.work_unit_id, payload.step
+                )
+                work_unit_states[payload.work_unit_id] = ReplayedWorkUnitState(
+                    payload.work_unit_id,
+                    payload.slice_id,
+                    payload.work_unit_status,
+                    payload.step,
+                )
+        elif isinstance(payload, WorkflowPolicyPayload):
+            workflow_policies[payload.work_unit_id] = payload
+
+    def identifier_order(value: str) -> tuple[int, int | str]:
+        return (0, int(value)) if value.isdigit() else (1, value)
+
     return ArtifactReplayResult(
         expected_run_id=expected_run_id,
         records=records,
@@ -651,6 +743,17 @@ def _result(expected_run_id: str, records: tuple[ArtifactRecord, ...]) -> Artifa
         ),
         run_identity=run_identity,
         run_profile=run_profile,
+        workflow_cursor=workflow_cursor,
+        slice_statuses=tuple(sorted(slice_statuses.items(), key=lambda item: identifier_order(item[0]))),
+        work_unit_states=tuple(
+            work_unit_states[key]
+            for key in sorted(work_unit_states, key=identifier_order)
+        ),
+        workflow_policies=tuple(
+            workflow_policies[key]
+            for key in sorted(workflow_policies, key=identifier_order)
+        ),
+        work_unit_reviewers=project_work_unit_reviewers(records),
     )
 
 
@@ -671,5 +774,8 @@ __all__ = [
     "ReplayDiagnostic",
     "ReplayDiagnosticCode",
     "ReplayFact",
+    "ReplayedWorkflowCursor",
+    "ReplayedWorkUnitState",
+    "project_work_unit_reviewers",
     "replay_artifacts",
 ]

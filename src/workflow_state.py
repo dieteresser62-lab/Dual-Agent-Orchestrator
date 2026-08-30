@@ -1034,6 +1034,11 @@ class WorkUnitRecord:
         )
 
 
+def project_implementer_return_policy(unit: WorkUnitRecord) -> tuple[int, int]:
+    """Map the provider-named state-v3 mirror fields to stable workflow roles."""
+    return unit.codex_return_count, unit.max_codex_returns  # allowlist:provider -- named R2 mirror projection
+
+
 @dataclass(frozen=True)
 class ResumeCursor:
     work_unit_id: int

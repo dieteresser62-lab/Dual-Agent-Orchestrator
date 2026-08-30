@@ -149,6 +149,8 @@ def test_first_checkpoint_bootstraps_authoritative_chain_idempotently(
     assert tuple(record.record_type for record in chain) == (
         RecordType.RUN_IDENTITY,
         RecordType.RUN_PROFILE,
+        RecordType.WORKFLOW_TRANSITION,
+        RecordType.WORKFLOW_POLICY,
         RecordType.TASK,
     )
 
@@ -732,13 +734,12 @@ def test_budget_denial_persists_gate_checkpoint_and_resumes_idempotently(
     assert output is None
     assert halted_again.current_step is WorkflowStep.CODEX_IMPLEMENTATION
     assert halted_again.current_work_unit.gate == halted.current_work_unit.gate
-    assert len(
-        tuple(
-            record
-            for record in ArtifactStore(repository, halted.run_id).load_chain()
-            if isinstance(record.payload, ProviderInputMeasurementPayload)
-        )
-    ) == 1
+    measurements = tuple(
+        record
+        for record in ArtifactStore(repository, halted.run_id).load_chain()
+        if isinstance(record.payload, ProviderInputMeasurementPayload)
+    )
+    assert len(measurements) == 1
 
 
 def test_legacy_final_review_keeps_budget_fact_without_structured_preflight(

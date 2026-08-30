@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 import json
 
+import artifact_models
 import pytest
 
 from artifact_models import (
@@ -38,6 +39,8 @@ from artifact_models import (
     ValidationResult,
     WorkUnitPayload,
     WorkflowCompletionPayload,
+    WorkflowPolicyPayload,
+    WorkflowTransitionPayload,
     ProviderInputComponentPayload,
     ProviderInputMeasurementPayload,
     ProviderAttemptPayload,
@@ -47,6 +50,7 @@ from artifact_models import (
     load_schema,
     validate_artifact_document,
 )
+from workflow_state import SliceStatus, WorkflowStep, WorkUnitStatus
 
 
 DIGEST = "a" * 64
@@ -111,6 +115,10 @@ def _record(payload, *, revision: int = 1) -> ArtifactRecord:  # type: ignore[no
         "docs/internal/task-audit.md",
     ),
     RunProfilePayload("gpt-5.6-sol", "max", "opus", "high"),
+    WorkflowTransitionPayload(
+        "1", "in_progress", "2", "codex_implementation", "in_progress"
+    ),
+    WorkflowPolicyPayload("2", 1, 4),
     TaskPayload("feature/records", ("src/a.py",), DIGEST),
     PlanPayload("docs/internal/plan.md", "b" * 40, (SliceSpec("1", "models", ("src/a.py",)),)),
     WorkUnitPayload("1", 1, ("src/a.py",)),
@@ -199,6 +207,14 @@ def test_schema_is_bundled_and_self_contained() -> None:
     schema = load_schema()
     assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
     assert not any("http" in ref for ref in _references(schema))
+
+
+def test_r2_record_vocabularies_stay_synced_with_state_v3() -> None:
+    assert artifact_models._WORKFLOW_STEPS == {item.value for item in WorkflowStep}
+    assert artifact_models._SLICE_STATUSES == {item.value for item in SliceStatus}
+    assert artifact_models._WORK_UNIT_STATUSES == {
+        item.value for item in WorkUnitStatus
+    }
 
 
 def _references(value):  # type: ignore[no-untyped-def]

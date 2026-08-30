@@ -38,9 +38,15 @@ from workflow_state import (
 FINAL_REVIEW_OPERATIONS = frozenset(
     {"codex_final_review", "claude_final_review"}
 )
-_BOOTSTRAP_TYPES = {
+_TRANSITION_FINGERPRINT_EXCLUDED_TYPES = {
     RecordType.PROVIDER_INPUT_MEASUREMENT,
     RecordType.FINAL_REVIEW_PREFLIGHT,
+    # Cursor and return-policy facts are verified by the dispatch guard. The
+    # operation and immutable work-unit id already bind the provider dispatch,
+    # so halt/resume of the same step must retain its deterministic local-check
+    # identity instead of growing the bootstrap mirror.
+    RecordType.WORKFLOW_TRANSITION,
+    RecordType.WORKFLOW_POLICY,
 }
 _EXTERNAL_PATH_GATE_KINDS = {
     GateReason.UNEXPECTED_FILE: "unexpected-file",
@@ -88,7 +94,7 @@ def relevant_record_head(records: Sequence[ArtifactRecord]) -> str:
             "payload": asdict(item.payload),
         }
         for item in records
-        if item.record_type not in _BOOTSTRAP_TYPES
+        if item.record_type not in _TRANSITION_FINGERPRINT_EXCLUDED_TYPES
     ]
     return hashlib.sha256(canonical_json(facts)).hexdigest()
 

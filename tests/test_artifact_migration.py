@@ -22,6 +22,7 @@ from artifact_models import (
     FindingTransitionPayload,
     FingerprintKind,
     PlanPayload,
+    RecordType,
     ReviewPayload,
     Role,
     RunIdentityPayload,
@@ -33,6 +34,8 @@ from artifact_models import (
     ValidationResult,
     WorkUnitPayload,
     WorkflowCompletionPayload,
+    WorkflowPolicyPayload,
+    WorkflowTransitionPayload,
 )
 from artifact_store import ArtifactStore
 from artifact_replay import ReplayDiagnosticCode, replay_artifacts
@@ -94,6 +97,7 @@ def _records(repository: Path, state) -> None:
         fingerprint_sha256="a" * 64,
         fingerprint_kind=FingerprintKind.CONTRACT,
     )
+    _status_records(bridge, state)
 
 
 def _run_records(
@@ -135,6 +139,98 @@ def _run_records(
     )
 
 
+def _status_records(bridge: ArtifactBridge, state: WorkflowState) -> None:
+    chain = bridge.store.load_chain()
+    denied_units = {
+        record.payload.work_unit_id
+        for record in chain
+        if isinstance(record.payload, ReviewPayload)
+        and record.payload.verdict == "denied"
+    }
+    for unit in state.work_units:
+        work_unit_id = str(unit.work_unit_id)
+        if unit.reviewer is None or work_unit_id in denied_units:
+            continue
+        bridge.append(
+            ReviewPayload(
+                Role.CLAUDE,
+                work_unit_id,
+                "denied",
+                unit.open_findings,
+                "fixture reviewer projection",
+                "native-claude-review-v2",
+                "native-review-request-" + f"{unit.work_unit_id:064x}",
+                f"{unit.work_unit_id + 100:064x}",
+            ),
+            logical_id=f"review-fixture-{work_unit_id}",
+            idempotency_key=f"review-fixture:{work_unit_id}",
+            fingerprint_sha256="a" * 64,
+        )
+
+    units_by_slice = {str(unit.slice_id) for unit in state.work_units}
+    revision = max(
+        (
+            record.revision for record in bridge.store.load_chain()
+            if record.record_type is RecordType.WORKFLOW_TRANSITION
+        ),
+        default=0,
+    )
+    for item in state.slices:
+        slice_id = str(item.slice_id)
+        if slice_id in units_by_slice:
+            continue
+        revision += 1
+        bridge.append(
+            WorkflowTransitionPayload(
+                slice_id, item.status.value, None, None, None
+            ),
+            logical_id="workflow-transition",
+            idempotency_key=f"workflow-transition:{revision}",
+            fingerprint_sha256="a" * 64,
+            fingerprint_kind=FingerprintKind.CONTRACT,
+        )
+    ordered_units = (
+        *(unit for unit in state.work_units if unit.work_unit_id != state.current_work_unit_id),
+        state.current_work_unit,
+    )
+    for unit in ordered_units:
+        revision += 1
+        slice_status = next(
+            item.status.value for item in state.slices if item.slice_id == unit.slice_id
+        )
+        bridge.append(
+            WorkflowTransitionPayload(
+                str(unit.slice_id),
+                slice_status,
+                str(unit.work_unit_id),
+                unit.current_step.value,
+                unit.status.value,
+            ),
+            logical_id="workflow-transition",
+            idempotency_key=f"workflow-transition:{revision}",
+            fingerprint_sha256="a" * 64,
+            fingerprint_kind=FingerprintKind.CONTRACT,
+        )
+        logical_id = f"workflow-policy-{unit.work_unit_id}"
+        policy_revision = 1 + max(
+            (
+                record.revision for record in bridge.store.load_chain()
+                if record.record_type is RecordType.WORKFLOW_POLICY
+                and record.logical_id == logical_id
+            ),
+            default=0,
+        )
+        bridge.append(
+            WorkflowPolicyPayload(
+                str(unit.work_unit_id),
+                unit.codex_return_count,
+                unit.max_codex_returns,
+            ),
+            logical_id=logical_id,
+            idempotency_key=f"workflow-policy:{unit.work_unit_id}:{policy_revision}",
+            fingerprint_sha256="a" * 64,
+            fingerprint_kind=FingerprintKind.CONTRACT,
+        )
 def _authorization_records(
     repository: Path,
     state: WorkflowState,
@@ -268,6 +364,7 @@ def _finding_handoff_resume_fixture(repository: Path):
         fingerprint_sha256="a" * 64,
         fingerprint_kind=FingerprintKind.CONTRACT,
     )
+    _status_records(local, state)
     return state, source, local, export, imported
 
 
@@ -448,10 +545,14 @@ def test_finding_import_denial_round_converges_from_record_ahead_state(
             "archive": [],
         },
     )
+    _status_records(local, state)
 
     resolution = resolve_resume_state(tmp_path, state)
 
-    assert resolution.record_head_id == next_round.record_id
+    assert next_round.record_id in {
+        record.record_id for record in resolution.replay_result.records
+    }
+    assert resolution.replay_result.records[-1].record_type is RecordType.WORKFLOW_POLICY
     assert review.record_id in {
         record.record_id for record in resolution.replay_result.records
     }
@@ -571,10 +672,14 @@ def test_later_work_unit_can_carry_open_finding_without_import_snapshot(
             "archive": [],
         },
     )
+    _status_records(bridge, state)
 
     resolution = resolve_resume_state(tmp_path, state)
 
-    assert resolution.record_head_id == latest.record_id
+    assert latest.record_id in {
+        record.record_id for record in resolution.replay_result.records
+    }
+    assert resolution.replay_result.records[-1].record_type is RecordType.WORKFLOW_POLICY
     assert state.current_work_unit.open_findings == ("C-04",)
     assert latest.payload.finding_import_record_id is None
     assert latest.payload.open_finding_ids == ()
@@ -676,6 +781,36 @@ def test_structured_resume_rejects_typed_run_binding_mismatch(
 def test_structured_state_without_records_halts_with_repair_hint(tmp_path: Path) -> None:
     with pytest.raises(ArtifactResumeError, match="restore its record directory"):
         resolve_resume_state(tmp_path, _state(tmp_path))
+
+
+@pytest.mark.parametrize("prefix", ("neither", "transition_only"))
+def test_pre_r2_chain_without_complete_status_prefix_is_rejected(
+    tmp_path: Path,
+    prefix: str,
+) -> None:
+    state = _state(tmp_path)
+    bridge = ArtifactBridge(ArtifactStore(tmp_path, state.run_id))
+    bridge.append(
+        TaskPayload("feature/resume", ("src/resume.py",), "a" * 64),
+        logical_id="task-contract",
+        idempotency_key="task-contract",
+        fingerprint_sha256="a" * 64,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    if prefix == "transition_only":
+        bridge.append(
+            WorkflowTransitionPayload(
+                "1", "in_progress", "2", "codex_implementation", "in_progress"
+            ),
+            logical_id="workflow-transition",
+            idempotency_key="workflow-transition:1",
+            fingerprint_sha256="a" * 64,
+            fingerprint_kind=FingerprintKind.CONTRACT,
+        )
+    with pytest.raises(ArtifactResumeError, match="workflow .* prefix") as caught:
+        resolve_resume_state(tmp_path, state)
+
+    assert caught.value.code is ReplayDiagnosticCode.RECORD_MISSING
 
 
 def test_structured_state_rejects_a_stale_round_with_record_id(tmp_path: Path) -> None:
@@ -1422,6 +1557,7 @@ def test_structured_resume_compares_correction_findings_with_their_own_round(
         bridge, second_round, round_number=2, finding_ids=("C-07",)
     )
     _append_open_finding(bridge, finding_id="C-07")
+    _status_records(bridge, second_round)
 
     resolution = resolve_resume_state(repository, second_round)
 
@@ -1466,6 +1602,7 @@ def test_structured_resume_rejects_invalid_latest_correction_round(
             bridge, second_round, round_number=3, finding_ids=("C-07",)
         )
     _append_open_finding(bridge, finding_id="C-07")
+    _status_records(bridge, second_round)
 
     with pytest.raises(ArtifactResumeError, match="round|finding attribution"):
         resolve_resume_state(repository, second_round)

@@ -8,7 +8,7 @@
   "properties": {
     "schema_version": {"const": "2"},
     "record_id": {"$ref": "#/$defs/identifier"},
-    "record_type": {"enum": ["run_identity", "run_profile", "task", "plan", "work_unit", "correction_work_unit", "agent_result", "diagnostic", "review", "finding_transition", "finding_handoff_export", "finding_handoff_import", "validation_request", "validation_attestation", "gate", "binding", "quota_pause", "transient_retry", "resume_check", "workflow_completion", "provider_input_measurement", "provider_attempt", "final_review_preflight"]},
+    "record_type": {"enum": ["run_identity", "run_profile", "workflow_transition", "workflow_policy", "task", "plan", "work_unit", "correction_work_unit", "agent_result", "diagnostic", "review", "finding_transition", "finding_handoff_export", "finding_handoff_import", "validation_request", "validation_attestation", "gate", "binding", "quota_pause", "transient_retry", "resume_check", "workflow_completion", "provider_input_measurement", "provider_attempt", "final_review_preflight"]},
     "run_id": {"$ref": "#/$defs/identifier"},
     "logical_id": {"$ref": "#/$defs/identifier"},
     "revision": {"type": "integer", "minimum": 1},
@@ -22,6 +22,8 @@
   "allOf": [
     {"if": {"properties": {"record_type": {"const": "run_identity"}}}, "then": {"properties": {"status": {"const": "bound"}, "payload": {"$ref": "#/$defs/run_identity"}}}},
     {"if": {"properties": {"record_type": {"const": "run_profile"}}}, "then": {"properties": {"status": {"const": "bound"}, "payload": {"$ref": "#/$defs/run_profile"}}}},
+    {"if": {"properties": {"record_type": {"const": "workflow_transition"}}}, "then": {"properties": {"status": {"const": "transitioned"}, "payload": {"$ref": "#/$defs/workflow_transition"}}}},
+    {"if": {"properties": {"record_type": {"const": "workflow_policy"}}}, "then": {"properties": {"status": {"const": "bound"}, "payload": {"$ref": "#/$defs/workflow_policy"}}}},
     {"if": {"properties": {"record_type": {"const": "task"}}}, "then": {"properties": {"status": {"const": "accepted"}, "payload": {"$ref": "#/$defs/task"}}}},
     {"if": {"properties": {"record_type": {"const": "plan"}}}, "then": {"properties": {"status": {"const": "approved"}, "payload": {"$ref": "#/$defs/plan"}}}},
     {"if": {"properties": {"record_type": {"const": "work_unit"}}}, "then": {"properties": {"status": {"const": "active"}, "payload": {"$ref": "#/$defs/work_unit"}}}},
@@ -94,6 +96,30 @@
         "codex_effort": {"enum": ["low", "medium", "high", "xhigh", "max"]},
         "claude_model": {"$ref": "#/$defs/non_empty"},
         "claude_effort": {"enum": ["low", "medium", "high", "xhigh", "max"]}
+      }
+    },
+    "workflow_transition": {
+      "type": "object", "additionalProperties": false,
+      "required": ["slice_id", "slice_status", "work_unit_id", "step", "work_unit_status"],
+      "properties": {
+        "slice_id": {"$ref": "#/$defs/identifier"},
+        "slice_status": {"enum": ["pending", "in_progress", "awaiting_user_decision", "waiting_for_quota", "waiting_for_retry", "awaiting_resume", "completed"]},
+        "work_unit_id": {"oneOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]},
+        "step": {"oneOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]},
+        "work_unit_status": {"oneOf": [{"enum": ["pending", "in_progress", "awaiting_user_decision", "waiting_for_quota", "waiting_for_retry", "awaiting_resume", "completed"]}, {"type": "null"}]}
+      },
+      "oneOf": [
+        {"properties": {"work_unit_id": {"type": "null"}, "step": {"type": "null"}, "work_unit_status": {"type": "null"}}},
+        {"properties": {"work_unit_id": {"$ref": "#/$defs/identifier"}, "step": {"$ref": "#/$defs/identifier"}, "work_unit_status": {"enum": ["pending", "in_progress", "awaiting_user_decision", "waiting_for_quota", "waiting_for_retry", "awaiting_resume", "completed"]}}}
+      ]
+    },
+    "workflow_policy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["work_unit_id", "implementer_return_count", "max_implementer_returns"],
+      "properties": {
+        "work_unit_id": {"$ref": "#/$defs/identifier"},
+        "implementer_return_count": {"type": "integer", "minimum": 0},
+        "max_implementer_returns": {"type": "integer", "minimum": 1}
       }
     },
     "task": {

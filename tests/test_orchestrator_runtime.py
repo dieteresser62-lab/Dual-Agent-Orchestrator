@@ -41,6 +41,8 @@ from artifact_models import (
     ValidationResult,
     WorkUnitPayload,
     WorkflowCompletionPayload,
+    WorkflowPolicyPayload,
+    WorkflowTransitionPayload,
 )
 from artifact_store import ArtifactStore
 from artifact_migration import ArtifactResumeError
@@ -443,6 +445,8 @@ def test_run_records_exist_before_first_workflow_dispatch(
     assert observed["types"] == (
         RecordType.RUN_IDENTITY,
         RecordType.RUN_PROFILE,
+        RecordType.WORKFLOW_TRANSITION,
+        RecordType.WORKFLOW_POLICY,
         RecordType.TASK,
     )
     assert observed["identity"] == RunIdentityPayload(
@@ -1143,9 +1147,168 @@ def test_structured_bind_persists_contract_and_active_work_unit_once(
     assert tuple(item.record_type for item in chain) == (
         RecordType.RUN_IDENTITY,
         RecordType.RUN_PROFILE,
+        RecordType.WORKFLOW_TRANSITION,
+        RecordType.WORKFLOW_TRANSITION,
+        RecordType.WORKFLOW_POLICY,
+        RecordType.WORKFLOW_POLICY,
         RecordType.TASK,
         RecordType.WORK_UNIT,
     )
+
+
+def test_r2_transition_records_precede_dispatch_guard_across_round_gate_resume_and_slice(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/r2-transition-order")
+    task = repository / "task.md"
+    _write_task(task, "feature/r2-transition-order", "src/one.py", "src/two.py")
+    head = _git(repository, "rev-parse", "HEAD")
+    state = init_workflow_state(
+        run_id="r2-transition-order",
+        task_file=str(task),
+        branch="feature/r2-transition-order",
+        branch_base=head,
+        first_slice_start_commit=head,
+        slice_count=2,
+        task_digest="a" * 64,
+        task_scope_patterns=("src/one.py", "src/two.py"),
+        target_branch="feature/r2-transition-order",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+    ).bind_slice_plan(
+        (
+            PlannedSlice(1, "first", ("src/one.py",)),
+            PlannedSlice(2, "second", ("src/two.py",)),
+        ),
+        first_start_commit=head,
+    ).complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    ).bind_current_slice_git_boundary(
+        start_commit=head,
+        scope_paths=("src/one.py",),
+        start_fingerprint="b" * 64,
+    )
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+
+    def transition_records() -> tuple:
+        return tuple(
+            record
+            for record in ArtifactStore(repository, state.run_id).load_chain()
+            if isinstance(record.payload, WorkflowTransitionPayload)
+        )
+
+    def bind_before_dispatch(candidate: WorkflowState) -> int:
+        driver.bind_work_unit(candidate)
+        driver.assert_structured_decision_context()
+        replay = replay_artifacts(
+            ArtifactStore(repository, state.run_id).load_chain(), state.run_id
+        )
+        assert replay.workflow_cursor is not None
+        assert replay.workflow_cursor.slice_id == str(candidate.current_slice_id)
+        assert replay.workflow_cursor.work_unit_id == str(candidate.current_work_unit_id)
+        assert replay.workflow_cursor.step == candidate.current_step.value
+        return len(transition_records())
+
+    initial_count = bind_before_dispatch(state)
+    assert bind_before_dispatch(state) == initial_count
+
+    review_round = state.with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW)
+    assert bind_before_dispatch(review_round) == initial_count + 1
+
+    gated = review_round.await_policy_gate(
+        reason=GateReason.STOP_REQUEST,
+        detail="R2 transition ordering fixture",
+    )
+    assert bind_before_dispatch(gated) == initial_count + 2
+
+    resumed = gated.resume_after_user_decision()
+    assert bind_before_dispatch(resumed) == initial_count + 3
+
+    slice_two = resumed.complete_current_work_unit().start_work_unit(
+        slice_id=2,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+        slice_start_commit=head,
+    ).bind_current_slice_git_boundary(
+        start_commit=head,
+        scope_paths=("src/two.py",),
+        start_fingerprint="c" * 64,
+    )
+    assert bind_before_dispatch(slice_two) == initial_count + 5
+    assert tuple(record.revision for record in transition_records()) == tuple(
+        range(1, initial_count + 6)
+    )
+
+
+def test_r2_policy_records_denial_count_and_limit_extension_as_separate_facts(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/r2-policy")
+    task = repository / "task.md"
+    _write_task(task, "feature/r2-policy", "src/runtime.py")
+    head = _git(repository, "rev-parse", "HEAD")
+    state = init_workflow_state(
+        run_id="r2-policy",
+        task_file=str(task),
+        branch="feature/r2-policy",
+        branch_base=head,
+        slice_count=1,
+        task_digest="a" * 64,
+        task_scope_patterns=("src/runtime.py",),
+        target_branch="feature/r2-policy",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+    ).complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    ).bind_current_slice_git_boundary(
+        start_commit=head,
+        scope_paths=("src/runtime.py",),
+        start_fingerprint="b" * 64,
+    )
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    driver.bind_work_unit(state)
+    work_unit_id = str(state.current_work_unit_id)
+
+    def policies() -> tuple[WorkflowPolicyPayload, ...]:
+        return tuple(
+            record.payload
+            for record in ArtifactStore(repository, state.run_id).load_chain()
+            if isinstance(record.payload, WorkflowPolicyPayload)
+            and record.payload.work_unit_id == work_unit_id
+        )
+
+    denied = state
+    for _ in range(4):
+        denied = denied.record_review_denial(
+            reviewer=Reviewer.CLAUDE,
+            open_findings=("C-01",),
+            return_step=WorkflowStep.CODEX_CORRECTION,
+        )
+        driver.bind_work_unit(denied)
+
+    assert policies()[-1] == WorkflowPolicyPayload(work_unit_id, 4, 4)
+    before_resume = len(policies())
+    resumed = denied.resume_after_user_decision()
+    driver.bind_work_unit(resumed)
+
+    assert policies()[-1] == WorkflowPolicyPayload(work_unit_id, 4, 8)
+    assert len(policies()) == before_resume + 1
+    driver.bind_work_unit(resumed)
+    assert len(policies()) == before_resume + 1
 
 
 def test_native_review_record_ahead_recovery_reuses_bound_json_without_provider(

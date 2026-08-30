@@ -22,6 +22,8 @@ from artifact_models import (
     Role,
     RunIdentityPayload,
     RunProfilePayload,
+    WorkflowPolicyPayload,
+    WorkflowTransitionPayload,
     TaskPayload,
     ValidationAttestationPayload,
     ValidationResult,
@@ -33,11 +35,15 @@ from artifact_models import (
 )
 from artifact_replay import (
     ArtifactReplayError,
+    ReplayedWorkUnitState,
+    ReplayedWorkflowCursor,
     ReplayDiagnosticCode,
+    project_work_unit_reviewers,
     replay_artifacts,
     replay_findings,
 )
 from contracts import FindingResponseDecision, FindingStatus
+from workflow_state import Reviewer, WorkflowStep, init_workflow_state
 
 
 FP = Fingerprint(FingerprintKind.IMPLEMENTATION, "a" * 64)
@@ -178,6 +184,159 @@ def test_pre_r1_chain_without_run_records_remains_readable() -> None:
 
     assert replay.run_identity is None
     assert replay.run_profile is None
+
+
+def test_replay_projects_r2_cursor_status_policy_and_reviewer_without_external_state() -> None:
+    records: list[ArtifactRecord] = []
+    _append(
+        records,
+        "workflow-transition",
+        WorkflowTransitionPayload("2", "pending", None, None, None),
+    )
+    _append(
+        records,
+        "workflow-transition",
+        WorkflowTransitionPayload("1", "in_progress", "1", "completed", "completed"),
+        revision=2,
+    )
+    _append(records, "workflow-policy-1", WorkflowPolicyPayload("1", 0, 4))
+    _append(
+        records,
+        "workflow-transition",
+        WorkflowTransitionPayload(
+            "1", "in_progress", "2", "codex_implementation", "in_progress"
+        ),
+        revision=3,
+    )
+    _append(records, "workflow-policy-2", WorkflowPolicyPayload("2", 0, 4))
+    _append(records, "work-unit-2", WorkUnitPayload("1", 1, ("src/a.py",)))
+    _append(
+        records,
+        "finding-C-01",
+        FindingTransitionPayload(
+            "C-01",
+            Role.CLAUDE,
+            Role.CLAUDE,
+            "opened",
+            FindingSeverity.BLOCKER,
+            "open",
+            "Correction required.",
+            "2",
+            "Correction required.",
+            "The next round fixes it.",
+            "1",
+            1,
+        ),
+    )
+    _append(
+        records,
+        "review-2",
+        ReviewPayload(
+            Role.CLAUDE,
+            "2",
+            "denied",
+            ("C-01",),
+            None,
+            "native-claude-review-v2",
+            "native-review-request-" + "d" * 64,
+            "e" * 64,
+        ),
+    )
+    _append(
+        records,
+        "workflow-transition",
+        WorkflowTransitionPayload(
+            "1", "in_progress", "2", "codex_correction", "in_progress"
+        ),
+        revision=4,
+    )
+    _append(
+        records,
+        "workflow-policy-2",
+        WorkflowPolicyPayload("2", 1, 4),
+        revision=2,
+    )
+
+    replay = replay_artifacts(tuple(records), "run-replay")
+    projected = {
+        "cursor": asdict(replay.workflow_cursor),
+        "slice_statuses": replay.slice_statuses,
+        "work_units": tuple(asdict(item) for item in replay.work_unit_states),
+        "policies": tuple(asdict(item) for item in replay.workflow_policies),
+        "reviewers": tuple(
+            (work_unit_id, None if reviewer is None else reviewer.value)
+            for work_unit_id, reviewer in replay.work_unit_reviewers
+        ),
+    }
+    mirror = {
+        "cursor": asdict(ReplayedWorkflowCursor("1", "2", "codex_correction")),
+        "slice_statuses": (("1", "in_progress"), ("2", "pending")),
+        "work_units": (
+            asdict(ReplayedWorkUnitState("1", "1", "completed", "completed")),
+            asdict(ReplayedWorkUnitState("2", "1", "in_progress", "codex_correction")),
+        ),
+        "policies": (
+            asdict(WorkflowPolicyPayload("1", 0, 4)),
+            asdict(WorkflowPolicyPayload("2", 1, 4)),
+        ),
+        "reviewers": (("1", None), ("2", "claude")),
+    }
+
+    assert canonical_json(projected) == canonical_json(mirror)
+    assert project_work_unit_reviewers(tuple(records)) == (
+        ("1", None),
+        ("2", Role.CLAUDE),
+    )
+
+
+def test_reviewer_projection_matches_state_v3_before_and_after_denial() -> None:
+    state = init_workflow_state(
+        run_id="reviewer-projection",
+        task_file="task.md",
+        branch="feature/reviewer-projection",
+        branch_base="a" * 40,
+        slice_count=1,
+    )
+    records: list[ArtifactRecord] = []
+    _append(
+        records,
+        "workflow-transition",
+        WorkflowTransitionPayload(
+            "1", "in_progress", "1", "codex_plan", "in_progress"  # allowlist:provider -- persisted step vocabulary
+        ),
+    )
+
+    def state_reviewers() -> tuple[tuple[str, Role | None], ...]:
+        return tuple(
+            (
+                str(unit.work_unit_id),
+                None if unit.reviewer is None else Role(unit.reviewer.value),
+            )
+            for unit in state.work_units
+        )
+
+    assert project_work_unit_reviewers(tuple(records)) == state_reviewers()
+
+    state = state.record_review_denial(
+        reviewer=Reviewer.CLAUDE,  # allowlist:provider -- reviewer projection fixture
+        open_findings=("C-01",),
+        return_step=WorkflowStep.CODEX_PLAN_REVISION,
+    )
+    _append(
+        records,
+        "review-1",
+        ReviewPayload(
+            Role.CLAUDE,  # allowlist:provider -- reviewer projection fixture
+            "1",
+            "denied",
+            ("C-01",),
+            None,
+            "native-claude-review-v2",  # allowlist:provider -- closed transport fixture
+            "native-review-request-" + "f" * 64,
+            "d" * 64,
+        ),
+    )
+    assert project_work_unit_reviewers(tuple(records)) == state_reviewers()
 
 
 def test_structured_finding_projection_rebuilds_reviewer_owned_history() -> None:

@@ -44,6 +44,8 @@ from artifact_bridge import (
 from artifact_migration import (
     ArtifactResumeError,
     assert_run_binding_mirror,
+    assert_workflow_status_mirror,
+    require_workflow_status_prefix,
     resolve_resume_state,
 )
 from artifact_models import (
@@ -58,10 +60,17 @@ from artifact_models import (
     FindingHandoffExportPayload, FindingHandoffImportPayload,
     FindingTransitionPayload,
     RunIdentityPayload, RunProfilePayload,
+    WorkflowPolicyPayload, WorkflowTransitionPayload,
     RecordType, stable_record_id,
 )
 from artifact_store import ArtifactStore
-from artifact_replay import ArtifactReplayError, ArtifactReplayResult, replay_artifacts
+from artifact_replay import (
+    ArtifactReplayError,
+    ArtifactReplayResult,
+    ReplayedWorkflowCursor,
+    ReplayedWorkUnitState,
+    replay_artifacts,
+)
 from finding_reducer import (
     project_finding_response_delta,
     project_reviewer_persistence_transitions,
@@ -186,6 +195,7 @@ from workflow_state import (
     init_workflow_state,
     BootstrapCheckFact,
     managed_correction_slice_report_path,
+    project_implementer_return_policy,
 )
 from validation_matrix import ValidationCommand, ValidationMatrix
 from error_classification import (
@@ -407,9 +417,14 @@ class ProductionWorkflowDriver(WorkflowDriver):
             )
         existing_chain = bridge.store.load_chain()
         if existing_chain:
-            assert_run_binding_mirror(
-                replay_artifacts(existing_chain, state.run_id), state, binding
+            existing_replay = replay_artifacts(existing_chain, state.run_id)
+            assert_run_binding_mirror(existing_replay, state, binding)
+            import_only_prefix = all(
+                isinstance(record.payload, FindingHandoffImportPayload)
+                for record in existing_replay.records
             )
+            if not import_only_prefix:
+                require_workflow_status_prefix(existing_replay)
         bridge.append(
             RunIdentityPayload(
                 task_file=state.task_file,
@@ -435,6 +450,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
             fingerprint_sha256=contract_fingerprint,
             fingerprint_kind=FingerprintKind.CONTRACT,
         )
+        self._persist_workflow_snapshot(state)
         if state.task_scope_patterns:
             bridge.append(
                 TaskPayload(
@@ -496,6 +512,154 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 fingerprint_sha256=contract_fingerprint,
                 fingerprint_kind=FingerprintKind.CONTRACT,
             )
+        self._persist_structured_tail(state)
+
+    def _persist_workflow_snapshot(self, state: WorkflowState) -> None:
+        """Append exactly the status and policy deltas needed by one checkpoint."""
+        bridge = self._artifact_bridge
+        if bridge is None or state.task_digest is None:
+            return
+        replay = replay_artifacts(bridge.store.load_chain(), state.run_id)
+        recorded_slices = dict(replay.slice_statuses)
+        recorded_units = {
+            item.work_unit_id: item for item in replay.work_unit_states
+        }
+        expected_units = {
+            str(item.work_unit_id): ReplayedWorkUnitState(
+                str(item.work_unit_id),
+                str(item.slice_id),
+                item.status.value,
+                item.current_step.value,
+            )
+            for item in state.work_units
+        }
+        changed_units = {
+            key for key, value in expected_units.items()
+            if recorded_units.get(key) != value
+        }
+        changed_unit_slices = {
+            expected_units[key].slice_id for key in changed_units
+        }
+
+        for item in state.slices:
+            slice_id = str(item.slice_id)
+            if (
+                recorded_slices.get(slice_id) != item.status.value
+                and slice_id not in changed_unit_slices
+            ):
+                self._append_workflow_transition(
+                    WorkflowTransitionPayload(
+                        slice_id, item.status.value, None, None, None
+                    ),
+                    state.task_digest,
+                )
+                recorded_slices[slice_id] = item.status.value
+
+        current_unit_id = str(state.current_work_unit_id)
+        for item in state.work_units:
+            work_unit_id = str(item.work_unit_id)
+            if work_unit_id not in changed_units or work_unit_id == current_unit_id:
+                continue
+            slice_status = next(
+                candidate.status.value
+                for candidate in state.slices
+                if candidate.slice_id == item.slice_id
+            )
+            self._append_workflow_transition(
+                WorkflowTransitionPayload(
+                    str(item.slice_id),
+                    slice_status,
+                    work_unit_id,
+                    item.current_step.value,
+                    item.status.value,
+                ),
+                state.task_digest,
+            )
+
+        current = state.current_work_unit
+        expected_cursor = ReplayedWorkflowCursor(
+            str(state.current_slice_id), current_unit_id, state.current_step.value
+        )
+        if (
+            current_unit_id in changed_units
+            or replay.workflow_cursor != expected_cursor
+            or recorded_slices.get(str(state.current_slice_id))
+            != state.current_slice.status.value
+            or any(key != current_unit_id for key in changed_units)
+        ):
+            self._append_workflow_transition(
+                WorkflowTransitionPayload(
+                    str(state.current_slice_id),
+                    state.current_slice.status.value,
+                    current_unit_id,
+                    state.current_step.value,
+                    current.status.value,
+                ),
+                state.task_digest,
+            )
+
+        recorded_policies = {
+            item.work_unit_id: item for item in replay.workflow_policies
+        }
+        for item in state.work_units:
+            work_unit_id = str(item.work_unit_id)
+            policy = WorkflowPolicyPayload(
+                work_unit_id,
+                *project_implementer_return_policy(item),
+            )
+            if recorded_policies.get(work_unit_id) == policy:
+                continue
+            chain = bridge.store.load_chain()
+            logical_id = f"workflow-policy-{work_unit_id}"
+            revision = 1 + max(
+                (
+                    record.revision for record in chain
+                    if record.record_type is RecordType.WORKFLOW_POLICY
+                    and record.logical_id == logical_id
+                ),
+                default=0,
+            )
+            bridge.append(
+                policy,
+                logical_id=logical_id,
+                idempotency_key=f"workflow-policy:{work_unit_id}:{revision}",
+                fingerprint_sha256=state.task_digest,
+                fingerprint_kind=FingerprintKind.CONTRACT,
+            )
+
+        assert_workflow_status_mirror(
+            replay_artifacts(bridge.store.load_chain(), state.run_id), state
+        )
+
+    def _append_workflow_transition(
+        self,
+        payload: WorkflowTransitionPayload,
+        fingerprint: str,
+    ) -> None:
+        bridge = self._artifact_bridge
+        assert bridge is not None
+        chain = bridge.store.load_chain()
+        revision = 1 + max(
+            (
+                record.revision for record in chain
+                if record.record_type is RecordType.WORKFLOW_TRANSITION
+                and record.logical_id == "workflow-transition"
+            ),
+            default=0,
+        )
+        bridge.append(
+            payload,
+            logical_id="workflow-transition",
+            idempotency_key=f"workflow-transition:{revision}",
+            fingerprint_sha256=fingerprint,
+            fingerprint_kind=FingerprintKind.CONTRACT,
+        )
+
+    def _persist_structured_tail(self, state: WorkflowState) -> None:
+        bridge = self._artifact_bridge
+        if bridge is None or state.task_digest is None:
+            return
+        contract_fingerprint = state.task_digest
         for persisted_unit in state.work_units:
             for failure in persisted_unit.invocation_failures:
                 if (

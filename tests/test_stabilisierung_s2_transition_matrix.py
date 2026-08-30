@@ -48,6 +48,12 @@ MIGRATION_MISMATCH_MARKERS = (
 RESUME_ERROR_MARKERS = (
     "run identity differs from state-v3",
     "run profile differs from state-v3",
+    "structured-v2 run has no workflow transition prefix",
+    "structured-v2 run has no workflow policy prefix",
+    "workflow cursor differs from state-v3",
+    "slice statuses differ from state-v3",
+    "work-unit statuses or steps differ from state-v3",
+    "workflow policies differ from state-v3",
     "is historical and cannot be resumed",
     "structured-v2 state lacks the complete native Codex-Claude transport binding",
     "record chain for run",
@@ -287,6 +293,8 @@ WORKFLOW_STATE_FIELD_INVENTORY = {
 COMPARISON_TARGETS = (
     ("src/artifact_migration.py", None, "resolve_resume_state"),
     ("src/artifact_migration.py", None, "assert_run_binding_mirror"),
+    ("src/artifact_migration.py", None, "require_workflow_status_prefix"),
+    ("src/artifact_migration.py", None, "assert_workflow_status_mirror"),
     ("src/artifact_migration.py", None, "_mirror_difference_code"),
     ("src/artifact_migration.py", None, "_finding_statuses"),
     ("src/artifact_migration.py", None, "_recoverable_pending_review_finding_gap"),
@@ -364,6 +372,8 @@ STRICT_BODY_TARGETS = tuple(
 EXPECTED_COMPARISON_COUNTS = {
     "src/artifact_migration.py:resolve_resume_state": 89,
     "src/artifact_migration.py:assert_run_binding_mirror": 6,
+    "src/artifact_migration.py:require_workflow_status_prefix": 3,
+    "src/artifact_migration.py:assert_workflow_status_mirror": 4,
     "src/artifact_migration.py:_mirror_difference_code": 0,
     "src/artifact_migration.py:_finding_statuses": 2,
     "src/artifact_migration.py:_recoverable_pending_review_finding_gap": 16,
@@ -416,6 +426,8 @@ EXPECTED_COMPARISON_COUNTS = {
 EXPECTED_STRICT_BODY_DIGESTS = {
     "src/artifact_bridge.py:review_payload_matches_result": "f72ff6a84fa3ce4651d52ba2317071a26ccf56d53e8b2b03bdda8e94a1bdf8d3",
     "src/artifact_migration.py:assert_run_binding_mirror": "e8febdf4104e65855caa2196ec8fad6f9e6ec5a81b3bdfc9a2ac1475daea9498",
+    "src/artifact_migration.py:require_workflow_status_prefix": "964d356480288034c6dc52de377c2326c06d2db50d6aae52fd2b3d5dbcc5bdec",
+    "src/artifact_migration.py:assert_workflow_status_mirror": "0d6ac0eec3998504048ccf74ee978930a4e2dfa3cd256e71268e143a774b7eae",
     "src/artifact_migration.py:_mirror_difference_code": "9433c6d83367347145eebab39e8fc4e3a989062ff9864bec6752710065ffbbc7",
     "src/artifact_migration.py:_finding_statuses": "cc4a0460cf13d1fbeba70deb2ae66dd19771bb31e8c56907139506ba3421c758",
     "src/artifact_migration.py:_recoverable_pending_review_finding_gap": "dbdbf286f9c1d85bcb53e7e3e2e716f052e60a318b51d5176088d382b4819468",
@@ -605,12 +617,12 @@ def test_migration_comparison_inventory_is_source_bound() -> None:
     source_strings = _string_constants("src/artifact_migration.py")
     document = MATRIX_PATH.read_text(encoding="utf-8")
     assert _raise_count("src/artifact_migration.py", "mismatch") == 32
-    assert source.count("differs from state-v3") == 14
+    assert source.count("differs from state-v3") == 15
     for marker in MIGRATION_MISMATCH_MARKERS:
         assert marker in source_strings
         assert marker in document
 
-    assert _raise_count("src/artifact_migration.py", "ArtifactResumeError") == 12
+    assert _raise_count("src/artifact_migration.py", "ArtifactResumeError") == 18
     for marker in RESUME_ERROR_MARKERS:
         assert marker in (source if marker == "exc.diagnostic.message" else source_strings)
         assert marker in document
@@ -787,10 +799,22 @@ def test_every_s4a_stop_entry_has_exactly_one_reasoned_classification() -> None:
         "`audit_report_path`",
         "`protocol_binding.codex_profile/claude_profile`",
     }
-    assert len(stop_fields) == 34
+    r2_covered_fields = {
+        "`current_slice_id`, `current_work_unit_id`, `current_step`",
+        "`slices[*].status`",
+        "`work_units[*].status`",
+        "`work_units[*].current_step`",
+        "`work_units[*].codex_return_count`",
+        "`work_units[*].max_codex_returns`",
+        "`work_units[*].reviewer`",
+    }
+    assert len(stop_fields) == 27
     assert len(fields) == len(set(fields)) == 41
     assert set(fields) == (
-        stop_fields | r1_covered_fields | {"`created_at`, `updated_at`"}
+        stop_fields
+        | r1_covered_fields
+        | r2_covered_fields
+        | {"`created_at`, `updated_at`"}
     )
     assert groups["`work_units[*].codex_return_count`"] == "A"
     assert groups["`ContractResult.test_files`"] == "A"
@@ -805,6 +829,17 @@ def test_every_s4a_stop_entry_has_exactly_one_reasoned_classification() -> None:
         reason = next(reason for name, _group, reason in rows if name == field)
         assert "In R1 geschlossen" in reason
         assert "RunIdentityPayload" in reason or "RunProfilePayload" in reason
+    for field in r2_covered_fields:
+        reason = next(reason for name, _group, reason in rows if name == field)
+        assert "In R2 geschlossen" in reason
+    policy_reason = next(
+        reason
+        for name, _group, reason in rows
+        if name == "`work_units[*].codex_return_count`"
+    )
+    assert "implementer_return_count" in policy_reason
+    assert "WorkflowPolicyPayload.codex_return_count" not in policy_reason
+    assert groups["`work_units[*].reviewer`"] == "C"
     for field, group, reason in rows:
         if group == "A":
             assert "Payload" in reason, field
