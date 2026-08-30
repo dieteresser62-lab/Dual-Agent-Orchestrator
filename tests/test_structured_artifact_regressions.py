@@ -18,7 +18,7 @@ from artifact_bridge import (
     finding_payload,
     review_payload,
 )
-from artifact_migration import resolve_resume_state
+from artifact_migration import ArtifactResumeError, resolve_resume_state
 from artifact_models import (
     ArtifactRecord,
     BindingPayload,
@@ -34,7 +34,7 @@ from artifact_models import (
     TransientRetryPayload,
     WorkUnitPayload,
 )
-from artifact_replay import replay_artifacts
+from artifact_replay import ReplayDiagnosticCode, replay_artifacts
 from artifact_store import ArtifactStore
 from artifact_projection import ArtifactAuditProjection
 from contracts import (
@@ -74,6 +74,7 @@ from workflow import (
     WorkflowChanges,
 )
 from workflow_state import (
+    AgentProfileBinding,
     AgentFailureKind,
     InvocationFailureRecord,
     ProtocolBinding,
@@ -145,7 +146,11 @@ def test_first_checkpoint_bootstraps_authoritative_chain_idempotently(
     driver.assert_structured_decision_context()
 
     chain = ArtifactStore(repository, state.run_id).load_chain()
-    assert tuple(record.record_type for record in chain) == (RecordType.TASK,)
+    assert tuple(record.record_type for record in chain) == (
+        RecordType.RUN_IDENTITY,
+        RecordType.RUN_PROFILE,
+        RecordType.TASK,
+    )
 
 
 def test_external_side_effect_guard_loads_and_replays_the_chain_once(
@@ -184,6 +189,36 @@ def test_external_side_effect_guard_rejects_mirror_ahead_of_records(
 
     with pytest.raises(WorkflowExecutionError, match="decision context is not resumable"):
         driver.assert_structured_decision_context()
+
+
+@pytest.mark.parametrize(
+    "drifted",
+    (
+        {
+            "branch": "feature/foreign-branch",
+            "target_branch": "feature/foreign-branch",
+        },
+        {
+            "protocol_binding": ProtocolBinding(
+                ProtocolMode.STRUCTURED_V2,
+                "2",
+                codex_profile=AgentProfileBinding("foreign-codex", "medium"),
+            )
+        },
+    ),
+)
+def test_baseline_rebind_rejects_run_record_mirror_drift_before_append(
+    tmp_path: Path, drifted: dict[str, object]
+) -> None:
+    repository = _repository(tmp_path, "feature/structured-regression")
+    state = _state(repository, "structured-run-binding-drift")
+    driver = _driver(repository)
+    driver.checkpoint(state, WorkflowHistory(1))
+
+    with pytest.raises(ArtifactResumeError) as caught:
+        driver.bind_work_unit(replace(state, **drifted))
+
+    assert caught.value.code is ReplayDiagnosticCode.MIRROR_AMBIGUOUS
 
 
 def test_external_side_effect_guard_rejects_review_record_ahead_of_mirror(

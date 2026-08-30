@@ -28,7 +28,7 @@ Dateien und Review-Pakete sind Caches beziehungsweise Projektionen.
   Provider-Bindungen und irreversible externe Side Effects reserviert.
 
 Die Inventur ergibt 26 Kanten, 32 `mismatch(...)`-Stellen in
-`artifact_migration.py`, 10 direkte `ArtifactResumeError`-Stellen dort, 22
+`artifact_migration.py`, 12 direkte `ArtifactResumeError`-Stellen dort, 22
 `ArtifactBridgeError`-Stellen in Migration, Bridge und Orchestrator sowie fünf
 `_recoverable_*`-Prädikate (vier in `artifact_migration.py`, eines für den
 finalen Review-Mirror in `orchestrator.py`).
@@ -37,10 +37,12 @@ finalen Review-Mirror in `orchestrator.py`).
 
 ### A01 — Protokollbindung, Recordkette und Replay
 
-1. **Autoritativer Eingaberecord:** Start ist der erste `Task`-Record; erwartet
-   wird eine lückenlose Kette bis `head_record_id`, danach der jeweils nächste
-   typisierte Record. Vor dem Replay werden `ProtocolBinding` und Store-Kette
-   geprüft.
+1. **Autoritativer Eingaberecord:** Neue R1-Läufe binden zuerst
+   `RunIdentity` und `RunProfile`, danach folgt `Task`; ein atomarer
+   Finding-Handoff-Import darf als vorbereitender Genesisrecord davorliegen.
+   Vor R1 geschriebene Ketten dürfen beide Runrecords auslassen. Erwartet wird
+   stets eine lückenlose Kette bis `head_record_id`; vor dem Replay werden
+   `ProtocolBinding` und Store-Kette geprüft.
 2. **State-/Cachefelder:** `version`, `run_id`, `protocol_binding` sowie
    `head.json`; kein fachlicher State wird bei der Prüfung geschrieben.
 3. **Schreibreihenfolge und Crashpunkte:** Recorddatei → rekonstruierbarer
@@ -699,16 +701,19 @@ zu derselben semantischen Kante.
 | `workflow completion differs from state-v3` | A15 |
 | `workflow completion references an unknown, invalid, or fingerprint-mismatched final binding` | A15/A13 |
 
-Damit sind die zwölf wörtlichen Vorkommen von `differs from state-v3`
-abgedeckt: Task; Correction-Attribution; Work-unit-Importbindung; letzte Runde;
+Damit sind die vierzehn wörtlichen Vorkommen von `differs from state-v3`
+abgedeckt: Runidentität; Runprofil; Task; Correction-Attribution;
+Work-unit-Importbindung; letzte Runde;
 letzter Findingzustand; letzte Correction-Attribution; Planbindung;
 Findingstatus; importierter Findingstatus; Bootstrap-Payload; Completion sowie
 die Export-Planbindung in A02/B03.
 
-### 10 direkte `ArtifactResumeError`-Stellen
+### 12 direkte `ArtifactResumeError`-Stellen
 
 | Meldungsstamm | Kante |
 |---|---|
+| `run identity differs from state-v3` | A01/A03 |
+| `run profile differs from state-v3` | A01/B04 |
 | `is historical and cannot be resumed` | A01 |
 | `structured-v2 state lacks the complete native Codex-Claude transport binding` | A01 |
 | `record chain for run` / `is invalid` | A01 |
@@ -847,6 +852,10 @@ folgende Meldungsstämme:
 Nach dem Cutover werden diese Lücken nicht mehr "toleriert": Der Recordpräfix
 ist einfach der Eingabestand, aus dem die Projektion neu entsteht.
 
+`assert_run_binding_mirror()` prüft unabhängig von den Recovery-Lücken frühe
+Runidentity-/Profilrecords gegen ihren Mirror und ist mit Vergleichszahl und
+vollständigem Funktionsdigest eingefroren.
+
 Die Recovery-Prädikate stützen sich zusätzlich auf
 `_pending_denied_review()` (eindeutiger, fingerprint-gebundener Denial),
 `_state_has_review_event()` (Review bereits im History-Mirror),
@@ -871,11 +880,11 @@ dem normativen Zustand entfernt.
 |---|---|---|---|---|
 | `version` | State-Initialisierung | Schema-/Resumeprüfung | **ja als Projektionskonstante**, aber nicht als fachlicher Recordfakt; Record-Schema 2 ist nicht State-Version 3 | nach Cutover nicht-normative Projektionsversion |
 | `run_id` | Initialisierung/Watch | Store, Resume, Watch | **ja** aus jedem Record-Envelope; die Kette erzwingt einen Run | ableitbar |
-| `task_file` | Initialisierung/CLI | Resume, Watch, Handoff | **nein**; `Task` bindet nur Inhaltsdigest, nicht Quellpfad | **STOP**: Task-Identity-Record oder Feld nicht normativ machen |
-| `branch` | Initialisierung/Resume | Repository-/Resumeprüfung | **nein**; `Task.target_branch` ist nicht zwingend die aktuelle Branchidentität | **STOP** |
-| `branch_base` | Initialisierung | Diff-/Scope-/Commitlogik | **nein** | **STOP**: Repository-Basis recorden |
-| `execution_mode` | Taskparser/Initialisierung | Workflowrouting | **nein**; aus Work-unit-Typen nicht eindeutig vor dem ersten Work-unit | **STOP** |
-| `audit_report_path` | Taskparser/Initialisierung | Auditprojektion, Correction-Reportpfad | **nein** | **STOP** oder als rein abgeleiteten Pfad definieren und Algorithmus binden |
+| `task_file` | Initialisierung/CLI | Resume, Watch, Handoff | **ja seit R1** aus `RunIdentityPayload.task_file` | **in R1 gedeckt** durch `RunIdentityPayload` |
+| `branch` | Initialisierung/Resume | Repository-/Resumeprüfung | **ja seit R1** aus `RunIdentityPayload.branch`; `Task.target_branch` bleibt davon verschieden | **in R1 gedeckt** durch `RunIdentityPayload` |
+| `branch_base` | Initialisierung | Diff-/Scope-/Commitlogik | **ja seit R1** aus `RunIdentityPayload.branch_base` | **in R1 gedeckt** durch `RunIdentityPayload` |
+| `execution_mode` | Taskparser/Initialisierung | Workflowrouting | **ja seit R1** aus `RunIdentityPayload.execution_mode` | **in R1 gedeckt** durch `RunIdentityPayload` |
+| `audit_report_path` | Taskparser/Initialisierung | Auditprojektion, Correction-Reportpfad | **ja seit R1** aus `RunIdentityPayload.audit_report_path` | **in R1 gedeckt** durch `RunIdentityPayload` |
 | `created_at`, `updated_at` | Initialisierung/State-Mutatoren | Diagnose/Serialisierung | **teilweise**; Recordzeiten geben Ereigniszeit, nicht exakt dieselben Statezeiten | kein STOP, falls als nicht normative Projektionsmetadaten neu definiert; sonst Record nötig |
 | `current_slice_id`, `current_work_unit_id`, `current_step` | WorkflowEngine | Dispatch/Resume/Checkpoint | **nicht vollständig**; Work-unit-Records enthalten IDs/Runde, aber keinen vollständigen Stepcursor | **STOP**: Cursor-/Transitionrecord |
 | `slices[*].slice_id` | Plan/State-Initialisierung | Routing, Work-unit-Zuordnung | **ja** aus `PlanPayload.slices[*].slice_id` | ableitbar |
@@ -906,7 +915,7 @@ dem normativen Zustand entfernt.
 | Handoff-IDs | Handoffinitialisierung | Import-/Resumeprüfung | **ja** aus `FindingHandoffImport` im Zielrun; vor Import ist "kein Handoff" eindeutig | ableitbar |
 | `target_branch`, `task_scope_patterns`, `task_digest` | Taskparser | Scope/Resume | **ja** aus `Task` (`target_branch`, `scope_paths`, `assignment_sha256`) | ableitbar |
 | `protocol_binding.mode/schema/transports` | Initialisierung | Resume/Providertransport | **teilweise**; Recordschema und AgentResult/Review zeigen Transporte erst nach deren Auftreten | **STOP**: Run-Protokollrecord vor Task oder unveränderliche Storemetadaten |
-| `protocol_binding.codex_profile/claude_profile` | CLI/Taskdefault | Providerstart/Resume | **nicht vollständig**; `ProviderAttempt` bindet Profil erst je gestarteter Operation | **STOP**: Profilbindung vor erstem Providerstart |
+| `protocol_binding.codex_profile/claude_profile` | CLI/Taskdefault | Providerstart/Resume | **ja seit R1** aus `RunProfilePayload`; `ProviderAttempt` bestätigt die Bindung je gestarteter Operation | **in R1 gedeckt** durch `RunProfilePayload` |
 | `bootstrap_checks` | Providerbootstrap | Providerstart/Resume | **ja** aus `ProviderInputMeasurement` und `FinalReviewPreflight` | ableitbar |
 | `runtime_history.findings` | Reviewpersistenz | Policy/Prompts/Audit | **ja** aus Finding-Transitionen und Import | ableitbar |
 | `runtime_history.reviews[*].reviewer/approval/stopped/findings` und `last_claude_fingerprint` | Reviewpersistenz | Approval-/Bindingpolicy | **ja** aus `Review`, Finding-Transitionen und Recordfingerprint | ableitbarer Teil der Reviewprojektion |
@@ -942,11 +951,11 @@ keinen fett markierten STOP enthält.
 
 | Statefeld/Fakt | Gruppe | Begründung und Record-/Ableitungsweg |
 |---|:---:|---|
-| `task_file` | A | `RunIdentityPayload.task_file`; Schreiber: Initialisierung in `ProductionWorkflowDriver` vor dem ersten Resume-/Watch-Handoff. CLI, Watch und Handoff lesen den Pfad zur Identitäts- und Queuezuordnung. |
-| `branch` | A | `RunIdentityPayload.branch`; Schreiber: Repositoryinitialisierung nach Prüfung der tatsächlich aktiven Branch. `TaskPayload.target_branch` ersetzt diese gemessene Identität nicht. |
-| `branch_base` | A | `RunIdentityPayload.branch_base`; Schreiber: Repositoryinitialisierung. Diff-, Scope- und Commitlogik lesen die exakte Git-Startgrenze. |
-| `execution_mode` | A | `RunIdentityPayload.execution_mode`; Schreiber: Taskparser/Initialisierung. Das Workflowrouting liest den Modus bereits vor der ersten Work-unit. |
-| `audit_report_path` | A | `RunIdentityPayload.audit_report_path`; Schreiber: Taskparser/Initialisierung. Auditprojektion und Correction-Reportrouting führen davon Dateischreibziele und Scope ab. |
+| `task_file` | A | **In R1 geschlossen:** `RunIdentityPayload.task_file`; Schreiber: erster strukturierter Checkpoint in `ProductionWorkflowDriver` vor dem ersten Resume-/Watch-Handoff und Dispatch. CLI, Watch und Handoff lesen den Pfad zur Identitäts- und Queuezuordnung. |
+| `branch` | A | **In R1 geschlossen:** `RunIdentityPayload.branch`; Schreiber: derselbe frühe Checkpoint nach Prüfung der tatsächlich aktiven Branch. `TaskPayload.target_branch` ersetzt diese gemessene Identität nicht. |
+| `branch_base` | A | **In R1 geschlossen:** `RunIdentityPayload.branch_base`; Schreiber: derselbe frühe Checkpoint. Diff-, Scope- und Commitlogik lesen die exakte Git-Startgrenze. |
+| `execution_mode` | A | **In R1 geschlossen:** `RunIdentityPayload.execution_mode`; Schreiber: derselbe frühe Checkpoint nach Taskparser/Initialisierung und vor dem ersten Workflowdispatch. |
+| `audit_report_path` | A | **In R1 geschlossen:** `RunIdentityPayload.audit_report_path`; Schreiber: derselbe frühe Checkpoint nach Taskparser/Initialisierung. Auditprojektion und Correction-Reportrouting führen davon Dateischreibziele und Scope ab. |
 | `created_at`, `updated_at` | B | Leser sind `WorkflowState.to_dict()/from_dict()`, `state_io` sowie die Diagnoseausgabe; `orchestrator` verwendet `updated_at` nur als Anzeigewert für das ebenfalls nicht normative `decided_at`. Kein Routing-, Authority-, Retry- oder Side-effect-Entscheid hängt von beiden Zeiten ab. Nach S4b sind sie volatile Projektionsmetadaten aus Recordzeiten und nicht Teil semantischer Gleichheit. |
 | `current_slice_id`, `current_work_unit_id`, `current_step` | A | `WorkflowTransitionPayload.slice_id/work_unit_id/step`; Schreiber: `WorkflowEngine` an jeder Dispatch-, Gate-, Resume- und Completionkante. Der Cursor steuert den nächsten Aufruf. |
 | `slices[*].status` | A | `WorkflowTransitionPayload.slice_status`; Schreiber: `WorkflowState`-Transitionsmethoden über den Engine-Treiber. Routing, Commit und Completion lesen den Status. |
@@ -969,7 +978,7 @@ keinen fett markierten STOP enthält.
 | `invocation_failures[*].parse_path/source_timezone/reset_at_utc/safety_margin_seconds` | A | Gleichnamige Felder in `InvocationFailurePayload`; Schreiber: Quota-Parser/Scheduler. Die nächste zulässige Ausführung hängt davon ab. |
 | `invocation_failures[*].auto_resume_count/automatic_resume/diff_fingerprint` | A | Gleichnamige Felder in `InvocationFailurePayload` plus Transitionrevision; Schreiber: Retry-/Resume-Policy. Automatisches Resume und Repository-Ack lesen die Entscheidung. |
 | `protocol_binding.mode/schema/transports` | C | Der erste akzeptierte `ArtifactRecord.schema_version == "2"` legt `mode=structured-v2` und `schema_version=2` fest. Das geschlossene Schema 2 erzwingt für `AgentResultPayload.transport_schema` den Wert `native-codex-v2` und für `ReviewPayload.transport_schema` `native-claude-review-v2`; andere Transporte sind in diesem Präfix unzulässig. |
-| `protocol_binding.codex_profile/claude_profile` | A | `RunProfilePayload.codex_model/codex_effort/claude_model/claude_effort`; Schreiber: CLI-/Taskdefault vor dem ersten Providerstart. `ProviderAttemptPayload` bestätigt die Bindung je Aufruf, kommt für die Erstentscheidung aber zu spät. |
+| `protocol_binding.codex_profile/claude_profile` | A | **In R1 geschlossen:** `RunProfilePayload.codex_model/codex_effort/claude_model/claude_effort`; Schreiber: erster strukturierter Checkpoint aus CLI-/Taskdefault vor dem ersten Providerstart. `ProviderAttemptPayload` bestätigt die Bindung je Aufruf. |
 | `ContractResult.red_state_followup_slice` in `runtime_history.reviews/latest_claude_review` | A | **In S4a geschlossen:** `ReviewPayload.red_state_followup_slice`; Schreiber: `ProductionWorkflowDriver.persist_native_review_contract()`. Audit- und Git-Autorisierung verlangen nun den approved Review-Record derselben Work-unit und desselben Fingerprints; ein Mirrorwert allein autorisiert keinen Red-State-Commit. Der aktuelle native-v2-Konverter setzt das Feld stets auf `None`, daher kann der heutige Transport keinen neuen Red-State-Review erzeugen. Das spätere Durchreichen aus `StepContract` über `NativeReviewContext` in `ContractResult` bleibt ein ausdrücklich benannter Folgepunkt und ist nicht Teil dieses Record-Slice. |
 | `ContractResult.test_files` | A | `ReviewPayload.test_files`; Schreiber: `persist_native_review_contract()` aus dem exakten `NativeReviewContext`. Die Produktivkonfiguration befüllt `expected_test_files` nicht zuverlässig aus dem vorherigen `AgentResultPayload`, deshalb ist die heutige Mirrorprojektion nicht allgemein aus dessen Record ableitbar. |
 | `ContractResult.pre_mortem` | A | `ReviewPayload.pre_mortem`; Schreiber: `persist_native_review_contract()`. Approvalpolicy und Audit lesen den reviewer-eigenen Text. |
@@ -985,6 +994,15 @@ keinen fett markierten STOP enthält.
 | sonstige `runtime_history`-Event-/Auditfelder | A | `WorkflowEventPayload.event_kind/work_unit_id/slice_id/round_number/record_refs` für noch nicht durch die fachlichen Records abgedeckte Ereignisse; Schreiber: `_record_review()`, Validation- und Transitionpfade. Erst danach darf ein reiner Audit-/Resume-Projektionsanteil als B entfernt werden. |
 
 #### Entscheidung zu Schema 2 und Bestandsrecords
+
+R1 ergänzt `RunIdentityPayload` und `RunProfilePayload` additiv. Beide werden
+beim ersten strukturierten Checkpoint vor dem ersten Workflowdispatch und damit
+vor jedem Providerstart geschrieben. Replay projiziert die beiden typisierten
+Payloads ohne State- oder Dateisystemzugriff; Resume vergleicht vorhandene
+Runrecords fail-closed mit dem State-v3-Mirror. Vor R1 geschriebene Ketten ohne
+beide Recordtypen bleiben gültig und liefern für diese Projektionen `None`.
+`protocol_binding.mode/schema/transports` bleibt Gruppe C und erhält keinen
+eigenen Record. Schema- und Transportversionen bleiben unverändert bei 2.
 
 S4a erweitert den geschlossenen `ReviewPayload` additiv um die optionalen Felder
 `review_evidence` und `red_state_followup_slice`; `schema_version` und beide

@@ -34,6 +34,8 @@ from artifact_models import (
     RecordType,
     ReviewPayload,
     Role,
+    RunIdentityPayload,
+    RunProfilePayload,
     SliceSpec,
     ValidationAttestationPayload,
     ValidationResult,
@@ -405,6 +407,54 @@ def test_resume_uses_persisted_profiles_and_rejects_explicit_drift_before_provid
     )
     with pytest.raises(StateSchemaError, match="AGENT-PROFILE-DIFF"):
         orchestrator._apply_resumed_agent_profiles(mismatched, state)
+
+
+def test_run_records_exist_before_first_workflow_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = _repository(tmp_path, "feature/run-binding-order")
+    task = tmp_path / "run-binding-order.md"
+    _write_task(task, "feature/run-binding-order", "src/new.py")
+    args = _args(repository, task)
+    args.agent_settings["codex"] = replace(
+        args.agent_settings["codex"], model="gpt-order", effort="max"
+    )
+    args.agent_settings["claude"] = replace(
+        args.agent_settings["claude"], model="opus-order", effort="max"
+    )
+    observed: dict[str, object] = {}
+
+    class DispatchObserved(RuntimeError):
+        pass
+
+    def inspect_first_dispatch(self, state, context, history):
+        chain = ArtifactStore(repository, state.run_id).load_chain()
+        observed["types"] = tuple(record.record_type for record in chain)
+        observed["identity"] = chain[0].payload
+        observed["profile"] = chain[1].payload
+        raise DispatchObserved
+
+    monkeypatch.setattr(WorkflowEngine, "run_current_work_unit", inspect_first_dispatch)
+    monkeypatch.chdir(repository)
+
+    with pytest.raises(DispatchObserved):
+        run_production_workflow(task, args, force_new=True)
+
+    assert observed["types"] == (
+        RecordType.RUN_IDENTITY,
+        RecordType.RUN_PROFILE,
+        RecordType.TASK,
+    )
+    assert observed["identity"] == RunIdentityPayload(
+        str(task.resolve()),
+        "feature/run-binding-order",
+        _git(repository, "merge-base", "HEAD", "master"),
+        "IMPLEMENT",
+        None,
+    )
+    assert observed["profile"] == RunProfilePayload(
+        "gpt-order", "max", "opus-order", "max"
+    )
 
 
 def test_fresh_workflow_is_immutably_bound_to_complete_native_transport(
@@ -1091,6 +1141,8 @@ def test_structured_bind_persists_contract_and_active_work_unit_once(
 
     chain = ArtifactStore(repository, state.run_id).load_chain()
     assert tuple(item.record_type for item in chain) == (
+        RecordType.RUN_IDENTITY,
+        RecordType.RUN_PROFILE,
         RecordType.TASK,
         RecordType.WORK_UNIT,
     )

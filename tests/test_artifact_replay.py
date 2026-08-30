@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import asdict, replace
 
 import pytest
 
@@ -8,6 +8,7 @@ from artifact_models import (
     AgentResultPayload,
     ArtifactRecord,
     BindingPayload,
+    canonical_json,
     CommandSpec,
     Fingerprint,
     FingerprintKind,
@@ -19,6 +20,8 @@ from artifact_models import (
     RecordType,
     ReviewPayload,
     Role,
+    RunIdentityPayload,
+    RunProfilePayload,
     TaskPayload,
     ValidationAttestationPayload,
     ValidationResult,
@@ -142,6 +145,39 @@ def test_replay_is_deterministic_and_does_not_mutate_input() -> None:
     assert first.semantic_digest == second.semantic_digest
     assert first.audit_events == second.audit_events
     assert tuple(record.canonical_json() for record in chain) == before
+
+
+def test_replay_projects_run_identity_and_profiles_without_external_state() -> None:
+    records: list[ArtifactRecord] = []
+    identity = RunIdentityPayload(
+        task_file="C:\\workspace\\inbox\\r1.md",
+        branch="feature/run-identity",
+        branch_base="b" * 40,
+        execution_mode="PLAN_ONLY",
+        audit_report_path=None,
+    )
+    profile = RunProfilePayload(
+        codex_model="gpt-5.6-sol",
+        codex_effort="max",
+        claude_model="opus",
+        claude_effort="max",
+    )
+    _append(records, "run-identity", identity)
+    _append(records, "run-profile", profile)
+
+    replay = replay_artifacts(tuple(records), "run-replay")
+
+    assert replay.run_identity == identity
+    assert replay.run_profile == profile
+    assert canonical_json(asdict(replay.run_identity)) == canonical_json(asdict(identity))
+    assert canonical_json(asdict(replay.run_profile)) == canonical_json(asdict(profile))
+
+
+def test_pre_r1_chain_without_run_records_remains_readable() -> None:
+    replay = replay_artifacts(_chain(), "run-replay")
+
+    assert replay.run_identity is None
+    assert replay.run_profile is None
 
 
 def test_structured_finding_projection_rebuilds_reviewer_owned_history() -> None:

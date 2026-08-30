@@ -28,6 +28,8 @@ from artifact_models import (
     ReviewPayload,
     ReviewEvidencePayload,
     Role,
+    RunIdentityPayload,
+    RunProfilePayload,
     SliceSpec,
     TaskPayload,
     TransientRetryPayload,
@@ -101,6 +103,14 @@ def _record(payload, *, revision: int = 1) -> ArtifactRecord:  # type: ignore[no
 
 
 @pytest.fixture(params=[
+    RunIdentityPayload(
+        "C:\\workspace\\inbox\\task.md",
+        "feature/records",
+        "legacy-base-ref",
+        "IMPLEMENT",
+        "docs/internal/task-audit.md",
+    ),
+    RunProfilePayload("gpt-5.6-sol", "max", "opus", "high"),
     TaskPayload("feature/records", ("src/a.py",), DIGEST),
     PlanPayload("docs/internal/plan.md", "b" * 40, (SliceSpec("1", "models", ("src/a.py",)),)),
     WorkUnitPayload("1", 1, ("src/a.py",)),

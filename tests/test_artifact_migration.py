@@ -24,6 +24,8 @@ from artifact_models import (
     PlanPayload,
     ReviewPayload,
     Role,
+    RunIdentityPayload,
+    RunProfilePayload,
     SliceSpec,
     TaskPayload,
     TransientRetryPayload,
@@ -89,6 +91,45 @@ def _records(repository: Path, state) -> None:
         WorkUnitPayload("1", 1, ("src/resume.py",)),
         logical_id="work-unit-2",
         idempotency_key="work-unit:2:round:1",
+        fingerprint_sha256="a" * 64,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+
+
+def _run_records(
+    repository: Path,
+    state: WorkflowState,
+    *,
+    identity: RunIdentityPayload | None = None,
+    profile: RunProfilePayload | None = None,
+) -> None:
+    binding = state.protocol_binding
+    assert binding is not None
+    bridge = ArtifactBridge(ArtifactStore(repository, state.run_id))
+    bridge.append(
+        identity
+        or RunIdentityPayload(
+            state.task_file,
+            state.branch,
+            state.branch_base,
+            state.execution_mode,
+            state.audit_report_path,
+        ),
+        logical_id="run-identity",
+        idempotency_key="run-identity",
+        fingerprint_sha256="a" * 64,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    bridge.append(
+        profile
+        or RunProfilePayload(
+            binding.codex_profile.model,
+            binding.codex_profile.effort,
+            binding.claude_profile.model,
+            binding.claude_profile.effort,
+        ),
+        logical_id="run-profile",
+        idempotency_key="run-profile",
         fingerprint_sha256="a" * 64,
         fingerprint_kind=FingerprintKind.CONTRACT,
     )
@@ -586,6 +627,50 @@ def test_structured_state_rehydrates_from_matching_complete_chain(tmp_path: Path
     assert resolved.record_head_id is not None
     assert resolved.replay_result is not None
     assert resolved.replay_result.head_record_id == resolved.record_head_id
+    assert resolved.replay_result.run_identity is None
+    assert resolved.replay_result.run_profile is None
+
+
+@pytest.mark.parametrize(
+    ("drift", "message"),
+    (
+        ("identity", "run identity differs from state-v3"),
+        ("profile", "run profile differs from state-v3"),
+    ),
+)
+def test_structured_resume_rejects_typed_run_binding_mismatch(
+    tmp_path: Path, drift: str, message: str
+) -> None:
+    state = _state(tmp_path)
+    if drift == "identity":
+        _run_records(
+            tmp_path,
+            state,
+            identity=RunIdentityPayload(
+                state.task_file,
+                "feature/foreign",
+                state.branch_base,
+                state.execution_mode,
+                state.audit_report_path,
+            ),
+        )
+    else:
+        _run_records(
+            tmp_path,
+            state,
+            profile=RunProfilePayload(
+                "foreign-codex",
+                "medium",
+                "foreign-claude",
+                "high",
+            ),
+        )
+    _records(tmp_path, state)
+
+    with pytest.raises(ArtifactResumeError, match=message) as caught:
+        resolve_resume_state(tmp_path, state)
+
+    assert caught.value.code is ReplayDiagnosticCode.MIRROR_AMBIGUOUS
 
 
 def test_structured_state_without_records_halts_with_repair_hint(tmp_path: Path) -> None:

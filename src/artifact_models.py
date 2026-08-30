@@ -37,6 +37,8 @@ class ArtifactValidationError(ValueError):
 
 
 class RecordType(StrEnum):
+    RUN_IDENTITY = "run_identity"
+    RUN_PROFILE = "run_profile"
     TASK = "task"
     PLAN = "plan"
     WORK_UNIT = "work_unit"
@@ -118,6 +120,51 @@ class SliceSpec:
         _require_identifier(self.slice_id, "slice_id")
         _require_text(self.summary, "summary")
         _require_paths(self.paths)
+
+
+@dataclass(frozen=True, slots=True)
+class RunIdentityPayload:
+    task_file: str
+    branch: str
+    branch_base: str
+    execution_mode: str
+    audit_report_path: str | None
+    status: ClassVar[str] = "bound"
+    record_type: ClassVar[RecordType] = RecordType.RUN_IDENTITY
+
+    def __post_init__(self) -> None:
+        _require_text(self.task_file, "task_file")
+        _require_text(self.branch, "branch")
+        _require_text(self.branch_base, "branch_base")
+        if self.execution_mode not in {"IMPLEMENT", "PLAN_ONLY"}:
+            raise ArtifactValidationError("execution_mode is invalid")
+        if self.audit_report_path is not None:
+            _require_path(self.audit_report_path)
+
+
+@dataclass(frozen=True, slots=True)
+class RunProfilePayload:
+    codex_model: str
+    codex_effort: str
+    claude_model: str
+    claude_effort: str
+    status: ClassVar[str] = "bound"
+    record_type: ClassVar[RecordType] = RecordType.RUN_PROFILE
+
+    def __post_init__(self) -> None:
+        for value, name in (
+            (self.codex_model, "codex_model"),
+            (self.claude_model, "claude_model"),
+        ):
+            _require_text(value, name)
+            if value != value.strip():
+                raise ArtifactValidationError(f"{name} must be canonical")
+        for value, name in (
+            (self.codex_effort, "codex_effort"),
+            (self.claude_effort, "claude_effort"),
+        ):
+            if value not in {"low", "medium", "high", "xhigh", "max"}:
+                raise ArtifactValidationError(f"{name} is unsupported")
 
 
 @dataclass(frozen=True, slots=True)
@@ -833,7 +880,8 @@ class WorkflowCompletionPayload:
 
 
 ArtifactPayload: TypeAlias = (
-    TaskPayload | PlanPayload | WorkUnitPayload | CorrectionWorkUnitPayload
+    RunIdentityPayload | RunProfilePayload
+    | TaskPayload | PlanPayload | WorkUnitPayload | CorrectionWorkUnitPayload
     | AgentResultPayload | DiagnosticPayload | ReviewPayload | FindingTransitionPayload
     | FindingHandoffExportPayload | FindingHandoffImportPayload
     | ValidationRequestPayload | ValidationAttestationPayload | GatePayload | BindingPayload
@@ -990,6 +1038,16 @@ def validate_artifact_document(document: Mapping[str, Any]) -> None:
 
 def _payload_from_dict(record_type: RecordType, raw: Mapping[str, Any]) -> ArtifactPayload:
     data = dict(raw)
+    if record_type is RecordType.RUN_IDENTITY:
+        return RunIdentityPayload(
+            data["task_file"], data["branch"], data["branch_base"],
+            data["execution_mode"], data["audit_report_path"],
+        )
+    if record_type is RecordType.RUN_PROFILE:
+        return RunProfilePayload(
+            data["codex_model"], data["codex_effort"],
+            data["claude_model"], data["claude_effort"],
+        )
     if record_type is RecordType.TASK:
         return TaskPayload(data["target_branch"], tuple(data["scope_paths"]), data["assignment_sha256"])
     if record_type is RecordType.PLAN:

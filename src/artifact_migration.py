@@ -17,6 +17,8 @@ from artifact_models import (
     RecordType,
     ReviewPayload,
     ResumeCheckPayload,
+    RunIdentityPayload,
+    RunProfilePayload,
     TaskPayload,
     TransientRetryPayload,
     ValidationAttestationPayload,
@@ -47,6 +49,7 @@ from workflow_state import (
     NATIVE_CLAUDE_REVIEW_TRANSPORT,
     NATIVE_CODEX_RESULT_TRANSPORT,
     ProtocolMode,
+    ProtocolBinding,
     WorkflowState,
     WorkflowStep,
     WorkUnitKind,
@@ -75,6 +78,51 @@ class ResumeResolution:
     mode: ProtocolMode
     record_head_id: str | None
     replay_result: ArtifactReplayResult | None
+
+
+def assert_run_binding_mirror(
+    replay: ArtifactReplayResult,
+    state: WorkflowState,
+    binding: ProtocolBinding,
+) -> None:
+    """Reject an early run record that differs from its state-v3 mirror."""
+    if replay.run_identity is not None:
+        expected_identity = RunIdentityPayload(
+            task_file=state.task_file,
+            branch=state.branch,
+            branch_base=state.branch_base,
+            execution_mode=state.execution_mode,
+            audit_report_path=state.audit_report_path,
+        )
+        if replay.run_identity != expected_identity:
+            identity_record = next(
+                record for record in replay.records
+                if record.record_type is RecordType.RUN_IDENTITY
+            )
+            raise ArtifactResumeError(
+                "run identity differs from state-v3; repair the state mirror or "
+                "restore the matching record chain before resuming",
+                code=ReplayDiagnosticCode.MIRROR_AMBIGUOUS,
+                record_id=identity_record.record_id,
+            )
+    if replay.run_profile is not None:
+        expected_profile = RunProfilePayload(
+            codex_model=binding.codex_profile.model,
+            codex_effort=binding.codex_profile.effort,
+            claude_model=binding.claude_profile.model,
+            claude_effort=binding.claude_profile.effort,
+        )
+        if replay.run_profile != expected_profile:
+            profile_record = next(
+                record for record in replay.records
+                if record.record_type is RecordType.RUN_PROFILE
+            )
+            raise ArtifactResumeError(
+                "run profile differs from state-v3; repair the state mirror or "
+                "restore the matching record chain before resuming",
+                code=ReplayDiagnosticCode.MIRROR_AMBIGUOUS,
+                record_id=profile_record.record_id,
+            )
 
 
 def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeResolution:
@@ -124,6 +172,7 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
             record_id=exc.record_id,
         ) from exc
     chain = replay.records
+    assert_run_binding_mirror(replay, state, binding)
 
     head = replay.head_record_id
     assert head is not None

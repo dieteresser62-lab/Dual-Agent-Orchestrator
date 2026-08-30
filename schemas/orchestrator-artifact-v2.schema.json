@@ -8,7 +8,7 @@
   "properties": {
     "schema_version": {"const": "2"},
     "record_id": {"$ref": "#/$defs/identifier"},
-    "record_type": {"enum": ["task", "plan", "work_unit", "correction_work_unit", "agent_result", "diagnostic", "review", "finding_transition", "finding_handoff_export", "finding_handoff_import", "validation_request", "validation_attestation", "gate", "binding", "quota_pause", "transient_retry", "resume_check", "workflow_completion", "provider_input_measurement", "provider_attempt", "final_review_preflight"]},
+    "record_type": {"enum": ["run_identity", "run_profile", "task", "plan", "work_unit", "correction_work_unit", "agent_result", "diagnostic", "review", "finding_transition", "finding_handoff_export", "finding_handoff_import", "validation_request", "validation_attestation", "gate", "binding", "quota_pause", "transient_retry", "resume_check", "workflow_completion", "provider_input_measurement", "provider_attempt", "final_review_preflight"]},
     "run_id": {"$ref": "#/$defs/identifier"},
     "logical_id": {"$ref": "#/$defs/identifier"},
     "revision": {"type": "integer", "minimum": 1},
@@ -20,6 +20,8 @@
     "payload": {"type": "object"}
   },
   "allOf": [
+    {"if": {"properties": {"record_type": {"const": "run_identity"}}}, "then": {"properties": {"status": {"const": "bound"}, "payload": {"$ref": "#/$defs/run_identity"}}}},
+    {"if": {"properties": {"record_type": {"const": "run_profile"}}}, "then": {"properties": {"status": {"const": "bound"}, "payload": {"$ref": "#/$defs/run_profile"}}}},
     {"if": {"properties": {"record_type": {"const": "task"}}}, "then": {"properties": {"status": {"const": "accepted"}, "payload": {"$ref": "#/$defs/task"}}}},
     {"if": {"properties": {"record_type": {"const": "plan"}}}, "then": {"properties": {"status": {"const": "approved"}, "payload": {"$ref": "#/$defs/plan"}}}},
     {"if": {"properties": {"record_type": {"const": "work_unit"}}}, "then": {"properties": {"status": {"const": "active"}, "payload": {"$ref": "#/$defs/work_unit"}}}},
@@ -72,6 +74,27 @@
     "slice": {
       "type": "object", "additionalProperties": false, "required": ["slice_id", "summary", "paths"],
       "properties": {"slice_id": {"$ref": "#/$defs/identifier"}, "summary": {"$ref": "#/$defs/non_empty"}, "paths": {"$ref": "#/$defs/non_empty_paths"}}
+    },
+    "run_identity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["task_file", "branch", "branch_base", "execution_mode", "audit_report_path"],
+      "properties": {
+        "task_file": {"$ref": "#/$defs/non_empty"},
+        "branch": {"$ref": "#/$defs/non_empty"},
+        "branch_base": {"$ref": "#/$defs/non_empty"},
+        "execution_mode": {"enum": ["IMPLEMENT", "PLAN_ONLY"]},
+        "audit_report_path": {"oneOf": [{"$ref": "#/$defs/path"}, {"type": "null"}]}
+      }
+    },
+    "run_profile": {
+      "type": "object", "additionalProperties": false,
+      "required": ["codex_model", "codex_effort", "claude_model", "claude_effort"],
+      "properties": {
+        "codex_model": {"$ref": "#/$defs/non_empty"},
+        "codex_effort": {"enum": ["low", "medium", "high", "xhigh", "max"]},
+        "claude_model": {"$ref": "#/$defs/non_empty"},
+        "claude_effort": {"enum": ["low", "medium", "high", "xhigh", "max"]}
+      }
     },
     "task": {
       "type": "object", "additionalProperties": false, "required": ["target_branch", "scope_paths", "assignment_sha256"],

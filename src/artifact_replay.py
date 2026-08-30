@@ -29,6 +29,8 @@ from artifact_models import (
     ProviderAttemptPayload,
     PlanPayload,
     RecordType,
+    RunIdentityPayload,
+    RunProfilePayload,
     ResumeCheckPayload,
     ReviewPayload,
     ValidationAttestationPayload,
@@ -124,6 +126,8 @@ class ArtifactReplayResult:
     semantic_facts: tuple[ReplayFact, ...]
     semantic_digest: str
     audit_events: tuple[ReplayAuditEvent, ...]
+    run_identity: RunIdentityPayload | None = None
+    run_profile: RunProfilePayload | None = None
 
     def subset(self, records: Sequence[ArtifactRecord]) -> "ArtifactReplayResult":
         """Derive a presentation-only subsequence from an accepted replay.
@@ -191,6 +195,8 @@ def replay_artifacts(
             )
         if record.record_type in {
             RecordType.TASK,
+            RecordType.RUN_IDENTITY,
+            RecordType.RUN_PROFILE,
             RecordType.PLAN,
             RecordType.WORKFLOW_COMPLETION,
             RecordType.FINDING_HANDOFF_EXPORT,
@@ -611,6 +617,22 @@ def _semantic_facts(records: tuple[ArtifactRecord, ...]) -> tuple[ReplayFact, ..
 def _result(expected_run_id: str, records: tuple[ArtifactRecord, ...]) -> ArtifactReplayResult:
     facts = _semantic_facts(records)
     documents = tuple(fact.to_document() for fact in facts)
+    run_identity = next(
+        (
+            record.payload
+            for record in records
+            if isinstance(record.payload, RunIdentityPayload)
+        ),
+        None,
+    )
+    run_profile = next(
+        (
+            record.payload
+            for record in records
+            if isinstance(record.payload, RunProfilePayload)
+        ),
+        None,
+    )
     return ArtifactReplayResult(
         expected_run_id=expected_run_id,
         records=records,
@@ -627,6 +649,8 @@ def _result(expected_run_id: str, records: tuple[ArtifactRecord, ...]) -> Artifa
             )
             for index, record in enumerate(records, start=1)
         ),
+        run_identity=run_identity,
+        run_profile=run_profile,
     )
 
 

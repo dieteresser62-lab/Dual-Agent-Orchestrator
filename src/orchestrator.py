@@ -41,7 +41,11 @@ from artifact_bridge import (
     provider_input_measurement_payload,
     finding_handoff_export_payload, finding_handoff_import_payload,
 )
-from artifact_migration import ArtifactResumeError, resolve_resume_state
+from artifact_migration import (
+    ArtifactResumeError,
+    assert_run_binding_mirror,
+    resolve_resume_state,
+)
 from artifact_models import (
     ArtifactRecord, BindingPayload, CorrectionWorkUnitPayload, DiagnosticPayload,
     FingerprintKind, GatePayload,
@@ -53,6 +57,7 @@ from artifact_models import (
     ProviderAttemptPayload, ProviderUsagePayload,
     FindingHandoffExportPayload, FindingHandoffImportPayload,
     FindingTransitionPayload,
+    RunIdentityPayload, RunProfilePayload,
     RecordType, stable_record_id,
 )
 from artifact_store import ArtifactStore
@@ -395,6 +400,41 @@ class ProductionWorkflowDriver(WorkflowDriver):
         if bridge is None or state.task_digest is None:
             return
         contract_fingerprint = state.task_digest
+        binding = state.protocol_binding
+        if binding is None:
+            raise WorkflowExecutionError(
+                "structured baseline requires the immutable protocol binding"
+            )
+        existing_chain = bridge.store.load_chain()
+        if existing_chain:
+            assert_run_binding_mirror(
+                replay_artifacts(existing_chain, state.run_id), state, binding
+            )
+        bridge.append(
+            RunIdentityPayload(
+                task_file=state.task_file,
+                branch=state.branch,
+                branch_base=state.branch_base,
+                execution_mode=state.execution_mode,
+                audit_report_path=state.audit_report_path,
+            ),
+            logical_id="run-identity",
+            idempotency_key="run-identity",
+            fingerprint_sha256=contract_fingerprint,
+            fingerprint_kind=FingerprintKind.CONTRACT,
+        )
+        bridge.append(
+            RunProfilePayload(
+                codex_model=binding.codex_profile.model,
+                codex_effort=binding.codex_profile.effort,
+                claude_model=binding.claude_profile.model,
+                claude_effort=binding.claude_profile.effort,
+            ),
+            logical_id="run-profile",
+            idempotency_key="run-profile",
+            fingerprint_sha256=contract_fingerprint,
+            fingerprint_kind=FingerprintKind.CONTRACT,
+        )
         if state.task_scope_patterns:
             bridge.append(
                 TaskPayload(

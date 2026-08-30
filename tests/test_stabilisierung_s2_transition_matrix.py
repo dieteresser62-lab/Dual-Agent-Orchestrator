@@ -46,6 +46,8 @@ MIGRATION_MISMATCH_MARKERS = (
 )
 
 RESUME_ERROR_MARKERS = (
+    "run identity differs from state-v3",
+    "run profile differs from state-v3",
     "is historical and cannot be resumed",
     "structured-v2 state lacks the complete native Codex-Claude transport binding",
     "record chain for run",
@@ -284,6 +286,7 @@ WORKFLOW_STATE_FIELD_INVENTORY = {
 
 COMPARISON_TARGETS = (
     ("src/artifact_migration.py", None, "resolve_resume_state"),
+    ("src/artifact_migration.py", None, "assert_run_binding_mirror"),
     ("src/artifact_migration.py", None, "_mirror_difference_code"),
     ("src/artifact_migration.py", None, "_finding_statuses"),
     ("src/artifact_migration.py", None, "_recoverable_pending_review_finding_gap"),
@@ -360,6 +363,7 @@ STRICT_BODY_TARGETS = tuple(
 # inventory to be reviewed instead of silently aging.
 EXPECTED_COMPARISON_COUNTS = {
     "src/artifact_migration.py:resolve_resume_state": 89,
+    "src/artifact_migration.py:assert_run_binding_mirror": 6,
     "src/artifact_migration.py:_mirror_difference_code": 0,
     "src/artifact_migration.py:_finding_statuses": 2,
     "src/artifact_migration.py:_recoverable_pending_review_finding_gap": 16,
@@ -411,6 +415,7 @@ EXPECTED_COMPARISON_COUNTS = {
 
 EXPECTED_STRICT_BODY_DIGESTS = {
     "src/artifact_bridge.py:review_payload_matches_result": "f72ff6a84fa3ce4651d52ba2317071a26ccf56d53e8b2b03bdda8e94a1bdf8d3",
+    "src/artifact_migration.py:assert_run_binding_mirror": "e8febdf4104e65855caa2196ec8fad6f9e6ec5a81b3bdfc9a2ac1475daea9498",
     "src/artifact_migration.py:_mirror_difference_code": "9433c6d83367347145eebab39e8fc4e3a989062ff9864bec6752710065ffbbc7",
     "src/artifact_migration.py:_finding_statuses": "cc4a0460cf13d1fbeba70deb2ae66dd19771bb31e8c56907139506ba3421c758",
     "src/artifact_migration.py:_recoverable_pending_review_finding_gap": "dbdbf286f9c1d85bcb53e7e3e2e716f052e60a318b51d5176088d382b4819468",
@@ -600,12 +605,12 @@ def test_migration_comparison_inventory_is_source_bound() -> None:
     source_strings = _string_constants("src/artifact_migration.py")
     document = MATRIX_PATH.read_text(encoding="utf-8")
     assert _raise_count("src/artifact_migration.py", "mismatch") == 32
-    assert source.count("differs from state-v3") == 12
+    assert source.count("differs from state-v3") == 14
     for marker in MIGRATION_MISMATCH_MARKERS:
         assert marker in source_strings
         assert marker in document
 
-    assert _raise_count("src/artifact_migration.py", "ArtifactResumeError") == 10
+    assert _raise_count("src/artifact_migration.py", "ArtifactResumeError") == 12
     for marker in RESUME_ERROR_MARKERS:
         assert marker in (source if marker == "exc.diagnostic.message" else source_strings)
         assert marker in document
@@ -774,9 +779,19 @@ def test_every_s4a_stop_entry_has_exactly_one_reasoned_classification() -> None:
     fields = tuple(field for field, _group, _reason in rows)
     groups = {field: group for field, group, _reason in rows}
 
-    assert len(stop_fields) == 40
+    r1_covered_fields = {
+        "`task_file`",
+        "`branch`",
+        "`branch_base`",
+        "`execution_mode`",
+        "`audit_report_path`",
+        "`protocol_binding.codex_profile/claude_profile`",
+    }
+    assert len(stop_fields) == 34
     assert len(fields) == len(set(fields)) == 41
-    assert set(fields) == stop_fields | {"`created_at`, `updated_at`"}
+    assert set(fields) == (
+        stop_fields | r1_covered_fields | {"`created_at`, `updated_at`"}
+    )
     assert groups["`work_units[*].codex_return_count`"] == "A"
     assert groups["`ContractResult.test_files`"] == "A"
     assert groups[
@@ -786,6 +801,10 @@ def test_every_s4a_stop_entry_has_exactly_one_reasoned_classification() -> None:
     assert groups[
         "`ContractResult.evidence.dimensions/largest_residual_risk/break_condition`"
     ] == "A"
+    for field in r1_covered_fields:
+        reason = next(reason for name, _group, reason in rows if name == field)
+        assert "In R1 geschlossen" in reason
+        assert "RunIdentityPayload" in reason or "RunProfilePayload" in reason
     for field, group, reason in rows:
         if group == "A":
             assert "Payload" in reason, field
