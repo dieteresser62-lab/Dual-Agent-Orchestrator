@@ -35,6 +35,7 @@ from artifact_models import (
     GatePayload,
     PlanPayload,
     ReviewPayload,
+    ReviewEvidencePayload,
     Role,
     SliceSpec,
     TaskPayload,
@@ -144,24 +145,66 @@ def review_payload(
     response_sha256: str,
 ) -> ReviewPayload:
     verdict = "stop" if result.stopped else "approved" if result.approval else "denied"
-    evidence = None
-    if result.evidence is not None:
-        evidence = " | ".join(
-            (
-                result.evidence.dimensions,
-                result.evidence.largest_residual_risk,
-                result.evidence.break_condition,
-            )
+    structured_evidence = (
+        None
+        if result.evidence is None
+        else ReviewEvidencePayload(
+            dimensions=result.evidence.dimensions,
+            largest_residual_risk=result.evidence.largest_residual_risk,
+            break_condition=result.evidence.break_condition,
         )
+    )
     return ReviewPayload(
         reviewer=_role(result.reviewer),
         work_unit_id=str(work_unit_id),
         verdict=verdict,
         finding_ids=tuple(item.finding_id for item in result.findings),
-        evidence=evidence,
+        # Schema-2 records written before S4a used this string field.  Keep it
+        # readable as opaque legacy data, but never create or split it again.
+        evidence=None,
         transport_schema=transport_schema,
         request_id=request_id,
         response_sha256=response_sha256,
+        review_evidence=structured_evidence,
+        red_state_followup_slice=result.red_state_followup_slice,
+    )
+
+
+def review_payload_matches_result(
+    payload: ReviewPayload,
+    result: ContractResult,
+) -> bool:
+    """Compare a review fact without ever parsing the legacy evidence string."""
+    verdict = "stop" if result.stopped else "approved" if result.approval else "denied"
+    finding_ids = tuple(item.finding_id for item in result.findings)
+    if payload.review_evidence is not None:
+        evidence_matches = payload.review_evidence == (
+            None
+            if result.evidence is None
+            else ReviewEvidencePayload(
+                result.evidence.dimensions,
+                result.evidence.largest_residual_risk,
+                result.evidence.break_condition,
+            )
+        ) and payload.evidence is None
+    else:
+        legacy_evidence = (
+            None
+            if result.evidence is None
+            else " | ".join(
+                (
+                    result.evidence.dimensions,
+                    result.evidence.largest_residual_risk,
+                    result.evidence.break_condition,
+                )
+            )
+        )
+        evidence_matches = payload.evidence == legacy_evidence
+    return (
+        payload.verdict == verdict
+        and payload.finding_ids == finding_ids
+        and evidence_matches
+        and payload.red_state_followup_slice == result.red_state_followup_slice
     )
 
 
@@ -699,7 +742,7 @@ __all__ = [
     "ArtifactBridge", "ArtifactBridgeError", "agent_result_payload",
     "attestation_payload", "command_payload", "finding_payload",
     "finding_handoff_export_payload", "finding_handoff_import_payload", "plan_payload",
-    "review_payload", "task_payload", "validation_request_payload",
+    "review_payload", "review_payload_matches_result", "task_payload", "validation_request_payload",
     "provider_input_measurement_payload",
     "BindingPayload", "GatePayload", "ProviderUsagePayload",
     "WorkUnitPayload",

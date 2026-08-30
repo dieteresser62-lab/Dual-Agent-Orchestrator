@@ -96,6 +96,8 @@ RECOVERABLE_FUNCTIONS = {
 DRIVER_DIVERGENCE_MESSAGES = Counter(
     {
         "structured reviewer decisions differ from the state-v3 mirror": 1,
+        "structured commit review record differs from its state-v3 mirror": 1,
+        "structured commit attestation record differs from its state-v3 mirror": 1,
         "provider attempt measurement context diverged": 1,
         "authoritative finding replay differs from the state-v3 mirror": 1,
         "record-native finding carry-forward differs from the state-v3 mirror": 1,
@@ -293,6 +295,7 @@ COMPARISON_TARGETS = (
     ("src/artifact_migration.py", None, "_attestation_facts"),
     ("src/artifact_bridge.py", None, "finding_handoff_export_payload"),
     ("src/artifact_bridge.py", None, "finding_handoff_import_payload"),
+    ("src/artifact_bridge.py", None, "review_payload_matches_result"),
     ("src/artifact_bridge.py", "ArtifactBridge", "append"),
     ("src/artifact_bridge.py", "ArtifactBridge", "start_provider_attempt"),
     ("src/artifact_bridge.py", "ArtifactBridge", "finish_provider_attempt"),
@@ -340,6 +343,7 @@ STRICT_BODY_TARGETS = tuple(
         }
         and target[2] != "resolve_resume_state"
     )
+    or target[2] == "review_payload_matches_result"
     or target[2]
     in {
         "_persisted_histories",
@@ -367,6 +371,7 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/artifact_migration.py:_attestation_facts": 2,
     "src/artifact_bridge.py:finding_handoff_export_payload": 5,
     "src/artifact_bridge.py:finding_handoff_import_payload": 8,
+    "src/artifact_bridge.py:review_payload_matches_result": 9,
     "src/artifact_bridge.py:ArtifactBridge.append": 6,
     "src/artifact_bridge.py:ArtifactBridge.start_provider_attempt": 21,
     "src/artifact_bridge.py:ArtifactBridge.finish_provider_attempt": 10,
@@ -387,8 +392,8 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/orchestrator.py:ProductionWorkflowDriver._materialize_review_packet": 3,
     "src/orchestrator.py:ProductionWorkflowDriver._canonical_native_agent_result": 4,
     "src/orchestrator.py:ProductionWorkflowDriver.recover_pending_native_codex": 37,
-    "src/orchestrator.py:ProductionWorkflowDriver.recover_pending_native_reviewer": 30,
-    "src/orchestrator.py:ProductionWorkflowDriver.recover_pending_native_reviewer_before_policy": 35,
+    "src/orchestrator.py:ProductionWorkflowDriver.recover_pending_native_reviewer": 27,
+    "src/orchestrator.py:ProductionWorkflowDriver.recover_pending_native_reviewer_before_policy": 32,
     "src/orchestrator.py:ProductionWorkflowDriver.persist_native_codex_contract": 8,
     "src/orchestrator.py:ProductionWorkflowDriver.prepare_finding_handoff": 13,
     "src/orchestrator.py:ProductionWorkflowDriver.checkpoint": 4,
@@ -405,6 +410,7 @@ EXPECTED_COMPARISON_COUNTS = {
 }
 
 EXPECTED_STRICT_BODY_DIGESTS = {
+    "src/artifact_bridge.py:review_payload_matches_result": "f72ff6a84fa3ce4651d52ba2317071a26ccf56d53e8b2b03bdda8e94a1bdf8d3",
     "src/artifact_migration.py:_mirror_difference_code": "9433c6d83367347145eebab39e8fc4e3a989062ff9864bec6752710065ffbbc7",
     "src/artifact_migration.py:_finding_statuses": "cc4a0460cf13d1fbeba70deb2ae66dd19771bb31e8c56907139506ba3421c758",
     "src/artifact_migration.py:_recoverable_pending_review_finding_gap": "dbdbf286f9c1d85bcb53e7e3e2e716f052e60a318b51d5176088d382b4819468",
@@ -708,6 +714,13 @@ def test_recordless_review_and_attestation_fields_are_source_bound() -> None:
             "transport_schema",
             "request_id",
             "response_sha256",
+            "review_evidence",
+            "red_state_followup_slice",
+        },
+        ("src/artifact_models.py", "ReviewEvidencePayload"): {
+            "dimensions",
+            "largest_residual_risk",
+            "break_condition",
         },
     }
     actual = {
@@ -728,8 +741,70 @@ def test_recordless_review_and_attestation_fields_are_source_bound() -> None:
         "ContractResult.anchors",
         "ContractResult.stop_request",
         "ContractResult.validation",
+        "ReviewPayload.review_evidence",
     ):
         assert marker in document
+
+
+def test_every_s4a_stop_entry_has_exactly_one_reasoned_classification() -> None:
+    document = MATRIX_PATH.read_text(encoding="utf-8")
+    inventory = document.split("## State-Fakten ohne vollständigen Record", 1)[1].split(
+        "### S4a-Sortierung der STOP-Einträge", 1
+    )[0]
+    classification = document.split(
+        "### S4a-Sortierung der STOP-Einträge", 1
+    )[1].split(
+        "#### Entscheidung zu Schema 2 und Bestandsrecords",  # allowlist:german
+        1,
+    )[0]
+    stop_fields = {
+        line.split("|", 2)[1].strip()
+        for line in inventory.splitlines()
+        if line.startswith("|")
+        and "| **STOP**" in line
+    }
+    rows = tuple(
+        (match.group(1).strip(), match.group(2), match.group(3).strip())
+        for match in re.finditer(
+            r"^\|\s*(.+?)\s*\|\s*([ABC])\s*\|\s*(.+?)\s*\|$",
+            classification,
+            re.MULTILINE,
+        )
+    )
+    fields = tuple(field for field, _group, _reason in rows)
+    groups = {field: group for field, group, _reason in rows}
+
+    assert len(stop_fields) == 40
+    assert len(fields) == len(set(fields)) == 41
+    assert set(fields) == stop_fields | {"`created_at`, `updated_at`"}
+    assert groups["`work_units[*].codex_return_count`"] == "A"
+    assert groups["`ContractResult.test_files`"] == "A"
+    assert groups[
+        "`ContractResult.red_state_followup_slice` in "
+        "`runtime_history.reviews/latest_claude_review`"
+    ] == "A"
+    assert groups[
+        "`ContractResult.evidence.dimensions/largest_residual_risk/break_condition`"
+    ] == "A"
+    for field, group, reason in rows:
+        if group == "A":
+            assert "Payload" in reason, field
+            assert "Schreiber" in reason or "Schreiber sind" in reason, field
+        elif group == "B":
+            assert "Leser" in reason, field
+        else:
+            assert any(
+                marker in reason
+                for marker in (
+                    "ReviewPayload",
+                    "AgentResultPayload",
+                    "ArtifactRecord.schema_version",
+                )
+            ), field
+
+    assert "32 persistierte Review-Records" in document
+    assert "ar1-c24d40d2bcf557f302bf3b64414ea5142bd8e11f3814315e1013547ab73bbfe3" in document
+    assert "niemals heuristisch geteilt" in document
 
 
 def test_state_schema_field_inventory_is_source_bound() -> None:

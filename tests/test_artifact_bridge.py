@@ -7,7 +7,8 @@ import pytest
 
 from artifact_bridge import (
     ArtifactBridge, ArtifactBridgeError, attestation_payload, command_payload,
-    finding_payload, review_payload, validation_request_payload,
+    finding_payload, review_payload, review_payload_matches_result,
+    validation_request_payload,
     finding_handoff_export_payload, finding_handoff_import_payload,
 )
 from artifact_models import (
@@ -230,6 +231,103 @@ def test_native_review_mapping_preserves_request_and_response_binding() -> None:
     assert payload.transport_schema == "native-claude-review-v2"
     assert payload.request_id == f"native-review-request-{'b' * 64}"
     assert payload.response_sha256 == "c" * 64
+
+
+def test_review_evidence_roundtrips_losslessly_through_the_record_store(
+    tmp_path: Path,
+) -> None:
+    result = ContractResult(
+        reviewer=AgentRole.CLAUDE,
+        approval=True,
+        stopped=False,
+        stop_request=None,
+        validation=None,
+        test_files=(),
+        pre_mortem="A replay implementation may accidentally invoke Claude twice.",
+        evidence=ReviewEvidence(
+            "correctness | failure paths",
+            "a cache | mirror disagreement",
+            "the record | state binding diverges",
+        ),
+        findings=(),
+        anchors=(),
+        red_state_followup_slice="Slice 12",
+    )
+    bridge = ArtifactBridge(
+        ArtifactStore(tmp_path, "run-evidence"),
+        now=lambda: "2026-08-30T10:00:00+00:00",
+    )
+    written = bridge.append(
+        review_payload(
+            result,
+            work_unit_id=1,
+            transport_schema="native-claude-review-v2",
+            request_id=f"native-review-request-{'b' * 64}",
+            response_sha256="c" * 64,
+        ),
+        logical_id="review-claude-1-1",
+        idempotency_key="review-evidence-roundtrip",
+        fingerprint_sha256=DIGEST,
+    )
+
+    loaded = bridge.store.load_chain()[0]
+
+    assert loaded == written
+    assert isinstance(loaded.payload, ReviewPayload)
+    assert loaded.payload.evidence is None
+    assert loaded.payload.review_evidence is not None
+    assert loaded.payload.review_evidence.dimensions == "correctness | failure paths"
+    assert (
+        loaded.payload.review_evidence.largest_residual_risk
+        == "a cache | mirror disagreement"
+    )
+    assert (
+        loaded.payload.review_evidence.break_condition
+        == "the record | state binding diverges"
+    )
+    assert loaded.payload.red_state_followup_slice == "Slice 12"
+
+
+def test_legacy_review_comparison_keeps_ambiguous_evidence_opaque() -> None:
+    result = ContractResult(
+        reviewer=AgentRole.CLAUDE,
+        approval=False,
+        stopped=False,
+        stop_request=None,
+        validation=None,
+        test_files=(),
+        pre_mortem=None,
+        evidence=ReviewEvidence(
+            "first | embedded",
+            "second",
+            "third",
+        ),
+        findings=(),
+        anchors=(),
+    )
+    legacy = ReviewPayload(
+        Role.CLAUDE,
+        "1",
+        "denied",
+        (),
+        "first | embedded | second | third",
+        "native-claude-review-v2",
+        f"native-review-request-{'b' * 64}",
+        "c" * 64,
+    )
+
+    assert review_payload_matches_result(legacy, result)
+    assert not review_payload_matches_result(
+        legacy,
+        replace(
+            result,
+            evidence=ReviewEvidence(
+                "first | embedded",
+                "second",
+                "changed",
+            ),
+        ),
+    )
 
 
 def _measurement() -> ProviderInputMeasurementPayload:

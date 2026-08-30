@@ -25,11 +25,13 @@ from audit_trail import (
     validate_slice_document,
     validate_work_plan_document,
 )
-from artifact_bridge import ArtifactBridge
+from artifact_bridge import ArtifactBridge, review_payload
 from artifact_models import (
     AgentResultPayload,
+    ArtifactRecord,
     FindingSeverity,
     FindingTransitionPayload,
+    Fingerprint,
     FingerprintKind,
     Role,
     TaskPayload,
@@ -207,6 +209,7 @@ def _review(
     validation=None,
     findings: tuple[FindingRecord, ...] = (),
     pre_mortem: str | None = "Concurrent writers may race",
+    red_state_followup_slice: str | None = None,
 ) -> ContractResult:
     return ContractResult(
         reviewer=reviewer,
@@ -223,6 +226,7 @@ def _review(
         ),
         findings=findings,
         anchors=(),
+        red_state_followup_slice=red_state_followup_slice,
     )
 
 
@@ -828,6 +832,121 @@ def test_projection_accepts_commit_authorization_with_claude_approval() -> None:
         commit_authorized=True,
     )
     assert projection.commit_authorized is True
+
+
+def test_red_state_audit_authorization_requires_the_bound_review_record() -> None:
+    passing = _attestation()
+    failing = replace(
+        passing,
+        records=(
+            replace(passing.records[0], status=ValidationStatus.FAIL, exit_code=1),
+            passing.records[1],
+        ),
+        summary="one required command is red",
+    )
+    review = _review(
+        validation=failing,
+        red_state_followup_slice="Slice 10",
+    )
+    events = (
+        ValidationAuditEvent(1, 8, failing),
+        ReviewAuditEvent(2, 8, 1, review),
+    )
+
+    with pytest.raises(AuditTrailError, match="fingerprint-bound review record"):
+        AuditProjection(
+            slice_id=8,
+            events=events,
+            commit_authorized=True,
+            red_state_followup_slice="Slice 10",
+        )
+
+    wrong_work_unit_record = ArtifactRecord.create(
+        run_id="run-red-state",
+        logical_id="review-claude-2-1",
+        revision=1,
+        fingerprint=Fingerprint(FingerprintKind.IMPLEMENTATION, "a" * 64),
+        predecessor_ids=(),
+        created_at="2026-08-30T10:00:00+00:00",
+        idempotency_key="review-red-state",
+        payload=review_payload(
+            review,
+            work_unit_id="2",
+            transport_schema="native-claude-review-v2",
+            request_id=f"native-review-request-{'b' * 64}",
+            response_sha256="c" * 64,
+        ),
+    )
+
+    with pytest.raises(AuditTrailError, match="fingerprint-bound review record"):
+        AuditProjection(
+            slice_id=8,
+            events=events,
+            commit_authorized=True,
+            red_state_followup_slice="Slice 10",
+            review_record=wrong_work_unit_record,
+            review_work_unit_id="1",
+        )
+
+    mismatched_record = ArtifactRecord.create(
+        run_id="run-red-state",
+        logical_id="review-claude-1-mismatch",
+        revision=1,
+        fingerprint=Fingerprint(FingerprintKind.IMPLEMENTATION, "a" * 64),
+        predecessor_ids=(),
+        created_at="2026-08-30T10:00:00+00:00",
+        idempotency_key="review-red-state-mismatch",
+        payload=review_payload(
+            replace(
+                review,
+                evidence=ReviewEvidence(
+                    "different dimensions",
+                    "different risk",
+                    "different break condition",
+                ),
+            ),
+            work_unit_id="1",
+            transport_schema="native-claude-review-v2",
+            request_id=f"native-review-request-{'b' * 64}",
+            response_sha256="c" * 64,
+        ),
+    )
+    with pytest.raises(AuditTrailError, match="fingerprint-bound review record"):
+        AuditProjection(
+            slice_id=8,
+            events=events,
+            commit_authorized=True,
+            red_state_followup_slice="Slice 10",
+            review_record=mismatched_record,
+            review_work_unit_id="1",
+        )
+
+    record = ArtifactRecord.create(
+        run_id="run-red-state",
+        logical_id="review-claude-1-1",
+        revision=1,
+        fingerprint=Fingerprint(FingerprintKind.IMPLEMENTATION, "a" * 64),
+        predecessor_ids=(),
+        created_at="2026-08-30T10:00:00+00:00",
+        idempotency_key="review-red-state-current-work-unit",
+        payload=review_payload(
+            review,
+            work_unit_id="1",
+            transport_schema="native-claude-review-v2",
+            request_id=f"native-review-request-{'b' * 64}",
+            response_sha256="c" * 64,
+        ),
+    )
+    projection = AuditProjection(
+        slice_id=8,
+        events=events,
+        commit_authorized=True,
+        red_state_followup_slice="Slice 10",
+        review_record=record,
+        review_work_unit_id="1",
+    )
+
+    assert projection.review_record == record
 
 
 def test_slice_projection_rejects_approving_review_without_validation(

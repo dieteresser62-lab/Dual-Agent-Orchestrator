@@ -244,6 +244,21 @@ class DiagnosticPayload:
 
 
 @dataclass(frozen=True, slots=True)
+class ReviewEvidencePayload:
+    dimensions: str
+    largest_residual_risk: str
+    break_condition: str
+
+    def __post_init__(self) -> None:
+        _require_text(self.dimensions, "review_evidence.dimensions")
+        _require_text(
+            self.largest_residual_risk,
+            "review_evidence.largest_residual_risk",
+        )
+        _require_text(self.break_condition, "review_evidence.break_condition")
+
+
+@dataclass(frozen=True, slots=True)
 class ReviewPayload:
     reviewer: Role
     work_unit_id: str
@@ -253,6 +268,8 @@ class ReviewPayload:
     transport_schema: str
     request_id: str
     response_sha256: str
+    review_evidence: ReviewEvidencePayload | None = None
+    red_state_followup_slice: str | None = None
     status: ClassVar[str] = "decided"
     record_type: ClassVar[RecordType] = RecordType.REVIEW
 
@@ -265,8 +282,33 @@ class ReviewPayload:
         _require_unique_finding_ids(self.finding_ids, "finding_ids", allow_empty=True)
         if self.evidence is not None:
             _require_text(self.evidence, "evidence")
-        if self.verdict == "approved" and not self.finding_ids and self.evidence is None:
+        if (
+            self.review_evidence is not None
+            and not isinstance(self.review_evidence, ReviewEvidencePayload)
+        ):
+            raise ArtifactValidationError(
+                "review_evidence must be a ReviewEvidencePayload"
+            )
+        if self.evidence is not None and self.review_evidence is not None:
+            raise ArtifactValidationError(
+                "review cannot combine legacy and structured review evidence"
+            )
+        if (
+            self.verdict == "approved"
+            and not self.finding_ids
+            and self.evidence is None
+            and self.review_evidence is None
+        ):
             raise ArtifactValidationError("an approval requires findings or review evidence")
+        if self.red_state_followup_slice is not None:
+            _require_text(
+                self.red_state_followup_slice,
+                "red_state_followup_slice",
+            )
+            if self.verdict != "approved":
+                raise ArtifactValidationError(
+                    "red-state follow-up authorization requires an approved review"
+                )
         if self.transport_schema != "native-claude-review-v2":
             raise ArtifactValidationError("review transport_schema is unsupported")
         if (
@@ -885,6 +927,13 @@ class ArtifactRecord:
 
     def to_dict(self) -> dict[str, Any]:
         raw = asdict(self)
+        if self.record_type is RecordType.REVIEW:
+            payload = raw["payload"]
+            if isinstance(payload, dict):
+                if payload.get("review_evidence") is None:
+                    payload.pop("review_evidence", None)
+                if payload.get("red_state_followup_slice") is None:
+                    payload.pop("red_state_followup_slice", None)
         return _json_value(raw)
 
     def canonical_json(self) -> bytes:
@@ -966,6 +1015,7 @@ def _payload_from_dict(record_type: RecordType, raw: Mapping[str, Any]) -> Artif
     if record_type is RecordType.DIAGNOSTIC:
         return DiagnosticPayload(Role(data["role"]), data["work_unit_id"], data["attempt"], data["output_sha256"], data["reason"])
     if record_type is RecordType.REVIEW:
+        structured_evidence = data.get("review_evidence")
         return ReviewPayload(
             Role(data["reviewer"]),
             data["work_unit_id"],
@@ -975,6 +1025,16 @@ def _payload_from_dict(record_type: RecordType, raw: Mapping[str, Any]) -> Artif
             data["transport_schema"],
             data["request_id"],
             data["response_sha256"],
+            (
+                None
+                if structured_evidence is None
+                else ReviewEvidencePayload(
+                    structured_evidence["dimensions"],
+                    structured_evidence["largest_residual_risk"],
+                    structured_evidence["break_condition"],
+                )
+            ),
+            data.get("red_state_followup_slice"),
         )
     if record_type is RecordType.FINDING_TRANSITION:
         return FindingTransitionPayload(

@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 import git_service
 
+from artifact_bridge import review_payload
+from artifact_models import ArtifactRecord, Fingerprint, FingerprintKind
 from contracts import (
     AgentRole,
     ContractResult,
@@ -858,6 +860,55 @@ def test_commit_accepts_complete_red_attestation_only_with_named_followup(
         ),
         red_state_followup_slice="Slice 10",
     )
+
+    with pytest.raises(
+        GitTransactionError,
+        match="requires its named exception in an approved fingerprint-bound review record",
+    ):
+        commit_slice(
+            repository_root=repository,
+            boundary=boundary,
+            authorization=authorized,
+            title="unrecorded red state",
+        )
+
+    recorded_review = ArtifactRecord.create(
+        run_id="run-red-state",
+        logical_id="review-claude-1-1",
+        revision=1,
+        fingerprint=Fingerprint(
+            FingerprintKind.IMPLEMENTATION,
+            authorization.diff_fingerprint,
+        ),
+        predecessor_ids=(),
+        created_at="2026-08-30T10:00:00+00:00",
+        idempotency_key="review-red-state",
+        payload=review_payload(
+            authorized.claude_review,
+            work_unit_id="1",
+            transport_schema="native-claude-review-v2",
+            request_id=f"native-review-request-{'b' * 64}",
+            response_sha256="c" * 64,
+        ),
+    )
+    authorized = replace(
+        authorized,
+        review_record=recorded_review,
+        review_work_unit_id="2",
+    )
+
+    with pytest.raises(
+        GitTransactionError,
+        match="requires its named exception in an approved fingerprint-bound review record",
+    ):
+        commit_slice(
+            repository_root=repository,
+            boundary=boundary,
+            authorization=authorized,
+            title="wrong work-unit review",
+        )
+
+    authorized = replace(authorized, review_work_unit_id="1")
 
     result = commit_slice(
         repository_root=repository,

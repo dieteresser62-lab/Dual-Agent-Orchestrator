@@ -36,7 +36,8 @@ from native_codex_contract import (
 from native_codex_request import validate_native_codex_provider_response
 from artifact_bridge import (
     ArtifactBridge, ArtifactBridgeError, agent_result_payload, attestation_payload, finding_payload,
-    plan_payload, review_payload, validation_request_payload,
+    plan_payload, review_payload, review_payload_matches_result,
+    validation_request_payload,
     provider_input_measurement_payload,
     finding_handoff_export_payload, finding_handoff_import_payload,
 )
@@ -55,7 +56,7 @@ from artifact_models import (
     RecordType, stable_record_id,
 )
 from artifact_store import ArtifactStore
-from artifact_replay import ArtifactReplayError, replay_artifacts
+from artifact_replay import ArtifactReplayError, ArtifactReplayResult, replay_artifacts
 from finding_reducer import (
     project_finding_response_delta,
     project_reviewer_persistence_transitions,
@@ -1463,18 +1464,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
             raise WorkflowExecutionError(
                 f"native reviewer recovery response no longer validates: {exc}"
             ) from exc
-        expected_verdict = (
-            "stop"
-            if result.stopped
-            else "approved"
-            if result.approval is True
-            else "denied"
-        )
-        if (
-            payload.verdict != expected_verdict
-            or payload.finding_ids
-            != tuple(item.finding_id for item in result.findings)
-        ):
+        if not review_payload_matches_result(payload, result):
             raise WorkflowExecutionError(
                 "native reviewer recovery result differs from its decision record"
             )
@@ -1681,18 +1671,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
             raise WorkflowExecutionError(
                 f"pre-policy native reviewer response no longer validates: {exc}"
             ) from exc
-        expected_verdict = (
-            "stop"
-            if result.stopped
-            else "approved"
-            if result.approval is True
-            else "denied"
-        )
-        if (
-            payload.verdict != expected_verdict
-            or payload.finding_ids
-            != tuple(item.finding_id for item in result.findings)
-        ):
+        if not review_payload_matches_result(payload, result):
             raise WorkflowExecutionError(
                 "pre-policy native reviewer result differs from its decision record"
             )
@@ -2529,6 +2508,74 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 ),
                 unexpected_paths or reviewed_changes.paths,
             )
+        review_result = request.claude_review
+        artifact_bridge = self._artifact_bridge
+        structured_attestation = None
+        approval_records: tuple[ArtifactRecord, ...] = ()
+        current_review_record: ArtifactRecord | None = None
+        structured_binding: tuple[str, tuple[str, ...]] | None = None
+        if artifact_bridge is not None:
+            chain = artifact_bridge.store.load_chain()
+            structured_attestation = next(
+                (
+                    item for item in reversed(chain)
+                    if item.record_type.value == "validation_attestation"
+                    and item.fingerprint.sha256 == request.fingerprint
+                    and item.logical_id == request.attestation.attestation_id
+                ),
+                None,
+            )
+            approval_records = tuple(
+                item
+                for item in chain
+                if isinstance(item.payload, ReviewPayload)
+                and item.payload.verdict == "approved"
+                and item.fingerprint.sha256 == request.fingerprint
+            )
+            current_review_record = next(
+                (
+                    item for item in reversed(approval_records)
+                    if item.payload.work_unit_id
+                    == str(state.current_work_unit_id)
+                ),
+                None,
+            )
+            if structured_attestation is None or not approval_records:
+                raise WorkflowExecutionError(
+                    "structured commit binding requires persisted attestation and approvals"
+                )
+            if structured_attestation.payload != attestation_payload(
+                request.attestation
+            ):
+                raise WorkflowExecutionError(
+                    "structured commit attestation record differs from its state-v3 mirror"
+                )
+            if (
+                current_review_record is None
+                or not review_payload_matches_result(
+                    current_review_record.payload,
+                    review_result,
+                )
+            ):
+                raise WorkflowExecutionError(
+                    "structured commit review record differs from its state-v3 mirror"
+                )
+            if (
+                not request.attestation.passed
+                and current_review_record.payload.red_state_followup_slice
+                != request.red_state_followup_slice
+            ):
+                raise WorkflowExecutionError(
+                    "red-state commit lacks its fingerprint-bound review record authorization"
+                )
+            structured_binding = (
+                structured_attestation.record_id,
+                tuple(item.record_id for item in approval_records),
+            )
+        if (artifact_bridge is None) != (structured_binding is None):
+            raise WorkflowExecutionError(
+                "structured commit binding was not established before the Git transaction"
+            )
         result = commit_slice(
             repository_root=self.root,
             boundary=boundary,
@@ -2536,9 +2583,11 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 slice_id=request.slice_id,
                 diff_fingerprint=request.fingerprint,
                 attestation=request.attestation,
-                claude_review=request.claude_review,
+                claude_review=review_result,
                 findings=request.findings,
                 red_state_followup_slice=request.red_state_followup_slice,
+                review_record=current_review_record,
+                review_work_unit_id=str(state.current_work_unit_id),
                 approved_head_commit=(
                     identity.head if head_approval is not None else None
                 ),
@@ -2548,33 +2597,14 @@ class ProductionWorkflowDriver(WorkflowDriver):
             ),
             title=summary,
         )
-        if self._artifact_bridge is not None:
-            chain = self._artifact_bridge.store.load_chain()
-            attestation = next(
-                (
-                    item for item in reversed(chain)
-                    if item.record_type.value == "validation_attestation"
-                    and item.fingerprint.sha256 == request.fingerprint
-                ),
-                None,
-            )
-            approvals = tuple(
-                item.record_id
-                for item in chain
-                if isinstance(item.payload, ReviewPayload)
-                and item.payload.verdict == "approved"
-                and item.fingerprint.sha256 == request.fingerprint
-            )
-            if attestation is None or not approvals:
-                raise WorkflowExecutionError(
-                    "structured commit binding requires persisted attestation and approvals"
-                )
-            self._artifact_bridge.append(
+        if artifact_bridge is not None and structured_binding is not None:
+            attestation_record_id, approval_record_ids = structured_binding
+            artifact_bridge.append(
                 BindingPayload(
                     binding_kind="commit",
                     target=result.commit_hash,
-                    attestation_id=attestation.record_id,
-                    approval_ids=approvals,
+                    attestation_id=attestation_record_id,
+                    approval_ids=approval_record_ids,
                 ),
                 logical_id=f"commit-{request.slice_id}-{result.commit_hash[:12]}",
                 idempotency_key=f"commit:{request.slice_id}:{request.fingerprint}",
@@ -2670,7 +2700,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 branch=state.branch,
                 task_scope=state.task_scope_patterns,
             )
-            entries = _overall_audit_entries(state)
+            entries = _overall_audit_entries(state, structured_replay)
             if entries:
                 project_overall_audit(document, entries)
                 if structured_replay is not None:
@@ -2705,7 +2735,13 @@ class ProductionWorkflowDriver(WorkflowDriver):
                     approved_at=decision.decided_at,
                     diff_fingerprint=decision.fingerprint,
                 )
-        projection = _audit_projection(state, unit, history, approval)
+        projection = _audit_projection(
+            state,
+            unit,
+            history,
+            approval,
+            structured_replay,
+        )
         if (
             state.execution_mode == TaskMode.PLAN_ONLY.value
             and state.work_plan_path is not None
@@ -2843,6 +2879,7 @@ def _audit_projection(
     unit: WorkUnitRecord,
     history: WorkflowHistory,
     approval: AuthorizedTestChanges | None = None,
+    structured_replay: ArtifactReplayResult | None = None,
 ) -> AuditProjection:
     slice_record = next(item for item in state.slices if item.slice_id == unit.slice_id)
     implementation_ready = (
@@ -2861,12 +2898,46 @@ def _audit_projection(
             or slice_record.status is SliceStatus.COMPLETED
         )
     )
+    latest_review = next(
+        (
+            event.result
+            for event in reversed(history.events)
+            if isinstance(event, ReviewAuditEvent)
+        ),
+        None,
+    )
+    review_record = None
+    if (
+        structured_replay is not None
+        and latest_review is not None
+        and latest_review.validation is not None
+    ):
+        review_record = next(
+            (
+                record
+                for record in reversed(structured_replay.records)
+                if isinstance(record.payload, ReviewPayload)
+                and record.payload.work_unit_id == str(unit.work_unit_id)
+                and record.payload.verdict == "approved"
+                and record.fingerprint.sha256
+                == latest_review.validation.diff_fingerprint
+                and review_payload_matches_result(record.payload, latest_review)
+            ),
+            None,
+        )
     return AuditProjection(
         slice_id=unit.slice_id,
         events=history.events,
         test_approval=approval or _authorized_test_approval(unit),
         implementation_ready=implementation_ready,
         commit_authorized=commit_authorized,
+        red_state_followup_slice=(
+            None
+            if review_record is None
+            else review_record.payload.red_state_followup_slice
+        ),
+        review_record=review_record,
+        review_work_unit_id=str(unit.work_unit_id),
     )
 
 
@@ -3045,7 +3116,10 @@ def _recover_final_review_attestation(
     )
 
 
-def _overall_audit_entries(state: WorkflowState) -> tuple[OverallAuditEntry, ...]:
+def _overall_audit_entries(
+    state: WorkflowState,
+    structured_replay: ArtifactReplayResult | None = None,
+) -> tuple[OverallAuditEntry, ...]:
     histories = _persisted_histories(state)
     entries: list[OverallAuditEntry] = []
     for unit in state.work_units:
@@ -3092,7 +3166,12 @@ def _overall_audit_entries(state: WorkflowState) -> tuple[OverallAuditEntry, ...
                 label=label,
                 summary=summary,
                 scope_paths=scope,
-                projection=_audit_projection(state, unit, history),
+                projection=_audit_projection(
+                    state,
+                    unit,
+                    history,
+                    structured_replay=structured_replay,
+                ),
             )
         )
     return tuple(entries)

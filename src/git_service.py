@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Literal, Sequence
 
+from artifact_bridge import review_payload_matches_result
+from artifact_models import ArtifactRecord, ReviewPayload
 from contracts import (
     AgentRole,
     ContractResult,
@@ -102,6 +104,8 @@ class CommitAuthorization:
     claude_review: ContractResult
     findings: tuple[FindingRecord, ...] = ()
     red_state_followup_slice: str | None = None
+    review_record: ArtifactRecord | None = None
+    review_work_unit_id: str | None = None
     approved_head_commit: str | None = None
     approved_external_paths: tuple[str, ...] = ()
 
@@ -112,6 +116,13 @@ class CommitAuthorization:
         ):
             raise GitTransactionError(
                 "red-state follow-up slice must be non-empty when provided"
+            )
+        if (
+            self.review_work_unit_id is not None
+            and not self.review_work_unit_id.strip()
+        ):
+            raise GitTransactionError(
+                "review work-unit id must be non-empty when provided"
             )
         approved_paths = _normalize_optional_scope_paths(
             self.approved_external_paths
@@ -709,6 +720,7 @@ def _validate_authorization(
     authorization: CommitAuthorization,
     current_fingerprint: str,
 ) -> None:
+    review_result = authorization.claude_review
     if authorization.diff_fingerprint != current_fingerprint:
         raise GitTransactionError("commit authorization fingerprint is stale")
     attestation = authorization.attestation
@@ -720,12 +732,33 @@ def _validate_authorization(
         raise GitTransactionError(
             "commit requires a passing current attestation or named complete red-state exception"
         )
+    if not attestation.passed:
+        review_record = authorization.review_record
+        if (
+            review_record is None
+            or not isinstance(review_record.payload, ReviewPayload)
+            or review_record.payload.verdict != "approved"
+            or review_record.fingerprint.sha256 != current_fingerprint
+            or authorization.review_work_unit_id is None
+            or review_record.payload.work_unit_id
+            != authorization.review_work_unit_id
+            or not review_payload_matches_result(
+                review_record.payload,
+                review_result,
+            )
+            or review_record.payload.red_state_followup_slice
+            != authorization.red_state_followup_slice
+        ):
+            raise GitTransactionError(
+                "red-state commit requires its named exception in an approved "
+                "fingerprint-bound review record"
+            )
     if any(
         finding.finding_class is FindingClass.BLOCKER
         for finding in project_open_set(authorization.findings).findings
     ):
         raise GitTransactionError("commit requires no globally open blockers")
-    for expected_role, result in ((AgentRole.CLAUDE, authorization.claude_review),):
+    for expected_role, result in ((AgentRole.CLAUDE, review_result),):
         if result.reviewer is not expected_role:
             raise GitTransactionError(f"commit requires the {expected_role.value} review role")
         if (

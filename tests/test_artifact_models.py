@@ -26,6 +26,7 @@ from artifact_models import (
     QuotaPausePayload,
     ResumeCheckPayload,
     ReviewPayload,
+    ReviewEvidencePayload,
     Role,
     SliceSpec,
     TaskPayload,
@@ -502,6 +503,61 @@ def test_native_review_transport_fields_roundtrip_together() -> None:
     record = _record(payload)
 
     assert ArtifactRecord.from_dict(record.to_dict()) == record
+
+
+def test_pre_s4a_review_evidence_is_read_as_opaque_legacy_data() -> None:
+    raw = _record(_review(evidence="one | embedded | two | three")).to_dict()
+    assert "review_evidence" not in raw["payload"]
+    assert "red_state_followup_slice" not in raw["payload"]
+
+    loaded = ArtifactRecord.from_dict(raw)
+
+    assert isinstance(loaded.payload, ReviewPayload)
+    assert loaded.payload.evidence == "one | embedded | two | three"
+    assert loaded.payload.review_evidence is None
+    assert loaded.payload.red_state_followup_slice is None
+    assert loaded.to_dict() == raw
+
+
+def test_review_approval_requires_one_evidence_form_in_schema_and_domain() -> None:
+    with pytest.raises(ArtifactValidationError, match="requires findings or review evidence"):
+        ReviewPayload(
+            Role.CLAUDE,
+            "work-01",
+            "approved",
+            (),
+            None,
+            "native-claude-review-v2",
+            CLAUDE_REQUEST_ID,
+            "c" * 64,
+        )
+
+    raw = _record(_review()).to_dict()
+    raw["payload"]["finding_ids"] = []
+    raw["payload"]["evidence"] = None
+    with pytest.raises(ArtifactValidationError, match="schema validation failed"):
+        validate_artifact_document(raw)
+
+
+def test_review_schema_rejects_simultaneous_legacy_and_structured_evidence() -> None:
+    raw = _record(_review(evidence="legacy evidence")).to_dict()
+    raw["payload"]["review_evidence"] = {
+        "dimensions": "correctness",
+        "largest_residual_risk": "mirror drift",
+        "break_condition": "the record differs",
+    }
+
+    with pytest.raises(ArtifactValidationError, match="schema validation failed"):
+        validate_artifact_document(raw)
+    with pytest.raises(ArtifactValidationError, match="cannot combine"):
+        replace(
+            _review(evidence="legacy evidence"),
+            review_evidence=ReviewEvidencePayload(
+                "correctness",
+                "mirror drift",
+                "the record differs",
+            ),
+        )
 
 
 def test_native_review_transport_rejects_foreign_reviewer() -> None:

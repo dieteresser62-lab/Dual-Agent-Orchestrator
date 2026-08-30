@@ -120,8 +120,10 @@ from artifact_replay import replay_artifacts, replay_findings
 from artifact_bridge import (
     ArtifactBridge,
     ArtifactBridgeError,
+    attestation_payload,
     finding_handoff_export_payload,
     finding_payload,
+    review_payload,
 )
 from plan_handoff import render_implementation_task
 from native_codex_contract import (
@@ -670,6 +672,129 @@ def test_commit_backstop_rejects_yes_reviews_bound_to_failed_attestation(
 
     assert _git(repository, "rev-parse", "HEAD") == start_commit
     assert _git(repository, "status", "--short") == "?? runtime.py"
+
+
+def test_structured_red_state_commit_requires_exact_chain_records_before_git(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    repository = _repository(tmp_path, "feature/structured-red-state")
+    start_commit = _git(repository, "rev-parse", "HEAD")
+    changed_path = "runtime.py"
+    (repository / changed_path).write_text("VALUE = 1\n", encoding="utf-8")
+    state = init_workflow_state(
+        run_id="structured-red-state",
+        task_file=str(tmp_path / "task.md"),
+        branch="feature/structured-red-state",
+        branch_base=start_commit,
+        slice_count=1,
+    ).bind_current_slice_git_boundary(
+        start_commit=start_commit,
+        scope_paths=(changed_path,),
+        start_fingerprint="a" * 64,
+    )
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    driver.active_state = state
+    changes = driver.collect_changes(start_commit)
+    bridge = ArtifactBridge(
+        ArtifactStore(repository, state.run_id),
+        now=lambda: "2026-08-30T10:00:00+00:00",
+    )
+    driver._artifact_bridge = bridge
+    monkeypatch.setattr(driver, "assert_structured_decision_context", lambda: None)
+    failing = ValidationAttestation(
+        "validation-red",
+        changes.fingerprint,
+        ("pytest",),
+        (ValidationRecord(ValidationStatus.FAIL, "pytest", 1, "known red"),),
+        "b" * 64,
+        "red pending Slice 10",
+    )
+    review = ContractResult(
+        reviewer=AgentRole.CLAUDE,
+        approval=True,
+        stopped=False,
+        stop_request=None,
+        validation=failing,
+        test_files=(),
+        pre_mortem="The named correction may not restore the failing command.",
+        evidence=ReviewEvidence(
+            "record authority",
+            "the red-state exception is stale",
+            "the review record differs",
+        ),
+        findings=(),
+        anchors=(),
+        red_state_followup_slice="Slice 10",
+    )
+    request = WorkflowCommitRequest(
+        slice_id=1,
+        fingerprint=changes.fingerprint,
+        attestation=failing,
+        claude_review=review,
+        findings=(),
+        red_state_followup_slice="Slice 10",
+    )
+    bridge.append(
+        attestation_payload(failing),
+        logical_id=failing.attestation_id,
+        idempotency_key="attestation:red",
+        fingerprint_sha256=changes.fingerprint,
+    )
+
+    with pytest.raises(
+        WorkflowExecutionError,
+        match="persisted attestation and approvals",
+    ):
+        driver.commit_slice(request)
+    assert _git(repository, "rev-parse", "HEAD") == start_commit
+
+    bridge.append(
+        review_payload(
+            review,
+            work_unit_id=state.current_work_unit_id,
+            transport_schema="native-claude-review-v2",
+            request_id=f"native-review-request-{'c' * 64}",
+            response_sha256="d" * 64,
+        ),
+        logical_id="review-claude-1-1",
+        idempotency_key="review:red",
+        fingerprint_sha256=changes.fingerprint,
+    )
+    passing = replace(
+        failing,
+        records=(
+            ValidationRecord(ValidationStatus.PASS, "pytest", 0, "passed"),
+        ),
+        summary="passed",
+    )
+    with pytest.raises(
+        WorkflowExecutionError,
+        match="attestation record differs from its state-v3 mirror",
+    ):
+        driver.commit_slice(
+            replace(
+                request,
+                attestation=passing,
+                claude_review=replace(
+                    review,
+                    validation=passing,
+                    red_state_followup_slice=None,
+                ),
+                red_state_followup_slice=None,
+            )
+        )
+    assert _git(repository, "rev-parse", "HEAD") == start_commit
+
+    commit_hash = driver.commit_slice(request)
+
+    assert commit_hash == _git(repository, "rev-parse", "HEAD")
 
 
 def test_runtime_context_auto_authorizes_scoped_test_changes_unless_gate_enabled(

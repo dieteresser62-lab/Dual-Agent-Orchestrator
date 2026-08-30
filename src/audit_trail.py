@@ -14,6 +14,8 @@ from artifact_projection import (
     finalize_projection_document,
 )
 from artifact_replay import ArtifactReplayResult
+from artifact_bridge import review_payload_matches_result
+from artifact_models import ArtifactRecord, ReviewPayload
 
 from contracts import (
     AgentRole,
@@ -262,6 +264,8 @@ class AuditProjection:
     implementation_ready: bool | None = None
     commit_authorized: bool | None = None
     red_state_followup_slice: str | None = None
+    review_record: ArtifactRecord | None = None
+    review_work_unit_id: str | None = None
 
     def __post_init__(self) -> None:
         _require_positive_int(self.slice_id, "slice_id")
@@ -278,6 +282,13 @@ class AuditProjection:
         ):
             raise AuditTrailError(
                 "red-state follow-up slice must be non-empty when provided"
+            )
+        if (
+            self.review_work_unit_id is not None
+            and not self.review_work_unit_id.strip()
+        ):
+            raise AuditTrailError(
+                "review work-unit id must be non-empty when provided"
             )
 
         attestations: dict[str, ValidationAttestation] = {}
@@ -302,17 +313,18 @@ class AuditProjection:
                 )
 
         if self.commit_authorized is True:
-            claude = self.latest_review(AgentRole.CLAUDE)
-            if claude is None or claude.result.approval is not True:
+            review_event = self.latest_review(AgentRole.CLAUDE)
+            if review_event is None or review_event.result.approval is not True:
                 raise AuditTrailError(
                     "commit authorization requires an approving Claude review"
                 )
+            review_result = review_event.result
             if (
-                claude.result.validation is None
+                review_result.validation is None
                 or not (
-                    claude.result.validation.passed
+                    review_result.validation.passed
                     or (
-                        claude.result.validation.complete
+                        review_result.validation.complete
                         and self.red_state_followup_slice is not None
                     )
                 )
@@ -320,15 +332,37 @@ class AuditProjection:
                 raise AuditTrailError(
                     "commit authorization requires Claude to be bound to a passing "
                     "attestation or named complete red-state exception"
-                )
+            )
             if (
-                not claude.result.validation.passed
-                and claude.result.red_state_followup_slice
+                not review_result.validation.passed
+                and review_result.red_state_followup_slice
                 != self.red_state_followup_slice
             ):
                 raise AuditTrailError(
                     "commit authorization red-state follow-up differs from Claude review"
                 )
+            if not review_result.validation.passed:
+                review_record = self.review_record
+                if (
+                    review_record is None
+                    or not isinstance(review_record.payload, ReviewPayload)
+                    or review_record.payload.verdict != "approved"
+                    or self.review_work_unit_id is None
+                    or review_record.payload.work_unit_id
+                    != self.review_work_unit_id
+                    or review_record.fingerprint.sha256
+                    != review_result.validation.diff_fingerprint
+                    or not review_payload_matches_result(
+                        review_record.payload,
+                        review_result,
+                    )
+                    or review_record.payload.red_state_followup_slice
+                    != self.red_state_followup_slice
+                ):
+                    raise AuditTrailError(
+                        "red-state audit authorization requires its named exception "
+                        "in an approved fingerprint-bound review record"
+                    )
 
     def latest_review(self, reviewer: AgentRole) -> ReviewAuditEvent | None:
         matches = (

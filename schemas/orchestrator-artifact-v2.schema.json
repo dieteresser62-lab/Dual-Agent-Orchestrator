@@ -99,8 +99,12 @@
     },
     "review": {
       "type": "object", "additionalProperties": false, "required": ["reviewer", "work_unit_id", "verdict", "finding_ids", "evidence", "transport_schema", "request_id", "response_sha256"],
-      "properties": {"reviewer": {"const": "claude"}, "work_unit_id": {"$ref": "#/$defs/identifier"}, "verdict": {"enum": ["approved", "denied", "stop"]}, "finding_ids": {"$ref": "#/$defs/finding_ids"}, "evidence": {"type": ["string", "null"], "minLength": 1}, "transport_schema": {"const": "native-claude-review-v2"}, "request_id": {"type": "string", "pattern": "^native-review-request-[0-9a-f]{64}$"}, "response_sha256": {"$ref": "#/$defs/sha256"}},
-      "allOf": [{"if": {"properties": {"verdict": {"const": "approved"}}}, "then": {"anyOf": [{"properties": {"finding_ids": {"minItems": 1}}}, {"properties": {"evidence": {"type": "string"}}}]}}]
+      "properties": {"reviewer": {"const": "claude"}, "work_unit_id": {"$ref": "#/$defs/identifier"}, "verdict": {"enum": ["approved", "denied", "stop"]}, "finding_ids": {"$ref": "#/$defs/finding_ids"}, "evidence": {"type": ["string", "null"], "minLength": 1}, "review_evidence": {"oneOf": [{"$ref": "#/$defs/review_evidence"}, {"type": "null"}]}, "red_state_followup_slice": {"type": ["string", "null"], "minLength": 1}, "transport_schema": {"const": "native-claude-review-v2"}, "request_id": {"type": "string", "pattern": "^native-review-request-[0-9a-f]{64}$"}, "response_sha256": {"$ref": "#/$defs/sha256"}},
+      "allOf": [{"if": {"properties": {"verdict": {"const": "approved"}}}, "then": {"anyOf": [{"properties": {"finding_ids": {"minItems": 1}}}, {"properties": {"evidence": {"type": "string"}}}, {"properties": {"review_evidence": {"$ref": "#/$defs/review_evidence"}}, "required": ["review_evidence"]}]}}, {"if": {"properties": {"red_state_followup_slice": {"type": "string"}}, "required": ["red_state_followup_slice"]}, "then": {"properties": {"verdict": {"const": "approved"}}}}, {"if": {"properties": {"evidence": {"type": "string"}}, "required": ["evidence"]}, "then": {"properties": {"review_evidence": {"type": "null"}}}}, {"if": {"properties": {"review_evidence": {"$ref": "#/$defs/review_evidence"}}, "required": ["review_evidence"]}, "then": {"properties": {"evidence": {"type": "null"}}}}]
+    },
+    "review_evidence": {
+      "type": "object", "additionalProperties": false, "required": ["dimensions", "largest_residual_risk", "break_condition"],
+      "properties": {"dimensions": {"$ref": "#/$defs/non_empty"}, "largest_residual_risk": {"$ref": "#/$defs/non_empty"}, "break_condition": {"$ref": "#/$defs/non_empty"}}
     },
     "finding_transition": {
       "type": "object", "additionalProperties": false, "required": ["finding_id", "reporter", "actor", "action", "severity", "finding_status", "rationale"],

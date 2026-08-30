@@ -752,6 +752,8 @@ die Export-Planbindung in A02/B03.
 | Meldungsstamm/Prüfung | Kante |
 |---|---|
 | `structured reviewer decisions differ from the state-v3 mirror` | B07 |
+| `structured commit review record differs from its state-v3 mirror` | B07 |
+| `structured commit attestation record differs from its state-v3 mirror` | B07 |
 | `provider attempt measurement context diverged` | A11/B04 |
 | `authoritative finding replay differs from the state-v3 mirror` | B07 |
 | `record-native finding carry-forward differs from the state-v3 mirror` | B07 |
@@ -926,6 +928,132 @@ dem normativen Zustand entfernt.
 | `runtime_history.codex_final_report` und weitere rohe Agenttexte | Agentresultatpfad | Abschlussbericht/Folgeprompt | **nein aus Records**; Record bindet nur `response_sha256`, Bytes liegen extern im Cache | **STOP**: Contentrecord/Blobauthority oder beweisbar entbehrlicher Cache |
 | `runtime_history.active_review_packet` | Reviewpacketbuilder | Recovery/Providerrequest | **nein aus Records**; content-addressed Cache ist nicht Teil des Recordpräfixes | **STOP**: kanonisch aus Records neu bauen oder Blob binden |
 | sonstige `runtime_history`-Event-/Auditfelder | Engine/Serialisierung | Audit und Resume-Helfer | **nur teilweise**; IDs lassen sich erzeugen, heutige Reihenfolge/Metadaten sind nicht vollständig spezifiziert | **STOP**, bis die Projektionsfunktion und nicht-normative Felder festgelegt sind |
+
+### S4a-Sortierung der STOP-Einträge
+
+Die folgende Tabelle ist die verbindliche Auflösung der vierzig fett als
+`STOP` markierten Zeilen oben. Jede Zeile kommt genau einmal vor. `A` benennt
+den benötigten Recordtyp, das Feld und den heutigen beziehungsweise künftigen
+Schreiber. `B` benennt die tatsächlichen Leser und begründet, weshalb deren
+Entscheidungen den Mirrorwert nicht benötigen. `C` benennt den vollständigen
+Ableitungsweg aus dem akzeptierten Recordpräfix. Die Zeitfelder des State sind
+zusätzlich aufgenommen, obwohl ihre Ursprungszeile nur einen bedingten und
+keinen fett markierten STOP enthält.
+
+| Statefeld/Fakt | Gruppe | Begründung und Record-/Ableitungsweg |
+|---|:---:|---|
+| `task_file` | A | `RunIdentityPayload.task_file`; Schreiber: Initialisierung in `ProductionWorkflowDriver` vor dem ersten Resume-/Watch-Handoff. CLI, Watch und Handoff lesen den Pfad zur Identitäts- und Queuezuordnung. |
+| `branch` | A | `RunIdentityPayload.branch`; Schreiber: Repositoryinitialisierung nach Prüfung der tatsächlich aktiven Branch. `TaskPayload.target_branch` ersetzt diese gemessene Identität nicht. |
+| `branch_base` | A | `RunIdentityPayload.branch_base`; Schreiber: Repositoryinitialisierung. Diff-, Scope- und Commitlogik lesen die exakte Git-Startgrenze. |
+| `execution_mode` | A | `RunIdentityPayload.execution_mode`; Schreiber: Taskparser/Initialisierung. Das Workflowrouting liest den Modus bereits vor der ersten Work-unit. |
+| `audit_report_path` | A | `RunIdentityPayload.audit_report_path`; Schreiber: Taskparser/Initialisierung. Auditprojektion und Correction-Reportrouting führen davon Dateischreibziele und Scope ab. |
+| `created_at`, `updated_at` | B | Leser sind `WorkflowState.to_dict()/from_dict()`, `state_io` sowie die Diagnoseausgabe; `orchestrator` verwendet `updated_at` nur als Anzeigewert für das ebenfalls nicht normative `decided_at`. Kein Routing-, Authority-, Retry- oder Side-effect-Entscheid hängt von beiden Zeiten ab. Nach S4b sind sie volatile Projektionsmetadaten aus Recordzeiten und nicht Teil semantischer Gleichheit. |
+| `current_slice_id`, `current_work_unit_id`, `current_step` | A | `WorkflowTransitionPayload.slice_id/work_unit_id/step`; Schreiber: `WorkflowEngine` an jeder Dispatch-, Gate-, Resume- und Completionkante. Der Cursor steuert den nächsten Aufruf. |
+| `slices[*].status` | A | `WorkflowTransitionPayload.slice_status`; Schreiber: `WorkflowState`-Transitionsmethoden über den Engine-Treiber. Routing, Commit und Completion lesen den Status. |
+| `slices[*].start_commit` | A | `SliceBoundaryPayload.start_commit`; Schreiber: `begin_slice()`/Sliceinitialisierung vor Scopeprüfung und Side Effect. |
+| `slices[*].scope_change_groups` | A | `SliceBoundaryPayload.scope_change_groups`; Schreiber: Plan-/Scopebindung in `WorkflowState`. Die Gruppen sind Eingabe der Scopevalidation und nicht aus der flachen Pfadmenge rekonstruierbar. |
+| `slices[*].start_fingerprint` | A | `SliceBoundaryPayload.start_fingerprint`; Schreiber: Repositorymessung beim Binden der Slice-Git-Grenze. Change-, Correction- und Resumeprüfung lesen ihn. |
+| `work_units[*].status` | A | `WorkflowTransitionPayload.work_unit_status`; Schreiber: Engine an Dispatch-, Wait-, Gate-, Resume- und Completionkanten. |
+| `work_units[*].current_step` | A | `WorkflowTransitionPayload.step`; Schreiber: Engine unmittelbar vor beziehungsweise nach jeder ausführbaren Operation. |
+| `work_units[*].codex_return_count` | A | `WorkflowPolicyPayload.codex_return_count`; Schreiber: `record_review_denial()` bei jedem normalen Rücklauf sowie die Iteration-limit-Fortsetzung mit ihrem unveränderten Zählerstand. Denied Reviews allein reichen nicht, weil die Fortsetzung `max_codex_returns` erhöht, ohne diesen Zähler mitzuerhöhen. |
+| `work_units[*].max_codex_returns` | A | `WorkflowPolicyPayload.max_codex_returns`; Schreiber: Work-unit-Initialisierung und explizite Iteration-limit-Fortsetzung. Der Wert autorisiert oder sperrt einen weiteren Codex-Rücklauf. |
+| `work_units[*].reviewer` | C | Vor dem ersten Review ist der Wert `None`; danach ist er die Rolle des ersten beziehungsweise letzten denied `ReviewPayload` derselben Work-unit. Schema 2 erlaubt dafür ausschließlich `Role.CLAUDE`; `record_review_denial()` übernimmt genau diese Rolle. |
+| `work_units[*].completed_side_effects` | A | `SideEffectPayload.effect_key/phase/result`; Schreiber: jeweiliger Side-effect-Wrapper vor und nach Git-, Provider-, Datei- oder Queueoperation. Resume und Idempotenz lesen das Ledger. |
+| `work_units[*].active_test_fingerprint`, `active_test_paths` | A | `GateTransitionPayload.active_test_fingerprint/paths`; Schreiber: Testchange-Gate nach exakter Scopeentscheidung. Testscope und Resume lesen beide Werte gemeinsam. |
+| aktueller `gate.status/reason/detail/fingerprint/paths/resume_step` | A | `GateTransitionPayload.status/reason/detail/fingerprint/paths/resume_step`; Schreiber: Gatepolicy bei Pending, Clear und Resume. Der aktuelle Dispatch hängt unmittelbar davon ab. |
+| `gate_decisions[*].paths` und `resume_step` | A | `GateDecisionPayload.paths/resume_step`; Schreiber: User-/Policyentscheidung in `persist_gate_decision()`. Resume und Testscope benötigen die exakte Bindung. |
+| `gate_decisions[*].decided_by` | B | Leser sind `_authorized_test_approval()`, `_overall_audit_entries()` und `workflow._authorized_test_changes()` über `AuthorizedTestChanges.approved_by`; sie rendern den freien Anzeigenamen nur im Audit. `has_gate_approval()` prüft ihn nicht. Die normative Authority bleibt verlustfrei `GatePayload.authority`; der freie State-String entfällt. |
+| `gate_decisions[*].decided_at` | B | Leser sind `_authorized_test_approval()`, `_overall_audit_entries()` und `workflow._authorized_test_changes()` über `AuthorizedTestChanges.approved_at`; keine Gate-, Commit- oder Resumeentscheidung prüft die Zeit. Für Anzeige genügt `ArtifactRecord.created_at`, ohne Gleichheit mit dem alten Mirrorzeitpunkt zu behaupten. |
+| `invocation_failures[*].invocation_id`, `idempotency_key` | A | `InvocationFailurePayload.invocation_id/idempotency_key`; Schreiber: Providerfehlerpfad vor Retry-/Pauseentscheidung. Resume und Deduplikation lesen beide IDs. |
+| `invocation_failures[*].provider_text/received_at/step/slice_id/work_unit_id/diagnostic_exit_code` | A | Gleichnamige Felder in `InvocationFailurePayload`; Schreiber: klassifizierter Providerfehlerpfad. Resume, Diagnose und Exitpolicy lesen diese Zuordnung. |
+| `invocation_failures[*].parse_path/source_timezone/reset_at_utc/safety_margin_seconds` | A | Gleichnamige Felder in `InvocationFailurePayload`; Schreiber: Quota-Parser/Scheduler. Die nächste zulässige Ausführung hängt davon ab. |
+| `invocation_failures[*].auto_resume_count/automatic_resume/diff_fingerprint` | A | Gleichnamige Felder in `InvocationFailurePayload` plus Transitionrevision; Schreiber: Retry-/Resume-Policy. Automatisches Resume und Repository-Ack lesen die Entscheidung. |
+| `protocol_binding.mode/schema/transports` | C | Der erste akzeptierte `ArtifactRecord.schema_version == "2"` legt `mode=structured-v2` und `schema_version=2` fest. Das geschlossene Schema 2 erzwingt für `AgentResultPayload.transport_schema` den Wert `native-codex-v2` und für `ReviewPayload.transport_schema` `native-claude-review-v2`; andere Transporte sind in diesem Präfix unzulässig. |
+| `protocol_binding.codex_profile/claude_profile` | A | `RunProfilePayload.codex_model/codex_effort/claude_model/claude_effort`; Schreiber: CLI-/Taskdefault vor dem ersten Providerstart. `ProviderAttemptPayload` bestätigt die Bindung je Aufruf, kommt für die Erstentscheidung aber zu spät. |
+| `ContractResult.red_state_followup_slice` in `runtime_history.reviews/latest_claude_review` | A | **In S4a geschlossen:** `ReviewPayload.red_state_followup_slice`; Schreiber: `ProductionWorkflowDriver.persist_native_review_contract()`. Audit- und Git-Autorisierung verlangen nun den approved Review-Record derselben Work-unit und desselben Fingerprints; ein Mirrorwert allein autorisiert keinen Red-State-Commit. Der aktuelle native-v2-Konverter setzt das Feld stets auf `None`, daher kann der heutige Transport keinen neuen Red-State-Review erzeugen. Das spätere Durchreichen aus `StepContract` über `NativeReviewContext` in `ContractResult` bleibt ein ausdrücklich benannter Folgepunkt und ist nicht Teil dieses Record-Slice. |
+| `ContractResult.test_files` | A | `ReviewPayload.test_files`; Schreiber: `persist_native_review_contract()` aus dem exakten `NativeReviewContext`. Die Produktivkonfiguration befüllt `expected_test_files` nicht zuverlässig aus dem vorherigen `AgentResultPayload`, deshalb ist die heutige Mirrorprojektion nicht allgemein aus dessen Record ableitbar. |
+| `ContractResult.pre_mortem` | A | `ReviewPayload.pre_mortem`; Schreiber: `persist_native_review_contract()`. Approvalpolicy und Audit lesen den reviewer-eigenen Text. |
+| `ContractResult.anchors` | A | `ReviewAnchorPayload`-Liste mit allen Anchorfeldern, an den Review-Record gebunden; Schreiber: `persist_native_review_contract()`. Anchorpolicy und Audit lesen die Struktur. |
+| `ContractResult.stop_request` | A | `ReviewPayload.stop_request.rule_id/rationale/remediation_paths`; Schreiber: `persist_native_review_contract()`. `verdict="stop"` allein rekonstruiert Ursache und Remediation nicht. |
+| `ContractResult.validation` | A | `ReviewValidationBindingPayload.review_record_id/attestation_record_id`; Schreiber: `persist_native_review_contract()` nach der Attestation. Die vollständige Projektion hängt zusätzlich von den unten genannten Validation-Contentrecords ab. |
+| `ContractResult.evidence.dimensions/largest_residual_risk/break_condition` | A | **In S4a geschlossen:** `ReviewPayload.review_evidence` mit drei gleichnamigen Feldern; Schreiber: `persist_native_review_contract()`. Neue Records schreiben das alte Stringfeld nie. |
+| `ValidationRecord.output` | A | `ValidationContentPayload.command/result_record_id/output_bytes`; Schreiber: Validator unmittelbar mit `ValidationAttestationPayload`. Reviewpacket, Audit und Diagnose lesen die Bytes. |
+| `ValidationAttestation.output_digest` | A | `ValidationContentPayload.raw_stdout/raw_stderr` plus `ValidationAttestationPayload.output_digest`; Schreiber: Validator. Der Digest bindet heute ungekürzte Ausgaben und ist aus den Digests der kompakten Recordausgaben nicht ableitbar. |
+| `runtime_history.latest_claude_review` als Aggregat | A | Kein zweiter Aggregatrecord: Projektion aus `ReviewPayload`, `ReviewAnchorPayload`, `ReviewValidationBindingPayload`, Finding-Transitionen und den zugehörigen Contentrecords; Schreiber sind die jeweiligen Review-/Validationpersistenzen. Bis diese Komponenten vollständig sind, bleibt der Aggregatleser gesperrt. |
+| `runtime_history.codex_final_report` und weitere rohe Agenttexte | A | `ProviderContentPayload.response_sha256/content_bytes/content_kind`; Schreiber: Providerabschluss vor Cache-/Mirrorwrite. Abschlussbericht und Folgeprompt lesen die bytes, nicht nur deren Digest. |
+| `runtime_history.active_review_packet` | A | `ReviewPacketPayload.fingerprint/manifest/content_bytes`; Schreiber: `build_review_packet()` vor Providerstart. Recovery und Providerrequest lesen die kanonischen Bytes. |
+| sonstige `runtime_history`-Event-/Auditfelder | A | `WorkflowEventPayload.event_kind/work_unit_id/slice_id/round_number/record_refs` für noch nicht durch die fachlichen Records abgedeckte Ereignisse; Schreiber: `_record_review()`, Validation- und Transitionpfade. Erst danach darf ein reiner Audit-/Resume-Projektionsanteil als B entfernt werden. |
+
+#### Entscheidung zu Schema 2 und Bestandsrecords
+
+S4a erweitert den geschlossenen `ReviewPayload` additiv um die optionalen Felder
+`review_evidence` und `red_state_followup_slice`; `schema_version` und beide
+nativen Transportversionen bleiben unverändert bei 2. Das ist keine Änderung
+der Bedeutung vorhandener Bytes: Alte Records ohne die neuen Properties werden
+weiter gelesen. Ihr `evidence`-String bleibt dabei **opak**. Er wird weder an
+`" | "` geteilt noch in drei vermeintliche Felder umgedeutet. Nur neue Records
+schreiben das strukturierte Objekt. Ein alter Review ohne
+`red_state_followup_slice` kann keine rote Attestation autorisieren.
+
+Die korrigierte S4a-Bestandsprüfung fand 32 persistierte Review-Records. Der
+Record `ar1-c24d40d2bcf557f302bf3b64414ea5142bd8e11f3814315e1013547ab73bbfe3`
+im Run `watch-20260826-122718.749752Z-ffce3cc1140c` enthält im Legacyfeld
+`evidence` drei `" | "`-Trenner. Damit ist mindestens eine Feldgrenze bereits
+nicht mehr aus dem Record rekonstruierbar.
+
+Die am 30. August 2026 bestätigte Bestandsdatenentscheidung lautet: Alte
+Records und ihre immutable Kette bleiben unverändert; Legacy-`evidence` wird
+als ein opaker String gelesen und niemals heuristisch geteilt. Die verlorenen
+Feldgrenzen gelten als nicht verfügbar. Eine spätere Migration ist nur aus
+einer authentisch request-/response-digest-gebundenen Originalantwort erlaubt,
+nie aus dem Trennzeichenstring. Fehlt diese Quelle, bleibt der Record als
+Legacyformat auditierbar, liefert aber keine drei strukturierten Evidencefelder.
+Neue Records schreiben ausschließlich das strukturierte Objekt.
+
+### S4a-Schnittvorschlag für die verbleibenden Gruppe-A-Einträge
+
+1. **Runidentität sowie frühe Protokoll-/Profilbindung.** `task_file`, `branch`,
+   `branch_base`, `execution_mode`, `audit_report_path` und beide Agentprofile.
+   Module: `workflow_state.py`, `orchestrator.py`, `artifact_models.py`,
+   `artifact_bridge.py`, Schema und Resume/Migration. Muss vor allen weiteren
+   Bündeln landen, weil bereits der erste Dispatch diese Fakten liest.
+2. **Cursor und Work-unit-/Slice-Status.** Aktuelle IDs/Steps, beide Statusarten,
+   `codex_return_count` und `max_codex_returns`. Module: `workflow_state.py`, `workflow.py`,
+   `artifact_models.py`, `artifact_replay.py`, `artifact_migration.py`. Benötigt
+   Bündel 1 und muss vor Side-effect-Reconciliation vorhanden sein.
+3. **Slice-Startgrenze und Scopefingerprint.** `start_commit`,
+   `scope_change_groups`, `start_fingerprint`. Module: `git_service.py`,
+   `repo_changes.py`, `workflow_state.py`, Recordmodell/Replay. Benötigt Run- und
+   Cursoridentität; Gate- und Commitrecords bauen darauf auf.
+4. **Side-effect-Ledger.** `completed_side_effects` als Intent-/Resultatpaare für
+   Git, Provider, Dateien und Queue. Module: `workflow.py`, `orchestrator.py`,
+   `inbox_watcher.py`, `git_service.py`, Store/Replay. Benötigt Bündel 1 bis 3;
+   liefert anschließend die Crashfenster-Reconciliation für S4b.
+5. **Gate-Transitionen.** Aktueller Gatezustand, aktive Testbindung sowie
+   Decision-`paths`/`resume_step`; die beiden B-Zeit-/Anzeigefelder entfallen.
+   Module: `workflow_state.py`, `workflow.py`, `orchestrator.py`,
+   `artifact_models.py`, Replay/Migration. Benötigt Cursor und Scopegrenze.
+6. **Failure-/Retry-Policy.** Alle vier Invocation-Failure-Zeilen einschließlich
+   Identitäten, Parserdiagnose, Scheduling und Auto-Resume. Module:
+   `failure_classification.py`, `agent_runtime.py`, `workflow_state.py`,
+   `workflow.py`, `orchestrator.py`, Replay/Migration. Benötigt Cursor, Profile
+   und Side-effect-Ledger.
+7. **Verbleibende Review-Contractfelder.** `test_files`, `pre_mortem`, `anchors`,
+   `stop_request`, Validationbindung und die daraus entstehende
+   `latest_claude_review`-Projektion. Module: `contracts.py`,
+   `native_review_contract.py`, `artifact_models.py`, `artifact_bridge.py`,
+   `artifact_replay.py`, `audit_trail.py`. Kann nach Bündel 1 bis 3 erfolgen;
+   Validationbindung benötigt Bündel 8.
+8. **Blob-/Contentauthority.** Validationoutput und -digest, rohe Agenttexte und
+   aktive Reviewpackets. Module: `validation_matrix.py`, `review_packets.py`,
+   `agent_runtime.py`, `orchestrator.py`, Store/Schema/Replay. Muss vor dem
+   Abschluss von Bündel 7 und vor dem Cutover liegen.
+9. **Restliche Historyprojektion.** Nur die nach Bündel 1 bis 8 noch
+   verbleibenden Event-/Auditfelder; normativen Rest recorden, reine
+   Darstellungswerte explizit entfernen. Module: `workflow.py`,
+   `audit_trail.py`, `artifact_projection.py`, `artifact_migration.py`. Dieses
+   Abschlussbündel hängt von allen vorigen ab und liefert die unmittelbare
+   S4b-Vorbedingung.
 
 ### Nicht im State, aber für Recovery relevante Caches/Side Effects
 

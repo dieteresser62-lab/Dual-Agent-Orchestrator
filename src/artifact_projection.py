@@ -229,6 +229,29 @@ def render_replay_sections(replay: ArtifactReplayResult) -> Mapping[str, str]:
                 f"`{response_sha256}` |",
                 "",
             ))
+            if payload.review_evidence is not None:
+                reviews[payload.reviewer].extend((
+                    "#### Strukturierte Reviewevidenz",
+                    "",
+                    f"- Prüfdimensionen: {_prose(payload.review_evidence.dimensions)}",
+                    f"- Größtes Restrisiko: {_prose(payload.review_evidence.largest_residual_risk)}",
+                    f"- Realistische Bruchbedingung: {_prose(payload.review_evidence.break_condition)}",
+                    "",
+                ))
+            elif payload.evidence is not None:
+                reviews[payload.reviewer].extend((
+                    "#### Opake Legacy-Reviewevidenz",
+                    "",
+                    f"- Unzerlegter Bestandswert: {_prose(payload.evidence)}",
+                    "",
+                ))
+            if payload.red_state_followup_slice is not None:
+                reviews[payload.reviewer].extend((
+                    "#### Red-State-Autorisierung",
+                    "",
+                    f"- Gebundene Folgeslice: `{_safe(payload.red_state_followup_slice)}`",
+                    "",
+                ))
         elif isinstance(payload, FindingTransitionPayload):
             round_number = work_unit_rounds.get(payload.work_unit_id or "", "–")
             line = (
