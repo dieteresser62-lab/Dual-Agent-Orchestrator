@@ -427,24 +427,21 @@ class ArtifactBridge:
         fingerprint_kind: FingerprintKind = FingerprintKind.IMPLEMENTATION,
     ) -> ArtifactRecord:
         fingerprint = Fingerprint(fingerprint_kind, fingerprint_sha256)
-        chain = self.store.load_chain()
-        existing = next(
-            (item for item in chain if item.idempotency_key == idempotency_key), None
+        context = self.store.append_context(
+            record_type=payload.record_type,
+            logical_id=logical_id,
+            idempotency_key=idempotency_key,
         )
+        existing = context.existing
         if existing is not None:
             self._assert_equal(existing, payload, logical_id, fingerprint)
             return existing
-        revisions = [
-            item.revision
-            for item in chain
-            if item.record_type is payload.record_type and item.logical_id == logical_id
-        ]
         record = ArtifactRecord.create(
             run_id=self.store.run_id,
             logical_id=logical_id,
-            revision=max(revisions, default=0) + 1,
+            revision=context.next_revision,
             fingerprint=fingerprint,
-            predecessor_ids=((chain[-1].record_id,) if chain else ()),
+            predecessor_ids=context.predecessor_ids,
             created_at=self.now(),
             idempotency_key=idempotency_key,
             payload=payload,

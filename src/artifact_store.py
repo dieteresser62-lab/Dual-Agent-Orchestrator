@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import hashlib
 import json
 import logging
@@ -24,6 +25,7 @@ _RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
 _RECORD_NAME_RE = re.compile(r"^(ar1-[0-9a-f]{64})\.json$")
 logger = logging.getLogger(__name__)
 _INVALID_CACHE = object()
+_EMPTY_CHAIN_SHA256 = hashlib.sha256(b"artifact-chain-v1").hexdigest()
 
 
 class ArtifactStoreError(ValueError):
@@ -36,6 +38,43 @@ class ArtifactConflictError(ArtifactStoreError):
 
 class ArtifactCorruptionError(ArtifactStoreError):
     """Raised when persisted bytes do not form one valid append-only chain."""
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactAppendContext:
+    """Derived lookup facts needed to construct one append candidate."""
+
+    existing: ArtifactRecord | None
+    next_revision: int
+    predecessor_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _RecordsDirectoryStamp:
+    exists: bool
+    modified_ns: int | None
+    changed_ns: int | None
+
+
+@dataclass(slots=True)
+class _AppendIndex:
+    """Process-local derivative of one fully validated record prefix."""
+
+    by_idempotency_key: dict[str, tuple[str, ArtifactRecord]]
+    record_ids: set[str]
+    revision_keys: set[tuple[RecordType, str, int]]
+    max_revisions: dict[tuple[RecordType, str], int]
+    head_record_id: str | None
+    record_count: int
+    chain_sha256: str
+    records_dir_stamp: _RecordsDirectoryStamp
+
+    def head_document(self) -> dict[str, object]:
+        return {
+            "head_record_id": self.head_record_id,
+            "record_count": self.record_count,
+            "chain_sha256": self.chain_sha256,
+        }
 
 
 class ArtifactStore:
@@ -57,6 +96,25 @@ class ArtifactStore:
         self.run_dir = self._confined(root / ".orchestrator" / "artifacts" / run_id)
         self.records_dir = self._confined(self.run_dir / "records")
         self.head_path = self._confined(self.run_dir / "head.json")
+        self._append_index: _AppendIndex | None = None
+
+    def append_context(
+        self,
+        *,
+        record_type: RecordType,
+        logical_id: str,
+        idempotency_key: str,
+    ) -> ArtifactAppendContext:
+        """Return append lookup facts without rescanning an unchanged chain."""
+        index = self._ensure_append_index()
+        existing = index.by_idempotency_key.get(idempotency_key)
+        return ArtifactAppendContext(
+            existing=None if existing is None else existing[1],
+            next_revision=index.max_revisions.get((record_type, logical_id), 0) + 1,
+            predecessor_ids=(
+                () if index.head_record_id is None else (index.head_record_id,)
+            ),
+        )
 
     def put(self, record: ArtifactRecord) -> ArtifactRecord:
         """Append ``record`` or return the matching idempotent prior write.
@@ -74,30 +132,26 @@ class ArtifactStore:
             raise ArtifactConflictError(
                 f"record run_id {record.run_id!r} does not match store {self.run_id!r}"
             )
-        chain = self.load_chain()
+        index = self._ensure_append_index()
         semantic = _semantic_digest(record)
-        for persisted in chain:
-            if persisted.idempotency_key == record.idempotency_key:
-                if _semantic_digest(persisted) != semantic:
-                    raise ArtifactConflictError(
-                        f"idempotency key {record.idempotency_key!r} has conflicting content"
-                    )
-                return persisted
-        if any(item.record_id == record.record_id for item in chain):
+        existing = index.by_idempotency_key.get(record.idempotency_key)
+        if existing is not None:
+            if existing[0] != semantic:
+                raise ArtifactConflictError(
+                    f"idempotency key {record.idempotency_key!r} has conflicting content"
+                )
+            return existing[1]
+        if record.record_id in index.record_ids:
             raise ArtifactConflictError(
                 f"record_id {record.record_id!r} already exists with another idempotency key"
             )
-        if any(
-            item.record_type == record.record_type
-            and item.logical_id == record.logical_id
-            and item.revision == record.revision
-            for item in chain
-        ):
+        revision_key = (record.record_type, record.logical_id, record.revision)
+        if revision_key in index.revision_keys:
             raise ArtifactConflictError(
                 "duplicate revision for record_type/logical_id"
             )
 
-        expected_head = chain[-1].record_id if chain else None
+        expected_head = index.head_record_id
         if expected_head is None:
             if record.predecessor_ids:
                 raise ArtifactConflictError("the first record cannot have predecessors")
@@ -105,8 +159,9 @@ class ArtifactStore:
             raise ArtifactConflictError(
                 f"record predecessor does not match current head {expected_head!r}"
             )
-        known = {item.record_id for item in chain}
-        missing = [item for item in record.predecessor_ids if item not in known]
+        missing = [
+            item for item in record.predecessor_ids if item not in index.record_ids
+        ]
         if missing:
             raise ArtifactConflictError(f"record references missing predecessor {missing[0]!r}")
         _validate_store_invariants(record)
@@ -122,21 +177,61 @@ class ArtifactStore:
         target = self._record_path(record.record_id)
         if target.exists():
             # A concurrent/crash-recovery publication is resolved by a fresh scan.
+            self._append_index = None
             recovered = self.load_chain()
             for persisted in recovered:
                 if persisted.idempotency_key == record.idempotency_key:
                     if _semantic_digest(persisted) == semantic:
                         return persisted
             raise ArtifactConflictError(f"record target already exists: {target.name}")
-        _atomic_write(target, envelope)
+        try:
+            _atomic_write(target, envelope)
+            published = _read_record(target)
+            if published != record:
+                raise ArtifactCorruptionError(
+                    "published record differs from the append candidate"
+                )
+            _validate_store_invariants(published, persisted=True)
 
-        # Re-scan published bytes before advertising the new head. If the cache
-        # update fails, the next scan reconstructs it from the record files.
-        published = self._load_chain(expected_cache_chain=chain)
-        result = next((item for item in published if item.record_id == record.record_id), None)
-        if result is None:
-            raise ArtifactCorruptionError("published record was not recovered by store scan")
-        return result
+            # A second writer which completed its own cache update after our
+            # pre-write guard makes the prior proof stale.  Re-scan instead of
+            # letting either cache choose the winner.
+            if not self._head_cache_matches(index):
+                self._append_index = None
+                recovered = self.load_chain()
+                result = next(
+                    (item for item in recovered if item.record_id == record.record_id),
+                    None,
+                )
+                if result is None:
+                    raise ArtifactCorruptionError(
+                        "published record was not recovered by store scan"
+                    )
+                return result
+
+            prior_document = index.head_document()
+            index.by_idempotency_key[record.idempotency_key] = (semantic, published)
+            index.record_ids.add(record.record_id)
+            index.revision_keys.add(revision_key)
+            revision_identity = (record.record_type, record.logical_id)
+            index.max_revisions[revision_identity] = max(
+                record.revision,
+                index.max_revisions.get(revision_identity, 0),
+            )
+            index.head_record_id = record.record_id
+            index.record_count += 1
+            index.chain_sha256 = _extend_chain_sha256(
+                index.chain_sha256, record.record_id
+            )
+            index.records_dir_stamp = self._records_directory_stamp()
+            self._refresh_append_head_cache(index, prior_document)
+            return published
+        except Exception:
+            # Once publication may have happened, no in-memory derivative is
+            # retained.  The bridge's durable-failure recovery performs a full
+            # authoritative scan before deciding whether to propagate.
+            self._append_index = None
+            raise
 
     def load_chain(self) -> tuple[ArtifactRecord, ...]:
         """Load and fully validate the authoritative chain in append order."""
@@ -148,9 +243,13 @@ class ArtifactStore:
         expected_cache_chain: tuple[ArtifactRecord, ...] | None = None,
     ) -> tuple[ArtifactRecord, ...]:
         """Internal scan with optional proof of this store's own append."""
+        self._append_index = None
         if not self.records_dir.exists():
             if self.head_path.exists():
                 self._refresh_cache_with_context((), expected_cache_chain)
+            self._append_index = _build_append_index(
+                (), self._records_directory_stamp()
+            )
             return ()
         self._confined(self.records_dir)
         records: dict[str, ArtifactRecord] = {}
@@ -198,7 +297,68 @@ class ArtifactStore:
 
         ordered = _order_chain(records)
         self._refresh_cache_with_context(ordered, expected_cache_chain)
+        self._append_index = _build_append_index(
+            ordered, self._records_directory_stamp()
+        )
         return ordered
+
+    def _ensure_append_index(self) -> _AppendIndex:
+        index = self._append_index
+        if index is not None and (
+            index.records_dir_stamp != self._records_directory_stamp()
+            or not self._head_cache_matches(index)
+        ):
+            logger.warning(
+                "Discarding stale artifact append index for run %s", self.run_id
+            )
+            self._append_index = None
+            index = None
+        if index is None:
+            self.load_chain()
+            index = self._append_index
+        if index is None:  # pragma: no cover - defensive postcondition
+            raise ArtifactStoreError("validated append index was not reconstructed")
+        return index
+
+    def _records_directory_stamp(self) -> _RecordsDirectoryStamp:
+        try:
+            stat = self._confined(self.records_dir).stat()
+        except FileNotFoundError:
+            return _RecordsDirectoryStamp(False, None, None)
+        return _RecordsDirectoryStamp(True, stat.st_mtime_ns, stat.st_ctime_ns)
+
+    def _read_head_cache(self) -> object:
+        try:
+            return json.loads(self._confined(self.head_path).read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return None
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            return _INVALID_CACHE
+
+    def _head_cache_matches(self, index: _AppendIndex) -> bool:
+        current = self._read_head_cache()
+        if index.record_count == 0 and current is None:
+            return True
+        return current == index.head_document()
+
+    def _refresh_append_head_cache(
+        self,
+        index: _AppendIndex,
+        prior_document: dict[str, object],
+    ) -> None:
+        current = self._read_head_cache()
+        allowed_prior = (
+            (prior_document, None)
+            if prior_document["record_count"] == 0
+            else (prior_document,)
+        )
+        if current not in allowed_prior:
+            raise ArtifactCorruptionError(
+                "artifact head cache changed during append; authoritative scan required"
+            )
+        expected = index.head_document()
+        self.run_dir.mkdir(parents=True, exist_ok=True)
+        _atomic_write(self.head_path, canonical_json(expected) + b"\n")
 
     def select(
         self,
@@ -261,12 +421,7 @@ class ArtifactStore:
     ) -> None:
         head_path = self._confined(self.head_path)
         expected = _head_cache_document(chain)
-        try:
-            current: object = json.loads(head_path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            current = None
-        except (OSError, UnicodeError, json.JSONDecodeError):
-            current = _INVALID_CACHE
+        current = self._read_head_cache()
         if not chain and current is None:
             return
         if current != expected:
@@ -285,13 +440,59 @@ class ArtifactStore:
 
 
 def _head_cache_document(chain: tuple[ArtifactRecord, ...]) -> dict[str, object]:
+    chain_sha256 = _EMPTY_CHAIN_SHA256
+    for record in chain:
+        chain_sha256 = _extend_chain_sha256(chain_sha256, record.record_id)
     return {
         "head_record_id": chain[-1].record_id if chain else None,
         "record_count": len(chain),
-        "chain_sha256": hashlib.sha256(
-            canonical_json([record.record_id for record in chain])
-        ).hexdigest(),
+        "chain_sha256": chain_sha256,
     }
+
+
+def _extend_chain_sha256(prior_sha256: str, record_id: str) -> str:
+    return hashlib.sha256(
+        canonical_json(
+            {
+                "prior_chain_sha256": prior_sha256,
+                "record_id": record_id,
+            }
+        )
+    ).hexdigest()
+
+
+def _build_append_index(
+    chain: tuple[ArtifactRecord, ...],
+    records_dir_stamp: _RecordsDirectoryStamp,
+) -> _AppendIndex:
+    by_idempotency_key: dict[str, tuple[str, ArtifactRecord]] = {}
+    record_ids: set[str] = set()
+    revision_keys: set[tuple[RecordType, str, int]] = set()
+    max_revisions: dict[tuple[RecordType, str], int] = {}
+    chain_sha256 = _EMPTY_CHAIN_SHA256
+    for record in chain:
+        by_idempotency_key[record.idempotency_key] = (
+            _semantic_digest(record),
+            record,
+        )
+        record_ids.add(record.record_id)
+        revision_keys.add((record.record_type, record.logical_id, record.revision))
+        identity = (record.record_type, record.logical_id)
+        max_revisions[identity] = max(
+            record.revision,
+            max_revisions.get(identity, 0),
+        )
+        chain_sha256 = _extend_chain_sha256(chain_sha256, record.record_id)
+    return _AppendIndex(
+        by_idempotency_key=by_idempotency_key,
+        record_ids=record_ids,
+        revision_keys=revision_keys,
+        max_revisions=max_revisions,
+        head_record_id=chain[-1].record_id if chain else None,
+        record_count=len(chain),
+        chain_sha256=chain_sha256,
+        records_dir_stamp=records_dir_stamp,
+    )
 
 
 def _read_record(path: Path) -> ArtifactRecord:

@@ -430,18 +430,27 @@ verschwinden.
 
 ### B01 — Generischer Append und durable-but-reported-failed
 
-1. **Autoritativer Eingaberecord:** aktueller Head und zu appendender typisierter
-   Record; Folgerecord ist der neu geladene, akzeptierte Head.
-2. **State-/Cachefelder:** `head.json` und aufruferspezifische Stateprojektion.
-3. **Schreibreihenfolge und Crashpunkte:** Recorddatei via `store.put()` → Head-
-   Cache → Rückgabe. Bei Exception wird die Kette neu geladen; Crash nach
-   durablem Write vor Rückgabe ist dadurch erkennbar.
+1. **Autoritativer Eingaberecord:** vollständig validierter Recordprefix und zu
+   appendender typisierter Record. Ein prozesslokaler, nicht persistierter
+   Append-Index leitet Idempotenz, Revision, Record-IDs und Head ausschließlich
+   aus diesem Prefix ab; die Recorddateien bleiben autoritativ.
+2. **State-/Cachefelder:** `head.json`, der verwerfbare prozesslokale Append-
+   Index und aufruferspezifische Stateprojektion. Fehlender oder abweichender
+   Head-/Verzeichnisnachweis verwirft den Index und erzwingt einen vollständigen
+   Recordscan; niemals werden Records aus Cachewerten repariert.
+3. **Schreibreihenfolge und Crashpunkte:** neuen Record gegen den validierten
+   Prefix prüfen → Recorddatei via `store.put()` publizieren → publizierte Datei
+   einzeln mit Digest, Schema und Storeinvarianten zurücklesen → rollierenden
+   Head-Cache aktualisieren → Rückgabe. Bei Exception wird die Kette vollständig
+   neu geladen; Crash nach durablem Write vor Rückgabe ist dadurch erkennbar.
 4. **Idempotenz:** `_assert_equal()` verlangt vollständige semantische
    Gleichheit mit dem bereits vorhandenen Record; Schlüsselgleichheit allein
    genügt nicht.
 5. **Recoverable-Sonderfall:** generische Reconciliation in
    `ArtifactBridge.append`, kein benanntes `_recoverable_*`.
-6. **Semantik-/Protokollversion:** alle Schema-2-Recordtypen.
+6. **Semantik-/Protokollversion:** alle Schema-2-Recordtypen; keine Schema-,
+   Protokoll- oder Registeränderung. Ausdrückliches Laden und Resume behalten
+   die vollständige Ketten-, Referenz-, Revisions- und Invariantenvalidierung.
 7. **Externe Side Effects:** keine; nur Dateien des Artifact-Stores.
 
 Bewertung: **bleibt bewusst** — dies ist die gemeinsame atomare

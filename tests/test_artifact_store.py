@@ -166,16 +166,99 @@ def test_crash_after_publication_is_recovered_by_scan(
     store = ArtifactStore(tmp_path, "run-1")
     record = make_record("one")
 
-    def fail_cache(chain, **kwargs) -> None:  # type: ignore[no-untyped-def]
+    def fail_cache(index, prior_document) -> None:  # type: ignore[no-untyped-def]
         raise OSError("simulated cache failure")
 
-    monkeypatch.setattr(store, "_refresh_head_cache", fail_cache)
+    monkeypatch.setattr(store, "_refresh_append_head_cache", fail_cache)
     with pytest.raises(OSError, match="cache failure"):
         store.put(record)
 
     recovered = ArtifactStore(tmp_path, "run-1")
     assert recovered.load_chain() == (record,)
     assert recovered.head == record
+
+
+def test_missing_and_manipulated_append_cache_is_rebuilt_from_records(
+    tmp_path: Path,
+) -> None:
+    store = ArtifactStore(tmp_path, "run-1")
+    first = store.put(make_record("one"))
+
+    # Both the process-local lookup index and its discardable head proof may be
+    # lost.  The next append must reconstruct them from authoritative records.
+    store._append_index = None
+    store.head_path.unlink()
+    second = store.put(make_record("two", predecessors=(first.record_id,)))
+
+    # A syntactically valid but false cache entry is no more authoritative.
+    store.head_path.write_text(
+        json.dumps({
+            "head_record_id": "ar1-" + "f" * 64,
+            "record_count": 99,
+            "chain_sha256": "e" * 64,
+        }),
+        encoding="utf-8",
+    )
+    third = store.put(make_record("three", predecessors=(second.record_id,)))
+
+    assert store.load_chain() == (first, second, third)
+    head = json.loads(store.head_path.read_text(encoding="utf-8"))
+    assert head["head_record_id"] == third.record_id
+    assert head["record_count"] == 3
+
+
+def test_records_win_when_append_cache_disagrees_with_authoritative_bytes(
+    tmp_path: Path,
+) -> None:
+    store = ArtifactStore(tmp_path, "run-1")
+    first = store.put(make_record("one"))
+    path = store.records_dir / f"{first.record_id}.json"
+    envelope = json.loads(path.read_text(encoding="utf-8"))
+    envelope["record"]["logical_id"] = "tampered"
+    path.write_text(json.dumps(envelope), encoding="utf-8")
+
+    # Losing the head proof forces an authoritative rebuild.  The stale
+    # process lookup cannot make the corrupted record acceptable.
+    store.head_path.unlink()
+    with pytest.raises(ArtifactCorruptionError, match="digest mismatch"):
+        store.append_context(
+            record_type=RecordType.WORK_UNIT,
+            logical_id="two",
+            idempotency_key="effect-two-1",
+        )
+
+
+def test_external_chain_fork_invalidates_append_index_and_fails_closed(
+    tmp_path: Path,
+) -> None:
+    store = ArtifactStore(tmp_path, "run-1")
+    first = store.put(make_record("one"))
+    left = make_record("left", predecessors=(first.record_id,))
+    right = make_record("right", predecessors=(first.record_id,))
+    write_envelope(store.records_dir / f"{left.record_id}.json", left)
+    write_envelope(store.records_dir / f"{right.record_id}.json", right)
+
+    # The directory proof changes even though the stale head cache still
+    # matches the old in-memory index.  Rebuild must retain the full fork check.
+    with pytest.raises(ArtifactCorruptionError, match="forks after predecessor"):
+        store.append_context(
+            record_type=RecordType.WORK_UNIT,
+            logical_id="next",
+            idempotency_key="effect-next-1",
+        )
+
+
+def test_append_index_observes_records_published_by_a_later_store_instance(
+    tmp_path: Path,
+) -> None:
+    first_store = ArtifactStore(tmp_path, "run-1")
+    first = first_store.put(make_record("one"))
+    second_store = ArtifactStore(tmp_path, "run-1")
+    second = second_store.put(make_record("two", predecessors=(first.record_id,)))
+
+    third = first_store.put(make_record("three", predecessors=(second.record_id,)))
+
+    assert first_store.load_chain() == (first, second, third)
 
 
 def test_cache_refresh_passes_expected_progress_without_instance_state(

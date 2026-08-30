@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import math
 from pathlib import Path
+import time
 
 import pytest
+
+import artifact_store as artifact_store_module
 
 from artifact_bridge import (
     ArtifactBridge, ArtifactBridgeError, attestation_payload, command_payload,
@@ -127,6 +131,116 @@ def test_bridge_is_idempotent_before_creating_volatile_metadata(tmp_path: Path) 
     )
     assert first == second
     assert calls == 1
+
+
+def test_bridge_idempotency_survives_complete_append_index_loss(tmp_path: Path) -> None:
+    calls = 0
+
+    def now() -> str:
+        nonlocal calls
+        calls += 1
+        return "2026-08-18T10:00:00+00:00"
+
+    store = ArtifactStore(tmp_path, "run-1")
+    bridge = ArtifactBridge(store, now=now)
+    payload = WorkUnitPayload("03", 1, ("src/a.py",))
+    first = bridge.append(
+        payload, logical_id="work-3", idempotency_key="work:3",
+        fingerprint_sha256=DIGEST,
+    )
+    store._append_index = None
+    store.head_path.unlink()
+
+    retried = bridge.append(
+        payload, logical_id="work-3", idempotency_key="work:3",
+        fingerprint_sha256=DIGEST,
+    )
+
+    assert retried == first
+    assert calls == 1
+
+
+def test_bridge_recovers_record_after_durable_append_reports_cache_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    store = ArtifactStore(tmp_path, "run-1")
+    bridge = ArtifactBridge(store, now=lambda: "2026-08-18T10:00:00+00:00")
+    refresh = store._refresh_append_head_cache
+    calls = 0
+
+    def publish_cache_then_fail(index, prior_document) -> None:  # type: ignore[no-untyped-def]
+        nonlocal calls
+        refresh(index, prior_document)
+        calls += 1
+        if calls == 1:
+            raise OSError("simulated reported failure after durable publication")
+
+    monkeypatch.setattr(store, "_refresh_append_head_cache", publish_cache_then_fail)
+    payload = WorkUnitPayload("03", 1, ("src/a.py",))
+
+    persisted = bridge.append(
+        payload, logical_id="work-3", idempotency_key="work:3",
+        fingerprint_sha256=DIGEST,
+    )
+
+    assert calls == 1
+    assert store.load_chain() == (persisted,)
+
+
+def test_append_elapsed_cost_does_not_follow_quadratic_full_scan_curve(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Measure wall time and retain a quadratic full-scan control mutation."""
+    original_read = artifact_store_module._read_record
+
+    def validation_cost(path: Path):  # type: ignore[no-untyped-def]
+        # Make the real record read/schema-validation work dominate scheduler
+        # and fsync noise without replacing it with an invocation counter.
+        time.sleep(0.002)
+        return original_read(path)
+
+    monkeypatch.setattr(artifact_store_module, "_read_record", validation_cost)
+    lengths = (12, 24, 48)
+
+    def measure(label: str, *, control_full_scan: bool) -> tuple[float, ...]:
+        timings: list[float] = []
+        for length in lengths:
+            root = tmp_path / f"{label}-{length}"
+            root.mkdir()
+            bridge = ArtifactBridge(
+                ArtifactStore(root, f"run-{label}-{length}"),
+                now=lambda: "2026-08-18T10:00:00+00:00",
+            )
+            started = time.perf_counter()
+            for number in range(length):
+                if control_full_scan:
+                    bridge.store.load_chain()
+                bridge.append(
+                    WorkUnitPayload(str(number), 1, ("src/a.py",)),
+                    logical_id=f"work-{number}",
+                    idempotency_key=f"work:{number}",
+                    fingerprint_sha256=DIGEST,
+                )
+            timings.append(time.perf_counter() - started)
+        return tuple(timings)
+
+    optimized = measure("optimized", control_full_scan=False)
+    quadratic_control = measure("quadratic-control", control_full_scan=True)
+    scale = math.log(lengths[-1] / lengths[0])
+    optimized_exponent = math.log(optimized[-1] / optimized[0]) / scale
+    control_exponent = math.log(
+        quadratic_control[-1] / quadratic_control[0]
+    ) / scale
+
+    assert optimized_exponent < 1.65, (
+        f"append wall-time scaled too steeply: {dict(zip(lengths, optimized))}, "
+        f"exponent={optimized_exponent:.2f}"
+    )
+    assert control_exponent > 1.65, (
+        "timing control did not expose the deliberately restored full scan: "
+        f"{dict(zip(lengths, quadratic_control))}, "
+        f"exponent={control_exponent:.2f}"
+    )
 
 
 def test_bridge_rejects_idempotency_key_with_different_meaning(tmp_path: Path) -> None:
