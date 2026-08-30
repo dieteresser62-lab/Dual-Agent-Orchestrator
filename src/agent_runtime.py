@@ -515,6 +515,7 @@ def _compact_usage_metadata(metadata: Mapping[str, object] | None) -> str:
 class ProviderAttemptLifecycle:
     start: Callable[[ProviderInputMeasurement, object | None], object]
     terminal: Callable[[object, float, str | None, ProviderUsagePayload | None], None]
+    durable_response_path: Callable[[object], Path] | None = None
     monotonic_fn: Callable[[], float] = time.monotonic
 
 
@@ -528,6 +529,11 @@ class _ProviderAttemptInvocation:
     def begin(self, measurement: ProviderInputMeasurement, bootstrap: object | None) -> None:
         self.handle = self.lifecycle.start(measurement, bootstrap)
         self.monotonic_started = self.lifecycle.monotonic_fn()
+
+    def response_path(self, fallback: Path) -> Path:
+        if self.handle is None or self.lifecycle.durable_response_path is None:
+            return fallback
+        return self.lifecycle.durable_response_path(self.handle)
 
     def finish(self, failure_kind: AgentFailureKind | None, metadata: Mapping[str, object] | None) -> None:
         if self.handle is None or self.monotonic_started is None or self.terminalized:
@@ -1363,12 +1369,20 @@ def run_native_review_agent_checked(
             pre_start_callback=pre_start_callback,
             attempt_invocation=attempt_invocation,
             validated_response_callback=lambda canonical: write_file(
-                log_path, canonical
+                attempt_invocation.response_path(log_path)
+                if attempt_invocation is not None
+                else log_path,
+                canonical,
             ),
+        )
+        actual_log_path = (
+            attempt_invocation.response_path(log_path)
+            if attempt_invocation is not None
+            else log_path
         )
         print_agent_output(
             adapter.name,
-            log_path,
+            actual_log_path,
             1,
             output.canonical_json,
             config=config,
@@ -1527,12 +1541,20 @@ def run_native_codex_agent_checked(
             attempt_invocation=attempt_invocation,
             execution_boundary=execution_boundary,
             validated_response_callback=lambda canonical: write_file(
-                raw_response_path, canonical
+                attempt_invocation.response_path(raw_response_path)
+                if attempt_invocation is not None
+                else raw_response_path,
+                canonical,
             ),
+        )
+        actual_response_path = (
+            attempt_invocation.response_path(raw_response_path)
+            if attempt_invocation is not None
+            else raw_response_path
         )
         print_agent_output(
             adapter.name,
-            raw_response_path,
+            actual_response_path,
             1,
             output.canonical_json,
             config=config,

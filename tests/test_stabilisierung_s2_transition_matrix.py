@@ -117,7 +117,7 @@ DRIVER_DIVERGENCE_MESSAGES = Counter(
         "content-addressed review packet cache differs from canonical bytes": 1,
         "native agent recovery has divergent agent-result records": 1,
         "native agent recovery result idempotency binding differs": 1,
-        "native Codex recovery raw response digest differs from its record": 1,
+        "native implementer recovery raw response digest differs from its record": 2,
         "native Codex recovery record differs from its durable binding": 1,
         "native Codex recovery result differs from its durable record": 1,
         "native reviewer recovery record differs from the rebuilt request": 1,
@@ -125,6 +125,8 @@ DRIVER_DIVERGENCE_MESSAGES = Counter(
         "pre-policy native reviewer result differs from its decision record": 1,
         "native agent result logical binding differs": 1,
         "persisted finding handoff export differs from the prepared task": 1,
+        "file side-effect target differs before result completion": 1,
+        "projection target differs before result completion": 1,
         "structured audit dual-write mismatch: ": 2,
     }
 )
@@ -143,6 +145,9 @@ WATCH_DIVERGENCE_MESSAGES = Counter(
         "terminal workflow result differs from watch identity": 1,
         "queue source digest differs from success evidence": 1,
         "bound queue destination digest differs from success evidence": 1,
+        "ledgered queue destination differs from the task binding": 1,
+        "ledgered queue destination differs before result completion": 1,
+        "bound queue destination differs before ledger completion": 1,
         "Workflow result run id %s differs from persisted watch identity %s for %s.": 1,
         "Workflow protocol mode %s differs from persisted watch identity %s for %s.": 1,
     }
@@ -299,6 +304,8 @@ COMPARISON_TARGETS = (
     ("src/artifact_migration.py", None, "require_workflow_status_prefix"),
     ("src/artifact_migration.py", None, "assert_workflow_status_mirror"),
     ("src/artifact_migration.py", None, "assert_slice_boundary_mirror"),
+    ("src/artifact_migration.py", None, "require_side_effect_ledger_prefix"),
+    ("src/artifact_migration.py", None, "assert_side_effect_mirror"),
     ("src/artifact_migration.py", None, "_mirror_difference_code"),
     ("src/artifact_migration.py", None, "_finding_statuses"),
     ("src/artifact_migration.py", None, "_recoverable_pending_review_finding_gap"),
@@ -312,6 +319,8 @@ COMPARISON_TARGETS = (
     ("src/artifact_bridge.py", None, "finding_handoff_import_payload"),
     ("src/artifact_bridge.py", None, "review_payload_matches_result"),
     ("src/artifact_bridge.py", "ArtifactBridge", "append"),
+    ("src/artifact_bridge.py", "ArtifactBridge", "record_side_effect_intent"),
+    ("src/artifact_bridge.py", "ArtifactBridge", "record_side_effect_result"),
     ("src/artifact_store.py", "ArtifactStore", "append_context"),
     ("src/artifact_store.py", "ArtifactStore", "put"),
     ("src/artifact_store.py", "ArtifactStore", "_ensure_append_index"),
@@ -319,6 +328,7 @@ COMPARISON_TARGETS = (
     ("src/artifact_store.py", "ArtifactStore", "_refresh_append_head_cache"),
     ("src/artifact_bridge.py", "ArtifactBridge", "start_provider_attempt"),
     ("src/artifact_bridge.py", "ArtifactBridge", "finish_provider_attempt"),
+    ("src/artifact_bridge.py", "ArtifactBridge", "side_effect_result"),
     ("src/final_review_preflight.py", None, "run_final_review_preflight"),
     ("src/final_review_preflight.py", None, "_approved_external_paths"),
     ("src/orchestrator.py", None, "_persisted_histories"),
@@ -329,9 +339,14 @@ COMPARISON_TARGETS = (
     ("src/orchestrator.py", None, "run_production_workflow"),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "assert_structured_decision_context"),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "_start_provider_attempt"),
+    ("src/orchestrator.py", "ProductionWorkflowDriver", "_reconcile_provider_effect"),
+    ("src/orchestrator.py", "ProductionWorkflowDriver", "_write_side_effect_file"),
+    ("src/orchestrator.py", "ProductionWorkflowDriver", "_execute_projection_write"),
+    ("src/orchestrator.py", "ProductionWorkflowDriver", "_reconcile_pending_side_effects"),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "authoritative_native_findings"),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "carry_forward_native_findings"),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "_persist_native_agent_request_bundle"),
+    ("src/orchestrator.py", "ProductionWorkflowDriver", "_write_immutable_file"),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "_write_native_codex_raw_response"),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "_materialize_review_packet"),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "_canonical_native_agent_result"),
@@ -343,14 +358,25 @@ COMPARISON_TARGETS = (
     ("src/orchestrator.py", "ProductionWorkflowDriver", "checkpoint"),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "_project_audit"),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "finalize_audit"),
+    ("src/orchestrator.py", "ProductionWorkflowDriver", "commit_slice"),
     ("src/inbox_watcher.py", "QueueSuccessEvidence", "__post_init__"),
     ("src/inbox_watcher.py", None, "load_rejection_marker"),
     ("src/inbox_watcher.py", None, "load_watch_identity"),
     ("src/inbox_watcher.py", None, "load_queue_success_evidence"),
     ("src/inbox_watcher.py", None, "finalize_queue_success"),
+    ("src/inbox_watcher.py", None, "move_to_outbox_with_ledger"),
+    ("src/inbox_watcher.py", None, "move_poison_to_outbox_recoverably"),
     ("src/inbox_watcher.py", None, "watch_inbox"),
     ("src/workflow.py", "WorkflowHistory", "from_dict"),
     ("src/git_service.py", None, "commit_managed_audit_report"),
+    ("src/git_service.py", None, "preview_commit_tree"),
+    ("src/git_service.py", None, "inspect_commit_tree"),
+    ("src/side_effects.py", "SideEffectExecutor", "execute"),
+    ("src/side_effects.py", "SideEffectExecutor", "begin"),
+    ("src/side_effects.py", None, "reconcile_file_write"),
+    ("src/side_effects.py", None, "reconcile_provider_start"),
+    ("src/side_effects.py", None, "reconcile_queue_move"),
+    ("src/side_effects.py", None, "reconcile_git_commit"),
 )
 
 STRICT_BODY_TARGETS = tuple(
@@ -384,6 +410,8 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/artifact_migration.py:require_workflow_status_prefix": 3,
     "src/artifact_migration.py:assert_workflow_status_mirror": 4,
     "src/artifact_migration.py:assert_slice_boundary_mirror": 4,
+    "src/artifact_migration.py:require_side_effect_ledger_prefix": 4,
+    "src/artifact_migration.py:assert_side_effect_mirror": 5,
     "src/artifact_migration.py:_mirror_difference_code": 0,
     "src/artifact_migration.py:_finding_statuses": 2,
     "src/artifact_migration.py:_recoverable_pending_review_finding_gap": 16,
@@ -397,6 +425,8 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/artifact_bridge.py:finding_handoff_import_payload": 8,
     "src/artifact_bridge.py:review_payload_matches_result": 9,
     "src/artifact_bridge.py:ArtifactBridge.append": 3,
+    "src/artifact_bridge.py:ArtifactBridge.record_side_effect_intent": 1,
+    "src/artifact_bridge.py:ArtifactBridge.record_side_effect_result": 4,
     "src/artifact_store.py:ArtifactStore.append_context": 2,
     "src/artifact_store.py:ArtifactStore.put": 13,
     "src/artifact_store.py:ArtifactStore._ensure_append_index": 4,
@@ -404,6 +434,7 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/artifact_store.py:ArtifactStore._refresh_append_head_cache": 2,
     "src/artifact_bridge.py:ArtifactBridge.start_provider_attempt": 21,
     "src/artifact_bridge.py:ArtifactBridge.finish_provider_attempt": 10,
+    "src/artifact_bridge.py:ArtifactBridge.side_effect_result": 7,
     "src/final_review_preflight.py:run_final_review_preflight": 20,
     "src/final_review_preflight.py:_approved_external_paths": 15,
     "src/orchestrator.py:_persisted_histories": 1,
@@ -413,29 +444,45 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/orchestrator.py:_apply_resumed_agent_profiles": 3,
     "src/orchestrator.py:run_production_workflow": 38,
     "src/orchestrator.py:ProductionWorkflowDriver.assert_structured_decision_context": 7,
-    "src/orchestrator.py:ProductionWorkflowDriver._start_provider_attempt": 5,
+    "src/orchestrator.py:ProductionWorkflowDriver._start_provider_attempt": 19,
+    "src/orchestrator.py:ProductionWorkflowDriver._reconcile_provider_effect": 13,
+    "src/orchestrator.py:ProductionWorkflowDriver._write_side_effect_file": 3,
+    "src/orchestrator.py:ProductionWorkflowDriver._execute_projection_write": 5,
+    "src/orchestrator.py:ProductionWorkflowDriver._reconcile_pending_side_effects": 34,
     "src/orchestrator.py:ProductionWorkflowDriver.authoritative_native_findings": 11,
     "src/orchestrator.py:ProductionWorkflowDriver.carry_forward_native_findings": 6,
     "src/orchestrator.py:ProductionWorkflowDriver._persist_native_agent_request_bundle": 4,
-    "src/orchestrator.py:ProductionWorkflowDriver._write_native_codex_raw_response": 3,
+    "src/orchestrator.py:ProductionWorkflowDriver._write_immutable_file": 3,
+    "src/orchestrator.py:ProductionWorkflowDriver._write_native_codex_raw_response": 0,
     "src/orchestrator.py:ProductionWorkflowDriver._materialize_review_packet": 3,
     "src/orchestrator.py:ProductionWorkflowDriver._canonical_native_agent_result": 4,
-    "src/orchestrator.py:ProductionWorkflowDriver.recover_pending_native_codex": 37,
-    "src/orchestrator.py:ProductionWorkflowDriver.recover_pending_native_reviewer": 27,
+    "src/orchestrator.py:ProductionWorkflowDriver.recover_pending_native_codex": 40,
+    "src/orchestrator.py:ProductionWorkflowDriver.recover_pending_native_reviewer": 33,
     "src/orchestrator.py:ProductionWorkflowDriver.recover_pending_native_reviewer_before_policy": 32,
     "src/orchestrator.py:ProductionWorkflowDriver.persist_native_codex_contract": 8,
     "src/orchestrator.py:ProductionWorkflowDriver.prepare_finding_handoff": 13,
-    "src/orchestrator.py:ProductionWorkflowDriver.checkpoint": 4,
+    "src/orchestrator.py:ProductionWorkflowDriver.checkpoint": 6,
     "src/orchestrator.py:ProductionWorkflowDriver._project_audit": 25,
-    "src/orchestrator.py:ProductionWorkflowDriver.finalize_audit": 1,
+    "src/orchestrator.py:ProductionWorkflowDriver.finalize_audit": 9,
+    "src/orchestrator.py:ProductionWorkflowDriver.commit_slice": 45,
     "src/inbox_watcher.py:QueueSuccessEvidence.__post_init__": 5,
     "src/inbox_watcher.py:load_rejection_marker": 9,
     "src/inbox_watcher.py:load_watch_identity": 4,
     "src/inbox_watcher.py:load_queue_success_evidence": 11,
-    "src/inbox_watcher.py:finalize_queue_success": 6,
-    "src/inbox_watcher.py:watch_inbox": 41,
+    "src/inbox_watcher.py:finalize_queue_success": 8,
+    "src/inbox_watcher.py:move_to_outbox_with_ledger": 11,
+    "src/inbox_watcher.py:move_poison_to_outbox_recoverably": 3,
+    "src/inbox_watcher.py:watch_inbox": 43,
     "src/workflow.py:WorkflowHistory.from_dict": 7,
     "src/git_service.py:commit_managed_audit_report": 5,
+    "src/git_service.py:preview_commit_tree": 9,
+    "src/git_service.py:inspect_commit_tree": 1,
+    "src/side_effects.py:SideEffectExecutor.execute": 4,
+    "src/side_effects.py:SideEffectExecutor.begin": 4,
+    "src/side_effects.py:reconcile_file_write": 6,
+    "src/side_effects.py:reconcile_provider_start": 2,
+    "src/side_effects.py:reconcile_queue_move": 2,
+    "src/side_effects.py:reconcile_git_commit": 3,
 }
 
 EXPECTED_STRICT_BODY_DIGESTS = {
@@ -444,6 +491,8 @@ EXPECTED_STRICT_BODY_DIGESTS = {
     "src/artifact_migration.py:require_workflow_status_prefix": "964d356480288034c6dc52de377c2326c06d2db50d6aae52fd2b3d5dbcc5bdec",
     "src/artifact_migration.py:assert_workflow_status_mirror": "0d6ac0eec3998504048ccf74ee978930a4e2dfa3cd256e71268e143a774b7eae",
     "src/artifact_migration.py:assert_slice_boundary_mirror": "e0f6199f8d92c8f1d141822a0cbb2d6b80238cf247cc2eaacc83310d158c5d5f",
+    "src/artifact_migration.py:require_side_effect_ledger_prefix": "75a389d1d2170ebd424810be772b2050c6b3951591530505cd7ba480138103c6",
+    "src/artifact_migration.py:assert_side_effect_mirror": "a987bcfdd6e57add8c76d0f45bcb005c7f560dcb2c682411eed66d9f67c76a54",
     "src/artifact_migration.py:_mirror_difference_code": "9433c6d83367347145eebab39e8fc4e3a989062ff9864bec6752710065ffbbc7",
     "src/artifact_migration.py:_finding_statuses": "cc4a0460cf13d1fbeba70deb2ae66dd19771bb31e8c56907139506ba3421c758",
     "src/artifact_migration.py:_recoverable_pending_review_finding_gap": "dbdbf286f9c1d85bcb53e7e3e2e716f052e60a318b51d5176088d382b4819468",
@@ -458,7 +507,7 @@ EXPECTED_STRICT_BODY_DIGESTS = {
     "src/orchestrator.py:_persisted_histories": "3f95d7d8d626305fc14dd90ea12be8d9baf8c4a2de0faf6c808989809c7879ea",
     "src/orchestrator.py:_recoverable_final_denial_mirror_gap": "3b78ce8c3861bfd62f8fd8728f7346b5cff5e1b6c12ab8b3b6c0f78bdc394331",
     "src/orchestrator.py:_historical_correction_attribution_matches": "9ca739a787d60da279c0bbd10a22d29f6a1c583d05434e704b616e5925afec35",
-    "src/orchestrator.py:ProductionWorkflowDriver.finalize_audit": "5a8f451d2aed43e838616c786a3e1b1a382465e7a37d19e9912dc2c28cde80c4",
+    "src/orchestrator.py:ProductionWorkflowDriver.finalize_audit": "ab243e85a4b66bc06e1025a688c87c651443ac32baa5b8018bb92f421b99bd69",
     "src/git_service.py:commit_managed_audit_report": "ec161c2eafd7369d9eb9ab30b1724ca01815f08ce669e94c4b322770556bc717",
 }
 
@@ -536,7 +585,15 @@ def _body_digest_inventory() -> dict[str, str]:
     for relative_path, class_name, function_name in STRICT_BODY_TARGETS:
         node = _function_node(relative_path, class_name, function_name)
         label = ".".join(part for part in (class_name, function_name) if part)
-        canonical = ast.dump(node, annotate_fields=True, include_attributes=False)
+        try:
+            canonical = ast.dump(
+                node,
+                annotate_fields=True,
+                include_attributes=False,
+                show_empty=True,
+            )
+        except TypeError:  # Python 3.12 has no show_empty parameter and includes empty fields.
+            canonical = ast.dump(node, annotate_fields=True, include_attributes=False)
         result[f"{relative_path}:{label}"] = hashlib.sha256(
             canonical.encode("utf-8")
         ).hexdigest()
@@ -638,7 +695,7 @@ def test_migration_comparison_inventory_is_source_bound() -> None:
         assert marker in source_strings
         assert marker in document
 
-    assert _raise_count("src/artifact_migration.py", "ArtifactResumeError") == 20
+    assert _raise_count("src/artifact_migration.py", "ArtifactResumeError") == 22
     for marker in RESUME_ERROR_MARKERS:
         assert marker in (source if marker == "exc.diagnostic.message" else source_strings)
         assert marker in document
@@ -652,7 +709,7 @@ def test_bridge_error_inventory_is_source_bound() -> None:
     )
     combined_source = "\n".join(_string_constants(path) for path in paths)
     document = MATRIX_PATH.read_text(encoding="utf-8")
-    assert sum(_raise_count(path, "ArtifactBridgeError") for path in paths) == 22
+    assert sum(_raise_count(path, "ArtifactBridgeError") for path in paths) == 24
     for marker in BRIDGE_ERROR_MARKERS:
         assert marker in combined_source
         assert marker in document
@@ -755,6 +812,14 @@ def test_recordless_review_and_attestation_fields_are_source_bound() -> None:
             "largest_residual_risk",
             "break_condition",
         },
+        ("src/artifact_models.py", "SideEffectPayload"): {
+            "effect_key",
+            "effect_class",
+            "work_unit_id",
+            "operation",
+            "phase",
+            "result",
+        },
     }
     actual = {
         key: _class_field_names(*key)
@@ -829,13 +894,15 @@ def test_every_s4a_stop_entry_has_exactly_one_reasoned_classification() -> None:
         "`slices[*].scope_change_groups`",
         "`slices[*].start_fingerprint`",
     }
-    assert len(stop_fields) == 24
+    r4_covered_fields = {"`work_units[*].completed_side_effects`"}
+    assert len(stop_fields) == 23
     assert len(fields) == len(set(fields)) == 41
     assert set(fields) == (
         stop_fields
         | r1_covered_fields
         | r2_covered_fields
         | r3_covered_fields
+        | r4_covered_fields
         | {"`created_at`, `updated_at`"}
     )
     assert groups["`work_units[*].codex_return_count`"] == "A"
@@ -854,6 +921,9 @@ def test_every_s4a_stop_entry_has_exactly_one_reasoned_classification() -> None:
     for field in r2_covered_fields:
         reason = next(reason for name, _group, reason in rows if name == field)
         assert "In R2 geschlossen" in reason
+    for field in r4_covered_fields:
+        reason = next(reason for name, _group, reason in rows if name == field)
+        assert "In R4 geschlossen" in reason
     for field in r3_covered_fields:
         reason = next(reason for name, _group, reason in rows if name == field)
         assert "In R3 geschlossen" in reason

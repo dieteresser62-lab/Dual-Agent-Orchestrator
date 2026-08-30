@@ -299,7 +299,7 @@ def _authoritative_finding_mismatch() -> BaseException:
     return _capture(lambda: driver.authoritative_native_findings(state, mirror))
 
 
-def test_central_inventory_classifies_all_46_project_error_types_exactly_once() -> None:
+def test_central_inventory_classifies_all_47_project_error_types_exactly_once() -> None:
     declared: dict[str, tuple[str, tuple[str, ...]]] = {}
     for path in (ROOT / "src").glob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -348,7 +348,7 @@ def test_central_inventory_classifies_all_46_project_error_types_exactly_once() 
         for error_type in ERROR_CLASSIFICATIONS
     }
 
-    assert len(named_errors) == 46
+    assert len(named_errors) == 47
     assert registered == project_exceptions
     assert project_exceptions - named_errors == {
         f"{FinalReviewPreflightDenied.__module__}.FinalReviewPreflightDenied",

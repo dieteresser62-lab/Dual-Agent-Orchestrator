@@ -520,6 +520,7 @@ def _run_record_ahead_probe() -> None:
 
 
 def _run_queue_resume_probe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
     inbox, outbox = tmp_path / "inbox", tmp_path / "outbox"
     inbox.mkdir()
     task = inbox / "runtime-resume.md"

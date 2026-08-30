@@ -1,6 +1,6 @@
 # S2 – Übergangs- und Divergenzmatrix
 
-Stand: 2026-08-30. Untersucht ist `structured-v2` auf dem R3-Stand des
+Stand: 2026-08-31. Untersucht ist `structured-v2` auf dem R4-Stand des
 Branches `feature/state-authority-consolidation`. Die Matrix beschreibt den
 Istzustand; der spätere Authority-Cutover bleibt ausdrücklich aus. Normativ sind
 heute die append-only Records zusammen mit dem noch autoritativen
@@ -28,7 +28,7 @@ Dateien und Review-Pakete sind Caches beziehungsweise Projektionen.
   Provider-Bindungen und irreversible externe Side Effects reserviert.
 
 Die Inventur ergibt 26 Kanten, 33 `mismatch(...)`-Stellen in
-`artifact_migration.py`, 20 direkte `ArtifactResumeError`-Stellen dort, 22
+`artifact_migration.py`, 22 direkte `ArtifactResumeError`-Stellen dort, 23
 `ArtifactBridgeError`-Stellen in Migration, Bridge und Orchestrator sowie fünf
 `_recoverable_*`-Prädikate (vier in `artifact_migration.py`, eines für den
 finalen Review-Mirror in `orchestrator.py`).
@@ -355,23 +355,26 @@ auch ohne Mirror eine eigenständige Sicherheitsgrenze.
 ### A14 — Slice-Commit
 
 1. **Autoritativer Eingaberecord:** gültige Review- und Attestation-Records;
-   erwartet wird nach dem Git-Commit ein `Binding(binding_kind=commit)`.
+   vor dem Git-Commit steht `SideEffect(intent)`, danach `SideEffect(result)`
+   und `Binding(binding_kind=commit)`.
 2. **State-/Cachefelder:** `slices[*].commit_ref/status`, Work-unit-Status,
    `completed_side_effects` und aktueller Schritt.
-3. **Schreibreihenfolge und Crashpunkte:** Git-Commit **zuerst** → Binding-
-   Record → Engine markiert Slice/Work-unit → State → Checkpoint. Crash nach
-   Commit vor Binding kann nicht allein aus dem Recordpräfix einem Übergang
-   zugeordnet werden; Crash nach Binding ist replaybar.
-4. **Idempotenz:** vorhandenes Binding verhindert ein zweites logisch anderes
-   Binden; der Git-Commit selbst benötigt vor Wiederholung Erkennung über
-   Repositoryzustand und Ziel-SHA.
+3. **Schreibreihenfolge und Crashpunkte:** Intent mit vorherigem HEAD und
+   erwartetem Baum → pfadexakter Git-Commit → Resultat mit Commit-SHA →
+   Binding → Engine/State/Checkpoint. Offene Git-Intents werden vor der
+   Neuberechnung des veränderten Worktrees über Work-unit und Slice-ID
+   aufgefunden; der durch den Commit veränderte HEAD oder Diff kann ihre
+   Wiederfindung deshalb nicht verhindern.
+4. **Idempotenz:** Bei offenem Intent bedeutet unveränderter vorheriger HEAD
+   "nicht erfolgt"; genau ein Childcommit mit demselben erwarteten Baum
+   bedeutet "erfolgt". Jede andere Parent-/Baumlage ist unbekannt und stoppt.
 5. **Recoverable-Sonderfall:** keiner.
 6. **Semantik-/Protokollversion:** `BindingPayload` Schema 2, Git-SHA als Ziel.
-7. **Externe Side Effects:** Git-Commit ist dauerhaft und liegt vor seinem
-   ersten autoritativen Record.
+7. **Externe Side Effects:** Git-Commit ist dauerhaft, liegt aber zwischen
+   seinem autoritativen Intent und Resultat.
 
-Bewertung: **bleibt bewusst** — S4 braucht für Commit-vor-Record entweder einen
-vorbereitenden Intentrecord oder eine explizite Git-Reconciliation.
+Bewertung: **bleibt bewusst** — R4 deckt die irreversible Kante mit exakter
+Parent-/Baum-Reconciliation; diese Prüfung bleibt auch nach dem Cutover.
 
 ### A15 — Workflowabschluss
 
@@ -398,35 +401,31 @@ projiziert; die Finalbinding-Prüfung bleibt recordintern.
 ### A16 — Finaler Git-Commit der verwalteten Auditprojektion
 
 1. **Autoritativer Eingaberecord:** finaler `Binding` und
-   `WorkflowCompletion` samt bereits geschriebener Auditprojektion. Heute folgt
-   **kein** Record auf den durch `commit_managed_audit_report()` erzeugten
-   Commit; nötig wäre ein Intent-/Resultat- oder Audit-Commit-Binding.
-2. **State-/Cachefelder:** `audit_report_path`, `branch` und der projizierte
-   Auditinhalt. Die resultierende Git-SHA lebt nur im zurückgegebenen
-   `WorkflowRunResult.commit_ref`, nicht in State oder Record.
-3. **Schreibreihenfolge und Crashpunkte:** finaler Review/Checkpoint inklusive
-   Completion-Record → `assert_structured_decision_context()` → Git-Identität
-   und exakte Pfadmenge prüfen → aktuellen Indexbaum merken → Auditpfad mit
-   `git add` stagen → Pfadexaktheit prüfen → `git commit` → neuen HEAD lesen →
-   SHA zurückgeben. Crash vor Commit kann einen gestagten Auditpfad
-   hinterlassen; Crash nach Commit vor HEAD-Lesen/Rückgabe hinterlässt einen
-   dauerhaften, aber recordlosen Commit.
-4. **Idempotenz:** ohne semantische Auditänderung liefert der Wiederholungslauf
-   den aktuellen HEAD; fremde Änderungen oder fremde Stagingpfade stoppen. Nach
-   Crash hinter dem Commit wird nicht doppelt committed, aber der Recordpräfix
-   kann den vorhandenen Commit keinem Run beweisbar zuordnen.
+   `WorkflowCompletion` samt Auditprojektion; `SideEffect(intent/result)` bindet
+   den Audit-Commit zusätzlich an vorherigen HEAD und erwarteten Baum.
+2. **State-/Cachefelder:** `audit_report_path`, `branch`, projizierter
+   Auditinhalt und die redundante Completionliste; die Git-SHA steht im
+   Side-effect-Resultat und im zurückgegebenen `WorkflowRunResult.commit_ref`.
+3. **Schreibreihenfolge und Crashpunkte:** finaler Review/Checkpoint → Git- und
+   Pfadprüfung → erwarteten Baum ohne Staging berechnen → Intent →
+   `commit_managed_audit_report()` mit `git add` und `git commit` → Resultat → SHA zurückgeben. Crash nach Commit vor Resultat
+   wird über Parent und Baum lokal klassifiziert.
+4. **Idempotenz:** unveränderter Vor-HEAD erlaubt die noch nicht erfolgte
+   Operation auch im `claude_final_review`-/`completed`-Resume und lässt
+   `finalize_audit()` denselben offenen Intent wiederverwenden; exakt erwarteter
+   Childbaum wird als erfolgt bestätigt. Fremde HEADs, Parents, Bäume oder
+   Stagingpfade stoppen.
 5. **Recoverable-Sonderfall:** keiner. Die Git-Funktion restauriert den Index
    nur bei gefangener Exception und unverändertem HEAD; ein harter Prozesscrash
    besitzt keinen `_recoverable_*`-Pfad.
 6. **Semantik-/Protokollversion:** Workflow `structured-v2`, Record-Schema 2;
-   der Side Effect selbst liegt heute außerhalb des Recordprotokolls.
+   `SideEffectPayload` wurde additiv ohne Versionshebung aufgenommen.
 7. **Externe Side Effects:** `git add` verändert den Index; `git commit -m
    "docs: finalize orchestrator audit"` erzeugt einen irreversiblen Commit und
    bewegt HEAD.
 
-Bewertung: **bleibt bewusst** — der Audit-Commit braucht vor S4 eine eigene
-Intent-/Resultat-Reconciliation; er darf nicht im generischen Cacheabgleich
-verschwinden.
+Bewertung: **bleibt bewusst** — R4 implementiert die eigene
+Intent-/Resultat-Reconciliation; sie verschwindet nicht im Cacheabgleich.
 
 ### B01 — Generischer Append und durable-but-reported-failed
 
@@ -496,17 +495,23 @@ eigene Trust Boundary.
 ### B04 — Providerattempt Start und Terminalrecord
 
 1. **Autoritativer Eingaberecord:** erlaubende `ProviderInputMeasurement` und
-   optional `FinalReviewPreflight`; Folgerecorde sind
-   `ProviderAttempt(started)` und exakt ein terminaler Attempt.
+   optional `FinalReviewPreflight`; `SideEffect(intent)` steht vor
+   `ProviderAttempt(started)`, die dauerhaft persistierte Antwort/der terminale
+   Fehler vor `SideEffect(result)`.
 2. **State-/Cachefelder:** Agentprofil, Invocation-Failure, Quota/Retry-Gate,
    Nutzung und Ergebnis-Request-/Responsebindung.
-3. **Schreibreihenfolge und Crashpunkte:** started-Record → Providerprozess →
-   terminaler Record → Agentresultat/Review → State/Checkpoint. Crash nach
-   started vor Prozess, während Provider, nach Providerantwort vor terminalem
-   Record oder nach terminalem Record ist möglich.
-4. **Idempotenz:** logische Operation, Bindingfingerprint, Measurement,
-   Inputdigest, Modell/Effort und Attemptnummer sind immutable; ein terminaler
-   direkter Vorgänger ist für den nächsten Versuch erforderlich.
+3. **Schreibreihenfolge und Crashpunkte:** Intent → started-Record →
+   Providerprozess → dauerhafte Rohantwort → Agentresultat/Review → terminaler
+   Attempt → Resultat → State/Checkpoint.
+4. **Idempotenz:** logische Operation, Inputdigest, Binding, Runde,
+   Attemptnummer und der daraus deterministisch gebildete, versuchsspezifische
+   Antwortpfad bilden den stabilen Schlüssel. Nur die Antwortdatei desselben
+   Attempts oder dessen terminaler Fehler beweist "erfolgt"; eine Antwort
+   eines früheren Attempts ist kein Beleg. Fehlt beides hinter einem
+   `started`-Record, ist der Remotezustand unbekannt und ein zweiter Start
+   verboten. Fehlt auch der `started`-Record, beweist das Recordpräfix, dass
+   der Prozess noch nicht gestartet wurde und derselbe Intent darf ausgeführt
+   werden.
 5. **Recoverable-Sonderfall:** kein `_recoverable_*`; durable Terminalrecords
    werden bei Wiederholung auf vollständige Ergebnisgleichheit geprüft.
 6. **Semantik-/Protokollversion:** `ProviderAttemptPayload` Schema 2 und im
@@ -514,8 +519,8 @@ eigene Trust Boundary.
 7. **Externe Side Effects:** Providerstart ist kostenpflichtig und kann nicht
    zurückgerollt werden.
 
-Bewertung: **bleibt bewusst** — Exactly-once ist extern nicht erzwingbar; die
-started/terminal-Kausalität minimiert Doppelaufrufe und muss eigenständig sein.
+Bewertung: **bleibt bewusst** — der unbekannte Remotezustand stoppt
+fail-closed; Reconciliation startet niemals probeweise einen zweiten Provider.
 
 ### B05 — Native Codex Request, Rohantwort und AgentResult
 
@@ -601,19 +606,21 @@ projiziert statt mit einer zweiten fachlichen Quelle verglichen.
    Finding-Export.
 2. **State-/Cachefelder:** Work-unit, Plancommit, Handoff-/Export-IDs und
    Zieltaskdigest.
-3. **Schreibreihenfolge und Crashpunkte:** Binding/Export → Taskdatei schreiben
-   → Queue verschieben → Zielimport oder nächster State. Crash nach Record vor
-   Datei, nach Datei vor Move, nach Move vor Import ist möglich.
-4. **Idempotenz:** Ziel, Approval-/Attestation-IDs beziehungsweise Taskdigest
-   und Exportrecord identifizieren dieselbe Übergabe.
+3. **Schreibreihenfolge und Crashpunkte:** Binding/Export → Datei-Intent →
+   Taskdatei → Datei-Resultat → Queue-Intent → Move → Queue-Resultat →
+   Zielimport. Jeder Zwischenpunkt ist replaybar.
+4. **Idempotenz:** Datei fehlt = nachweislich nicht geschrieben, identischer
+   Inhaltsdigest = erfolgt, abweichender Inhalt = unbekannt/Stop. Bei Queue gilt
+   analog: exakte Quelle allein = nicht bewegt, exaktes Ziel allein = bewegt,
+   beide oder keines = unbekannt/Stop.
 5. **Recoverable-Sonderfall:** keiner; `prepare_finding_handoff()` akzeptiert
    einen vorhandenen Export nur bei identischen vorbereiteten Taskbytes.
 6. **Semantik-/Protokollversion:** Binding/Handoff Schema 2; Taskformat ist über
    SHA-256 gebunden.
 7. **Externe Side Effects:** Dateischreiben und Queuebewegung.
 
-Bewertung: **bleibt bewusst** — externe Publikation erfordert eine eigene
-Reconciliation mit Intent/Resultat.
+Bewertung: **bleibt bewusst** — R4 liefert getrennte Datei- und
+Source-/Destination-Reconciliation mit Intent/Resultat.
 
 ### B09 — Checkpoint-Dualwrite und Auditprojektion
 
@@ -622,21 +629,31 @@ Reconciliation mit Intent/Resultat.
    aber keine neuen fachlichen Records außer den zuvor ergänzten Baselines.
 2. **State-/Cachefelder:** gesamter `WorkflowState`, `runtime_history`,
    `audit_report_path`, Checkpoint-Cursor und Audit-Markdown.
-3. **Schreibreihenfolge und Crashpunkte:** `_bind_artifact_store()` →
-   `_persist_structured_baseline()` → `_project_audit()` → `save_workflow_state()` →
-   `write_workflow_checkpoint()` → In-memory-`active_state`. Crash nach jedem
-   Schritt erzeugt unterschiedliche Cachestände; auch Store-Bindung/Baseline/
-   Projektion können denselben Dualwrite-Fehler auslösen. Die Recordkette bleibt
-   vollständig oder voraus.
+3. **Schreibreihenfolge und Crashpunkte:** `_bind_artifact_store()` → Baseline
+   inklusive Ledgerinitialisierung → Auditprojektion → Datei-Intent → State →
+   Datei-Resultat → Datei-Intent → Checkpoint → Datei-Resultat. Projektions-
+   Side-effects verwenden die Work-unit `projection` und werden nicht zu einem
+   fachlichen Mirrorfakt aufgewertet. Jeder überschreibende Projektionsintent
+   bindet Ziel, Vorher-Digest, Soll-Digest und die exakten Sollbytes, bevor der
+   atomare Replace beginnt.
 4. **Idempotenz:** Baseline-Append ist record-idempotent; Projektionen müssen
    aus demselben Präfix deterministisch überschreibbar sein. State und
-   Checkpoint besitzen heute noch getrennte Gleichheitsanforderungen.
+   Checkpoint besitzen heute noch getrennte Gleichheitsanforderungen. Die
+   atomaren Textschreiber verwenden `newline=""`, sodass Intentdigest und
+   physische Bytes auch unter Windows identisch bleiben. Stimmt das Ziel beim
+   Resume noch mit dem gebundenen Vorher-Digest überein, werden ausschließlich
+   die im Intent persistierten Bytes geschrieben; stimmt es mit dem Soll-Digest
+   überein, wird nur das Resultat ergänzt. Jede dritte Lage stoppt fail-closed.
 5. **Recoverable-Sonderfall:** die vier Migration-Prädikate und der finale
    Denial-Prädikat decken nur bestimmte Record-vor-Mirror-Fenster, nicht das
    allgemeine Dualwrite.
 6. **Semantik-/Protokollversion:** Records Schema 2; State/Checkpoint Version 3.
-7. **Externe Side Effects:** Schreiben des verwalteten Auditdokuments und
-   mehrerer Dateien; kein Provider/Git innerhalb von `checkpoint()`.
+7. **Externe Side Effects:** State- und Checkpointdatei sind an Vorherzustand
+   und Sollbytes gebunden; fehlendes Ziel ist nur bei gebundenem `absent`
+   nicht erfolgt, identisches Sollziel ist erfolgt, identischer Vorherzustand
+   ist exakt nachholbar und jede Abweichung unbekannt/Stop. Symlinks und andere
+   nicht reguläre Dateitypen werden nie als dauerhaftes Ergebnis akzeptiert.
+   Das Auditdokument bleibt Projektion.
 
 Bewertung: **wird generisch** — alle drei Dateien werden Cacheprojektionen mit
 einem gemeinsamen Head/Digest-Abgleich und atomarer Neuprojektion.
@@ -650,15 +667,27 @@ einem gemeinsamen Head/Digest-Abgleich und atomarer Neuprojektion.
    Outboxziel. Verglichen werden Workflowresultat ↔ Watchidentity ↔
    Success-/Rejection-Evidence ↔ tatsächliche Task-/Zieldateibytes.
 3. **Schreibreihenfolge und Crashpunkte:** terminale Records → State/Checkpoint
-   → Watch-Ergebnisdatei → Inbox/Processing nach Outbox verschieben. Crash vor
-   Ergebnis, zwischen Ergebnis und Move oder nach Move vor Prozessende ist
-   möglich.
+   → Watch-Evidence → Queue-Intent → Inbox nach gebundenem Outboxziel bewegen →
+   Queue-Resultat → Markerbereinigung.
 4. **Idempotenz:** Run-/Taskidentität, Protokollmodus, Taskdigest,
    Evidence-Digest und Zielpfad müssen übereinstimmen; Quelle und Ziel dürfen
-   nie gleichzeitig oder beide nicht existieren. Ein vorhandenes Ergebnis darf
-   nur identisch wiederverwendet werden.
-5. **Recoverable-Sonderfall:** keiner im Matrixscope; Watch hat eigene
-   technische Retry-/Poison-Regeln.
+   nie gleichzeitig oder beide nicht existieren. Der stabile Queue-`effect_key`
+   wird ausschließlich aus kanonischer Quelle und Taskdigest gebildet; der
+   zeitgestempelte Zielpfad ist gebundener Operationsparameter, aber kein
+   Schlüsselbestandteil. Ein vorhandenes Ergebnis darf nur identisch
+   wiederverwendet werden.
+5. **Recoverable-Sonderfall:** kein `_recoverable_*`; direkte Queue-Recovery
+   liest denselben Ledgerintent und dieselbe Source-/Destination-Regel. Eine
+   technische Ablehnung vor der ersten Workflowbaseline initialisiert vor der
+   Poison-Bewegung einen minimalen Ledgerprefix. Ist die Recordkette selbst
+   korrupt, verwendet die irreversible Quarantäne einen aus Run-ID, Taskdigest
+   und Quellname deterministisch herleitbaren Zielpfad, damit der Watcher nicht
+   in einer Endlosschleife bleibt; die korrupte Kette wird dabei weder gelesen
+   noch repariert. Weil eine korrupte Authority kein weiteres autoritatives
+   Record sicher aufnehmen kann, ist diese Quarantäne ausdrücklich kein
+   abgeschlossenes strukturiertes Side Effect: Die gebundene Poison-Diagnose
+   dokumentiert den Abbruch, während die deterministische Bewegung ausschließlich
+   der sicheren Isolierung dient.
 6. **Semantik-/Protokollversion:** terminales Record-Schema 2; Watchprojektion
    ist Cache/Transport, nicht Authority.
 7. **Externe Side Effects:** Ergebnisdatei und Queueverschiebung.
@@ -720,7 +749,7 @@ die Export-Planbindung in A02/B03. Die grammatisch plurale R3-Meldung
 `slice boundaries differ from state-v3` ist zusätzlich in der direkten
 Resume-Fehlerliste gebunden.
 
-### 20 direkte `ArtifactResumeError`-Stellen
+### 22 direkte `ArtifactResumeError`-Stellen
 
 | Meldungsstamm | Kante |
 |---|---|
@@ -734,6 +763,8 @@ Resume-Fehlerliste gebunden.
 | `workflow policies differ from state-v3` | R2 Returncount-/Limitprojektion |
 | `structured-v2 run has no slice boundary prefix` | R3 Slicegrenzenpräfix fehlt für einen bereits gebundenen Slice; fail-closed vor Resume |
 | `slice boundaries differ from state-v3` | R3 Start-Commit, exakte Scopegruppen und gemessener Startfingerprint |
+| `structured-v2 run has no unique initialized side-effect ledger` | R4 Ledgerpräfix fehlt oder ist mehrdeutig; keine Nachrüstung aus dem Mirror |
+| `completed side effects differ from the authoritative ledger` | R4 Mirror ist der Resultatfolge voraus oder kein exakter Präfix; ein reines Record-vor-Mirror-Suffix wird deterministisch projiziert |
 | `is historical and cannot be resumed` | A01 |
 | `structured-v2 state lacks the complete native Codex-Claude transport binding` | A01 |
 | `record chain for run` / `is invalid` | A01 |
@@ -745,7 +776,7 @@ Resume-Fehlerliste gebunden.
 | `finding handoff source is no longer valid` | A02 |
 | `finding import differs from its revalidated source` | A02/B03 |
 
-### 22 `ArtifactBridgeError`-Stellen
+### 24 `ArtifactBridgeError`-Stellen
 
 | Meldungsstamm | Kante |
 |---|---|
@@ -761,6 +792,8 @@ Resume-Fehlerliste gebunden.
 | `finding export differs from its accepted source replay` | B03 |
 | `finding import task bytes differ from the export binding` | B03 |
 | `structured artifact differs semantically from the state-v3 statement` | B01 |
+| `side effect result has no authoritative intent` | A14/A16/B04/B08/B09/B10 |
+| `side effect result changed its immutable intent binding` | A14/A16/B04/B08/B09/B10 |
 | `provider attempt measurement is not in the accepted chain` | B04 |
 | `provider attempt work unit differs from its measurement` | B04 |
 | `provider attempt operation instance must be non-empty` | B04 |
@@ -787,7 +820,7 @@ Resume-Fehlerliste gebunden.
 | `content-addressed review packet cache differs from canonical bytes` | B06 |
 | `native agent recovery has divergent agent-result records` | B05 |
 | `native agent recovery result idempotency binding differs` | B05 |
-| `native Codex recovery raw response digest differs from its record` | B05 |
+| `native implementer recovery raw response digest differs from its record` | B05 |
 | `native Codex recovery record differs from its durable binding` | B05 |
 | `native Codex recovery result differs from its durable record` | B05 |
 | `native reviewer recovery record differs from the rebuilt request` | B06 |
@@ -795,6 +828,8 @@ Resume-Fehlerliste gebunden.
 | `pre-policy native reviewer result differs from its decision record` | B06 |
 | `native agent result logical binding differs` | B05 |
 | `persisted finding handoff export differs from the prepared task` | B08 |
+| `file side-effect target differs before result completion` | B05/B08/B09; Zieltyp/-digest unmittelbar vor Datei-Resultat, **bleibt bewusst** |
+| `projection target differs before result completion` | B09; State-/Checkpointbytes unmittelbar vor Datei-Resultat, **bleibt bewusst** |
 | `structured audit dual-write mismatch` | B09 |
 | `workflow history review packet cache differs from canonical bytes` | B06/B09 |
 | `differs from the immutable persisted profile` | A01/B04; Runtimeprofil ↔ persistierte ProtocolBinding, **bleibt bewusst** |
@@ -854,9 +889,12 @@ folgende Meldungsstämme:
 | `terminal workflow result differs from watch identity` | Workflowresultat ↔ Watchidentity | **wird generisch** |
 | `queue source digest differs from success evidence` | Quellbytes ↔ Evidence vor Move | **bleibt bewusst** an der Side-effect-Grenze |
 | `bound queue destination digest differs from success evidence` | Zielbytes ↔ Evidence nach Move | **bleibt bewusst** an der Side-effect-Grenze |
+| `bound queue destination differs before ledger completion` | Zieltyp und Zielbytes ↔ Evidence unmittelbar vor dem Queue-Resultatrecord | **bleibt bewusst**; verhindert ein autoritatives Resultat vor physischer Feststellung |
 | `Workflow result run id %s differs from persisted watch identity %s for %s.` | Prozessresultat ↔ persistierte Watchidentity | **wird generisch** |
 | `Workflow protocol mode %s differs from persisted watch identity %s for %s.` | Prozessresultat ↔ persistierte Watchidentity | **wird generisch** |
 | `bound success evidence differs from terminal workflow state` | direkte Queue-Recovery: Success-Evidence ↔ persistierter terminaler State | **wird generisch** |
+| `ledgered queue destination differs from the task binding` | R4 Queue-Resultat ↔ exakt gebundene Outboxdatei und Taskdigest | **bleibt bewusst** |
+| `ledgered queue destination differs before result completion` | Fehlgeschlagene/Poison-Queuebewegung ↔ Zieltyp und Digest vor ihrem Resultatrecord | **bleibt bewusst**; verhindert einen falschen abgeschlossenen Ledgerzustand |
 | `Terminal workflow result differs from bound watch task identity` | neuer Terminalabschluss ↔ gebundene Watch-Taskidentität vor Publikation | **wird generisch** |
 
 ### `_recoverable_*`-Inventar
@@ -941,7 +979,7 @@ dem normativen Zustand entfernt.
 | `work_units[*].codex_return_count` | Return-/Correctionpolicy | Iterationsgate | **ja seit R2** über die benannte Mirrorprojektion auf `WorkflowPolicyPayload.implementer_return_count`; nicht aus denied Reviews gezählt | **in R2 gedeckt** durch rollenbasierten Policyrecord |
 | `work_units[*].max_codex_returns` | Initialisierung/Policy | Iterationsgate | **ja seit R2** über die benannte Mirrorprojektion auf `WorkflowPolicyPayload.max_implementer_returns`; Iteration-limit-Fortsetzung ändert diesen Fakt unabhängig vom Zähler | **in R2 gedeckt** durch rollenbasierten Policyrecord |
 | `work_units[*].reviewer` | Initialisierung/Engine | Reviewerdispatch | **ja seit R2 als Gruppe-C-Projektion**: `None` vor dem ersten denied Review, danach die Rolle des letzten denied `ReviewPayload` derselben Work-unit | ableitbar; kein eigener Record |
-| `work_units[*].completed_side_effects` | Engine nach Side Effect | Idempotenz/Resume | **nein** | **STOP**: Intent-/Resultatrecord je Side Effect |
+| `work_units[*].completed_side_effects` | Engine nach Side Effect | Idempotenz/Resume | **ja seit R4** aus den in Resultatreihenfolge reduzierten `SideEffectPayload`-Paaren je Work-unit | **in R4 gedeckt**; Ketten ohne initialisiertes Ledger stoppen |
 | `work_units[*].active_test_fingerprint`, `active_test_paths` | Testchange-Gate | Testscope/Resume | **nicht vollständig**; Gatepayload trägt weder Pfade noch Resume-Step | **STOP** |
 | aktueller `gate.status/reason/detail/fingerprint/paths/resume_step` | Gatepolicy | Resume/CLI/Dispatch | **nein**; `Gate` bildet nur abgeschlossene Entscheidung mit Kind, Entscheidung und Rationale ab | **STOP**: Pending-/Cleared-Gatetransitionen |
 | `gate_decisions[*].paths` und `resume_step` | User-/Policyentscheidung | Resume, Testscope | **nein**; `GatePayload` lässt beide Fakten aus | **STOP** |
@@ -982,8 +1020,9 @@ dem normativen Zustand entfernt.
 
 ### S4a-Sortierung der STOP-Einträge
 
-Die folgende Tabelle ist die verbindliche Auflösung der vierzig fett als
-`STOP` markierten Zeilen oben. Jede Zeile kommt genau einmal vor. `A` benennt
+Die folgende Tabelle ist die verbindliche Auflösung der aktuell dreiundzwanzig
+fett als `STOP` markierten Zeilen sowie der bereits in R1 bis R4 geschlossenen
+Zeilen oben. Jede Zeile kommt genau einmal vor. `A` benennt
 den benötigten Recordtyp, das Feld und den heutigen beziehungsweise künftigen
 Schreiber. `B` benennt die tatsächlichen Leser und begründet, weshalb deren
 Entscheidungen den Mirrorwert nicht benötigen. `C` benennt den vollständigen
@@ -1009,7 +1048,7 @@ keinen fett markierten STOP enthält.
 | `work_units[*].codex_return_count` | A | **In R2 geschlossen:** `WorkflowPolicyPayload.implementer_return_count`; Schreiber: Work-unit-Initialisierung und `record_review_denial()` bei jedem normalen Rücklauf. Die benannte Projektion `project_implementer_return_policy()` bildet den unveränderten State-v3-Mirrornamen auf die Rolle ab. |
 | `work_units[*].max_codex_returns` | A | **In R2 geschlossen:** `WorkflowPolicyPayload.max_implementer_returns`; Schreiber: Work-unit-Initialisierung und explizite Iteration-limit-Fortsetzung. Diese Fortsetzung erhöht nur die Obergrenze und lässt `implementer_return_count` unverändert. |
 | `work_units[*].reviewer` | C | **In R2 geschlossen:** Die benannte und vor/nach einem Denial gegen den State-v3-Mirror getestete Projektion `project_work_unit_reviewers()` liefert vor dem ersten Review `None`, danach die Rolle des letzten denied `ReviewPayload` derselben Work-unit. Schema 2 erlaubt dafür ausschließlich `Role.CLAUDE`; ein eigener Reviewerrecord existiert nicht. |
-| `work_units[*].completed_side_effects` | A | `SideEffectPayload.effect_key/phase/result`; Schreiber: jeweiliger Side-effect-Wrapper vor und nach Git-, Provider-, Datei- oder Queueoperation. Resume und Idempotenz lesen das Ledger. |
+| `work_units[*].completed_side_effects` | A | **In R4 geschlossen:** `SideEffectPayload.effect_key/phase/result` plus immutable Klasse/Work-unit/Operationsparameter; Schreiber: jeweiliger Wrapper vor und nach Git-, Provider-, Datei- oder Queueoperation. Pure Replay projiziert Resultate in Abschlussreihenfolge; Resume verlangt, dass der Mirror ein exakter Präfix ist, und übernimmt ausschließlich ein autoritatives Record-vor-Mirror-Suffix. Git prüft Parent/erwarteten Baum, Provider die dauerhafte Antwort oder terminalen Fehler, überschreibende Projektionen Soll-/Vorher-Digest plus im Intent persistierte Sollbytes und Queue genau eine gebundene reguläre Source-/Destinationlage ohne Symlink. Unbekanntes stoppt, Ketten ohne Ledgerinitialisierung werden nicht nachgerüstet. |
 | `work_units[*].active_test_fingerprint`, `active_test_paths` | A | `GateTransitionPayload.active_test_fingerprint/paths`; Schreiber: Testchange-Gate nach exakter Scopeentscheidung. Testscope und Resume lesen beide Werte gemeinsam. |
 | aktueller `gate.status/reason/detail/fingerprint/paths/resume_step` | A | `GateTransitionPayload.status/reason/detail/fingerprint/paths/resume_step`; Schreiber: Gatepolicy bei Pending, Clear und Resume. Der aktuelle Dispatch hängt unmittelbar davon ab. |
 | `gate_decisions[*].paths` und `resume_step` | A | `GateDecisionPayload.paths/resume_step`; Schreiber: User-/Policyentscheidung in `persist_gate_decision()`. Resume und Testscope benötigen die exakte Bindung. |
@@ -1034,6 +1073,19 @@ keinen fett markierten STOP enthält.
 | `runtime_history.codex_final_report` und weitere rohe Agenttexte | A | `ProviderContentPayload.response_sha256/content_bytes/content_kind`; Schreiber: Providerabschluss vor Cache-/Mirrorwrite. Abschlussbericht und Folgeprompt lesen die bytes, nicht nur deren Digest. |
 | `runtime_history.active_review_packet` | A | `ReviewPacketPayload.fingerprint/manifest/content_bytes`; Schreiber: `build_review_packet()` vor Providerstart. Recovery und Providerrequest lesen die kanonischen Bytes. |
 | sonstige `runtime_history`-Event-/Auditfelder | A | `WorkflowEventPayload.event_kind/work_unit_id/slice_id/round_number/record_refs` für noch nicht durch die fachlichen Records abgedeckte Ereignisse; Schreiber: `_record_review()`, Validation- und Transitionpfade. Erst danach darf ein reiner Audit-/Resume-Projektionsanteil als B entfernt werden. |
+
+#### R4-Suitelaufzeit
+
+Der vollständige WSL-Lauf vom 31. August 2026 mit
+`python3 -m pytest tests/ -q` ist grün: **1297 passed in 142,81 s**.
+Gegenüber der RP-Baseline von **1264 passed in 279 s** sind das 33 zusätzliche
+Tests bei einer um **136,19 s beziehungsweise 48,8 %** niedrigeren von Pytest
+ausgewiesenen Laufzeit. Der zunächst gemessene Ledger-Anstieg wurde auf die bei
+jedem Record erneut vollständig selbstgeprüfte statische JSON-Schema-Definition
+zurückgeführt. Der Schemaquellbaum wird nun einmal privat geladen und geprüft;
+`load_schema()` gibt weiterhin nur eine isolierte Kopie aus. Damit bleibt der
+Cache abgeleitet und ohne änderbare Autorität, während jeder Record weiterhin
+gegen das bereits selbstgeprüfte Schema validiert wird.
 
 #### Entscheidung zu Schema 2 und Bestandsrecords
 

@@ -62,6 +62,7 @@ def atomic_write_file(path: Path, content: str) -> None:
         prefix=f".{path.name}.",
         suffix=".tmp",
         delete=False,
+        newline="",
     ) as tmp:
         tmp.write(content)
         tmp_path = Path(tmp.name)

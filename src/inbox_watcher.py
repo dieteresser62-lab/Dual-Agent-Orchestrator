@@ -23,6 +23,16 @@ from error_classification import (
     classify_exception,
     enforce_record_start_boundary,
 )
+from artifact_bridge import ArtifactBridge, ArtifactBridgeError
+from artifact_store import ArtifactStore
+from artifact_replay import replay_artifacts
+from side_effects import (
+    ReconciliationOutcome,
+    SideEffectExecutor,
+    SideEffectReconciliationError,
+    SideEffectSpec,
+    reconcile_queue_move,
+)
 from state_io import atomic_write_file
 from workflow import WorkflowRunResult
 from workflow_state import GateReason, WorkUnitStatus
@@ -600,6 +610,140 @@ def move_to_outbox(task_file: Path, outbox_subdir: Path, *, source_name: str | N
     return move_to_reserved_outbox(task_file, destination)
 
 
+def move_to_outbox_with_ledger(
+    task_file: Path,
+    outbox_subdir: Path,
+    *,
+    repository_root: Path,
+    run_id: str,
+    task_digest: str,
+    source_name: str | None = None,
+) -> Path:
+    """Move one structured task through the same crash-safe queue ledger."""
+    bridge = ArtifactBridge(ArtifactStore(repository_root.resolve(), run_id))
+    source = _canonical(task_file)
+    chain = bridge.store.load_chain()
+    if not chain:
+        initializer = ("structured-v2-side-effect-ledger",)
+        bridge.record_side_effect_intent(
+            effect_class="ledger",
+            work_unit_id="run",
+            operation=initializer,
+            fingerprint_sha256=task_digest,
+        )
+        bridge.record_side_effect_result(
+            effect_class="ledger",
+            work_unit_id="run",
+            operation=initializer,
+            result="initialized",
+            fingerprint_sha256=task_digest,
+        )
+        chain = bridge.store.load_chain()
+    replay = replay_artifacts(chain, run_id)
+    initializers = tuple(
+        item
+        for item in replay.side_effects
+        if item.effect_class == "ledger"
+        and item.operation == ("structured-v2-side-effect-ledger",)
+        and item.result == "initialized"
+    )
+    if len(initializers) != 1:
+        raise ValueError("queue move requires one initialized side-effect ledger")
+    existing = tuple(
+        item
+        for item in replay.side_effects
+        if item.effect_class == "queue_move"
+        and item.work_unit_id == "queue"
+        and item.operation[0] == str(source)
+        and item.operation[2] == task_digest
+    )
+    if len(existing) > 1:
+        raise ValueError("queue source has multiple move ledger entries")
+    destination = (
+        Path(existing[0].operation[1])
+        if existing
+        else _canonical(
+            build_outbox_destination(
+                outbox_subdir, source_name or task_file.name
+            )
+        )
+    )
+    spec = SideEffectSpec(
+        "queue_move",
+        "queue",
+        (str(source), str(destination), task_digest),
+        task_digest,
+    )
+
+    def perform_queue_move() -> tuple[Path, str]:
+        moved = (
+            move_to_reserved_outbox(task_file, destination)
+            if task_file.exists()
+            else destination
+        )
+        if (
+            not destination.is_file()
+            or destination.is_symlink()
+            or _task_digest(destination) != task_digest
+        ):
+            raise ValueError(
+                "ledgered queue destination differs before result completion"
+            )
+        return moved, task_digest
+
+    result = SideEffectExecutor(bridge).execute(
+        spec,
+        reconcile=lambda: reconcile_queue_move(
+            task_file, destination, task_digest
+        ),
+        perform=perform_queue_move,
+    )
+    if not destination.is_file() or _task_digest(destination) != task_digest:
+        raise ValueError("ledgered queue destination differs from the task binding")
+    return destination
+
+
+def move_poison_to_outbox_recoverably(
+    task_file: Path,
+    outbox_subdir: Path,
+    *,
+    repository_root: Path,
+    run_id: str,
+    task_digest: str,
+    source_name: str,
+    quarantine_diagnostic: Callable[[str], None] | None = None,
+) -> Path:
+    """Quarantine even a pre-baseline or corrupt run without a retry loop."""
+    try:
+        return move_to_outbox_with_ledger(
+            task_file,
+            outbox_subdir,
+            repository_root=repository_root,
+            run_id=run_id,
+            task_digest=task_digest,
+            source_name=source_name,
+        )
+    except (ValueError, ArtifactBridgeError, SideEffectReconciliationError) as exc:
+        detail = f"{type(exc).__name__}: {exc}"
+        if quarantine_diagnostic is not None:
+            quarantine_diagnostic(detail)
+        logger.error(
+            "Artifact chain is unavailable; using deterministic poison quarantine: %s",
+            exc,
+        )
+        destination = _canonical(
+            outbox_subdir
+            / f"quarantine-{run_id}-{task_digest[:16]}-{source_name}"
+        )
+        outbox_subdir.mkdir(parents=True, exist_ok=True)
+        outcome = reconcile_queue_move(task_file, destination, task_digest)
+        if outcome.outcome is ReconciliationOutcome.OCCURRED:
+            return destination
+        if outcome.outcome is not ReconciliationOutcome.NOT_OCCURRED:
+            raise ValueError("poison quarantine has an ambiguous physical state")
+        return move_to_reserved_outbox(task_file, destination)
+
+
 def move_to_reserved_outbox(task_file: Path, destination: Path) -> Path:
     # Re-check at the filesystem mutation boundary. Digest reads use O_NOFOLLOW,
     # while this guard prevents a path swapped afterward from being moved.
@@ -721,6 +865,7 @@ def finalize_queue_success(
     task_digest: str | None = None,
     protocol_mode: str = "structured-v2",
     publish: bool = False,
+    repository_root: Path | None = None,
 ) -> QueueFinalizationResult:
     """Publish or recover a bound, idempotent successful queue finalization."""
     try:
@@ -770,9 +915,43 @@ def finalize_queue_success(
             raise ValueError("queue source and bound destination both exist")
         if not source_exists and not destination_exists:
             raise ValueError("queue source and bound destination are both absent")
-        if source_exists:
-            if _task_digest(task_file) != evidence.task_digest:
-                raise ValueError("queue source digest differs from success evidence")
+        if source_exists and _task_digest(task_file) != evidence.task_digest:
+            raise ValueError("queue source digest differs from success evidence")
+        if repository_root is not None:
+            bridge = ArtifactBridge(
+                ArtifactStore(repository_root.resolve(), evidence.run_id)
+            )
+            spec = SideEffectSpec(
+                "queue_move",
+                "queue",
+                (str(source), str(destination), evidence.task_digest),
+                evidence.task_digest,
+            )
+
+            def perform_queue_move() -> tuple[Path, str]:
+                moved = (
+                    move_to_reserved_outbox(task_file, destination)
+                    if task_file.exists()
+                    else destination
+                )
+                if (
+                    not destination.is_file()
+                    or destination.is_symlink()
+                    or _task_digest(destination) != evidence.task_digest
+                ):
+                    raise ValueError(
+                        "bound queue destination differs before ledger completion"
+                    )
+                return moved, evidence.task_digest
+
+            SideEffectExecutor(bridge).execute(
+                spec,
+                reconcile=lambda: reconcile_queue_move(
+                    task_file, destination, evidence.task_digest
+                ),
+                perform=perform_queue_move,
+            )
+        elif source_exists:
             move_to_reserved_outbox(task_file, destination)
         elif not destination.is_file() or destination.is_symlink():
             raise ValueError("bound queue destination is not a regular file")
@@ -1233,15 +1412,37 @@ def watch_inbox(
                 if attempts >= max_retries:
                     # Poison-pill naming makes permanently failing tasks visible to operators.
                     poison_name = f"{task_file.name}.poison"
+                    quarantine_diagnostics: list[str] = []
                     try:
-                        destination = move_to_outbox(task_file, outbox_failed_dir, source_name=poison_name)
+                        destination = (
+                            move_poison_to_outbox_recoverably(
+                                task_file,
+                                outbox_failed_dir,
+                                repository_root=Path.cwd(),
+                                run_id=task_result.run_id,
+                                task_digest=identity.task_digest,
+                                source_name=poison_name,
+                                quarantine_diagnostic=quarantine_diagnostics.append,
+                            )
+                            if task_result.protocol_mode == "structured-v2"
+                            and identity is not None
+                            else move_to_outbox(
+                                task_file,
+                                outbox_failed_dir,
+                                source_name=poison_name,
+                            )
+                        )
                         report: Path | None = None
                         try:
                             report = write_poison_failure_report(
                                 destination,
                                 attempts=attempts,
                                 task_result=task_result,
-                                exception_detail=None,
+                                exception_detail=(
+                                    quarantine_diagnostics[-1]
+                                    if quarantine_diagnostics
+                                    else None
+                                ),
                             )
                         except Exception:
                             logger.exception(
@@ -1301,6 +1502,7 @@ def watch_inbox(
                     task_digest=identity.task_digest,
                     protocol_mode=identity.protocol_mode or "structured-v2",
                     publish=True,
+                    repository_root=Path.cwd(),
                 )
                 if queue_result.disposition is QueueFinalizationDisposition.COMPLETED:
                     logger.info("Moved task to done outbox: %s", queue_result.destination)
@@ -1328,6 +1530,7 @@ def watch_inbox(
                     task_file,
                     inbox_dir=inbox_dir,
                     outbox_dir=outbox_dir,
+                    repository_root=Path.cwd(),
                 )
                 if queue_result.disposition is QueueFinalizationDisposition.COMPLETED:
                     logger.info(

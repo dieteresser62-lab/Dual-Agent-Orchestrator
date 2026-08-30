@@ -10,6 +10,8 @@ from types import SimpleNamespace
 
 import orchestrator
 import pytest
+from agent_adapters import NativeClaudeReviewAdapter
+from agent_config import AgentSettings
 from agent_runtime import (
     AgentInvocationError,
     NativeAgentCodexOutput,
@@ -130,6 +132,67 @@ from artifact_bridge import (
     finding_payload,
     review_payload,
 )
+
+
+def test_invoke_reviewer_dispatches_native_adapter_with_provider_ledger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = _repository(tmp_path, "feature/native-review-dispatch")
+    state = init_workflow_state(
+        run_id="native-review-dispatch",
+        task_file=str(repository / "task.md"),
+        branch="feature/native-review-dispatch",
+        branch_base=_git(repository, "rev-parse", "HEAD"),
+        slice_count=1,
+        task_digest="a" * 64,
+        task_scope_patterns=("src/runtime.py",),
+        target_branch="feature/native-review-dispatch",
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V2,
+            "2",
+            codex_result_transport="native-codex-v2",
+            claude_review_transport="native-claude-review-v2",
+        ),
+    ).with_current_step(WorkflowStep.CLAUDE_PLAN_REVIEW)
+    adapter = NativeClaudeReviewAdapter(
+        AgentSettings("claude", "claude", "sonnet", 1800, "high")
+    )
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={"claude": adapter},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    driver.active_state = state
+    driver._artifact_bridge = SimpleNamespace()
+    monkeypatch.setattr(driver, "assert_structured_decision_context", lambda: None)
+    captured: dict[str, object] = {}
+    expected = object()
+
+    def dispatch(**kwargs):  # type: ignore[no-untyped-def]
+        captured.update(kwargs)
+        return expected
+
+    monkeypatch.setattr(orchestrator, "run_native_review_agent_checked", dispatch)
+    invocation = ReviewerInvocation(
+        work_unit_id=state.current_work_unit_id,
+        step=WorkflowStep.CLAUDE_PLAN_REVIEW,
+        reviewer=AgentRole.CLAUDE,
+        round_number=1,
+        evidence_kind=EvidenceKind.FULL_SLICE,
+        fingerprint="b" * 64,
+        paths=(),
+        prompt="review",
+        native_request=object(),  # type: ignore[arg-type]
+    )
+
+    assert driver.invoke_reviewer(invocation) is expected
+    assert captured["adapter"] is adapter
+    lifecycle = captured["provider_attempt_lifecycle"]
+    assert lifecycle is not None
+    assert callable(lifecycle.start)
+    assert callable(lifecycle.terminal)
 from plan_handoff import render_implementation_task
 from native_codex_contract import (
     NativeCodexContext,
@@ -443,12 +506,18 @@ def test_run_records_exist_before_first_workflow_dispatch(
     with pytest.raises(DispatchObserved):
         run_production_workflow(task, args, force_new=True)
 
-    assert observed["types"] == (
+    assert observed["types"][:7] == (
         RecordType.RUN_IDENTITY,
         RecordType.RUN_PROFILE,
+        RecordType.SIDE_EFFECT,
+        RecordType.SIDE_EFFECT,
         RecordType.WORKFLOW_TRANSITION,
         RecordType.WORKFLOW_POLICY,
         RecordType.TASK,
+    )
+    assert all(
+        record_type is RecordType.SIDE_EFFECT
+        for record_type in observed["types"][7:]
     )
     assert observed["identity"] == RunIdentityPayload(
         str(task.resolve()),
@@ -1148,6 +1217,8 @@ def test_structured_bind_persists_contract_and_active_work_unit_once(
     assert tuple(item.record_type for item in chain) == (
         RecordType.RUN_IDENTITY,
         RecordType.RUN_PROFILE,
+        RecordType.SIDE_EFFECT,
+        RecordType.SIDE_EFFECT,
         RecordType.WORKFLOW_TRANSITION,
         RecordType.WORKFLOW_TRANSITION,
         RecordType.WORKFLOW_POLICY,
@@ -5131,6 +5202,7 @@ def test_prepare_finding_handoff_rejects_unstable_export_identity(
 def test_explicit_resume_of_watch_origin_runs_terminal_workflow_once_then_finalizes_queue(
     tmp_path: Path, monkeypatch
 ) -> None:
+    monkeypatch.chdir(tmp_path)
     inbox = tmp_path / "inbox"
     outbox = tmp_path / "outbox"
     inbox.mkdir()

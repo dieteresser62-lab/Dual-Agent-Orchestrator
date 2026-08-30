@@ -8,6 +8,9 @@ no network resolver is used.
 
 from __future__ import annotations
 
+import base64
+import binascii
+import copy
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -16,6 +19,7 @@ import json
 import math
 from pathlib import Path, PurePosixPath
 import re
+from functools import lru_cache
 from typing import Any, ClassVar, Mapping, Sequence, TypeAlias
 
 from schema_validation import (
@@ -63,6 +67,7 @@ class RecordType(StrEnum):
     PROVIDER_INPUT_MEASUREMENT = "provider_input_measurement"
     PROVIDER_ATTEMPT = "provider_attempt"
     FINAL_REVIEW_PREFLIGHT = "final_review_preflight"
+    SIDE_EFFECT = "side_effect"
 
 
 class FingerprintKind(StrEnum):
@@ -873,6 +878,150 @@ class ProviderAttemptPayload:
                 raise ArtifactValidationError("failed provider attempt requires a classified failure_kind")
 
 
+_SIDE_EFFECT_CLASSES = {
+    "git_commit",
+    "provider_start",
+    "file_write",
+    "queue_move",
+    "internal",
+    "ledger",
+}
+
+
+def stable_side_effect_key(
+    effect_class: str,
+    work_unit_id: str,
+    operation: Sequence[str],
+) -> str:
+    """Derive the immutable idempotency key for one physical operation."""
+    if effect_class == "internal":
+        if len(operation) != 1:
+            raise ArtifactValidationError("internal side effect requires one marker")
+        _require_identifier(operation[0], "internal side effect marker")
+    if effect_class == "queue_move" and len(operation) == 3:
+        key_operation = (operation[0], operation[2])
+    elif effect_class == "file_write" and len(operation) == 4:
+        # The expected digest already binds the durable bytes.  Excluding their
+        # base64 representation keeps key derivation bounded while the prior
+        # digest distinguishes successive overwrite generations.
+        key_operation = operation[:3]
+    else:
+        key_operation = tuple(operation)
+    digest = hashlib.sha256(
+        canonical_json([effect_class, work_unit_id, list(key_operation)])
+    ).hexdigest()
+    return f"side-effect:{effect_class}:{digest[:32]}"
+
+
+@dataclass(frozen=True, slots=True)
+class SideEffectPayload:
+    effect_key: str
+    effect_class: str
+    work_unit_id: str
+    operation: tuple[str, ...]
+    phase: str
+    result: str | None
+    record_type: ClassVar[RecordType] = RecordType.SIDE_EFFECT
+
+    @property
+    def status(self) -> str:
+        return self.phase
+
+    def __post_init__(self) -> None:
+        _require_identifier(self.effect_key, "side effect key")
+        if self.effect_class not in _SIDE_EFFECT_CLASSES:
+            raise ArtifactValidationError("side effect class is invalid")
+        _require_identifier(self.work_unit_id, "side effect work_unit_id")
+        if not self.operation:
+            raise ArtifactValidationError("side effect operation must not be empty")
+        for index, item in enumerate(self.operation):
+            _require_text(item, f"side effect operation[{index}]")
+            if any(character in item for character in ("\x00", "\r", "\n")):
+                raise ArtifactValidationError("side effect operation contains a control separator")
+        if self.effect_key != stable_side_effect_key(
+            self.effect_class, self.work_unit_id, self.operation
+        ):
+            raise ArtifactValidationError("side effect key differs from its immutable operation")
+        if self.effect_class == "git_commit":
+            if (
+                len(self.operation) != 6
+                or self.operation[0] not in {"slice_commit", "audit_commit"}
+                or re.fullmatch(r"[0-9a-f]{40}", self.operation[2]) is None
+                or re.fullmatch(r"[0-9a-f]{40}", self.operation[3]) is None
+            ):
+                raise ArtifactValidationError("Git side effect operation is invalid")
+            _require_sha256(self.operation[4], "Git side effect fingerprint")
+            _require_sha256(self.operation[5], "Git side effect message digest")
+        elif self.effect_class == "provider_start":
+            if (
+                len(self.operation) != 7
+                or not self.operation[5].isdigit()
+                or int(self.operation[5]) < 1
+            ):
+                raise ArtifactValidationError("provider side effect operation is invalid")
+            _require_sha256(self.operation[2], "provider side effect input digest")
+            _require_sha256(self.operation[3], "provider side effect binding")
+        elif self.effect_class == "file_write":
+            if len(self.operation) not in {2, 4}:
+                raise ArtifactValidationError("file side effect operation is invalid")
+            _require_sha256(self.operation[1], "file side effect content digest")
+            if len(self.operation) == 4:
+                if self.operation[2] != "absent":
+                    _require_sha256(
+                        self.operation[2], "file side effect prior content digest"
+                    )
+                try:
+                    durable_content = base64.b64decode(
+                        self.operation[3], validate=True
+                    )
+                except (ValueError, binascii.Error) as exc:
+                    raise ArtifactValidationError(
+                        "file side effect durable content is invalid"
+                    ) from exc
+                if hashlib.sha256(durable_content).hexdigest() != self.operation[1]:
+                    raise ArtifactValidationError(
+                        "file side effect durable content differs from its digest"
+                    )
+        elif self.effect_class == "queue_move":
+            if len(self.operation) != 3:
+                raise ArtifactValidationError("queue side effect operation is invalid")
+            _require_sha256(self.operation[2], "queue side effect content digest")
+        elif self.effect_class == "ledger" and (
+            self.work_unit_id != "run"
+            or self.operation != ("structured-v2-side-effect-ledger",)
+        ):
+            raise ArtifactValidationError("ledger initializer operation is invalid")
+        if self.phase not in {"intent", "result"}:
+            raise ArtifactValidationError("side effect phase is invalid")
+        if self.phase == "intent":
+            if self.result is not None:
+                raise ArtifactValidationError("side effect intent cannot carry a result")
+        elif self.result is None:
+            raise ArtifactValidationError("side effect result phase requires a result")
+        else:
+            _require_text(self.result, "side effect result")
+            if any(character in self.result for character in ("\x00", "\r", "\n")):
+                raise ArtifactValidationError("side effect result contains a control separator")
+            if self.effect_class == "git_commit" and re.fullmatch(
+                r"[0-9a-f]{40}", self.result
+            ) is None:
+                raise ArtifactValidationError("Git side effect result must be a commit")
+            if self.effect_class == "provider_start" and not (
+                _SHA256_RE.fullmatch(self.result)
+                or re.fullmatch(
+                    r"failed:(?:quota|network|timeout|permission|auth|binary|output|process|runtime)",
+                    self.result,
+                )
+            ):
+                raise ArtifactValidationError("provider side effect result is invalid")
+            if self.effect_class in {"file_write", "queue_move"}:
+                _require_sha256(self.result, "side effect content result")
+            if self.effect_class == "internal" and self.result != "completed":
+                raise ArtifactValidationError("internal side effect result is invalid")
+            if self.effect_class == "ledger" and self.result != "initialized":
+                raise ArtifactValidationError("ledger initializer result is invalid")
+
+
 @dataclass(frozen=True, slots=True)
 class FinalReviewPreflightPayload:
     provider: Role
@@ -1018,6 +1167,7 @@ ArtifactPayload: TypeAlias = (
     | QuotaPausePayload | TransientRetryPayload | ResumeCheckPayload
     | WorkflowCompletionPayload
     | ProviderInputMeasurementPayload | ProviderAttemptPayload | FinalReviewPreflightPayload
+    | SideEffectPayload
 )
 
 
@@ -1136,8 +1286,9 @@ def canonical_json(value: Any) -> bytes:
     ).encode("utf-8")
 
 
-def load_schema() -> dict[str, Any]:
-    """Load and self-check the bundled schema without remote resolution."""
+@lru_cache(maxsize=1)
+def _validated_schema() -> dict[str, Any]:
+    """Load and self-check the private immutable-at-runtime schema source."""
     schema = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
     if not isinstance(schema, dict):
         raise ArtifactValidationError("bundled artifact schema must be a JSON object")
@@ -1148,6 +1299,11 @@ def load_schema() -> dict[str, Any]:
     return schema
 
 
+def load_schema() -> dict[str, Any]:
+    """Return an isolated copy of the checked bundled schema."""
+    return copy.deepcopy(_validated_schema())
+
+
 def validate_artifact_document(document: Mapping[str, Any]) -> None:
     """Validate a document against the bundled, closed v2 schema offline.
 
@@ -1156,7 +1312,7 @@ def validate_artifact_document(document: Mapping[str, Any]) -> None:
     schema self-check rejects unknown keywords, preventing an unsupported
     extension from being accepted silently.
     """
-    schema = load_schema()
+    schema = _validated_schema()
     try:
         validate_schema_document(document, schema)
     except SchemaMismatch as error:
@@ -1325,6 +1481,11 @@ def _payload_from_dict(record_type: RecordType, raw: Mapping[str, Any]) -> Artif
             data["ended_at"], data["duration_seconds"], data["failure_kind"],
             ProviderUsagePayload(**usage) if usage is not None else None,
             data["model"], data["effort"],
+        )
+    if record_type is RecordType.SIDE_EFFECT:
+        return SideEffectPayload(
+            data["effect_key"], data["effect_class"], data["work_unit_id"],
+            tuple(data["operation"]), data["phase"], data["result"],
         )
     if record_type is RecordType.FINAL_REVIEW_PREFLIGHT:
         return FinalReviewPreflightPayload(

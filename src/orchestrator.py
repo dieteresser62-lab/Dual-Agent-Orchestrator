@@ -40,6 +40,7 @@ from artifact_bridge import (
     validation_request_payload,
     provider_input_measurement_payload,
     finding_handoff_export_payload, finding_handoff_import_payload,
+    logical_provider_operation_id,
 )
 from artifact_migration import (
     ArtifactResumeError,
@@ -61,9 +62,10 @@ from artifact_models import (
     FindingHandoffExportPayload, FindingHandoffImportPayload,
     FindingTransitionPayload,
     RunIdentityPayload, RunProfilePayload,
+    SideEffectPayload,
     SliceBoundaryPayload,
     WorkflowPolicyPayload, WorkflowTransitionPayload,
-    RecordType, stable_record_id,
+    RecordType, stable_record_id, stable_side_effect_key,
 )
 from artifact_store import ArtifactStore
 from artifact_replay import (
@@ -117,12 +119,15 @@ from contracts import (
     ValidationStatus,
 )
 from gates import TestChangeEvidence, detect_test_changes, matches_path_patterns
+from path_policy import PathPolicyError, resolve_path_within_roots
 from git_service import (
     CommitAuthorization,
     SliceGitBoundary,
     commit_managed_audit_report,
     commit_slice,
+    inspect_commit_tree,
     inspect_repository,
+    preview_commit_tree,
     prepare_new_watch_task_branch,
     require_committed_file_at_head,
     GitTransactionError,
@@ -144,12 +149,14 @@ from state_io import (
     ActiveV2StateError,
     CompletedV2State,
     StateSchemaError,
+    atomic_write_file,
     load_resumable_workflow_state,
     load_workflow_state,
     new_run_id,
     save_workflow_state,
     write_file,
     write_workflow_checkpoint,
+    workflow_checkpoint_path,
 )
 from task_contract import TaskContract, TaskMode, parse_task_contract
 from native_review_contract import (
@@ -198,6 +205,21 @@ from workflow_state import (
     BootstrapCheckFact,
     managed_correction_slice_report_path,
     project_implementer_return_policy,
+)
+from side_effects import (
+    decode_file_write_content,
+    encode_file_write_content,
+    file_state_digest,
+    Reconciliation,
+    ReconciliationOutcome,
+    SideEffectExecutor,
+    SideEffectReconciliationError,
+    SideEffectSpec,
+    reconcile_file_write,
+    reconcile_git_commit,
+    reconcile_provider_start,
+    reconcile_queue_move,
+    sha256_bytes,
 )
 from validation_matrix import ValidationCommand, ValidationMatrix
 from error_classification import (
@@ -286,12 +308,326 @@ class ProductionWorkflowDriver(WorkflowDriver):
         self._artifact_bridge: ArtifactBridge | None = None
         self._replace_existing_run_id = replace_existing_run_id
 
+    def _mark_completed_side_effect(self, effect_key: str) -> None:
+        if self.active_state is not None:
+            self.active_state = self.active_state.mark_side_effect_completed(effect_key)
+
+    def _side_effect_spec(
+        self,
+        effect_class: str,
+        operation: tuple[str, ...],
+        *,
+        fingerprint: str | None = None,
+    ) -> SideEffectSpec:
+        state = self.active_state
+        if state is None:
+            raise WorkflowExecutionError("side effect has no active workflow state")
+        return SideEffectSpec(
+            effect_class,
+            str(state.current_work_unit_id),
+            operation,
+            fingerprint or self._artifact_fingerprint(),
+        )
+
+    def _write_side_effect_file(
+        self,
+        path: Path,
+        content: str,
+        *,
+        normalized_text: bool,
+    ) -> None:
+        bridge = self._artifact_bridge
+        if bridge is None or self.active_state is None:
+            if normalized_text:
+                write_file(path, content)
+            else:
+                self._write_immutable_file(path, content)
+            return
+        rendered = content.strip() + "\n" if normalized_text else content
+        expected = rendered.encode("utf-8")
+        try:
+            target = path.resolve().relative_to(self.root).as_posix()
+        except ValueError:
+            try:
+                resolved = resolve_path_within_roots(path, self.allowed_roots)
+            except PathPolicyError as exc:
+                raise WorkflowExecutionError(
+                    "side-effect file target is outside the authorized roots"
+                ) from exc
+            target = f"external:{resolved.as_posix()}"
+        spec = self._side_effect_spec(
+            "file_write", (target, sha256_bytes(expected))
+        )
+
+        def perform() -> tuple[None, str]:
+            if normalized_text:
+                write_file(path, content)
+            else:
+                self._write_immutable_file(path, content)
+            actual = file_state_digest(path)
+            if actual != spec.operation[1]:
+                raise SideEffectReconciliationError(
+                    "file side-effect target differs before result completion"
+                )
+            return None, actual
+
+        SideEffectExecutor(bridge).execute(
+            spec,
+            reconcile=lambda: reconcile_file_write(path, sha256_bytes(expected)),
+            perform=perform,
+        )
+        self._mark_completed_side_effect(spec.effect_key)
+
+    def _write_text_side_effect_file(self, path: Path, content: str) -> None:
+        self._write_side_effect_file(path, content, normalized_text=True)
+
+    def _execute_projection_write(
+        self,
+        path: Path,
+        expected: bytes,
+        perform,
+    ) -> None:
+        bridge = self._artifact_bridge
+        state = self.active_state
+        if bridge is None or state is None or state.task_digest is None:
+            perform()
+            return
+        try:
+            target = path.resolve().relative_to(self.root).as_posix()
+        except ValueError as exc:
+            raise WorkflowExecutionError("projection target is outside the repository") from exc
+        expected_sha256 = sha256_bytes(expected)
+        prior_sha256 = file_state_digest(path)
+        if prior_sha256 == expected_sha256:
+            return
+        spec = SideEffectSpec(
+            "file_write",
+            "projection",
+            (
+                target,
+                expected_sha256,
+                prior_sha256,
+                encode_file_write_content(expected),
+            ),
+            state.task_digest,
+            FingerprintKind.CONTRACT,
+        )
+
+        def perform_projection() -> tuple[None, str]:
+            perform()
+            actual = file_state_digest(path)
+            if actual != expected_sha256:
+                raise SideEffectReconciliationError(
+                    "projection target differs before result completion"
+                )
+            return None, actual
+
+        SideEffectExecutor(bridge).execute(
+            spec,
+            reconcile=lambda: reconcile_file_write(
+                path, spec.operation[1], spec.operation[2]
+            ),
+            perform=perform_projection,
+        )
+
+    def _reconcile_pending_side_effects(
+        self,
+        state: WorkflowState,
+        replay=None,
+    ) -> bool:
+        """Resolve every crash-window intent before another workflow decision."""
+        bridge = self._artifact_bridge
+        if bridge is None:
+            return False
+        if replay is None:
+            replay = replay_artifacts(bridge.store.load_chain(), state.run_id)
+        records = {record.record_id: record for record in replay.records}
+        changed = False
+
+        def complete(item, result: str) -> None:
+            nonlocal changed
+            intent = records[item.intent_record_id]
+            bridge.record_side_effect_result(
+                effect_class=item.effect_class,
+                work_unit_id=item.work_unit_id,
+                operation=item.operation,
+                result=result,
+                fingerprint_sha256=intent.fingerprint.sha256,
+                fingerprint_kind=intent.fingerprint.kind,
+            )
+            changed = True
+
+        for item in replay.side_effects:
+            if item.result is not None:
+                continue
+            if item.effect_class == "internal":
+                complete(item, "completed")
+                continue
+            if item.effect_class == "ledger":
+                complete(item, "initialized")
+                continue
+            if item.effect_class == "file_write":
+                target = item.operation[0]
+                path = (
+                    Path(target.removeprefix("external:"))
+                    if target.startswith("external:")
+                    else self.root.joinpath(*PurePosixPath(target).parts)
+                )
+                prior_sha256 = (
+                    item.operation[2] if len(item.operation) == 4 else None
+                )
+                outcome = reconcile_file_write(
+                    path, item.operation[1], prior_sha256
+                )
+                if outcome.outcome is ReconciliationOutcome.OCCURRED:
+                    assert outcome.result is not None
+                    complete(item, outcome.result)
+                    continue
+                if outcome.outcome is ReconciliationOutcome.NOT_OCCURRED:
+                    if len(item.operation) == 4:
+                        content = decode_file_write_content(
+                            item.operation[3], item.operation[1]
+                        )
+                        try:
+                            rendered = content.decode("utf-8")
+                        except UnicodeDecodeError as exc:
+                            raise SideEffectReconciliationError(
+                                "projection intent contains non-UTF-8 content"
+                            ) from exc
+                        atomic_write_file(path, rendered)
+                        actual = file_state_digest(path)
+                        if actual != item.operation[1]:
+                            raise SideEffectReconciliationError(
+                                f"pending projection {item.effect_key!r} was not written identically"
+                            )
+                        complete(item, actual)
+                        continue
+                    # The owning writer will re-enter through SideEffectExecutor
+                    # and perform the proven-absent write under this same intent.
+                    continue
+                raise SideEffectReconciliationError(
+                    f"pending file write {item.effect_key!r} has no durable identical target"
+                )
+            if item.effect_class == "git_commit":
+                identity = inspect_repository(self.root)
+                if identity.head == item.operation[2]:
+                    outcome = reconcile_git_commit(
+                        prior_head=item.operation[2],
+                        current_head=identity.head,
+                        current_parent=None,
+                        expected_tree=item.operation[3],
+                        current_tree=None,
+                    )
+                else:
+                    parent, tree = inspect_commit_tree(self.root, identity.head)
+                    outcome = reconcile_git_commit(
+                        prior_head=item.operation[2],
+                        current_head=identity.head,
+                        current_parent=parent,
+                        expected_tree=item.operation[3],
+                        current_tree=tree,
+                    )
+                if outcome.outcome is ReconciliationOutcome.OCCURRED:
+                    assert outcome.result is not None
+                    complete(item, outcome.result)
+                    continue
+                if outcome.outcome is ReconciliationOutcome.NOT_OCCURRED:
+                    is_current_slice_commit = (
+                        item.work_unit_id == str(state.current_work_unit_id)
+                        and item.operation[0] == "slice_commit"
+                        and state.current_step is WorkflowStep.SLICE_COMMIT
+                    )
+                    is_current_audit_commit = (
+                        item.work_unit_id == str(state.current_work_unit_id)
+                        and item.operation[0] == "audit_commit"
+                        and (
+                            state.current_step is WorkflowStep.COMPLETED
+                            or state.current_step.value in FINAL_REVIEW_OPERATIONS
+                        )
+                    )
+                    if is_current_slice_commit or is_current_audit_commit:
+                        continue
+                raise SideEffectReconciliationError(
+                    f"pending Git effect {item.effect_key!r} cannot be reconciled"
+                )
+            if item.effect_class == "provider_start":
+                path = self.root.joinpath(*PurePosixPath(item.operation[6]).parts)
+                outcome = self._reconcile_provider_effect(
+                    SideEffectSpec(
+                        item.effect_class,
+                        item.work_unit_id,
+                        item.operation,
+                        records[item.intent_record_id].fingerprint.sha256,
+                        records[item.intent_record_id].fingerprint.kind,
+                    ),
+                    path,
+                )
+                if outcome.outcome is ReconciliationOutcome.OCCURRED:
+                    assert outcome.result is not None
+                    complete(item, outcome.result)
+                    continue
+                if (
+                    outcome.outcome is ReconciliationOutcome.NOT_OCCURRED
+                    and item.work_unit_id == str(state.current_work_unit_id)
+                    and item.operation[1] == state.current_step.value
+                ):
+                    continue
+                raise SideEffectReconciliationError(
+                    f"pending provider effect {item.effect_key!r} has an unknown outcome"
+                )
+            if item.effect_class == "queue_move":
+                outcome = reconcile_queue_move(
+                    Path(item.operation[0]),
+                    Path(item.operation[1]),
+                    item.operation[2],
+                )
+                if outcome.outcome is ReconciliationOutcome.OCCURRED:
+                    assert outcome.result is not None
+                    complete(item, outcome.result)
+                    continue
+                if outcome.outcome is ReconciliationOutcome.NOT_OCCURRED:
+                    # Queue finalization owns the later move and reuses this intent.
+                    continue
+                raise SideEffectReconciliationError(
+                    f"pending queue effect {item.effect_key!r} has an unknown outcome"
+                )
+            raise SideEffectReconciliationError(
+                f"pending {item.effect_class} effect {item.effect_key!r} has no runtime reconciler"
+            )
+        return changed
+
     def bind_work_unit(self, state: WorkflowState) -> None:
         # Runtime history is written by checkpoint(), not by the pure workflow-state
         # transitions.  A transition that starts the next work unit in the same engine
         # invocation can therefore carry an older runtime_history snapshot.  Preserve
         # the driver's last persisted ledger so the subsequent checkpoint can archive
         # the just-completed work unit instead of silently dropping its reviews.
+        if (
+            self.active_state is not None
+            and self.active_state.run_id == state.run_id
+        ):
+            active_units = {
+                item.work_unit_id: item for item in self.active_state.work_units
+            }
+            state = replace(
+                state,
+                work_units=tuple(
+                    replace(
+                        item,
+                        completed_side_effects=tuple(
+                            dict.fromkeys(
+                                (
+                                    *active_units.get(
+                                        item.work_unit_id, item
+                                    ).completed_side_effects,
+                                    *item.completed_side_effects,
+                                )
+                            )
+                        ),
+                    )
+                    for item in state.work_units
+                ),
+            )
         if (
             self.active_state is not None
             and self.active_state.run_id == state.run_id
@@ -336,6 +672,10 @@ class ProductionWorkflowDriver(WorkflowDriver):
             return
         try:
             resolution = resolve_resume_state(self.root, state)
+            if self._reconcile_pending_side_effects(
+                resolution.state, resolution.replay_result
+            ):
+                resolution = resolve_resume_state(self.root, resolution.state)
         except (ArtifactResumeError, ValueError) as exc:
             raise WorkflowExecutionError(
                 f"structured decision context is not resumable: {exc}"
@@ -349,6 +689,8 @@ class ProductionWorkflowDriver(WorkflowDriver):
             raise WorkflowExecutionError(
                 "structured decision context has no authoritative replay result"
             )
+        state = resolution.state
+        self.active_state = state
         chain = replay.records
         record_reviews = Counter(
             (
@@ -418,6 +760,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 "structured baseline requires the immutable protocol binding"
             )
         existing_chain = bridge.store.load_chain()
+        existing_replay = None
         if existing_chain:
             existing_replay = replay_artifacts(existing_chain, state.run_id)
             assert_run_binding_mirror(existing_replay, state, binding)
@@ -427,6 +770,15 @@ class ProductionWorkflowDriver(WorkflowDriver):
             )
             if not import_only_prefix:
                 require_workflow_status_prefix(existing_replay)
+                if not any(
+                    isinstance(record.payload, SideEffectPayload)
+                    and record.payload.effect_class == "ledger"
+                    and record.payload.phase == "result"
+                    for record in existing_replay.records
+                ):
+                    raise WorkflowExecutionError(
+                        "structured-v2 chain predates the side-effect ledger and cannot be backfilled"
+                    )
         bridge.append(
             RunIdentityPayload(
                 task_file=state.task_file,
@@ -452,6 +804,55 @@ class ProductionWorkflowDriver(WorkflowDriver):
             fingerprint_sha256=contract_fingerprint,
             fingerprint_kind=FingerprintKind.CONTRACT,
         )
+        ledger_operation = ("structured-v2-side-effect-ledger",)
+        completed_effect_keys = {
+            item.effect_key
+            for item in (() if existing_replay is None else existing_replay.side_effects)
+            if item.result is not None
+        }
+        ledger_key = stable_side_effect_key("ledger", "run", ledger_operation)
+        if ledger_key not in completed_effect_keys:
+            bridge.record_side_effect_intent(
+                effect_class="ledger",
+                work_unit_id="run",
+                operation=ledger_operation,
+                fingerprint_sha256=contract_fingerprint,
+                fingerprint_kind=FingerprintKind.CONTRACT,
+            )
+            bridge.record_side_effect_result(
+                effect_class="ledger",
+                work_unit_id="run",
+                operation=ledger_operation,
+                result="initialized",
+                fingerprint_sha256=contract_fingerprint,
+                fingerprint_kind=FingerprintKind.CONTRACT,
+            )
+        if existing_replay is not None:
+            self._reconcile_pending_side_effects(state, existing_replay)
+        for work_unit in state.work_units:
+            for marker in work_unit.completed_side_effects:
+                if marker.startswith("side-effect:"):
+                    continue
+                operation = (marker,)
+                if stable_side_effect_key(
+                    "internal", str(work_unit.work_unit_id), operation
+                ) in completed_effect_keys:
+                    continue
+                bridge.record_side_effect_intent(
+                    effect_class="internal",
+                    work_unit_id=work_unit.work_unit_id,
+                    operation=operation,
+                    fingerprint_sha256=contract_fingerprint,
+                    fingerprint_kind=FingerprintKind.CONTRACT,
+                )
+                bridge.record_side_effect_result(
+                    effect_class="internal",
+                    work_unit_id=work_unit.work_unit_id,
+                    operation=operation,
+                    result="completed",
+                    fingerprint_sha256=contract_fingerprint,
+                    fingerprint_kind=FingerprintKind.CONTRACT,
+                )
         self._persist_workflow_snapshot(state)
         self._persist_slice_boundaries(state)
         if state.task_scope_patterns:
@@ -868,13 +1269,20 @@ class ProductionWorkflowDriver(WorkflowDriver):
             )
         return measurement_record
 
+    @staticmethod
+    def _provider_attempt_response_path(base: Path, attempt_number: int) -> Path:
+        return base.with_name(
+            f"{base.stem}.attempt-{attempt_number}{base.suffix}"
+        )
+
     def _start_provider_attempt(
         self,
         measurement: ProviderInputMeasurement,
         bootstrap: object | None,
         *,
         operation_instance: str | None = None,
-    ) -> ArtifactRecord:
+        durable_response_path: Path,
+    ) -> tuple[ArtifactRecord, SideEffectSpec, Path]:
         bridge = self._artifact_bridge
         state = self.active_state
         if (
@@ -890,7 +1298,109 @@ class ProductionWorkflowDriver(WorkflowDriver):
             or bootstrap.payload.operation != measurement.operation
         ):
             raise WorkflowExecutionError("provider attempt measurement context diverged")
-        return bridge.start_provider_attempt(
+        try:
+            durable_response_path.resolve().relative_to(self.root)
+        except ValueError as exc:
+            raise WorkflowExecutionError("provider response target is outside the repository") from exc
+        replay = replay_artifacts(bridge.store.load_chain(), state.run_id)
+        instance = operation_instance or "default"
+        operation_prefix = (
+            measurement.provider,
+            measurement.operation,
+            measurement.input_digest,
+            measurement.binding_fingerprint,
+            instance,
+        )
+        pending = tuple(
+            item
+            for item in replay.side_effects
+            if item.effect_class == "provider_start"
+            and item.work_unit_id == str(state.current_work_unit_id)
+            and item.operation[:5] == operation_prefix
+            and item.result is None
+        )
+        if len(pending) > 1:
+            raise WorkflowExecutionError("provider start has multiple pending ledger intents")
+        if pending:
+            operation = pending[0].operation
+            response_path = self.root.joinpath(
+                *PurePosixPath(operation[6]).parts
+            )
+        else:
+            logical_operation_id = logical_provider_operation_id(
+                run_id=state.run_id,
+                work_unit_id=str(state.current_work_unit_id),
+                provider=bootstrap.payload.provider,
+                operation=measurement.operation,
+                binding_fingerprint=measurement.binding_fingerprint,
+                operation_instance=operation_instance,
+            )
+            prior_records = tuple(
+                record
+                for record in replay.records
+                if isinstance(record.payload, ProviderAttemptPayload)
+                and record.payload.logical_operation_id == logical_operation_id
+            )
+            if operation_instance is not None and not prior_records:
+                legacy_operation_id = logical_provider_operation_id(
+                    run_id=state.run_id,
+                    work_unit_id=str(state.current_work_unit_id),
+                    provider=bootstrap.payload.provider,
+                    operation=measurement.operation,
+                    binding_fingerprint=measurement.binding_fingerprint,
+                )
+                legacy_records = tuple(
+                    record
+                    for record in replay.records
+                    if isinstance(record.payload, ProviderAttemptPayload)
+                    and record.payload.logical_operation_id == legacy_operation_id
+                )
+                if legacy_records and all(
+                    record.payload.provider == bootstrap.payload.provider
+                    and record.payload.role == bootstrap.payload.role
+                    and record.payload.operation == measurement.operation
+                    and record.payload.work_unit_id
+                    == str(state.current_work_unit_id)
+                    and record.payload.binding_fingerprint
+                    == measurement.binding_fingerprint
+                    and record.payload.input_digest == measurement.input_digest
+                    for record in legacy_records
+                ):
+                    prior_records = legacy_records
+            attempt_number = max(
+                (
+                    record.payload.attempt_number
+                    for record in prior_records
+                ),
+                default=0,
+            ) + 1
+            response_path = self._provider_attempt_response_path(
+                durable_response_path, attempt_number
+            )
+            response_target = response_path.resolve().relative_to(
+                self.root
+            ).as_posix()
+            operation = (
+                *operation_prefix,
+                str(attempt_number),
+                response_target,
+            )
+        spec = self._side_effect_spec(
+            "provider_start", operation,
+            fingerprint=measurement.binding_fingerprint,
+        )
+        may_start = SideEffectExecutor(bridge).begin(
+            spec,
+            reconcile=lambda: self._reconcile_provider_effect(
+                spec, response_path
+            ),
+        )
+        if not may_start:
+            self._mark_completed_side_effect(spec.effect_key)
+            raise WorkflowExecutionError(
+                "provider operation already occurred; recover its durable response instead of starting again"
+            )
+        started = bridge.start_provider_attempt(
             measurement_record=bootstrap,
             binding_fingerprint=measurement.binding_fingerprint,
             work_unit_id=state.current_work_unit_id,
@@ -898,6 +1408,46 @@ class ProductionWorkflowDriver(WorkflowDriver):
             model=self.agents[measurement.provider].model,
             effort=self.agents[measurement.provider].effort,
         )
+        return started, spec, response_path
+
+    def _reconcile_provider_effect(
+        self,
+        spec: SideEffectSpec,
+        durable_response_path: Path,
+    ):
+        bridge = self._artifact_bridge
+        if bridge is None:
+            return Reconciliation(ReconciliationOutcome.UNKNOWN)
+        attempt_number = int(spec.operation[5])
+        matching_attempt_records = tuple(
+            record.payload
+            for record in bridge.store.load_chain()
+            if isinstance(record.payload, ProviderAttemptPayload)
+            and record.payload.provider.value == spec.operation[0]
+            and record.payload.operation == spec.operation[1]
+            and record.payload.work_unit_id == spec.work_unit_id
+            and record.payload.input_digest == spec.operation[2]
+            and record.payload.binding_fingerprint == spec.operation[3]
+            and record.payload.attempt_number == attempt_number
+        )
+        terminals = tuple(
+            payload
+            for payload in matching_attempt_records
+            if payload.phase in {"succeeded", "failed"}
+        )
+        if len(terminals) == 1 and terminals[0].phase == "failed":
+            return Reconciliation(
+                ReconciliationOutcome.OCCURRED,
+                f"failed:{terminals[0].failure_kind}",
+            )
+        if not matching_attempt_records:
+            return Reconciliation(ReconciliationOutcome.NOT_OCCURRED)
+        response = reconcile_provider_start(durable_response_path)
+        if len(terminals) == 1 and terminals[0].phase == "succeeded":
+            return response
+        if len(matching_attempt_records) == 1:
+            return response
+        return Reconciliation(ReconciliationOutcome.UNKNOWN)
 
     def _finish_provider_attempt(
         self,
@@ -907,14 +1457,32 @@ class ProductionWorkflowDriver(WorkflowDriver):
         usage: ProviderUsagePayload | None,
     ) -> None:
         bridge = self._artifact_bridge
-        if bridge is None or not isinstance(started, ArtifactRecord):
+        if (
+            bridge is None
+            or not isinstance(started, tuple)
+            or len(started) != 3
+            or not isinstance(started[0], ArtifactRecord)
+            or not isinstance(started[1], SideEffectSpec)
+            or not isinstance(started[2], Path)
+        ):
             raise WorkflowExecutionError("provider attempt terminal requires its durable start")
+        started_record, spec, response_path = started
         bridge.finish_provider_attempt(
-            started,
+            started_record,
             duration_seconds=duration_seconds,
             failure_kind=failure_kind,
             usage=usage,
         )
+        if response_path.is_file():
+            result = sha256_bytes(response_path.read_bytes())
+        elif failure_kind is not None:
+            result = f"failed:{failure_kind}"
+        else:
+            raise WorkflowExecutionError(
+                "successful provider attempt has no durable response evidence"
+            )
+        SideEffectExecutor(bridge).complete(spec, result)
+        self._mark_completed_side_effect(spec.effect_key)
 
     @staticmethod
     def _bootstrap_fact(payload: ProviderInputMeasurementPayload | object) -> BootstrapCheckFact:
@@ -936,8 +1504,33 @@ class ProductionWorkflowDriver(WorkflowDriver):
         )
 
     def _persist_bootstrap_state(self, state: WorkflowState) -> None:
-        save_workflow_state(self.state_file, state, allowed_roots=self.allowed_roots, replace_existing_run_id=self._replace_existing_run_id)
-        write_workflow_checkpoint(self.checkpoint_dir / state.run_id, state, allowed_roots=self.allowed_roots)
+        expected = (
+            json.dumps(state.to_dict(), indent=2, ensure_ascii=True) + "\n"
+        ).encode("utf-8")
+        self._execute_projection_write(
+            self.state_file,
+            expected,
+            lambda: save_workflow_state(
+                self.state_file,
+                state,
+                allowed_roots=self.allowed_roots,
+                replace_existing_run_id=self._replace_existing_run_id,
+            ),
+        )
+        checkpoint_root = self.checkpoint_dir / state.run_id
+        checkpoint_path = workflow_checkpoint_path(
+            checkpoint_root,
+            work_unit_id=state.current_work_unit_id,
+            slice_id=state.current_slice_id,
+            round_number=state.current_work_unit.round_number,
+        )
+        self._execute_projection_write(
+            checkpoint_path,
+            expected,
+            lambda: write_workflow_checkpoint(
+                checkpoint_root, state, allowed_roots=self.allowed_roots
+            ),
+        )
         self._replace_existing_run_id = None
         self.active_state = state
 
@@ -981,8 +1574,10 @@ class ProductionWorkflowDriver(WorkflowDriver):
                             measurement,
                             bootstrap,
                             operation_instance=f"round:{invocation.round_number}",
+                            durable_response_path=raw_path,
                         ),
                         terminal=self._finish_provider_attempt,
+                        durable_response_path=lambda handle: handle[2],
                     )
                     if self._artifact_bridge is not None
                     else None
@@ -1253,7 +1848,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
             ) from exc
 
     @staticmethod
-    def _write_native_codex_raw_response(path: Path, content: str) -> None:
+    def _write_immutable_file(path: Path, content: str) -> None:
         """Create or verify one immutable raw response artifact."""
         if path.exists():
             if not path.is_file() or path.read_text(encoding="utf-8") != content:
@@ -1275,6 +1870,23 @@ class ProductionWorkflowDriver(WorkflowDriver):
             raise WorkflowExecutionError(
                 "native Codex raw response verification failed"
             )
+
+    def _write_native_codex_raw_response(self, path: Path, content: str) -> None:
+        self._write_side_effect_file(path, content, normalized_text=False)
+
+    def _native_agent_response_files(
+        self, invocation: CodexInvocation
+    ) -> tuple[Path, ...]:
+        base = self._native_codex_response_path(invocation)
+        candidates = [base] if base.is_file() else []
+        candidates.extend(
+            path
+            for path in sorted(
+                base.parent.glob(f"{base.stem}.attempt-*{base.suffix}")
+            )
+            if path.is_file()
+        )
+        return tuple(dict.fromkeys(candidates))
 
     def invoke_reviewer(self, invocation: ReviewerInvocation) -> NativeAgentReviewOutput:
         manifest_paths: tuple[str, ...] | None = None
@@ -1299,6 +1911,10 @@ class ProductionWorkflowDriver(WorkflowDriver):
             raise WorkflowExecutionError(
                 "configured Claude adapter is not the native review transport"
             )
+        review_log_path = self.log_dir / (
+            f"work-unit-{invocation.work_unit_id:04d}-"
+            f"{invocation.step.value}-round-{invocation.round_number:04d}.log"
+        )
         return run_native_review_agent_checked(
                 adapter=native_adapter,
                 bundle=invocation.native_request,
@@ -1308,7 +1924,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 ),
                 config=self.config,
                 log_dir=self.log_dir,
-                write_file=write_file,
+                write_file=self._write_text_side_effect_file,
                 shorten=_shorten,
                 reviewer_manifest_paths=manifest_paths,
                 operation=invocation.step.value,
@@ -1320,8 +1936,10 @@ class ProductionWorkflowDriver(WorkflowDriver):
                             measurement,
                             bootstrap,
                             operation_instance=f"round:{invocation.round_number}",
+                            durable_response_path=review_log_path,
                         ),
                         terminal=self._finish_provider_attempt,
+                        durable_response_path=lambda handle: handle[2],
                     )
                     if self._artifact_bridge is not None
                     else None
@@ -1432,13 +2050,30 @@ class ProductionWorkflowDriver(WorkflowDriver):
             and item.logical_id == logical
         )
         candidate = self._canonical_native_agent_result(candidates, logical)
-        raw_path = self._native_codex_response_path(invocation)
-        if not raw_path.is_file():
+        raw_paths = self._native_agent_response_files(invocation)
+        unbound_raw_paths = raw_paths
+        if candidate is not None:
+            raw_paths = tuple(
+                path
+                for path in raw_paths
+                if hashlib.sha256(path.read_bytes()).hexdigest()
+                == candidate.payload.response_sha256
+            )
+        if not raw_paths:
             if candidate is None:
                 return None
+            if unbound_raw_paths:
+                raise WorkflowExecutionError(
+                    "native implementer recovery raw response digest differs from its record"
+                )
             raise WorkflowExecutionError(
                 "native Codex recovery record has no raw response artifact"
             )
+        if len(raw_paths) != 1:
+            raise WorkflowExecutionError(
+                "native Codex recovery has no unique response artifact"
+            )
+        raw_path = raw_paths[0]
         canonical = raw_path.read_text(encoding="utf-8")
         response_sha256 = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
         if (
@@ -1446,7 +2081,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
             and candidate.payload.response_sha256 != response_sha256
         ):
             raise WorkflowExecutionError(
-                "native Codex recovery raw response digest differs from its record"
+                "native implementer recovery raw response digest differs from its record"
             )
         recovery_bundle = self._load_native_agent_request_bundle(invocation, bundle)
         recovery_bound = (
@@ -1563,7 +2198,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 output, invocation.previous_findings
             )
             logger.warning(
-                "Recovered native Codex result from raw-response-ahead persistence: "
+                "Recovered native implementer result from raw-response-ahead persistence: "
                 "work-unit=%s operation=%s",
                 invocation.work_unit_id,
                 invocation.step.value,
@@ -1604,7 +2239,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
             recovery_fingerprint=record.fingerprint.sha256,
         )
         logger.warning(
-            "Recovered native Codex result from record-ahead persistence: "
+            "Recovered native implementer result from record-ahead persistence: "
             "work-unit=%s operation=%s",
             invocation.work_unit_id,
             invocation.step.value,
@@ -1644,26 +2279,25 @@ class ProductionWorkflowDriver(WorkflowDriver):
             if isinstance(item.payload, ReviewPayload)
             and item.logical_id == logical_id
         )
-        if not candidates:
-            return None
-        if len(candidates) != 1:
+        if len(candidates) > 1:
             raise WorkflowExecutionError(
                 "native reviewer recovery has multiple decision records"
             )
-        record = candidates[0]
-        payload = record.payload
-        assert isinstance(payload, ReviewPayload)
-        if (
-            payload.reviewer is not Role.CLAUDE
-            or payload.work_unit_id != str(invocation.work_unit_id)
-            or payload.transport_schema != NATIVE_CLAUDE_REVIEW_TRANSPORT
-            or payload.request_id != bundle.bound_context.request_id
-            or payload.response_sha256 is None
-            or record.fingerprint.sha256 != invocation.fingerprint
-        ):
-            raise WorkflowExecutionError(
-                "native reviewer recovery record differs from the rebuilt request"
-            )
+        record = candidates[0] if candidates else None
+        payload = None if record is None else record.payload
+        if record is not None:
+            assert isinstance(payload, ReviewPayload)
+            if (
+                payload.reviewer is not Role.CLAUDE
+                or payload.work_unit_id != str(invocation.work_unit_id)
+                or payload.transport_schema != NATIVE_CLAUDE_REVIEW_TRANSPORT
+                or payload.request_id != bundle.bound_context.request_id
+                or payload.response_sha256 is None
+                or record.fingerprint.sha256 != invocation.fingerprint
+            ):
+                raise WorkflowExecutionError(
+                    "native reviewer recovery record differs from the rebuilt request"
+                )
         if any(
             isinstance(event, ReviewAuditEvent)
             and event.round_number == invocation.round_number
@@ -1705,11 +2339,16 @@ class ProductionWorkflowDriver(WorkflowDriver):
             path.read_text(encoding="utf-8").strip()
             for path in sorted(self.log_dir.glob(log_pattern))
             if path.is_file()
-            and hashlib.sha256(
-                path.read_text(encoding="utf-8").strip().encode("utf-8")
-            ).hexdigest()
-            == payload.response_sha256
+            and (
+                payload is None
+                or hashlib.sha256(
+                    path.read_text(encoding="utf-8").strip().encode("utf-8")
+                ).hexdigest()
+                == payload.response_sha256
+            )
         )
+        if not outputs and payload is None:
+            return None
         if len(outputs) != 1:
             raise WorkflowExecutionError(
                 "native reviewer recovery has no unique response-digest-bound log"
@@ -1727,9 +2366,21 @@ class ProductionWorkflowDriver(WorkflowDriver):
             raise WorkflowExecutionError(
                 f"native reviewer recovery response no longer validates: {exc}"
             ) from exc
-        if not review_payload_matches_result(payload, result):
+        if payload is not None and not review_payload_matches_result(payload, result):
             raise WorkflowExecutionError(
                 "native reviewer recovery result differs from its decision record"
+            )
+        output = NativeAgentReviewOutput(
+            result=result,
+            canonical_json=canonical,
+            request_id=bundle.bound_context.request_id,
+        )
+        if payload is None:
+            self.persist_native_review_contract(
+                output,
+                invocation.fingerprint,
+                invocation.round_number,
+                invocation.previous_findings,
             )
         logger.warning(
             "Replaying request-bound native Claude review after its state "
@@ -1739,11 +2390,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
             invocation.fingerprint,
             bundle.bound_context.request_id,
         )
-        return NativeAgentReviewOutput(
-            result=result,
-            canonical_json=canonical,
-            request_id=bundle.bound_context.request_id,
-        )
+        return output
 
     def recover_pending_native_reviewer_before_policy(
         self,
@@ -2747,6 +3394,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
             raise WorkflowExecutionError(
                 "slice commit has unapproved paths outside its persisted scope"
             )
+        artifact_bridge = self._artifact_bridge
         head_approval = next(
             (
                 decision
@@ -2762,7 +3410,82 @@ class ProductionWorkflowDriver(WorkflowDriver):
             None,
         )
         identity = inspect_repository(self.root)
-        if identity.head != current.start_commit and head_approval is None:
+        existing_git_effect = None
+        if artifact_bridge is not None:
+            effect_replay = replay_artifacts(
+                artifact_bridge.store.load_chain(), state.run_id
+            )
+            existing_git_effect = next(
+                (
+                    item
+                    for item in reversed(effect_replay.side_effects)
+                    if item.effect_class == "git_commit"
+                    and item.work_unit_id == str(state.current_work_unit_id)
+                    and len(item.operation) == 6
+                    and item.operation[0] == "slice_commit"
+                    and item.operation[1] == str(request.slice_id)
+                    and item.result is None
+                ),
+                None,
+            )
+        if (
+            existing_git_effect is not None
+            and existing_git_effect.operation[4] != request.fingerprint
+        ):
+            raise WorkflowExecutionError(
+                "pending Slice commit belongs to another reviewed fingerprint"
+            )
+        if existing_git_effect is None:
+            if identity.head == boundary.start_commit:
+                transaction_changes = reviewed_changes
+            else:
+                semantic_transaction_paths = tuple(
+                    sorted(
+                        path
+                        for path in (
+                            *boundary.semantic_markdown_paths,
+                            *unexpected_paths,
+                        )
+                        if path.startswith("docs/internal/")
+                        and path.endswith(".md")
+                    )
+                )
+                transaction_changes = collect_repository_changes(
+                    self.root,
+                    identity.head,
+                    semantic_markdown_paths=semantic_transaction_paths,
+                    excluded_paths=boundary.excluded_control_paths,
+                )
+            expected_tree = preview_commit_tree(self.root, transaction_changes)
+        else:
+            expected_tree = existing_git_effect.operation[3]
+        git_operation = (
+            existing_git_effect.operation
+            if existing_git_effect is not None
+            else (
+                "slice_commit",
+                str(request.slice_id),
+                identity.head,
+                expected_tree,
+                request.fingerprint,
+                hashlib.sha256(summary.encode("utf-8")).hexdigest(),
+            )
+        )
+        own_commit_recovery = False
+        if existing_git_effect is not None and identity.head != git_operation[2]:
+            parent, tree = inspect_commit_tree(self.root, identity.head)
+            own_commit_recovery = reconcile_git_commit(
+                prior_head=git_operation[2],
+                current_head=identity.head,
+                current_parent=parent,
+                expected_tree=git_operation[3],
+                current_tree=tree,
+            ).outcome is ReconciliationOutcome.OCCURRED
+        if (
+            identity.head != current.start_commit
+            and head_approval is None
+            and not own_commit_recovery
+        ):
             raise WorkflowCommitApprovalRequired(
                 (
                     "HEAD-DRIFT | the Slice HEAD changed after its persisted start; "
@@ -2772,7 +3495,6 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 unexpected_paths or reviewed_changes.paths,
             )
         review_result = request.claude_review
-        artifact_bridge = self._artifact_bridge
         structured_attestation = None
         approval_records: tuple[ArtifactRecord, ...] = ()
         current_review_record: ArtifactRecord | None = None
@@ -2839,52 +3561,171 @@ class ProductionWorkflowDriver(WorkflowDriver):
             raise WorkflowExecutionError(
                 "structured commit binding was not established before the Git transaction"
             )
-        result = commit_slice(
-            repository_root=self.root,
-            boundary=boundary,
-            authorization=CommitAuthorization(
-                slice_id=request.slice_id,
-                diff_fingerprint=request.fingerprint,
-                attestation=request.attestation,
-                claude_review=review_result,
-                findings=request.findings,
-                red_state_followup_slice=request.red_state_followup_slice,
-                review_record=current_review_record,
-                review_work_unit_id=str(state.current_work_unit_id),
-                approved_head_commit=(
-                    identity.head if head_approval is not None else None
+        def perform_commit():
+            committed = commit_slice(
+                repository_root=self.root,
+                boundary=boundary,
+                authorization=CommitAuthorization(
+                    slice_id=request.slice_id,
+                    diff_fingerprint=request.fingerprint,
+                    attestation=request.attestation,
+                    claude_review=review_result,
+                    findings=request.findings,
+                    red_state_followup_slice=request.red_state_followup_slice,
+                    review_record=current_review_record,
+                    review_work_unit_id=str(state.current_work_unit_id),
+                    approved_head_commit=(
+                        identity.head if head_approval is not None else None
+                    ),
+                    approved_external_paths=(
+                        unexpected_paths if exact_scope_approval else ()
+                    ),
                 ),
-                approved_external_paths=(
-                    unexpected_paths if exact_scope_approval else ()
-                ),
-            ),
-            title=summary,
-        )
+                title=summary,
+            )
+            return committed, committed.commit_hash
+
+        if artifact_bridge is None:
+            result = perform_commit()[0]
+            commit_hash = result.commit_hash
+        else:
+            git_spec = self._side_effect_spec(
+                "git_commit", git_operation, fingerprint=request.fingerprint
+            )
+
+            def reconcile_commit():
+                current_identity = inspect_repository(self.root)
+                if current_identity.head == git_operation[2]:
+                    return reconcile_git_commit(
+                        prior_head=git_operation[2],
+                        current_head=current_identity.head,
+                        current_parent=None,
+                        expected_tree=git_operation[3],
+                        current_tree=None,
+                    )
+                parent, tree = inspect_commit_tree(
+                    self.root, current_identity.head
+                )
+                return reconcile_git_commit(
+                    prior_head=git_operation[2],
+                    current_head=current_identity.head,
+                    current_parent=parent,
+                    expected_tree=git_operation[3],
+                    current_tree=tree,
+                )
+
+            executed = SideEffectExecutor(artifact_bridge).execute(
+                git_spec,
+                reconcile=reconcile_commit,
+                perform=perform_commit,
+            )
+            commit_hash = (
+                executed.commit_hash
+                if hasattr(executed, "commit_hash")
+                else str(executed)
+            )
+            self._mark_completed_side_effect(git_spec.effect_key)
         if artifact_bridge is not None and structured_binding is not None:
             attestation_record_id, approval_record_ids = structured_binding
             artifact_bridge.append(
                 BindingPayload(
                     binding_kind="commit",
-                    target=result.commit_hash,
+                    target=commit_hash,
                     attestation_id=attestation_record_id,
                     approval_ids=approval_record_ids,
                 ),
-                logical_id=f"commit-{request.slice_id}-{result.commit_hash[:12]}",
+                logical_id=f"commit-{request.slice_id}-{commit_hash[:12]}",
                 idempotency_key=f"commit:{request.slice_id}:{request.fingerprint}",
                 fingerprint_sha256=request.fingerprint,
             )
-        return result.commit_hash
+        return commit_hash
 
     def finalize_audit(self, state: WorkflowState) -> str | None:
         if state.audit_report_path is None:
             return None
         self.assert_structured_decision_context()
-        return commit_managed_audit_report(
-            repository_root=self.root,
-            branch=state.branch,
-            audit_path=state.audit_report_path,
-            excluded_control_paths=_bound_task_control_paths(self.root, state),
+        bridge = self._artifact_bridge
+        if bridge is None:
+            return commit_managed_audit_report(
+                repository_root=self.root,
+                branch=state.branch,
+                audit_path=state.audit_report_path,
+                excluded_control_paths=_bound_task_control_paths(self.root, state),
+            )
+        replay = replay_artifacts(bridge.store.load_chain(), state.run_id)
+        existing = next(
+            (
+                item
+                for item in reversed(replay.side_effects)
+                if item.effect_class == "git_commit"
+                and item.work_unit_id == str(state.current_work_unit_id)
+                and len(item.operation) == 6
+                and item.operation[:2]
+                == ("audit_commit", state.audit_report_path)
+                and item.result is None
+            ),
+            None,
         )
+        if existing is None:
+            identity = inspect_repository(self.root)
+            changes = collect_repository_changes(
+                self.root,
+                identity.head,
+                semantic_markdown_paths=(state.audit_report_path,),
+                excluded_paths=_bound_task_control_paths(self.root, state),
+            )
+            if not changes.entries:
+                return identity.head
+            operation = (
+                "audit_commit",
+                state.audit_report_path,
+                identity.head,
+                preview_commit_tree(
+                    self.root,
+                    changes,
+                    force_non_executable_paths=(state.audit_report_path,),
+                ),
+                changes.fingerprint,
+                hashlib.sha256(
+                    b"docs: finalize orchestrator audit"
+                ).hexdigest(),
+            )
+        else:
+            operation = existing.operation
+        spec = self._side_effect_spec(
+            "git_commit", operation, fingerprint=operation[4]
+        )
+
+        def reconcile_audit_commit():
+            identity = inspect_repository(self.root)
+            if identity.head == operation[2]:
+                return reconcile_git_commit(
+                    prior_head=operation[2], current_head=identity.head,
+                    current_parent=None, expected_tree=operation[3],
+                    current_tree=None,
+                )
+            parent, tree = inspect_commit_tree(self.root, identity.head)
+            return reconcile_git_commit(
+                prior_head=operation[2], current_head=identity.head,
+                current_parent=parent, expected_tree=operation[3],
+                current_tree=tree,
+            )
+
+        result = SideEffectExecutor(bridge).execute(
+            spec,
+            reconcile=reconcile_audit_commit,
+            perform=lambda: (
+                committed := commit_managed_audit_report(
+                    repository_root=self.root,
+                    branch=state.branch,
+                    audit_path=state.audit_report_path,
+                    excluded_control_paths=_bound_task_control_paths(self.root, state),
+                ),
+                committed,
+            ),
+        )
+        self._mark_completed_side_effect(spec.effect_key)
+        return str(result)
 
     def checkpoint(self, state: WorkflowState, history: WorkflowHistory) -> None:
         # Pure workflow transitions return a new state without the runtime ledger
@@ -2893,6 +3734,32 @@ class ProductionWorkflowDriver(WorkflowDriver):
         # engine invocation.  Merge the driver-owned ledger before archiving the
         # completed unit, otherwise the audit can bind the new commit to an older
         # (possibly denying) reviewer result.
+        if (
+            self.active_state is not None
+            and self.active_state.run_id == state.run_id
+        ):
+            active_units = {
+                item.work_unit_id: item for item in self.active_state.work_units
+            }
+            state = replace(
+                state,
+                work_units=tuple(
+                    replace(
+                        item,
+                        completed_side_effects=tuple(
+                            dict.fromkeys(
+                                (
+                                    *active_units.get(
+                                        item.work_unit_id, item
+                                    ).completed_side_effects,
+                                    *item.completed_side_effects,
+                                )
+                            )
+                        ),
+                    )
+                    for item in state.work_units
+                ),
+            )
         if (
             self.active_state is not None
             and self.active_state.run_id == state.run_id
@@ -2918,16 +3785,35 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 ) from exc
             raise
         replacement_run_id = self._replace_existing_run_id
-        save_workflow_state(
+        expected = (
+            json.dumps(persisted.to_dict(), indent=2, ensure_ascii=True) + "\n"
+        ).encode("utf-8")
+        self.active_state = persisted
+        self._execute_projection_write(
             self.state_file,
-            persisted,
-            allowed_roots=self.allowed_roots,
-            replace_existing_run_id=replacement_run_id,
+            expected,
+            lambda: save_workflow_state(
+                self.state_file,
+                persisted,
+                allowed_roots=self.allowed_roots,
+                replace_existing_run_id=replacement_run_id,
+            ),
         )
-        write_workflow_checkpoint(
-            self.checkpoint_dir / persisted.run_id,
-            persisted,
-            allowed_roots=self.allowed_roots,
+        checkpoint_root = self.checkpoint_dir / persisted.run_id
+        checkpoint_path = workflow_checkpoint_path(
+            checkpoint_root,
+            work_unit_id=persisted.current_work_unit_id,
+            slice_id=persisted.current_slice_id,
+            round_number=persisted.current_work_unit.round_number,
+        )
+        self._execute_projection_write(
+            checkpoint_path,
+            expected,
+            lambda: write_workflow_checkpoint(
+                checkpoint_root,
+                persisted,
+                allowed_roots=self.allowed_roots,
+            ),
         )
         self._replace_existing_run_id = None
         self.active_state = persisted
@@ -4393,6 +5279,9 @@ def run_production_workflow(
                         target_branch=state.target_branch or state.branch,
                         approved_plan_commit=commit_ref,
                         finding_handoff=finding_handoff,
+                        write_content=lambda path, content: driver._write_side_effect_file(
+                            path, content, normalized_text=False
+                        ),
                     )
                 except (ArtifactBridgeError, ArtifactReplayError, PlanHandoffError) as exc:
                     raise WorkflowExecutionError(
@@ -4746,6 +5635,7 @@ def run_pipeline(
                 run_id=evidence.run_id,
                 task_digest=evidence.task_digest,
                 protocol_mode=evidence.protocol_mode,
+                repository_root=repository_root,
             )
             if queue_result.disposition is QueueFinalizationDisposition.COMPLETED:
                 logger.info("Completed pending queue bookkeeping: %s", queue_result.destination)
@@ -4830,6 +5720,7 @@ def run_pipeline(
             task_digest=state.task_digest,
             protocol_mode=state_protocol,
             publish=True,
+            repository_root=Path.cwd(),
         )
         if queue_result.disposition is not QueueFinalizationDisposition.COMPLETED:
             logger.error("Terminal workflow succeeded but queue finalization failed: %s", queue_result.detail)

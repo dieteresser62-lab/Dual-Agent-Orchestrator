@@ -1033,12 +1033,14 @@ def test_failed_provider_attempt_uses_injected_clock_and_allowlisted_usage() -> 
             terminal=lambda _handle, duration, failure, usage: terminal.append(
                 (duration, failure, usage)
             ),
+            durable_response_path=lambda handle: Path(f"{handle}.json"),
             monotonic_fn=lambda: next(ticks),
         )
     )
     measurement = object()
 
     invocation.begin(measurement, None)  # type: ignore[arg-type]
+    assert invocation.response_path(Path("fallback.json")) == Path("attempt-1.json")
     invocation.finish(
         AgentFailureKind.OUTPUT,
         {
@@ -1498,7 +1500,12 @@ def test_manifest_reviewer_workspace_rejects_missing_and_symlink_paths(tmp_path:
     source.mkdir()
     outside = tmp_path / "outside.txt"
     outside.write_text("outside\n", encoding="utf-8")
-    (source / "link.txt").symlink_to(outside)
+    try:
+        (source / "link.txt").symlink_to(outside)
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 1314:
+            pytest.skip("Windows symlink privilege is unavailable")
+        raise
 
     with pytest.raises(RuntimeError, match="missing or not a file"):
         create_read_only_reviewer_workspace(source, ("missing.txt",))

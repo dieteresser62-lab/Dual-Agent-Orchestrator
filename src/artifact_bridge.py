@@ -32,11 +32,13 @@ from artifact_models import (
     ProviderInputMeasurementPayload,
     ProviderAttemptPayload,
     ProviderUsagePayload,
+    RecordType,
     GatePayload,
     PlanPayload,
     ReviewPayload,
     ReviewEvidencePayload,
     Role,
+    SideEffectPayload,
     SliceSpec,
     TaskPayload,
     ValidationAttestationPayload,
@@ -44,6 +46,7 @@ from artifact_models import (
     ValidationResult,
     WorkUnitPayload,
     canonical_json,
+    stable_side_effect_key,
     finding_transition_sequence_sha256,
 )
 from artifact_store import ArtifactStore
@@ -466,6 +469,131 @@ class ArtifactBridge:
         return persisted
 
     @staticmethod
+    def _side_effect_logical_id(effect_key: str) -> str:
+        return f"side-effect-{hashlib.sha256(effect_key.encode('utf-8')).hexdigest()[:32]}"
+
+    def record_side_effect_intent(
+        self,
+        *,
+        effect_class: str,
+        work_unit_id: int | str,
+        operation: tuple[str, ...],
+        fingerprint_sha256: str,
+        fingerprint_kind: FingerprintKind = FingerprintKind.IMPLEMENTATION,
+    ) -> tuple[ArtifactRecord, bool]:
+        """Persist an intent and report whether this call created it."""
+        unit_id = str(work_unit_id)
+        effect_key = stable_side_effect_key(effect_class, unit_id, operation)
+        logical_id = self._side_effect_logical_id(effect_key)
+        existing = self.store.append_context(
+            record_type=RecordType.SIDE_EFFECT,
+            logical_id=logical_id,
+            idempotency_key=f"side-effect-intent:{hashlib.sha256(effect_key.encode('utf-8')).hexdigest()}",
+        ).existing
+        record = self.append(
+            SideEffectPayload(
+                effect_key,
+                effect_class,
+                unit_id,
+                operation,
+                "intent",
+                None,
+            ),
+            logical_id=logical_id,
+            idempotency_key=f"side-effect-intent:{hashlib.sha256(effect_key.encode('utf-8')).hexdigest()}",
+            fingerprint_sha256=fingerprint_sha256,
+            fingerprint_kind=fingerprint_kind,
+        )
+        return record, existing is None
+
+    def record_side_effect_result(
+        self,
+        *,
+        effect_class: str,
+        work_unit_id: int | str,
+        operation: tuple[str, ...],
+        result: str,
+        fingerprint_sha256: str,
+        fingerprint_kind: FingerprintKind = FingerprintKind.IMPLEMENTATION,
+    ) -> ArtifactRecord:
+        """Persist the result only when the matching intent is authoritative."""
+        unit_id = str(work_unit_id)
+        effect_key = stable_side_effect_key(effect_class, unit_id, operation)
+        logical_id = self._side_effect_logical_id(effect_key)
+        intent = self.store.append_context(
+            record_type=RecordType.SIDE_EFFECT,
+            logical_id=logical_id,
+            idempotency_key=(
+                f"side-effect-intent:{hashlib.sha256(effect_key.encode('utf-8')).hexdigest()}"
+            ),
+        )
+        expected_intent = SideEffectPayload(
+            effect_key,
+            effect_class,
+            unit_id,
+            operation,
+            "intent",
+            None,
+        )
+        if (
+            intent.existing is None
+            or intent.existing.logical_id != logical_id
+            or intent.existing.payload != expected_intent
+            or intent.existing.fingerprint
+            != Fingerprint(fingerprint_kind, fingerprint_sha256)
+        ):
+            raise ArtifactBridgeError("side effect result has no authoritative intent")
+        return self.append(
+            SideEffectPayload(
+                effect_key,
+                effect_class,
+                unit_id,
+                operation,
+                "result",
+                result,
+            ),
+            logical_id=logical_id,
+            idempotency_key=f"side-effect-result:{hashlib.sha256(effect_key.encode('utf-8')).hexdigest()}",
+            fingerprint_sha256=fingerprint_sha256,
+            fingerprint_kind=fingerprint_kind,
+        )
+
+    def side_effect_result(
+        self,
+        *,
+        effect_class: str,
+        work_unit_id: int | str,
+        operation: tuple[str, ...],
+    ) -> str | None:
+        """Return one indexed result without invalidating the append index."""
+        unit_id = str(work_unit_id)
+        effect_key = stable_side_effect_key(effect_class, unit_id, operation)
+        logical_id = self._side_effect_logical_id(effect_key)
+        record = self.store.append_context(
+            record_type=RecordType.SIDE_EFFECT,
+            logical_id=logical_id,
+            idempotency_key=(
+                f"side-effect-result:{hashlib.sha256(effect_key.encode('utf-8')).hexdigest()}"
+            ),
+        ).existing
+        if record is None:
+            return None
+        payload = record.payload
+        if (
+            not isinstance(payload, SideEffectPayload)
+            or payload.effect_key != effect_key
+            or payload.effect_class != effect_class
+            or payload.work_unit_id != unit_id
+            or payload.operation != operation
+            or payload.phase != "result"
+            or payload.result is None
+        ):
+            raise ArtifactBridgeError(
+                "side effect result changed its immutable intent binding"
+            )
+        return payload.result
+
+    @staticmethod
     def _assert_equal(
         record: ArtifactRecord,
         payload: ArtifactPayload,
@@ -531,7 +659,7 @@ class ArtifactBridge:
             raise ArtifactBridgeError("provider attempt work unit differs from its measurement")
         if operation_instance is not None and not operation_instance.strip():
             raise ArtifactBridgeError("provider attempt operation instance must be non-empty")
-        logical_operation_id = _logical_provider_operation_id(
+        logical_operation_id = logical_provider_operation_id(
             run_id=self.store.run_id,
             work_unit_id=str(work_unit_id),
             provider=measurement.provider,
@@ -546,7 +674,7 @@ class ArtifactBridge:
             and record.payload.logical_operation_id == logical_operation_id
         )
         if operation_instance is not None and not prior:
-            legacy_operation_id = _logical_provider_operation_id(
+            legacy_operation_id = logical_provider_operation_id(
                 run_id=self.store.run_id,
                 work_unit_id=str(work_unit_id),
                 provider=measurement.provider,
@@ -714,7 +842,7 @@ class ArtifactBridge:
         return record
 
 
-def _logical_provider_operation_id(
+def logical_provider_operation_id(
     *, run_id: str, work_unit_id: str, provider: Role, operation: str,
     binding_fingerprint: str, operation_instance: str | None = None,
 ) -> str:
@@ -741,6 +869,7 @@ __all__ = [
     "finding_handoff_export_payload", "finding_handoff_import_payload", "plan_payload",
     "review_payload", "review_payload_matches_result", "task_payload", "validation_request_payload",
     "provider_input_measurement_payload",
+    "logical_provider_operation_id",
     "BindingPayload", "GatePayload", "ProviderUsagePayload",
     "WorkUnitPayload",
 ]

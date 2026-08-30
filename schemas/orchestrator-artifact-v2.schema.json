@@ -8,7 +8,7 @@
   "properties": {
     "schema_version": {"const": "2"},
     "record_id": {"$ref": "#/$defs/identifier"},
-    "record_type": {"enum": ["run_identity", "run_profile", "workflow_transition", "workflow_policy", "slice_boundary", "task", "plan", "work_unit", "correction_work_unit", "agent_result", "diagnostic", "review", "finding_transition", "finding_handoff_export", "finding_handoff_import", "validation_request", "validation_attestation", "gate", "binding", "quota_pause", "transient_retry", "resume_check", "workflow_completion", "provider_input_measurement", "provider_attempt", "final_review_preflight"]},
+    "record_type": {"enum": ["run_identity", "run_profile", "workflow_transition", "workflow_policy", "slice_boundary", "task", "plan", "work_unit", "correction_work_unit", "agent_result", "diagnostic", "review", "finding_transition", "finding_handoff_export", "finding_handoff_import", "validation_request", "validation_attestation", "gate", "binding", "quota_pause", "transient_retry", "resume_check", "workflow_completion", "provider_input_measurement", "provider_attempt", "final_review_preflight", "side_effect"]},
     "run_id": {"$ref": "#/$defs/identifier"},
     "logical_id": {"$ref": "#/$defs/identifier"},
     "revision": {"type": "integer", "minimum": 1},
@@ -48,7 +48,10 @@
     {"if": {"properties": {"record_type": {"const": "provider_attempt"}, "payload": {"properties": {"phase": {"const": "started"}}}}}, "then": {"properties": {"status": {"const": "started"}}}},
     {"if": {"properties": {"record_type": {"const": "provider_attempt"}, "payload": {"properties": {"phase": {"const": "succeeded"}}}}}, "then": {"properties": {"status": {"const": "succeeded"}}}},
     {"if": {"properties": {"record_type": {"const": "provider_attempt"}, "payload": {"properties": {"phase": {"const": "failed"}}}}}, "then": {"properties": {"status": {"const": "failed"}}}},
-    {"if": {"properties": {"record_type": {"const": "final_review_preflight"}}}, "then": {"properties": {"status": {"const": "checked"}, "payload": {"$ref": "#/$defs/final_review_preflight"}}}}
+    {"if": {"properties": {"record_type": {"const": "final_review_preflight"}}}, "then": {"properties": {"status": {"const": "checked"}, "payload": {"$ref": "#/$defs/final_review_preflight"}}}},
+    {"if": {"properties": {"record_type": {"const": "side_effect"}}}, "then": {"properties": {"status": {"enum": ["intent", "result"]}, "payload": {"$ref": "#/$defs/side_effect"}}}},
+    {"if": {"properties": {"record_type": {"const": "side_effect"}, "payload": {"properties": {"phase": {"const": "intent"}}}}}, "then": {"properties": {"status": {"const": "intent"}}}},
+    {"if": {"properties": {"record_type": {"const": "side_effect"}, "payload": {"properties": {"phase": {"const": "result"}}}}}, "then": {"properties": {"status": {"const": "result"}}}}
   ],
   "$defs": {
     "identifier": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$"},
@@ -269,6 +272,22 @@
         {"if": {"properties": {"phase": {"const": "started"}}}, "then": {"properties": {"ended_at": {"type": "null"}, "duration_seconds": {"type": "null"}, "failure_kind": {"type": "null"}, "usage": {"type": "null"}}}},
         {"if": {"properties": {"phase": {"const": "succeeded"}}}, "then": {"properties": {"ended_at": {"type": "string"}, "duration_seconds": {"type": "number"}, "failure_kind": {"type": "null"}}}},
         {"if": {"properties": {"phase": {"const": "failed"}}}, "then": {"properties": {"ended_at": {"type": "string"}, "duration_seconds": {"type": "number"}, "failure_kind": {"enum": ["quota", "network", "timeout", "permission", "auth", "binary", "output", "process", "runtime"]}}}}
+      ]
+    },
+    "side_effect": {
+      "type": "object", "additionalProperties": false,
+      "required": ["effect_key", "effect_class", "work_unit_id", "operation", "phase", "result"],
+      "properties": {
+        "effect_key": {"$ref": "#/$defs/identifier"},
+        "effect_class": {"enum": ["git_commit", "provider_start", "file_write", "queue_move", "internal", "ledger"]},
+        "work_unit_id": {"$ref": "#/$defs/identifier"},
+        "operation": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1, "pattern": "^[^\\u0000\\r\\n]+$"}},
+        "phase": {"enum": ["intent", "result"]},
+        "result": {"type": ["string", "null"], "minLength": 1, "pattern": "^[^\\u0000\\r\\n]+$"}
+      },
+      "allOf": [
+        {"if": {"properties": {"phase": {"const": "intent"}}}, "then": {"properties": {"result": {"type": "null"}}}},
+        {"if": {"properties": {"phase": {"const": "result"}}}, "then": {"properties": {"result": {"type": "string"}}}}
       ]
     },
     "final_review_preflight": {

@@ -8,7 +8,7 @@ view which can be shared by resume and audit projection code.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 import hashlib
 import json
@@ -32,6 +32,7 @@ from artifact_models import (
     Role,
     RunIdentityPayload,
     RunProfilePayload,
+    SideEffectPayload,
     SliceBoundaryPayload,
     WorkflowPolicyPayload,
     WorkflowTransitionPayload,
@@ -135,6 +136,18 @@ class ReplayedWorkUnitState:
     step: str
 
 
+@dataclass(frozen=True, slots=True)
+class ReplayedSideEffect:
+    effect_key: str
+    effect_class: str
+    work_unit_id: str
+    operation: tuple[str, ...]
+    result: str | None
+    intent_record_id: str
+    result_record_id: str | None
+    result_sequence: int | None
+
+
 def project_work_unit_reviewers(
     records: Sequence[ArtifactRecord],
 ) -> tuple[tuple[str, Role | None], ...]:
@@ -176,6 +189,23 @@ class ArtifactReplayResult:
     workflow_policies: tuple[WorkflowPolicyPayload, ...] = ()
     slice_boundaries: tuple[SliceBoundaryPayload, ...] = ()
     work_unit_reviewers: tuple[tuple[str, Role | None], ...] = ()
+    side_effects: tuple[ReplayedSideEffect, ...] = ()
+
+    def completed_side_effects(self, work_unit_id: str) -> tuple[str, ...]:
+        completed = tuple(
+            item
+            for item in self.side_effects
+            if item.work_unit_id == work_unit_id
+            and item.result_record_id is not None
+            and item.effect_class != "ledger"
+        )
+        return tuple(
+            item.operation[0] if item.effect_class == "internal" else item.effect_key
+            for item in sorted(
+                completed,
+                key=lambda item: item.result_sequence or 0,
+            )
+        )
 
     def subset(self, records: Sequence[ArtifactRecord]) -> "ArtifactReplayResult":
         """Derive a presentation-only subsequence from an accepted replay.
@@ -707,6 +737,57 @@ def _validate_payload_references(
                 ):
                     _fail(ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH, "provider attempt terminal changed immutable fields", terminal)
 
+    effects: dict[str, list[ArtifactRecord]] = {}
+    for record in chain:
+        if isinstance(record.payload, SideEffectPayload):
+            effects.setdefault(record.payload.effect_key, []).append(record)
+    for effect_key, records in effects.items():
+        if len(records) not in {1, 2}:
+            _fail(
+                ReplayDiagnosticCode.RECORD_DUPLICATE,
+                "side effect has too many phases",
+                records[-1],
+            )
+        intent = records[0]
+        intent_payload = intent.payload
+        assert isinstance(intent_payload, SideEffectPayload)
+        if intent.revision != 1 or intent_payload.phase != "intent":
+            _fail(
+                ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+                "side effect must begin with revision 1 intent",
+                intent,
+            )
+        expected_logical = f"side-effect-{hashlib.sha256(effect_key.encode('utf-8')).hexdigest()[:32]}"
+        if intent.logical_id != expected_logical:
+            _fail(
+                ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+                "side effect logical identity differs from its key",
+                intent,
+            )
+        if len(records) == 2:
+            result = records[1]
+            result_payload = result.payload
+            assert isinstance(result_payload, SideEffectPayload)
+            if result.revision != 2 or result_payload.phase != "result":
+                _fail(
+                    ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+                    "side effect result must be revision 2 after intent",
+                    result,
+                )
+            if (
+                result.logical_id != intent.logical_id
+                or result.fingerprint != intent.fingerprint
+                or result_payload.effect_key != intent_payload.effect_key
+                or result_payload.effect_class != intent_payload.effect_class
+                or result_payload.work_unit_id != intent_payload.work_unit_id
+                or result_payload.operation != intent_payload.operation
+            ):
+                _fail(
+                    ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+                    "side effect result changed its immutable intent binding",
+                    result,
+                )
+
 
 def _same_fingerprint(record: ArtifactRecord, referenced: ArtifactRecord) -> None:
     if referenced.fingerprint != record.fingerprint:
@@ -758,7 +839,9 @@ def _result(expected_run_id: str, records: tuple[ArtifactRecord, ...]) -> Artifa
     work_unit_states: dict[str, ReplayedWorkUnitState] = {}
     workflow_policies: dict[str, WorkflowPolicyPayload] = {}
     slice_boundaries: dict[str, SliceBoundaryPayload] = {}
-    for record in records:
+    side_effects: list[ReplayedSideEffect] = []
+    side_effect_indexes: dict[str, int] = {}
+    for sequence, record in enumerate(records, start=1):
         payload = record.payload
         if isinstance(payload, WorkflowTransitionPayload):
             slice_statuses[payload.slice_id] = payload.slice_status
@@ -778,6 +861,29 @@ def _result(expected_run_id: str, records: tuple[ArtifactRecord, ...]) -> Artifa
             workflow_policies[payload.work_unit_id] = payload
         elif isinstance(payload, SliceBoundaryPayload):
             slice_boundaries[payload.slice_id] = payload
+        elif isinstance(payload, SideEffectPayload) and payload.phase == "intent":
+            side_effect_indexes[payload.effect_key] = len(side_effects)
+            side_effects.append(
+                ReplayedSideEffect(
+                    payload.effect_key,
+                    payload.effect_class,
+                    payload.work_unit_id,
+                    payload.operation,
+                    None,
+                    record.record_id,
+                    None,
+                    None,
+                )
+            )
+        elif isinstance(payload, SideEffectPayload):
+            index = side_effect_indexes.get(payload.effect_key)
+            if index is not None:
+                side_effects[index] = replace(
+                    side_effects[index],
+                    result=payload.result,
+                    result_record_id=record.record_id,
+                    result_sequence=sequence,
+                )
 
     def identifier_order(value: str) -> tuple[int, int | str]:
         return (0, int(value)) if value.isdigit() else (1, value)
@@ -815,6 +921,7 @@ def _result(expected_run_id: str, records: tuple[ArtifactRecord, ...]) -> Artifa
             for key in sorted(slice_boundaries, key=identifier_order)
         ),
         work_unit_reviewers=project_work_unit_reviewers(records),
+        side_effects=tuple(side_effects),
     )
 
 
@@ -837,6 +944,7 @@ __all__ = [
     "ReplayFact",
     "ReplayedWorkflowCursor",
     "ReplayedWorkUnitState",
+    "ReplayedSideEffect",
     "project_work_unit_reviewers",
     "replay_artifacts",
 ]

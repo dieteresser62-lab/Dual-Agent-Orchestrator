@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import hashlib
 import re
 import subprocess
 from dataclasses import dataclass
@@ -150,6 +151,128 @@ class SliceCommitResult:
     message: str
     diff_fingerprint: str
     committed_paths: tuple[str, ...]
+
+
+def preview_commit_tree(
+    repository_root: Path,
+    changes: RepositoryChanges,
+    *,
+    force_non_executable_paths: Sequence[str] = (),
+) -> str:
+    """Calculate the exact Git tree of a path-exact commit without staging."""
+    raw_index = os.fsdecode(
+        _git(repository_root, "ls-files", "--stage", "-z").stdout
+    )
+    blobs: dict[str, tuple[str, str]] = {}
+    for field in raw_index.split("\0"):
+        if not field:
+            continue
+        metadata, path = field.split("\t", 1)
+        mode, object_id, stage = metadata.split(" ", 2)
+        if stage != "0":
+            raise GitTransactionError("cannot preview a commit with an unmerged index")
+        blobs[path] = (mode, object_id)
+    fingerprint_by_path = {
+        item.path: item for item in changes.fingerprint_entries
+    }
+    for entry in changes.entries:
+        if entry.old_path is not None:
+            blobs.pop(entry.old_path, None)
+        if entry.kind == "deleted":
+            blobs.pop(entry.path, None)
+            continue
+        relative = repository_root.joinpath(*PurePosixPath(entry.path).parts)
+        if not relative.exists() and not relative.is_symlink():
+            raise GitTransactionError(
+                f"cannot preview missing commit content: {entry.path}"
+            )
+        fingerprint = fingerprint_by_path.get(entry.path)
+        payload_mode = None if fingerprint is None else fingerprint.payload_mode
+        if payload_mode == 0o120000:
+            mode = "120000"
+            object_id = os.fsdecode(
+                _git(
+                    repository_root,
+                    "hash-object",
+                    "--stdin",
+                    input_bytes=os.fsencode(os.readlink(relative)),
+                ).stdout
+            ).strip()
+        elif (
+            payload_mode is not None
+            and payload_mode & 0o111
+            and not entry.path.lower().endswith(".md")
+            and entry.path not in force_non_executable_paths
+        ):
+            mode = "100755"
+        else:
+            mode = "100644"
+        if payload_mode != 0o120000:
+            object_id = os.fsdecode(
+                _git(
+                    repository_root,
+                    "hash-object",
+                    f"--path={entry.path}",
+                    "--",
+                    entry.path,
+                ).stdout
+            ).strip()
+        blobs[entry.path] = (mode, object_id)
+
+    tree: dict[str, object] = {}
+    for path, value in blobs.items():
+        cursor = tree
+        parts = PurePosixPath(path).parts
+        for part in parts[:-1]:
+            child = cursor.setdefault(part, {})
+            if not isinstance(child, dict):
+                raise GitTransactionError("Git tree path collides with a blob")
+            cursor = child
+        cursor[parts[-1]] = value
+
+    object_format = os.fsdecode(
+        _git(repository_root, "rev-parse", "--show-object-format").stdout
+    ).strip()
+    if object_format not in {"sha1", "sha256"}:
+        raise GitTransactionError(
+            f"unsupported Git object format for tree preview: {object_format}"
+        )
+
+    def tree_id(node: dict[str, object]) -> str:
+        encoded = bytearray()
+        for name in sorted(
+            node,
+            key=lambda item: (
+                item + "/" if isinstance(node[item], dict) else item
+            ).encode("utf-8"),
+        ):
+            value = node[name]
+            if isinstance(value, dict):
+                mode, object_id = "40000", tree_id(value)
+            else:
+                assert isinstance(value, tuple)
+                mode, object_id = value
+            encoded.extend(f"{mode} {name}".encode("utf-8"))
+            encoded.append(0)
+            encoded.extend(bytes.fromhex(object_id))
+        header = f"tree {len(encoded)}\0".encode("ascii")
+        return hashlib.new(object_format, header + encoded).hexdigest()
+
+    return tree_id(tree)
+
+
+def inspect_commit_tree(
+    repository_root: Path,
+    commit: str,
+) -> tuple[str | None, str]:
+    """Return first parent and tree for one commit without changing Git state."""
+    fields = os.fsdecode(
+        _git(repository_root, "show", "-s", "--format=%P%n%T", commit).stdout
+    ).splitlines()
+    if len(fields) != 2:
+        raise GitTransactionError("could not inspect commit parent and tree")
+    parents = fields[0].split()
+    return (parents[0] if parents else None, fields[1])
 
 
 def commit_managed_audit_report(
@@ -870,6 +993,7 @@ def _git(
     repository_root: Path,
     *arguments: str,
     accepted_exit_codes: tuple[int, ...] = (0,),
+    input_bytes: bytes | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
     try:
         result = subprocess.run(
@@ -877,6 +1001,7 @@ def _git(
             cwd=repository_root,
             capture_output=True,
             check=False,
+            input=input_bytes,
         )
     except OSError as exc:
         raise GitTransactionError(f"could not execute git: {exc}") from exc

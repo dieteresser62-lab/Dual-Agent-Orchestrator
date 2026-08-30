@@ -227,6 +227,13 @@ def test_schema_is_bundled_and_self_contained() -> None:
     assert not any("http" in ref for ref in _references(schema))
 
 
+def test_schema_cache_never_exposes_mutable_authority() -> None:
+    schema = load_schema()
+    schema["title"] = "tampered caller copy"
+
+    assert load_schema()["title"] != "tampered caller copy"
+
+
 def test_r2_record_vocabularies_stay_synced_with_state_v3() -> None:
     assert artifact_models._WORKFLOW_STEPS == {item.value for item in WorkflowStep}
     assert artifact_models._SLICE_STATUSES == {item.value for item in SliceStatus}

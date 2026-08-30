@@ -64,6 +64,7 @@ def test_watch_dry_run_returns_typed_terminal_result(tmp_path: Path, monkeypatch
 def test_explicit_direct_resume_finalizes_bound_watch_task(
     tmp_path: Path, monkeypatch
 ) -> None:
+    monkeypatch.chdir(tmp_path)
     inbox = tmp_path / "inbox"
     outbox = tmp_path / "outbox"
     inbox.mkdir()

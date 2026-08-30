@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from pathlib import Path, PurePosixPath
+from typing import Callable
 
 from contracts import PlannedSlice
 from state_io import atomic_write_file
@@ -247,6 +248,7 @@ def write_implementation_handoff(
     target_branch: str,
     approved_plan_commit: str,
     finding_handoff: tuple[str, str] | None = None,
+    write_content: Callable[[Path, str], None] | None = None,
 ) -> Path:
     plan = repository_root / PurePosixPath(work_plan_path)
     try:
@@ -271,8 +273,13 @@ def write_implementation_handoff(
             raise PlanHandoffError(
                 f"implementation handoff already exists with different content: {target}"
             )
+        if write_content is not None:
+            write_content(target, content)
         return target
-    atomic_write_file(target, content)
+    if write_content is None:
+        atomic_write_file(target, content)
+    else:
+        write_content(target, content)
     return target
 
 

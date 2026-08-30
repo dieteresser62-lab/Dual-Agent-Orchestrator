@@ -29,6 +29,7 @@ from git_service import (
     commit_managed_audit_report,
     commit_slice,
     inspect_repository,
+    preview_commit_tree,
     prepare_new_watch_task_branch,
     require_committed_file_at_head,
     resume_slice,
@@ -99,6 +100,55 @@ def _authorization(
         attestation=attestation,
         claude_review=review(AgentRole.CLAUDE, claude_approval),
     )
+
+
+def test_preview_commit_tree_matches_exact_git_index_tree_without_staging(
+    tmp_path: Path,
+) -> None:
+    repository, start = _new_repository(tmp_path)
+    (repository / "base.txt").write_text("changed\n", encoding="utf-8")
+    (repository / "folder").mkdir()
+    (repository / "folder" / "nested.txt").write_text("nested\n", encoding="utf-8")
+    (repository / "folder.txt").write_text("sibling\n", encoding="utf-8")
+    changes = collect_repository_changes(repository, start)
+
+    expected_tree = preview_commit_tree(repository, changes)
+    assert _git(repository, "diff", "--cached", "--name-only") == ""
+
+    _git(repository, "add", "-A")
+    assert _git(repository, "write-tree") == expected_tree
+
+
+def test_preview_commit_tree_matches_symlink_rename_and_forced_mode(
+    tmp_path: Path,
+) -> None:
+    repository, start = _new_repository(tmp_path)
+    (repository / "base.txt").rename(repository / "renamed.txt")
+    script = repository / "script.sh"
+    script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    script.chmod(0o755)
+    audit = repository / "audit.txt"
+    audit.write_text("audit\n", encoding="utf-8")
+    audit.chmod(0o755)
+    link = repository / "base-link"
+    try:
+        link.symlink_to("renamed.txt")
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 1314:
+            pytest.skip("Windows symlink privilege is unavailable")
+        raise
+    changes = collect_repository_changes(repository, start)
+
+    expected_tree = preview_commit_tree(
+        repository,
+        changes,
+        force_non_executable_paths=("audit.txt",),
+    )
+    assert _git(repository, "diff", "--cached", "--name-only") == ""
+
+    _git(repository, "add", "-A")
+    _git(repository, "update-index", "--chmod=-x", "audit.txt")
+    assert _git(repository, "write-tree") == expected_tree
 
 
 def test_new_watch_task_creates_missing_target_branch(tmp_path: Path) -> None:

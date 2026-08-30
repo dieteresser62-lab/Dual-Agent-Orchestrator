@@ -4,6 +4,7 @@ import copy
 from dataclasses import replace
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -108,6 +109,7 @@ def _collect_registered_regression(node_id: str, root: Path) -> None:
         [sys.executable, "-m", "pytest", "--collect-only", "-q", node_id],
         cwd=root,
         env={
+            **os.environ,
             "PYTHONDONTWRITEBYTECODE": "1",
             "PYTHONPATH": str(root / "src"),
         },

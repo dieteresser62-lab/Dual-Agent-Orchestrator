@@ -51,6 +51,7 @@ from repo_changes import NotGitRepositoryError, RepositoryChangeError
 from review_packets import ReviewPacketError
 from schema_validation import SchemaDefinitionError, SchemaMismatch
 from semantic_markdown import SemanticMarkdownError
+from side_effects import SideEffectReconciliationError
 from state_io import (
     ActiveV2StateError,
     StatePathError,
@@ -101,7 +102,7 @@ _TRANSIENT = FailureClass.TRANSIENT
 _REJECT = FailureClass.TERMINAL_REJECTION
 
 
-# Authoritative inventory: all 45 ``*Error`` classes currently defined in
+# Authoritative inventory: all 46 ``*Error`` classes currently defined in
 # ``src/`` plus the schema validator's typed ``SchemaMismatch`` exception and
 # the four project exceptions whose names do not end in ``Error``.  Subclasses
 # are intentionally repeated instead of inheriting an implicit classification.
@@ -145,6 +146,7 @@ ERROR_CLASSIFICATIONS: dict[type[BaseException], tuple[FailureClass, str]] = {
     SchemaDefinitionError: _entry(_HALT, "SCHEMA-DEFINITION"),
     SchemaMismatch: _entry(_HALT, "SCHEMA-MISMATCH"),
     SemanticMarkdownError: _entry(_HALT, "SEMANTIC-MARKDOWN"),
+    SideEffectReconciliationError: _entry(_HALT, "SIDE-EFFECT-RECONCILIATION"),
     StateSchemaError: _entry(_HALT, "STATE-SCHEMA"),
     UnknownStateVersionError: _entry(_HALT, "UNKNOWN-STATE-VERSION"),
     ActiveV2StateError: _entry(_HALT, "ACTIVE-V2-STATE"),

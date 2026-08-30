@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import hashlib
 from pathlib import Path
 
@@ -19,6 +19,7 @@ from artifact_models import (
     ResumeCheckPayload,
     RunIdentityPayload,
     RunProfilePayload,
+    SideEffectPayload,
     SliceBoundaryPayload,
     TaskPayload,
     TransientRetryPayload,
@@ -242,6 +243,56 @@ def assert_slice_boundary_mirror(
         )
 
 
+def require_side_effect_ledger_prefix(replay: ArtifactReplayResult) -> None:
+    """Reject pre-R4 chains; the ledger is never synthesized from mirrors."""
+    initializers = tuple(
+        item
+        for item in replay.side_effects
+        if item.effect_class == "ledger"
+        and item.operation == ("structured-v2-side-effect-ledger",)
+        and item.result == "initialized"
+    )
+    if len(initializers) != 1:
+        raise ArtifactResumeError(
+            "structured-v2 run has no unique initialized side-effect ledger",
+            code=ReplayDiagnosticCode.RECORD_MISSING,
+            record_id=(initializers[0].intent_record_id if initializers else None),
+        )
+
+
+def assert_side_effect_mirror(
+    replay: ArtifactReplayResult,
+    state: WorkflowState,
+) -> WorkflowState:
+    """Validate the mirror and project any authoritative record-ahead suffix."""
+    require_side_effect_ledger_prefix(replay)
+    projected_units = []
+    for unit in state.work_units:
+        recorded = replay.completed_side_effects(str(unit.work_unit_id))
+        mirrored = unit.completed_side_effects
+        if recorded[: len(mirrored)] != mirrored:
+            related = next(
+                (
+                    item
+                    for item in reversed(replay.side_effects)
+                    if item.work_unit_id == str(unit.work_unit_id)
+                ),
+                None,
+            )
+            raise ArtifactResumeError(
+                "completed side effects differ from the authoritative ledger",
+                code=_mirror_difference_code(set(recorded), set(mirrored)),
+                record_id=None if related is None else related.intent_record_id,
+            )
+        projected_units.append(
+            unit if recorded == mirrored else replace(
+                unit, completed_side_effects=recorded
+            )
+        )
+    projected = tuple(projected_units)
+    return state if projected == state.work_units else replace(state, work_units=projected)
+
+
 def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeResolution:
     """Resolve the immutable protocol binding and verify structured mirror facts.
 
@@ -292,6 +343,7 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
     assert_run_binding_mirror(replay, state, binding)
     assert_workflow_status_mirror(replay, state)
     assert_slice_boundary_mirror(replay, state)
+    state = assert_side_effect_mirror(replay, state)
 
     head = replay.head_record_id
     assert head is not None

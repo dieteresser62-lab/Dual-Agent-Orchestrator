@@ -101,6 +101,44 @@ def _records(repository: Path, state) -> None:
     _status_records(bridge, state)
 
 
+def test_resume_projects_authoritative_side_effect_result_ahead_of_mirror(
+    tmp_path: Path,
+) -> None:
+    state = _state(tmp_path)
+    _records(tmp_path, state)
+    bridge = ArtifactBridge(ArtifactStore(tmp_path, state.run_id))
+    operation = ("result.json", "d" * 64)
+    intent, _ = bridge.record_side_effect_intent(
+        effect_class="file_write",
+        work_unit_id=state.current_work_unit_id,
+        operation=operation,
+        fingerprint_sha256="d" * 64,
+    )
+    result = bridge.record_side_effect_result(
+        effect_class="file_write",
+        work_unit_id=state.current_work_unit_id,
+        operation=operation,
+        result="d" * 64,
+        fingerprint_sha256="d" * 64,
+    )
+
+    resolved = resolve_resume_state(tmp_path, state).state
+
+    assert resolved.current_work_unit.completed_side_effects == (
+        result.payload.effect_key,
+    )
+    assert intent.payload.effect_key == result.payload.effect_key
+
+
+def test_resume_rejects_side_effect_mirror_ahead_of_ledger(tmp_path: Path) -> None:
+    state = _state(tmp_path)
+    _records(tmp_path, state)
+    state = state.mark_side_effect_completed("unrecorded-effect")
+
+    with pytest.raises(ArtifactResumeError, match="completed side effects differ"):
+        resolve_resume_state(tmp_path, state)
+
+
 def _run_records(
     repository: Path,
     state: WorkflowState,
@@ -195,6 +233,22 @@ def _status_records(
             fingerprint_sha256="a" * 64,
             fingerprint_kind=FingerprintKind.CONTRACT,
         )
+    operation = ("structured-v2-side-effect-ledger",)
+    bridge.record_side_effect_intent(
+        effect_class="ledger",
+        work_unit_id="run",
+        operation=operation,
+        fingerprint_sha256="a" * 64,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    bridge.record_side_effect_result(
+        effect_class="ledger",
+        work_unit_id="run",
+        operation=operation,
+        result="initialized",
+        fingerprint_sha256="a" * 64,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
     ordered_units = (
         *(unit for unit in state.work_units if unit.work_unit_id != state.current_work_unit_id),
         state.current_work_unit,
