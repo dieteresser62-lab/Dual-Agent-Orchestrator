@@ -123,6 +123,8 @@ def _chain() -> tuple[ArtifactRecord, ...]:
                 ),
             ),
             Role.ORCHESTRATOR,
+            "b" * 64,
+            "ar1-" + "0" * 64,
         ),
     )
     review = _append(

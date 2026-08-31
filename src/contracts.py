@@ -7,6 +7,12 @@ from enum import Enum
 from pathlib import PurePosixPath
 from typing import Iterable
 
+from content_authority import (
+    VALIDATION_MATRIX_DIGEST_V1,
+    ValidationCapture,
+    validation_output_digest,
+)
+
 
 SOURCE_FINDING_ID_PATTERN = re.compile(r"^C-(0[1-9]|[1-9][0-9]*)$")
 ANCHOR_ID_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]*$")
@@ -194,6 +200,8 @@ class ValidationAttestation:
     output_digest: str
     summary: str
     command_specs: tuple[ValidationCommandSpec, ...] = ()
+    content_captures: tuple[ValidationCapture, ...] = ()
+    content_digest_format: str = VALIDATION_MATRIX_DIGEST_V1
 
     def __post_init__(self) -> None:
         if not self.attestation_id.strip():
@@ -208,6 +216,18 @@ class ValidationAttestation:
             raise ValueError("validation attestation requires expected commands")
         if len(set(self.expected_commands)) != len(self.expected_commands):
             raise ValueError("validation attestation expected commands must be unique")
+        if self.content_captures:
+            if tuple(item.command for item in self.content_captures) != self.expected_commands:
+                raise ValueError(
+                    "validation content must follow every expected command exactly"
+                )
+            if validation_output_digest(
+                self.content_captures,
+                self.content_digest_format,
+            ) != self.output_digest:
+                raise ValueError(
+                    "validation content does not reproduce the attestation digest"
+                )
         record_commands = tuple(record.command for record in self.records)
         if len(set(record_commands)) != len(record_commands):
             raise ValueError("validation attestation command records must be unique")

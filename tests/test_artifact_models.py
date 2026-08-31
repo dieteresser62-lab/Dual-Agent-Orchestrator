@@ -148,7 +148,12 @@ def _record(payload, *, revision: int = 1) -> ArtifactRecord:  # type: ignore[no
     _review(),
     FindingTransitionPayload("C-01", Role.CLAUDE, Role.CLAUDE, "opened", FindingSeverity.BLOCKER, "open", "broken"),
     ValidationRequestPayload((CommandSpec("pytest", ("python3", "-m", "pytest", "tests/a b.py")),), Role.ORCHESTRATOR),
-    ValidationAttestationPayload((ValidationResult(CommandSpec("pytest", ("pytest", "-q")), "pass", 0, DIGEST),), Role.ORCHESTRATOR),
+    ValidationAttestationPayload(
+        (ValidationResult(CommandSpec("pytest", ("pytest", "-q")), "pass", 0, DIGEST),),
+        Role.ORCHESTRATOR,
+        DIGEST,
+        "ar1-" + "0" * 64,
+    ),
     GatePayload("manual-plan", "approved", Role.USER, "explicit approval"),
     GateTransitionPayload(
         "work-01",

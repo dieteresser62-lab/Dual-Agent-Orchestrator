@@ -74,6 +74,8 @@ def _chain() -> tuple[ArtifactRecord, ...]:
                 ),
             ),
             attested_by=Role.ORCHESTRATOR,
+            output_digest="b" * 64,
+            content_record_id="ar1-" + "0" * 64,
         ),
         ReviewPayload(
             reviewer=Role.CLAUDE,
@@ -589,6 +591,8 @@ def test_slice_projection_excludes_other_slice_gate_validation_and_binding_recor
                 ),
             ),
             attested_by=Role.ORCHESTRATOR,
+            output_digest="d" * 64,
+            content_record_id="ar1-" + "0" * 64,
         ),
     )
     gate = append(
@@ -682,6 +686,8 @@ def test_slice_projection_includes_own_round_gate_and_validation_records_before_
                 ),
             ),
             attested_by=Role.ORCHESTRATOR,
+            output_digest="e" * 64,
+            content_record_id="ar1-" + "0" * 64,
         ),
     )
     gate = append(

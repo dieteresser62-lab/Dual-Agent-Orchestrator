@@ -229,7 +229,7 @@ def _changes(
 def _attestation(changes: WorkflowChanges) -> ValidationAttestation:
     command = "python3 -m pytest tests/ -v"
     return ValidationAttestation(
-        attestation_id=f"validation-{changes.fingerprint[:8]}",
+        attestation_id=f"validation-{changes.fingerprint[:12]}",
         diff_fingerprint=changes.fingerprint,
         expected_commands=(command,),
         records=(ValidationRecord(ValidationStatus.PASS, command, 0),),
@@ -414,6 +414,12 @@ class FakeDriver:
     reviewer_calls: list[ReviewerInvocation] = field(default_factory=list)
     validation_calls: list[str] = field(default_factory=list)
     validation_requests: list[ValidationRequest] = field(default_factory=list)
+    validation_recoveries: dict[
+        tuple[str, tuple[str, ...], str], ValidationAttestation
+    ] = field(default_factory=dict)
+    validation_recovery_calls: list[
+        tuple[str, tuple[str, ...], str]
+    ] = field(default_factory=list)
     commit_calls: list[WorkflowCommitRequest] = field(default_factory=list)
     checkpoints: list = field(default_factory=list)
     checkpoint_histories: list = field(default_factory=list)
@@ -554,6 +560,16 @@ class FakeDriver:
                 "validation failed",
             )
         return attestation
+
+    def recover_pending_validation_attestation(
+        self,
+        fingerprint: str,
+        expected_commands: tuple[str, ...],
+        attestation_id: str,
+    ) -> ValidationAttestation | None:
+        key = (fingerprint, expected_commands, attestation_id)
+        self.validation_recovery_calls.append(key)
+        return self.validation_recoveries.get(key)
 
     def validate_plan(
         self,
@@ -2956,6 +2972,13 @@ def test_explicit_failed_retry_runs_once_then_reuses_result_for_review_chain() -
     )
     engine = WorkflowEngine(driver)
     history = WorkflowHistory(2, attestations=(failed,))
+    driver.validation_recoveries[
+        (
+            changes.fingerprint,
+            failed.expected_commands,
+            failed.attestation_id,
+        )
+    ] = failed
 
     retried, retried_history = engine._attestation(
         changes,
@@ -2971,9 +2994,37 @@ def test_explicit_failed_retry_runs_once_then_reuses_result_for_review_chain() -
     )
 
     assert [request.attempt_number for request in driver.validation_requests] == [2]
+    assert driver.validation_recovery_calls == [
+        (
+            changes.fingerprint,
+            failed.expected_commands,
+            f"validation-{changes.fingerprint[:12]}-retry-2",
+        )
+    ]
     assert retried.passed is True
     assert reused is retried
     assert reused_history is retried_history
+
+
+def test_plan_contract_validation_does_not_recover_matrix_content() -> None:
+    changes = _changes("1", "docs/internal/plan.md")
+    driver = FakeDriver(snapshots=[], codex_outputs=[], reviewer_outputs=[])
+
+    attestation, _history = WorkflowEngine(driver)._attestation(
+        changes,
+        WorkflowHistory(1),
+        replace(
+            _context(),
+            plan_only=True,
+            task_scope_patterns=("docs/internal/plan.md",),
+            work_plan_path="docs/internal/plan.md",
+        ),
+        1,
+        plan_contract=True,
+    )
+
+    assert attestation.diff_fingerprint == changes.fingerprint
+    assert driver.validation_recovery_calls == []
 
 
 def test_second_quota_on_same_step_stops_with_exit_two_without_reviewer() -> None:

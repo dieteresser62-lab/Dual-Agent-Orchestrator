@@ -57,6 +57,11 @@ from workflow_state import (
     WorkUnitKind,
     init_workflow_state,
 )
+from content_authority_support import (
+    append_provider_decision_authority,
+    append_validation_authority,
+    validation_history_mirror,
+)
 
 
 def _state(repository: Path, *, structured: bool = True):
@@ -260,7 +265,8 @@ def _status_records(
         work_unit_id = str(unit.work_unit_id)
         if unit.reviewer is None or work_unit_id in denied_units:
             continue
-        bridge.append(
+        append_provider_decision_authority(
+            bridge,
             ReviewPayload(
                 Role.CLAUDE,
                 work_unit_id,
@@ -274,6 +280,7 @@ def _status_records(
             logical_id=f"review-fixture-{work_unit_id}",
             idempotency_key=f"review-fixture:{work_unit_id}",
             fingerprint_sha256="a" * 64,
+            operation="claude_slice_review",
         )
 
     units_by_slice = {str(unit.slice_id) for unit in state.work_units}
@@ -404,7 +411,8 @@ def _authorization_records(
     review_verdict: str = "approved",
 ):
     bridge = ArtifactBridge(ArtifactStore(repository, state.run_id))
-    attestation = bridge.append(
+    attestation = append_validation_authority(
+        bridge,
         ValidationAttestationPayload(
             results=(
                 ValidationResult(
@@ -415,12 +423,15 @@ def _authorization_records(
                 ),
             ),
             attested_by=Role.ORCHESTRATOR,
+            output_digest="0" * 64,
+            content_record_id="ar1-" + "0" * 64,
         ),
         logical_id="validation-resume",
         idempotency_key=f"validation-resume:{attestation_fingerprint}",
         fingerprint_sha256=attestation_fingerprint,
     )
-    review = bridge.append(
+    review = append_provider_decision_authority(
+        bridge,
         ReviewPayload(
             reviewer=Role.CLAUDE,
             work_unit_id="2",
@@ -434,6 +445,7 @@ def _authorization_records(
         logical_id="review-resume",
         idempotency_key=f"review-resume:{review_fingerprint}:{review_verdict}",
         fingerprint_sha256=review_fingerprint,
+        operation="claude_slice_review",
     )
     return attestation, review
 
@@ -465,7 +477,8 @@ def _finding_handoff_resume_fixture(repository: Path):
         idempotency_key="finding-C-01",
         fingerprint_sha256="b" * 64,
     )
-    review = source.append(
+    review = append_provider_decision_authority(
+        source,
         ReviewPayload(
             Role.CLAUDE, "plan-review", "approved", ("C-01",), None,
             "native-claude-review-v2", "native-review-request-" + "c" * 64,
@@ -474,6 +487,7 @@ def _finding_handoff_resume_fixture(repository: Path):
         logical_id="plan-review",
         idempotency_key="plan-review",
         fingerprint_sha256="b" * 64,
+        operation="claude_plan_review",
     )
     source_replay = replay_artifacts(source.store.load_chain(), "source-plan-run")
     export = source.append(
@@ -633,7 +647,8 @@ def test_finding_import_denial_round_converges_from_record_ahead_state(
         tmp_path
     )
     state = state.with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW)
-    attestation = local.append(
+    attestation = append_validation_authority(
+        local,
         ValidationAttestationPayload(
             results=(
                 ValidationResult(
@@ -644,12 +659,15 @@ def test_finding_import_denial_round_converges_from_record_ahead_state(
                 ),
             ),
             attested_by=Role.ORCHESTRATOR,
+            output_digest="0" * 64,
+            content_record_id="ar1-" + "0" * 64,
         ),
         logical_id="validation-slice-round-1",
         idempotency_key="validation-slice-round-1",
         fingerprint_sha256="d" * 64,
     )
-    review = local.append(
+    review = append_provider_decision_authority(
+        local,
         ReviewPayload(
             reviewer=Role.CLAUDE,
             work_unit_id=str(state.current_work_unit_id),
@@ -663,6 +681,7 @@ def test_finding_import_denial_round_converges_from_record_ahead_state(
         logical_id=f"review-claude-{state.current_work_unit_id}-1",
         idempotency_key="slice-review-round-1",
         fingerprint_sha256="d" * 64,
+        operation="claude_slice_review",
     )
     local.append(
         FindingTransitionPayload(
@@ -699,12 +718,7 @@ def test_finding_import_denial_round_converges_from_record_ahead_state(
         runtime_history={
             "current": {
                 "findings": [{"finding_id": "C-01", "status": "open"}],
-                "attestations": [
-                    {
-                        "attestation_id": attestation.logical_id,
-                        "diff_fingerprint": attestation.fingerprint.sha256,
-                    }
-                ],
+                "attestations": [validation_history_mirror(local, attestation)],
             },
             "archive": [],
         },
@@ -826,12 +840,7 @@ def test_later_work_unit_can_carry_open_finding_without_import_snapshot(
         runtime_history={
             "current": {
                 "findings": [{"finding_id": "C-04", "status": "open"}],
-                "attestations": [
-                    {
-                        "attestation_id": attestation.logical_id,
-                        "diff_fingerprint": attestation.fingerprint.sha256,
-                    }
-                ],
+                "attestations": [validation_history_mirror(bridge, attestation)],
             },
             "archive": [],
         },
@@ -1334,7 +1343,8 @@ def _pending_review_chain(
         WorkflowStep.CLAUDE_SLICE_REVIEW
     )
     bridge = ArtifactBridge(ArtifactStore(repository, state.run_id))
-    attestation = bridge.append(
+    attestation = append_validation_authority(
+        bridge,
         ValidationAttestationPayload(
             results=(
                 ValidationResult(
@@ -1345,6 +1355,8 @@ def _pending_review_chain(
                 ),
             ),
             attested_by=Role.ORCHESTRATOR,
+            output_digest="0" * 64,
+            content_record_id="ar1-" + "0" * 64,
         ),
         logical_id="validation-pending-review",
         idempotency_key="validation-pending-review",
@@ -1364,7 +1376,8 @@ def _pending_review_chain(
         idempotency_key="finding-C-01-opened",
         fingerprint_sha256="d" * 64,
     )
-    review = bridge.append(
+    review = append_provider_decision_authority(
+        bridge,
         ReviewPayload(
             reviewer=Role.CLAUDE,
             work_unit_id=str(state.current_work_unit_id),
@@ -1378,6 +1391,7 @@ def _pending_review_chain(
         logical_id=f"review-claude-{state.current_work_unit_id}-1",
         idempotency_key="pending-review",
         fingerprint_sha256="d" * 64,
+        operation="claude_slice_review",
     )
     current = bridge.append(
         FindingTransitionPayload(
@@ -1484,7 +1498,8 @@ def _pending_slice_denial_chain(
         fingerprint_sha256=state.task_digest,
         fingerprint_kind=FingerprintKind.CONTRACT,
     )
-    attestation = bridge.append(
+    attestation = append_validation_authority(
+        bridge,
         ValidationAttestationPayload(
             results=(
                 ValidationResult(
@@ -1495,12 +1510,15 @@ def _pending_slice_denial_chain(
                 ),
             ),
             attested_by=Role.ORCHESTRATOR,
+            output_digest="0" * 64,
+            content_record_id="ar1-" + "0" * 64,
         ),
         logical_id="validation-slice-round-1",
         idempotency_key="validation-slice-round-1",
         fingerprint_sha256="d" * 64,
     )
-    review = bridge.append(
+    review = append_provider_decision_authority(
+        bridge,
         ReviewPayload(
             reviewer=Role.CLAUDE,
             work_unit_id=str(state.current_work_unit_id),
@@ -1514,6 +1532,7 @@ def _pending_slice_denial_chain(
         logical_id=f"review-claude-{state.current_work_unit_id}-1",
         idempotency_key="slice-review-round-1",
         fingerprint_sha256="d" * 64,
+        operation="claude_slice_review",
     )
     next_round = bridge.append(
         WorkUnitPayload(
@@ -1769,7 +1788,8 @@ def _append_completed_slice_binding(
         attestation_fingerprint="d" * 64,
         review_fingerprint="d" * 64,
     )
-    ArtifactBridge(ArtifactStore(repository, state.run_id)).append(
+    bridge = ArtifactBridge(ArtifactStore(repository, state.run_id))
+    bridge.append(
         BindingPayload(
             binding_kind="commit",
             target="d" * 40,
@@ -1783,12 +1803,7 @@ def _append_completed_slice_binding(
     return replace(
         state,
         runtime_history={
-            "attestations": [
-                {
-                    "attestation_id": attestation.logical_id,
-                    "diff_fingerprint": attestation.fingerprint.sha256,
-                }
-            ]
+            "attestations": [validation_history_mirror(bridge, attestation)]
         },
     )
 
@@ -1936,12 +1951,7 @@ def test_structured_resume_halts_when_state_mirror_reports_completion_without_ch
     state = replace(
         state,
         runtime_history={
-            "attestations": [
-                {
-                    "attestation_id": attestation.logical_id,
-                    "diff_fingerprint": attestation.fingerprint.sha256,
-                }
-            ]
+            "attestations": [validation_history_mirror(bridge, attestation)]
         },
     )
     bridge.append(
@@ -1989,18 +1999,13 @@ def test_structured_resume_halts_when_completion_final_binding_id_is_unknown_or_
         attestation_fingerprint=binding_fingerprint,
         review_fingerprint=binding_fingerprint,
     )
+    bridge = ArtifactBridge(ArtifactStore(tmp_path, state.run_id))
     state = replace(
         state,
         runtime_history={
-            "attestations": [
-                {
-                    "attestation_id": attestation.logical_id,
-                    "diff_fingerprint": attestation.fingerprint.sha256,
-                }
-            ]
+            "attestations": [validation_history_mirror(bridge, attestation)]
         },
     )
-    bridge = ArtifactBridge(ArtifactStore(tmp_path, state.run_id))
     bridge.append(
         WorkUnitPayload("1", 1, ("src/resume.py",)),
         logical_id="work-unit-3",
@@ -2073,18 +2078,13 @@ def test_structured_resume_halts_when_commit_binding_references_unknown_or_misma
         review_fingerprint=review_fingerprint,
         review_verdict=review_verdict,
     )
+    bridge = ArtifactBridge(ArtifactStore(tmp_path, state.run_id))
     state = replace(
         state,
         runtime_history={
-            "attestations": [
-                {
-                    "attestation_id": attestation.logical_id,
-                    "diff_fingerprint": attestation.fingerprint.sha256,
-                }
-            ]
+            "attestations": [validation_history_mirror(bridge, attestation)]
         },
     )
-    bridge = ArtifactBridge(ArtifactStore(tmp_path, state.run_id))
     bridge.append(
         BindingPayload(
             binding_kind="commit",

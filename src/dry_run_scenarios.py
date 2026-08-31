@@ -21,7 +21,11 @@ from audit_trail import ReviewAuditEvent, ValidationAuditEvent
 from contracts import AgentRole, FindingRecord, ValidationAttestation, ValidationRecord, ValidationStatus
 from finding_reducer import project_open_set
 from gates import TestChangeEvidence
-from validation_matrix import ValidationCommand, ValidationRequest
+from validation_matrix import (
+    ValidationCommand,
+    ValidationRequest,
+    validation_attestation_id,
+)
 from workflow import (
     CodexInvocation,
     ReviewerInvocation,
@@ -1058,10 +1062,7 @@ class ScriptedWorkflowDriver:
             separators=(",", ":"),
         )
         return ValidationAttestation(
-            attestation_id=(
-                f"dry-{self.scenario.name}-{changes.fingerprint[:8]}-"
-                f"{request.attempt_number}"
-            ),
+            attestation_id=validation_attestation_id(request),
             diff_fingerprint=attestation_fingerprint,
             expected_commands=request.expected_commands,
             records=records,

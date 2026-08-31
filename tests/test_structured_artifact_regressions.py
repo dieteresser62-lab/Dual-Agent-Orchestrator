@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 import orchestrator
+from agent_runtime import NativeAgentCodexOutput
 from audit_trail import ReviewAuditEvent, ValidationAuditEvent
 from artifact_bridge import (
     ArtifactBridge,
@@ -28,9 +29,11 @@ from artifact_models import (
     ProviderInputMeasurementPayload,
     ProviderInputComponentPayload,
     ProviderAttemptPayload,
+    ProviderContentPayload,
     QuotaPausePayload,
     RecordType,
     ReviewPayload,
+    ReviewPacketPayload,
     Role,
     TransientRetryPayload,
     WorkUnitPayload,
@@ -39,8 +42,14 @@ from artifact_models import (
 from artifact_replay import ReplayDiagnosticCode, replay_artifacts
 from artifact_store import ArtifactStore
 from artifact_projection import ArtifactAuditProjection
+from content_authority import ValidationCapture, validation_output_digest
+from content_authority_support import (
+    append_provider_decision_authority,
+    append_validation_authority,
+)
 from contracts import (
     AgentRole,
+    CodexContractResult,
     ContractResult,
     FindingClass,
     FindingOrigin,
@@ -55,6 +64,7 @@ from contracts import (
     ValidationStatus,
 )
 from orchestrator import ProductionWorkflowDriver
+from review_packets import build_review_packet
 from final_review_preflight import (
     FinalReviewPreflightDenied,
     FinalReviewPreflightResult,
@@ -78,6 +88,7 @@ from workflow import (
 from workflow_state import (
     AgentProfileBinding,
     AgentFailureKind,
+    GateReason,
     InvocationFailureRecord,
     ProtocolBinding,
     ProtocolMode,
@@ -186,6 +197,185 @@ def test_external_side_effect_guard_loads_and_replays_the_chain_once(
     assert calls == 1
 
 
+def test_not_ready_final_report_resumes_without_a_final_report_mirror(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/structured-regression")
+    head = _git(repository, "rev-parse", "HEAD")
+    state = (
+        _state(repository, "not-ready-final-report")
+        .bind_slice_plan(
+            (PlannedSlice(1, "implementation", ("src/runtime.py",)),),
+            first_start_commit=head,
+        )
+        .complete_current_work_unit()
+        .start_work_unit(
+            slice_id=1,
+            kind=WorkUnitKind.SLICE,
+            step=WorkflowStep.CODEX_IMPLEMENTATION,
+        )
+        .bind_current_slice_git_boundary(
+            start_commit=head,
+            scope_paths=("src/runtime.py",),
+            start_fingerprint="b" * 64,
+        )
+    )
+    final_unit = replace(
+        state.current_work_unit,
+        kind=WorkUnitKind.FINAL_REVIEW,
+        current_step=WorkflowStep.CODEX_FINAL_REVIEW,
+    )
+    state = replace(
+        state,
+        current_step=WorkflowStep.CODEX_FINAL_REVIEW,
+        work_units=(*state.work_units[:-1], final_unit),
+    )
+    driver = _driver(repository)
+    history = WorkflowHistory(state.current_work_unit_id)
+    driver.checkpoint(state, history)
+    request_id = "native-codex-request-" + "b" * 64
+    canonical = json.dumps(
+        {"request_id": request_id, "ready": False},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    driver.persist_native_codex_contract(
+        NativeAgentCodexOutput(
+            result=CodexContractResult(
+                ready=False,
+                stopped=False,
+                stop_request=None,
+                validation=None,
+                test_files=(),
+                findings=(),
+                slice_plan=(),
+            ),
+            canonical_json=canonical,
+            request_id=request_id,
+            response_sha256=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+        ),
+        (),
+    )
+    halted = state.await_policy_gate(
+        reason=GateReason.STOP_REQUEST,
+        detail="CODEX-FINAL-REPORT-NOT-READY | retry the same final report step",
+    )
+    driver.checkpoint(halted, history)
+    persisted = driver.active_state
+    assert persisted is not None
+
+    resolution = resolve_resume_state(repository, persisted)
+    contents = tuple(
+        record.payload
+        for record in resolution.replay_result.records
+        if isinstance(record.payload, ProviderContentPayload)
+    )
+
+    assert contents[-1].content_kind == "agent_result"
+    assert history.codex_final_report is None
+    assert resolution.state.current_step is WorkflowStep.CODEX_FINAL_REVIEW
+
+
+def test_resume_compares_only_latest_review_packet_per_work_unit(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/structured-regression")
+    head = _git(repository, "rev-parse", "HEAD")
+    state = (
+        _state(repository, "review-packet-rounds")
+        .bind_slice_plan(
+            (PlannedSlice(1, "implementation", ("src/runtime.py",)),),
+            first_start_commit=head,
+        )
+        .complete_current_work_unit()
+        .start_work_unit(
+            slice_id=1,
+            kind=WorkUnitKind.SLICE,
+            step=WorkflowStep.CODEX_IMPLEMENTATION,
+        )
+        .bind_current_slice_git_boundary(
+            start_commit=head,
+            scope_paths=("src/runtime.py",),
+            start_fingerprint="0" * 64,
+        )
+        .with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW)
+    )
+    driver = _driver(repository)
+    history = WorkflowHistory(state.current_work_unit_id)
+    driver.checkpoint(state, history)
+    plan_text = (
+        "### Slice 1 - Runtime\n\n"
+        "**Ziel**\n\nBind review evidence.\n\n"
+        "**Exakter Änderungspfad**\n\n- `src/runtime.py`\n\n"
+        "#### " + "Akzep" + "tanzkriterien\n\n"
+        "- Resume uses the latest packet.\n"
+    )
+    packets = []
+    attestations = []
+    for index, fingerprint in enumerate(("c" * 64, "d" * 64), start=1):
+        command = ValidationCommandSpec(argv=("pytest",))
+        capture = ValidationCapture(
+            "pytest", "pass", 0, f"round {index}", "", f"round {index}"
+        )
+        attestation = ValidationAttestation(
+            attestation_id=f"validation-{fingerprint[:12]}",
+            diff_fingerprint=fingerprint,
+            expected_commands=("pytest",),
+            records=(
+                ValidationRecord(
+                    ValidationStatus.PASS,
+                    "pytest",
+                    0,
+                    f"round {index}",
+                ),
+            ),
+            output_digest=validation_output_digest((capture,)),
+            summary=f"round {index} passed",
+            command_specs=(command,),
+            content_captures=(capture,),
+        )
+        driver.persist_validation_attestation(attestation)
+        packet = build_review_packet(
+            purpose="slice",
+            fingerprint=fingerprint,
+            start_fingerprint="0" * 64,
+            paths=("src/runtime.py",),
+            review_diff=(
+                "diff --git a/src/runtime.py b/src/runtime.py\n"
+                "index 1111111..2222222 100644\n"
+                "--- a/src/runtime.py\n"
+                "+++ b/src/runtime.py\n"
+                "@@ -1 +1 @@\n"
+                f"-old {index}\n+new {index}\n"
+            ),
+            plan_text=plan_text,
+            slice_id=1,
+            attestation=attestation,
+            findings=(),
+        )
+        driver.persist_review_packet(packet)
+        attestations.append(attestation)
+        packets.append(packet)
+        history = replace(
+            history,
+            attestations=tuple(attestations),
+            active_review_packet=packet,
+        )
+        driver.checkpoint(state, history)
+        state = driver.active_state or state
+
+    resolution = resolve_resume_state(repository, state)
+    packet_records = tuple(
+        record
+        for record in resolution.replay_result.records
+        if isinstance(record.payload, ReviewPacketPayload)
+    )
+
+    assert len(packet_records) == 2
+    assert history.active_review_packet is packets[-1]
+    assert packet_records[-1].payload.fingerprint == packets[-1].fingerprint
+
+
 def test_external_side_effect_guard_rejects_mirror_ahead_of_records(
     tmp_path: Path,
 ) -> None:
@@ -280,7 +470,8 @@ def test_external_side_effect_guard_rejects_review_record_ahead_of_mirror(
     state = _state(repository, "structured-review-drift")
     driver = _driver(repository)
     driver.checkpoint(state, WorkflowHistory(1))
-    ArtifactBridge(ArtifactStore(repository, state.run_id)).append(
+    append_provider_decision_authority(
+        ArtifactBridge(ArtifactStore(repository, state.run_id)),
         ReviewPayload(
             reviewer=Role.CLAUDE,
             work_unit_id="1",
@@ -294,6 +485,7 @@ def test_external_side_effect_guard_rejects_review_record_ahead_of_mirror(
         logical_id="review-claude-1-1",
         idempotency_key="review-drift",
         fingerprint_sha256="b" * 64,
+        operation=state.current_step.value,
     )
 
     with pytest.raises(WorkflowExecutionError, match="reviewer decisions differ"):
@@ -627,7 +819,7 @@ def _pending_reviewer_recovery_case(
     digest = hashlib.sha256(output.encode("utf-8")).hexdigest()
     bridge = ArtifactBridge(ArtifactStore(repository, state.run_id))
     bridge.append(
-        attestation_payload(attestation),
+        attestation_payload(attestation, "ar1-" + "0" * 64),
         logical_id=attestation.attestation_id,
         idempotency_key=f"attestation:{attestation.attestation_id}",
         fingerprint_sha256=attestation_fingerprint or fingerprint,
@@ -1189,6 +1381,7 @@ def test_structured_resume_accepts_mirrored_stopped_review(tmp_path: Path) -> No
     state = _state(repository, "structured-stopped-review")
     driver = _driver(repository)
     driver.checkpoint(state, WorkflowHistory(1))
+    validation_output = "pass:0"
     attestation = ValidationAttestation(
         attestation_id="validation-stop",
         diff_fingerprint="b" * 64,
@@ -1198,10 +1391,22 @@ def test_structured_resume_accepts_mirrored_stopped_review(tmp_path: Path) -> No
                 ValidationStatus.PASS,
                 "python3 -m pytest tests/ -v",
                 0,
+                validation_output,
             ),
         ),
-        output_digest="c" * 64,
-        summary="validation completed before reviewer stop",
+        output_digest=validation_output_digest(
+            (
+                ValidationCapture(
+                    "python3 -m pytest tests/ -v",
+                    "pass",
+                    0,
+                    validation_output,
+                    "",
+                    validation_output,
+                ),
+            )
+        ),
+        summary="test validation authority",
         command_specs=(
             ValidationCommandSpec(
                 argv=("python3", "-m", "pytest", "tests/", "-v")
@@ -1221,13 +1426,15 @@ def test_structured_resume_accepts_mirrored_stopped_review(tmp_path: Path) -> No
         anchors=(),
     )
     bridge = ArtifactBridge(ArtifactStore(repository, state.run_id))
-    bridge.append(
-        attestation_payload(attestation),
+    append_validation_authority(
+        bridge,
+        attestation_payload(attestation, "ar1-" + "0" * 64),
         logical_id=attestation.attestation_id,
         idempotency_key="attestation:validation-stop",
         fingerprint_sha256=attestation.diff_fingerprint,
     )
-    bridge.append(
+    append_provider_decision_authority(
+        bridge,
         ReviewPayload(
             reviewer=Role.CLAUDE,
             work_unit_id="1",
@@ -1241,6 +1448,7 @@ def test_structured_resume_accepts_mirrored_stopped_review(tmp_path: Path) -> No
         logical_id="review-claude-1-1",
         idempotency_key="review-stop",
         fingerprint_sha256=attestation.diff_fingerprint,
+        operation=state.current_step.value,
     )
     history = WorkflowHistory(
         1,

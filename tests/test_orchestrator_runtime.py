@@ -32,6 +32,7 @@ from artifact_models import (
     GateDecisionPayload,
     GatePayload,
     PlanPayload,
+    ProviderContentPayload,
     ProviderAttemptPayload,
     ProviderInputComponentPayload,
     ProviderInputMeasurementPayload,
@@ -135,6 +136,7 @@ from artifact_bridge import (
     finding_payload,
     review_payload,
 )
+from content_authority import ValidationCapture, validation_output_digest
 
 
 def test_invoke_reviewer_dispatches_native_adapter_with_provider_ledger(
@@ -870,7 +872,7 @@ def test_structured_red_state_commit_requires_exact_chain_records_before_git(
         red_state_followup_slice="Slice 10",
     )
     bridge.append(
-        attestation_payload(failing),
+        attestation_payload(failing, "ar1-" + "0" * 64),
         logical_id=failing.attestation_id,
         idempotency_key="attestation:red",
         fingerprint_sha256=changes.fingerprint,
@@ -1638,18 +1640,22 @@ def test_native_review_record_ahead_recovery_reuses_bound_json_without_provider(
     )
     driver.bind_work_unit(state)
     command = "python3 -m pytest tests/ -v"
+    validation_capture = ValidationCapture(
+        command, "pass", 0, "passed", "", "passed"
+    )
     attestation = ValidationAttestation(
         "validation-native-recovery",
         fingerprint,
         (command,),
         (ValidationRecord(ValidationStatus.PASS, command, 0, "passed"),),
-        "d" * 64,
+        validation_output_digest((validation_capture,)),
         "passed",
         command_specs=(
             ValidationCommandSpec(
                 argv=("python3", "-m", "pytest", "tests/", "-v")
             ),
         ),
+        content_captures=(validation_capture,),
     )
     driver.persist_validation_attestation(attestation)
     context = NativeReviewContext(
@@ -1770,15 +1776,11 @@ def test_native_review_record_ahead_recovery_reuses_bound_json_without_provider(
     assert pre_policy.round_number == 1
 
     log_path.unlink()
-    with pytest.raises(
-        WorkflowExecutionError,
-        match="no unique response-digest-bound log",
-    ):
-        driver.recover_pending_native_reviewer(
-            invocation,
-            contract,
-            WorkflowHistory(state.current_work_unit_id),
-        )
+    assert driver.recover_pending_native_reviewer(
+        invocation,
+        contract,
+        WorkflowHistory(state.current_work_unit_id),
+    ) == output
 
 
 def test_native_codex_record_ahead_recovery_reuses_raw_json_without_provider(
@@ -1927,6 +1929,16 @@ def test_native_codex_record_ahead_recovery_reuses_raw_json_without_provider(
         idempotency_key="provider-attempt:legacy-recovery:started",
         fingerprint_sha256="c" * 64,
     )
+    driver._persist_provider_content(
+        role=Role.CODEX,
+        work_unit_id=state.current_work_unit_id,
+        round_number=state.current_work_unit.round_number,
+        operation=WorkflowStep.CODEX_IMPLEMENTATION.value,
+        request_id=output.request_id,
+        canonical=output.canonical_json,
+        content_kind="agent_result",
+        fingerprint="c" * 64,
+    )
 
     raw_ahead_recovered = driver.recover_pending_native_codex(
         rebuilt_invocation,
@@ -1997,15 +2009,11 @@ def test_native_codex_record_ahead_recovery_reuses_raw_json_without_provider(
     ) == output
 
     raw_path.write_text("{}", encoding="utf-8")
-    with pytest.raises(
-        WorkflowExecutionError,
-        match="raw response digest differs",
-    ):
-        driver.recover_pending_native_codex(
-            rebuilt_invocation,
-            contract,
-            WorkflowHistory(state.current_work_unit_id),
-        )
+    assert driver.recover_pending_native_codex(
+        rebuilt_invocation,
+        contract,
+        WorkflowHistory(state.current_work_unit_id),
+    ) == output
 
 
 def test_native_review_persists_open_status_rationale_for_authoritative_replay(
@@ -2713,6 +2721,18 @@ def test_native_codex_record_ahead_recovery_completes_finding_responses(
             f"{output.response_sha256}"
         ).encode("utf-8")
     ).hexdigest()
+    existing_content = next(
+        item.payload
+        for item in bridge.store.load_chain()
+        if isinstance(item.payload, ProviderContentPayload)
+        and item.payload.request_id == output.request_id
+    )
+    bridge.append(
+        existing_content,
+        logical_id="provider-content-duplicate-fingerprint",
+        idempotency_key="provider-content:duplicate-fingerprint",
+        fingerprint_sha256=duplicate_fingerprint,
+    )
     bridge.append(
         canonical_agent_result.payload,
         logical_id=canonical_agent_result.logical_id,
@@ -3191,6 +3211,25 @@ def test_native_codex_plan_and_final_recovery_are_raw_and_record_ahead_safe(
     )
     raw_path = driver._native_codex_response_path(invocation)
     driver._write_native_codex_raw_response(raw_path, canonical)
+    driver._persist_provider_content(
+        role=Role.CODEX,
+        work_unit_id=state.current_work_unit_id,
+        round_number=invocation.round_number,
+        operation=step.value,
+        request_id=output.request_id,
+        canonical=output.canonical_json,
+        content_kind=(
+            "final_report"
+            if step is WorkflowStep.CODEX_FINAL_REVIEW
+            else "agent_result"
+        ),
+        fingerprint=current_fingerprint,
+        fingerprint_kind=(
+            FingerprintKind.CONTRACT
+            if state.current_work_unit.kind is WorkUnitKind.PLAN
+            else FingerprintKind.IMPLEMENTATION
+        ),
+    )
 
     raw_ahead_recovered = driver.recover_pending_native_codex(
         invocation,
@@ -5315,6 +5354,8 @@ def _finding_export_driver(
                     ),
                 ),
                 Role.ORCHESTRATOR,
+                "e" * 64,
+                "ar1-" + "0" * 64,
             ),
             logical_id="validation-plan",
             idempotency_key="validation-plan",

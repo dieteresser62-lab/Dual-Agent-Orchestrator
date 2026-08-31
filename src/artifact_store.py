@@ -9,20 +9,27 @@ import logging
 import os
 from pathlib import Path
 import re
+import shlex
 import tempfile
 
 from artifact_models import (
     ArtifactRecord,
     ArtifactValidationError,
+    BlobReference,
+    ProviderContentPayload,
     RecordType,
+    ReviewPacketPayload,
+    ValidationContentPayload,
     WorkflowCompletionPayload,
     canonical_json,
 )
 from path_policy import PathPolicyError, resolve_path_within_roots
+from content_authority import ValidationCapture, validation_output_digest
 
 
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
 _RECORD_NAME_RE = re.compile(r"^(ar1-[0-9a-f]{64})\.json$")
+_BLOB_NAME_RE = re.compile(r"^([0-9a-f]{64})\.blob$")
 logger = logging.getLogger(__name__)
 _INVALID_CACHE = object()
 _EMPTY_CHAIN_SHA256 = hashlib.sha256(b"artifact-chain-v1").hexdigest()
@@ -95,8 +102,56 @@ class ArtifactStore:
         self.run_id = run_id
         self.run_dir = self._confined(root / ".orchestrator" / "artifacts" / run_id)
         self.records_dir = self._confined(self.run_dir / "records")
+        self.blobs_dir = self._confined(self.run_dir / "blobs")
         self.head_path = self._confined(self.run_dir / "head.json")
         self._append_index: _AppendIndex | None = None
+
+    def put_blob(self, content: bytes) -> BlobReference:
+        """Publish immutable run-bound content and return its recordable binding."""
+        if not isinstance(content, bytes):
+            raise ArtifactStoreError("artifact blob content must be bytes")
+        reference = BlobReference(hashlib.sha256(content).hexdigest(), len(content))
+        self.blobs_dir.mkdir(parents=True, exist_ok=True)
+        target = self._blob_path(reference.sha256)
+        if target.exists():
+            persisted = self.read_blob(reference)
+            if persisted != content:  # pragma: no cover - digest collision guard
+                raise ArtifactConflictError("artifact blob digest has conflicting content")
+            return reference
+        try:
+            _atomic_write(target, content)
+        except Exception:
+            if not target.exists():
+                raise
+        persisted = self.read_blob(reference)
+        if persisted != content:  # pragma: no cover - read_blob verifies this too
+            raise ArtifactCorruptionError("published artifact blob differs from input")
+        return reference
+
+    def read_blob(self, reference: BlobReference) -> bytes:
+        """Read one record-bound blob, rejecting absence, links, size, or digest drift."""
+        if not isinstance(reference, BlobReference):
+            raise ArtifactStoreError("artifact blob reference is invalid")
+        path = self._blob_path(reference.sha256)
+        if not path.is_file() or path.is_symlink():
+            raise ArtifactCorruptionError(
+                f"artifact blob is missing or not a regular file: {path.name!r}"
+            )
+        try:
+            content = path.read_bytes()
+        except OSError as exc:
+            raise ArtifactCorruptionError(
+                f"artifact blob cannot be read: {path.name!r}: {exc}"
+            ) from exc
+        if len(content) != reference.bytes:
+            raise ArtifactCorruptionError(
+                f"artifact blob byte length mismatch: {path.name!r}"
+            )
+        if hashlib.sha256(content).hexdigest() != reference.sha256:
+            raise ArtifactCorruptionError(
+                f"artifact blob digest mismatch: {path.name!r}"
+            )
+        return content
 
     def append_context(
         self,
@@ -296,6 +351,7 @@ class ArtifactStore:
             records[record.record_id] = record
 
         ordered = _order_chain(records)
+        self._validate_record_blobs(ordered)
         self._refresh_cache_with_context(ordered, expected_cache_chain)
         self._append_index = _build_append_index(
             ordered, self._records_directory_stamp()
@@ -396,6 +452,69 @@ class ArtifactStore:
         if _RECORD_NAME_RE.fullmatch(f"{record_id}.json") is None:
             raise ArtifactStoreError("record_id is not a safe artifact filename")
         return self._confined(self.records_dir / f"{record_id}.json")
+
+    def _blob_path(self, sha256: str) -> Path:
+        if _BLOB_NAME_RE.fullmatch(f"{sha256}.blob") is None:
+            raise ArtifactStoreError("blob digest is not a safe artifact filename")
+        return self._confined(self.blobs_dir / f"{sha256}.blob")
+
+    def _validate_record_blobs(self, chain: tuple[ArtifactRecord, ...]) -> None:
+        validated: dict[BlobReference, bytes] = {}
+
+        def content(reference: BlobReference) -> bytes:
+            persisted = validated.get(reference)
+            if persisted is None:
+                persisted = self.read_blob(reference)
+                validated[reference] = persisted
+            return persisted
+
+        for record in chain:
+            for reference in _payload_blob_references(record.payload):
+                content(reference)
+            payload = record.payload
+            if isinstance(payload, ValidationContentPayload):
+                try:
+                    captures = tuple(
+                        ValidationCapture(
+                            _command_display(item.command),
+                            item.digest_outcome,
+                            item.exit_code,
+                            content(item.raw_stdout).decode("utf-8"),
+                            content(item.raw_stderr).decode("utf-8"),
+                            content(item.compact_output).decode("utf-8"),
+                        )
+                        for item in payload.outputs
+                    )
+                    actual = validation_output_digest(captures, payload.digest_format)
+                except (UnicodeDecodeError, ValueError) as exc:
+                    raise ArtifactCorruptionError(
+                        "validation content cannot reproduce its digest"
+                    ) from exc
+                if actual != payload.output_digest:
+                    raise ArtifactCorruptionError(
+                        "validation content digest differs from its raw streams"
+                    )
+            elif isinstance(payload, ReviewPacketPayload):
+                from review_packets import ReviewPacket, ReviewPacketError
+
+                try:
+                    packet = ReviewPacket.restore(
+                        content(payload.blob), payload.blob.sha256
+                    )
+                except ReviewPacketError as exc:
+                    raise ArtifactCorruptionError(
+                        "review packet blob is not canonical"
+                    ) from exc
+                if (
+                    packet.fingerprint != payload.fingerprint
+                    or packet.purpose != payload.purpose
+                    or packet.manifest.paths != payload.manifest
+                    or packet.manifest.diff_coverage_digest
+                    != payload.diff_coverage_sha256
+                ):
+                    raise ArtifactCorruptionError(
+                        "review packet blob differs from its record metadata"
+                    )
 
     def _confined(self, path: Path) -> Path:
         try:
@@ -615,6 +734,28 @@ def _validate_store_invariants(
         raise error_type(
             f"{payload.outcome} workflow completion cannot carry final_binding_id"
         )
+
+
+def _payload_blob_references(payload: object) -> tuple[BlobReference, ...]:
+    if isinstance(payload, ValidationContentPayload):
+        return tuple(
+            reference
+            for output in payload.outputs
+            for reference in (
+                output.raw_stdout,
+                output.raw_stderr,
+                output.compact_output,
+            )
+        )
+    if isinstance(payload, (ProviderContentPayload, ReviewPacketPayload)):
+        return (payload.blob,)
+    return ()
+
+
+def _command_display(command: object) -> str:
+    if getattr(command, "mode", None) == "legacy_shell":
+        return command.argv[0]  # type: ignore[attr-defined]
+    return shlex.join(command.argv)  # type: ignore[attr-defined]
 
 
 def _atomic_write(path: Path, content: bytes) -> None:

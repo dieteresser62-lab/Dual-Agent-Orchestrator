@@ -143,6 +143,8 @@ def _attest(bridge: ArtifactBridge) -> None:
         ValidationAttestationPayload(
             (ValidationResult(CommandSpec("pytest", ("pytest",)), "pass", 0, "1" * 64),),
             Role.ORCHESTRATOR,
+            "1" * 64,
+            "ar1-" + "0" * 64,
         ),
         logical_id="final-validation", idempotency_key="final-validation",
         fingerprint_sha256=FINGERPRINT,
@@ -160,6 +162,8 @@ def _append_external_path_evidence(
         ValidationAttestationPayload(
             (ValidationResult(CommandSpec("pytest", ("pytest",)), "pass", 0, "2" * 64),),
             Role.ORCHESTRATOR,
+            "2" * 64,
+            "ar1-" + "0" * 64,
         ),
         logical_id="slice-validation",
         idempotency_key="slice-validation",
@@ -439,6 +443,8 @@ def test_preflight_rejects_binding_reference_with_wrong_payload_type(
         ValidationAttestationPayload(
             (ValidationResult(CommandSpec("pytest", ("pytest",)), "pass", 0, "2" * 64),),
             Role.ORCHESTRATOR,
+            "2" * 64,
+            "ar1-" + "0" * 64,
         ),
         logical_id="binding-attestation",
         idempotency_key="binding-attestation",

@@ -1020,18 +1020,18 @@ dem normativen Zustand entfernt.
 | `ValidationAttestation.diff_fingerprint` | Orchestrator-Validation | Binding/Commit | **ja** aus `ArtifactRecord.fingerprint` | ableitbar |
 | `ValidationAttestation.expected_commands` und `command_specs` | Orchestrator-Validation | Vollständigkeitsprüfung | **ja** in Reihenfolge aus `ValidationAttestationPayload.results[*].command`; `command_payload()` ist über Family/Mode eindeutig und der State-Contract erzwingt `tuple(spec.display) == expected_commands` | ableitbar |
 | `ValidationAttestation.records[*].status/command/exit_code` | Orchestrator-Validation | Review/Audit | **ja** aus den typisierten Results, einschließlich `unavailable` | ableitbar |
-| `ValidationRecord.output` | Validator | Review/Audit/Diagnose | **nein**; der Record enthält nur `output_sha256` | **STOP**: Content-/Blobrecord oder Output als ausdrücklich nicht normativ entfernen |
-| `ValidationAttestation.output_digest` | Orchestrator-Validation | Integritätsprüfung | **nein** ohne die gebundenen Outputbytes und den Aggregationsbeleg | **STOP** |
+| `ValidationRecord.output` | Validator | Review/Audit/Diagnose | **ja seit R8**; `ValidationContentPayload.outputs[*]` bindet Command, Ergebnisrecord, exakte Bytelänge sowie SHA-256-Verweise auf rohe Streams und kompakte Ausgabe | **in R8 gedeckt** durch laufgebundene, fail-closed geprüfte Blobs |
+| `ValidationAttestation.output_digest` | Orchestrator-Validation | Integritätsprüfung | **ja seit R8**; `ValidationContentPayload.digest_format/raw_stdout/raw_stderr` reproduziert den unveränderten Digest und `ValidationAttestationPayload` bindet ihn samt Contentrecord | **in R8 gedeckt** ohne stille Digeständerung |
 | `ValidationAttestation.summary` | Orchestrator-Validation | Contractvalidierung/Review/Audit | **ja** als deterministische Projektion der aufgezeichneten Outcome-Anzahlen: `passed/failed/unavailable/required` | ableitbar; Formel an Schema 2 binden |
 | `runtime_history.latest_claude_review` als Aggregat | Reviewpersistenz | Folgeprompts/Policy | **nicht vollständig**; nur die oben als ableitbar markierte Teilmenge besitzt Records | **STOP**, bis alle Einzelzeilen recordfähig oder nicht normativ sind |
-| `runtime_history.codex_final_report` und weitere rohe Agenttexte | Agentresultatpfad | Abschlussbericht/Folgeprompt | **nein aus Records**; Record bindet nur `response_sha256`, Bytes liegen extern im Cache | **STOP**: Contentrecord/Blobauthority oder beweisbar entbehrlicher Cache |
-| `runtime_history.active_review_packet` | Reviewpacketbuilder | Recovery/Providerrequest | **nein aus Records**; content-addressed Cache ist nicht Teil des Recordpräfixes | **STOP**: kanonisch aus Records neu bauen oder Blob binden |
+| `runtime_history.codex_final_report` und weitere rohe Agenttexte | Agentresultatpfad | Abschlussbericht/Folgeprompt | **ja seit R8**; `ProviderContentPayload` bindet die akzeptierte kanonische native Antwort vor dem Ergebnisrecord an SHA-256, Bytelänge, Rolle, Request, Operation und Inhaltsart | **in R8 gedeckt**; unakzeptierter Failure-Rohtext bleibt gemäß R6 redigiert |
+| `runtime_history.active_review_packet` | Reviewpacketbuilder | Recovery/Providerrequest | **ja seit R8**; `ReviewPacketPayload` bindet die lokal erzeugten kanonischen Bytes an Fingerprint, Manifest, Diff-Coverage, Bytelänge und Blobdigest | **in R8 gedeckt**; die materialisierte Datei bleibt Cache |
 | sonstige `runtime_history`-Event-/Auditfelder | Engine/Serialisierung | Audit und Resume-Helfer | **nur teilweise**; IDs lassen sich erzeugen, heutige Reihenfolge/Metadaten sind nicht vollständig spezifiziert | **STOP**, bis die Projektionsfunktion und nicht-normative Felder festgelegt sind |
 
 ### S4a-Sortierung der STOP-Einträge
 
-Die folgende Tabelle ist die verbindliche Auflösung der aktuell vierzehn
-fett als `STOP` markierten Zeilen sowie der bereits in R1 bis R6 geschlossenen
+Die folgende Tabelle ist die verbindliche Auflösung der aktuell zehn
+fett als `STOP` markierten Zeilen sowie der bereits in R1 bis R6 und R8 geschlossenen
 Zeilen oben. Jede Zeile kommt genau einmal vor. `A` benennt
 den benötigten Recordtyp, das Feld und den heutigen beziehungsweise künftigen
 Schreiber. `B` benennt die tatsächlichen Leser und begründet, weshalb deren
@@ -1077,12 +1077,82 @@ keinen fett markierten STOP enthält.
 | `ContractResult.stop_request` | A | `ReviewPayload.stop_request.rule_id/rationale/remediation_paths`; Schreiber: `persist_native_review_contract()`. `verdict="stop"` allein rekonstruiert Ursache und Remediation nicht. |
 | `ContractResult.validation` | A | `ReviewValidationBindingPayload.review_record_id/attestation_record_id`; Schreiber: `persist_native_review_contract()` nach der Attestation. Die vollständige Projektion hängt zusätzlich von den unten genannten Validation-Contentrecords ab. |
 | `ContractResult.evidence.dimensions/largest_residual_risk/break_condition` | A | **In S4a geschlossen:** `ReviewPayload.review_evidence` mit drei gleichnamigen Feldern; Schreiber: `persist_native_review_contract()`. Neue Records schreiben das alte Stringfeld nie. |
-| `ValidationRecord.output` | A | `ValidationContentPayload.command/result_record_id/output_bytes`; Schreiber: Validator unmittelbar mit `ValidationAttestationPayload`. Reviewpacket, Audit und Diagnose lesen die Bytes. |
-| `ValidationAttestation.output_digest` | A | `ValidationContentPayload.raw_stdout/raw_stderr` plus `ValidationAttestationPayload.output_digest`; Schreiber: Validator. Der Digest bindet heute ungekürzte Ausgaben und ist aus den Digests der kompakten Recordausgaben nicht ableitbar. |
+| `ValidationRecord.output` | A | **In R8 geschlossen:** `ValidationContentPayload.outputs[*].command/result_record_id/output_bytes/raw_stdout/raw_stderr/compact_output`; Schreiber: Validator unmittelbar vor `ValidationAttestationPayload`. Die exakten UTF-8-Bytes liegen in laufgebundenen SHA-256-Blobs; Reviewpacket, Audit, Recovery und Diagnose lesen sie über den Recordverweis. |
+| `ValidationAttestation.output_digest` | A | **In R8 geschlossen:** `ValidationContentPayload.digest_format/raw_stdout/raw_stderr` plus `ValidationAttestationPayload.output_digest/content_record_id`; Schreiber: Validator. `validation-matrix-v1` reproduziert exakt die vor R8 verwendete kanonische Aggregation ungekürzter Ausgaben; der Digest der kompakten Recordausgabe ersetzt sie nicht. |
 | `runtime_history.latest_claude_review` als Aggregat | A | Kein zweiter Aggregatrecord: Projektion aus `ReviewPayload`, `ReviewAnchorPayload`, `ReviewValidationBindingPayload`, Finding-Transitionen und den zugehörigen Contentrecords; Schreiber sind die jeweiligen Review-/Validationpersistenzen. Bis diese Komponenten vollständig sind, bleibt der Aggregatleser gesperrt. |
-| `runtime_history.codex_final_report` und weitere rohe Agenttexte | A | `ProviderContentPayload.response_sha256/content_bytes/content_kind`; Schreiber: Providerabschluss vor Cache-/Mirrorwrite. Abschlussbericht und Folgeprompt lesen die bytes, nicht nur deren Digest. |
-| `runtime_history.active_review_packet` | A | `ReviewPacketPayload.fingerprint/manifest/content_bytes`; Schreiber: `build_review_packet()` vor Providerstart. Recovery und Providerrequest lesen die kanonischen Bytes. |
+| `runtime_history.codex_final_report` und weitere rohe Agenttexte | A | **In R8 geschlossen:** `ProviderContentPayload.response_sha256/content_bytes/content_kind/blob/round_number` plus Rolle, Work-unit, Operation und Request; Schreiber: Providerabschluss nach nativer Schema-/Domainannahme und vor `AgentResultPayload`/`ReviewPayload`, Cache und Mirror. Recovery, Abschlussbericht und Folgeprompt lesen die exakten kanonischen Bytes. Nur ein `ready=true`-Abschlussresultat besitzt `content_kind=final_report`; `ready=false` und Stop bleiben `agent_result` ohne Final-Report-Mirror. R6 bleibt unverändert: nicht angenommener Failure-Rohtext ist kein semantischer Recoveryfakt und wird ausschließlich als Redaktionsmarker mit Digest und Bytelänge recordet. |
+| `runtime_history.active_review_packet` | A | **In R8 geschlossen:** `ReviewPacketPayload.fingerprint/manifest/diff_coverage_sha256/content_bytes/blob`; Schreiber: `build_review_packet()` vor Providerstart und Mirrorwrite. Recovery und Providerrequest lesen die exakt gebundenen, lokal erzeugten kanonischen Bytes; die materialisierte Paketdatei besitzt keine Autorität. |
 | sonstige `runtime_history`-Event-/Auditfelder | A | `WorkflowEventPayload.event_kind/work_unit_id/slice_id/round_number/record_refs` für noch nicht durch die fachlichen Records abgedeckte Ereignisse; Schreiber: `_record_review()`, Validation- und Transitionpfade. Erst danach darf ein reiner Audit-/Resume-Projektionsanteil als B entfernt werden. |
+
+#### R8-Inhaltsentscheidungen, Bindung und Größenmessung
+
+R8 verwendet keinen pauschalen Umgang mit Rohtext, sondern vier ausdrücklich
+getrennte Entscheidungen:
+
+1. `ValidationRecord.output` bleibt als kompakte Projektion erhalten; zusätzlich
+   bindet der Contentrecord die **exakten rohen stdout-/stderr-Bytes** und die
+   kompakte Ausgabe jeweils über einen externen Blobverweis. Eine Kürzung würde
+   Diagnosebytes verlieren und findet nicht statt.
+2. `ValidationAttestation.output_digest` behält die Definition
+   `validation-matrix-v1` unverändert. Der Test vergleicht die frühere
+   kanonische JSON-/SHA-256-Berechnung direkt mit der aus den Blobstreams
+   reproduzierten Berechnung. Damit wird die ungekürzte Evidenz weder durch den
+   Kompaktdigest ersetzt noch still neu definiert.
+3. `ProviderContentPayload` bewahrt die **exakte kanonische native JSON-Antwort**
+   nur für bereits schema- und domaingültig angenommene Agentresultate. Diese
+   Bytes sind für requestgebundene Recovery semantisch erforderlich. Das ist
+   die sichtbare, getestete Abgrenzung zu R6: rohe Fehlerdiagnosen werden nicht
+   als Ergebnis angenommen und bleiben ausschließlich redigierter Marker plus
+   Digest und Bytezahl. Der Contentrecord ist zusätzlich an die exakte
+   `round_number` gebunden; ein Crash vor dem Decisionrecord kann deshalb auch
+   ab Runde 2 nur den Inhalt derselben Invocation wiederaufnehmen.
+4. `ReviewPacketPayload` bindet die **exakten lokal erzeugten kanonischen
+   Paketbytes**. Diffinhalte werden weder redigiert noch gekürzt, weil genau
+   diese Bytes den Providerinput und die spätere Recovery bestimmen.
+
+Alle vier Inhalte liegen unter `.orchestrator/artifacts/<run-id>/blobs/` und
+werden durch SHA-256 plus exakte Bytelänge aus einem Record desselben Runs
+gebunden. Fehlende, verlinkte, längenabweichende, digestabweichende oder bei
+Reviewpaketen nicht-kanonische Ziele stoppen Store/Replay fail-closed. Ein
+Validation- oder Provider-Contentrecord darf als genau ein letztes
+Record-ahead-Crashsuffix vorliegen; jedes ältere ungebundene Contentrecord und
+jede Entscheidung ohne den exakt früheren Contentrecord stoppt. Ketten vor R8
+werden bei Resume ausdrücklich nicht ergänzt, sondern fail-closed abgewiesen.
+Validation-Recovery ist an die konkrete Attestierungs-ID einschließlich
+Retryversuch gebunden und wird für Planvertragsprüfungen nicht verwendet.
+Mehrere Reviewpacketrecords derselben Work-unit bleiben historische Autorität;
+der State-v3-Mirror `active_review_packet` wird ausschließlich gegen das
+letzte Packet dieser Work-unit verglichen. Mehrere Final-Report-Contentrecords
+derselben Work-unit sind dagegen mehrdeutig und stoppen fail-closed.
+
+Der providerfreie Skalierungstest erzeugt echte Reviewpakete mit wachsenden
+Diffzielen von **64 KiB, 256 KiB und 1 MiB**. Während die kanonischen
+Paketbytes um mehr als Faktor 12 wachsen, differieren die drei
+JSON-Record-Envelopes um weniger als **32 Byte** und bleiben jeweils kleiner
+als ein Zwanzigstel bereits des kleinsten Pakets. Der JSON-Kettenscan trägt
+damit nur Verweise; Blobprüfung und Rekonstruktion lesen jeden gebundenen
+Inhalt linear genau einmal. Der RP-Appendindex scannt weder alte Recordbytes
+noch alte Blobs pro Append erneut. Ein zweiter Test ruft für alle drei Größen
+den echten `ArtifactStore.load_chain()` jeweils fünfmal auf, instrumentiert die
+gelesenen Blobbytes und misst die Medianlaufzeit. Pro Vollscan entspricht die
+gelesene Bytezahl exakt einmal der Paketgröße; der aus kleinster und größter
+Messung berechnete Laufzeitexponent muss unter **1,25** bleiben.
+
+Die in R8 neu inventarisierten Record-/Mirror-Grenzen lauten:
+`validation content has no complete state-v3 counterpart`,
+`validation output or digest differs from state-v3`,
+`final-report content differs from state-v3`,
+`final-report bytes differ from state-v3`,
+`active review packets differ from state-v3` und
+`active review packet bytes or metadata differ from state-v3`. Die
+Runtimebindungen ergänzen die dokumentierten Divergenzen
+`native provider content digest differs from its record`,
+`native agent content digest differs from its result binding`,
+`native reviewer content digest differs from its review binding` und
+`validation recovery result differs from its content`.
+Nach den Opus-Korrekturen umfasst das quellgebundene Inventar **40**
+`mismatch(...)`-Aufrufe; `resolve_resume_state()` besitzt 112 und
+`persist_native_codex_contract()` 11 inventarisierte Vergleichsausdrücke.
 
 #### R4-Suitelaufzeit
 
@@ -1120,6 +1190,26 @@ Kopplung der automatischen Fortsetzung an die tiefste S1-Klasse. Nach der
 Korrektur belegt ein nativer, aus `AgentOutputError` gekapselter Quotafall die
 unveränderte Policy bei gleichzeitig vollständig recordeter S1-Provenienz.
 Die abschließende Opus-5-Max-Korrekturrunde wurde ohne Findings freigegeben.
+
+#### R8-Suitelaufzeit
+
+Der vollständige WSL-Lauf vom 31. August 2026 mit
+`python3 -m pytest tests/ -v` ist nach der Review-Korrekturrunde grün:
+**1327 passed in 190,06 s**. Gegenüber der exakten R6-Messung von
+**1315 passed in 155,98 s** sind das zwölf zusätzliche Akzeptanzfälle und
+**34,08 s beziehungsweise 21,8 %** mehr Pytest-Laufzeit; gegenüber der im
+R8-Auftrag gerundeten 160-s-Baseline beträgt der Anstieg **30,06 s
+beziehungsweise 18,8 %**. Der erste vollständige R8-Kandidatenlauf lag bei
+1321 Tests und 165,11 s; die beiden vollständigen Läufe nach der adversarialen
+Review-Härtung lagen reproduzierbar bei 191,98 s (mit elf anschließend
+behobenen Dry-run-Fehlern) und 190,06 s (vollständig grün). Die gesonderte
+Vollscanmessung über 64 KiB, 256 KiB und 1 MiB liest jeden gebundenen Blob pro
+Scan exakt einmal und bleibt linear in den gelesenen Bytes; sie zeigt deshalb
+keine durch Recordgröße wieder eingeführte überproportionale RP-Kostenkurve.
+Der absolute Suiteanstieg ist als Abnahmebefund festgehalten und darf nicht als
+Beleg für konstante Kosten umgedeutet werden. Die Providernamen-Baseline,
+Schema-/Protokollversion 2 und das Inventar der `_recoverable_*`-Sonderfälle
+blieben unverändert.
 
 #### Entscheidung zu Schema 2 und Bestandsrecords
 
@@ -1255,10 +1345,11 @@ Record nicht zur aktuell gebundenen Work-unit gehört.
    `native_review_contract.py`, `artifact_models.py`, `artifact_bridge.py`,
    `artifact_replay.py`, `audit_trail.py`. Kann nach Bündel 1 bis 3 erfolgen;
    Validationbindung benötigt Bündel 8.
-8. **Blob-/Contentauthority.** Validationoutput und -digest, rohe Agenttexte und
-   aktive Reviewpackets. Module: `validation_matrix.py`, `review_packets.py`,
-   `agent_runtime.py`, `orchestrator.py`, Store/Schema/Replay. Muss vor dem
-   Abschluss von Bündel 7 und vor dem Cutover liegen.
+8. **Blob-/Contentauthority. In R8 geschlossen.** Validationoutput und -digest,
+   angenommene rohe Agentresultate und aktive Reviewpackets sind durch
+   laufgebundene SHA-256-Blobs an neue Schema-2-Contentrecords gebunden. Module:
+   `validation_matrix.py`, `review_packets.py`, `orchestrator.py`,
+   Store/Schema/Replay. Die Validationbindung für Bündel 7 ist damit vorhanden.
 9. **Restliche Historyprojektion.** Nur die nach Bündel 1 bis 8 noch
    verbleibenden Event-/Auditfelder; normativen Rest recorden, reine
    Darstellungswerte explizit entfernen. Module: `workflow.py`,
@@ -1268,14 +1359,18 @@ Record nicht zur aktuell gebundenen Work-unit gehört.
 
 ### Nicht im State, aber für Recovery relevante Caches/Side Effects
 
-Requestbundles, rohe Codex-/Claude-Antworten, Reviewpakete, `head.json`,
-Audit-Markdown und Checkpoints sind nicht allein aus dem Recordpräfix
-rekonstruierbar, solange Records nur Digests speichern. Ein Digest beweist
-vorhandene Bytes, rekonstruiert sie aber nicht. S4 darf sie daher nur dann als
-wegwerfbaren Cache behandeln, wenn die kanonischen Bytes aus Records plus
-versionierter Policy neu gebaut werden können; andernfalls ist ein Blob-/
-Contentrecord nötig. Git-Commits, Provideraufrufe und Queuebewegungen sind keine
-Caches und brauchen je eine Intent-/Resultat- oder Reconciliation-Regel.
+Requestbundles, `head.json`, Audit-Markdown und Checkpoints bleiben nicht allein
+aus dem Recordpräfix rekonstruierbare Hilfsdateien. Seit R8 sind dagegen
+angenommene kanonische Agentantworten und Reviewpakete keine Cacheautorität
+mehr: Der jeweilige Contentrecord bindet ihre exakten Bytes in einem
+laufgebundenen Blob. Rohe Failurediagnosen bleiben gemäß R6 bewusst nur als
+Redaktionsmarker plus Digest und Bytezahl erhalten. Ein Digest allein beweist
+vorhandene Bytes, rekonstruiert sie aber nicht; daher darf S4 einen Inhalt nur
+dann als wegwerfbaren Cache behandeln, wenn die kanonischen Bytes aus Records
+plus versionierter Policy neu gebaut werden können, andernfalls ist der
+R8-Blob-/Contentrecord zwingend. Git-Commits, Provideraufrufe und
+Queuebewegungen sind keine Caches und brauchen je eine Intent-/Resultat- oder
+Reconciliation-Regel.
 
 ## Konsequenzen für S3 und S4
 

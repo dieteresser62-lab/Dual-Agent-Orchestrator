@@ -43,6 +43,9 @@ from artifact_models import (
     WorkflowTransitionPayload,
     ResumeCheckPayload,
     ReviewPayload,
+    ProviderContentPayload,
+    ReviewPacketPayload,
+    ValidationContentPayload,
     ValidationAttestationPayload,
     WorkflowCompletionPayload,
     WorkUnitPayload,
@@ -212,6 +215,9 @@ class ArtifactReplayResult:
     gate_transitions: tuple[GateTransitionPayload, ...] = ()
     gate_decisions: tuple[ReplayedGateDecision, ...] = ()
     invocation_failures: tuple[InvocationFailurePayload, ...] = ()
+    validation_contents: tuple[ValidationContentPayload, ...] = ()
+    provider_contents: tuple[ProviderContentPayload, ...] = ()
+    review_packets: tuple[ReviewPacketPayload, ...] = ()
     work_unit_reviewers: tuple[tuple[str, Role | None], ...] = ()
     side_effects: tuple[ReplayedSideEffect, ...] = ()
     _reference_records: tuple[ArtifactRecord, ...] = field(
@@ -270,6 +276,7 @@ def replay_artifacts(
     expected_run_id: str,
     *,
     allow_empty: bool = False,
+    require_content_authority: bool | None = None,
 ) -> ArtifactReplayResult:
     """Validate and reduce ``records`` without I/O or mutation."""
     chain = tuple(records)
@@ -359,7 +366,21 @@ def replay_artifacts(
         seen_revisions.add(revision_key)
         latest_revisions[logical_key] = record.revision
 
-    _validate_payload_references(chain, seen_ids)
+    strict_content = (
+        require_content_authority
+        if require_content_authority is not None
+        else any(isinstance(record.payload, RunIdentityPayload) for record in chain)
+        or any(
+            isinstance(
+                record.payload,
+                (ValidationContentPayload, ProviderContentPayload, ReviewPacketPayload),
+            )
+            for record in chain
+        )
+    )
+    _validate_payload_references(
+        chain, seen_ids, require_content_authority=strict_content
+    )
     return _result(expected_run_id, chain)
 
 
@@ -379,7 +400,10 @@ def replay_findings(
 
 
 def _validate_payload_references(
-    chain: tuple[ArtifactRecord, ...], records_by_id: dict[str, ArtifactRecord]
+    chain: tuple[ArtifactRecord, ...],
+    records_by_id: dict[str, ArtifactRecord],
+    *,
+    require_content_authority: bool,
 ) -> None:
     from finding_reducer import reduce_findings
 
@@ -602,6 +626,200 @@ def _validate_payload_references(
                     record,
                 )
             bound_gate_decisions.add(binding)
+
+    validation_content_records = tuple(
+        record for record in chain
+        if isinstance(record.payload, ValidationContentPayload)
+    )
+    attestation_records = tuple(
+        record for record in chain
+        if isinstance(record.payload, ValidationAttestationPayload)
+    )
+    content_by_result = {
+        record.payload.result_record_id: record
+        for record in validation_content_records
+    }
+    if len(content_by_result) != len(validation_content_records):
+        _fail(
+            ReplayDiagnosticCode.RECORD_DUPLICATE,
+            "validation content result binding is duplicated",
+        )
+    for attestation_record in attestation_records:
+        attestation = attestation_record.payload
+        content_record = content_by_result.get(attestation_record.record_id)
+        if content_record is None:
+            if not require_content_authority:
+                continue
+            _fail(
+                ReplayDiagnosticCode.RECORD_MISSING,
+                "validation attestation has no authoritative content record",
+                attestation_record,
+            )
+        content = content_record.payload
+        assert isinstance(content, ValidationContentPayload)
+        if (
+            positions[content_record.record_id] >= positions[attestation_record.record_id]
+            or content_record.logical_id
+            != f"validation-content-{content.attestation_id}"
+            or content.attestation_id != attestation_record.logical_id
+            or attestation.content_record_id != content_record.record_id
+            or content.output_digest != attestation.output_digest
+            or content_record.fingerprint != attestation_record.fingerprint
+            or len(content.outputs) != len(attestation.results)
+        ):
+            _fail(
+                ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+                "validation content differs from its attestation binding",
+                attestation_record,
+            )
+        for output, result in zip(content.outputs, attestation.results, strict=True):
+            expected_outcome = (
+                "fail" if output.digest_outcome == "timeout"
+                else "unavailable"
+                if output.digest_outcome in {"missing", "unavailable"}
+                else output.digest_outcome
+            )
+            if (
+                output.command != result.command
+                or expected_outcome != result.outcome
+                or output.exit_code != result.exit_code
+                or output.compact_output.sha256 != result.output_sha256
+            ):
+                _fail(
+                    ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+                    "validation result differs from its exact content",
+                    attestation_record,
+                )
+    bound_attestation_ids = {record.record_id for record in attestation_records}
+    for content_record in validation_content_records:
+        if content_record.payload.result_record_id not in bound_attestation_ids:
+            if positions[content_record.record_id] == len(chain) - 1:
+                continue
+            _fail(
+                ReplayDiagnosticCode.RECORD_MISSING,
+                "validation content has no bound attestation result",
+                content_record,
+            )
+
+    provider_content_records = tuple(
+        record for record in chain
+        if isinstance(record.payload, ProviderContentPayload)
+    )
+    provider_decisions = tuple(
+        record for record in chain
+        if isinstance(record.payload, (AgentResultPayload, ReviewPayload))
+    )
+    bound_provider_records: set[str] = set()
+    for decision_record in provider_decisions:
+        decision = decision_record.payload
+        request_id = decision.request_id
+        response_sha256 = decision.response_sha256
+        if request_id is None or response_sha256 is None:
+            _fail(
+                ReplayDiagnosticCode.RECORD_MISSING,
+                "native decision lacks its provider-content binding",
+                decision_record,
+            )
+        role = decision.role if isinstance(decision, AgentResultPayload) else decision.reviewer
+        decision_unit = next(
+            (
+                candidate.payload
+                for candidate in reversed(chain[:positions[decision_record.record_id]])
+                if isinstance(
+                    candidate.payload,
+                    (WorkUnitPayload, CorrectionWorkUnitPayload),
+                )
+                and candidate.logical_id == f"work-unit-{decision.work_unit_id}"
+            ),
+            None,
+        )
+        if decision_unit is not None:
+            decision_round = decision_unit.round_number
+        else:
+            round_suffix = decision_record.logical_id.rsplit("-", 1)[-1]
+            if not round_suffix.isdigit():
+                if not require_content_authority:
+                    continue
+                _fail(
+                    ReplayDiagnosticCode.RECORD_MISSING,
+                    "native decision has no work-unit or logical round binding",
+                    decision_record,
+                )
+            decision_round = int(round_suffix)
+        candidates = tuple(
+            content_record
+            for content_record in provider_content_records
+            if positions[content_record.record_id] < positions[decision_record.record_id]
+            and content_record.payload.role is role
+            and content_record.payload.work_unit_id == decision.work_unit_id
+            and content_record.payload.round_number == decision_round
+            and content_record.payload.request_id == request_id
+            and content_record.payload.response_sha256 == response_sha256
+            and content_record.fingerprint == decision_record.fingerprint
+        )
+        if len(candidates) != 1:
+            if not require_content_authority and not candidates:
+                continue
+            _fail(
+                ReplayDiagnosticCode.RECORD_MISSING,
+                "native decision has no unique earlier provider-content record",
+                decision_record,
+            )
+        content_record = candidates[0]
+        content = content_record.payload
+        latest_transition = next(
+            (
+                candidate.payload
+                for candidate in reversed(chain[:positions[decision_record.record_id]])
+                if isinstance(candidate.payload, WorkflowTransitionPayload)
+                and candidate.payload.work_unit_id == decision.work_unit_id
+            ),
+            None,
+        )
+        expected_kind = (
+            "review_result" if isinstance(decision, ReviewPayload)
+            else "final_report"
+            if decision.outcome == "ready"
+            and content.operation.endswith("_final_review")
+            else "agent_result"
+        )
+        if (
+            (
+                latest_transition is not None
+                and latest_transition.step != content.operation
+            )
+            or content.content_kind != expected_kind
+        ):
+            _fail(
+                ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+                "provider content differs from its active operation or content kind",
+                content_record,
+            )
+        bound_provider_records.add(content_record.record_id)
+    for content_record in provider_content_records:
+        if content_record.record_id not in bound_provider_records:
+            if positions[content_record.record_id] == len(chain) - 1:
+                continue
+            _fail(
+                ReplayDiagnosticCode.RECORD_MISSING,
+                "provider content has no bound native decision",
+                content_record,
+            )
+
+    for packet_record in (
+        record for record in chain if isinstance(record.payload, ReviewPacketPayload)
+    ):
+        packet = packet_record.payload
+        if (
+            packet_record.logical_id
+            != f"review-packet-{packet.work_unit_id}-{packet.fingerprint[:12]}"
+            or packet_record.fingerprint.sha256 != packet.fingerprint
+        ):
+            _fail(
+                ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+                "review packet record identity differs from its content binding",
+                packet_record,
+            )
     work_units: dict[str, ArtifactRecord] = {}
     latest_work_units: dict[str, ArtifactRecord] = {}
     for record in chain:
@@ -1051,6 +1269,9 @@ def _result(
     gate_transitions: dict[str, GateTransitionPayload] = {}
     gate_decisions: list[ReplayedGateDecision] = []
     invocation_failures: list[InvocationFailurePayload] = []
+    validation_contents: list[ValidationContentPayload] = []
+    provider_contents: list[ProviderContentPayload] = []
+    review_packets: list[ReviewPacketPayload] = []
     side_effects: list[ReplayedSideEffect] = []
     side_effect_indexes: dict[str, int] = {}
     for sequence, record in enumerate(records, start=1):
@@ -1100,6 +1321,12 @@ def _result(
             )
         elif isinstance(payload, InvocationFailurePayload):
             invocation_failures.append(payload)
+        elif isinstance(payload, ValidationContentPayload):
+            validation_contents.append(payload)
+        elif isinstance(payload, ProviderContentPayload):
+            provider_contents.append(payload)
+        elif isinstance(payload, ReviewPacketPayload):
+            review_packets.append(payload)
         elif isinstance(payload, SideEffectPayload) and payload.phase == "intent":
             side_effect_indexes[payload.effect_key] = len(side_effects)
             side_effects.append(
@@ -1165,6 +1392,9 @@ def _result(
         ),
         gate_decisions=tuple(gate_decisions),
         invocation_failures=tuple(invocation_failures),
+        validation_contents=tuple(validation_contents),
+        provider_contents=tuple(provider_contents),
+        review_packets=tuple(review_packets),
         work_unit_reviewers=project_work_unit_reviewers(records),
         side_effects=tuple(side_effects),
         _reference_records=accepted_references,

@@ -35,7 +35,8 @@ from native_codex_contract import (
 )
 from native_codex_request import validate_native_codex_provider_response
 from artifact_bridge import (
-    ArtifactBridge, ArtifactBridgeError, agent_result_payload, attestation_payload, finding_payload,
+    ArtifactBridge, ArtifactBridgeError, agent_result_payload, attestation_payload,
+    command_payload, finding_payload,
     plan_payload, review_payload, review_payload_matches_result,
     validation_request_payload,
     provider_input_measurement_payload,
@@ -58,7 +59,9 @@ from artifact_models import (
     FingerprintKind, GateDecisionPayload, GatePayload, GateTransitionPayload,
     AgentResultPayload, InvocationFailurePayload, QuotaPausePayload, ReviewPayload,
     Role, TaskPayload, TransientRetryPayload,
-    ValidationAttestationPayload,
+    BlobReference, ProviderContentPayload, ReviewPacketPayload,
+    ValidationAttestationPayload, ValidationContentPayload,
+    ValidationOutputContent,
     WorkUnitPayload,
     WorkflowCompletionPayload,
     ProviderInputMeasurementPayload, canonical_json,
@@ -210,6 +213,7 @@ from workflow_state import (
     managed_correction_slice_report_path,
     project_implementer_return_policy,
 )
+from content_authority import RAW_OUTPUT_DIGEST_V1, ValidationCapture
 from side_effects import (
     decode_file_write_content,
     encode_file_write_content,
@@ -2111,6 +2115,130 @@ class ProductionWorkflowDriver(WorkflowDriver):
             raise WorkflowExecutionError("review packet cache verification failed")
         return target
 
+    def persist_review_packet(self, packet: ReviewPacket) -> None:
+        """Bind locally generated review evidence before it enters the mirror."""
+        bridge = self._artifact_bridge
+        state = self.active_state
+        if bridge is None or state is None:
+            return
+        coverage_digest = packet.manifest.diff_coverage_digest
+        if coverage_digest is None:
+            raise WorkflowExecutionError(
+                "structured-v2 review packet lacks its diff-coverage digest"
+            )
+        blob = bridge.store.put_blob(packet.canonical_bytes)
+        bridge.append(
+            ReviewPacketPayload(
+                work_unit_id=str(state.current_work_unit_id),
+                fingerprint=packet.fingerprint,
+                purpose=packet.purpose,
+                manifest=packet.manifest.paths,
+                diff_coverage_sha256=coverage_digest,
+                content_bytes=len(packet.canonical_bytes),
+                blob=blob,
+            ),
+            logical_id=(
+                f"review-packet-{state.current_work_unit_id}-"
+                f"{packet.fingerprint[:12]}"
+            ),
+            idempotency_key=f"review-packet:{state.current_work_unit_id}:{packet.digest}",
+            fingerprint_sha256=packet.fingerprint,
+        )
+        self._materialize_review_packet(packet)
+
+    def _persist_provider_content(
+        self,
+        *,
+        role: Role,
+        work_unit_id: int,
+        round_number: int,
+        operation: str,
+        request_id: str,
+        canonical: str,
+        content_kind: str,
+        fingerprint: str,
+        fingerprint_kind: FingerprintKind = FingerprintKind.IMPLEMENTATION,
+    ) -> ArtifactRecord:
+        bridge = self._artifact_bridge
+        if bridge is None:
+            raise WorkflowExecutionError("provider content has no artifact authority")
+        content = canonical.encode("utf-8")
+        blob = bridge.store.put_blob(content)
+        payload = ProviderContentPayload(
+            role=role,
+            work_unit_id=str(work_unit_id),
+            round_number=round_number,
+            operation=operation,
+            request_id=request_id,
+            response_sha256=blob.sha256,
+            content_kind=content_kind,
+            content_bytes=blob.bytes,
+            blob=blob,
+        )
+        return bridge.append(
+            payload,
+            logical_id=(
+                f"provider-content-{role.value}-{work_unit_id}-"
+                f"{request_id.rsplit('-', 1)[-1][:12]}"
+            ),
+            idempotency_key=(
+                f"provider-content:{role.value}:{work_unit_id}:"
+                f"{round_number}:{operation}:{request_id}:{blob.sha256}"
+            ),
+            fingerprint_sha256=fingerprint,
+            fingerprint_kind=fingerprint_kind,
+        )
+
+    def _provider_content_text(
+        self,
+        *,
+        role: Role,
+        work_unit_id: int,
+        round_number: int,
+        operation: str,
+        request_id: str | None = None,
+        response_sha256: str | None = None,
+        fingerprint: str | None = None,
+        chain: tuple[ArtifactRecord, ...] | None = None,
+    ) -> tuple[str, ArtifactRecord] | None:
+        bridge = self._artifact_bridge
+        if bridge is None:
+            return None
+        matches = tuple(
+            record
+            for record in (chain if chain is not None else bridge.store.load_chain())
+            if isinstance(record.payload, ProviderContentPayload)
+            and record.payload.role is role
+            and record.payload.work_unit_id == str(work_unit_id)
+            and record.payload.round_number == round_number
+            and record.payload.operation == operation
+            and (
+                fingerprint is None
+                or record.fingerprint.sha256 == fingerprint
+            )
+            and (request_id is None or record.payload.request_id == request_id)
+            and (
+                response_sha256 is None
+                or record.payload.response_sha256 == response_sha256
+            )
+        )
+        if not matches:
+            return None
+        if len(matches) != 1:
+            raise WorkflowExecutionError(
+                "provider content recovery has no unique record binding"
+            )
+        record = matches[0]
+        payload = record.payload
+        assert isinstance(payload, ProviderContentPayload)
+        try:
+            content = bridge.store.read_blob(payload.blob).decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise WorkflowExecutionError(
+                "provider content is not canonical UTF-8"
+            ) from exc
+        return content, record
+
     @staticmethod
     def _canonical_native_agent_result(
         candidates: tuple[ArtifactRecord, ...],
@@ -2184,32 +2312,34 @@ class ProductionWorkflowDriver(WorkflowDriver):
             and item.logical_id == logical
         )
         candidate = self._canonical_native_agent_result(candidates, logical)
-        raw_paths = self._native_agent_response_files(invocation)
-        unbound_raw_paths = raw_paths
-        if candidate is not None:
-            raw_paths = tuple(
-                path
-                for path in raw_paths
-                if hashlib.sha256(path.read_bytes()).hexdigest()
-                == candidate.payload.response_sha256
-            )
-        if not raw_paths:
+        persisted_content = self._provider_content_text(
+            role=Role.CODEX,
+            work_unit_id=invocation.work_unit_id,
+            round_number=invocation.round_number,
+            operation=invocation.step.value,
+            request_id=(None if candidate is None else candidate.payload.request_id),
+            response_sha256=(
+                None if candidate is None else candidate.payload.response_sha256
+            ),
+            fingerprint=(
+                None if candidate is None else candidate.fingerprint.sha256
+            ),
+            chain=chain,
+        )
+        if persisted_content is None:
             if candidate is None:
                 return None
-            if unbound_raw_paths:
-                raise WorkflowExecutionError(
-                    "native implementer recovery raw response digest differs from its record"
-                )
             raise WorkflowExecutionError(
-                "native Codex recovery record has no raw response artifact"
+                "native agent recovery record has no authoritative provider content"
             )
-        if len(raw_paths) != 1:
-            raise WorkflowExecutionError(
-                "native Codex recovery has no unique response artifact"
-            )
-        raw_path = raw_paths[0]
-        canonical = raw_path.read_text(encoding="utf-8")
+        canonical, content_record = persisted_content
+        content_payload = content_record.payload
+        assert isinstance(content_payload, ProviderContentPayload)
         response_sha256 = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        if response_sha256 != content_payload.response_sha256:
+            raise WorkflowExecutionError(
+                "native provider content digest differs from its record"
+            )
         if (
             candidate is not None
             and candidate.payload.response_sha256 != response_sha256
@@ -2329,7 +2459,9 @@ class ProductionWorkflowDriver(WorkflowDriver):
         )
         if candidate is None:
             self.persist_native_codex_contract(
-                output, invocation.previous_findings
+                output,
+                invocation.previous_findings,
+                recovery_fingerprint=content_record.fingerprint.sha256,
             )
             logger.warning(
                 "Recovered native implementer result from raw-response-ahead persistence: "
@@ -2464,30 +2596,23 @@ class ProductionWorkflowDriver(WorkflowDriver):
             raise WorkflowExecutionError(
                 "native reviewer recovery has no complete bound attestation"
             )
-        log_pattern = (
-            f"work-unit-{invocation.work_unit_id:04d}-"
-            f"{invocation.step.value}-round-{invocation.round_number:04d}."
-            "attempt-*.log"
+        persisted_content = self._provider_content_text(
+            role=Role(invocation.reviewer.value),
+            work_unit_id=invocation.work_unit_id,
+            round_number=invocation.round_number,
+            operation=invocation.step.value,
+            request_id=(None if payload is None else payload.request_id),
+            response_sha256=(None if payload is None else payload.response_sha256),
+            fingerprint=(None if record is None else record.fingerprint.sha256),
+            chain=chain,
         )
-        outputs = tuple(
-            path.read_text(encoding="utf-8").strip()
-            for path in sorted(self.log_dir.glob(log_pattern))
-            if path.is_file()
-            and (
-                payload is None
-                or hashlib.sha256(
-                    path.read_text(encoding="utf-8").strip().encode("utf-8")
-                ).hexdigest()
-                == payload.response_sha256
-            )
-        )
-        if not outputs and payload is None:
+        if persisted_content is None and payload is None:
             return None
-        if len(outputs) != 1:
+        if persisted_content is None:
             raise WorkflowExecutionError(
-                "native reviewer recovery has no unique response-digest-bound log"
+                "native reviewer recovery has no authoritative provider content"
             )
-        canonical = outputs[0]
+        canonical, _content_payload = persisted_content
         try:
             document = json.loads(canonical)
             if not isinstance(document, dict):
@@ -2637,24 +2762,22 @@ class ProductionWorkflowDriver(WorkflowDriver):
             )
         attestation = matching_attestations[0]
 
-        log_pattern = (
-            f"work-unit-{unit.work_unit_id:04d}-{state.current_step.value}-"
-            f"round-{round_number:04d}.attempt-*.log"
+        persisted_content = self._provider_content_text(
+            role=payload.reviewer,
+            work_unit_id=unit.work_unit_id,
+            round_number=round_number,
+            operation=state.current_step.value,
+            request_id=payload.request_id,
+            response_sha256=payload.response_sha256,
+            fingerprint=record.fingerprint.sha256,
+            chain=chain,
         )
-        outputs = tuple(
-            output
-            for path in sorted(self.log_dir.glob(log_pattern))
-            if path.is_file()
-            for output in (path.read_text(encoding="utf-8").strip(),)
-            if hashlib.sha256(output.encode("utf-8")).hexdigest()
-            == payload.response_sha256
-        )
-        if len(outputs) != 1:
+        if persisted_content is None:
             raise WorkflowExecutionError(
-                "pre-policy native reviewer recovery has no unique "
-                "response-digest-bound log"
+                "pre-policy native reviewer recovery has no authoritative "
+                "provider content"
             )
-        canonical = outputs[0]
+        canonical, _content_payload = persisted_content
         expected_test_files = (
             tuple(
                 path
@@ -2813,16 +2936,38 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 ).encode("utf-8")
             ).hexdigest()
             idempotency_key = f"native:{logical}:{binding_digest}"
+        fingerprint_kind = (
+            FingerprintKind.CONTRACT
+            if unit.kind is WorkUnitKind.PLAN
+            else FingerprintKind.IMPLEMENTATION
+        )
+        content_record = self._persist_provider_content(
+            role=Role.CODEX,
+            work_unit_id=unit.work_unit_id,
+            round_number=unit.round_number,
+            operation=state.current_step.value,
+            request_id=output.request_id,
+            canonical=output.canonical_json,
+            content_kind=(
+                "final_report"
+                if state.current_step is WorkflowStep.CODEX_FINAL_REVIEW
+                and output.result.ready is True
+                else "agent_result"
+            ),
+            fingerprint=fingerprint,
+            fingerprint_kind=fingerprint_kind,
+        )
+        assert isinstance(content_record.payload, ProviderContentPayload)
+        if content_record.payload.response_sha256 != output.response_sha256:
+            raise WorkflowExecutionError(
+                "native agent content digest differs from its result binding"
+            )
         self._artifact_bridge.append(
             payload,
             logical_id=logical,
             idempotency_key=idempotency_key,
             fingerprint_sha256=fingerprint,
-            fingerprint_kind=(
-                FingerprintKind.CONTRACT
-                if unit.kind is WorkUnitKind.PLAN
-                else FingerprintKind.IMPLEMENTATION
-            ),
+            fingerprint_kind=fingerprint_kind,
         )
         try:
             response_delta = project_finding_response_delta(
@@ -2881,6 +3026,21 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 f"{fingerprint}:{output.request_id}:{response_sha256}"
             ).encode("utf-8")
         ).hexdigest()
+        content_record = self._persist_provider_content(
+            role=Role(output.result.reviewer.value),
+            work_unit_id=unit.work_unit_id,
+            round_number=round_number,
+            operation=state.current_step.value,
+            request_id=output.request_id,
+            canonical=output.canonical_json,
+            content_kind="review_result",
+            fingerprint=fingerprint,
+        )
+        assert isinstance(content_record.payload, ProviderContentPayload)
+        if content_record.payload.response_sha256 != response_sha256:
+            raise WorkflowExecutionError(
+                "native reviewer content digest differs from its review binding"
+            )
         self._artifact_bridge.append(
             review_payload(
                 output.result,
@@ -3000,12 +3160,181 @@ class ProductionWorkflowDriver(WorkflowDriver):
             raise WorkflowExecutionError(
                 "structured-v2 validation accepts only matrix-provided argv commands"
             )
-        self._artifact_bridge.append(
-            attestation_payload(attestation),
+        if (
+            not attestation.content_captures
+            or tuple(item.command for item in attestation.content_captures)
+            != attestation.expected_commands
+        ):
+            raise WorkflowExecutionError(
+                "structured-v2 validation requires exact content for every command"
+            )
+        bridge = self._artifact_bridge
+        store = bridge.store
+        result_key = f"attestation:{attestation.attestation_id}"
+        result_context = store.append_context(
+            record_type=RecordType.VALIDATION_ATTESTATION,
             logical_id=attestation.attestation_id,
-            idempotency_key=f"attestation:{attestation.attestation_id}",
+            idempotency_key=result_key,
+        )
+        result_record_id = (
+            result_context.existing.record_id
+            if result_context.existing is not None
+            else stable_record_id(
+                store.run_id,
+                RecordType.VALIDATION_ATTESTATION,
+                attestation.attestation_id,
+                result_context.next_revision,
+            )
+        )
+        outputs: list[ValidationOutputContent] = []
+        for spec, capture in zip(
+            attestation.command_specs,
+            attestation.content_captures,
+            strict=True,
+        ):
+            stdout = capture.stdout.encode("utf-8")
+            stderr = capture.stderr.encode("utf-8")
+            compact = capture.compact_output.encode("utf-8")
+            outputs.append(
+                ValidationOutputContent(
+                    command=command_payload(spec),
+                    digest_outcome=capture.outcome,
+                    exit_code=capture.exit_code,
+                    raw_stdout=store.put_blob(stdout),
+                    raw_stderr=store.put_blob(stderr),
+                    compact_output=store.put_blob(compact),
+                    output_bytes=len(stdout) + len(stderr),
+                )
+            )
+        content_record = bridge.append(
+            ValidationContentPayload(
+                attestation_id=attestation.attestation_id,
+                result_record_id=result_record_id,
+                digest_format=attestation.content_digest_format,
+                output_digest=attestation.output_digest,
+                summary=attestation.summary,
+                outputs=tuple(outputs),
+            ),
+            logical_id=f"validation-content-{attestation.attestation_id}",
+            idempotency_key=f"validation-content:{attestation.attestation_id}",
             fingerprint_sha256=attestation.diff_fingerprint,
         )
+        result_record = bridge.append(
+            attestation_payload(attestation, content_record.record_id),
+            logical_id=attestation.attestation_id,
+            idempotency_key=result_key,
+            fingerprint_sha256=attestation.diff_fingerprint,
+        )
+        if result_record.record_id != result_record_id:
+            raise WorkflowExecutionError(
+                "validation content forward binding is not stable"
+            )
+
+    def recover_pending_validation_attestation(
+        self,
+        fingerprint: str,
+        expected_commands: tuple[str, ...],
+        attestation_id: str,
+    ) -> ValidationAttestation | None:
+        """Restore exact validation state from its authoritative content blobs."""
+        bridge = self._artifact_bridge
+        if bridge is None:
+            return None
+        chain = bridge.store.load_chain()
+        candidates = tuple(
+            record
+            for record in chain
+            if isinstance(record.payload, ValidationContentPayload)
+            and record.fingerprint.sha256 == fingerprint
+            and record.payload.attestation_id == attestation_id
+            and tuple(
+                (
+                    item.command.argv[0]
+                    if item.command.mode == "legacy_shell"
+                    else shlex.join(item.command.argv)
+                )
+                for item in record.payload.outputs
+            )
+            == expected_commands
+        )
+        if not candidates:
+            return None
+        if len(candidates) != 1:
+            raise WorkflowExecutionError(
+                "validation recovery has multiple content records"
+            )
+        content_record = candidates[0]
+        payload = content_record.payload
+        assert isinstance(payload, ValidationContentPayload)
+        specs = tuple(
+            (
+                ValidationCommandSpec(legacy_shell=item.command.argv[0])
+                if item.command.mode == "legacy_shell"
+                else ValidationCommandSpec(argv=item.command.argv)
+            )
+            for item in payload.outputs
+        )
+        captures: list[ValidationCapture] = []
+        records: list[ValidationRecord] = []
+        for item, spec in zip(payload.outputs, specs, strict=True):
+            try:
+                stdout = bridge.store.read_blob(item.raw_stdout).decode("utf-8")
+                stderr = bridge.store.read_blob(item.raw_stderr).decode("utf-8")
+                compact = bridge.store.read_blob(item.compact_output).decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise WorkflowExecutionError(
+                    "validation content is not canonical UTF-8"
+                ) from exc
+            capture = ValidationCapture(
+                spec.display,
+                item.digest_outcome,
+                item.exit_code,
+                stdout,
+                stderr,
+                compact,
+            )
+            captures.append(capture)
+            if item.digest_outcome in {"pass", "fail", "timeout"}:
+                records.append(
+                    ValidationRecord(
+                        ValidationStatus.PASS
+                        if item.digest_outcome == "pass"
+                        else ValidationStatus.FAIL,
+                        spec.display,
+                        item.exit_code,
+                        compact,
+                    )
+                )
+        attestation = ValidationAttestation(
+            attestation_id=payload.attestation_id,
+            diff_fingerprint=fingerprint,
+            expected_commands=expected_commands,
+            records=tuple(records),
+            output_digest=payload.output_digest,
+            summary=payload.summary,
+            command_specs=specs,
+            content_captures=tuple(captures),
+            content_digest_format=payload.digest_format,
+        )
+        result = next(
+            (
+                record for record in chain
+                if record.record_id == payload.result_record_id
+            ),
+            None,
+        )
+        if result is None:
+            self.persist_validation_attestation(attestation)
+        elif (
+            not isinstance(result.payload, ValidationAttestationPayload)
+            or result.payload != attestation_payload(
+                attestation, content_record.record_id
+            )
+        ):
+            raise WorkflowExecutionError(
+                "validation recovery result differs from its content"
+            )
+        return attestation
 
     def persist_validation_request(self, request) -> None:  # type: ignore[no-untyped-def]
         if self._artifact_bridge is None:
@@ -3465,6 +3794,10 @@ class ProductionWorkflowDriver(WorkflowDriver):
             output_digest=digest,
             summary="internal plan contract passed",
             command_specs=(ValidationCommandSpec(argv=(command,)),),
+            content_captures=(
+                ValidationCapture(command, "pass", 0, detail, "", detail),
+            ),
+            content_digest_format=RAW_OUTPUT_DIGEST_V1,
         )
 
     def prepare_correction(
@@ -3699,7 +4032,8 @@ class ProductionWorkflowDriver(WorkflowDriver):
                     "structured commit binding requires persisted attestation and approvals"
                 )
             if structured_attestation.payload != attestation_payload(
-                request.attestation
+                request.attestation,
+                structured_attestation.payload.content_record_id,
             ):
                 raise WorkflowExecutionError(
                     "structured commit attestation record differs from its state-v3 mirror"

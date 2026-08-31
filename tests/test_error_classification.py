@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 from dataclasses import replace
 from pathlib import Path
@@ -16,8 +17,10 @@ from artifact_migration import ArtifactResumeError
 from artifact_models import (
     AgentResultPayload,
     ArtifactRecord,
+    BlobReference,
     Fingerprint,
     FingerprintKind,
+    ProviderContentPayload,
     ReviewPayload,
     Role,
 )
@@ -101,8 +104,33 @@ def _invalid_recovery_response(tmp_path: Path) -> BaseException:
     driver = object.__new__(ProductionWorkflowDriver)
     driver.root = tmp_path
     driver.active_state = state
+    raw = b"{}"
+    blob = BlobReference(hashlib.sha256(raw).hexdigest(), len(raw))
+    content_record = ArtifactRecord.create(
+        run_id=state.run_id,
+        logical_id="provider-content-invalid-recovery",
+        revision=1,
+        fingerprint=Fingerprint(FingerprintKind.CONTRACT, "a" * 64),
+        predecessor_ids=(),
+        created_at="2026-08-29T10:00:00+00:00",
+        idempotency_key="provider-content:invalid-recovery",
+        payload=ProviderContentPayload(
+            role=Role.CODEX,
+            work_unit_id=str(state.current_work_unit_id),
+            round_number=1,
+            operation=state.current_step.value,
+            request_id="native-codex-request-" + "b" * 64,
+            response_sha256=blob.sha256,
+            content_kind="agent_result",
+            content_bytes=len(raw),
+            blob=blob,
+        ),
+    )
     driver._artifact_bridge = SimpleNamespace(  # noqa: SLF001
-        store=SimpleNamespace(load_chain=lambda: ())
+        store=SimpleNamespace(
+            load_chain=lambda: (content_record,),
+            read_blob=lambda _reference: b"[]",
+        )
     )
     driver._load_native_agent_request_bundle = lambda *_args: None  # type: ignore[method-assign]  # noqa: SLF001,E501
     invocation = SimpleNamespace(
@@ -115,9 +143,6 @@ def _invalid_recovery_response(tmp_path: Path) -> BaseException:
             )
         ),
     )
-    raw_path = driver._native_codex_response_path(invocation)  # noqa: SLF001
-    raw_path.parent.mkdir(parents=True)
-    raw_path.write_text("{}", encoding="utf-8")
     return _capture(
         lambda: driver.recover_pending_native_codex(
             invocation, None, WorkflowHistory(state.current_work_unit_id)

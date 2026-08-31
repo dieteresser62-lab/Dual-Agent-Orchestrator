@@ -100,6 +100,7 @@ from validation_matrix import (
     ValidationMatrixError,
     ValidationRequest,
     select_validation_request,
+    validation_attestation_id,
 )
 from workflow_state import (
     AgentFailureKind,
@@ -454,6 +455,13 @@ class WorkflowDriver(Protocol):
         scope_patterns: tuple[str, ...],
         plan_only: bool,
     ) -> ValidationAttestation: ...
+
+    def recover_pending_validation_attestation(
+        self,
+        fingerprint: str,
+        expected_commands: tuple[str, ...],
+        attestation_id: str,
+    ) -> ValidationAttestation | None: ...
 
     def invoke_reviewer(
         self, invocation: ReviewerInvocation
@@ -1913,6 +1921,7 @@ class WorkflowEngine:
                 raise WorkflowExecutionError(
                     f"canonical review packet could not be built: {exc}"
                 ) from exc
+            self._persist_structured("persist_review_packet", review_packet)
             history = replace(history, active_review_packet=review_packet)
             self.driver.checkpoint(state, history)
         native_request = self._native_review_request(
@@ -2558,7 +2567,25 @@ class WorkflowEngine:
                 )
             request = replace(request, attempt_number=len(matching) + 1)
         self._persist_structured("persist_validation_request", request)
-        attestation = self.driver.validate(changes, request)
+        recovery_loader = getattr(
+            self.driver, "recover_pending_validation_attestation", None
+        )
+        attestation = (
+            recovery_loader(
+                changes.fingerprint,
+                request.expected_commands,
+                validation_attestation_id(request),
+            )
+            if recovery_loader is not None
+            else None
+        )
+        if attestation is None:
+            attestation = self.driver.validate(changes, request)
+        expected_attestation_id = validation_attestation_id(request)
+        if attestation.attestation_id != expected_attestation_id:
+            raise WorkflowExecutionError(
+                "validation attestation id does not match the selected attempt"
+            )
         if attestation.diff_fingerprint != changes.fingerprint:
             raise WorkflowExecutionError("validation attestation fingerprint is foreign")
         if attestation.expected_commands != request.expected_commands:

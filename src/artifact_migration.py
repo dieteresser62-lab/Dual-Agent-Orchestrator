@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, replace
 import hashlib
 from pathlib import Path
+import shlex
 
 from artifact_models import (
     BindingPayload,
@@ -18,6 +19,8 @@ from artifact_models import (
     QuotaPausePayload,
     RecordType,
     ReviewPayload,
+    ProviderContentPayload,
+    ReviewPacketPayload,
     ResumeCheckPayload,
     RunIdentityPayload,
     RunProfilePayload,
@@ -26,6 +29,7 @@ from artifact_models import (
     TaskPayload,
     TransientRetryPayload,
     ValidationAttestationPayload,
+    ValidationContentPayload,
     WorkUnitPayload,
     WorkflowCompletionPayload,
     WorkflowPolicyPayload,
@@ -596,7 +600,8 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
         )
 
     try:
-        chain = ArtifactStore(repository_root, state.run_id).load_chain()
+        store = ArtifactStore(repository_root, state.run_id)
+        chain = store.load_chain()
     except ArtifactStoreError as exc:
         raise ArtifactResumeError(
             f"structured-v2 record chain for run {state.run_id!r} is invalid: {exc}; "
@@ -611,7 +616,9 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
         )
 
     try:
-        replay = replay_artifacts(chain, state.run_id)
+        replay = replay_artifacts(
+            chain, state.run_id, require_content_authority=True
+        )
     except ArtifactReplayError as exc:
         raise ArtifactResumeError(
             exc.diagnostic.message,
@@ -968,6 +975,140 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
             None if record is None else record.record_id,
             code=_mirror_difference_code(set(attestation_records), attestation_facts),
         )
+    attestation_mirrors = _attestation_mirrors(state)
+    records_by_id = {record.record_id: record for record in chain}
+    for key, attestation_record in attestation_records.items():
+        mirror = attestation_mirrors.get(key)
+        payload = attestation_record.payload
+        assert isinstance(payload, ValidationAttestationPayload)
+        content_record = records_by_id.get(payload.content_record_id)
+        if (
+            mirror is None
+            or not isinstance(
+                content_record.payload if content_record else None,
+                ValidationContentPayload,
+            )
+            or not {"output_digest", "summary", "records"}.issubset(mirror)
+        ):
+            raise mismatch(
+                "validation content has no complete state-v3 counterpart",
+                attestation_record.record_id,
+            )
+        content = content_record.payload
+        assert isinstance(content, ValidationContentPayload)
+        expected = _mirror_attestation_statement(mirror)
+        actual = {
+            "output_digest": payload.output_digest,
+            "summary": content.summary,
+            "results": tuple(
+                (
+                    result.command.family,
+                    result.command.argv,
+                    result.command.mode,
+                    result.outcome,
+                    result.exit_code,
+                    result.output_sha256,
+                )
+                for result in payload.results
+            ),
+        }
+        if actual != expected:
+            raise mismatch(
+                "validation output or digest differs from state-v3",
+                attestation_record.record_id,
+            )
+
+    history_mirrors = _runtime_history_mirrors(state)
+    final_report_mirrors: dict[str, bytes] = {}
+    for history in history_mirrors:
+        unit_id = history.get("work_unit_id")
+        candidates = tuple(
+            value
+            for key, value in history.items()
+            if key.endswith("_final_report") and isinstance(value, str)
+        )
+        if len(candidates) > 1:
+            raise mismatch("final-report content differs from state-v3")
+        if isinstance(unit_id, int) and candidates:
+            final_report_mirrors[str(unit_id)] = candidates[0].encode("utf-8")
+    final_report_groups: dict[str, list[ArtifactRecord]] = {}
+    for record in chain:
+        if (
+            isinstance(record.payload, ProviderContentPayload)
+            and record.payload.content_kind == "final_report"
+        ):
+            final_report_groups.setdefault(record.payload.work_unit_id, []).append(
+                record
+            )
+    ambiguous_reports = next(
+        (records for records in final_report_groups.values() if len(records) != 1),
+        None,
+    )
+    if ambiguous_reports is not None:
+        raise mismatch(
+            "final-report content differs from state-v3",
+            ambiguous_reports[-1].record_id,
+            code=ReplayDiagnosticCode.MIRROR_AMBIGUOUS,
+        )
+    final_report_records = {
+        unit_id: records[0] for unit_id, records in final_report_groups.items()
+    }
+    if set(final_report_records) != set(final_report_mirrors):
+        differing = next(
+            iter(set(final_report_records) ^ set(final_report_mirrors)), None
+        )
+        record = final_report_records.get(differing) if differing else None
+        raise mismatch(
+            "final-report content differs from state-v3",
+            None if record is None else record.record_id,
+            code=_mirror_difference_code(
+                set(final_report_records), set(final_report_mirrors)
+            ),
+        )
+    for unit_id, record in final_report_records.items():
+        payload = record.payload
+        assert isinstance(payload, ProviderContentPayload)
+        if store.read_blob(payload.blob) != final_report_mirrors[unit_id]:
+            raise mismatch(
+                "final-report bytes differ from state-v3", record.record_id
+            )
+
+    packet_mirrors = {
+        str(history["work_unit_id"]): packet
+        for history in history_mirrors
+        for packet in (history.get("active_review_packet"),)
+        if isinstance(history.get("work_unit_id"), int)
+        and isinstance(packet, dict)
+        and isinstance(packet.get("fingerprint"), str)
+    }
+    packet_records: dict[str, ArtifactRecord] = {}
+    for record in chain:
+        if isinstance(record.payload, ReviewPacketPayload):
+            packet_records[record.payload.work_unit_id] = record
+    if set(packet_records) != set(packet_mirrors):
+        differing = next(iter(set(packet_records) ^ set(packet_mirrors)), None)
+        record = packet_records.get(differing) if differing else None
+        raise mismatch(
+            "active review packets differ from state-v3",
+            None if record is None else record.record_id,
+            code=_mirror_difference_code(set(packet_records), set(packet_mirrors)),
+        )
+    for key, record in packet_records.items():
+        packet = packet_mirrors[key]
+        payload = record.payload
+        assert isinstance(payload, ReviewPacketPayload)
+        canonical = str(packet.get("canonical_text", "")).encode("utf-8")
+        if (
+            store.read_blob(payload.blob) != canonical
+            or payload.fingerprint != packet.get("fingerprint")
+            or payload.blob.sha256 != packet.get("digest")
+            or payload.purpose != packet.get("purpose")
+            or payload.manifest != tuple(packet.get("paths", ()))
+        ):
+            raise mismatch(
+                "active review packet bytes or metadata differ from state-v3",
+                record.record_id,
+            )
 
     quota_facts = {
         (failure.role, failure.diff_fingerprint, failure.resume_at_utc)
@@ -1437,3 +1578,94 @@ def _attestation_facts(state: WorkflowState) -> set[tuple[str, str]]:
             if isinstance(attestation_id, str) and isinstance(fingerprint, str):
                 facts.add((attestation_id, fingerprint))
     return facts
+
+
+def _runtime_history_mirrors(state: WorkflowState) -> tuple[dict[str, object], ...]:
+    raw = state.runtime_history
+    candidates: list[object] = []
+    if isinstance(raw, dict) and set(raw) == {"current", "archive"}:
+        archive = raw.get("archive")
+        if isinstance(archive, list):
+            candidates.extend(archive)
+        candidates.append(raw.get("current"))
+    elif raw is not None:
+        candidates.append(raw)
+    return tuple(item for item in candidates if isinstance(item, dict))
+
+
+def _attestation_mirrors(
+    state: WorkflowState,
+) -> dict[tuple[str, str], dict[str, object]]:
+    result: dict[tuple[str, str], dict[str, object]] = {}
+    for history in _runtime_history_mirrors(state):
+        attestations = history.get("attestations")
+        if not isinstance(attestations, list):
+            continue
+        for item in attestations:
+            if not isinstance(item, dict):
+                continue
+            attestation_id = item.get("attestation_id")
+            fingerprint = item.get("diff_fingerprint")
+            if isinstance(attestation_id, str) and isinstance(fingerprint, str):
+                result[(attestation_id, fingerprint)] = item
+    return result
+
+
+def _mirror_attestation_statement(raw: dict[str, object]) -> dict[str, object]:
+    specs_raw = raw.get("command_specs")
+    expected_raw = raw.get("expected_commands")
+    records_raw = raw.get("records")
+    specs = specs_raw if isinstance(specs_raw, list) else []
+    expected = expected_raw if isinstance(expected_raw, list) else []
+    records = records_raw if isinstance(records_raw, list) else []
+    if not specs:
+        specs = [
+            {"argv": [], "legacy_shell": command}
+            for command in expected
+            if isinstance(command, str)
+        ]
+    records_by_command = {
+        item.get("command"): item
+        for item in records
+        if isinstance(item, dict) and isinstance(item.get("command"), str)
+    }
+    results: list[tuple[object, ...]] = []
+    for spec in specs:
+        if not isinstance(spec, dict):
+            continue
+        argv_raw = spec.get("argv")
+        argv = tuple(argv_raw) if isinstance(argv_raw, list) else ()
+        legacy = spec.get("legacy_shell")
+        if argv:
+            family = "validation"
+            mode = "argv"
+            command = shlex.join(argv)
+        else:
+            family = "legacy-validation"
+            mode = "legacy_shell"
+            command = legacy
+            argv = (legacy,)
+        mirrored = records_by_command.get(command)
+        status = mirrored.get("status") if isinstance(mirrored, dict) else None
+        output = (
+            str(mirrored.get("output", ""))
+            if isinstance(mirrored, dict)
+            else ""
+        )
+        results.append(
+            (
+                family,
+                argv,
+                mode,
+                str(status).lower() if status in {"PASS", "FAIL"} else "unavailable",
+                int(mirrored.get("exit_code", -1))
+                if isinstance(mirrored, dict)
+                else -1,
+                hashlib.sha256(output.encode("utf-8")).hexdigest(),
+            )
+        )
+    return {
+        "output_digest": raw.get("output_digest"),
+        "summary": raw.get("summary"),
+        "results": tuple(results),
+    }

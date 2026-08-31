@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import re
@@ -19,6 +18,7 @@ from contracts import (
     ValidationRecord,
     ValidationStatus,
 )
+from content_authority import ValidationCapture, validation_output_digest
 from finding_reducer import project_open_set
 from gates import matches_path_patterns, normalize_path_patterns
 
@@ -330,7 +330,7 @@ class ValidationMatrixRunner:
 
     def run(self, request: ValidationRequest) -> ValidationAttestation:
         records: list[ValidationRecord] = []
-        digest_items: list[dict[str, object]] = []
+        captures: list[ValidationCapture] = []
         unavailable = 0
         for command in request.commands:
             try:
@@ -347,35 +347,48 @@ class ValidationMatrixRunner:
                 )
             except FileNotFoundError as exc:
                 unavailable += 1
-                digest_items.append(
-                    {"command": command.display, "outcome": "missing", "detail": str(exc)}
+                captures.append(
+                    ValidationCapture(
+                        command.display,
+                        "missing",
+                        -1,
+                        "",
+                        str(exc),
+                        "",
+                    )
                 )
                 continue
             except subprocess.TimeoutExpired as exc:
                 stdout = _timeout_text(exc.stdout)
                 stderr = _timeout_text(exc.stderr)
+                compact = _compact_output(stdout, stderr, self.output_limit)
                 records.append(
                     ValidationRecord(
-                        ValidationStatus.FAIL,
-                        command.display,
-                        124,
-                        _compact_output(stdout, stderr, self.output_limit),
+                        ValidationStatus.FAIL, command.display, 124, compact
                     )
                 )
-                digest_items.append(
-                    {
-                        "command": command.display,
-                        "outcome": "timeout",
-                        "exit_code": 124,
-                        "stdout": stdout,
-                        "stderr": stderr,
-                    }
+                captures.append(
+                    ValidationCapture(
+                        command.display,
+                        "timeout",
+                        124,
+                        stdout,
+                        stderr,
+                        compact,
+                    )
                 )
                 continue
             except OSError as exc:
                 unavailable += 1
-                digest_items.append(
-                    {"command": command.display, "outcome": "unavailable", "detail": str(exc)}
+                captures.append(
+                    ValidationCapture(
+                        command.display,
+                        "unavailable",
+                        -1,
+                        "",
+                        str(exc),
+                        "",
+                    )
                 )
                 continue
             status = (
@@ -383,29 +396,24 @@ class ValidationMatrixRunner:
                 if result.returncode == 0
                 else ValidationStatus.FAIL
             )
+            compact = _compact_output(
+                result.stdout, result.stderr, self.output_limit
+            )
             records.append(
                 ValidationRecord(
-                    status,
-                    command.display,
-                    result.returncode,
-                    _compact_output(result.stdout, result.stderr, self.output_limit),
+                    status, command.display, result.returncode, compact
                 )
             )
-            digest_items.append(
-                {
-                    "command": command.display,
-                    "outcome": status.value.lower(),
-                    "exit_code": result.returncode,
-                    "stdout": result.stdout,
-                    "stderr": result.stderr,
-                }
+            captures.append(
+                ValidationCapture(
+                    command.display,
+                    status.value.lower(),
+                    result.returncode,
+                    result.stdout,
+                    result.stderr,
+                    compact,
+                )
             )
-        digest_payload = json.dumps(
-            digest_items,
-            ensure_ascii=True,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
         failed = sum(record.status is ValidationStatus.FAIL for record in records)
         passed = sum(record.status is ValidationStatus.PASS for record in records)
         summary = (
@@ -413,18 +421,25 @@ class ValidationMatrixRunner:
             f"{len(request.commands)} required"
         )
         return ValidationAttestation(
-            attestation_id=(
-                f"validation-{request.diff_fingerprint[:12]}"
-                if request.attempt_number == 1
-                else f"validation-{request.diff_fingerprint[:12]}-retry-{request.attempt_number}"
-            ),
+            attestation_id=validation_attestation_id(request),
             diff_fingerprint=request.diff_fingerprint,
             expected_commands=request.expected_commands,
             records=tuple(records),
-            output_digest=hashlib.sha256(digest_payload).hexdigest(),
+            output_digest=validation_output_digest(captures),
             summary=summary,
             command_specs=tuple(command.command_spec for command in request.commands),
+            content_captures=tuple(captures),
         )
+
+
+def validation_attestation_id(request: ValidationRequest) -> str:
+    """Return the immutable validation identity for one exact matrix attempt."""
+    if request.attempt_number == 1:
+        return f"validation-{request.diff_fingerprint[:12]}"
+    return (
+        f"validation-{request.diff_fingerprint[:12]}-retry-"
+        f"{request.attempt_number}"
+    )
 
 
 def _timeout_text(value: str | bytes | None) -> str:

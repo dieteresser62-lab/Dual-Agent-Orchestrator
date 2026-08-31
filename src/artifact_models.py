@@ -57,7 +57,10 @@ class RecordType(StrEnum):
     FINDING_HANDOFF_EXPORT = "finding_handoff_export"
     FINDING_HANDOFF_IMPORT = "finding_handoff_import"
     VALIDATION_REQUEST = "validation_request"
+    VALIDATION_CONTENT = "validation_content"
     VALIDATION_ATTESTATION = "validation_attestation"
+    PROVIDER_CONTENT = "provider_content"
+    REVIEW_PACKET = "review_packet"
     GATE = "gate"
     GATE_TRANSITION = "gate_transition"
     GATE_DECISION = "gate_decision"
@@ -706,15 +709,148 @@ class ValidationResult:
 
 
 @dataclass(frozen=True, slots=True)
+class BlobReference:
+    sha256: str
+    bytes: int
+
+    def __post_init__(self) -> None:
+        _require_sha256(self.sha256, "blob sha256")
+        if isinstance(self.bytes, bool) or not isinstance(self.bytes, int) or self.bytes < 0:
+            raise ArtifactValidationError("blob bytes must be a non-negative integer")
+
+
+@dataclass(frozen=True, slots=True)
+class ValidationOutputContent:
+    command: CommandSpec
+    digest_outcome: str
+    exit_code: int
+    raw_stdout: BlobReference
+    raw_stderr: BlobReference
+    compact_output: BlobReference
+    output_bytes: int
+
+    def __post_init__(self) -> None:
+        if self.digest_outcome not in {
+            "pass", "fail", "timeout", "missing", "unavailable",
+        }:
+            raise ArtifactValidationError("validation content outcome is invalid")
+        if isinstance(self.exit_code, bool) or not isinstance(self.exit_code, int):
+            raise ArtifactValidationError("validation content exit_code must be an integer")
+        expected_bytes = self.raw_stdout.bytes + self.raw_stderr.bytes
+        if self.output_bytes != expected_bytes:
+            raise ArtifactValidationError(
+                "validation content output_bytes differs from its streams"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class ValidationContentPayload:
+    attestation_id: str
+    result_record_id: str
+    digest_format: str
+    output_digest: str
+    summary: str
+    outputs: tuple[ValidationOutputContent, ...]
+    status: ClassVar[str] = "captured"
+    record_type: ClassVar[RecordType] = RecordType.VALIDATION_CONTENT
+
+    def __post_init__(self) -> None:
+        _require_identifier(self.attestation_id, "validation content attestation_id")
+        _require_record_id(self.result_record_id, "validation content result_record_id")
+        if self.digest_format not in {"validation-matrix-v1", "raw-output-v1"}:
+            raise ArtifactValidationError("validation content digest_format is invalid")
+        _require_sha256(self.output_digest, "validation content output_digest")
+        _require_text(self.summary, "validation content summary")
+        if not self.outputs:
+            raise ArtifactValidationError("validation content outputs must not be empty")
+        commands = tuple(item.command for item in self.outputs)
+        if len(commands) != len(set(commands)):
+            raise ArtifactValidationError("validation content commands must be unique")
+
+
+@dataclass(frozen=True, slots=True)
 class ValidationAttestationPayload:
     results: tuple[ValidationResult, ...]
     attested_by: Role
+    output_digest: str
+    content_record_id: str
     status: ClassVar[str] = "attested"
     record_type: ClassVar[RecordType] = RecordType.VALIDATION_ATTESTATION
 
     def __post_init__(self) -> None:
         if not self.results:
             raise ArtifactValidationError("validation attestation results must not be empty")
+        _require_sha256(self.output_digest, "validation attestation output_digest")
+        _require_record_id(
+            self.content_record_id,
+            "validation attestation content_record_id",
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderContentPayload:
+    role: Role
+    work_unit_id: str
+    round_number: int
+    operation: str
+    request_id: str
+    response_sha256: str
+    content_kind: str
+    content_bytes: int
+    blob: BlobReference
+    status: ClassVar[str] = "captured"
+    record_type: ClassVar[RecordType] = RecordType.PROVIDER_CONTENT
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.role, Role) or self.role in {
+            Role.ORCHESTRATOR,
+            Role.USER,
+        }:
+            raise ArtifactValidationError("provider content role must identify one agent")
+        _require_identifier(self.work_unit_id, "provider content work_unit_id")
+        if (
+            isinstance(self.round_number, bool)
+            or not isinstance(self.round_number, int)
+            or self.round_number < 1
+        ):
+            raise ArtifactValidationError(
+                "provider content round_number must be positive"
+            )
+        _require_identifier(self.operation, "provider content operation")
+        _require_identifier(self.request_id, "provider content request_id")
+        _require_sha256(self.response_sha256, "provider content response_sha256")
+        if self.content_kind not in {"agent_result", "review_result", "final_report"}:
+            raise ArtifactValidationError("provider content kind is invalid")
+        if self.content_bytes != self.blob.bytes:
+            raise ArtifactValidationError("provider content bytes differ from its blob")
+        if self.response_sha256 != self.blob.sha256:
+            raise ArtifactValidationError("provider content digest differs from its blob")
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewPacketPayload:
+    work_unit_id: str
+    fingerprint: str
+    purpose: str
+    manifest: tuple[str, ...]
+    diff_coverage_sha256: str
+    content_bytes: int
+    blob: BlobReference
+    status: ClassVar[str] = "captured"
+    record_type: ClassVar[RecordType] = RecordType.REVIEW_PACKET
+
+    def __post_init__(self) -> None:
+        _require_identifier(self.work_unit_id, "review packet work_unit_id")
+        _require_sha256(self.fingerprint, "review packet fingerprint")
+        if self.purpose not in {"slice", "correction"}:
+            raise ArtifactValidationError("review packet purpose is invalid")
+        _require_paths(self.manifest)
+        _require_sha256(
+            self.diff_coverage_sha256,
+            "review packet diff_coverage_sha256",
+        )
+        if self.content_bytes != self.blob.bytes:
+            raise ArtifactValidationError("review packet bytes differ from its blob")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1470,7 +1606,9 @@ ArtifactPayload: TypeAlias = (
     | TaskPayload | PlanPayload | WorkUnitPayload | CorrectionWorkUnitPayload
     | AgentResultPayload | DiagnosticPayload | ReviewPayload | FindingTransitionPayload
     | FindingHandoffExportPayload | FindingHandoffImportPayload
-    | ValidationRequestPayload | ValidationAttestationPayload | GatePayload
+    | ValidationRequestPayload | ValidationContentPayload
+    | ValidationAttestationPayload | ProviderContentPayload
+    | ReviewPacketPayload | GatePayload
     | GateTransitionPayload | GateDecisionPayload | BindingPayload
     | InvocationFailurePayload | QuotaPausePayload
     | TransientRetryPayload | ResumeCheckPayload
@@ -1748,12 +1886,63 @@ def _payload_from_dict(record_type: RecordType, raw: Mapping[str, Any]) -> Artif
     if record_type is RecordType.VALIDATION_REQUEST:
         commands = tuple(CommandSpec(item["family"], tuple(item["argv"]), item["mode"]) for item in data["commands"])
         return ValidationRequestPayload(commands, Role(data["requested_by"]))
+    if record_type is RecordType.VALIDATION_CONTENT:
+        return ValidationContentPayload(
+            data["attestation_id"],
+            data["result_record_id"],
+            data["digest_format"],
+            data["output_digest"],
+            data["summary"],
+            tuple(
+                ValidationOutputContent(
+                    CommandSpec(
+                        item["command"]["family"],
+                        tuple(item["command"]["argv"]),
+                        item["command"]["mode"],
+                    ),
+                    item["digest_outcome"],
+                    item["exit_code"],
+                    BlobReference(**item["raw_stdout"]),
+                    BlobReference(**item["raw_stderr"]),
+                    BlobReference(**item["compact_output"]),
+                    item["output_bytes"],
+                )
+                for item in data["outputs"]
+            ),
+        )
     if record_type is RecordType.VALIDATION_ATTESTATION:
         results = tuple(
             ValidationResult(CommandSpec(item["command"]["family"], tuple(item["command"]["argv"]), item["command"]["mode"]), item["outcome"], item["exit_code"], item["output_sha256"])
             for item in data["results"]
         )
-        return ValidationAttestationPayload(results, Role(data["attested_by"]))
+        return ValidationAttestationPayload(
+            results,
+            Role(data["attested_by"]),
+            data["output_digest"],
+            data["content_record_id"],
+        )
+    if record_type is RecordType.PROVIDER_CONTENT:
+        return ProviderContentPayload(
+            Role(data["role"]),
+            data["work_unit_id"],
+            data["round_number"],
+            data["operation"],
+            data["request_id"],
+            data["response_sha256"],
+            data["content_kind"],
+            data["content_bytes"],
+            BlobReference(**data["blob"]),
+        )
+    if record_type is RecordType.REVIEW_PACKET:
+        return ReviewPacketPayload(
+            data["work_unit_id"],
+            data["fingerprint"],
+            data["purpose"],
+            tuple(data["manifest"]),
+            data["diff_coverage_sha256"],
+            data["content_bytes"],
+            BlobReference(**data["blob"]),
+        )
     if record_type is RecordType.GATE:
         return GatePayload(data["gate_kind"], data["decision"], Role(data["authority"]), data["rationale"])
     if record_type is RecordType.GATE_TRANSITION:
@@ -1853,6 +2042,12 @@ def _require_text(value: str, name: str) -> None:
 def _require_identifier(value: str, name: str) -> None:
     if not isinstance(value, str) or _IDENTIFIER_RE.fullmatch(value) is None:
         raise ArtifactValidationError(f"{name} is not a canonical identifier")
+
+
+def _require_record_id(value: str, name: str) -> None:
+    _require_identifier(value, name)
+    if not value.startswith("ar1-") or len(value) != 68:
+        raise ArtifactValidationError(f"{name} must identify an artifact record")
 
 
 def _require_finding_id(value: str, name: str) -> None:

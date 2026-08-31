@@ -341,7 +341,10 @@ def finding_handoff_import_payload(
     )
 
 
-def attestation_payload(attestation: ValidationAttestation) -> ValidationAttestationPayload:
+def attestation_payload(
+    attestation: ValidationAttestation,
+    content_record_id: str,
+) -> ValidationAttestationPayload:
     records_by_display = {record.command: record for record in attestation.records}
     results = tuple(
         ValidationResult(
@@ -366,7 +369,12 @@ def attestation_payload(attestation: ValidationAttestation) -> ValidationAttesta
         )
         for spec in attestation.command_specs
     )
-    return ValidationAttestationPayload(results=results, attested_by=Role.ORCHESTRATOR)
+    return ValidationAttestationPayload(
+        results=results,
+        attested_by=Role.ORCHESTRATOR,
+        output_digest=attestation.output_digest,
+        content_record_id=content_record_id,
+    )
 
 
 def validation_request_payload(request: ValidationRequest) -> ValidationRequestPayload:

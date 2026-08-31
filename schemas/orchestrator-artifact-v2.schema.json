@@ -8,7 +8,7 @@
   "properties": {
     "schema_version": {"const": "2"},
     "record_id": {"$ref": "#/$defs/identifier"},
-    "record_type": {"enum": ["run_identity", "run_profile", "workflow_transition", "workflow_policy", "slice_boundary", "task", "plan", "work_unit", "correction_work_unit", "agent_result", "diagnostic", "review", "finding_transition", "finding_handoff_export", "finding_handoff_import", "validation_request", "validation_attestation", "gate", "gate_transition", "gate_decision", "binding", "invocation_failure", "quota_pause", "transient_retry", "resume_check", "workflow_completion", "provider_input_measurement", "provider_attempt", "final_review_preflight", "side_effect"]},
+    "record_type": {"enum": ["run_identity", "run_profile", "workflow_transition", "workflow_policy", "slice_boundary", "task", "plan", "work_unit", "correction_work_unit", "agent_result", "diagnostic", "review", "finding_transition", "finding_handoff_export", "finding_handoff_import", "validation_request", "validation_content", "validation_attestation", "provider_content", "review_packet", "gate", "gate_transition", "gate_decision", "binding", "invocation_failure", "quota_pause", "transient_retry", "resume_check", "workflow_completion", "provider_input_measurement", "provider_attempt", "final_review_preflight", "side_effect"]},
     "run_id": {"$ref": "#/$defs/identifier"},
     "logical_id": {"$ref": "#/$defs/identifier"},
     "revision": {"type": "integer", "minimum": 1},
@@ -36,7 +36,10 @@
     {"if": {"properties": {"record_type": {"const": "finding_handoff_export"}}}, "then": {"properties": {"status": {"const": "exported"}, "payload": {"$ref": "#/$defs/finding_handoff_export"}}}},
     {"if": {"properties": {"record_type": {"const": "finding_handoff_import"}}}, "then": {"properties": {"status": {"const": "imported"}, "payload": {"$ref": "#/$defs/finding_handoff_import"}}}},
     {"if": {"properties": {"record_type": {"const": "validation_request"}}}, "then": {"properties": {"status": {"const": "requested"}, "payload": {"$ref": "#/$defs/validation_request"}}}},
+    {"if": {"properties": {"record_type": {"const": "validation_content"}}}, "then": {"properties": {"status": {"const": "captured"}, "payload": {"$ref": "#/$defs/validation_content"}}}},
     {"if": {"properties": {"record_type": {"const": "validation_attestation"}}}, "then": {"properties": {"status": {"const": "attested"}, "payload": {"$ref": "#/$defs/validation_attestation"}}}},
+    {"if": {"properties": {"record_type": {"const": "provider_content"}}}, "then": {"properties": {"status": {"const": "captured"}, "payload": {"$ref": "#/$defs/provider_content"}}}},
+    {"if": {"properties": {"record_type": {"const": "review_packet"}}}, "then": {"properties": {"status": {"const": "captured"}, "payload": {"$ref": "#/$defs/review_packet"}}}},
     {"if": {"properties": {"record_type": {"const": "gate"}}}, "then": {"properties": {"status": {"const": "decided"}, "payload": {"$ref": "#/$defs/gate"}}}},
     {"if": {"properties": {"record_type": {"const": "gate_transition"}}}, "then": {"properties": {"status": {"const": "transitioned"}, "payload": {"$ref": "#/$defs/gate_transition"}}}},
     {"if": {"properties": {"record_type": {"const": "gate_decision"}}}, "then": {"properties": {"status": {"const": "bound"}, "payload": {"$ref": "#/$defs/gate_decision"}}}},
@@ -201,9 +204,66 @@
       "type": "object", "additionalProperties": false, "required": ["command", "outcome", "exit_code", "output_sha256"],
       "properties": {"command": {"$ref": "#/$defs/command"}, "outcome": {"enum": ["pass", "fail", "unavailable"]}, "exit_code": {"type": "integer"}, "output_sha256": {"$ref": "#/$defs/sha256"}}
     },
+    "blob_reference": {
+      "type": "object", "additionalProperties": false, "required": ["sha256", "bytes"],
+      "properties": {"sha256": {"$ref": "#/$defs/sha256"}, "bytes": {"type": "integer", "minimum": 0}}
+    },
+    "validation_output_content": {
+      "type": "object", "additionalProperties": false,
+      "required": ["command", "digest_outcome", "exit_code", "raw_stdout", "raw_stderr", "compact_output", "output_bytes"],
+      "properties": {
+        "command": {"$ref": "#/$defs/command"},
+        "digest_outcome": {"enum": ["pass", "fail", "timeout", "missing", "unavailable"]},
+        "exit_code": {"type": "integer"},
+        "raw_stdout": {"$ref": "#/$defs/blob_reference"},
+        "raw_stderr": {"$ref": "#/$defs/blob_reference"},
+        "compact_output": {"$ref": "#/$defs/blob_reference"},
+        "output_bytes": {"type": "integer", "minimum": 0}
+      }
+    },
+    "validation_content": {
+      "type": "object", "additionalProperties": false,
+      "required": ["attestation_id", "result_record_id", "digest_format", "output_digest", "summary", "outputs"],
+      "properties": {
+        "attestation_id": {"$ref": "#/$defs/identifier"},
+        "result_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"},
+        "digest_format": {"enum": ["validation-matrix-v1", "raw-output-v1"]},
+        "output_digest": {"$ref": "#/$defs/sha256"},
+        "summary": {"$ref": "#/$defs/non_empty"},
+        "outputs": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/validation_output_content"}}
+      }
+    },
     "validation_attestation": {
-      "type": "object", "additionalProperties": false, "required": ["results", "attested_by"],
-      "properties": {"results": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/validation_result"}}, "attested_by": {"$ref": "#/$defs/role"}}
+      "type": "object", "additionalProperties": false, "required": ["results", "attested_by", "output_digest", "content_record_id"],
+      "properties": {"results": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/validation_result"}}, "attested_by": {"$ref": "#/$defs/role"}, "output_digest": {"$ref": "#/$defs/sha256"}, "content_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}}
+    },
+    "provider_content": {
+      "type": "object", "additionalProperties": false,
+      "required": ["role", "work_unit_id", "round_number", "operation", "request_id", "response_sha256", "content_kind", "content_bytes", "blob"],
+      "properties": {
+        "role": {"$ref": "#/$defs/role"},
+        "work_unit_id": {"$ref": "#/$defs/identifier"},
+        "round_number": {"type": "integer", "minimum": 1},
+        "operation": {"$ref": "#/$defs/identifier"},
+        "request_id": {"$ref": "#/$defs/identifier"},
+        "response_sha256": {"$ref": "#/$defs/sha256"},
+        "content_kind": {"enum": ["agent_result", "review_result", "final_report"]},
+        "content_bytes": {"type": "integer", "minimum": 0},
+        "blob": {"$ref": "#/$defs/blob_reference"}
+      }
+    },
+    "review_packet": {
+      "type": "object", "additionalProperties": false,
+      "required": ["work_unit_id", "fingerprint", "purpose", "manifest", "diff_coverage_sha256", "content_bytes", "blob"],
+      "properties": {
+        "work_unit_id": {"$ref": "#/$defs/identifier"},
+        "fingerprint": {"$ref": "#/$defs/sha256"},
+        "purpose": {"enum": ["slice", "correction"]},
+        "manifest": {"$ref": "#/$defs/non_empty_paths"},
+        "diff_coverage_sha256": {"$ref": "#/$defs/sha256"},
+        "content_bytes": {"type": "integer", "minimum": 0},
+        "blob": {"$ref": "#/$defs/blob_reference"}
+      }
     },
     "gate": {
       "type": "object", "additionalProperties": false, "required": ["gate_kind", "decision", "authority", "rationale"],

@@ -277,7 +277,9 @@ def test_attestation_mapping_uses_command_specs_not_display_reparsing() -> None:
         records=(ValidationRecord(ValidationStatus.PASS, spec.display, 0, "ok"),),
         output_digest="b" * 64, summary="passed", command_specs=(spec,),
     )
-    assert attestation_payload(attestation).results[0].command.argv == spec.argv
+    assert attestation_payload(
+        attestation, "ar1-" + "0" * 64
+    ).results[0].command.argv == spec.argv
 
 
 def test_legacy_attestation_does_not_guess_argv() -> None:
@@ -288,7 +290,7 @@ def test_legacy_attestation_does_not_guess_argv() -> None:
         records=(ValidationRecord(ValidationStatus.PASS, display, 0, "ok"),),
         output_digest="b" * 64, summary="passed",
     )
-    command = attestation_payload(attestation).results[0].command
+    command = attestation_payload(attestation, "ar1-" + "0" * 64).results[0].command
     assert command.mode == "legacy_shell"
     assert command.argv == (display,)
 
@@ -304,7 +306,7 @@ def test_incomplete_attestation_preserves_missing_command_as_unavailable() -> No
         command_specs=(first, missing),
     )
 
-    payload = attestation_payload(attestation)
+    payload = attestation_payload(attestation, "ar1-" + "0" * 64)
     assert payload.results[1].outcome == "unavailable"
     assert payload.results[1].command.argv == missing.argv
 

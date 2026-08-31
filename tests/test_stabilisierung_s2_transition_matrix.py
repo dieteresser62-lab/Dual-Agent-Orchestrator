@@ -43,6 +43,12 @@ MIGRATION_MISMATCH_MARKERS = (
     "state-v3 mirror reports workflow completion without a structured record",
     "workflow completion differs from state-v3",
     "workflow completion references an unknown, invalid, or fingerprint-mismatched final binding",
+    "validation content has no complete state-v3 counterpart",
+    "validation output or digest differs from state-v3",
+    "final-report content differs from state-v3",
+    "final-report bytes differ from state-v3",
+    "active review packets differ from state-v3",
+    "active review packet bytes or metadata differ from state-v3",
 )
 
 RESUME_ERROR_MARKERS = (
@@ -124,13 +130,17 @@ DRIVER_DIVERGENCE_MESSAGES = Counter(
         "content-addressed review packet cache differs from canonical bytes": 1,
         "native agent recovery has divergent agent-result records": 1,
         "native agent recovery result idempotency binding differs": 1,
-        "native implementer recovery raw response digest differs from its record": 2,
+        "native provider content digest differs from its record": 1,
+        "native implementer recovery raw response digest differs from its record": 1,
         "native Codex recovery record differs from its durable binding": 1,
         "native Codex recovery result differs from its durable record": 1,
         "native reviewer recovery record differs from the rebuilt request": 1,
         "native reviewer recovery result differs from its decision record": 1,
         "pre-policy native reviewer result differs from its decision record": 1,
         "native agent result logical binding differs": 1,
+        "native agent content digest differs from its result binding": 1,
+        "native reviewer content digest differs from its review binding": 1,
+        "validation recovery result differs from its content": 1,
         "persisted finding handoff export differs from the prepared task": 1,
         "file side-effect target differs before result completion": 1,
         "projection target differs before result completion": 1,
@@ -415,7 +425,7 @@ STRICT_BODY_TARGETS = tuple(
 # non-divergence comparison added inside one of these boundaries forces S2's
 # inventory to be reviewed instead of silently aging.
 EXPECTED_COMPARISON_COUNTS = {
-    "src/artifact_migration.py:resolve_resume_state": 96,
+    "src/artifact_migration.py:resolve_resume_state": 112,
     "src/artifact_migration.py:assert_run_binding_mirror": 6,
     "src/artifact_migration.py:require_workflow_status_prefix": 3,
     "src/artifact_migration.py:assert_workflow_status_mirror": 4,
@@ -470,10 +480,10 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/orchestrator.py:ProductionWorkflowDriver._write_native_codex_raw_response": 0,
     "src/orchestrator.py:ProductionWorkflowDriver._materialize_review_packet": 3,
     "src/orchestrator.py:ProductionWorkflowDriver._canonical_native_agent_result": 4,
-    "src/orchestrator.py:ProductionWorkflowDriver.recover_pending_native_codex": 40,
-    "src/orchestrator.py:ProductionWorkflowDriver.recover_pending_native_reviewer": 33,
-    "src/orchestrator.py:ProductionWorkflowDriver.recover_pending_native_reviewer_before_policy": 32,
-    "src/orchestrator.py:ProductionWorkflowDriver.persist_native_codex_contract": 8,
+    "src/orchestrator.py:ProductionWorkflowDriver.recover_pending_native_codex": 42,
+    "src/orchestrator.py:ProductionWorkflowDriver.recover_pending_native_reviewer": 35,
+    "src/orchestrator.py:ProductionWorkflowDriver.recover_pending_native_reviewer_before_policy": 31,
+    "src/orchestrator.py:ProductionWorkflowDriver.persist_native_codex_contract": 11,
     "src/orchestrator.py:ProductionWorkflowDriver.prepare_finding_handoff": 13,
     "src/orchestrator.py:ProductionWorkflowDriver.checkpoint": 6,
     "src/orchestrator.py:ProductionWorkflowDriver._project_audit": 21,
@@ -707,8 +717,8 @@ def test_migration_comparison_inventory_is_source_bound() -> None:
     source = _source("src/artifact_migration.py")
     source_strings = _string_constants("src/artifact_migration.py")
     document = MATRIX_PATH.read_text(encoding="utf-8")
-    assert _raise_count("src/artifact_migration.py", "mismatch") == 32
-    assert source.count("differs from state-v3") == 16
+    assert _raise_count("src/artifact_migration.py", "mismatch") == 40
+    assert source.count("differs from state-v3") == 20
     for marker in MIGRATION_MISMATCH_MARKERS:
         assert marker in source_strings
         assert marker in document
@@ -795,10 +805,14 @@ def test_recordless_review_and_attestation_fields_are_source_bound() -> None:
             "output_digest",
             "summary",
             "command_specs",
+            "content_captures",
+            "content_digest_format",
         },
         ("src/artifact_models.py", "ValidationAttestationPayload"): {
             "results",
             "attested_by",
+            "output_digest",
+            "content_record_id",
         },
         ("src/contracts.py", "ContractResult"): {
             "reviewer",
@@ -926,7 +940,13 @@ def test_every_s4a_stop_entry_has_exactly_one_reasoned_classification() -> None:
         "`invocation_failures[*].parse_path/source_timezone/reset_at_utc/safety_margin_seconds`",
         "`invocation_failures[*].auto_resume_count/automatic_resume/diff_fingerprint`",
     }
-    assert len(stop_fields) == 14
+    r8_covered_fields = {
+        "`ValidationRecord.output`",
+        "`ValidationAttestation.output_digest`",
+        "`runtime_history.codex_final_report` und weitere rohe Agenttexte",
+        "`runtime_history.active_review_packet`",
+    }
+    assert len(stop_fields) == 10
     assert len(fields) == len(set(fields)) == 41
     assert set(fields) == (
         stop_fields
@@ -936,6 +956,7 @@ def test_every_s4a_stop_entry_has_exactly_one_reasoned_classification() -> None:
         | r4_covered_fields
         | r5_covered_fields
         | r6_covered_fields
+        | r8_covered_fields
         | {"`created_at`, `updated_at`"}
     )
     assert groups["`work_units[*].codex_return_count`"] == "A"
@@ -964,6 +985,9 @@ def test_every_s4a_stop_entry_has_exactly_one_reasoned_classification() -> None:
         reason = next(reason for name, _group, reason in rows if name == field)
         assert "In R6 geschlossen" in reason
         assert "InvocationFailurePayload" in reason or "Gleichnamige Felder" in reason
+    for field in r8_covered_fields:
+        reason = next(reason for name, _group, reason in rows if name == field)
+        assert "In R8 geschlossen" in reason
     for field in r3_covered_fields:
         reason = next(reason for name, _group, reason in rows if name == field)
         assert "In R3 geschlossen" in reason
