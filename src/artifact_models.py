@@ -44,6 +44,7 @@ class RecordType(StrEnum):
     RUN_IDENTITY = "run_identity"
     RUN_PROFILE = "run_profile"
     WORKFLOW_TRANSITION = "workflow_transition"
+    WORKFLOW_EVENT = "workflow_event"
     WORKFLOW_POLICY = "workflow_policy"
     SLICE_BOUNDARY = "slice_boundary"
     TASK = "task"
@@ -258,6 +259,53 @@ class WorkflowTransitionPayload:
             raise ArtifactValidationError("transition step is invalid")
         if self.work_unit_status not in _WORK_UNIT_STATUSES:
             raise ArtifactValidationError("transition work_unit_status is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowEventPayload:
+    """Presentation-neutral ordering metadata for an already recorded fact.
+
+    Event records deliberately carry no review, validation, or transition
+    content.  ``record_refs`` points backwards to the typed records which own
+    that content, keeping the event stream useful for audit ordering without
+    creating a second semantic authority.
+    """
+
+    event_kind: str
+    work_unit_id: str | None
+    slice_id: str
+    round_number: int | None
+    record_refs: tuple[str, ...]
+    status: ClassVar[str] = "recorded"
+    record_type: ClassVar[RecordType] = RecordType.WORKFLOW_EVENT
+
+    def __post_init__(self) -> None:
+        if self.event_kind not in {"run", "transition", "validation", "review"}:
+            raise ArtifactValidationError("workflow event kind is invalid")
+        _require_identifier(self.slice_id, "workflow event slice_id")
+        _require_unique_identifiers(self.record_refs, "workflow event record_refs")
+        if not self.record_refs:
+            raise ArtifactValidationError("workflow event record_refs must be non-empty")
+        if self.work_unit_id is not None:
+            _require_identifier(self.work_unit_id, "workflow event work_unit_id")
+        if self.round_number is not None:
+            _require_positive(self.round_number, "workflow event round_number")
+        if self.event_kind in {"validation", "review"} and (
+            self.work_unit_id is None or self.round_number is None
+        ):
+            raise ArtifactValidationError(
+                "validation and review events require work-unit and round identity"
+            )
+        if self.event_kind == "transition" and self.round_number is not None:
+            raise ArtifactValidationError(
+                "transition events do not carry a redundant round number"
+            )
+        if self.event_kind == "run" and (
+            self.work_unit_id is not None or self.round_number is not None
+        ):
+            raise ArtifactValidationError(
+                "run events do not carry work-unit or round identity"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1682,7 +1730,8 @@ class WorkflowCompletionPayload:
 
 ArtifactPayload: TypeAlias = (
     RunIdentityPayload | RunProfilePayload
-    | WorkflowTransitionPayload | WorkflowPolicyPayload | SliceBoundaryPayload
+    | WorkflowTransitionPayload | WorkflowEventPayload
+    | WorkflowPolicyPayload | SliceBoundaryPayload
     | TaskPayload | PlanPayload | WorkUnitPayload | CorrectionWorkUnitPayload
     | AgentResultPayload | DiagnosticPayload | ReviewPayload
     | ReviewAnchorPayload | ReviewValidationBindingPayload
@@ -1867,6 +1916,11 @@ def _payload_from_dict(record_type: RecordType, raw: Mapping[str, Any]) -> Artif
         return WorkflowTransitionPayload(
             data["slice_id"], data["slice_status"], data["work_unit_id"],
             data["step"], data["work_unit_status"],
+        )
+    if record_type is RecordType.WORKFLOW_EVENT:
+        return WorkflowEventPayload(
+            data["event_kind"], data["work_unit_id"], data["slice_id"],
+            data["round_number"], tuple(data["record_refs"]),
         )
     if record_type is RecordType.WORKFLOW_POLICY:
         return WorkflowPolicyPayload(

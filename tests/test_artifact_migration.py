@@ -39,6 +39,7 @@ from artifact_models import (
     ValidationResult,
     WorkUnitPayload,
     WorkflowCompletionPayload,
+    WorkflowEventPayload,
     WorkflowPolicyPayload,
     WorkflowTransitionPayload,
     provider_text_evidence,
@@ -404,6 +405,7 @@ def _status_records(
                 fingerprint_kind=FingerprintKind.CONTRACT,
             )
     if not include_slice_boundaries:
+        _append_missing_workflow_events(bridge, state)
         return
     for item in state.slices:
         if item.start_commit is None or item.start_fingerprint is None:
@@ -419,6 +421,62 @@ def _status_records(
             idempotency_key=f"slice-boundary:{item.slice_id}:1",
             fingerprint_sha256="a" * 64,
             fingerprint_kind=FingerprintKind.CONTRACT,
+        )
+    _append_missing_workflow_events(bridge, state)
+
+
+def _append_missing_workflow_events(
+    bridge: ArtifactBridge, state: WorkflowState
+) -> None:
+    chain = bridge.store.load_chain()
+    referenced = {
+        item
+        for record in chain
+        if isinstance(record.payload, WorkflowEventPayload)
+        for item in record.payload.record_refs
+    }
+    unit_by_id = {str(unit.work_unit_id): unit for unit in state.work_units}
+    latest_unit: str | None = None
+    latest_slice = str(state.current_slice_id)
+    for record in chain:
+        payload = record.payload
+        if isinstance(payload, WorkflowTransitionPayload):
+            latest_slice = payload.slice_id
+            if payload.work_unit_id is not None:
+                latest_unit = payload.work_unit_id
+            event_kind = "transition"
+            work_unit_id = payload.work_unit_id
+            slice_id = payload.slice_id
+            round_number = None
+        elif isinstance(payload, ValidationAttestationPayload):
+            event_kind = "validation"
+            work_unit_id = latest_unit or str(state.current_work_unit_id)
+            unit = unit_by_id[work_unit_id]
+            slice_id = str(unit.slice_id)
+            round_number = unit.round_number
+        elif isinstance(payload, ReviewPayload):
+            event_kind = "review"
+            work_unit_id = payload.work_unit_id
+            unit = unit_by_id[work_unit_id]
+            slice_id = str(unit.slice_id)
+            suffix = record.logical_id.rsplit("-", 1)[-1]
+            round_number = int(suffix) if suffix.isdigit() else unit.round_number
+        else:
+            continue
+        if record.record_id in referenced:
+            continue
+        bridge.append(
+            WorkflowEventPayload(
+                event_kind,
+                work_unit_id,
+                slice_id,
+                round_number,
+                (record.record_id,),
+            ),
+            logical_id=f"workflow-event-{record.record_id}",
+            idempotency_key=f"workflow-event:{record.record_id}",
+            fingerprint_sha256=record.fingerprint.sha256,
+            fingerprint_kind=record.fingerprint.kind,
         )
 def _authorization_records(
     repository: Path,
@@ -772,7 +830,11 @@ def test_finding_import_denial_round_converges_from_record_ahead_state(
     assert next_round.record_id in {
         record.record_id for record in resolution.replay_result.records
     }
-    assert resolution.replay_result.records[-1].record_type is RecordType.WORKFLOW_POLICY
+    assert next(
+        record
+        for record in reversed(resolution.replay_result.records)
+        if record.record_type is not RecordType.WORKFLOW_EVENT
+    ).record_type is RecordType.WORKFLOW_POLICY
     assert review.record_id in {
         record.record_id for record in resolution.replay_result.records
     }
@@ -894,7 +956,11 @@ def test_later_work_unit_can_carry_open_finding_without_import_snapshot(
     assert latest.record_id in {
         record.record_id for record in resolution.replay_result.records
     }
-    assert resolution.replay_result.records[-1].record_type is RecordType.SLICE_BOUNDARY
+    assert next(
+        record
+        for record in reversed(resolution.replay_result.records)
+        if record.record_type is not RecordType.WORKFLOW_EVENT
+    ).record_type is RecordType.SLICE_BOUNDARY
     assert state.current_work_unit.open_findings == ("C-04",)
     assert latest.payload.finding_import_record_id is None
     assert latest.payload.open_finding_ids == ()

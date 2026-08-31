@@ -46,6 +46,7 @@ _TRANSITION_FINGERPRINT_EXCLUDED_TYPES = {
     # so halt/resume of the same step must retain its deterministic local-check
     # identity instead of growing the bootstrap mirror.
     RecordType.WORKFLOW_TRANSITION,
+    RecordType.WORKFLOW_EVENT,
     RecordType.WORKFLOW_POLICY,
     RecordType.GATE_TRANSITION,
     RecordType.INVOCATION_FAILURE,

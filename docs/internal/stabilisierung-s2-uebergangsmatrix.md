@@ -1,6 +1,6 @@
 # S2 – Übergangs- und Divergenzmatrix
 
-Stand: 2026-08-31. Untersucht ist `structured-v2` einschließlich R6 auf dem
+Stand: 2026-08-31. Untersucht ist `structured-v2` einschließlich R9 auf dem
 Branches `feature/state-authority-consolidation`. Die Matrix beschreibt den
 Istzustand; der spätere Authority-Cutover bleibt ausdrücklich aus. Normativ sind
 heute die append-only Records zusammen mit dem noch autoritativen
@@ -27,8 +27,8 @@ Dateien und Review-Pakete sind Caches beziehungsweise Projektionen.
 - **bleibt bewusst** ist für Record-interne Kausalität, unveränderliche
   Provider-Bindungen und irreversible externe Side Effects reserviert.
 
-Die Inventur ergibt 26 Kanten, 32 `mismatch(...)`-Stellen in
-`artifact_migration.py`, 30 direkte `ArtifactResumeError`-Stellen dort, 24
+Die Inventur ergibt 26 Kanten, 43 `mismatch(...)`-Stellen in
+`artifact_migration.py`, 32 direkte `ArtifactResumeError`-Stellen dort, 24
 `ArtifactBridgeError`-Stellen in Migration, Bridge und Orchestrator sowie fünf
 `_recoverable_*`-Prädikate (vier in `artifact_migration.py`, eines für den
 finalen Review-Mirror in `orchestrator.py`).
@@ -945,7 +945,8 @@ weder Scope entfernen noch die Slice-/Rundengrenze verschieben kann.
 
 Die Recovery-Prädikate stützen sich zusätzlich auf
 `_pending_denied_review()` (eindeutiger, fingerprint-gebundener Denial),
-`_state_has_review_event()` (Review bereits im History-Mirror),
+`_state_has_review_projection()` (Review bereits durch die verbleibenden
+R7-Aggregate im History-Mirror repräsentiert),
 `_finding_statuses()` und `_attestation_facts()` (Stateprojektionen) sowie
 `_mirror_difference_code()` (Mirror-ahead gegen ambige Abweichung). R6 ergänzt
 die vollständig gezählten und per AST-Digest gebundenen Leser
@@ -1004,7 +1005,7 @@ dem normativen Zustand entfernt.
 | `approved_plan_commit` | Planfreigabe | Implementation/Binding/Handoff | **ja** aus `Plan` und Planbinding | ableitbar |
 | Handoff-IDs | Handoffinitialisierung | Import-/Resumeprüfung | **ja** aus `FindingHandoffImport` im Zielrun; vor Import ist "kein Handoff" eindeutig | ableitbar |
 | `target_branch`, `task_scope_patterns`, `task_digest` | Taskparser | Scope/Resume | **ja** aus `Task` (`target_branch`, `scope_paths`, `assignment_sha256`) | ableitbar |
-| `protocol_binding.mode/schema/transports` | Initialisierung | Resume/Providertransport | **teilweise**; Recordschema und AgentResult/Review zeigen Transporte erst nach deren Auftreten | **STOP**: Run-Protokollrecord vor Task oder unveränderliche Storemetadaten |
+| `protocol_binding.mode/schema/transports` | Initialisierung | Resume/Providertransport | **ja seit R1/S4a**; der erste akzeptierte Schema-2-Envelope legt `structured-v2` fest und das geschlossene Schema erzwingt beide nativen Transporte | **geschlossen** durch Envelope- und Writer-Schema-Bindung |
 | `protocol_binding.codex_profile/claude_profile` | CLI/Taskdefault | Providerstart/Resume | **ja seit R1** aus `RunProfilePayload`; `ProviderAttempt` bestätigt die Bindung je gestarteter Operation | **in R1 gedeckt** durch `RunProfilePayload` |
 | `bootstrap_checks` | Providerbootstrap | Providerstart/Resume | **ja** aus `ProviderInputMeasurement` und `FinalReviewPreflight` | ableitbar |
 | `runtime_history.findings` | Reviewpersistenz | Policy/Prompts/Audit | **ja** aus Finding-Transitionen und Import | ableitbar |
@@ -1015,7 +1016,7 @@ dem normativen Zustand entfernt.
 | `ContractResult.anchors` | Claude-Reviewpersistenz | Anchorpolicy/Audit | **ja seit R7** in genau einem `ReviewAnchorPayload` je Reviewrecord | **IN R7 GESCHLOSSEN:** Record-ID- und Fingerprintbindung, auch für die leere Liste |
 | `ContractResult.stop_request` | Claude-Reviewpersistenz | Stop-/Resumepolicy | **ja seit R7** in `ReviewPayload.stop_request.rule_id/rationale/remediation_paths` | **IN R7 GESCHLOSSEN:** drei getrennte strukturierte Felder |
 | `ContractResult.validation` | Claude-Reviewpersistenz | Approval-/Commitpolicy | **ja seit R7** über `ReviewValidationBindingPayload.review_record_id/attestation_record_id` und die R8-Contentrecords | **IN R7 GESCHLOSSEN:** beide referenzierten Records müssen früher und fingerprintgleich sein |
-| `ContractResult.evidence.dimensions/largest_residual_risk/break_condition` | Claude-Reviewpersistenz | Approvalpolicy/Audit | **nicht verlustfrei**; `review_payload()` verbindet die drei Strings mit `" | "`, das Trennzeichen ist in Inhalten nicht ausgeschlossen | **STOP**: strukturierte Evidencefelder recorden |
+| `ContractResult.evidence.dimensions/largest_residual_risk/break_condition` | Claude-Reviewpersistenz | Approvalpolicy/Audit | **ja seit S4a**; `ReviewPayload.review_evidence` bewahrt alle drei Strings getrennt | **geschlossen** durch das strukturierte Schema-2-Feld |
 | `ValidationAttestation.attestation_id` in `runtime_history.attestations` | Orchestrator-Validation | Binding/Commit/Audit | **ja** aus `ArtifactRecord.logical_id`; `persist_validation_attestation()` setzt ihn exakt auf `attestation.attestation_id`, und Resume vergleicht `(logical_id, fingerprint)` mit dem Mirror | ableitbar |
 | `ValidationAttestation.diff_fingerprint` | Orchestrator-Validation | Binding/Commit | **ja** aus `ArtifactRecord.fingerprint` | ableitbar |
 | `ValidationAttestation.expected_commands` und `command_specs` | Orchestrator-Validation | Vollständigkeitsprüfung | **ja** in Reihenfolge aus `ValidationAttestationPayload.results[*].command`; `command_payload()` ist über Family/Mode eindeutig und der State-Contract erzwingt `tuple(spec.display) == expected_commands` | ableitbar |
@@ -1026,12 +1027,12 @@ dem normativen Zustand entfernt.
 | `runtime_history.latest_claude_review` als Aggregat | Reviewpersistenz | Folgeprompts/Policy | **ja seit R7** als reine Projektion aus Review-, Anchor-, Validation-, Finding- und Contentrecords | **IN R7 GESCHLOSSEN:** Aggregatleser entsperrt; ausdrücklich kein zweiter Aggregatrecord |
 | `runtime_history.codex_final_report` und weitere rohe Agenttexte | Agentresultatpfad | Abschlussbericht/Folgeprompt | **ja seit R8**; `ProviderContentPayload` bindet die akzeptierte kanonische native Antwort vor dem Ergebnisrecord an SHA-256, Bytelänge, Rolle, Request, Operation und Inhaltsart | **in R8 gedeckt**; unakzeptierter Failure-Rohtext bleibt gemäß R6 redigiert |
 | `runtime_history.active_review_packet` | Reviewpacketbuilder | Recovery/Providerrequest | **ja seit R8**; `ReviewPacketPayload` bindet die lokal erzeugten kanonischen Bytes an Fingerprint, Manifest, Diff-Coverage, Bytelänge und Blobdigest | **in R8 gedeckt**; die materialisierte Datei bleibt Cache |
-| sonstige `runtime_history`-Event-/Auditfelder | Engine/Serialisierung | Audit und Resume-Helfer | **nur teilweise**; IDs lassen sich erzeugen, heutige Reihenfolge/Metadaten sind nicht vollständig spezifiziert | **STOP**, bis die Projektionsfunktion und nicht-normative Felder festgelegt sind |
+| sonstige `runtime_history`-Event-/Auditfelder | Engine/Serialisierung | Audit und Resume-Helfer | **ja seit R9**; `WorkflowEventPayload` bindet Reihenfolge und Kontext ausschließlich über Rückwärtsverweise auf Transition, Validation und Review | **geschlossen**; `runtime_history.events` ist entfernt und gegen Rückkehr gesperrt |
 
 ### S4a-Sortierung der STOP-Einträge
 
-Die folgende Tabelle ist die verbindliche Auflösung der aktuell zehn
-fett als `STOP` markierten Zeilen sowie der bereits in R1 bis R6 und R8 geschlossenen
+Die folgende Tabelle ist die verbindliche Auflösung der früher als Stopgrund
+markierten Zeilen sowie der bereits in R1 bis R8 geschlossenen
 Zeilen oben. Jede Zeile kommt genau einmal vor. `A` benennt
 den benötigten Recordtyp, das Feld und den heutigen beziehungsweise künftigen
 Schreiber. `B` benennt die tatsächlichen Leser und begründet, weshalb deren
@@ -1082,7 +1083,58 @@ keinen fett markierten STOP enthält.
 | `runtime_history.latest_claude_review` als Aggregat | A | **In R7 entsperrt:** kein zweiter Aggregatrecord; `project_latest_review(..., work_unit_id)` projiziert ausschließlich für die angegebene Work-Unit aus `ReviewPayload`, `ReviewAnchorPayload`, `ReviewValidationBindingPayload`, Finding-Transitionen und den zugehörigen R8-Contentrecords; Schreiber sind die jeweiligen Review-, Finding- und Validierungspersistenzen. |
 | `runtime_history.codex_final_report` und weitere rohe Agenttexte | A | **In R8 geschlossen:** `ProviderContentPayload.response_sha256/content_bytes/content_kind/blob/round_number` plus Rolle, Work-unit, Operation und Request; Schreiber: Providerabschluss nach nativer Schema-/Domainannahme und vor `AgentResultPayload`/`ReviewPayload`, Cache und Mirror. Recovery, Abschlussbericht und Folgeprompt lesen die exakten kanonischen Bytes. Nur ein `ready=true`-Abschlussresultat besitzt `content_kind=final_report`; `ready=false` und Stop bleiben `agent_result` ohne Final-Report-Mirror. R6 bleibt unverändert: nicht angenommener Failure-Rohtext ist kein semantischer Recoveryfakt und wird ausschließlich als Redaktionsmarker mit Digest und Bytelänge recordet. |
 | `runtime_history.active_review_packet` | A | **In R8 geschlossen:** `ReviewPacketPayload.fingerprint/manifest/diff_coverage_sha256/content_bytes/blob`; Schreiber: `build_review_packet()` vor Providerstart und Mirrorwrite. Recovery und Providerrequest lesen die exakt gebundenen, lokal erzeugten kanonischen Bytes; die materialisierte Paketdatei besitzt keine Autorität. |
-| sonstige `runtime_history`-Event-/Auditfelder | A | `WorkflowEventPayload.event_kind/work_unit_id/slice_id/round_number/record_refs` für noch nicht durch die fachlichen Records abgedeckte Ereignisse; Schreiber: `_record_review()`, Validation- und Transitionpfade. Erst danach darf ein reiner Audit-/Resume-Projektionsanteil als B entfernt werden. |
+| sonstige `runtime_history`-Event-/Auditfelder | A | **In R9 geschlossen:** `WorkflowEventPayload.event_kind/work_unit_id/slice_id/round_number/record_refs` bindet Transition, Validation und Review an genau einen früheren, fingerprintgleichen fachlichen Record; Schreiber: `persist_native_review_contract()`, `persist_validation_attestation()` und `_append_workflow_transition()`. `record_refs` wiederholt keinen fachlichen Inhalt. Der reine Darstellungswert `runtime_history.events` ist aus `WorkflowHistory.to_dict()/from_dict()` entfernt, alle Leser projizieren ihn aus Replay, und `WorkflowState` weist seine Rückkehr ab. |
+
+#### R9-`runtime_history`-Inventur
+
+Die Inventur stammt aus der aktuellen `WorkflowHistory.to_dict()`-Form und den
+Produktionslesern, nicht aus einer angenommenen Typdefinition des freien
+`WorkflowState.runtime_history`-Mappings. Der im R9-Vorbefund genannte Schlüssel
+`reviews` ist in der aktuellen Serialisierung kein eigener Schlüssel; die
+Reviewfolge war ausschließlich im nun entfernten Schlüssel `events` enthalten.
+
+| Persistierter Schlüssel | Gruppe | Heutiger Leser und R9-Entscheidung |
+|---|:---:|---|
+| `work_unit_id` | bereits gedeckt | `_history()` und `_persisted_histories()` ordnen Current/Archive einer Work-unit zu; R2 projiziert dieselbe Identität aus `WorkflowTransitionPayload.work_unit_id`. |
+| `findings` | bereits gedeckt | Policy, Folgeprompt und Audit lesen die Findingmenge; S3 projiziert sie mit `reduce_findings()` aus Finding-Transitionen und Import. |
+| `events` | braucht Record, Darstellungsfeld entfällt | `_audit_projection()`, `assert_structured_decision_context()`, `_recoverable_pending_review_finding_gap()` und `_recover_final_review_attestation()` benötigen Reihenfolge und Kontext. `WorkflowEventPayload` recordet nur diese Metadaten mit `record_refs`; `_attach_record_events()` baut die Auditobjekte aus den referenzierten Records. Der serialisierte Schlüssel selbst ist reine Darstellung und entfällt. |
+| `attestations` | bereits gedeckt | Validation-Recovery, Reviewbindung, Commit und Audit lesen die Attestierung; R8 bindet die vollständige Evidenz über `ValidationAttestationPayload` und `ValidationContentPayload`. |
+| `last_claude_fingerprint` | bereits gedeckt | Review-Deduplikation und Folgepolicy lesen den letzten Fingerprint; R7 projiziert ihn aus dem letzten Reviewrecord derselben Work-unit. |
+| `latest_claude_review` | bereits gedeckt | Approval-, Commit-, Folgeprompt- und Auditpolicy lesen das Aggregat; R7 projiziert es aus Review-, Anchor-, Validation- und Findingrecords. |
+| `codex_final_report` | bereits gedeckt | Abschlussbericht und Folgeprompt lesen die angenommene Antwort; R8 bindet ihre kanonischen Bytes über `ProviderContentPayload`. |
+| `active_review_packet` | bereits gedeckt | Recovery und Providerrequest lesen das Paket; R8 bindet die kanonischen Bytes über `ReviewPacketPayload`. |
+
+Damit passt jeder tatsächlich serialisierte Schlüssel genau in eine der drei
+R9-Gruppen. Es bleibt kein offener Gruppe-A-Eintrag und keine als Stopgrund
+markierte Tabellenzeile.
+
+#### R9-S4b-Vorbedingung und Präfixnormalisierung
+
+`project_workflow_state()` nimmt ausschließlich ein bereits validiertes
+`ArtifactReplayResult` entgegen und erzeugt daraus ein echtes, erneut durch
+`WorkflowState.from_dict()` validiertes State-v3-Dokument. Es liest weder
+`state.json` noch Checkpoints, Blobs, Dateisystem oder Uhr. Die beiden volatilen
+Statezeiten werden auf erste und letzte Recordzeit normalisiert. Der weiterhin
+geschriebene `runtime_history`-Mirror wird für den kanonischen Vergleich auf
+seine Recordverweise normalisiert; eingebettete Review-, Validation- und
+Providerinhalte bleiben durch R7/R8 rekonstruierbar, werden aber nicht zu einer
+zweiten Authority im Eventrecord.
+
+Der providerfreie Akzeptanzfall durchläuft jeden Recordpräfix einer Journey mit
+zwei regulären Slices, einem Gate-Halt und Resume, Validation und Review sowie
+einer Correction-Work-unit mit zwei Runden. Nach vollständigen
+Domain→`WorkflowEvent`-Paaren muss die Projektion zweimal bytegleich sein;
+Crashpräfixe zwischen Domainrecord und Eventrecord sowie zwischen Status- und
+Gate-Transition sind unvollständig und werden fail-closed abgewiesen. Für
+**jeden** akzeptierten Präfix wird parallel ein echter `WorkflowState` über die
+produktiven State-Mutatoren fortgeschrieben und — nur um volatile Zeiten
+bereinigt — kanonisch gleich gegen die Recordprojektion geprüft. Vor der
+History-Referenznormalisierung werden die im tatsächlichen Mirror verbliebenen
+Review- und Attestierungsaggregate gegen die Records validiert. Zusätzlich
+weist ein Objektgleichheitstest nach, dass `_attach_record_events()` die
+entfernten Auditereignisse, Attestierungen und den letzten Review exakt aus den
+Recordreferenzen rekonstruiert. Damit ist die unmittelbare S4b-Vorbedingung
+nachgewiesen; der Authority-Cutover selbst bleibt Nicht-Ziel dieses Slices.
 
 #### R8-Inhaltsentscheidungen, Bindung und Größenmessung
 
@@ -1154,16 +1206,27 @@ Runtimebindungen ergänzen die dokumentierten Divergenzen
 `native reviewer content digest differs from its review binding`,
 `validation recovery result differs from its content` und
 `native review persistence differs from its exact review context`.
-R7 ergänzt die Mirrorgrenzen `review contract projection is ambiguous`,
-`review contract mirror is ambiguous`,
-`latest review mirror has no aggregate field`,
-`review contracts differ from state-v3`,
-`review contract fields differ from state-v3` und
-`latest review differs from its event projection`.
-Das quellgebundene Inventar umfasst damit **46** `mismatch(...)`-Aufrufe;
-`resolve_resume_state()` besitzt 119,
+Von den R7-Mirrorgrenzen bleiben nach R9
+`review contract projection is ambiguous`,
+`latest review mirror has no aggregate field` und
+`latest review differs from its record projection`. Die früheren Vergleiche
+`review contract mirror is ambiguous`, `review contracts differ from state-v3`
+und `review contract fields differ from state-v3` entfielen, weil Reviewereignisse
+nicht mehr aus einem eingebetteten Eventmirror rekonstruiert werden.
+R9 ergänzt die fail-closed Resumegrenze
+`structured-v2 run has no complete workflow event prefix`.
+`require_workflow_event_prefix()` besitzt sechs inventarisierte
+Vergleichsausdrücke und ist wie die übrigen Recoveryprädikate per AST-Digest
+gebunden. Der produktive Record→Audit-Leser `_attach_record_events()` ist mit
+16 Vergleichsausdrücken ebenfalls vollständig per AST-Digest gebunden. Das
+quellgebundene Inventar umfasst nach Entfernung der drei
+redundanten Review-Event-/Mirrorvergleiche **43** `mismatch(...)`-Aufrufe;
+`resolve_resume_state()` besitzt 117,
 `review_payload_matches_result()` 13 und `persist_native_codex_contract()` 11
-inventarisierte Vergleichsausdrücke.
+inventarisierte Vergleichsausdrücke. Der nun record-gegen-Mirror gerichtete
+Reviewguard `assert_structured_decision_context()` besitzt **11** inventarisierte
+Vergleichsausdrücke; seine vier zusätzlichen Vergleiche binden die getrennt
+ermittelten letzten Reviewrecords an das tatsächlich serialisierte Mirroraggregat.
 
 #### R4-Suitelaufzeit
 
@@ -1230,6 +1293,20 @@ Der vollständige WSL-Lauf vom 31. August 2026 mit
 **1327 passed in 190,06 s** sind das sechs zusätzliche Akzeptanzfälle bei einer
 um **16,16 s beziehungsweise 8,5 %** niedrigeren von Pytest ausgewiesenen
 Laufzeit. Die Providernamen-Baseline, Schema-/Protokollversion 2 und das
+Inventar der `_recoverable_*`-Sonderfälle blieben unverändert.
+
+#### R9-Suitelaufzeit
+
+Der vollständige WSL-Lauf vom 31. August 2026 mit
+`python3 -m pytest tests/ -v` ist nach den externen Reviewkorrekturen grün:
+**1344 passed in 197,22 s**. Gegenüber der im R9-Auftrag festgehaltenen
+R7-Baseline von **1333 passed in 177 s** sind das elf zusätzliche
+Akzeptanzfälle und **20,22 s beziehungsweise 11,4 %** mehr von Pytest
+ausgewiesene Laufzeit. Die zusätzlichen Reviewregressionen prüfen die
+Mirror-Gleichheit an jedem akzeptierten Präfix, die exakte
+Auditereignisrekonstruktion einschließlich einer in den Final-Review
+übertragenen Slice-Attestierung und die Finding-Herkunft über mehrere
+Reviewrunden. Die Providernamen-Baseline, Schema-/Protokollversion 2 und das
 Inventar der `_recoverable_*`-Sonderfälle blieben unverändert.
 
 #### Entscheidung zu Schema 2 und Bestandsrecords
@@ -1360,7 +1437,7 @@ statt. Die Treibersenke stoppt außerdem mit
 `invocation failure work unit differs from the active workflow`, wenn der
 Record nicht zur aktuell gebundenen Work-unit gehört.
 
-### S4a-Schnittvorschlag für die verbleibenden Gruppe-A-Einträge
+### S4a-Schnittvorschlag und Abschluss der Gruppe-A-Bündel
 
 1. **Runidentität sowie frühe Protokoll-/Profilbindung.** `task_file`, `branch`,
    `branch_base`, `execution_mode`, `audit_report_path` und beide Agentprofile.
@@ -1423,13 +1500,14 @@ Reconciliation-Regel.
 
 ## Konsequenzen für S3 und S4
 
-1. S3 muss zuerst Records oder explizite Ableitungsregeln für alle **STOP**-
-   Einträge schaffen. Insbesondere Cursor/Status, Slice-Startgrenze,
-   Side-effect-Ledger, Pending-Gate und frühe
-   Protocol-/Profilbindung dürfen nicht aus dem Mirror "übernommen" werden.
-2. S4 darf Record-Authority erst aktivieren, wenn ein leerer State aus einem
-   beliebigen akzeptierten Präfix deterministisch neu projiziert werden kann
-   und Commit/Provider/Queue-Crashfenster eine explizite Reconciliation haben.
+1. R1 bis R9 haben Records oder explizite Ableitungsregeln für sämtliche
+   früheren Stopgründe geschaffen. Cursor/Status, Slice-Startgrenze,
+   Side-effect-Ledger, Pending-Gate, frühe Protocol-/Profilbindung und die
+   Historyereignisse werden nicht aus dem Mirror übernommen.
+2. R9 weist nach, dass ein leerer State aus jedem vollständigen akzeptierten
+   Präfix deterministisch neu projiziert werden kann; die bereits recordeten
+   Commit-/Provider-/Queue-Crashfenster besitzen explizite Reconciliation.
+   S4b darf auf dieser Vorbedingung aufsetzen.
 3. Danach entfallen die spezialisierten Mirrorvergleiche und
    `_recoverable_*`-Ausnahmen. Es bleiben Recordschema/Kette/Referenzen,
    Providerattempt-Kausalität, Cross-run-Handoff und externe Side-effect-

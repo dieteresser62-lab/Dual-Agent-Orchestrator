@@ -50,11 +50,8 @@ MIGRATION_MISMATCH_MARKERS = (
     "active review packets differ from state-v3",
     "active review packet bytes or metadata differ from state-v3",
     "review contract projection is ambiguous",
-    "review contract mirror is ambiguous",
     "latest review mirror has no aggregate field",
-    "review contracts differ from state-v3",
-    "review contract fields differ from state-v3",
-    "latest review differs from its event projection",
+    "latest review differs from its record projection",
 )
 
 RESUME_ERROR_MARKERS = (
@@ -62,6 +59,7 @@ RESUME_ERROR_MARKERS = (
     "run profile differs from state-v3",
     "structured-v2 run has no workflow transition prefix",
     "structured-v2 run has no workflow policy prefix",
+    "structured-v2 run has no complete workflow event prefix",
     "workflow cursor differs from state-v3",
     "slice statuses differ from state-v3",
     "work-unit statuses or steps differ from state-v3",
@@ -325,6 +323,7 @@ COMPARISON_TARGETS = (
     ("src/artifact_migration.py", None, "resolve_resume_state"),
     ("src/artifact_migration.py", None, "assert_run_binding_mirror"),
     ("src/artifact_migration.py", None, "require_workflow_status_prefix"),
+    ("src/artifact_migration.py", None, "require_workflow_event_prefix"),
     ("src/artifact_migration.py", None, "assert_workflow_status_mirror"),
     ("src/artifact_migration.py", None, "assert_slice_boundary_mirror"),
     ("src/artifact_migration.py", None, "require_gate_prefix"),
@@ -340,7 +339,7 @@ COMPARISON_TARGETS = (
     ("src/artifact_migration.py", None, "_recoverable_pending_slice_denial_record"),
     ("src/artifact_migration.py", None, "_recoverable_pending_work_record"),
     ("src/artifact_migration.py", None, "_pending_denied_review"),
-    ("src/artifact_migration.py", None, "_state_has_review_event"),
+    ("src/artifact_migration.py", None, "_state_has_review_projection"),
     ("src/artifact_migration.py", None, "_attestation_facts"),
     ("src/artifact_bridge.py", None, "finding_handoff_export_payload"),
     ("src/artifact_bridge.py", None, "finding_handoff_import_payload"),
@@ -359,6 +358,7 @@ COMPARISON_TARGETS = (
     ("src/final_review_preflight.py", None, "run_final_review_preflight"),
     ("src/final_review_preflight.py", None, "_approved_external_paths"),
     ("src/orchestrator.py", None, "_persisted_histories"),
+    ("src/orchestrator.py", None, "_attach_record_events"),
     ("src/orchestrator.py", None, "_recoverable_final_denial_mirror_gap"),
     ("src/orchestrator.py", None, "_historical_correction_attribution_matches"),
     ("src/orchestrator.py", None, "run_pipeline"),
@@ -420,6 +420,7 @@ STRICT_BODY_TARGETS = tuple(
     or target[2]
     in {
         "_persisted_histories",
+        "_attach_record_events",
         "_recoverable_final_denial_mirror_gap",
         "_historical_correction_attribution_matches",
         "finalize_audit",
@@ -432,9 +433,10 @@ STRICT_BODY_TARGETS = tuple(
 # non-divergence comparison added inside one of these boundaries forces S2's
 # inventory to be reviewed instead of silently aging.
 EXPECTED_COMPARISON_COUNTS = {
-    "src/artifact_migration.py:resolve_resume_state": 119,
+    "src/artifact_migration.py:resolve_resume_state": 117,
     "src/artifact_migration.py:assert_run_binding_mirror": 6,
     "src/artifact_migration.py:require_workflow_status_prefix": 3,
+    "src/artifact_migration.py:require_workflow_event_prefix": 6,
     "src/artifact_migration.py:assert_workflow_status_mirror": 4,
     "src/artifact_migration.py:assert_slice_boundary_mirror": 4,
     "src/artifact_migration.py:require_gate_prefix": 1,
@@ -450,7 +452,7 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/artifact_migration.py:_recoverable_pending_slice_denial_record": 7,
     "src/artifact_migration.py:_recoverable_pending_work_record": 0,
     "src/artifact_migration.py:_pending_denied_review": 7,
-    "src/artifact_migration.py:_state_has_review_event": 5,
+    "src/artifact_migration.py:_state_has_review_projection": 5,
     "src/artifact_migration.py:_attestation_facts": 2,
     "src/artifact_bridge.py:finding_handoff_export_payload": 5,
     "src/artifact_bridge.py:finding_handoff_import_payload": 8,
@@ -468,13 +470,14 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/artifact_bridge.py:ArtifactBridge.side_effect_result": 7,
     "src/final_review_preflight.py:run_final_review_preflight": 20,
     "src/final_review_preflight.py:_approved_external_paths": 15,
-    "src/orchestrator.py:_persisted_histories": 1,
+    "src/orchestrator.py:_persisted_histories": 3,
+    "src/orchestrator.py:_attach_record_events": 16,
     "src/orchestrator.py:_recoverable_final_denial_mirror_gap": 10,
     "src/orchestrator.py:_historical_correction_attribution_matches": 7,
     "src/orchestrator.py:run_pipeline": 20,
     "src/orchestrator.py:_apply_resumed_agent_profiles": 3,
     "src/orchestrator.py:run_production_workflow": 38,
-    "src/orchestrator.py:ProductionWorkflowDriver.assert_structured_decision_context": 7,
+    "src/orchestrator.py:ProductionWorkflowDriver.assert_structured_decision_context": 11,
     "src/orchestrator.py:ProductionWorkflowDriver._start_provider_attempt": 19,
     "src/orchestrator.py:ProductionWorkflowDriver._reconcile_provider_effect": 13,
     "src/orchestrator.py:ProductionWorkflowDriver._write_side_effect_file": 3,
@@ -493,7 +496,7 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/orchestrator.py:ProductionWorkflowDriver.persist_native_codex_contract": 11,
     "src/orchestrator.py:ProductionWorkflowDriver.prepare_finding_handoff": 13,
     "src/orchestrator.py:ProductionWorkflowDriver.checkpoint": 6,
-    "src/orchestrator.py:ProductionWorkflowDriver._project_audit": 21,
+    "src/orchestrator.py:ProductionWorkflowDriver._project_audit": 22,
     "src/orchestrator.py:ProductionWorkflowDriver.finalize_audit": 9,
     "src/orchestrator.py:ProductionWorkflowDriver.commit_slice": 45,
     "src/inbox_watcher.py:QueueSuccessEvidence.__post_init__": 5,
@@ -520,6 +523,7 @@ EXPECTED_STRICT_BODY_DIGESTS = {
     "src/artifact_bridge.py:review_payload_matches_result": "b3233be38c3e4729058eba7ffd325fc94d29d4f08bd5ccfd08de0e3557eaf612",
     "src/artifact_migration.py:assert_run_binding_mirror": "e8febdf4104e65855caa2196ec8fad6f9e6ec5a81b3bdfc9a2ac1475daea9498",
     "src/artifact_migration.py:require_workflow_status_prefix": "964d356480288034c6dc52de377c2326c06d2db50d6aae52fd2b3d5dbcc5bdec",
+    "src/artifact_migration.py:require_workflow_event_prefix": "2e9c88f52f65aeb0edfa9352f123f05c12c5a88ccdcfa590d813d5466bca1ddc",
     "src/artifact_migration.py:assert_workflow_status_mirror": "0d6ac0eec3998504048ccf74ee978930a4e2dfa3cd256e71268e143a774b7eae",
     "src/artifact_migration.py:assert_slice_boundary_mirror": "e0f6199f8d92c8f1d141822a0cbb2d6b80238cf247cc2eaacc83310d158c5d5f",
     "src/artifact_migration.py:require_gate_prefix": "980ecc54d5b6c651d9937728b37a9e7cdfc2d27d8d4100eee15fde0d85249774",
@@ -530,16 +534,17 @@ EXPECTED_STRICT_BODY_DIGESTS = {
     "src/artifact_migration.py:assert_side_effect_mirror": "a987bcfdd6e57add8c76d0f45bcb005c7f560dcb2c682411eed66d9f67c76a54",
     "src/artifact_migration.py:_mirror_difference_code": "9433c6d83367347145eebab39e8fc4e3a989062ff9864bec6752710065ffbbc7",
     "src/artifact_migration.py:_finding_statuses": "cc4a0460cf13d1fbeba70deb2ae66dd19771bb31e8c56907139506ba3421c758",
-    "src/artifact_migration.py:_recoverable_pending_review_finding_gap": "dbdbf286f9c1d85bcb53e7e3e2e716f052e60a318b51d5176088d382b4819468",
+    "src/artifact_migration.py:_recoverable_pending_review_finding_gap": "ad6728a16432bbf82d6973402ac25f2766c42513287c0530d8aa2a7a8eea8145",
     "src/artifact_migration.py:_recoverable_pending_correction_record": "2ccc8845cec0e65d669837cb5d64a4dbe5877b1e68d814ee255e57575032a08a",
     "src/artifact_migration.py:_recoverable_pending_slice_denial_record": "dbc94b37591451b1ea7d668cb54df91e945f957b4752a205e23cc8178acc8629",
     "src/artifact_migration.py:_recoverable_pending_work_record": "b9359c5e9abeac81d260e58a1e4f0d74c44ccaf740a772d06d71e32e6a333934",
     "src/artifact_migration.py:_pending_denied_review": "b91272ae23c736309c6e7f5784cd95a549b5229fd3033a365c00c81e96fcc447",
-    "src/artifact_migration.py:_state_has_review_event": "53beb6c372999d3931c45af1f231be4f59d7fc63793dead8dad1ce0eabad8a60",
+    "src/artifact_migration.py:_state_has_review_projection": "f6036ea4a3170f103a275fef04b949f4803d31a5d986ae15c1db2b1ae00ee83d",
     "src/artifact_migration.py:_attestation_facts": "482ceda433b65606b715f3433cbbc2c1b320ffb0b706e672ba2521d83a112923",
     "src/final_review_preflight.py:run_final_review_preflight": "8ea919e177653eee0f5c6ecac64ee1598f58b33126dfa1df6ab1eb0a04caac61",
     "src/final_review_preflight.py:_approved_external_paths": "24a9647addbf8df21fba7ecd0e25164e7237b00eb9c831bd7ee7b9ce1b8f5439",
-    "src/orchestrator.py:_persisted_histories": "3f95d7d8d626305fc14dd90ea12be8d9baf8c4a2de0faf6c808989809c7879ea",
+    "src/orchestrator.py:_persisted_histories": "9a392ebaac497327344362a78b1a9dd5580c1e7d046fb6e0aa3b585db0a2a978",
+    "src/orchestrator.py:_attach_record_events": "7065cd5a4554100a800dd581702c9738d89e6134736908703b715e18c9885d6b",
     "src/orchestrator.py:_recoverable_final_denial_mirror_gap": "3b78ce8c3861bfd62f8fd8728f7346b5cff5e1b6c12ab8b3b6c0f78bdc394331",
     "src/orchestrator.py:_historical_correction_attribution_matches": "9ca739a787d60da279c0bbd10a22d29f6a1c583d05434e704b616e5925afec35",
     "src/orchestrator.py:ProductionWorkflowDriver.finalize_audit": "ab243e85a4b66bc06e1025a688c87c651443ac32baa5b8018bb92f421b99bd69",
@@ -724,13 +729,13 @@ def test_migration_comparison_inventory_is_source_bound() -> None:
     source = _source("src/artifact_migration.py")
     source_strings = _string_constants("src/artifact_migration.py")
     document = MATRIX_PATH.read_text(encoding="utf-8")
-    assert _raise_count("src/artifact_migration.py", "mismatch") == 46
+    assert _raise_count("src/artifact_migration.py", "mismatch") == 43
     assert source.count("differs from state-v3") == 20
     for marker in MIGRATION_MISMATCH_MARKERS:
         assert marker in source_strings
         assert marker in document
 
-    assert _raise_count("src/artifact_migration.py", "ArtifactResumeError") == 30
+    assert _raise_count("src/artifact_migration.py", "ArtifactResumeError") == 32
     for marker in RESUME_ERROR_MARKERS:
         assert marker in (source if marker == "exc.diagnostic.message" else source_strings)
         assert marker in document
@@ -862,6 +867,13 @@ def test_recordless_review_and_attestation_fields_are_source_bound() -> None:
             "phase",
             "result",
         },
+        ("src/artifact_models.py", "WorkflowEventPayload"): {
+            "event_kind",
+            "work_unit_id",
+            "slice_id",
+            "round_number",
+            "record_refs",
+        },
     }
     actual = {
         key: _class_field_names(*key)
@@ -965,7 +977,13 @@ def test_every_s4a_stop_entry_has_exactly_one_reasoned_classification() -> None:
         "`ContractResult.validation`",
         "`runtime_history.latest_claude_review` als Aggregat",
     }
-    assert len(stop_fields) == 3
+    r9_covered_fields = {"sonstige `runtime_history`-Event-/Auditfelder"}
+    closed_stop_fields = {
+        "`protocol_binding.mode/schema/transports`",
+        "`ContractResult.evidence.dimensions/largest_residual_risk/break_condition`",
+        *r9_covered_fields,
+    }
+    assert len(stop_fields) == 0
     assert len(fields) == len(set(fields)) == 41
     assert set(fields) == (
         stop_fields
@@ -977,6 +995,7 @@ def test_every_s4a_stop_entry_has_exactly_one_reasoned_classification() -> None:
         | r6_covered_fields
         | r7_covered_fields
         | r8_covered_fields
+        | closed_stop_fields
         | {"`created_at`, `updated_at`"}
     )
     assert groups["`work_units[*].codex_return_count`"] == "A"
@@ -1011,6 +1030,10 @@ def test_every_s4a_stop_entry_has_exactly_one_reasoned_classification() -> None:
     for field in r7_covered_fields:
         reason = next(reason for name, _group, reason in rows if name == field)
         assert "R7" in reason
+    for field in r9_covered_fields:
+        reason = next(reason for name, _group, reason in rows if name == field)
+        assert "In R9 geschlossen" in reason
+        assert "WorkflowEventPayload" in reason
     for field in r3_covered_fields:
         reason = next(reason for name, _group, reason in rows if name == field)
         assert "In R3 geschlossen" in reason

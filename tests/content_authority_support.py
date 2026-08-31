@@ -22,6 +22,7 @@ from artifact_models import (
     WorkUnitPayload,
     CorrectionWorkUnitPayload,
     WorkflowTransitionPayload,
+    WorkflowEventPayload,
     stable_record_id,
 )
 from content_authority import ValidationCapture, validation_output_digest
@@ -175,7 +176,7 @@ def append_validation_authority(
         idempotency_key=f"content:{idempotency_key}",
         fingerprint_sha256=fingerprint_sha256,
     )
-    return bridge.append(
+    attestation = bridge.append(
         ValidationAttestationPayload(
             tuple(results),
             payload.attested_by,
@@ -186,6 +187,10 @@ def append_validation_authority(
         idempotency_key=idempotency_key,
         fingerprint_sha256=fingerprint_sha256,
     )
+    _append_workflow_event_if_bound(
+        bridge, attestation, "validation", round_number=None
+    )
+    return attestation
 
 
 def append_provider_decision_authority(
@@ -292,4 +297,62 @@ def append_provider_decision_authority(
             idempotency_key=f"review-validation:{idempotency_key}",
             fingerprint_sha256=fingerprint_sha256,
         )
+        _append_workflow_event_if_bound(
+            bridge, decision, "review", round_number=round_number
+        )
     return decision
+
+
+def _append_workflow_event_if_bound(
+    bridge: ArtifactBridge,
+    domain_record,
+    event_kind: str,
+    *,
+    round_number: int | None,
+) -> None:
+    chain = bridge.store.load_chain()
+    domain = domain_record.payload
+    work_unit_id = (
+        domain.work_unit_id if isinstance(domain, ReviewPayload) else None
+    )
+    transition = next(
+        (
+            record.payload
+            for record in reversed(chain)
+            if isinstance(record.payload, WorkflowTransitionPayload)
+            and (
+                work_unit_id is None
+                or record.payload.work_unit_id == work_unit_id
+            )
+            and record.payload.work_unit_id is not None
+        ),
+        None,
+    )
+    if transition is None or transition.work_unit_id is None:
+        return
+    if round_number is None:
+        round_number = next(
+            (
+                record.payload.round_number
+                for record in reversed(chain)
+                if isinstance(
+                    record.payload, (WorkUnitPayload, CorrectionWorkUnitPayload)
+                )
+                and record.logical_id
+                == f"work-unit-{transition.work_unit_id}"
+            ),
+            1,
+        )
+    bridge.append(
+        WorkflowEventPayload(
+            event_kind,
+            transition.work_unit_id,
+            transition.slice_id,
+            round_number,
+            (domain_record.record_id,),
+        ),
+        logical_id=f"workflow-event-{domain_record.record_id}",
+        idempotency_key=f"workflow-event:{domain_record.record_id}",
+        fingerprint_sha256=domain_record.fingerprint.sha256,
+        fingerprint_kind=domain_record.fingerprint.kind,
+    )

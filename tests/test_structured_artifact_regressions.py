@@ -162,18 +162,20 @@ def test_first_checkpoint_bootstraps_authoritative_chain_idempotently(
     driver.assert_structured_decision_context()
 
     chain = ArtifactStore(repository, state.run_id).load_chain()
-    assert tuple(record.record_type for record in chain[:8]) == (
+    assert tuple(record.record_type for record in chain[:10]) == (
         RecordType.RUN_IDENTITY,
+        RecordType.WORKFLOW_EVENT,
         RecordType.RUN_PROFILE,
         RecordType.SIDE_EFFECT,
         RecordType.SIDE_EFFECT,
         RecordType.WORKFLOW_TRANSITION,
+        RecordType.WORKFLOW_EVENT,
         RecordType.WORKFLOW_POLICY,
         RecordType.GATE_TRANSITION,
         RecordType.TASK,
     )
     assert all(
-        record.record_type is RecordType.SIDE_EFFECT for record in chain[8:]
+        record.record_type is RecordType.SIDE_EFFECT for record in chain[10:]
     )
 
 
@@ -540,7 +542,10 @@ def test_external_side_effect_guard_rejects_review_record_ahead_of_mirror(
         operation=state.current_step.value,
     )
 
-    with pytest.raises(WorkflowExecutionError, match="reviewer decisions differ"):
+    with pytest.raises(
+        WorkflowExecutionError,
+        match="reviewer decisions differ from the state-v3 mirror",
+    ):
         driver.assert_structured_decision_context()
 
 
@@ -1514,6 +1519,8 @@ def test_structured_resume_accepts_mirrored_stopped_review(tmp_path: Path) -> No
             ReviewAuditEvent(2, 1, 1, stopped),
         ),
         attestations=(attestation,),
+        last_claude_fingerprint=attestation.diff_fingerprint,
+        latest_claude_review=stopped,
     )
     assert driver.active_state is not None
     driver.checkpoint(driver.active_state, history)

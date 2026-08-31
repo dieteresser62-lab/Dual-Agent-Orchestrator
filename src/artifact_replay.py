@@ -12,7 +12,8 @@ from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
 import hashlib
 import json
-from typing import Callable, Sequence
+import re
+from typing import Callable, Mapping, Sequence
 
 from artifact_models import (
     AgentResultPayload,
@@ -32,6 +33,7 @@ from artifact_models import (
     ProviderInputMeasurementPayload,
     ProviderAttemptPayload,
     PlanPayload,
+    TaskPayload,
     RecordType,
     Role,
     RunIdentityPayload,
@@ -51,6 +53,7 @@ from artifact_models import (
     ValidationContentPayload,
     ValidationAttestationPayload,
     WorkflowCompletionPayload,
+    WorkflowEventPayload,
     WorkUnitPayload,
     CorrectionWorkUnitPayload,
     TransientRetryPayload,
@@ -150,6 +153,29 @@ class ReplayedWorkflowCursor:
 
 
 @dataclass(frozen=True, slots=True)
+class ReplayedWorkflowEvent:
+    record_id: str
+    event_kind: str
+    work_unit_id: str | None
+    slice_id: str
+    round_number: int | None
+    record_refs: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ReplayedWorkflowState:
+    """Canonical, cache-free projection of every WorkflowState fact group."""
+
+    state: object
+    canonical_document: bytes
+
+    def to_document(self) -> dict[str, object]:
+        document = json.loads(self.canonical_document)
+        assert isinstance(document, dict)
+        return document
+
+
+@dataclass(frozen=True, slots=True)
 class ReplayedWorkUnitState:
     work_unit_id: str
     slice_id: str
@@ -225,7 +251,9 @@ class ArtifactReplayResult:
     semantic_facts: tuple[ReplayFact, ...]
     semantic_digest: str
     audit_events: tuple[ReplayAuditEvent, ...]
+    workflow_events: tuple[ReplayedWorkflowEvent, ...] = ()
     pending_review_record_id: str | None = None
+    pending_workflow_event_record_id: str | None = None
     run_identity: RunIdentityPayload | None = None
     run_profile: RunProfilePayload | None = None
     workflow_cursor: ReplayedWorkflowCursor | None = None
@@ -453,6 +481,629 @@ def replay_findings(
     ).findings
 
 
+def project_workflow_state(replay: ArtifactReplayResult) -> ReplayedWorkflowState:
+    """Project the complete semantic state from records, without filesystem I/O.
+
+    Volatile state timestamps are normalized to the first and last record time.
+    Former ``runtime_history`` content is represented by its authoritative
+    record references; embedded review/validation bodies and ``events`` are not
+    recreated as a second authority.
+    """
+    from contracts import FindingClass
+    from finding_reducer import project_open_set, reduce_findings
+
+    records = replay.records
+    if not records:
+        _fail(ReplayDiagnosticCode.RECORD_MISSING, "cannot project an empty workflow")
+    expected_events = {
+        record.record_id: kind
+        for record in records
+        for kind in (
+            "run"
+            if isinstance(record.payload, RunIdentityPayload)
+            else "transition"
+            if isinstance(record.payload, WorkflowTransitionPayload)
+            else "validation"
+            if isinstance(record.payload, ValidationAttestationPayload)
+            else "review"
+            if isinstance(record.payload, ReviewPayload)
+            else None,
+        )
+        if kind is not None
+        and record.record_id != replay.pending_review_record_id
+    }
+    actual_events: dict[str, str] = {}
+    for event in replay.workflow_events:
+        referenced = event.record_refs[0]
+        if referenced in actual_events:
+            related = next(
+                record for record in records if record.record_id == event.record_id
+            )
+            _fail(
+                ReplayDiagnosticCode.RECORD_DUPLICATE,
+                "workflow state projection found a duplicate event reference",
+                related,
+            )
+        actual_events[referenced] = event.event_kind
+    if actual_events != expected_events:
+        differing = next(iter(set(actual_events) ^ set(expected_events)), None)
+        related = next(
+            (record for record in records if record.record_id == differing), None
+        )
+        _fail(
+            ReplayDiagnosticCode.RECORD_MISSING,
+            "workflow state projection requires a complete workflow event prefix",
+            related,
+        )
+    identity = replay.run_identity
+    profile = replay.run_profile
+    task_record = next(
+        (record for record in records if isinstance(record.payload, TaskPayload)),
+        None,
+    )
+    if identity is None or profile is None or task_record is None:
+        _fail(
+            ReplayDiagnosticCode.RECORD_MISSING,
+            "workflow state projection requires run identity, profile, and task",
+        )
+    task = task_record.payload
+    assert isinstance(task, TaskPayload)
+    plan_record = next(
+        (record for record in reversed(records) if isinstance(record.payload, PlanPayload)),
+        None,
+    )
+    plan = None if plan_record is None else plan_record.payload
+    assert plan is None or isinstance(plan, PlanPayload)
+
+    transition_history = tuple(
+        record for record in records
+        if isinstance(record.payload, WorkflowTransitionPayload)
+    )
+    if replay.workflow_cursor is None or not transition_history:
+        _fail(
+            ReplayDiagnosticCode.RECORD_MISSING,
+            "workflow state projection requires a current cursor",
+        )
+    slice_ids = {slice_id for slice_id, _status in replay.slice_statuses}
+    if plan is not None:
+        slice_ids.update(item.slice_id for item in plan.slices)
+    boundaries = {item.slice_id: item for item in replay.slice_boundaries}
+    commit_refs: dict[str, str] = {}
+    for record in records:
+        payload = record.payload
+        if not isinstance(payload, BindingPayload) or payload.binding_kind != "commit":
+            continue
+        match = re.fullmatch(r"commit-([A-Za-z0-9._:]+)(?:-.+)?", record.logical_id)
+        if match is not None:
+            commit_refs[match.group(1)] = payload.target
+    slices: list[dict[str, object]] = []
+    prior_commit: str | None = None
+    for slice_id in sorted(slice_ids, key=_identifier_order):
+        boundary = boundaries.get(slice_id)
+        planned = next(
+            (item for item in (() if plan is None else plan.slices) if item.slice_id == slice_id),
+            None,
+        )
+        scope_groups = () if boundary is None else boundary.scope_change_groups
+        scope_paths = tuple(path for group in scope_groups for path in group)
+        start_commit = (
+            boundary.start_commit
+            if boundary is not None
+            else identity.branch_base
+            if slice_id == "1"
+            else prior_commit
+        )
+        commit_ref = commit_refs.get(slice_id)
+        slices.append(
+            {
+                "slice_id": int(slice_id),
+                "status": dict(replay.slice_statuses).get(slice_id, "pending"),
+                "start_commit": start_commit,
+                # The approved plan allowlist is not the executed Slice boundary.
+                # Pending Slices therefore stay unbound until a SliceBoundary
+                # record supplies their scope and fingerprint.
+                "scope_paths": scope_paths,
+                "scope_change_groups": scope_groups,
+                "start_fingerprint": None if boundary is None else boundary.start_fingerprint,
+                "commit_ref": commit_ref,
+            }
+        )
+        if commit_ref is not None:
+            prior_commit = commit_ref
+
+    unit_payloads: dict[str, ArtifactRecord] = {}
+    for record in records:
+        if isinstance(record.payload, (WorkUnitPayload, CorrectionWorkUnitPayload)):
+            unit_payloads[record.logical_id.removeprefix("work-unit-")] = record
+    policies = {item.work_unit_id: item for item in replay.workflow_policies}
+    gates = {item.work_unit_id: item for item in replay.gate_transitions}
+    reviewers = dict(replay.work_unit_reviewers)
+    positions = {record.record_id: index for index, record in enumerate(records)}
+    latest_review_records: dict[str, ArtifactRecord] = {}
+    for record in records:
+        if (
+            isinstance(record.payload, ReviewPayload)
+            and record.record_id != replay.pending_review_record_id
+        ):
+            latest_review_records[record.payload.work_unit_id] = record
+    work_units: list[dict[str, object]] = []
+    for unit in replay.work_unit_states:
+        definition_record = unit_payloads.get(unit.work_unit_id)
+        definition = None if definition_record is None else definition_record.payload
+        round_candidates = [
+            event.round_number
+            for event in replay.workflow_events
+            if event.work_unit_id == unit.work_unit_id
+            and event.round_number is not None
+        ]
+        gate_history = tuple(
+            record.payload
+            for record in records
+            if isinstance(record.payload, GateTransitionPayload)
+            and record.payload.work_unit_id == unit.work_unit_id
+        )
+        resumed_gate_round = 1 + sum(
+            previous.gate_status != "clear" and current.gate_status == "clear"
+            for previous, current in zip(gate_history, gate_history[1:])
+        )
+        round_candidates.append(resumed_gate_round)
+        if isinstance(definition, (WorkUnitPayload, CorrectionWorkUnitPayload)):
+            round_candidates.append(definition.round_number)
+        round_number = max(round_candidates, default=1)
+        first_step = next(
+            candidate.payload.step
+            for candidate in transition_history
+            if candidate.payload.work_unit_id == unit.work_unit_id
+        )
+        if first_step == "codex_final_correction" and not isinstance(  # allowlist:provider -- canonical state-v3 step
+            definition, CorrectionWorkUnitPayload
+        ):
+            _fail(
+                ReplayDiagnosticCode.RECORD_MISSING,
+                "a correction cursor requires its correction work-unit record",
+                next(
+                    record
+                    for record in transition_history
+                    if record.payload.work_unit_id == unit.work_unit_id
+                ),
+            )
+        kind = (
+            "correction"
+            if isinstance(definition, CorrectionWorkUnitPayload)
+            else "plan"
+            if unit.work_unit_id == "1"
+            or first_step in {"codex_plan", "claude_plan_review", "codex_plan_revision"}  # allowlist:provider -- canonical state-v3 steps
+            else "final_review"
+            if first_step in {"codex_final_review", "claude_final_review"}  # allowlist:provider -- canonical state-v3 steps
+            else "slice"
+        )
+        policy = policies.get(unit.work_unit_id)
+        gate = gates.get(unit.work_unit_id)
+        decisions = tuple(
+            asdict(item)
+            for item in replay.gate_decisions
+            if item.work_unit_id == unit.work_unit_id
+        )
+        failures = tuple(
+            {
+                "invocation_id": item.invocation_id,
+                "idempotency_key": item.idempotency_key,
+                "role": item.role.value,
+                "failure_kind": item.failure_kind,
+                "provider_text": item.provider_text,
+                "received_at": item.received_at,
+                "step": item.step,
+                "slice_id": int(item.slice_id),
+                "work_unit_id": int(item.work_unit_id),
+                "diagnostic_exit_code": item.diagnostic_exit_code,
+                "parse_path": item.parse_path,
+                "source_timezone": item.source_timezone,
+                "reset_at_utc": item.reset_at_utc,
+                "resume_at_utc": item.resume_at_utc,
+                "safety_margin_seconds": item.safety_margin_seconds,
+                "auto_resume_count": item.auto_resume_count,
+                "automatic_resume": item.automatic_resume,
+                "diff_fingerprint": item.diff_fingerprint,
+            }
+            for item in replay.invocation_failures
+            if item.work_unit_id == unit.work_unit_id
+        )
+        gate_document = (
+            {
+                "status": "clear",
+                "reason": "none",
+                "detail": None,
+                "fingerprint": None,
+                "paths": (),
+                "resume_step": None,
+            }
+            if gate is None
+            else {
+                "status": gate.gate_status,
+                "reason": gate.reason,
+                "detail": gate.detail,
+                "fingerprint": gate.fingerprint,
+                "paths": gate.paths,
+                "resume_step": gate.resume_step,
+            }
+        )
+        definition_findings = (
+            definition.finding_ids
+            if isinstance(definition, CorrectionWorkUnitPayload)
+            else definition.open_finding_ids
+            if isinstance(definition, WorkUnitPayload)
+            else ()
+        )
+        latest_review_record = latest_review_records.get(unit.work_unit_id)
+        if latest_review_record is not None:
+            review_payload = latest_review_record.payload
+            assert isinstance(review_payload, ReviewPayload)
+            review_prefix = replay.subset(
+                records[:_review_prefix_end(records, positions, latest_review_record)]
+            )
+            reviewed_findings = reduce_findings(review_prefix).request_subset(
+                finding_ids=review_payload.finding_ids
+            ).findings
+            definition_findings = tuple(
+                finding.finding_id
+                for finding in project_open_set(reviewed_findings).findings
+                if finding.finding_class is FindingClass.BLOCKER
+                and finding.origin.reporter.value == review_payload.reviewer.value
+            )
+        work_units.append(
+            {
+                "work_unit_id": int(unit.work_unit_id),
+                "slice_id": int(unit.slice_id),
+                "kind": kind,
+                "status": unit.status,
+                "current_step": unit.step,
+                "round_number": round_number,
+                "codex_return_count": (  # allowlist:provider -- canonical state-v3 field
+                    0 if policy is None else policy.implementer_return_count
+                ),
+                "max_codex_returns": (  # allowlist:provider -- canonical state-v3 field
+                    4 if policy is None else policy.max_implementer_returns
+                ),
+                "gate": gate_document,
+                "reviewer": (
+                    None if reviewers.get(unit.work_unit_id) is None
+                    else reviewers[unit.work_unit_id].value
+                ),
+                "open_findings": definition_findings,
+                "completed_side_effects": replay.completed_side_effects(
+                    unit.work_unit_id
+                ),
+                "gate_decisions": tuple(
+                    {
+                        "approved": item["approved"],
+                        "reason": item["reason"],
+                        "fingerprint": item["fingerprint"],
+                        "paths": item["paths"],
+                        "rationale": item["rationale"],
+                        "resume_step": item["resume_step"],
+                    }
+                    for item in decisions
+                ),
+                "active_test_fingerprint": (
+                    None if gate is None else gate.active_test_fingerprint
+                ),
+                "active_test_paths": (
+                    () if gate is None else gate.active_test_paths
+                ),
+                "invocation_failures": failures,
+            }
+        )
+
+    import_record = next(
+        (
+            record
+            for record in records
+            if isinstance(record.payload, FindingHandoffImportPayload)
+        ),
+        None,
+    )
+    runtime_history = project_runtime_history_references(replay)
+
+    document = {
+        "version": 3,
+        "run_id": replay.expected_run_id,
+        "task_file": identity.task_file,
+        "branch": identity.branch,
+        "branch_base": identity.branch_base,
+        "created_at": records[0].created_at,
+        "updated_at": records[-1].created_at,
+        "current_slice_id": int(replay.workflow_cursor.slice_id),
+        "current_work_unit_id": int(replay.workflow_cursor.work_unit_id),
+        "current_step": replay.workflow_cursor.step,
+        "slices": tuple(slices),
+        "work_units": tuple(work_units),
+        "planned_slices": (
+            ()
+            if plan is None
+            else tuple(
+                {
+                    "slice_id": int(item.slice_id),
+                    "summary": item.summary,
+                    "scope_paths": item.paths,
+                }
+                for item in plan.slices
+            )
+        ),
+        "runtime_history": runtime_history,
+        "task_digest": task.assignment_sha256,
+        "execution_mode": identity.execution_mode,
+        "task_scope_patterns": task.scope_paths,
+        "work_plan_path": None if plan is None else plan.work_plan_path,
+        "approved_plan_commit": None if plan is None else plan.approved_plan_commit,
+        "finding_handoff_source_run_id": (
+            None if import_record is None else import_record.payload.source_run_id
+        ),
+        "finding_handoff_export_record_id": (
+            None if import_record is None else import_record.payload.export_record_id
+        ),
+        "audit_report_path": identity.audit_report_path,
+        "target_branch": task.target_branch,
+        "protocol_binding": {
+            "mode": "structured-v2",
+            "schema_version": "2",
+            "claude_review_transport": "native-claude-review-v2",  # allowlist:provider -- canonical protocol binding
+            "codex_result_transport": "native-codex-v2",  # allowlist:provider -- canonical protocol binding
+            "codex_profile": {  # allowlist:provider -- canonical state-v3 field
+                "model": profile.codex_model,  # allowlist:provider -- canonical record field
+                "effort": profile.codex_effort,  # allowlist:provider -- canonical record field
+            },
+            "claude_profile": {  # allowlist:provider -- canonical state-v3 field
+                "model": profile.claude_model,  # allowlist:provider -- canonical record field
+                "effort": profile.claude_effort,  # allowlist:provider -- canonical record field
+            },
+        },
+        "bootstrap_checks": tuple(
+            _project_bootstrap_fact(record.payload)
+            for record in records
+            if isinstance(
+                record.payload,
+                (ProviderInputMeasurementPayload, FinalReviewPreflightPayload),
+            )
+        ),
+    }
+    # Parsing the projection through the real state-v3 validator proves that
+    # this is a complete state document rather than a look-alike audit view.
+    # The import remains local so workflow_state does not acquire a replay
+    # dependency in the opposite direction.
+    from workflow_state import WorkflowState, WorkflowStateValidationError
+
+    try:
+        state = WorkflowState.from_dict(json.loads(canonical_json(document)))
+    except WorkflowStateValidationError as exc:
+        _fail(
+            ReplayDiagnosticCode.RECORD_MISSING,
+            f"workflow state projection is not yet a complete accepted prefix: {exc}",
+            records[-1],
+        )
+    canonical_document = canonical_json(state.to_dict())
+    return ReplayedWorkflowState(state, canonical_document)
+
+
+def project_runtime_history_references(
+    replay: ArtifactReplayResult,
+) -> dict[str, dict[str, tuple[str, ...]]]:
+    """Normalize each mirror history to immutable record references only."""
+    records = replay.records
+    runtime_history: dict[str, dict[str, tuple[str, ...]]] = {}
+    for unit in replay.work_unit_states:
+        unit_id = unit.work_unit_id
+        runtime_history[unit_id] = {
+            "finding_record_refs": tuple(
+                record.record_id
+                for record in records
+                if isinstance(record.payload, FindingTransitionPayload)
+                and record.payload.work_unit_id == unit_id
+            ),
+            "review_record_refs": tuple(
+                record.record_id
+                for record in records
+                if isinstance(record.payload, ReviewPayload)
+                and record.payload.work_unit_id == unit_id
+            ),
+            "attestation_record_refs": tuple(
+                event.record_refs[0]
+                for event in replay.workflow_events
+                if event.event_kind == "validation" and event.work_unit_id == unit_id
+            ),
+            "provider_content_record_refs": tuple(
+                record.record_id
+                for record in records
+                if isinstance(record.payload, ProviderContentPayload)
+                and record.payload.work_unit_id == unit_id
+            ),
+            "review_packet_record_refs": tuple(
+                record.record_id
+                for record in records
+                if isinstance(record.payload, ReviewPacketPayload)
+                and record.payload.work_unit_id == unit_id
+            ),
+            "workflow_event_record_refs": tuple(
+                event.record_id
+                for event in replay.workflow_events
+                if event.work_unit_id == unit_id
+            ),
+        }
+
+    return runtime_history
+
+
+def normalize_workflow_state_mirror(
+    state: object,
+    replay: ArtifactReplayResult,
+) -> bytes:
+    """Canonicalize the current mirror for an exact record projection comparison."""
+    from workflow_state import WorkflowState, WorkflowStateValidationError
+
+    if not isinstance(state, WorkflowState):
+        raise TypeError("workflow mirror normalization requires WorkflowState")
+    document = state.to_dict()
+    document["created_at"] = replay.records[0].created_at
+    document["updated_at"] = replay.records[-1].created_at
+    document["runtime_history"] = _validated_runtime_history_references(
+        state.runtime_history, replay
+    )
+    try:
+        normalized = WorkflowState.from_dict(document)
+    except WorkflowStateValidationError as exc:
+        _fail(
+            ReplayDiagnosticCode.MIRROR_AMBIGUOUS,
+            f"workflow state mirror cannot be normalized: {exc}",
+            replay.records[-1],
+        )
+    return canonical_json(normalized.to_dict())
+
+
+def _validated_runtime_history_references(
+    raw_history: object,
+    replay: ArtifactReplayResult,
+) -> dict[str, dict[str, tuple[str, ...]]]:
+    """Normalize a real mirror only after checking its durable bindings.
+
+    The serialized mirror deliberately no longer contains ``events``.  This
+    guard therefore validates the review and validation aggregates which are
+    still present before replacing the cache shape with immutable references.
+    Event-object equivalence is tested separately through the production
+    ``_attach_record_events`` reader.
+    """
+    from workflow import WorkflowHistory
+
+    candidates: list[object] = []
+    if isinstance(raw_history, Mapping):
+        if set(raw_history) == {"current", "archive"}:
+            archive = raw_history.get("archive")
+            if isinstance(archive, list):
+                candidates.extend(archive)
+            candidates.append(raw_history.get("current"))
+        else:
+            candidates.append(raw_history)
+    histories: dict[str, WorkflowHistory] = {}
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        try:
+            parsed = WorkflowHistory.from_dict(candidate)
+        except (TypeError, ValueError) as exc:
+            _fail(
+                ReplayDiagnosticCode.MIRROR_AMBIGUOUS,
+                f"runtime history mirror is not canonical: {exc}",
+                replay.records[-1],
+            )
+        histories[str(parsed.work_unit_id)] = parsed
+
+    records = {record.record_id: record for record in replay.records}
+    for unit_id in {event.work_unit_id for event in replay.workflow_events}:
+        if unit_id is None:
+            continue
+        history = histories.get(unit_id)
+        validation_records = tuple(
+            records[event.record_refs[0]]
+            for event in replay.workflow_events
+            if event.work_unit_id == unit_id
+            and event.event_kind == "validation"
+        )
+        review_records = tuple(
+            records[event.record_refs[0]]
+            for event in replay.workflow_events
+            if event.work_unit_id == unit_id
+            and event.event_kind == "review"
+        )
+        if (validation_records or review_records) and history is None:
+            _fail(
+                ReplayDiagnosticCode.MIRROR_AMBIGUOUS,
+                "runtime history mirror omits a work unit with audit records",
+                (review_records or validation_records)[-1],
+            )
+        if history is None:
+            continue
+        mirrored_attestations = {
+            (item.attestation_id, item.diff_fingerprint)
+            for item in history.attestations
+        }
+        required_attestations = {
+            (record.logical_id, record.fingerprint.sha256)
+            for record in validation_records
+        }
+        if not required_attestations.issubset(mirrored_attestations):
+            _fail(
+                ReplayDiagnosticCode.MIRROR_AMBIGUOUS,
+                "runtime history mirror omits a validation event binding",
+                validation_records[-1],
+            )
+        if not review_records:
+            continue
+        latest = review_records[-1]
+        payload = latest.payload
+        assert isinstance(payload, ReviewPayload)
+        result = history.latest_claude_review  # allowlist:provider -- canonical history field
+        fingerprint = history.last_claude_fingerprint  # allowlist:provider -- canonical history field
+        if result is None or fingerprint != latest.fingerprint.sha256:
+            _fail(
+                ReplayDiagnosticCode.MIRROR_AMBIGUOUS,
+                "runtime history latest review binding differs from records",
+                latest,
+            )
+        expected_approval = (
+            None if payload.verdict == "stop" else payload.verdict == "approved"
+        )
+        if (
+            result.reviewer.value != payload.reviewer.value
+            or result.approval != expected_approval
+            or result.stopped != (payload.verdict == "stop")
+            or tuple(item.finding_id for item in result.findings)
+            != payload.finding_ids
+        ):
+            _fail(
+                ReplayDiagnosticCode.MIRROR_AMBIGUOUS,
+                "runtime history latest review aggregate differs from records",
+                latest,
+            )
+
+    return project_runtime_history_references(replay)
+
+
+def _project_bootstrap_fact(
+    payload: ProviderInputMeasurementPayload | FinalReviewPreflightPayload,
+) -> dict[str, object]:
+    """Apply the versioned state-v3 bootstrap projection without I/O."""
+    decision = (
+        "allowed"
+        if isinstance(payload, ProviderInputMeasurementPayload) and payload.allowed
+        else "denied"
+        if isinstance(payload, ProviderInputMeasurementPayload)
+        or payload.outcome == "denied"
+        else "passed"
+    )
+    return {
+        "check_kind": payload.record_type.value,
+        "transition_fingerprint": payload.transition_fingerprint,
+        "provider": payload.provider.value,
+        "role": payload.role.value,
+        "operation": payload.operation,
+        "work_unit_id": int(payload.work_unit_id),
+        "semantic_digest": hashlib.sha256(canonical_json(payload)).hexdigest(),
+        "decision": decision,
+        "error_code": (
+            payload.record_type.value.removesuffix("_measurement")
+            .replace("_", "-")
+            .upper()
+            + "-BUDGET"
+            if isinstance(payload, ProviderInputMeasurementPayload) and not payload.allowed
+            else payload.error_code
+            if isinstance(payload, FinalReviewPreflightPayload)
+            else None
+        ),
+    }
+
+
+def _identifier_order(value: str) -> tuple[int, int | str]:
+    return (0, int(value)) if value.isdigit() else (1, value)
+
+
 def project_review_contracts(
     replay: ArtifactReplayResult,
     read_blob: Callable[[BlobReference], bytes],
@@ -595,6 +1246,21 @@ def project_review_contracts(
     return tuple(projected)
 
 
+def project_validation_attestations(
+    replay: ArtifactReplayResult,
+    read_blob: Callable[[BlobReference], bytes],
+) -> tuple[tuple[str, ValidationAttestation], ...]:
+    """Project validation domain objects keyed by their authoritative record ID."""
+    return tuple(
+        (
+            record.record_id,
+            _project_validation_attestation(replay, record, read_blob),
+        )
+        for record in replay.records
+        if isinstance(record.payload, ValidationAttestationPayload)
+    )
+
+
 def _review_prefix_end(
     chain: tuple[ArtifactRecord, ...],
     positions: dict[str, int],
@@ -616,6 +1282,10 @@ def _review_prefix_end(
             isinstance(candidate, FindingTransitionPayload)
             and candidate.work_unit_id == payload.work_unit_id
             and candidate.actor is payload.reviewer
+        ) or (
+            isinstance(candidate, WorkflowEventPayload)
+            and candidate.event_kind == "review"
+            and candidate.record_refs == (review_record.record_id,)
         ):
             prefix_end += 1
             continue
@@ -744,6 +1414,7 @@ def _validate_payload_references(
     transition_units: dict[str, ArtifactRecord] = {}
     transition_slices: set[str] = set()
     slice_boundaries: dict[str, SliceBoundaryPayload] = {}
+    workflow_event_domain_refs: set[str] = set()
     for record in chain:
         payload = record.payload
         if isinstance(payload, WorkflowTransitionPayload):
@@ -787,6 +1458,75 @@ def _validate_payload_references(
                         record,
                     )
             slice_boundaries[payload.slice_id] = payload
+        elif isinstance(payload, WorkflowEventPayload):
+            referenced_id = payload.record_refs[0]
+            if referenced_id in workflow_event_domain_refs:
+                _fail(
+                    ReplayDiagnosticCode.RECORD_DUPLICATE,
+                    "workflow event domain reference is duplicated",
+                    record,
+                )
+            workflow_event_domain_refs.add(referenced_id)
+            references = tuple(records_by_id.get(item) for item in payload.record_refs)
+            if any(
+                referenced is None
+                or positions[referenced.record_id] >= positions[record.record_id]
+                for referenced in references
+            ):
+                _fail(
+                    ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+                    "workflow event references a missing or later record",
+                    record,
+                )
+            typed_references = tuple(
+                referenced for referenced in references if referenced is not None
+            )
+            expected_type = {
+                "run": RunIdentityPayload,
+                "transition": WorkflowTransitionPayload,
+                "validation": ValidationAttestationPayload,
+                "review": ReviewPayload,
+            }[payload.event_kind]
+            if len(typed_references) != 1 or not isinstance(
+                typed_references[0].payload, expected_type
+            ):
+                _fail(
+                    ReplayDiagnosticCode.RECORD_TYPE_MISMATCH,
+                    "workflow event must reference exactly one matching domain record",
+                    record,
+                )
+            referenced = typed_references[0]
+            if referenced.fingerprint != record.fingerprint:
+                _fail(
+                    ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+                    "workflow event fingerprint differs from its domain record",
+                    record,
+                )
+            domain = referenced.payload
+            if isinstance(domain, RunIdentityPayload):
+                if payload.work_unit_id is not None or payload.round_number is not None:
+                    _fail(
+                        ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+                        "run event carries workflow-local identity",
+                        record,
+                    )
+            elif isinstance(domain, WorkflowTransitionPayload):
+                if (
+                    domain.slice_id != payload.slice_id
+                    or domain.work_unit_id != payload.work_unit_id
+                ):
+                    _fail(
+                        ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+                        "transition event identity differs from its referenced transition",
+                        record,
+                    )
+            elif isinstance(domain, ReviewPayload):
+                if domain.work_unit_id != payload.work_unit_id:
+                    _fail(
+                        ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+                        "review event work unit differs from its referenced review",
+                        record,
+                    )
 
     invocation_failures: dict[str, tuple[ArtifactRecord, InvocationFailurePayload]] = {}
     for record in chain:
@@ -1712,6 +2452,116 @@ def _semantic_facts(records: tuple[ArtifactRecord, ...]) -> tuple[ReplayFact, ..
     )
 
 
+def _workflow_event_domain_kind(payload: object) -> str | None:
+    if isinstance(payload, RunIdentityPayload):
+        return "run"
+    if isinstance(payload, WorkflowTransitionPayload):
+        return "transition"
+    if isinstance(payload, ValidationAttestationPayload):
+        return "validation"
+    if isinstance(payload, ReviewPayload):
+        return "review"
+    return None
+
+
+def _pending_workflow_event_record_id(
+    records: tuple[ArtifactRecord, ...],
+    pending_review_record_id: str | None,
+) -> str | None:
+    """Recognize exactly one auditable domain transaction at the chain tail."""
+    observed = {
+        record.payload.record_refs[0]
+        for record in records
+        if isinstance(record.payload, WorkflowEventPayload)
+    }
+    missing = tuple(
+        record
+        for record in records
+        if _workflow_event_domain_kind(record.payload) is not None
+        and record.record_id != pending_review_record_id
+        and record.record_id not in observed
+    )
+    if len(missing) != 1:
+        return None
+    candidate = missing[0]
+    if isinstance(candidate.payload, ReviewPayload):
+        positions = {record.record_id: index for index, record in enumerate(records)}
+        if _review_prefix_end(records, positions, candidate) != len(records):
+            return None
+    elif candidate is not records[-1]:
+        return None
+    return candidate.record_id
+
+
+def pending_workflow_event_payload(
+    replay: ArtifactReplayResult,
+) -> WorkflowEventPayload | None:
+    """Project the sole crash-tail event from its already durable domain fact."""
+    record_id = replay.pending_workflow_event_record_id
+    if record_id is None:
+        return None
+    positions = {
+        record.record_id: index for index, record in enumerate(replay.records)
+    }
+    domain_record = next(
+        record for record in replay.records if record.record_id == record_id
+    )
+    domain = domain_record.payload
+    kind = _workflow_event_domain_kind(domain)
+    assert kind is not None
+    if isinstance(domain, RunIdentityPayload):
+        return WorkflowEventPayload("run", None, "1", None, (record_id,))
+    if isinstance(domain, WorkflowTransitionPayload):
+        return WorkflowEventPayload(
+            "transition",
+            domain.work_unit_id,
+            domain.slice_id,
+            None,
+            (record_id,),
+        )
+    work_unit_id = domain.work_unit_id if isinstance(domain, ReviewPayload) else None
+    prior_transitions = tuple(
+        record.payload
+        for record in replay.records[: positions[record_id] + 1]
+        if isinstance(record.payload, WorkflowTransitionPayload)
+        and record.payload.work_unit_id is not None
+        and (work_unit_id is None or record.payload.work_unit_id == work_unit_id)
+    )
+    if not prior_transitions:
+        _fail(
+            ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+            "pending workflow event has no earlier workflow cursor",
+            domain_record,
+        )
+    cursor = prior_transitions[-1]
+    assert cursor.work_unit_id is not None
+    if work_unit_id is None:
+        work_unit_id = cursor.work_unit_id
+    round_candidates = [
+        payload.round_number
+        for record in replay.records[: positions[record_id] + 1]
+        for payload in (record.payload,)
+        if isinstance(payload, (WorkUnitPayload, CorrectionWorkUnitPayload))
+        and record.logical_id.removeprefix("work-unit-") == work_unit_id
+    ]
+    if isinstance(domain, ReviewPayload):
+        suffix = domain_record.logical_id.rsplit("-", 1)[-1]
+        if not suffix.isdigit():
+            _fail(
+                ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+                "pending review event has no canonical logical round",
+                domain_record,
+            )
+        round_candidates.append(int(suffix))
+    return WorkflowEventPayload(
+        kind,
+        work_unit_id,
+        cursor.slice_id,
+        max(round_candidates, default=1),
+        (record_id,),
+    )
+
+
 def _result(
     expected_run_id: str,
     records: tuple[ArtifactRecord, ...],
@@ -1751,6 +2601,7 @@ def _result(
     review_packets: list[ReviewPacketPayload] = []
     review_anchors: list[ReviewAnchorPayload] = []
     review_validation_bindings: list[ReviewValidationBindingPayload] = []
+    workflow_events: list[ReplayedWorkflowEvent] = []
     side_effects: list[ReplayedSideEffect] = []
     side_effect_indexes: dict[str, int] = {}
     for sequence, record in enumerate(records, start=1):
@@ -1769,6 +2620,17 @@ def _result(
                     payload.work_unit_status,
                     payload.step,
                 )
+        elif isinstance(payload, WorkflowEventPayload):
+            workflow_events.append(
+                ReplayedWorkflowEvent(
+                    record.record_id,
+                    payload.event_kind,
+                    payload.work_unit_id,
+                    payload.slice_id,
+                    payload.round_number,
+                    payload.record_refs,
+                )
+            )
         elif isinstance(payload, WorkflowPolicyPayload):
             workflow_policies[payload.work_unit_id] = payload
         elif isinstance(payload, SliceBoundaryPayload):
@@ -1842,6 +2704,9 @@ def _result(
         records=records,
         head_record_id=records[-1].record_id if records else None,
         pending_review_record_id=pending_review_record_id,
+        pending_workflow_event_record_id=_pending_workflow_event_record_id(
+            records, pending_review_record_id
+        ),
         semantic_facts=facts,
         semantic_digest=hashlib.sha256(canonical_json(documents)).hexdigest(),
         audit_events=tuple(
@@ -1854,6 +2719,7 @@ def _result(
             )
             for index, record in enumerate(records, start=1)
         ),
+        workflow_events=tuple(workflow_events),
         run_identity=run_identity,
         run_profile=run_profile,
         workflow_cursor=workflow_cursor,

@@ -52,6 +52,7 @@ from artifact_models import (
     WorkflowCompletionPayload,
     WorkflowPolicyPayload,
     WorkflowTransitionPayload,
+    canonical_json,
 )
 from artifact_store import ArtifactStore
 from artifact_migration import ArtifactResumeError, resolve_resume_state
@@ -132,6 +133,8 @@ from native_review_request import (
 from artifact_replay import (
     ArtifactReplayError,
     ReplayDiagnosticCode,
+    normalize_workflow_state_mirror,
+    project_workflow_state,
     replay_artifacts,
     replay_findings,
 )
@@ -510,7 +513,7 @@ def test_run_records_exist_before_first_workflow_dispatch(
         chain = ArtifactStore(repository, state.run_id).load_chain()
         observed["types"] = tuple(record.record_type for record in chain)
         observed["identity"] = chain[0].payload
-        observed["profile"] = chain[1].payload
+        observed["profile"] = chain[2].payload
         raise DispatchObserved
 
     monkeypatch.setattr(WorkflowEngine, "run_current_work_unit", inspect_first_dispatch)
@@ -519,19 +522,21 @@ def test_run_records_exist_before_first_workflow_dispatch(
     with pytest.raises(DispatchObserved):
         run_production_workflow(task, args, force_new=True)
 
-    assert observed["types"][:8] == (
+    assert observed["types"][:10] == (
         RecordType.RUN_IDENTITY,
+        RecordType.WORKFLOW_EVENT,
         RecordType.RUN_PROFILE,
         RecordType.SIDE_EFFECT,
         RecordType.SIDE_EFFECT,
         RecordType.WORKFLOW_TRANSITION,
+        RecordType.WORKFLOW_EVENT,
         RecordType.WORKFLOW_POLICY,
         RecordType.GATE_TRANSITION,
         RecordType.TASK,
     )
     assert all(
         record_type is RecordType.SIDE_EFFECT
-        for record_type in observed["types"][8:]
+        for record_type in observed["types"][10:]
     )
     assert observed["identity"] == RunIdentityPayload(
         str(task.resolve()),
@@ -1230,11 +1235,14 @@ def test_structured_bind_persists_contract_and_active_work_unit_once(
     chain = ArtifactStore(repository, state.run_id).load_chain()
     assert tuple(item.record_type for item in chain) == (
         RecordType.RUN_IDENTITY,
+        RecordType.WORKFLOW_EVENT,
         RecordType.RUN_PROFILE,
         RecordType.SIDE_EFFECT,
         RecordType.SIDE_EFFECT,
         RecordType.WORKFLOW_TRANSITION,
+        RecordType.WORKFLOW_EVENT,
         RecordType.WORKFLOW_TRANSITION,
+        RecordType.WORKFLOW_EVENT,
         RecordType.WORKFLOW_POLICY,
         RecordType.WORKFLOW_POLICY,
         RecordType.SLICE_BOUNDARY,
@@ -1242,6 +1250,11 @@ def test_structured_bind_persists_contract_and_active_work_unit_once(
         RecordType.GATE_TRANSITION,
         RecordType.TASK,
         RecordType.WORK_UNIT,
+    )
+    projection = project_workflow_state(replay_artifacts(chain, state.run_id))
+    assert (
+        normalize_workflow_state_mirror(state, replay_artifacts(chain, state.run_id))
+        == projection.canonical_document
     )
 
 
@@ -1261,6 +1274,8 @@ def test_r2_transition_records_precede_dispatch_guard_across_round_gate_resume_a
         slice_count=2,
         task_digest="a" * 64,
         task_scope_patterns=("src/one.py", "src/two.py"),
+        work_plan_path="docs/internal/approved-plan.md",
+        approved_plan_commit=head,
         target_branch="feature/r2-transition-order",
         protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
     ).bind_slice_plan(
@@ -1299,6 +1314,10 @@ def test_r2_transition_records_precede_dispatch_guard_across_round_gate_resume_a
         replay = replay_artifacts(
             ArtifactStore(repository, state.run_id).load_chain(), state.run_id
         )
+        assert driver.active_state is not None
+        assert json.loads(normalize_workflow_state_mirror(driver.active_state, replay)) == (
+            project_workflow_state(replay).to_document()
+        )
         assert replay.workflow_cursor is not None
         assert replay.workflow_cursor.slice_id == str(candidate.current_slice_id)
         assert replay.workflow_cursor.work_unit_id == str(candidate.current_work_unit_id)
@@ -1333,6 +1352,75 @@ def test_r2_transition_records_precede_dispatch_guard_across_round_gate_resume_a
     assert bind_before_dispatch(slice_two) == initial_count + 5
     assert tuple(record.revision for record in transition_records()) == tuple(
         range(1, initial_count + 6)
+    )
+
+
+def test_r9_resume_reconciles_one_durable_transition_without_its_event(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/r9-event-recovery")
+    task = repository / "task.md"
+    _write_task(task, "feature/r9-event-recovery", "src/runtime.py")
+    head = _git(repository, "rev-parse", "HEAD")
+    state = init_workflow_state(
+        run_id="r9-event-recovery",
+        task_file=str(task),
+        branch="feature/r9-event-recovery",
+        branch_base=head,
+        slice_count=1,
+        task_digest="a" * 64,
+        task_scope_patterns=("src/runtime.py",),
+        target_branch="feature/r9-event-recovery",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+    )
+    first = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    first.bind_work_unit(state)
+    bridge = ArtifactBridge(ArtifactStore(repository, state.run_id))
+    transition = bridge.append(
+        WorkflowTransitionPayload(
+            "1", "in_progress", "1", "claude_plan_review", "in_progress"
+        ),
+        logical_id="workflow-transition",
+        idempotency_key="workflow-transition:crash-tail",
+        fingerprint_sha256=state.task_digest,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    before = replay_artifacts(bridge.store.load_chain(), state.run_id)
+    assert before.pending_workflow_event_record_id == transition.record_id
+
+    resumed = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    resumed.bind_work_unit(state.with_current_step(WorkflowStep.CLAUDE_PLAN_REVIEW))
+
+    replay = replay_artifacts(bridge.store.load_chain(), state.run_id)
+    assert replay.pending_workflow_event_record_id is None
+    matching = tuple(
+        event for event in replay.workflow_events
+        if event.record_refs == (transition.record_id,)
+    )
+    assert len(matching) == 1
+    assert (
+        matching[0].event_kind,
+        matching[0].work_unit_id,
+        matching[0].slice_id,
+        matching[0].round_number,
+        matching[0].record_refs,
+    ) == ("transition", "1", "1", None, (transition.record_id,))
+    assert resumed.active_state is not None
+    assert (
+        normalize_workflow_state_mirror(resumed.active_state, replay)
+        == project_workflow_state(replay).canonical_document
     )
 
 

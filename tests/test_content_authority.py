@@ -9,6 +9,7 @@ import time
 
 import pytest
 
+from agent_runtime import OrchestratorConfig
 from artifact_bridge import ArtifactBridge
 from artifact_models import (
     AgentResultPayload,
@@ -36,6 +37,7 @@ from contracts import (
 )
 from orchestrator import ProductionWorkflowDriver
 from review_packets import build_review_packet
+from workflow_state import init_workflow_state
 
 
 FINGERPRINT = "a" * 64
@@ -51,6 +53,25 @@ Bind large content outside the record envelope.
 
 - The record binds the exact external bytes.
 """
+
+
+def _validation_driver(store: ArtifactStore) -> ProductionWorkflowDriver:
+    driver = ProductionWorkflowDriver(
+        repository_root=store.repository_root,
+        state_file=store.repository_root / ".orchestrator" / "state.json",
+        agents={},
+        config=OrchestratorConfig(repo_root=store.repository_root),
+        allowed_roots=(store.repository_root,),
+    )
+    driver._artifact_bridge = ArtifactBridge(store)  # noqa: SLF001
+    driver.active_state = init_workflow_state(
+        run_id=store.run_id,
+        task_file=str(store.repository_root / "task.md"),
+        branch="feature/content-authority",
+        branch_base="b" * 40,
+        slice_count=1,
+    )
+    return driver
 
 
 def _attestation_for_packet() -> ValidationAttestation:
@@ -150,8 +171,7 @@ def test_validation_content_preserves_exact_streams_and_pre_r8_digest(
         content_digest_format=VALIDATION_MATRIX_DIGEST_V1,
     )
     store = ArtifactStore(tmp_path, "validation-content")
-    driver = object.__new__(ProductionWorkflowDriver)
-    driver._artifact_bridge = ArtifactBridge(store)  # noqa: SLF001
+    driver = _validation_driver(store)
     driver.persist_validation_attestation(attestation)
 
     replay = replay_artifacts(store.load_chain(), store.run_id)
@@ -358,8 +378,7 @@ def test_validation_recovery_never_reuses_an_earlier_attempt(
             content_digest_format=VALIDATION_MATRIX_DIGEST_V1,
         )
 
-    driver = object.__new__(ProductionWorkflowDriver)
-    driver._artifact_bridge = ArtifactBridge(  # noqa: SLF001
+    driver = _validation_driver(
         ArtifactStore(tmp_path, "validation-attempt-recovery")
     )
     first = attestation(f"validation-{FINGERPRINT[:12]}")

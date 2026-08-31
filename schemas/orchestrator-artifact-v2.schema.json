@@ -8,7 +8,7 @@
   "properties": {
     "schema_version": {"const": "2"},
     "record_id": {"$ref": "#/$defs/identifier"},
-    "record_type": {"enum": ["run_identity", "run_profile", "workflow_transition", "workflow_policy", "slice_boundary", "task", "plan", "work_unit", "correction_work_unit", "agent_result", "diagnostic", "review", "review_anchor", "review_validation_binding", "finding_transition", "finding_handoff_export", "finding_handoff_import", "validation_request", "validation_content", "validation_attestation", "provider_content", "review_packet", "gate", "gate_transition", "gate_decision", "binding", "invocation_failure", "quota_pause", "transient_retry", "resume_check", "workflow_completion", "provider_input_measurement", "provider_attempt", "final_review_preflight", "side_effect"]},
+    "record_type": {"enum": ["run_identity", "run_profile", "workflow_transition", "workflow_event", "workflow_policy", "slice_boundary", "task", "plan", "work_unit", "correction_work_unit", "agent_result", "diagnostic", "review", "review_anchor", "review_validation_binding", "finding_transition", "finding_handoff_export", "finding_handoff_import", "validation_request", "validation_content", "validation_attestation", "provider_content", "review_packet", "gate", "gate_transition", "gate_decision", "binding", "invocation_failure", "quota_pause", "transient_retry", "resume_check", "workflow_completion", "provider_input_measurement", "provider_attempt", "final_review_preflight", "side_effect"]},
     "run_id": {"$ref": "#/$defs/identifier"},
     "logical_id": {"$ref": "#/$defs/identifier"},
     "revision": {"type": "integer", "minimum": 1},
@@ -23,6 +23,7 @@
     {"if": {"properties": {"record_type": {"const": "run_identity"}}}, "then": {"properties": {"status": {"const": "bound"}, "payload": {"$ref": "#/$defs/run_identity"}}}},
     {"if": {"properties": {"record_type": {"const": "run_profile"}}}, "then": {"properties": {"status": {"const": "bound"}, "payload": {"$ref": "#/$defs/run_profile"}}}},
     {"if": {"properties": {"record_type": {"const": "workflow_transition"}}}, "then": {"properties": {"status": {"const": "transitioned"}, "payload": {"$ref": "#/$defs/workflow_transition"}}}},
+    {"if": {"properties": {"record_type": {"const": "workflow_event"}}}, "then": {"properties": {"status": {"const": "recorded"}, "payload": {"$ref": "#/$defs/workflow_event"}}}},
     {"if": {"properties": {"record_type": {"const": "workflow_policy"}}}, "then": {"properties": {"status": {"const": "bound"}, "payload": {"$ref": "#/$defs/workflow_policy"}}}},
     {"if": {"properties": {"record_type": {"const": "slice_boundary"}}}, "then": {"properties": {"status": {"const": "bound"}, "payload": {"$ref": "#/$defs/slice_boundary"}}}},
     {"if": {"properties": {"record_type": {"const": "task"}}}, "then": {"properties": {"status": {"const": "accepted"}, "payload": {"$ref": "#/$defs/task"}}}},
@@ -123,6 +124,22 @@
       "oneOf": [
         {"properties": {"work_unit_id": {"type": "null"}, "step": {"type": "null"}, "work_unit_status": {"type": "null"}}},
         {"properties": {"work_unit_id": {"$ref": "#/$defs/identifier"}, "step": {"$ref": "#/$defs/identifier"}, "work_unit_status": {"enum": ["pending", "in_progress", "awaiting_user_decision", "waiting_for_quota", "waiting_for_retry", "awaiting_resume", "completed"]}}}
+      ]
+    },
+    "workflow_event": {
+      "type": "object", "additionalProperties": false,
+      "required": ["event_kind", "work_unit_id", "slice_id", "round_number", "record_refs"],
+      "properties": {
+        "event_kind": {"enum": ["run", "transition", "validation", "review"]},
+        "work_unit_id": {"oneOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]},
+        "slice_id": {"$ref": "#/$defs/identifier"},
+        "round_number": {"oneOf": [{"type": "integer", "minimum": 1}, {"type": "null"}]},
+        "record_refs": {"$ref": "#/$defs/non_empty_identifiers"}
+      },
+      "allOf": [
+        {"if": {"properties": {"event_kind": {"enum": ["validation", "review"]}}}, "then": {"properties": {"work_unit_id": {"$ref": "#/$defs/identifier"}, "round_number": {"type": "integer", "minimum": 1}}}},
+        {"if": {"properties": {"event_kind": {"const": "transition"}}}, "then": {"properties": {"round_number": {"type": "null"}}}},
+        {"if": {"properties": {"event_kind": {"const": "run"}}}, "then": {"properties": {"work_unit_id": {"type": "null"}, "round_number": {"type": "null"}}}}
       ]
     },
     "workflow_policy": {

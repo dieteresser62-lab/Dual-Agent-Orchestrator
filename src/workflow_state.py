@@ -1192,6 +1192,22 @@ class WorkflowState:
             self.runtime_history, Mapping
         ):
             raise WorkflowStateValidationError("runtime_history must be an object")
+        if isinstance(self.runtime_history, Mapping):
+            candidates: list[object] = []
+            if set(self.runtime_history) == {"current", "archive"}:
+                archive = self.runtime_history.get("archive")
+                if isinstance(archive, list):
+                    candidates.extend(archive)
+                candidates.append(self.runtime_history.get("current"))
+            else:
+                candidates.append(self.runtime_history)
+            if any(
+                isinstance(candidate, Mapping) and "events" in candidate
+                for candidate in candidates
+            ):
+                raise WorkflowStateValidationError(
+                    "runtime_history.events is retired; project workflow events from records"
+                )
         if self.execution_mode not in {"IMPLEMENT", "PLAN_ONLY"}:
             raise WorkflowStateValidationError(
                 "execution_mode must be IMPLEMENT or PLAN_ONLY"

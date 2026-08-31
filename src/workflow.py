@@ -507,7 +507,6 @@ class WorkflowHistory:
         result: dict[str, object] = {
             "work_unit_id": self.work_unit_id,
             "findings": [_finding_to_dict(item) for item in self.findings],
-            "events": [_event_to_dict(item) for item in self.events],
             "attestations": [_attestation_to_dict(item) for item in self.attestations],
             "last_claude_fingerprint": self.last_claude_fingerprint,
             "latest_claude_review": _review_to_dict(self.latest_claude_review),
@@ -529,7 +528,7 @@ class WorkflowHistory:
         if not isinstance(raw, dict):
             raise ValueError("workflow history must be an object")
         expected = {
-            "work_unit_id", "findings", "events", "attestations",
+            "work_unit_id", "findings", "attestations",
             "last_claude_fingerprint", "latest_claude_review",
         }
         allowed = {*expected, "codex_final_report", "active_review_packet"}
@@ -556,7 +555,7 @@ class WorkflowHistory:
         return cls(
             work_unit_id=int(raw["work_unit_id"]),
             findings=tuple(_finding_from_dict(item) for item in _json_list(raw["findings"])),
-            events=tuple(_event_from_dict(item) for item in _json_list(raw["events"])),
+            events=(),
             attestations=tuple(
                 _attestation_from_dict(item) for item in _json_list(raw["attestations"])
             ),

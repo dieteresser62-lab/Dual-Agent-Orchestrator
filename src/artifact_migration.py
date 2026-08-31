@@ -32,7 +32,9 @@ from artifact_models import (
     ValidationContentPayload,
     WorkUnitPayload,
     WorkflowCompletionPayload,
+    WorkflowEventPayload,
     WorkflowPolicyPayload,
+    WorkflowTransitionPayload,
     ProviderInputMeasurementPayload,
     FinalReviewPreflightPayload,
     FindingHandoffExportPayload,
@@ -166,6 +168,73 @@ def require_workflow_status_prefix(
             code=ReplayDiagnosticCode.RECORD_MISSING,
         )
     return transition_records, policy_records
+
+
+def require_workflow_event_prefix(
+    replay: ArtifactReplayResult,
+    *,
+    allow_incomplete_tail: bool = False,
+) -> None:
+    """Require one non-duplicating event reference for every auditable fact."""
+    expected = {
+        record.record_id: kind
+        for record in replay.records
+        if record.record_id != replay.pending_review_record_id
+        for kind in (
+            "run"
+            if isinstance(record.payload, RunIdentityPayload)
+            else "transition"
+            if isinstance(record.payload, WorkflowTransitionPayload)
+            else "validation"
+            if isinstance(record.payload, ValidationAttestationPayload)
+            else "review"
+            if isinstance(record.payload, ReviewPayload)
+            else None,
+        )
+        if kind is not None
+    }
+    observed: dict[str, str] = {}
+    event_records = tuple(
+        record
+        for record in replay.records
+        if isinstance(record.payload, WorkflowEventPayload)
+    )
+    for record in event_records:
+        payload = record.payload
+        referenced = payload.record_refs[0]
+        if referenced in observed:
+            raise ArtifactResumeError(
+                "workflow event prefix contains a duplicate domain reference",
+                code=ReplayDiagnosticCode.RECORD_DUPLICATE,
+                record_id=record.record_id,
+            )
+        observed[referenced] = payload.event_kind
+    if expected != observed:
+        missing = set(expected) - set(observed)
+        if (
+            allow_incomplete_tail
+            and not (set(observed) - set(expected))
+            and missing == {replay.pending_workflow_event_record_id}
+        ):
+            return
+        differing = next(iter(set(expected) ^ set(observed)), None)
+        related = next(
+            (
+                record.record_id
+                for record in event_records
+                if record.payload.record_refs[0] == differing
+            ),
+            differing,
+        )
+        raise ArtifactResumeError(
+            "structured-v2 run has no complete workflow event prefix",
+            code=(
+                ReplayDiagnosticCode.RECORD_MISSING
+                if set(observed).issubset(expected)
+                else ReplayDiagnosticCode.MIRROR_AMBIGUOUS
+            ),
+            record_id=related,
+        )
 
 
 def assert_workflow_status_mirror(
@@ -631,6 +700,7 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
         ) from exc
     chain = replay.records
     assert_run_binding_mirror(replay, state, binding)
+    require_workflow_event_prefix(replay, allow_incomplete_tail=True)
     require_workflow_status_prefix(replay)
     assert_slice_boundary_mirror(replay, state)
     state = assert_invocation_failure_mirror(replay, state)
@@ -1031,29 +1101,12 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
                 "review contract projection is ambiguous", projected.record_id
             )
         record_reviews[key] = projected
-    mirror_reviews: dict[tuple[str, int], dict[str, object]] = {}
     mirror_latest: dict[str, object] = {}
     for history in _runtime_history_mirrors(state):
         unit_id = history.get("work_unit_id")
         if not isinstance(unit_id, int):
             continue
         unit_key = str(unit_id)
-        events = history.get("events")
-        if isinstance(events, list):
-            for event in events:
-                if not isinstance(event, dict) or event.get("kind") != "review":
-                    continue
-                round_number = event.get("round_number")
-                result = event.get("result")
-                if (
-                    isinstance(round_number, int)
-                    and round_number > 0
-                    and isinstance(result, dict)
-                ):
-                    key = (unit_key, round_number)
-                    if key in mirror_reviews:
-                        raise mismatch("review contract mirror is ambiguous")
-                    mirror_reviews[key] = result
         try:
             latest_key = next(
                 key
@@ -1063,16 +1116,8 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
         except StopIteration:
             raise mismatch("latest review mirror has no aggregate field") from None
         mirror_latest[unit_key] = history.get(latest_key)
-    record_keys = set(record_reviews)
-    mirror_keys = set(mirror_reviews)
-    if mirror_keys - record_keys:
-        raise mismatch(
-            "review contracts differ from state-v3",
-            None,
-            code=_mirror_difference_code(record_keys, mirror_keys),
-        )
-    for key in record_keys & mirror_keys:
-        projected = record_reviews[key]
+    projected_by_unit: dict[str, list[tuple[int, object, dict[str, object]]]] = {}
+    for (unit_id, round_number), projected in record_reviews.items():
         statement = asdict(projected.result)
         validation_statement = statement.get("validation")
         if isinstance(validation_statement, dict):
@@ -1081,21 +1126,21 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
             for spec in validation_statement.get("command_specs", ()):
                 if isinstance(spec, dict):
                     spec["mode"] = "argv" if spec.get("argv") else "legacy_shell"
-        if canonical_json(statement) != canonical_json(mirror_reviews[key]):
-            raise mismatch(
-                "review contract fields differ from state-v3", projected.record_id
-            )
-    mirrored_by_unit: dict[str, list[tuple[int, dict[str, object]]]] = {}
-    for (unit_id, round_number), result in mirror_reviews.items():
-        mirrored_by_unit.setdefault(unit_id, []).append((round_number, result))
+        projected_by_unit.setdefault(unit_id, []).append(
+            (round_number, projected, statement)
+        )
     for unit_id, latest in mirror_latest.items():
-        reviews = mirrored_by_unit.get(unit_id, [])
-        expected_latest = max(reviews, key=lambda item: item[0])[1] if reviews else None
+        reviews = projected_by_unit.get(unit_id, [])
+        selected = max(reviews, key=lambda item: item[0]) if reviews else None
+        expected_latest = None if selected is None else selected[2]
         if (
             latest is not None
             and canonical_json(latest) != canonical_json(expected_latest)
         ):
-            raise mismatch("latest review differs from its event projection")
+            raise mismatch(
+                "latest review differs from its record projection",
+                None if selected is None else selected[1].record_id,
+            )
 
     history_mirrors = _runtime_history_mirrors(state)
     final_report_mirrors: dict[str, bytes] = {}
@@ -1439,11 +1484,12 @@ def _recoverable_pending_review_finding_gap(
         review_round = int(round_text)
         if (
             review_round > unit.round_number
-            or _state_has_review_event(
+            or _state_has_review_projection(
                 state,
                 work_unit_id=unit.work_unit_id,
                 reviewer=reviewer,
                 round_number=review_round,
+                fingerprint=record.fingerprint.sha256,
             )
         ):
             continue
@@ -1592,13 +1638,15 @@ def _pending_denied_review(
     return reviews[0] if len(reviews) == 1 else None
 
 
-def _state_has_review_event(
+def _state_has_review_projection(
     state: WorkflowState,
     *,
     work_unit_id: int,
     reviewer: str,
     round_number: int,
+    fingerprint: str,
 ) -> bool:
+    """Recognize a review already represented by the remaining R7 aggregates."""
     raw = state.runtime_history
     if not isinstance(raw, dict):
         return False
@@ -1619,19 +1667,15 @@ def _state_has_review_event(
             continue
         if candidate_work_unit != work_unit_id:
             continue
-        events = candidate.get("events")
-        if not isinstance(events, list):
-            continue
-        for event in events:
-            if not isinstance(event, dict) or event.get("kind") != "review":
-                continue
-            result = event.get("result")
-            if (
-                isinstance(result, dict)
-                and result.get("reviewer") == reviewer
-                and event.get("round_number") == round_number
-            ):
-                return True
+        latest = candidate.get("latest_claude_review")  # allowlist:provider -- canonical state-v3 field
+        if round_number < state.current_work_unit.round_number:
+            return True
+        if (
+            isinstance(latest, dict)
+            and latest.get("reviewer") == reviewer
+            and candidate.get("last_claude_fingerprint") == fingerprint  # allowlist:provider -- canonical state-v3 field
+        ):
+            return True
     return False
 
 

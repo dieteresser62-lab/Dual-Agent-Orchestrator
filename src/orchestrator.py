@@ -11,7 +11,7 @@ import shlex
 import time
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
-from typing import get_args, get_type_hints
+from typing import Callable, get_args, get_type_hints
 
 from agent_adapters import (
     AgentAdapter,
@@ -51,6 +51,7 @@ from artifact_migration import (
     assert_slice_boundary_mirror,
     assert_workflow_status_mirror,
     require_gate_prefix,
+    require_workflow_event_prefix,
     require_workflow_status_prefix,
     resolve_resume_state,
 )
@@ -72,15 +73,18 @@ from artifact_models import (
     RunIdentityPayload, RunProfilePayload,
     SideEffectPayload,
     SliceBoundaryPayload,
-    WorkflowPolicyPayload, WorkflowTransitionPayload,
+    WorkflowEventPayload, WorkflowPolicyPayload, WorkflowTransitionPayload,
     RecordType, stable_record_id, stable_side_effect_key,
 )
-from artifact_store import ArtifactStore
+from artifact_store import ArtifactStore, ArtifactStoreError
 from artifact_replay import (
     ArtifactReplayError,
     ArtifactReplayResult,
     ReplayedWorkflowCursor,
     ReplayedWorkUnitState,
+    pending_workflow_event_payload,
+    project_review_contracts,
+    project_validation_attestations,
     replay_artifacts,
 )
 from finding_reducer import (
@@ -701,6 +705,10 @@ class ProductionWorkflowDriver(WorkflowDriver):
         state = resolution.state
         self.active_state = state
         chain = replay.records
+        latest_record_reviews: dict[str, ArtifactRecord] = {}
+        for item in chain:
+            if isinstance(item.payload, ReviewPayload):
+                latest_record_reviews[item.payload.work_unit_id] = item
         record_reviews = Counter(
             (
                 item.payload.work_unit_id,
@@ -709,34 +717,33 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 item.payload.verdict,
                 item.payload.finding_ids,
             )
-            for item in chain
-            if isinstance(item.payload, ReviewPayload)
+            for item in latest_record_reviews.values()
         )
         mirror_reviews: Counter[tuple[object, ...]] = Counter()
         for work_unit_id, history in _persisted_histories(state).items():
-            for event in history.events:
-                if not isinstance(event, ReviewAuditEvent):
-                    continue
-                result = event.result
-                if result.validation is None:
-                    raise WorkflowExecutionError(
-                        "structured review mirror is missing its validation binding"
-                    )
-                mirror_reviews[
+            result = history.latest_claude_review  # allowlist:provider -- canonical history field
+            fingerprint = history.last_claude_fingerprint  # allowlist:provider -- canonical history field
+            if result is None and fingerprint is None:
+                continue
+            if result is None or fingerprint is None or result.validation is None:
+                raise WorkflowExecutionError(
+                    "structured review mirror is missing its review or validation binding"
+                )
+            mirror_reviews[
+                (
+                    str(work_unit_id),
+                    result.reviewer.value,
+                    fingerprint,
                     (
-                        str(work_unit_id),
-                        result.reviewer.value,
-                        result.validation.diff_fingerprint,
-                        (
-                            "stop"
-                            if result.stopped
-                            else "approved"
-                            if result.approval is True
-                            else "denied"
-                        ),
-                        tuple(item.finding_id for item in result.findings),
-                    )
-                ] += 1
+                        "stop"
+                        if result.stopped
+                        else "approved"
+                        if result.approval is True
+                        else "denied"
+                    ),
+                    tuple(item.finding_id for item in result.findings),
+                )
+            ] += 1
         # Compatibility for runs checkpointed by the former final-denial
         # transition bug: the authoritative denied ReviewPayload and the
         # following correction work unit were durable, but the redundant
@@ -777,6 +784,14 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 allow_incomplete_review_tail=True,
             )
             assert_run_binding_mirror(existing_replay, state, binding)
+            if existing_replay.pending_workflow_event_record_id is not None:
+                self._reconcile_pending_workflow_event(existing_replay)
+                existing_replay = replay_artifacts(
+                    bridge.store.load_chain(),
+                    state.run_id,
+                    allow_incomplete_review_tail=True,
+                )
+            require_workflow_event_prefix(existing_replay)
             if existing_replay.pending_review_record_id is not None:
                 # The reviewer recovery path is the only writer allowed to
                 # complete this exact append tail.  Appending baseline facts
@@ -807,7 +822,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
                     raise WorkflowExecutionError(
                         "structured-v2 chain predates the side-effect ledger and cannot be backfilled"
                     )
-        bridge.append(
+        identity_record = bridge.append(
             RunIdentityPayload(
                 task_file=state.task_file,
                 branch=state.branch,
@@ -819,6 +834,13 @@ class ProductionWorkflowDriver(WorkflowDriver):
             idempotency_key="run-identity",
             fingerprint_sha256=contract_fingerprint,
             fingerprint_kind=FingerprintKind.CONTRACT,
+        )
+        self._append_workflow_event(
+            event_kind="run",
+            work_unit_id=None,
+            slice_id="1",
+            round_number=None,
+            domain_record=identity_record,
         )
         bridge.append(
             RunProfilePayload(
@@ -1256,12 +1278,67 @@ class ProductionWorkflowDriver(WorkflowDriver):
             ),
             default=0,
         )
-        bridge.append(
+        transition_record = bridge.append(
             payload,
             logical_id="workflow-transition",
             idempotency_key=f"workflow-transition:{revision}",
             fingerprint_sha256=fingerprint,
             fingerprint_kind=FingerprintKind.CONTRACT,
+        )
+        self._append_workflow_event(
+            event_kind="transition",
+            work_unit_id=payload.work_unit_id,
+            slice_id=payload.slice_id,
+            round_number=None,
+            domain_record=transition_record,
+        )
+
+    def _append_workflow_event(
+        self,
+        *,
+        event_kind: str,
+        work_unit_id: str | None,
+        slice_id: str,
+        round_number: int | None,
+        domain_record: ArtifactRecord,
+    ) -> ArtifactRecord:
+        """Append ordering metadata which references, but never copies, a fact."""
+        bridge = self._artifact_bridge
+        assert bridge is not None
+        return bridge.append(
+            WorkflowEventPayload(
+                event_kind=event_kind,
+                work_unit_id=work_unit_id,
+                slice_id=slice_id,
+                round_number=round_number,
+                record_refs=(domain_record.record_id,),
+            ),
+            logical_id=f"workflow-event-{domain_record.record_id}",
+            idempotency_key=f"workflow-event:{domain_record.record_id}",
+            fingerprint_sha256=domain_record.fingerprint.sha256,
+            fingerprint_kind=domain_record.fingerprint.kind,
+        )
+
+    def _reconcile_pending_workflow_event(
+        self, replay: ArtifactReplayResult
+    ) -> ArtifactRecord:
+        """Finish the sole deterministic domain-record/event crash tail."""
+        payload = pending_workflow_event_payload(replay)
+        if payload is None:
+            raise WorkflowExecutionError(
+                "workflow event reconciliation has no unique pending domain record"
+            )
+        domain_record = next(
+            record
+            for record in replay.records
+            if record.record_id == payload.record_refs[0]
+        )
+        return self._append_workflow_event(
+            event_kind=payload.event_kind,
+            work_unit_id=payload.work_unit_id,
+            slice_id=payload.slice_id,
+            round_number=payload.round_number,
+            domain_record=domain_record,
         )
 
     def _persist_structured_tail(self, state: WorkflowState) -> None:
@@ -3148,6 +3225,13 @@ class ProductionWorkflowDriver(WorkflowDriver):
             previous_findings=previous_findings,
             structured=True,
         )
+        self._append_workflow_event(
+            event_kind="review",
+            work_unit_id=str(unit.work_unit_id),
+            slice_id=str(unit.slice_id),
+            round_number=round_number,
+            domain_record=review_record,
+        )
 
     def _persist_review_finding_transitions(
         self,
@@ -3317,6 +3401,18 @@ class ProductionWorkflowDriver(WorkflowDriver):
             raise WorkflowExecutionError(
                 "validation content forward binding is not stable"
             )
+        if self.active_state is None:
+            raise WorkflowExecutionError(
+                "validation event persistence lacks an active workflow state"
+            )
+        unit = self.active_state.current_work_unit
+        self._append_workflow_event(
+            event_kind="validation",
+            work_unit_id=str(unit.work_unit_id),
+            slice_id=str(unit.slice_id),
+            round_number=unit.round_number,
+            domain_record=result_record,
+        )
 
     def recover_pending_validation_attestation(
         self,
@@ -4440,7 +4536,15 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 branch=state.branch,
                 task_scope=state.task_scope_patterns,
             )
-            entries = _overall_audit_entries(state, structured_replay)
+            entries = _overall_audit_entries(
+                state,
+                structured_replay,
+                (
+                    None
+                    if self._artifact_bridge is None
+                    else self._artifact_bridge.store.read_blob
+                ),
+            )
             if entries:
                 project_overall_audit(document, entries)
                 if structured_replay is not None:
@@ -4667,7 +4771,11 @@ def _audit_projection(
     )
 
 
-def _persisted_histories(state: WorkflowState) -> dict[int, WorkflowHistory]:
+def _persisted_histories(
+    state: WorkflowState,
+    structured_replay: ArtifactReplayResult | None = None,
+    read_blob: Callable[[object], bytes] | None = None,
+) -> dict[int, WorkflowHistory]:
     raw = state.runtime_history
     if not isinstance(raw, dict):
         return {}
@@ -4686,7 +4794,160 @@ def _persisted_histories(state: WorkflowState) -> dict[int, WorkflowHistory]:
         except (TypeError, ValueError):
             continue
         histories[parsed.work_unit_id] = parsed
+    if structured_replay is not None and read_blob is not None:
+        histories = _attach_record_events(histories, structured_replay, read_blob)
     return histories
+
+
+def _attach_record_events(
+    histories: dict[int, WorkflowHistory],
+    replay: ArtifactReplayResult,
+    read_blob: Callable[[object], bytes],
+) -> dict[int, WorkflowHistory]:
+    """Rehydrate the retired event mirror from record references only."""
+    reviews = {
+        item.record_id: item
+        for item in project_review_contracts(replay, read_blob)
+    }
+    validations = dict(project_validation_attestations(replay, read_blob))
+    records = {record.record_id: record for record in replay.records}
+    positions = {
+        record.record_id: index for index, record in enumerate(replay.records)
+    }
+    projected = dict(histories)
+    event_lists: dict[int, list[ReviewAuditEvent | ValidationAuditEvent]] = {}
+    attestation_lists: dict[int, list[ValidationAttestation]] = {}
+    latest_reviews: dict[int, tuple[str, ContractResult]] = {}
+    prior_review_findings: dict[int, tuple[FindingRecord, ...]] = {}
+    correction_finding_ids = {
+        int(record.logical_id.removeprefix("work-unit-")): record.payload.finding_ids
+        for record in replay.records
+        if isinstance(record.payload, CorrectionWorkUnitPayload)
+        and record.logical_id.removeprefix("work-unit-").isdigit()
+    }
+    for event in replay.workflow_events:
+        if event.event_kind == "transition" or event.work_unit_id is None:
+            continue
+        try:
+            work_unit_id = int(event.work_unit_id)
+        except ValueError as exc:
+            raise WorkflowExecutionError(
+                "workflow event work-unit identity is not numeric"
+            ) from exc
+        work_unit_events = event_lists.setdefault(work_unit_id, [])
+        referenced_id = event.record_refs[0]
+        if event.event_kind == "validation":
+            attestation = validations.get(referenced_id)
+            if attestation is None:
+                raise WorkflowExecutionError(
+                    "validation workflow event has no projected attestation"
+                )
+            work_unit_events.append(
+                ValidationAuditEvent(
+                    len(work_unit_events) + 1,
+                    int(event.slice_id),
+                    attestation,
+                )
+            )
+            if all(
+                existing.attestation_id != attestation.attestation_id
+                for existing in attestation_lists.setdefault(work_unit_id, [])
+            ):
+                attestation_lists[work_unit_id].append(attestation)
+            continue
+        review = reviews.get(referenced_id)
+        if review is None or event.round_number is None:
+            raise WorkflowExecutionError(
+                "review workflow event has no complete projected review contract"
+            )
+        review_record = records[referenced_id]
+        review_position = positions[referenced_id]
+        prior_findings = prior_review_findings.get(work_unit_id)
+        if prior_findings is None:
+            reduced_prefix = reduce_findings(
+                replay.subset(replay.records[:review_position])
+            )
+            correction_ids = correction_finding_ids.get(work_unit_id)
+            prior_findings = (
+                reduced_prefix.ledger.findings
+                if correction_ids is None
+                else reduced_prefix.request_subset(
+                    finding_ids=correction_ids
+                ).findings
+            )
+        prior_steps = tuple(
+            record.payload.step
+            for record in replay.records[: review_position + 1]
+            if isinstance(record.payload, WorkflowTransitionPayload)
+            and record.payload.work_unit_id == event.work_unit_id
+        )
+        allowed_origin_set = {
+            finding.origin.slice_id
+            for finding in prior_findings
+            if finding.origin.slice_id != f"{int(event.slice_id):02d}"
+        }
+        if (
+            prior_steps
+            and prior_steps[-1] == WorkflowStep.CLAUDE_FINAL_REVIEW.value  # allowlist:provider -- canonical state-v3 step
+        ):
+            allowed_origin_set.add("FINAL")
+        allowed_origins = tuple(sorted(allowed_origin_set))
+        review_validation = review.result.validation
+        work_unit_attestations = attestation_lists.setdefault(work_unit_id, [])
+        if (
+            review_validation is not None
+            and all(
+                existing.attestation_id != review_validation.attestation_id
+                for existing in work_unit_attestations
+            )
+        ):
+            # Final review may reuse the last Slice attestation without writing
+            # another ValidationAttestation/WorkflowEvent for its own work unit.
+            # Its ReviewValidationBinding is nevertheless authoritative and the
+            # audit contract requires that attestation to precede the review.
+            work_unit_attestations.append(review_validation)
+            work_unit_events.append(
+                ValidationAuditEvent(
+                    len(work_unit_events) + 1,
+                    int(event.slice_id),
+                    review_validation,
+                )
+            )
+        work_unit_events.append(
+            ReviewAuditEvent(
+                len(work_unit_events) + 1,
+                int(event.slice_id),
+                event.round_number,
+                review.result,
+                allowed_origins,
+            )
+        )
+        latest_reviews[work_unit_id] = (
+            review_record.fingerprint.sha256,
+            review.result,
+        )
+        # _record_review() replaces, rather than merges, history.findings.
+        # A later round must therefore inherit exactly the prior review's
+        # snapshot and may not self-authorize origins from the run-wide ledger.
+        prior_review_findings[work_unit_id] = review.result.findings
+    for work_unit_id in {
+        *projected,
+        *event_lists,
+    }:
+        history = projected.get(work_unit_id, WorkflowHistory(work_unit_id))
+        latest = latest_reviews.get(work_unit_id)
+        projected[work_unit_id] = replace(
+            history,
+            events=tuple(event_lists.get(work_unit_id, ())),
+            attestations=tuple(attestation_lists.get(work_unit_id, ())),
+            last_claude_fingerprint=(  # allowlist:provider -- canonical history field
+                history.last_claude_fingerprint if latest is None else latest[0]  # allowlist:provider -- canonical history field
+            ),
+            latest_claude_review=(  # allowlist:provider -- canonical history field
+                history.latest_claude_review if latest is None else latest[1]  # allowlist:provider -- canonical history field
+            ),
+        )
+    return projected
 
 
 def _recoverable_final_denial_mirror_gap(
@@ -4845,8 +5106,9 @@ def _recover_final_review_attestation(
 def _overall_audit_entries(
     state: WorkflowState,
     structured_replay: ArtifactReplayResult | None = None,
+    read_blob: Callable[[object], bytes] | None = None,
 ) -> tuple[OverallAuditEntry, ...]:
-    histories = _persisted_histories(state)
+    histories = _persisted_histories(state, structured_replay, read_blob)
     entries: list[OverallAuditEntry] = []
     for unit in state.work_units:
         history = histories.get(unit.work_unit_id, WorkflowHistory(unit.work_unit_id))
@@ -5066,7 +5328,10 @@ def _plan_only_step_boundary(state: WorkflowState) -> str:
     )
 
 
-def _history(state: WorkflowState) -> WorkflowHistory:
+def _history(
+    state: WorkflowState,
+    repository_root: Path | None = None,
+) -> WorkflowHistory:
     if state.runtime_history is None:
         return WorkflowHistory(state.current_work_unit_id)
     try:
@@ -5078,7 +5343,27 @@ def _history(state: WorkflowState) -> WorkflowHistory:
             f"persisted workflow history is invalid: {exc}"
         ) from exc
     if history.work_unit_id != state.current_work_unit_id:
-        return WorkflowHistory(state.current_work_unit_id)
+        history = WorkflowHistory(state.current_work_unit_id)
+    if (
+        repository_root is not None
+        and state.effective_protocol_mode is ProtocolMode.STRUCTURED_V2
+    ):
+        try:
+            store = ArtifactStore(repository_root, state.run_id)
+            replay = replay_artifacts(
+                store.load_chain(),
+                state.run_id,
+                require_content_authority=True,
+                require_review_authority=True,
+                allow_incomplete_review_tail=True,
+            )
+            history = _attach_record_events(
+                {history.work_unit_id: history}, replay, store.read_blob
+            ).get(history.work_unit_id, history)
+        except (ArtifactReplayError, ArtifactStoreError, ValueError) as exc:
+            raise WorkflowExecutionError(
+                f"persisted workflow event projection is invalid: {exc}"
+            ) from exc
     return history
 
 
@@ -5706,10 +5991,10 @@ def run_production_workflow(
         replace_existing_run_id=replacement_run_id,
     )
     engine = WorkflowEngine(driver)
-    driver.checkpoint(state, _history(state))
+    history = _history(state, root)
+    driver.checkpoint(state, history)
 
     for _ in range(100):
-        history = _history(state)
         current = state.current_work_unit
         recovered_history = _recover_final_review_attestation(state, history)
         if recovered_history != history:
@@ -5814,7 +6099,7 @@ def run_production_workflow(
 
         if current.kind is WorkUnitKind.FINAL_REVIEW:
             audit_commit = driver.finalize_audit(state)
-            return WorkflowRunResult(state, _history(state), audit_commit)
+            return WorkflowRunResult(state, history, audit_commit)
 
         if current.kind is WorkUnitKind.PLAN:
             if state.execution_mode == TaskMode.PLAN_ONLY.value:
@@ -5862,7 +6147,7 @@ def run_production_workflow(
                     ) from exc
                 driver.persist_implementation_handoff(handoff, commit_ref)
                 logger.info("Implementation handoff ready: %s", handoff)
-                return WorkflowRunResult(state, _history(state), commit_ref)
+                return WorkflowRunResult(state, history, commit_ref)
             if not state.planned_slices:
                 raise WorkflowExecutionError("completed plan has no persisted SLICE_PLAN")
             carried_findings = driver.carry_forward_native_findings(
@@ -5873,13 +6158,11 @@ def run_production_workflow(
                 kind=WorkUnitKind.SLICE,
                 step=WorkflowStep.CODEX_IMPLEMENTATION,
             )
-            driver.checkpoint(
-                state,
-                WorkflowHistory(
-                    state.current_work_unit_id,
-                    findings=carried_findings,
-                ),
+            history = WorkflowHistory(
+                state.current_work_unit_id,
+                findings=carried_findings,
             )
+            driver.checkpoint(state, history)
             state = driver.active_state or state
             continue
 
@@ -5897,13 +6180,11 @@ def run_production_workflow(
                 step=WorkflowStep.CODEX_IMPLEMENTATION,
                 slice_start_commit=identity.head,
             )
-            driver.checkpoint(
-                state,
-                WorkflowHistory(
-                    state.current_work_unit_id,
-                    findings=carried_findings,
-                ),
+            history = WorkflowHistory(
+                state.current_work_unit_id,
+                findings=carried_findings,
             )
+            driver.checkpoint(state, history)
             state = driver.active_state or state
             continue
 
@@ -5912,25 +6193,23 @@ def run_production_workflow(
         )
         state = state.start_final_review_work_unit()
         carried_attestations = history.attestations[-1:]
-        driver.checkpoint(
-            state,
-            WorkflowHistory(
-                state.current_work_unit_id,
-                findings=carried_findings,
-                events=(
-                    (
-                        ValidationAuditEvent(
-                            event_id=1,
-                            slice_id=state.current_slice_id,
-                            attestation=carried_attestations[0],
-                        ),
-                    )
-                    if carried_attestations
-                    else ()
-                ),
-                attestations=carried_attestations,
+        history = WorkflowHistory(
+            state.current_work_unit_id,
+            findings=carried_findings,
+            events=(
+                (
+                    ValidationAuditEvent(
+                        event_id=1,
+                        slice_id=state.current_slice_id,
+                        attestation=carried_attestations[0],
+                    ),
+                )
+                if carried_attestations
+                else ()
             ),
+            attestations=carried_attestations,
         )
+        driver.checkpoint(state, history)
         state = driver.active_state or state
 
     raise WorkflowExecutionError("workflow session exceeded its deterministic transition bound")
@@ -6009,7 +6288,17 @@ def _recover_legacy_plan_only_post_gate(state: WorkflowState) -> WorkflowState:
     current_history = runtime.get("current")
     if plan_history is None or not isinstance(current_history, dict):
         return state
-    if current_history.get("events") or current_history.get("findings"):
+    if any(
+        current_history.get(key)
+        for key in (
+            "findings",
+            "attestations",
+            "last_claude_fingerprint",  # allowlist:provider -- canonical history field
+            "latest_claude_review",  # allowlist:provider -- canonical history field
+            "codex_final_report",  # allowlist:provider -- canonical history field
+            "active_review_packet",
+        )
+    ):
         return state
     restored_unit = replace(
         plan_unit,
@@ -6188,7 +6477,9 @@ def run_pipeline(
                 )
                 if not isinstance(resumed, WorkflowState):
                     raise ValueError("bound queue recovery requires version-3 state")
-                terminal = WorkflowRunResult(resumed, _history(resumed))
+                terminal = WorkflowRunResult(
+                    resumed, _history(resumed, repository_root)
+                )
                 if (
                     not terminal.workflow_completed
                     or resumed.run_id != evidence.run_id
