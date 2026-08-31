@@ -1009,12 +1009,12 @@ dem normativen Zustand entfernt.
 | `bootstrap_checks` | Providerbootstrap | Providerstart/Resume | **ja** aus `ProviderInputMeasurement` und `FinalReviewPreflight` | ableitbar |
 | `runtime_history.findings` | Reviewpersistenz | Policy/Prompts/Audit | **ja** aus Finding-Transitionen und Import | ableitbar |
 | `runtime_history.reviews[*].reviewer/approval/stopped/findings` und `last_claude_fingerprint` | Reviewpersistenz | Approval-/Bindingpolicy | **ja** aus `Review`, Finding-Transitionen und Recordfingerprint | ableitbarer Teil der Reviewprojektion |
-| `ContractResult.red_state_followup_slice` in `runtime_history.reviews/latest_claude_review` | Claude-Reviewpersistenz | `audit_trail` und `commit_slice()` | **nein**; `ReviewPayload` enthält das Feld nicht | **STOP**: eigener Reviewfakt ist zwingend, weil er einen Red-State-Git-Commit autorisiert |
-| `ContractResult.test_files` | Claude-Reviewpersistenz | Testscope/Audit/Folgeprompt | **nein** im `ReviewPayload` | **STOP**, falls der Leser bleibt |
-| `ContractResult.pre_mortem` | Claude-Reviewpersistenz | Approvalpolicy/Audit | **nein** im `ReviewPayload` | **STOP** |
-| `ContractResult.anchors` | Claude-Reviewpersistenz | Anchorpolicy/Audit | **nein** im `ReviewPayload` | **STOP** |
-| `ContractResult.stop_request` | Claude-Reviewpersistenz | Stop-/Resumepolicy | **nein** im `ReviewPayload`; `verdict=stop` bewahrt nicht die strukturierte Requestursache | **STOP** |
-| `ContractResult.validation` | Claude-Reviewpersistenz | Approval-/Commitpolicy | **nicht vollständig**; Binding kann eine Attestation referenzieren, die Reviewshape und deren vollständige Bytes fehlen | **STOP** |
+| `ContractResult.red_state_followup_slice` in `runtime_history.reviews/latest_claude_review` | Claude-Reviewpersistenz | `audit_trail` und `commit_slice()` | **ja seit R7**; `StepContract` bindet die benannte Folgeslice über `NativeReviewContext` an den approved `ReviewPayload` | **IN R7 GESCHLOSSEN:** eine vollständige rote Attestation ist nur mit exakt benannter Folgeslice autorisierbar; ohne den Reviewrecord bleibt der Commit gesperrt |
+| `ContractResult.test_files` | Claude-Reviewpersistenz | Testscope/Audit/Folgeprompt | **ja seit R7** in `ReviewPayload.test_files` | **IN R7 GESCHLOSSEN:** exakter nativer Reviewkontext und Mirrorvergleich |
+| `ContractResult.pre_mortem` | Claude-Reviewpersistenz | Approvalpolicy/Audit | **ja seit R7** in `ReviewPayload.pre_mortem` | **IN R7 GESCHLOSSEN:** strukturierter Einzelwert statt Audittext als Quelle |
+| `ContractResult.anchors` | Claude-Reviewpersistenz | Anchorpolicy/Audit | **ja seit R7** in genau einem `ReviewAnchorPayload` je Reviewrecord | **IN R7 GESCHLOSSEN:** Record-ID- und Fingerprintbindung, auch für die leere Liste |
+| `ContractResult.stop_request` | Claude-Reviewpersistenz | Stop-/Resumepolicy | **ja seit R7** in `ReviewPayload.stop_request.rule_id/rationale/remediation_paths` | **IN R7 GESCHLOSSEN:** drei getrennte strukturierte Felder |
+| `ContractResult.validation` | Claude-Reviewpersistenz | Approval-/Commitpolicy | **ja seit R7** über `ReviewValidationBindingPayload.review_record_id/attestation_record_id` und die R8-Contentrecords | **IN R7 GESCHLOSSEN:** beide referenzierten Records müssen früher und fingerprintgleich sein |
 | `ContractResult.evidence.dimensions/largest_residual_risk/break_condition` | Claude-Reviewpersistenz | Approvalpolicy/Audit | **nicht verlustfrei**; `review_payload()` verbindet die drei Strings mit `" | "`, das Trennzeichen ist in Inhalten nicht ausgeschlossen | **STOP**: strukturierte Evidencefelder recorden |
 | `ValidationAttestation.attestation_id` in `runtime_history.attestations` | Orchestrator-Validation | Binding/Commit/Audit | **ja** aus `ArtifactRecord.logical_id`; `persist_validation_attestation()` setzt ihn exakt auf `attestation.attestation_id`, und Resume vergleicht `(logical_id, fingerprint)` mit dem Mirror | ableitbar |
 | `ValidationAttestation.diff_fingerprint` | Orchestrator-Validation | Binding/Commit | **ja** aus `ArtifactRecord.fingerprint` | ableitbar |
@@ -1023,7 +1023,7 @@ dem normativen Zustand entfernt.
 | `ValidationRecord.output` | Validator | Review/Audit/Diagnose | **ja seit R8**; `ValidationContentPayload.outputs[*]` bindet Command, Ergebnisrecord, exakte Bytelänge sowie SHA-256-Verweise auf rohe Streams und kompakte Ausgabe | **in R8 gedeckt** durch laufgebundene, fail-closed geprüfte Blobs |
 | `ValidationAttestation.output_digest` | Orchestrator-Validation | Integritätsprüfung | **ja seit R8**; `ValidationContentPayload.digest_format/raw_stdout/raw_stderr` reproduziert den unveränderten Digest und `ValidationAttestationPayload` bindet ihn samt Contentrecord | **in R8 gedeckt** ohne stille Digeständerung |
 | `ValidationAttestation.summary` | Orchestrator-Validation | Contractvalidierung/Review/Audit | **ja** als deterministische Projektion der aufgezeichneten Outcome-Anzahlen: `passed/failed/unavailable/required` | ableitbar; Formel an Schema 2 binden |
-| `runtime_history.latest_claude_review` als Aggregat | Reviewpersistenz | Folgeprompts/Policy | **nicht vollständig**; nur die oben als ableitbar markierte Teilmenge besitzt Records | **STOP**, bis alle Einzelzeilen recordfähig oder nicht normativ sind |
+| `runtime_history.latest_claude_review` als Aggregat | Reviewpersistenz | Folgeprompts/Policy | **ja seit R7** als reine Projektion aus Review-, Anchor-, Validation-, Finding- und Contentrecords | **IN R7 GESCHLOSSEN:** Aggregatleser entsperrt; ausdrücklich kein zweiter Aggregatrecord |
 | `runtime_history.codex_final_report` und weitere rohe Agenttexte | Agentresultatpfad | Abschlussbericht/Folgeprompt | **ja seit R8**; `ProviderContentPayload` bindet die akzeptierte kanonische native Antwort vor dem Ergebnisrecord an SHA-256, Bytelänge, Rolle, Request, Operation und Inhaltsart | **in R8 gedeckt**; unakzeptierter Failure-Rohtext bleibt gemäß R6 redigiert |
 | `runtime_history.active_review_packet` | Reviewpacketbuilder | Recovery/Providerrequest | **ja seit R8**; `ReviewPacketPayload` bindet die lokal erzeugten kanonischen Bytes an Fingerprint, Manifest, Diff-Coverage, Bytelänge und Blobdigest | **in R8 gedeckt**; die materialisierte Datei bleibt Cache |
 | sonstige `runtime_history`-Event-/Auditfelder | Engine/Serialisierung | Audit und Resume-Helfer | **nur teilweise**; IDs lassen sich erzeugen, heutige Reihenfolge/Metadaten sind nicht vollständig spezifiziert | **STOP**, bis die Projektionsfunktion und nicht-normative Felder festgelegt sind |
@@ -1070,16 +1070,16 @@ keinen fett markierten STOP enthält.
 | `invocation_failures[*].auto_resume_count/automatic_resume/diff_fingerprint` | A | **In R6 geschlossen:** Gleichnamige Felder in `InvocationFailurePayload` plus `decision_at_utc` und `retry_delay_seconds`; Schreiber: Retry-/Resume-Policy. Netzwerkziele müssen Entscheidung + Delay entsprechen. Genau ein vorausliegender Failure-Record darf den Halt deterministisch in den Mirror projizieren; mehrdeutige oder fehlende R6-Records stoppen. |
 | `protocol_binding.mode/schema/transports` | C | Der erste akzeptierte `ArtifactRecord.schema_version == "2"` legt `mode=structured-v2` und `schema_version=2` fest. Das geschlossene Schema 2 erzwingt für `AgentResultPayload.transport_schema` den Wert `native-codex-v2` und für `ReviewPayload.transport_schema` `native-claude-review-v2`; andere Transporte sind in diesem Präfix unzulässig. |
 | `protocol_binding.codex_profile/claude_profile` | A | **In R1 geschlossen:** `RunProfilePayload.codex_model/codex_effort/claude_model/claude_effort`; Schreiber: erster strukturierter Checkpoint aus CLI-/Taskdefault vor dem ersten Providerstart. `ProviderAttemptPayload` bestätigt die Bindung je Aufruf. |
-| `ContractResult.red_state_followup_slice` in `runtime_history.reviews/latest_claude_review` | A | **In S4a geschlossen:** `ReviewPayload.red_state_followup_slice`; Schreiber: `ProductionWorkflowDriver.persist_native_review_contract()`. Audit- und Git-Autorisierung verlangen nun den approved Review-Record derselben Work-unit und desselben Fingerprints; ein Mirrorwert allein autorisiert keinen Red-State-Commit. Der aktuelle native-v2-Konverter setzt das Feld stets auf `None`, daher kann der heutige Transport keinen neuen Red-State-Review erzeugen. Das spätere Durchreichen aus `StepContract` über `NativeReviewContext` in `ContractResult` bleibt ein ausdrücklich benannter Folgepunkt und ist nicht Teil dieses Record-Slice. |
-| `ContractResult.test_files` | A | `ReviewPayload.test_files`; Schreiber: `persist_native_review_contract()` aus dem exakten `NativeReviewContext`. Die Produktivkonfiguration befüllt `expected_test_files` nicht zuverlässig aus dem vorherigen `AgentResultPayload`, deshalb ist die heutige Mirrorprojektion nicht allgemein aus dessen Record ableitbar. |
-| `ContractResult.pre_mortem` | A | `ReviewPayload.pre_mortem`; Schreiber: `persist_native_review_contract()`. Approvalpolicy und Audit lesen den reviewer-eigenen Text. |
-| `ContractResult.anchors` | A | `ReviewAnchorPayload`-Liste mit allen Anchorfeldern, an den Review-Record gebunden; Schreiber: `persist_native_review_contract()`. Anchorpolicy und Audit lesen die Struktur. |
-| `ContractResult.stop_request` | A | `ReviewPayload.stop_request.rule_id/rationale/remediation_paths`; Schreiber: `persist_native_review_contract()`. `verdict="stop"` allein rekonstruiert Ursache und Remediation nicht. |
-| `ContractResult.validation` | A | `ReviewValidationBindingPayload.review_record_id/attestation_record_id`; Schreiber: `persist_native_review_contract()` nach der Attestation. Die vollständige Projektion hängt zusätzlich von den unten genannten Validation-Contentrecords ab. |
+| `ContractResult.red_state_followup_slice` in `runtime_history.reviews/latest_claude_review` | A | **In R7 geschlossen:** `StepContract.red_state_followup_slice` wird über `NativeReviewContext` in `ContractResult` und den approved, fingerprintgebundenen `ReviewPayload` getragen; Schreiber: `persist_native_review_contract()`. Eine vollständige fehlgeschlagene Validation ist damit nur mit benannter Folgeslice autorisierbar; ein Commit ohne diesen Record bleibt abgewiesen. |
+| `ContractResult.test_files` | A | **In R7 geschlossen:** `ReviewPayload.test_files`; Schreiber: `persist_native_review_contract()` aus dem exakten `NativeReviewContext`. Replay und Mirrorvergleich bewahren die sortierte Pfadliste. |
+| `ContractResult.pre_mortem` | A | **In R7 geschlossen:** `ReviewPayload.pre_mortem`; Schreiber: `persist_native_review_contract()`. Approvalpolicy und Audit lesen den reviewer-eigenen Text. |
+| `ContractResult.anchors` | A | **In R7 geschlossen:** genau ein `ReviewAnchorPayload` mit allen Anchorfeldern je Review, über `review_record_id`, logische ID und Fingerprint gebunden; Schreiber: `persist_native_review_contract()`. |
+| `ContractResult.stop_request` | A | **In R7 geschlossen:** `ReviewPayload.stop_request.rule_id/rationale/remediation_paths`; Schreiber: `persist_native_review_contract()`. Native STOP-Ergebnisse müssen die Pfadliste explizit liefern. |
+| `ContractResult.validation` | A | **In R7 geschlossen:** `ReviewValidationBindingPayload.review_record_id/attestation_record_id`; Schreiber: `persist_native_review_contract()` nach der Attestation und nach dem Reviewrecord. Replay löst die R8-Contentrecords ohne Mirror auf. |
 | `ContractResult.evidence.dimensions/largest_residual_risk/break_condition` | A | **In S4a geschlossen:** `ReviewPayload.review_evidence` mit drei gleichnamigen Feldern; Schreiber: `persist_native_review_contract()`. Neue Records schreiben das alte Stringfeld nie. |
 | `ValidationRecord.output` | A | **In R8 geschlossen:** `ValidationContentPayload.outputs[*].command/result_record_id/output_bytes/raw_stdout/raw_stderr/compact_output`; Schreiber: Validator unmittelbar vor `ValidationAttestationPayload`. Die exakten UTF-8-Bytes liegen in laufgebundenen SHA-256-Blobs; Reviewpacket, Audit, Recovery und Diagnose lesen sie über den Recordverweis. |
 | `ValidationAttestation.output_digest` | A | **In R8 geschlossen:** `ValidationContentPayload.digest_format/raw_stdout/raw_stderr` plus `ValidationAttestationPayload.output_digest/content_record_id`; Schreiber: Validator. `validation-matrix-v1` reproduziert exakt die vor R8 verwendete kanonische Aggregation ungekürzter Ausgaben; der Digest der kompakten Recordausgabe ersetzt sie nicht. |
-| `runtime_history.latest_claude_review` als Aggregat | A | Kein zweiter Aggregatrecord: Projektion aus `ReviewPayload`, `ReviewAnchorPayload`, `ReviewValidationBindingPayload`, Finding-Transitionen und den zugehörigen Contentrecords; Schreiber sind die jeweiligen Review-/Validationpersistenzen. Bis diese Komponenten vollständig sind, bleibt der Aggregatleser gesperrt. |
+| `runtime_history.latest_claude_review` als Aggregat | A | **In R7 entsperrt:** kein zweiter Aggregatrecord; `project_latest_review(..., work_unit_id)` projiziert ausschließlich für die angegebene Work-Unit aus `ReviewPayload`, `ReviewAnchorPayload`, `ReviewValidationBindingPayload`, Finding-Transitionen und den zugehörigen R8-Contentrecords; Schreiber sind die jeweiligen Review-, Finding- und Validierungspersistenzen. |
 | `runtime_history.codex_final_report` und weitere rohe Agenttexte | A | **In R8 geschlossen:** `ProviderContentPayload.response_sha256/content_bytes/content_kind/blob/round_number` plus Rolle, Work-unit, Operation und Request; Schreiber: Providerabschluss nach nativer Schema-/Domainannahme und vor `AgentResultPayload`/`ReviewPayload`, Cache und Mirror. Recovery, Abschlussbericht und Folgeprompt lesen die exakten kanonischen Bytes. Nur ein `ready=true`-Abschlussresultat besitzt `content_kind=final_report`; `ready=false` und Stop bleiben `agent_result` ohne Final-Report-Mirror. R6 bleibt unverändert: nicht angenommener Failure-Rohtext ist kein semantischer Recoveryfakt und wird ausschließlich als Redaktionsmarker mit Digest und Bytelänge recordet. |
 | `runtime_history.active_review_packet` | A | **In R8 geschlossen:** `ReviewPacketPayload.fingerprint/manifest/diff_coverage_sha256/content_bytes/blob`; Schreiber: `build_review_packet()` vor Providerstart und Mirrorwrite. Recovery und Providerrequest lesen die exakt gebundenen, lokal erzeugten kanonischen Bytes; die materialisierte Paketdatei besitzt keine Autorität. |
 | sonstige `runtime_history`-Event-/Auditfelder | A | `WorkflowEventPayload.event_kind/work_unit_id/slice_id/round_number/record_refs` für noch nicht durch die fachlichen Records abgedeckte Ereignisse; Schreiber: `_record_review()`, Validation- und Transitionpfade. Erst danach darf ein reiner Audit-/Resume-Projektionsanteil als B entfernt werden. |
@@ -1137,6 +1137,9 @@ den echten `ArtifactStore.load_chain()` jeweils fünfmal auf, instrumentiert die
 gelesenen Blobbytes und misst die Medianlaufzeit. Pro Vollscan entspricht die
 gelesene Bytezahl exakt einmal der Paketgröße; der aus kleinster und größter
 Messung berechnete Laufzeitexponent muss unter **1,25** bleiben.
+R7 ergänzt die zuvor fehlende Negativkontrolle: Dieselbe Envelope-Schranke wird
+zusätzlich mit hypothetisch wiedereingebetteten Paketbytes gespeist und muss
+dann rot werden. Damit erkennt der Guard die konkrete Inlining-Regression.
 
 Die in R8 neu inventarisierten Record-/Mirror-Grenzen lauten:
 `validation content has no complete state-v3 counterpart`,
@@ -1148,11 +1151,19 @@ Die in R8 neu inventarisierten Record-/Mirror-Grenzen lauten:
 Runtimebindungen ergänzen die dokumentierten Divergenzen
 `native provider content digest differs from its record`,
 `native agent content digest differs from its result binding`,
-`native reviewer content digest differs from its review binding` und
-`validation recovery result differs from its content`.
-Nach den Opus-Korrekturen umfasst das quellgebundene Inventar **40**
-`mismatch(...)`-Aufrufe; `resolve_resume_state()` besitzt 112 und
-`persist_native_codex_contract()` 11 inventarisierte Vergleichsausdrücke.
+`native reviewer content digest differs from its review binding`,
+`validation recovery result differs from its content` und
+`native review persistence differs from its exact review context`.
+R7 ergänzt die Mirrorgrenzen `review contract projection is ambiguous`,
+`review contract mirror is ambiguous`,
+`latest review mirror has no aggregate field`,
+`review contracts differ from state-v3`,
+`review contract fields differ from state-v3` und
+`latest review differs from its event projection`.
+Das quellgebundene Inventar umfasst damit **46** `mismatch(...)`-Aufrufe;
+`resolve_resume_state()` besitzt 119,
+`review_payload_matches_result()` 13 und `persist_native_codex_contract()` 11
+inventarisierte Vergleichsausdrücke.
 
 #### R4-Suitelaufzeit
 
@@ -1211,6 +1222,16 @@ Beleg für konstante Kosten umgedeutet werden. Die Providernamen-Baseline,
 Schema-/Protokollversion 2 und das Inventar der `_recoverable_*`-Sonderfälle
 blieben unverändert.
 
+#### R7-Suitelaufzeit
+
+Der vollständige WSL-Lauf vom 31. August 2026 mit
+`python3 -m pytest tests/ -q` ist nach den externen Reviewkorrekturen grün:
+**1333 passed in 173,90 s**. Gegenüber der exakten R8-Baseline von
+**1327 passed in 190,06 s** sind das sechs zusätzliche Akzeptanzfälle bei einer
+um **16,16 s beziehungsweise 8,5 %** niedrigeren von Pytest ausgewiesenen
+Laufzeit. Die Providernamen-Baseline, Schema-/Protokollversion 2 und das
+Inventar der `_recoverable_*`-Sonderfälle blieben unverändert.
+
 #### Entscheidung zu Schema 2 und Bestandsrecords
 
 R1 ergänzt `RunIdentityPayload` und `RunProfilePayload` additiv. Beide werden
@@ -1263,6 +1284,34 @@ einer authentisch request-/response-digest-gebundenen Originalantwort erlaubt,
 nie aus dem Trennzeichenstring. Fehlt diese Quelle, bleibt der Record als
 Legacyformat auditierbar, liefert aber keine drei strukturierten Evidencefelder.
 Neue Records schreiben ausschließlich das strukturierte Objekt.
+
+R7 ergänzt denselben Schema-2-Vertrag um die nun verpflichtenden
+`ReviewPayload.test_files/pre_mortem/stop_request`-Properties sowie die
+Recordtypen `ReviewAnchorPayload` und `ReviewValidationBindingPayload`.
+Jeder neue Reviewrecord wird aus dem exakten `NativeReviewContext` geschrieben,
+danach folgen genau eine Anchorliste und genau eine Bindung an die bereits
+vorhandene fingerprintgleiche Validationattestierung. Resume verlangt beide
+Komponenten für jeden Review; Vor-R7-Präfixe werden deshalb gemäß Auftrag
+fail-closed abgewiesen und nicht aus State-v3 ergänzt. Der frühere
+S4a-Hinweis zur Lesbarkeit alter Einzelrecords beschreibt nur deren damalige
+Payloaddekodierung und ist keine Fortsetzungszusage nach R7.
+
+`project_review_contracts()` rekonstruiert Validationausgaben über die
+R8-Blobs, Findings über den kanonischen Reducer sowie Testdateien, Pre-Mortem,
+Anchors, Stopursache und Red-State-Folgeslice direkt aus dem akzeptierten
+Recordpräfix. `project_latest_review(..., work_unit_id)` wählt daraus ausschließlich den
+letzten Review; ein `latest_claude_review`-Record existiert bewusst nicht.
+Ein bewusst auf `null` invalidierter State-v3-Latest-Mirror darf dabei ältere
+Audit-Events behalten; ein nichtleerer Latest-Mirror muss weiterhin exakt dem
+letzten Event derselben Work-Unit entsprechen. Resume akzeptiert ausschließlich
+am Kettenende Review, Review+Anchor oder Review+Anchor+Validationbindung mit
+noch unvollständigen Finding-Transitionen als pending. Die requestgebundene
+Providerantwort ergänzt diesen Suffix idempotent; dieselben Lücken in der
+Kettenmitte bleiben fail-closed.
+Audit-Markdown bleibt eine Projektion: Der bestehende Grenztest verändert den
+verwalteten Reviewabschnitt zweimal und belegt identische Repository-
+Fingerprints, Pfadmengen (Guardinput) und kanonische Review-Diffs. Damit bleibt
+auch das daraus erzeugte Reviewpaket unverändert.
 
 R5 ergänzt `GateTransitionPayload` und `GateDecisionPayload` additiv in Schema
 2. Jede nicht ausschließlich aus einem Finding-Import bestehende fortsetzbare

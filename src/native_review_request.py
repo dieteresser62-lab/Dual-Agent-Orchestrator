@@ -500,6 +500,9 @@ def _review_context_request_projection(
             "validation_command_prefixes": context_binding[
                 "validation_command_prefixes"
             ],
+            "red_state_followup_slice": context_binding[
+                "red_state_followup_slice"
+            ],
         },
     }
 

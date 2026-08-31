@@ -529,6 +529,7 @@ def test_writer_schema_requires_approval_evidence_pre_mortem_and_closed_stop() -
         "reviewer": "claude",
         "rule_id": "UNEXPECTED-PATH",
         "rationale": "Additional scope is required.",
+        "remediation_paths": [],
     }
     validate_schema_document({"result": stop}, schema)
     with pytest.raises(SchemaMismatch):

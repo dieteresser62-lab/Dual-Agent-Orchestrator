@@ -36,6 +36,7 @@ from artifact_models import (
     GatePayload,
     PlanPayload,
     ReviewPayload,
+    ReviewStopRequestPayload,
     ReviewEvidencePayload,
     Role,
     SideEffectPayload,
@@ -170,6 +171,17 @@ def review_payload(
         response_sha256=response_sha256,
         review_evidence=structured_evidence,
         red_state_followup_slice=result.red_state_followup_slice,
+        test_files=result.test_files,
+        pre_mortem=result.pre_mortem,
+        stop_request=(
+            None
+            if result.stop_request is None
+            else ReviewStopRequestPayload(
+                result.stop_request.rule_id,
+                result.stop_request.rationale,
+                result.stop_request.remediation_paths,
+            )
+        ),
     )
 
 
@@ -208,6 +220,18 @@ def review_payload_matches_result(
         and payload.finding_ids == finding_ids
         and evidence_matches
         and payload.red_state_followup_slice == result.red_state_followup_slice
+        and payload.test_files == result.test_files
+        and payload.pre_mortem == result.pre_mortem
+        and payload.stop_request
+        == (
+            None
+            if result.stop_request is None
+            else ReviewStopRequestPayload(
+                result.stop_request.rule_id,
+                result.stop_request.rationale,
+                result.stop_request.remediation_paths,
+            )
+        )
     )
 
 

@@ -26,6 +26,7 @@ from artifact_models import (
     InvocationFailurePayload,
     PlanPayload,
     RecordType,
+    ReviewEvidencePayload,
     ReviewPayload,
     Role,
     RunIdentityPayload,
@@ -261,25 +262,42 @@ def _status_records(
         if isinstance(record.payload, ReviewPayload)
         and record.payload.verdict == "denied"
     }
+    latest_attestation = next(
+        (
+            record
+            for record in reversed(chain)
+            if isinstance(record.payload, ValidationAttestationPayload)
+        ),
+        None,
+    )
     for unit in state.work_units:
         work_unit_id = str(unit.work_unit_id)
         if unit.reviewer is None or work_unit_id in denied_units:
             continue
+        if latest_attestation is None:
+            raise AssertionError("fixture reviewer projection requires validation")
         append_provider_decision_authority(
             bridge,
             ReviewPayload(
-                Role.CLAUDE,
-                work_unit_id,
-                "denied",
-                unit.open_findings,
-                "fixture reviewer projection",
-                "native-claude-review-v2",
-                "native-review-request-" + f"{unit.work_unit_id:064x}",
-                f"{unit.work_unit_id + 100:064x}",
+                reviewer=Role.CLAUDE,
+                work_unit_id=work_unit_id,
+                verdict="denied",
+                finding_ids=unit.open_findings,
+                evidence=None,
+                transport_schema="native-claude-review-v2",
+                request_id=(
+                    "native-review-request-" + f"{unit.work_unit_id:064x}"
+                ),
+                response_sha256=f"{unit.work_unit_id + 100:064x}",
+                review_evidence=ReviewEvidencePayload(
+                    "fixture reviewer projection",
+                    "fixture residual risk",
+                    "fixture break condition",
+                ),
             ),
             logical_id=f"review-fixture-{work_unit_id}",
             idempotency_key=f"review-fixture:{work_unit_id}",
-            fingerprint_sha256="a" * 64,
+            fingerprint_sha256=latest_attestation.fingerprint.sha256,
             operation="claude_slice_review",
         )
 
@@ -437,10 +455,15 @@ def _authorization_records(
             work_unit_id="2",
             verdict=review_verdict,
             finding_ids=(),
-            evidence="resume authorization reviewed",
+            evidence=None,
             transport_schema="native-claude-review-v2",
             request_id="native-review-request-" + "b" * 64,
             response_sha256="c" * 64,
+            review_evidence=ReviewEvidencePayload(
+                "resume authorization reviewed",
+                "fixture residual risk",
+                "fixture break condition",
+            ),
         ),
         logical_id="review-resume",
         idempotency_key=f"review-resume:{review_fingerprint}:{review_verdict}",
@@ -465,6 +488,25 @@ def _finding_handoff_resume_fixture(repository: Path):
         ),
         logical_id="approved-plan",
         idempotency_key="approved-plan",
+        fingerprint_sha256="b" * 64,
+    )
+    append_validation_authority(
+        source,
+        ValidationAttestationPayload(
+            (
+                ValidationResult(
+                    CommandSpec("pytest", ("python3", "-m", "pytest")),
+                    "pass",
+                    0,
+                    "0" * 64,
+                ),
+            ),
+            Role.ORCHESTRATOR,
+            "0" * 64,
+            "ar1-" + "0" * 64,
+        ),
+        logical_id="validation-plan-review",
+        idempotency_key="validation-plan-review",
         fingerprint_sha256="b" * 64,
     )
     source.append(
@@ -1320,6 +1362,11 @@ def _append_open_finding(
             severity=FindingSeverity.BLOCKER,
             finding_status="open",
             rationale="correction round finding",
+            work_unit_id="4",
+            summary="Correction round finding.",
+            acceptance_test="The correction resolves C-07.",
+            origin_slice_id="2",
+            origin_round_number=2,
         ),
         logical_id=f"finding-{finding_id}",
         idempotency_key=f"finding-{finding_id}-opened",

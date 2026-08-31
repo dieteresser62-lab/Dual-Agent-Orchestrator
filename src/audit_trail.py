@@ -1142,10 +1142,19 @@ def _render_reviews(projection: AuditProjection, reviewer: AgentRole) -> str:
             )
         )
         if result.stop_request is not None:
-            blocks.append(
+            blocks.extend((
                 f"- Stop-Regel: `{_safe(result.stop_request.rule_id)}` — "
-                f"{_prose_safe(result.stop_request.rationale)}"
-            )
+                f"{_prose_safe(result.stop_request.rationale)}",
+                "- Remediation-Pfade: "
+                + (
+                    ", ".join(
+                        f"`{_safe(path)}`"
+                        for path in result.stop_request.remediation_paths
+                    )
+                    if result.stop_request.remediation_paths
+                    else "keine"
+                ),
+            ))
         if result.evidence is not None:
             blocks.extend(
                 (
@@ -1160,6 +1169,20 @@ def _render_reviews(projection: AuditProjection, reviewer: AgentRole) -> str:
         blocks.append(
             "- Eigene Findings: "
             + (", ".join(f"`{item.finding_id}`" for item in own_findings) or "keine")
+        )
+        blocks.append(
+            "- Anker: "
+            + (
+                "; ".join(
+                    f"`{_safe(anchor.anchor_id)}` ({_prose_safe(anchor.origin)}; "
+                    f"Fixture: {_prose_safe(anchor.input_fixture)}; "
+                    f"Erwartung: {_prose_safe(anchor.expected)}; "
+                    f"Toleranz: {_prose_safe(anchor.tolerance)})"
+                    for anchor in result.anchors
+                )
+                if result.anchors
+                else "keine"
+            )
         )
         blocks.append("")
     return "\n".join(blocks).rstrip()

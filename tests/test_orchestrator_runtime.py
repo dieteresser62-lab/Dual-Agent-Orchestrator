@@ -38,7 +38,9 @@ from artifact_models import (
     ProviderInputMeasurementPayload,
     QuotaPausePayload,
     RecordType,
+    ReviewAnchorPayload,
     ReviewPayload,
+    ReviewValidationBindingPayload,
     Role,
     RunIdentityPayload,
     RunProfilePayload,
@@ -127,7 +129,12 @@ from native_review_request import (
     NativeReviewRequestSpec,
     build_native_review_request,
 )
-from artifact_replay import replay_artifacts, replay_findings
+from artifact_replay import (
+    ArtifactReplayError,
+    ReplayDiagnosticCode,
+    replay_artifacts,
+    replay_findings,
+)
 from artifact_bridge import (
     ArtifactBridge,
     ArtifactBridgeError,
@@ -295,6 +302,7 @@ def _native_review_approval(
         result=parse_bound_native_contract_result(document, bundle.bound_context),
         canonical_json=canonical,
         request_id=bundle.bound_context.request_id,
+        context=bundle.bound_context.context,
     )
 
 
@@ -1600,8 +1608,19 @@ def test_r3_scope_extension_checkpoint_accepts_older_subset_revision(
     )
 
 
+@pytest.mark.parametrize(
+    "crash_payload_type",
+    (
+        ReviewAnchorPayload,
+        ReviewValidationBindingPayload,
+        FindingTransitionPayload,
+    ),
+    ids=("before-anchor", "before-validation-binding", "before-finding-transition"),
+)
 def test_native_review_record_ahead_recovery_reuses_bound_json_without_provider(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    crash_payload_type: type[object],
 ) -> None:
     repository = _repository(tmp_path, "feature/native-record-ahead")
     task = repository / "task.md"
@@ -1658,6 +1677,16 @@ def test_native_review_record_ahead_recovery_reuses_bound_json_without_provider(
         content_captures=(validation_capture,),
     )
     driver.persist_validation_attestation(attestation)
+    driver.checkpoint(
+        state,
+        WorkflowHistory(
+            state.current_work_unit_id,
+            events=(ValidationAuditEvent(1, 1, attestation),),
+            attestations=(attestation,),
+        ),
+    )
+    assert driver.active_state is not None
+    state = driver.active_state
     context = NativeReviewContext(
         run_id=state.run_id,
         work_unit_id=str(state.current_work_unit_id),
@@ -1691,7 +1720,17 @@ def test_native_review_record_ahead_recovery_reuses_bound_json_without_provider(
         "request_id": bundle.bound_context.request_id,
         "reviewer": "claude",
         "decision": "approved",
-        "new_findings": [],
+        "new_findings": [
+            {
+                "finding_id": "C-01",
+                "finding_class": "OBSERVATION",
+                "summary": "Keep recovery transaction completeness visible.",
+                "acceptance_test": {
+                    "kind": "prose",
+                    "text": "Recovery appends the missing finding transition once.",
+                },
+            }
+        ],
         "status_changes": [],
         "reclassifications": [],
         "anchors": [],
@@ -1710,8 +1749,42 @@ def test_native_review_record_ahead_recovery_reuses_bound_json_without_provider(
         result=result,
         canonical_json=canonical,
         request_id=bundle.bound_context.request_id,
+        context=bundle.bound_context.context,
     )
-    driver.persist_native_review_contract(output, fingerprint, 1, ())
+    assert driver._artifact_bridge is not None
+    original_append = ArtifactBridge.append
+    interrupted = False
+
+    def interrupt_child_append(self, payload, *args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal interrupted
+        if isinstance(payload, crash_payload_type) and not interrupted:
+            interrupted = True
+            raise RuntimeError("simulated R7 child-record append crash")
+        return original_append(self, payload, *args, **kwargs)
+
+    with monkeypatch.context() as child_patch:
+        child_patch.setattr(ArtifactBridge, "append", interrupt_child_append)
+        with pytest.raises(RuntimeError, match="simulated R7 child-record append crash"):
+            driver.persist_native_review_contract(output, fingerprint, 1, ())
+
+    interrupted_chain = ArtifactStore(repository, state.run_id).load_chain()
+    with pytest.raises(ArtifactReplayError) as strict_error:
+        replay_artifacts(interrupted_chain, state.run_id)
+    assert strict_error.value.code is ReplayDiagnosticCode.RECORD_MISSING
+    interrupted_replay = replay_artifacts(
+        interrupted_chain,
+        state.run_id,
+        allow_incomplete_review_tail=True,
+    )
+    interrupted_reviews = tuple(
+        item for item in interrupted_chain if isinstance(item.payload, ReviewPayload)
+    )
+    assert len(interrupted_reviews) == 1
+    assert interrupted_replay.pending_review_record_id == interrupted_reviews[0].record_id
+    assert (
+        resolve_resume_state(repository, state).replay_result.pending_review_record_id
+        == interrupted_reviews[0].record_id
+    )
     driver.log_dir.mkdir(parents=True, exist_ok=True)
     log_path = (
         driver.log_dir
@@ -1749,22 +1822,50 @@ def test_native_review_record_ahead_recovery_reuses_bound_json_without_provider(
     )
 
     assert recovered == output
+    completed_chain = ArtifactStore(repository, state.run_id).load_chain()
     reviews = tuple(
         item
-        for item in ArtifactStore(repository, state.run_id).load_chain()
+        for item in completed_chain
         if isinstance(item.payload, ReviewPayload)
     )
     assert len(reviews) == 1
     assert reviews[0].payload.request_id == bundle.bound_context.request_id
+    anchors = tuple(
+        item
+        for item in completed_chain
+        if isinstance(item.payload, ReviewAnchorPayload)
+        and item.payload.review_record_id == reviews[0].record_id
+    )
+    bindings = tuple(
+        item
+        for item in completed_chain
+        if isinstance(item.payload, ReviewValidationBindingPayload)
+        and item.payload.review_record_id == reviews[0].record_id
+    )
+    assert len(anchors) == len(bindings) == 1
+    assert bindings[0].payload.attestation_record_id == next(
+        item.record_id
+        for item in completed_chain
+        if isinstance(item.payload, ValidationAttestationPayload)
+        and item.logical_id == attestation.attestation_id
+    )
+    finding_transitions = tuple(
+        item
+        for item in completed_chain
+        if isinstance(item.payload, FindingTransitionPayload)
+        and item.payload.finding_id == "C-01"
+    )
+    assert len(finding_transitions) == 1
+    assert finding_transitions[0].payload.action == "opened"
+    assert replay_artifacts(completed_chain, state.run_id).pending_review_record_id is None
 
     pre_policy = driver.recover_pending_native_reviewer_before_policy(
         state,
         WorkflowContext(
-            assignment="Recover the durable native decision.",
-            distilled_plan="Claude reviews the bound response once.",
-            slice_summary="Native reviewer record-ahead recovery.",
-            test_changes_approved=True,
-        ),
+                assignment="Recover the durable native decision.",
+                distilled_plan="Claude reviews the bound response once.",
+                slice_summary="Native reviewer record-ahead recovery.",
+            ),
         WorkflowHistory(
             state.current_work_unit_id,
             attestations=(attestation,),

@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
 import hashlib
 import json
-from typing import Sequence
+from typing import Callable, Sequence
 
 from artifact_models import (
     AgentResultPayload,
@@ -43,6 +43,9 @@ from artifact_models import (
     WorkflowTransitionPayload,
     ResumeCheckPayload,
     ReviewPayload,
+    ReviewAnchorPayload,
+    ReviewValidationBindingPayload,
+    BlobReference,
     ProviderContentPayload,
     ReviewPacketPayload,
     ValidationContentPayload,
@@ -54,7 +57,16 @@ from artifact_models import (
     canonical_json,
 )
 from contracts import (
+    AgentRole,
+    AnchorRecord,
+    ContractResult,
     FindingRecord,
+    ReviewEvidence,
+    StopRequest,
+    ValidationAttestation,
+    ValidationCommandSpec,
+    ValidationRecord,
+    ValidationStatus,
 )
 
 
@@ -172,6 +184,14 @@ class ReplayedGateDecision:
     decision_record_id: str
 
 
+@dataclass(frozen=True, slots=True)
+class ReplayedReviewContract:
+    record_id: str
+    work_unit_id: str
+    round_number: int
+    result: ContractResult
+
+
 def project_work_unit_reviewers(
     records: Sequence[ArtifactRecord],
 ) -> tuple[tuple[str, Role | None], ...]:
@@ -205,6 +225,7 @@ class ArtifactReplayResult:
     semantic_facts: tuple[ReplayFact, ...]
     semantic_digest: str
     audit_events: tuple[ReplayAuditEvent, ...]
+    pending_review_record_id: str | None = None
     run_identity: RunIdentityPayload | None = None
     run_profile: RunProfilePayload | None = None
     workflow_cursor: ReplayedWorkflowCursor | None = None
@@ -218,6 +239,8 @@ class ArtifactReplayResult:
     validation_contents: tuple[ValidationContentPayload, ...] = ()
     provider_contents: tuple[ProviderContentPayload, ...] = ()
     review_packets: tuple[ReviewPacketPayload, ...] = ()
+    review_anchors: tuple[ReviewAnchorPayload, ...] = ()
+    review_validation_bindings: tuple[ReviewValidationBindingPayload, ...] = ()
     work_unit_reviewers: tuple[tuple[str, Role | None], ...] = ()
     side_effects: tuple[ReplayedSideEffect, ...] = ()
     _reference_records: tuple[ArtifactRecord, ...] = field(
@@ -268,6 +291,15 @@ class ArtifactReplayResult:
             self.expected_run_id,
             selected,
             reference_records=self._reference_records or self.records,
+            pending_review_record_id=(
+                self.pending_review_record_id
+                if self.pending_review_record_id is not None
+                and any(
+                    record.record_id == self.pending_review_record_id
+                    for record in selected
+                )
+                else None
+            ),
         )
 
 
@@ -277,6 +309,8 @@ def replay_artifacts(
     *,
     allow_empty: bool = False,
     require_content_authority: bool | None = None,
+    require_review_authority: bool | None = None,
+    allow_incomplete_review_tail: bool = False,
 ) -> ArtifactReplayResult:
     """Validate and reduce ``records`` without I/O or mutation."""
     chain = tuple(records)
@@ -378,10 +412,30 @@ def replay_artifacts(
             for record in chain
         )
     )
-    _validate_payload_references(
-        chain, seen_ids, require_content_authority=strict_content
+    strict_reviews = (
+        require_review_authority
+        if require_review_authority is not None
+        else any(isinstance(record.payload, RunIdentityPayload) for record in chain)
+        or any(
+            isinstance(
+                record.payload,
+                (ReviewAnchorPayload, ReviewValidationBindingPayload),
+            )
+            for record in chain
+        )
     )
-    return _result(expected_run_id, chain)
+    pending_review_record_id = _validate_payload_references(
+        chain,
+        seen_ids,
+        require_content_authority=strict_content,
+        require_review_authority=strict_reviews,
+        allow_incomplete_review_tail=allow_incomplete_review_tail,
+    )
+    return _result(
+        expected_run_id,
+        chain,
+        pending_review_record_id=pending_review_record_id,
+    )
 
 
 def replay_findings(
@@ -399,12 +453,291 @@ def replay_findings(
     ).findings
 
 
+def project_review_contracts(
+    replay: ArtifactReplayResult,
+    read_blob: Callable[[BlobReference], bytes],
+) -> tuple[ReplayedReviewContract, ...]:
+    """Rebuild reviewer domain results from the accepted R7/R8 prefix alone."""
+    chain = replay.records
+    positions = {record.record_id: index for index, record in enumerate(chain)}
+    records_by_id = {record.record_id: record for record in chain}
+    anchors_by_review = {
+        record.payload.review_record_id: record
+        for record in chain
+        if isinstance(record.payload, ReviewAnchorPayload)
+    }
+    validations_by_review = {
+        record.payload.review_record_id: record
+        for record in chain
+        if isinstance(record.payload, ReviewValidationBindingPayload)
+    }
+    projected: list[ReplayedReviewContract] = []
+    for review_record in chain:
+        payload = review_record.payload
+        if not isinstance(payload, ReviewPayload):
+            continue
+        if review_record.record_id == replay.pending_review_record_id:
+            continue
+        anchor_record = anchors_by_review.get(review_record.record_id)
+        validation_record = validations_by_review.get(review_record.record_id)
+        if anchor_record is None or validation_record is None:
+            _fail(
+                ReplayDiagnosticCode.RECORD_MISSING,
+                "review contract projection lacks its R7 component records",
+                review_record,
+            )
+        assert isinstance(anchor_record.payload, ReviewAnchorPayload)
+        assert isinstance(
+            validation_record.payload, ReviewValidationBindingPayload
+        )
+        attestation_record = records_by_id.get(
+            validation_record.payload.attestation_record_id
+        )
+        if attestation_record is None or not isinstance(
+            attestation_record.payload, ValidationAttestationPayload
+        ):
+            _fail(
+                ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+                "review contract projection cannot resolve its validation attestation",
+                validation_record,
+            )
+        attestation = _project_validation_attestation(
+            replay,
+            attestation_record,
+            read_blob,
+        )
+
+        prefix_end = _review_prefix_end(chain, positions, review_record)
+        from finding_reducer import reduce_findings
+
+        prefix_replay = replay.subset(chain[:prefix_end])
+        try:
+            findings = reduce_findings(prefix_replay).request_subset(
+                finding_ids=payload.finding_ids
+            ).findings
+        except ValueError:
+            _fail(
+                ReplayDiagnosticCode.RECORD_MISSING,
+                "review finding transition set is incomplete",
+                review_record,
+            )
+        if tuple(item.finding_id for item in findings) != payload.finding_ids:
+            _fail(
+                ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+                "review finding snapshot differs from its transition prefix",
+                review_record,
+            )
+        if payload.evidence is not None:
+            _fail(
+                ReplayDiagnosticCode.UNSUPPORTED_PROTOCOL,
+                "opaque legacy review evidence cannot project the R7 contract",
+                review_record,
+            )
+        evidence = (
+            None
+            if payload.review_evidence is None
+            else ReviewEvidence(
+                payload.review_evidence.dimensions,
+                payload.review_evidence.largest_residual_risk,
+                payload.review_evidence.break_condition,
+            )
+        )
+        stop_request = (
+            None
+            if payload.stop_request is None
+            else StopRequest(
+                payload.stop_request.rule_id,
+                payload.stop_request.rationale,
+                payload.stop_request.remediation_paths,
+            )
+        )
+        anchors = tuple(
+            AnchorRecord(
+                anchor.anchor_id,
+                anchor.origin,
+                anchor.input_fixture,
+                anchor.expected,
+                anchor.tolerance,
+            )
+            for anchor in anchor_record.payload.anchors
+        )
+        round_suffix = review_record.logical_id.rsplit("-", 1)[-1]
+        if not round_suffix.isdigit() or int(round_suffix) < 1:
+            _fail(
+                ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+                "review contract has no canonical logical round",
+                review_record,
+            )
+        projected.append(
+            ReplayedReviewContract(
+                record_id=review_record.record_id,
+                work_unit_id=payload.work_unit_id,
+                round_number=int(round_suffix),
+                result=ContractResult(
+                    reviewer=AgentRole(payload.reviewer.value),
+                    approval=(
+                        None
+                        if payload.verdict == "stop"
+                        else payload.verdict == "approved"
+                    ),
+                    stopped=payload.verdict == "stop",
+                    stop_request=stop_request,
+                    validation=attestation,
+                    test_files=payload.test_files,
+                    pre_mortem=payload.pre_mortem,
+                    evidence=evidence,
+                    findings=findings,
+                    anchors=anchors,
+                    red_state_followup_slice=payload.red_state_followup_slice,
+                ),
+            )
+        )
+    return tuple(projected)
+
+
+def _review_prefix_end(
+    chain: tuple[ArtifactRecord, ...],
+    positions: dict[str, int],
+    review_record: ArtifactRecord,
+) -> int:
+    """Return the exclusive end of one contiguous review transaction prefix."""
+    payload = review_record.payload
+    assert isinstance(payload, ReviewPayload)
+    prefix_end = positions[review_record.record_id] + 1
+    while prefix_end < len(chain):
+        candidate = chain[prefix_end].payload
+        if (
+            isinstance(candidate, ReviewAnchorPayload)
+            and candidate.review_record_id == review_record.record_id
+        ) or (
+            isinstance(candidate, ReviewValidationBindingPayload)
+            and candidate.review_record_id == review_record.record_id
+        ) or (
+            isinstance(candidate, FindingTransitionPayload)
+            and candidate.work_unit_id == payload.work_unit_id
+            and candidate.actor is payload.reviewer
+        ):
+            prefix_end += 1
+            continue
+        break
+    return prefix_end
+
+
+def _review_prefix_finding_ids(
+    chain: tuple[ArtifactRecord, ...],
+    positions: dict[str, int],
+    review_record: ArtifactRecord,
+) -> tuple[str, ...] | None:
+    """Project finding ids only when this review's contiguous prefix is complete."""
+    from finding_reducer import reduce_findings
+
+    payload = review_record.payload
+    assert isinstance(payload, ReviewPayload)
+    prefix_end = _review_prefix_end(chain, positions, review_record)
+    try:
+        findings = reduce_findings(
+            _result(
+                review_record.run_id,
+                chain[:prefix_end],
+                reference_records=chain,
+            )
+        ).request_subset(finding_ids=payload.finding_ids).findings
+    except ValueError:
+        return None
+    return tuple(item.finding_id for item in findings)
+
+
+def project_latest_review(
+    replay: ArtifactReplayResult,
+    read_blob: Callable[[BlobReference], bytes],
+    work_unit_id: int | str,
+) -> ContractResult | None:
+    """Return one work unit's latest review projection, never an aggregate record."""
+    unit_id = str(work_unit_id)
+    reviews = tuple(
+        review
+        for review in project_review_contracts(replay, read_blob)
+        if review.work_unit_id == unit_id
+    )
+    return None if not reviews else reviews[-1].result
+
+
+def _project_validation_attestation(
+    replay: ArtifactReplayResult,
+    attestation_record: ArtifactRecord,
+    read_blob: Callable[[BlobReference], bytes],
+) -> ValidationAttestation:
+    payload = attestation_record.payload
+    assert isinstance(payload, ValidationAttestationPayload)
+    content_record = next(
+        (
+            record
+            for record in replay.records
+            if record.record_id == payload.content_record_id
+        ),
+        None,
+    )
+    if content_record is None or not isinstance(
+        content_record.payload, ValidationContentPayload
+    ):
+        _fail(
+            ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+            "review validation projection lacks exact content",
+            attestation_record,
+        )
+    content = content_record.payload
+    specs: list[ValidationCommandSpec] = []
+    expected_commands: list[str] = []
+    records: list[ValidationRecord] = []
+    for result, output in zip(payload.results, content.outputs, strict=True):
+        command = result.command
+        spec = (
+            ValidationCommandSpec(argv=command.argv)
+            if command.mode == "argv"
+            else ValidationCommandSpec(legacy_shell=command.argv[0])
+        )
+        display = spec.display
+        specs.append(spec)
+        expected_commands.append(display)
+        if result.outcome == "unavailable":
+            continue
+        try:
+            compact_output = read_blob(output.compact_output).decode("utf-8")
+        except (OSError, UnicodeDecodeError, ValueError) as exc:
+            _fail(
+                ReplayDiagnosticCode.RECORD_UNKNOWN,
+                f"review validation compact output cannot be read: {exc}",
+                content_record,
+            )
+        records.append(
+            ValidationRecord(
+                ValidationStatus.PASS
+                if result.outcome == "pass"
+                else ValidationStatus.FAIL,
+                display,
+                result.exit_code,
+                compact_output,
+            )
+        )
+    return ValidationAttestation(
+        attestation_id=attestation_record.logical_id,
+        diff_fingerprint=attestation_record.fingerprint.sha256,
+        expected_commands=tuple(expected_commands),
+        records=tuple(records),
+        output_digest=payload.output_digest,
+        summary=content.summary,
+        command_specs=tuple(specs),
+    )
+
+
 def _validate_payload_references(
     chain: tuple[ArtifactRecord, ...],
     records_by_id: dict[str, ArtifactRecord],
     *,
     require_content_authority: bool,
-) -> None:
+    require_review_authority: bool,
+    allow_incomplete_review_tail: bool,
+) -> str | None:
     from finding_reducer import reduce_findings
 
     positions = {record.record_id: index for index, record in enumerate(chain)}
@@ -806,6 +1139,146 @@ def _validate_payload_references(
                 content_record,
             )
 
+    review_records = tuple(
+        record for record in chain if isinstance(record.payload, ReviewPayload)
+    )
+    review_anchor_records = tuple(
+        record for record in chain if isinstance(record.payload, ReviewAnchorPayload)
+    )
+    review_validation_records = tuple(
+        record
+        for record in chain
+        if isinstance(record.payload, ReviewValidationBindingPayload)
+    )
+    anchors_by_review: dict[str, ArtifactRecord] = {}
+    for anchor_record in review_anchor_records:
+        anchor = anchor_record.payload
+        review = records_by_id.get(anchor.review_record_id)
+        binding_digest = hashlib.sha256(
+            anchor.review_record_id.encode("utf-8")
+        ).hexdigest()
+        if (
+            review is None
+            or not isinstance(review.payload, ReviewPayload)
+            or positions[review.record_id] >= positions[anchor_record.record_id]
+            or review.fingerprint != anchor_record.fingerprint
+            or anchor_record.logical_id
+            != f"review-anchors-{binding_digest[:16]}"
+        ):
+            _fail(
+                ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+                "review anchors do not bind one earlier fingerprint-matched review",
+                anchor_record,
+            )
+        if anchor.review_record_id in anchors_by_review:
+            _fail(
+                ReplayDiagnosticCode.RECORD_DUPLICATE,
+                "review anchor binding is duplicated",
+                anchor_record,
+            )
+        anchors_by_review[anchor.review_record_id] = anchor_record
+
+    validations_by_review: dict[str, ArtifactRecord] = {}
+    for binding_record in review_validation_records:
+        binding = binding_record.payload
+        review = records_by_id.get(binding.review_record_id)
+        attestation = records_by_id.get(binding.attestation_record_id)
+        binding_digest = hashlib.sha256(
+            binding.review_record_id.encode("utf-8")
+        ).hexdigest()
+        if (
+            review is None
+            or not isinstance(review.payload, ReviewPayload)
+            or attestation is None
+            or not isinstance(attestation.payload, ValidationAttestationPayload)
+            or positions[review.record_id] >= positions[binding_record.record_id]
+            or positions[attestation.record_id] >= positions[binding_record.record_id]
+            or binding_record.logical_id
+            != f"review-validation-{binding_digest[:16]}"
+        ):
+            _fail(
+                ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+                "review validation binding does not reference earlier fingerprint-matched facts",
+                binding_record,
+            )
+        if (
+            review.fingerprint != binding_record.fingerprint
+            or attestation.fingerprint != binding_record.fingerprint
+        ):
+            _fail(
+                ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+                "review validation binding fingerprint differs from its review or attestation",
+                binding_record,
+            )
+        if binding.review_record_id in validations_by_review:
+            _fail(
+                ReplayDiagnosticCode.RECORD_DUPLICATE,
+                "review validation binding is duplicated",
+                binding_record,
+            )
+        validations_by_review[binding.review_record_id] = binding_record
+
+    pending_review_record_id: str | None = None
+    if require_review_authority:
+        for review in review_records:
+            anchor_record = anchors_by_review.get(review.record_id)
+            validation_record = validations_by_review.get(review.record_id)
+            review_position = positions[review.record_id]
+            finding_ids_complete = (
+                anchor_record is not None
+                and validation_record is not None
+                and _review_prefix_finding_ids(chain, positions, review)
+                == review.payload.finding_ids
+            )
+            if finding_ids_complete:
+                continue
+            prefix_end = _review_prefix_end(chain, positions, review)
+            recoverable_tail = (
+                allow_incomplete_review_tail
+                and pending_review_record_id is None
+                and (
+                    (
+                        anchor_record is None
+                        and validation_record is None
+                        and review_position == len(chain) - 1
+                    )
+                    or (
+                        anchor_record is not None
+                        and validation_record is None
+                        and positions[anchor_record.record_id] == review_position + 1
+                        and positions[anchor_record.record_id] == len(chain) - 1
+                    )
+                    or (
+                        anchor_record is not None
+                        and validation_record is not None
+                        and positions[anchor_record.record_id] == review_position + 1
+                        and positions[validation_record.record_id]
+                        == positions[anchor_record.record_id] + 1
+                        and prefix_end == len(chain)
+                    )
+                )
+            )
+            if recoverable_tail:
+                pending_review_record_id = review.record_id
+                continue
+            if anchor_record is None:
+                _fail(
+                    ReplayDiagnosticCode.RECORD_MISSING,
+                    "review has no authoritative anchor-list record",
+                    review,
+                )
+            if validation_record is None:
+                _fail(
+                    ReplayDiagnosticCode.RECORD_MISSING,
+                    "review has no authoritative validation binding",
+                    review,
+                )
+            _fail(
+                ReplayDiagnosticCode.RECORD_MISSING,
+                "review finding transition set is incomplete",
+                review,
+            )
+
     for packet_record in (
         record for record in chain if isinstance(record.payload, ReviewPacketPayload)
     ):
@@ -820,6 +1293,7 @@ def _validate_payload_references(
                 "review packet record identity differs from its content binding",
                 packet_record,
             )
+
     work_units: dict[str, ArtifactRecord] = {}
     latest_work_units: dict[str, ArtifactRecord] = {}
     for record in chain:
@@ -1209,6 +1683,8 @@ def _validate_payload_references(
                     result,
                 )
 
+    return pending_review_record_id
+
 
 def _same_fingerprint(record: ArtifactRecord, referenced: ArtifactRecord) -> None:
     if referenced.fingerprint != record.fingerprint:
@@ -1241,6 +1717,7 @@ def _result(
     records: tuple[ArtifactRecord, ...],
     *,
     reference_records: tuple[ArtifactRecord, ...] | None = None,
+    pending_review_record_id: str | None = None,
 ) -> ArtifactReplayResult:
     accepted_references = records if reference_records is None else reference_records
     facts = _semantic_facts(records)
@@ -1272,6 +1749,8 @@ def _result(
     validation_contents: list[ValidationContentPayload] = []
     provider_contents: list[ProviderContentPayload] = []
     review_packets: list[ReviewPacketPayload] = []
+    review_anchors: list[ReviewAnchorPayload] = []
+    review_validation_bindings: list[ReviewValidationBindingPayload] = []
     side_effects: list[ReplayedSideEffect] = []
     side_effect_indexes: dict[str, int] = {}
     for sequence, record in enumerate(records, start=1):
@@ -1327,6 +1806,10 @@ def _result(
             provider_contents.append(payload)
         elif isinstance(payload, ReviewPacketPayload):
             review_packets.append(payload)
+        elif isinstance(payload, ReviewAnchorPayload):
+            review_anchors.append(payload)
+        elif isinstance(payload, ReviewValidationBindingPayload):
+            review_validation_bindings.append(payload)
         elif isinstance(payload, SideEffectPayload) and payload.phase == "intent":
             side_effect_indexes[payload.effect_key] = len(side_effects)
             side_effects.append(
@@ -1358,6 +1841,7 @@ def _result(
         expected_run_id=expected_run_id,
         records=records,
         head_record_id=records[-1].record_id if records else None,
+        pending_review_record_id=pending_review_record_id,
         semantic_facts=facts,
         semantic_digest=hashlib.sha256(canonical_json(documents)).hexdigest(),
         audit_events=tuple(
@@ -1395,7 +1879,15 @@ def _result(
         validation_contents=tuple(validation_contents),
         provider_contents=tuple(provider_contents),
         review_packets=tuple(review_packets),
-        work_unit_reviewers=project_work_unit_reviewers(records),
+        review_anchors=tuple(review_anchors),
+        review_validation_bindings=tuple(review_validation_bindings),
+        work_unit_reviewers=project_work_unit_reviewers(
+            tuple(
+                record
+                for record in records
+                if record.record_id != pending_review_record_id
+            )
+        ),
         side_effects=tuple(side_effects),
         _reference_records=accepted_references,
     )

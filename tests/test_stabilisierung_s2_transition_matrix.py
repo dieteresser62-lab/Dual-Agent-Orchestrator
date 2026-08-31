@@ -49,6 +49,12 @@ MIGRATION_MISMATCH_MARKERS = (
     "final-report bytes differ from state-v3",
     "active review packets differ from state-v3",
     "active review packet bytes or metadata differ from state-v3",
+    "review contract projection is ambiguous",
+    "review contract mirror is ambiguous",
+    "latest review mirror has no aggregate field",
+    "review contracts differ from state-v3",
+    "review contract fields differ from state-v3",
+    "latest review differs from its event projection",
 )
 
 RESUME_ERROR_MARKERS = (
@@ -140,6 +146,7 @@ DRIVER_DIVERGENCE_MESSAGES = Counter(
         "native agent result logical binding differs": 1,
         "native agent content digest differs from its result binding": 1,
         "native reviewer content digest differs from its review binding": 1,
+        "native review persistence differs from its exact review context": 1,
         "validation recovery result differs from its content": 1,
         "persisted finding handoff export differs from the prepared task": 1,
         "file side-effect target differs before result completion": 1,
@@ -425,7 +432,7 @@ STRICT_BODY_TARGETS = tuple(
 # non-divergence comparison added inside one of these boundaries forces S2's
 # inventory to be reviewed instead of silently aging.
 EXPECTED_COMPARISON_COUNTS = {
-    "src/artifact_migration.py:resolve_resume_state": 112,
+    "src/artifact_migration.py:resolve_resume_state": 119,
     "src/artifact_migration.py:assert_run_binding_mirror": 6,
     "src/artifact_migration.py:require_workflow_status_prefix": 3,
     "src/artifact_migration.py:assert_workflow_status_mirror": 4,
@@ -447,7 +454,7 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/artifact_migration.py:_attestation_facts": 2,
     "src/artifact_bridge.py:finding_handoff_export_payload": 5,
     "src/artifact_bridge.py:finding_handoff_import_payload": 8,
-    "src/artifact_bridge.py:review_payload_matches_result": 9,
+    "src/artifact_bridge.py:review_payload_matches_result": 13,
     "src/artifact_bridge.py:ArtifactBridge.append": 3,
     "src/artifact_bridge.py:ArtifactBridge.record_side_effect_intent": 1,
     "src/artifact_bridge.py:ArtifactBridge.record_side_effect_result": 4,
@@ -481,7 +488,7 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/orchestrator.py:ProductionWorkflowDriver._materialize_review_packet": 3,
     "src/orchestrator.py:ProductionWorkflowDriver._canonical_native_agent_result": 4,
     "src/orchestrator.py:ProductionWorkflowDriver.recover_pending_native_codex": 42,
-    "src/orchestrator.py:ProductionWorkflowDriver.recover_pending_native_reviewer": 35,
+    "src/orchestrator.py:ProductionWorkflowDriver.recover_pending_native_reviewer": 34,
     "src/orchestrator.py:ProductionWorkflowDriver.recover_pending_native_reviewer_before_policy": 31,
     "src/orchestrator.py:ProductionWorkflowDriver.persist_native_codex_contract": 11,
     "src/orchestrator.py:ProductionWorkflowDriver.prepare_finding_handoff": 13,
@@ -510,7 +517,7 @@ EXPECTED_COMPARISON_COUNTS = {
 }
 
 EXPECTED_STRICT_BODY_DIGESTS = {
-    "src/artifact_bridge.py:review_payload_matches_result": "f72ff6a84fa3ce4651d52ba2317071a26ccf56d53e8b2b03bdda8e94a1bdf8d3",
+    "src/artifact_bridge.py:review_payload_matches_result": "b3233be38c3e4729058eba7ffd325fc94d29d4f08bd5ccfd08de0e3557eaf612",
     "src/artifact_migration.py:assert_run_binding_mirror": "e8febdf4104e65855caa2196ec8fad6f9e6ec5a81b3bdfc9a2ac1475daea9498",
     "src/artifact_migration.py:require_workflow_status_prefix": "964d356480288034c6dc52de377c2326c06d2db50d6aae52fd2b3d5dbcc5bdec",
     "src/artifact_migration.py:assert_workflow_status_mirror": "0d6ac0eec3998504048ccf74ee978930a4e2dfa3cd256e71268e143a774b7eae",
@@ -717,7 +724,7 @@ def test_migration_comparison_inventory_is_source_bound() -> None:
     source = _source("src/artifact_migration.py")
     source_strings = _string_constants("src/artifact_migration.py")
     document = MATRIX_PATH.read_text(encoding="utf-8")
-    assert _raise_count("src/artifact_migration.py", "mismatch") == 40
+    assert _raise_count("src/artifact_migration.py", "mismatch") == 46
     assert source.count("differs from state-v3") == 20
     for marker in MIGRATION_MISMATCH_MARKERS:
         assert marker in source_strings
@@ -838,6 +845,9 @@ def test_recordless_review_and_attestation_fields_are_source_bound() -> None:
             "response_sha256",
             "review_evidence",
             "red_state_followup_slice",
+            "test_files",
+            "pre_mortem",
+            "stop_request",
         },
         ("src/artifact_models.py", "ReviewEvidencePayload"): {
             "dimensions",
@@ -946,7 +956,16 @@ def test_every_s4a_stop_entry_has_exactly_one_reasoned_classification() -> None:
         "`runtime_history.codex_final_report` und weitere rohe Agenttexte",
         "`runtime_history.active_review_packet`",
     }
-    assert len(stop_fields) == 10
+    r7_covered_fields = {
+        "`ContractResult.red_state_followup_slice` in `runtime_history.reviews/latest_claude_review`",
+        "`ContractResult.test_files`",
+        "`ContractResult.pre_mortem`",
+        "`ContractResult.anchors`",
+        "`ContractResult.stop_request`",
+        "`ContractResult.validation`",
+        "`runtime_history.latest_claude_review` als Aggregat",
+    }
+    assert len(stop_fields) == 3
     assert len(fields) == len(set(fields)) == 41
     assert set(fields) == (
         stop_fields
@@ -956,6 +975,7 @@ def test_every_s4a_stop_entry_has_exactly_one_reasoned_classification() -> None:
         | r4_covered_fields
         | r5_covered_fields
         | r6_covered_fields
+        | r7_covered_fields
         | r8_covered_fields
         | {"`created_at`, `updated_at`"}
     )
@@ -988,6 +1008,9 @@ def test_every_s4a_stop_entry_has_exactly_one_reasoned_classification() -> None:
     for field in r8_covered_fields:
         reason = next(reason for name, _group, reason in rows if name == field)
         assert "In R8 geschlossen" in reason
+    for field in r7_covered_fields:
+        reason = next(reason for name, _group, reason in rows if name == field)
+        assert "R7" in reason
     for field in r3_covered_fields:
         reason = next(reason for name, _group, reason in rows if name == field)
         assert "In R3 geschlossen" in reason

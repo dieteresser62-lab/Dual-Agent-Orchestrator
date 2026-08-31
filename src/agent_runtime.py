@@ -43,6 +43,7 @@ from native_codex_request import (
     validate_native_codex_provider_response,
 )
 from native_review_contract import (
+    NativeReviewContext,
     NativeReviewContractError,
     NativeReviewErrorCode,
     parse_bound_native_contract_result,
@@ -1261,6 +1262,7 @@ class NativeAgentReviewOutput:
     result: ContractResult
     canonical_json: str
     request_id: str
+    context: NativeReviewContext | None = None
 
 
 def run_native_review_agent(
@@ -1323,6 +1325,7 @@ def run_native_review_agent(
         result=result,
         canonical_json=canonical,
         request_id=bundle.bound_context.request_id,
+        context=bundle.bound_context.context,
     )
 
 

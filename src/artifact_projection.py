@@ -18,7 +18,9 @@ from artifact_models import (
     FindingHandoffImportPayload,
     GatePayload,
     PlanPayload,
+    ReviewAnchorPayload,
     ReviewPayload,
+    ReviewValidationBindingPayload,
     Role,
     TaskPayload,
     ValidationAttestationPayload,
@@ -187,6 +189,11 @@ def render_replay_sections(replay: ArtifactReplayResult) -> Mapping[str, str]:
                 record.payload.round_number,
             )
     convergence: dict[str, dict[str, Any]] = {}
+    review_records_by_id = {
+        record.record_id: record
+        for record in chain
+        if isinstance(record.payload, ReviewPayload)
+    }
 
     for sequence, record in enumerate(chain, start=1):
         payload = record.payload
@@ -252,6 +259,53 @@ def render_replay_sections(replay: ArtifactReplayResult) -> Mapping[str, str]:
                     f"- Gebundene Folgeslice: `{_safe(payload.red_state_followup_slice)}`",
                     "",
                 ))
+            reviews[payload.reviewer].extend((
+                "#### Reviewvertrag",
+                "",
+                f"- Testdateien: {_codes(payload.test_files)}",
+                f"- Pre-Mortem: {_prose(payload.pre_mortem or '–')}",
+            ))
+            if payload.stop_request is not None:
+                reviews[payload.reviewer].extend((
+                    f"- Stop-Regel: `{_safe(payload.stop_request.rule_id)}`",
+                    f"- Stop-Begründung: {_prose(payload.stop_request.rationale)}",
+                    f"- Remediation-Pfade: {_codes(payload.stop_request.remediation_paths)}",
+                ))
+            reviews[payload.reviewer].append("")
+        elif isinstance(payload, ReviewAnchorPayload):
+            review_record = review_records_by_id[payload.review_record_id]
+            review_payload = review_record.payload
+            assert isinstance(review_payload, ReviewPayload)
+            reviews[review_payload.reviewer].extend((
+                "#### Review-Anker",
+                "",
+                f"- Gebundener Reviewrecord: `{_safe(payload.review_record_id)}`",
+            ))
+            if payload.anchors:
+                reviews[review_payload.reviewer].extend((
+                    "",
+                    "| Anchor | Ursprung | Fixture | Erwartung | Toleranz |",
+                    "|---|---|---|---|---|",
+                ))
+                for anchor in payload.anchors:
+                    reviews[review_payload.reviewer].append(
+                        f"| `{_safe(anchor.anchor_id)}` | {_table_prose(anchor.origin)} | "
+                        f"{_table_prose(anchor.input_fixture)} | {_table_prose(anchor.expected)} | "
+                        f"{_table_prose(anchor.tolerance)} |"
+                    )
+            else:
+                reviews[review_payload.reviewer].append("- Anker: keine")
+            reviews[review_payload.reviewer].append("")
+        elif isinstance(payload, ReviewValidationBindingPayload):
+            validations.extend((
+                "### Review-Validierungsbindung",
+                "",
+                "| Seq/Record | Reviewrecord | Attestierungsrecord | Fingerprint |",
+                "|---|---|---|---|",
+                f"| {prefix} | `{_safe(payload.review_record_id)}` | "
+                f"`{_safe(payload.attestation_record_id)}` | `{record.fingerprint.sha256}` |",
+                "",
+            ))
         elif isinstance(payload, FindingTransitionPayload):
             round_number = work_unit_rounds.get(payload.work_unit_id or "", "–")
             line = (

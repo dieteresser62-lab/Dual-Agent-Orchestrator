@@ -971,6 +971,7 @@ class ScriptedWorkflowDriver:
             ),
             canonical_json=canonical,
             request_id=invocation.native_request.bound_context.request_id,
+            context=invocation.native_request.bound_context.context,
         )
 
     def collect_changes(self, start_commit: str) -> WorkflowChanges:

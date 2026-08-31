@@ -4,22 +4,22 @@
     {
       "provider": "claude",
       "form": "convergence",
-      "sha256": "e41b22c001edbdae297ce9e3be08896396c92cdcdf60ac1505d54c5525017e74"
+      "sha256": "02b5715baaebbdc12ad6f97f1320df30c2594aaec6b90d46ed08b2dff72c1f6d"
     },
     {
       "provider": "claude",
       "form": "final",
-      "sha256": "a65e65ff18bf594ecb5d7fb4c622eb34b4c8a91e1809058b369f44a6aa04c790"
+      "sha256": "9ddf9bc9f833c74cfe1f32b997ccd6475c12fdceaf127b3e4cfb800b2ed2231a"
     },
     {
       "provider": "claude",
       "form": "initial_slice",
-      "sha256": "188229cab90f1061eba619da4e059b3e9feac494337460e794c07fa882a46e7e"
+      "sha256": "70187e6ab499518eb8f29b8f11af6b4befff7c83043829eefb8a68c228e85e70"
     },
     {
       "provider": "claude",
       "form": "plan",
-      "sha256": "3db7549f4ed7c45eb810980038f9fd1f04a738a71396ecfd719501866aa6261e"
+      "sha256": "4ddd1ba953d9018eb89e6d5597b691c88dc2169656f6e7ead76bf193021e412d"
     },
     {
       "provider": "codex",

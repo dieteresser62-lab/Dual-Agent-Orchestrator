@@ -248,9 +248,18 @@ def test_review_packet_record_size_stays_bounded_as_diff_content_grows(
         )
         assert replay.review_packets[0].content_bytes == packet_sizes[-1]
 
-    assert packet_sizes[-1] > packet_sizes[0] * 12
-    assert max(record_sizes) - min(record_sizes) < 32
-    assert max(record_sizes) < packet_sizes[0] // 20
+    def assert_externalized(sizes: list[int]) -> None:
+        assert packet_sizes[-1] > packet_sizes[0] * 12
+        assert max(sizes) - min(sizes) < 32
+        assert max(sizes) < packet_sizes[0] // 20
+
+    assert_externalized(record_sizes)
+    with pytest.raises(AssertionError):
+        assert_externalized(
+            [record_size + packet_size for record_size, packet_size in zip(
+                record_sizes, packet_sizes, strict=True
+            )]
+        )
 
 
 def test_review_packet_fullscan_reads_each_blob_once_with_linear_byte_cost(

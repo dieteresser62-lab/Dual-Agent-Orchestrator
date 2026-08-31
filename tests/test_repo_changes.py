@@ -7,6 +7,21 @@ from pathlib import Path
 
 import pytest
 
+from audit_trail import (
+    AuditProjection,
+    ReviewAuditEvent,
+    ValidationAuditEvent,
+    _render_reviews,
+)
+from contracts import (
+    AgentRole,
+    AnchorRecord,
+    ContractResult,
+    ReviewEvidence,
+    ValidationAttestation,
+    ValidationRecord,
+    ValidationStatus,
+)
 from repo_changes import (
     NotGitRepositoryError,
     RepositoryChangeError,
@@ -15,6 +30,7 @@ from repo_changes import (
     merge_reported_paths,
     resolve_merge_base,
 )
+from review_packets import build_review_packet
 from semantic_markdown import MANAGED_SECTION_HEADINGS, MANAGED_SECTION_KEYS
 
 
@@ -166,6 +182,7 @@ def test_internal_managed_audit_body_is_excluded_from_diff_and_fingerprint(
     second = collect_repository_changes(repository, base_commit)
 
     assert first.fingerprint == second.fingerprint
+    assert first.paths == second.paths
     assert first.diff_text == second.diff_text
     assert "first projected review" not in first.diff_text
     assert "second and much longer projected review" not in second.diff_text
@@ -176,6 +193,138 @@ def test_internal_managed_audit_body_is_excluded_from_diff_and_fingerprint(
     )
     semantic_change = collect_repository_changes(repository, base_commit)
     assert semantic_change.fingerprint != second.fingerprint
+
+
+def test_rendered_review_contract_cannot_change_guard_or_packet_bytes(
+    tmp_path: Path,
+) -> None:
+    repository, _base_commit = _new_repository(tmp_path)
+    _git(repository, "switch", "-c", "feature/rendered-review-boundary")
+    audit = repository / "docs" / "internal" / "slice-example-08-audit.md"
+    audit.parent.mkdir(parents=True)
+    audit.write_text(_managed_slice_markdown(), encoding="utf-8")
+    review_base = _commit_all(repository, "add managed audit document")
+    (repository / "base.txt").write_text(
+        "semantic implementation\n", encoding="utf-8"
+    )
+
+    provisional = collect_repository_changes(repository, review_base)
+    attestation = ValidationAttestation(
+        "validation-render-boundary",
+        provisional.fingerprint,
+        ("pytest",),
+        (ValidationRecord(ValidationStatus.PASS, "pytest", 0, "passed"),),
+        "a" * 64,
+        "validation passed",
+    )
+    first_result = ContractResult(
+        reviewer=AgentRole.CLAUDE,
+        approval=True,
+        stopped=False,
+        stop_request=None,
+        validation=attestation,
+        test_files=("tests/test_first_projection.py",),
+        pre_mortem="A projection writer could leak into semantic evidence.",
+        evidence=ReviewEvidence(
+            "review field rendering and fingerprint boundaries",
+            "an unregistered audit path",
+            "rendered reviewer fields alter the canonical packet",
+        ),
+        findings=(),
+        anchors=(
+            AnchorRecord(
+                "render-boundary",
+                "R7 audit projection",
+                "first renderer fixture",
+                "managed prose remains non-authoritative",
+                "canonical bytes stay identical",
+            ),
+        ),
+    )
+    second_result = replace(
+        first_result,
+        test_files=("tests/test_second_projection.py",),
+        evidence=ReviewEvidence(
+            "different rendered dimensions",
+            "different rendered residual risk",
+            "different rendered break condition",
+        ),
+        anchors=(
+            AnchorRecord(
+                "render-boundary-updated",
+                "R7 audit projection",
+                "second renderer fixture",
+                "the audit text visibly changes",
+                "canonical bytes still stay identical",
+            ),
+        ),
+    )
+
+    first_render = _render_reviews(
+        AuditProjection(
+            8,
+            (
+                ValidationAuditEvent(1, 8, attestation),
+                ReviewAuditEvent(2, 8, 1, first_result),
+            ),
+        ),
+        AgentRole.CLAUDE,
+    )
+    audit.write_text(_managed_slice_markdown(first_render), encoding="utf-8")
+    first = collect_repository_changes(repository, review_base)
+
+    second_render = _render_reviews(
+        AuditProjection(
+            8,
+            (
+                ValidationAuditEvent(1, 8, attestation),
+                ReviewAuditEvent(2, 8, 1, second_result),
+            ),
+        ),
+        AgentRole.CLAUDE,
+    )
+    audit.write_text(_managed_slice_markdown(second_render), encoding="utf-8")
+    second = collect_repository_changes(repository, review_base)
+
+    assert first_render != second_render
+    assert first.fingerprint == second.fingerprint
+    assert first.paths == second.paths
+    assert first.review_paths == second.review_paths
+    assert first.diff_text == second.diff_text
+
+    packet_attestation = replace(
+        attestation,
+        diff_fingerprint=first.fingerprint,
+    )
+
+    plan = """# Plan
+
+### Slice 8 - Review projection boundary
+
+**Ziel**
+
+Keep managed audit review fields outside canonical implementation evidence.
+
+#### \u0041kzeptanzkriterien
+
+- Renderer changes do not alter the review packet.
+"""
+    packets = tuple(
+        build_review_packet(
+            purpose="slice",
+            fingerprint=changes.fingerprint,
+            start_fingerprint="0" * 64,
+            paths=("base.txt",),
+            review_diff=changes.diff_text,
+            plan_text=plan,
+            slice_id=8,
+            attestation=packet_attestation,
+            findings=(),
+        )
+        for changes in (first, second)
+    )
+    assert packets[0].canonical_bytes == packets[1].canonical_bytes
+    assert packets[0].digest == packets[1].digest
 
 
 def test_unregistered_internal_markdown_cannot_hide_content_from_fingerprint(

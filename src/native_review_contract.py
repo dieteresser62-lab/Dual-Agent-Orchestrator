@@ -144,6 +144,7 @@ class NativeStopResult:
     reviewer: AgentRole
     rule_id: str
     rationale: str
+    remediation_paths: tuple[str, ...] = ()
 
 
 NativeReviewResponse: TypeAlias = NativeReviewResult | NativeStopResult
@@ -166,6 +167,7 @@ class NativeReviewContext:
     allow_new_observations: bool = True
     anchor_origin: str | None = None
     validation_command_prefixes: tuple[tuple[str, ...], ...] = ()
+    red_state_followup_slice: str | None = None
 
     def __post_init__(self) -> None:
         for label, value in (
@@ -222,6 +224,14 @@ class NativeReviewContext:
             raise NativeReviewContractError(
                 NativeReviewErrorCode.CONTEXT_INVALID,
                 "anchor_origin must be non-empty when present",
+            )
+        if (
+            self.red_state_followup_slice is not None
+            and not self.red_state_followup_slice.strip()
+        ):
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.CONTEXT_INVALID,
+                "red_state_followup_slice must be non-empty when present",
             )
         normalized_prefixes = tuple(dict.fromkeys(self.validation_command_prefixes))
         if normalized_prefixes != self.validation_command_prefixes or any(
@@ -578,7 +588,10 @@ def native_review_provider_response_schema(
     approval_possible = (
         validation is not None
         and validation.complete
-        and validation.passed
+        and (
+            validation.passed
+            or context.red_state_followup_slice is not None
+        )
         and (not context.test_files or context.test_changes_approved)
     )
     result_refs: list[dict[str, str]] = []
@@ -718,6 +731,7 @@ def _parse_native_review_response(
             reviewer=reviewer,
             rule_id=document["rule_id"],
             rationale=document["rationale"],
+            remediation_paths=tuple(document["remediation_paths"]),
         )
 
     evidence: ReviewEvidence | None = None
@@ -807,7 +821,11 @@ def _native_response_to_contract_result(
             code=NativeReviewErrorCode.STOP_CONTENT_INVALID,
         )
         try:
-            stop_request = StopRequest(response.rule_id, response.rationale)
+            stop_request = StopRequest(
+                response.rule_id,
+                response.rationale,
+                response.remediation_paths,
+            )
         except ValueError as exc:
             raise NativeReviewContractError(
                 NativeReviewErrorCode.STOP_CONTENT_INVALID, str(exc)
@@ -841,7 +859,9 @@ def _native_response_to_contract_result(
         evidence=response.evidence,
         findings=findings,
         anchors=anchors,
-        red_state_followup_slice=None,
+        red_state_followup_slice=(
+            context.red_state_followup_slice if response.approved else None
+        ),
     )
 
 
@@ -1161,10 +1181,17 @@ def _validate_decision(
             )
         return
     validation = context.validation_attestation
-    if validation is None or not validation.complete or not validation.passed:
+    if (
+        validation is None
+        or not validation.complete
+        or (
+            not validation.passed
+            and context.red_state_followup_slice is None
+        )
+    ):
         raise NativeReviewContractError(
             NativeReviewErrorCode.APPROVAL_INVALID,
-            "approval requires a complete PASS attestation",
+            "approval requires a complete PASS attestation or named red-state follow-up",
         )
     if context.test_files and not context.test_changes_approved:
         raise NativeReviewContractError(
@@ -1222,6 +1249,7 @@ def native_review_context_binding(context: NativeReviewContext) -> dict[str, Any
         "validation_command_prefixes": [
             list(prefix) for prefix in context.validation_command_prefixes
         ],
+        "red_state_followup_slice": context.red_state_followup_slice,
     }
 
 

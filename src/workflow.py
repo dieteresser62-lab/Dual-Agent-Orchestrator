@@ -3459,6 +3459,7 @@ class WorkflowEngine:
             validation_command_prefixes=(
                 context.validation_matrix.finding_command_prefixes
             ),
+            red_state_followup_slice=contract.red_state_followup_slice,
         )
         evidence: list[NativeReviewEvidenceInput] = [
             NativeReviewEvidenceInput(

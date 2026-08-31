@@ -47,6 +47,7 @@ from artifact_replay import (
     ReplayedWorkflowCursor,
     ReplayedWorkUnitState,
     ReplayDiagnosticCode,
+    project_review_contracts,
     replay_artifacts,
 )
 from finding_reducer import (
@@ -617,7 +618,10 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
 
     try:
         replay = replay_artifacts(
-            chain, state.run_id, require_content_authority=True
+            chain,
+            state.run_id,
+            require_content_authority=True,
+            allow_incomplete_review_tail=True,
         )
     except ArtifactReplayError as exc:
         raise ArtifactResumeError(
@@ -1017,6 +1021,81 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
                 "validation output or digest differs from state-v3",
                 attestation_record.record_id,
             )
+
+    projected_reviews = project_review_contracts(replay, store.read_blob)
+    record_reviews = {}
+    for projected in projected_reviews:
+        key = (projected.work_unit_id, projected.round_number)
+        if key in record_reviews:
+            raise mismatch(
+                "review contract projection is ambiguous", projected.record_id
+            )
+        record_reviews[key] = projected
+    mirror_reviews: dict[tuple[str, int], dict[str, object]] = {}
+    mirror_latest: dict[str, object] = {}
+    for history in _runtime_history_mirrors(state):
+        unit_id = history.get("work_unit_id")
+        if not isinstance(unit_id, int):
+            continue
+        unit_key = str(unit_id)
+        events = history.get("events")
+        if isinstance(events, list):
+            for event in events:
+                if not isinstance(event, dict) or event.get("kind") != "review":
+                    continue
+                round_number = event.get("round_number")
+                result = event.get("result")
+                if (
+                    isinstance(round_number, int)
+                    and round_number > 0
+                    and isinstance(result, dict)
+                ):
+                    key = (unit_key, round_number)
+                    if key in mirror_reviews:
+                        raise mismatch("review contract mirror is ambiguous")
+                    mirror_reviews[key] = result
+        try:
+            latest_key = next(
+                key
+                for key in history
+                if key.startswith("latest_") and key.endswith("_review")
+            )
+        except StopIteration:
+            raise mismatch("latest review mirror has no aggregate field") from None
+        mirror_latest[unit_key] = history.get(latest_key)
+    record_keys = set(record_reviews)
+    mirror_keys = set(mirror_reviews)
+    if mirror_keys - record_keys:
+        raise mismatch(
+            "review contracts differ from state-v3",
+            None,
+            code=_mirror_difference_code(record_keys, mirror_keys),
+        )
+    for key in record_keys & mirror_keys:
+        projected = record_reviews[key]
+        statement = asdict(projected.result)
+        validation_statement = statement.get("validation")
+        if isinstance(validation_statement, dict):
+            validation_statement.pop("content_captures", None)
+            validation_statement.pop("content_digest_format", None)
+            for spec in validation_statement.get("command_specs", ()):
+                if isinstance(spec, dict):
+                    spec["mode"] = "argv" if spec.get("argv") else "legacy_shell"
+        if canonical_json(statement) != canonical_json(mirror_reviews[key]):
+            raise mismatch(
+                "review contract fields differ from state-v3", projected.record_id
+            )
+    mirrored_by_unit: dict[str, list[tuple[int, dict[str, object]]]] = {}
+    for (unit_id, round_number), result in mirror_reviews.items():
+        mirrored_by_unit.setdefault(unit_id, []).append((round_number, result))
+    for unit_id, latest in mirror_latest.items():
+        reviews = mirrored_by_unit.get(unit_id, [])
+        expected_latest = max(reviews, key=lambda item: item[0])[1] if reviews else None
+        if (
+            latest is not None
+            and canonical_json(latest) != canonical_json(expected_latest)
+        ):
+            raise mismatch("latest review differs from its event projection")
 
     history_mirrors = _runtime_history_mirrors(state)
     final_report_mirrors: dict[str, bytes] = {}

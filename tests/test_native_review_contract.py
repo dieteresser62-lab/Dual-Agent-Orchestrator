@@ -71,6 +71,7 @@ def _context(
     tests_approved: bool = False,
     allow_observations: bool = True,
     anchor_origin: str | None = "approved-plan-v1",
+    red_state_followup_slice: str | None = None,
 ) -> NativeReviewContext:
     return NativeReviewContext(
         run_id="run-native",
@@ -88,6 +89,7 @@ def _context(
         allow_new_observations=allow_observations,
         anchor_origin=anchor_origin,
         validation_command_prefixes=(("python3", "-m", "pytest"),),
+        red_state_followup_slice=red_state_followup_slice,
     )
 
 
@@ -149,6 +151,26 @@ def test_minimal_positive_review_converts_deterministically() -> None:
     assert first.validation is context.validation_attestation
     assert first.evidence is not None
     assert first.red_state_followup_slice is None
+
+
+def test_named_red_state_followup_allows_complete_failed_validation() -> None:
+    command = "python3 -m pytest tests/ -v"
+    failed = replace(
+        _attestation(),
+        records=(ValidationRecord(ValidationStatus.FAIL, command, 1, "failed"),),
+        summary="1 failed",
+    )
+    context = replace(
+        _context(red_state_followup_slice="Slice 08 - repair validation"),
+        validation_attestation=failed,
+    )
+
+    result = parse_native_contract_result(_review(context), context)
+
+    assert result.approval is True
+    assert result.validation is failed
+    assert not result.validation.passed
+    assert result.red_state_followup_slice == "Slice 08 - repair validation"
 
 
 def test_new_blocker_uses_exact_context_origin_and_denies() -> None:
@@ -553,6 +575,7 @@ def test_whitespace_stop_fields_are_a_typed_native_error() -> None:
         "reviewer": "claude",
         "rule_id": "   ",
         "rationale": "Cannot continue.",
+        "remediation_paths": [],
     }
 
     _assert_error(document, context, NativeReviewErrorCode.STOP_CONTENT_INVALID)
@@ -672,6 +695,7 @@ def test_stop_request_has_explicit_safe_contract_result_defaults() -> None:
         "reviewer": "claude",
         "rule_id": "UNEXPECTED-PATH",
         "rationale": "A required path is outside the bound scope.",
+        "remediation_paths": [],
     }
     result = parse_native_contract_result(document, context)
     assert result.stopped is True

@@ -32,8 +32,10 @@ from artifact_models import (
     ProviderContentPayload,
     QuotaPausePayload,
     RecordType,
+    ReviewEvidencePayload,
     ReviewPayload,
     ReviewPacketPayload,
+    ReviewStopRequestPayload,
     Role,
     TransientRetryPayload,
     WorkUnitPayload,
@@ -470,17 +472,67 @@ def test_external_side_effect_guard_rejects_review_record_ahead_of_mirror(
     state = _state(repository, "structured-review-drift")
     driver = _driver(repository)
     driver.checkpoint(state, WorkflowHistory(1))
+    validation_output = "pass:0"
+    attestation = ValidationAttestation(
+        attestation_id="validation-review-drift",
+        diff_fingerprint="b" * 64,
+        expected_commands=("python3 -m pytest tests/ -v",),
+        records=(
+            ValidationRecord(
+                ValidationStatus.PASS,
+                "python3 -m pytest tests/ -v",
+                0,
+                validation_output,
+            ),
+        ),
+        output_digest=validation_output_digest(
+            (
+                ValidationCapture(
+                    "python3 -m pytest tests/ -v",
+                    "pass",
+                    0,
+                    validation_output,
+                    "",
+                    validation_output,
+                ),
+            )
+        ),
+        summary="test validation authority",
+        command_specs=(
+            ValidationCommandSpec(
+                argv=("python3", "-m", "pytest", "tests/", "-v")
+            ),
+        ),
+    )
+    bridge = ArtifactBridge(ArtifactStore(repository, state.run_id))
+    append_validation_authority(
+        bridge,
+        attestation_payload(attestation, "ar1-" + "0" * 64),
+        logical_id=attestation.attestation_id,
+        idempotency_key="attestation:validation-review-drift",
+        fingerprint_sha256=attestation.diff_fingerprint,
+    )
+    assert driver.active_state is not None
+    driver.checkpoint(
+        driver.active_state,
+        WorkflowHistory(1, attestations=(attestation,)),
+    )
     append_provider_decision_authority(
-        ArtifactBridge(ArtifactStore(repository, state.run_id)),
+        bridge,
         ReviewPayload(
             reviewer=Role.CLAUDE,
             work_unit_id="1",
             verdict="approved",
             finding_ids=(),
-            evidence="complete evidence",
+            evidence=None,
             transport_schema="native-claude-review-v2",
             request_id="native-review-request-" + "b" * 64,
             response_sha256="c" * 64,
+            review_evidence=ReviewEvidencePayload(
+                "complete evidence",
+                "fixture residual risk",
+                "fixture break condition",
+            ),
         ),
         logical_id="review-claude-1-1",
         idempotency_key="review-drift",
@@ -1440,10 +1492,15 @@ def test_structured_resume_accepts_mirrored_stopped_review(tmp_path: Path) -> No
             work_unit_id="1",
             verdict="stop",
             finding_ids=(),
-            evidence="owner decision required",
+            evidence=None,
             transport_schema="native-claude-review-v2",
             request_id="native-review-request-" + "b" * 64,
             response_sha256="c" * 64,
+            stop_request=ReviewStopRequestPayload(
+                "CONTRACT-UNCLEAR",
+                "owner decision required",
+                (),
+            ),
         ),
         logical_id="review-claude-1-1",
         idempotency_key="review-stop",
@@ -1460,6 +1517,19 @@ def test_structured_resume_accepts_mirrored_stopped_review(tmp_path: Path) -> No
     )
     assert driver.active_state is not None
     driver.checkpoint(driver.active_state, history)
+
+    wrong_latest = replace(
+        stopped,
+        stop_request=StopRequest(
+            "CONTRACT-UNCLEAR",
+            "a different latest-review mirror",
+        ),
+    )
+    with pytest.raises(WorkflowExecutionError, match="latest review differs"):
+        driver.checkpoint(
+            driver.active_state,
+            replace(history, latest_claude_review=wrong_latest),
+        )
 
     resumed = _driver(repository)
     assert driver.active_state is not None

@@ -203,7 +203,16 @@
             },
             "reviewer": { "enum": ["claude"] },
             "rule_id": { "type": "string", "pattern": "^[^\\u0000]{1,200}$" },
-            "rationale": { "type": "string", "pattern": "^[^\\u0000]{1,3000}$" }
+            "rationale": { "type": "string", "pattern": "^[^\\u0000]{1,3000}$" },
+            "remediation_paths": {
+              "type": "array",
+              "maxItems": 1000,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*\\\\)[^/]+(?:/[^/]+)*$"
+              }
+            }
           },
           "required": [
             "schema_version",
@@ -211,7 +220,8 @@
             "request_id",
             "reviewer",
             "rule_id",
-            "rationale"
+            "rationale",
+            "remediation_paths"
           ],
           "additionalProperties": false
         }

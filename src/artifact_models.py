@@ -53,6 +53,8 @@ class RecordType(StrEnum):
     AGENT_RESULT = "agent_result"
     DIAGNOSTIC = "diagnostic"
     REVIEW = "review"
+    REVIEW_ANCHOR = "review_anchor"
+    REVIEW_VALIDATION_BINDING = "review_validation_binding"
     FINDING_TRANSITION = "finding_transition"
     FINDING_HANDOFF_EXPORT = "finding_handoff_export"
     FINDING_HANDOFF_IMPORT = "finding_handoff_import"
@@ -467,6 +469,18 @@ class ReviewEvidencePayload:
 
 
 @dataclass(frozen=True, slots=True)
+class ReviewStopRequestPayload:
+    rule_id: str
+    rationale: str
+    remediation_paths: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        _require_text(self.rule_id, "stop_request.rule_id")
+        _require_text(self.rationale, "stop_request.rationale")
+        _require_paths(self.remediation_paths, allow_empty=True)
+
+
+@dataclass(frozen=True, slots=True)
 class ReviewPayload:
     reviewer: Role
     work_unit_id: str
@@ -478,6 +492,9 @@ class ReviewPayload:
     response_sha256: str
     review_evidence: ReviewEvidencePayload | None = None
     red_state_followup_slice: str | None = None
+    test_files: tuple[str, ...] = ()
+    pre_mortem: str | None = None
+    stop_request: ReviewStopRequestPayload | None = None
     status: ClassVar[str] = "decided"
     record_type: ClassVar[RecordType] = RecordType.REVIEW
 
@@ -517,6 +534,19 @@ class ReviewPayload:
                 raise ArtifactValidationError(
                     "red-state follow-up authorization requires an approved review"
                 )
+        _require_paths(self.test_files, allow_empty=True)
+        if self.pre_mortem is not None:
+            _require_text(self.pre_mortem, "pre_mortem")
+        if self.stop_request is not None and not isinstance(
+            self.stop_request, ReviewStopRequestPayload
+        ):
+            raise ArtifactValidationError(
+                "stop_request must be a ReviewStopRequestPayload"
+            )
+        if (self.verdict == "stop") != (self.stop_request is not None):
+            raise ArtifactValidationError(
+                "review stop verdict and structured stop request differ"
+            )
         if self.transport_schema != "native-claude-review-v2":
             raise ArtifactValidationError("review transport_schema is unsupported")
         if (
@@ -526,6 +556,56 @@ class ReviewPayload:
         ):
             raise ArtifactValidationError("native review request_id is invalid")
         _require_sha256(self.response_sha256, "response_sha256")
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewAnchor:
+    anchor_id: str
+    origin: str
+    input_fixture: str
+    expected: str
+    tolerance: str
+
+    def __post_init__(self) -> None:
+        _require_identifier(self.anchor_id, "review anchor_id")
+        _require_text(self.origin, "review anchor origin")
+        _require_text(self.input_fixture, "review anchor input_fixture")
+        _require_text(self.expected, "review anchor expected")
+        _require_text(self.tolerance, "review anchor tolerance")
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewAnchorPayload:
+    review_record_id: str
+    anchors: tuple[ReviewAnchor, ...]
+    status: ClassVar[str] = "bound"
+    record_type: ClassVar[RecordType] = RecordType.REVIEW_ANCHOR
+
+    def __post_init__(self) -> None:
+        _require_record_id(self.review_record_id, "review anchor review_record_id")
+        ids = tuple(item.anchor_id for item in self.anchors)
+        if ids != tuple(sorted(set(ids))):
+            raise ArtifactValidationError(
+                "review anchors must be sorted and unique by anchor_id"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewValidationBindingPayload:
+    review_record_id: str
+    attestation_record_id: str
+    status: ClassVar[str] = "bound"
+    record_type: ClassVar[RecordType] = RecordType.REVIEW_VALIDATION_BINDING
+
+    def __post_init__(self) -> None:
+        _require_record_id(
+            self.review_record_id,
+            "review validation binding review_record_id",
+        )
+        _require_record_id(
+            self.attestation_record_id,
+            "review validation binding attestation_record_id",
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1604,7 +1684,9 @@ ArtifactPayload: TypeAlias = (
     RunIdentityPayload | RunProfilePayload
     | WorkflowTransitionPayload | WorkflowPolicyPayload | SliceBoundaryPayload
     | TaskPayload | PlanPayload | WorkUnitPayload | CorrectionWorkUnitPayload
-    | AgentResultPayload | DiagnosticPayload | ReviewPayload | FindingTransitionPayload
+    | AgentResultPayload | DiagnosticPayload | ReviewPayload
+    | ReviewAnchorPayload | ReviewValidationBindingPayload
+    | FindingTransitionPayload
     | FindingHandoffExportPayload | FindingHandoffImportPayload
     | ValidationRequestPayload | ValidationContentPayload
     | ValidationAttestationPayload | ProviderContentPayload
@@ -1824,6 +1906,7 @@ def _payload_from_dict(record_type: RecordType, raw: Mapping[str, Any]) -> Artif
         return DiagnosticPayload(Role(data["role"]), data["work_unit_id"], data["attempt"], data["output_sha256"], data["reason"])
     if record_type is RecordType.REVIEW:
         structured_evidence = data.get("review_evidence")
+        stop_request = data.get("stop_request")
         return ReviewPayload(
             Role(data["reviewer"]),
             data["work_unit_id"],
@@ -1843,6 +1926,36 @@ def _payload_from_dict(record_type: RecordType, raw: Mapping[str, Any]) -> Artif
                 )
             ),
             data.get("red_state_followup_slice"),
+            tuple(data["test_files"]),
+            data["pre_mortem"],
+            (
+                None
+                if stop_request is None
+                else ReviewStopRequestPayload(
+                    stop_request["rule_id"],
+                    stop_request["rationale"],
+                    tuple(stop_request["remediation_paths"]),
+                )
+            ),
+        )
+    if record_type is RecordType.REVIEW_ANCHOR:
+        return ReviewAnchorPayload(
+            data["review_record_id"],
+            tuple(
+                ReviewAnchor(
+                    item["anchor_id"],
+                    item["origin"],
+                    item["input_fixture"],
+                    item["expected"],
+                    item["tolerance"],
+                )
+                for item in data["anchors"]
+            ),
+        )
+    if record_type is RecordType.REVIEW_VALIDATION_BINDING:
+        return ReviewValidationBindingPayload(
+            data["review_record_id"],
+            data["attestation_record_id"],
         )
     if record_type is RecordType.FINDING_TRANSITION:
         return FindingTransitionPayload(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import hashlib
 import shlex
 
 from artifact_bridge import ArtifactBridge
@@ -10,6 +11,9 @@ from artifact_models import (
     ProviderContentPayload,
     RecordType,
     ReviewPayload,
+    ReviewAnchorPayload,
+    ReviewAnchor,
+    ReviewValidationBindingPayload,
     Role,
     ValidationAttestationPayload,
     ValidationContentPayload,
@@ -192,8 +196,31 @@ def append_provider_decision_authority(
     idempotency_key: str,
     fingerprint_sha256: str,
     operation: str,
+    anchors: tuple[ReviewAnchor, ...] = (),
 ):
     role = payload.role if isinstance(payload, AgentResultPayload) else payload.reviewer
+    review_attestation = None
+    if isinstance(payload, ReviewPayload):
+        review_attestation = next(
+            (
+                record
+                for record in reversed(bridge.store.load_chain())
+                if isinstance(record.payload, ValidationAttestationPayload)
+                and record.fingerprint.sha256 == fingerprint_sha256
+            ),
+            None,
+        )
+        if review_attestation is None:
+            review_attestation = next(
+                (
+                    record
+                    for record in reversed(bridge.store.load_chain())
+                    if isinstance(record.payload, ValidationAttestationPayload)
+                ),
+                None,
+            )
+        if review_attestation is None:
+            raise AssertionError("test review authority requires a prior attestation")
     canonical = (
         f"request={payload.request_id};result={logical_id};role={role.value}"
     ).encode("utf-8")
@@ -242,9 +269,27 @@ def append_provider_decision_authority(
         if isinstance(payload, AgentResultPayload)
         else f"review-{role.value}-{payload.work_unit_id}-{round_number}"
     )
-    return bridge.append(
+    decision = bridge.append(
         bound,
         logical_id=decision_logical_id,
         idempotency_key=idempotency_key,
         fingerprint_sha256=fingerprint_sha256,
     )
+    if isinstance(payload, ReviewPayload):
+        assert review_attestation is not None
+        binding = hashlib.sha256(decision.record_id.encode("utf-8")).hexdigest()[:16]
+        bridge.append(
+            ReviewAnchorPayload(decision.record_id, anchors),
+            logical_id=f"review-anchors-{binding}",
+            idempotency_key=f"anchors:{idempotency_key}",
+            fingerprint_sha256=fingerprint_sha256,
+        )
+        bridge.append(
+            ReviewValidationBindingPayload(
+                decision.record_id, review_attestation.record_id
+            ),
+            logical_id=f"review-validation-{binding}",
+            idempotency_key=f"review-validation:{idempotency_key}",
+            fingerprint_sha256=fingerprint_sha256,
+        )
+    return decision

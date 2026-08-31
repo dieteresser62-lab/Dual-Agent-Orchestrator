@@ -57,6 +57,7 @@ def test_schema_accepts_minimal_closed_stop_request() -> None:
             "reviewer": "claude",
             "rule_id": "UNEXPECTED-PATH",
             "rationale": "A path is outside the bound scope.",
+            "remediation_paths": [],
         }
     )
 

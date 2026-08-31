@@ -301,6 +301,10 @@
               "minLength": 1
             }
           }
+        },
+        "red_state_followup_slice": {
+          "type": ["string", "null"],
+          "minLength": 1
         }
       },
       "required": [
@@ -314,7 +318,8 @@
         "test_changes_approved",
         "allow_new_observations",
         "anchor_origin",
-        "validation_command_prefixes"
+        "validation_command_prefixes",
+        "red_state_followup_slice"
       ],
       "additionalProperties": false
     },

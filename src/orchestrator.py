@@ -58,6 +58,7 @@ from artifact_models import (
     ArtifactRecord, BindingPayload, CorrectionWorkUnitPayload, DiagnosticPayload,
     FingerprintKind, GateDecisionPayload, GatePayload, GateTransitionPayload,
     AgentResultPayload, InvocationFailurePayload, QuotaPausePayload, ReviewPayload,
+    ReviewAnchor, ReviewAnchorPayload, ReviewValidationBindingPayload,
     Role, TaskPayload, TransientRetryPayload,
     BlobReference, ProviderContentPayload, ReviewPacketPayload,
     ValidationAttestationPayload, ValidationContentPayload,
@@ -770,8 +771,18 @@ class ProductionWorkflowDriver(WorkflowDriver):
         existing_chain = bridge.store.load_chain()
         existing_replay = None
         if existing_chain:
-            existing_replay = replay_artifacts(existing_chain, state.run_id)
+            existing_replay = replay_artifacts(
+                existing_chain,
+                state.run_id,
+                allow_incomplete_review_tail=True,
+            )
             assert_run_binding_mirror(existing_replay, state, binding)
+            if existing_replay.pending_review_record_id is not None:
+                # The reviewer recovery path is the only writer allowed to
+                # complete this exact append tail.  Appending baseline facts
+                # here would turn the recoverable suffix into a chain-middle
+                # authority gap.
+                return
             import_only_prefix = all(
                 isinstance(record.payload, FindingHandoffImportPayload)
                 for record in existing_replay.records
@@ -2633,14 +2644,14 @@ class ProductionWorkflowDriver(WorkflowDriver):
             result=result,
             canonical_json=canonical,
             request_id=bundle.bound_context.request_id,
+            context=bundle.bound_context.context,
         )
-        if payload is None:
-            self.persist_native_review_contract(
-                output,
-                invocation.fingerprint,
-                invocation.round_number,
-                invocation.previous_findings,
-            )
+        self.persist_native_review_contract(
+            output,
+            invocation.fingerprint,
+            invocation.round_number,
+            invocation.previous_findings,
+        )
         logger.warning(
             "Replaying request-bound native Claude review after its state "
             "checkpoint failed: work-unit=%s round=%s fingerprint=%s request=%s",
@@ -2812,11 +2823,12 @@ class ProductionWorkflowDriver(WorkflowDriver):
             previous_findings=history.findings,
             validation_attestation=attestation,
             test_files=tuple(sorted(set(expected_test_files))),
-            test_changes_approved=True,
+            test_changes_approved=context.test_changes_approved,
             allow_new_observations=unit.kind is not WorkUnitKind.CORRECTION,
             validation_command_prefixes=(
                 context.validation_matrix.finding_command_prefixes
             ),
+            red_state_followup_slice=context.red_state_followup_slice,
         )
         request_digest = payload.request_id.removeprefix("native-review-request-")
         try:
@@ -2842,6 +2854,18 @@ class ProductionWorkflowDriver(WorkflowDriver):
             raise WorkflowExecutionError(
                 "pre-policy native reviewer result differs from its decision record"
             )
+        output = NativeAgentReviewOutput(
+            result=result,
+            canonical_json=canonical,
+            request_id=payload.request_id,
+            context=native_context,
+        )
+        self.persist_native_review_contract(
+            output,
+            record.fingerprint.sha256,
+            round_number,
+            history.findings,
+        )
         logger.warning(
             "Mirroring request-bound native Claude review before current-diff "
             "policy: work-unit=%s round=%s fingerprint=%s request=%s",
@@ -2851,11 +2875,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
             payload.request_id,
         )
         return PersistedNativeReviewerReplay(
-            output=NativeAgentReviewOutput(
-                result=result,
-                canonical_json=canonical,
-                request_id=payload.request_id,
-            ),
+            output=output,
             fingerprint=record.fingerprint.sha256,
             round_number=round_number,
         )
@@ -3017,6 +3037,44 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 "native review persistence lacks its immutable Claude binding"
             )
         unit = state.current_work_unit
+        native_context = output.context
+        if (
+            native_context is None
+            or native_context.work_unit_id != str(unit.work_unit_id)
+            or native_context.diff_fingerprint != fingerprint
+            or native_context.round_number != round_number
+            or native_context.reviewer is not output.result.reviewer
+            or native_context.validation_attestation != output.result.validation
+            or (
+                not output.result.stopped
+                and native_context.test_files != output.result.test_files
+            )
+            or output.result.red_state_followup_slice
+            != (
+                native_context.red_state_followup_slice
+                if output.result.approval is True
+                else None
+            )
+        ):
+            raise WorkflowExecutionError(
+                "native review persistence differs from its exact review context"
+            )
+        if output.result.validation is None:
+            raise WorkflowExecutionError(
+                "native review persistence lacks its validation attestation"
+            )
+        attestation_records = tuple(
+            record
+            for record in self._artifact_bridge.store.load_chain()
+            if isinstance(record.payload, ValidationAttestationPayload)
+            and record.logical_id == output.result.validation.attestation_id
+            and record.fingerprint.sha256 == fingerprint
+        )
+        if len(attestation_records) != 1:
+            raise WorkflowExecutionError(
+                "native review persistence has no unique earlier validation record"
+            )
+        attestation_record = attestation_records[0]
         logical = f"review-claude-{unit.work_unit_id}-{round_number}"
         response_sha256 = hashlib.sha256(
             output.canonical_json.encode("utf-8")
@@ -3041,7 +3099,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
             raise WorkflowExecutionError(
                 "native reviewer content digest differs from its review binding"
             )
-        self._artifact_bridge.append(
+        review_record = self._artifact_bridge.append(
             review_payload(
                 output.result,
                 work_unit_id=unit.work_unit_id,
@@ -3051,6 +3109,36 @@ class ProductionWorkflowDriver(WorkflowDriver):
             ),
             logical_id=logical,
             idempotency_key=f"native:{logical}:{binding_digest}",
+            fingerprint_sha256=fingerprint,
+        )
+        review_binding_digest = hashlib.sha256(
+            review_record.record_id.encode("utf-8")
+        ).hexdigest()
+        self._artifact_bridge.append(
+            ReviewAnchorPayload(
+                review_record_id=review_record.record_id,
+                anchors=tuple(
+                    ReviewAnchor(
+                        anchor.anchor_id,
+                        anchor.origin,
+                        anchor.input_fixture,
+                        anchor.expected,
+                        anchor.tolerance,
+                    )
+                    for anchor in output.result.anchors
+                ),
+            ),
+            logical_id=f"review-anchors-{review_binding_digest[:16]}",
+            idempotency_key=f"review-anchors:{review_binding_digest}",
+            fingerprint_sha256=fingerprint,
+        )
+        self._artifact_bridge.append(
+            ReviewValidationBindingPayload(
+                review_record_id=review_record.record_id,
+                attestation_record_id=attestation_record.record_id,
+            ),
+            logical_id=f"review-validation-{review_binding_digest[:16]}",
+            idempotency_key=f"review-validation:{review_binding_digest}",
             fingerprint_sha256=fingerprint,
         )
         self._persist_review_finding_transitions(

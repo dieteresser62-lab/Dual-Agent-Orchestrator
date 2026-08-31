@@ -8,7 +8,7 @@
   "properties": {
     "schema_version": {"const": "2"},
     "record_id": {"$ref": "#/$defs/identifier"},
-    "record_type": {"enum": ["run_identity", "run_profile", "workflow_transition", "workflow_policy", "slice_boundary", "task", "plan", "work_unit", "correction_work_unit", "agent_result", "diagnostic", "review", "finding_transition", "finding_handoff_export", "finding_handoff_import", "validation_request", "validation_content", "validation_attestation", "provider_content", "review_packet", "gate", "gate_transition", "gate_decision", "binding", "invocation_failure", "quota_pause", "transient_retry", "resume_check", "workflow_completion", "provider_input_measurement", "provider_attempt", "final_review_preflight", "side_effect"]},
+    "record_type": {"enum": ["run_identity", "run_profile", "workflow_transition", "workflow_policy", "slice_boundary", "task", "plan", "work_unit", "correction_work_unit", "agent_result", "diagnostic", "review", "review_anchor", "review_validation_binding", "finding_transition", "finding_handoff_export", "finding_handoff_import", "validation_request", "validation_content", "validation_attestation", "provider_content", "review_packet", "gate", "gate_transition", "gate_decision", "binding", "invocation_failure", "quota_pause", "transient_retry", "resume_check", "workflow_completion", "provider_input_measurement", "provider_attempt", "final_review_preflight", "side_effect"]},
     "run_id": {"$ref": "#/$defs/identifier"},
     "logical_id": {"$ref": "#/$defs/identifier"},
     "revision": {"type": "integer", "minimum": 1},
@@ -32,6 +32,8 @@
     {"if": {"properties": {"record_type": {"const": "agent_result"}}}, "then": {"properties": {"status": {"const": "ready"}, "payload": {"$ref": "#/$defs/agent_result"}}}},
     {"if": {"properties": {"record_type": {"const": "diagnostic"}}}, "then": {"properties": {"status": {"const": "failed"}, "payload": {"$ref": "#/$defs/diagnostic"}}}},
     {"if": {"properties": {"record_type": {"const": "review"}}}, "then": {"properties": {"status": {"const": "decided"}, "payload": {"$ref": "#/$defs/review"}}}},
+    {"if": {"properties": {"record_type": {"const": "review_anchor"}}}, "then": {"properties": {"status": {"const": "bound"}, "payload": {"$ref": "#/$defs/review_anchor"}}}},
+    {"if": {"properties": {"record_type": {"const": "review_validation_binding"}}}, "then": {"properties": {"status": {"const": "bound"}, "payload": {"$ref": "#/$defs/review_validation_binding"}}}},
     {"if": {"properties": {"record_type": {"const": "finding_transition"}}}, "then": {"properties": {"status": {"const": "recorded"}, "payload": {"$ref": "#/$defs/finding_transition"}}}},
     {"if": {"properties": {"record_type": {"const": "finding_handoff_export"}}}, "then": {"properties": {"status": {"const": "exported"}, "payload": {"$ref": "#/$defs/finding_handoff_export"}}}},
     {"if": {"properties": {"record_type": {"const": "finding_handoff_import"}}}, "then": {"properties": {"status": {"const": "imported"}, "payload": {"$ref": "#/$defs/finding_handoff_import"}}}},
@@ -170,13 +172,29 @@
       "properties": {"role": {"$ref": "#/$defs/role"}, "work_unit_id": {"$ref": "#/$defs/identifier"}, "attempt": {"type": "integer", "minimum": 1}, "output_sha256": {"$ref": "#/$defs/sha256"}, "reason": {"$ref": "#/$defs/non_empty"}}
     },
     "review": {
-      "type": "object", "additionalProperties": false, "required": ["reviewer", "work_unit_id", "verdict", "finding_ids", "evidence", "transport_schema", "request_id", "response_sha256"],
-      "properties": {"reviewer": {"const": "claude"}, "work_unit_id": {"$ref": "#/$defs/identifier"}, "verdict": {"enum": ["approved", "denied", "stop"]}, "finding_ids": {"$ref": "#/$defs/finding_ids"}, "evidence": {"type": ["string", "null"], "minLength": 1}, "review_evidence": {"oneOf": [{"$ref": "#/$defs/review_evidence"}, {"type": "null"}]}, "red_state_followup_slice": {"type": ["string", "null"], "minLength": 1}, "transport_schema": {"const": "native-claude-review-v2"}, "request_id": {"type": "string", "pattern": "^native-review-request-[0-9a-f]{64}$"}, "response_sha256": {"$ref": "#/$defs/sha256"}},
-      "allOf": [{"if": {"properties": {"verdict": {"const": "approved"}}}, "then": {"anyOf": [{"properties": {"finding_ids": {"minItems": 1}}}, {"properties": {"evidence": {"type": "string"}}}, {"properties": {"review_evidence": {"$ref": "#/$defs/review_evidence"}}, "required": ["review_evidence"]}]}}, {"if": {"properties": {"red_state_followup_slice": {"type": "string"}}, "required": ["red_state_followup_slice"]}, "then": {"properties": {"verdict": {"const": "approved"}}}}, {"if": {"properties": {"evidence": {"type": "string"}}, "required": ["evidence"]}, "then": {"properties": {"review_evidence": {"type": "null"}}}}, {"if": {"properties": {"review_evidence": {"$ref": "#/$defs/review_evidence"}}, "required": ["review_evidence"]}, "then": {"properties": {"evidence": {"type": "null"}}}}]
+      "type": "object", "additionalProperties": false, "required": ["reviewer", "work_unit_id", "verdict", "finding_ids", "evidence", "test_files", "pre_mortem", "stop_request", "transport_schema", "request_id", "response_sha256"],
+      "properties": {"reviewer": {"const": "claude"}, "work_unit_id": {"$ref": "#/$defs/identifier"}, "verdict": {"enum": ["approved", "denied", "stop"]}, "finding_ids": {"$ref": "#/$defs/finding_ids"}, "evidence": {"type": ["string", "null"], "minLength": 1}, "review_evidence": {"oneOf": [{"$ref": "#/$defs/review_evidence"}, {"type": "null"}]}, "red_state_followup_slice": {"type": ["string", "null"], "minLength": 1}, "test_files": {"$ref": "#/$defs/paths"}, "pre_mortem": {"type": ["string", "null"], "minLength": 1}, "stop_request": {"oneOf": [{"$ref": "#/$defs/review_stop_request"}, {"type": "null"}]}, "transport_schema": {"const": "native-claude-review-v2"}, "request_id": {"type": "string", "pattern": "^native-review-request-[0-9a-f]{64}$"}, "response_sha256": {"$ref": "#/$defs/sha256"}},
+      "allOf": [{"if": {"properties": {"verdict": {"const": "approved"}}}, "then": {"anyOf": [{"properties": {"finding_ids": {"minItems": 1}}}, {"properties": {"evidence": {"type": "string"}}}, {"properties": {"review_evidence": {"$ref": "#/$defs/review_evidence"}}, "required": ["review_evidence"]}]}}, {"if": {"properties": {"red_state_followup_slice": {"type": "string"}}, "required": ["red_state_followup_slice"]}, "then": {"properties": {"verdict": {"const": "approved"}}}}, {"if": {"properties": {"evidence": {"type": "string"}}, "required": ["evidence"]}, "then": {"properties": {"review_evidence": {"type": "null"}}}}, {"if": {"properties": {"review_evidence": {"$ref": "#/$defs/review_evidence"}}, "required": ["review_evidence"]}, "then": {"properties": {"evidence": {"type": "null"}}}}, {"if": {"properties": {"verdict": {"const": "stop"}}}, "then": {"properties": {"stop_request": {"$ref": "#/$defs/review_stop_request"}}}, "else": {"properties": {"stop_request": {"type": "null"}}}}]
+    },
+    "review_stop_request": {
+      "type": "object", "additionalProperties": false, "required": ["rule_id", "rationale", "remediation_paths"],
+      "properties": {"rule_id": {"$ref": "#/$defs/non_empty"}, "rationale": {"$ref": "#/$defs/non_empty"}, "remediation_paths": {"$ref": "#/$defs/paths"}}
     },
     "review_evidence": {
       "type": "object", "additionalProperties": false, "required": ["dimensions", "largest_residual_risk", "break_condition"],
       "properties": {"dimensions": {"$ref": "#/$defs/non_empty"}, "largest_residual_risk": {"$ref": "#/$defs/non_empty"}, "break_condition": {"$ref": "#/$defs/non_empty"}}
+    },
+    "review_anchor_value": {
+      "type": "object", "additionalProperties": false, "required": ["anchor_id", "origin", "input_fixture", "expected", "tolerance"],
+      "properties": {"anchor_id": {"$ref": "#/$defs/identifier"}, "origin": {"$ref": "#/$defs/non_empty"}, "input_fixture": {"$ref": "#/$defs/non_empty"}, "expected": {"$ref": "#/$defs/non_empty"}, "tolerance": {"$ref": "#/$defs/non_empty"}}
+    },
+    "review_anchor": {
+      "type": "object", "additionalProperties": false, "required": ["review_record_id", "anchors"],
+      "properties": {"review_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "anchors": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/review_anchor_value"}}}
+    },
+    "review_validation_binding": {
+      "type": "object", "additionalProperties": false, "required": ["review_record_id", "attestation_record_id"],
+      "properties": {"review_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "attestation_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}}
     },
     "finding_transition": {
       "type": "object", "additionalProperties": false, "required": ["finding_id", "reporter", "actor", "action", "severity", "finding_status", "rationale"],

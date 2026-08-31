@@ -414,6 +414,10 @@ class ContractResult:
             raise ValueError(
                 "review red-state follow-up slice must be non-empty when provided"
             )
+        if self.red_state_followup_slice is not None and self.approval is not True:
+            raise ValueError(
+                "review red-state follow-up slice requires an approval"
+            )
 
     @property
     def open_blockers(self) -> tuple[FindingRecord, ...]:
