@@ -733,7 +733,7 @@ def test_quota_auto_wait_boundary_uses_reset_span_without_safety_margin(
     )
     assert failure.resume_at_utc == expected_resume
     assert failure.safety_margin_seconds == (
-        safety_margin_seconds if expected_automatic else 0
+        safety_margin_seconds if reset_at is not None else 0
     )
 
 

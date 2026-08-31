@@ -27,6 +27,7 @@ from artifact_models import (
     GatePayload,
     GateTransitionPayload,
     ImportedFindingTransition,
+    InvocationFailurePayload,
     finding_transition_sequence_sha256,
     ProviderInputMeasurementPayload,
     ProviderAttemptPayload,
@@ -35,6 +36,7 @@ from artifact_models import (
     Role,
     RunIdentityPayload,
     RunProfilePayload,
+    QuotaPausePayload,
     SideEffectPayload,
     SliceBoundaryPayload,
     WorkflowPolicyPayload,
@@ -45,6 +47,7 @@ from artifact_models import (
     WorkflowCompletionPayload,
     WorkUnitPayload,
     CorrectionWorkUnitPayload,
+    TransientRetryPayload,
     canonical_json,
 )
 from contracts import (
@@ -208,6 +211,7 @@ class ArtifactReplayResult:
     slice_boundaries: tuple[SliceBoundaryPayload, ...] = ()
     gate_transitions: tuple[GateTransitionPayload, ...] = ()
     gate_decisions: tuple[ReplayedGateDecision, ...] = ()
+    invocation_failures: tuple[InvocationFailurePayload, ...] = ()
     work_unit_reviewers: tuple[tuple[str, Role | None], ...] = ()
     side_effects: tuple[ReplayedSideEffect, ...] = ()
     _reference_records: tuple[ArtifactRecord, ...] = field(
@@ -426,6 +430,107 @@ def _validate_payload_references(
                         record,
                     )
             slice_boundaries[payload.slice_id] = payload
+
+    invocation_failures: dict[str, tuple[ArtifactRecord, InvocationFailurePayload]] = {}
+    for record in chain:
+        payload = record.payload
+        if isinstance(payload, InvocationFailurePayload):
+            if (
+                record.logical_id != f"invocation-failure-{payload.invocation_id}"
+                or record.idempotency_key
+                != f"invocation-failure:{payload.invocation_id}"
+            ):
+                _fail(
+                    ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+                    "invocation failure record identity differs from its invocation",
+                    record,
+                )
+            transition = transition_units.get(payload.work_unit_id)
+            if (
+                transition is None
+                or positions[transition.record_id] >= positions[record.record_id]
+            ):
+                _fail(
+                    ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+                    "invocation failure precedes its work-unit transition",
+                    record,
+                )
+            prior_transitions = tuple(
+                candidate.payload
+                for candidate in chain[: positions[record.record_id]]
+                if isinstance(candidate.payload, WorkflowTransitionPayload)
+                and candidate.payload.work_unit_id == payload.work_unit_id
+            )
+            latest_transition = prior_transitions[-1]
+            if (
+                latest_transition.slice_id != payload.slice_id
+                or latest_transition.step != payload.step
+                or latest_transition.work_unit_status != "in_progress"
+            ):
+                _fail(
+                    ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+                    "invocation failure assignment differs from the active transition",
+                    record,
+                )
+            if (
+                payload.diff_fingerprint is not None
+                and record.fingerprint.sha256 != payload.diff_fingerprint
+            ):
+                _fail(
+                    ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+                    "invocation failure fingerprint differs from its retry binding",
+                    record,
+                )
+            if payload.invocation_id in invocation_failures:
+                _fail(
+                    ReplayDiagnosticCode.RECORD_DUPLICATE,
+                    "invocation failure id is duplicated",
+                    record,
+                )
+            invocation_failures[payload.invocation_id] = (record, payload)
+        elif isinstance(payload, (QuotaPausePayload, TransientRetryPayload)):
+            prefix = (
+                "quota-pause-"
+                if isinstance(payload, QuotaPausePayload)
+                else "transient-retry-"
+            )
+            if not record.logical_id.startswith(prefix):
+                _fail(
+                    ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+                    "retry transition logical identity is malformed",
+                    record,
+                )
+            invocation_id = record.logical_id.removeprefix(prefix)
+            failure_entry = invocation_failures.get(invocation_id)
+            if failure_entry is None:
+                _fail(
+                    ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+                    "retry transition has no earlier invocation failure",
+                    record,
+                )
+            failure_record, failure = failure_entry
+            expected_kind = (
+                "quota" if isinstance(payload, QuotaPausePayload) else "network"
+            )
+            if (
+                positions[failure_record.record_id] >= positions[record.record_id]
+                or failure.failure_kind != expected_kind
+                or failure.role is not payload.role
+                or failure.diff_fingerprint != payload.repository_fingerprint
+                or failure.resume_at_utc != payload.retry_at
+                or (
+                    isinstance(payload, TransientRetryPayload)
+                    and (
+                        not failure.automatic_resume
+                        or failure.auto_resume_count != payload.attempt
+                    )
+                )
+            ):
+                _fail(
+                    ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+                    "retry transition differs from its invocation failure decision",
+                    record,
+                )
 
     bound_gate_decisions: set[tuple[str, str]] = set()
     for record in chain:
@@ -945,6 +1050,7 @@ def _result(
     slice_boundaries: dict[str, SliceBoundaryPayload] = {}
     gate_transitions: dict[str, GateTransitionPayload] = {}
     gate_decisions: list[ReplayedGateDecision] = []
+    invocation_failures: list[InvocationFailurePayload] = []
     side_effects: list[ReplayedSideEffect] = []
     side_effect_indexes: dict[str, int] = {}
     for sequence, record in enumerate(records, start=1):
@@ -992,6 +1098,8 @@ def _result(
                     decision_record_id=record.record_id,
                 )
             )
+        elif isinstance(payload, InvocationFailurePayload):
+            invocation_failures.append(payload)
         elif isinstance(payload, SideEffectPayload) and payload.phase == "intent":
             side_effect_indexes[payload.effect_key] = len(side_effects)
             side_effects.append(
@@ -1056,6 +1164,7 @@ def _result(
             for key in sorted(gate_transitions, key=identifier_order)
         ),
         gate_decisions=tuple(gate_decisions),
+        invocation_failures=tuple(invocation_failures),
         work_unit_reviewers=project_work_unit_reviewers(records),
         side_effects=tuple(side_effects),
         _reference_records=accepted_references,

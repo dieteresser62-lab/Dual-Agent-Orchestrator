@@ -8,7 +8,7 @@
   "properties": {
     "schema_version": {"const": "2"},
     "record_id": {"$ref": "#/$defs/identifier"},
-    "record_type": {"enum": ["run_identity", "run_profile", "workflow_transition", "workflow_policy", "slice_boundary", "task", "plan", "work_unit", "correction_work_unit", "agent_result", "diagnostic", "review", "finding_transition", "finding_handoff_export", "finding_handoff_import", "validation_request", "validation_attestation", "gate", "gate_transition", "gate_decision", "binding", "quota_pause", "transient_retry", "resume_check", "workflow_completion", "provider_input_measurement", "provider_attempt", "final_review_preflight", "side_effect"]},
+    "record_type": {"enum": ["run_identity", "run_profile", "workflow_transition", "workflow_policy", "slice_boundary", "task", "plan", "work_unit", "correction_work_unit", "agent_result", "diagnostic", "review", "finding_transition", "finding_handoff_export", "finding_handoff_import", "validation_request", "validation_attestation", "gate", "gate_transition", "gate_decision", "binding", "invocation_failure", "quota_pause", "transient_retry", "resume_check", "workflow_completion", "provider_input_measurement", "provider_attempt", "final_review_preflight", "side_effect"]},
     "run_id": {"$ref": "#/$defs/identifier"},
     "logical_id": {"$ref": "#/$defs/identifier"},
     "revision": {"type": "integer", "minimum": 1},
@@ -41,6 +41,7 @@
     {"if": {"properties": {"record_type": {"const": "gate_transition"}}}, "then": {"properties": {"status": {"const": "transitioned"}, "payload": {"$ref": "#/$defs/gate_transition"}}}},
     {"if": {"properties": {"record_type": {"const": "gate_decision"}}}, "then": {"properties": {"status": {"const": "bound"}, "payload": {"$ref": "#/$defs/gate_decision"}}}},
     {"if": {"properties": {"record_type": {"const": "binding"}}}, "then": {"properties": {"status": {"const": "bound"}, "payload": {"$ref": "#/$defs/binding"}}}},
+    {"if": {"properties": {"record_type": {"const": "invocation_failure"}}}, "then": {"properties": {"status": {"const": "classified"}, "payload": {"$ref": "#/$defs/invocation_failure"}}}},
     {"if": {"properties": {"record_type": {"const": "quota_pause"}}}, "then": {"properties": {"status": {"const": "paused"}, "payload": {"$ref": "#/$defs/quota_pause"}}}},
     {"if": {"properties": {"record_type": {"const": "transient_retry"}}}, "then": {"properties": {"status": {"const": "waiting"}, "payload": {"$ref": "#/$defs/transient_retry"}}}},
     {"if": {"properties": {"record_type": {"const": "resume_check"}}}, "then": {"properties": {"status": {"const": "checked"}, "payload": {"$ref": "#/$defs/resume_check"}}}},
@@ -243,6 +244,36 @@
     "binding": {
       "type": "object", "additionalProperties": false, "required": ["binding_kind", "target", "attestation_id", "approval_ids"],
       "properties": {"binding_kind": {"enum": ["commit", "plan_commit", "implementation_handoff"]}, "target": {"$ref": "#/$defs/non_empty"}, "attestation_id": {"$ref": "#/$defs/identifier"}, "approval_ids": {"$ref": "#/$defs/non_empty_identifiers"}}
+    },
+    "invocation_failure": {
+      "type": "object", "additionalProperties": false,
+      "required": ["invocation_id", "idempotency_key", "role", "failure_kind", "failure_class", "diagnostic_code", "provider_text", "provider_text_sha256", "provider_text_bytes", "received_at", "decision_at_utc", "step", "slice_id", "work_unit_id", "diagnostic_exit_code", "parse_path", "source_timezone", "reset_at_utc", "resume_at_utc", "safety_margin_seconds", "retry_delay_seconds", "auto_resume_count", "automatic_resume", "diff_fingerprint"],
+      "properties": {
+        "invocation_id": {"$ref": "#/$defs/identifier"},
+        "idempotency_key": {"$ref": "#/$defs/non_empty"},
+        "role": {"$ref": "#/$defs/role"},
+        "failure_kind": {"enum": ["quota", "network", "timeout", "permission", "auth", "binary", "output", "process", "runtime"]},
+        "failure_class": {"enum": ["transient", "resumable_halt", "terminal_rejection"]},
+        "diagnostic_code": {"$ref": "#/$defs/identifier"},
+        "provider_text": {"type": "string", "maxLength": 128, "pattern": "^\\[provider text redacted; sha256=[0-9a-f]{64}; utf8_bytes=[1-9][0-9]*\\]$"},
+        "provider_text_sha256": {"$ref": "#/$defs/sha256"},
+        "provider_text_bytes": {"type": "integer", "minimum": 1},
+        "received_at": {"type": "string", "format": "date-time"},
+        "decision_at_utc": {"type": "string", "format": "date-time"},
+        "step": {"$ref": "#/$defs/identifier"},
+        "slice_id": {"$ref": "#/$defs/identifier"},
+        "work_unit_id": {"$ref": "#/$defs/identifier"},
+        "diagnostic_exit_code": {"enum": [2, 3]},
+        "parse_path": {"type": ["string", "null"], "minLength": 1},
+        "source_timezone": {"type": ["string", "null"], "minLength": 1},
+        "reset_at_utc": {"type": ["string", "null"], "format": "date-time"},
+        "resume_at_utc": {"type": ["string", "null"], "format": "date-time"},
+        "safety_margin_seconds": {"type": "integer", "minimum": 0},
+        "retry_delay_seconds": {"type": "integer", "minimum": 0},
+        "auto_resume_count": {"type": "integer", "minimum": 0},
+        "automatic_resume": {"type": "boolean"},
+        "diff_fingerprint": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]}
+      }
     },
     "quota_pause": {
       "type": "object", "additionalProperties": false, "required": ["role", "repository_fingerprint", "retry_at"],

@@ -12,7 +12,7 @@ import base64
 import binascii
 import copy
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 import hashlib
 import json
@@ -62,6 +62,7 @@ class RecordType(StrEnum):
     GATE_TRANSITION = "gate_transition"
     GATE_DECISION = "gate_decision"
     BINDING = "binding"
+    INVOCATION_FAILURE = "invocation_failure"
     QUOTA_PAUSE = "quota_pause"
     TRANSIENT_RETRY = "transient_retry"
     RESUME_CHECK = "resume_check"
@@ -1196,6 +1197,213 @@ class BindingPayload:
         _require_unique_identifiers(self.approval_ids, "approval_ids")
 
 
+_AGENT_FAILURE_KINDS = {
+    "quota",
+    "network",
+    "timeout",
+    "permission",
+    "auth",
+    "binary",
+    "output",
+    "process",
+    "runtime",
+}
+_OPERATIONAL_FAILURE_CLASSES = {
+    "transient",
+    "resumable_halt",
+    "terminal_rejection",
+}
+_PROVIDER_TEXT_MARKER_RE = re.compile(
+    r"^\[provider text redacted; sha256=([0-9a-f]{64}); utf8_bytes=([1-9][0-9]*)\]$"
+)
+
+
+def provider_text_evidence(provider_text: str) -> tuple[str, str, int]:
+    """Return bounded immutable evidence without retaining provider bytes.
+
+    Calling the helper again with an existing marker is idempotent.  That lets
+    a record-ahead resume rebuild the state mirror without inventing the
+    unavailable raw diagnostic.
+    """
+    _require_text(provider_text, "provider_text")
+    existing = _PROVIDER_TEXT_MARKER_RE.fullmatch(provider_text)
+    if existing is not None:
+        return provider_text, existing.group(1), int(existing.group(2))
+    encoded = provider_text.encode("utf-8")
+    digest = hashlib.sha256(encoded).hexdigest()
+    marker = (
+        f"[provider text redacted; sha256={digest}; "
+        f"utf8_bytes={len(encoded)}]"
+    )
+    return marker, digest, len(encoded)
+
+
+@dataclass(frozen=True, slots=True)
+class InvocationFailurePayload:
+    invocation_id: str
+    idempotency_key: str
+    role: Role
+    failure_kind: str
+    failure_class: str
+    diagnostic_code: str
+    provider_text: str
+    provider_text_sha256: str
+    provider_text_bytes: int
+    received_at: str
+    decision_at_utc: str
+    step: str
+    slice_id: str
+    work_unit_id: str
+    diagnostic_exit_code: int
+    parse_path: str | None
+    source_timezone: str | None
+    reset_at_utc: str | None
+    resume_at_utc: str | None
+    safety_margin_seconds: int
+    retry_delay_seconds: int
+    auto_resume_count: int
+    automatic_resume: bool
+    diff_fingerprint: str | None
+    status: ClassVar[str] = "classified"
+    record_type: ClassVar[RecordType] = RecordType.INVOCATION_FAILURE
+
+    def __post_init__(self) -> None:
+        _require_identifier(self.invocation_id, "invocation failure invocation_id")
+        _require_text(self.idempotency_key, "invocation failure idempotency_key")
+        if not isinstance(self.role, Role) or self.role in {
+            Role.ORCHESTRATOR,
+            Role.USER,
+        }:
+            raise ArtifactValidationError(
+                "invocation failure role must identify one agent"
+            )
+        if self.failure_kind not in _AGENT_FAILURE_KINDS:
+            raise ArtifactValidationError("invocation failure kind is invalid")
+        if self.failure_class not in _OPERATIONAL_FAILURE_CLASSES:
+            raise ArtifactValidationError("invocation failure class is invalid")
+        _require_identifier(self.diagnostic_code, "invocation failure diagnostic_code")
+        _require_sha256(
+            self.provider_text_sha256,
+            "invocation failure provider_text_sha256",
+        )
+        _require_positive(
+            self.provider_text_bytes,
+            "invocation failure provider_text_bytes",
+        )
+        marker, digest, byte_count = provider_text_evidence(self.provider_text)
+        if (
+            marker != self.provider_text
+            or digest != self.provider_text_sha256
+            or byte_count != self.provider_text_bytes
+        ):
+            raise ArtifactValidationError(
+                "invocation failure provider text evidence is inconsistent"
+            )
+        for value, label in (
+            (self.received_at, "invocation failure received_at"),
+            (self.decision_at_utc, "invocation failure decision_at_utc"),
+        ):
+            _require_utc_timestamp(value, label)
+        _require_identifier(self.step, "invocation failure step")
+        _require_identifier(self.slice_id, "invocation failure slice_id")
+        _require_identifier(self.work_unit_id, "invocation failure work_unit_id")
+        if self.diagnostic_exit_code != (
+            2 if self.failure_kind == "quota" else 3
+        ):
+            raise ArtifactValidationError(
+                "invocation failure diagnostic exit code differs from its kind"
+            )
+        for value, label in (
+            (self.safety_margin_seconds, "invocation failure safety margin"),
+            (self.retry_delay_seconds, "invocation failure retry delay"),
+            (self.auto_resume_count, "invocation failure auto-resume count"),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ArtifactValidationError(f"{label} must be non-negative")
+        if not isinstance(self.automatic_resume, bool):
+            raise ArtifactValidationError(
+                "invocation failure automatic_resume must be a boolean"
+            )
+        if self.diff_fingerprint is not None:
+            _require_sha256(
+                self.diff_fingerprint,
+                "invocation failure diff_fingerprint",
+            )
+        for value, label in (
+            (self.reset_at_utc, "invocation failure reset_at_utc"),
+            (self.resume_at_utc, "invocation failure resume_at_utc"),
+        ):
+            if value is not None:
+                _require_utc_timestamp(value, label)
+        quota_evidence = (
+            self.parse_path,
+            self.source_timezone,
+            self.reset_at_utc,
+        )
+        if any(value is not None for value in quota_evidence) and not all(
+            value is not None for value in quota_evidence
+        ):
+            raise ArtifactValidationError(
+                "invocation failure quota source evidence is partial"
+            )
+        if self.failure_kind != "quota" and any(
+            value is not None for value in quota_evidence
+        ):
+            raise ArtifactValidationError(
+                "non-quota invocation failure carries quota source evidence"
+            )
+        if self.reset_at_utc is not None:
+            assert self.resume_at_utc is not None
+            if self.retry_delay_seconds != self.safety_margin_seconds:
+                raise ArtifactValidationError(
+                    "quota retry delay must equal its safety margin"
+                )
+            reset = datetime.fromisoformat(
+                self.reset_at_utc.replace("Z", "+00:00")
+            )
+            resume = datetime.fromisoformat(
+                self.resume_at_utc.replace("Z", "+00:00")
+            )
+            if resume != reset + timedelta(seconds=self.safety_margin_seconds):
+                raise ArtifactValidationError(
+                    "quota resume target is not derived from reset plus margin"
+                )
+        elif self.safety_margin_seconds != 0:
+            raise ArtifactValidationError(
+                "invocation failure without quota reset cannot carry a margin"
+            )
+        if self.failure_kind == "network" and self.automatic_resume:
+            if self.resume_at_utc is None or self.retry_delay_seconds < 1:
+                raise ArtifactValidationError(
+                    "automatic network retry requires target and positive delay"
+                )
+            decision = datetime.fromisoformat(
+                self.decision_at_utc.replace("Z", "+00:00")
+            )
+            resume = datetime.fromisoformat(
+                self.resume_at_utc.replace("Z", "+00:00")
+            )
+            if resume != decision + timedelta(seconds=self.retry_delay_seconds):
+                raise ArtifactValidationError(
+                    "network retry target is not derived from decision plus delay"
+                )
+        elif self.failure_kind != "quota" and (
+            self.resume_at_utc is not None or self.retry_delay_seconds != 0
+        ):
+            raise ArtifactValidationError(
+                "unscheduled invocation failure carries retry timing"
+            )
+        if self.automatic_resume:
+            if self.failure_kind not in {"quota", "network"}:
+                raise ArtifactValidationError(
+                    "automatic resume is limited to quota and network failures"
+                )
+            if self.resume_at_utc is None or self.auto_resume_count < 1:
+                raise ArtifactValidationError(
+                    "automatic resume requires target and positive continuation count"
+                )
+
+
 @dataclass(frozen=True, slots=True)
 class QuotaPausePayload:
     role: Role
@@ -1264,7 +1472,8 @@ ArtifactPayload: TypeAlias = (
     | FindingHandoffExportPayload | FindingHandoffImportPayload
     | ValidationRequestPayload | ValidationAttestationPayload | GatePayload
     | GateTransitionPayload | GateDecisionPayload | BindingPayload
-    | QuotaPausePayload | TransientRetryPayload | ResumeCheckPayload
+    | InvocationFailurePayload | QuotaPausePayload
+    | TransientRetryPayload | ResumeCheckPayload
     | WorkflowCompletionPayload
     | ProviderInputMeasurementPayload | ProviderAttemptPayload | FinalReviewPreflightPayload
     | SideEffectPayload
@@ -1561,6 +1770,19 @@ def _payload_from_dict(record_type: RecordType, raw: Mapping[str, Any]) -> Artif
         )
     if record_type is RecordType.BINDING:
         return BindingPayload(data["binding_kind"], data["target"], data["attestation_id"], tuple(data["approval_ids"]))
+    if record_type is RecordType.INVOCATION_FAILURE:
+        return InvocationFailurePayload(
+            data["invocation_id"], data["idempotency_key"], Role(data["role"]),
+            data["failure_kind"], data["failure_class"], data["diagnostic_code"],
+            data["provider_text"], data["provider_text_sha256"],
+            data["provider_text_bytes"], data["received_at"],
+            data["decision_at_utc"], data["step"], data["slice_id"],
+            data["work_unit_id"], data["diagnostic_exit_code"],
+            data["parse_path"], data["source_timezone"], data["reset_at_utc"],
+            data["resume_at_utc"], data["safety_margin_seconds"],
+            data["retry_delay_seconds"], data["auto_resume_count"],
+            data["automatic_resume"], data["diff_fingerprint"],
+        )
     if record_type is RecordType.QUOTA_PAUSE:
         return QuotaPausePayload(Role(data["role"]), data["repository_fingerprint"], data["retry_at"])
     if record_type is RecordType.TRANSIENT_RETRY:
@@ -1656,6 +1878,13 @@ def _require_timestamp(value: str, name: str) -> None:
         raise ArtifactValidationError(f"{name} must be an ISO-8601 timestamp") from exc
     if parsed.tzinfo is None:
         raise ArtifactValidationError(f"{name} must include a timezone")
+
+
+def _require_utc_timestamp(value: str, name: str) -> None:
+    _require_timestamp(value, name)
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.utcoffset() != timezone.utc.utcoffset(parsed):
+        raise ArtifactValidationError(f"{name} must be normalized to UTC")
 
 
 def _require_path(value: str) -> None:

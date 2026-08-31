@@ -24,6 +24,7 @@ from artifact_models import (
     BindingPayload,
     CorrectionWorkUnitPayload,
     FingerprintKind,
+    InvocationFailurePayload,
     ProviderInputMeasurementPayload,
     ProviderInputComponentPayload,
     ProviderAttemptPayload,
@@ -33,6 +34,7 @@ from artifact_models import (
     Role,
     TransientRetryPayload,
     WorkUnitPayload,
+    provider_text_evidence,
 )
 from artifact_replay import ReplayDiagnosticCode, replay_artifacts
 from artifact_store import ArtifactStore
@@ -82,6 +84,7 @@ from workflow_state import (
     WorkflowState,
     WorkflowStep,
     WorkUnitKind,
+    WorkUnitStatus,
     init_workflow_state,
 )
 
@@ -197,6 +200,47 @@ def test_external_side_effect_guard_rejects_mirror_ahead_of_records(
 
     with pytest.raises(WorkflowExecutionError, match="decision context is not resumable"):
         driver.assert_structured_decision_context()
+
+
+def _invocation_failure_payload(
+    failure: InvocationFailureRecord,
+) -> InvocationFailurePayload:
+    marker, digest, byte_count = provider_text_evidence(failure.provider_text)
+    decision_at = failure.received_at
+    retry_delay = (
+        failure.safety_margin_seconds
+        if failure.failure_kind is AgentFailureKind.QUOTA
+        else 5
+        if failure.failure_kind is AgentFailureKind.NETWORK
+        and failure.automatic_resume
+        else 0
+    )
+    return InvocationFailurePayload(
+        invocation_id=failure.invocation_id,
+        idempotency_key=failure.idempotency_key,
+        role=Role(failure.role),
+        failure_kind=failure.failure_kind.value,
+        failure_class="transient",
+        diagnostic_code="AGENT-INVOCATION",
+        provider_text=marker,
+        provider_text_sha256=digest,
+        provider_text_bytes=byte_count,
+        received_at=failure.received_at,
+        decision_at_utc=decision_at,
+        step=failure.step.value,
+        slice_id=str(failure.slice_id),
+        work_unit_id=str(failure.work_unit_id),
+        diagnostic_exit_code=failure.diagnostic_exit_code,
+        parse_path=failure.parse_path,
+        source_timezone=failure.source_timezone,
+        reset_at_utc=failure.reset_at_utc,
+        resume_at_utc=failure.resume_at_utc,
+        safety_margin_seconds=failure.safety_margin_seconds,
+        retry_delay_seconds=retry_delay,
+        auto_resume_count=failure.auto_resume_count,
+        automatic_resume=failure.automatic_resume,
+        diff_fingerprint=failure.diff_fingerprint,
+    )
 
 
 @pytest.mark.parametrize(
@@ -960,8 +1004,10 @@ def test_automatic_quota_pause_persists_matching_chain_record_and_resumes(
         automatic_resume=True,
         diff_fingerprint="c" * 64,
     )
-    paused = state.record_invocation_failure(failure, wait_automatically=True)
     driver = _driver(repository)
+    driver.checkpoint(state, WorkflowHistory(state.current_work_unit_id))
+    driver.persist_invocation_failure(_invocation_failure_payload(failure))
+    paused = state.record_invocation_failure(failure, wait_automatically=True)
 
     driver.checkpoint(paused, WorkflowHistory(paused.current_work_unit_id))
 
@@ -970,6 +1016,12 @@ def test_automatic_quota_pause_persists_matching_chain_record_and_resumes(
         record for record in chain if isinstance(record.payload, QuotaPausePayload)
     )
     assert len(quota_records) == 1
+    failure_record = next(
+        record
+        for record in chain
+        if isinstance(record.payload, InvocationFailurePayload)
+    )
+    assert chain.index(failure_record) < chain.index(quota_records[0])
     assert quota_records[0].payload == QuotaPausePayload(
         role=Role.CODEX,
         repository_fingerprint="c" * 64,
@@ -989,6 +1041,72 @@ def test_automatic_quota_pause_persists_matching_chain_record_and_resumes(
             if isinstance(record.payload, QuotaPausePayload)
         )
     ) == 1
+
+
+def test_record_ahead_failure_resume_is_idempotent_and_does_not_restart_provider(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/structured-regression")
+    state = _state(repository, "structured-record-ahead-failure")
+    head = _git(repository, "rev-parse", "HEAD")
+    state = state.complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CLAUDE_SLICE_REVIEW,
+    ).bind_current_slice_git_boundary(
+        start_commit=head,
+        scope_paths=("src/runtime.py",),
+        start_fingerprint="b" * 64,
+    )
+    failure = InvocationFailureRecord(
+        invocation_id="record-ahead-network-1",
+        idempotency_key=(
+            f"{state.run_id}:{state.current_work_unit_id}:"
+            f"{state.current_step.value}:claude"
+        ),
+        role="claude",
+        failure_kind=AgentFailureKind.NETWORK,
+        provider_text="HTTP 529 overloaded",
+        received_at="2026-08-31T10:00:00+00:00",
+        step=state.current_step,
+        slice_id=state.current_slice_id,
+        work_unit_id=state.current_work_unit_id,
+        diagnostic_exit_code=3,
+        resume_at_utc="2026-08-31T10:00:05+00:00",
+        auto_resume_count=1,
+        automatic_resume=True,
+        diff_fingerprint="c" * 64,
+    )
+    payload = _invocation_failure_payload(failure)
+    driver = _driver(repository)
+    driver.checkpoint(state, WorkflowHistory(state.current_work_unit_id))
+
+    driver.persist_invocation_failure(payload)
+    driver.persist_invocation_failure(payload)
+
+    chain = ArtifactStore(repository, state.run_id).load_chain()
+    assert sum(
+        isinstance(record.payload, InvocationFailurePayload) for record in chain
+    ) == 1
+    resolved = resolve_resume_state(repository, state)
+    assert resolved.replay_result is not None
+    assert resolved.replay_result.invocation_failures == (payload,)
+    assert resolved.state.current_work_unit.status is WorkUnitStatus.WAITING_FOR_RETRY
+    assert resolved.state.current_work_unit.invocation_failures == (
+        replace(failure, provider_text=payload.provider_text),
+    )
+
+    result = WorkflowEngine(driver).run_current_work_unit(
+        resolved.state,
+        WorkflowContext("assignment", "plan", "slice"),
+    )
+
+    assert result.state.current_work_unit.status is WorkUnitStatus.WAITING_FOR_RETRY
+    assert len(result.state.current_work_unit.invocation_failures) == 1
+    assert not any(
+        isinstance(record.payload, ProviderAttemptPayload)
+        for record in ArtifactStore(repository, state.run_id).load_chain()
+    )
 
 
 def test_automatic_network_retry_uses_its_own_chain_record_idempotently(
@@ -1025,8 +1143,10 @@ def test_automatic_network_retry_uses_its_own_chain_record_idempotently(
         automatic_resume=True,
         diff_fingerprint="c" * 64,
     )
-    waiting = state.record_invocation_failure(failure, wait_automatically=True)
     driver = _driver(repository)
+    driver.checkpoint(state, WorkflowHistory(state.current_work_unit_id))
+    driver.persist_invocation_failure(_invocation_failure_payload(failure))
+    waiting = state.record_invocation_failure(failure, wait_automatically=True)
 
     driver.checkpoint(waiting, WorkflowHistory(waiting.current_work_unit_id))
 
@@ -1035,6 +1155,12 @@ def test_automatic_network_retry_uses_its_own_chain_record_idempotently(
         record for record in chain if isinstance(record.payload, TransientRetryPayload)
     )
     assert len(retry_records) == 1
+    failure_record = next(
+        record
+        for record in chain
+        if isinstance(record.payload, InvocationFailurePayload)
+    )
+    assert chain.index(failure_record) < chain.index(retry_records[0])
     assert retry_records[0].payload == TransientRetryPayload(
         role=Role.CLAUDE,
         repository_fingerprint="c" * 64,

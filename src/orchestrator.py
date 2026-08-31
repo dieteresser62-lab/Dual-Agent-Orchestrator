@@ -44,6 +44,7 @@ from artifact_bridge import (
 )
 from artifact_migration import (
     ArtifactResumeError,
+    assert_invocation_failure_mirror,
     assert_run_binding_mirror,
     assert_gate_mirror,
     assert_slice_boundary_mirror,
@@ -55,7 +56,8 @@ from artifact_migration import (
 from artifact_models import (
     ArtifactRecord, BindingPayload, CorrectionWorkUnitPayload, DiagnosticPayload,
     FingerprintKind, GateDecisionPayload, GatePayload, GateTransitionPayload,
-    AgentResultPayload, QuotaPausePayload, ReviewPayload, Role, TaskPayload, TransientRetryPayload,
+    AgentResultPayload, InvocationFailurePayload, QuotaPausePayload, ReviewPayload,
+    Role, TaskPayload, TransientRetryPayload,
     ValidationAttestationPayload,
     WorkUnitPayload,
     WorkflowCompletionPayload,
@@ -773,6 +775,14 @@ class ProductionWorkflowDriver(WorkflowDriver):
             if not import_only_prefix:
                 require_workflow_status_prefix(existing_replay)
                 require_gate_prefix(existing_replay)
+                failure_mirror = assert_invocation_failure_mirror(
+                    existing_replay, state
+                )
+                if failure_mirror is not state:
+                    raise ArtifactResumeError(
+                        "record-ahead invocation failure requires resume "
+                        "resolution before baseline"
+                    )
                 if not any(
                     isinstance(record.payload, SideEffectPayload)
                     and record.payload.effect_class == "ledger"
@@ -3011,6 +3021,35 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 f"validation-request:{request.diff_fingerprint}:{request.attempt_number}"
             ),
             fingerprint_sha256=request.diff_fingerprint,
+        )
+
+    def persist_invocation_failure(
+        self, payload: InvocationFailurePayload
+    ) -> None:
+        """Append the classified failure before its state retry decision."""
+        if self._artifact_bridge is None or self.active_state is None:
+            raise WorkflowExecutionError(
+                "structured invocation failure has no active artifact authority"
+            )
+        if payload.work_unit_id != str(self.active_state.current_work_unit_id):
+            raise WorkflowExecutionError(
+                "invocation failure work unit differs from the active workflow"
+            )
+        fingerprint = payload.diff_fingerprint or self.active_state.task_digest
+        if fingerprint is None:
+            raise WorkflowExecutionError(
+                "invocation failure requires a contract or implementation fingerprint"
+            )
+        self._artifact_bridge.append(
+            payload,
+            logical_id=f"invocation-failure-{payload.invocation_id}",
+            idempotency_key=f"invocation-failure:{payload.invocation_id}",
+            fingerprint_sha256=fingerprint,
+            fingerprint_kind=(
+                FingerprintKind.IMPLEMENTATION
+                if payload.diff_fingerprint is not None
+                else FingerprintKind.CONTRACT
+            ),
         )
 
     def persist_gate_decision(

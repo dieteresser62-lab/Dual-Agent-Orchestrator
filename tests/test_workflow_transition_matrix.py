@@ -518,7 +518,10 @@ GATE_SOURCE_MAP = (
         "instance_failure_or_quota",
         "resume",
         "workflow_state.record_invocation_failure",
-        ("workflow._persist_invocation_failure",),
+        (
+            "workflow._persist_invocation_failure",
+            "artifact_migration.assert_invocation_failure_mirror",
+        ),
         ("invocation-failure",),
         (
             r"role=(?:codex|claude) step=[a-z_]+ invocation=[A-Za-z0-9._:-]+ "
@@ -706,6 +709,11 @@ EXPECTED_GATE_CALL_SITES = Counter(
         ("workflow.py", "_invoke_role", "await_user_gate"): 1,
         ("workflow.py", "_invoke_role", "await_bootstrap_resume"): 1,
         ("workflow.py", "_persist_invocation_failure", "record_invocation_failure"): 1,
+        (
+            "artifact_migration.py",
+            "assert_invocation_failure_mirror",
+            "record_invocation_failure",
+        ): 1,
         ("workflow.py", "_revalidate_waiting_diff", "await_policy_gate"): 2,
         ("workflow.py", "_revalidate_waiting_diff", "await_user_gate"): 1,
         ("workflow.py", "_commit", "await_user_gate"): 3,
@@ -730,6 +738,11 @@ EXPECTED_DIRECT_GATE_CONSTRUCTORS = Counter(
         ("workflow_state.py", "await_bootstrap_resume", "GateRecord"): 1,
         ("workflow_state.py", "resume_after_invocation_halt", "GateRecord"): 1,
         ("workflow_state.py", "resume_after_user_decision", "GateRecord"): 1,
+        (
+            "artifact_migration.py",
+            "project_transition_mirror_before_failure",
+            "GateRecord",
+        ): 1,
     }
 )
 
@@ -746,6 +759,7 @@ EXPECTED_GATE_REPLACEMENTS = Counter(
         ("workflow_state.py", "await_bootstrap_resume"): 1,
         ("workflow_state.py", "resume_after_invocation_halt"): 1,
         ("workflow_state.py", "resume_after_user_decision"): 1,
+        ("artifact_migration.py", "project_transition_mirror_before_failure"): 1,
     }
 )
 

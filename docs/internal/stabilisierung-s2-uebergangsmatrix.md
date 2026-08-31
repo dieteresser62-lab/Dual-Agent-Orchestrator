@@ -1,6 +1,6 @@
 # S2 – Übergangs- und Divergenzmatrix
 
-Stand: 2026-08-31. Untersucht ist `structured-v2` auf dem R4-Stand des
+Stand: 2026-08-31. Untersucht ist `structured-v2` einschließlich R6 auf dem
 Branches `feature/state-authority-consolidation`. Die Matrix beschreibt den
 Istzustand; der spätere Authority-Cutover bleibt ausdrücklich aus. Normativ sind
 heute die append-only Records zusammen mit dem noch autoritativen
@@ -28,7 +28,7 @@ Dateien und Review-Pakete sind Caches beziehungsweise Projektionen.
   Provider-Bindungen und irreversible externe Side Effects reserviert.
 
 Die Inventur ergibt 26 Kanten, 32 `mismatch(...)`-Stellen in
-`artifact_migration.py`, 25 direkte `ArtifactResumeError`-Stellen dort, 24
+`artifact_migration.py`, 30 direkte `ArtifactResumeError`-Stellen dort, 24
 `ArtifactBridgeError`-Stellen in Migration, Bridge und Orchestrator sowie fünf
 `_recoverable_*`-Prädikate (vier in `artifact_migration.py`, eines für den
 finalen Review-Mirror in `orchestrator.py`).
@@ -748,7 +748,7 @@ die Export-Planbindung in A02/B03. Die grammatisch plurale R3-Meldung
 `slice boundaries differ from state-v3` ist zusätzlich in der direkten
 Resume-Fehlerliste gebunden.
 
-### 25 direkte `ArtifactResumeError`-Stellen
+### 30 direkte `ArtifactResumeError`-Stellen
 
 | Meldungsstamm | Kante |
 |---|---|
@@ -765,6 +765,11 @@ Resume-Fehlerliste gebunden.
 | `structured-v2 run has no gate transition prefix` | R5 Gatepräfix fehlt; keine Nachrüstung aus dem State-Mirror |
 | `gate transitions differ from state-v3` | R5 aktueller Gatezustand und gemeinsam gebundener aktiver Testscope |
 | `gate decision bindings differ from state-v3` | R5 exakte Work-unit-, Pfad- und Resume-Step-Bindung an den früheren `GatePayload` |
+| `structured-v2 run has invocation failures but no R6 failure records` | R6 Failure-Mirror ohne autoritativen Failure-Record; keine Nachrüstung aus State |
+| `invocation failure identity cannot be projected into state-v3` | R6 Recordidentität ist nicht in die numerische State-v3-Zuordnung projizierbar |
+| `invocation failures differ from state-v3` | R6 Failure-Recordfolge und Mirror sind kein identischer Präfix |
+| `record chain has an ambiguous invocation failure suffix` | R6 mehr als genau ein Failure-Record liegt dem Mirror voraus |
+| `record-ahead invocation failure cannot rehydrate the current work unit` | R6 vorausliegende Retry-/Pauseentscheidung passt nicht auf den aktuellen Rollenschritt |
 | `structured-v2 run has no unique initialized side-effect ledger` | R4 Ledgerpräfix fehlt oder ist mehrdeutig; keine Nachrüstung aus dem Mirror |
 | `completed side effects differ from the authoritative ledger` | R4 Mirror ist der Resultatfolge voraus oder kein exakter Präfix; ein reines Record-vor-Mirror-Suffix wird deterministisch projiziert |
 | `is historical and cannot be resumed` | A01 |
@@ -942,7 +947,10 @@ Die Recovery-Prädikate stützen sich zusätzlich auf
 `_pending_denied_review()` (eindeutiger, fingerprint-gebundener Denial),
 `_state_has_review_event()` (Review bereits im History-Mirror),
 `_finding_statuses()` und `_attestation_facts()` (Stateprojektionen) sowie
-`_mirror_difference_code()` (Mirror-ahead gegen ambige Abweichung). Diese
+`_mirror_difference_code()` (Mirror-ahead gegen ambige Abweichung). R6 ergänzt
+die vollständig gezählten und per AST-Digest gebundenen Leser
+`assert_invocation_failure_mirror()` und
+`project_transition_mirror_before_failure()`. Diese
 Hilfsvergleiche gehören zu A04/A07/A08, Bewertung jeweils **entfällt**. Ihre
 vollständigen AST-Funktionskörper sind ebenso wie die zwei Preflightfunktionen
 per SHA-256 eingefroren. Für das fünfte Prädikat sind außerdem
@@ -987,10 +995,10 @@ dem normativen Zustand entfernt.
 | `gate_decisions[*].paths` und `resume_step` | User-/Policyentscheidung | Resume, Testscope | **In R5 vollständig:** `GateDecisionPayload` bindet beide an einen früheren `GatePayload` | **IN R5 GESCHLOSSEN:** Replay rekonstruiert die exakte Entscheidungsbindung |
 | `gate_decisions[*].decided_by` | User-/Policyentscheidung | Audit/Authorityprüfung | **In R5 entfallen:** freier State-String entfernt; Anzeige aus `GatePayload.authority` | **ENTFALLEN IN R5:** Guard verhindert die Rückkehr ins State-Schema |
 | `gate_decisions[*].decided_at` | User-/Policyentscheidung | Audit | **In R5 entfallen:** Statezeit entfernt; Anzeige aus `ArtifactRecord.created_at` des referenzierten Gate-Records | **ENTFALLEN IN R5:** keine Gleichheit mit dem alten Mirrorzeitpunkt wird zugesichert |
-| `invocation_failures[*].invocation_id`, `idempotency_key` | Providerfehlerpfad | Resume/Retry-Deduplikation | **nein**; weder Pause/Retry noch terminaler Attempt bewahren beide State-IDs | **STOP** |
-| `invocation_failures[*].provider_text/received_at/step/slice_id/work_unit_id/diagnostic_exit_code` | Providerfehlerpfad | Resume, Diagnose, Exitpolicy | **nein**; Quota/Retry tragen nur Teilmenge | **STOP** |
-| `invocation_failures[*].parse_path/source_timezone/reset_at_utc/safety_margin_seconds` | Quota-Parser | Scheduling/Diagnose | **nein** | **STOP** |
-| `invocation_failures[*].auto_resume_count/automatic_resume/diff_fingerprint` | Retry-/Resume-Policy | Automatisches Resume und Ack | **teilweise**; Retry-`attempt` und Fingerprint decken nicht die gesamte Policyentscheidung | **STOP** |
+| `invocation_failures[*].invocation_id`, `idempotency_key` | Providerfehlerpfad | Resume/Retry-Deduplikation | **ja seit R6** aus `InvocationFailurePayload`; Replay erzwingt eindeutige Invocation-ID und logische Bindung | **IN R6 GESCHLOSSEN:** Record vor Status-/Retrymutation; idempotenter Wiederholungsappend |
+| `invocation_failures[*].provider_text/received_at/step/slice_id/work_unit_id/diagnostic_exit_code` | Providerfehlerpfad | Resume, Diagnose, Exitpolicy | **ja seit R6**; `provider_text` ist normativ ein fester Redaktionsmarker mit SHA-256 und UTF-8-Bytezahl statt unbeschränktem Rohtext | **IN R6 GESCHLOSSEN:** Produktionsmirror und Record tragen denselben sicheren Marker |
+| `invocation_failures[*].parse_path/source_timezone/reset_at_utc/safety_margin_seconds` | Quota-Parser | Scheduling/Diagnose | **ja seit R6** einschließlich geparster Quelle und hergeleitetem `resume_at_utc` | **IN R6 GESCHLOSSEN:** Domainvalidator beweist Ziel = Reset + Marge |
+| `invocation_failures[*].auto_resume_count/automatic_resume/diff_fingerprint` | Retry-/Resume-Policy | Automatisches Resume und Ack | **ja seit R6** einschließlich `decision_at_utc` und `retry_delay_seconds` | **IN R6 GESCHLOSSEN:** Record-ahead-Replay rekonstruiert Halt und verhindert erneuten Dispatch desselben Fehlers |
 | `planned_slices[*].summary` | Planparser | Audit/Prompts | **ja**; `plan_payload()` schreibt `PlannedSlice.summary` wörtlich in `SliceSpec.summary` | ableitbar |
 | `work_plan_path` | Task/Plan | Planrouting/Audit | **ja**, sobald der genau eine `Plan`-Record existiert; vor Plan noch nicht vorhanden | nullable Projektion zulässig |
 | `approved_plan_commit` | Planfreigabe | Implementation/Binding/Handoff | **ja** aus `Plan` und Planbinding | ableitbar |
@@ -1022,8 +1030,8 @@ dem normativen Zustand entfernt.
 
 ### S4a-Sortierung der STOP-Einträge
 
-Die folgende Tabelle ist die verbindliche Auflösung der aktuell achtzehn
-fett als `STOP` markierten Zeilen sowie der bereits in R1 bis R5 geschlossenen
+Die folgende Tabelle ist die verbindliche Auflösung der aktuell vierzehn
+fett als `STOP` markierten Zeilen sowie der bereits in R1 bis R6 geschlossenen
 Zeilen oben. Jede Zeile kommt genau einmal vor. `A` benennt
 den benötigten Recordtyp, das Feld und den heutigen beziehungsweise künftigen
 Schreiber. `B` benennt die tatsächlichen Leser und begründet, weshalb deren
@@ -1056,10 +1064,10 @@ keinen fett markierten STOP enthält.
 | `gate_decisions[*].paths` und `resume_step` | A | **In R5 geschlossen:** `GateDecisionPayload.paths/resume_step`; Schreiber: User-/Policyentscheidung in `persist_gate_decision()`, gebunden an den vorher geschriebenen `GatePayload`. Resume und Testscope erhalten die exakte Work-unit-Bindung. |
 | `gate_decisions[*].decided_by` | B | **In R5 entfallen:** Leser waren `_authorized_test_approval()`, `_overall_audit_entries()` und `workflow.authorized_test_changes_from_state()` über `AuthorizedTestChanges.approved_by`. Die State-only-Projektion ist entfernt; die Auditprojektion liest jetzt `GatePayload.authority` aus `ArtifactReplayResult`. `has_gate_approval()` prüfte den freien String nie. |
 | `gate_decisions[*].decided_at` | B | **In R5 entfallen:** Leser waren dieselben Auditpfade über `AuthorizedTestChanges.approved_at`; keine Gate-, Commit- oder Resumeentscheidung prüfte die Zeit. Die Anzeige verwendet nun `ArtifactRecord.created_at` des referenzierten `GatePayload`, ausdrücklich als Recordzeit und ohne Gleichheitsbehauptung zum entfernten Mirrorwert. |
-| `invocation_failures[*].invocation_id`, `idempotency_key` | A | `InvocationFailurePayload.invocation_id/idempotency_key`; Schreiber: Providerfehlerpfad vor Retry-/Pauseentscheidung. Resume und Deduplikation lesen beide IDs. |
-| `invocation_failures[*].provider_text/received_at/step/slice_id/work_unit_id/diagnostic_exit_code` | A | Gleichnamige Felder in `InvocationFailurePayload`; Schreiber: klassifizierter Providerfehlerpfad. Resume, Diagnose und Exitpolicy lesen diese Zuordnung. |
-| `invocation_failures[*].parse_path/source_timezone/reset_at_utc/safety_margin_seconds` | A | Gleichnamige Felder in `InvocationFailurePayload`; Schreiber: Quota-Parser/Scheduler. Die nächste zulässige Ausführung hängt davon ab. |
-| `invocation_failures[*].auto_resume_count/automatic_resume/diff_fingerprint` | A | Gleichnamige Felder in `InvocationFailurePayload` plus Transitionrevision; Schreiber: Retry-/Resume-Policy. Automatisches Resume und Repository-Ack lesen die Entscheidung. |
+| `invocation_failures[*].invocation_id`, `idempotency_key` | A | **In R6 geschlossen:** `InvocationFailurePayload.invocation_id/idempotency_key`; Schreiber: Providerfehlerpfad vor jeder Status-, Zähler-, Retry- oder Pausemutation. Replay erzwingt eine Invocation-ID, der Store einen semantisch identischen Idempotenzschlüssel. |
+| `invocation_failures[*].provider_text/received_at/step/slice_id/work_unit_id/diagnostic_exit_code` | A | **In R6 geschlossen:** Gleichnamige Felder in `InvocationFailurePayload`; Schreiber: klassifizierter Providerfehlerpfad. Der unbeschränkte Rohtext wird vor Persistenz durch `[provider text redacted; sha256=…; utf8_bytes=…]` ersetzt. Der Marker ist auf 128 Zeichen begrenzt, bindet die exakten UTF-8-Bytes kryptografisch und steht identisch im Produktionsmirror. Die typisierte `failure_class` und der `diagnostic_code` werden ausschließlich aus `error_classification.classify_exception()` übernommen, nie aus Text oder Exitcode neu hergeleitet. |
+| `invocation_failures[*].parse_path/source_timezone/reset_at_utc/safety_margin_seconds` | A | **In R6 geschlossen:** Gleichnamige Felder in `InvocationFailurePayload` plus `resume_at_utc`; Schreiber: Quota-Parser/Scheduler. Recordet werden sowohl geparste Herkunft (`parse_path`, `source_timezone`, Reset) und Marge als auch das berechnete Ziel. Der Domainvalidator verlangt `resume_at_utc = reset_at_utc + safety_margin_seconds`. |
+| `invocation_failures[*].auto_resume_count/automatic_resume/diff_fingerprint` | A | **In R6 geschlossen:** Gleichnamige Felder in `InvocationFailurePayload` plus `decision_at_utc` und `retry_delay_seconds`; Schreiber: Retry-/Resume-Policy. Netzwerkziele müssen Entscheidung + Delay entsprechen. Genau ein vorausliegender Failure-Record darf den Halt deterministisch in den Mirror projizieren; mehrdeutige oder fehlende R6-Records stoppen. |
 | `protocol_binding.mode/schema/transports` | C | Der erste akzeptierte `ArtifactRecord.schema_version == "2"` legt `mode=structured-v2` und `schema_version=2` fest. Das geschlossene Schema 2 erzwingt für `AgentResultPayload.transport_schema` den Wert `native-codex-v2` und für `ReviewPayload.transport_schema` `native-claude-review-v2`; andere Transporte sind in diesem Präfix unzulässig. |
 | `protocol_binding.codex_profile/claude_profile` | A | **In R1 geschlossen:** `RunProfilePayload.codex_model/codex_effort/claude_model/claude_effort`; Schreiber: erster strukturierter Checkpoint aus CLI-/Taskdefault vor dem ersten Providerstart. `ProviderAttemptPayload` bestätigt die Bindung je Aufruf. |
 | `ContractResult.red_state_followup_slice` in `runtime_history.reviews/latest_claude_review` | A | **In S4a geschlossen:** `ReviewPayload.red_state_followup_slice`; Schreiber: `ProductionWorkflowDriver.persist_native_review_contract()`. Audit- und Git-Autorisierung verlangen nun den approved Review-Record derselben Work-unit und desselben Fingerprints; ein Mirrorwert allein autorisiert keinen Red-State-Commit. Der aktuelle native-v2-Konverter setzt das Feld stets auf `None`, daher kann der heutige Transport keinen neuen Red-State-Review erzeugen. Das spätere Durchreichen aus `StepContract` über `NativeReviewContext` in `ContractResult` bleibt ein ausdrücklich benannter Folgepunkt und ist nicht Teil dieses Record-Slice. |
@@ -1097,6 +1105,21 @@ Gegenüber der im R5-Auftrag festgehaltenen R4-Baseline von **1297 passed in
 147 s** sind das sieben zusätzliche Akzeptanzfälle und **12,91 s** mehr
 Pytest-Laufzeit. Die Providernamen-Baseline, Schema-/Protokollversion 2 und das
 Inventar der `_recoverable_*`-Sonderfälle blieben unverändert.
+
+#### R6-Suitelaufzeit
+
+Der vollständige WSL-Lauf vom 31. August 2026 mit
+`python3 -m pytest tests/ -v` ist grün: **1315 passed in 155,98 s**.
+Gegenüber der R5-Baseline von **1308 passed in 159 s** sind das sieben
+zusätzliche Akzeptanzfälle bei praktisch unveränderter Laufzeit. Die
+Providernamen-Baseline, Schema-/Protokollversion 2 und das Inventar der
+`_recoverable_*`-Sonderfälle blieben unverändert.
+
+Das erste Claude-CLI-Review mit Opus 5 auf Max fand eine unbeabsichtigte
+Kopplung der automatischen Fortsetzung an die tiefste S1-Klasse. Nach der
+Korrektur belegt ein nativer, aus `AgentOutputError` gekapselter Quotafall die
+unveränderte Policy bei gleichzeitig vollständig recordeter S1-Provenienz.
+Die abschließende Opus-5-Max-Korrekturrunde wurde ohne Findings freigegeben.
 
 #### Entscheidung zu Schema 2 und Bestandsrecords
 
@@ -1165,6 +1188,39 @@ wird ausdrücklich nicht als identisch mit dem entfernten Mirrorzeitpunkt
 behauptet. Mirror, Schema-/Protokollversion 2 und die Providerrollen bleiben
 ansonsten unverändert.
 
+R6 ergänzt `InvocationFailurePayload` additiv in demselben Schema 2. Der
+klassifizierte Failurepfad übernimmt `failure_class` und `diagnostic_code`
+direkt aus `src/error_classification.py`, berechnet die bestehende Policy und
+appendet anschließend den vollständigen Fakt, bevor State-Status, Gate,
+Fortsetzungszähler oder Wait verändert werden. Ein unbeschränkter Providertext
+wird weder in den Record noch in den neu geschriebenen Produktionsmirror
+übernommen: Persistiert wird ausschließlich ein höchstens 128 Zeichen langer
+Redaktionsmarker mit SHA-256 und exakter UTF-8-Bytezahl. Quota-Records tragen
+Quelle, Zeitzone, Reset und Marge sowie das daraus berechnete Ziel; Netzwerk-
+Records tragen Entscheidungszeit, Delay und Ziel. Die Domainvalidierung prüft
+beide Herleitungen.
+
+Die S1-Klasse ist dabei Provenienz und kein zweites Retry-Gate. Native Adapter
+können einen als Quota oder Netzwerk klassifizierten Aufruf mit einer tieferen,
+deterministischen `__cause__`-Klasse kapseln. Der Record bewahrt diese
+Divergenz, während die unveränderte Retry-Policy weiterhin aus dem bereits
+klassifizierten `failure_kind`, ihren Grenzwerten und dem Fingerprint folgt.
+Damit dokumentiert R6 die S1-Klasse, ohne bisherigen Quota- oder
+Structured-Output-Fällen automatische Fortsetzung zu entziehen.
+
+Replay bewahrt die Failurepayloads in Kettenreihenfolge, bindet sie an den
+letzten aktiven Work-unit-/Step-Übergang und verlangt, dass spätere Quota- und
+Transient-Transitionen exakt auf denselben Failure zurückzeigen. Fehlt zu
+einem vorhandenen Failure-Mirror der R6-Record, stoppt Resume fail-closed. Das
+einzige zulässige Crashsuffix ist genau ein Record vor seinem Mirror; daraus
+wird der Halt deterministisch projiziert. Teilweise bereits gelandete
+Workflow-, Gate- und Retry-Transitionen werden jeweils gegen den passenden
+Vorher-/Nachherzustand geprüft. Ein zweiter Append derselben Invocation ist
+idempotent, ein zweiter Providerdispatch aus diesem Crashfenster findet nicht
+statt. Die Treibersenke stoppt außerdem mit
+`invocation failure work unit differs from the active workflow`, wenn der
+Record nicht zur aktuell gebundenen Work-unit gehört.
+
 ### S4a-Schnittvorschlag für die verbleibenden Gruppe-A-Einträge
 
 1. **Runidentität sowie frühe Protokoll-/Profilbindung.** `task_file`, `branch`,
@@ -1190,7 +1246,7 @@ ansonsten unverändert.
    `artifact_models.py`, Replay/Migration. Benötigt Cursor und Scopegrenze.
 6. **Failure-/Retry-Policy.** Alle vier Invocation-Failure-Zeilen einschließlich
    Identitäten, Parserdiagnose, Scheduling und Auto-Resume. Module:
-   `failure_classification.py`, `agent_runtime.py`, `workflow_state.py`,
+   `error_classification.py`, `agent_runtime.py`, `workflow_state.py`,
    `workflow.py`, `orchestrator.py`, Replay/Migration. Benötigt Cursor, Profile
    und Side-effect-Ledger.
 7. **Verbleibende Review-Contractfelder.** `test_files`, `pre_mortem`, `anchors`,
@@ -1225,7 +1281,7 @@ Caches und brauchen je eine Intent-/Resultat- oder Reconciliation-Regel.
 
 1. S3 muss zuerst Records oder explizite Ableitungsregeln für alle **STOP**-
    Einträge schaffen. Insbesondere Cursor/Status, Slice-Startgrenze,
-   Side-effect-Ledger, Pending-Gate, vollständige Failurepolicy und frühe
+   Side-effect-Ledger, Pending-Gate und frühe
    Protocol-/Profilbindung dürfen nicht aus dem Mirror "übernommen" werden.
 2. S4 darf Record-Authority erst aktivieren, wenn ein leerer State aus einem
    beliebigen akzeptierten Präfix deterministisch neu projiziert werden kann

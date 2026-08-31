@@ -59,6 +59,11 @@ RESUME_ERROR_MARKERS = (
     "structured-v2 run has no gate transition prefix",
     "gate transitions differ from state-v3",
     "gate decision bindings differ from state-v3",
+    "structured-v2 run has invocation failures but no R6 failure records",
+    "invocation failure identity cannot be projected into state-v3",
+    "invocation failures differ from state-v3",
+    "record chain has an ambiguous invocation failure suffix",
+    "record-ahead invocation failure cannot rehydrate the current work unit",
     "is historical and cannot be resumed",
     "structured-v2 state lacks the complete native Codex-Claude transport binding",
     "record chain for run",
@@ -129,6 +134,7 @@ DRIVER_DIVERGENCE_MESSAGES = Counter(
         "persisted finding handoff export differs from the prepared task": 1,
         "file side-effect target differs before result completion": 1,
         "projection target differs before result completion": 1,
+        "invocation failure work unit differs from the active workflow": 1,
         "structured audit dual-write mismatch: ": 2,
     }
 )
@@ -307,6 +313,8 @@ COMPARISON_TARGETS = (
     ("src/artifact_migration.py", None, "require_gate_prefix"),
     ("src/artifact_migration.py", None, "assert_gate_mirror"),
     ("src/artifact_migration.py", None, "require_side_effect_ledger_prefix"),
+    ("src/artifact_migration.py", None, "assert_invocation_failure_mirror"),
+    ("src/artifact_migration.py", None, "project_transition_mirror_before_failure"),
     ("src/artifact_migration.py", None, "assert_side_effect_mirror"),
     ("src/artifact_migration.py", None, "_mirror_difference_code"),
     ("src/artifact_migration.py", None, "_finding_statuses"),
@@ -407,7 +415,7 @@ STRICT_BODY_TARGETS = tuple(
 # non-divergence comparison added inside one of these boundaries forces S2's
 # inventory to be reviewed instead of silently aging.
 EXPECTED_COMPARISON_COUNTS = {
-    "src/artifact_migration.py:resolve_resume_state": 86,
+    "src/artifact_migration.py:resolve_resume_state": 96,
     "src/artifact_migration.py:assert_run_binding_mirror": 6,
     "src/artifact_migration.py:require_workflow_status_prefix": 3,
     "src/artifact_migration.py:assert_workflow_status_mirror": 4,
@@ -415,6 +423,8 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/artifact_migration.py:require_gate_prefix": 1,
     "src/artifact_migration.py:assert_gate_mirror": 4,
     "src/artifact_migration.py:require_side_effect_ledger_prefix": 4,
+    "src/artifact_migration.py:assert_invocation_failure_mirror": 4,
+    "src/artifact_migration.py:project_transition_mirror_before_failure": 3,
     "src/artifact_migration.py:assert_side_effect_mirror": 5,
     "src/artifact_migration.py:_mirror_difference_code": 0,
     "src/artifact_migration.py:_finding_statuses": 2,
@@ -498,6 +508,8 @@ EXPECTED_STRICT_BODY_DIGESTS = {
     "src/artifact_migration.py:require_gate_prefix": "980ecc54d5b6c651d9937728b37a9e7cdfc2d27d8d4100eee15fde0d85249774",
     "src/artifact_migration.py:assert_gate_mirror": "cc1214a7684e5c95ae519fac33f0624739167083440bbd58725888ce3a46e581",
     "src/artifact_migration.py:require_side_effect_ledger_prefix": "75a389d1d2170ebd424810be772b2050c6b3951591530505cd7ba480138103c6",
+    "src/artifact_migration.py:assert_invocation_failure_mirror": "0a6caf71c272a876202ef11434386e304cd206f774f97e2f0ac996b92e5ddce0",
+    "src/artifact_migration.py:project_transition_mirror_before_failure": "ffea068886e435d3c2b63d67f329625b9a0c00a511d88f084e1ea22a1aef89d4",
     "src/artifact_migration.py:assert_side_effect_mirror": "a987bcfdd6e57add8c76d0f45bcb005c7f560dcb2c682411eed66d9f67c76a54",
     "src/artifact_migration.py:_mirror_difference_code": "9433c6d83367347145eebab39e8fc4e3a989062ff9864bec6752710065ffbbc7",
     "src/artifact_migration.py:_finding_statuses": "cc4a0460cf13d1fbeba70deb2ae66dd19771bb31e8c56907139506ba3421c758",
@@ -701,7 +713,7 @@ def test_migration_comparison_inventory_is_source_bound() -> None:
         assert marker in source_strings
         assert marker in document
 
-    assert _raise_count("src/artifact_migration.py", "ArtifactResumeError") == 25
+    assert _raise_count("src/artifact_migration.py", "ArtifactResumeError") == 30
     for marker in RESUME_ERROR_MARKERS:
         assert marker in (source if marker == "exc.diagnostic.message" else source_strings)
         assert marker in document
@@ -908,7 +920,13 @@ def test_every_s4a_stop_entry_has_exactly_one_reasoned_classification() -> None:
         "`gate_decisions[*].decided_by`",
         "`gate_decisions[*].decided_at`",
     }
-    assert len(stop_fields) == 18
+    r6_covered_fields = {
+        "`invocation_failures[*].invocation_id`, `idempotency_key`",
+        "`invocation_failures[*].provider_text/received_at/step/slice_id/work_unit_id/diagnostic_exit_code`",
+        "`invocation_failures[*].parse_path/source_timezone/reset_at_utc/safety_margin_seconds`",
+        "`invocation_failures[*].auto_resume_count/automatic_resume/diff_fingerprint`",
+    }
+    assert len(stop_fields) == 14
     assert len(fields) == len(set(fields)) == 41
     assert set(fields) == (
         stop_fields
@@ -917,6 +935,7 @@ def test_every_s4a_stop_entry_has_exactly_one_reasoned_classification() -> None:
         | r3_covered_fields
         | r4_covered_fields
         | r5_covered_fields
+        | r6_covered_fields
         | {"`created_at`, `updated_at`"}
     )
     assert groups["`work_units[*].codex_return_count`"] == "A"
@@ -941,6 +960,10 @@ def test_every_s4a_stop_entry_has_exactly_one_reasoned_classification() -> None:
     for field in r5_covered_fields:
         reason = next(reason for name, _group, reason in rows if name == field)
         assert "In R5" in reason
+    for field in r6_covered_fields:
+        reason = next(reason for name, _group, reason in rows if name == field)
+        assert "In R6 geschlossen" in reason
+        assert "InvocationFailurePayload" in reason or "Gleichnamige Felder" in reason
     for field in r3_covered_fields:
         reason = next(reason for name, _group, reason in rows if name == field)
         assert "In R3 geschlossen" in reason

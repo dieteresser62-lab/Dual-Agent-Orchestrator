@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -22,6 +23,7 @@ from artifact_models import (
     FindingTransitionPayload,
     FingerprintKind,
     GateTransitionPayload,
+    InvocationFailurePayload,
     PlanPayload,
     RecordType,
     ReviewPayload,
@@ -38,6 +40,7 @@ from artifact_models import (
     WorkflowCompletionPayload,
     WorkflowPolicyPayload,
     WorkflowTransitionPayload,
+    provider_text_evidence,
 )
 from artifact_store import ArtifactStore
 from artifact_replay import ReplayDiagnosticCode, replay_artifacts
@@ -81,6 +84,61 @@ def _state(repository: Path, *, structured: bool = True):
         start_fingerprint="c" * 64,
     )
     return state
+
+
+def _append_invocation_failure(
+    repository: Path, state: WorkflowState, failure: InvocationFailureRecord
+) -> None:
+    marker, digest, byte_count = provider_text_evidence(failure.provider_text)
+    decision = datetime.fromisoformat(failure.received_at.replace("Z", "+00:00"))
+    retry_delay = 0
+    if failure.failure_kind is AgentFailureKind.QUOTA and failure.reset_at_utc:
+        retry_delay = failure.safety_margin_seconds
+    elif failure.failure_kind is AgentFailureKind.NETWORK and failure.automatic_resume:
+        assert failure.resume_at_utc is not None
+        retry_delay = int(
+            (
+                datetime.fromisoformat(failure.resume_at_utc.replace("Z", "+00:00"))
+                - decision
+            ).total_seconds()
+        )
+    payload = InvocationFailurePayload(
+        invocation_id=failure.invocation_id,
+        idempotency_key=failure.idempotency_key,
+        role=Role(failure.role),
+        failure_kind=failure.failure_kind.value,
+        failure_class="transient",
+        diagnostic_code="AGENT-INVOCATION",
+        provider_text=marker,
+        provider_text_sha256=digest,
+        provider_text_bytes=byte_count,
+        received_at=failure.received_at,
+        decision_at_utc=failure.received_at,
+        step=failure.step.value,
+        slice_id=str(failure.slice_id),
+        work_unit_id=str(failure.work_unit_id),
+        diagnostic_exit_code=failure.diagnostic_exit_code,
+        parse_path=failure.parse_path,
+        source_timezone=failure.source_timezone,
+        reset_at_utc=failure.reset_at_utc,
+        resume_at_utc=failure.resume_at_utc,
+        safety_margin_seconds=failure.safety_margin_seconds,
+        retry_delay_seconds=retry_delay,
+        auto_resume_count=failure.auto_resume_count,
+        automatic_resume=failure.automatic_resume,
+        diff_fingerprint=failure.diff_fingerprint,
+    )
+    ArtifactBridge(ArtifactStore(repository, state.run_id)).append(
+        payload,
+        logical_id=f"invocation-failure-{failure.invocation_id}",
+        idempotency_key=f"invocation-failure:{failure.invocation_id}",
+        fingerprint_sha256=failure.diff_fingerprint or state.task_digest,
+        fingerprint_kind=(
+            FingerprintKind.IMPLEMENTATION
+            if failure.diff_fingerprint is not None
+            else FingerprintKind.CONTRACT
+        ),
+    )
 
 
 def _records(
@@ -1099,6 +1157,7 @@ def test_structured_resume_halts_when_mirror_quota_pause_has_no_chain_record(
         reset_at_utc="2026-08-18T12:05:00+00:00",
         resume_at_utc="2026-08-18T12:05:30+00:00",
         safety_margin_seconds=30,
+        auto_resume_count=1,
         automatic_resume=True,
         diff_fingerprint="d" * 64,
     )
@@ -1106,9 +1165,40 @@ def test_structured_resume_halts_when_mirror_quota_pause_has_no_chain_record(
         failure,
         wait_automatically=True,
     ).resume_after_invocation_halt(updated_at="2026-08-18T12:05:30+00:00")
+    _append_invocation_failure(tmp_path, state, failure)
 
     with pytest.raises(ArtifactResumeError, match="quota pauses differ from state-v3"):
         resolve_resume_state(tmp_path, state)
+
+
+def test_structured_resume_rejects_pre_r6_failure_mirror_without_record(
+    tmp_path: Path,
+) -> None:
+    state = _state(tmp_path)
+    _records(tmp_path, state)
+    failure = InvocationFailureRecord(
+        invocation_id="pre-r6-process-failure",
+        idempotency_key="resume-run:2:codex_implementation:codex",
+        role="codex",
+        failure_kind=AgentFailureKind.PROCESS,
+        provider_text="provider process failed",
+        received_at="2026-08-31T10:00:00+00:00",
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+        slice_id=1,
+        work_unit_id=2,
+        diagnostic_exit_code=3,
+    )
+    state = state.record_invocation_failure(
+        failure, wait_automatically=False
+    )
+
+    with pytest.raises(
+        ArtifactResumeError,
+        match="structured-v2 run has invocation failures but no R6 failure records",
+    ) as caught:
+        resolve_resume_state(tmp_path, state)
+
+    assert caught.value.code is ReplayDiagnosticCode.RECORD_MISSING
 
 
 def test_runtime_finding_closure_overrides_correction_work_unit_attribution(
@@ -1160,6 +1250,7 @@ def test_structured_resume_halts_when_mirror_transient_retry_has_no_chain_record
         failure,
         wait_automatically=True,
     ).resume_after_invocation_halt(updated_at="2026-08-18T12:00:05+00:00")
+    _append_invocation_failure(tmp_path, state, failure)
 
     with pytest.raises(
         ArtifactResumeError,
@@ -1806,6 +1897,7 @@ def test_structured_resume_accepts_matching_transient_retry_record(
         failure,
         wait_automatically=True,
     ).resume_after_invocation_halt(updated_at="2026-08-18T12:00:05+00:00")
+    _append_invocation_failure(tmp_path, state, failure)
     ArtifactBridge(ArtifactStore(tmp_path, state.run_id)).append(
         TransientRetryPayload(
             role=Role.CLAUDE,

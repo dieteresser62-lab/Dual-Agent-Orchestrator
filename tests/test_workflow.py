@@ -9,14 +9,18 @@ from datetime import datetime, timedelta, timezone
 import pytest
 import plan_handoff
 
+from agent_adapters import AgentOutputError
 from audit_trail import ReviewAuditEvent
+from artifact_models import InvocationFailurePayload, provider_text_evidence
 from agent_runtime import (
     AgentInvocationError,
+    AgentProcessError,
     NativeAgentCodexOutput,
     NativeAgentReviewOutput,
     QuotaReset,
     QuotaWaitPolicy,
     TransientRetryPolicy,
+    classify_agent_failure,
 )
 
 from contracts import (
@@ -413,6 +417,8 @@ class FakeDriver:
     commit_calls: list[WorkflowCommitRequest] = field(default_factory=list)
     checkpoints: list = field(default_factory=list)
     checkpoint_histories: list = field(default_factory=list)
+    failure_payloads: list[InvocationFailurePayload] = field(default_factory=list)
+    failure_persistence_events: list[str] = field(default_factory=list)
     require_checkpointed_attestation: bool = False
     authoritative_finding_error: str | None = None
     authoritative_finding_calls: list[tuple[str, tuple[FindingRecord, ...]]] = field(
@@ -598,8 +604,15 @@ class FakeDriver:
         return self.commit_refs.pop(0) if self.commit_refs else "b" * 40
 
     def checkpoint(self, state, history) -> None:
+        self.failure_persistence_events.append("checkpoint")
         self.checkpoints.append(state)
         self.checkpoint_histories.append(history)
+
+    def persist_invocation_failure(
+        self, payload: InvocationFailurePayload
+    ) -> None:
+        self.failure_persistence_events.append("failure-record")
+        self.failure_payloads.append(payload)
 
 
 def _slice_state(
@@ -806,6 +819,139 @@ def _invocation_failure(
         exit_code=None if kind is AgentFailureKind.QUOTA else 7,
         quota_reset=reset,
     )
+
+
+@pytest.mark.parametrize(
+    ("kind", "expected_automatic", "expected_diagnostic"),
+    (
+        (AgentFailureKind.QUOTA, True, "AGENT-INVOCATION"),
+        (AgentFailureKind.NETWORK, True, "AGENT-INVOCATION"),
+        (AgentFailureKind.PROCESS, False, "AGENT-PROCESS"),
+    ),
+)
+def test_r6_failure_record_precedes_retry_decision_and_uses_s1_classification(
+    kind: AgentFailureKind,
+    expected_automatic: bool,
+    expected_diagnostic: str,
+) -> None:
+    from error_classification import classify_exception
+
+    now = datetime(2026, 8, 31, 10, 0, tzinfo=timezone.utc)
+    raw_provider_text = f"secret-provider-diagnostic-{kind.value}"
+    reset = (
+        QuotaReset(
+            now + timedelta(seconds=30),
+            "codex:structured:retry_after_seconds",
+            "UTC",
+        )
+        if kind is AgentFailureKind.QUOTA
+        else None
+    )
+    error = AgentInvocationError(
+        agent_key="codex",
+        kind=kind,
+        invocation_id=f"r6-{kind.value}",
+        provider_text=raw_provider_text,
+        received_at=now,
+        quota_reset=reset,
+    )
+    if kind is AgentFailureKind.PROCESS:
+        error.__cause__ = AgentProcessError("provider process exited", exit_code=7)
+    classified = classify_exception(error)
+    driver = FakeDriver(
+        snapshots=[_changes("1", "src/early.py", TEST_FILE)],
+        codex_outputs=[],
+        reviewer_outputs=[],
+    )
+    context = replace(
+        _context(),
+        quota_wait_policy=QuotaWaitPolicy(safety_margin_seconds=7),
+        transient_retry_policy=TransientRetryPolicy(initial_delay_seconds=5),
+    )
+
+    persisted, failure = WorkflowEngine(
+        driver, now_fn=lambda: now
+    )._persist_invocation_failure(
+        _slice_state(),
+        WorkflowHistory(2),
+        context,
+        AgentRole.CODEX,
+        error,
+    )
+
+    assert driver.failure_persistence_events == ["failure-record", "checkpoint"]
+    assert len(driver.failure_payloads) == 1
+    payload = driver.failure_payloads[0]
+    assert payload.failure_class == classified.failure_class.value == "transient"
+    assert payload.diagnostic_code == classified.diagnostic_code == expected_diagnostic
+    assert payload.automatic_resume is expected_automatic
+    assert payload.auto_resume_count == (1 if expected_automatic else 0)
+    assert raw_provider_text not in payload.provider_text
+    assert payload.provider_text.startswith("[provider text redacted; sha256=")
+    assert payload.provider_text_bytes == len(raw_provider_text.encode("utf-8"))
+    assert len(payload.provider_text) <= 128
+    assert failure.provider_text == payload.provider_text
+    assert persisted.current_work_unit.invocation_failures == (failure,)
+    if kind is AgentFailureKind.QUOTA:
+        assert payload.parse_path == "codex:structured:retry_after_seconds"
+        assert payload.source_timezone == "UTC"
+        assert payload.retry_delay_seconds == payload.safety_margin_seconds == 7
+        assert payload.resume_at_utc == "2026-08-31T10:00:37+00:00"
+    elif kind is AgentFailureKind.NETWORK:
+        assert payload.retry_delay_seconds == 5
+        assert payload.resume_at_utc == "2026-08-31T10:00:05+00:00"
+    else:
+        assert payload.retry_delay_seconds == 0
+        assert payload.resume_at_utc is None
+
+
+def test_r6_wrapped_quota_keeps_policy_despite_deeper_s1_classification() -> None:
+    now = datetime(2026, 8, 31, 10, 0, tzinfo=timezone.utc)
+    source = AgentOutputError(
+        "usage limit reached; your limit will reset at 3pm (Europe/Berlin)"
+    )
+    classified_error = classify_agent_failure(
+        AgentRole.CLAUDE.value,
+        source,
+        invocation_id="r6-wrapped-quota",
+        received_at=now,
+    )
+    try:
+        raise classified_error from source
+    except AgentInvocationError as captured:
+        error = captured
+    driver = FakeDriver(
+        snapshots=[_changes("1", "src/early.py", TEST_FILE)],
+        codex_outputs=[],
+        reviewer_outputs=[],
+    )
+    context = replace(
+        _context(),
+        quota_wait_policy=QuotaWaitPolicy(safety_margin_seconds=7),
+    )
+
+    persisted, failure = WorkflowEngine(
+        driver, now_fn=lambda: now
+    )._persist_invocation_failure(
+        _slice_state(),
+        WorkflowHistory(2),
+        context,
+        AgentRole.CLAUDE,
+        error,
+    )
+
+    payload = driver.failure_payloads[0]
+    assert failure.failure_kind is AgentFailureKind.QUOTA
+    assert payload.failure_class == "resumable_halt"
+    assert payload.diagnostic_code == "AGENT-OUTPUT"
+    assert payload.automatic_resume is failure.automatic_resume is True
+    assert payload.auto_resume_count == failure.auto_resume_count == 1
+    assert payload.parse_path == "claude:text:local-clock"
+    assert payload.source_timezone == "Europe/Berlin"
+    assert payload.reset_at_utc == "2026-08-31T13:00:00+00:00"
+    assert payload.retry_delay_seconds == payload.safety_margin_seconds == 7
+    assert payload.resume_at_utc == "2026-08-31T13:00:07+00:00"
+    assert persisted.current_work_unit.status is WorkUnitStatus.WAITING_FOR_QUOTA
 
 
 def test_claude_reuses_single_fingerprint_attestation_without_matrix_rerun() -> None:
@@ -2916,7 +3062,9 @@ def test_non_terminable_quota_is_manual_exit_two(
     assert result.state.current_work_unit.status is WorkUnitStatus.AWAITING_RESUME
     failure = result.state.current_work_unit.invocation_failures[-1]
     assert failure.automatic_resume is False
-    assert failure.provider_text == "usage cap reached"
+    marker, _, _ = provider_text_evidence("usage cap reached")
+    assert failure.provider_text == marker
+    assert "usage cap reached" not in failure.provider_text
     assert driver.reviewer_calls == []
 
 

@@ -13,6 +13,7 @@ from artifact_models import (
     FindingTransitionPayload,
     GateDecisionPayload,
     GateTransitionPayload,
+    InvocationFailurePayload,
     PlanPayload,
     QuotaPausePayload,
     RecordType,
@@ -33,6 +34,7 @@ from artifact_models import (
     FindingHandoffExportPayload,
     FindingHandoffImportPayload,
     canonical_json,
+    provider_text_evidence,
 )
 from artifact_store import ArtifactStore, ArtifactStoreError
 from artifact_replay import (
@@ -52,13 +54,17 @@ from finding_reducer import (
 )
 from workflow_state import (
     AgentFailureKind,
+    GateRecord,
+    InvocationFailureRecord,
     NATIVE_CLAUDE_REVIEW_TRANSPORT,
     NATIVE_CODEX_RESULT_TRANSPORT,
     ProtocolMode,
     ProtocolBinding,
+    SliceStatus,
     WorkflowState,
     WorkflowStep,
     WorkUnitKind,
+    WorkUnitStatus,
     project_implementer_return_policy,
 )
 
@@ -348,6 +354,191 @@ def require_side_effect_ledger_prefix(replay: ArtifactReplayResult) -> None:
         )
 
 
+def _invocation_failure_state_signature(
+    failure: InvocationFailureRecord,
+) -> tuple[object, ...]:
+    provider_marker, provider_digest, provider_bytes = provider_text_evidence(
+        failure.provider_text
+    )
+    return (
+        failure.invocation_id,
+        failure.idempotency_key,
+        failure.role,
+        failure.failure_kind.value,
+        provider_marker,
+        provider_digest,
+        provider_bytes,
+        failure.received_at,
+        failure.step.value,
+        failure.slice_id,
+        failure.work_unit_id,
+        failure.diagnostic_exit_code,
+        failure.parse_path,
+        failure.source_timezone,
+        failure.reset_at_utc,
+        failure.resume_at_utc,
+        failure.safety_margin_seconds,
+        failure.auto_resume_count,
+        failure.automatic_resume,
+        failure.diff_fingerprint,
+    )
+
+
+def _invocation_failure_payload_signature(
+    failure: InvocationFailurePayload,
+) -> tuple[object, ...]:
+    return (
+        failure.invocation_id,
+        failure.idempotency_key,
+        failure.role.value,
+        failure.failure_kind,
+        failure.provider_text,
+        failure.provider_text_sha256,
+        failure.provider_text_bytes,
+        failure.received_at,
+        failure.step,
+        int(failure.slice_id),
+        int(failure.work_unit_id),
+        failure.diagnostic_exit_code,
+        failure.parse_path,
+        failure.source_timezone,
+        failure.reset_at_utc,
+        failure.resume_at_utc,
+        failure.safety_margin_seconds,
+        failure.auto_resume_count,
+        failure.automatic_resume,
+        failure.diff_fingerprint,
+    )
+
+
+def assert_invocation_failure_mirror(
+    replay: ArtifactReplayResult,
+    state: WorkflowState,
+) -> WorkflowState:
+    """Bind every failure mirror or project one record-ahead crash suffix.
+
+    The sole accepted suffix is the current invocation failure itself.  Its
+    persisted retry decision rehydrates the halted state, preventing resume
+    from starting the same provider invocation a second time.
+    """
+    mirrored = tuple(
+        failure
+        for unit in state.work_units
+        for failure in unit.invocation_failures
+    )
+    recorded = replay.invocation_failures
+    if mirrored and not recorded:
+        raise ArtifactResumeError(
+            "structured-v2 run has invocation failures but no R6 failure records",
+            code=ReplayDiagnosticCode.RECORD_MISSING,
+        )
+    try:
+        mirrored_signatures = tuple(
+            _invocation_failure_state_signature(item) for item in mirrored
+        )
+        recorded_signatures = tuple(
+            _invocation_failure_payload_signature(item) for item in recorded
+        )
+    except (TypeError, ValueError) as exc:
+        raise ArtifactResumeError(
+            "invocation failure identity cannot be projected into state-v3",
+            code=ReplayDiagnosticCode.MIRROR_AMBIGUOUS,
+        ) from exc
+    if recorded_signatures[: len(mirrored_signatures)] != mirrored_signatures:
+        related = next(
+            (
+                record
+                for record in reversed(replay.records)
+                if isinstance(record.payload, InvocationFailurePayload)
+            ),
+            None,
+        )
+        raise ArtifactResumeError(
+            "invocation failures differ from state-v3",
+            code=_mirror_difference_code(
+                set(recorded_signatures), set(mirrored_signatures)
+            ),
+            record_id=None if related is None else related.record_id,
+        )
+    if len(recorded) == len(mirrored):
+        return state
+    if len(recorded) != len(mirrored) + 1:
+        raise ArtifactResumeError(
+            "record chain has an ambiguous invocation failure suffix",
+            code=ReplayDiagnosticCode.MIRROR_AMBIGUOUS,
+        )
+    payload = recorded[-1]
+    try:
+        failure = InvocationFailureRecord(
+            invocation_id=payload.invocation_id,
+            idempotency_key=payload.idempotency_key,
+            role=payload.role.value,
+            failure_kind=AgentFailureKind(payload.failure_kind),
+            provider_text=payload.provider_text,
+            received_at=payload.received_at,
+            step=WorkflowStep(payload.step),
+            slice_id=int(payload.slice_id),
+            work_unit_id=int(payload.work_unit_id),
+            diagnostic_exit_code=payload.diagnostic_exit_code,
+            parse_path=payload.parse_path,
+            source_timezone=payload.source_timezone,
+            reset_at_utc=payload.reset_at_utc,
+            resume_at_utc=payload.resume_at_utc,
+            safety_margin_seconds=payload.safety_margin_seconds,
+            auto_resume_count=payload.auto_resume_count,
+            automatic_resume=payload.automatic_resume,
+            diff_fingerprint=payload.diff_fingerprint,
+        )
+        return state.record_invocation_failure(
+            failure,
+            wait_automatically=payload.automatic_resume,
+            updated_at=payload.decision_at_utc,
+        )
+    except (TypeError, ValueError) as exc:
+        related = next(
+            record
+            for record in reversed(replay.records)
+            if isinstance(record.payload, InvocationFailurePayload)
+        )
+        raise ArtifactResumeError(
+            "record-ahead invocation failure cannot rehydrate the current work unit",
+            code=ReplayDiagnosticCode.MIRROR_AMBIGUOUS,
+            record_id=related.record_id,
+        ) from exc
+
+
+def project_transition_mirror_before_failure(
+    state: WorkflowState,
+    failure: InvocationFailurePayload,
+) -> WorkflowState:
+    """Project the exact status/gate prefix immediately before one failure."""
+    current = state.current_work_unit
+    if (
+        not current.invocation_failures
+        or current.invocation_failures[-1].invocation_id != failure.invocation_id
+    ):
+        return state
+    prior_unit = replace(
+        current,
+        status=WorkUnitStatus.IN_PROGRESS,
+        gate=GateRecord(),
+        invocation_failures=current.invocation_failures[:-1],
+    )
+    return replace(
+        state,
+        work_units=tuple(
+            prior_unit if unit.work_unit_id == current.work_unit_id else unit
+            for unit in state.work_units
+        ),
+        slices=tuple(
+            replace(item, status=SliceStatus.IN_PROGRESS)
+            if item.slice_id == current.slice_id
+            else item
+            for item in state.slices
+        ),
+    )
+
+
 def assert_side_effect_mirror(
     replay: ArtifactReplayResult,
     state: WorkflowState,
@@ -429,9 +620,63 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
         ) from exc
     chain = replay.records
     assert_run_binding_mirror(replay, state, binding)
-    assert_workflow_status_mirror(replay, state)
+    require_workflow_status_prefix(replay)
     assert_slice_boundary_mirror(replay, state)
-    assert_gate_mirror(replay, state)
+    state = assert_invocation_failure_mirror(replay, state)
+    latest_failure_record = next(
+        (
+            record
+            for record in reversed(chain)
+            if isinstance(record.payload, InvocationFailurePayload)
+        ),
+        None,
+    )
+    pending_transition_invocation: str | None = None
+    if latest_failure_record is not None:
+        failure_position = chain.index(latest_failure_record)
+        failure_payload = latest_failure_record.payload
+        assert isinstance(failure_payload, InvocationFailurePayload)
+        prior_state = project_transition_mirror_before_failure(
+            state, failure_payload
+        )
+        workflow_transition_landed = any(
+            index > failure_position
+            and record.record_type is RecordType.WORKFLOW_TRANSITION
+            for index, record in enumerate(chain)
+        )
+        gate_transition_landed = any(
+            index > failure_position
+            and record.record_type is RecordType.GATE_TRANSITION
+            for index, record in enumerate(chain)
+        )
+        assert_workflow_status_mirror(
+            replay, state if workflow_transition_landed else prior_state
+        )
+        assert_gate_mirror(
+            replay, state if gate_transition_landed else prior_state
+        )
+        transition_landed = any(
+            index > failure_position
+            and record.logical_id
+            in {
+                f"quota-pause-{failure_payload.invocation_id}",
+                f"transient-retry-{failure_payload.invocation_id}",
+            }
+            for index, record in enumerate(chain)
+        )
+        if (
+            not transition_landed
+            and state.current_work_unit.status
+            in {
+                WorkUnitStatus.WAITING_FOR_QUOTA,
+                WorkUnitStatus.WAITING_FOR_RETRY,
+                WorkUnitStatus.AWAITING_RESUME,
+            }
+        ):
+            pending_transition_invocation = failure_payload.invocation_id
+    else:
+        assert_workflow_status_mirror(replay, state)
+        assert_gate_mirror(replay, state)
     state = assert_side_effect_mirror(replay, state)
 
     head = replay.head_record_id
@@ -732,6 +977,7 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
             failure.failure_kind is AgentFailureKind.QUOTA
             and failure.diff_fingerprint is not None
             and failure.resume_at_utc is not None
+            and failure.invocation_id != pending_transition_invocation
         )
     }
     quota_records = {
@@ -766,6 +1012,7 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
             and failure.automatic_resume
             and failure.diff_fingerprint is not None
             and failure.resume_at_utc is not None
+            and failure.invocation_id != pending_transition_invocation
         )
     }
     transient_records = {

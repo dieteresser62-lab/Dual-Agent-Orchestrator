@@ -25,6 +25,7 @@ from artifact_models import (
     GateDecisionPayload,
     GatePayload,
     GateTransitionPayload,
+    InvocationFailurePayload,
     PlanPayload,
     QuotaPausePayload,
     ResumeCheckPayload,
@@ -52,6 +53,7 @@ from artifact_models import (
     canonical_json,
     load_schema,
     validate_artifact_document,
+    provider_text_evidence,
 )
 from workflow_state import (
     GateReason,
@@ -66,6 +68,9 @@ DIGEST = "a" * 64
 CREATED_AT = "2026-08-18T10:30:00+00:00"
 CODEX_REQUEST_ID = "native-codex-request-" + "b" * 64
 CLAUDE_REQUEST_ID = "native-review-request-" + "b" * 64
+PROVIDER_MARKER, PROVIDER_DIGEST, PROVIDER_BYTES = provider_text_evidence(
+    "provider diagnostic"
+)
 
 
 def _agent_result(
@@ -161,6 +166,15 @@ def _record(payload, *, revision: int = 1) -> ArtifactRecord:  # type: ignore[no
         "claude_slice_review",
     ),
     BindingPayload("implementation_handoff", "ec40aa3", "attestation-01", ("review-claude",)),
+    InvocationFailurePayload(
+        "invocation-01", "run-01:work-01:claude_slice_review:claude",
+        Role.CLAUDE, "network", "transient", "AGENT-INVOCATION",
+        PROVIDER_MARKER, PROVIDER_DIGEST, PROVIDER_BYTES,
+        "2026-08-18T11:30:00+00:00", "2026-08-18T11:30:00+00:00",
+        "claude_slice_review", "1", "work-01", 3,
+        None, None, None, "2026-08-18T11:30:05+00:00", 0, 5, 1, True,
+        DIGEST,
+    ),
     QuotaPausePayload(Role.CLAUDE, DIGEST, "2026-08-18T11:30:00Z"),
     TransientRetryPayload(Role.CLAUDE, DIGEST, "2026-08-18T11:30:05Z", 1),
     ResumeCheckPayload("head-01", DIGEST, "matched"),
