@@ -19,11 +19,18 @@ from artifact_models import (
     PlanPayload,
     ReviewPayload,
     Role,
+    RoleProfilePayload,
+    RunIdentityPayload,
+    RunProfilePayload,
     SliceSpec,
     WorkUnitPayload,
     finding_transition_sequence_sha256,
 )
-from artifact_replay import ArtifactReplayError, replay_artifacts
+from artifact_replay import (
+    ArtifactReplayError,
+    ArtifactReplayResult,
+    replay_artifacts as replay_artifacts_checked,
+)
 from finding_reducer import (
     FindingReduction,
     reduce_findings,
@@ -48,6 +55,19 @@ HISTORICAL_COMMITS = {
     "17c39c2",
     "d24511e",
 }
+
+
+def replay_artifacts(
+    records: tuple[ArtifactRecord, ...] | list[ArtifactRecord],
+    run_id: str,
+) -> ArtifactReplayResult:
+    """Replay reducer-only fixtures without recreating later R7/R8 records."""
+    return replay_artifacts_checked(
+        records,
+        run_id,
+        require_content_authority=False,
+        require_review_authority=False,
+    )
 
 
 def _corpus() -> tuple[dict[str, Any], ...]:
@@ -108,6 +128,27 @@ def _opening_payload(event: dict[str, Any]) -> FindingTransitionPayload:
 def _build_case(case: dict[str, Any]) -> tuple[ArtifactRecord, ...]:
     records: list[ArtifactRecord] = []
     revisions: dict[tuple[str, str], int] = {}
+    _append(
+        records,
+        revisions,
+        "run-identity",
+        RunIdentityPayload(
+            "inbox/backlog/finding-reducer.md",
+            "feature/finding-reducer",
+            "b" * 40,
+            "IMPLEMENT",
+            None,
+        ),
+    )
+    _append(
+        records,
+        revisions,
+        "run-profile",
+        RunProfilePayload(
+            RoleProfilePayload("implementer-model", "medium"),
+            RoleProfilePayload("reviewer-model", "high"),
+        ),
+    )
     classes: dict[str, FindingSeverity] = {}
     imported: ArtifactRecord | None = None
     for index, event in enumerate(case["events"], start=1):
@@ -368,6 +409,10 @@ def test_combined_multi_slice_correction_sequence_resumes_at_every_prefix() -> N
     records = _build_case(case)
     reductions: list[FindingReduction] = []
     for end in range(1, len(records) + 1):
+        if end == 1:
+            with pytest.raises(ArtifactReplayError, match="RECORD-MISSING"):
+                replay_artifacts(records[:end], RUN_ID)
+            continue
         replay = replay_artifacts(records[:end], RUN_ID)
         first = reduce_findings(replay)
         second = reduce_findings(replay)

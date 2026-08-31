@@ -23,6 +23,7 @@ from artifact_models import (
     RecordType,
     ReviewPayload,
     Role,
+    RoleProfilePayload,
     RunIdentityPayload,
     RunProfilePayload,
     SliceBoundaryPayload,
@@ -43,7 +44,7 @@ from artifact_replay import (
     ReplayedWorkflowCursor,
     ReplayDiagnosticCode,
     project_work_unit_reviewers,
-    replay_artifacts,
+    replay_artifacts as replay_artifacts_checked,
     replay_findings,
 )
 from contracts import FindingResponseDecision, FindingStatus
@@ -51,6 +52,13 @@ from workflow_state import Reviewer, WorkflowStep, init_workflow_state
 
 
 FP = Fingerprint(FingerprintKind.IMPLEMENTATION, "a" * 64)
+
+
+def replay_artifacts(records, expected_run_id, **kwargs):  # type: ignore[no-untyped-def]
+    """Exercise replay mechanics without duplicating the R7/R8 fixtures here."""
+    kwargs.setdefault("require_content_authority", False)
+    kwargs.setdefault("require_review_authority", False)
+    return replay_artifacts_checked(records, expected_run_id, **kwargs)
 
 
 def _agent_result(work_unit_id: str, test_files: tuple[str, ...] = ()) -> AgentResultPayload:
@@ -86,6 +94,26 @@ def _append(
     fingerprint: Fingerprint = FP,
     revision: int = 1,
 ) -> ArtifactRecord:
+    if not records and not isinstance(payload, (RunIdentityPayload, RunProfilePayload)):
+        _append(
+            records,
+            "run-identity",
+            RunIdentityPayload(
+                "inbox/backlog/replay.md",
+                "feature/replay",
+                "b" * 40,
+                "IMPLEMENT",
+                None,
+            ),
+        )
+        _append(
+            records,
+            "run-profile",
+            RunProfilePayload(
+                RoleProfilePayload("implementer-model", "medium"),
+                RoleProfilePayload("reviewer-model", "high"),
+            ),
+        )
     record = ArtifactRecord.create(
         run_id="run-replay",
         logical_id=logical_id,
@@ -104,6 +132,25 @@ def _append(
 
 def _chain() -> tuple[ArtifactRecord, ...]:
     records: list[ArtifactRecord] = []
+    _append(
+        records,
+        "run-identity",
+        RunIdentityPayload(
+            "inbox/backlog/replay.md",
+            "feature/replay",
+            "b" * 40,
+            "IMPLEMENT",
+            None,
+        ),
+    )
+    _append(
+        records,
+        "run-profile",
+        RunProfilePayload(
+            RoleProfilePayload("implementer-model", "medium"),
+            RoleProfilePayload("reviewer-model", "high"),
+        ),
+    )
     _append(records, "work-unit-1", WorkUnitPayload("1", 1, ("src/a.py",)))
     _append(
         records,
@@ -169,10 +216,8 @@ def test_replay_projects_run_identity_and_profiles_without_external_state() -> N
         audit_report_path=None,
     )
     profile = RunProfilePayload(
-        codex_model="gpt-5.6-sol",
-        codex_effort="max",
-        claude_model="opus",
-        claude_effort="max",
+        implementer=RoleProfilePayload("gpt-5.6-sol", "max"),
+        reviewer=RoleProfilePayload("opus", "max"),
     )
     _append(records, "run-identity", identity)
     _append(records, "run-profile", profile)
@@ -185,11 +230,37 @@ def test_replay_projects_run_identity_and_profiles_without_external_state() -> N
     assert canonical_json(asdict(replay.run_profile)) == canonical_json(asdict(profile))
 
 
-def test_pre_r1_chain_without_run_records_remains_readable() -> None:
-    replay = replay_artifacts(_chain(), "run-replay")
+@pytest.mark.parametrize("missing", ("identity", "profile"))
+def test_pre_r1_chain_without_complete_run_binding_is_rejected(missing: str) -> None:
+    records: list[ArtifactRecord] = []
+    if missing != "identity":
+        _append(
+            records,
+            "run-identity",
+            RunIdentityPayload(
+                "inbox/backlog/replay.md",
+                "feature/replay",
+                "b" * 40,
+                "IMPLEMENT",
+                None,
+            ),
+        )
+    if missing != "profile":
+        _append(
+            records,
+            "run-profile",
+            RunProfilePayload(
+                RoleProfilePayload("implementer-model", "medium"),
+                RoleProfilePayload("reviewer-model", "high"),
+            ),
+        )
 
-    assert replay.run_identity is None
-    assert replay.run_profile is None
+    with pytest.raises(ArtifactReplayError) as caught:
+        replay_artifacts(tuple(records), "run-replay")
+
+    assert caught.value.code is ReplayDiagnosticCode.RECORD_MISSING
+    assert "requires exactly one run identity and run profile" in str(caught.value)
+    assert f"missing run {missing}" in str(caught.value)
 
 
 def test_replay_projects_r2_cursor_status_policy_and_reviewer_without_external_state() -> None:
@@ -635,8 +706,8 @@ def test_import_tampering_and_partial_work_unit_binding_fail_with_stable_codes()
     _assert_code(tuple(records), ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH)
 
     wrong_target = replace(imported.payload, target_run_id="other-run")
-    object.__setattr__(records[0], "payload", wrong_target)
-    _assert_code((records[0],), ReplayDiagnosticCode.RECORD_RUN_MISMATCH)
+    object.__setattr__(imported, "payload", wrong_target)
+    _assert_code(tuple(records), ReplayDiagnosticCode.RECORD_RUN_MISMATCH)
 
 
 def test_structured_finding_projection_rejects_legacy_incomplete_opening() -> None:
@@ -817,11 +888,11 @@ def test_replay_accepts_one_provider_attempt_and_rejects_terminal_without_start(
     )
     assert replay_artifacts(records, "run-replay").records == tuple(records)
 
-    terminal_only = [records[0], records[1], records[3]]
-    terminal_only[2] = replace(
-        terminal_only[2], revision=1,
-        record_id=records[2].record_id,
-        predecessor_ids=(records[1].record_id,),
+    terminal_only = [records[0], records[1], records[2], records[3], records[5]]
+    terminal_only[4] = replace(
+        terminal_only[4], revision=1,
+        record_id=records[4].record_id,
+        predecessor_ids=(records[3].record_id,),
     )
     _assert_code(tuple(terminal_only), ReplayDiagnosticCode.RECORD_REFERENCE_MISSING)
 
@@ -855,7 +926,7 @@ def test_work_unit_revisions_extend_scope_only_within_the_same_round() -> None:
     )
     assert replay_artifacts(tuple(records), "run-replay").records == tuple(records)
 
-    shrunk = list(records[:1])
+    shrunk = list(records[:3])
     _append(
         shrunk,
         "work-unit-1",
@@ -864,7 +935,7 @@ def test_work_unit_revisions_extend_scope_only_within_the_same_round() -> None:
     )
     _assert_code(tuple(shrunk), ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH)
 
-    moved_round = list(records[:1])
+    moved_round = list(records[:3])
     _append(
         moved_round,
         "work-unit-1",
@@ -966,7 +1037,7 @@ def test_gate_replay_rejects_partial_test_binding_and_missing_decision_reference
     )
     _assert_code(tuple(records), ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH)
 
-    records = records[:1]
+    records = records[:3]
     _append(
         records,
         "gate-decision-1",

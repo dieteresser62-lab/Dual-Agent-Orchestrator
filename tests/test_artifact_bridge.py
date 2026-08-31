@@ -19,7 +19,8 @@ from artifact_models import (
     ArtifactRecord, ArtifactValidationError, FindingSeverity, FindingTransitionPayload,
     Fingerprint, FingerprintKind, PlanPayload, ReviewPayload, SliceSpec,
     ProviderAttemptPayload, ProviderInputComponentPayload,
-    ProviderInputMeasurementPayload, ProviderUsagePayload, Role, WorkUnitPayload,
+    ProviderInputMeasurementPayload, ProviderUsagePayload, Role, RoleProfilePayload,
+    RunIdentityPayload, RunProfilePayload, WorkUnitPayload,
 )
 from artifact_store import ArtifactStore
 from artifact_replay import replay_artifacts
@@ -34,6 +35,34 @@ from validation_matrix import ValidationCommand, ValidationRequest
 DIGEST = "a" * 64
 
 
+def _bound_bridge(
+    root: Path,
+    run_id: str,
+    *,
+    now=None,  # type: ignore[no-untyped-def]
+) -> ArtifactBridge:
+    store = ArtifactStore(root, run_id)
+    setup = ArtifactBridge(store, now=lambda: "2026-08-18T09:00:00+00:00")
+    setup.append(
+        RunIdentityPayload("task.md", "feature/test", "b" * 40, "IMPLEMENT", None),
+        logical_id="run-identity",
+        idempotency_key="run-identity",
+        fingerprint_sha256=DIGEST,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    setup.append(
+        RunProfilePayload(
+            RoleProfilePayload("implementer-model", "medium"),
+            RoleProfilePayload("reviewer-model", "high"),
+        ),
+        logical_id="run-profile",
+        idempotency_key="run-profile",
+        fingerprint_sha256=DIGEST,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    return ArtifactBridge(store) if now is None else ArtifactBridge(store, now=now)
+
+
 def test_bridge_constructs_lossless_handoff_only_from_accepted_replay() -> None:
     records: list[ArtifactRecord] = []
     def append(logical_id: str, payload: object) -> ArtifactRecord:
@@ -46,8 +75,19 @@ def test_bridge_constructs_lossless_handoff_only_from_accepted_replay() -> None:
         )
         records.append(record)
         return record
+    append(
+        "run-identity",
+        RunIdentityPayload("task.md", "feature/test", "b" * 40, "PLAN_ONLY", None),
+    )
+    append(
+        "run-profile",
+        RunProfilePayload(
+            RoleProfilePayload("implementer-model", "medium"),
+            RoleProfilePayload("reviewer-model", "high"),
+        ),
+    )
     append("plan", PlanPayload("docs/plan.md", "b" * 40, (SliceSpec("1", "one", ("src/a.py",)),)))
-    append("finding-C-01", FindingTransitionPayload(
+    finding = append("finding-C-01", FindingTransitionPayload(
         "C-01", Role.CLAUDE, Role.CLAUDE, "opened", FindingSeverity.OBSERVATION,
         "open", "Carry it.", "plan-review", "Carry it.", "It remains visible.", "plan", 1,
     ))
@@ -55,19 +95,29 @@ def test_bridge_constructs_lossless_handoff_only_from_accepted_replay() -> None:
         Role.CLAUDE, "plan-review", "approved", ("C-01",), None,
         "native-claude-review-v2", "native-review-request-" + "c" * 64, "d" * 64,
     ))
-    before_export = replay_artifacts(records, "source-run")
+    before_export = replay_artifacts(
+        records,
+        "source-run",
+        require_content_authority=False,
+        require_review_authority=False,
+    )
     export_payload = finding_handoff_export_payload(
         before_export, approved_plan_commit="b" * 40,
         approval_review_record_id=review.record_id,
         target_task_path="inbox/implement.md", target_task_bytes=b"task",
     )
     export_record = append("finding-export", export_payload)
-    source = replay_artifacts(records, "source-run")
+    source = replay_artifacts(
+        records,
+        "source-run",
+        require_content_authority=False,
+        require_review_authority=False,
+    )
     imported = finding_handoff_import_payload(
         source, export_record, target_run_id="target-run", target_task_bytes=b"task"
     )
 
-    assert imported.transitions[0].payload == records[1].payload
+    assert imported.transitions[0].payload == finding.payload
     assert imported.export_record_id == export_record.record_id
     with pytest.raises(ArtifactBridgeError, match="task bytes differ"):
         finding_handoff_import_payload(
@@ -464,7 +514,7 @@ def test_provider_attempt_start_terminal_and_resume_are_stable(tmp_path: Path) -
             "2026-08-18T10:00:06+00:00",
         )
     )
-    bridge = ArtifactBridge(ArtifactStore(tmp_path, "run-1"), now=lambda: next(ticks))
+    bridge = _bound_bridge(tmp_path, "run-1", now=lambda: next(ticks))
     measurement = bridge.append(
         _measurement(), logical_id="measurement-1", idempotency_key="measurement:1",
         fingerprint_sha256=DIGEST,
@@ -500,7 +550,7 @@ def test_provider_attempt_start_terminal_and_resume_are_stable(tmp_path: Path) -
 
 
 def test_provider_attempt_requires_terminal_direct_predecessor(tmp_path: Path) -> None:
-    bridge = ArtifactBridge(ArtifactStore(tmp_path, "run-open"))
+    bridge = _bound_bridge(tmp_path, "run-open")
     measurement = bridge.append(
         _measurement(), logical_id="measurement-open",
         idempotency_key="measurement:open", fingerprint_sha256=DIGEST,
@@ -521,7 +571,7 @@ def test_provider_attempt_requires_terminal_direct_predecessor(tmp_path: Path) -
 
 
 def test_provider_attempt_rejects_changed_digest_for_same_operation(tmp_path: Path) -> None:
-    bridge = ArtifactBridge(ArtifactStore(tmp_path, "run-1"))
+    bridge = _bound_bridge(tmp_path, "run-1")
     first_measurement = bridge.append(
         _measurement(), logical_id="measurement-1", idempotency_key="measurement:1",
         fingerprint_sha256=DIGEST,
@@ -544,7 +594,7 @@ def test_provider_attempt_rejects_changed_digest_for_same_operation(tmp_path: Pa
 
 
 def test_provider_attempt_rounds_have_distinct_immutable_bindings(tmp_path: Path) -> None:
-    bridge = ArtifactBridge(ArtifactStore(tmp_path, "run-rounds"))
+    bridge = _bound_bridge(tmp_path, "run-rounds")
     first_measurement = bridge.append(
         _measurement(), logical_id="measurement-round-2",
         idempotency_key="measurement:round:2", fingerprint_sha256=DIGEST,
@@ -586,7 +636,7 @@ def test_provider_attempt_rounds_have_distinct_immutable_bindings(tmp_path: Path
 def test_provider_attempt_round_scope_reuses_matching_legacy_operation(
     tmp_path: Path,
 ) -> None:
-    bridge = ArtifactBridge(ArtifactStore(tmp_path, "run-legacy-round"))
+    bridge = _bound_bridge(tmp_path, "run-legacy-round")
     measurement = bridge.append(
         _measurement(), logical_id="measurement-legacy",
         idempotency_key="measurement:legacy", fingerprint_sha256=DIGEST,
@@ -614,7 +664,7 @@ def test_provider_attempt_round_scope_reuses_matching_legacy_operation(
 def test_provider_attempt_finish_rejects_start_from_foreign_chain(
     tmp_path: Path,
 ) -> None:
-    foreign_bridge = ArtifactBridge(ArtifactStore(tmp_path, "foreign-run"))
+    foreign_bridge = _bound_bridge(tmp_path, "foreign-run")
     foreign_measurement = foreign_bridge.append(
         _measurement(),
         logical_id="foreign-measurement",
@@ -626,7 +676,7 @@ def test_provider_attempt_finish_rejects_start_from_foreign_chain(
         binding_fingerprint=DIGEST,
         work_unit_id="1",
     )
-    bridge = ArtifactBridge(ArtifactStore(tmp_path, "run-1"))
+    bridge = _bound_bridge(tmp_path, "run-1")
     chain_before = bridge.store.load_chain()
 
     with pytest.raises(

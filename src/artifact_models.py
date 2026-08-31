@@ -160,28 +160,30 @@ class RunIdentityPayload:
 
 
 @dataclass(frozen=True, slots=True)
+class RoleProfilePayload:
+    model: str
+    effort: str
+
+    def __post_init__(self) -> None:
+        _require_text(self.model, "model")
+        if self.model != self.model.strip():
+            raise ArtifactValidationError("model must be canonical")
+        if self.effort not in {"low", "medium", "high", "xhigh", "max"}:
+            raise ArtifactValidationError("effort is unsupported")
+
+
+@dataclass(frozen=True, slots=True)
 class RunProfilePayload:
-    codex_model: str
-    codex_effort: str
-    claude_model: str
-    claude_effort: str
+    implementer: RoleProfilePayload
+    reviewer: RoleProfilePayload
     status: ClassVar[str] = "bound"
     record_type: ClassVar[RecordType] = RecordType.RUN_PROFILE
 
     def __post_init__(self) -> None:
-        for value, name in (
-            (self.codex_model, "codex_model"),
-            (self.claude_model, "claude_model"),
-        ):
-            _require_text(value, name)
-            if value != value.strip():
-                raise ArtifactValidationError(f"{name} must be canonical")
-        for value, name in (
-            (self.codex_effort, "codex_effort"),
-            (self.claude_effort, "claude_effort"),
-        ):
-            if value not in {"low", "medium", "high", "xhigh", "max"}:
-                raise ArtifactValidationError(f"{name} is unsupported")
+        if not isinstance(self.implementer, RoleProfilePayload):
+            raise ArtifactValidationError("implementer profile is invalid")
+        if not isinstance(self.reviewer, RoleProfilePayload):
+            raise ArtifactValidationError("reviewer profile is invalid")
 
 
 _WORKFLOW_STEPS = {
@@ -1909,8 +1911,8 @@ def _payload_from_dict(record_type: RecordType, raw: Mapping[str, Any]) -> Artif
         )
     if record_type is RecordType.RUN_PROFILE:
         return RunProfilePayload(
-            data["codex_model"], data["codex_effort"],
-            data["claude_model"], data["claude_effort"],
+            RoleProfilePayload(**data["implementer"]),
+            RoleProfilePayload(**data["reviewer"]),
         )
     if record_type is RecordType.WORKFLOW_TRANSITION:
         return WorkflowTransitionPayload(

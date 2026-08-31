@@ -42,6 +42,7 @@ from artifact_models import (
     ReviewPayload,
     ReviewValidationBindingPayload,
     Role,
+    RoleProfilePayload,
     RunIdentityPayload,
     RunProfilePayload,
     SliceBoundaryPayload,
@@ -50,6 +51,7 @@ from artifact_models import (
     ValidationResult,
     WorkUnitPayload,
     WorkflowCompletionPayload,
+    WorkflowEventPayload,
     WorkflowPolicyPayload,
     WorkflowTransitionPayload,
     canonical_json,
@@ -147,6 +149,49 @@ from artifact_bridge import (
     review_payload,
 )
 from content_authority import ValidationCapture, validation_output_digest
+from content_authority_support import (
+    append_provider_decision_authority,
+    append_validation_authority,
+)
+
+
+def _append_run_binding(bridge: ArtifactBridge, state: WorkflowState) -> None:
+    fingerprint = state.task_digest or "a" * 64
+    binding = state.protocol_binding or ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2")
+    identity = bridge.append(
+        RunIdentityPayload(
+            state.task_file,
+            state.branch,
+            state.branch_base,
+            state.execution_mode,
+            state.audit_report_path,
+        ),
+        logical_id="run-identity",
+        idempotency_key="run-identity",
+        fingerprint_sha256=fingerprint,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    bridge.append(
+        WorkflowEventPayload("run", None, "1", None, (identity.record_id,)),
+        logical_id=f"workflow-event-{identity.record_id}",
+        idempotency_key=f"workflow-event:{identity.record_id}",
+        fingerprint_sha256=identity.fingerprint.sha256,
+        fingerprint_kind=identity.fingerprint.kind,
+    )
+    bridge.append(
+        RunProfilePayload(
+            RoleProfilePayload(
+                binding.codex_profile.model, binding.codex_profile.effort
+            ),
+            RoleProfilePayload(
+                binding.claude_profile.model, binding.claude_profile.effort
+            ),
+        ),
+        logical_id="run-profile",
+        idempotency_key="run-profile",
+        fingerprint_sha256=fingerprint,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
 
 
 def test_invoke_reviewer_dispatches_native_adapter_with_provider_ledger(
@@ -546,7 +591,8 @@ def test_run_records_exist_before_first_workflow_dispatch(
         None,
     )
     assert observed["profile"] == RunProfilePayload(
-        "gpt-order", "max", "opus-order", "max"
+        RoleProfilePayload("gpt-order", "max"),
+        RoleProfilePayload("opus-order", "max"),
     )
 
 
@@ -831,6 +877,10 @@ def test_structured_red_state_commit_requires_exact_chain_records_before_git(
         branch="feature/structured-red-state",
         branch_base=start_commit,
         slice_count=1,
+        task_digest="a" * 64,
+        task_scope_patterns=(changed_path,),
+        target_branch="feature/structured-red-state",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
     ).bind_current_slice_git_boundary(
         start_commit=start_commit,
         scope_paths=(changed_path,),
@@ -843,13 +893,10 @@ def test_structured_red_state_commit_requires_exact_chain_records_before_git(
         config=orchestrator.OrchestratorConfig(repo_root=repository),
         allowed_roots=(repository,),
     )
-    driver.active_state = state
+    driver.bind_work_unit(state)
     changes = driver.collect_changes(start_commit)
-    bridge = ArtifactBridge(
-        ArtifactStore(repository, state.run_id),
-        now=lambda: "2026-08-30T10:00:00+00:00",
-    )
-    driver._artifact_bridge = bridge
+    bridge = driver._artifact_bridge
+    assert bridge is not None
     monkeypatch.setattr(driver, "assert_structured_decision_context", lambda: None)
     failing = ValidationAttestation(
         "validation-red",
@@ -884,7 +931,8 @@ def test_structured_red_state_commit_requires_exact_chain_records_before_git(
         findings=(),
         red_state_followup_slice="Slice 10",
     )
-    bridge.append(
+    stored_attestation = append_validation_authority(
+        bridge,
         attestation_payload(failing, "ar1-" + "0" * 64),
         logical_id=failing.attestation_id,
         idempotency_key="attestation:red",
@@ -898,7 +946,18 @@ def test_structured_red_state_commit_requires_exact_chain_records_before_git(
         driver.commit_slice(request)
     assert _git(repository, "rev-parse", "HEAD") == start_commit
 
-    bridge.append(
+    failing = replace(
+        failing,
+        records=(
+            ValidationRecord(ValidationStatus.FAIL, "pytest", 1, "fail:1"),
+        ),
+        output_digest=stored_attestation.payload.output_digest,
+    )
+    review = replace(review, validation=failing)
+    request = replace(request, attestation=failing, claude_review=review)
+
+    append_provider_decision_authority(
+        bridge,
         review_payload(
             review,
             work_unit_id=state.current_work_unit_id,
@@ -909,6 +968,7 @@ def test_structured_red_state_commit_requires_exact_chain_records_before_git(
         logical_id="review-claude-1-1",
         idempotency_key="review:red",
         fingerprint_sha256=changes.fingerprint,
+        operation="claude_slice_review",
     )
     passing = replace(
         failing,
@@ -2216,6 +2276,9 @@ def test_native_review_persists_open_status_rationale_for_authoritative_replay(
         branch="feature/native-open-rationale-replay",
         branch_base=head,
         slice_count=1,
+        task_digest="a" * 64,
+        task_scope_patterns=("src/runtime.py",),
+        target_branch="feature/native-open-rationale-replay",
         protocol_binding=ProtocolBinding(
             ProtocolMode.STRUCTURED_V2,
             "2",
@@ -2303,6 +2366,9 @@ def _finding_transition_driver(
         branch=f"feature/{run_id}",
         branch_base=head,
         slice_count=1,
+        task_digest="a" * 64,
+        task_scope_patterns=("src/runtime.py",),
+        target_branch=f"feature/{run_id}",
         protocol_binding=ProtocolBinding(
             ProtocolMode.STRUCTURED_V2,
             "2",
@@ -4114,6 +4180,7 @@ def test_audit_test_approval_is_projected_from_gate_record_authority_and_time(
     bridge = ArtifactBridge(
         ArtifactStore(tmp_path, state.run_id), now=lambda: created_at
     )
+    _append_run_binding(bridge, state)
     bridge.append(
         WorkflowTransitionPayload(
             str(unit.slice_id),
@@ -5361,6 +5428,20 @@ def test_finding_handoff_import_precedes_baseline_and_binds_first_work_unit(
 ) -> None:
     repository = _repository(tmp_path, "feature/finding-import")
     source = ArtifactBridge(ArtifactStore(repository, "source-plan-run"))
+    source_state = init_workflow_state(
+        run_id="source-plan-run",
+        task_file=str(repository / "inbox" / "source-plan.md"),
+        branch="feature/finding-import",
+        branch_base=_git(repository, "rev-parse", "HEAD"),
+        slice_count=1,
+        task_digest="a" * 64,
+        execution_mode="PLAN_ONLY",
+        task_scope_patterns=("docs/internal/plan.md",),
+        work_plan_path="docs/internal/plan.md",
+        target_branch="feature/finding-import",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+    )
+    _append_run_binding(source, source_state)
     source.append(
         PlanPayload(
             "docs/internal/plan.md",
@@ -5381,7 +5462,25 @@ def test_finding_handoff_import_precedes_baseline_and_binds_first_work_unit(
         idempotency_key="finding-C-01",
         fingerprint_sha256="a" * 64,
     )
-    review = source.append(
+    append_validation_authority(
+        source,
+        ValidationAttestationPayload(
+            (
+                ValidationResult(
+                    CommandSpec("pytest", ("python3", "-m", "pytest")),
+                    "pass", 0, "e" * 64,
+                ),
+            ),
+            Role.ORCHESTRATOR,
+            "e" * 64,
+            "ar1-" + "0" * 64,
+        ),
+        logical_id="validation-plan",
+        idempotency_key="validation-plan",
+        fingerprint_sha256="a" * 64,
+    )
+    review = append_provider_decision_authority(
+        source,
         ReviewPayload(
             Role.CLAUDE, "plan-review", "approved", ("C-01",), None,
             "native-claude-review-v2", "native-review-request-" + "c" * 64,
@@ -5390,6 +5489,7 @@ def test_finding_handoff_import_precedes_baseline_and_binds_first_work_unit(
         logical_id="plan-review",
         idempotency_key="plan-review",
         fingerprint_sha256="a" * 64,
+        operation="claude_plan_review",
     )
     export_id = orchestrator.stable_record_id(
         "source-plan-run", RecordType.FINDING_HANDOFF_EXPORT,
@@ -5503,6 +5603,7 @@ def _finding_export_driver(
         protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
     )
     bridge = ArtifactBridge(ArtifactStore(repository, state.run_id))
+    _append_run_binding(bridge, state)
     bridge.append(
         PlanPayload(
             "docs/internal/plan.md",
@@ -5523,7 +5624,25 @@ def _finding_export_driver(
         idempotency_key="finding-C-01",
         fingerprint_sha256="b" * 64,
     )
-    review = bridge.append(
+    attestation = append_validation_authority(
+        bridge,
+        ValidationAttestationPayload(
+            (
+                ValidationResult(
+                    CommandSpec("pytest", ("python3", "-m", "pytest")),
+                    "pass", 0, "e" * 64,
+                ),
+            ),
+            Role.ORCHESTRATOR,
+            "e" * 64,
+            "ar1-" + "0" * 64,
+        ),
+        logical_id="validation-plan",
+        idempotency_key="validation-plan",
+        fingerprint_sha256="b" * 64,
+    )
+    review = append_provider_decision_authority(
+        bridge,
         ReviewPayload(
             Role.CLAUDE, "plan-review", review_verdict, ("C-01",), None,
             "native-claude-review-v2", "native-review-request-" + "c" * 64,
@@ -5532,24 +5651,9 @@ def _finding_export_driver(
         logical_id="plan-review",
         idempotency_key=f"plan-review:{review_verdict}",
         fingerprint_sha256="b" * 64,
+        operation="claude_plan_review",
     )
     if bind_commit:
-        attestation = bridge.append(
-            ValidationAttestationPayload(
-                (
-                    ValidationResult(
-                        CommandSpec("pytest", ("python3", "-m", "pytest")),
-                        "pass", 0, "e" * 64,
-                    ),
-                ),
-                Role.ORCHESTRATOR,
-                "e" * 64,
-                "ar1-" + "0" * 64,
-            ),
-            logical_id="validation-plan",
-            idempotency_key="validation-plan",
-            fingerprint_sha256="b" * 64,
-        )
         bridge.append(
             BindingPayload(
                 "commit", "b" * 40, attestation.record_id, (review.record_id,)

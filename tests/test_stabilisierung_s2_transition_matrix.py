@@ -86,6 +86,10 @@ RESUME_ERROR_MARKERS = (
     "finding import differs from its revalidated source",
 )
 
+RUN_BINDING_REPLAY_MARKER = (
+    "record chain requires exactly one run identity and run profile"
+)
+
 BRIDGE_ERROR_MARKERS = (
     "referenced source record is not a finding export",
     "source export plan commit differs from state-v3",
@@ -521,7 +525,7 @@ EXPECTED_COMPARISON_COUNTS = {
 
 EXPECTED_STRICT_BODY_DIGESTS = {
     "src/artifact_bridge.py:review_payload_matches_result": "b3233be38c3e4729058eba7ffd325fc94d29d4f08bd5ccfd08de0e3557eaf612",
-    "src/artifact_migration.py:assert_run_binding_mirror": "e8febdf4104e65855caa2196ec8fad6f9e6ec5a81b3bdfc9a2ac1475daea9498",
+    "src/artifact_migration.py:assert_run_binding_mirror": "309b1243909d782df06f2ea62f6288a19aab6f9aa3763de23a4b950664d121c5",
     "src/artifact_migration.py:require_workflow_status_prefix": "964d356480288034c6dc52de377c2326c06d2db50d6aae52fd2b3d5dbcc5bdec",
     "src/artifact_migration.py:require_workflow_event_prefix": "2e9c88f52f65aeb0edfa9352f123f05c12c5a88ccdcfa590d813d5466bca1ddc",
     "src/artifact_migration.py:assert_workflow_status_mirror": "0d6ac0eec3998504048ccf74ee978930a4e2dfa3cd256e71268e143a774b7eae",
@@ -739,6 +743,8 @@ def test_migration_comparison_inventory_is_source_bound() -> None:
     for marker in RESUME_ERROR_MARKERS:
         assert marker in (source if marker == "exc.diagnostic.message" else source_strings)
         assert marker in document
+    assert RUN_BINDING_REPLAY_MARKER in _string_constants("src/artifact_replay.py")
+    assert RUN_BINDING_REPLAY_MARKER in document
 
 
 def test_bridge_error_inventory_is_source_bound() -> None:

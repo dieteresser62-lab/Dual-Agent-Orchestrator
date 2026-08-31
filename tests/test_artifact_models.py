@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import asdict, replace
 import json
 
 import artifact_models
@@ -32,6 +32,7 @@ from artifact_models import (
     ReviewPayload,
     ReviewEvidencePayload,
     Role,
+    RoleProfilePayload,
     RunIdentityPayload,
     RunProfilePayload,
     SliceBoundaryPayload,
@@ -71,6 +72,19 @@ CLAUDE_REQUEST_ID = "native-review-request-" + "b" * 64
 PROVIDER_MARKER, PROVIDER_DIGEST, PROVIDER_BYTES = provider_text_evidence(
     "provider diagnostic"
 )
+
+
+def test_run_profile_record_fields_are_role_keyed() -> None:
+    profile = RunProfilePayload(
+        RoleProfilePayload("implementer-model", "medium"),
+        RoleProfilePayload("reviewer-model", "high"),
+    )
+
+    assert asdict(profile) == {
+        "implementer": {"model": "implementer-model", "effort": "medium"},
+        "reviewer": {"model": "reviewer-model", "effort": "high"},
+    }
+    assert not {"codex", "claude"} & set(asdict(profile))
 
 
 def _agent_result(
@@ -128,7 +142,10 @@ def _record(payload, *, revision: int = 1) -> ArtifactRecord:  # type: ignore[no
         "IMPLEMENT",
         "docs/internal/task-audit.md",
     ),
-    RunProfilePayload("gpt-5.6-sol", "max", "opus", "high"),
+    RunProfilePayload(
+        RoleProfilePayload("gpt-5.6-sol", "max"),
+        RoleProfilePayload("opus", "high"),
+    ),
     WorkflowTransitionPayload(
         "1", "in_progress", "2", "codex_implementation", "in_progress"
     ),

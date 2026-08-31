@@ -29,6 +29,7 @@ from artifact_models import (
     ReviewEvidencePayload,
     ReviewPayload,
     Role,
+    RoleProfilePayload,
     RunIdentityPayload,
     RunProfilePayload,
     SliceBoundaryPayload,
@@ -154,6 +155,9 @@ def _records(
     *,
     include_gate_records: bool = True,
 ) -> None:
+    existing = ArtifactStore(repository, state.run_id).load_chain()
+    if not any(record.record_type is RecordType.RUN_IDENTITY for record in existing):
+        _run_records(repository, state)
     bridge = ArtifactBridge(ArtifactStore(repository, state.run_id))
     bridge.append(
         TaskPayload("feature/resume", ("src/resume.py",), "a" * 64),
@@ -220,7 +224,7 @@ def _run_records(
     binding = state.protocol_binding
     assert binding is not None
     bridge = ArtifactBridge(ArtifactStore(repository, state.run_id))
-    bridge.append(
+    identity_record = bridge.append(
         identity
         or RunIdentityPayload(
             state.task_file,
@@ -235,12 +239,21 @@ def _run_records(
         fingerprint_kind=FingerprintKind.CONTRACT,
     )
     bridge.append(
+        WorkflowEventPayload("run", None, "1", None, (identity_record.record_id,)),
+        logical_id=f"workflow-event-{identity_record.record_id}",
+        idempotency_key=f"workflow-event:{identity_record.record_id}",
+        fingerprint_sha256=identity_record.fingerprint.sha256,
+        fingerprint_kind=identity_record.fingerprint.kind,
+    )
+    bridge.append(
         profile
         or RunProfilePayload(
-            binding.codex_profile.model,
-            binding.codex_profile.effort,
-            binding.claude_profile.model,
-            binding.claude_profile.effort,
+            RoleProfilePayload(
+                binding.codex_profile.model, binding.codex_profile.effort
+            ),
+            RoleProfilePayload(
+                binding.claude_profile.model, binding.claude_profile.effort
+            ),
         ),
         logical_id="run-profile",
         idempotency_key="run-profile",
@@ -538,6 +551,36 @@ def _finding_handoff_resume_fixture(repository: Path):
         work_plan_path="docs/internal/plan.md",
     )
     source = ArtifactBridge(ArtifactStore(repository, "source-plan-run"))
+    source_identity = source.append(
+        RunIdentityPayload(
+            "inbox/backlog/source-plan.md",
+            "feature/resume",
+            "b" * 40,
+            "PLAN_ONLY",
+            None,
+        ),
+        logical_id="run-identity",
+        idempotency_key="run-identity",
+        fingerprint_sha256="b" * 64,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    source.append(
+        WorkflowEventPayload("run", None, "1", None, (source_identity.record_id,)),
+        logical_id=f"workflow-event-{source_identity.record_id}",
+        idempotency_key=f"workflow-event:{source_identity.record_id}",
+        fingerprint_sha256=source_identity.fingerprint.sha256,
+        fingerprint_kind=source_identity.fingerprint.kind,
+    )
+    source.append(
+        RunProfilePayload(
+            RoleProfilePayload("implementer-model", "medium"),
+            RoleProfilePayload("reviewer-model", "high"),
+        ),
+        logical_id="run-profile",
+        idempotency_key="run-profile",
+        fingerprint_sha256="b" * 64,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
     source.append(
         PlanPayload(
             "docs/internal/plan.md",
@@ -613,6 +656,7 @@ def _finding_handoff_resume_fixture(repository: Path):
         ),
     )
     source_replay = replay_artifacts(source.store.load_chain(), "source-plan-run")
+    _run_records(repository, state)
     local = ArtifactBridge(ArtifactStore(repository, state.run_id))
     local.append(
         TaskPayload("feature/resume", ("src/resume.py",), "a" * 64),
@@ -886,6 +930,7 @@ def test_later_work_unit_can_carry_open_finding_without_import_snapshot(
         state,
         work_units=(*state.work_units[:-1], carried_unit),
     )
+    _run_records(tmp_path, state)
     bridge = ArtifactBridge(ArtifactStore(tmp_path, state.run_id))
     bridge.append(
         TaskPayload(
@@ -1013,8 +1058,8 @@ def test_structured_state_rehydrates_from_matching_complete_chain(tmp_path: Path
     assert resolved.record_head_id is not None
     assert resolved.replay_result is not None
     assert resolved.replay_result.head_record_id == resolved.record_head_id
-    assert resolved.replay_result.run_identity is None
-    assert resolved.replay_result.run_profile is None
+    assert resolved.replay_result.run_identity is not None
+    assert resolved.replay_result.run_profile is not None
 
 
 @pytest.mark.parametrize(
@@ -1045,10 +1090,8 @@ def test_structured_resume_rejects_typed_run_binding_mismatch(
             tmp_path,
             state,
             profile=RunProfilePayload(
-                "foreign-codex",
-                "medium",
-                "foreign-claude",
-                "high",
+                RoleProfilePayload("foreign-codex", "medium"),
+                RoleProfilePayload("foreign-claude", "high"),
             ),
         )
     _records(tmp_path, state)
@@ -1070,6 +1113,7 @@ def test_pre_r2_chain_without_complete_status_prefix_is_rejected(
     prefix: str,
 ) -> None:
     state = _state(tmp_path)
+    _run_records(tmp_path, state)
     bridge = ArtifactBridge(ArtifactStore(tmp_path, state.run_id))
     bridge.append(
         TaskPayload("feature/resume", ("src/resume.py",), "a" * 64),
@@ -1098,6 +1142,7 @@ def test_pre_r3_chain_without_slice_boundary_prefix_is_rejected(
     tmp_path: Path,
 ) -> None:
     state = _state(tmp_path)
+    _run_records(tmp_path, state)
     bridge = ArtifactBridge(ArtifactStore(tmp_path, state.run_id))
     bridge.append(
         TaskPayload("feature/resume", ("src/resume.py",), "a" * 64),
@@ -1934,6 +1979,7 @@ def test_structured_resume_compares_correction_findings_with_their_own_round(
         open_findings=("C-07",),
         return_step=WorkflowStep.CODEX_FINAL_CORRECTION,
     )
+    _run_records(repository, second_round)
     bridge = ArtifactBridge(ArtifactStore(repository, second_round.run_id))
     bridge.append(
         TaskPayload("feature/resume", ("src/resume.py",), "a" * 64),
@@ -1974,6 +2020,7 @@ def test_structured_resume_rejects_invalid_latest_correction_round(
         open_findings=("C-07",),
         return_step=WorkflowStep.CODEX_FINAL_CORRECTION,
     )
+    _run_records(repository, second_round)
     bridge = ArtifactBridge(ArtifactStore(repository, second_round.run_id))
     bridge.append(
         TaskPayload("feature/resume", ("src/resume.py",), "a" * 64),

@@ -60,7 +60,7 @@ from artifact_models import (
     FingerprintKind, GateDecisionPayload, GatePayload, GateTransitionPayload,
     AgentResultPayload, InvocationFailurePayload, QuotaPausePayload, ReviewPayload,
     ReviewAnchor, ReviewAnchorPayload, ReviewValidationBindingPayload,
-    Role, TaskPayload, TransientRetryPayload,
+    Role, RoleProfilePayload, TaskPayload, TransientRetryPayload,
     BlobReference, ProviderContentPayload, ReviewPacketPayload,
     ValidationAttestationPayload, ValidationContentPayload,
     ValidationOutputContent,
@@ -778,18 +778,25 @@ class ProductionWorkflowDriver(WorkflowDriver):
         existing_chain = bridge.store.load_chain()
         existing_replay = None
         if existing_chain:
+            import_only_prefix = all(
+                isinstance(record.payload, FindingHandoffImportPayload)
+                for record in existing_chain
+            )
             existing_replay = replay_artifacts(
                 existing_chain,
                 state.run_id,
                 allow_incomplete_review_tail=True,
+                allow_finding_import_bootstrap=import_only_prefix,
             )
-            assert_run_binding_mirror(existing_replay, state, binding)
+            if not import_only_prefix:
+                assert_run_binding_mirror(existing_replay, state, binding)
             if existing_replay.pending_workflow_event_record_id is not None:
                 self._reconcile_pending_workflow_event(existing_replay)
                 existing_replay = replay_artifacts(
                     bridge.store.load_chain(),
                     state.run_id,
                     allow_incomplete_review_tail=True,
+                    allow_finding_import_bootstrap=import_only_prefix,
                 )
             require_workflow_event_prefix(existing_replay)
             if existing_replay.pending_review_record_id is not None:
@@ -798,10 +805,6 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 # here would turn the recoverable suffix into a chain-middle
                 # authority gap.
                 return
-            import_only_prefix = all(
-                isinstance(record.payload, FindingHandoffImportPayload)
-                for record in existing_replay.records
-            )
             if not import_only_prefix:
                 require_workflow_status_prefix(existing_replay)
                 require_gate_prefix(existing_replay)
@@ -844,10 +847,12 @@ class ProductionWorkflowDriver(WorkflowDriver):
         )
         bridge.append(
             RunProfilePayload(
-                codex_model=binding.codex_profile.model,
-                codex_effort=binding.codex_profile.effort,
-                claude_model=binding.claude_profile.model,
-                claude_effort=binding.claude_profile.effort,
+                implementer=RoleProfilePayload(
+                    binding.codex_profile.model, binding.codex_profile.effort
+                ),
+                reviewer=RoleProfilePayload(
+                    binding.claude_profile.model, binding.claude_profile.effort
+                ),
             ),
             logical_id="run-profile",
             idempotency_key="run-profile",
@@ -5754,7 +5759,11 @@ def _initialize_finding_handoff(
             fingerprint_sha256=task_contract.digest,
             fingerprint_kind=FingerprintKind.CONTRACT,
         )
-        local_replay = replay_artifacts(bridge.store.load_chain(), state.run_id)
+        local_replay = replay_artifacts(
+            bridge.store.load_chain(),
+            state.run_id,
+            allow_finding_import_bootstrap=True,
+        )
         reduction = reduce_findings(local_replay)
         findings = reduction.ledger.findings
     except (ArtifactBridgeError, ArtifactReplayError, ValueError) as exc:

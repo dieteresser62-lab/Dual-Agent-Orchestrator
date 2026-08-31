@@ -193,6 +193,11 @@ def test_root_roles_share_structured_artifact_authority_contract() -> None:
     for path in ROLE_FILES:
         text = path.read_text(encoding="utf-8")
         assert all(fragment in text for fragment in required), path.name
+        assert "Pre-R1 chains without those records remain readable" not in text
+        assert (
+            "A structured-v2 chain without exactly one of each record is "
+            "rejected fail-closed with `RECORD-MISSING` and without backfill"
+        ) in text
         section = text.split(required[0], 1)[1].split("\n## ", 1)[0].strip()
         sections.append(section)
     assert len(set(sections)) == 1

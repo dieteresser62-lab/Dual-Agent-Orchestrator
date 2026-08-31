@@ -1,7 +1,8 @@
 # S2 – Übergangs- und Divergenzmatrix
 
-Stand: 2026-08-31. Untersucht ist `structured-v2` einschließlich R9 auf dem
-Branches `feature/state-authority-consolidation`. Die Matrix beschreibt den
+Stand: 2026-08-31. Untersucht ist `structured-v2` einschließlich R9 und des
+R1-Nachzugs auf dem
+Branch `feature/state-authority-consolidation`. Die Matrix beschreibt den
 Istzustand; der spätere Authority-Cutover bleibt ausdrücklich aus. Normativ sind
 heute die append-only Records zusammen mit dem noch autoritativen
 `state-v3`-Mirror. `head.json`, Checkpoints, Audit-Markdown, Request-/Response-
@@ -40,8 +41,13 @@ finalen Review-Mirror in `orchestrator.py`).
 1. **Autoritativer Eingaberecord:** Neue R1-Läufe binden zuerst
    `RunIdentity` und `RunProfile`, danach folgt `Task`; ein atomarer
    Finding-Handoff-Import darf als vorbereitender Genesisrecord davorliegen.
-   Vor R1 geschriebene Ketten dürfen beide Runrecords auslassen. Erwartet wird
-   stets eine lückenlose Kette bis `head_record_id`; vor dem Replay werden
+   Jede replaybare Laufkette ohne genau einen Identity- und Profilrecord wird
+   seit dem R1-Nachzug mit `RECORD-MISSING` und dem Meldungsstamm
+   `record chain requires exactly one run identity and run profile` abgewiesen.
+   Nur der eng begrenzte,
+   ausschließlich aus einem Finding-Handoff-Import bestehende Schreibpräfix
+   darf bis zum unmittelbaren Baseline-Append noch unvollständig sein. Erwartet
+   wird stets eine lückenlose Kette bis `head_record_id`; vor dem Replay werden
    `ProtocolBinding` und Store-Kette geprüft.
 2. **State-/Cachefelder:** `version`, `run_id`, `protocol_binding` sowie
    `head.json`; kein fachlicher State wird bei der Prüfung geschrieben.
@@ -678,12 +684,14 @@ einem gemeinsamen Head/Digest-Abgleich und atomarer Neuprojektion.
    wiederverwendet werden.
 5. **Recoverable-Sonderfall:** kein `_recoverable_*`; direkte Queue-Recovery
    liest denselben Ledgerintent und dieselbe Source-/Destination-Regel. Eine
-   technische Ablehnung vor der ersten Workflowbaseline initialisiert vor der
-   Poison-Bewegung einen minimalen Ledgerprefix. Ist die Recordkette selbst
-   korrupt, verwendet die irreversible Quarantäne einen aus Run-ID, Taskdigest
-   und Quellname deterministisch herleitbaren Zielpfad, damit der Watcher nicht
-   in einer Endlosschleife bleibt; die korrupte Kette wird dabei weder gelesen
-   noch repariert. Weil eine korrupte Authority kein weiteres autoritatives
+   technische Ablehnung vor der ersten Workflowbaseline besitzt noch keine
+   vollständige R1-Laufbindung und wird deshalb vor jedem Ledgerappend
+   fail-closed abgewiesen. Wie bei einer korrupten Recordkette verwendet die
+   irreversible Quarantäne dann einen aus Run-ID, Taskdigest und Quellname
+   deterministisch herleitbaren Zielpfad, damit der Watcher nicht in einer
+   Endlosschleife bleibt; die fehlende oder korrupte Kette wird dabei weder
+   ergänzt, gelesen noch repariert. Weil eine nicht verfügbare Authority kein
+   weiteres autoritatives
    Record sicher aufnehmen kann, ist diese Quarantäne ausdrücklich kein
    abgeschlossenes strukturiertes Side Effect: Die gebundene Poison-Diagnose
    dokumentiert den Abbruch, während die deterministische Bewegung ausschließlich
@@ -748,7 +756,11 @@ die Export-Planbindung in A02/B03. Die grammatisch plurale R3-Meldung
 `slice boundaries differ from state-v3` ist zusätzlich in der direkten
 Resume-Fehlerliste gebunden.
 
-### 30 direkte `ArtifactResumeError`-Stellen
+### 30 Meldungsstämme aus 32 direkten `ArtifactResumeError`-Stellen
+
+Mehrere Raise-Stellen teilen bewusst denselben stabilen Meldungsstamm; die
+Tabelle inventarisiert daher 30 Stämme, während der AST-Zähler 32 direkte
+`ArtifactResumeError`-Stellen bindet.
 
 | Meldungsstamm | Kante |
 |---|---|
@@ -919,7 +931,9 @@ ist einfach der Eingabestand, aus dem die Projektion neu entsteht.
 
 `assert_run_binding_mirror()` prüft unabhängig von den Recovery-Lücken frühe
 Runidentity-/Profilrecords gegen ihren Mirror und ist mit Vergleichszahl und
-vollständigem Funktionsdigest eingefroren.
+vollständigem Funktionsdigest eingefroren. Der Rollenumbau hält die inventarisierten
+sechs AST-Vergleiche unverändert; der geänderte Funktionsdigest ist in der Matrix-
+Regression aktualisiert.
 
 `require_workflow_status_prefix()` weist Vor-R2-Ketten ohne vollständigen
 Transition-/Policyprefix ab. `assert_workflow_status_mirror()` vergleicht
@@ -1070,7 +1084,7 @@ keinen fett markierten STOP enthält.
 | `invocation_failures[*].parse_path/source_timezone/reset_at_utc/safety_margin_seconds` | A | **In R6 geschlossen:** Gleichnamige Felder in `InvocationFailurePayload` plus `resume_at_utc`; Schreiber: Quota-Parser/Scheduler. Recordet werden sowohl geparste Herkunft (`parse_path`, `source_timezone`, Reset) und Marge als auch das berechnete Ziel. Der Domainvalidator verlangt `resume_at_utc = reset_at_utc + safety_margin_seconds`. |
 | `invocation_failures[*].auto_resume_count/automatic_resume/diff_fingerprint` | A | **In R6 geschlossen:** Gleichnamige Felder in `InvocationFailurePayload` plus `decision_at_utc` und `retry_delay_seconds`; Schreiber: Retry-/Resume-Policy. Netzwerkziele müssen Entscheidung + Delay entsprechen. Genau ein vorausliegender Failure-Record darf den Halt deterministisch in den Mirror projizieren; mehrdeutige oder fehlende R6-Records stoppen. |
 | `protocol_binding.mode/schema/transports` | C | Der erste akzeptierte `ArtifactRecord.schema_version == "2"` legt `mode=structured-v2` und `schema_version=2` fest. Das geschlossene Schema 2 erzwingt für `AgentResultPayload.transport_schema` den Wert `native-codex-v2` und für `ReviewPayload.transport_schema` `native-claude-review-v2`; andere Transporte sind in diesem Präfix unzulässig. |
-| `protocol_binding.codex_profile/claude_profile` | A | **In R1 geschlossen:** `RunProfilePayload.codex_model/codex_effort/claude_model/claude_effort`; Schreiber: erster strukturierter Checkpoint aus CLI-/Taskdefault vor dem ersten Providerstart. `ProviderAttemptPayload` bestätigt die Bindung je Aufruf. |
+| `protocol_binding.codex_profile/claude_profile` | A | **In R1 geschlossen und im R1-Nachzug rollenschlüssig:** `RunProfilePayload.implementer.model/effort` und `reviewer.model/effort`; Schreiber: erster strukturierter Checkpoint aus CLI-/Taskdefault vor dem ersten Providerstart. Die Providernamen bleiben nur im State-v3-Mirror, nicht im Recordfeldnamen. `ProviderAttemptPayload` bestätigt die Bindung je Aufruf. |
 | `ContractResult.red_state_followup_slice` in `runtime_history.reviews/latest_claude_review` | A | **In R7 geschlossen:** `StepContract.red_state_followup_slice` wird über `NativeReviewContext` in `ContractResult` und den approved, fingerprintgebundenen `ReviewPayload` getragen; Schreiber: `persist_native_review_contract()`. Eine vollständige fehlgeschlagene Validation ist damit nur mit benannter Folgeslice autorisierbar; ein Commit ohne diesen Record bleibt abgewiesen. |
 | `ContractResult.test_files` | A | **In R7 geschlossen:** `ReviewPayload.test_files`; Schreiber: `persist_native_review_contract()` aus dem exakten `NativeReviewContext`. Replay und Mirrorvergleich bewahren die sortierte Pfadliste. |
 | `ContractResult.pre_mortem` | A | **In R7 geschlossen:** `ReviewPayload.pre_mortem`; Schreiber: `persist_native_review_contract()`. Approvalpolicy und Audit lesen den reviewer-eigenen Text. |
@@ -1309,16 +1323,44 @@ Auditereignisrekonstruktion einschließlich einer in den Final-Review
 Reviewrunden. Die Providernamen-Baseline, Schema-/Protokollversion 2 und das
 Inventar der `_recoverable_*`-Sonderfälle blieben unverändert.
 
+#### R1-Nachzug-Suitelaufzeit
+
+Der vollständige WSL-Lauf vom 31. August 2026 mit
+`python3 -m pytest tests/ -v` ist nach der Opus-Korrekturrunde grün:
+**1348 passed in 207,42 s**. Gegenüber der exakten R9-Messung von
+**1344 passed in 197,22 s** sind das vier zusätzliche Akzeptanzfälle und
+**10,20 s beziehungsweise 5,2 %** mehr von Pytest
+ausgewiesene Laufzeit; gegenüber der im Auftrag gerundeten 200-s-Baseline
+beträgt der Anstieg **7,42 s beziehungsweise 3,7 %**. Die neuen Abnahmepunkte
+binden die rollenschlüssige Profilform, die vollständige Runbindung, den
+schreibfreien Vor-Baseline-Poisonpfad und die produktive Striktheit der
+öffentlichen Projektionsfunktionen. Schema-/Protokollversion 2 und das Inventar
+der `_recoverable_*`-Sonderfälle bleiben unverändert.
+
 #### Entscheidung zu Schema 2 und Bestandsrecords
 
 R1 ergänzt `RunIdentityPayload` und `RunProfilePayload` additiv. Beide werden
 beim ersten strukturierten Checkpoint vor dem ersten Workflowdispatch und damit
 vor jedem Providerstart geschrieben. Replay projiziert die beiden typisierten
-Payloads ohne State- oder Dateisystemzugriff; Resume vergleicht vorhandene
-Runrecords fail-closed mit dem State-v3-Mirror. Vor R1 geschriebene Ketten ohne
-beide Recordtypen bleiben gültig und liefern für diese Projektionen `None`.
+Payloads ohne State- oder Dateisystemzugriff; Resume vergleicht die
+verpflichtenden Runrecords fail-closed mit dem State-v3-Mirror. Der R1-Nachzug
+weist Ketten ohne einen der beiden Recordtypen mit `RECORD-MISSING` ab. Das
+Profil ist im Record ausschließlich über die Rollen `implementer` und
+`reviewer` mit jeweils `model` und `effort` benannt; die State-v3-Projektion
+behält ihre bisherigen Mirrorfeldnamen.
+Da jede akzeptierte Laufkette nun einen `RunIdentityPayload` enthält, greifen
+die R7-/R8-Authorityprüfungen für native Decisions, Reviewcontracts und deren
+Content bei produktiver Defaultprojektion unbedingt. Nur explizit als
+Reducer-Fixture gekennzeichnete Tests dürfen diese späteren Authorityschichten
+abschalten; die öffentlichen Projektionsfunktionen bleiben mit produktiver
+Striktheit getestet.
 `protocol_binding.mode/schema/transports` bleibt Gruppe C und erhält keinen
 eigenen Record. Schema- und Transportversionen bleiben unverändert bei 2.
+
+Die Providernamen-Ratsche sinkt für `src/artifact_models.py` von
+`{codex: 22, claude: 18}` auf den Vor-R1-Stand `{codex: 14, claude: 10}`.
+Auch das betroffene Artifact-Schema sinkt von `{16, 16}` auf `{12, 12}`;
+es findet somit keine Verlagerung der entfernten Recordfeldnamen statt.
 
 R2 ergänzt `WorkflowTransitionPayload` und `WorkflowPolicyPayload` ebenfalls
 additiv in Schema 2, ändert aber bewusst die Lesepolicy: Jede fortsetzbare

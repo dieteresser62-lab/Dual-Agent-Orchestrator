@@ -101,14 +101,20 @@
         "audit_report_path": {"oneOf": [{"$ref": "#/$defs/path"}, {"type": "null"}]}
       }
     },
+    "role_profile": {
+      "type": "object", "additionalProperties": false,
+      "required": ["model", "effort"],
+      "properties": {
+        "model": {"$ref": "#/$defs/non_empty"},
+        "effort": {"enum": ["low", "medium", "high", "xhigh", "max"]}
+      }
+    },
     "run_profile": {
       "type": "object", "additionalProperties": false,
-      "required": ["codex_model", "codex_effort", "claude_model", "claude_effort"],
+      "required": ["implementer", "reviewer"],
       "properties": {
-        "codex_model": {"$ref": "#/$defs/non_empty"},
-        "codex_effort": {"enum": ["low", "medium", "high", "xhigh", "max"]},
-        "claude_model": {"$ref": "#/$defs/non_empty"},
-        "claude_effort": {"enum": ["low", "medium", "high", "xhigh", "max"]}
+        "implementer": {"$ref": "#/$defs/role_profile"},
+        "reviewer": {"$ref": "#/$defs/role_profile"}
       }
     },
     "workflow_transition": {

@@ -15,6 +15,9 @@ from artifact_models import (
     ArtifactValidationError,
     Fingerprint,
     FingerprintKind,
+    RoleProfilePayload,
+    RunIdentityPayload,
+    RunProfilePayload,
     SideEffectPayload,
     stable_side_effect_key,
 )
@@ -52,7 +55,32 @@ DIGEST = "a" * 64
 
 
 def _bridge(tmp_path: Path, run_id: str = "side-effect-run") -> ArtifactBridge:
-    return ArtifactBridge(ArtifactStore(tmp_path, run_id))
+    store = ArtifactStore(tmp_path, run_id)
+    bridge = ArtifactBridge(store, now=lambda: "2026-08-30T09:00:00+00:00")
+    bridge.append(
+        RunIdentityPayload(
+            "inbox/backlog/side-effect.md",
+            "feature/side-effect-ledger",
+            "b" * 40,
+            "IMPLEMENT",
+            None,
+        ),
+        logical_id="run-identity",
+        idempotency_key="run-identity",
+        fingerprint_sha256=DIGEST,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    bridge.append(
+        RunProfilePayload(
+            RoleProfilePayload("implementer-model", "medium"),
+            RoleProfilePayload("reviewer-model", "high"),
+        ),
+        logical_id="run-profile",
+        idempotency_key="run-profile",
+        fingerprint_sha256=DIGEST,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    return ArtifactBridge(store)
 
 
 def _spec(effect_class: str, operation: tuple[str, ...]) -> SideEffectSpec:
@@ -130,27 +158,21 @@ def test_internal_marker_is_distinct_per_work_unit_but_projects_legacy_marker(
     )
 
 
-def test_replay_rejects_result_without_intent() -> None:
+def test_replay_rejects_result_without_intent(tmp_path: Path) -> None:
     operation = ("result.json", "b" * 64)
     key = stable_side_effect_key("file_write", "2", operation)
     payload = SideEffectPayload(
         key, "file_write", "2", operation, "result", "b" * 64
     )
-    record = ArtifactRecord.create(
-        run_id="side-effect-run",
-        logical_id=(
-            "side-effect-"
-            + hashlib.sha256(key.encode()).hexdigest()[:32]
-        ),
-        revision=1,
-        fingerprint=Fingerprint(FingerprintKind.IMPLEMENTATION, DIGEST),
-        predecessor_ids=(),
-        created_at="2026-08-30T10:00:00+00:00",
+    bridge = _bridge(tmp_path)
+    record = bridge.append(
+        payload,
+        logical_id="side-effect-" + hashlib.sha256(key.encode()).hexdigest()[:32],
         idempotency_key="orphan-side-effect-result",
-        payload=payload,
+        fingerprint_sha256=DIGEST,
     )
     with pytest.raises(ArtifactReplayError, match="begin with revision 1 intent"):
-        replay_artifacts((record,), "side-effect-run")
+        replay_artifacts(bridge.store.load_chain(), "side-effect-run")
 
 
 def test_bridge_rejects_result_without_authoritative_intent(tmp_path: Path) -> None:
@@ -718,7 +740,7 @@ def test_failed_outbox_move_never_records_result_before_destination_digest(
     assert queue_effect.result is None
 
 
-def test_empty_chain_is_initialized_before_queue_move(tmp_path: Path) -> None:
+def test_empty_chain_is_rejected_before_queue_move(tmp_path: Path) -> None:
     inbox = tmp_path / "inbox"
     failed = tmp_path / "failed"
     inbox.mkdir()
@@ -727,22 +749,51 @@ def test_empty_chain_is_initialized_before_queue_move(tmp_path: Path) -> None:
     source.write_bytes(b"task")
     digest = sha256_bytes(b"task")
 
-    destination = move_to_outbox_with_ledger(
+    with pytest.raises(ArtifactReplayError, match="RECORD-MISSING"):
+        move_to_outbox_with_ledger(
+            source,
+            failed,
+            repository_root=tmp_path,
+            run_id="pre-baseline-run",
+            task_digest=digest,
+            source_name="task.md.poison",
+        )
+
+    assert source.is_file()
+    assert tuple(failed.iterdir()) == ()
+    assert ArtifactStore(tmp_path, "pre-baseline-run").load_chain() == ()
+
+
+def test_empty_chain_uses_deterministic_poison_quarantine_without_records(
+    tmp_path: Path,
+) -> None:
+    inbox = tmp_path / "inbox"
+    failed = tmp_path / "failed"
+    inbox.mkdir()
+    failed.mkdir()
+    source = inbox / "task.md"
+    source.write_bytes(b"task")
+    digest = sha256_bytes(b"task")
+    diagnostics: list[str] = []
+
+    destination = move_poison_to_outbox_recoverably(
         source,
         failed,
         repository_root=tmp_path,
         run_id="pre-baseline-run",
         task_digest=digest,
         source_name="task.md.poison",
+        quarantine_diagnostic=diagnostics.append,
     )
 
-    replay = replay_artifacts(
-        ArtifactStore(tmp_path, "pre-baseline-run").load_chain(),
-        "pre-baseline-run",
+    assert destination.name == (
+        f"quarantine-pre-baseline-run-{digest[:16]}-task.md.poison"
     )
-    assert destination.is_file()
-    assert any(item.effect_class == "ledger" and item.result == "initialized" for item in replay.side_effects)
-    assert any(item.effect_class == "queue_move" and item.result == digest for item in replay.side_effects)
+    assert destination.read_bytes() == b"task"
+    assert not source.exists()
+    assert len(diagnostics) == 1
+    assert "RECORD-MISSING" in diagnostics[0]
+    assert ArtifactStore(tmp_path, "pre-baseline-run").load_chain() == ()
 
 
 def test_corrupt_chain_uses_deterministic_poison_quarantine(tmp_path: Path) -> None:

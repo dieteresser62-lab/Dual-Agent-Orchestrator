@@ -24,6 +24,8 @@ from artifact_models import (
     ArtifactRecord,
     BindingPayload,
     CorrectionWorkUnitPayload,
+    FindingSeverity,
+    FindingTransitionPayload,
     FingerprintKind,
     InvocationFailurePayload,
     ProviderInputMeasurementPayload,
@@ -37,11 +39,14 @@ from artifact_models import (
     ReviewPacketPayload,
     ReviewStopRequestPayload,
     Role,
+    RoleProfilePayload,
+    RunIdentityPayload,
+    RunProfilePayload,
     TransientRetryPayload,
     WorkUnitPayload,
     provider_text_evidence,
 )
-from artifact_replay import ReplayDiagnosticCode, replay_artifacts
+from artifact_replay import ArtifactReplayError, ReplayDiagnosticCode, replay_artifacts
 from artifact_store import ArtifactStore
 from artifact_projection import ArtifactAuditProjection
 from content_authority import ValidationCapture, validation_output_digest
@@ -612,7 +617,75 @@ def _legacy_final_denial_recovery_case(
     )
 
     bridge = ArtifactBridge(ArtifactStore(repository, correction.run_id))
+    binding = correction.protocol_binding
+    assert binding is not None
     bridge.append(
+        RunIdentityPayload(
+            correction.task_file,
+            correction.branch,
+            correction.branch_base,
+            correction.execution_mode,
+            correction.audit_report_path,
+        ),
+        logical_id="run-identity",
+        idempotency_key="run-identity",
+        fingerprint_sha256=correction.task_digest,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    bridge.append(
+        RunProfilePayload(
+            RoleProfilePayload(
+                binding.codex_profile.model, binding.codex_profile.effort
+            ),
+            RoleProfilePayload(
+                binding.claude_profile.model, binding.claude_profile.effort
+            ),
+        ),
+        logical_id="run-profile",
+        idempotency_key="run-profile",
+        fingerprint_sha256=correction.task_digest,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    bridge.append(
+        WorkUnitPayload(
+            str(state.current_slice_id),
+            1,
+            state.current_slice.scope_paths,
+        ),
+        logical_id=f"work-unit-{state.current_work_unit_id}",
+        idempotency_key="legacy-final-denial-work-unit",
+        fingerprint_sha256=correction.task_digest,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    for finding_id in sorted({*signature[4], *correction_finding_ids}):
+        bridge.append(
+            FindingTransitionPayload(
+                finding_id=finding_id,
+                reporter=Role.CLAUDE,
+                actor=Role.CLAUDE,
+                action="opened",
+                severity=FindingSeverity.BLOCKER,
+                finding_status="open",
+                rationale=f"Historical final denial opened {finding_id}.",
+                work_unit_id=signature[0],
+                summary=f"Historical final denial finding {finding_id}.",
+                acceptance_test=f"Correction closes {finding_id}.",
+                origin_slice_id="final",
+                origin_round_number=1,
+            ),
+            logical_id=f"finding-{finding_id}",
+            idempotency_key=f"legacy-final-denial:{finding_id}:opened",
+            fingerprint_sha256=signature[2],
+        )
+    append_validation_authority(
+        bridge,
+        attestation_payload(attestation, "ar1-" + "0" * 64),
+        logical_id=attestation.attestation_id,
+        idempotency_key="legacy-final-denial-attestation",
+        fingerprint_sha256=signature[2],
+    )
+    append_provider_decision_authority(
+        bridge,
         ReviewPayload(
             reviewer=Role.CLAUDE,
             work_unit_id=signature[0],
@@ -626,6 +699,7 @@ def _legacy_final_denial_recovery_case(
         logical_id=f"review-claude-{signature[0]}-1",
         idempotency_key="legacy-final-denial-review",
         fingerprint_sha256=signature[2],
+        operation=state.current_step.value,
     )
     bridge.append(
         CorrectionWorkUnitPayload(
@@ -643,7 +717,7 @@ def _legacy_final_denial_recovery_case(
     return correction, signature, bridge.store.load_chain()
 
 
-def test_external_side_effect_guard_accepts_legacy_final_denial_correction_transition(
+def test_external_side_effect_guard_accepts_bound_final_denial_transition(
     tmp_path: Path,
 ) -> None:
     repository = _repository(tmp_path, "feature/structured-regression")
@@ -1556,7 +1630,7 @@ def test_unbound_historical_state_keeps_legacy_resume_mode(tmp_path: Path) -> No
     assert ArtifactStore(repository, historical.run_id).load_chain() == ()
 
 
-def test_pre_schema_failure_artifact_chain_replays_without_synthesized_facts(
+def test_pre_r1_failure_artifact_chain_is_rejected_without_synthesized_facts(
     tmp_path: Path,
 ) -> None:
     store = ArtifactStore(tmp_path, "pre-schema-failure-chain")
@@ -1579,27 +1653,21 @@ def test_pre_schema_failure_artifact_chain_replays_without_synthesized_facts(
         idempotency_key="measurement:legacy",
         fingerprint_sha256="a" * 64,
     )
-    started = bridge.start_provider_attempt(
-        measurement_record=measurement,
-        binding_fingerprint="a" * 64,
-        work_unit_id="1",
-    )
-    bridge.finish_provider_attempt(
-        started, duration_seconds=1.0, failure_kind="network", usage=None
-    )
     before = store.load_chain()
 
-    first_replay = replay_artifacts(before, store.run_id)
-    after = store.load_chain()
-    second_replay = replay_artifacts(after, store.run_id)
+    with pytest.raises(ArtifactReplayError, match="RECORD-MISSING"):
+        bridge.start_provider_attempt(
+            measurement_record=measurement,
+            binding_fingerprint="a" * 64,
+            work_unit_id="1",
+        )
 
+    after = store.load_chain()
     assert after == before
-    assert first_replay.records == second_replay.records
     assert Counter(record.record_type for record in after) == Counter(
         {
             RecordType.WORK_UNIT: 1,
             RecordType.PROVIDER_INPUT_MEASUREMENT: 1,
-            RecordType.PROVIDER_ATTEMPT: 2,
         }
     )
     assert not any(

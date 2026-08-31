@@ -339,6 +339,7 @@ def replay_artifacts(
     require_content_authority: bool | None = None,
     require_review_authority: bool | None = None,
     allow_incomplete_review_tail: bool = False,
+    allow_finding_import_bootstrap: bool = False,
 ) -> ArtifactReplayResult:
     """Validate and reduce ``records`` without I/O or mutation."""
     chain = tuple(records)
@@ -427,6 +428,24 @@ def replay_artifacts(
         seen_keys.add(record.idempotency_key)
         seen_revisions.add(revision_key)
         latest_revisions[logical_key] = record.revision
+
+    has_run_identity = RecordType.RUN_IDENTITY in singleton_types
+    has_run_profile = RecordType.RUN_PROFILE in singleton_types
+    finding_import_bootstrap = (
+        allow_finding_import_bootstrap
+        and all(isinstance(record.payload, FindingHandoffImportPayload) for record in chain)
+    )
+    if (not has_run_identity or not has_run_profile) and not finding_import_bootstrap:
+        missing = []
+        if not has_run_identity:
+            missing.append("run identity")
+        if not has_run_profile:
+            missing.append("run profile")
+        _fail(
+            ReplayDiagnosticCode.RECORD_MISSING,
+            "record chain requires exactly one run identity and run profile; missing "
+            + " and ".join(missing),
+        )
 
     strict_content = (
         require_content_authority
@@ -849,12 +868,12 @@ def project_workflow_state(replay: ArtifactReplayResult) -> ReplayedWorkflowStat
             "claude_review_transport": "native-claude-review-v2",  # allowlist:provider -- canonical protocol binding
             "codex_result_transport": "native-codex-v2",  # allowlist:provider -- canonical protocol binding
             "codex_profile": {  # allowlist:provider -- canonical state-v3 field
-                "model": profile.codex_model,  # allowlist:provider -- canonical record field
-                "effort": profile.codex_effort,  # allowlist:provider -- canonical record field
+                "model": profile.implementer.model,
+                "effort": profile.implementer.effort,
             },
             "claude_profile": {  # allowlist:provider -- canonical state-v3 field
-                "model": profile.claude_model,  # allowlist:provider -- canonical record field
-                "effort": profile.claude_effort,  # allowlist:provider -- canonical record field
+                "model": profile.reviewer.model,
+                "effort": profile.reviewer.effort,
             },
         },
         "bootstrap_checks": tuple(

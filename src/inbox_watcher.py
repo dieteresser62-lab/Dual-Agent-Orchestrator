@@ -623,22 +623,6 @@ def move_to_outbox_with_ledger(
     bridge = ArtifactBridge(ArtifactStore(repository_root.resolve(), run_id))
     source = _canonical(task_file)
     chain = bridge.store.load_chain()
-    if not chain:
-        initializer = ("structured-v2-side-effect-ledger",)
-        bridge.record_side_effect_intent(
-            effect_class="ledger",
-            work_unit_id="run",
-            operation=initializer,
-            fingerprint_sha256=task_digest,
-        )
-        bridge.record_side_effect_result(
-            effect_class="ledger",
-            work_unit_id="run",
-            operation=initializer,
-            result="initialized",
-            fingerprint_sha256=task_digest,
-        )
-        chain = bridge.store.load_chain()
     replay = replay_artifacts(chain, run_id)
     initializers = tuple(
         item

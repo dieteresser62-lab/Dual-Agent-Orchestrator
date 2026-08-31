@@ -22,6 +22,9 @@ from artifact_models import (
     GatePayload,
     ReviewPayload,
     Role,
+    RoleProfilePayload,
+    RunIdentityPayload,
+    RunProfilePayload,
     ValidationAttestationPayload,
     ValidationRequestPayload,
     ValidationResult,
@@ -31,17 +34,94 @@ from artifact_models import (
 from artifact_projection import (
     ArtifactAuditProjection,
     ArtifactProjectionError,
-    render_artifact_sections,
+    render_artifact_sections as render_artifact_sections_checked,
     render_replay_sections,
-    semantic_artifact_digest,
+    semantic_artifact_digest as semantic_artifact_digest_checked,
 )
-from artifact_replay import replay_artifacts
+from artifact_replay import replay_artifacts as replay_artifacts_checked
 from artifact_bridge import ArtifactBridge
 from artifact_store import ArtifactStore
 from artifact_models import (
     ProviderInputComponentPayload, ProviderInputMeasurementPayload,
     ProviderUsagePayload,
 )
+
+
+def _bind_records(
+    records: tuple[ArtifactRecord, ...] | list[ArtifactRecord],
+    run_id: str,
+    fingerprint: Fingerprint,
+) -> tuple[ArtifactRecord, ...]:
+    bound = list(records)
+    for logical_id, payload in (
+        (
+            "run-identity",
+            RunIdentityPayload("task.md", "feature/test", "b" * 40, "IMPLEMENT", None),
+        ),
+        (
+            "run-profile",
+            RunProfilePayload(
+                RoleProfilePayload("implementer-model", "medium"),
+                RoleProfilePayload("reviewer-model", "high"),
+            ),
+        ),
+    ):
+        bound.append(
+            ArtifactRecord.create(
+                run_id=run_id,
+                logical_id=logical_id,
+                revision=1,
+                fingerprint=fingerprint,
+                predecessor_ids=((bound[-1].record_id,) if bound else ()),
+                created_at=f"2026-08-18T10:59:{len(bound):02d}+00:00",
+                idempotency_key=logical_id,
+                payload=payload,
+            )
+        )
+    return tuple(bound)
+
+
+def _bind_bridge(bridge: ArtifactBridge) -> None:
+    for logical_id, payload in (
+        (
+            "run-identity",
+            RunIdentityPayload("task.md", "feature/test", "b" * 40, "IMPLEMENT", None),
+        ),
+        (
+            "run-profile",
+            RunProfilePayload(
+                RoleProfilePayload("implementer-model", "medium"),
+                RoleProfilePayload("reviewer-model", "high"),
+            ),
+        ),
+    ):
+        bridge.append(
+            payload,
+            logical_id=logical_id,
+            idempotency_key=logical_id,
+            fingerprint_sha256="a" * 64,
+        )
+
+
+def replay_artifacts(records, expected_run_id):  # type: ignore[no-untyped-def]
+    return replay_artifacts_checked(
+        records,
+        expected_run_id,
+        require_content_authority=False,
+        require_review_authority=False,
+    )
+
+
+def _render_fixture_sections(records):  # type: ignore[no-untyped-def]
+    chain = tuple(records)
+    run_id = chain[0].run_id if chain else "empty-projection"
+    return render_replay_sections(replay_artifacts(chain, run_id))
+
+
+def _semantic_fixture_digest(records):  # type: ignore[no-untyped-def]
+    chain = tuple(records)
+    run_id = chain[0].run_id if chain else "empty-projection"
+    return replay_artifacts(chain, run_id).semantic_digest
 
 
 def _chain() -> tuple[ArtifactRecord, ...]:
@@ -124,14 +204,63 @@ def _chain() -> tuple[ArtifactRecord, ...]:
             approval_ids=(records[3].record_id,),
         ),
     )
-    return (*records, binding)
+    return _bind_records((*records, binding), "run-5", binding.fingerprint)
+
+
+def test_public_projection_helpers_use_production_strict_replay() -> None:
+    fingerprint = Fingerprint(FingerprintKind.IMPLEMENTATION, "a" * 64)
+    bound = list(_bind_records((), "strict-projection", fingerprint))
+
+    accepted = replay_artifacts_checked(tuple(bound), "strict-projection")
+    assert semantic_artifact_digest_checked(tuple(bound)) == accepted.semantic_digest
+    assert render_artifact_sections_checked(tuple(bound)) == render_replay_sections(
+        accepted
+    )
+
+    for logical_id, payload in (
+        ("work-unit-1", WorkUnitPayload("1", 1, ("src/a.py",))),
+        (
+            "agent-1-codex_implementation-1",
+            AgentResultPayload(
+                Role.CODEX,
+                "1",
+                "ready",
+                (),
+                transport_schema="native-codex-v2",
+                request_id="native-codex-request-" + "b" * 64,
+                response_sha256="c" * 64,
+            ),
+        ),
+    ):
+        bound.append(
+            ArtifactRecord.create(
+                run_id="strict-projection",
+                logical_id=logical_id,
+                revision=1,
+                fingerprint=fingerprint,
+                predecessor_ids=(bound[-1].record_id,),
+                created_at=f"2026-08-18T11:00:0{len(bound)}+00:00",
+                idempotency_key=logical_id,
+                payload=payload,
+            )
+        )
+
+    for projector in (
+        render_artifact_sections_checked,
+        semantic_artifact_digest_checked,
+    ):
+        with pytest.raises(
+            ArtifactProjectionError,
+            match="native decision has no unique earlier provider-content record",
+        ):
+            projector(tuple(bound))
 
 
 def test_same_chain_renders_byte_identically_in_record_sequence() -> None:
     chain = _chain()
 
-    first = render_artifact_sections(chain)
-    second = render_artifact_sections(chain)
+    first = _render_fixture_sections(chain)
+    second = _render_fixture_sections(chain)
 
     assert first == second
     table = first["decision-table"]
@@ -170,7 +299,9 @@ def test_projection_shows_import_origin_and_source_lifecycle_as_history() -> Non
         payload=WorkUnitPayload("1", 1, ("src/a.py",), ("C-01",), imported.record_id),
     )
 
-    sections = render_artifact_sections((imported, unit))
+    sections = _render_fixture_sections(
+        _bind_records((imported, unit), "target-run", imported.fingerprint)
+    )
     assert "Finding-Import · fremde Vorgeschichte" in sections["approval-status"]
     assert "source-run" in sections["approval-status"]
     assert "imported:opened" in sections["findings"]
@@ -178,7 +309,7 @@ def test_projection_shows_import_origin_and_source_lifecycle_as_history() -> Non
 
 
 def test_projection_has_one_deduplicated_full_value_evidence_table() -> None:
-    sections = render_artifact_sections(_chain())
+    sections = _render_fixture_sections(_chain())
     document = "\n".join(sections[key] for key in sections)
     heading = "### Nachweis vollständiger Bindungswerte"
     assert document.count(heading) == 1
@@ -209,11 +340,12 @@ def test_projection_has_one_deduplicated_full_value_evidence_table() -> None:
 def test_every_projection_section_has_a_human_readable_event_or_table_form(
     key: str, human_readable_form: str
 ) -> None:
-    assert human_readable_form in render_artifact_sections(_chain())[key]
+    assert human_readable_form in _render_fixture_sections(_chain())[key]
 
 
 def test_projection_renders_native_finding_convergence_from_records(tmp_path) -> None:  # type: ignore[no-untyped-def]
     bridge = ArtifactBridge(ArtifactStore(tmp_path, "run-convergence"))
+    _bind_bridge(bridge)
     bridge.append(
         CorrectionWorkUnitPayload(
             slice_id="1",
@@ -276,7 +408,7 @@ def test_projection_renders_native_finding_convergence_from_records(tmp_path) ->
         fingerprint_sha256="b" * 64,
     )
 
-    rendered = render_artifact_sections(bridge.store.load_chain())["findings"]
+    rendered = _render_fixture_sections(bridge.store.load_chain())["findings"]
 
     assert "### Native convergence summary" in rendered
     assert "| `C-01` | `7` | `2` |" in rendered
@@ -325,7 +457,9 @@ def test_projection_renders_native_and_legacy_transport_bindings_symmetrically()
         records.append(record)
         predecessor = (record.record_id,)
 
-    sections = render_artifact_sections(tuple(records))
+    sections = _render_fixture_sections(
+        _bind_records(tuple(records), "run-native", records[0].fingerprint)
+    )
 
     assert "`native-codex-v2`" in sections["approval-status"]
     assert "`native-codex-request-" in sections["approval-status"]
@@ -335,6 +469,7 @@ def test_projection_renders_native_and_legacy_transport_bindings_symmetrically()
 
 def test_projection_reduces_attempts_and_keeps_unknown_usage_explicit(tmp_path) -> None:  # type: ignore[no-untyped-def]
     bridge = ArtifactBridge(ArtifactStore(tmp_path, "run-attempts"))
+    _bind_bridge(bridge)
     bridge.append(
         WorkUnitPayload("1", 1, ("src/a.py",)), logical_id="work-unit-1",
         idempotency_key="work-unit:1", fingerprint_sha256="a" * 64,
@@ -362,7 +497,7 @@ def test_projection_reduces_attempts_and_keeps_unknown_usage_explicit(tmp_path) 
         model="sonnet", effort="high",
     )
 
-    rendered = render_artifact_sections(bridge.store.load_chain())["validation-attestation"]
+    rendered = _render_fixture_sections(bridge.store.load_chain())["validation-attestation"]
     assert "Attempts `2`, offen `1`" in rendered
     assert "input_tokens=sum:0,known:1,unknown:1" in rendered
     assert "output_tokens=sum:5,known:1,unknown:1" in rendered
@@ -383,7 +518,7 @@ def test_projection_can_render_an_accepted_replay_without_reduction_drift() -> N
 
     assert projection.replay_result is replay
     assert projection.render_sections() == render_replay_sections(replay)
-    assert projection.render_sections() == render_artifact_sections(chain)
+    assert projection.render_sections() == _render_fixture_sections(chain)
 
 
 def test_digest_ignores_timestamp_and_markdown_presentation_but_not_typed_facts() -> None:
@@ -393,13 +528,21 @@ def test_digest_ignores_timestamp_and_markdown_presentation_but_not_typed_facts(
         for index, record in enumerate(chain)
     )
 
-    assert semantic_artifact_digest(retimed) == semantic_artifact_digest(chain)
-    changed = (*chain[:-1], replace(chain[-1], payload=replace(chain[-1].payload, target="cafebabe")))
-    assert semantic_artifact_digest(changed) != semantic_artifact_digest(chain)
+    assert _semantic_fixture_digest(retimed) == _semantic_fixture_digest(chain)
+    changed = list(chain)
+    binding_index = next(
+        index for index, record in enumerate(changed)
+        if isinstance(record.payload, BindingPayload)
+    )
+    changed[binding_index] = replace(
+        changed[binding_index],
+        payload=replace(changed[binding_index].payload, target="cafebabe"),
+    )
+    assert _semantic_fixture_digest(tuple(changed)) != _semantic_fixture_digest(chain)
 
 
 def test_projection_preserves_argv_boundaries_and_escapes_markdown_data() -> None:
-    sections = render_artifact_sections(_chain())
+    sections = _render_fixture_sections(_chain())
 
     validation = sections["validation-attestation"]
     findings = sections["findings"]
@@ -412,6 +555,7 @@ def test_projection_keeps_structured_prose_inside_finding_response_and_gate_rows
     tmp_path,
 ) -> None:  # type: ignore[no-untyped-def]
     bridge = ArtifactBridge(ArtifactStore(tmp_path, "run-table-prose"))
+    _bind_bridge(bridge)
     bridge.append(
         CorrectionWorkUnitPayload(
             slice_id="2",
@@ -452,7 +596,7 @@ def test_projection_keeps_structured_prose_inside_finding_response_and_gate_rows
         fingerprint_sha256="a" * 64,
     )
 
-    sections = render_artifact_sections(bridge.store.load_chain())
+    sections = _render_fixture_sections(bridge.store.load_chain())
     expected_prose = (
         "First sentence.<br>Second sentence!<br>Third question?<br>- list item"
     )
@@ -529,7 +673,9 @@ def test_slice_projection_accepts_chain_subsequence_and_excludes_other_work_unit
     )
     chain.append(finding)
 
-    rendered = ArtifactAuditProjection(tuple(chain), slice_id="5").render_sections()
+    rendered = ArtifactAuditProjection.from_replay(
+        replay_artifacts(tuple(chain), "run-5"), slice_id="5"
+    ).render_sections()
 
     assert "work-unit-13" not in rendered["decision-table"]
     assert "`src/b.py`" not in rendered["approval-status"]
@@ -614,7 +760,9 @@ def test_slice_projection_excludes_other_slice_gate_validation_and_binding_recor
         ),
     )
 
-    rendered = ArtifactAuditProjection(tuple(chain), slice_id="5").render_sections()
+    rendered = ArtifactAuditProjection.from_replay(
+        replay_artifacts(tuple(chain), "run-5"), slice_id="5"
+    ).render_sections()
     ledger = rendered["decision-table"]
 
     for record in (chain[2], chain[4], chain[5]):
@@ -700,7 +848,9 @@ def test_slice_projection_includes_own_round_gate_and_validation_records_before_
         ),
     )
 
-    projection = ArtifactAuditProjection(tuple(chain), slice_id="7")
+    projection = ArtifactAuditProjection.from_replay(
+        replay_artifacts(tuple(chain), "run-5"), slice_id="7"
+    )
     rendered = projection.render_sections()
     ledger = rendered["decision-table"]
 
@@ -785,7 +935,9 @@ def test_slice_projection_resolves_selected_gate_decision_from_unselected_gate_r
         fingerprint="e" * 64,
     )
 
-    projection = ArtifactAuditProjection(tuple(chain), slice_id="8")
+    projection = ArtifactAuditProjection.from_replay(
+        replay_artifacts(tuple(chain), "run-5"), slice_id="8"
+    )
     selected = projection.selected_records
     rendered = projection.render_sections()
 

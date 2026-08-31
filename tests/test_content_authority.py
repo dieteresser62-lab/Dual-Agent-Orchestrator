@@ -17,6 +17,10 @@ from artifact_models import (
     ProviderContentPayload,
     ReviewPacketPayload,
     Role,
+    RoleProfilePayload,
+    RunIdentityPayload,
+    RunProfilePayload,
+    FingerprintKind,
     ValidationAttestationPayload,
     ValidationContentPayload,
     ValidationResult,
@@ -55,7 +59,37 @@ Bind large content outside the record envelope.
 """
 
 
+def _bind_store(store: ArtifactStore) -> None:
+    if store.load_chain():
+        return
+    bridge = ArtifactBridge(store)
+    bridge.append(
+        RunIdentityPayload(
+            "inbox/backlog/content-authority.md",
+            "feature/content-authority",
+            "b" * 40,
+            "IMPLEMENT",
+            None,
+        ),
+        logical_id="run-identity",
+        idempotency_key="run-identity",
+        fingerprint_sha256=FINGERPRINT,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    bridge.append(
+        RunProfilePayload(
+            RoleProfilePayload("implementer-model", "medium"),
+            RoleProfilePayload("reviewer-model", "high"),
+        ),
+        logical_id="run-profile",
+        idempotency_key="run-profile",
+        fingerprint_sha256=FINGERPRINT,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+
+
 def _validation_driver(store: ArtifactStore) -> ProductionWorkflowDriver:
+    _bind_store(store)
     driver = ProductionWorkflowDriver(
         repository_root=store.repository_root,
         state_file=store.repository_root / ".orchestrator" / "state.json",
@@ -111,6 +145,7 @@ def _large_packet(target_bytes: int):
 
 
 def _append_review_packet(store: ArtifactStore, packet) -> None:  # type: ignore[no-untyped-def]
+    _bind_store(store)
     blob = store.put_blob(packet.canonical_bytes)
     ArtifactBridge(store).append(
         ReviewPacketPayload(
@@ -236,7 +271,9 @@ def test_external_blob_absence_or_tampering_is_fail_closed(
     store = ArtifactStore(tmp_path, f"blob-{mutation}")
     packet = _large_packet(16 * 1024)
     _append_review_packet(store, packet)
-    record = store.load_chain()[0]
+    record = next(
+        item for item in store.load_chain() if isinstance(item.payload, ReviewPacketPayload)
+    )
     payload = record.payload
     assert isinstance(payload, ReviewPacketPayload)
     blob_path = store.blobs_dir / f"{payload.blob.sha256}.blob"
@@ -400,6 +437,7 @@ def test_structured_replay_rejects_pre_r8_attestation_without_content(
     tmp_path: Path,
 ) -> None:
     store = ArtifactStore(tmp_path, "pre-r8-chain")
+    _bind_store(store)
     ArtifactBridge(store).append(
         ValidationAttestationPayload(
             results=(

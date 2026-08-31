@@ -34,6 +34,9 @@ from artifact_models import (
     Fingerprint,
     FingerprintKind,
     Role,
+    RoleProfilePayload,
+    RunIdentityPayload,
+    RunProfilePayload,
     TaskPayload,
     WorkUnitPayload,
 )
@@ -347,6 +350,23 @@ def test_structured_projection_uses_accepted_replay_and_is_a_byte_equal_noop(
     document = _document(tmp_path)
     bridge = ArtifactBridge(ArtifactStore(tmp_path, "audit-replay"))
     bridge.append(
+        RunIdentityPayload("task.md", "feature/test", "b" * 40, "IMPLEMENT", None),
+        logical_id="run-identity",
+        idempotency_key="run-identity",
+        fingerprint_sha256="a" * 64,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    bridge.append(
+        RunProfilePayload(
+            RoleProfilePayload("implementer-model", "medium"),
+            RoleProfilePayload("reviewer-model", "high"),
+        ),
+        logical_id="run-profile",
+        idempotency_key="run-profile",
+        fingerprint_sha256="a" * 64,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    bridge.append(
         TaskPayload("feature/test", (RELATIVE_PATH,), "a" * 64),
         logical_id="task-contract",
         idempotency_key="task-contract",
@@ -392,7 +412,12 @@ def test_structured_projection_uses_accepted_replay_and_is_a_byte_equal_noop(
         idempotency_key="finding:C-01:opened:1:claude",
         fingerprint_sha256="b" * 64,
     )
-    replay = replay_artifacts(bridge.store.load_chain(), "audit-replay")
+    replay = replay_artifacts(
+        bridge.store.load_chain(),
+        "audit-replay",
+        require_content_authority=False,
+        require_review_authority=False,
+    )
 
     monkeypatch.setattr(
         "artifact_projection.replay_artifacts",
@@ -407,7 +432,24 @@ def test_structured_projection_uses_accepted_replay_and_is_a_byte_equal_noop(
 
     assert repeated == rendered
     assert document.slice_path.stat().st_mtime_ns == stat_after_first
-    assert replay.semantic_digest in rendered
+    expected_records = tuple(
+        record
+        for record in replay.records
+        if record.logical_id
+        in {
+            "task-contract",
+            "work-unit-2",
+            "agent-2-codex_implementation-1",
+            "finding-C-01",
+        }
+    )
+    assert tuple(record.logical_id for record in expected_records) == (
+        "task-contract",
+        "work-unit-2",
+        "agent-2-codex_implementation-1",
+        "finding-C-01",
+    )
+    assert replay.subset(expected_records).semantic_digest in rendered
     assert "`native-codex-v2`" in rendered
     assert "`native-codex-request-" in rendered
     assert "### Native convergence summary" in rendered

@@ -9,12 +9,16 @@ from artifact_models import (
     DiagnosticPayload,
     FindingSeverity,
     FindingTransitionPayload,
+    FingerprintKind,
     RecordType,
     ReviewAnchor,
     ReviewEvidencePayload,
     ReviewPayload,
     ReviewStopRequestPayload,
     Role,
+    RoleProfilePayload,
+    RunIdentityPayload,
+    RunProfilePayload,
     ValidationAttestationPayload,
     ValidationResult,
     WorkUnitPayload,
@@ -35,6 +39,28 @@ from content_authority_support import (
 
 
 FINGERPRINT = "d" * 64
+
+
+def _bridge(tmp_path, run_id: str) -> ArtifactBridge:  # type: ignore[no-untyped-def]
+    bridge = ArtifactBridge(ArtifactStore(tmp_path, run_id))
+    bridge.append(
+        RunIdentityPayload("task.md", "feature/review", "b" * 40, "IMPLEMENT", None),
+        logical_id="run-identity",
+        idempotency_key="run-identity",
+        fingerprint_sha256=FINGERPRINT,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    bridge.append(
+        RunProfilePayload(
+            RoleProfilePayload("implementer-model", "medium"),
+            RoleProfilePayload("reviewer-model", "high"),
+        ),
+        logical_id="run-profile",
+        idempotency_key="run-profile",
+        fingerprint_sha256=FINGERPRINT,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    return bridge
 
 
 def _attestation(bridge: ArtifactBridge, suffix: str = "1"):
@@ -62,7 +88,7 @@ def _attestation(bridge: ArtifactBridge, suffix: str = "1"):
 def test_review_contract_projects_every_r7_fact_without_state_or_aggregate(
     tmp_path,
 ) -> None:
-    bridge = ArtifactBridge(ArtifactStore(tmp_path, "review-authority"))
+    bridge = _bridge(tmp_path, "review-authority")
     bridge.append(
         WorkUnitPayload("7", 3, ("src/review.py",)),
         logical_id="work-unit-7",
@@ -156,7 +182,7 @@ def test_review_contract_projects_every_r7_fact_without_state_or_aggregate(
 def test_review_contract_stop_request_and_missing_component_are_fail_closed(
     tmp_path,
 ) -> None:
-    bridge = ArtifactBridge(ArtifactStore(tmp_path, "review-stop-authority"))
+    bridge = _bridge(tmp_path, "review-stop-authority")
     _attestation(bridge, "stop")
     review = append_provider_decision_authority(
         bridge,

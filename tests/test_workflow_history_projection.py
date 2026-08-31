@@ -19,6 +19,7 @@ from artifact_models import (
     ReviewEvidencePayload,
     ReviewPayload,
     Role,
+    RoleProfilePayload,
     RunIdentityPayload,
     RunProfilePayload,
     SliceBoundaryPayload,
@@ -32,6 +33,7 @@ from artifact_models import (
 )
 from artifact_replay import (
     ArtifactReplayError,
+    ReplayDiagnosticCode,
     normalize_workflow_state_mirror,
     pending_workflow_event_payload,
     project_review_contracts,
@@ -223,7 +225,10 @@ def _journey(bridge: ArtifactBridge, *, carried_validation: bool = False):
         round_number=None,
     )
     bridge.append(
-        RunProfilePayload("gpt-5.6-sol", "medium", "opus", "max"),
+        RunProfilePayload(
+            RoleProfilePayload("gpt-5.6-sol", "medium"),
+            RoleProfilePayload("opus", "max"),
+        ),
         logical_id="run-profile",
         idempotency_key="run-profile",
         fingerprint_sha256=FINGERPRINT,
@@ -675,6 +680,7 @@ def test_multi_slice_correction_gate_halt_resume_projects_every_accepted_prefix(
     accepted_ends = []
     rejected: dict[int, str] = {}
     rejection_markers = {
+        "run_binding": "requires exactly one run identity and run profile",
         "event_tail": "workflow event prefix",
         "identity_profile_task": "requires run identity, profile, and task",
         "cursor": "requires a current cursor",
@@ -715,8 +721,8 @@ def test_multi_slice_correction_gate_halt_resume_projects_every_accepted_prefix(
     )
     assert set(mirrors) == set(accepted_ends)
     assert rejected == {
-        1: "event_tail",
-        2: "identity_profile_task",
+        1: "run_binding",
+        2: "run_binding",
         3: "identity_profile_task",
         4: "cursor",
         5: "event_tail",
@@ -944,6 +950,14 @@ def test_each_domain_event_crash_tail_is_bounded_and_reconstructable(
     }
 
     for index, event_record in events:
+        if event_record.payload.event_kind == "run":
+            with pytest.raises(
+                ArtifactReplayError,
+                match="requires exactly one run identity and run profile",
+            ) as caught:
+                replay_artifacts(chain[:index], RUN_ID)
+            assert caught.value.code is ReplayDiagnosticCode.RECORD_MISSING
+            continue
         replay = replay_artifacts(chain[:index], RUN_ID)
         assert replay.pending_workflow_event_record_id == (
             event_record.payload.record_refs[0]
@@ -1061,7 +1075,10 @@ def test_chain_without_workflow_events_is_rejected_fail_closed(tmp_path: Path) -
         fingerprint_kind=FingerprintKind.CONTRACT,
     )
     bridge.append(
-        RunProfilePayload("model-a", "medium", "model-b", "high"),
+        RunProfilePayload(
+            RoleProfilePayload("model-a", "medium"),
+            RoleProfilePayload("model-b", "high"),
+        ),
         logical_id="run-profile",
         idempotency_key="run-profile",
         fingerprint_sha256=FINGERPRINT,

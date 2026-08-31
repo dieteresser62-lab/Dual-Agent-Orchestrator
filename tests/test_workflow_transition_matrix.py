@@ -13,10 +13,14 @@ import orchestrator
 from artifact_bridge import ArtifactBridge
 from artifact_models import (
     FindingTransitionPayload,
+    FingerprintKind,
     ProviderAttemptPayload,
     ProviderInputComponentPayload,
     ProviderInputMeasurementPayload,
     Role,
+    RoleProfilePayload,
+    RunIdentityPayload,
+    RunProfilePayload,
 )
 from artifact_replay import ArtifactReplayError, replay_artifacts, replay_findings
 from artifact_store import ArtifactStore
@@ -2669,6 +2673,23 @@ def test_record_replay_matrix_has_independent_literal_oracle_and_failure_windows
 
     # A damaged lineage fails at replay rather than being healed by the mirror.
     orphan = ArtifactBridge(ArtifactStore(driver.root, "orphan-transition"))
+    orphan.append(
+        RunIdentityPayload("task.md", "feature/test", "b" * 40, "IMPLEMENT", None),
+        logical_id="run-identity",
+        idempotency_key="run-identity",
+        fingerprint_sha256="9" * 64,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    orphan.append(
+        RunProfilePayload(
+            RoleProfilePayload("implementer-model", "medium"),
+            RoleProfilePayload("reviewer-model", "high"),
+        ),
+        logical_id="run-profile",
+        idempotency_key="run-profile",
+        fingerprint_sha256="9" * 64,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
     orphan_finding = replace(
         correction_mirror[0],
         status=FindingStatus.CLOSED,
