@@ -561,8 +561,6 @@ class GateDecisionRecord:
     reason: GateReason
     fingerprint: str
     paths: tuple[str, ...]
-    decided_by: str
-    decided_at: str
     rationale: str
     resume_step: WorkflowStep | None = None
 
@@ -594,8 +592,6 @@ class GateDecisionRecord:
             )
         if self.paths != tuple(sorted(self.paths)):
             raise WorkflowStateValidationError("gate decision paths must be sorted")
-        _require_non_empty(self.decided_by, "gate decision decided_by")
-        _require_timestamp(self.decided_at, "gate decision decided_at")
         _require_non_empty(self.rationale, "gate decision rationale")
         if self.reason is GateReason.TEST_CHANGE and not self.paths:
             raise WorkflowStateValidationError(
@@ -647,8 +643,6 @@ class GateDecisionRecord:
             "reason": self.reason.value,
             "fingerprint": self.fingerprint,
             "paths": list(self.paths),
-            "decided_by": self.decided_by,
-            "decided_at": self.decided_at,
             "rationale": self.rationale,
             "resume_step": self.resume_step.value if self.resume_step is not None else None,
         }
@@ -662,8 +656,6 @@ class GateDecisionRecord:
                 "reason",
                 "fingerprint",
                 "paths",
-                "decided_by",
-                "decided_at",
                 "rationale",
                 "resume_step",
             },
@@ -677,8 +669,6 @@ class GateDecisionRecord:
             reason=_enum_value(GateReason, raw["reason"], "gate decision reason"),
             fingerprint=_string(raw["fingerprint"], "gate decision fingerprint"),
             paths=_string_tuple(raw["paths"], "gate decision paths"),
-            decided_by=_string(raw["decided_by"], "gate decision decided_by"),
-            decided_at=_string(raw["decided_at"], "gate decision decided_at"),
             rationale=_string(raw["rationale"], "gate decision rationale"),
             resume_step=(
                 None
@@ -1875,8 +1865,6 @@ class WorkflowState:
         approved: bool,
         fingerprint: str,
         paths: tuple[str, ...],
-        decided_by: str,
-        decided_at: str,
         rationale: str,
         updated_at: str | None = None,
     ) -> WorkflowState:
@@ -1911,8 +1899,6 @@ class WorkflowState:
             reason=gate.reason,
             fingerprint=fingerprint,
             paths=normalized_paths,
-            decided_by=decided_by,
-            decided_at=decided_at,
             rationale=rationale,
             resume_step=gate.resume_step,
         )
@@ -1949,7 +1935,7 @@ class WorkflowState:
         return self._replace_current_unit(
             updated_unit,
             slices=slices,
-            updated_at=updated_at or decided_at,
+            updated_at=updated_at,
         )
 
     def reopen_legacy_quota_resume_diff_gate(

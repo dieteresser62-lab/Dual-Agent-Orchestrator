@@ -18,6 +18,7 @@ from artifact_models import (
     finding_transition_sequence_sha256,
     Fingerprint,
     FingerprintKind,
+    GateDecisionPayload,
     GatePayload,
     ReviewPayload,
     Role,
@@ -25,6 +26,7 @@ from artifact_models import (
     ValidationRequestPayload,
     ValidationResult,
     WorkUnitPayload,
+    WorkflowTransitionPayload,
 )
 from artifact_projection import (
     ArtifactAuditProjection,
@@ -704,3 +706,84 @@ def test_slice_projection_includes_own_round_gate_and_validation_records_before_
         assert record.record_id[:16] in ledger
     assert "slice-7" in rendered["validation-attestation"]
     assert "slice 7 before review" in rendered["test-approval-premortem"]
+
+
+def test_slice_projection_resolves_selected_gate_decision_from_unselected_gate_record() -> None:
+    chain = list(_chain())
+
+    def append(
+        logical_id: str,
+        payload: object,
+        *,
+        fingerprint: str,
+        kind: FingerprintKind = FingerprintKind.IMPLEMENTATION,
+    ) -> ArtifactRecord:
+        record = ArtifactRecord.create(
+            run_id="run-5",
+            logical_id=logical_id,
+            revision=1,
+            fingerprint=Fingerprint(kind, fingerprint),
+            predecessor_ids=(chain[-1].record_id,),
+            created_at=f"2026-08-18T10:03:{len(chain):02d}+00:00",
+            idempotency_key=f"slice-8:{logical_id}",
+            payload=payload,  # type: ignore[arg-type]
+        )
+        chain.append(record)
+        return record
+
+    append(
+        "work-unit-15",
+        WorkUnitPayload(slice_id="8", round_number=1, paths=("src/d.py",)),
+        fingerprint="c" * 64,
+        kind=FingerprintKind.CONTRACT,
+    )
+    append(
+        "workflow-transition-slice-8",
+        WorkflowTransitionPayload(
+            "8", "in_progress", "15", "codex_implementation", "in_progress"
+        ),
+        fingerprint="c" * 64,
+        kind=FingerprintKind.CONTRACT,
+    )
+    append(
+        "agent-15-codex",
+        AgentResultPayload(
+            role=Role.CODEX,
+            work_unit_id="15",
+            outcome="ready",
+            test_files=("tests/test_d.py",),
+            transport_schema="native-codex-v2",
+            request_id="native-codex-request-" + "d" * 64,
+            response_sha256="e" * 64,
+        ),
+        fingerprint="d" * 64,
+    )
+    gate = append(
+        "gate-slice-8",
+        GatePayload(
+            gate_kind="test-change",
+            decision="approved",
+            authority=Role.USER,
+            rationale="separate test fingerprint",
+        ),
+        fingerprint="e" * 64,
+    )
+    decision = append(
+        "gate-decision-15",
+        GateDecisionPayload(
+            work_unit_id="15",
+            gate_record_id=gate.record_id,
+            paths=("tests/test_d.py",),
+            resume_step="claude_slice_review",
+        ),
+        fingerprint="e" * 64,
+    )
+
+    projection = ArtifactAuditProjection(tuple(chain), slice_id="8")
+    selected = projection.selected_records
+    rendered = projection.render_sections()
+
+    assert decision in selected
+    assert gate not in selected
+    assert decision.record_id[:16] in rendered["decision-table"]
+    assert projection.replay_result.subset(selected).gate_decisions[0].authority is Role.USER

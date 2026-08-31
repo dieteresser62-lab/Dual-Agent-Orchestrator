@@ -49,7 +49,6 @@ from finding_reducer import (
 
 from audit_trail import (
     AuditEvent,
-    AuthorizedTestChanges,
     ReviewAuditEvent,
     ValidationAuditEvent,
     managed_slice_document_path,
@@ -900,6 +899,7 @@ class WorkflowEngine:
                 current.gate.fingerprint,
                 current.gate.paths,
             )
+            self._persist_structured("persist_gate_transition", state)
             current = state.current_work_unit
             self._bind_driver_work_unit(state)
         if current.status is not WorkUnitStatus.IN_PROGRESS:
@@ -1058,8 +1058,6 @@ class WorkflowEngine:
         history: WorkflowHistory,
         *,
         approved: bool,
-        decided_by: str,
-        decided_at: str,
         rationale: str,
     ) -> WorkflowRunResult:
         """Record an explicit decision against the exact persisted gate evidence."""
@@ -1078,16 +1076,17 @@ class WorkflowEngine:
                 approved=approved,
                 fingerprint=gate.fingerprint,
                 paths=gate.paths,
-                decided_by=decided_by,
-                decided_at=decided_at,
                 rationale=rationale,
             )
         except ValueError as exc:
             raise WorkflowExecutionError(f"invalid user gate decision: {exc}") from exc
         if len(updated.current_work_unit.gate_decisions) > prior_decision_count:
             self._persist_structured(
-                "persist_gate_decision", updated.current_work_unit.gate_decisions[-1]
+                "persist_gate_decision",
+                updated.current_work_unit_id,
+                updated.current_work_unit.gate_decisions[-1],
             )
+        self._persist_structured("persist_gate_transition", updated)
         self.driver.checkpoint(updated, history)
         return WorkflowRunResult(updated, history)
 
@@ -2238,6 +2237,7 @@ class WorkflowEngine:
                         heartbeat_fn=self.heartbeat_fn,
                     )
                 state = state.resume_after_invocation_halt()
+                self._persist_structured("persist_gate_transition", state)
                 state, halted = self._apply_pre_agent_policy_gates(state, context)
                 if not halted:
                     state, halted = self._revalidate_waiting_diff(
@@ -2974,33 +2974,34 @@ class WorkflowEngine:
     ) -> tuple[WorkflowState, bool, bool]:
         approved = context.test_changes_approved
         if approved:
-            return state.record_active_test_approval(None), True, False
+            state = state.record_active_test_approval(None)
+            self._persist_structured("persist_gate_transition", state)
+            return state, True, False
         evidence = self.driver.detect_test_changes(changes, context.test_path_patterns)
         if evidence is None:
-            return state.record_active_test_approval(None), False, False
+            state = state.record_active_test_approval(None)
+            self._persist_structured("persist_gate_transition", state)
+            return state, False, False
         state = state.inherit_prior_test_approval(
             evidence.fingerprint,
             evidence.paths,
         )
+        self._persist_structured("persist_gate_transition", state)
         approved = state.current_work_unit.has_gate_approval(
             GateReason.TEST_CHANGE, evidence.fingerprint, evidence.paths
         )
         if not approved:
-            return (
-                state.await_user_gate(
+            state = state.await_user_gate(
                     reason=GateReason.TEST_CHANGE,
                     detail="test changes require explicit approval before review",
                     fingerprint=evidence.fingerprint,
                     paths=evidence.paths,
-                ),
-                False,
-                True,
             )
-        return (
-            state.record_active_test_approval(evidence.fingerprint, evidence.paths),
-            True,
-            False,
-        )
+            self._persist_structured("persist_gate_transition", state)
+            return state, False, True
+        state = state.record_active_test_approval(evidence.fingerprint, evidence.paths)
+        self._persist_structured("persist_gate_transition", state)
+        return state, True, False
 
     @staticmethod
     def _change_start_commit(state: WorkflowState) -> str | None:
@@ -3456,33 +3457,3 @@ class WorkflowEngine:
             f"summary={finding.summary} | acceptance={finding.acceptance_test} | "
             f"responses={responses} | closure={finding.status_rationale or 'NONE'}"
         )
-
-
-def authorized_test_changes_from_state(
-    state: WorkflowState,
-) -> AuthorizedTestChanges | None:
-    """Project the exact test approval recorded as active during the final review."""
-    unit = state.current_work_unit
-    if unit.active_test_fingerprint is None:
-        return None
-    decision = next(
-        (
-            item
-            for item in reversed(unit.gate_decisions)
-            if item.approved
-            and item.reason is GateReason.TEST_CHANGE
-            and item.fingerprint == unit.active_test_fingerprint
-            and item.paths == unit.active_test_paths
-        ),
-        None,
-    )
-    if decision is None:
-        return None
-    return AuthorizedTestChanges(
-        approved=True,
-        paths=decision.paths,
-        approved_by=decision.decided_by,
-        rationale=decision.rationale,
-        approved_at=decision.decided_at,
-        diff_fingerprint=decision.fingerprint,
-    )

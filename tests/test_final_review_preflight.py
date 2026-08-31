@@ -10,6 +10,7 @@ from artifact_models import (
     AgentResultPayload,
     BindingPayload,
     GatePayload,
+    GateTransitionPayload,
     ProviderInputComponentPayload,
     ProviderInputMeasurementPayload,
     ReviewPayload,
@@ -76,8 +77,6 @@ def _state_with_approved_external_path():  # type: ignore[no-untyped-def]
         approved=True,
         fingerprint=EXTERNAL_FINGERPRINT,
         paths=("src/external.py",),
-        decided_by="operator",
-        decided_at="2026-08-20T10:00:00+00:00",
         rationale="reviewed exact external path",
     ).complete_current_slice(commit_ref=SLICE_COMMIT).start_final_review_work_unit()
     return state
@@ -119,8 +118,6 @@ def _state_with_approved_correction_external_path():  # type: ignore[no-untyped-
         approved=True,
         fingerprint=EXTERNAL_FINGERPRINT,
         paths=("src/external.py",),
-        decided_by="operator",
-        decided_at="2026-08-21T18:00:00+00:00",
         rationale="reviewed exact correction path",
     ).complete_current_slice(
         commit_ref=CORRECTION_COMMIT,
@@ -302,8 +299,6 @@ def test_preflight_accepts_exact_current_final_review_gate_paths(
         approved=True,
         fingerprint=FINGERPRINT,
         paths=("src/final_review_preflight.py",),
-        decided_by="operator",
-        decided_at="2026-08-21T10:00:00+00:00",
         rationale="reviewed exact final-review hotfix",
     )
     bridge = ArtifactBridge(ArtifactStore(tmp_path, state.run_id))
@@ -521,7 +516,7 @@ def test_preflight_rejects_binding_reference_that_is_not_a_predecessor(
     assert set(result.affected_record_ids[1:]) == set(binding.payload.approval_ids)
 
 
-def test_relevant_record_head_excludes_r2_dispatch_context_but_includes_r3_boundary(
+def test_relevant_record_head_excludes_r2_r5_dispatch_context_but_includes_r3_boundary(
     tmp_path: Path,
 ) -> None:
     state = _state(WorkflowStep.CODEX_FINAL_REVIEW)
@@ -545,6 +540,23 @@ def test_relevant_record_head_excludes_r2_dispatch_context_but_includes_r3_bound
         WorkflowPolicyPayload(str(state.current_work_unit_id), 0, 4),
         logical_id=f"workflow-policy-{state.current_work_unit_id}",
         idempotency_key=f"workflow-policy:{state.current_work_unit_id}:1",
+        fingerprint_sha256=FINGERPRINT,
+    )
+    unit = state.current_work_unit
+    bridge.append(
+        GateTransitionPayload(
+            str(unit.work_unit_id),
+            unit.gate.status.value,
+            unit.gate.reason.value,
+            unit.gate.detail,
+            unit.gate.fingerprint,
+            unit.gate.paths,
+            None if unit.gate.resume_step is None else unit.gate.resume_step.value,
+            unit.active_test_fingerprint,
+            unit.active_test_paths,
+        ),
+        logical_id=f"gate-transition-{unit.work_unit_id}",
+        idempotency_key=f"gate-transition:{unit.work_unit_id}:1",
         fingerprint_sha256=FINGERPRINT,
     )
     assert relevant_record_head(bridge.store.load_chain()) == before

@@ -146,17 +146,18 @@ def test_first_checkpoint_bootstraps_authoritative_chain_idempotently(
     driver.assert_structured_decision_context()
 
     chain = ArtifactStore(repository, state.run_id).load_chain()
-    assert tuple(record.record_type for record in chain[:7]) == (
+    assert tuple(record.record_type for record in chain[:8]) == (
         RecordType.RUN_IDENTITY,
         RecordType.RUN_PROFILE,
         RecordType.SIDE_EFFECT,
         RecordType.SIDE_EFFECT,
         RecordType.WORKFLOW_TRANSITION,
         RecordType.WORKFLOW_POLICY,
+        RecordType.GATE_TRANSITION,
         RecordType.TASK,
     )
     assert all(
-        record.record_type is RecordType.SIDE_EFFECT for record in chain[7:]
+        record.record_type is RecordType.SIDE_EFFECT for record in chain[8:]
     )
 
 

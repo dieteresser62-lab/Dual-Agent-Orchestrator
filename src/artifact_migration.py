@@ -11,7 +11,8 @@ from artifact_models import (
     ArtifactRecord,
     CorrectionWorkUnitPayload,
     FindingTransitionPayload,
-    GatePayload,
+    GateDecisionPayload,
+    GateTransitionPayload,
     PlanPayload,
     QuotaPausePayload,
     RecordType,
@@ -243,6 +244,93 @@ def assert_slice_boundary_mirror(
         )
 
 
+def require_gate_prefix(replay: ArtifactReplayResult) -> None:
+    """Reject pre-R5 chains; gate authority is never backfilled from state."""
+    records = tuple(
+        record
+        for record in replay.records
+        if record.record_type is RecordType.GATE_TRANSITION
+    )
+    if not records or not replay.gate_transitions:
+        raise ArtifactResumeError(
+            "structured-v2 run has no gate transition prefix",
+            code=ReplayDiagnosticCode.RECORD_MISSING,
+        )
+
+
+def assert_gate_mirror(
+    replay: ArtifactReplayResult,
+    state: WorkflowState,
+) -> None:
+    """Compare all R5 gate state and decision bindings with state-v3."""
+    require_gate_prefix(replay)
+    expected_transitions = tuple(
+        GateTransitionPayload(
+            work_unit_id=str(unit.work_unit_id),
+            gate_status=unit.gate.status.value,
+            reason=unit.gate.reason.value,
+            detail=unit.gate.detail,
+            fingerprint=unit.gate.fingerprint,
+            paths=unit.gate.paths,
+            resume_step=(
+                None if unit.gate.resume_step is None else unit.gate.resume_step.value
+            ),
+            active_test_fingerprint=unit.active_test_fingerprint,
+            active_test_paths=unit.active_test_paths,
+        )
+        for unit in state.work_units
+    )
+    transition_records = tuple(
+        record
+        for record in replay.records
+        if isinstance(record.payload, GateTransitionPayload)
+    )
+    if replay.gate_transitions != expected_transitions:
+        raise ArtifactResumeError(
+            "gate transitions differ from state-v3",
+            record_id=transition_records[-1].record_id,
+        )
+
+    expected_decisions = tuple(
+        (
+            str(unit.work_unit_id),
+            decision.approved,
+            decision.reason.value,
+            decision.fingerprint,
+            decision.paths,
+            decision.rationale,
+            None if decision.resume_step is None else decision.resume_step.value,
+        )
+        for unit in state.work_units
+        for decision in unit.gate_decisions
+    )
+    actual_decisions = tuple(
+        (
+            decision.work_unit_id,
+            decision.approved,
+            decision.reason,
+            decision.fingerprint,
+            decision.paths,
+            decision.rationale,
+            decision.resume_step,
+        )
+        for decision in replay.gate_decisions
+    )
+    if set(actual_decisions) != set(expected_decisions):
+        decision_records = tuple(
+            record
+            for record in replay.records
+            if isinstance(record.payload, GateDecisionPayload)
+        )
+        raise ArtifactResumeError(
+            "gate decision bindings differ from state-v3",
+            code=_mirror_difference_code(
+                set(actual_decisions), set(expected_decisions)
+            ),
+            record_id=(decision_records[-1].record_id if decision_records else None),
+        )
+
+
 def require_side_effect_ledger_prefix(replay: ArtifactReplayResult) -> None:
     """Reject pre-R4 chains; the ledger is never synthesized from mirrors."""
     initializers = tuple(
@@ -343,6 +431,7 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
     assert_run_binding_mirror(replay, state, binding)
     assert_workflow_status_mirror(replay, state)
     assert_slice_boundary_mirror(replay, state)
+    assert_gate_mirror(replay, state)
     state = assert_side_effect_mirror(replay, state)
 
     head = replay.head_record_id
@@ -573,35 +662,6 @@ def resolve_resume_state(repository_root: Path, state: WorkflowState) -> ResumeR
             or actual_slices != expected_slices
         ):
             raise mismatch("approved-plan binding differs from state-v3", plans[-1].record_id)
-
-    decisions = {
-        (
-            decision.reason.value.replace("_", "-"),
-            "approved" if decision.approved else "rejected",
-            decision.rationale,
-            decision.fingerprint,
-        )
-        for unit in state.work_units
-        for decision in unit.gate_decisions
-    }
-    decision_records = {
-        (
-            record.payload.gate_kind,
-            record.payload.decision,
-            record.payload.rationale,
-            record.fingerprint.sha256,
-        ): record
-        for record in chain
-        if isinstance(record.payload, GatePayload)
-    }
-    if set(decision_records) != decisions:
-        differing = next(iter(set(decision_records) ^ decisions), None)
-        record = decision_records.get(differing) if differing is not None else None
-        raise mismatch(
-            "gate decisions differ from state-v3",
-            None if record is None else record.record_id,
-            code=_mirror_difference_code(set(decision_records), decisions),
-        )
 
     finding_statuses = _finding_statuses(state)
     latest_findings = {

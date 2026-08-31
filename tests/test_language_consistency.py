@@ -268,6 +268,40 @@ def test_readme_documents_exactly_the_public_long_cli_options() -> None:
     )
 
 
+def test_quickstart_run_task_commands_use_only_public_long_cli_options() -> None:
+    quickstart = (ROOT / "Quickstart.md").read_text(encoding="utf-8")
+    lines = quickstart.splitlines()
+    commands: list[str] = []
+    index = 0
+    while index < len(lines):
+        stripped = lines[index].strip()
+        if not stripped.startswith(
+            ("run_task", "python -m orchestrator", "python3 -m orchestrator")
+        ):
+            index += 1
+            continue
+        parts = [stripped]
+        while parts[-1].endswith("\\") and index + 1 < len(lines):
+            index += 1
+            parts.append(lines[index].strip())
+        commands.append(" ".join(parts))
+        index += 1
+    documented = set(
+        re.findall(
+            r"(?<![A-Za-z0-9_])--[a-z][a-z0-9-]+", "\n".join(commands)
+        )
+    )
+    public = {
+        option
+        for action in build_parser()._actions
+        for option in action.option_strings
+        if option.startswith("--")
+    }
+    assert documented <= public, (
+        f"Quickstart-only options: {sorted(documented - public)}"
+    )
+
+
 def test_readme_defaults_and_environment_names_match_runtime(tmp_path: Path) -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     args = parse_args([], cwd=tmp_path, environ={})

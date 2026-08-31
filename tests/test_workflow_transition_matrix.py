@@ -1807,8 +1807,6 @@ def _exercise_transition_oracle(tmp_path: Path) -> None:
         approved=True,
         fingerprint="1" * 64,
         paths=("src/runtime.py",),
-        decided_by="dieter",
-        decided_at="2026-08-27T10:00:13+00:00",
         rationale="Reviewed exact drift.",
     )
     assert approved.current_step is WorkflowStep.SLICE_COMMIT
@@ -2182,8 +2180,6 @@ def test_resume_oracle_is_idempotent_and_fails_closed_on_changed_evidence() -> N
         approved=True,
         fingerprint="3" * 64,
         paths=("src/runtime.py",),
-        decided_by="dieter",
-        decided_at="2026-08-27T10:00:20+00:00",
         rationale="Exact evidence reviewed.",
     )
     repeated = decided.await_user_gate(
@@ -2196,8 +2192,6 @@ def test_resume_oracle_is_idempotent_and_fails_closed_on_changed_evidence() -> N
         approved=True,
         fingerprint="3" * 64,
         paths=("src/runtime.py",),
-        decided_by="dieter",
-        decided_at="2026-08-27T10:00:21+00:00",
         rationale="Same exact evidence reviewed again.",
     )
     assert repeated.current_work_unit.gate_decisions == decided.current_work_unit.gate_decisions
@@ -2207,8 +2201,6 @@ def test_resume_oracle_is_idempotent_and_fails_closed_on_changed_evidence() -> N
             approved=True,
             fingerprint="4" * 64,
             paths=("src/runtime.py",),
-            decided_by="dieter",
-            decided_at="2026-08-27T10:00:22+00:00",
             rationale="Wrong fingerprint.",
         )
 

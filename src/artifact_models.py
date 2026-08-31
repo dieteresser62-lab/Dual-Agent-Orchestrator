@@ -59,6 +59,8 @@ class RecordType(StrEnum):
     VALIDATION_REQUEST = "validation_request"
     VALIDATION_ATTESTATION = "validation_attestation"
     GATE = "gate"
+    GATE_TRANSITION = "gate_transition"
+    GATE_DECISION = "gate_decision"
     BINDING = "binding"
     QUOTA_PAUSE = "quota_pause"
     TRANSIENT_RETRY = "transient_retry"
@@ -198,6 +200,27 @@ _SLICE_STATUSES = {
     "completed",
 }
 _WORK_UNIT_STATUSES = _SLICE_STATUSES
+_GATE_STATUSES = {
+    "clear",
+    "awaiting_user_decision",
+    "waiting_for_quota",
+    "waiting_for_retry",
+    "awaiting_resume",
+}
+_GATE_REASONS = {
+    "none",
+    "iteration_limit",
+    "test_change",
+    "stop_request",
+    "unexpected_file",
+    "anchor_change",
+    "manual_slice",
+    "plan_approval",
+    "quota",
+    "instance_failure",
+    "bootstrap_check",
+    "quota_resume_diff",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -1081,6 +1104,82 @@ class GatePayload:
 
 
 @dataclass(frozen=True, slots=True)
+class GateTransitionPayload:
+    work_unit_id: str
+    gate_status: str
+    reason: str
+    detail: str | None
+    fingerprint: str | None
+    paths: tuple[str, ...]
+    resume_step: str | None
+    active_test_fingerprint: str | None
+    active_test_paths: tuple[str, ...]
+    status: ClassVar[str] = "transitioned"
+    record_type: ClassVar[RecordType] = RecordType.GATE_TRANSITION
+
+    def __post_init__(self) -> None:
+        _require_identifier(self.work_unit_id, "gate transition work_unit_id")
+        if self.gate_status not in _GATE_STATUSES:
+            raise ArtifactValidationError("gate transition status is invalid")
+        if self.reason not in _GATE_REASONS:
+            raise ArtifactValidationError("gate transition reason is invalid")
+        if self.detail is not None:
+            _require_text(self.detail, "gate transition detail")
+        if self.fingerprint is not None:
+            _require_sha256(self.fingerprint, "gate transition fingerprint")
+        _require_paths(self.paths, allow_empty=True)
+        if self.paths != tuple(sorted(self.paths)):
+            raise ArtifactValidationError("gate transition paths must be sorted")
+        if self.resume_step is not None and self.resume_step not in _WORKFLOW_STEPS:
+            raise ArtifactValidationError("gate transition resume_step is invalid")
+        if self.gate_status == "clear":
+            if (
+                self.reason != "none"
+                or self.detail is not None
+                or self.fingerprint is not None
+                or self.paths
+                or self.resume_step is not None
+            ):
+                raise ArtifactValidationError(
+                    "clear gate transition cannot carry gate evidence"
+                )
+        elif self.reason == "none":
+            raise ArtifactValidationError(
+                "non-clear gate transition requires a reason"
+            )
+        if (self.active_test_fingerprint is None) != (not self.active_test_paths):
+            raise ArtifactValidationError(
+                "active test fingerprint and paths must be bound together"
+            )
+        if self.active_test_fingerprint is not None:
+            _require_sha256(
+                self.active_test_fingerprint, "active test fingerprint"
+            )
+            _require_paths(self.active_test_paths)
+            if self.active_test_paths != tuple(sorted(self.active_test_paths)):
+                raise ArtifactValidationError("active test paths must be sorted")
+
+
+@dataclass(frozen=True, slots=True)
+class GateDecisionPayload:
+    work_unit_id: str
+    gate_record_id: str
+    paths: tuple[str, ...]
+    resume_step: str | None
+    status: ClassVar[str] = "bound"
+    record_type: ClassVar[RecordType] = RecordType.GATE_DECISION
+
+    def __post_init__(self) -> None:
+        _require_identifier(self.work_unit_id, "gate decision work_unit_id")
+        _require_identifier(self.gate_record_id, "gate decision gate_record_id")
+        _require_paths(self.paths, allow_empty=True)
+        if self.paths != tuple(sorted(self.paths)):
+            raise ArtifactValidationError("gate decision paths must be sorted")
+        if self.resume_step is not None and self.resume_step not in _WORKFLOW_STEPS:
+            raise ArtifactValidationError("gate decision resume_step is invalid")
+
+
+@dataclass(frozen=True, slots=True)
 class BindingPayload:
     binding_kind: str
     target: str
@@ -1163,7 +1262,8 @@ ArtifactPayload: TypeAlias = (
     | TaskPayload | PlanPayload | WorkUnitPayload | CorrectionWorkUnitPayload
     | AgentResultPayload | DiagnosticPayload | ReviewPayload | FindingTransitionPayload
     | FindingHandoffExportPayload | FindingHandoffImportPayload
-    | ValidationRequestPayload | ValidationAttestationPayload | GatePayload | BindingPayload
+    | ValidationRequestPayload | ValidationAttestationPayload | GatePayload
+    | GateTransitionPayload | GateDecisionPayload | BindingPayload
     | QuotaPausePayload | TransientRetryPayload | ResumeCheckPayload
     | WorkflowCompletionPayload
     | ProviderInputMeasurementPayload | ProviderAttemptPayload | FinalReviewPreflightPayload
@@ -1447,6 +1547,18 @@ def _payload_from_dict(record_type: RecordType, raw: Mapping[str, Any]) -> Artif
         return ValidationAttestationPayload(results, Role(data["attested_by"]))
     if record_type is RecordType.GATE:
         return GatePayload(data["gate_kind"], data["decision"], Role(data["authority"]), data["rationale"])
+    if record_type is RecordType.GATE_TRANSITION:
+        return GateTransitionPayload(
+            data["work_unit_id"], data["gate_status"], data["reason"],
+            data["detail"], data["fingerprint"], tuple(data["paths"]),
+            data["resume_step"], data["active_test_fingerprint"],
+            tuple(data["active_test_paths"]),
+        )
+    if record_type is RecordType.GATE_DECISION:
+        return GateDecisionPayload(
+            data["work_unit_id"], data["gate_record_id"], tuple(data["paths"]),
+            data["resume_step"],
+        )
     if record_type is RecordType.BINDING:
         return BindingPayload(data["binding_kind"], data["target"], data["attestation_id"], tuple(data["approval_ids"]))
     if record_type is RecordType.QUOTA_PAUSE:

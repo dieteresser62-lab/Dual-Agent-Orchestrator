@@ -15,6 +15,9 @@ from artifact_models import (
     FindingSeverity,
     FindingTransitionPayload,
     FindingHandoffImportPayload,
+    GateDecisionPayload,
+    GatePayload,
+    GateTransitionPayload,
     ImportedFindingTransition,
     finding_transition_sequence_sha256,
     RecordType,
@@ -891,3 +894,81 @@ def test_replay_reports_type_mismatch_with_stable_code() -> None:
     object.__setattr__(record, "record_type", RecordType.PLAN)
 
     _assert_code((record,), ReplayDiagnosticCode.RECORD_TYPE_MISMATCH)
+
+
+def test_gate_prefix_replays_transition_test_scope_and_decision_binding() -> None:
+    records: list[ArtifactRecord] = []
+    _append(
+        records,
+        "workflow-transition",
+        WorkflowTransitionPayload("1", "in_progress", "1", "codex_plan", "in_progress"),
+    )
+    transition = GateTransitionPayload(
+        work_unit_id="1",
+        gate_status="clear",
+        reason="none",
+        detail=None,
+        fingerprint=None,
+        paths=(),
+        resume_step=None,
+        active_test_fingerprint="b" * 64,
+        active_test_paths=("tests/test_gate.py",),
+    )
+    _append(records, "gate-transition-1", transition)
+    gate = _append(
+        records,
+        "gate-test-change",
+        GatePayload("test-change", "approved", Role.USER, "reviewed exact test delta"),
+        fingerprint=Fingerprint(FingerprintKind.IMPLEMENTATION, "b" * 64),
+    )
+    decision = GateDecisionPayload(
+        work_unit_id="1",
+        gate_record_id=gate.record_id,
+        paths=("tests/test_gate.py",),
+        resume_step="claude_slice_review",
+    )
+    binding = _append(
+        records,
+        "gate-decision-1",
+        decision,
+        fingerprint=Fingerprint(FingerprintKind.IMPLEMENTATION, "b" * 64),
+    )
+
+    replay = replay_artifacts(records, "run-replay")
+
+    assert replay.gate_transitions == (transition,)
+    assert len(replay.gate_decisions) == 1
+    projected = replay.gate_decisions[0]
+    assert projected.work_unit_id == "1"
+    assert projected.paths == ("tests/test_gate.py",)
+    assert projected.resume_step == "claude_slice_review"
+    assert projected.authority is Role.USER
+    assert projected.gate_created_at == gate.created_at
+    assert projected.gate_record_id == gate.record_id
+    assert projected.decision_record_id == binding.record_id
+
+
+def test_gate_replay_rejects_partial_test_binding_and_missing_decision_reference() -> None:
+    records: list[ArtifactRecord] = []
+    _append(
+        records,
+        "workflow-transition",
+        WorkflowTransitionPayload("1", "in_progress", "1", "codex_plan", "in_progress"),
+    )
+    partial = GateTransitionPayload(
+        "1", "clear", "none", None, None, (), None, None, ()
+    )
+    partial_record = _append(records, "gate-transition-1", partial)
+    object.__setattr__(
+        partial_record.payload, "active_test_paths", ("tests/test_gate.py",)
+    )
+    _assert_code(tuple(records), ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH)
+
+    records = records[:1]
+    _append(
+        records,
+        "gate-decision-1",
+        GateDecisionPayload("1", "ar1-" + "d" * 64, (), "codex_plan"),
+        fingerprint=Fingerprint(FingerprintKind.IMPLEMENTATION, "c" * 64),
+    )
+    _assert_code(tuple(records), ReplayDiagnosticCode.RECORD_REFERENCE_MISSING)

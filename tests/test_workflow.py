@@ -65,7 +65,6 @@ from workflow import (
     WorkflowHistory,
     WorkflowRunResult,
     ValidationExecutionError,
-    authorized_test_changes_from_state,
 )
 from workflow_state import (
     AgentFailureKind,
@@ -998,8 +997,6 @@ def test_plan_change_boundary_honors_exact_fingerprint_bound_path_approval() -> 
         approved=True,
         fingerprint=changes.fingerprint,
         paths=unexpected,
-        decided_by="dieter",
-        decided_at="2026-08-23T10:24:26+00:00",
         rationale="fingerprint-bound hotfix reviewed",
     )
 
@@ -2702,15 +2699,15 @@ def test_reopened_exact_gate_reuses_immutable_approval_without_dual_write() -> N
     )
     driver = FakeDriver(snapshots=[], codex_outputs=[], reviewer_outputs=[])
     persisted: list[GateDecisionRecord] = []
-    driver.persist_gate_decision = persisted.append  # type: ignore[attr-defined]
+    driver.persist_gate_decision = (  # type: ignore[attr-defined]
+        lambda _work_unit_id, decision: persisted.append(decision)
+    )
     engine = WorkflowEngine(driver)
 
     first = engine.decide_current_gate(
         gated,
         WorkflowHistory(1),
         approved=True,
-        decided_by="dieter",
-        decided_at="2026-08-23T10:24:26+00:00",
         rationale="fingerprint-bound hotfix reviewed",
     )
     reopened = first.state.await_user_gate(
@@ -2723,8 +2720,6 @@ def test_reopened_exact_gate_reuses_immutable_approval_without_dual_write() -> N
         reopened,
         first.history,
         approved=True,
-        decided_by="dieter",
-        decided_at="2026-08-23T10:32:55+00:00",
         rationale="second confirmation must not rewrite immutable audit semantics",
     )
 
@@ -3028,8 +3023,6 @@ def test_changed_fingerprint_during_quota_wait_halts_before_retry() -> None:
         approved=True,
         fingerprint=gate.fingerprint,
         paths=gate.paths,
-        decided_by="operator",
-        decided_at=now[0].isoformat(),
         rationale="reviewed exact changed fingerprint and paths",
     )
     failure = acknowledged.current_work_unit.invocation_failures[-1]
@@ -3828,37 +3821,6 @@ def test_unapproved_test_change_halts_before_validation_and_review() -> None:
     assert driver.reviewer_calls == []
 
 
-def test_test_audit_projection_uses_active_approval_not_latest_decision() -> None:
-    state = _slice_state()
-    paths = (TEST_FILE,)
-    first_fingerprint = "8" * 64
-    second_fingerprint = "9" * 64
-    for fingerprint, minute in (
-        (first_fingerprint, "00"),
-        (second_fingerprint, "01"),
-    ):
-        state = state.await_user_gate(
-            reason=GateReason.TEST_CHANGE,
-            detail="test approval required",
-            fingerprint=fingerprint,
-            paths=paths,
-        ).record_user_gate_decision(
-            approved=True,
-            fingerprint=fingerprint,
-            paths=paths,
-            decided_by="user",
-            decided_at=f"2026-08-12T12:{minute}:00+00:00",
-            rationale=f"approved {fingerprint[:1]}",
-        )
-    state = state.record_active_test_approval(first_fingerprint, paths)
-
-    audit_record = authorized_test_changes_from_state(state)
-
-    assert audit_record is not None
-    assert audit_record.diff_fingerprint == first_fingerprint
-    assert audit_record.rationale == "approved 8"
-
-
 def test_changed_test_fingerprint_expires_previous_gate_approval() -> None:
     first = _changes("1", "src/early.py", TEST_FILE)
     changed = _changes("2", "src/early.py", TEST_FILE)
@@ -3889,8 +3851,6 @@ def test_changed_test_fingerprint_expires_previous_gate_approval() -> None:
         halted.state,
         halted.history,
         approved=True,
-        decided_by="user",
-        decided_at="2026-08-12T12:00:00+00:00",
         rationale="first test diff reviewed",
     )
     driver.use_changed = True
@@ -3931,8 +3891,6 @@ def test_final_review_resumes_redundant_gate_from_exact_prior_test_approval() ->
         approved=True,
         fingerprint=evidence.fingerprint,
         paths=evidence.paths,
-        decided_by="user",
-        decided_at="2026-08-12T12:00:00+00:00",
         rationale="exact Slice test diff reviewed",
     ).record_active_test_approval(
         evidence.fingerprint,
@@ -3972,7 +3930,7 @@ def test_final_review_resumes_redundant_gate_from_exact_prior_test_approval() ->
     assert result.state.current_work_unit.active_test_paths == evidence.paths
     inherited = result.state.current_work_unit.gate_decisions
     assert len(inherited) == 1
-    assert inherited[0].decided_by == "user"
+    assert inherited[0].rationale == "exact Slice test diff reviewed"
     assert len(driver.codex_calls) == 1
     assert len(driver.reviewer_calls) == 1
 

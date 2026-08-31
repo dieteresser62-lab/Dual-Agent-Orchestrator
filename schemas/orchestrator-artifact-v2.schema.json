@@ -8,7 +8,7 @@
   "properties": {
     "schema_version": {"const": "2"},
     "record_id": {"$ref": "#/$defs/identifier"},
-    "record_type": {"enum": ["run_identity", "run_profile", "workflow_transition", "workflow_policy", "slice_boundary", "task", "plan", "work_unit", "correction_work_unit", "agent_result", "diagnostic", "review", "finding_transition", "finding_handoff_export", "finding_handoff_import", "validation_request", "validation_attestation", "gate", "binding", "quota_pause", "transient_retry", "resume_check", "workflow_completion", "provider_input_measurement", "provider_attempt", "final_review_preflight", "side_effect"]},
+    "record_type": {"enum": ["run_identity", "run_profile", "workflow_transition", "workflow_policy", "slice_boundary", "task", "plan", "work_unit", "correction_work_unit", "agent_result", "diagnostic", "review", "finding_transition", "finding_handoff_export", "finding_handoff_import", "validation_request", "validation_attestation", "gate", "gate_transition", "gate_decision", "binding", "quota_pause", "transient_retry", "resume_check", "workflow_completion", "provider_input_measurement", "provider_attempt", "final_review_preflight", "side_effect"]},
     "run_id": {"$ref": "#/$defs/identifier"},
     "logical_id": {"$ref": "#/$defs/identifier"},
     "revision": {"type": "integer", "minimum": 1},
@@ -38,6 +38,8 @@
     {"if": {"properties": {"record_type": {"const": "validation_request"}}}, "then": {"properties": {"status": {"const": "requested"}, "payload": {"$ref": "#/$defs/validation_request"}}}},
     {"if": {"properties": {"record_type": {"const": "validation_attestation"}}}, "then": {"properties": {"status": {"const": "attested"}, "payload": {"$ref": "#/$defs/validation_attestation"}}}},
     {"if": {"properties": {"record_type": {"const": "gate"}}}, "then": {"properties": {"status": {"const": "decided"}, "payload": {"$ref": "#/$defs/gate"}}}},
+    {"if": {"properties": {"record_type": {"const": "gate_transition"}}}, "then": {"properties": {"status": {"const": "transitioned"}, "payload": {"$ref": "#/$defs/gate_transition"}}}},
+    {"if": {"properties": {"record_type": {"const": "gate_decision"}}}, "then": {"properties": {"status": {"const": "bound"}, "payload": {"$ref": "#/$defs/gate_decision"}}}},
     {"if": {"properties": {"record_type": {"const": "binding"}}}, "then": {"properties": {"status": {"const": "bound"}, "payload": {"$ref": "#/$defs/binding"}}}},
     {"if": {"properties": {"record_type": {"const": "quota_pause"}}}, "then": {"properties": {"status": {"const": "paused"}, "payload": {"$ref": "#/$defs/quota_pause"}}}},
     {"if": {"properties": {"record_type": {"const": "transient_retry"}}}, "then": {"properties": {"status": {"const": "waiting"}, "payload": {"$ref": "#/$defs/transient_retry"}}}},
@@ -205,6 +207,38 @@
     "gate": {
       "type": "object", "additionalProperties": false, "required": ["gate_kind", "decision", "authority", "rationale"],
       "properties": {"gate_kind": {"$ref": "#/$defs/identifier"}, "decision": {"enum": ["approved", "rejected", "pending"]}, "authority": {"$ref": "#/$defs/role"}, "rationale": {"$ref": "#/$defs/non_empty"}}
+    },
+    "gate_transition": {
+      "type": "object", "additionalProperties": false,
+      "required": ["work_unit_id", "gate_status", "reason", "detail", "fingerprint", "paths", "resume_step", "active_test_fingerprint", "active_test_paths"],
+      "allOf": [
+        {
+          "if": {"properties": {"active_test_fingerprint": {"type": "null"}}},
+          "then": {"properties": {"active_test_paths": {"maxItems": 0}}},
+          "else": {"properties": {"active_test_paths": {"minItems": 1}}}
+        }
+      ],
+      "properties": {
+        "work_unit_id": {"$ref": "#/$defs/identifier"},
+        "gate_status": {"enum": ["clear", "awaiting_user_decision", "waiting_for_quota", "waiting_for_retry", "awaiting_resume"]},
+        "reason": {"enum": ["none", "iteration_limit", "test_change", "stop_request", "unexpected_file", "anchor_change", "manual_slice", "plan_approval", "quota", "instance_failure", "bootstrap_check", "quota_resume_diff"]},
+        "detail": {"type": ["string", "null"], "minLength": 1},
+        "fingerprint": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+        "paths": {"$ref": "#/$defs/paths"},
+        "resume_step": {"oneOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]},
+        "active_test_fingerprint": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+        "active_test_paths": {"$ref": "#/$defs/paths"}
+      }
+    },
+    "gate_decision": {
+      "type": "object", "additionalProperties": false,
+      "required": ["work_unit_id", "gate_record_id", "paths", "resume_step"],
+      "properties": {
+        "work_unit_id": {"$ref": "#/$defs/identifier"},
+        "gate_record_id": {"$ref": "#/$defs/identifier"},
+        "paths": {"$ref": "#/$defs/paths"},
+        "resume_step": {"oneOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]}
+      }
     },
     "binding": {
       "type": "object", "additionalProperties": false, "required": ["binding_kind", "target", "attestation_id", "approval_ids"],

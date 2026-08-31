@@ -101,8 +101,6 @@ def test_codex_scope_uses_only_matching_fingerprint_bound_resume_approval() -> N
         reason=GateReason.UNEXPECTED_FILE,
         fingerprint="b" * 64,
         paths=(path,),
-        decided_by="architect",
-        decided_at="2026-08-23T13:00:00+00:00",
         rationale="Reviewed bootstrap hotfix.",
         resume_step=WorkflowStep.CODEX_PLAN_REVISION,
     )
@@ -613,8 +611,6 @@ def test_legacy_quota_resume_diff_gate_reopens_for_fingerprint_revalidation() ->
         approved=True,
         fingerprint="3" * 64,
         paths=("src/runtime.py",),
-        decided_by="operator",
-        decided_at="2026-08-12T12:00:00+00:00",
         rationale="reviewed exact changed fingerprint and path",
     )
     loaded = WorkflowState.from_dict(approved.to_dict())
@@ -626,6 +622,31 @@ def test_legacy_quota_resume_diff_gate_reopens_for_fingerprint_revalidation() ->
         "quota-resume-diff:inv-quota-diff:" + "3" * 64
         in loaded.current_work_unit.completed_side_effects
     )
+
+
+@pytest.mark.parametrize("removed_field", ("decided_by", "decided_at"))
+def test_removed_gate_decision_display_fields_cannot_return_to_state(
+    removed_field: str,
+) -> None:
+    state = make_state().await_user_gate(
+        reason=GateReason.TEST_CHANGE,
+        detail="test approval required",
+        fingerprint="4" * 64,
+        paths=("tests/test_gate.py",),
+    ).record_user_gate_decision(
+        approved=True,
+        fingerprint="4" * 64,
+        paths=("tests/test_gate.py",),
+        rationale="reviewed exact test delta",
+    )
+    document = state.to_dict()
+    work_units = document["work_units"]
+    assert isinstance(work_units, list)
+    decision = work_units[0]["gate_decisions"][0]
+    decision[removed_field] = "forbidden mirror value"
+
+    with pytest.raises(WorkflowStateValidationError, match="unexpected"):
+        WorkflowState.from_dict(document)
 
 
 def test_network_failure_roundtrips_as_bounded_retry_wait() -> None:
@@ -1021,8 +1042,6 @@ def test_fingerprint_bound_gate_rejects_mismatch_and_persists_denial_then_approv
             approved=True,
             fingerprint="2" * 64,
             paths=("tests/test_one.py",),
-            decided_by="user",
-            decided_at="2026-08-12T12:00:00+00:00",
             rationale="wrong fingerprint",
         )
     with pytest.raises(WorkflowStateValidationError, match="explicit recorded"):
@@ -1032,16 +1051,12 @@ def test_fingerprint_bound_gate_rejects_mismatch_and_persists_denial_then_approv
         approved=False,
         fingerprint="1" * 64,
         paths=("tests/test_one.py",),
-        decided_by="user",
-        decided_at="2026-08-12T12:00:00+00:00",
         rationale="needs another look",
     )
     approved = rejected.record_user_gate_decision(
         approved=True,
         fingerprint="1" * 64,
         paths=("tests/test_one.py",),
-        decided_by="user",
-        decided_at="2026-08-12T12:01:00+00:00",
         rationale="reviewed",
     )
     active = approved.record_active_test_approval(
@@ -1076,8 +1091,6 @@ def test_anchor_gate_persists_reset_and_resume_steps() -> None:
         approved=True,
         fingerprint="3" * 64,
         paths=("RATE",),
-        decided_by="domain-owner",
-        decided_at="2026-08-12T12:00:00+00:00",
         rationale="review the new anchor",
     )
     decision = approved.current_work_unit.gate_decisions[-1]
@@ -1174,8 +1187,6 @@ def test_unexpected_file_user_gate_decision_roundtrips() -> None:
         approved=True,
         fingerprint="4" * 64,
         paths=("src/external.py",),
-        decided_by="operator",
-        decided_at="2026-08-20T10:00:00+00:00",
         rationale="exact external change reviewed",
     )
     loaded = WorkflowState.from_dict(approved.to_dict())

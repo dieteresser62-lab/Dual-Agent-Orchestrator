@@ -27,7 +27,6 @@ MIGRATION_MISMATCH_MARKERS = (
     "expected exactly one immutable approved-plan record, found",
     "state-v3 mirror is missing its approved-plan commit binding",
     "approved-plan binding differs from state-v3",
-    "gate decisions differ from state-v3",
     "finding transitions differ from state-v3",
     "finding status differs from state-v3",
     "imported finding status differs from state-v3",
@@ -57,6 +56,9 @@ RESUME_ERROR_MARKERS = (
     "workflow policies differ from state-v3",
     "structured-v2 run has no slice boundary prefix",
     "slice boundaries differ from state-v3",
+    "structured-v2 run has no gate transition prefix",
+    "gate transitions differ from state-v3",
+    "gate decision bindings differ from state-v3",
     "is historical and cannot be resumed",
     "structured-v2 state lacks the complete native Codex-Claude transport binding",
     "record chain for run",
@@ -219,8 +221,6 @@ WORKFLOW_STATE_FIELD_INVENTORY = {
         "reason",
         "fingerprint",
         "paths",
-        "decided_by",
-        "decided_at",
         "rationale",
         "resume_step",
     },
@@ -304,6 +304,8 @@ COMPARISON_TARGETS = (
     ("src/artifact_migration.py", None, "require_workflow_status_prefix"),
     ("src/artifact_migration.py", None, "assert_workflow_status_mirror"),
     ("src/artifact_migration.py", None, "assert_slice_boundary_mirror"),
+    ("src/artifact_migration.py", None, "require_gate_prefix"),
+    ("src/artifact_migration.py", None, "assert_gate_mirror"),
     ("src/artifact_migration.py", None, "require_side_effect_ledger_prefix"),
     ("src/artifact_migration.py", None, "assert_side_effect_mirror"),
     ("src/artifact_migration.py", None, "_mirror_difference_code"),
@@ -405,11 +407,13 @@ STRICT_BODY_TARGETS = tuple(
 # non-divergence comparison added inside one of these boundaries forces S2's
 # inventory to be reviewed instead of silently aging.
 EXPECTED_COMPARISON_COUNTS = {
-    "src/artifact_migration.py:resolve_resume_state": 89,
+    "src/artifact_migration.py:resolve_resume_state": 86,
     "src/artifact_migration.py:assert_run_binding_mirror": 6,
     "src/artifact_migration.py:require_workflow_status_prefix": 3,
     "src/artifact_migration.py:assert_workflow_status_mirror": 4,
     "src/artifact_migration.py:assert_slice_boundary_mirror": 4,
+    "src/artifact_migration.py:require_gate_prefix": 1,
+    "src/artifact_migration.py:assert_gate_mirror": 4,
     "src/artifact_migration.py:require_side_effect_ledger_prefix": 4,
     "src/artifact_migration.py:assert_side_effect_mirror": 5,
     "src/artifact_migration.py:_mirror_difference_code": 0,
@@ -462,7 +466,7 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/orchestrator.py:ProductionWorkflowDriver.persist_native_codex_contract": 8,
     "src/orchestrator.py:ProductionWorkflowDriver.prepare_finding_handoff": 13,
     "src/orchestrator.py:ProductionWorkflowDriver.checkpoint": 6,
-    "src/orchestrator.py:ProductionWorkflowDriver._project_audit": 25,
+    "src/orchestrator.py:ProductionWorkflowDriver._project_audit": 21,
     "src/orchestrator.py:ProductionWorkflowDriver.finalize_audit": 9,
     "src/orchestrator.py:ProductionWorkflowDriver.commit_slice": 45,
     "src/inbox_watcher.py:QueueSuccessEvidence.__post_init__": 5,
@@ -491,6 +495,8 @@ EXPECTED_STRICT_BODY_DIGESTS = {
     "src/artifact_migration.py:require_workflow_status_prefix": "964d356480288034c6dc52de377c2326c06d2db50d6aae52fd2b3d5dbcc5bdec",
     "src/artifact_migration.py:assert_workflow_status_mirror": "0d6ac0eec3998504048ccf74ee978930a4e2dfa3cd256e71268e143a774b7eae",
     "src/artifact_migration.py:assert_slice_boundary_mirror": "e0f6199f8d92c8f1d141822a0cbb2d6b80238cf247cc2eaacc83310d158c5d5f",
+    "src/artifact_migration.py:require_gate_prefix": "980ecc54d5b6c651d9937728b37a9e7cdfc2d27d8d4100eee15fde0d85249774",
+    "src/artifact_migration.py:assert_gate_mirror": "cc1214a7684e5c95ae519fac33f0624739167083440bbd58725888ce3a46e581",
     "src/artifact_migration.py:require_side_effect_ledger_prefix": "75a389d1d2170ebd424810be772b2050c6b3951591530505cd7ba480138103c6",
     "src/artifact_migration.py:assert_side_effect_mirror": "a987bcfdd6e57add8c76d0f45bcb005c7f560dcb2c682411eed66d9f67c76a54",
     "src/artifact_migration.py:_mirror_difference_code": "9433c6d83367347145eebab39e8fc4e3a989062ff9864bec6752710065ffbbc7",
@@ -689,13 +695,13 @@ def test_migration_comparison_inventory_is_source_bound() -> None:
     source = _source("src/artifact_migration.py")
     source_strings = _string_constants("src/artifact_migration.py")
     document = MATRIX_PATH.read_text(encoding="utf-8")
-    assert _raise_count("src/artifact_migration.py", "mismatch") == 33
+    assert _raise_count("src/artifact_migration.py", "mismatch") == 32
     assert source.count("differs from state-v3") == 16
     for marker in MIGRATION_MISMATCH_MARKERS:
         assert marker in source_strings
         assert marker in document
 
-    assert _raise_count("src/artifact_migration.py", "ArtifactResumeError") == 22
+    assert _raise_count("src/artifact_migration.py", "ArtifactResumeError") == 25
     for marker in RESUME_ERROR_MARKERS:
         assert marker in (source if marker == "exc.diagnostic.message" else source_strings)
         assert marker in document
@@ -895,7 +901,14 @@ def test_every_s4a_stop_entry_has_exactly_one_reasoned_classification() -> None:
         "`slices[*].start_fingerprint`",
     }
     r4_covered_fields = {"`work_units[*].completed_side_effects`"}
-    assert len(stop_fields) == 23
+    r5_covered_fields = {
+        "`work_units[*].active_test_fingerprint`, `active_test_paths`",
+        "aktueller `gate.status/reason/detail/fingerprint/paths/resume_step`",
+        "`gate_decisions[*].paths` und `resume_step`",
+        "`gate_decisions[*].decided_by`",
+        "`gate_decisions[*].decided_at`",
+    }
+    assert len(stop_fields) == 18
     assert len(fields) == len(set(fields)) == 41
     assert set(fields) == (
         stop_fields
@@ -903,6 +916,7 @@ def test_every_s4a_stop_entry_has_exactly_one_reasoned_classification() -> None:
         | r2_covered_fields
         | r3_covered_fields
         | r4_covered_fields
+        | r5_covered_fields
         | {"`created_at`, `updated_at`"}
     )
     assert groups["`work_units[*].codex_return_count`"] == "A"
@@ -924,6 +938,9 @@ def test_every_s4a_stop_entry_has_exactly_one_reasoned_classification() -> None:
     for field in r4_covered_fields:
         reason = next(reason for name, _group, reason in rows if name == field)
         assert "In R4 geschlossen" in reason
+    for field in r5_covered_fields:
+        reason = next(reason for name, _group, reason in rows if name == field)
+        assert "In R5" in reason
     for field in r3_covered_fields:
         reason = next(reason for name, _group, reason in rows if name == field)
         assert "In R3 geschlossen" in reason

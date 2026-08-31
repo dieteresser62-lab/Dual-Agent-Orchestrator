@@ -144,12 +144,11 @@ Einen formalen Einzelauftrag setzt du explizit fort:
 run_task --resume --task-file task.md
 ```
 
-Nur wenn der protokollierte Exitcode 4 tatsächlich eine menschliche Gate-Entscheidung verlangt — also nicht bei `bootstrap_check` — wird diese mit Akteur und Begründung erteilt:
+Nur wenn der protokollierte Exitcode 4 tatsächlich eine menschliche Gate-Entscheidung verlangt — also nicht bei `bootstrap_check` — wird diese mit Begründung erteilt:
 
 ```bash
 run_task --watch --resume \
   --approve-gate \
-  --gate-actor "Ihr Name" \
   --gate-rationale "Persistierten Gate-Grund und Fingerprint geprüft"
 ```
 

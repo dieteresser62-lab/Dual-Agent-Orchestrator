@@ -196,11 +196,10 @@ Der Workflow persistiert seinen Zustand, bevor er aus einem fortsetzbaren Halt z
 
 ```bash
 ./run_task --resume --approve-gate \
-  --gate-actor "Dieter" \
   --gate-rationale "Exakten persistierten Fingerprint geprüft und Fortsetzung freigegeben"
 ```
 
-Mit `--reject-gate` und denselben Anforderungen an Akteur und Begründung wird eine Ablehnung protokolliert.
+Mit `--reject-gate` und derselben Anforderung an eine Begründung wird eine Ablehnung protokolliert. Die angezeigte Autorität stammt aus dem strukturierten Gate-Record.
 
 Die wichtigsten Gates sind:
 
@@ -228,7 +227,7 @@ Markdown-Codezäune, lokale Textnormalisierung und ein LLM-Reparaturturn gehöre
 nicht mehr zum produktiven Transport. Eine fehlende oder ungültige JSON-Antwort
 endet fail-closed als Provider-Outputfehler.
 
-Die Quotabehandlung erfolgt rollenspezifisch. Bei aktivierter automatischer Quotafortsetzung wird ein eindeutiger Reset innerhalb der konfigurierten Wartegrenze persistiert, unter Ausgabe von Heartbeats abgewartet und am exakt fehlgeschlagenen Schritt einmal fortgesetzt. Neben Zeitstempeln, relativen Angaben und ausdrücklich benannten Zeitzonen wird auch Codex' englische Datumsangabe wie `Aug 20th, 2026 5:36 AM` erkannt; da sie selbst keine Zeitzone enthält, wird sie ausschließlich für Codex in der lokalen IANA-Zeitzone des Orchestrator-Rechners ausgewertet. Andernfalls endet der Prozess mit Exitcode 2 und bleibt fortsetzbar. Es gibt keine Ersatzrolle. Ändert sich das Repository während einer Quota-Pause, erzeugt die Fortsetzung ein `QUOTA-RESUME-DIFF`-Gate für den aktuellen Fingerprint und die betroffenen Pfade. Ein weiteres gewöhnliches `--resume` genehmigt diese Änderung bewusst nicht; erst `--resume --approve-gate` mit Akteur und Begründung setzt denselben Rollenschritt fort.
+Die Quotabehandlung erfolgt rollenspezifisch. Bei aktivierter automatischer Quotafortsetzung wird ein eindeutiger Reset innerhalb der konfigurierten Wartegrenze persistiert, unter Ausgabe von Heartbeats abgewartet und am exakt fehlgeschlagenen Schritt einmal fortgesetzt. Neben Zeitstempeln, relativen Angaben und ausdrücklich benannten Zeitzonen wird auch Codex' englische Datumsangabe wie `Aug 20th, 2026 5:36 AM` erkannt; da sie selbst keine Zeitzone enthält, wird sie ausschließlich für Codex in der lokalen IANA-Zeitzone des Orchestrator-Rechners ausgewertet. Andernfalls endet der Prozess mit Exitcode 2 und bleibt fortsetzbar. Es gibt keine Ersatzrolle. Ändert sich das Repository während einer Quota-Pause, erzeugt die Fortsetzung ein `QUOTA-RESUME-DIFF`-Gate für den aktuellen Fingerprint und die betroffenen Pfade. Ein weiteres gewöhnliches `--resume` genehmigt diese Änderung bewusst nicht; erst `--resume --approve-gate` mit Begründung setzt denselben Rollenschritt fort.
 
 ## Lokale Commits und externe Git-Aktionen
 
@@ -329,7 +328,6 @@ Für deterministische Negativ- und Fortsetzungsszenarien kann ein State-v3-JSON-
 | `--work-plan <path>` | Aufgabenmarker | Exakter repositoryrelativer `WORK_PLAN_PATH` für `PLAN_ONLY`; darf dem Marker nicht widersprechen. |
 | `--target-branch <branch>` | Aufgabenmarker | Exakter erforderlicher Feature-Branch; darf dem Marker nicht widersprechen. |
 | `--approve-gate` / `--reject-gate` | nicht gesetzt | Zusammen mit explizitem `--resume` über das exakt persistierte Benutzergate entscheiden. |
-| `--gate-actor <name>` | nicht gesetzt | Erforderliche Identität für eine explizite Gate-Entscheidung. |
 | `--gate-rationale <text>` | nicht gesetzt | Erforderliche Begründung für eine explizite Gate-Entscheidung. |
 
 ### Validierung, Probelauf und Quota

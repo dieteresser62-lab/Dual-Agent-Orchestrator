@@ -21,6 +21,7 @@ from artifact_models import (
     FindingHandoffImportPayload,
     FindingTransitionPayload,
     FingerprintKind,
+    GateTransitionPayload,
     PlanPayload,
     RecordType,
     ReviewPayload,
@@ -82,7 +83,12 @@ def _state(repository: Path, *, structured: bool = True):
     return state
 
 
-def _records(repository: Path, state) -> None:
+def _records(
+    repository: Path,
+    state,
+    *,
+    include_gate_records: bool = True,
+) -> None:
     bridge = ArtifactBridge(ArtifactStore(repository, state.run_id))
     bridge.append(
         TaskPayload("feature/resume", ("src/resume.py",), "a" * 64),
@@ -98,7 +104,7 @@ def _records(repository: Path, state) -> None:
         fingerprint_sha256="a" * 64,
         fingerprint_kind=FingerprintKind.CONTRACT,
     )
-    _status_records(bridge, state)
+    _status_records(bridge, state, include_gate_records=include_gate_records)
 
 
 def test_resume_projects_authoritative_side_effect_result_ahead_of_mirror(
@@ -183,6 +189,7 @@ def _status_records(
     state: WorkflowState,
     *,
     include_slice_boundaries: bool = True,
+    include_gate_records: bool = True,
 ) -> None:
     chain = bridge.store.load_chain()
     denied_units = {
@@ -291,6 +298,28 @@ def _status_records(
             fingerprint_sha256="a" * 64,
             fingerprint_kind=FingerprintKind.CONTRACT,
         )
+        if include_gate_records:
+            bridge.append(
+                GateTransitionPayload(
+                    work_unit_id=str(unit.work_unit_id),
+                    gate_status=unit.gate.status.value,
+                    reason=unit.gate.reason.value,
+                    detail=unit.gate.detail,
+                    fingerprint=unit.gate.fingerprint,
+                    paths=unit.gate.paths,
+                    resume_step=(
+                        None
+                        if unit.gate.resume_step is None
+                        else unit.gate.resume_step.value
+                    ),
+                    active_test_fingerprint=unit.active_test_fingerprint,
+                    active_test_paths=unit.active_test_paths,
+                ),
+                logical_id=f"gate-transition-{unit.work_unit_id}",
+                idempotency_key=f"gate-transition:{unit.work_unit_id}:1",
+                fingerprint_sha256="a" * 64,
+                fingerprint_kind=FingerprintKind.CONTRACT,
+            )
     if not include_slice_boundaries:
         return
     for item in state.slices:
@@ -917,6 +946,18 @@ def test_pre_r3_chain_without_slice_boundary_prefix_is_rejected(
     assert caught.value.code is ReplayDiagnosticCode.RECORD_MISSING
 
 
+def test_pre_r5_chain_without_gate_transition_prefix_is_rejected(
+    tmp_path: Path,
+) -> None:
+    state = _state(tmp_path)
+    _records(tmp_path, state, include_gate_records=False)
+
+    with pytest.raises(ArtifactResumeError, match="gate transition prefix") as caught:
+        resolve_resume_state(tmp_path, state)
+
+    assert caught.value.code is ReplayDiagnosticCode.RECORD_MISSING
+
+
 @pytest.mark.parametrize("field", ("start_commit", "start_fingerprint", "groups"))
 def test_structured_resume_rejects_slice_boundary_mirror_drift(
     tmp_path: Path,
@@ -1005,12 +1046,10 @@ def test_structured_resume_halts_when_mirror_gate_decision_has_no_chain_record(
         approved=True,
         fingerprint="d" * 64,
         paths=("tests/test_resume.py",),
-        decided_by="user",
-        decided_at="2026-08-18T12:00:00+00:00",
         rationale="approve changed resume test",
     )
 
-    with pytest.raises(ArtifactResumeError, match="gate decisions differ from state-v3") as error:
+    with pytest.raises(ArtifactResumeError, match="gate decision bindings differ from state-v3") as error:
         resolve_resume_state(tmp_path, state)
 
     assert error.value.code is ReplayDiagnosticCode.MIRROR_AHEAD

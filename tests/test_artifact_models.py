@@ -22,7 +22,9 @@ from artifact_models import (
     finding_transition_sequence_sha256,
     Fingerprint,
     FingerprintKind,
+    GateDecisionPayload,
     GatePayload,
+    GateTransitionPayload,
     PlanPayload,
     QuotaPausePayload,
     ResumeCheckPayload,
@@ -51,7 +53,13 @@ from artifact_models import (
     load_schema,
     validate_artifact_document,
 )
-from workflow_state import SliceStatus, WorkflowStep, WorkUnitStatus
+from workflow_state import (
+    GateReason,
+    GateStatus,
+    SliceStatus,
+    WorkflowStep,
+    WorkUnitStatus,
+)
 
 
 DIGEST = "a" * 64
@@ -137,6 +145,21 @@ def _record(payload, *, revision: int = 1) -> ArtifactRecord:  # type: ignore[no
     ValidationRequestPayload((CommandSpec("pytest", ("python3", "-m", "pytest", "tests/a b.py")),), Role.ORCHESTRATOR),
     ValidationAttestationPayload((ValidationResult(CommandSpec("pytest", ("pytest", "-q")), "pass", 0, DIGEST),), Role.ORCHESTRATOR),
     GatePayload("manual-plan", "approved", Role.USER, "explicit approval"),
+    GateTransitionPayload(
+        "work-01",
+        "awaiting_user_decision",
+        "test_change",
+        "test approval required",
+        DIGEST,
+        ("tests/test_gate.py",),
+        "claude_slice_review",
+        DIGEST,
+        ("tests/test_gate.py",),
+    ),
+    GateDecisionPayload(
+        "work-01", "gate-record-01", ("tests/test_gate.py",),
+        "claude_slice_review",
+    ),
     BindingPayload("implementation_handoff", "ec40aa3", "attestation-01", ("review-claude",)),
     QuotaPausePayload(Role.CLAUDE, DIGEST, "2026-08-18T11:30:00Z"),
     TransientRetryPayload(Role.CLAUDE, DIGEST, "2026-08-18T11:30:05Z", 1),
@@ -234,12 +257,28 @@ def test_schema_cache_never_exposes_mutable_authority() -> None:
     assert load_schema()["title"] != "tampered caller copy"
 
 
-def test_r2_record_vocabularies_stay_synced_with_state_v3() -> None:
+def test_record_vocabularies_stay_synced_with_state_v3() -> None:
     assert artifact_models._WORKFLOW_STEPS == {item.value for item in WorkflowStep}
     assert artifact_models._SLICE_STATUSES == {item.value for item in SliceStatus}
     assert artifact_models._WORK_UNIT_STATUSES == {
         item.value for item in WorkUnitStatus
     }
+    assert artifact_models._GATE_STATUSES == {item.value for item in GateStatus}
+    assert artifact_models._GATE_REASONS == {item.value for item in GateReason}
+
+
+def test_gate_transition_schema_and_domain_reject_partial_active_test_binding() -> None:
+    payload = GateTransitionPayload(
+        "work-01", "clear", "none", None, None, (), None,
+        DIGEST, ("tests/test_gate.py",),
+    )
+    raw = _record(payload).to_dict()
+    raw["payload"]["active_test_fingerprint"] = None
+
+    with pytest.raises(ArtifactValidationError, match="schema validation failed"):
+        validate_artifact_document(raw)
+    with pytest.raises(ArtifactValidationError, match="bound together"):
+        replace(payload, active_test_fingerprint=None)
 
 
 def _references(value):  # type: ignore[no-untyped-def]

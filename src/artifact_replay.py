@@ -8,7 +8,7 @@ view which can be shared by resume and audit projection code.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
 import hashlib
 import json
@@ -23,6 +23,9 @@ from artifact_models import (
     FindingTransitionPayload,
     FindingHandoffExportPayload,
     FindingHandoffImportPayload,
+    GateDecisionPayload,
+    GatePayload,
+    GateTransitionPayload,
     ImportedFindingTransition,
     finding_transition_sequence_sha256,
     ProviderInputMeasurementPayload,
@@ -148,6 +151,21 @@ class ReplayedSideEffect:
     result_sequence: int | None
 
 
+@dataclass(frozen=True, slots=True)
+class ReplayedGateDecision:
+    work_unit_id: str
+    approved: bool
+    reason: str
+    fingerprint: str
+    paths: tuple[str, ...]
+    rationale: str
+    resume_step: str | None
+    authority: Role
+    gate_created_at: str
+    gate_record_id: str
+    decision_record_id: str
+
+
 def project_work_unit_reviewers(
     records: Sequence[ArtifactRecord],
 ) -> tuple[tuple[str, Role | None], ...]:
@@ -188,8 +206,13 @@ class ArtifactReplayResult:
     work_unit_states: tuple[ReplayedWorkUnitState, ...] = ()
     workflow_policies: tuple[WorkflowPolicyPayload, ...] = ()
     slice_boundaries: tuple[SliceBoundaryPayload, ...] = ()
+    gate_transitions: tuple[GateTransitionPayload, ...] = ()
+    gate_decisions: tuple[ReplayedGateDecision, ...] = ()
     work_unit_reviewers: tuple[tuple[str, Role | None], ...] = ()
     side_effects: tuple[ReplayedSideEffect, ...] = ()
+    _reference_records: tuple[ArtifactRecord, ...] = field(
+        default=(), repr=False, compare=False
+    )
 
     def completed_side_effects(self, work_unit_id: str) -> tuple[str, ...]:
         completed = tuple(
@@ -231,7 +254,11 @@ class ArtifactReplayResult:
             for left, right in zip(selected, selected[1:])
         ):
             _fail(ReplayDiagnosticCode.RECORD_REFERENCE_MISSING, "subset is not in replay order")
-        return _result(self.expected_run_id, selected)
+        return _result(
+            self.expected_run_id,
+            selected,
+            reference_records=self._reference_records or self.records,
+        )
 
 
 def replay_artifacts(
@@ -399,6 +426,77 @@ def _validate_payload_references(
                         record,
                     )
             slice_boundaries[payload.slice_id] = payload
+
+    bound_gate_decisions: set[tuple[str, str]] = set()
+    for record in chain:
+        payload = record.payload
+        if isinstance(payload, GateTransitionPayload):
+            if record.logical_id != f"gate-transition-{payload.work_unit_id}":
+                _fail(
+                    ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+                    "gate transition logical identity differs from its work unit",
+                    record,
+                )
+            if (payload.active_test_fingerprint is None) != (
+                not payload.active_test_paths
+            ):
+                _fail(
+                    ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+                    "gate transition has a partial active-test binding",
+                    record,
+                )
+            transition = transition_units.get(payload.work_unit_id)
+            if (
+                transition is None
+                or positions[transition.record_id] >= positions[record.record_id]
+            ):
+                _fail(
+                    ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+                    "gate transition precedes its work-unit transition",
+                    record,
+                )
+        elif isinstance(payload, GateDecisionPayload):
+            transition = transition_units.get(payload.work_unit_id)
+            gate = records_by_id.get(payload.gate_record_id)
+            if (
+                transition is None
+                or positions[transition.record_id] >= positions[record.record_id]
+            ):
+                _fail(
+                    ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+                    "gate decision precedes its work-unit transition",
+                    record,
+                )
+            if (
+                gate is None
+                or not isinstance(gate.payload, GatePayload)
+                or positions[gate.record_id] >= positions[record.record_id]
+            ):
+                _fail(
+                    ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+                    "gate decision does not reference an earlier gate record",
+                    record,
+                )
+            if gate.payload.decision not in {"approved", "rejected"}:
+                _fail(
+                    ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+                    "gate decision references a non-final gate record",
+                    record,
+                )
+            if gate.fingerprint.sha256 != record.fingerprint.sha256:
+                _fail(
+                    ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+                    "gate decision fingerprint differs from its gate record",
+                    record,
+                )
+            binding = (payload.work_unit_id, payload.gate_record_id)
+            if binding in bound_gate_decisions:
+                _fail(
+                    ReplayDiagnosticCode.RECORD_DUPLICATE,
+                    "gate decision binding is duplicated",
+                    record,
+                )
+            bound_gate_decisions.add(binding)
     work_units: dict[str, ArtifactRecord] = {}
     latest_work_units: dict[str, ArtifactRecord] = {}
     for record in chain:
@@ -815,7 +913,13 @@ def _semantic_facts(records: tuple[ArtifactRecord, ...]) -> tuple[ReplayFact, ..
     )
 
 
-def _result(expected_run_id: str, records: tuple[ArtifactRecord, ...]) -> ArtifactReplayResult:
+def _result(
+    expected_run_id: str,
+    records: tuple[ArtifactRecord, ...],
+    *,
+    reference_records: tuple[ArtifactRecord, ...] | None = None,
+) -> ArtifactReplayResult:
+    accepted_references = records if reference_records is None else reference_records
     facts = _semantic_facts(records)
     documents = tuple(fact.to_document() for fact in facts)
     run_identity = next(
@@ -839,6 +943,8 @@ def _result(expected_run_id: str, records: tuple[ArtifactRecord, ...]) -> Artifa
     work_unit_states: dict[str, ReplayedWorkUnitState] = {}
     workflow_policies: dict[str, WorkflowPolicyPayload] = {}
     slice_boundaries: dict[str, SliceBoundaryPayload] = {}
+    gate_transitions: dict[str, GateTransitionPayload] = {}
+    gate_decisions: list[ReplayedGateDecision] = []
     side_effects: list[ReplayedSideEffect] = []
     side_effect_indexes: dict[str, int] = {}
     for sequence, record in enumerate(records, start=1):
@@ -861,6 +967,31 @@ def _result(expected_run_id: str, records: tuple[ArtifactRecord, ...]) -> Artifa
             workflow_policies[payload.work_unit_id] = payload
         elif isinstance(payload, SliceBoundaryPayload):
             slice_boundaries[payload.slice_id] = payload
+        elif isinstance(payload, GateTransitionPayload):
+            gate_transitions[payload.work_unit_id] = payload
+        elif isinstance(payload, GateDecisionPayload):
+            gate_record = next(
+                candidate
+                for candidate in accepted_references
+                if candidate.record_id == payload.gate_record_id
+            )
+            gate_payload = gate_record.payload
+            assert isinstance(gate_payload, GatePayload)
+            gate_decisions.append(
+                ReplayedGateDecision(
+                    work_unit_id=payload.work_unit_id,
+                    approved=gate_payload.decision == "approved",
+                    reason=gate_payload.gate_kind.replace("-", "_"),
+                    fingerprint=gate_record.fingerprint.sha256,
+                    paths=payload.paths,
+                    rationale=gate_payload.rationale,
+                    resume_step=payload.resume_step,
+                    authority=gate_payload.authority,
+                    gate_created_at=gate_record.created_at,
+                    gate_record_id=gate_record.record_id,
+                    decision_record_id=record.record_id,
+                )
+            )
         elif isinstance(payload, SideEffectPayload) and payload.phase == "intent":
             side_effect_indexes[payload.effect_key] = len(side_effects)
             side_effects.append(
@@ -920,8 +1051,14 @@ def _result(expected_run_id: str, records: tuple[ArtifactRecord, ...]) -> Artifa
             slice_boundaries[key]
             for key in sorted(slice_boundaries, key=identifier_order)
         ),
+        gate_transitions=tuple(
+            gate_transitions[key]
+            for key in sorted(gate_transitions, key=identifier_order)
+        ),
+        gate_decisions=tuple(gate_decisions),
         work_unit_reviewers=project_work_unit_reviewers(records),
         side_effects=tuple(side_effects),
+        _reference_records=accepted_references,
     )
 
 
@@ -945,6 +1082,7 @@ __all__ = [
     "ReplayedWorkflowCursor",
     "ReplayedWorkUnitState",
     "ReplayedSideEffect",
+    "ReplayedGateDecision",
     "project_work_unit_reviewers",
     "replay_artifacts",
 ]

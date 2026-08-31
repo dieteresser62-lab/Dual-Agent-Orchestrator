@@ -19,7 +19,7 @@ from agent_runtime import (
     QuotaReset,
     QuotaWaitPolicy,
 )
-from audit_trail import ValidationAuditEvent
+from audit_trail import AuditProjection, ValidationAuditEvent, _render_test_approval
 from artifact_models import (
     AgentResultPayload,
     BindingPayload,
@@ -28,6 +28,9 @@ from artifact_models import (
     FindingHandoffExportPayload,
     FindingTransitionPayload,
     FindingSeverity,
+    FingerprintKind,
+    GateDecisionPayload,
+    GatePayload,
     PlanPayload,
     ProviderAttemptPayload,
     ProviderInputComponentPayload,
@@ -506,18 +509,19 @@ def test_run_records_exist_before_first_workflow_dispatch(
     with pytest.raises(DispatchObserved):
         run_production_workflow(task, args, force_new=True)
 
-    assert observed["types"][:7] == (
+    assert observed["types"][:8] == (
         RecordType.RUN_IDENTITY,
         RecordType.RUN_PROFILE,
         RecordType.SIDE_EFFECT,
         RecordType.SIDE_EFFECT,
         RecordType.WORKFLOW_TRANSITION,
         RecordType.WORKFLOW_POLICY,
+        RecordType.GATE_TRANSITION,
         RecordType.TASK,
     )
     assert all(
         record_type is RecordType.SIDE_EFFECT
-        for record_type in observed["types"][7:]
+        for record_type in observed["types"][8:]
     )
     assert observed["identity"] == RunIdentityPayload(
         str(task.resolve()),
@@ -1224,6 +1228,8 @@ def test_structured_bind_persists_contract_and_active_work_unit_once(
         RecordType.WORKFLOW_POLICY,
         RecordType.WORKFLOW_POLICY,
         RecordType.SLICE_BOUNDARY,
+        RecordType.GATE_TRANSITION,
+        RecordType.GATE_TRANSITION,
         RecordType.TASK,
         RecordType.WORK_UNIT,
     )
@@ -3786,8 +3792,6 @@ def test_runtime_inherits_exact_prior_test_gate_before_early_resume_return() -> 
         approved=True,
         fingerprint=fingerprint,
         paths=(test_path,),
-        decided_by="dieter",
-        decided_at="2026-08-14T17:11:21+00:00",
         rationale="planned regression test reviewed",
     ).record_active_test_approval(
         fingerprint,
@@ -3827,8 +3831,6 @@ def test_runtime_recognizes_exact_reopened_gate_approval_for_plain_resume() -> N
         approved=True,
         fingerprint=fingerprint,
         paths=paths,
-        decided_by="dieter",
-        decided_at="2026-08-23T10:24:26+00:00",
         rationale="fingerprint-bound hotfix reviewed",
     ).await_user_gate(
         reason=GateReason.UNEXPECTED_FILE,
@@ -3841,6 +3843,243 @@ def test_runtime_recognizes_exact_reopened_gate_approval_for_plain_resume() -> N
 
     assert approval is state.current_work_unit.gate_decisions[0]
     assert approval.rationale == "fingerprint-bound hotfix reviewed"
+
+
+def test_audit_test_approval_is_projected_from_gate_record_authority_and_time(
+    tmp_path: Path,
+) -> None:
+    fingerprint = "a" * 64
+    later_fingerprint = "b" * 64
+    paths = ("tests/test_gate.py",)
+    state = init_workflow_state(
+        run_id="gate-audit-authority",
+        task_file=str(tmp_path / "task.md"),
+        branch="feature/gate-audit",
+        branch_base="b" * 40,
+        slice_count=1,
+        task_digest="c" * 64,
+        task_scope_patterns=paths,
+        target_branch="feature/gate-audit",
+    ).await_user_gate(
+        reason=GateReason.TEST_CHANGE,
+        detail="test approval required",
+        fingerprint=fingerprint,
+        paths=paths,
+    ).record_user_gate_decision(
+        approved=True,
+        fingerprint=fingerprint,
+        paths=paths,
+        rationale="reviewed exact test delta",
+    ).await_user_gate(
+        reason=GateReason.TEST_CHANGE,
+        detail="later test approval",
+        fingerprint=later_fingerprint,
+        paths=paths,
+    ).record_user_gate_decision(
+        approved=True,
+        fingerprint=later_fingerprint,
+        paths=paths,
+        rationale="later approval is not active",
+    ).record_active_test_approval(fingerprint, paths)
+    unit = state.current_work_unit
+    created_at = "2026-08-31T12:34:56+00:00"
+    bridge = ArtifactBridge(
+        ArtifactStore(tmp_path, state.run_id), now=lambda: created_at
+    )
+    bridge.append(
+        WorkflowTransitionPayload(
+            str(unit.slice_id),
+            state.current_slice.status.value,
+            str(unit.work_unit_id),
+            unit.current_step.value,
+            unit.status.value,
+        ),
+        logical_id="workflow-transition",
+        idempotency_key="workflow-transition:1",
+        fingerprint_sha256=state.task_digest,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    bridge.append(
+        ProductionWorkflowDriver._gate_transition_payload(unit),
+        logical_id="gate-transition-1",
+        idempotency_key="gate-transition:1:1",
+        fingerprint_sha256=state.task_digest,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    gate_record = bridge.append(
+        GatePayload(
+            "test-change", "approved", Role.USER, "reviewed exact test delta"
+        ),
+        logical_id="gate-test-change",
+        idempotency_key="gate:test-change:approved",
+        fingerprint_sha256=fingerprint,
+    )
+    bridge.append(
+        GateDecisionPayload(
+            str(unit.work_unit_id), gate_record.record_id, paths, None
+        ),
+        logical_id="gate-decision-1",
+        idempotency_key="gate-decision:1",
+        fingerprint_sha256=fingerprint,
+    )
+    later_gate_record = bridge.append(
+        GatePayload(
+            "test-change", "approved", Role.USER, "later approval is not active"
+        ),
+        logical_id="gate-test-change-later",
+        idempotency_key="gate:test-change:approved:later",
+        fingerprint_sha256=later_fingerprint,
+    )
+    bridge.append(
+        GateDecisionPayload(
+            str(unit.work_unit_id), later_gate_record.record_id, paths, None
+        ),
+        logical_id="gate-decision-1-later",
+        idempotency_key="gate-decision:1:later",
+        fingerprint_sha256=later_fingerprint,
+    )
+    replay = replay_artifacts(bridge.store.load_chain(), state.run_id)
+
+    approval = orchestrator._authorized_test_approval(unit, replay)
+
+    assert approval is not None
+    assert _render_test_approval(AuditProjection(1, test_approval=approval)) == (
+        "- Teständerungsfreigabe: `YES`\n"  # allowlist:german
+        "- Freigebende Stelle: user\n"  # allowlist:german
+        f"- Freigabezeitpunkt: {created_at}\n"  # allowlist:german
+        f"- Test-Diff-Fingerprint: `{'a' * 64}`\n"
+        "- Begründung: reviewed exact test delta\n"
+        "- Pfade: `tests/test_gate.py`\n"
+        "- Pre-Mortems: keine erfasst."
+    )
+
+
+def test_r5_gate_pending_decision_and_resume_records_precede_state_readers(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/r5-gate-order")
+    task = repository / "task.md"
+    task.write_text("gate task", encoding="utf-8")
+    head = _git(repository, "rev-parse", "HEAD")
+    state = init_workflow_state(
+        run_id="r5-gate-order",
+        task_file=str(task),
+        branch="feature/r5-gate-order",
+        branch_base=head,
+        slice_count=1,
+        task_digest="d" * 64,
+        task_scope_patterns=("src/runtime.py",),
+        target_branch="feature/r5-gate-order",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+    )
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    history = WorkflowHistory(state.current_work_unit_id)
+    driver.checkpoint(state, history)
+    pending = state.await_user_gate(
+        reason=GateReason.UNEXPECTED_FILE,
+        detail="exact runtime path requires approval",
+        fingerprint="e" * 64,
+        paths=("src/runtime.py",),
+        resume_step=WorkflowStep.CODEX_PLAN,
+    )
+    driver.checkpoint(pending, history)
+
+    result = WorkflowEngine(driver).decide_current_gate(
+        pending,
+        history,
+        approved=True,
+        rationale="reviewed exact runtime path",
+    )
+
+    replay = resolve_resume_state(repository, result.state).replay_result
+    assert replay is not None
+    transitions = tuple(
+        record
+        for record in replay.records
+        if record.record_type is RecordType.GATE_TRANSITION
+        and record.payload.work_unit_id == "1"
+    )
+    assert tuple(record.payload.gate_status for record in transitions) == (
+        "clear",
+        "awaiting_user_decision",
+        "clear",
+    )
+    gate_record = next(
+        record for record in replay.records
+        if isinstance(record.payload, GatePayload)
+    )
+    decision_record = next(
+        record for record in replay.records
+        if isinstance(record.payload, GateDecisionPayload)
+    )
+    assert replay.records.index(gate_record) < replay.records.index(decision_record)
+    assert replay.records.index(decision_record) < replay.records.index(transitions[-1])
+    assert replay.gate_decisions[0].paths == ("src/runtime.py",)
+    assert replay.gate_decisions[0].resume_step == WorkflowStep.CODEX_PLAN.value
+    assert result.state.current_work_unit.gate_decisions[0].paths == (
+        "src/runtime.py",
+    )
+    assert result.state.current_work_unit.gate_decisions[0].resume_step is WorkflowStep.CODEX_PLAN
+
+
+def test_r5_repeated_identical_rejection_remains_resume_safe(tmp_path: Path) -> None:
+    repository = _repository(tmp_path, "feature/r5-repeat-rejection")
+    task = repository / "task.md"
+    task.write_text("gate task", encoding="utf-8")
+    head = _git(repository, "rev-parse", "HEAD")
+    state = init_workflow_state(
+        run_id="r5-repeat-rejection",
+        task_file=str(task),
+        branch="feature/r5-repeat-rejection",
+        branch_base=head,
+        slice_count=1,
+        task_digest="d" * 64,
+        task_scope_patterns=("src/runtime.py",),
+        target_branch="feature/r5-repeat-rejection",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+    )
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    history = WorkflowHistory(state.current_work_unit_id)
+    driver.checkpoint(state, history)
+    pending = state.await_user_gate(
+        reason=GateReason.UNEXPECTED_FILE,
+        detail="exact runtime path requires approval",
+        fingerprint="e" * 64,
+        paths=("src/runtime.py",),
+        resume_step=WorkflowStep.CODEX_PLAN,
+    )
+    driver.checkpoint(pending, history)
+
+    first = WorkflowEngine(driver).decide_current_gate(
+        pending,
+        history,
+        approved=False,
+        rationale="path remains out of scope",
+    )
+    second = WorkflowEngine(driver).decide_current_gate(
+        first.state,
+        first.history,
+        approved=False,
+        rationale="path remains out of scope",
+    )
+
+    resolution = resolve_resume_state(repository, second.state)
+    assert resolution.replay_result is not None
+    assert len(second.state.current_work_unit.gate_decisions) == 2
+    assert len(resolution.replay_result.gate_decisions) == 1
+    assert resolution.replay_result.gate_decisions[0].approved is False
 
 
 def test_runtime_does_not_reuse_gate_approval_for_changed_fingerprint() -> None:
@@ -3860,8 +4099,6 @@ def test_runtime_does_not_reuse_gate_approval_for_changed_fingerprint() -> None:
         approved=True,
         fingerprint="a" * 64,
         paths=paths,
-        decided_by="dieter",
-        decided_at="2026-08-23T10:24:26+00:00",
         rationale="first fingerprint reviewed",
     ).await_user_gate(
         reason=GateReason.UNEXPECTED_FILE,
@@ -4329,8 +4566,6 @@ def test_internal_plan_validation_honors_exact_approved_hotfix_paths(
         approved=True,
         fingerprint=fingerprint,
         paths=hotfix_paths,
-        decided_by="dieter",
-        decided_at="2026-08-23T10:48:28+00:00",
         rationale="bootstrap hotfixes reviewed",
     )
     driver = ProductionWorkflowDriver(

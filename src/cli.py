@@ -560,10 +560,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="With --resume, reject the exact fingerprint-bound v3 user gate in state.",
     )
     parser.add_argument(
-        "--gate-actor",
-        help="User or authority recorded for an explicit v3 gate decision.",
-    )
-    parser.add_argument(
         "--gate-rationale",
         help="Rationale recorded for an explicit v3 gate decision.",
     )
@@ -848,12 +844,10 @@ def parse_args(
     if gate_decision is not None:
         if args.resume is not True:
             parser.error("--approve-gate/--reject-gate requires explicit --resume")
-        if not (args.gate_actor or "").strip():
-            parser.error("an explicit gate decision requires --gate-actor")
         if not (args.gate_rationale or "").strip():
             parser.error("an explicit gate decision requires --gate-rationale")
-    elif args.gate_actor is not None or args.gate_rationale is not None:
-        parser.error("--gate-actor/--gate-rationale require --approve-gate or --reject-gate")
+    elif args.gate_rationale is not None:
+        parser.error("--gate-rationale requires --approve-gate or --reject-gate")
     args.gate_decision = gate_decision
 
     if args.test_command is None:

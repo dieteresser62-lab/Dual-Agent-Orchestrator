@@ -443,13 +443,12 @@ def test_workflow_gates_default_to_automatic_and_allow_explicit_overrides(
 @pytest.mark.parametrize(
     "arguments",
     [
-        ["--approve-gate", "--gate-actor", "user", "--gate-rationale", "ok"],
-        ["--resume", "--approve-gate", "--gate-rationale", "ok"],
-        ["--resume", "--approve-gate", "--gate-actor", "user"],
-        ["--resume", "--gate-actor", "user"],
+        ["--approve-gate", "--gate-rationale", "ok"],
+        ["--resume", "--approve-gate"],
+        ["--resume", "--gate-rationale", "ok"],
     ],
 )
-def test_gate_cli_decision_requires_explicit_resume_actor_and_rationale(
+def test_gate_cli_decision_requires_explicit_resume_and_rationale(
     arguments: list[str], tmp_path: Path
 ) -> None:
     with pytest.raises(SystemExit):
@@ -461,8 +460,6 @@ def test_gate_cli_records_explicit_approval_intent(tmp_path: Path) -> None:
         [
             "--resume",
             "--approve-gate",
-            "--gate-actor",
-            "domain-owner",
             "--gate-rationale",
             "reviewed exact persisted evidence",
         ],
@@ -471,7 +468,6 @@ def test_gate_cli_records_explicit_approval_intent(tmp_path: Path) -> None:
     )
 
     assert args.gate_decision is True
-    assert args.gate_actor == "domain-owner"
     assert args.gate_rationale == "reviewed exact persisted evidence"
 
 

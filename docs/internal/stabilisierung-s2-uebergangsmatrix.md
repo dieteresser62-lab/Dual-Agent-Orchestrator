@@ -27,8 +27,8 @@ Dateien und Review-Pakete sind Caches beziehungsweise Projektionen.
 - **bleibt bewusst** ist für Record-interne Kausalität, unveränderliche
   Provider-Bindungen und irreversible externe Side Effects reserviert.
 
-Die Inventur ergibt 26 Kanten, 33 `mismatch(...)`-Stellen in
-`artifact_migration.py`, 22 direkte `ArtifactResumeError`-Stellen dort, 23
+Die Inventur ergibt 26 Kanten, 32 `mismatch(...)`-Stellen in
+`artifact_migration.py`, 25 direkte `ArtifactResumeError`-Stellen dort, 24
 `ArtifactBridgeError`-Stellen in Migration, Bridge und Orchestrator sowie fünf
 `_recoverable_*`-Prädikate (vier in `artifact_migration.py`, eines für den
 finalen Review-Mirror in `orchestrator.py`).
@@ -702,7 +702,7 @@ Die folgenden Meldungsstämme sind nicht die Quelle der Inventur, sondern ein
 prüfbarer Index auf jede aktuelle Raise-Stelle. Mehrere Stämme gehören bewusst
 zu derselben semantischen Kante.
 
-### 33 Migration-`mismatch(...)`-Stellen
+### 32 Migration-`mismatch(...)`-Stellen
 
 | Meldungsstamm | Kante |
 |---|---|
@@ -722,7 +722,6 @@ zu derselben semantischen Kante.
 | `expected exactly one immutable approved-plan record, found` | A05 |
 | `state-v3 mirror is missing its approved-plan commit binding` | A05 |
 | `approved-plan binding differs from state-v3` | A05 |
-| `gate decisions differ from state-v3` | A06 |
 | `finding transitions differ from state-v3` | A07 |
 | `finding status differs from state-v3` | A07 |
 | `imported finding status differs from state-v3` | A07/A02 |
@@ -749,7 +748,7 @@ die Export-Planbindung in A02/B03. Die grammatisch plurale R3-Meldung
 `slice boundaries differ from state-v3` ist zusätzlich in der direkten
 Resume-Fehlerliste gebunden.
 
-### 22 direkte `ArtifactResumeError`-Stellen
+### 25 direkte `ArtifactResumeError`-Stellen
 
 | Meldungsstamm | Kante |
 |---|---|
@@ -763,6 +762,9 @@ Resume-Fehlerliste gebunden.
 | `workflow policies differ from state-v3` | R2 Returncount-/Limitprojektion |
 | `structured-v2 run has no slice boundary prefix` | R3 Slicegrenzenpräfix fehlt für einen bereits gebundenen Slice; fail-closed vor Resume |
 | `slice boundaries differ from state-v3` | R3 Start-Commit, exakte Scopegruppen und gemessener Startfingerprint |
+| `structured-v2 run has no gate transition prefix` | R5 Gatepräfix fehlt; keine Nachrüstung aus dem State-Mirror |
+| `gate transitions differ from state-v3` | R5 aktueller Gatezustand und gemeinsam gebundener aktiver Testscope |
+| `gate decision bindings differ from state-v3` | R5 exakte Work-unit-, Pfad- und Resume-Step-Bindung an den früheren `GatePayload` |
 | `structured-v2 run has no unique initialized side-effect ledger` | R4 Ledgerpräfix fehlt oder ist mehrdeutig; keine Nachrüstung aus dem Mirror |
 | `completed side effects differ from the authoritative ledger` | R4 Mirror ist der Resultatfolge voraus oder kein exakter Präfix; ein reines Record-vor-Mirror-Suffix wird deterministisch projiziert |
 | `is historical and cannot be resumed` | A01 |
@@ -980,11 +982,11 @@ dem normativen Zustand entfernt.
 | `work_units[*].max_codex_returns` | Initialisierung/Policy | Iterationsgate | **ja seit R2** über die benannte Mirrorprojektion auf `WorkflowPolicyPayload.max_implementer_returns`; Iteration-limit-Fortsetzung ändert diesen Fakt unabhängig vom Zähler | **in R2 gedeckt** durch rollenbasierten Policyrecord |
 | `work_units[*].reviewer` | Initialisierung/Engine | Reviewerdispatch | **ja seit R2 als Gruppe-C-Projektion**: `None` vor dem ersten denied Review, danach die Rolle des letzten denied `ReviewPayload` derselben Work-unit | ableitbar; kein eigener Record |
 | `work_units[*].completed_side_effects` | Engine nach Side Effect | Idempotenz/Resume | **ja seit R4** aus den in Resultatreihenfolge reduzierten `SideEffectPayload`-Paaren je Work-unit | **in R4 gedeckt**; Ketten ohne initialisiertes Ledger stoppen |
-| `work_units[*].active_test_fingerprint`, `active_test_paths` | Testchange-Gate | Testscope/Resume | **nicht vollständig**; Gatepayload trägt weder Pfade noch Resume-Step | **STOP** |
-| aktueller `gate.status/reason/detail/fingerprint/paths/resume_step` | Gatepolicy | Resume/CLI/Dispatch | **nein**; `Gate` bildet nur abgeschlossene Entscheidung mit Kind, Entscheidung und Rationale ab | **STOP**: Pending-/Cleared-Gatetransitionen |
-| `gate_decisions[*].paths` und `resume_step` | User-/Policyentscheidung | Resume, Testscope | **nein**; `GatePayload` lässt beide Fakten aus | **STOP** |
-| `gate_decisions[*].decided_by` | User-/Policyentscheidung | Audit/Authorityprüfung | **teilweise** aus `GatePayload.authority`; die zulässige Abbildung State-String ↔ Role ist noch nicht als Projektion spezifiziert | **STOP** bis zur geschlossenen Abbildung |
-| `gate_decisions[*].decided_at` | User-/Policyentscheidung | Audit | **nein**; `ArtifactRecord.created_at` ist nicht nachweislich dieselbe Entscheidungszeit | **STOP**, falls normativ; sonst Projektionszeit entfernen |
+| `work_units[*].active_test_fingerprint`, `active_test_paths` | Testchange-Gate | Testscope/Resume | **In R5 vollständig:** gemeinsam in `GateTransitionPayload.active_test_fingerprint/active_test_paths` | **IN R5 GESCHLOSSEN:** Replay und Mirrorvergleich erzwingen die gemeinsame Bindung |
+| aktueller `gate.status/reason/detail/fingerprint/paths/resume_step` | Gatepolicy | Resume/CLI/Dispatch | **In R5 vollständig:** `GateTransitionPayload` trägt den gesamten Gatezustand | **IN R5 GESCHLOSSEN:** Pending, Entscheidung, Clear und Resume werden vor ihrem Leser geschrieben |
+| `gate_decisions[*].paths` und `resume_step` | User-/Policyentscheidung | Resume, Testscope | **In R5 vollständig:** `GateDecisionPayload` bindet beide an einen früheren `GatePayload` | **IN R5 GESCHLOSSEN:** Replay rekonstruiert die exakte Entscheidungsbindung |
+| `gate_decisions[*].decided_by` | User-/Policyentscheidung | Audit/Authorityprüfung | **In R5 entfallen:** freier State-String entfernt; Anzeige aus `GatePayload.authority` | **ENTFALLEN IN R5:** Guard verhindert die Rückkehr ins State-Schema |
+| `gate_decisions[*].decided_at` | User-/Policyentscheidung | Audit | **In R5 entfallen:** Statezeit entfernt; Anzeige aus `ArtifactRecord.created_at` des referenzierten Gate-Records | **ENTFALLEN IN R5:** keine Gleichheit mit dem alten Mirrorzeitpunkt wird zugesichert |
 | `invocation_failures[*].invocation_id`, `idempotency_key` | Providerfehlerpfad | Resume/Retry-Deduplikation | **nein**; weder Pause/Retry noch terminaler Attempt bewahren beide State-IDs | **STOP** |
 | `invocation_failures[*].provider_text/received_at/step/slice_id/work_unit_id/diagnostic_exit_code` | Providerfehlerpfad | Resume, Diagnose, Exitpolicy | **nein**; Quota/Retry tragen nur Teilmenge | **STOP** |
 | `invocation_failures[*].parse_path/source_timezone/reset_at_utc/safety_margin_seconds` | Quota-Parser | Scheduling/Diagnose | **nein** | **STOP** |
@@ -1020,8 +1022,8 @@ dem normativen Zustand entfernt.
 
 ### S4a-Sortierung der STOP-Einträge
 
-Die folgende Tabelle ist die verbindliche Auflösung der aktuell dreiundzwanzig
-fett als `STOP` markierten Zeilen sowie der bereits in R1 bis R4 geschlossenen
+Die folgende Tabelle ist die verbindliche Auflösung der aktuell achtzehn
+fett als `STOP` markierten Zeilen sowie der bereits in R1 bis R5 geschlossenen
 Zeilen oben. Jede Zeile kommt genau einmal vor. `A` benennt
 den benötigten Recordtyp, das Feld und den heutigen beziehungsweise künftigen
 Schreiber. `B` benennt die tatsächlichen Leser und begründet, weshalb deren
@@ -1037,7 +1039,7 @@ keinen fett markierten STOP enthält.
 | `branch_base` | A | **In R1 geschlossen:** `RunIdentityPayload.branch_base`; Schreiber: derselbe frühe Checkpoint. Diff-, Scope- und Commitlogik lesen die exakte Git-Startgrenze. |
 | `execution_mode` | A | **In R1 geschlossen:** `RunIdentityPayload.execution_mode`; Schreiber: derselbe frühe Checkpoint nach Taskparser/Initialisierung und vor dem ersten Workflowdispatch. |
 | `audit_report_path` | A | **In R1 geschlossen:** `RunIdentityPayload.audit_report_path`; Schreiber: derselbe frühe Checkpoint nach Taskparser/Initialisierung. Auditprojektion und Correction-Reportrouting führen davon Dateischreibziele und Scope ab. |
-| `created_at`, `updated_at` | B | Leser sind `WorkflowState.to_dict()/from_dict()`, `state_io` sowie die Diagnoseausgabe; `orchestrator` verwendet `updated_at` nur als Anzeigewert für das ebenfalls nicht normative `decided_at`. Kein Routing-, Authority-, Retry- oder Side-effect-Entscheid hängt von beiden Zeiten ab. Nach S4b sind sie volatile Projektionsmetadaten aus Recordzeiten und nicht Teil semantischer Gleichheit. |
+| `created_at`, `updated_at` | B | Leser sind `WorkflowState.to_dict()/from_dict()`, `state_io` sowie die Diagnoseausgabe. Der frühere hängende Leser `decided_at=state.updated_at` ist in R5 zusammen mit `decided_at` entfallen. Kein Routing-, Authority-, Retry- oder Side-effect-Entscheid hängt von beiden Zeiten ab. Nach S4b sind sie volatile Projektionsmetadaten aus Recordzeiten und nicht Teil semantischer Gleichheit. |
 | `current_slice_id`, `current_work_unit_id`, `current_step` | A | **In R2 geschlossen:** `WorkflowTransitionPayload.slice_id/work_unit_id/step`; Schreiber: `WorkflowEngine` über den Treiber an jeder Dispatch-, Gate-, Resume- und Completionkante vor dem nächsten Leser. Der globale Step ist die benannte Projektion des Steps der aktuellen Work-unit und kein zweiter Fakt. |
 | `slices[*].status` | A | **In R2 geschlossen:** `WorkflowTransitionPayload.slice_status`; Schreiber: `WorkflowState`-Transitionsmethoden über den Engine-Treiber. Routing, Commit und Completion lesen die letzte Transition je Slice. |
 | `slices[*].start_commit` | A | **In R3 geschlossen:** `SliceBoundaryPayload.start_commit`; Schreiber: `_persist_slice_boundaries()` nach der Cursortransition und vor Work-unit-Bindung, Scopeprüfung und Side Effect. Replay erzwingt denselben Start-Commit in jeder späteren Scopeerweiterungsrevision. |
@@ -1049,11 +1051,11 @@ keinen fett markierten STOP enthält.
 | `work_units[*].max_codex_returns` | A | **In R2 geschlossen:** `WorkflowPolicyPayload.max_implementer_returns`; Schreiber: Work-unit-Initialisierung und explizite Iteration-limit-Fortsetzung. Diese Fortsetzung erhöht nur die Obergrenze und lässt `implementer_return_count` unverändert. |
 | `work_units[*].reviewer` | C | **In R2 geschlossen:** Die benannte und vor/nach einem Denial gegen den State-v3-Mirror getestete Projektion `project_work_unit_reviewers()` liefert vor dem ersten Review `None`, danach die Rolle des letzten denied `ReviewPayload` derselben Work-unit. Schema 2 erlaubt dafür ausschließlich `Role.CLAUDE`; ein eigener Reviewerrecord existiert nicht. |
 | `work_units[*].completed_side_effects` | A | **In R4 geschlossen:** `SideEffectPayload.effect_key/phase/result` plus immutable Klasse/Work-unit/Operationsparameter; Schreiber: jeweiliger Wrapper vor und nach Git-, Provider-, Datei- oder Queueoperation. Pure Replay projiziert Resultate in Abschlussreihenfolge; Resume verlangt, dass der Mirror ein exakter Präfix ist, und übernimmt ausschließlich ein autoritatives Record-vor-Mirror-Suffix. Git prüft Parent/erwarteten Baum, Provider die dauerhafte Antwort oder terminalen Fehler, überschreibende Projektionen Soll-/Vorher-Digest plus im Intent persistierte Sollbytes und Queue genau eine gebundene reguläre Source-/Destinationlage ohne Symlink. Unbekanntes stoppt, Ketten ohne Ledgerinitialisierung werden nicht nachgerüstet. |
-| `work_units[*].active_test_fingerprint`, `active_test_paths` | A | `GateTransitionPayload.active_test_fingerprint/paths`; Schreiber: Testchange-Gate nach exakter Scopeentscheidung. Testscope und Resume lesen beide Werte gemeinsam. |
-| aktueller `gate.status/reason/detail/fingerprint/paths/resume_step` | A | `GateTransitionPayload.status/reason/detail/fingerprint/paths/resume_step`; Schreiber: Gatepolicy bei Pending, Clear und Resume. Der aktuelle Dispatch hängt unmittelbar davon ab. |
-| `gate_decisions[*].paths` und `resume_step` | A | `GateDecisionPayload.paths/resume_step`; Schreiber: User-/Policyentscheidung in `persist_gate_decision()`. Resume und Testscope benötigen die exakte Bindung. |
-| `gate_decisions[*].decided_by` | B | Leser sind `_authorized_test_approval()`, `_overall_audit_entries()` und `workflow._authorized_test_changes()` über `AuthorizedTestChanges.approved_by`; sie rendern den freien Anzeigenamen nur im Audit. `has_gate_approval()` prüft ihn nicht. Die normative Authority bleibt verlustfrei `GatePayload.authority`; der freie State-String entfällt. |
-| `gate_decisions[*].decided_at` | B | Leser sind `_authorized_test_approval()`, `_overall_audit_entries()` und `workflow._authorized_test_changes()` über `AuthorizedTestChanges.approved_at`; keine Gate-, Commit- oder Resumeentscheidung prüft die Zeit. Für Anzeige genügt `ArtifactRecord.created_at`, ohne Gleichheit mit dem alten Mirrorzeitpunkt zu behaupten. |
+| `work_units[*].active_test_fingerprint`, `active_test_paths` | A | **In R5 geschlossen:** `GateTransitionPayload.active_test_fingerprint/active_test_paths`; Schreiber: Testchange-Gate nach exakter Scopeentscheidung. Domainvalidierung und Replay binden beide Werte gemeinsam; Testscope und Resume erhalten niemals nur einen Teil. |
+| aktueller `gate.status/reason/detail/fingerprint/paths/resume_step` | A | **In R5 geschlossen:** `GateTransitionPayload.gate_status/reason/detail/fingerprint/paths/resume_step`; Schreiber: Gatepolicy bei Pending, Clear und Resume vor dem jeweiligen Dispatch-/Audit-Leser. |
+| `gate_decisions[*].paths` und `resume_step` | A | **In R5 geschlossen:** `GateDecisionPayload.paths/resume_step`; Schreiber: User-/Policyentscheidung in `persist_gate_decision()`, gebunden an den vorher geschriebenen `GatePayload`. Resume und Testscope erhalten die exakte Work-unit-Bindung. |
+| `gate_decisions[*].decided_by` | B | **In R5 entfallen:** Leser waren `_authorized_test_approval()`, `_overall_audit_entries()` und `workflow.authorized_test_changes_from_state()` über `AuthorizedTestChanges.approved_by`. Die State-only-Projektion ist entfernt; die Auditprojektion liest jetzt `GatePayload.authority` aus `ArtifactReplayResult`. `has_gate_approval()` prüfte den freien String nie. |
+| `gate_decisions[*].decided_at` | B | **In R5 entfallen:** Leser waren dieselben Auditpfade über `AuthorizedTestChanges.approved_at`; keine Gate-, Commit- oder Resumeentscheidung prüfte die Zeit. Die Anzeige verwendet nun `ArtifactRecord.created_at` des referenzierten `GatePayload`, ausdrücklich als Recordzeit und ohne Gleichheitsbehauptung zum entfernten Mirrorwert. |
 | `invocation_failures[*].invocation_id`, `idempotency_key` | A | `InvocationFailurePayload.invocation_id/idempotency_key`; Schreiber: Providerfehlerpfad vor Retry-/Pauseentscheidung. Resume und Deduplikation lesen beide IDs. |
 | `invocation_failures[*].provider_text/received_at/step/slice_id/work_unit_id/diagnostic_exit_code` | A | Gleichnamige Felder in `InvocationFailurePayload`; Schreiber: klassifizierter Providerfehlerpfad. Resume, Diagnose und Exitpolicy lesen diese Zuordnung. |
 | `invocation_failures[*].parse_path/source_timezone/reset_at_utc/safety_margin_seconds` | A | Gleichnamige Felder in `InvocationFailurePayload`; Schreiber: Quota-Parser/Scheduler. Die nächste zulässige Ausführung hängt davon ab. |
@@ -1086,6 +1088,15 @@ zurückgeführt. Der Schemaquellbaum wird nun einmal privat geladen und geprüft
 `load_schema()` gibt weiterhin nur eine isolierte Kopie aus. Damit bleibt der
 Cache abgeleitet und ohne änderbare Autorität, während jeder Record weiterhin
 gegen das bereits selbstgeprüfte Schema validiert wird.
+
+#### R5-Suitelaufzeit
+
+Der vollständige WSL-Lauf vom 31. August 2026 mit
+`python3 -m pytest tests/ -q` ist grün: **1308 passed in 153,31 s**.
+Gegenüber der im R5-Auftrag festgehaltenen R4-Baseline von **1297 passed in
+147 s** sind das sieben zusätzliche Akzeptanzfälle und **12,91 s** mehr
+Pytest-Laufzeit. Die Providernamen-Baseline, Schema-/Protokollversion 2 und das
+Inventar der `_recoverable_*`-Sonderfälle blieben unverändert.
 
 #### Entscheidung zu Schema 2 und Bestandsrecords
 
@@ -1139,6 +1150,20 @@ einer authentisch request-/response-digest-gebundenen Originalantwort erlaubt,
 nie aus dem Trennzeichenstring. Fehlt diese Quelle, bleibt der Record als
 Legacyformat auditierbar, liefert aber keine drei strukturierten Evidencefelder.
 Neue Records schreiben ausschließlich das strukturierte Objekt.
+
+R5 ergänzt `GateTransitionPayload` und `GateDecisionPayload` additiv in Schema
+2. Jede nicht ausschließlich aus einem Finding-Import bestehende fortsetzbare
+Kette muss nun für jede Work-unit den aktuellen Gate-/Testscope-Präfix sowie
+für jede Mirrorentscheidung eine Bindung an einen früheren endgültigen
+`GatePayload` besitzen; Vor-R5-Ketten werden fail-closed abgewiesen und niemals
+aus `state.json` nachgerüstet. Der Schreiber persistiert Pending, Clear, Resume
+und aktive Testbindung jeweils vor dem nächsten Gate-/Dispatch-/Audit-Leser.
+`GateDecisionRecord.decided_by` und `.decided_at` sind aus State-v3 und CLI
+entfernt. Die Auditprojektion zeigt stattdessen `GatePayload.authority` und
+`ArtifactRecord.created_at` des referenzierten Gate-Records; diese Recordzeit
+wird ausdrücklich nicht als identisch mit dem entfernten Mirrorzeitpunkt
+behauptet. Mirror, Schema-/Protokollversion 2 und die Providerrollen bleiben
+ansonsten unverändert.
 
 ### S4a-Schnittvorschlag für die verbleibenden Gruppe-A-Einträge
 

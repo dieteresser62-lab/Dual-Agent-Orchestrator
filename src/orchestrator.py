@@ -45,14 +45,16 @@ from artifact_bridge import (
 from artifact_migration import (
     ArtifactResumeError,
     assert_run_binding_mirror,
+    assert_gate_mirror,
     assert_slice_boundary_mirror,
     assert_workflow_status_mirror,
+    require_gate_prefix,
     require_workflow_status_prefix,
     resolve_resume_state,
 )
 from artifact_models import (
     ArtifactRecord, BindingPayload, CorrectionWorkUnitPayload, DiagnosticPayload,
-    FingerprintKind, GatePayload,
+    FingerprintKind, GateDecisionPayload, GatePayload, GateTransitionPayload,
     AgentResultPayload, QuotaPausePayload, ReviewPayload, Role, TaskPayload, TransientRetryPayload,
     ValidationAttestationPayload,
     WorkUnitPayload,
@@ -770,6 +772,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
             )
             if not import_only_prefix:
                 require_workflow_status_prefix(existing_replay)
+                require_gate_prefix(existing_replay)
                 if not any(
                     isinstance(record.payload, SideEffectPayload)
                     and record.payload.effect_class == "ledger"
@@ -855,6 +858,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 )
         self._persist_workflow_snapshot(state)
         self._persist_slice_boundaries(state)
+        self._persist_gate_snapshot(state)
         if state.task_scope_patterns:
             bridge.append(
                 TaskPayload(
@@ -1089,6 +1093,126 @@ class ProductionWorkflowDriver(WorkflowDriver):
 
         assert_slice_boundary_mirror(
             replay_artifacts(bridge.store.load_chain(), state.run_id), state
+        )
+
+    @staticmethod
+    def _gate_transition_payload(unit: WorkUnitRecord) -> GateTransitionPayload:
+        return GateTransitionPayload(
+            work_unit_id=str(unit.work_unit_id),
+            gate_status=unit.gate.status.value,
+            reason=unit.gate.reason.value,
+            detail=unit.gate.detail,
+            fingerprint=unit.gate.fingerprint,
+            paths=unit.gate.paths,
+            resume_step=(
+                None if unit.gate.resume_step is None else unit.gate.resume_step.value
+            ),
+            active_test_fingerprint=unit.active_test_fingerprint,
+            active_test_paths=unit.active_test_paths,
+        )
+
+    @staticmethod
+    def _matching_gate_record(
+        chain: tuple[ArtifactRecord, ...] | list[ArtifactRecord],
+        decision: GateDecisionRecord,
+    ) -> ArtifactRecord | None:
+        return next(
+            (
+                record
+                for record in reversed(chain)
+                if isinstance(record.payload, GatePayload)
+                and record.payload.gate_kind
+                == decision.reason.value.replace("_", "-")
+                and record.payload.decision
+                == ("approved" if decision.approved else "rejected")
+                and record.payload.rationale == decision.rationale
+                and record.fingerprint.sha256 == decision.fingerprint
+            ),
+            None,
+        )
+
+    def _append_gate_decision_binding(
+        self,
+        work_unit_id: int | str,
+        decision: GateDecisionRecord,
+        gate_record: ArtifactRecord,
+    ) -> ArtifactRecord:
+        bridge = self._artifact_bridge
+        assert bridge is not None
+        unit_id = str(work_unit_id)
+        logical_id = f"gate-decision-{unit_id}-{gate_record.record_id[:20]}"
+        return bridge.append(
+            GateDecisionPayload(
+                work_unit_id=unit_id,
+                gate_record_id=gate_record.record_id,
+                paths=decision.paths,
+                resume_step=(
+                    None
+                    if decision.resume_step is None
+                    else decision.resume_step.value
+                ),
+            ),
+            logical_id=logical_id,
+            idempotency_key=f"gate-decision:{unit_id}:{gate_record.record_id}",
+            fingerprint_sha256=decision.fingerprint,
+        )
+
+    def _persist_gate_snapshot(self, state: WorkflowState) -> None:
+        """Append R5 gate facts before any state-based gate reader runs."""
+        bridge = self._artifact_bridge
+        if bridge is None or state.task_digest is None:
+            return
+        chain = bridge.store.load_chain()
+        replay = replay_artifacts(chain, state.run_id)
+        recorded = {
+            payload.work_unit_id: payload for payload in replay.gate_transitions
+        }
+        transition_revisions = {
+            record.logical_id: record.revision
+            for record in chain
+            if record.record_type is RecordType.GATE_TRANSITION
+        }
+        for unit in state.work_units:
+            payload = self._gate_transition_payload(unit)
+            if recorded.get(payload.work_unit_id) == payload:
+                continue
+            logical_id = f"gate-transition-{payload.work_unit_id}"
+            revision = transition_revisions.get(logical_id, 0) + 1
+            transition_record = bridge.append(
+                payload,
+                logical_id=logical_id,
+                idempotency_key=(
+                    f"gate-transition:{payload.work_unit_id}:{revision}"
+                ),
+                fingerprint_sha256=state.task_digest,
+                fingerprint_kind=FingerprintKind.CONTRACT,
+            )
+            chain = (*chain, transition_record)
+            transition_revisions[logical_id] = revision
+            recorded[payload.work_unit_id] = payload
+
+        bound = {
+            (item.work_unit_id, item.gate_record_id)
+            for item in replay.gate_decisions
+        }
+        for unit in state.work_units:
+            for decision in unit.gate_decisions:
+                gate_record = self._matching_gate_record(chain, decision)
+                if gate_record is None:
+                    raise WorkflowExecutionError(
+                        "gate decision mirror has no authoritative GatePayload"
+                    )
+                binding = (str(unit.work_unit_id), gate_record.record_id)
+                if binding in bound:
+                    continue
+                decision_record = self._append_gate_decision_binding(
+                    unit.work_unit_id, decision, gate_record
+                )
+                chain = (*chain, decision_record)
+                bound.add(binding)
+
+        assert_gate_mirror(
+            replay_artifacts(chain, state.run_id), state
         )
 
     def _append_workflow_transition(
@@ -2889,11 +3013,13 @@ class ProductionWorkflowDriver(WorkflowDriver):
             fingerprint_sha256=request.diff_fingerprint,
         )
 
-    def persist_gate_decision(self, decision: GateDecisionRecord) -> None:
+    def persist_gate_decision(
+        self, work_unit_id: int, decision: GateDecisionRecord
+    ) -> None:
         if self._artifact_bridge is None:
             return
         logical = f"gate-{decision.reason.value}-{decision.fingerprint[:12]}"
-        self._artifact_bridge.append(
+        gate_record = self._artifact_bridge.append(
             GatePayload(
                 gate_kind=decision.reason.value.replace("_", "-"),
                 decision="approved" if decision.approved else "rejected",
@@ -2904,6 +3030,10 @@ class ProductionWorkflowDriver(WorkflowDriver):
             idempotency_key=f"gate:{logical}:{decision.approved}",
             fingerprint_sha256=decision.fingerprint,
         )
+        self._append_gate_decision_binding(work_unit_id, decision, gate_record)
+
+    def persist_gate_transition(self, state: WorkflowState) -> None:
+        self._persist_gate_snapshot(state)
 
     def persist_implementation_handoff(
         self, handoff_path: Path, approved_plan_commit: str
@@ -3864,26 +3994,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
         # a foreign dirty path for the final audit transaction.
         if state.current_slice.commit_ref is not None:
             return
-        approval: AuthorizedTestChanges | None = None
-        if unit.active_test_fingerprint is not None:
-            decision = next(
-                (
-                    item for item in reversed(unit.gate_decisions)
-                    if item.approved
-                    and item.fingerprint == unit.active_test_fingerprint
-                    and item.paths == unit.active_test_paths
-                ),
-                None,
-            )
-            if decision is not None:
-                approval = AuthorizedTestChanges(
-                    approved=True,
-                    paths=decision.paths,
-                    approved_by=decision.decided_by,
-                    rationale=decision.rationale,
-                    approved_at=decision.decided_at,
-                    diff_fingerprint=decision.fingerprint,
-                )
+        approval = _authorized_test_approval(unit, structured_replay)
         projection = _audit_projection(
             state,
             unit,
@@ -3998,14 +4109,19 @@ class ProductionWorkflowDriver(WorkflowDriver):
         logger.debug("No prepared Slice audit target is present for Slice %s.", state.current_slice_id)
 
 
-def _authorized_test_approval(unit: WorkUnitRecord) -> AuthorizedTestChanges | None:
-    if unit.active_test_fingerprint is None:
+def _authorized_test_approval(
+    unit: WorkUnitRecord,
+    structured_replay: ArtifactReplayResult | None,
+) -> AuthorizedTestChanges | None:
+    if unit.active_test_fingerprint is None or structured_replay is None:
         return None
     decision = next(
         (
             item
-            for item in reversed(unit.gate_decisions)
+            for item in reversed(structured_replay.gate_decisions)
+            if item.work_unit_id == str(unit.work_unit_id)
             if item.approved
+            and item.reason == GateReason.TEST_CHANGE.value
             and item.fingerprint == unit.active_test_fingerprint
             and item.paths == unit.active_test_paths
         ),
@@ -4016,9 +4132,9 @@ def _authorized_test_approval(unit: WorkUnitRecord) -> AuthorizedTestChanges | N
     return AuthorizedTestChanges(
         approved=True,
         paths=decision.paths,
-        approved_by=decision.decided_by,
+        approved_by=decision.authority.value,
         rationale=decision.rationale,
-        approved_at=decision.decided_at,
+        approved_at=decision.gate_created_at,
         diff_fingerprint=decision.fingerprint,
     )
 
@@ -4077,7 +4193,7 @@ def _audit_projection(
     return AuditProjection(
         slice_id=unit.slice_id,
         events=history.events,
-        test_approval=approval or _authorized_test_approval(unit),
+        test_approval=approval or _authorized_test_approval(unit, structured_replay),
         implementation_ready=implementation_ready,
         commit_authorized=commit_authorized,
         red_state_followup_slice=(
@@ -5166,8 +5282,6 @@ def run_production_workflow(
                     state,
                     history,
                     approved=True,
-                    decided_by=existing_approval.decided_by,
-                    decided_at=existing_approval.decided_at,
                     rationale=existing_approval.rationale,
                 )
                 state, history = decided.state, decided.history
@@ -5176,8 +5290,6 @@ def run_production_workflow(
                     state,
                     history,
                     approved=args.gate_decision,
-                    decided_by=args.gate_actor,
-                    decided_at=state.updated_at,
                     rationale=args.gate_rationale,
                 )
                 state, history = decided.state, decided.history

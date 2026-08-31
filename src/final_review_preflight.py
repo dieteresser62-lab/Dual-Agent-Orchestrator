@@ -47,6 +47,7 @@ _TRANSITION_FINGERPRINT_EXCLUDED_TYPES = {
     # identity instead of growing the bootstrap mirror.
     RecordType.WORKFLOW_TRANSITION,
     RecordType.WORKFLOW_POLICY,
+    RecordType.GATE_TRANSITION,
     # Side-effect intents/results record physical execution and projection
     # progress. They do not change the semantic provider input transition.
     RecordType.SIDE_EFFECT,
