@@ -46,7 +46,7 @@ from workflow_state import ProtocolBinding, ProtocolMode, init_workflow_state
 
 
 ROOT = Path(__file__).resolve().parents[1]
-FAILED = ROOT / "outbox" / "failed"
+FAILED = ROOT / "tests" / "fixtures" / "error_classification"
 
 
 def _capture(call: Callable[[], object]) -> BaseException:
@@ -476,14 +476,14 @@ def test_terminal_rejection_is_promoted_after_record_start() -> None:
             "persisted request binding must be repaired, not overwritten",
         ),
         (
-            "20260829T094222.462Z_01-validierungsevidenz-darf-aktive-pruefungen-nicht-selbst-vergiften.md.poison.error.json",  # allowlist:german -- historical filename
+            "historical-poison-finding-export.error.json",
             "finding export plan commit is not present in accepted replay",
             lambda _tmp: _missing_finding_export_plan(),
             FailureClass.RESUMABLE_HALT,
             "accepted replay authority cannot be recreated by retry",
         ),
         (
-            "20260829T154920.305Z_01-validierungsevidenz-darf-aktive-pruefungen-nicht-selbst-vergiften-implement.md.poison.error.json",  # allowlist:german -- historical filename
+            "historical-poison-audit-dual-write.error.json",
             "structured audit dual-write mismatch",
             _checkpoint_failure_with_prior_quota,
             FailureClass.RESUMABLE_HALT,

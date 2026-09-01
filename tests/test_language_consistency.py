@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import re
 import shutil
@@ -1135,13 +1136,283 @@ def test_internal_archive_link_cannot_hide_a_process_role() -> None:
 def test_runtime_and_tests_do_not_read_non_authoritative_archives() -> None:
     archive_token = "docs/internal/" + "archive/"
     hits = []
-    for root in (ROOT / "src", ROOT / "tests"):
+    for root in (ROOT / "src", ROOT / "scripts", ROOT / "tests"):
         for path in root.rglob("*.py"):
             if path == THIS_FILE:
                 continue
             if archive_token in path.read_text(encoding="utf-8"):
                 hits.append(str(path.relative_to(ROOT)))
     assert not hits
+
+
+_REPOSITORY_ROOT_NAMES = frozenset(("ROOT", "PROJECT_ROOT", "repository_root"))
+_PATH_READ_METHODS = frozenset(("read_text", "read_bytes", "open"))
+
+
+def _gitignored_top_level_directories(repository_root: Path = ROOT) -> frozenset[str]:
+    directories = set()
+    for raw in (repository_root / ".gitignore").read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if (
+            not line
+            or line.startswith(("#", "!"))
+            or not line.endswith("/")
+            or any(token in line for token in ("*", "?", "["))
+        ):
+            continue
+        relative = line.removesuffix("/")
+        if "/" not in relative:
+            directories.add(relative.casefold())
+    return frozenset(directories)
+
+
+def _repository_ignored_read_hits(
+    path: Path, source: str, ignored_directories: frozenset[str]
+) -> tuple[str, ...]:
+    tree = ast.parse(source, filename=str(path))
+    parents = {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+    lexical_scope_types = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+
+    def depth(node: ast.AST) -> int:
+        result = 0
+        cursor = parents.get(node)
+        while cursor is not None:
+            result += 1
+            cursor = parents.get(cursor)
+        return result
+
+    scopes: tuple[ast.AST, ...] = (
+        tree,
+        *sorted(
+            (node for node in ast.walk(tree) if isinstance(node, lexical_scope_types)),
+            key=depth,
+        ),
+    )
+
+    def owner(node: ast.AST) -> ast.AST:
+        cursor = parents.get(node)
+        while cursor is not None and not isinstance(cursor, lexical_scope_types):
+            cursor = parents.get(cursor)
+        return cursor or tree
+
+    nodes_by_scope = {
+        scope: tuple(
+            node for node in ast.walk(scope) if node is scope or owner(node) is scope
+        )
+        for scope in scopes
+    }
+
+    def target_names(node: ast.AST) -> set[str]:
+        return {
+            item.id
+            for item in ast.walk(node)
+            if isinstance(item, ast.Name) and isinstance(item.ctx, ast.Store)
+        }
+
+    def ignored_fragments(node: ast.AST) -> set[str]:
+        paths = set()
+        for item in ast.walk(node):
+            if not isinstance(item, ast.Constant) or not isinstance(item.value, str):
+                continue
+            normalized = item.value.replace("\\", "/")
+            while normalized.startswith("./"):
+                normalized = normalized[2:]
+            first = normalized.split("/", 1)[0].casefold()
+            if first in ignored_directories:
+                paths.add(normalized)
+        return paths
+
+    environments: dict[
+        ast.AST, tuple[set[str], dict[str, set[str]], dict[str, set[str]]]
+    ] = {}
+    hits = []
+    for scope in scopes:
+        nodes = nodes_by_scope[scope]
+        parent_scope = owner(scope) if scope is not tree else None
+        parent_environment = environments.get(parent_scope)
+        rooted_names = set(_REPOSITORY_ROOT_NAMES)
+        fragments: dict[str, set[str]] = {}
+        tainted: dict[str, set[str]] = {}
+        if parent_environment is not None:
+            rooted_names.update(parent_environment[0])
+            fragments.update(
+                {name: set(values) for name, values in parent_environment[1].items()}
+            )
+            tainted.update(
+                {name: set(values) for name, values in parent_environment[2].items()}
+            )
+        changed = True
+        while changed:
+            changed = False
+            for node in nodes:
+                value: ast.AST | None = None
+                targets: set[str] = set()
+                if isinstance(node, (ast.Assign, ast.AnnAssign)):
+                    value = node.value
+                    raw_targets = node.targets if isinstance(node, ast.Assign) else (node.target,)
+                    targets = set().union(*(target_names(item) for item in raw_targets))
+                elif isinstance(node, (ast.For, ast.AsyncFor)):
+                    value = node.iter
+                    targets = target_names(node.target)
+                if value is None or not targets:
+                    continue
+                referenced_names = {
+                    item.id for item in ast.walk(value) if isinstance(item, ast.Name)
+                }
+                values = ignored_fragments(value)
+                for name in referenced_names:
+                    values.update(fragments.get(name, ()))
+                is_rooted = bool(referenced_names.intersection(rooted_names))
+                for name in targets:
+                    previous_fragments = len(fragments.get(name, ()))
+                    fragments.setdefault(name, set()).update(values)
+                    changed = changed or len(fragments[name]) != previous_fragments
+                    if is_rooted and name not in rooted_names:
+                        rooted_names.add(name)
+                        changed = True
+                    if is_rooted:
+                        previous_tainted = len(tainted.get(name, ()))
+                        tainted.setdefault(name, set()).update(values)
+                        changed = changed or len(tainted[name]) != previous_tainted
+        environments[scope] = (rooted_names, fragments, tainted)
+
+        for node in nodes:
+            if not isinstance(node, ast.Call):
+                continue
+            read_expression: ast.AST | None = None
+            if (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr in _PATH_READ_METHODS
+            ):
+                read_expression = node.func.value
+            elif (
+                isinstance(node.func, ast.Name)
+                and node.func.id == "open"
+                and node.args
+            ):
+                read_expression = node.args[0]
+            if read_expression is None:
+                continue
+            referenced_names = {
+                item.id
+                for item in ast.walk(read_expression)
+                if isinstance(item, ast.Name)
+            }
+            values = ignored_fragments(read_expression)
+            for name in referenced_names:
+                values.update(fragments.get(name, ()))
+                values.update(tainted.get(name, ()))
+            if not referenced_names.intersection(rooted_names):
+                values = set().union(
+                    *(tainted.get(name, set()) for name in referenced_names)
+                )
+            for value in sorted(values):
+                hits.append(f"{path.as_posix()}:{node.lineno}:{value}")
+    return tuple(sorted(set(hits)))
+
+
+def _repository_code_gitignored_read_hits(
+    repository_root: Path,
+    ignored_directories: frozenset[str],
+) -> tuple[str, ...]:
+    hits = []
+    for code_tree in ("src", "scripts", "tests"):
+        root = repository_root / code_tree
+        if not root.is_dir():
+            continue
+        for path in root.rglob("*.py"):
+            hits.extend(
+                _repository_ignored_read_hits(
+                    path.relative_to(repository_root),
+                    path.read_text(encoding="utf-8"),
+                    ignored_directories,
+                )
+            )
+    return tuple(sorted(hits))
+
+
+def test_repository_code_does_not_read_gitignored_source_paths() -> None:
+    ignored_directories = _gitignored_top_level_directories()
+    assert {"inbox", "outbox", ".orchestrator"} <= ignored_directories
+    hits = _repository_code_gitignored_read_hits(
+        ROOT,
+        ignored_directories,
+    )
+    assert not hits, "Gitignored repository source reads found:\n" + "\n".join(hits)
+
+
+@pytest.mark.parametrize("code_tree", ("src", "scripts", "tests"))
+@pytest.mark.parametrize("ignored_root", ("inbox", "outbox", ".orchestrator"))
+def test_gitignored_source_read_guard_covers_required_roots(
+    tmp_path: Path, code_tree: str, ignored_root: str
+) -> None:
+    synthetic = "\n".join(
+        (
+            "from pathlib import Path",
+            "ROOT = Path(__file__).resolve().parents[1]",
+            f'sources = (ROOT / "{ignored_root}/fixture.json",)',
+            "for source in sources:",
+            "    source.read_bytes()",
+        )
+    )
+    source = tmp_path / code_tree / "synthetic.py"
+    source.parent.mkdir(parents=True)
+    source.write_text(synthetic, encoding="utf-8")
+    hits = _repository_code_gitignored_read_hits(
+        tmp_path,
+        frozenset(("inbox", "outbox", ".orchestrator")),
+    )
+    assert hits == (
+        f"{code_tree}/synthetic.py:5:{ignored_root}/fixture.json",
+    )
+
+
+def test_gitignored_source_read_guard_covers_roots_reads_and_nested_scope() -> None:
+    for root_name in sorted(_REPOSITORY_ROOT_NAMES):
+        for read_expression in (
+            "open(source)",
+            "source.read_bytes()",
+            "source.read_text(encoding='utf-8')",
+        ):
+            synthetic = "\n".join(
+                (
+                    "from pathlib import Path",
+                    f"{root_name} = Path(__file__).resolve().parents[1]",
+                    "IGNORED_FIXTURE = 'outbox/failed/fixture.json'",
+                    f"source = {root_name} / IGNORED_FIXTURE",
+                    "def load_fixture():",
+                    f"    return {read_expression}",
+                )
+            )
+            hits = _repository_ignored_read_hits(
+                Path("src/synthetic.py"),
+                synthetic,
+                frozenset(("inbox", "outbox", ".orchestrator")),
+            )
+            assert hits == (
+                "src/synthetic.py:6:outbox/failed/fixture.json",
+            )
+
+
+def test_gitignored_source_read_guard_allows_indirect_runtime_state_read() -> None:
+    synthetic = "\n".join(
+        (
+            "from pathlib import Path",
+            "repository_root = Path('/caller-supplied-repository')",
+            "state_file = repository_root / '.orchestrator/state.json'",
+            "state = load_resumable_workflow_state(state_file)",
+        )
+    )
+
+    assert not _repository_ignored_read_hits(
+        Path("src/synthetic.py"),
+        synthetic,
+        frozenset(("inbox", "outbox", ".orchestrator")),
+    )
 
 
 def test_example_task_declares_every_required_boundary() -> None:

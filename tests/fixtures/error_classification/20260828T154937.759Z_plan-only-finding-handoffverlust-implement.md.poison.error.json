@@ -1,0 +1,14 @@
+{
+  "attempts": 3,
+  "exit_code": 1,
+  "failure_detail": "WorkflowExecutionError: native Codex recovery has multiple agent-result records",
+  "gate_reason": "technical_failure",
+  "poison_task": "20260828T154937.759Z_plan-only-finding-handoffverlust-implement.md.poison",
+  "protocol_mode": null,
+  "recorded_at": "2026-08-28T15:49:37.765126+00:00",
+  "run_id": "watch-20260828-113929.322399Z-a1f9abaf4ade",
+  "status": "technical_failure",
+  "step": "pipeline",
+  "version": 1,
+  "work_unit_id": 1
+}

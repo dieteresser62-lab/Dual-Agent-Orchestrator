@@ -1,0 +1,14 @@
+{
+  "attempts": 3,
+  "exit_code": 1,
+  "failure_detail": "WorkflowExecutionError: authoritative finding replay differs from the state-v3 mirror",
+  "gate_reason": "technical_failure",
+  "poison_task": "20260826T130701.912Z_Menschenlesbarkeit_der_Auditprojektion_verbessern-implement.md.poison",
+  "protocol_mode": null,
+  "recorded_at": "2026-08-26T13:07:01.917744+00:00",
+  "run_id": "watch-20260826-122718.749752Z-ffce3cc1140c",
+  "status": "technical_failure",
+  "step": "pipeline",
+  "version": 1,
+  "work_unit_id": 1
+}

@@ -1,0 +1,14 @@
+{
+  "attempts": 3,
+  "exit_code": 1,
+  "failure_detail": "WorkflowExecutionError: structured audit dual-write mismatch: structured audit dual-write mismatch: MIRROR-AMBIGUOUS at record ar1-e12ffc3b16186958f79e67ed89b5849c1d1f6bfe2f475465212587ec5176a32b: structured-v2 resume mismatch at record ar1-e12ffc3b16186958f79e67ed89b5849c1d1f6bfe2f475465212587ec5176a32b: latest work-unit finding state differs from state-v3; repair the state mirror or restore the matching record chain before resuming",
+  "gate_reason": "technical_failure",
+  "poison_task": "20260829T154920.305Z_01-validierungsevidenz-darf-aktive-pruefungen-nicht-selbst-vergiften-implement.md.poison",
+  "protocol_mode": null,
+  "recorded_at": "2026-08-29T15:49:20.313548+00:00",
+  "run_id": "watch-20260829-102810.560490Z-c16fdae858d0",
+  "status": "technical_failure",
+  "step": "pipeline",
+  "version": 1,
+  "work_unit_id": 1
+}

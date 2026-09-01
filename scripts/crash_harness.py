@@ -12,6 +12,7 @@ import argparse
 from dataclasses import dataclass, replace
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -1101,6 +1102,47 @@ def _repository_commit(repository_root: Path) -> str:
     return completed.stdout.strip()
 
 
+def _tracked_implementation_sources(
+    repository_root: Path, manifest_path: Path
+) -> tuple[Path, ...]:
+    root = repository_root.resolve()
+    manifest_relative = manifest_path.resolve().relative_to(root).as_posix()
+    completed = subprocess.run(
+        (
+            "git",
+            "ls-files",
+            "-z",
+            "--",
+            ":(glob)schemas/**/*.json",
+            ":(glob)src/**/*.py",
+            "scripts/crash_harness.py",
+            manifest_relative,
+        ),
+        cwd=root,
+        capture_output=True,
+    )
+    if completed.returncode != 0:
+        raise CrashHarnessError(
+            "Cannot resolve tracked crash-harness implementation sources: "
+            + os.fsdecode(completed.stderr).strip()
+        )
+    relative_paths = tuple(
+        sorted(
+            os.fsdecode(raw).replace("\\", "/")
+            for raw in completed.stdout.split(b"\0")
+            if raw
+        )
+    )
+    required = {"scripts/crash_harness.py", manifest_relative}
+    missing = sorted(required.difference(relative_paths))
+    if missing:
+        raise CrashHarnessError(
+            "Crash-harness implementation source is not tracked: "
+            + ", ".join(missing)
+        )
+    return tuple(root / relative for relative in relative_paths)
+
+
 def canonical_result(document: Mapping[str, object]) -> bytes:
     """Return a self-bound canonical artifact with no volatile runtime fields."""
 
@@ -1459,23 +1501,8 @@ def run_provider_free_harness(
         for row in matrix
         if row["end_state"] == "stop_condition"
     )
-    measured_sources = (
-        repository_root / "inbox/backlog/00-s5-auftrag-crash-injection-und-harness.md",
-        repository_root
-        / "inbox/backlog/00-s5b-auftrag-baselinepraefix-konvergenz.md",
-        repository_root / "schemas/orchestrator-artifact-v2.schema.json",
-        repository_root / "src/artifact_models.py",
-        repository_root / "src/artifact_bridge.py",
-        repository_root / "src/artifact_migration.py",
-        repository_root / "src/artifact_replay.py",
-        repository_root / "src/workflow.py",
-        repository_root / "src/workflow_state.py",
-        repository_root / "src/orchestrator.py",
-        repository_root / "src/inbox_watcher.py",
-        repository_root / "src" / "side_effects.py",
-        repository_root / "src" / "dry_run_scenarios.py",
-        repository_root / "scripts" / "crash_harness.py",
-        manifest_path,
+    measured_sources = _tracked_implementation_sources(
+        repository_root, manifest_path
     )
     implementation_digest = hashlib.sha256()
     measured_source_paths: list[str] = []

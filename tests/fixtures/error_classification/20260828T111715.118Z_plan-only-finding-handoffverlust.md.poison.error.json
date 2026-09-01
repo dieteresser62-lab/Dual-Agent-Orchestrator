@@ -1,0 +1,14 @@
+{
+  "attempts": 3,
+  "exit_code": 1,
+  "failure_detail": "RepositoryChangeError: could not canonicalize managed audit sections in 'docs/internal/plan-only-finding-handoffverlust-arbeitsplan.md': slice document is missing managed sections: ['approval-status', 'codex-responses', 'test-approval-premortem', 'validation-attestation']",
+  "gate_reason": "technical_failure",
+  "poison_task": "20260828T111715.118Z_plan-only-finding-handoffverlust.md.poison",
+  "protocol_mode": null,
+  "recorded_at": "2026-08-28T11:17:15.124575+00:00",
+  "run_id": "watch-20260828-111023.424270Z-d7ed6f8dc3e0",
+  "status": "technical_failure",
+  "step": "pipeline",
+  "version": 1,
+  "work_unit_id": 1
+}

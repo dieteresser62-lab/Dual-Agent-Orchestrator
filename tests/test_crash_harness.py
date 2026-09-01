@@ -3,7 +3,10 @@ from __future__ import annotations
 import ast
 from dataclasses import replace
 import json
+import os
 from pathlib import Path
+import shutil
+import subprocess
 import sys
 
 import pytest
@@ -28,11 +31,133 @@ from crash_harness import (
     RESULT_SCHEMA_VERSION,
     CrashHarnessError,
     CrashHarnessManifest,
+    _tracked_implementation_sources,
     run_provider_free_harness,
 )
 
 
 MANIFEST = ROOT / "tests/fixtures/crash_harness/manifest-v1.json"
+
+
+def _tracked_repository_snapshot(destination: Path) -> Path:
+    result = subprocess.run(
+        ("git", "ls-files", "-z", "--"),
+        cwd=ROOT,
+        capture_output=True,
+        check=True,
+    )
+    destination.mkdir()
+    for raw in result.stdout.split(b"\0"):
+        if not raw:
+            continue
+        relative = Path(os.fsdecode(raw))
+        source = ROOT / relative
+        if not source.is_file():
+            continue
+        target = destination / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+    for ignored_root in ("inbox", "outbox", ".orchestrator"):
+        assert not (destination / ignored_root).exists()
+    subprocess.run(("git", "init", "--quiet"), cwd=destination, check=True)
+    subprocess.run(("git", "add", "-f", "--", "."), cwd=destination, check=True)
+    subprocess.run(
+        (
+            "git",
+            "-c",
+            "user.name=S7b Harness",
+            "-c",
+            "user.email=s7b-harness@example.invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            "tracked repository snapshot",
+        ),
+        cwd=destination,
+        check=True,
+    )
+    return destination
+
+
+def _run_snapshot_harness(
+    repository: Path,
+    *,
+    work_root: Path,
+    manifest: Path,
+) -> bytes:
+    output = work_root.parent / f"{work_root.name}.json"
+    program = "\n".join(
+        (
+            "from pathlib import Path",
+            "import sys",
+            "repository = Path(sys.argv[1])",
+            "sys.path.insert(0, str(repository / 'scripts'))",
+            "from crash_harness import run_provider_free_harness",
+            "payload = run_provider_free_harness(",
+            "    repository_root=repository,",
+            "    work_root=Path(sys.argv[2]),",
+            "    manifest_path=Path(sys.argv[3]),",
+            ")",
+            "Path(sys.argv[4]).write_bytes(payload)",
+        )
+    )
+    completed = subprocess.run(
+        (
+            sys.executable,
+            "-I",
+            "-c",
+            program,
+            str(repository),
+            str(work_root),
+            str(manifest),
+            str(output),
+        ),
+        cwd=repository,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        pytest.fail(
+            "Isolated snapshot harness failed"
+            f" (exit {completed.returncode}).\n"
+            f"stdout:\n{completed.stdout}\n"
+            f"stderr:\n{completed.stderr}",
+            pytrace=False,
+        )
+    return output.read_bytes()
+
+
+def test_tracked_implementation_sources_are_recursive_and_ignore_untracked_files(
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "repository"
+    tracked = (
+        Path("schemas/root.json"),
+        Path("schemas/nested/child.json"),
+        Path("scripts/crash_harness.py"),
+        Path("src/root.py"),
+        Path("src/package/child.py"),
+        Path("tests/fixtures/crash_harness/manifest-v1.json"),
+    )
+    for relative in (*tracked, Path("src/untracked_backup.py")):
+        path = repository / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(relative.as_posix(), encoding="utf-8")
+    subprocess.run(("git", "init", "--quiet"), cwd=repository, check=True)
+    subprocess.run(
+        ("git", "add", "--", *(relative.as_posix() for relative in tracked)),
+        cwd=repository,
+        check=True,
+    )
+
+    sources = _tracked_implementation_sources(
+        repository,
+        repository / "tests/fixtures/crash_harness/manifest-v1.json",
+    )
+
+    assert tuple(path.relative_to(repository) for path in sources) == tuple(
+        sorted(tracked, key=lambda path: path.as_posix())
+    )
 
 
 def test_manifest_is_versioned_and_derived_from_complete_ledger_inventory() -> None:
@@ -370,28 +495,40 @@ def test_baseline_prefix_completion_rejects_near_miss_profile(
 
 
 def test_harness_result_is_byte_stable_and_self_bound(tmp_path: Path) -> None:
-    first = run_provider_free_harness(
-        repository_root=ROOT,
+    repository = _tracked_repository_snapshot(tmp_path / "repository")
+    manifest = repository / MANIFEST.relative_to(ROOT)
+    first = _run_snapshot_harness(
+        repository,
         work_root=tmp_path / "first",
-        manifest_path=MANIFEST,
-        repository_commit="e" * 40,
+        manifest=manifest,
     )
-    second = run_provider_free_harness(
-        repository_root=ROOT,
+    second = _run_snapshot_harness(
+        repository,
         work_root=tmp_path / "second",
-        manifest_path=MANIFEST,
-        repository_commit="e" * 40,
+        manifest=manifest,
     )
 
     assert first == second
     document = json.loads(first)
-    assert {
-        "inbox/backlog/00-s5-auftrag-crash-injection-und-harness.md",
-        "src/artifact_migration.py",
-        "src/artifact_replay.py",
-        "src/orchestrator.py",
-        "src/side_effects.py",
-    } <= set(document["measured_source_paths"])
+    expected_measured_sources = tuple(
+        sorted(
+            (
+                *(
+                    path.relative_to(repository).as_posix()
+                    for path in (repository / "schemas").rglob("*.json")
+                ),
+                *(
+                    path.relative_to(repository).as_posix()
+                    for path in (repository / "src").rglob("*.py")
+                ),
+                "scripts/crash_harness.py",
+                "tests/fixtures/crash_harness/manifest-v1.json",
+            )
+        )
+    )
+    assert document["measured_source_paths"] == list(expected_measured_sources)
+    for ignored_root in ("inbox", "outbox", ".orchestrator"):
+        assert not (repository / ignored_root).exists()
     digest = document.pop("artifact_sha256")
     from artifact_models import canonical_json
 

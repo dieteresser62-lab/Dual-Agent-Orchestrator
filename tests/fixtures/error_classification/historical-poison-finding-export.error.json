@@ -1,0 +1,14 @@
+{
+  "attempts": 3,
+  "exit_code": null,
+  "failure_detail": "ArtifactBridgeError: finding export plan commit is not present in accepted replay",
+  "gate_reason": null,
+  "poison_task": "20260829T094222.462Z_01-validierungsevidenz-darf-aktive-pruefungen-nicht-selbst-vergiften.md.poison",
+  "protocol_mode": null,
+  "recorded_at": "2026-08-29T09:42:22.467469+00:00",
+  "run_id": null,
+  "status": null,
+  "step": null,
+  "version": 1,
+  "work_unit_id": null
+}

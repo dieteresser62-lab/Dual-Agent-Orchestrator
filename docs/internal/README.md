@@ -11,6 +11,9 @@ Unterlagen.
   Stabilisierung abgeschlossen ist: Sie ist die eine Inventur, auf die
   Folgevorhaben aufsetzen, und `tests/test_stabilisierung_s2_transition_matrix.py`
   bindet ihren Pfad.
+- [S7b-Harness-Repositorybindung](s7b-harness-repository-binding-decisions.md) —
+  begründet die versionierte Digestgrenze und dokumentiert den Fresh-Clone-
+  Nachweis sowie den Guard gegen gitignorierte Repository-Quellabhängigkeiten.
 
 Aktive Orchestratorläufe dürfen ihre gebundenen Arbeitsplan-, Slice- und
 Auditpfade nicht manuell verschieben. Die Archivierung erfolgt erst nach dem

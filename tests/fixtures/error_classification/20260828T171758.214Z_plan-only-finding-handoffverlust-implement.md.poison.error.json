@@ -1,0 +1,14 @@
+{
+  "attempts": 3,
+  "exit_code": 1,
+  "failure_detail": "WorkflowExecutionError: branch final review requires a complete passing attestation",
+  "gate_reason": "technical_failure",
+  "poison_task": "20260828T171758.214Z_plan-only-finding-handoffverlust-implement.md.poison",
+  "protocol_mode": null,
+  "recorded_at": "2026-08-28T17:17:58.220152+00:00",
+  "run_id": "watch-20260828-113929.322399Z-a1f9abaf4ade",
+  "status": "technical_failure",
+  "step": "pipeline",
+  "version": 1,
+  "work_unit_id": 1
+}

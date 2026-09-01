@@ -1,0 +1,14 @@
+{
+  "attempts": 3,
+  "exit_code": 1,
+  "failure_detail": "TaskContractError: TARGET_BRANCH must use feature/<name> or codex/<name>",
+  "gate_reason": "technical_failure",
+  "poison_task": "20260828T110617.393Z_plan-only-finding-handoffverlust.md.poison",
+  "protocol_mode": null,
+  "recorded_at": "2026-08-28T11:06:17.398865+00:00",
+  "run_id": "watch-20260828-110617.291852Z-6f721b69f76c",
+  "status": "technical_failure",
+  "step": "pipeline",
+  "version": 1,
+  "work_unit_id": 1
+}
