@@ -6,6 +6,11 @@ Unterlagen.
 ## Aktive Dokumente
 
 - [Roadmap für Phase 2 und Folgephasen](ORCHESTRATOR_ROADMAP_PHASE_2_PLUS.md)
+- [S2-Übergangs- und Divergenzmatrix](stabilisierung-s2-uebergangsmatrix.md) —
+  die Inventur der Record-Mirror-Kanten. Sie bleibt aktiv, obwohl die
+  Stabilisierung abgeschlossen ist: Sie ist die eine Inventur, auf die
+  Folgevorhaben aufsetzen, und `tests/test_stabilisierung_s2_transition_matrix.py`
+  bindet ihren Pfad.
 
 Aktive Orchestratorläufe dürfen ihre gebundenen Arbeitsplan-, Slice- und
 Auditpfade nicht manuell verschieben. Die Archivierung erfolgt erst nach dem
@@ -59,3 +64,27 @@ branchweite Gesamtaudit sowie die vollständige Reviewkette der beiden während
 des Hochlaufs erforderlichen Recovery-Hotfixes. Die Kennung bindet das Archiv
 an den von Claude freigegebenen und vom Orchestrator mit 1132 bestandenen
 Tests attestierten Abschlussfingerprint.
+
+Der Ordner
+[`archive/stabilisierung-state-authority/`](archive/stabilisierung-state-authority/)
+enthält das vollständige Vorhaben zur Konsolidierung der Zustandsautorität:
+Analyse und Gegenanalyse, den manuellen Arbeitsplan, alle Slice-Aufträge von S1
+bis S7 einschließlich der zehn Recordbündel, der Appendkosten- und
+Basispräfix-Korrektur, die Backloganalyse, die Merge-Bestandsaufnahme, die
+S6-Vertragsentscheidungen und das Gesamtreview. Das Vorhaben lief bewusst ohne
+den Orchestrator: Codex implementierte, Claude reviewte read-only, der Betreiber
+gab frei. Ergebnis sind 27 Commits, die die Recordkette zur alleinigen Autorität
+machen; `state.json` ist seither eine verwerfbare Projektion.
+
+Der Ordner
+[`archive/validierungsevidenz-selbstvergiftung/`](archive/validierungsevidenz-selbstvergiftung/)
+enthält den Arbeitsplan, den Slicebericht und das Implementierungsreview des
+abgebrochenen Orchestratorlaufs, dessen Slice 1 die kanonische semantische
+Markdowngrenze eingeführt hat. Seine Slices 3 bis 5 gingen in die Stabilisierung
+auf; sein Slice 2 blieb als `dc29d82` gesichert und ist eine offene Entscheidung.
+
+Der Ordner
+[`archive/plan-only-finding-hotfixes-20260829/`](archive/plan-only-finding-hotfixes-20260829/)
+enthält die drei Symptom-Hotfixes zum PLAN_ONLY-Finding-Handoff vom 29. August
+2026 und das zugehörige Claude-Review. Ihre Invarianten wurden in der
+Stabilisierung zentral definiert.

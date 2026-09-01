@@ -141,10 +141,12 @@ def test_fenced_blockquoted_indented_and_inline_examples_remain_visible() -> Non
 
 
 def test_current_plan_stale_attestation_bytes_are_not_semantic_authority() -> None:
-    plan = (
-        ROOT
-        / "docs/internal/01-validierungsevidenz-darf-aktive-pruefungen-nicht-selbst-vergiften-arbeitsplan.md"  # allowlist:german
-    ).read_text(encoding="utf-8")
+    # Byte-exact snapshot of the work plan whose own audit appendix carried a
+    # stale attestation fingerprint.  The original is inert archive evidence;
+    # tests must not read archives, so the bytes live here.
+    plan = (ROOT / "tests/fixtures/stale-attestation-work-plan.md").read_text(
+        encoding="utf-8"
+    )
     stale = "028a4a6e346a"
     current = "219134f218b1"
     assert stale in plan and current in plan
