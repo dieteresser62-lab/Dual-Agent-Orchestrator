@@ -183,11 +183,14 @@ def test_root_roles_share_structured_artifact_authority_contract() -> None:
         "Native JSON results are validated",
         ".orchestrator/artifacts/<run-id>/records/",
         "technical source of truth",
-        "operational mirrors",
+        "disposable projection used only to locate its `run_id`",
         "human audit view rather than a repair source",
+        "state-projection reducer version",
+        "foreign reducer semantics is rejected fail-closed",
+        "exact cut of the canonical pre-work baseline append sequence",
+        "Any non-prefix fact",
         "UNSUPPORTED-PROTOCOL",
-        "never silently migrated",
-        "Resume is fail-closed",
+        "never migrated, repaired, or used as a fallback",
     )
     sections = []
     for path in ROLE_FILES:
@@ -195,12 +198,85 @@ def test_root_roles_share_structured_artifact_authority_contract() -> None:
         assert all(fragment in text for fragment in required), path.name
         assert "Pre-R1 chains without those records remain readable" not in text
         assert (
-            "A structured-v2 chain without exactly one of each record is "
-            "rejected fail-closed with `RECORD-MISSING` and without backfill"
+            "The initializer may finish only the exact canonical incomplete "
+            "baseline prefix described above"
         ) in text
         section = text.split(required[0], 1)[1].split("\n## ", 1)[0].strip()
         sections.append(section)
     assert len(set(sections)) == 1
+
+
+def test_root_roles_share_plan_only_transport_and_validation_tiers() -> None:
+    headings = (
+        "## PLAN_ONLY repository artifact",
+        "## Validation tiers",
+    )
+    sections: dict[str, list[str]] = {heading: [] for heading in headings}
+    for path in ROLE_FILES:
+        text = path.read_text(encoding="utf-8")
+        for fragment in (
+            "creates or updates the exact repository file at `WORK_PLAN_PATH`",
+            "`SLICE_PLAN` record for that path as a receipt",
+            "correct” explicitly means create the missing file",
+            "configured `--agents-file` (root `AGENTS.md` by default)",
+            "does not append `CLAUDE.md` or `CODEX.md`",
+            "Codex CLI may also discover `AGENTS.md`",
+            "Every review with a `ReviewPacket` uses its manifest-selected",
+            "Every review without a packet uses the full read-only Git snapshot",
+            "git ls-files --cached --others --exclude-standard",
+            "direct `IMPLEMENT` flows without an approved work plan",
+            "A root role file is manifest-dependent only when a packet exists",
+            "tests marked `crash_harness`",
+            "python3 -m pytest tests/test_crash_harness.py -v",
+            "before the branch-wide final review",
+            "The orchestrator does not select or enforce this standalone command",
+            "The operator treats a merge as permitted only when",
+            "never sampled or reduced",
+        ):
+            assert fragment in text, f"{path.name}: {fragment}"
+        for heading in headings:
+            section = text.split(heading, 1)[1].split("\n## ", 1)[0].strip()
+            sections[heading].append(section)
+    assert all(len(set(values)) == 1 for values in sections.values())
+
+
+def test_crash_harness_is_complete_but_not_in_default_slice_validation() -> None:
+    repository_config = tomllib.loads(
+        (ROOT / "orchestrator.toml").read_text(encoding="utf-8")
+    )
+    default_command = repository_config["validation"]["default_command"]
+    assert default_command == [
+        "python3",
+        "-m",
+        "pytest",
+        "tests/",
+        "-v",
+        "-m",
+        "not crash_harness",
+    ]
+    pytest_config = tomllib.loads(
+        (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    assert any(
+        marker.startswith("crash_harness:")
+        for marker in pytest_config["tool"]["pytest"]["ini_options"]["markers"]
+    )
+    harness_source = (ROOT / "tests" / "test_crash_harness.py").read_text(
+        encoding="utf-8"
+    )
+    assert "pytestmark = pytest.mark.crash_harness" in harness_source
+
+
+def test_record_authority_module_headers_match_the_root_contract() -> None:
+    required_by_module = {
+        "artifact_bridge.py": ("technical authority", "disposable run locator"),
+        "artifact_migration.py": ("only technical authority", "disposable run locator"),
+        "artifact_replay.py": ("authoritative structured record chain", "reducer version"),
+    }
+    for filename, fragments in required_by_module.items():
+        source = (ROOT / "src" / filename).read_text(encoding="utf-8")
+        header = source.split('"""', 2)[1]
+        assert all(fragment in header for fragment in fragments), filename
 
 
 def test_claude_profile_is_persistently_sonnet_high() -> None:
@@ -541,12 +617,26 @@ def test_user_docs_and_diagram_explain_structured_artifact_operations() -> None:
     ):
         assert fragment in diagram
 
-    authority_sections = "\n".join(
-        path.read_text(encoding="utf-8").split("## Structured artifact authority", 1)[1]
-        for path in ROLE_FILES
+    allowed_merge_claim = (
+        "The operator treats a merge as permitted only when that same green "
+        "HEAD-bound evidence exists, or runs a fresh complete proof after HEAD changes."
     )
-    for forbidden_claim in ("SQLite", "JSONL", "push", "merge", "external publication"):
-        assert forbidden_claim not in authority_sections
+    for path in ROLE_FILES:
+        shared_contract_tail = path.read_text(encoding="utf-8").split(
+            "## Structured artifact authority", 1
+        )[1]
+        assert shared_contract_tail.count(allowed_merge_claim) == 1, path.name
+        guarded_tail = shared_contract_tail.replace(allowed_merge_claim, "")
+        for forbidden_claim in (
+            "SQLite",
+            "JSONL",
+            "push",
+            "merge",
+            "external publication",
+        ):
+            assert forbidden_claim not in guarded_tail, (
+                f"{path.name}: {forbidden_claim}"
+            )
 
 
 _RETIREMENT_EVIDENCE_PREFIX = "antigravity-endgueltige-entfernung-"

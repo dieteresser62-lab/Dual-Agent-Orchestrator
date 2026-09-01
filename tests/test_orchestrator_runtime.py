@@ -10,7 +10,11 @@ from types import SimpleNamespace
 
 import orchestrator
 import pytest
-from agent_adapters import NativeClaudeReviewAdapter
+from agent_adapters import (
+    NativeClaudeReviewAdapter,
+    NativeCodexAdapter,
+    NativeCodexExecutionBoundary,
+)
 from agent_config import AgentSettings
 from agent_runtime import (
     AgentInvocationError,
@@ -271,7 +275,7 @@ def _append_test_commit_authority(
     return review_state
 
 
-def test_invoke_reviewer_dispatches_native_adapter_with_provider_ledger(
+def test_invoke_reviewer_dispatches_native_adapter_with_snapshot_boundary_and_provider_ledger(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository = _repository(tmp_path, "feature/native-review-dispatch")
@@ -326,10 +330,56 @@ def test_invoke_reviewer_dispatches_native_adapter_with_provider_ledger(
 
     assert driver.invoke_reviewer(invocation) is expected
     assert captured["adapter"] is adapter
+    assert captured["reviewer_manifest_paths"] is None
     lifecycle = captured["provider_attempt_lifecycle"]
     assert lifecycle is not None
     assert callable(lifecycle.start)
     assert callable(lifecycle.terminal)
+
+    assert state.work_plan_path is None
+    captured.clear()
+    direct_implement_slice = replace(
+        invocation,
+        step=WorkflowStep.CLAUDE_SLICE_REVIEW,
+    )
+    driver.active_state = state.with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW)
+
+    assert driver.invoke_reviewer(direct_implement_slice) is expected
+    assert captured["reviewer_manifest_paths"] is None
+
+    canonical_packet = json.dumps(
+        {
+            "schema": "review-packet-v1",
+            "purpose": "slice",
+            "fingerprint": "b" * 64,
+            "manifest": {
+                "paths": ["src/runtime.py"],
+                "additional_dependencies": [],
+            },
+            "diff": "slice diff",
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+    packet = ReviewPacket(
+        purpose="slice",
+        fingerprint="b" * 64,
+        manifest=ReviewPacketManifest(("src/runtime.py",)),
+        canonical_bytes=canonical_packet,
+        digest=hashlib.sha256(canonical_packet).hexdigest(),
+    )
+    monkeypatch.setattr(
+        driver,
+        "_materialize_review_packet",
+        lambda materialized: repository / f"{materialized.digest}.json",
+    )
+    captured.clear()
+    slice_invocation = replace(
+        direct_implement_slice,
+        review_packet=packet,
+    )
+
+    assert driver.invoke_reviewer(slice_invocation) is expected
+    assert captured["reviewer_manifest_paths"] == ("src/runtime.py",)
 from plan_handoff import render_implementation_task
 from native_codex_contract import (
     NativeCodexContext,
@@ -1115,6 +1165,86 @@ def test_runtime_context_auto_authorizes_scoped_test_changes_unless_gate_enabled
 
     assert automatic.test_changes_approved is True
     assert gated.test_changes_approved is False
+
+
+def test_real_codex_canonical_request_embeds_only_configured_agents_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = _repository(tmp_path, "feature/transport-boundary")
+    task = tmp_path / "task.md"
+    _write_task(task, "feature/transport-boundary", "docs/internal/work-plan.md")
+    agents_prefix = "AGENTS-S6-TRANSPORT-SENTINEL\n"
+    agents_content = (
+        agents_prefix
+        + "A" * (12_000 - len(agents_prefix))
+        + "AGENTS-S6-OUTSIDE-TRANSPORT-LIMIT\n"
+    )
+    (repository / "AGENTS.md").write_text(agents_content, encoding="utf-8")
+    (repository / "CLAUDE.md").write_text(
+        "CLAUDE-S6-TRANSPORT-SENTINEL\n", encoding="utf-8"
+    )
+    (repository / "CODEX.md").write_text(
+        "CODEX-S6-TRANSPORT-SENTINEL\n", encoding="utf-8"
+    )
+    state = init_workflow_state(
+        run_id="transport-boundary",
+        task_file=str(task),
+        branch="feature/transport-boundary",
+        branch_base=_git(repository, "rev-parse", "HEAD"),
+        slice_count=1,
+        task_digest="a" * 64,
+        task_scope_patterns=("docs/internal/work-plan.md",),
+        target_branch="feature/transport-boundary",
+        execution_mode="PLAN_ONLY",
+        work_plan_path="docs/internal/work-plan.md",
+    )
+    args = _args(repository, task)
+    args.agents_file = str(repository / "AGENTS.md")
+    monkeypatch.chdir(repository)
+    context = orchestrator._context(
+        args=args,
+        assignment="TASK-S6-TRANSPORT-SENTINEL",
+        state=state,
+    )
+    contract = CodexStepContract(
+        name="transport-boundary-plan",
+        readiness_marker=ReadinessMarker.PLAN,
+        slice_id="01",
+        round_number=1,
+        require_slice_plan=True,
+        plan_artifact_path="docs/internal/work-plan.md",
+    )
+    bundle = WorkflowEngine._native_codex_request(
+        state=state,
+        context=context,
+        history=WorkflowHistory(state.current_work_unit_id),
+        contract=contract,
+        request_kind=NativeCodexRequestKind.PLAN,
+    )
+    execution = tmp_path / "execution"
+    assets = tmp_path / "assets"
+    execution.mkdir()
+    assets.mkdir()
+    adapter = NativeCodexAdapter(args.agent_settings["codex"])
+    prepared = adapter.prepare_native_provider_input(
+        bundle,
+        NativeCodexExecutionBoundary.canary(
+            repository, execution_root=execution, evidence_asset_root=assets
+        ),
+    )
+
+    assert prepared.stdin_text is not None
+    canonical_request = json.loads(prepared.stdin_text)
+    assignment = canonical_request["assignment"]
+    assert assignment == context.assignment
+    assert "TASK-S6-TRANSPORT-SENTINEL" in assignment
+    assert "AGENTS-S6-TRANSPORT-SENTINEL" in assignment
+    assert agents_content[:12_000] in assignment
+    assert "AGENTS-S6-OUTSIDE-TRANSPORT-LIMIT" not in assignment
+    assert "CLAUDE-S6-TRANSPORT-SENTINEL" not in assignment
+    assert "CODEX-S6-TRANSPORT-SENTINEL" not in assignment
+    assert prepared.stdin_text == bundle.canonical_json
+    adapter.cleanup()
 
 
 def test_final_review_recovers_latest_prior_attestation_after_transition_checkpoint() -> None:

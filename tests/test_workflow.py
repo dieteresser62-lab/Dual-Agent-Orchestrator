@@ -2621,6 +2621,8 @@ def test_native_codex_request_builder_covers_plan_and_final_report() -> None:
     assert plan_bundle.document["request_type"] == "plan"
     assert plan_bundle.document["current_fingerprint"] == "a" * 64
     assert plan_bundle.document["authorized_paths"] == ["docs/internal/plan.md"]
+    transported_plan_request = json.loads(plan_bundle.canonical_json)
+    assert transported_plan_request["assignment"] == _context().assignment
     assert final_bundle.document["request_type"] == "final_report"
     assert final_bundle.document["current_fingerprint"] == "f" * 64
     assert final_bundle.document["authorized_paths"] == sorted(

@@ -1,8 +1,10 @@
 """Lossless writers from workflow domain objects to authoritative records.
 
 The bridge validates every append against the typed source object and reloads
-the durable record before the caller may act. The record chain is authoritative;
-state-v3 documents are disposable projections produced by the reducer.
+the durable record before the caller may act. The record chain is the only
+technical authority; ``state.json`` is a disposable run locator and every
+state-v3 document is a reducer-version-bound projection. Foreign semantics and
+non-canonical resume histories remain fail-closed.
 """
 
 from __future__ import annotations

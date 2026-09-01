@@ -430,7 +430,7 @@ id = "DOMAIN-001"
 description = "Stop when the named domain invariant changes."
 
 [validation]
-default_command = ["python3", "-m", "pytest", "tests/", "-v"]
+default_command = ["python3", "-m", "pytest", "tests/", "-v", "-m", "not crash_harness"]
 default_timeout_seconds = 1800
 
 [[provider_input_budget]]
@@ -524,5 +524,12 @@ chmod +x /absolute/path/to/Dual-Agent-Orchestrator/run_task
 ```bash
 ./run_task --help
 ./run_task --dry-run --task-file example-task.md --quiet
-python3 -m pytest tests/ -v
+python3 -m pytest tests/ -v -m "not crash_harness"
+python3 -m pytest tests/test_crash_harness.py -v
 ```
+
+Der erste Pytest-Aufruf entspricht der standardmäßigen Slice- und
+Korrekturvalidierung. Den vollständigen Crash-Harness führt der Betreiber nach
+der letzten relevanten Änderung auf dem exakten Branch-HEAD und vor dem
+branchweiten Finalreview separat aus; der Orchestrator erzwingt dieses
+Betreiber-Gate nicht.

@@ -1,8 +1,9 @@
 """Fail-closed record-authoritative resume for structured-v2 runs.
 
 The append-only record chain is the only technical authority. ``state.json``
-and checkpoints are disposable projections and are never compared as an
-independent source of workflow facts.
+is only a disposable run locator and checkpoints are disposable projections,
+never independent workflow facts. Replay accepts only the bound reducer
+semantics; unsupported, corrupt, or non-canonical histories remain fail-closed.
 """
 
 from __future__ import annotations

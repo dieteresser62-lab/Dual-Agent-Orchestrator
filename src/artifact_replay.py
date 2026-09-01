@@ -1,9 +1,11 @@
-"""Pure, deterministic reduction of one structured artifact record chain.
+"""Pure, deterministic reduction of one authoritative structured record chain.
 
 The store remains responsible for decoding bytes and validating the physical
-append-only chain.  This module deliberately has no filesystem or clock access:
-it validates the cross-record domain relationships and returns an immutable
-view which can be shared by resume and audit projection code.
+append-only chain. Models and loaders bind and validate the installed reducer version
+before replay. This module has no filesystem or clock access: it
+enforces cross-record relationships, rejects non-canonical histories, and
+returns the immutable view used to rebuild every disposable state and audit
+projection.
 """
 
 from __future__ import annotations

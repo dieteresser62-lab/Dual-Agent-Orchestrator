@@ -6,7 +6,7 @@
 - Ask only for material ambiguity, missing authority, secrets, or destructive action.
 - Treat unrelated dirty-worktree changes as pre-existing context and never overwrite them.
 - Do not edit `.orchestrator/state.json` or checkpoints manually.
-- After orchestration, prompt, parser, watch, or state changes run `python3 -m pytest tests/ -v`.
+- After orchestration, prompt, parser, watch, or state changes run the repository default validation tier: `python3 -m pytest tests/ -v -m "not crash_harness"`. Run the complete crash proof at the operator gate defined below.
 - Keep `AGENTS.md`, `CLAUDE.md`, and `CODEX.md` synchronized.
 - Never push, merge, force-push, rewrite history, or run destructive cleanup without explicit approval.
 
@@ -37,15 +37,28 @@
 
 - New workflows are immutably bound to `structured-v2`. Native JSON results are validated against their request-specific writer schema and domain contract before the validated append-only records become the technical source of truth for every fact they represent. There is no text-parser fallback.
 - Codex results and Claude reviews always use their native JSON transports. The former transport-selection CLI flags are retired and cannot weaken or alter this binding.
-- The authoritative record chain lives in `.orchestrator/artifacts/<run-id>/records/`. `.orchestrator/state.json` and checkpoints are operational mirrors, `head.json` is a reconstructable cache, and projected Markdown is a human audit view rather than a repair source.
+- The authoritative record chain lives in `.orchestrator/artifacts/<run-id>/records/`. `.orchestrator/state.json` is a disposable projection used only to locate its `run_id`; checkpoints are disposable operational projections, `head.json` is a reconstructable cache, and projected Markdown is a human audit view rather than a repair source.
+- The run profile binds exactly one state-projection reducer version. A cache or record chain with foreign reducer semantics is rejected fail-closed; it is never interpreted by the installed reducer.
 - Append lookups use only a process-local derivative of a fully validated record prefix. A missing, stale, or divergent derivative or `head.json` proof is discarded and rebuilt from authoritative records; explicit load and resume paths always retain full-chain validation.
-- Historical `legacy-state-v3` and `structured-v1` states are unsupported and rejected fail-closed with `UNSUPPORTED-PROTOCOL`; they are never silently migrated or used as a fallback.
-- Resume is fail-closed. Missing, corrupt, unknown, or mirror-divergent structured records require restoring the matching chain or mirror before continuation; agents must never invent records, approvals, or migration facts.
+- Historical `legacy-state-v3` and `structured-v1` chains are unsupported and rejected fail-closed with `UNSUPPORTED-PROTOCOL`; they are never migrated, repaired, or used as a fallback.
+- Resume may complete only an exact cut of the canonical pre-work baseline append sequence before any external effect. Any non-prefix fact or evidence of runtime history, invocation failure, gate decision, or completed side effect keeps resume fail-closed. Missing, corrupt, unknown, or otherwise inconsistent records require restoring the matching authoritative chain; agents must never invent records, approvals, or migration facts.
 - Every Git commit, provider start, authoritative file write, and queue move is bracketed by one stable `SideEffectPayload` intent/result pair. Replay alone reconstructs the ledger; resume may inspect Git or files only to reconcile an open intent. Overwriting cache projections bind both the prior digest and the exact intended bytes so a proven-not-occurred write can be replayed exactly; non-regular files and symlinks are never accepted as durable file or queue results. Unknown outcomes stop fail-closed, and a structured-v2 chain without the initialized ledger is unsupported. A corrupt chain cannot safely accept another authoritative record: poison handling may move the source only to its digest-bound deterministic quarantine path after provider-free reconciliation, and must persist the corruption diagnosis instead of treating that move as a completed structured side effect.
 - New Review records store the three review-evidence fields structurally. Pre-S4a `ReviewPayload.evidence` strings remain opaque legacy data and must never be split heuristically. A red-state commit or audit authorization requires the named follow-up Slice in the approved, fingerprint-bound Review record; the state mirror alone has no authority.
-- New runs bind task path, branch identity, branch base, execution mode, audit path, and both role-keyed agent profiles in early `RunIdentity`/`RunProfile` records before the first dispatch. A structured-v2 chain without exactly one of each record is rejected fail-closed with `RECORD-MISSING` and without backfill; resume compares every accepted run binding fail-closed with the state-v3 mirror.
-- Every resumable R2 chain persists role-named `WorkflowTransition` and `WorkflowPolicy` records before the next dispatch; a missing R2 status or policy prefix is rejected fail-closed without backfill.
+- A complete accepted baseline contains exactly one early `RunIdentity` and `RunProfile`, binding task path, branch identity, branch base, execution mode, audit path, both role-keyed agent profiles, and the reducer version. The initializer may finish only the exact canonical incomplete baseline prefix described above; every malformed, non-prefix, or already-active chain remains rejected fail-closed without synthesized facts.
+- Outside that exact baseline-prefix completion, every resumable R2 chain must already contain role-named `WorkflowTransition` and `WorkflowPolicy` records before the next dispatch; a missing R2 status or policy fact is rejected fail-closed without backfill.
 - Every bound Slice persists an exact `SliceBoundary` record before scope validation or a guarded side effect; the measured start commit/fingerprint are immutable, grouped scope is lossless, and a missing R3 boundary is rejected fail-closed.
+
+## PLAN_ONLY repository artifact
+
+- In `PLAN_ONLY`, Codex creates or updates the exact repository file at `WORK_PLAN_PATH`. The native result contains exactly one `SLICE_PLAN` record for that path as a receipt; the result record never substitutes for the file.
+- Automatic plan-contract correction has the same repository duty. If `WORK_PLAN_PATH` is missing, “correct” explicitly means create the missing file before returning the receipt.
+- For Codex, the orchestrator appends at most 12,000 characters from the configured `--agents-file` (root `AGENTS.md` by default) to `canonical_request.assignment`; it does not append `CLAUDE.md` or `CODEX.md`. Codex CLI may also discover `AGENTS.md` in its working tree, but the request binding does not rely on that implicit load. The native Claude reviewer has no `assignment` field and receives an explicit system policy plus its canonical request files. Every review with a `ReviewPacket` uses its manifest-selected read-only workspace; this is the normal path for plan-bound Slice and correction reviews. Every review without a packet uses the full read-only Git snapshot selected by `git ls-files --cached --others --exclude-standard`, minus the fixed generated/dependency roots. Packetless reviews include plan and branch-wide final reviews plus Slice or correction reviews in direct `IMPLEMENT` flows without an approved work plan; tracked root role files are provider-visible in all of those full-snapshot cases. A root role file is manifest-dependent only when a packet exists. Native system policy and request schemas remain the enforceable transport contract.
+
+## Validation tiers
+
+- The repository default validation command excludes tests marked `crash_harness`; it remains the per-Slice and correction-round matrix.
+- The operator runs the complete provider-free crash proof with `python3 -m pytest tests/test_crash_harness.py -v` on the exact branch HEAD after the last relevant change and before the branch-wide final review. The orchestrator does not select or enforce this standalone command. The operator treats a merge as permitted only when that same green HEAD-bound evidence exists, or runs a fresh complete proof after HEAD changes.
+- The standalone crash proof is never sampled or reduced. Only its frequency changes; its crash-boundary and convergence guarantees remain complete.
 
 ## Native JSON results
 

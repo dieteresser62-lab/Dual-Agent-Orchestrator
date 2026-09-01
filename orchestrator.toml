@@ -5,7 +5,7 @@ documentation = ["docs/**", "*.md", "*.puml"]
 generated = [".orchestrator/**", "**/__pycache__/**", ".pytest_cache/**"]
 
 [validation]
-default_command = ["python3", "-m", "pytest", "tests/", "-v"]
+default_command = ["python3", "-m", "pytest", "tests/", "-v", "-m", "not crash_harness"]
 
 [[provider_input_budget]]
 provider = "codex"

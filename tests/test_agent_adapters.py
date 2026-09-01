@@ -39,7 +39,7 @@ def _settings(role: str) -> AgentSettings:
     )
 
 
-def _codex_bundle():
+def _codex_bundle(*, assignment: str = "Create the plan."):
     contract = CodexStepContract(
         name="plan",
         readiness_marker=ReadinessMarker.PLAN,
@@ -62,7 +62,7 @@ def _codex_bundle():
             target_branch="feature/native",
             base_commit="b" * 40,
             authorized_paths=("docs/internal/plan.md",),
-            assignment="Create the plan.",
+            assignment=assignment,
             work_context="Use the typed request.",
             evidence=(NativeCodexEvidenceInput("policy", "system_policy", "JSON only"),),
         )
@@ -140,6 +140,41 @@ def test_native_codex_prepares_schema_request_and_assets(tmp_path: Path) -> None
     assert prepared.command[prepared.command.index("--sandbox") + 1] == "read-only"
     assert {item.name for item in prepared.components} >= {"stdin_prompt", "response_schema"}
     assert NativeCodexAdapter.required_hosts == ("chatgpt.com", "api.openai.com")
+    adapter.cleanup()
+
+
+def test_native_codex_transports_assignment_without_inlining_root_roles(
+    tmp_path: Path,
+) -> None:
+    assignment = "S6-TRANSPORT-SENTINEL: create the declared work-plan artifact."
+    adapter = NativeCodexAdapter(_settings("codex"))
+    bundle = _codex_bundle(assignment=assignment)
+    repository = tmp_path / "repository"
+    execution = tmp_path / "execution"
+    assets = tmp_path / "assets"
+    repository.mkdir()
+    execution.mkdir()
+    assets.mkdir()
+
+    prepared = adapter.prepare_native_provider_input(
+        bundle,
+        NativeCodexExecutionBoundary.canary(
+            repository, execution_root=execution, evidence_asset_root=assets
+        ),
+    )
+
+    assert prepared.stdin_text is not None
+    canonical_request = json.loads(prepared.stdin_text)
+    assert canonical_request["assignment"] == assignment
+    assert prepared.stdin_text == bundle.canonical_json
+    assert next(
+        item.content for item in prepared.components if item.name == "stdin_prompt"
+    ) == bundle.canonical_json
+    assert all(
+        role_file not in canonical_request["assignment"]
+        for role_file in ("AGENTS.md", "CLAUDE.md", "CODEX.md")
+    )
+    assert "Structured artifact authority" not in canonical_request["assignment"]
     adapter.cleanup()
 
 

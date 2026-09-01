@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 from collections import Counter
 from dataclasses import dataclass, replace
+from functools import lru_cache
 import hashlib
 from pathlib import Path
 import re
@@ -919,9 +920,21 @@ def _final_review_preflight_error_codes(
 ) -> set[str]:
     """Derive the exact typed preflight denial codes that can feed ``error_code``."""
 
-    tree = trees.get("final_review_preflight.py")
+    return set(
+        _cached_final_review_preflight_error_codes(
+            trees.get("final_review_preflight.py")
+        )
+    )
+
+
+@lru_cache(maxsize=None)
+def _cached_final_review_preflight_error_codes(
+    tree: ast.Module | None,
+) -> frozenset[str]:
+    """Cache the pure AST walk while preserving the public helper's set result."""
+
     if tree is None:
-        return set()
+        return frozenset()
     function = next(
         (
             node
@@ -932,7 +945,7 @@ def _final_review_preflight_error_codes(
         None,
     )
     if function is None:
-        return set()
+        return frozenset()
     codes: set[str] = set()
     for call in (
         node
@@ -953,7 +966,7 @@ def _final_review_preflight_error_codes(
             and re.fullmatch(r"[A-Z][A-Z0-9_-]*", code.value)
         ):
             codes.add(code.value)
-    return codes
+    return frozenset(codes)
 
 
 def _unknown_gate_prefixes(trees: dict[str, ast.Module]) -> set[str]:
@@ -983,6 +996,13 @@ def _function_for_symbol(
     tree = trees.get(f"{module}.py")
     if tree is None or not function:
         return None
+    return _cached_function_for_tree(tree, function)
+
+
+@lru_cache(maxsize=None)
+def _cached_function_for_tree(
+    tree: ast.Module, function: str
+) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
     return next(
         (
             node
@@ -997,6 +1017,20 @@ def _function_for_symbol(
 def _assigned_rule_ids(
     node: ast.AST, *, preflight_error_codes: set[str] | None = None
 ) -> dict[str, set[str]]:
+    return {
+        name: set(values)
+        for name, values in _cached_assigned_rule_ids(
+            node, frozenset(preflight_error_codes or ())
+        )
+    }
+
+
+@lru_cache(maxsize=None)
+def _cached_assigned_rule_ids(
+    node: ast.AST, preflight_error_codes: frozenset[str]
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """Cache immutable results for repeated walks over the same parsed nodes."""
+
     assigned: dict[str, set[str]] = {}
     for assignment in ast.walk(node):
         if not isinstance(assignment, (ast.Assign, ast.AnnAssign)):
@@ -1023,7 +1057,10 @@ def _assigned_rule_ids(
         for target in targets:
             if isinstance(target, ast.Name) and values:
                 assigned.setdefault(target.id, set()).update(values)
-    return assigned
+    return tuple(
+        (name, tuple(sorted(values)))
+        for name, values in sorted(assigned.items())
+    )
 
 
 def _merge_rule_ids(
@@ -1038,6 +1075,19 @@ def _module_rule_ids(
 ) -> dict[str, set[str]]:
     """Resolve module constants and explicitly imported rule constants only."""
 
+    return {
+        name: set(values)
+        for name, values in _cached_module_rule_ids(
+            tuple(sorted(trees.items())), module
+        )
+    }
+
+
+@lru_cache(maxsize=None)
+def _cached_module_rule_ids(
+    tree_items: tuple[tuple[str, ast.Module], ...], module: str
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    trees = dict(tree_items)
     tree = trees[f"{module}.py"]
     resolved: dict[str, set[str]] = {}
     for statement in tree.body:
@@ -1056,7 +1106,10 @@ def _module_rule_ids(
             for alias in statement.names:
                 if alias.name in imported:
                     resolved[alias.asname or alias.name] = set(imported[alias.name])
-    return resolved
+    return tuple(
+        (name, tuple(sorted(values)))
+        for name, values in sorted(resolved.items())
+    )
 
 
 def _rule_ids_in_expression(
