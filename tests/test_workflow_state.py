@@ -270,6 +270,11 @@ def test_plan_pre_review_scope_drift_gates_without_reinvoking_codex() -> None:
     checkpoints: list[WorkflowState] = []
 
     class Driver:
+        active_state: WorkflowState | None = None
+
+        def bind_work_unit(self, bound_state: WorkflowState) -> None:
+            self.active_state = bound_state
+
         @staticmethod
         def collect_changes(_start_commit: str) -> WorkflowChanges:
             return WorkflowChanges(

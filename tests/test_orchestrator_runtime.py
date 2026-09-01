@@ -810,9 +810,14 @@ def test_quota_auto_wait_boundary_uses_reset_span_without_safety_margin(
     safety_margin_seconds: int,
     expected_automatic: bool,
 ) -> None:
+    persisted_payloads = []
+
     class CheckpointDriver:
         def checkpoint(self, state, history) -> None:
             _ = (state, history)
+
+        def persist_invocation_failure(self, payload) -> None:
+            persisted_payloads.append(payload)
 
     now = datetime(2026, 8, 19, 10, 0, tzinfo=timezone.utc)
     state = init_workflow_state(
@@ -859,6 +864,8 @@ def test_quota_auto_wait_boundary_uses_reset_span_without_safety_margin(
         AgentRole.CODEX,
         error,
     )
+
+    assert persisted_payloads
 
     assert failure.automatic_resume is expected_automatic
     assert persisted.current_work_unit.invocation_failures[-1] == failure

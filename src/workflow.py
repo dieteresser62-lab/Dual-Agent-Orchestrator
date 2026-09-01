@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import logging
 import re
@@ -160,6 +161,10 @@ class WorkflowCommitApprovalRequired(WorkflowExecutionError):
 
 class ValidationExecutionError(WorkflowExecutionError):
     """Raised by a v3 driver when required validation cannot be executed."""
+
+
+class WorkflowDriverContractError(WorkflowExecutionError):
+    """Raised before a workflow uses an incomplete driver surface."""
 
 
 class EvidenceKind(str, Enum):
@@ -417,6 +422,10 @@ class WorkflowCommitRequest:
 
 
 class WorkflowDriver(Protocol):
+    active_state: WorkflowState | None
+
+    def bind_work_unit(self, state: WorkflowState) -> None: ...
+
     def authoritative_native_findings(
         self,
         state: WorkflowState,
@@ -432,6 +441,13 @@ class WorkflowDriver(Protocol):
     def invoke_codex(
         self, invocation: CodexInvocation
     ) -> str | NativeAgentCodexOutput: ...
+
+    def recover_pending_native_codex(  # allowlist:provider -- canonical capability
+        self,
+        invocation: CodexInvocation,  # allowlist:provider -- typed boundary
+        contract: CodexStepContract,  # allowlist:provider -- typed boundary
+        history: WorkflowHistory,
+    ) -> NativeAgentCodexOutput | None: ...  # allowlist:provider -- typed boundary
 
     def collect_changes(self, start_commit: str) -> WorkflowChanges: ...
 
@@ -467,6 +483,20 @@ class WorkflowDriver(Protocol):
         self, invocation: ReviewerInvocation
     ) -> str | NativeAgentReviewOutput: ...
 
+    def recover_pending_native_reviewer(
+        self,
+        invocation: ReviewerInvocation,
+        contract: StepContract,
+        history: WorkflowHistory,
+    ) -> NativeAgentReviewOutput | None: ...
+
+    def recover_pending_native_reviewer_before_policy(
+        self,
+        state: WorkflowState,
+        context: WorkflowContext,
+        history: WorkflowHistory,
+    ) -> PersistedNativeReviewerReplay | None: ...
+
     def prepare_correction(
         self, findings: tuple[FindingRecord, ...]
     ) -> WorkflowCorrectionBoundary: ...
@@ -474,6 +504,116 @@ class WorkflowDriver(Protocol):
     def commit_slice(self, request: WorkflowCommitRequest) -> str: ...
 
     def checkpoint(self, state: WorkflowState, history: WorkflowHistory) -> None: ...
+
+    def persist_gate_decision(
+        self, work_unit_id: int, decision: GateDecisionRecord
+    ) -> None: ...
+
+    def persist_gate_transition(self, state: WorkflowState) -> None: ...
+
+    def persist_invocation_failure(
+        self, payload: InvocationFailurePayload
+    ) -> None: ...
+
+    def persist_native_codex_contract(  # allowlist:provider -- canonical capability
+        self,
+        output: NativeAgentCodexOutput,  # allowlist:provider -- typed boundary
+        previous_findings: tuple[FindingRecord, ...],
+    ) -> None: ...
+
+    def persist_native_review_contract(
+        self,
+        output: NativeAgentReviewOutput,
+        fingerprint: str,
+        round_number: int,
+        previous_findings: tuple[FindingRecord, ...],
+    ) -> None: ...
+
+    def persist_review_packet(self, packet: ReviewPacket) -> None: ...
+
+    def persist_validation_request(self, request: ValidationRequest) -> None: ...
+
+    def persist_validation_attestation(
+        self, attestation: ValidationAttestation
+    ) -> None: ...
+
+
+MANDATORY_WORKFLOW_DRIVER_METHODS = frozenset(
+    {
+        "authoritative_native_findings",
+        "bind_work_unit",
+        "carry_forward_native_findings",
+        "checkpoint",
+        "collect_changes",
+        "collect_correction_delta",
+        "commit_slice",
+        "detect_test_changes",
+        "invoke_codex",  # allowlist:provider -- canonical capability
+        "invoke_reviewer",
+        "persist_gate_decision",
+        "persist_gate_transition",
+        "persist_invocation_failure",
+        "persist_native_codex_contract",  # allowlist:provider -- canonical capability
+        "persist_native_review_contract",
+        "persist_review_packet",
+        "persist_validation_attestation",
+        "persist_validation_request",
+        "prepare_correction",
+        "recover_pending_native_codex",  # allowlist:provider -- canonical capability
+        "recover_pending_native_reviewer",
+        "recover_pending_native_reviewer_before_policy",
+        "recover_pending_validation_attestation",
+        "validate",
+        "validate_plan",
+    }
+)
+MANDATORY_WORKFLOW_DRIVER_STATE_ATTRIBUTES = frozenset({"active_state"})
+OPTIONAL_WORKFLOW_DRIVER_CAPABILITIES: frozenset[str] = frozenset()
+
+
+def require_driver_capabilities(
+    driver: object,
+    *,
+    methods: frozenset[str],
+    state_attributes: frozenset[str] = frozenset(),
+    label: str,
+) -> None:
+    """Validate one named structural driver surface without invoking hooks."""
+    missing: list[str] = []
+    invalid: list[str] = []
+    for name in sorted(methods):
+        try:
+            member = inspect.getattr_static(driver, name)
+        except AttributeError:
+            missing.append(name)
+            continue
+        if not callable(member):
+            invalid.append(name)
+    for name in sorted(state_attributes):
+        try:
+            inspect.getattr_static(driver, name)
+        except AttributeError:
+            missing.append(name)
+    if missing or invalid:
+        detail = []
+        if missing:
+            detail.append("missing=" + ",".join(missing))
+        if invalid:
+            detail.append("non-callable=" + ",".join(invalid))
+        raise WorkflowDriverContractError(
+            f"{label} does not satisfy its mandatory capability contract: "
+            + "; ".join(detail)
+        )
+
+
+def require_workflow_driver(driver: object) -> None:
+    """Validate the complete structural driver contract without invoking hooks."""
+    require_driver_capabilities(
+        driver,
+        methods=MANDATORY_WORKFLOW_DRIVER_METHODS,
+        state_attributes=MANDATORY_WORKFLOW_DRIVER_STATE_ATTRIBUTES,
+        label="workflow driver",
+    )
 
 
 @dataclass(frozen=True)
@@ -869,11 +1009,10 @@ class WorkflowEngine:
         self.heartbeat_fn = heartbeat_fn
         self._retried_failed_validation_fingerprints: set[str] = set()
 
-    def _persist_structured(self, method_name: str, *args: object) -> None:
-        """Invoke an optional driver sink and fail closed on divergence."""
-        sink = getattr(self.driver, method_name, None)
-        if sink is None:
-            return
+    def _persist_structured(
+        self, sink: Callable[..., None], *args: object
+    ) -> None:
+        """Invoke one declared driver sink and fail closed on divergence."""
         try:
             sink(*args)
         except Exception as exc:
@@ -887,6 +1026,7 @@ class WorkflowEngine:
         context: WorkflowContext,
         history: WorkflowHistory | None = None,
     ) -> WorkflowRunResult:
+        require_workflow_driver(self.driver)
         current = state.current_work_unit
         active_history = history or WorkflowHistory(current.work_unit_id)
         if active_history.work_unit_id != current.work_unit_id:
@@ -907,19 +1047,14 @@ class WorkflowEngine:
                 current.gate.fingerprint,
                 current.gate.paths,
             )
-            self._persist_structured("persist_gate_transition", state)
+            self._persist_structured(self.driver.persist_gate_transition, state)
             current = state.current_work_unit
             self._bind_driver_work_unit(state)
         if current.status is not WorkUnitStatus.IN_PROGRESS:
             return WorkflowRunResult(state, active_history)
 
-        pending_native_loader = getattr(
-            self.driver, "recover_pending_native_reviewer_before_policy", None
-        )
-        pending_native = (
-            pending_native_loader(state, context, active_history)
-            if callable(pending_native_loader)
-            else None
+        pending_native = self.driver.recover_pending_native_reviewer_before_policy(
+            state, context, active_history
         )
         if pending_native is not None:
             if not isinstance(pending_native, PersistedNativeReviewerReplay):
@@ -1053,6 +1188,7 @@ class WorkflowEngine:
         history: WorkflowHistory | None = None,
     ) -> WorkflowRunResult:
         """Start or resume the branch-wide final review on the production engine."""
+        require_workflow_driver(self.driver)
         if state.current_work_unit.kind is not WorkUnitKind.FINAL_REVIEW:
             state, history = self._start_final_review_work_unit(
                 state,
@@ -1069,6 +1205,7 @@ class WorkflowEngine:
         rationale: str,
     ) -> WorkflowRunResult:
         """Record an explicit decision against the exact persisted gate evidence."""
+        require_workflow_driver(self.driver)
         if history.work_unit_id != state.current_work_unit_id:
             raise WorkflowExecutionError(
                 "workflow history belongs to a different gated work unit"
@@ -1090,11 +1227,11 @@ class WorkflowEngine:
             raise WorkflowExecutionError(f"invalid user gate decision: {exc}") from exc
         if len(updated.current_work_unit.gate_decisions) > prior_decision_count:
             self._persist_structured(
-                "persist_gate_decision",
+                self.driver.persist_gate_decision,
                 updated.current_work_unit_id,
                 updated.current_work_unit.gate_decisions[-1],
             )
-        self._persist_structured("persist_gate_transition", updated)
+        self._persist_structured(self.driver.persist_gate_transition, updated)
         self.driver.checkpoint(updated, history)
         return WorkflowRunResult(updated, history)
 
@@ -1102,6 +1239,11 @@ class WorkflowEngine:
         self, state: WorkflowState
     ) -> WorkflowState:
         """Upgrade a legacy Codex UNEXPECTED-PATH stop to an exact user gate."""
+        require_driver_capabilities(
+            self.driver,
+            methods=frozenset({"collect_changes"}),
+            label="gate-reframing driver",
+        )
         current = state.current_work_unit
         gate = current.gate
         direct_unexpected_path = (
@@ -1229,10 +1371,11 @@ class WorkflowEngine:
             native_request=native_request,
             previous_findings=history.findings,
         )
-        recovery_loader = getattr(self.driver, "recover_pending_native_codex", None)
         recovered = (
-            recovery_loader(invocation, contract, history)
-            if native_request is not None and callable(recovery_loader)
+            self.driver.recover_pending_native_codex(  # allowlist:provider
+                invocation, contract, history
+            )
+            if native_request is not None
             else None
         )
         if recovered is None and native_request is not None:
@@ -1275,7 +1418,9 @@ class WorkflowEngine:
         result = output.result
         output_text = output.canonical_json
         self._persist_structured(
-            "persist_native_codex_contract", output, history.findings
+            self.driver.persist_native_codex_contract,  # allowlist:provider
+            output,
+            history.findings,
         )
         assert invocation.native_request is not None
         history = replace(
@@ -1654,10 +1799,11 @@ class WorkflowEngine:
             native_request=native_request,
             previous_findings=history.findings,
         )
-        recovery_loader = getattr(self.driver, "recover_pending_native_codex", None)
         recovered = (
-            recovery_loader(invocation, contract, history)
-            if native_request is not None and callable(recovery_loader)
+            self.driver.recover_pending_native_codex(  # allowlist:provider
+                invocation, contract, history
+            )
+            if native_request is not None
             else None
         )
         if recovered is None and native_request is not None:
@@ -1676,7 +1822,9 @@ class WorkflowEngine:
         result = output.result
         output_text = output.canonical_json
         self._persist_structured(
-            "persist_native_codex_contract", output, history.findings
+            self.driver.persist_native_codex_contract,  # allowlist:provider
+            output,
+            history.findings,
         )
         if result.stopped:
             if result.stop_request is None:
@@ -1920,7 +2068,7 @@ class WorkflowEngine:
                 raise WorkflowExecutionError(
                     f"canonical review packet could not be built: {exc}"
                 ) from exc
-            self._persist_structured("persist_review_packet", review_packet)
+            self._persist_structured(self.driver.persist_review_packet, review_packet)
             history = replace(history, active_review_packet=review_packet)
             self.driver.checkpoint(state, history)
         native_request = self._native_review_request(
@@ -1951,12 +2099,11 @@ class WorkflowEngine:
             native_request=native_request,
             previous_findings=history.findings,
         )
-        native_replay_loader = getattr(
-            self.driver, "recover_pending_native_reviewer", None
-        )
         native_output = (
-            native_replay_loader(invocation, contract, history)
-            if native_request is not None and callable(native_replay_loader)
+            self.driver.recover_pending_native_reviewer(
+                invocation, contract, history
+            )
+            if native_request is not None
             else None
         )
         if native_output is not None and not isinstance(
@@ -1982,7 +2129,7 @@ class WorkflowEngine:
             raise WorkflowContractError("Claude returned a non-native review result")
         result = output.result
         self._persist_structured(
-            "persist_native_review_contract",
+            self.driver.persist_native_review_contract,
             output,
             changes.fingerprint,
             review_round,
@@ -2141,7 +2288,7 @@ class WorkflowEngine:
         while True:
             try:
                 output = invoke()
-                driver_state = getattr(self.driver, "active_state", None)
+                driver_state = self.driver.active_state
                 if isinstance(driver_state, WorkflowState) and driver_state.run_id == state.run_id:
                     state = replace(state, bootstrap_checks=driver_state.bootstrap_checks)
                 return state, output
@@ -2178,7 +2325,7 @@ class WorkflowEngine:
                         and error.fingerprint is not None
                         and affected_paths
                     ):
-                        driver_state = getattr(self.driver, "active_state", None)
+                        driver_state = self.driver.active_state
                         if (
                             isinstance(driver_state, WorkflowState)
                             and driver_state.run_id == state.run_id
@@ -2201,7 +2348,7 @@ class WorkflowEngine:
                     code = "PROVIDER-INPUT-BUDGET"
                     detail = str(error)
                     affected_paths = ()
-                driver_state = getattr(self.driver, "active_state", None)
+                driver_state = self.driver.active_state
                 if isinstance(driver_state, WorkflowState) and driver_state.run_id == state.run_id:
                     state = replace(state, bootstrap_checks=driver_state.bootstrap_checks)
                 state = state.await_bootstrap_resume(
@@ -2246,7 +2393,7 @@ class WorkflowEngine:
                         heartbeat_fn=self.heartbeat_fn,
                     )
                 state = state.resume_after_invocation_halt()
-                self._persist_structured("persist_gate_transition", state)
+                self._persist_structured(self.driver.persist_gate_transition, state)
                 state, halted = self._apply_pre_agent_policy_gates(state, context)
                 if not halted:
                     state, halted = self._revalidate_waiting_diff(
@@ -2405,7 +2552,7 @@ class WorkflowEngine:
         )
         # This append is the decision-ahead authority boundary: no workflow
         # status, counter, wait, or provider restart is changed before it lands.
-        self._persist_structured("persist_invocation_failure", payload)
+        self._persist_structured(self.driver.persist_invocation_failure, payload)
         state = state.record_invocation_failure(
             record, wait_automatically=automatic, updated_at=decision_at
         )
@@ -2514,7 +2661,7 @@ class WorkflowEngine:
                     "plan validation attestation fingerprint is foreign"
                 )
             self._persist_structured(
-                "persist_validation_attestation", attestation
+                self.driver.persist_validation_attestation, attestation
             )
             event = ValidationAuditEvent(
                 event_id=len(history.events) + 1,
@@ -2565,18 +2712,11 @@ class WorkflowEngine:
                     changes.fingerprint
                 )
             request = replace(request, attempt_number=len(matching) + 1)
-        self._persist_structured("persist_validation_request", request)
-        recovery_loader = getattr(
-            self.driver, "recover_pending_validation_attestation", None
-        )
-        attestation = (
-            recovery_loader(
-                changes.fingerprint,
-                request.expected_commands,
-                validation_attestation_id(request),
-            )
-            if recovery_loader is not None
-            else None
+        self._persist_structured(self.driver.persist_validation_request, request)
+        attestation = self.driver.recover_pending_validation_attestation(
+            changes.fingerprint,
+            request.expected_commands,
+            validation_attestation_id(request),
         )
         if attestation is None:
             attestation = self.driver.validate(changes, request)
@@ -2596,7 +2736,9 @@ class WorkflowEngine:
             for item in history.attestations
         ):
             raise WorkflowExecutionError("validation attestation id was reused")
-        self._persist_structured("persist_validation_attestation", attestation)
+        self._persist_structured(
+            self.driver.persist_validation_attestation, attestation
+        )
         event = ValidationAuditEvent(
             event_id=len(history.events) + 1,
             slice_id=slice_id,
@@ -3049,18 +3191,18 @@ class WorkflowEngine:
         approved = context.test_changes_approved
         if approved:
             state = state.record_active_test_approval(None)
-            self._persist_structured("persist_gate_transition", state)
+            self._persist_structured(self.driver.persist_gate_transition, state)
             return state, True, False
         evidence = self.driver.detect_test_changes(changes, context.test_path_patterns)
         if evidence is None:
             state = state.record_active_test_approval(None)
-            self._persist_structured("persist_gate_transition", state)
+            self._persist_structured(self.driver.persist_gate_transition, state)
             return state, False, False
         state = state.inherit_prior_test_approval(
             evidence.fingerprint,
             evidence.paths,
         )
-        self._persist_structured("persist_gate_transition", state)
+        self._persist_structured(self.driver.persist_gate_transition, state)
         approved = state.current_work_unit.has_gate_approval(
             GateReason.TEST_CHANGE, evidence.fingerprint, evidence.paths
         )
@@ -3071,10 +3213,10 @@ class WorkflowEngine:
                     fingerprint=evidence.fingerprint,
                     paths=evidence.paths,
             )
-            self._persist_structured("persist_gate_transition", state)
+            self._persist_structured(self.driver.persist_gate_transition, state)
             return state, False, True
         state = state.record_active_test_approval(evidence.fingerprint, evidence.paths)
-        self._persist_structured("persist_gate_transition", state)
+        self._persist_structured(self.driver.persist_gate_transition, state)
         return state, True, False
 
     @staticmethod
@@ -3084,9 +3226,7 @@ class WorkflowEngine:
         return state.current_slice.start_commit
 
     def _bind_driver_work_unit(self, state: WorkflowState) -> None:
-        binder = getattr(self.driver, "bind_work_unit", None)
-        if binder is not None:
-            binder(state)
+        self.driver.bind_work_unit(state)
 
     def _bind_authoritative_native_findings(
         self, state: WorkflowState, history: WorkflowHistory
@@ -3099,12 +3239,7 @@ class WorkflowEngine:
             or binding.claude_review_transport != NATIVE_CLAUDE_REVIEW_TRANSPORT
         ):
             return history
-        resolver = getattr(self.driver, "authoritative_native_findings", None)
-        if not callable(resolver):
-            raise WorkflowExecutionError(
-                "combined native workflow has no authoritative finding replay"
-            )
-        findings = resolver(state, history.findings)
+        findings = self.driver.authoritative_native_findings(state, history.findings)
         if not isinstance(findings, tuple) or any(
             not isinstance(item, FindingRecord) for item in findings
         ):
@@ -3149,12 +3284,9 @@ class WorkflowEngine:
             or binding.claude_review_transport != NATIVE_CLAUDE_REVIEW_TRANSPORT
         ):
             return current_findings
-        carrier = getattr(self.driver, "carry_forward_native_findings", None)
-        if not callable(carrier):
-            raise WorkflowExecutionError(
-                "combined native workflow has no finding carry-forward"
-            )
-        findings = carrier(state, current_findings)
+        findings = self.driver.carry_forward_native_findings(
+            state, current_findings
+        )
         if not isinstance(findings, tuple) or any(
             not isinstance(item, FindingRecord) for item in findings
         ):

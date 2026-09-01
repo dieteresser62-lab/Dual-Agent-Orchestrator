@@ -10,7 +10,7 @@ import shlex
 import time
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
-from typing import Callable, get_args, get_type_hints
+from typing import Callable, Protocol, get_args, get_type_hints
 
 from agent_adapters import (
     AgentAdapter,
@@ -193,6 +193,8 @@ from workflow import (
     WorkflowExecutionError,
     WorkflowHistory,
     WorkflowRunResult,
+    require_driver_capabilities,
+    require_workflow_driver,
 )
 from workflow_state import (
     AgentProfileBinding,
@@ -290,8 +292,56 @@ def _shorten(value: str | None, maximum: int) -> str:
     return text if len(text) <= maximum else text[: max(0, maximum - 3)] + "..."
 
 
-class ProductionWorkflowDriver(WorkflowDriver):
+class ProductionWorkflowLoopDriver(WorkflowDriver, Protocol):
+    """Workflow contract plus capabilities owned only by the production loop."""
+
+    def finalize_audit(self, state: WorkflowState) -> str | None: ...
+
+    def assert_structured_decision_context(self) -> None: ...
+
+    def prepare_finding_handoff(
+        self,
+        *,
+        plan_task_path: Path,
+        work_plan_path: str,
+        target_branch: str,
+        approved_plan_commit: str,
+    ) -> tuple[str, str] | None: ...
+
+    def persist_implementation_handoff(
+        self, handoff_path: Path, approved_plan_commit: str
+    ) -> None: ...
+
+    def _write_side_effect_file(
+        self, path: Path, content: str, *, normalized_text: bool
+    ) -> None: ...
+
+
+PRODUCTION_LOOP_INTERNAL_DRIVER_METHODS = frozenset(
+    {
+        "_write_side_effect_file",
+        "assert_structured_decision_context",
+        "finalize_audit",
+        "persist_implementation_handoff",
+        "prepare_finding_handoff",
+    }
+)
+
+
+def require_production_workflow_loop_driver(driver: object) -> None:
+    """Fail before the production loop uses an incomplete internal surface."""
+    require_workflow_driver(driver)
+    require_driver_capabilities(
+        driver,
+        methods=PRODUCTION_LOOP_INTERNAL_DRIVER_METHODS,
+        label="production workflow driver internal surface",
+    )
+
+
+class ProductionWorkflowDriver:
     """Bind the deterministic v3 engine to real agents, Git, validation, and state."""
+
+    active_state: WorkflowState | None
 
     def __init__(
         self,
@@ -5771,7 +5821,7 @@ def run_production_workflow(
         strict_preflight=bool(args.strict_preflight),
         provider_input_budget=args.repo_config.provider_input_budget,
     )
-    driver = ProductionWorkflowDriver(
+    driver: ProductionWorkflowLoopDriver = ProductionWorkflowDriver(
         repository_root=root,
         state_file=state_file,
         agents=build_agent_registry(args.agent_settings),
@@ -5779,6 +5829,7 @@ def run_production_workflow(
         allowed_roots=allowed_roots,
         replace_existing_run_id=replacement_run_id,
     )
+    require_production_workflow_loop_driver(driver)
     engine = WorkflowEngine(driver)
     history = _history(state, root)
     driver.checkpoint(state, history)

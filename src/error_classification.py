@@ -65,6 +65,7 @@ from workflow import (
     ValidationExecutionError,
     WorkflowCommitApprovalRequired,
     WorkflowContractError,
+    WorkflowDriverContractError,
     WorkflowExecutionError,
 )
 from workflow_state import WorkflowStateValidationError
@@ -102,7 +103,7 @@ _TRANSIENT = FailureClass.TRANSIENT
 _REJECT = FailureClass.TERMINAL_REJECTION
 
 
-# Authoritative inventory: all 46 ``*Error`` classes currently defined in
+# Authoritative inventory: all 47 ``*Error`` classes currently defined in
 # ``src/`` plus the schema validator's typed ``SchemaMismatch`` exception and
 # the four project exceptions whose names do not end in ``Error``.  Subclasses
 # are intentionally repeated instead of inheriting an implicit classification.
@@ -155,6 +156,7 @@ ERROR_CLASSIFICATIONS: dict[type[BaseException], tuple[FailureClass, str]] = {
     ValidationMatrixError: _entry(_HALT, "VALIDATION-MATRIX"),
     WorkflowStateValidationError: _entry(_HALT, "WORKFLOW-STATE-VALIDATION"),
     WorkflowExecutionError: _entry(_HALT, "WORKFLOW-EXECUTION"),
+    WorkflowDriverContractError: _entry(_HALT, "WORKFLOW-DRIVER-CONTRACT"),
     WorkflowCommitApprovalRequired: _entry(_HALT, "WORKFLOW-COMMIT-APPROVAL"),
     NoWorkflowChangesError: _entry(_HALT, "NO-WORKFLOW-CHANGES"),
     WorkflowContractError: _entry(_HALT, "WORKFLOW-CONTRACT"),

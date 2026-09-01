@@ -430,7 +430,12 @@ class FakeDriver:
     authoritative_finding_calls: list[tuple[str, tuple[FindingRecord, ...]]] = field(
         default_factory=list
     )
+    active_state: WorkflowState | None = None
+    structured_events: list[tuple[str, object]] = field(default_factory=list)
     snapshot_index: int = -1
+
+    def bind_work_unit(self, state: WorkflowState) -> None:
+        self.active_state = state
 
     def authoritative_native_findings(
         self,
@@ -475,6 +480,17 @@ class FakeDriver:
             if isinstance(output, NativeAgentCodexOutput)
             else _test_native_codex_output(invocation, output)
         )
+
+    def recover_pending_native_codex(
+        self,
+        invocation: CodexInvocation,
+        contract: CodexStepContract,
+        history: WorkflowHistory,
+    ) -> NativeAgentCodexOutput | None:
+        self.structured_events.append(
+            ("recover-native-codex", (invocation, contract, history))
+        )
+        return None
 
     def collect_changes(self, start_commit: str) -> WorkflowChanges:
         index = max(self.snapshot_index, 0)
@@ -605,6 +621,28 @@ class FakeDriver:
             else _test_native_review_output(invocation, output)
         )
 
+    def recover_pending_native_reviewer(
+        self,
+        invocation: ReviewerInvocation,
+        contract: StepContract,
+        history: WorkflowHistory,
+    ) -> NativeAgentReviewOutput | None:
+        self.structured_events.append(
+            ("recover-native-reviewer", (invocation, contract, history))
+        )
+        return None
+
+    def recover_pending_native_reviewer_before_policy(
+        self,
+        state: WorkflowState,
+        context: WorkflowContext,
+        history: WorkflowHistory,
+    ) -> PersistedNativeReviewerReplay | None:
+        self.structured_events.append(
+            ("recover-native-reviewer-before-policy", (state, context, history))
+        )
+        return None
+
     def prepare_correction(
         self, findings
     ) -> WorkflowCorrectionBoundary:
@@ -620,15 +658,59 @@ class FakeDriver:
         return self.commit_refs.pop(0) if self.commit_refs else "b" * 40
 
     def checkpoint(self, state, history) -> None:
+        self.active_state = state
         self.failure_persistence_events.append("checkpoint")
         self.checkpoints.append(state)
         self.checkpoint_histories.append(history)
+
+    def persist_gate_decision(self, work_unit_id: int, decision: object) -> None:
+        self.structured_events.append(
+            ("gate-decision", (work_unit_id, decision))
+        )
+
+    def persist_gate_transition(self, state: WorkflowState) -> None:
+        self.structured_events.append(("gate-transition", state))
 
     def persist_invocation_failure(
         self, payload: InvocationFailurePayload
     ) -> None:
         self.failure_persistence_events.append("failure-record")
         self.failure_payloads.append(payload)
+        self.structured_events.append(("invocation-failure", payload))
+
+    def persist_native_codex_contract(
+        self,
+        output: NativeAgentCodexOutput,
+        previous_findings: tuple[FindingRecord, ...],
+    ) -> None:
+        self.structured_events.append(
+            ("native-codex", (output, previous_findings))
+        )
+
+    def persist_native_review_contract(
+        self,
+        output: NativeAgentReviewOutput,
+        fingerprint: str,
+        round_number: int,
+        previous_findings: tuple[FindingRecord, ...],
+    ) -> None:
+        self.structured_events.append(
+            (
+                "native-review",
+                (output, fingerprint, round_number, previous_findings),
+            )
+        )
+
+    def persist_review_packet(self, packet: ReviewPacket) -> None:
+        self.structured_events.append(("review-packet", packet))
+
+    def persist_validation_request(self, request: ValidationRequest) -> None:
+        self.structured_events.append(("validation-request", request))
+
+    def persist_validation_attestation(
+        self, attestation: ValidationAttestation
+    ) -> None:
+        self.structured_events.append(("validation-attestation", attestation))
 
 
 def _slice_state(

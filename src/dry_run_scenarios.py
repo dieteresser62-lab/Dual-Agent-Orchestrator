@@ -17,10 +17,20 @@ from agent_runtime import (
     TransientRetryPolicy,
     classify_agent_failure,
 )
+from artifact_models import InvocationFailurePayload
 from audit_trail import ReviewAuditEvent, ValidationAuditEvent
-from contracts import AgentRole, FindingRecord, ValidationAttestation, ValidationRecord, ValidationStatus
+from contracts import (
+    AgentRole,
+    CodexStepContract,  # allowlist:provider -- typed boundary
+    FindingRecord,
+    StepContract,
+    ValidationAttestation,
+    ValidationRecord,
+    ValidationStatus,
+)
 from finding_reducer import project_open_set
 from gates import TestChangeEvidence
+from review_packets import ReviewPacket
 from validation_matrix import (
     ValidationCommand,
     ValidationRequest,
@@ -28,6 +38,7 @@ from validation_matrix import (
 )
 from workflow import (
     CodexInvocation,
+    PersistedNativeReviewerReplay,
     ReviewerInvocation,
     ValidationExecutionError,
     WorkflowChanges,
@@ -50,6 +61,7 @@ from native_review_contract import (
 from native_review_request import validate_native_review_provider_response
 from workflow_state import (
     AgentFailureKind,
+    GateDecisionRecord,
     GateReason,
     GateStatus,
     ProtocolBinding,
@@ -843,6 +855,8 @@ class ScriptedWorkflowDriver:
     codex_invocations: list[CodexInvocation] = field(default_factory=list)
     reviewer_invocations: list[ReviewerInvocation] = field(default_factory=list)
     durable_findings: tuple[FindingRecord, ...] = ()
+    active_state: WorkflowState | None = None
+    structured_events: list[tuple[str, object]] = field(default_factory=list)
     _agent_index: int = 0
     _validation_index: int = 0
     _commit_index: int = 0
@@ -850,6 +864,7 @@ class ScriptedWorkflowDriver:
     _change_positions: dict[tuple[int, int], int] = field(default_factory=dict)
 
     def bind_work_unit(self, state: WorkflowState) -> None:
+        self.active_state = state
         self._active_identity = (
             state.current_work_unit_id,
             state.current_work_unit.round_number,
@@ -878,6 +893,9 @@ class ScriptedWorkflowDriver:
         ledger = {item.finding_id: item for item in self.durable_findings or previous_findings}
         ledger.update({item.finding_id: item for item in output.result.findings})
         self.durable_findings = tuple(ledger[key] for key in sorted(ledger))
+        self.structured_events.append(
+            ("native-codex", (output, previous_findings))  # allowlist:provider
+        )
 
     def persist_native_review_contract(
         self,
@@ -891,6 +909,12 @@ class ScriptedWorkflowDriver:
         ledger = {item.finding_id: item for item in self.durable_findings or previous_findings}
         ledger.update({item.finding_id: item for item in output.result.findings})
         self.durable_findings = tuple(ledger[key] for key in sorted(ledger))
+        self.structured_events.append(
+            (
+                "native-review",
+                (output, fingerprint, round_number, previous_findings),
+            )
+        )
 
     def _consume_agent(
         self,
@@ -950,6 +974,17 @@ class ScriptedWorkflowDriver:
             response_sha256=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
         )
 
+    def recover_pending_native_codex(  # allowlist:provider -- canonical capability
+        self,
+        invocation: CodexInvocation,  # allowlist:provider -- typed boundary
+        contract: CodexStepContract,  # allowlist:provider -- typed boundary
+        history: WorkflowHistory,
+    ) -> NativeAgentCodexOutput | None:  # allowlist:provider -- typed boundary
+        self.structured_events.append(
+            ("recover-native-codex", (invocation, contract, history))  # allowlist:provider
+        )
+        return None
+
     def invoke_reviewer(self, invocation: ReviewerInvocation) -> NativeAgentReviewOutput:
         self.reviewer_invocations.append(invocation)
         document = self._consume_agent(
@@ -973,6 +1008,28 @@ class ScriptedWorkflowDriver:
             request_id=invocation.native_request.bound_context.request_id,
             context=invocation.native_request.bound_context.context,
         )
+
+    def recover_pending_native_reviewer(
+        self,
+        invocation: ReviewerInvocation,
+        contract: StepContract,
+        history: WorkflowHistory,
+    ) -> NativeAgentReviewOutput | None:
+        self.structured_events.append(
+            ("recover-native-reviewer", (invocation, contract, history))
+        )
+        return None
+
+    def recover_pending_native_reviewer_before_policy(
+        self,
+        state: WorkflowState,
+        context: WorkflowContext,
+        history: WorkflowHistory,
+    ) -> PersistedNativeReviewerReplay | None:
+        self.structured_events.append(
+            ("recover-native-reviewer-before-policy", (state, context, history))
+        )
+        return None
 
     def collect_changes(self, start_commit: str) -> WorkflowChanges:
         if self._active_identity is None:
@@ -1088,6 +1145,20 @@ class ScriptedWorkflowDriver:
             ),
         )
 
+    def recover_pending_validation_attestation(
+        self,
+        fingerprint: str,
+        expected_commands: tuple[str, ...],
+        attestation_id: str,
+    ) -> ValidationAttestation | None:
+        self.structured_events.append(
+            (
+                "recover-validation-attestation",
+                (fingerprint, expected_commands, attestation_id),
+            )
+        )
+        return None
+
     def prepare_correction(
         self, findings
     ) -> WorkflowCorrectionBoundary:
@@ -1136,12 +1207,39 @@ class ScriptedWorkflowDriver:
         return event.commit_ref
 
     def checkpoint(self, state: WorkflowState, history: WorkflowHistory) -> None:
+        self.active_state = state
         self.checkpoints.append(state)
         self.checkpoint_histories.append(history)
         self.calls.append(
             f"checkpoint:{state.current_work_unit_id}:{state.current_step.value}:"
             f"{state.current_work_unit.status.value}"
         )
+
+    def persist_gate_decision(
+        self, work_unit_id: int, decision: GateDecisionRecord
+    ) -> None:
+        self.structured_events.append(
+            ("gate-decision", (work_unit_id, decision))
+        )
+
+    def persist_gate_transition(self, state: WorkflowState) -> None:
+        self.structured_events.append(("gate-transition", state))
+
+    def persist_invocation_failure(
+        self, payload: InvocationFailurePayload
+    ) -> None:
+        self.structured_events.append(("invocation-failure", payload))
+
+    def persist_review_packet(self, packet: ReviewPacket) -> None:
+        self.structured_events.append(("review-packet", packet))
+
+    def persist_validation_request(self, request: ValidationRequest) -> None:
+        self.structured_events.append(("validation-request", request))
+
+    def persist_validation_attestation(
+        self, attestation: ValidationAttestation
+    ) -> None:
+        self.structured_events.append(("validation-attestation", attestation))
 
     @property
     def remaining_agent_events(self) -> int:
