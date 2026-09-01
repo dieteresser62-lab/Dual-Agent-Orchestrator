@@ -26,6 +26,29 @@ class ReconciliationOutcome(StrEnum):
     UNKNOWN = "unknown"
 
 
+class SideEffectBoundaryPhase(StrEnum):
+    """Stable interruption points around one ledger-bound physical effect."""
+
+    BEFORE_INTENT = "before_intent"
+    AFTER_INTENT = "after_intent"
+    BEFORE_EFFECT = "before_effect"
+    AFTER_EFFECT = "after_effect"
+    BEFORE_RESULT = "before_result"
+    AFTER_RESULT = "after_result"
+
+
+@dataclass(frozen=True, slots=True)
+class SideEffectBoundary:
+    """One exact production boundary exposed to provider-free crash harnesses."""
+
+    effect_class: str
+    effect_key: str
+    phase: SideEffectBoundaryPhase
+
+
+SideEffectBoundaryObserver = Callable[[SideEffectBoundary], None]
+
+
 @dataclass(frozen=True, slots=True)
 class Reconciliation:
     outcome: ReconciliationOutcome
@@ -57,6 +80,25 @@ T = TypeVar("T")
 @dataclass(slots=True)
 class SideEffectExecutor:
     bridge: ArtifactBridge
+    boundary_observer: SideEffectBoundaryObserver | None = None
+
+    def _observe(self, spec: SideEffectSpec, phase: SideEffectBoundaryPhase) -> None:
+        if self.boundary_observer is not None:
+            self.boundary_observer(
+                SideEffectBoundary(spec.effect_class, spec.effect_key, phase)
+            )
+
+    def _record_intent(self, spec: SideEffectSpec) -> bool:
+        self._observe(spec, SideEffectBoundaryPhase.BEFORE_INTENT)
+        _, created = self.bridge.record_side_effect_intent(
+            effect_class=spec.effect_class,
+            work_unit_id=spec.work_unit_id,
+            operation=spec.operation,
+            fingerprint_sha256=spec.fingerprint_sha256,
+            fingerprint_kind=spec.fingerprint_kind,
+        )
+        self._observe(spec, SideEffectBoundaryPhase.AFTER_INTENT)
+        return created
 
     def execute(
         self,
@@ -66,13 +108,7 @@ class SideEffectExecutor:
         perform: Callable[[], tuple[T, str]],
     ) -> T | str:
         """Execute once, or reconcile the crash window before any repetition."""
-        _, created = self.bridge.record_side_effect_intent(
-            effect_class=spec.effect_class,
-            work_unit_id=spec.work_unit_id,
-            operation=spec.operation,
-            fingerprint_sha256=spec.fingerprint_sha256,
-            fingerprint_kind=spec.fingerprint_kind,
-        )
+        created = self._record_intent(spec)
         result = self.bridge.side_effect_result(
             effect_class=spec.effect_class,
             work_unit_id=spec.work_unit_id,
@@ -88,9 +124,12 @@ class SideEffectExecutor:
                 )
             if recovered.outcome is ReconciliationOutcome.OCCURRED:
                 assert recovered.result is not None
+                self._observe(spec, SideEffectBoundaryPhase.AFTER_EFFECT)
                 self._complete(spec, recovered.result)
                 return recovered.result
+        self._observe(spec, SideEffectBoundaryPhase.BEFORE_EFFECT)
         value, result = perform()
+        self._observe(spec, SideEffectBoundaryPhase.AFTER_EFFECT)
         self._complete(spec, result)
         return value
 
@@ -101,13 +140,7 @@ class SideEffectExecutor:
         reconcile: Callable[[], Reconciliation],
     ) -> bool:
         """Open a split operation such as a provider process invocation."""
-        _, created = self.bridge.record_side_effect_intent(
-            effect_class=spec.effect_class,
-            work_unit_id=spec.work_unit_id,
-            operation=spec.operation,
-            fingerprint_sha256=spec.fingerprint_sha256,
-            fingerprint_kind=spec.fingerprint_kind,
-        )
+        created = self._record_intent(spec)
         result = self.bridge.side_effect_result(
             effect_class=spec.effect_class,
             work_unit_id=spec.work_unit_id,
@@ -116,22 +149,30 @@ class SideEffectExecutor:
         if result is not None:
             return False
         if created:
+            self._observe(spec, SideEffectBoundaryPhase.BEFORE_EFFECT)
             return True
         recovered = reconcile()
         if recovered.outcome is ReconciliationOutcome.OCCURRED:
             assert recovered.result is not None
+            self._observe(spec, SideEffectBoundaryPhase.AFTER_EFFECT)
             self._complete(spec, recovered.result)
             return False
         if recovered.outcome is ReconciliationOutcome.NOT_OCCURRED:
+            self._observe(spec, SideEffectBoundaryPhase.BEFORE_EFFECT)
             return True
         raise SideEffectReconciliationError(
             f"side effect {spec.effect_key!r} has an unknown physical outcome"
         )
 
     def complete(self, spec: SideEffectSpec, result: str) -> None:
+        # Split operations call ``complete`` immediately after the physical
+        # provider/process edge, so expose the same post-effect boundary as
+        # the single-call ``execute`` path.
+        self._observe(spec, SideEffectBoundaryPhase.AFTER_EFFECT)
         self._complete(spec, result)
 
     def _complete(self, spec: SideEffectSpec, result: str) -> None:
+        self._observe(spec, SideEffectBoundaryPhase.BEFORE_RESULT)
         self.bridge.record_side_effect_result(
             effect_class=spec.effect_class,
             work_unit_id=spec.work_unit_id,
@@ -140,6 +181,7 @@ class SideEffectExecutor:
             fingerprint_sha256=spec.fingerprint_sha256,
             fingerprint_kind=spec.fingerprint_kind,
         )
+        self._observe(spec, SideEffectBoundaryPhase.AFTER_RESULT)
 
 
 def sha256_bytes(content: bytes) -> str:

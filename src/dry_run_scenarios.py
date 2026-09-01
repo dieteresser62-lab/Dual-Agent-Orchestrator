@@ -23,6 +23,7 @@ from contracts import (
     AgentRole,
     CodexStepContract,  # allowlist:provider -- typed boundary
     FindingRecord,
+    PlannedSlice,
     StepContract,
     ValidationAttestation,
     ValidationRecord,
@@ -66,6 +67,7 @@ from workflow_state import (
     GateStatus,
     ProtocolBinding,
     ProtocolMode,
+    WorkUnitStatus,
     WorkUnitKind,
     WorkflowState,
     WorkflowStep,
@@ -412,13 +414,21 @@ class ScriptedInitialState:
     slice_count: int = 1
     max_codex_returns: int = 4
     scope_paths: tuple[str, ...] = ()
+    execution_mode: str = "IMPLEMENT"
+    work_plan_path: str | None = None
+    approved_plan_commit: str | None = None
+    planned_slices: tuple[PlannedSlice, ...] = ()
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, object]) -> ScriptedInitialState:
         _require_exact_keys(
             raw,
             set(),
-            {"kind", "branch", "slice_count", "max_codex_returns", "scope_paths"},
+            {
+                "kind", "branch", "slice_count", "max_codex_returns", "scope_paths",
+                "execution_mode", "work_plan_path", "approved_plan_commit",
+                "planned_slices",
+            },
             "scenario.initial",
         )
         try:
@@ -427,6 +437,47 @@ class ScriptedInitialState:
             raise DryRunScenarioError("scenario.initial.kind is unknown") from exc
         if kind not in {WorkUnitKind.PLAN, WorkUnitKind.SLICE}:
             raise DryRunScenarioError("scenario.initial.kind must be plan or slice")
+        execution_mode = _string(
+            raw.get("execution_mode", "IMPLEMENT"), "scenario.initial.execution_mode"
+        )
+        if execution_mode not in {"IMPLEMENT", "PLAN_ONLY"}:
+            raise DryRunScenarioError("scenario.initial.execution_mode is unknown")
+        work_plan_raw = raw.get("work_plan_path")
+        approved_commit_raw = raw.get("approved_plan_commit")
+        if work_plan_raw is not None and not isinstance(work_plan_raw, str):
+            raise DryRunScenarioError("scenario.initial.work_plan_path must be a string")
+        if approved_commit_raw is not None and not isinstance(approved_commit_raw, str):
+            raise DryRunScenarioError(
+                "scenario.initial.approved_plan_commit must be a string"
+            )
+        planned_raw = raw.get("planned_slices", [])
+        if not isinstance(planned_raw, list):
+            raise DryRunScenarioError("scenario.initial.planned_slices must be an array")
+        planned_slices: list[PlannedSlice] = []
+        for index, item in enumerate(planned_raw):
+            item = _mapping(item, f"scenario.initial.planned_slices[{index}]")
+            _require_exact_keys(
+                item,
+                {"slice_id", "summary", "scope_paths"},
+                set(),
+                f"scenario.initial.planned_slices[{index}]",
+            )
+            planned_slices.append(
+                PlannedSlice(
+                    _positive_int(
+                        item["slice_id"],
+                        f"scenario.initial.planned_slices[{index}].slice_id",
+                    ),
+                    _string(
+                        item["summary"],
+                        f"scenario.initial.planned_slices[{index}].summary",
+                    ),
+                    _string_tuple(
+                        item["scope_paths"],
+                        f"scenario.initial.planned_slices[{index}].scope_paths",
+                    ),
+                )
+            )
         return cls(
             kind=kind,
             branch=_string(raw.get("branch", "feature/dry-run"), "scenario.initial.branch"),
@@ -440,6 +491,10 @@ class ScriptedInitialState:
                 "scenario.initial.scope_paths",
                 allow_empty=True,
             ),
+            execution_mode=execution_mode,
+            work_plan_path=work_plan_raw,
+            approved_plan_commit=approved_commit_raw,
+            planned_slices=tuple(planned_slices),
         )
 
 
@@ -1422,11 +1477,20 @@ def build_scenario_state(
         branch_base=first.start_commit,
         slice_count=scenario.initial.slice_count,
         task_digest=first.fingerprint,
+        execution_mode=scenario.initial.execution_mode,
         task_scope_patterns=scenario.initial.scope_paths or first.paths,
+        work_plan_path=scenario.initial.work_plan_path,
+        approved_plan_commit=scenario.initial.approved_plan_commit,
         target_branch=scenario.initial.branch,
         protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
         timestamp=scenario.clock_start.isoformat(),
     )
+    if scenario.initial.planned_slices:
+        state = state.bind_slice_plan(
+            scenario.initial.planned_slices,
+            first_start_commit=first.start_commit,
+            updated_at=scenario.clock_start.isoformat(),
+        )
     if scenario.initial.kind is WorkUnitKind.PLAN:
         return state
     state = state.complete_current_work_unit(updated_at=scenario.clock_start.isoformat())
@@ -1477,6 +1541,8 @@ def build_scenario_context(scenario: DryRunScenario) -> WorkflowContext:
         transient_retry_policy=configured.transient_retry_policy,
         task_scope_patterns=scenario.initial.scope_paths or scenario.changes[0].paths,
         require_slice_plan=scenario.initial.kind is WorkUnitKind.PLAN,
+        plan_only=scenario.initial.execution_mode == "PLAN_ONLY",
+        work_plan_path=scenario.initial.work_plan_path,
     )
 
 
@@ -1579,60 +1645,365 @@ def run_scripted_workflow(
 ) -> ScriptedRunReport:
     """Run plan/slices/final review as one provider-free workflow journey."""
 
+    return _run_scripted_workflow(
+        scenario=scenario,
+        task_file=task_file,
+        resume_scripted_interruptions=False,
+    )
+
+
+def run_scripted_workflow_resumable(
+    *, scenario: DryRunScenario, task_file: Path
+) -> ScriptedRunReport:
+    """Run one full journey and automatically resume scripted crash checkpoints.
+
+    Only ``ScriptedInterruption`` is resumed. Policy and user gates still
+    terminate normally, so this helper cannot turn a denied decision into an
+    implicit approval.
+    """
+
+    return _run_scripted_workflow(
+        scenario=scenario,
+        task_file=task_file,
+        resume_scripted_interruptions=True,
+    )
+
+
+def _run_scripted_workflow(
+    *,
+    scenario: DryRunScenario,
+    task_file: Path,
+    resume_scripted_interruptions: bool,
+) -> ScriptedRunReport:
     session = ScriptedWorkflowSession(scenario)
     context = build_scenario_context(scenario)
     state = build_scenario_state(scenario, task_file=task_file)
-    if state.current_work_unit.kind is WorkUnitKind.PLAN:
-        plan_report = session.run(state, context)
-        if not plan_report.result.completed:
-            return plan_report
-        state = plan_report.result.state
-        planned_slices = state.planned_slices
-    else:
-        planned_slices = ()
 
-    if state.current_work_unit.kind is WorkUnitKind.SLICE:
-        slice_report = session.run(state, context)
-        if not slice_report.result.completed:
-            return slice_report
-        state = slice_report.result.state
-    else:
-        for planned in planned_slices:
-            next_work_unit_id = len(state.work_units) + 1
-            first_change = next(
-                (
-                    item
-                    for item in scenario.changes
-                    if item.work_unit_id == next_work_unit_id
-                    and item.round_number == 1
-                ),
-                None,
-            )
-            if first_change is None:
+    def run_unit(
+        current: WorkflowState, history: WorkflowHistory | None = None
+    ) -> ScriptedRunReport:
+        while True:
+            before = sum(call.startswith("interrupt:") for call in session.driver.calls)
+            report = session.run(current, context, history)
+            after = sum(call.startswith("interrupt:") for call in session.driver.calls)
+            if after == before or not resume_scripted_interruptions:
+                return report
+            current, history = report.result.state, report.result.history
+            if current.current_work_unit.status not in {
+                WorkUnitStatus.WAITING_FOR_QUOTA,
+                WorkUnitStatus.WAITING_FOR_RETRY,
+            }:
                 raise DryRunScenarioError(
-                    f"missing scripted Slice boundary for work unit {next_work_unit_id}"
+                    "scripted interruption did not preserve an automatic resume gate"
                 )
-            state = state.start_work_unit(
-                slice_id=planned.slice_id,
-                kind=WorkUnitKind.SLICE,
-                step=WorkflowStep.CODEX_IMPLEMENTATION,
-                slice_start_commit=(
-                    None if planned.slice_id == 1 else first_change.start_commit
-                ),
-            ).bind_current_slice_git_boundary(
-                start_commit=first_change.start_commit,
-                scope_paths=planned.scope_paths,
-                start_fingerprint="0" * 64,
+            resume_at = current.current_work_unit.invocation_failures[-1].resume_at_utc
+            if resume_at is None:
+                raise DryRunScenarioError(
+                    "automatic scripted interruption has no durable resume time"
+                )
+            session.clock.current = _timestamp(resume_at, "invocation resume_at_utc")
+            current = current.resume_after_invocation_halt(
+                updated_at=session.clock.current.isoformat()
             )
-            slice_report = session.run(state, context)
-            if not slice_report.result.completed:
-                return slice_report
-            state = slice_report.result.state
+            session.driver.checkpoint(current, history)
 
+    first = run_unit(state)
+    if not first.result.completed:
+        return first
+    state = first.result.state
+    if state.execution_mode == "PLAN_ONLY":
+        return first
+    planned_slices = state.planned_slices
+    completed_slice = (
+        first if state.current_work_unit.kind is WorkUnitKind.SLICE else None
+    )
+    completed_ids = {
+        item.slice_id for item in state.slices if item.commit_ref is not None
+    }
+    for planned in (
+        item for item in planned_slices if item.slice_id not in completed_ids
+    ):
+        next_work_unit_id = len(state.work_units) + 1
+        change = next(
+            item
+            for item in scenario.changes
+            if item.work_unit_id == next_work_unit_id and item.round_number == 1
+        )
+        state = state.start_work_unit(
+            slice_id=planned.slice_id,
+            kind=WorkUnitKind.SLICE,
+            step=WorkflowStep.CODEX_IMPLEMENTATION,  # allowlist:provider
+            slice_start_commit=None if planned.slice_id == 1 else change.start_commit,
+        ).bind_current_slice_git_boundary(
+            start_commit=change.start_commit,
+            scope_paths=planned.scope_paths,
+            start_fingerprint="0" * 64,
+        )
+        completed_slice = run_unit(state)
+        if not completed_slice.result.completed:
+            return completed_slice
+        state = completed_slice.result.state
+    if completed_slice is None:
+        raise DryRunScenarioError("scripted workflow has no completed Slice")
     final_result = session.engine.run_final_review(
-        state, context, slice_report.result.history
+        state, context, completed_slice.result.history
     )
     return session.report(final_result)
+
+
+def build_s5_plan_only_scenario() -> DryRunScenario:
+    """Return S5's reviewed, commit-bound PLAN_ONLY half of the journey."""
+
+    base, plan_commit, plan_fp = "a" * 40, "b" * 40, "1" * 64
+    return DryRunScenario(
+        name="s5-plan-only-v1",
+        initial=ScriptedInitialState(
+            kind=WorkUnitKind.PLAN,
+            branch="feature/dry-run",
+            slice_count=1,
+            scope_paths=("docs/internal/s5-work-plan.md",),
+            execution_mode="PLAN_ONLY",
+            work_plan_path="docs/internal/s5-work-plan.md",
+        ),
+        agent_events=(
+            ScriptedAgentEvent(
+                AgentRole.CODEX,  # allowlist:provider
+                1,
+                1,
+                WorkflowStep.CODEX_PLAN,  # allowlist:provider
+                {
+                    "schema_version": "native-agent-codex-result-v2",  # allowlist:provider
+                    "request_id": "$BOUND_REQUEST_ID",
+                    "result_type": "plan_result",
+                    "ready": True,
+                    "finding_dispositions": [],
+                    "slice_plan": [
+                        {
+                            "slice_id": 1,
+                            "summary": "Create the executable S5 work-plan artifact.",
+                            "scope_paths": ["docs/internal/s5-work-plan.md"],
+                        }
+                    ],
+                },
+            ),
+            ScriptedAgentEvent(
+                AgentRole.CLAUDE,  # allowlist:provider
+                1,
+                1,
+                WorkflowStep.CLAUDE_PLAN_REVIEW,  # allowlist:provider
+                {
+                    "schema_version": "native-agent-review-result-v2",
+                    "result_type": "review_result",
+                    "request_id": "$BOUND_REQUEST_ID",
+                    "reviewer": "claude",  # allowlist:provider
+                    "decision": "approved",
+                    "new_findings": [],
+                    "status_changes": [],
+                    "reclassifications": [],
+                    "anchors": [],
+                    "review_evidence": {
+                        "dimensions": "plan contract, scope, failure paths, handoff",
+                        "largest_residual_risk": "the commit binding changes before handoff",
+                        "break_condition": "IMPLEMENT receives a foreign plan commit",
+                    },
+                    "pre_mortem": "A crash after the plan commit could duplicate the handoff.",
+                },
+            ),
+        ),
+        changes=(
+            ScriptedChange(
+                1,
+                1,
+                base,
+                plan_fp,
+                ("docs/internal/s5-work-plan.md",),
+                "S5 work-plan artifact",
+            ),
+        ),
+        validations=(ScriptedValidation(plan_fp),),
+        commits=(ScriptedCommit(1, plan_fp, plan_commit),),
+        clock_start=datetime(2026, 9, 1, tzinfo=timezone.utc),
+    )
+
+
+def build_s5_long_run_scenario() -> DryRunScenario:
+    """Return S5's IMPLEMENT correction, observation and resume journey."""
+
+    base, commit_one, commit_two = "b" * 40, "c" * 40, "d" * 40
+    slice_one_fp, slice_two_fp, correction_fp, final_fp = (
+        value * 64 for value in "2345"
+    )
+
+    def codex(  # allowlist:provider -- scripted native result factory
+        result_type: str, *, dispositions: tuple[str, ...] = (), **fields: object
+    ) -> dict[str, object]:
+        return {
+            "schema_version": "native-agent-codex-result-v2",  # allowlist:provider
+            "request_id": "$BOUND_REQUEST_ID",
+            "result_type": result_type,
+            "ready": True,
+            "finding_dispositions": [
+                {
+                    "finding_id": finding_id,
+                    "decision": "accepted",
+                    "rationale": f"The provider-free correction addresses {finding_id}.",
+                }
+                for finding_id in dispositions
+            ],
+            **fields,
+        }
+
+    def review(
+        *,
+        approved: bool,
+        observations: tuple[str, ...] = (),
+        blockers: tuple[str, ...] = (),
+        closed: tuple[str, ...] = (),
+    ) -> dict[str, object]:
+        findings = [
+            {
+                "finding_id": finding_id,
+                "finding_class": finding_class,
+                "summary": f"Provider-free finding {finding_id}.",
+                "acceptance_test": {
+                    "kind": "prose",
+                    "text": f"The long-run evidence closes {finding_id}.",
+                },
+            }
+            for finding_class, identities in (
+                ("OBSERVATION", observations),
+                ("BLOCKER", blockers),
+            )
+            for finding_id in identities
+        ]
+        return {
+            "schema_version": "native-agent-review-result-v2",
+            "result_type": "review_result",
+            "request_id": "$BOUND_REQUEST_ID",
+            "reviewer": "claude",  # allowlist:provider -- persisted reviewer role
+            "decision": "approved" if approved else "denied",
+            "new_findings": findings,
+            "status_changes": [
+                {
+                    "finding_id": finding_id,
+                    "status": "CLOSED",
+                    "rationale": f"The long-run evidence closes {finding_id}.",
+                }
+                for finding_id in closed
+            ],
+            "reclassifications": [],
+            "anchors": [],
+            "review_evidence": {
+                "dimensions": "correctness, contracts, failure paths, security, resume",
+                "largest_residual_risk": "a later transition drops carried findings",
+                "break_condition": "resume changes the canonical finding ledger",
+            },
+            "pre_mortem": "A crash after a denied review repeats one physical effect.",
+        }
+
+    quota_failure = ScriptedFailure(
+        AgentFailureKind.QUOTA,
+        "usage cap reached; reset 2026-09-01T00:00:05+00:00",
+        datetime(2026, 9, 1, tzinfo=timezone.utc),
+        provider_data={
+            "provider": "codex",  # allowlist:provider -- structured quota evidence
+            "error_type": "usage_limit",
+            "resets_at": "2026-09-01T00:00:05+00:00",
+        },
+    )
+    return DryRunScenario(
+        name="s5-long-run-v1",
+        initial=ScriptedInitialState(
+            kind=WorkUnitKind.SLICE,
+            slice_count=2,
+            scope_paths=("src/first.py", "src/second.py"),
+            work_plan_path="docs/internal/s5-work-plan.md",
+            approved_plan_commit=base,
+            planned_slices=(
+                PlannedSlice(1, "Implement the first provider-free Slice.", ("src/first.py",)),
+                PlannedSlice(2, "Correct and close the carried finding.", ("src/second.py",)),
+            ),
+        ),
+        agent_events=(
+            ScriptedAgentEvent(
+                AgentRole.CODEX, 2, 1, WorkflowStep.CODEX_IMPLEMENTATION,  # allowlist:provider
+                codex("implementation_result", test_files=[]),  # allowlist:provider
+            ),
+            ScriptedAgentEvent(
+                AgentRole.CLAUDE, 2, 1, WorkflowStep.CLAUDE_SLICE_REVIEW,  # allowlist:provider
+                review(approved=True, observations=("C-01",)),
+            ),
+            ScriptedAgentEvent(
+                AgentRole.CODEX, 3, 1, WorkflowStep.CODEX_IMPLEMENTATION,  # allowlist:provider
+                failure=quota_failure,
+            ),
+            ScriptedAgentEvent(
+                AgentRole.CODEX, 3, 1, WorkflowStep.CODEX_IMPLEMENTATION,  # allowlist:provider
+                output=codex(  # allowlist:provider
+                    "implementation_result", dispositions=("C-01",), test_files=[]
+                ),
+            ),
+            ScriptedAgentEvent(
+                AgentRole.CLAUDE, 3, 1, WorkflowStep.CLAUDE_SLICE_REVIEW,  # allowlist:provider
+                review(approved=False, blockers=("C-02",), closed=("C-01",)),
+            ),
+            ScriptedAgentEvent(
+                AgentRole.CODEX, 3, 2, WorkflowStep.CODEX_CORRECTION,  # allowlist:provider
+                codex("correction_result", dispositions=("C-02",), test_files=[]),  # allowlist:provider
+            ),
+            ScriptedAgentEvent(
+                AgentRole.CLAUDE, 3, 2, WorkflowStep.CLAUDE_SLICE_REVIEW,  # allowlist:provider
+                review(approved=True, closed=("C-02",)),
+            ),
+            ScriptedAgentEvent(
+                AgentRole.CODEX, 4, 1, WorkflowStep.CODEX_FINAL_REVIEW,  # allowlist:provider
+                codex(  # allowlist:provider
+                    "final_report_result",
+                    self_check="The resumed long-run retained and closed every finding.",
+                ),
+            ),
+            ScriptedAgentEvent(
+                AgentRole.CLAUDE, 4, 1, WorkflowStep.CLAUDE_FINAL_REVIEW,  # allowlist:provider
+                review(approved=True),
+            ),
+        ),
+        changes=(
+            ScriptedChange(2, 1, base, slice_one_fp, ("src/first.py",), "slice one"),
+            ScriptedChange(3, 1, commit_one, slice_two_fp, ("src/second.py",), "slice two"),
+            ScriptedChange(3, 2, commit_one, correction_fp, ("src/second.py",), "correction"),
+            ScriptedChange(4, 1, base, final_fp, ("src/first.py", "src/second.py"), "final"),
+        ),
+        validations=tuple(
+            ScriptedValidation(fingerprint)
+            for fingerprint in (
+                slice_one_fp,
+                slice_two_fp,
+                correction_fp,
+                final_fp,
+            )
+        ),
+        commits=(
+            ScriptedCommit(1, slice_one_fp, commit_one),
+            ScriptedCommit(2, correction_fp, commit_two),
+        ),
+        clock_start=datetime(2026, 9, 1, tzinfo=timezone.utc),
+        interrupt_on_sleep=1,
+        context=ScriptedContext(
+            quota_wait_policy=QuotaWaitPolicy(
+                automatic=True,
+                safety_margin_seconds=0,
+                maximum_wait_seconds=60,
+                maximum_auto_resumes=2,
+                heartbeat_interval_seconds=1,
+            ),
+            transient_retry_policy=TransientRetryPolicy(
+                automatic=True,
+                initial_delay_seconds=1,
+                maximum_delay_seconds=5,
+                maximum_auto_resumes=2,
+            ),
+        ),
+    )
 
 
 def run_scripted_work_unit(

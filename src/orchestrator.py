@@ -224,6 +224,7 @@ from side_effects import (
     Reconciliation,
     ReconciliationOutcome,
     SideEffectExecutor,
+    SideEffectBoundaryObserver,
     SideEffectReconciliationError,
     SideEffectSpec,
     reconcile_file_write,
@@ -352,6 +353,7 @@ class ProductionWorkflowDriver:
         config: OrchestratorConfig,
         allowed_roots: tuple[Path, ...],
         replace_existing_run_id: str | None = None,
+        side_effect_boundary_observer: SideEffectBoundaryObserver | None = None,
     ) -> None:
         self.root = repository_root.resolve()
         self.state_file = state_file.resolve()
@@ -366,6 +368,14 @@ class ProductionWorkflowDriver:
         self._rendered_changes: dict[str, WorkflowChanges] = {}
         self._artifact_bridge: ArtifactBridge | None = None
         self._replace_existing_run_id = replace_existing_run_id
+        self._side_effect_boundary_observer = side_effect_boundary_observer
+
+    def _side_effect_executor(self, bridge: ArtifactBridge) -> SideEffectExecutor:
+        """Create the one ledger executor carrying the optional crash observer."""
+
+        return SideEffectExecutor(
+            bridge, getattr(self, "_side_effect_boundary_observer", None)
+        )
 
     def _mark_completed_side_effect(self, effect_key: str) -> None:
         if self.active_state is not None:
@@ -430,7 +440,7 @@ class ProductionWorkflowDriver:
                 )
             return None, actual
 
-        SideEffectExecutor(bridge).execute(
+        self._side_effect_executor(bridge).execute(
             spec,
             reconcile=lambda: reconcile_file_write(path, sha256_bytes(expected)),
             perform=perform,
@@ -788,20 +798,19 @@ class ProductionWorkflowDriver:
         }
         ledger_key = stable_side_effect_key("ledger", "run", ledger_operation)
         if ledger_key not in completed_effect_keys:
-            bridge.record_side_effect_intent(
-                effect_class="ledger",
-                work_unit_id="run",
-                operation=ledger_operation,
-                fingerprint_sha256=contract_fingerprint,
-                fingerprint_kind=FingerprintKind.CONTRACT,
+            ledger_spec = SideEffectSpec(
+                "ledger",
+                "run",
+                ledger_operation,
+                contract_fingerprint,
+                FingerprintKind.CONTRACT,
             )
-            bridge.record_side_effect_result(
-                effect_class="ledger",
-                work_unit_id="run",
-                operation=ledger_operation,
-                result="initialized",
-                fingerprint_sha256=contract_fingerprint,
-                fingerprint_kind=FingerprintKind.CONTRACT,
+            self._side_effect_executor(bridge).execute(
+                ledger_spec,
+                reconcile=lambda: Reconciliation(
+                    ReconciliationOutcome.NOT_OCCURRED
+                ),
+                perform=lambda: (None, "initialized"),
             )
         if existing_replay is not None:
             self._reconcile_pending_side_effects(state, existing_replay)
@@ -814,20 +823,19 @@ class ProductionWorkflowDriver:
                     "internal", str(work_unit.work_unit_id), operation
                 ) in completed_effect_keys:
                     continue
-                bridge.record_side_effect_intent(
-                    effect_class="internal",
-                    work_unit_id=work_unit.work_unit_id,
-                    operation=operation,
-                    fingerprint_sha256=contract_fingerprint,
-                    fingerprint_kind=FingerprintKind.CONTRACT,
+                internal_spec = SideEffectSpec(
+                    "internal",
+                    str(work_unit.work_unit_id),
+                    operation,
+                    contract_fingerprint,
+                    FingerprintKind.CONTRACT,
                 )
-                bridge.record_side_effect_result(
-                    effect_class="internal",
-                    work_unit_id=work_unit.work_unit_id,
-                    operation=operation,
-                    result="completed",
-                    fingerprint_sha256=contract_fingerprint,
-                    fingerprint_kind=FingerprintKind.CONTRACT,
+                self._side_effect_executor(bridge).execute(
+                    internal_spec,
+                    reconcile=lambda: Reconciliation(
+                        ReconciliationOutcome.OCCURRED, "completed"
+                    ),
+                    perform=lambda: (None, "completed"),
                 )
         self._persist_workflow_snapshot(state)
         self._persist_slice_boundaries(state)
@@ -1530,7 +1538,7 @@ class ProductionWorkflowDriver:
             "provider_start", operation,
             fingerprint=measurement.binding_fingerprint,
         )
-        may_start = SideEffectExecutor(bridge).begin(
+        may_start = self._side_effect_executor(bridge).begin(
             spec,
             reconcile=lambda: self._reconcile_provider_effect(
                 spec, response_path
@@ -1622,7 +1630,7 @@ class ProductionWorkflowDriver:
             raise WorkflowExecutionError(
                 "successful provider attempt has no durable response evidence"
             )
-        SideEffectExecutor(bridge).complete(spec, result)
+        self._side_effect_executor(bridge).complete(spec, result)
         self._mark_completed_side_effect(spec.effect_key)
 
     @staticmethod
@@ -4185,7 +4193,7 @@ class ProductionWorkflowDriver:
                     current_tree=tree,
                 )
 
-            executed = SideEffectExecutor(artifact_bridge).execute(
+            executed = self._side_effect_executor(artifact_bridge).execute(
                 git_spec,
                 reconcile=reconcile_commit,
                 perform=perform_commit,
@@ -4282,7 +4290,7 @@ class ProductionWorkflowDriver:
                 current_tree=tree,
             )
 
-        result = SideEffectExecutor(bridge).execute(
+        result = self._side_effect_executor(bridge).execute(
             spec,
             reconcile=reconcile_audit_commit,
             perform=lambda: (

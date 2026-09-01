@@ -482,7 +482,7 @@ EXPECTED_STRICT_BODY_DIGESTS = {
     "src/final_review_preflight.py:_approved_external_paths": "24a9647addbf8df21fba7ecd0e25164e7237b00eb9c831bd7ee7b9ce1b8f5439",
     "src/orchestrator.py:_persisted_histories": "46d16ba2f5f168dbb9f86da548b7c370305003fa27f39d3979423f76f53b8d86",
     "src/orchestrator.py:_attach_record_events": "7065cd5a4554100a800dd581702c9738d89e6134736908703b715e18c9885d6b",
-    "src/orchestrator.py:ProductionWorkflowDriver.finalize_audit": "ab243e85a4b66bc06e1025a688c87c651443ac32baa5b8018bb92f421b99bd69",
+    "src/orchestrator.py:ProductionWorkflowDriver.finalize_audit": "cd30a2f259a2f529477c2eccfe43c5b767110ead9d577057876c71c8f7c41276",
     "src/git_service.py:commit_managed_audit_report": "ec161c2eafd7369d9eb9ab30b1724ca01815f08ce669e94c4b322770556bc717",
 }
 

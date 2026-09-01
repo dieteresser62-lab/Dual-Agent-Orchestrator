@@ -1,0 +1,29 @@
+{
+  "schema_version": "provider-free-crash-harness-v1",
+  "scenario_version": "s5-v1",
+  "effect_classes": [
+    "git_commit",
+    "provider_start",
+    "file_write",
+    "queue_move",
+    "internal",
+    "ledger"
+  ],
+  "boundary_matrix": {
+    "git_commit": ["before_intent", "after_intent", "before_effect", "after_effect", "before_result", "after_result"],
+    "provider_start": ["before_intent", "after_intent", "before_effect", "after_effect", "before_result", "after_result"],
+    "file_write": ["before_intent", "after_intent", "before_effect", "after_effect", "before_result", "after_result"],
+    "queue_move": ["before_intent", "after_intent", "before_effect", "after_effect", "before_result", "after_result"],
+    "internal": ["before_intent", "after_intent", "before_result", "after_result"],
+    "ledger": ["before_intent", "after_intent", "before_result", "after_result"]
+  },
+  "journeys": [
+    "plan-implement-finalreview",
+    "multi-slice-correction-observation-resume"
+  ],
+  "retry_kinds": [
+    "quota",
+    "network",
+    "process"
+  ]
+}

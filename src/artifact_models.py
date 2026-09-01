@@ -1185,14 +1185,14 @@ class ProviderAttemptPayload:
                 raise ArtifactValidationError("failed provider attempt requires a classified failure_kind")
 
 
-_SIDE_EFFECT_CLASSES = {
+SIDE_EFFECT_CLASSES = frozenset({
     "git_commit",
     "provider_start",
     "file_write",
     "queue_move",
     "internal",
     "ledger",
-}
+})
 
 
 def stable_side_effect_key(
@@ -1236,7 +1236,7 @@ class SideEffectPayload:
 
     def __post_init__(self) -> None:
         _require_identifier(self.effect_key, "side effect key")
-        if self.effect_class not in _SIDE_EFFECT_CLASSES:
+        if self.effect_class not in SIDE_EFFECT_CLASSES:
             raise ArtifactValidationError("side effect class is invalid")
         _require_identifier(self.work_unit_id, "side effect work_unit_id")
         if not self.operation:
