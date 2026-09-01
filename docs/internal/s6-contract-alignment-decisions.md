@@ -129,9 +129,19 @@ The available choices presented to the operator were:
    must remain unavailable to orchestrated reviews and must not allow push,
    merge, history rewriting, or self-approval.
 
-Decision: **option 1, explicitly selected by the operator.** `CLAUDE.md` now
-states that the read-only boundary also applies to manually launched sessions;
-there is no exception for the full suite, edits, commits, or follow-up tasks.
+Decision: **option 1, explicitly selected by the operator** — but the first
+wording of it was wrong and was corrected on 1 September 2026.
+
+The operator clarified that the boundary is meant for the reviewer instance
+that Codex invokes directly during a Slice, not for a session the operator
+drives interactively. "Manually launched" does not separate the two, because
+both start manually; the distinguishing fact is who invokes the session.
+
+`CLAUDE.md` therefore now names three roles. The reviewer instance stays
+strictly read-only however it was started. An operator-driven session may, on
+explicit instruction, run the suite, commit locally, and write follow-up
+assignments. In orchestrated runs only the orchestrator commits. Push, merge,
+history rewriting, and self-approval remain closed to every role.
 
 ## Manual Opus review correction round
 
