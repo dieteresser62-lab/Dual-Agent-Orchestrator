@@ -147,9 +147,14 @@ from plan_handoff import (
     write_implementation_handoff,
 )
 from repo_changes import (
+    FinalReviewEvidenceSnapshot,
     RepositoryChangeError,
     RepositoryChanges,
+    build_final_review_evidence_snapshot,
     collect_repository_changes,
+    load_final_review_evidence_cache,
+    probe_repository_snapshot,
+    render_final_review_evidence_cache,
     resolve_merge_base,
 )
 from state_io import (
@@ -366,6 +371,9 @@ class ProductionWorkflowDriver:
         self.last_codex_output = ""
         self._repository_changes: dict[str, RepositoryChanges] = {}
         self._rendered_changes: dict[str, WorkflowChanges] = {}
+        self._final_review_evidence_snapshot: FinalReviewEvidenceSnapshot | None = None
+        self._final_review_evidence_collections = 0
+        self._final_review_evidence_reuses = 0
         self._artifact_bridge: ArtifactBridge | None = None
         self._replace_existing_run_id = replace_existing_run_id
         self._side_effect_boundary_observer = side_effect_boundary_observer
@@ -404,6 +412,7 @@ class ProductionWorkflowDriver:
         content: str,
         *,
         normalized_text: bool,
+        fingerprint: str | None = None,
     ) -> None:
         bridge = self._artifact_bridge
         if bridge is None or self.active_state is None:
@@ -425,7 +434,7 @@ class ProductionWorkflowDriver:
                 ) from exc
             target = f"external:{resolved.as_posix()}"
         spec = self._side_effect_spec(
-            "file_write", (target, sha256_bytes(expected))
+            "file_write", (target, sha256_bytes(expected)), fingerprint=fingerprint
         )
 
         def perform() -> tuple[None, str]:
@@ -1674,9 +1683,14 @@ class ProductionWorkflowDriver:
         bridge = self._artifact_bridge
         chain = bridge.store.load_chain() if bridge is not None else ()
         record_head = relevant_record_head(chain)
-        repository_fingerprint = (
-            self.collect_changes(state.branch_base).fingerprint
+        final_review_changes = (
+            self.collect_changes(state.branch_base)
             if measurement.operation in FINAL_REVIEW_OPERATIONS
+            else None
+        )
+        repository_fingerprint = (
+            final_review_changes.fingerprint
+            if final_review_changes is not None
             else self._artifact_fingerprint()
         )
         transition = transition_fingerprint(
@@ -1706,11 +1720,9 @@ class ProductionWorkflowDriver:
             return measurement_record
         assert measurement_record is not None
         current_chain = bridge.store.load_chain()
-        try:
-            changes = self.collect_changes(state.branch_base)
-            repository_paths = changes.paths
-        except NoWorkflowChangesError:
-            repository_paths = ()
+        repository_paths = (
+            final_review_changes.paths if final_review_changes is not None else ()
+        )
         result = run_final_review_preflight(
             state=state, records=current_chain, measurement_record=measurement_record,
             repository_paths=repository_paths,
@@ -3949,55 +3961,158 @@ class ProductionWorkflowDriver:
         excluded_control_paths = _bound_task_control_paths(
             self.root, self.active_state
         )
-        changes = collect_repository_changes(
-            self.root,
-            start_commit,
-            semantic_markdown_paths=semantic_paths,
-            excluded_paths=excluded_control_paths,
+        final_review = (
+            self.active_state is not None
+            and self.active_state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
         )
-        if changes.entries:
-            review_diff = changes.diff_text or (
-                "(binary or metadata-only repository change)"
+        audit_path = (
+            self.active_state.audit_report_path if final_review else None
+        )
+        snapshot: FinalReviewEvidenceSnapshot | None = None
+        probe = None
+        cache_path: Path | None = None
+        if final_review:
+            probe = probe_repository_snapshot(
+                self.root,
+                start_commit,
+                semantic_markdown_paths=semantic_paths,
+                excluded_paths=excluded_control_paths,
             )
-            if (
-                self.active_state is not None
-                and self.active_state.current_work_unit.kind
-                is WorkUnitKind.FINAL_REVIEW
-                and self.active_state.audit_report_path is not None
-                and self.active_state.audit_report_path in changes.paths
+            cache_path = self._final_review_evidence_cache_path(
+                start_commit=start_commit,
+                semantic_markdown_paths=semantic_paths,
+                excluded_paths=excluded_control_paths,
+                audit_path=audit_path,
+                repository_identity_digest=probe.identity_digest,
+            )
+            memory_snapshot = self._final_review_evidence_snapshot
+            if memory_snapshot is not None and memory_snapshot.matches(
+                probe,
+                start_commit=start_commit,
+                semantic_markdown_paths=semantic_paths,
+                excluded_paths=excluded_control_paths,
+                audit_path=audit_path,
             ):
-                audit_path = self.active_state.audit_report_path
-                compacted = collect_repository_changes(
+                snapshot = memory_snapshot
+            else:
+                authorized_digest = self._final_review_cache_authorized_digest(
+                    cache_path, repository_fingerprint=probe.fingerprint
+                )
+                disk_snapshot = load_final_review_evidence_cache(
+                    cache_path, expected_file_sha256=authorized_digest
+                )
+                if disk_snapshot is not None and disk_snapshot.matches(
+                    probe,
+                    start_commit=start_commit,
+                    semantic_markdown_paths=semantic_paths,
+                    excluded_paths=excluded_control_paths,
+                    audit_path=audit_path,
+                ):
+                    snapshot = disk_snapshot
+            if snapshot is not None:
+                self._final_review_evidence_reuses += 1
+                logger.debug(
+                    "Final review evidence reused: fingerprint=%s reuses=%s "
+                    "collections=%s elapsed_ms=%s",
+                    snapshot.repository_fingerprint,
+                    self._final_review_evidence_reuses,
+                    self._final_review_evidence_collections,
+                    snapshot.collection_elapsed_ms,
+                )
+            elif memory_snapshot is not None or cache_path.exists():
+                logger.debug(
+                    "Final review evidence cache invalidated by the live repository "
+                    "or controlling boundaries"
+                )
+        if snapshot is not None:
+            changes = snapshot.repository_changes(self.root)
+        else:
+            collection_started = time.monotonic()
+            changes = collect_repository_changes(
+                self.root,
+                start_commit,
+                semantic_markdown_paths=semantic_paths,
+                excluded_paths=excluded_control_paths,
+            )
+            if final_review and changes.entries:
+                # Re-probe after the expensive collection. A concurrent repository or
+                # index mutation is denied instead of being written into a stale cache.
+                probe = probe_repository_snapshot(
                     self.root,
                     start_commit,
                     semantic_markdown_paths=semantic_paths,
-                    excluded_paths=tuple(
-                        sorted({*excluded_control_paths, audit_path})
-                    ),
+                    excluded_paths=excluded_control_paths,
                 )
-                summary = _final_review_audit_evidence_summary(
-                    changes,
-                    audit_path=audit_path,
-                    omitted_diff_chars=max(
-                        0, len(changes.diff_text) - len(compacted.diff_text)
-                    ),
+                elapsed_ms = max(
+                    0, round((time.monotonic() - collection_started) * 1000)
                 )
-                review_diff = "\n\n".join(
-                    part
-                    for part in (
-                        compacted.diff_text.strip(),
-                        summary,
+                try:
+                    snapshot = build_final_review_evidence_snapshot(
+                        changes,
+                        probe,
+                        start_commit=start_commit,
+                        semantic_markdown_paths=semantic_paths,
+                        excluded_paths=excluded_control_paths,
+                        audit_path=audit_path,
+                        collection_elapsed_ms=elapsed_ms,
                     )
-                    if part
+                except ValueError as exc:
+                    raise WorkflowExecutionError(
+                        "final-review repository changed during evidence collection"
+                    ) from exc
+                self._final_review_evidence_snapshot = snapshot
+                self._final_review_evidence_collections += 1
+                cache_path = self._final_review_evidence_cache_path(
+                    start_commit=start_commit,
+                    semantic_markdown_paths=semantic_paths,
+                    excluded_paths=excluded_control_paths,
+                    audit_path=audit_path,
+                    repository_identity_digest=probe.identity_digest,
                 )
-                logger.info(
-                    "Final review evidence compacted: audit=%s original_chars=%s "
-                    "evidence_chars=%s fingerprint=%s",
-                    audit_path,
-                    len(changes.diff_text),
-                    len(review_diff),
-                    changes.fingerprint,
+                cache_content = render_final_review_evidence_cache(snapshot)
+                cache_digest = sha256_bytes(cache_content.encode("utf-8"))
+                prior_authority = self._final_review_cache_authorized_digest(
+                    cache_path, repository_fingerprint=snapshot.repository_fingerprint
                 )
+                try:
+                    current_digest = file_state_digest(cache_path)
+                except SideEffectReconciliationError:
+                    # A non-regular or unstable cache target has no authority.
+                    # Keep the freshly collected in-memory evidence, but do not
+                    # follow, replace, or otherwise repair that filesystem node.
+                    current_digest = "invalid"
+                if self._artifact_bridge is not None and (
+                    prior_authority is None and current_digest in {"absent", cache_digest}
+                ):
+                    self._write_side_effect_file(
+                        cache_path,
+                        cache_content,
+                        normalized_text=False,
+                        fingerprint=snapshot.repository_fingerprint,
+                    )
+                elif prior_authority != cache_digest or current_digest != cache_digest:
+                    # A missing or modified cache is never repaired from its own
+                    # contents. The freshly collected repository evidence remains
+                    # usable only in this process; a later resume will collect again.
+                    logger.warning(
+                        "Final review evidence cache is absent, modified, or lacks "
+                        "append-only authority; resume will collect it again"
+                    )
+                if snapshot.audit_summary is not None:
+                    logger.info(
+                        "Final review evidence compacted: audit=%s original_chars=%s "
+                        "evidence_chars=%s fingerprint=%s elapsed_ms=%s collection=%s",
+                        snapshot.audit_summary.audit_path,
+                        len(snapshot.canonical_diff),
+                        len(snapshot.evidence_diff),
+                        snapshot.repository_fingerprint,
+                        snapshot.collection_elapsed_ms,
+                        self._final_review_evidence_collections,
+                    )
+        if changes.entries:
+            review_diff = (
+                snapshot.evidence_diff if snapshot is not None else changes.diff_text
+            ) or "(binary or metadata-only repository change)"
             rendered = WorkflowChanges(
                 start_commit=start_commit,
                 fingerprint=changes.fingerprint,
@@ -4026,6 +4141,62 @@ class ProductionWorkflowDriver:
             )
         self._rendered_changes[rendered.fingerprint] = rendered
         return rendered
+
+    def _final_review_evidence_cache_path(
+        self,
+        *,
+        start_commit: str,
+        semantic_markdown_paths: tuple[str, ...],
+        excluded_paths: tuple[str, ...],
+        audit_path: str | None,
+        repository_identity_digest: str,
+    ) -> Path:
+        if self.active_state is None:
+            raise WorkflowExecutionError("final-review evidence cache has no active run")
+        run_key = hashlib.sha256(self.active_state.run_id.encode("utf-8")).hexdigest()
+        snapshot_key = hashlib.sha256(
+            json.dumps(
+                {
+                    "start_commit": start_commit,
+                    "semantic_markdown_paths": semantic_markdown_paths,
+                    "excluded_paths": excluded_paths,
+                    "audit_path": audit_path,
+                    "repository_identity_digest": repository_identity_digest,
+                },
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        return (
+            self.root
+            / ".orchestrator"
+            / "cache"
+            / "final-review-evidence"
+            / run_key
+            / f"{snapshot_key}.json"
+        )
+
+    def _final_review_cache_authorized_digest(
+        self, path: Path, *, repository_fingerprint: str
+    ) -> str | None:
+        bridge = self._artifact_bridge
+        if bridge is None:
+            return None
+        target = path.resolve().relative_to(self.root).as_posix()
+        for record in reversed(bridge.store.load_chain()):
+            payload = record.payload
+            if (
+                isinstance(payload, SideEffectPayload)
+                and payload.effect_class == "file_write"
+                and payload.phase == "result"
+                and len(payload.operation) in {2, 4}
+                and payload.operation[0] == target
+                and payload.result == payload.operation[1]
+                and record.fingerprint.sha256 == repository_fingerprint
+            ):
+                return payload.operation[1]
+        return None
 
     def collect_correction_delta(
         self, previous_fingerprint: str, current_fingerprint: str
@@ -5523,46 +5694,6 @@ def _bound_task_control_paths(
             "bound task file changed during execution; start a new run with a new task digest"
         )
     return (task.relative_to(root).as_posix(),)
-
-
-def _final_review_audit_evidence_summary(
-    changes: RepositoryChanges,
-    *,
-    audit_path: str,
-    omitted_diff_chars: int,
-) -> str:
-    """Bind a generated audit projection without repeating its full diff.
-
-    The canonical ``RepositoryChanges`` object remains the source for the complete
-    branch fingerprint, path boundary, test detection, and validation attestation.
-    Only the agent-facing evidence substitutes this deterministic projection with
-    its already-captured semantic payload metadata.
-    """
-    entries = tuple(
-        entry for entry in changes.fingerprint_entries if entry.path == audit_path
-    )
-    if len(entries) != 1:
-        raise WorkflowExecutionError(
-            "final review audit compaction requires exactly one fingerprint entry "
-            f"for {audit_path!r}"
-        )
-    entry = entries[0]
-    return "\n".join(
-        (
-            "=== DETERMINISTIC AUDIT PROJECTION (COMPACT EVIDENCE) ===",
-            f"path: {audit_path}",
-            f"change_kind: {entry.kind}",
-            f"semantic_payload_type: {entry.payload_type or 'none'}",
-            f"semantic_payload_size: {entry.payload_size if entry.payload_size is not None else 'none'}",
-            f"semantic_payload_sha256: {entry.payload_digest or 'none'}",
-            f"omitted_full_diff_chars: {omitted_diff_chars}",
-            "reason: The full managed audit projection is deterministic and repeats "
-            "structured findings, approvals, and validation attestations supplied "
-            "separately. Its canonical semantic payload remains bound to the complete "
-            "branch fingerprint and validation boundary.",
-            "=== END COMPACT AUDIT EVIDENCE ===",
-        )
-    )
 
 
 def _new_watch_task_control_paths(

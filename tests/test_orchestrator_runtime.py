@@ -50,6 +50,7 @@ from artifact_models import (
     RoleProfilePayload,
     RunIdentityPayload,
     RunProfilePayload,
+    SideEffectPayload,
     SliceBoundaryPayload,
     SliceSpec,
     ValidationAttestationPayload,
@@ -96,6 +97,7 @@ from inbox_watcher import (
 )
 from orchestrator import ProductionWorkflowDriver, run_pipeline, run_production_workflow
 from review_packets import ReviewPacket, ReviewPacketManifest
+from semantic_markdown import MANAGED_SECTION_HEADINGS, MANAGED_SECTION_KEYS
 from workflow import (
     CodexInvocation,
     EvidenceKind,
@@ -157,6 +159,7 @@ from content_authority_support import (
     append_provider_decision_authority,
     append_validation_authority,
 )
+from side_effects import SideEffectBoundaryPhase
 
 
 def _append_run_binding(bridge: ArtifactBridge, state: WorkflowState) -> None:
@@ -1534,6 +1537,439 @@ def test_final_review_evidence_never_silently_truncates_diff_content(
     assert "LAST_SENTINEL" in changes.full_diff
     assert "middle of final-review diff section" not in changes.full_diff
     assert "DETERMINISTIC AUDIT PROJECTION (COMPACT EVIDENCE)" in changes.full_diff
+
+
+def _managed_final_review_audit(projected: str) -> str:
+    lines = ["# Final review", "", "stable authored evidence", "", "## Orchestrator-Prüfprotokoll", ""]
+    for key in MANAGED_SECTION_KEYS:
+        lines.extend(
+            (
+                f"### {MANAGED_SECTION_HEADINGS[key]}",
+                "",
+                f"<!-- audit:{key}:begin -->",
+                projected,
+                f"<!-- audit:{key}:end -->",
+                "",
+            )
+        )
+    return "\n".join(lines)
+
+
+def _final_review_evidence_driver(
+    repository: Path,
+    tmp_path: Path,
+    *,
+    run_id: str,
+) -> tuple[ProductionWorkflowDriver, WorkflowState, str, str]:
+    head = _git(repository, "rev-parse", "HEAD")
+    audit_path = "docs/internal/final-review-cache-review-12345678.md"
+    source_path = "src/runtime.py"
+    (repository / "docs/internal").mkdir(parents=True, exist_ok=True)
+    (repository / "src").mkdir(exist_ok=True)
+    (repository / audit_path).write_text(
+        _managed_final_review_audit("first projected value"), encoding="utf-8"
+    )
+    (repository / source_path).write_text("VALUE = 1\n", encoding="utf-8")
+    _git(repository, "add", audit_path, source_path)
+    state = init_workflow_state(
+        run_id=run_id,
+        task_file=str(tmp_path / "task.md"),
+        branch="feature/final-review-cache",
+        branch_base=head,
+        slice_count=1,
+        task_scope_patterns=(audit_path, source_path),
+        audit_report_path=audit_path,
+    ).bind_current_slice_git_boundary(
+        start_commit=head,
+        scope_paths=(audit_path, source_path),
+        start_fingerprint="a" * 64,
+    ).complete_current_slice(commit_ref="b" * 40).start_final_review_work_unit()
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    driver.active_state = state
+    driver._artifact_bridge = ArtifactBridge(ArtifactStore(repository, state.run_id))
+    return driver, state, head, audit_path
+
+
+def test_final_review_evidence_is_collected_once_across_consumers_and_resume(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    repository = _repository(tmp_path, "feature/final-review-cache")
+    driver, state, head, _audit_path = _final_review_evidence_driver(
+        repository, tmp_path, run_id="final-review-cache"
+    )
+    real_collect = orchestrator.collect_repository_changes
+    collections: list[str] = []
+
+    def measured_collect(*args, **kwargs):  # type: ignore[no-untyped-def]
+        collections.append(str(args[1]))
+        return real_collect(*args, **kwargs)
+
+    monkeypatch.setattr(orchestrator, "collect_repository_changes", measured_collect)
+    caplog.set_level("DEBUG")
+
+    final_report = driver.collect_changes(head)
+    attestation_fingerprint = driver._artifact_fingerprint()
+    provider_request = driver.collect_changes(head)
+    preflight = driver.collect_changes(head)
+
+    resumed = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    resumed.active_state = state
+    resumed._artifact_bridge = ArtifactBridge(ArtifactStore(repository, state.run_id))
+    resumed_evidence = resumed.collect_changes(head)
+
+    assert collections == [head]
+    assert attestation_fingerprint == final_report.fingerprint
+    assert (
+        final_report.full_diff
+        == provider_request.full_diff
+        == preflight.full_diff
+        == resumed_evidence.full_diff
+    )
+    assert final_report.paths == provider_request.paths == preflight.paths == resumed_evidence.paths
+    assert sum(
+        record.message.startswith("Final review evidence compacted")
+        for record in caplog.records
+    ) == 1
+    assert any(
+        record.message.startswith("Final review evidence reused")
+        for record in caplog.records
+    )
+
+
+def test_final_review_cache_bytes_exclude_collection_runtime(tmp_path: Path) -> None:
+    repository = _repository(tmp_path, "feature/final-review-cache")
+    driver, _state, head, _audit_path = _final_review_evidence_driver(
+        repository, tmp_path, run_id="final-review-cache-deterministic"
+    )
+
+    driver.collect_changes(head)
+    snapshot = driver._final_review_evidence_snapshot
+
+    assert snapshot is not None
+    slower_snapshot = replace(
+        snapshot, collection_elapsed_ms=snapshot.collection_elapsed_ms + 60_000
+    )
+    first = orchestrator.render_final_review_evidence_cache(snapshot)
+    second = orchestrator.render_final_review_evidence_cache(slower_snapshot)
+    assert first == second
+    assert "collection_elapsed_ms" not in json.loads(first)["snapshot"]
+
+
+def test_final_review_semantically_empty_diff_retains_metadata_fallback(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/final-review-cache")
+    semantic_path = "docs/internal/final-review-projection.md"
+    (repository / "docs/internal").mkdir(parents=True, exist_ok=True)
+    (repository / semantic_path).write_text(
+        _managed_final_review_audit("first projected value"), encoding="utf-8"
+    )
+    _git(repository, "add", semantic_path)
+    _git(repository, "commit", "-m", "add managed projection")
+    head = _git(repository, "rev-parse", "HEAD")
+    (repository / semantic_path).write_text(
+        _managed_final_review_audit("second projected value"), encoding="utf-8"
+    )
+    state = init_workflow_state(
+        run_id="final-review-empty-diff",
+        task_file=str(tmp_path / "task.md"),
+        branch="feature/final-review-cache",
+        branch_base=head,
+        slice_count=1,
+        task_scope_patterns=(semantic_path,),
+    ).bind_current_slice_git_boundary(
+        start_commit=head,
+        scope_paths=(semantic_path,),
+        start_fingerprint="a" * 64,
+    ).complete_current_slice(commit_ref="b" * 40).start_final_review_work_unit()
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    driver.active_state = state
+    driver._artifact_bridge = ArtifactBridge(ArtifactStore(repository, state.run_id))
+
+    changes = driver.collect_changes(head)
+
+    assert changes.paths == (semantic_path,)
+    assert changes.full_diff == "(binary or metadata-only repository change)"
+
+
+def test_final_review_cache_intent_resumes_with_deterministic_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = _repository(tmp_path, "feature/final-review-cache")
+    driver, state, head, _audit_path = _final_review_evidence_driver(
+        repository, tmp_path, run_id="final-review-cache-intent-resume"
+    )
+    real_collect = orchestrator.collect_repository_changes
+    collections = 0
+    monotonic_values = iter((0.0, 1.0, 10.0, 12.5))
+
+    def measured_collect(*args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal collections
+        collections += 1
+        return real_collect(*args, **kwargs)
+
+    class InjectedCacheCrash(RuntimeError):
+        pass
+
+    def crash_after_cache_intent(boundary):  # type: ignore[no-untyped-def]
+        if (
+            boundary.effect_class == "file_write"
+            and boundary.phase is SideEffectBoundaryPhase.AFTER_INTENT
+        ):
+            raise InjectedCacheCrash
+
+    monkeypatch.setattr(orchestrator, "collect_repository_changes", measured_collect)
+    monkeypatch.setattr(orchestrator.time, "monotonic", lambda: next(monotonic_values))
+    driver._side_effect_boundary_observer = crash_after_cache_intent
+
+    with pytest.raises(InjectedCacheCrash):
+        driver.collect_changes(head)
+    interrupted_snapshot = driver._final_review_evidence_snapshot
+    assert interrupted_snapshot is not None
+    assert interrupted_snapshot.collection_elapsed_ms == 1_000
+
+    resumed = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    resumed.active_state = state
+    resumed._artifact_bridge = ArtifactBridge(ArtifactStore(repository, state.run_id))
+    resumed.collect_changes(head)
+    resumed_snapshot = resumed._final_review_evidence_snapshot
+
+    assert collections == 2
+    assert resumed_snapshot is not None
+    assert resumed_snapshot.collection_elapsed_ms == 2_500
+    assert orchestrator.render_final_review_evidence_cache(
+        interrupted_snapshot
+    ) == orchestrator.render_final_review_evidence_cache(resumed_snapshot)
+    cache_effects = tuple(
+        record.payload
+        for record in resumed._artifact_bridge.store.load_chain()
+        if isinstance(record.payload, SideEffectPayload)
+        and record.payload.effect_class == "file_write"
+        and "cache/final-review-evidence" in record.payload.operation[0]
+    )
+    assert tuple(payload.phase for payload in cache_effects) == ("intent", "result")
+    assert cache_effects[0].operation == cache_effects[1].operation
+
+
+@pytest.mark.parametrize("mutation", ("visible", "untracked", "index", "head"))
+def test_final_review_evidence_cache_invalidates_every_repository_surface(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    repository = _repository(tmp_path, "feature/final-review-cache")
+    driver, _state, head, _audit_path = _final_review_evidence_driver(
+        repository, tmp_path, run_id=f"final-review-cache-{mutation}"
+    )
+    real_collect = orchestrator.collect_repository_changes
+    collections = 0
+
+    def measured_collect(*args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal collections
+        collections += 1
+        return real_collect(*args, **kwargs)
+
+    monkeypatch.setattr(orchestrator, "collect_repository_changes", measured_collect)
+    first = driver.collect_changes(head)
+
+    if mutation == "visible":
+        (repository / "src/runtime.py").write_text("VALUE = 2\n", encoding="utf-8")
+    elif mutation == "untracked":
+        (repository / "outside.py").write_text("UNAUTHORIZED = True\n", encoding="utf-8")
+    elif mutation == "index":
+        (repository / "seed.txt").write_text("staged-only\n", encoding="utf-8")
+        _git(repository, "add", "seed.txt")
+        (repository / "seed.txt").write_text("seed\n", encoding="utf-8")
+    else:
+        (repository / "head.txt").write_text("new head\n", encoding="utf-8")
+        _git(repository, "add", "head.txt")
+        _git(repository, "commit", "-m", "move head")
+
+    second = driver.collect_changes(head)
+
+    assert collections == 2
+    if mutation == "index":
+        assert second.fingerprint == first.fingerprint
+        assert second.full_diff == first.full_diff
+    else:
+        assert second.fingerprint != first.fingerprint
+    if mutation == "untracked":
+        assert "outside.py" in second.paths
+
+
+def test_final_review_projection_only_update_reuses_semantic_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = _repository(tmp_path, "feature/final-review-cache")
+    driver, _state, head, audit_path = _final_review_evidence_driver(
+        repository, tmp_path, run_id="final-review-cache-projection"
+    )
+    real_collect = orchestrator.collect_repository_changes
+    collections = 0
+
+    def measured_collect(*args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal collections
+        collections += 1
+        return real_collect(*args, **kwargs)
+
+    monkeypatch.setattr(orchestrator, "collect_repository_changes", measured_collect)
+    first = driver.collect_changes(head)
+    (repository / audit_path).write_text(
+        _managed_final_review_audit("second, much longer projected value"),
+        encoding="utf-8",
+    )
+    second = driver.collect_changes(head)
+
+    assert collections == 1
+    assert second.fingerprint == first.fingerprint
+    assert second.full_diff == first.full_diff
+    assert "second, much longer projected value" not in second.full_diff
+
+
+@pytest.mark.parametrize("boundary", ("audit_path", "excluded_control_path"))
+def test_final_review_evidence_cache_invalidates_controlling_boundaries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    boundary: str,
+) -> None:
+    repository = _repository(tmp_path, "feature/final-review-cache")
+    if boundary == "excluded_control_path":
+        ignore = repository / ".gitignore"
+        ignore.write_text(
+            ignore.read_text(encoding="utf-8") + ".task-*.md\n", encoding="utf-8"
+        )
+        _git(repository, "add", ".gitignore")
+        _git(repository, "commit", "-m", "ignore task controls")
+    driver, state, head, _audit_path = _final_review_evidence_driver(
+        repository, tmp_path, run_id=f"final-review-cache-{boundary}"
+    )
+    if boundary == "excluded_control_path":
+        first_task = repository / ".task-a.md"
+        second_task = repository / ".task-b.md"
+        first_task.write_text("bound task\n", encoding="utf-8")
+        second_task.write_text("bound task\n", encoding="utf-8")
+        task_digest = hashlib.sha256("bound task\n".encode("utf-8")).hexdigest()
+        state = replace(
+            state,
+            task_file=str(first_task),
+            task_digest=task_digest,
+            target_branch=state.branch,
+        )
+        driver.active_state = state
+    real_collect = orchestrator.collect_repository_changes
+    collections = 0
+
+    def measured_collect(*args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal collections
+        collections += 1
+        return real_collect(*args, **kwargs)
+
+    monkeypatch.setattr(orchestrator, "collect_repository_changes", measured_collect)
+    first = driver.collect_changes(head)
+    if boundary == "audit_path":
+        driver.active_state = replace(
+            state,
+            audit_report_path="docs/internal/rebound-final-review.md",
+        )
+    else:
+        driver.active_state = replace(state, task_file=str(second_task))
+    second = driver.collect_changes(head)
+
+    assert collections == 2
+    assert second.fingerprint == first.fingerprint
+
+
+@pytest.mark.parametrize("cache_mutation", ("deleted", "tampered"))
+def test_final_review_cache_loss_or_tampering_recollects_without_touching_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cache_mutation: str,
+) -> None:
+    repository = _repository(tmp_path, "feature/final-review-cache")
+    driver, state, head, _audit_path = _final_review_evidence_driver(
+        repository, tmp_path, run_id=f"final-review-cache-{cache_mutation}"
+    )
+    real_collect = orchestrator.collect_repository_changes
+    collections = 0
+
+    def measured_collect(*args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal collections
+        collections += 1
+        return real_collect(*args, **kwargs)
+
+    monkeypatch.setattr(orchestrator, "collect_repository_changes", measured_collect)
+    first = driver.collect_changes(head)
+    source_before = (repository / "src/runtime.py").read_bytes()
+    cache_path = next(
+        (repository / ".orchestrator" / "cache" / "final-review-evidence").rglob(
+            "*.json"
+        )
+    )
+    if cache_mutation == "deleted":
+        cache_path.unlink()
+    else:
+        envelope = json.loads(cache_path.read_text(encoding="utf-8"))
+        envelope["snapshot"]["start_commit"] = "c" * 40
+        snapshot_bytes = json.dumps(
+            envelope["snapshot"],
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        envelope["snapshot_sha256"] = hashlib.sha256(snapshot_bytes).hexdigest()
+        cache_path.write_text(
+            json.dumps(
+                envelope,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    resumed = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    resumed.active_state = state
+    resumed._artifact_bridge = ArtifactBridge(ArtifactStore(repository, state.run_id))
+    second = resumed.collect_changes(head)
+
+    assert collections == 2
+    assert second == first
+    assert (repository / "src/runtime.py").read_bytes() == source_before
 
 
 def test_structured_bind_persists_contract_and_active_work_unit_once(

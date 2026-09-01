@@ -13,6 +13,7 @@ from typing import Iterable, Mapping, Sequence
 
 from semantic_markdown import SemanticMarkdownError, canonical_semantic_markdown
 from path_policy import PathPolicyError, resolve_path_within_roots
+from review_packets import exclude_review_diff_paths
 
 
 UNTRACKED_PREVIEW_LIMIT = 256_000
@@ -132,6 +133,46 @@ class RepositoryChanges:
                 diff,
             ]
         ).strip()
+
+
+@dataclass(frozen=True)
+class RepositorySnapshotProbe:
+    """Cheap, content-addressed identity used to validate derived evidence caches."""
+
+    repository_root: Path
+    merge_base: str
+    head_commit: str
+    index_fingerprint: str
+    entries: tuple[ChangedPath, ...]
+    fingerprint: str
+    fingerprint_entries: tuple[ChangeFingerprintEntry, ...]
+
+    @property
+    def paths(self) -> tuple[str, ...]:
+        return tuple(entry.path for entry in self.entries)
+
+    @property
+    def review_paths(self) -> tuple[str, ...]:
+        current = [entry.path for entry in self.entries if entry.working_tree]
+        committed = [entry.path for entry in self.entries if not entry.working_tree]
+        return tuple([*current, *committed])
+
+    @property
+    def identity_digest(self) -> str:
+        payload = {
+            "merge_base": self.merge_base,
+            "head_commit": self.head_commit,
+            "index_fingerprint": self.index_fingerprint,
+            "fingerprint": self.fingerprint,
+            "entries": [entry.to_payload() for entry in self.fingerprint_entries],
+        }
+        serialized = json.dumps(
+            payload,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(serialized).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -690,6 +731,209 @@ def collect_repository_changes(
     )
 
 
+def probe_repository_snapshot(
+    repository_root: Path,
+    merge_base: str,
+    *,
+    semantic_markdown_paths: Iterable[str] = (),
+    excluded_paths: Iterable[str] = (),
+) -> RepositorySnapshotProbe:
+    """Fingerprint the live repository without constructing its potentially huge diff.
+
+    The probe deliberately repeats the canonical path and payload rules used by
+    :func:`collect_repository_changes`.  It additionally binds HEAD and the staged
+    index, including an index-only change hidden by the working tree.  Managed
+    Markdown is canonicalized before hashing so projection-only audit rewrites do
+    not manufacture a new semantic snapshot.
+    """
+
+    root = _validated_repository_root(repository_root)
+    verified = _git(
+        root,
+        ("rev-parse", "--verify", "--end-of-options", f"{merge_base}^{{commit}}"),
+    )
+    canonical_merge_base = os.fsdecode(verified.stdout).strip()
+    head_commit = os.fsdecode(
+        _git(root, ("rev-parse", "--verify", "HEAD^{commit}")).stdout
+    ).strip()
+    semantic_paths = frozenset(
+        _normalize_selected_path(path) for path in semantic_markdown_paths
+    )
+    exclusions = frozenset(_normalize_selected_path(path) for path in excluded_paths)
+    entries = [
+        entry
+        for entry in _parse_name_status(
+            _git(
+                root,
+                (
+                    "diff",
+                    "--name-status",
+                    "-z",
+                    "--find-renames",
+                    canonical_merge_base,
+                    "--",
+                ),
+            ).stdout
+        )
+        if entry.path not in exclusions and entry.old_path not in exclusions
+    ]
+    untracked_paths = sorted(
+        path
+        for field in _git(
+            root, ("ls-files", "--others", "--exclude-standard", "-z", "--")
+        ).stdout.split(b"\0")
+        if field and (path := os.fsdecode(field)) not in exclusions
+    )
+    existing_paths = {entry.path for entry in entries}
+    for path in untracked_paths:
+        if path not in existing_paths:
+            entries.append(
+                ChangedPath(
+                    path=path,
+                    kind="untracked",
+                    raw_status="??",
+                    tracked=False,
+                    working_tree=True,
+                )
+            )
+    working_tree_paths = {
+        os.fsdecode(field)
+        for field in _git(
+            root,
+            ("diff", "--name-only", "-z", "--find-renames", "HEAD", "--"),
+        ).stdout.split(b"\0")
+        if field
+    }
+    working_tree_paths.update(untracked_paths)
+    entries = [
+        replace(entry, working_tree=entry.path in working_tree_paths)
+        for entry in entries
+    ]
+    entries.sort(key=lambda item: (item.path, item.old_path or "", item.raw_status))
+    payloads = {
+        entry.path: _read_path_payload(
+            root,
+            entry.path,
+            semantic_markdown_paths=semantic_paths,
+        )
+        for entry in entries
+        if entry.kind != "deleted"
+    }
+    fingerprint_entries = tuple(
+        _change_fingerprint_entry(entry, payloads) for entry in entries
+    )
+    fingerprint_payload = {
+        "version": 1,
+        "merge_base": canonical_merge_base,
+        "entries": [entry.to_payload() for entry in fingerprint_entries],
+    }
+    fingerprint = hashlib.sha256(
+        json.dumps(
+            fingerprint_payload,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    index_fingerprint = _index_fingerprint(
+        root,
+        head_commit=head_commit,
+        semantic_paths=semantic_paths,
+        exclusions=exclusions,
+    )
+    return RepositorySnapshotProbe(
+        repository_root=root,
+        merge_base=canonical_merge_base,
+        head_commit=head_commit,
+        index_fingerprint=index_fingerprint,
+        entries=tuple(entries),
+        fingerprint=fingerprint,
+        fingerprint_entries=fingerprint_entries,
+    )
+
+
+def _index_fingerprint(
+    repository_root: Path,
+    *,
+    head_commit: str,
+    semantic_paths: frozenset[str],
+    exclusions: frozenset[str],
+) -> str:
+    raw = _git(
+        repository_root,
+        ("diff", "--cached", "--name-status", "-z", "--find-renames", "HEAD", "--"),
+    ).stdout
+    entries = [
+        entry
+        for entry in _parse_name_status(raw)
+        if entry.path not in exclusions and entry.old_path not in exclusions
+    ]
+    entries.sort(key=lambda item: (item.path, item.old_path or "", item.raw_status))
+    payload_entries: list[dict[str, object]] = []
+    for entry in entries:
+        payload: dict[str, object] | None = None
+        if entry.kind != "deleted":
+            stage_lines = [
+                field
+                for field in _git(
+                    repository_root,
+                    ("ls-files", "--stage", "-z", "--", entry.path),
+                ).stdout.split(b"\0")
+                if field
+            ]
+            if len(stage_lines) != 1 or b"\t" not in stage_lines[0]:
+                raise RepositoryChangeError(
+                    f"could not resolve one stage-zero index entry for {entry.path!r}"
+                )
+            metadata, recorded_path = stage_lines[0].split(b"\t", 1)
+            fields = metadata.split()
+            if len(fields) != 3 or fields[2] != b"0" or os.fsdecode(recorded_path) != entry.path:
+                raise RepositoryChangeError(
+                    f"index entry for {entry.path!r} is unmerged or malformed"
+                )
+            mode = os.fsdecode(fields[0])
+            if entry.path in semantic_paths or _uses_semantic_markdown_digest(entry.path):
+                staged = _git(repository_root, ("show", f":{entry.path}")).stdout
+                try:
+                    canonical = canonical_semantic_markdown(
+                        staged.decode("utf-8"),
+                        path=entry.path,
+                        remove_appendix=entry.path in semantic_paths,
+                    ).encode("utf-8")
+                except (UnicodeError, SemanticMarkdownError) as exc:
+                    raise RepositoryChangeError(
+                        f"could not canonicalize staged Markdown {entry.path!r}: {exc}"
+                    ) from exc
+                payload = {
+                    "mode": mode,
+                    "type": "semantic-markdown",
+                    "size": len(canonical),
+                    "sha256": hashlib.sha256(canonical).hexdigest(),
+                }
+            else:
+                payload = {
+                    "mode": mode,
+                    "type": "git-blob",
+                    "sha256": os.fsdecode(fields[1]),
+                }
+        payload_entries.append(
+            {
+                "path": entry.path,
+                "old_path": entry.old_path,
+                "kind": entry.kind,
+                "raw_status": entry.raw_status,
+                "payload": payload,
+            }
+        )
+    canonical = json.dumps(
+        {"head_commit": head_commit, "entries": payload_entries},
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
 def fingerprint_change_subset(
     changes: RepositoryChanges,
     selected_paths: Iterable[str],
@@ -784,3 +1028,482 @@ def merge_reported_paths(
             merged.append(path)
             seen.add(path)
     return merged
+
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_GIT_OBJECT_ID = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+_CACHE_TYPE = "final-review-evidence-snapshot"
+
+
+@dataclass(frozen=True)
+class AuditCompactionSummary:
+    audit_path: str
+    change_kind: str
+    semantic_payload_type: str | None
+    semantic_payload_size: int | None
+    semantic_payload_sha256: str | None
+    omitted_diff_chars: int
+
+    def render(self) -> str:
+        return "\n".join(
+            (
+                "=== DETERMINISTIC AUDIT PROJECTION (COMPACT EVIDENCE) ===",
+                f"path: {self.audit_path}",
+                f"change_kind: {self.change_kind}",
+                f"semantic_payload_type: {self.semantic_payload_type or 'none'}",
+                "semantic_payload_size: "
+                f"{self.semantic_payload_size if self.semantic_payload_size is not None else 'none'}",
+                f"semantic_payload_sha256: {self.semantic_payload_sha256 or 'none'}",
+                f"omitted_full_diff_chars: {self.omitted_diff_chars}",
+                "reason: The full managed audit projection is deterministic and repeats "
+                "structured findings, approvals, and validation attestations supplied "
+                "separately. Its canonical semantic payload remains bound to the complete "
+                "branch fingerprint and validation boundary.",
+                "=== END COMPACT AUDIT EVIDENCE ===",
+            )
+        )
+
+
+@dataclass(frozen=True)
+class FinalReviewEvidenceSnapshot:
+    """Immutable derived evidence bound to one fully validated repository snapshot."""
+
+    start_commit: str
+    merge_base: str
+    head_commit: str
+    index_fingerprint: str
+    repository_identity_digest: str
+    repository_fingerprint: str
+    semantic_markdown_paths: tuple[str, ...]
+    excluded_paths: tuple[str, ...]
+    audit_path: str | None
+    entries: tuple[ChangedPath, ...]
+    fingerprint_entries: tuple[ChangeFingerprintEntry, ...]
+    canonical_diff: str
+    evidence_diff: str
+    gate_paths: tuple[str, ...]
+    audit_summary: AuditCompactionSummary | None
+    collection_elapsed_ms: int
+
+    def __post_init__(self) -> None:
+        for label, value in (
+            ("merge_base", self.merge_base),
+            ("head_commit", self.head_commit),
+        ):
+            if not _GIT_OBJECT_ID.fullmatch(value):
+                raise ValueError(f"snapshot {label} must be a Git object ID")
+        for label, value in (
+            ("index_fingerprint", self.index_fingerprint),
+            ("repository_identity_digest", self.repository_identity_digest),
+            ("repository_fingerprint", self.repository_fingerprint),
+        ):
+            if not _SHA256.fullmatch(value):
+                raise ValueError(f"snapshot {label} must be SHA-256")
+        if self.collection_elapsed_ms < 0:
+            raise ValueError("snapshot collection time must not be negative")
+        if self.semantic_markdown_paths != tuple(sorted(set(self.semantic_markdown_paths))):
+            raise ValueError("snapshot semantic paths are not canonical")
+        if self.excluded_paths != tuple(sorted(set(self.excluded_paths))):
+            raise ValueError("snapshot exclusions are not canonical")
+        paths = tuple(entry.path for entry in self.entries)
+        if tuple(entry.path for entry in self.fingerprint_entries) != paths:
+            raise ValueError("snapshot fingerprint entries differ from paths")
+        expected_gate_paths = tuple(sorted({entry.path for entry in self.entries}))
+        if self.gate_paths != expected_gate_paths:
+            raise ValueError("snapshot gate paths are not canonical")
+        fingerprint_payload = {
+            "version": 1,
+            "merge_base": self.merge_base,
+            "entries": [entry.to_payload() for entry in self.fingerprint_entries],
+        }
+        expected_fingerprint = hashlib.sha256(
+            json.dumps(
+                fingerprint_payload,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        if self.repository_fingerprint != expected_fingerprint:
+            raise ValueError("snapshot repository fingerprint is inconsistent")
+        expected_evidence = self.canonical_diff
+        if self.audit_summary is not None:
+            if self.audit_path != self.audit_summary.audit_path:
+                raise ValueError("snapshot audit summary has another path")
+            compacted = exclude_review_diff_paths(
+                self.canonical_diff, (self.audit_summary.audit_path,)
+            )
+            expected_evidence = "\n\n".join(
+                part
+                for part in (compacted.strip(), self.audit_summary.render())
+                if part
+            )
+        if self.evidence_diff != expected_evidence:
+            raise ValueError("snapshot evidence differs from canonical inputs")
+
+    @property
+    def paths(self) -> tuple[str, ...]:
+        return tuple(entry.path for entry in self.entries)
+
+    def matches(
+        self,
+        probe: RepositorySnapshotProbe,
+        *,
+        start_commit: str,
+        semantic_markdown_paths: Iterable[str],
+        excluded_paths: Iterable[str],
+        audit_path: str | None,
+    ) -> bool:
+        return (
+            self.start_commit == start_commit
+            and self.semantic_markdown_paths
+            == tuple(sorted(set(semantic_markdown_paths)))
+            and self.excluded_paths == tuple(sorted(set(excluded_paths)))
+            and self.audit_path == audit_path
+            and self.merge_base == probe.merge_base
+            and self.head_commit == probe.head_commit
+            and self.index_fingerprint == probe.index_fingerprint
+            and self.repository_identity_digest == probe.identity_digest
+            and self.repository_fingerprint == probe.fingerprint
+            and self.entries == probe.entries
+            and self.fingerprint_entries == probe.fingerprint_entries
+            and self.paths == probe.paths
+            and self.gate_paths == tuple(sorted(set(probe.review_paths)))
+        )
+
+    def repository_changes(self, repository_root: Path) -> RepositoryChanges:
+        return RepositoryChanges(
+            repository_root=repository_root.resolve(),
+            merge_base=self.merge_base,
+            entries=self.entries,
+            diff_text=self.canonical_diff,
+            fingerprint=self.repository_fingerprint,
+            fingerprint_entries=self.fingerprint_entries,
+        )
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "type": _CACHE_TYPE,
+            "start_commit": self.start_commit,
+            "merge_base": self.merge_base,
+            "head_commit": self.head_commit,
+            "index_fingerprint": self.index_fingerprint,
+            "repository_identity_digest": self.repository_identity_digest,
+            "repository_fingerprint": self.repository_fingerprint,
+            "semantic_markdown_paths": list(self.semantic_markdown_paths),
+            "excluded_paths": list(self.excluded_paths),
+            "audit_path": self.audit_path,
+            "entries": [_changed_path_payload(item) for item in self.entries],
+            "fingerprint_entries": [
+                _fingerprint_entry_payload(item) for item in self.fingerprint_entries
+            ],
+            "canonical_diff": self.canonical_diff,
+            "evidence_diff": self.evidence_diff,
+            "gate_paths": list(self.gate_paths),
+            "audit_summary": (
+                None if self.audit_summary is None else _audit_payload(self.audit_summary)
+            ),
+        }
+
+    @classmethod
+    def from_payload(cls, raw: object) -> FinalReviewEvidenceSnapshot:
+        if not isinstance(raw, Mapping) or set(raw) != {
+            "type",
+            "start_commit",
+            "merge_base",
+            "head_commit",
+            "index_fingerprint",
+            "repository_identity_digest",
+            "repository_fingerprint",
+            "semantic_markdown_paths",
+            "excluded_paths",
+            "audit_path",
+            "entries",
+            "fingerprint_entries",
+            "canonical_diff",
+            "evidence_diff",
+            "gate_paths",
+            "audit_summary",
+        }:
+            raise ValueError("snapshot cache has invalid fields")
+        if raw["type"] != _CACHE_TYPE:
+            raise ValueError("snapshot cache has invalid type")
+        return cls(
+            start_commit=_string(raw["start_commit"], "start_commit"),
+            merge_base=_string(raw["merge_base"], "merge_base"),
+            head_commit=_string(raw["head_commit"], "head_commit"),
+            index_fingerprint=_string(raw["index_fingerprint"], "index_fingerprint"),
+            repository_identity_digest=_string(
+                raw["repository_identity_digest"], "repository_identity_digest"
+            ),
+            repository_fingerprint=_string(
+                raw["repository_fingerprint"], "repository_fingerprint"
+            ),
+            semantic_markdown_paths=_strings(
+                raw["semantic_markdown_paths"], "semantic_markdown_paths"
+            ),
+            excluded_paths=_strings(raw["excluded_paths"], "excluded_paths"),
+            audit_path=(
+                None
+                if raw["audit_path"] is None
+                else _string(raw["audit_path"], "audit_path")
+            ),
+            entries=tuple(_changed_path(item) for item in _list(raw["entries"], "entries")),
+            fingerprint_entries=tuple(
+                _fingerprint_entry(item)
+                for item in _list(raw["fingerprint_entries"], "fingerprint_entries")
+            ),
+            canonical_diff=_string(raw["canonical_diff"], "canonical_diff", empty=True),
+            evidence_diff=_string(raw["evidence_diff"], "evidence_diff", empty=True),
+            gate_paths=_strings(raw["gate_paths"], "gate_paths"),
+            audit_summary=(
+                None
+                if raw["audit_summary"] is None
+                else _audit_summary(raw["audit_summary"])
+            ),
+            # Collection time is process-local diagnostics. Persisting it would
+            # make otherwise identical cache bytes (and the file-write intent)
+            # change after a crash between intent and physical write.
+            collection_elapsed_ms=0,
+        )
+
+
+def build_final_review_evidence_snapshot(
+    changes: RepositoryChanges,
+    probe: RepositorySnapshotProbe,
+    *,
+    start_commit: str,
+    semantic_markdown_paths: Iterable[str],
+    excluded_paths: Iterable[str],
+    audit_path: str | None,
+    collection_elapsed_ms: int,
+) -> FinalReviewEvidenceSnapshot:
+    if (
+        changes.merge_base != probe.merge_base
+        or changes.fingerprint != probe.fingerprint
+        or changes.entries != probe.entries
+        or changes.fingerprint_entries != probe.fingerprint_entries
+    ):
+        raise ValueError(
+            "repository changed while final-review evidence was being collected"
+        )
+    summary = None
+    evidence_diff = changes.diff_text
+    if audit_path is not None and audit_path in changes.paths:
+        matching = tuple(
+            entry for entry in changes.fingerprint_entries if entry.path == audit_path
+        )
+        if len(matching) != 1:
+            raise ValueError(
+                "final-review audit compaction requires exactly one fingerprint entry"
+            )
+        compacted = exclude_review_diff_paths(changes.diff_text, (audit_path,))
+        entry = matching[0]
+        summary = AuditCompactionSummary(
+            audit_path=audit_path,
+            change_kind=entry.kind,
+            semantic_payload_type=entry.payload_type,
+            semantic_payload_size=entry.payload_size,
+            semantic_payload_sha256=entry.payload_digest,
+            omitted_diff_chars=max(0, len(changes.diff_text) - len(compacted)),
+        )
+        evidence_diff = "\n\n".join(
+            part for part in (compacted.strip(), summary.render()) if part
+        )
+    return FinalReviewEvidenceSnapshot(
+        start_commit=start_commit,
+        merge_base=changes.merge_base,
+        head_commit=probe.head_commit,
+        index_fingerprint=probe.index_fingerprint,
+        repository_identity_digest=probe.identity_digest,
+        repository_fingerprint=changes.fingerprint,
+        semantic_markdown_paths=tuple(sorted(set(semantic_markdown_paths))),
+        excluded_paths=tuple(sorted(set(excluded_paths))),
+        audit_path=audit_path,
+        entries=changes.entries,
+        fingerprint_entries=changes.fingerprint_entries,
+        canonical_diff=changes.diff_text,
+        evidence_diff=evidence_diff,
+        gate_paths=tuple(sorted(set(changes.review_paths))),
+        audit_summary=summary,
+        collection_elapsed_ms=collection_elapsed_ms,
+    )
+
+
+def load_final_review_evidence_cache(
+    path: Path, *, expected_file_sha256: str | None
+) -> FinalReviewEvidenceSnapshot | None:
+    if expected_file_sha256 is None or not _SHA256.fullmatch(expected_file_sha256):
+        return None
+    try:
+        raw = path.read_bytes()
+        if hashlib.sha256(raw).hexdigest() != expected_file_sha256:
+            return None
+        envelope = json.loads(raw.decode("utf-8"))
+        if not isinstance(envelope, Mapping) or set(envelope) != {
+            "snapshot_sha256",
+            "snapshot",
+        }:
+            return None
+        snapshot_bytes = _canonical_bytes(envelope["snapshot"])
+        if envelope["snapshot_sha256"] != hashlib.sha256(snapshot_bytes).hexdigest():
+            return None
+        return FinalReviewEvidenceSnapshot.from_payload(envelope["snapshot"])
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+        return None
+
+
+def render_final_review_evidence_cache(snapshot: FinalReviewEvidenceSnapshot) -> str:
+    payload = snapshot.to_payload()
+    snapshot_sha256 = hashlib.sha256(_canonical_bytes(payload)).hexdigest()
+    envelope = {"snapshot_sha256": snapshot_sha256, "snapshot": payload}
+    return _canonical_bytes(envelope).decode("utf-8") + "\n"
+
+
+def _canonical_bytes(value: object) -> bytes:
+    return json.dumps(
+        value,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def _changed_path_payload(item: ChangedPath) -> dict[str, object]:
+    return {
+        "path": item.path,
+        "kind": item.kind,
+        "raw_status": item.raw_status,
+        "old_path": item.old_path,
+        "tracked": item.tracked,
+        "working_tree": item.working_tree,
+    }
+
+
+def _changed_path(raw: object) -> ChangedPath:
+    if not isinstance(raw, Mapping) or set(raw) != {
+        "path",
+        "kind",
+        "raw_status",
+        "old_path",
+        "tracked",
+        "working_tree",
+    }:
+        raise ValueError("snapshot changed path has invalid fields")
+    old_path = raw["old_path"]
+    if old_path is not None and not isinstance(old_path, str):
+        raise ValueError("snapshot old path is invalid")
+    return ChangedPath(
+        path=_string(raw["path"], "path"),
+        kind=_string(raw["kind"], "kind"),
+        raw_status=_string(raw["raw_status"], "raw_status"),
+        old_path=old_path,
+        tracked=_boolean(raw["tracked"], "tracked"),
+        working_tree=_boolean(raw["working_tree"], "working_tree"),
+    )
+
+
+def _fingerprint_entry_payload(item: ChangeFingerprintEntry) -> dict[str, object]:
+    return {
+        "path": item.path,
+        "old_path": item.old_path,
+        "kind": item.kind,
+        "payload_type": item.payload_type,
+        "payload_size": item.payload_size,
+        "payload_digest": item.payload_digest,
+        "payload_mode": item.payload_mode,
+    }
+
+
+def _fingerprint_entry(raw: object) -> ChangeFingerprintEntry:
+    if not isinstance(raw, Mapping) or set(raw) != {
+        "path",
+        "old_path",
+        "kind",
+        "payload_type",
+        "payload_size",
+        "payload_digest",
+        "payload_mode",
+    }:
+        raise ValueError("snapshot fingerprint entry has invalid fields")
+    return ChangeFingerprintEntry(
+        path=_string(raw["path"], "fingerprint path"),
+        old_path=_optional_string(raw["old_path"], "fingerprint old_path"),
+        kind=_string(raw["kind"], "fingerprint kind"),
+        payload_type=_optional_string(raw["payload_type"], "payload_type"),
+        payload_size=_optional_integer(raw["payload_size"], "payload_size"),
+        payload_digest=_optional_string(raw["payload_digest"], "payload_digest"),
+        payload_mode=_optional_integer(raw["payload_mode"], "payload_mode"),
+    )
+
+
+def _audit_payload(item: AuditCompactionSummary) -> dict[str, object]:
+    return {
+        "audit_path": item.audit_path,
+        "change_kind": item.change_kind,
+        "semantic_payload_type": item.semantic_payload_type,
+        "semantic_payload_size": item.semantic_payload_size,
+        "semantic_payload_sha256": item.semantic_payload_sha256,
+        "omitted_diff_chars": item.omitted_diff_chars,
+    }
+
+
+def _audit_summary(raw: object) -> AuditCompactionSummary:
+    if not isinstance(raw, Mapping) or set(raw) != {
+        "audit_path",
+        "change_kind",
+        "semantic_payload_type",
+        "semantic_payload_size",
+        "semantic_payload_sha256",
+        "omitted_diff_chars",
+    }:
+        raise ValueError("snapshot audit summary has invalid fields")
+    return AuditCompactionSummary(
+        audit_path=_string(raw["audit_path"], "audit_path"),
+        change_kind=_string(raw["change_kind"], "change_kind"),
+        semantic_payload_type=_optional_string(
+            raw["semantic_payload_type"], "semantic_payload_type"
+        ),
+        semantic_payload_size=_optional_integer(
+            raw["semantic_payload_size"], "semantic_payload_size"
+        ),
+        semantic_payload_sha256=_optional_string(
+            raw["semantic_payload_sha256"], "semantic_payload_sha256"
+        ),
+        omitted_diff_chars=_integer(raw["omitted_diff_chars"], "omitted_diff_chars"),
+    )
+
+
+def _list(value: object, label: str) -> list[object]:
+    if not isinstance(value, list):
+        raise ValueError(f"snapshot {label} must be a list")
+    return value
+
+
+def _strings(value: object, label: str) -> tuple[str, ...]:
+    return tuple(_string(item, label) for item in _list(value, label))
+
+
+def _string(value: object, label: str, *, empty: bool = False) -> str:
+    if not isinstance(value, str) or (not empty and not value):
+        raise ValueError(f"snapshot {label} must be a string")
+    return value
+
+
+def _optional_string(value: object, label: str) -> str | None:
+    return None if value is None else _string(value, label)
+
+
+def _integer(value: object, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"snapshot {label} must be a non-negative integer")
+    return value
+
+
+def _optional_integer(value: object, label: str) -> int | None:
+    return None if value is None else _integer(value, label)
+
+
+def _boolean(value: object, label: str) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError(f"snapshot {label} must be a boolean")
+    return value
