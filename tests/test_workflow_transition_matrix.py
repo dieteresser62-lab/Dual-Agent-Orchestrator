@@ -12,6 +12,9 @@ import pytest
 import orchestrator
 from artifact_bridge import ArtifactBridge
 from artifact_models import (
+    BindingPayload,
+    CommandSpec,
+    CorrectionWorkUnitPayload,
     FindingTransitionPayload,
     FingerprintKind,
     ProviderAttemptPayload,
@@ -19,11 +22,21 @@ from artifact_models import (
     ProviderInputMeasurementPayload,
     Role,
     RoleProfilePayload,
+    ReviewEvidencePayload,
+    ReviewPayload,
     RunIdentityPayload,
     RunProfilePayload,
+    ValidationAttestationPayload,
+    ValidationResult,
+    WorkUnitPayload,
 )
+from artifact_migration import resolve_resume_state
 from artifact_replay import ArtifactReplayError, replay_artifacts, replay_findings
 from artifact_store import ArtifactStore
+from content_authority_support import (
+    append_provider_decision_authority,
+    append_validation_authority,
+)
 from contracts import (
     AgentRole,
     FindingClass,
@@ -34,7 +47,10 @@ from contracts import (
 )
 from gates import BUILTIN_STOP_RULES
 from orchestrator import ProductionWorkflowDriver
-from state_io import save_workflow_state, write_workflow_checkpoint
+from state_io import (
+    write_workflow_projection_checkpoint,
+    write_workflow_state_projection,
+)
 from workflow import WorkflowExecutionError, WorkflowHistory
 from workflow_state import (
     AgentFailureKind,
@@ -522,10 +538,7 @@ GATE_SOURCE_MAP = (
         "instance_failure_or_quota",
         "resume",
         "workflow_state.record_invocation_failure",
-        (
-            "workflow._persist_invocation_failure",
-            "artifact_migration.assert_invocation_failure_mirror",
-        ),
+        ("workflow._persist_invocation_failure",),
         ("invocation-failure",),
         (
             r"role=(?:codex|claude) step=[a-z_]+ invocation=[A-Za-z0-9._:-]+ "
@@ -713,11 +726,6 @@ EXPECTED_GATE_CALL_SITES = Counter(
         ("workflow.py", "_invoke_role", "await_user_gate"): 1,
         ("workflow.py", "_invoke_role", "await_bootstrap_resume"): 1,
         ("workflow.py", "_persist_invocation_failure", "record_invocation_failure"): 1,
-        (
-            "artifact_migration.py",
-            "assert_invocation_failure_mirror",
-            "record_invocation_failure",
-        ): 1,
         ("workflow.py", "_revalidate_waiting_diff", "await_policy_gate"): 2,
         ("workflow.py", "_revalidate_waiting_diff", "await_user_gate"): 1,
         ("workflow.py", "_commit", "await_user_gate"): 3,
@@ -742,11 +750,6 @@ EXPECTED_DIRECT_GATE_CONSTRUCTORS = Counter(
         ("workflow_state.py", "await_bootstrap_resume", "GateRecord"): 1,
         ("workflow_state.py", "resume_after_invocation_halt", "GateRecord"): 1,
         ("workflow_state.py", "resume_after_user_decision", "GateRecord"): 1,
-        (
-            "artifact_migration.py",
-            "project_transition_mirror_before_failure",
-            "GateRecord",
-        ): 1,
     }
 )
 
@@ -763,7 +766,6 @@ EXPECTED_GATE_REPLACEMENTS = Counter(
         ("workflow_state.py", "await_bootstrap_resume"): 1,
         ("workflow_state.py", "resume_after_invocation_halt"): 1,
         ("workflow_state.py", "resume_after_user_decision"): 1,
-        ("artifact_migration.py", "project_transition_mirror_before_failure"): 1,
     }
 )
 
@@ -2298,6 +2300,158 @@ def _repository(tmp_path: Path) -> Path:
     return root
 
 
+def _bind_record_authoritative_fixture(
+    driver: ProductionWorkflowDriver,
+    state: WorkflowState,
+    *,
+    findings: tuple[FindingRecord, ...] = (),
+) -> WorkflowState:
+    """Seed a synthetic endpoint with the authority production would create.
+
+    These matrix fixtures deliberately jump across provider and Git execution.
+    Completed Slices therefore need explicit validation, review, and commit
+    records before the resulting prefix can be projected.
+    """
+    driver.active_state = state
+    driver._bind_artifact_store(state)
+    driver._persist_structured_baseline(state)
+    bridge = driver._artifact_bridge
+    assert bridge is not None
+    existing_commit_slices = {
+        record.logical_id.split("-", 2)[1]
+        for record in bridge.store.load_chain()
+        if isinstance(record.payload, BindingPayload)
+        and record.payload.binding_kind == "commit"
+        and record.logical_id.startswith("commit-")
+    }
+    for slice_record in state.slices:
+        if (
+            slice_record.commit_ref is None
+            or str(slice_record.slice_id) in existing_commit_slices
+        ):
+            continue
+        slice_unit = next(
+            unit
+            for unit in reversed(state.work_units)
+            if unit.slice_id == slice_record.slice_id
+            and unit.kind in {WorkUnitKind.SLICE, WorkUnitKind.CORRECTION}
+        )
+        fingerprint = slice_record.start_fingerprint or "e" * 64
+        if not any(
+            isinstance(record.payload, (WorkUnitPayload, CorrectionWorkUnitPayload))
+            and record.logical_id == f"work-unit-{slice_unit.work_unit_id}"
+            for record in bridge.store.load_chain()
+        ):
+            work_unit_payload = (
+                CorrectionWorkUnitPayload(
+                    str(slice_record.slice_id),
+                    slice_unit.round_number,
+                    slice_record.scope_paths,
+                    slice_unit.open_findings,
+                )
+                if slice_unit.kind is WorkUnitKind.CORRECTION
+                else WorkUnitPayload(
+                    str(slice_record.slice_id),
+                    slice_unit.round_number,
+                    slice_record.scope_paths,
+                )
+            )
+            bridge.append(
+                work_unit_payload,
+                logical_id=f"work-unit-{slice_unit.work_unit_id}",
+                idempotency_key=(
+                    f"matrix-work-unit:{slice_unit.work_unit_id}:"
+                    f"{slice_unit.round_number}"
+                ),
+                fingerprint_sha256=state.task_digest or "b" * 64,
+                fingerprint_kind=FingerprintKind.CONTRACT,
+            )
+        attestation = append_validation_authority(
+            bridge,
+            ValidationAttestationPayload(
+                (
+                    ValidationResult(
+                        CommandSpec("pytest", ("python3", "-m", "pytest")),
+                        "pass",
+                        0,
+                        "e" * 64,
+                    ),
+                ),
+                Role.ORCHESTRATOR,
+                "e" * 64,
+                "ar1-" + "0" * 64,
+            ),
+            logical_id=f"matrix-validation-{slice_record.slice_id}",
+            idempotency_key=f"matrix-validation:{slice_record.slice_id}",
+            fingerprint_sha256=fingerprint,
+        )
+        review = append_provider_decision_authority(
+            bridge,
+            ReviewPayload(
+                Role.CLAUDE,
+                str(slice_unit.work_unit_id),
+                "approved",
+                (),
+                None,
+                "native-claude-review-v2",
+                "native-review-request-" + hashlib.sha256(
+                    f"{state.run_id}:{slice_record.slice_id}".encode("utf-8")
+                ).hexdigest(),
+                "d" * 64,
+                review_evidence=ReviewEvidencePayload(
+                    "synthetic matrix commit authority",
+                    "the fixture skips the real Git transaction",
+                    "the commit loses its review or attestation binding",
+                ),
+                pre_mortem="The synthetic binding could target the wrong Slice.",
+            ),
+            logical_id=f"matrix-review-{slice_record.slice_id}",
+            idempotency_key=f"matrix-review:{slice_record.slice_id}",
+            fingerprint_sha256=fingerprint,
+            operation=WorkflowStep.CLAUDE_SLICE_REVIEW.value,
+        )
+        bridge.append(
+            BindingPayload(
+                "commit",
+                slice_record.commit_ref,
+                attestation.record_id,
+                (review.record_id,),
+            ),
+            logical_id=(
+                f"commit-{slice_record.slice_id}-"
+                f"{slice_record.commit_ref[:12]}"
+            ),
+            idempotency_key=(
+                f"matrix-commit:{slice_record.slice_id}:"
+                f"{slice_record.commit_ref}"
+            ),
+            fingerprint_sha256=fingerprint,
+        )
+    for finding in findings:
+        opening = (
+            replace(finding, status=FindingStatus.OPEN, status_rationale=None)
+            if finding.status is FindingStatus.CLOSED
+            else finding
+        )
+        _append_finding(
+            bridge,
+            opening,
+            work_unit_id=state.current_work_unit_id,
+        )
+        if finding.status is FindingStatus.CLOSED:
+            _append_finding(
+                bridge,
+                finding,
+                work_unit_id=state.current_work_unit_id,
+                action="status_changed",
+                actor=AgentRole.CLAUDE,
+                rationale=finding.status_rationale,
+            )
+    projected = resolve_resume_state(driver.root, state.run_id).state
+    driver.active_state = projected
+    return projected
+
+
 def _driver_state(root: Path) -> tuple[ProductionWorkflowDriver, WorkflowState]:
     head = _git(root, "rev-parse", "HEAD")
     task = root / "task.md"
@@ -2343,8 +2497,7 @@ def _driver_state(root: Path) -> tuple[ProductionWorkflowDriver, WorkflowState]:
         config=orchestrator.OrchestratorConfig(repo_root=root),
         allowed_roots=(root,),
     )
-    driver.bind_work_unit(state)
-    return driver, state
+    return driver, _bind_record_authoritative_fixture(driver, state)
 
 
 def _append_finding(
@@ -2456,30 +2609,13 @@ def _transition_evidence(
         config=orchestrator.OrchestratorConfig(repo_root=root),
         allowed_roots=(root,),
     )
-    driver.bind_work_unit(state)
+    state = _bind_record_authoritative_fixture(
+        driver,
+        state,
+        findings=(*current_findings, *historical_findings),
+    )
     bridge = driver._artifact_bridge
     assert bridge is not None
-
-    for finding in (*current_findings, *historical_findings):
-        opening = (
-            replace(finding, status=FindingStatus.OPEN, status_rationale=None)
-            if finding.status is FindingStatus.CLOSED
-            else finding
-        )
-        _append_finding(
-            bridge,
-            opening,
-            work_unit_id=state.current_work_unit_id,
-        )
-        if finding.status is FindingStatus.CLOSED:
-            _append_finding(
-                bridge,
-                finding,
-                work_unit_id=state.current_work_unit_id,
-                action="status_changed",
-                actor=AgentRole.CLAUDE,
-                rationale=finding.status_rationale,
-            )
 
     if case_id in PROVIDER_ATTEMPT_CASES:
         _append_completed_provider_attempt(
@@ -2487,26 +2623,28 @@ def _transition_evidence(
             work_unit_id=state.current_work_unit_id,
         )
 
-    mirror = (*current_findings, *historical_findings)
+    projected_findings = (*current_findings, *historical_findings)
     if carry_forward:
-        mirror = driver.carry_forward_native_findings(state, current_findings)
-    history = WorkflowHistory(state.current_work_unit_id, findings=mirror)
-    persisted = replace(
-        state,
-        runtime_history={"current": history.to_dict(), "archive": []},
+        projected_findings = driver.carry_forward_native_findings(
+            state, current_findings
+        )
+    history = WorkflowHistory(
+        state.current_work_unit_id, findings=projected_findings
     )
-    save_workflow_state(state_file, persisted, allowed_roots=(root,))
-    checkpoint_path = (
-        write_workflow_checkpoint(
-            root / ".orchestrator" / "checkpoints" / state.run_id,
-            persisted,
+    checkpoint_path = None
+    if persist_checkpoint:
+        resolution = resolve_resume_state(root, state.run_id)
+        write_workflow_state_projection(
+            state_file,
+            resolution,
             allowed_roots=(root,),
         )
-        if persist_checkpoint
-        else None
-    )
-    assert persisted.runtime_history is not None
-    current_history = WorkflowHistory.from_dict(persisted.runtime_history["current"])
+        checkpoint_root = root / ".orchestrator" / "checkpoints" / state.run_id
+        checkpoint_path = write_workflow_projection_checkpoint(
+            checkpoint_root,
+            resolution,
+            allowed_roots=(root,),
+        )
 
     replay = replay_artifacts(bridge.store.load_chain(), state.run_id)
     finding_records = tuple(
@@ -2522,7 +2660,7 @@ def _transition_evidence(
     return TransitionEvidence(
         ledger=_ledger_literal(replay_findings(replay)),
         record_count=len(finding_records),
-        mirror_count=len(current_history.findings),
+        mirror_count=len(projected_findings),
         external_calls=external_calls,
         checkpoint_state=(
             "persisted"
@@ -2574,7 +2712,7 @@ def _ledger_case(
         start_fingerprint="2" * 64,
         finding_ids=("C-01", "C-02"),
     )
-    driver.bind_work_unit(correction)
+    correction = _bind_record_authoritative_fixture(driver, correction)
     c03 = _finding(
         "C-03", FindingClass.BLOCKER, FindingStatus.OPEN, round_number=2
     )
@@ -2588,7 +2726,7 @@ def _ledger_case(
         open_findings=("C-01", "C-03"),
         return_step=WorkflowStep.CODEX_FINAL_CORRECTION,
     )
-    driver.bind_work_unit(round_two)
+    round_two = _bind_record_authoritative_fixture(driver, round_two)
     correction_mirror = (c01, c02_closed, c03)
     full_ledger = (c01, c02_closed, c03, historical)
     return driver, round_two, correction_mirror, full_ledger
@@ -2629,10 +2767,8 @@ def test_record_replay_matrix_has_independent_literal_oracle_and_failure_windows
         "C-99:open:observation",
     )
 
-    # The after-mirror/before-checkpoint window is recoverable without another
-    # provider call: binding the literal mirror neither duplicates nor mutates
-    # any finding transition. The authoritative checkpoint itself is exercised
-    # separately with complete commit/review bindings by the runtime suite.
+    # Rebinding a manipulated projection is cache-only: it neither duplicates
+    # nor mutates finding authority and it never starts another provider call.
     mirrored = replace(
         state,
         runtime_history={
@@ -2656,20 +2792,16 @@ def test_record_replay_matrix_has_independent_literal_oracle_and_failure_windows
         "C-03:open:blocker",
     )
 
-    # Before-record and record-ahead/mirror-behind windows both fail closed.
+    # Projection arguments cannot add or hide findings: records stay decisive.
     missing_record = _finding("C-04", FindingClass.BLOCKER, FindingStatus.OPEN)
-    with pytest.raises(
-        WorkflowExecutionError,
-        match="record-native finding carry-forward differs from the state-v3 mirror",
-    ):
+    assert _ledger_literal(
         driver.carry_forward_native_findings(
             state, (*correction_mirror, missing_record)
         )
-    with pytest.raises(
-        WorkflowExecutionError,
-        match="authoritative finding replay differs from the state-v3 mirror",
-    ):
+    ) == _ledger_literal(full_ledger)
+    assert _ledger_literal(
         driver.authoritative_native_findings(state, correction_mirror[:-1])
+    ) == _ledger_literal(correction_mirror)
 
     # A damaged lineage fails at replay rather than being healed by the mirror.
     orphan = ArtifactBridge(ArtifactStore(driver.root, "orphan-transition"))
@@ -2730,10 +2862,7 @@ def test_replay_and_carry_forward_mutations_turn_matrix_cases_red(
         )
 
     monkeypatch.setattr(orchestrator, "reduce_findings", empty_ledger)
-    with pytest.raises(
-        WorkflowExecutionError,
-        match="record-native finding carry-forward differs from the state-v3 mirror",
-    ):
+    with pytest.raises(AssertionError):
         _exercise_transition_oracle(tmp_path / "replay-empty")
 
     monkeypatch.undo()

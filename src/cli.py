@@ -428,6 +428,11 @@ def _read_state_for_auto_resume(state_file: Path) -> tuple[bool, bool, bool]:
         return True, False, False
     if not isinstance(data, dict):
         return True, False, False
+    if data.get("cache_format") == "workflow-state-projection-v1":
+        projected = data.get("state")
+        if not isinstance(projected, dict):
+            return True, False, False
+        data = projected
     if data.get("version") == 3:
         units = data.get("work_units")
         slices = data.get("slices")

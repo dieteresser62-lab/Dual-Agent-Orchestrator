@@ -449,7 +449,7 @@ def test_bound_state_and_checkpoint_require_exact_resume_protocol(tmp_path: Path
         )
 
 
-def test_resumable_loader_rejects_unbound_v3_state_as_unsupported(tmp_path: Path) -> None:
+def test_resumable_loader_rejects_unbound_legacy_v3_state(tmp_path: Path) -> None:
     state = make_v3_state(tmp_path)
     state_file = tmp_path / "state.json"
     save_workflow_state(state_file, state, allowed_roots=(tmp_path,))

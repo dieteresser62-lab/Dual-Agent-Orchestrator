@@ -16,6 +16,8 @@ from artifact_models import (
     FindingSeverity,
     FindingTransitionPayload,
     GateTransitionPayload,
+    ProviderContentPayload,
+    ReviewPacketPayload,
     ReviewEvidencePayload,
     ReviewPayload,
     Role,
@@ -34,7 +36,6 @@ from artifact_models import (
 from artifact_replay import (
     ArtifactReplayError,
     ReplayDiagnosticCode,
-    normalize_workflow_state_mirror,
     pending_workflow_event_payload,
     project_review_contracts,
     project_validation_attestations,
@@ -67,6 +68,57 @@ from orchestrator import _attach_record_events, _overall_audit_entries
 
 
 RUN_ID = "r9-prefix-projection"
+
+
+def _normalized_independent_mirror(
+    mirror: WorkflowState,
+    replay,
+) -> dict[str, object]:
+    """Normalize only volatile/cache fields in the independent R9 oracle."""
+    document = mirror.to_dict()
+    document["created_at"] = replay.records[0].created_at
+    document["updated_at"] = replay.records[-1].created_at
+    document["runtime_history"] = {
+        unit.work_unit_id: {
+            "finding_record_refs": tuple(
+                record.record_id
+                for record in replay.records
+                if isinstance(record.payload, FindingTransitionPayload)
+                and record.payload.work_unit_id == unit.work_unit_id
+            ),
+            "review_record_refs": tuple(
+                record.record_id
+                for record in replay.records
+                if isinstance(record.payload, ReviewPayload)
+                and record.payload.work_unit_id == unit.work_unit_id
+            ),
+            "attestation_record_refs": tuple(
+                event.record_refs[0]
+                for event in replay.workflow_events
+                if event.event_kind == "validation"
+                and event.work_unit_id == unit.work_unit_id
+            ),
+            "provider_content_record_refs": tuple(
+                record.record_id
+                for record in replay.records
+                if isinstance(record.payload, ProviderContentPayload)
+                and record.payload.work_unit_id == unit.work_unit_id
+            ),
+            "review_packet_record_refs": tuple(
+                record.record_id
+                for record in replay.records
+                if isinstance(record.payload, ReviewPacketPayload)
+                and record.payload.work_unit_id == unit.work_unit_id
+            ),
+            "workflow_event_record_refs": tuple(
+                event.record_id
+                for event in replay.workflow_events
+                if event.work_unit_id == unit.work_unit_id
+            ),
+        }
+        for unit in replay.work_unit_states
+    }
+    return WorkflowState.from_dict(document).to_dict()
 FINGERPRINT = "a" * 64
 
 
@@ -706,7 +758,7 @@ def test_multi_slice_correction_gate_halt_resume_projects_every_accepted_prefix(
         second = project_workflow_state(replay)
         assert first.canonical_document == second.canonical_document
         assert json.loads(
-            normalize_workflow_state_mirror(mirrors[end], replay)
+            json.dumps(_normalized_independent_mirror(mirrors[end], replay))
         ) == first.to_document(), end
         assert isinstance(first.state, WorkflowState)
         assert set(first.to_document()) == set(WorkflowState.__dataclass_fields__)
@@ -839,7 +891,8 @@ def test_record_events_reconstruct_the_retired_audit_mirror_exactly(
         projected.state,
         runtime_history={"archive": [], "current": expected.to_dict()},
     )
-    assert normalize_workflow_state_mirror(mirror, replay) == projected.canonical_document
+    assert mirror.runtime_history != projected.state.runtime_history
+    assert project_workflow_state(replay).canonical_document == projected.canonical_document
 
     missing_attestation = replace(expected, attestations=())
     damaged = replace(
@@ -849,10 +902,8 @@ def test_record_events_reconstruct_the_retired_audit_mirror_exactly(
             "current": missing_attestation.to_dict(),
         },
     )
-    with pytest.raises(
-        ArtifactReplayError, match="omits a validation event binding"
-    ):
-        normalize_workflow_state_mirror(damaged, replay)
+    assert damaged.runtime_history != projected.state.runtime_history
+    assert project_workflow_state(replay).canonical_document == projected.canonical_document
 
 
 def test_final_review_audit_reuses_carried_attestation(tmp_path: Path) -> None:

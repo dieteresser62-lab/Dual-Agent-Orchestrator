@@ -83,6 +83,7 @@ def test_run_profile_record_fields_are_role_keyed() -> None:
     assert asdict(profile) == {
         "implementer": {"model": "implementer-model", "effort": "medium"},
         "reviewer": {"model": "reviewer-model", "effort": "high"},
+        "reducer_version": "structured-v2-schema-2-state-v3-v1",
     }
     assert not {"codex", "claude"} & set(asdict(profile))
 

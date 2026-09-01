@@ -306,22 +306,11 @@ def _checkpoint_failure_with_prior_quota(tmp_path: Path) -> BaseException:
         return _capture(lambda: driver.checkpoint(state, history))
 
 
-def _authoritative_finding_mismatch() -> BaseException:
-    state = init_workflow_state(
-        run_id="corpus-run",
-        task_file="/repo/task.md",
-        branch="feature/corpus",
-        branch_base="a" * 40,
-        slice_count=1,
-        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
-    )
-    driver = object.__new__(ProductionWorkflowDriver)
-    driver.active_state = state
-    driver._artifact_bridge = SimpleNamespace(  # noqa: SLF001
-        store=SimpleNamespace(load_chain=lambda: ())
-    )
-    mirror = (SimpleNamespace(finding_id="C-01"),)
-    return _capture(lambda: driver.authoritative_native_findings(state, mirror))
+def _record_authority_resume_failure() -> BaseException:
+    # The historical poison report predates the S4b cutover. Its old
+    # record/mirror mismatch now maps to the record-native resume failure that
+    # replaces it, without reintroducing mirror-dependent production logic.
+    return ArtifactResumeError("record/native finding authority is incomplete")
 
 
 def test_central_inventory_classifies_all_47_project_error_types_exactly_once() -> None:
@@ -440,7 +429,7 @@ def test_terminal_rejection_is_promoted_after_record_start() -> None:
         (
             "20260826T130701.912Z_Menschenlesbarkeit_der_Auditprojektion_verbessern-implement.md.poison.error.json",
             "authoritative finding replay differs",
-            lambda _tmp: _authoritative_finding_mismatch(),
+            lambda _tmp: _record_authority_resume_failure(),
             FailureClass.RESUMABLE_HALT,
             "record/native finding authority already exists",
         ),

@@ -1,9 +1,8 @@
-"""Lossless adapters between state-v3 domain objects and artifact records.
+"""Lossless writers from workflow domain objects to authoritative records.
 
-The bridge is intentionally a write-through comparator, not a second workflow
-engine.  State-v3 remains authoritative until the explicit cutover.  Every
-successful write is reloaded from the append-only store and compared with the
-typed source object before the caller may act on it.
+The bridge validates every append against the typed source object and reloads
+the durable record before the caller may act. The record chain is authoritative;
+state-v3 documents are disposable projections produced by the reducer.
 """
 
 from __future__ import annotations
@@ -103,6 +102,7 @@ def task_payload(contract: TaskContract) -> TaskPayload:
         target_branch=contract.target_branch,
         scope_paths=contract.scope_patterns,
         assignment_sha256=contract.digest,
+        work_plan_path=contract.work_plan_path,
     )
 
 
@@ -137,6 +137,10 @@ def agent_result_payload(
         transport_schema=transport_schema,
         request_id=request_id,
         response_sha256=response_sha256,
+        slice_plan=tuple(
+            SliceSpec(str(item.slice_id), item.summary, item.scope_paths)
+            for item in result.slice_plan
+        ),
     )
 
 
@@ -638,7 +642,7 @@ class ArtifactBridge:
             or _digest(record.payload) != _digest(payload)
         ):
             raise ArtifactBridgeError(
-                "structured artifact differs semantically from the state-v3 statement"
+                "structured artifact differs semantically from its existing record"
             )
 
     def diagnostic(

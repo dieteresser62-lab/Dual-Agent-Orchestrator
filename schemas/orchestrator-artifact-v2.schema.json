@@ -111,10 +111,11 @@
     },
     "run_profile": {
       "type": "object", "additionalProperties": false,
-      "required": ["implementer", "reviewer"],
+      "required": ["implementer", "reviewer", "reducer_version"],
       "properties": {
         "implementer": {"$ref": "#/$defs/role_profile"},
-        "reviewer": {"$ref": "#/$defs/role_profile"}
+        "reviewer": {"$ref": "#/$defs/role_profile"},
+        "reducer_version": {"const": "structured-v2-schema-2-state-v3-v1"}
       }
     },
     "workflow_transition": {
@@ -171,8 +172,8 @@
       }
     },
     "task": {
-      "type": "object", "additionalProperties": false, "required": ["target_branch", "scope_paths", "assignment_sha256"],
-      "properties": {"target_branch": {"$ref": "#/$defs/non_empty"}, "scope_paths": {"$ref": "#/$defs/non_empty_paths"}, "assignment_sha256": {"$ref": "#/$defs/sha256"}}
+      "type": "object", "additionalProperties": false, "required": ["target_branch", "scope_paths", "assignment_sha256", "work_plan_path"],
+      "properties": {"target_branch": {"$ref": "#/$defs/non_empty"}, "scope_paths": {"$ref": "#/$defs/non_empty_paths"}, "assignment_sha256": {"$ref": "#/$defs/sha256"}, "work_plan_path": {"oneOf": [{"$ref": "#/$defs/path"}, {"type": "null"}]}}
     },
     "plan": {
       "type": "object", "additionalProperties": false, "required": ["work_plan_path", "approved_plan_commit", "slices"],
@@ -187,8 +188,8 @@
       "properties": {"slice_id": {"$ref": "#/$defs/identifier"}, "round_number": {"type": "integer", "minimum": 1}, "paths": {"$ref": "#/$defs/non_empty_paths"}, "finding_ids": {"$ref": "#/$defs/non_empty_finding_ids"}}
     },
     "agent_result": {
-      "type": "object", "additionalProperties": false, "required": ["role", "work_unit_id", "outcome", "test_files", "transport_schema", "request_id", "response_sha256"],
-      "properties": {"role": {"const": "codex"}, "work_unit_id": {"$ref": "#/$defs/identifier"}, "outcome": {"enum": ["ready", "not_ready", "stopped"]}, "test_files": {"$ref": "#/$defs/paths"}, "transport_schema": {"const": "native-codex-v2"}, "request_id": {"type": "string", "pattern": "^native-codex-request-[0-9a-f]{64}$"}, "response_sha256": {"$ref": "#/$defs/sha256"}}
+      "type": "object", "additionalProperties": false, "required": ["role", "work_unit_id", "outcome", "test_files", "transport_schema", "request_id", "response_sha256", "slice_plan"],
+      "properties": {"role": {"const": "codex"}, "work_unit_id": {"$ref": "#/$defs/identifier"}, "outcome": {"enum": ["ready", "not_ready", "stopped"]}, "test_files": {"$ref": "#/$defs/paths"}, "transport_schema": {"const": "native-codex-v2"}, "request_id": {"type": "string", "pattern": "^native-codex-request-[0-9a-f]{64}$"}, "response_sha256": {"$ref": "#/$defs/sha256"}, "slice_plan": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/slice"}}}
     },
     "diagnostic": {
       "type": "object", "additionalProperties": false, "required": ["role", "work_unit_id", "attempt", "output_sha256", "reason"],

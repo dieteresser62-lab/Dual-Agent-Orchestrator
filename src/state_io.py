@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import os
 import re
@@ -11,13 +12,16 @@ from pathlib import Path
 from typing import Mapping
 
 from path_policy import PathPolicyError, resolve_path_within_roots
-from artifact_migration import ResumeResolution, resolve_resume_state
+from artifact_migration import ArtifactResumeError, ResumeResolution, resolve_resume_state
+from artifact_models import canonical_json
+from artifact_replay import STATE_PROJECTION_REDUCER_VERSION
 from workflow_state import ProtocolBinding, WorkflowState, WorkflowStateValidationError
 
 # Canonical finding identifiers exchanged by both agents, e.g. F-001.
 FINDING_ID_PATTERN = re.compile(r"^F-\d{3}$")
 logger = logging.getLogger(__name__)
 _UNSPECIFIED_PROTOCOL = object()
+STATE_PROJECTION_CACHE_FORMAT = "workflow-state-projection-v1"
 
 
 class StateSchemaError(ValueError):
@@ -295,6 +299,7 @@ def load_workflow_state(
     if not path.exists():
         return None
     raw = _read_json_object(path, "workflow state")
+    raw = _unwrap_projection_cache(raw)
     version = raw.get("version")
     if type(version) is int and version == 3:
         try:
@@ -338,13 +343,125 @@ def load_resumable_workflow_state(
     *,
     repository_root: Path,
     allowed_roots: tuple[Path, ...],
+    expected_run_id: str | None = None,
+    expected_task_file: Path | None = None,
+    expected_task_digest: str | None = None,
 ) -> WorkflowState | CompletedV2State | None:
-    """Load state and verify the immutable protocol-specific resume source."""
-    loaded = load_workflow_state(state_file, allowed_roots=allowed_roots)
-    if isinstance(loaded, WorkflowState):
-        resolution: ResumeResolution = resolve_resume_state(repository_root, loaded)
-        return resolution.state
-    return loaded
+    """Project resume state from records and refresh the disposable cache.
+
+    ``state.json`` contributes at most a run-id locator. Its remaining bytes,
+    including a stale or invalid cache binding, never authorize a decision.
+    When the cache is absent, an exact task-bound record run is discovered.
+    """
+    path = _resolve_state_storage_path(state_file, allowed_roots)
+    if path.exists():
+        try:
+            raw_locator = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            raw_locator = None
+        if isinstance(raw_locator, dict) and raw_locator.get("version") == 2:
+            return load_workflow_state(path, allowed_roots=allowed_roots)
+        if (
+            isinstance(raw_locator, dict)
+            and raw_locator.get("version") == 3
+            and raw_locator.get("cache_format") is None
+        ):
+            binding = raw_locator.get("protocol_binding")
+            if (
+                not isinstance(binding, dict)
+                or binding.get("mode") != "structured-v2"
+            ):
+                raise ArtifactResumeError(
+                    "UNSUPPORTED-PROTOCOL: legacy-state-v3 is not resumable; "
+                    "restore a structured-v2 record chain or start a new run"
+                )
+    run_id = expected_run_id or _projection_cache_run_id(path)
+    if run_id is None:
+        resolution = _discover_resume_resolution(
+            repository_root,
+            expected_task_file=expected_task_file,
+            expected_task_digest=expected_task_digest,
+        )
+    else:
+        resolution = resolve_resume_state(repository_root, run_id)
+    projected = resolution.state
+    if (
+        expected_task_file is not None
+        and Path(projected.task_file).resolve() != expected_task_file.resolve()
+    ):
+        raise StateSchemaError(
+            "record-projected task identity differs from the requested resume task"
+        )
+    if (
+        expected_task_digest is not None
+        and projected.task_digest != expected_task_digest
+    ):
+        raise StateSchemaError(
+            "record-projected task digest differs from the requested resume task"
+        )
+    write_workflow_state_projection(
+        path,
+        resolution,
+        allowed_roots=allowed_roots,
+    )
+    return projected
+
+
+def write_workflow_state_projection(
+    state_file: Path,
+    resolution: ResumeResolution,
+    *,
+    allowed_roots: tuple[Path, ...],
+) -> None:
+    """Atomically write one head/reducer/digest-bound state cache."""
+    path = _resolve_state_storage_path(state_file, allowed_roots)
+    if resolution.replay_result is None or resolution.record_head_id is None:
+        raise StateSchemaError(
+            "workflow state projection requires an authoritative replay head"
+        )
+    state = resolution.state
+    try:
+        resolve_path_within_roots(state.task_file, allowed_roots)
+        validated = WorkflowState.from_dict(state.to_dict())
+    except (PathPolicyError, WorkflowStateValidationError) as exc:
+        raise StateSchemaError(
+            f"refusing to cache invalid projected workflow state: {exc}"
+        ) from exc
+    state_document = validated.to_dict()
+    projection_digest = hashlib.sha256(canonical_json(state_document)).hexdigest()
+    document = {
+        "cache_format": STATE_PROJECTION_CACHE_FORMAT,
+        "record_head_id": resolution.record_head_id,
+        "reducer_version": STATE_PROJECTION_REDUCER_VERSION,
+        "projection_digest": projection_digest,
+        "state": state_document,
+    }
+    expected = json.dumps(document, indent=2, ensure_ascii=True) + "\n"
+    try:
+        current = path.read_text(encoding="utf-8") if path.exists() else None
+    except (OSError, UnicodeError):
+        current = None
+    if current != expected:
+        atomic_write_file(path, expected)
+
+
+def write_workflow_projection_checkpoint(
+    checkpoint_dir: Path,
+    resolution: ResumeResolution,
+    *,
+    allowed_roots: tuple[Path, ...],
+) -> Path:
+    """Write a disposable checkpoint using the same cache envelope."""
+    state = resolution.state
+    current = state.current_work_unit
+    path = workflow_checkpoint_path(
+        checkpoint_dir,
+        work_unit_id=current.work_unit_id,
+        slice_id=current.slice_id,
+        round_number=current.round_number,
+    )
+    write_workflow_state_projection(path, resolution, allowed_roots=allowed_roots)
+    return path.resolve()
 
 
 def save_workflow_state(
@@ -459,6 +576,104 @@ def _resolve_state_storage_path(path: Path, allowed_roots: tuple[Path, ...]) -> 
         return resolve_path_within_roots(path, allowed_roots)
     except PathPolicyError as exc:
         raise StatePathError(f"state path '{path}' is not allowed: {exc}") from exc
+
+
+def _unwrap_projection_cache(raw: dict) -> dict:
+    """Validate and unwrap a non-authoritative state projection cache."""
+    if "cache_format" not in raw:
+        return raw
+    expected_keys = {
+        "cache_format",
+        "record_head_id",
+        "reducer_version",
+        "projection_digest",
+        "state",
+    }
+    if set(raw) != expected_keys:
+        raise StateSchemaError("workflow state projection cache has unknown fields")
+    if raw.get("cache_format") != STATE_PROJECTION_CACHE_FORMAT:
+        raise StateSchemaError("workflow state projection cache format is unsupported")
+    if raw.get("reducer_version") != STATE_PROJECTION_REDUCER_VERSION:
+        raise StateSchemaError("workflow state projection cache reducer is unsupported")
+    if not isinstance(raw.get("record_head_id"), str) or not raw["record_head_id"]:
+        raise StateSchemaError("workflow state projection cache has no record head")
+    state_document = raw.get("state")
+    if not isinstance(state_document, dict):
+        raise StateSchemaError("workflow state projection cache has no state document")
+    try:
+        canonical_state = WorkflowState.from_dict(state_document).to_dict()
+    except WorkflowStateValidationError as exc:
+        raise StateSchemaError(
+            f"workflow state projection cache contains invalid state: {exc}"
+        ) from exc
+    digest = hashlib.sha256(canonical_json(canonical_state)).hexdigest()
+    if raw.get("projection_digest") != digest:
+        raise StateSchemaError("workflow state projection cache digest is invalid")
+    return canonical_state
+
+
+def _projection_cache_run_id(path: Path) -> str | None:
+    """Read only the cache locator; malformed cache content has no authority."""
+    if not path.exists():
+        return None
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    state = raw.get("state") if "cache_format" in raw else raw
+    if not isinstance(state, dict):
+        return None
+    run_id = state.get("run_id")
+    return run_id if isinstance(run_id, str) and run_id.strip() else None
+
+
+def _discover_resume_resolution(
+    repository_root: Path,
+    *,
+    expected_task_file: Path | None,
+    expected_task_digest: str | None,
+) -> ResumeResolution:
+    """Find one unambiguous record run when the disposable cache is absent."""
+    artifacts_root = repository_root.resolve() / ".orchestrator" / "artifacts"
+    if not artifacts_root.is_dir() or artifacts_root.is_symlink():
+        raise ArtifactResumeError(
+            "no state cache and no structured artifact runs are available"
+        )
+    matches: list[ResumeResolution] = []
+    candidate_errors: list[ArtifactResumeError] = []
+    for candidate in sorted(artifacts_root.iterdir(), key=lambda item: item.name):
+        if not candidate.is_dir() or candidate.is_symlink():
+            continue
+        try:
+            resolution = resolve_resume_state(repository_root, candidate.name)
+        except ArtifactResumeError as exc:
+            candidate_errors.append(exc)
+            continue
+        state = resolution.state
+        if (
+            expected_task_file is not None
+            and Path(state.task_file).resolve() != expected_task_file.resolve()
+        ):
+            continue
+        if (
+            expected_task_digest is not None
+            and state.task_digest != expected_task_digest
+        ):
+            continue
+        matches.append(resolution)
+    if candidate_errors:
+        first_error = candidate_errors[0]
+        raise ArtifactResumeError(
+            "record run discovery encountered an invalid candidate: "
+            f"{first_error}"
+        ) from first_error
+    if len(matches) != 1:
+        raise ArtifactResumeError(
+            "state cache is absent and the requested record run is not unique"
+        )
+    return matches[0]
 
 
 def _read_json_object(path: Path, label: str) -> dict:

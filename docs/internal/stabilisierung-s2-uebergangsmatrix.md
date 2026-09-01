@@ -1,12 +1,12 @@
 # S2 – Übergangs- und Divergenzmatrix
 
-Stand: 2026-08-31. Untersucht ist `structured-v2` einschließlich R9 und des
-R1-Nachzugs auf dem
-Branch `feature/state-authority-consolidation`. Die Matrix beschreibt den
-Istzustand; der spätere Authority-Cutover bleibt ausdrücklich aus. Normativ sind
-heute die append-only Records zusammen mit dem noch autoritativen
-`state-v3`-Mirror. `head.json`, Checkpoints, Audit-Markdown, Request-/Response-
-Dateien und Review-Pakete sind Caches beziehungsweise Projektionen.
+Stand: 2026-08-31. Untersucht ist `structured-v2` einschließlich S4b auf dem
+Branch `feature/state-authority-consolidation`. Der Authority-Cutover ist
+vollzogen: Ausschließlich die append-only Recordkette ist technische Quelle.
+`state.json`, Checkpoints, `head.json` und Audit-Markdown sind wegwerfbare
+Projektionen beziehungsweise Caches. Die Einzelkanten bewahren die ursprüngliche
+S2-Analyse; der Abschnitt **S4b-Cutover-Abschluss** hält ihre nun wirksame
+Endklassifikation fest.
 
 ## Leseschlüssel und Gesamtbefund
 
@@ -28,11 +28,17 @@ Dateien und Review-Pakete sind Caches beziehungsweise Projektionen.
 - **bleibt bewusst** ist für Record-interne Kausalität, unveränderliche
   Provider-Bindungen und irreversible externe Side Effects reserviert.
 
-Die Inventur ergibt 26 Kanten, 43 `mismatch(...)`-Stellen in
-`artifact_migration.py`, 32 direkte `ArtifactResumeError`-Stellen dort, 24
-`ArtifactBridgeError`-Stellen in Migration, Bridge und Orchestrator sowie fünf
-`_recoverable_*`-Prädikate (vier in `artifact_migration.py`, eines für den
-finalen Review-Mirror in `orchestrator.py`).
+Die Inventur umfasst 26 Kanten. Die S4b-Abnahme misst im relevanten
+Vorher-/Nachher-Scope:
+
+- `_recoverable_*`: **5 → 0**
+- `differs from state-v3`: **20 → 0** in `artifact_migration.py`
+- `mismatch(...)` in `artifact_migration.py`: **44 → 0**
+
+Es gibt in diesen drei Inventaren keinen Rest zu begründen. Die weiterhin
+bewussten Prüfungen sind Record-interne Kausalität, unveränderliche
+Providerbindungen oder irreversible externe Side Effects und werden in der
+Endklassifikation einzeln ausgewiesen.
 
 ## Matrix
 
@@ -636,30 +642,24 @@ Source-/Destination-Reconciliation mit Intent/Resultat.
 2. **State-/Cachefelder:** gesamter `WorkflowState`, `runtime_history`,
    `audit_report_path`, Checkpoint-Cursor und Audit-Markdown.
 3. **Schreibreihenfolge und Crashpunkte:** `_bind_artifact_store()` → Baseline
-   inklusive Ledgerinitialisierung → Auditprojektion → Datei-Intent → State →
-   Datei-Resultat → Datei-Intent → Checkpoint → Datei-Resultat. Projektions-
-   Side-effects verwenden die Work-unit `projection` und werden nicht zu einem
-   fachlichen Mirrorfakt aufgewertet. Jeder überschreibende Projektionsintent
-   bindet Ziel, Vorher-Digest, Soll-Digest und die exakten Sollbytes, bevor der
-   atomare Replace beginnt.
+   inklusive Ledgerinitialisierung → Auditprojektion → atomarer State-Replace →
+   atomarer Checkpoint-Replace. Cachewrites erzeugen bewusst keine weiteren
+   Records: Ein Record-Intent würde den Head verändern und damit seine eigene
+   gerade berechnete Cachebindung sofort veralten lassen.
 4. **Idempotenz:** Baseline-Append ist record-idempotent; Projektionen müssen
    aus demselben Präfix deterministisch überschreibbar sein. State und
    Checkpoint besitzen heute noch getrennte Gleichheitsanforderungen. Die
-   atomaren Textschreiber verwenden `newline=""`, sodass Intentdigest und
-   physische Bytes auch unter Windows identisch bleiben. Stimmt das Ziel beim
-   Resume noch mit dem gebundenen Vorher-Digest überein, werden ausschließlich
-   die im Intent persistierten Bytes geschrieben; stimmt es mit dem Soll-Digest
-   überein, wird nur das Resultat ergänzt. Jede dritte Lage stoppt fail-closed.
-5. **Recoverable-Sonderfall:** die vier Migration-Prädikate und der finale
-   Denial-Prädikat decken nur bestimmte Record-vor-Mirror-Fenster, nicht das
-   allgemeine Dualwrite.
+   atomaren Textschreiber erzeugen dieselben kanonischen Bytes unter Windows.
+   Ein fehlender, veralteter oder manipulierter Cache wird ausschließlich aus
+   dem unveränderten autoritativen Recordpräfix ersetzt.
+5. **Recoverable-Sonderfall:** keiner; Cacheverlust und unterbrochener Replace
+   werden durch deterministische Neuprojektion behandelt, Recordkorruption
+   stoppt fail-closed.
 6. **Semantik-/Protokollversion:** Records Schema 2; State/Checkpoint Version 3.
-7. **Externe Side Effects:** State- und Checkpointdatei sind an Vorherzustand
-   und Sollbytes gebunden; fehlendes Ziel ist nur bei gebundenem `absent`
-   nicht erfolgt, identisches Sollziel ist erfolgt, identischer Vorherzustand
-   ist exakt nachholbar und jede Abweichung unbekannt/Stop. Symlinks und andere
-   nicht reguläre Dateitypen werden nie als dauerhaftes Ergebnis akzeptiert.
-   Das Auditdokument bleibt Projektion.
+7. **Externe Side Effects:** State und Checkpoint sind wegwerfbare, atomar
+   ersetzte Cachedateien und deshalb ausdrücklich keine ledgerpflichtigen
+   fachlichen Side Effects. Das Auditdokument bleibt ebenfalls Projektion;
+   Queue-, Provider- und Git-Wirkungen bleiben separat ledgergebunden.
 
 Bewertung: **wird generisch** — alle drei Dateien werden Cacheprojektionen mit
 einem gemeinsamen Head/Digest-Abgleich und atomarer Neuprojektion.
@@ -810,7 +810,7 @@ Tabelle inventarisiert daher 30 Stämme, während der AST-Zähler 32 direkte
 | `finding export record belongs to another source run` | B03 |
 | `finding export differs from its accepted source replay` | B03 |
 | `finding import task bytes differ from the export binding` | B03 |
-| `structured artifact differs semantically from the state-v3 statement` | B01 |
+| `structured artifact differs semantically from its existing record` | B01; idempotenter Append gegen unveränderlichen Vorgängerrecord, **bleibt bewusst** |
 | `side effect result has no authoritative intent` | A14/A16/B04/B08/B09/B10 |
 | `side effect result changed its immutable intent binding` | A14/A16/B04/B08/B09/B10 |
 | `provider attempt measurement is not in the accepted chain` | B04 |
@@ -828,12 +828,10 @@ Tabelle inventarisiert daher 30 Stämme, während der AST-Zähler 32 direkte
 
 | Meldungsstamm/Prüfung | Kante |
 |---|---|
-| `structured reviewer decisions differ from the state-v3 mirror` | B07 |
-| `structured commit review record differs from its state-v3 mirror` | B07 |
-| `structured commit attestation record differs from its state-v3 mirror` | B07 |
+| `structured commit review differs from the commit request` | B07/A14; Record ↔ unmittelbar auszuführender irreversibler Commit, **bleibt bewusst** |
+| `structured commit attestation differs from the commit request` | B07/A14; Record ↔ unmittelbar auszuführender irreversibler Commit, **bleibt bewusst** |
 | `provider attempt measurement context diverged` | A11/B04 |
-| `authoritative finding replay differs from the state-v3 mirror` | B07 |
-| `record-native finding carry-forward differs from the state-v3 mirror` | B07 |
+| `pre-policy native reviewer recovery tail differs from the active work unit` | B06; Record-interne Zuordnung des Crash-Tails, **bleibt bewusst** |
 | `native agent request differs from its persisted recovery artifact` | B05 |
 | `native Codex raw response differs from its persisted artifact` | B05 |
 | `content-addressed review packet cache differs from canonical bytes` | B06 |
@@ -848,7 +846,6 @@ Tabelle inventarisiert daher 30 Stämme, während der AST-Zähler 32 direkte
 | `native agent result logical binding differs` | B05 |
 | `persisted finding handoff export differs from the prepared task` | B08 |
 | `file side-effect target differs before result completion` | B05/B08/B09; Zieltyp/-digest unmittelbar vor Datei-Resultat, **bleibt bewusst** |
-| `projection target differs before result completion` | B09; State-/Checkpointbytes unmittelbar vor Datei-Resultat, **bleibt bewusst** |
 | `structured audit dual-write mismatch` | B09 |
 | `workflow history review packet cache differs from canonical bytes` | B06/B09 |
 | `differs from the immutable persisted profile` | A01/B04; Runtimeprofil ↔ persistierte ProtocolBinding, **bleibt bewusst** |
@@ -1540,6 +1537,85 @@ R8-Blob-/Contentrecord zwingend. Git-Commits, Provideraufrufe und
 Queuebewegungen sind keine Caches und brauchen je eine Intent-/Resultat- oder
 Reconciliation-Regel.
 
+## S4b-Cutover-Abschluss
+
+### Endklassifikation aller 26 S2-Kanten
+
+| Kante | Endstatus | Begründung nach dem Cutover |
+|---|---|---|
+| A01 | bleibt bewusst | Schema, Runprofil, Reducerbindung und physische Kette bestimmen erst den akzeptierten Präfix. |
+| A02 | bleibt bewusst | Cross-run-Handoff revalidiert Quelle, Planbindung und Taskbytes. |
+| A03 | entfällt | Taskvertrag einschließlich PLAN_ONLY-Zielpfad wird ausschließlich aus Records projiziert. |
+| A04 | entfällt | Work-unit, Runde, Scope und Findingattribution stammen aus Records. |
+| A05 | entfällt | Vorgeschlagener Slice-Plan und freigegebener Plan sind Record-Fakten; die Statekopie ist Cache. |
+| A06 | entfällt | Gatezustand und Entscheidungen werden aus Gate-Records projiziert. |
+| A07 | entfällt | Findingstatus und offene Menge kommen allein aus dem Finding-Reducer. |
+| A08 | entfällt | Validationzustand und Inhalte kommen aus Attestation-/Contentrecords und Blobs. |
+| A09 | entfällt | Quota-Pause und Zielzeit werden aus Failure-/Quota-Records projiziert. |
+| A10 | entfällt | Retryfolge und Zielzeit werden aus Failure-/Retry-Records projiziert. |
+| A11 | entfällt | Messung, Bootstrap und Preflight sind vollständige Record-Fakten. |
+| A12 | bleibt bewusst | ResumeCheck bindet eine zeitliche Aussage unveränderlich an den Vorgängerhead. |
+| A13 | bleibt bewusst | Recordreferenzen auf Attestierungen, Reviews und Bindings müssen kausal gültig bleiben. |
+| A14 | bleibt bewusst | Der Git-Commit ist irreversibel und bleibt über Intent, Resultat und Reconciliation geschützt. |
+| A15 | entfällt | Terminalzustand wird aus Completion- und Binding-Records projiziert. |
+| A16 | bleibt bewusst | Der finale Audit-Git-Commit ist ein irreversibler externer Side Effect. |
+| B01 | bleibt bewusst | Atomarer Append, Idempotenz und durable-but-reported-failed sind Store-Kausalität. |
+| B02 | bleibt bewusst | Finding-Export muss den vollständig akzeptierten Quellpräfix belegen. |
+| B03 | bleibt bewusst | Finding-Import revalidiert fremde Kette und veröffentlichte Taskbytes. |
+| B04 | bleibt bewusst | Providerstart kann extern unbestimmt sein und benötigt dreiwertige Reconciliation. |
+| B05 | wird generisch | Materialisierte Request-/Response-Dateien sind aus gebundenem Content rekonstruierbare Caches. |
+| B06 | wird generisch | Reviewpaket und Rohantwort werden aus Content-/Reviewrecords materialisiert; fachliche Sonderfälle entfallen. |
+| B07 | entfällt | Review-, Finding- und Attestation-History ist direkte Recordprojektion. |
+| B08 | bleibt bewusst | Handoff-Dateischreibung und Queuebewegung sind externe Side Effects mit eigener Bindung. |
+| B09 | wird generisch | `state.json` und Checkpoints tragen denselben Head-, Reducer- und Projektionsdigest-Abgleich. |
+| B10 | wird generisch | Terminale Datei-/Watchprojektionen sind Cache; ihre externen Queue-/Git-Bindungen bleiben separat bewusst. |
+
+### Cachevertrag und statischer Leser-Nachweis
+
+`state.json` und strukturierte Checkpoints verwenden
+`workflow-state-projection-v1`. Der Umschlag bindet exakt `record_head_id`,
+`reducer_version`, `projection_digest` und das projizierte `state`-Dokument.
+Fehlt der Cache oder ist eine dieser Bindungen fremd, veraltet oder manipuliert,
+wird er aus der unveränderten Recordkette neu geschrieben. Eine beschädigte,
+unvollständige, unbekannte oder widersprüchliche Kette stoppt dagegen
+fail-closed.
+
+Auch der interne Pfadabgleich bleibt fail-closed:
+`workflow projection checkpoint path differs from its cursor` stoppt, falls der zurückgegebene
+Checkpointpfad nicht exakt zur recordprojizierten Work-unit-, Slice- und
+Round-Identität passt.
+
+Der statische Test der Lesestellen belegt: `resolve_resume_state()` liest aus
+einem übergebenen `WorkflowState` nur `run_id` als Locator. Sämtliche
+strukturierten Dispatch-, Gate-, Resume- und Checkpointentscheidungen laden die
+Kette über `resolve_resume_state()`; der einzige direkte
+`load_workflow_state()`-Aufruf im Produktionsorchestrator dient der expliziten
+Force-Replacement-Autorisierung, nicht einer Workflowentscheidung. Legacy-v3
+ohne strukturierte Kette wird mit `UNSUPPORTED-PROTOCOL` abgewiesen.
+
+### Versionsentscheidung
+
+Der Cutover erhöht weder Protokoll- noch Recordschema-Version:
+`structured-v2` und `schema_version = 2` bleiben bestehen. R9 hatte bereits
+dieselbe vollständige Zustandsprojektion und dieselbe Bedeutung jedes
+Bestandsrecords definiert; S4b wählt diese Projektion als alleinige Autorität
+und interpretiert keine vorhandenen Recordbytes neu. Die innerhalb der
+Schema-2-Serie additive Vollständigkeitsbindung schreibt nun
+`RunProfilePayload.reducer_version = structured-v2-schema-2-state-v3-v1`, den
+PLAN_ONLY-`work_plan_path` im Taskrecord sowie vorgeschlagene `slice_plan`-Daten
+im nativen AgentResult. Bestandskompatibilität ist gemäß Arbeitsplan nicht
+zugelassen. Eine Kette mit fehlender oder fremder Reducer-Version scheitert am
+geschlossenen Schema beziehungsweise Domainmodell. Eine spätere Änderung der
+Recordbedeutung oder Reducer-Semantik benötigt ausdrücklich eine neue
+Semantik-/Protokollversion.
+
+### S4b-Abnahmelauf
+
+Der vollständige providerfreie WSL-Lauf nach dem Cutover ergibt
+`1368 passed in 194.75s` (Gesamtprozesszeit `195.27s`). Gegenüber der
+Zwischenlauf-Baseline `1348 passed in 210s` sind das 20 zusätzliche
+Akzeptanz- und Regressionstests bei vollständig grüner Suite.
+
 ## Konsequenzen für S3 und S4
 
 1. R1 bis R9 haben Records oder explizite Ableitungsregeln für sämtliche
@@ -1549,12 +1625,11 @@ Reconciliation-Regel.
 2. R9 weist nach, dass ein leerer State aus jedem vollständigen akzeptierten
    Präfix deterministisch neu projiziert werden kann; die bereits recordeten
    Commit-/Provider-/Queue-Crashfenster besitzen explizite Reconciliation.
-   S4b darf auf dieser Vorbedingung aufsetzen.
-3. Danach entfallen die spezialisierten Mirrorvergleiche und
-   `_recoverable_*`-Ausnahmen. Es bleiben Recordschema/Kette/Referenzen,
+   S4b hat auf dieser Vorbedingung aufgesetzt.
+3. Die spezialisierten Mirrorvergleiche und
+   `_recoverable_*`-Ausnahmen sind entfallen. Es bleiben Recordschema/Kette/Referenzen,
    Providerattempt-Kausalität, Cross-run-Handoff und externe Side-effect-
    Reconciliation. Alle Datei-/Historykopien gehen in einen generischen
    Cacheintegritätsabgleich auf.
 
-Diese Aussagen sind Empfehlungen für die folgenden Slices, keine
-Cutover-Entscheidung in S2.
+Diese Aussagen beschreiben seit S4b den umgesetzten Cutover.

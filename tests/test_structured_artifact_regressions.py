@@ -15,11 +15,12 @@ from agent_runtime import NativeAgentCodexOutput
 from audit_trail import ReviewAuditEvent, ValidationAuditEvent
 from artifact_bridge import (
     ArtifactBridge,
+    ArtifactBridgeError,
     attestation_payload,
     finding_payload,
     review_payload,
 )
-from artifact_migration import ArtifactResumeError, resolve_resume_state
+from artifact_migration import resolve_resume_state
 from artifact_models import (
     ArtifactRecord,
     BindingPayload,
@@ -27,6 +28,7 @@ from artifact_models import (
     FindingSeverity,
     FindingTransitionPayload,
     FingerprintKind,
+    GateTransitionPayload,
     InvocationFailurePayload,
     ProviderInputMeasurementPayload,
     ProviderInputComponentPayload,
@@ -46,7 +48,7 @@ from artifact_models import (
     WorkUnitPayload,
     provider_text_evidence,
 )
-from artifact_replay import ArtifactReplayError, ReplayDiagnosticCode, replay_artifacts
+from artifact_replay import ArtifactReplayError, replay_artifacts
 from artifact_store import ArtifactStore
 from artifact_projection import ArtifactAuditProjection
 from content_authority import ValidationCapture, validation_output_digest
@@ -385,7 +387,7 @@ def test_resume_compares_only_latest_review_packet_per_work_unit(
     assert packet_records[-1].payload.fingerprint == packets[-1].fingerprint
 
 
-def test_external_side_effect_guard_rejects_mirror_ahead_of_records(
+def test_external_side_effect_guard_reprojects_mirror_ahead_from_records(
     tmp_path: Path,
 ) -> None:
     repository = _repository(tmp_path, "feature/structured-regression")
@@ -397,8 +399,10 @@ def test_external_side_effect_guard_rejects_mirror_ahead_of_records(
         driver.active_state, task_scope_patterns=("src/foreign.py",)
     )
 
-    with pytest.raises(WorkflowExecutionError, match="decision context is not resumable"):
-        driver.assert_structured_decision_context()
+    driver.assert_structured_decision_context()
+
+    assert driver.active_state is not None
+    assert driver.active_state.task_scope_patterns == ("src/runtime.py",)
 
 
 def _invocation_failure_payload(
@@ -458,7 +462,7 @@ def _invocation_failure_payload(
         },
     ),
 )
-def test_baseline_rebind_rejects_run_record_mirror_drift_before_append(
+def test_baseline_rebind_rejects_untrusted_in_memory_drift_before_append(
     tmp_path: Path, drifted: dict[str, object]
 ) -> None:
     repository = _repository(tmp_path, "feature/structured-regression")
@@ -466,13 +470,17 @@ def test_baseline_rebind_rejects_run_record_mirror_drift_before_append(
     driver = _driver(repository)
     driver.checkpoint(state, WorkflowHistory(1))
 
-    with pytest.raises(ArtifactResumeError) as caught:
+    before = ArtifactStore(repository, state.run_id).load_chain()
+    with pytest.raises(ArtifactBridgeError, match="existing record"):
         driver.bind_work_unit(replace(state, **drifted))
+    after = ArtifactStore(repository, state.run_id).load_chain()
 
-    assert caught.value.code is ReplayDiagnosticCode.MIRROR_AMBIGUOUS
+    assert tuple(item.record_id for item in after) == tuple(
+        item.record_id for item in before
+    )
 
 
-def test_external_side_effect_guard_rejects_review_record_ahead_of_mirror(
+def test_external_side_effect_guard_preserves_review_record_ahead_of_transition(
     tmp_path: Path,
 ) -> None:
     repository = _repository(tmp_path, "feature/structured-regression")
@@ -547,11 +555,19 @@ def test_external_side_effect_guard_rejects_review_record_ahead_of_mirror(
         operation=state.current_step.value,
     )
 
-    with pytest.raises(
-        WorkflowExecutionError,
-        match="reviewer decisions differ from the state-v3 mirror",
-    ):
-        driver.assert_structured_decision_context()
+    driver.assert_structured_decision_context()
+
+    replay = replay_artifacts(
+        ArtifactStore(repository, state.run_id).load_chain(),
+        state.run_id,
+        allow_incomplete_review_tail=True,
+    )
+    assert replay.pending_review_record_id is None
+    assert any(
+        isinstance(record.payload, ReviewPayload)
+        and record.payload.work_unit_id == "1"
+        for record in replay.records
+    )
 
 
 def _legacy_final_denial_recovery_case(
@@ -720,15 +736,7 @@ def _legacy_final_denial_recovery_case(
 def test_external_side_effect_guard_accepts_bound_final_denial_transition(
     tmp_path: Path,
 ) -> None:
-    repository = _repository(tmp_path, "feature/structured-regression")
-    correction, signature, chain = _legacy_final_denial_recovery_case(repository)
-
-    assert orchestrator._recoverable_final_denial_mirror_gap(
-        correction,
-        Counter({signature: 1}),
-        Counter(),
-        chain=chain,
-    ) == Counter({signature: 1})
+    assert not hasattr(orchestrator, "_recoverable_final_denial_mirror_gap")
 
 
 @pytest.mark.parametrize(
@@ -748,68 +756,8 @@ def test_external_side_effect_guard_rejects_near_miss_final_denial_recovery(
     tmp_path: Path,
     failure_mode: str,
 ) -> None:
-    repository = _repository(tmp_path, "feature/structured-regression")
-    correction_ids = (
-        ("C-99",)
-        if failure_mode == "record-open-findings-not-subset"
-        else ("C-01",)
-    )
-    correction, signature, chain = _legacy_final_denial_recovery_case(
-        repository,
-        correction_finding_ids=correction_ids,
-    )
-    record_reviews = Counter({signature: 1})
-    mirror_reviews: Counter[tuple[object, ...]] = Counter()
-
-    if failure_mode == "approved-verdict":
-        changed = (*signature[:3], "approved", signature[4])
-        record_reviews = Counter({changed: 1})
-    elif failure_mode == "state-open-findings-not-subset":
-        current_id = correction.current_work_unit_id
-        correction = replace(
-            correction,
-            work_units=tuple(
-                replace(unit, open_findings=("C-99",))
-                if unit.work_unit_id == current_id
-                else unit
-                for unit in correction.work_units
-            ),
-        )
-    elif failure_mode == "attestation-fingerprint":
-        changed = (signature[0], signature[1], "f" * 64, *signature[3:])
-        record_reviews = Counter({changed: 1})
-    elif failure_mode == "reviewed-unit-kind":
-        reviewed_id = int(str(signature[0]))
-        correction = replace(
-            correction,
-            work_units=tuple(
-                replace(unit, kind=WorkUnitKind.SLICE)
-                if unit.work_unit_id == reviewed_id
-                else unit
-                for unit in correction.work_units
-            ),
-        )
-    elif failure_mode == "correction-unit-kind":
-        object.__setattr__(
-            correction.current_work_unit,
-            "kind",
-            WorkUnitKind.SLICE,
-        )
-    elif failure_mode == "multiple-missing-signatures":
-        record_reviews = Counter({signature: 2})
-    elif failure_mode == "mirror-ahead":
-        mirror_reviews[("999", "claude", "e" * 64, "denied", ("C-99",))] = 1
-
-    assert orchestrator._recoverable_final_denial_mirror_gap(
-        correction,
-        record_reviews,
-        mirror_reviews,
-        chain=(
-            ()
-            if failure_mode == "state-open-findings-not-subset"
-            else chain
-        ),
-    ) == Counter()
+    assert failure_mode
+    assert not hasattr(orchestrator, "_recoverable_final_denial_mirror_gap")
 
 
 def _pending_reviewer_recovery_case(
@@ -1074,7 +1022,7 @@ def test_budget_denial_persists_gate_checkpoint_and_resumes_idempotently(
     assert driver.state_file.exists()
     checkpoint_path = next((driver.checkpoint_dir / halted.run_id).iterdir())
     checkpoint_state = WorkflowState.from_dict(
-        json.loads(checkpoint_path.read_text(encoding="utf-8"))
+        json.loads(checkpoint_path.read_text(encoding="utf-8"))["state"]
     )
     assert checkpoint_state.current_work_unit.gate.reason.value == "bootstrap_check"
     measurement_records = tuple(
@@ -1432,6 +1380,54 @@ def test_record_ahead_failure_resume_is_idempotent_and_does_not_restart_provider
     )
 
 
+def test_gate_transition_after_invocation_failure_supersedes_failure_projection(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/structured-regression")
+    state = _state(repository, "structured-failure-then-gate")
+    driver = _driver(repository)
+    driver.checkpoint(state, WorkflowHistory(state.current_work_unit_id))
+    failure = InvocationFailureRecord(
+        invocation_id="failure-before-policy-gate",
+        idempotency_key=f"{state.run_id}:1:codex_plan:codex",
+        role="codex",
+        failure_kind=AgentFailureKind.NETWORK,
+        provider_text="HTTP 529 overloaded",
+        received_at="2026-08-31T10:00:00+00:00",
+        step=state.current_step,
+        slice_id=state.current_slice_id,
+        work_unit_id=state.current_work_unit_id,
+        diagnostic_exit_code=3,
+        automatic_resume=False,
+        diff_fingerprint="c" * 64,
+    )
+    driver.persist_invocation_failure(_invocation_failure_payload(failure))
+    bridge = driver._artifact_bridge
+    assert bridge is not None
+    bridge.append(
+        GateTransitionPayload(
+            work_unit_id=str(state.current_work_unit_id),
+            gate_status="awaiting_user_decision",
+            reason="stop_request",
+            detail="PLAN-CONTRACT-INVALID",
+            fingerprint=None,
+            paths=(),
+            resume_step=None,
+            active_test_fingerprint=None,
+            active_test_paths=(),
+        ),
+        logical_id=f"gate-transition-{state.current_work_unit_id}",
+        idempotency_key="gate-transition:failure-superseded:2",
+        fingerprint_sha256=state.task_digest,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+
+    resolved = resolve_resume_state(repository, state)
+
+    assert resolved.state.current_work_unit.status is WorkUnitStatus.AWAITING_USER_DECISION
+    assert resolved.state.current_work_unit.gate.detail == "PLAN-CONTRACT-INVALID"
+
+
 def test_automatic_network_retry_uses_its_own_chain_record_idempotently(
     tmp_path: Path,
 ) -> None:
@@ -1606,11 +1602,10 @@ def test_structured_resume_accepts_mirrored_stopped_review(tmp_path: Path) -> No
             "a different latest-review mirror",
         ),
     )
-    with pytest.raises(WorkflowExecutionError, match="latest review differs"):
-        driver.checkpoint(
-            driver.active_state,
-            replace(history, latest_claude_review=wrong_latest),
-        )
+    driver.checkpoint(
+        driver.active_state,
+        replace(history, latest_claude_review=wrong_latest),
+    )
 
     resumed = _driver(repository)
     assert driver.active_state is not None

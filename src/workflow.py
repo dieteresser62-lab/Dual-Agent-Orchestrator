@@ -393,7 +393,7 @@ class ReviewerInvocation:
 
 @dataclass(frozen=True)
 class PersistedNativeReviewerReplay:
-    """One request-bound native decision durable ahead of its state mirror."""
+    """One request-bound native decision durable ahead of its next transition."""
 
     output: NativeAgentReviewOutput
     fingerprint: str
@@ -420,13 +420,13 @@ class WorkflowDriver(Protocol):
     def authoritative_native_findings(
         self,
         state: WorkflowState,
-        mirror_findings: tuple[FindingRecord, ...],
+        _projected_findings: tuple[FindingRecord, ...],
     ) -> tuple[FindingRecord, ...]: ...
 
     def carry_forward_native_findings(
         self,
         state: WorkflowState,
-        current_findings: tuple[FindingRecord, ...],
+        _projected_findings: tuple[FindingRecord, ...],
     ) -> tuple[FindingRecord, ...]: ...
 
     def invoke_codex(
@@ -1808,7 +1808,7 @@ class WorkflowEngine:
             )
             self.driver.checkpoint(state, history)
             return state, history
-        # Persist the state-v3 mirror of a newly appended attestation before
+        # Project the newly appended attestation before
         # invoking Claude. The idempotent checkpoint protects record-ahead recovery.
         self.driver.checkpoint(state, history)
         if not attestation.complete:
@@ -2091,7 +2091,7 @@ class WorkflowEngine:
             if is_final_review:
                 # Persist the denying final-review event while the final-review
                 # work unit is still current. Starting the correction unit first
-                # would archive the driver's older mirror and leave the already
+                # would archive the driver's older projection and leave the already
                 # appended structured ReviewPayload ahead of state-v3.
                 self.driver.checkpoint(state, history)
                 boundary = self.driver.prepare_correction(history.findings)

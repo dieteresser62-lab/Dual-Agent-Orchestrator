@@ -30,6 +30,7 @@ from schema_validation import (
 )
 
 SCHEMA_VERSION = "2"
+STATE_PROJECTION_REDUCER_VERSION = "structured-v2-schema-2-state-v3-v1"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
 _FINDING_ID_RE = re.compile(r"^C-(0[1-9]|[1-9][0-9]*)$")
@@ -176,6 +177,7 @@ class RoleProfilePayload:
 class RunProfilePayload:
     implementer: RoleProfilePayload
     reviewer: RoleProfilePayload
+    reducer_version: str = STATE_PROJECTION_REDUCER_VERSION
     status: ClassVar[str] = "bound"
     record_type: ClassVar[RecordType] = RecordType.RUN_PROFILE
 
@@ -184,6 +186,10 @@ class RunProfilePayload:
             raise ArtifactValidationError("implementer profile is invalid")
         if not isinstance(self.reviewer, RoleProfilePayload):
             raise ArtifactValidationError("reviewer profile is invalid")
+        if self.reducer_version != STATE_PROJECTION_REDUCER_VERSION:
+            raise ArtifactValidationError(
+                "run profile reducer_version is unsupported"
+            )
 
 
 _WORKFLOW_STEPS = {
@@ -385,6 +391,7 @@ class TaskPayload:
     target_branch: str
     scope_paths: tuple[str, ...]
     assignment_sha256: str
+    work_plan_path: str | None = None
     status: ClassVar[str] = "accepted"
     record_type: ClassVar[RecordType] = RecordType.TASK
 
@@ -392,6 +399,8 @@ class TaskPayload:
         _require_text(self.target_branch, "target_branch")
         _require_paths(self.scope_paths)
         _require_sha256(self.assignment_sha256, "assignment_sha256")
+        if self.work_plan_path is not None:
+            _require_path(self.work_plan_path)
 
 
 @dataclass(frozen=True, slots=True)
@@ -463,6 +472,7 @@ class AgentResultPayload:
     transport_schema: str
     request_id: str
     response_sha256: str
+    slice_plan: tuple[SliceSpec, ...] = ()
     status: ClassVar[str] = "ready"
     record_type: ClassVar[RecordType] = RecordType.AGENT_RESULT
 
@@ -484,6 +494,13 @@ class AgentResultPayload:
         ):
             raise ArtifactValidationError("native Codex result request_id is invalid")
         _require_sha256(self.response_sha256, "response_sha256")
+        if not isinstance(self.slice_plan, tuple) or any(
+            not isinstance(item, SliceSpec) for item in self.slice_plan
+        ):
+            raise ArtifactValidationError("agent result slice_plan is invalid")
+        slice_ids = tuple(item.slice_id for item in self.slice_plan)
+        if len(slice_ids) != len(set(slice_ids)):
+            raise ArtifactValidationError("agent result slice_plan ids must be unique")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1913,6 +1930,7 @@ def _payload_from_dict(record_type: RecordType, raw: Mapping[str, Any]) -> Artif
         return RunProfilePayload(
             RoleProfilePayload(**data["implementer"]),
             RoleProfilePayload(**data["reviewer"]),
+            data["reducer_version"],
         )
     if record_type is RecordType.WORKFLOW_TRANSITION:
         return WorkflowTransitionPayload(
@@ -1937,7 +1955,12 @@ def _payload_from_dict(record_type: RecordType, raw: Mapping[str, Any]) -> Artif
             data["start_fingerprint"],
         )
     if record_type is RecordType.TASK:
-        return TaskPayload(data["target_branch"], tuple(data["scope_paths"]), data["assignment_sha256"])
+        return TaskPayload(
+            data["target_branch"],
+            tuple(data["scope_paths"]),
+            data["assignment_sha256"],
+            data["work_plan_path"],
+        )
     if record_type is RecordType.PLAN:
         slices = tuple(SliceSpec(item["slice_id"], item["summary"], tuple(item["paths"])) for item in data["slices"])
         return PlanPayload(data["work_plan_path"], data["approved_plan_commit"], slices)
@@ -1957,6 +1980,10 @@ def _payload_from_dict(record_type: RecordType, raw: Mapping[str, Any]) -> Artif
             data["transport_schema"],
             data["request_id"],
             data["response_sha256"],
+            tuple(
+                SliceSpec(item["slice_id"], item["summary"], tuple(item["paths"]))
+                for item in data["slice_plan"]
+            ),
         )
     if record_type is RecordType.DIAGNOSTIC:
         return DiagnosticPayload(Role(data["role"]), data["work_unit_id"], data["attempt"], data["output_sha256"], data["reason"])

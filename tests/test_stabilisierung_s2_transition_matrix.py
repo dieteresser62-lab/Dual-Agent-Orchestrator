@@ -92,7 +92,6 @@ RUN_BINDING_REPLAY_MARKER = (
 
 BRIDGE_ERROR_MARKERS = (
     "referenced source record is not a finding export",
-    "source export plan commit differs from state-v3",
     "finding export requires a non-empty accepted replay",
     "finding export requires its approved reviewer record",
     "finding export plan commit is not present in accepted replay",
@@ -102,7 +101,7 @@ BRIDGE_ERROR_MARKERS = (
     "finding export record belongs to another source run",
     "finding export differs from its accepted source replay",
     "finding import task bytes differ from the export binding",
-    "structured artifact differs semantically from the state-v3 statement",
+    "structured artifact differs semantically from its existing record",
     "provider attempt measurement is not in the accepted chain",
     "provider attempt work unit differs from its measurement",
     "provider attempt operation instance must be non-empty",
@@ -115,24 +114,13 @@ BRIDGE_ERROR_MARKERS = (
     "finding export plan commit differs from the task",
 )
 
-RECOVERABLE_FUNCTIONS = {
-    "src/artifact_migration.py": {
-        "_recoverable_pending_review_finding_gap",
-        "_recoverable_pending_correction_record",
-        "_recoverable_pending_slice_denial_record",
-        "_recoverable_pending_work_record",
-    },
-    "src/orchestrator.py": {"_recoverable_final_denial_mirror_gap"},
-}
+RECOVERABLE_FUNCTIONS: dict[str, set[str]] = {}
 
 DRIVER_DIVERGENCE_MESSAGES = Counter(
     {
-        "structured reviewer decisions differ from the state-v3 mirror": 1,
-        "structured commit review record differs from its state-v3 mirror": 1,
-        "structured commit attestation record differs from its state-v3 mirror": 1,
+        "structured commit review differs from the commit request": 1,
+        "structured commit attestation differs from the commit request": 1,
         "provider attempt measurement context diverged": 1,
-        "authoritative finding replay differs from the state-v3 mirror": 1,
-        "record-native finding carry-forward differs from the state-v3 mirror": 1,
         "native agent request differs from its persisted recovery artifact": 2,
         "native Codex raw response differs from its persisted artifact": 2,
         "content-addressed review packet cache differs from canonical bytes": 1,
@@ -145,6 +133,7 @@ DRIVER_DIVERGENCE_MESSAGES = Counter(
         "native reviewer recovery record differs from the rebuilt request": 1,
         "native reviewer recovery result differs from its decision record": 1,
         "pre-policy native reviewer result differs from its decision record": 1,
+        "pre-policy native reviewer recovery tail differs from the active work unit": 1,
         "native agent result logical binding differs": 1,
         "native agent content digest differs from its result binding": 1,
         "native reviewer content digest differs from its review binding": 1,
@@ -152,9 +141,9 @@ DRIVER_DIVERGENCE_MESSAGES = Counter(
         "validation recovery result differs from its content": 1,
         "persisted finding handoff export differs from the prepared task": 1,
         "file side-effect target differs before result completion": 1,
-        "projection target differs before result completion": 1,
         "invocation failure work unit differs from the active workflow": 1,
         "structured audit dual-write mismatch: ": 2,
+        "workflow projection checkpoint path differs from its cursor": 2,
     }
 )
 
@@ -325,26 +314,10 @@ WORKFLOW_STATE_FIELD_INVENTORY = {
 
 COMPARISON_TARGETS = (
     ("src/artifact_migration.py", None, "resolve_resume_state"),
-    ("src/artifact_migration.py", None, "assert_run_binding_mirror"),
     ("src/artifact_migration.py", None, "require_workflow_status_prefix"),
     ("src/artifact_migration.py", None, "require_workflow_event_prefix"),
-    ("src/artifact_migration.py", None, "assert_workflow_status_mirror"),
-    ("src/artifact_migration.py", None, "assert_slice_boundary_mirror"),
     ("src/artifact_migration.py", None, "require_gate_prefix"),
-    ("src/artifact_migration.py", None, "assert_gate_mirror"),
     ("src/artifact_migration.py", None, "require_side_effect_ledger_prefix"),
-    ("src/artifact_migration.py", None, "assert_invocation_failure_mirror"),
-    ("src/artifact_migration.py", None, "project_transition_mirror_before_failure"),
-    ("src/artifact_migration.py", None, "assert_side_effect_mirror"),
-    ("src/artifact_migration.py", None, "_mirror_difference_code"),
-    ("src/artifact_migration.py", None, "_finding_statuses"),
-    ("src/artifact_migration.py", None, "_recoverable_pending_review_finding_gap"),
-    ("src/artifact_migration.py", None, "_recoverable_pending_correction_record"),
-    ("src/artifact_migration.py", None, "_recoverable_pending_slice_denial_record"),
-    ("src/artifact_migration.py", None, "_recoverable_pending_work_record"),
-    ("src/artifact_migration.py", None, "_pending_denied_review"),
-    ("src/artifact_migration.py", None, "_state_has_review_projection"),
-    ("src/artifact_migration.py", None, "_attestation_facts"),
     ("src/artifact_bridge.py", None, "finding_handoff_export_payload"),
     ("src/artifact_bridge.py", None, "finding_handoff_import_payload"),
     ("src/artifact_bridge.py", None, "review_payload_matches_result"),
@@ -363,8 +336,6 @@ COMPARISON_TARGETS = (
     ("src/final_review_preflight.py", None, "_approved_external_paths"),
     ("src/orchestrator.py", None, "_persisted_histories"),
     ("src/orchestrator.py", None, "_attach_record_events"),
-    ("src/orchestrator.py", None, "_recoverable_final_denial_mirror_gap"),
-    ("src/orchestrator.py", None, "_historical_correction_attribution_matches"),
     ("src/orchestrator.py", None, "run_pipeline"),
     ("src/orchestrator.py", None, "_apply_resumed_agent_profiles"),
     ("src/orchestrator.py", None, "run_production_workflow"),
@@ -372,7 +343,6 @@ COMPARISON_TARGETS = (
     ("src/orchestrator.py", "ProductionWorkflowDriver", "_start_provider_attempt"),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "_reconcile_provider_effect"),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "_write_side_effect_file"),
-    ("src/orchestrator.py", "ProductionWorkflowDriver", "_execute_projection_write"),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "_reconcile_pending_side_effects"),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "authoritative_native_findings"),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "carry_forward_native_findings"),
@@ -425,8 +395,6 @@ STRICT_BODY_TARGETS = tuple(
     in {
         "_persisted_histories",
         "_attach_record_events",
-        "_recoverable_final_denial_mirror_gap",
-        "_historical_correction_attribution_matches",
         "finalize_audit",
         "commit_managed_audit_report",
     }
@@ -437,27 +405,11 @@ STRICT_BODY_TARGETS = tuple(
 # non-divergence comparison added inside one of these boundaries forces S2's
 # inventory to be reviewed instead of silently aging.
 EXPECTED_COMPARISON_COUNTS = {
-    "src/artifact_migration.py:resolve_resume_state": 117,
-    "src/artifact_migration.py:assert_run_binding_mirror": 6,
+    "src/artifact_migration.py:resolve_resume_state": 1,
     "src/artifact_migration.py:require_workflow_status_prefix": 3,
     "src/artifact_migration.py:require_workflow_event_prefix": 6,
-    "src/artifact_migration.py:assert_workflow_status_mirror": 4,
-    "src/artifact_migration.py:assert_slice_boundary_mirror": 4,
     "src/artifact_migration.py:require_gate_prefix": 1,
-    "src/artifact_migration.py:assert_gate_mirror": 4,
     "src/artifact_migration.py:require_side_effect_ledger_prefix": 4,
-    "src/artifact_migration.py:assert_invocation_failure_mirror": 4,
-    "src/artifact_migration.py:project_transition_mirror_before_failure": 3,
-    "src/artifact_migration.py:assert_side_effect_mirror": 5,
-    "src/artifact_migration.py:_mirror_difference_code": 0,
-    "src/artifact_migration.py:_finding_statuses": 2,
-    "src/artifact_migration.py:_recoverable_pending_review_finding_gap": 16,
-    "src/artifact_migration.py:_recoverable_pending_correction_record": 6,
-    "src/artifact_migration.py:_recoverable_pending_slice_denial_record": 7,
-    "src/artifact_migration.py:_recoverable_pending_work_record": 0,
-    "src/artifact_migration.py:_pending_denied_review": 7,
-    "src/artifact_migration.py:_state_has_review_projection": 5,
-    "src/artifact_migration.py:_attestation_facts": 2,
     "src/artifact_bridge.py:finding_handoff_export_payload": 5,
     "src/artifact_bridge.py:finding_handoff_import_payload": 8,
     "src/artifact_bridge.py:review_payload_matches_result": 13,
@@ -474,32 +426,29 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/artifact_bridge.py:ArtifactBridge.side_effect_result": 7,
     "src/final_review_preflight.py:run_final_review_preflight": 20,
     "src/final_review_preflight.py:_approved_external_paths": 15,
-    "src/orchestrator.py:_persisted_histories": 3,
+    "src/orchestrator.py:_persisted_histories": 6,
     "src/orchestrator.py:_attach_record_events": 16,
-    "src/orchestrator.py:_recoverable_final_denial_mirror_gap": 10,
-    "src/orchestrator.py:_historical_correction_attribution_matches": 7,
     "src/orchestrator.py:run_pipeline": 20,
     "src/orchestrator.py:_apply_resumed_agent_profiles": 3,
-    "src/orchestrator.py:run_production_workflow": 38,
-    "src/orchestrator.py:ProductionWorkflowDriver.assert_structured_decision_context": 11,
+    "src/orchestrator.py:run_production_workflow": 40,
+    "src/orchestrator.py:ProductionWorkflowDriver.assert_structured_decision_context": 4,
     "src/orchestrator.py:ProductionWorkflowDriver._start_provider_attempt": 19,
     "src/orchestrator.py:ProductionWorkflowDriver._reconcile_provider_effect": 13,
     "src/orchestrator.py:ProductionWorkflowDriver._write_side_effect_file": 3,
-    "src/orchestrator.py:ProductionWorkflowDriver._execute_projection_write": 5,
     "src/orchestrator.py:ProductionWorkflowDriver._reconcile_pending_side_effects": 34,
-    "src/orchestrator.py:ProductionWorkflowDriver.authoritative_native_findings": 11,
-    "src/orchestrator.py:ProductionWorkflowDriver.carry_forward_native_findings": 6,
+    "src/orchestrator.py:ProductionWorkflowDriver.authoritative_native_findings": 9,
+    "src/orchestrator.py:ProductionWorkflowDriver.carry_forward_native_findings": 4,
     "src/orchestrator.py:ProductionWorkflowDriver._persist_native_agent_request_bundle": 4,
     "src/orchestrator.py:ProductionWorkflowDriver._write_immutable_file": 3,
     "src/orchestrator.py:ProductionWorkflowDriver._write_native_codex_raw_response": 0,
     "src/orchestrator.py:ProductionWorkflowDriver._materialize_review_packet": 3,
     "src/orchestrator.py:ProductionWorkflowDriver._canonical_native_agent_result": 4,
     "src/orchestrator.py:ProductionWorkflowDriver.recover_pending_native_codex": 42,
-    "src/orchestrator.py:ProductionWorkflowDriver.recover_pending_native_reviewer": 34,
+    "src/orchestrator.py:ProductionWorkflowDriver.recover_pending_native_reviewer": 30,
     "src/orchestrator.py:ProductionWorkflowDriver.recover_pending_native_reviewer_before_policy": 31,
     "src/orchestrator.py:ProductionWorkflowDriver.persist_native_codex_contract": 11,
     "src/orchestrator.py:ProductionWorkflowDriver.prepare_finding_handoff": 13,
-    "src/orchestrator.py:ProductionWorkflowDriver.checkpoint": 6,
+    "src/orchestrator.py:ProductionWorkflowDriver.checkpoint": 8,
     "src/orchestrator.py:ProductionWorkflowDriver._project_audit": 22,
     "src/orchestrator.py:ProductionWorkflowDriver.finalize_audit": 9,
     "src/orchestrator.py:ProductionWorkflowDriver.commit_slice": 45,
@@ -525,32 +474,14 @@ EXPECTED_COMPARISON_COUNTS = {
 
 EXPECTED_STRICT_BODY_DIGESTS = {
     "src/artifact_bridge.py:review_payload_matches_result": "b3233be38c3e4729058eba7ffd325fc94d29d4f08bd5ccfd08de0e3557eaf612",
-    "src/artifact_migration.py:assert_run_binding_mirror": "309b1243909d782df06f2ea62f6288a19aab6f9aa3763de23a4b950664d121c5",
     "src/artifact_migration.py:require_workflow_status_prefix": "964d356480288034c6dc52de377c2326c06d2db50d6aae52fd2b3d5dbcc5bdec",
-    "src/artifact_migration.py:require_workflow_event_prefix": "2e9c88f52f65aeb0edfa9352f123f05c12c5a88ccdcfa590d813d5466bca1ddc",
-    "src/artifact_migration.py:assert_workflow_status_mirror": "0d6ac0eec3998504048ccf74ee978930a4e2dfa3cd256e71268e143a774b7eae",
-    "src/artifact_migration.py:assert_slice_boundary_mirror": "e0f6199f8d92c8f1d141822a0cbb2d6b80238cf247cc2eaacc83310d158c5d5f",
-    "src/artifact_migration.py:require_gate_prefix": "980ecc54d5b6c651d9937728b37a9e7cdfc2d27d8d4100eee15fde0d85249774",
-    "src/artifact_migration.py:assert_gate_mirror": "cc1214a7684e5c95ae519fac33f0624739167083440bbd58725888ce3a46e581",
-    "src/artifact_migration.py:require_side_effect_ledger_prefix": "75a389d1d2170ebd424810be772b2050c6b3951591530505cd7ba480138103c6",
-    "src/artifact_migration.py:assert_invocation_failure_mirror": "0a6caf71c272a876202ef11434386e304cd206f774f97e2f0ac996b92e5ddce0",
-    "src/artifact_migration.py:project_transition_mirror_before_failure": "ffea068886e435d3c2b63d67f329625b9a0c00a511d88f084e1ea22a1aef89d4",
-    "src/artifact_migration.py:assert_side_effect_mirror": "a987bcfdd6e57add8c76d0f45bcb005c7f560dcb2c682411eed66d9f67c76a54",
-    "src/artifact_migration.py:_mirror_difference_code": "9433c6d83367347145eebab39e8fc4e3a989062ff9864bec6752710065ffbbc7",
-    "src/artifact_migration.py:_finding_statuses": "cc4a0460cf13d1fbeba70deb2ae66dd19771bb31e8c56907139506ba3421c758",
-    "src/artifact_migration.py:_recoverable_pending_review_finding_gap": "ad6728a16432bbf82d6973402ac25f2766c42513287c0530d8aa2a7a8eea8145",
-    "src/artifact_migration.py:_recoverable_pending_correction_record": "2ccc8845cec0e65d669837cb5d64a4dbe5877b1e68d814ee255e57575032a08a",
-    "src/artifact_migration.py:_recoverable_pending_slice_denial_record": "dbc94b37591451b1ea7d668cb54df91e945f957b4752a205e23cc8178acc8629",
-    "src/artifact_migration.py:_recoverable_pending_work_record": "b9359c5e9abeac81d260e58a1e4f0d74c44ccaf740a772d06d71e32e6a333934",
-    "src/artifact_migration.py:_pending_denied_review": "b91272ae23c736309c6e7f5784cd95a549b5229fd3033a365c00c81e96fcc447",
-    "src/artifact_migration.py:_state_has_review_projection": "f6036ea4a3170f103a275fef04b949f4803d31a5d986ae15c1db2b1ae00ee83d",
-    "src/artifact_migration.py:_attestation_facts": "482ceda433b65606b715f3433cbbc2c1b320ffb0b706e672ba2521d83a112923",
+    "src/artifact_migration.py:require_workflow_event_prefix": "baf1ce7cd7ef465131f9779714b33b34d5e929f10c19c48b7a92b68089543d5a",
+    "src/artifact_migration.py:require_gate_prefix": "67196c4e07c9c428033a8bf93726a93adc22a66929cbf975019913bf60979b82",
+    "src/artifact_migration.py:require_side_effect_ledger_prefix": "7803832a9e825309cbbecf6b49d54d9dad15f2eeb0a973d803d90ae324acb7fd",
     "src/final_review_preflight.py:run_final_review_preflight": "8ea919e177653eee0f5c6ecac64ee1598f58b33126dfa1df6ab1eb0a04caac61",
     "src/final_review_preflight.py:_approved_external_paths": "24a9647addbf8df21fba7ecd0e25164e7237b00eb9c831bd7ee7b9ce1b8f5439",
-    "src/orchestrator.py:_persisted_histories": "9a392ebaac497327344362a78b1a9dd5580c1e7d046fb6e0aa3b585db0a2a978",
+    "src/orchestrator.py:_persisted_histories": "46d16ba2f5f168dbb9f86da548b7c370305003fa27f39d3979423f76f53b8d86",
     "src/orchestrator.py:_attach_record_events": "7065cd5a4554100a800dd581702c9738d89e6134736908703b715e18c9885d6b",
-    "src/orchestrator.py:_recoverable_final_denial_mirror_gap": "3b78ce8c3861bfd62f8fd8728f7346b5cff5e1b6c12ab8b3b6c0f78bdc394331",
-    "src/orchestrator.py:_historical_correction_attribution_matches": "9ca739a787d60da279c0bbd10a22d29f6a1c583d05434e704b616e5925afec35",
     "src/orchestrator.py:ProductionWorkflowDriver.finalize_audit": "ab243e85a4b66bc06e1025a688c87c651443ac32baa5b8018bb92f421b99bd69",
     "src/git_service.py:commit_managed_audit_report": "ec161c2eafd7369d9eb9ab30b1724ca01815f08ce669e94c4b322770556bc717",
 }
@@ -733,18 +664,56 @@ def test_migration_comparison_inventory_is_source_bound() -> None:
     source = _source("src/artifact_migration.py")
     source_strings = _string_constants("src/artifact_migration.py")
     document = MATRIX_PATH.read_text(encoding="utf-8")
-    assert _raise_count("src/artifact_migration.py", "mismatch") == 43
-    assert source.count("differs from state-v3") == 20
-    for marker in MIGRATION_MISMATCH_MARKERS:
+    assert _raise_count("src/artifact_migration.py", "mismatch") == 0
+    assert source.count("differs from state-v3") == 0
+    assert source.count("_recoverable_") == 0
+    assert _raise_count("src/artifact_migration.py", "ArtifactResumeError") > 0
+    for marker in (
+        "has no records; restore its record directory before resuming",
+        "structured-v2 record chain for run",
+        "finding handoff source is no longer valid",
+    ):
         assert marker in source_strings
-        assert marker in document
-
-    assert _raise_count("src/artifact_migration.py", "ArtifactResumeError") == 32
-    for marker in RESUME_ERROR_MARKERS:
-        assert marker in (source if marker == "exc.diagnostic.message" else source_strings)
+    for marker in (
+        "`_recoverable_*`: **5 → 0**",
+        "`differs from state-v3`: **20 → 0**",
+        "`mismatch(...)` in `artifact_migration.py`: **44 → 0**",
+    ):
         assert marker in document
     assert RUN_BINDING_REPLAY_MARKER in _string_constants("src/artifact_replay.py")
     assert RUN_BINDING_REPLAY_MARKER in document
+
+
+def test_structured_decision_paths_do_not_read_the_state_cache() -> None:
+    resolver = _function_node(
+        "src/artifact_migration.py", None, "resolve_resume_state"
+    )
+    locator_attributes = {
+        node.attr
+        for node in ast.walk(resolver)
+        if isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "state_or_run_id"
+    }
+    assert locator_attributes == {"run_id", "strip"}
+
+    orchestrator_source = _source("src/orchestrator.py")
+    assert orchestrator_source.count("load_workflow_state(") == 1
+    replacement = _function_node(
+        "src/orchestrator.py", None, "run_production_workflow"
+    )
+    replacement_dump = ast.dump(replacement, include_attributes=False)
+    assert "replacement_requested" in replacement_dump
+    assert "load_resumable_workflow_state" in replacement_dump
+
+    decision_guard = _function_node(
+        "src/orchestrator.py",
+        "ProductionWorkflowDriver",
+        "assert_structured_decision_context",
+    )
+    guard_dump = ast.dump(decision_guard, include_attributes=False)
+    assert "resolve_resume_state" in guard_dump
+    assert "load_workflow_state" not in guard_dump
 
 
 def test_bridge_error_inventory_is_source_bound() -> None:
@@ -1119,10 +1088,8 @@ def test_managed_audit_commit_boundary_is_source_and_document_bound() -> None:
 
 
 def test_comparison_expression_inventory_has_not_grown() -> None:
-    actual = _comparison_inventory()
-    assert actual == EXPECTED_COMPARISON_COUNTS, actual
+    assert _comparison_inventory() == EXPECTED_COMPARISON_COUNTS
 
 
 def test_recovery_and_preflight_predicate_bodies_are_frozen() -> None:
-    actual = _body_digest_inventory()
-    assert actual == EXPECTED_STRICT_BODY_DIGESTS, actual
+    assert _body_digest_inventory() == EXPECTED_STRICT_BODY_DIGESTS

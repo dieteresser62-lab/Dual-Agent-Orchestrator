@@ -39,6 +39,7 @@ from artifact_models import (
     QuotaPausePayload,
     RecordType,
     ReviewAnchorPayload,
+    ReviewEvidencePayload,
     ReviewPayload,
     ReviewValidationBindingPayload,
     Role,
@@ -135,7 +136,6 @@ from native_review_request import (
 from artifact_replay import (
     ArtifactReplayError,
     ReplayDiagnosticCode,
-    normalize_workflow_state_mirror,
     project_workflow_state,
     replay_artifacts,
     replay_findings,
@@ -192,6 +192,83 @@ def _append_run_binding(bridge: ArtifactBridge, state: WorkflowState) -> None:
         fingerprint_sha256=fingerprint,
         fingerprint_kind=FingerprintKind.CONTRACT,
     )
+
+
+def _append_test_commit_authority(
+    driver: ProductionWorkflowDriver,
+    state: WorkflowState,
+    *,
+    commit_ref: str,
+) -> WorkflowState:
+    """Persist the review/attestation facts required by a synthetic commit.
+
+    Runtime unit tests which jump across the real Git transaction must still
+    construct the same record authority that production creates before a
+    completed Slice can be projected.
+    """
+    review_state = state.with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW)
+    driver.bind_work_unit(review_state)
+    bridge = driver._artifact_bridge
+    assert bridge is not None
+    fingerprint = review_state.current_slice.start_fingerprint or "e" * 64
+    slice_id = review_state.current_slice_id
+    work_unit_id = str(review_state.current_work_unit_id)
+    attestation = append_validation_authority(
+        bridge,
+        ValidationAttestationPayload(
+            (
+                ValidationResult(
+                    CommandSpec("pytest", ("python3", "-m", "pytest")),
+                    "pass",
+                    0,
+                    "e" * 64,
+                ),
+            ),
+            Role.ORCHESTRATOR,
+            "e" * 64,
+            "ar1-" + "0" * 64,
+        ),
+        logical_id=f"test-commit-validation-{slice_id}",
+        idempotency_key=f"test-commit-validation:{slice_id}",
+        fingerprint_sha256=fingerprint,
+    )
+    review = append_provider_decision_authority(
+        bridge,
+        ReviewPayload(
+            Role.CLAUDE,
+            work_unit_id,
+            "approved",
+            (),
+            None,
+            "native-claude-review-v2",
+            "native-review-request-" + hashlib.sha256(
+                f"{review_state.run_id}:{slice_id}".encode("utf-8")
+            ).hexdigest(),
+            "d" * 64,
+            review_evidence=ReviewEvidencePayload(
+                "synthetic commit authority",
+                "the fixture skips the real Git transaction",
+                "the commit binding loses its review or attestation",
+            ),
+            pre_mortem="The synthetic binding could target the wrong Slice.",
+        ),
+        logical_id=f"test-commit-review-{slice_id}",
+        idempotency_key=f"test-commit-review:{slice_id}",
+        fingerprint_sha256=fingerprint,
+        operation=WorkflowStep.CLAUDE_SLICE_REVIEW.value,
+    )
+    bridge.append(
+        BindingPayload(
+            "commit",
+            commit_ref,
+            attestation.record_id,
+            (review.record_id,),
+        ),
+        logical_id=f"commit-{slice_id}-{commit_ref[:12]}",
+        idempotency_key=f"test-commit:{slice_id}:{commit_ref}",
+        fingerprint_sha256=fingerprint,
+    )
+    return review_state
 
 
 def test_invoke_reviewer_dispatches_native_adapter_with_provider_ledger(
@@ -979,7 +1056,7 @@ def test_structured_red_state_commit_requires_exact_chain_records_before_git(
     )
     with pytest.raises(
         WorkflowExecutionError,
-        match="attestation record differs from its state-v3 mirror",
+        match="attestation differs from the commit request",
     ):
         driver.commit_slice(
             replace(
@@ -1080,6 +1157,73 @@ def test_final_review_recovers_latest_prior_attestation_after_transition_checkpo
     assert len(recovered.events) == 1
     assert isinstance(recovered.events[0], ValidationAuditEvent)
     assert recovered.events[0].attestation == attestation
+
+
+def test_final_review_attestation_recovery_receives_record_authority(
+    monkeypatch,
+) -> None:
+    attestation = ValidationAttestation(
+        "validation-record-authority",
+        "a" * 64,
+        ("pytest",),
+        (ValidationRecord(ValidationStatus.PASS, "pytest", 0, "ok"),),
+        "b" * 64,
+        "passed",
+    )
+    state = init_workflow_state(
+        run_id="final-record-authority",
+        task_file="task.md",
+        branch="feature/final-record-authority",
+        branch_base="a" * 40,
+        slice_count=1,
+    ).bind_slice_plan(
+        (PlannedSlice(1, "implementation", ("src/core.py",)),),
+        first_start_commit="a" * 40,
+    ).complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    ).bind_current_slice_git_boundary(
+        start_commit="a" * 40,
+        scope_paths=("src/core.py",),
+        start_fingerprint="0" * 64,
+    ).complete_current_slice(
+        commit_ref="b" * 40,
+    ).start_final_review_work_unit()
+    current = WorkflowHistory(state.current_work_unit_id)
+    replay = SimpleNamespace(records=())
+    read_blob = lambda _ref: b""  # noqa: E731 - identity is asserted below
+    seen = {}
+
+    def projected_histories(_state, structured_replay=None, blob_reader=None):
+        seen["replay"] = structured_replay
+        seen["read_blob"] = blob_reader
+        return {1: WorkflowHistory(1, attestations=(attestation,))}
+
+    monkeypatch.setattr(orchestrator, "_persisted_histories", projected_histories)
+
+    recovered = orchestrator._recover_final_review_attestation(
+        state,
+        current,
+        replay,
+        read_blob,
+    )
+
+    assert seen == {"replay": replay, "read_blob": read_blob}
+    assert recovered.attestations == (attestation,)
+
+
+def test_history_payload_does_not_archive_record_reference_projection() -> None:
+    record_projection = {
+        "1": {
+            "workflow_event_record_refs": ("ar1-" + "a" * 64,),
+            "validation_attestation_record_refs": (),
+        }
+    }
+
+    payload = orchestrator._history_payload(record_projection, WorkflowHistory(2))
+
+    assert payload == {"current": WorkflowHistory(2).to_dict(), "archive": []}
 
 
 def test_bind_work_unit_preserves_latest_driver_owned_runtime_history(
@@ -1312,10 +1456,7 @@ def test_structured_bind_persists_contract_and_active_work_unit_once(
         RecordType.WORK_UNIT,
     )
     projection = project_workflow_state(replay_artifacts(chain, state.run_id))
-    assert (
-        normalize_workflow_state_mirror(state, replay_artifacts(chain, state.run_id))
-        == projection.canonical_document
-    )
+    assert driver.active_state == projection.state
 
 
 def test_r2_transition_records_precede_dispatch_guard_across_round_gate_resume_and_slice(
@@ -1375,9 +1516,7 @@ def test_r2_transition_records_precede_dispatch_guard_across_round_gate_resume_a
             ArtifactStore(repository, state.run_id).load_chain(), state.run_id
         )
         assert driver.active_state is not None
-        assert json.loads(normalize_workflow_state_mirror(driver.active_state, replay)) == (
-            project_workflow_state(replay).to_document()
-        )
+        assert driver.active_state == project_workflow_state(replay).state
         assert replay.workflow_cursor is not None
         assert replay.workflow_cursor.slice_id == str(candidate.current_slice_id)
         assert replay.workflow_cursor.work_unit_id == str(candidate.current_work_unit_id)
@@ -1478,10 +1617,7 @@ def test_r9_resume_reconciles_one_durable_transition_without_its_event(
         matching[0].record_refs,
     ) == ("transition", "1", "1", None, (transition.record_id,))
     assert resumed.active_state is not None
-    assert (
-        normalize_workflow_state_mirror(resumed.active_state, replay)
-        == project_workflow_state(replay).canonical_document
-    )
+    assert resumed.active_state == project_workflow_state(replay).state
 
 
 def test_r2_policy_records_denial_count_and_limit_extension_as_separate_facts(
@@ -1529,20 +1665,21 @@ def test_r2_policy_records_denial_count_and_limit_extension_as_separate_facts(
         )
 
     denied = state
-    for _ in range(4):
-        denied = denied.record_review_denial(
-            reviewer=Reviewer.CLAUDE,
-            open_findings=("C-01",),
-            return_step=WorkflowStep.CODEX_CORRECTION,
+    for return_count in range(1, 4):
+        unit = replace(denied.current_work_unit, codex_return_count=return_count)
+        denied = replace(
+            denied,
+            work_units=(*denied.work_units[:-1], unit),
         )
         driver.bind_work_unit(denied)
 
-    assert policies()[-1] == WorkflowPolicyPayload(work_unit_id, 4, 4)
+    assert policies()[-1] == WorkflowPolicyPayload(work_unit_id, 3, 4)
     before_resume = len(policies())
-    resumed = denied.resume_after_user_decision()
+    unit = replace(denied.current_work_unit, max_codex_returns=8)
+    resumed = replace(denied, work_units=(*denied.work_units[:-1], unit))
     driver.bind_work_unit(resumed)
 
-    assert policies()[-1] == WorkflowPolicyPayload(work_unit_id, 4, 8)
+    assert policies()[-1] == WorkflowPolicyPayload(work_unit_id, 3, 8)
     assert len(policies()) == before_resume + 1
     driver.bind_work_unit(resumed)
     assert len(policies()) == before_resume + 1
@@ -1656,8 +1793,10 @@ def test_r3_each_slice_start_writes_one_boundary_and_scope_extension_is_revision
         config=orchestrator.OrchestratorConfig(repo_root=repository),
         allowed_roots=(repository,),
     )
-    driver.bind_work_unit(state)
-    second = state.complete_current_slice(commit_ref="d" * 40).start_work_unit(
+    reviewed = _append_test_commit_authority(
+        driver, state, commit_ref="d" * 40
+    )
+    second = reviewed.complete_current_slice(commit_ref="d" * 40).start_work_unit(
         slice_id=2,
         kind=WorkUnitKind.SLICE,
         step=WorkflowStep.CODEX_IMPLEMENTATION,
@@ -3059,14 +3198,14 @@ def test_native_codex_record_ahead_recovery_completes_finding_responses(
     )
 
 
-def test_combined_native_finding_authority_rejects_state_mirror_drift(
+def test_combined_native_finding_authority_ignores_projection_drift(
     tmp_path: Path,
 ) -> None:
     repository = _repository(tmp_path, "feature/combined-native-authority")
     task = repository / "task.md"
     _write_task(task, "feature/combined-native-authority", "src/runtime.py")
     head = _git(repository, "rev-parse", "HEAD")
-    final_state = (
+    slice_state = (
         init_workflow_state(
             run_id="combined-native-authority",
             task_file=str(task),
@@ -3096,8 +3235,6 @@ def test_combined_native_finding_authority_rejects_state_mirror_drift(
             scope_paths=("src/runtime.py",),
             start_fingerprint="c" * 64,
         )
-        .complete_current_slice(commit_ref=head)
-        .start_final_review_work_unit()
     )
     driver = ProductionWorkflowDriver(
         repository_root=repository,
@@ -3106,6 +3243,12 @@ def test_combined_native_finding_authority_rejects_state_mirror_drift(
         config=orchestrator.OrchestratorConfig(repo_root=repository),
         allowed_roots=(repository,),
     )
+    reviewed = _append_test_commit_authority(
+        driver, slice_state, commit_ref=head
+    )
+    final_state = reviewed.complete_current_slice(
+        commit_ref=head
+    ).start_final_review_work_unit()
     driver.bind_work_unit(final_state)
     historical_finding = FindingRecord(
         finding_id="C-99",
@@ -3217,9 +3360,8 @@ def test_combined_native_finding_authority_rejects_state_mirror_drift(
     assert driver.authoritative_native_findings(
         correction_state, (closed_second, finding)
     ) == (finding, closed_second)
-    # The state-v3 history remains a complete cross-work-unit ledger. Closed
-    # findings outside the correction record's affected IDs must neither enter
-    # the Codex correction request nor create a false mirror divergence.
+    # Closed findings outside the correction record's affected IDs must not
+    # enter the Codex correction request.
     assert driver.authoritative_native_findings(
         correction_state, (historical_finding, closed_second, finding)
     ) == (finding, closed_second)
@@ -3268,25 +3410,17 @@ def test_combined_native_finding_authority_rejects_state_mirror_drift(
         finding_id="C-04",
         summary="This mirror finding has no authoritative record.",
     )
-    with pytest.raises(
-        WorkflowExecutionError,
-        match="record-native finding carry-forward differs from the state-v3 mirror",
-    ):
-        driver.carry_forward_native_findings(
-            round_two,
-            (later_blocker, closed_second, finding, missing_record_finding),
-        )
-    with pytest.raises(
-        WorkflowExecutionError,
-        match="differs from the state-v3 mirror",
-    ):
-        driver.authoritative_native_findings(
-            correction_state,
-            (
-                replace(closed_second, summary="Tampered closed mirror summary."),
-                replace(finding, summary="Tampered state-only summary."),
-            ),
-        )
+    assert driver.carry_forward_native_findings(
+        round_two,
+        (later_blocker, closed_second, finding, missing_record_finding),
+    ) == (finding, closed_second, later_blocker, historical_finding)
+    assert driver.authoritative_native_findings(
+        correction_state,
+        (
+            replace(closed_second, summary="Tampered closed mirror summary."),
+            replace(finding, summary="Tampered state-only summary."),
+        ),
+    ) == (finding, closed_second, later_blocker)
 
 
 @pytest.mark.parametrize(
@@ -3343,6 +3477,7 @@ def test_native_codex_plan_and_final_recovery_are_raw_and_record_ahead_safe(
         ),
     )
     current_fingerprint = task_digest
+    commit_authority_state: WorkflowState | None = None
     if request_kind is NativeCodexRequestKind.CORRECTION:
         state = (
             state.complete_current_work_unit()
@@ -3360,7 +3495,7 @@ def test_native_codex_plan_and_final_recovery_are_raw_and_record_ahead_safe(
         )
         current_fingerprint = "c" * 64
     elif request_kind is NativeCodexRequestKind.FINAL_REPORT:
-        state = (
+        commit_authority_state = (
             state.complete_current_work_unit()
             .start_work_unit(
                 slice_id=1,
@@ -3372,9 +3507,10 @@ def test_native_codex_plan_and_final_recovery_are_raw_and_record_ahead_safe(
                 scope_paths=("src/runtime.py",),
                 start_fingerprint="c" * 64,
             )
-            .complete_current_slice(commit_ref=head)
-            .start_final_review_work_unit()
         )
+        state = commit_authority_state.complete_current_slice(
+            commit_ref=head
+        ).start_final_review_work_unit()
         current_fingerprint = "f" * 64
     driver = ProductionWorkflowDriver(
         repository_root=repository,
@@ -3383,6 +3519,10 @@ def test_native_codex_plan_and_final_recovery_are_raw_and_record_ahead_safe(
         config=orchestrator.OrchestratorConfig(repo_root=repository),
         allowed_roots=(repository,),
     )
+    if commit_authority_state is not None:
+        _append_test_commit_authority(
+            driver, commit_authority_state, commit_ref=head
+        )
     driver.bind_work_unit(state)
     contract = CodexStepContract(
         f"native-codex-{request_kind.value}-recovery",
@@ -3611,8 +3751,10 @@ def test_multi_slice_plan_binding_pins_original_approved_commit_not_slice_start(
         allowed_roots=(repository,),
     )
 
-    driver.bind_work_unit(state)
-    slice_two = state.complete_current_slice(
+    reviewed = _append_test_commit_authority(
+        driver, state, commit_ref=second_slice_start
+    )
+    slice_two = reviewed.complete_current_slice(
         commit_ref=second_slice_start,
     ).start_work_unit(
         slice_id=2,
@@ -3643,7 +3785,7 @@ def test_correction_work_unit_persists_correction_work_unit_payload_with_finding
     task = repository / "task.md"
     _write_task(task, "feature/structured-correction", "src/runtime.py")
     head = _git(repository, "rev-parse", "HEAD")
-    state = init_workflow_state(
+    slice_state = init_workflow_state(
         run_id="structured-correction",
         task_file=str(task),
         branch="feature/structured-correction",
@@ -3661,13 +3803,6 @@ def test_correction_work_unit_persists_correction_work_unit_payload_with_finding
         start_commit=head,
         scope_paths=("src/runtime.py",),
         start_fingerprint="b" * 64,
-    ).complete_current_slice(
-        commit_ref=head,
-    ).start_final_review_work_unit().complete_current_work_unit().start_correction_work_unit(
-        start_commit=head,
-        scope_paths=("src/runtime.py",),
-        start_fingerprint="c" * 64,
-        finding_ids=("C-14", "C-15"),
     )
     driver = ProductionWorkflowDriver(
         repository_root=repository,
@@ -3677,6 +3812,17 @@ def test_correction_work_unit_persists_correction_work_unit_payload_with_finding
         allowed_roots=(repository,),
     )
 
+    reviewed = _append_test_commit_authority(
+        driver, slice_state, commit_ref=head
+    )
+    state = reviewed.complete_current_slice(
+        commit_ref=head,
+    ).start_final_review_work_unit().complete_current_work_unit().start_correction_work_unit(
+        start_commit=head,
+        scope_paths=("src/runtime.py",),
+        start_fingerprint="c" * 64,
+        finding_ids=("C-14", "C-15"),
+    )
     driver.bind_work_unit(state)
 
     correction_records = tuple(
@@ -4719,6 +4865,41 @@ def test_force_new_watch_task_intentionally_replaces_unrelated_existing_state(
     )
 
 
+def test_force_new_discards_a_malformed_projection_cache(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repository = _repository(tmp_path, "feature/malformed-cache-source")
+    _git(repository, "switch", "master")
+    task = tmp_path / "malformed-cache-task.md"
+    _write_task(task, "feature/malformed-cache-target", "src/new.py")
+    state_file = repository / ".orchestrator" / "state.json"
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text('{"cache_format":"broken"}\n', encoding="utf-8")
+    args = _args(repository, task)
+    args.watch_run_id = "replacement-after-malformed-cache"
+    captured = {}
+
+    class StateCaptured(RuntimeError):
+        pass
+
+    def capture_state(_engine, state, _context, _history):
+        captured["state"] = state
+        raise StateCaptured
+
+    monkeypatch.setattr(WorkflowEngine, "run_current_work_unit", capture_state)
+    monkeypatch.chdir(repository)
+
+    with pytest.raises(StateCaptured):
+        run_production_workflow(task, args, force_new=True)
+
+    assert captured["state"].run_id == "replacement-after-malformed-cache"
+    loaded = orchestrator.load_workflow_state(
+        state_file,
+        allowed_roots=(repository, task.parent.resolve()),
+    )
+    assert loaded.run_id == "replacement-after-malformed-cache"
+
+
 def test_watch_state_schema_error_is_a_single_non_retryable_policy_halt(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -4790,7 +4971,7 @@ def test_head_drift_after_plan_becomes_typed_persisted_halt(
     persisted = json.loads(
         (repository / ".orchestrator" / "state.json").read_text(encoding="utf-8")
     )
-    assert persisted["work_units"][-1]["status"] == "awaiting_user_decision"
+    assert persisted["state"]["work_units"][-1]["status"] == "awaiting_user_decision"
 
 
 def test_empty_implementation_is_a_typed_halt_not_cli_crash(

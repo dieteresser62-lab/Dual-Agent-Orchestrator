@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-from collections import Counter
 import hashlib
 import json
 import logging
@@ -45,12 +44,8 @@ from artifact_bridge import (
 )
 from artifact_migration import (
     ArtifactResumeError,
-    assert_invocation_failure_mirror,
-    assert_run_binding_mirror,
-    assert_gate_mirror,
-    assert_slice_boundary_mirror,
-    assert_workflow_status_mirror,
     require_gate_prefix,
+    require_side_effect_ledger_prefix,
     require_workflow_event_prefix,
     require_workflow_status_prefix,
     resolve_resume_state,
@@ -168,6 +163,8 @@ from state_io import (
     save_workflow_state,
     write_file,
     write_workflow_checkpoint,
+    write_workflow_projection_checkpoint,
+    write_workflow_state_projection,
     workflow_checkpoint_path,
 )
 from task_contract import TaskContract, TaskMode, parse_task_contract
@@ -221,7 +218,6 @@ from workflow_state import (
 from content_authority import RAW_OUTPUT_DIGEST_V1, ValidationCapture
 from side_effects import (
     decode_file_write_content,
-    encode_file_write_content,
     file_state_digest,
     Reconciliation,
     ReconciliationOutcome,
@@ -393,55 +389,6 @@ class ProductionWorkflowDriver(WorkflowDriver):
 
     def _write_text_side_effect_file(self, path: Path, content: str) -> None:
         self._write_side_effect_file(path, content, normalized_text=True)
-
-    def _execute_projection_write(
-        self,
-        path: Path,
-        expected: bytes,
-        perform,
-    ) -> None:
-        bridge = self._artifact_bridge
-        state = self.active_state
-        if bridge is None or state is None or state.task_digest is None:
-            perform()
-            return
-        try:
-            target = path.resolve().relative_to(self.root).as_posix()
-        except ValueError as exc:
-            raise WorkflowExecutionError("projection target is outside the repository") from exc
-        expected_sha256 = sha256_bytes(expected)
-        prior_sha256 = file_state_digest(path)
-        if prior_sha256 == expected_sha256:
-            return
-        spec = SideEffectSpec(
-            "file_write",
-            "projection",
-            (
-                target,
-                expected_sha256,
-                prior_sha256,
-                encode_file_write_content(expected),
-            ),
-            state.task_digest,
-            FingerprintKind.CONTRACT,
-        )
-
-        def perform_projection() -> tuple[None, str]:
-            perform()
-            actual = file_state_digest(path)
-            if actual != expected_sha256:
-                raise SideEffectReconciliationError(
-                    "projection target differs before result completion"
-                )
-            return None, actual
-
-        SideEffectExecutor(bridge).execute(
-            spec,
-            reconcile=lambda: reconcile_file_write(
-                path, spec.operation[1], spec.operation[2]
-            ),
-            perform=perform_projection,
-        )
 
     def _reconcile_pending_side_effects(
         self,
@@ -654,6 +601,9 @@ class ProductionWorkflowDriver(WorkflowDriver):
         self.active_state = state
         self._bind_artifact_store(state)
         self._persist_structured_baseline(state)
+        if self._artifact_bridge is not None:
+            self.active_state = resolve_resume_state(self.root, state.run_id).state
+            state = self.active_state
         if state.current_work_unit.kind is WorkUnitKind.PLAN and not self.last_codex_output:
             artifact = (
                 self.root / ".orchestrator" / "runs" / state.run_id
@@ -702,68 +652,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
             raise WorkflowExecutionError(
                 "structured decision context has no authoritative replay result"
             )
-        state = resolution.state
-        self.active_state = state
-        chain = replay.records
-        latest_record_reviews: dict[str, ArtifactRecord] = {}
-        for item in chain:
-            if isinstance(item.payload, ReviewPayload):
-                latest_record_reviews[item.payload.work_unit_id] = item
-        record_reviews = Counter(
-            (
-                item.payload.work_unit_id,
-                item.payload.reviewer.value,
-                item.fingerprint.sha256,
-                item.payload.verdict,
-                item.payload.finding_ids,
-            )
-            for item in latest_record_reviews.values()
-        )
-        mirror_reviews: Counter[tuple[object, ...]] = Counter()
-        for work_unit_id, history in _persisted_histories(state).items():
-            result = history.latest_claude_review  # allowlist:provider -- canonical history field
-            fingerprint = history.last_claude_fingerprint  # allowlist:provider -- canonical history field
-            if result is None and fingerprint is None:
-                continue
-            if result is None or fingerprint is None or result.validation is None:
-                raise WorkflowExecutionError(
-                    "structured review mirror is missing its review or validation binding"
-                )
-            mirror_reviews[
-                (
-                    str(work_unit_id),
-                    result.reviewer.value,
-                    fingerprint,
-                    (
-                        "stop"
-                        if result.stopped
-                        else "approved"
-                        if result.approval is True
-                        else "denied"
-                    ),
-                    tuple(item.finding_id for item in result.findings),
-                )
-            ] += 1
-        # Compatibility for runs checkpointed by the former final-denial
-        # transition bug: the authoritative denied ReviewPayload and the
-        # following correction work unit were durable, but the redundant
-        # ReviewAuditEvent was not archived before the work-unit switch.  Accept
-        # only that exact, fully evidenced transition; every other record/mirror
-        # difference remains fail-closed.
-        recoverable = _recoverable_final_denial_mirror_gap(
-            state, record_reviews, mirror_reviews, chain=chain
-        )
-        if recoverable:
-            logger.warning(
-                "Accepting an authoritative final-review denial whose legacy "
-                "state-v3 mirror is represented by the immediately following "
-                "correction work unit."
-            )
-            mirror_reviews.update(recoverable)
-        if record_reviews != mirror_reviews:
-            raise WorkflowExecutionError(
-                "structured reviewer decisions differ from the state-v3 mirror"
-            )
+        self.active_state = resolution.state
 
     def _persist_structured_baseline(self, state: WorkflowState) -> None:
         bridge = self._artifact_bridge
@@ -788,8 +677,6 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 allow_incomplete_review_tail=True,
                 allow_finding_import_bootstrap=import_only_prefix,
             )
-            if not import_only_prefix:
-                assert_run_binding_mirror(existing_replay, state, binding)
             if existing_replay.pending_workflow_event_record_id is not None:
                 self._reconcile_pending_workflow_event(existing_replay)
                 existing_replay = replay_artifacts(
@@ -808,23 +695,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
             if not import_only_prefix:
                 require_workflow_status_prefix(existing_replay)
                 require_gate_prefix(existing_replay)
-                failure_mirror = assert_invocation_failure_mirror(
-                    existing_replay, state
-                )
-                if failure_mirror is not state:
-                    raise ArtifactResumeError(
-                        "record-ahead invocation failure requires resume "
-                        "resolution before baseline"
-                    )
-                if not any(
-                    isinstance(record.payload, SideEffectPayload)
-                    and record.payload.effect_class == "ledger"
-                    and record.payload.phase == "result"
-                    for record in existing_replay.records
-                ):
-                    raise WorkflowExecutionError(
-                        "structured-v2 chain predates the side-effect ledger and cannot be backfilled"
-                    )
+                require_side_effect_ledger_prefix(existing_replay)
         identity_record = bridge.append(
             RunIdentityPayload(
                 task_file=state.task_file,
@@ -917,6 +788,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
                     target_branch=state.target_branch or state.branch,
                     scope_paths=state.task_scope_patterns,
                     assignment_sha256=state.task_digest,
+                    work_plan_path=state.work_plan_path,
                 ),
                 logical_id="task-contract",
                 idempotency_key="task-contract",
@@ -1102,10 +974,6 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 fingerprint_kind=FingerprintKind.CONTRACT,
             )
 
-        assert_workflow_status_mirror(
-            replay_artifacts(bridge.store.load_chain(), state.run_id), state
-        )
-
     def _persist_slice_boundaries(self, state: WorkflowState) -> None:
         """Append exact Slice Git/scope facts before any guarded side effect."""
         bridge = self._artifact_bridge
@@ -1142,10 +1010,6 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 fingerprint_kind=FingerprintKind.CONTRACT,
             )
             recorded[payload.slice_id] = payload
-
-        assert_slice_boundary_mirror(
-            replay_artifacts(bridge.store.load_chain(), state.run_id), state
-        )
 
     @staticmethod
     def _gate_transition_payload(unit: WorkUnitRecord) -> GateTransitionPayload:
@@ -1252,7 +1116,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 gate_record = self._matching_gate_record(chain, decision)
                 if gate_record is None:
                     raise WorkflowExecutionError(
-                        "gate decision mirror has no authoritative GatePayload"
+                        "gate decision projection has no authoritative GatePayload"
                     )
                 binding = (str(unit.work_unit_id), gate_record.record_id)
                 if binding in bound:
@@ -1262,10 +1126,6 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 )
                 chain = (*chain, decision_record)
                 bound.add(binding)
-
-        assert_gate_mirror(
-            replay_artifacts(chain, state.run_id), state
-        )
 
     def _append_workflow_transition(
         self,
@@ -1735,35 +1595,46 @@ class ProductionWorkflowDriver(WorkflowDriver):
         )
 
     def _persist_bootstrap_state(self, state: WorkflowState) -> None:
-        expected = (
-            json.dumps(state.to_dict(), indent=2, ensure_ascii=True) + "\n"
-        ).encode("utf-8")
-        self._execute_projection_write(
-            self.state_file,
-            expected,
-            lambda: save_workflow_state(
+        if state.effective_protocol_mode is ProtocolMode.LEGACY_STATE_V3:
+            save_workflow_state(
                 self.state_file,
                 state,
                 allowed_roots=self.allowed_roots,
                 replace_existing_run_id=self._replace_existing_run_id,
-            ),
+            )
+            write_workflow_checkpoint(
+                self.checkpoint_dir / state.run_id,
+                state,
+                allowed_roots=self.allowed_roots,
+            )
+            self._replace_existing_run_id = None
+            self.active_state = state
+            return
+        resolution = resolve_resume_state(self.root, state.run_id)
+        write_workflow_state_projection(
+            self.state_file,
+            resolution,
+            allowed_roots=self.allowed_roots,
         )
-        checkpoint_root = self.checkpoint_dir / state.run_id
+        projected = resolution.state
+        checkpoint_root = self.checkpoint_dir / projected.run_id
         checkpoint_path = workflow_checkpoint_path(
             checkpoint_root,
-            work_unit_id=state.current_work_unit_id,
-            slice_id=state.current_slice_id,
-            round_number=state.current_work_unit.round_number,
+            work_unit_id=projected.current_work_unit_id,
+            slice_id=projected.current_slice_id,
+            round_number=projected.current_work_unit.round_number,
         )
-        self._execute_projection_write(
-            checkpoint_path,
-            expected,
-            lambda: write_workflow_checkpoint(
-                checkpoint_root, state, allowed_roots=self.allowed_roots
-            ),
+        written = write_workflow_projection_checkpoint(
+            checkpoint_root,
+            resolution,
+            allowed_roots=self.allowed_roots,
         )
+        if written != checkpoint_path.resolve():
+            raise WorkflowExecutionError(
+                "workflow projection checkpoint path differs from its cursor"
+            )
         self._replace_existing_run_id = None
-        self.active_state = state
+        self.active_state = projected
 
     def invoke_codex(self, invocation: CodexInvocation) -> NativeAgentCodexOutput:
         state = self.active_state
@@ -1825,7 +1696,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
     def authoritative_native_findings(
         self,
         state: WorkflowState,
-        mirror_findings: tuple[FindingRecord, ...],
+        _projected_findings: tuple[FindingRecord, ...],
     ) -> tuple[FindingRecord, ...]:
         """Return the current work unit's finding state only from accepted records."""
         active = self.active_state
@@ -1861,39 +1732,20 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 projected = reduced.request_subset(
                     finding_ids=attribution.finding_ids
                 ).findings
-                correction_ids = frozenset(attribution.finding_ids)
-                mirror_findings = tuple(
-                    finding
-                    for finding in mirror_findings
-                    if finding.finding_id in correction_ids
-                )
             else:
                 projected = reduced.ledger.findings
         except (ArtifactReplayError, ValueError) as exc:
             raise WorkflowExecutionError(
                 f"authoritative finding replay failed: {exc}"
             ) from exc
-        canonical_mirror = tuple(
-            sorted(mirror_findings, key=lambda item: item.finding_id)
-        )
-        if projected != canonical_mirror:
-            raise WorkflowExecutionError(
-                "authoritative finding replay differs from the state-v3 mirror"
-            )
         return projected
 
     def carry_forward_native_findings(
         self,
         state: WorkflowState,
-        current_findings: tuple[FindingRecord, ...],
+        _current_findings: tuple[FindingRecord, ...],
     ) -> tuple[FindingRecord, ...]:
-        """Restore the complete record-native ledger at a work-unit boundary.
-
-        The replay may add findings from earlier work units, but it must contain
-        every finding already present in the current state mirror with identical
-        semantics.  Otherwise carrying the replay into the next work unit would
-        silently bless a damaged or incomplete record chain as the new mirror.
-        """
+        """Restore the complete record-native ledger at a work-unit boundary."""
         active = self.active_state
         bridge = self._artifact_bridge
         if (
@@ -1914,18 +1766,6 @@ class ProductionWorkflowDriver(WorkflowDriver):
             raise WorkflowExecutionError(
                 f"native finding carry-forward failed: {exc}"
             ) from exc
-        current_ids = {finding.finding_id for finding in current_findings}
-        carried_current = tuple(
-            finding for finding in projected if finding.finding_id in current_ids
-        )
-        canonical_current = tuple(
-            sorted(current_findings, key=lambda finding: finding.finding_id)
-        )
-        if carried_current != canonical_current:
-            raise WorkflowExecutionError(
-                "record-native finding carry-forward differs from the "
-                "state-v3 mirror"
-            )
         return projected
 
     def _native_codex_response_path(self, invocation: CodexInvocation) -> Path:
@@ -2209,7 +2049,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
         return target
 
     def persist_review_packet(self, packet: ReviewPacket) -> None:
-        """Bind locally generated review evidence before it enters the mirror."""
+        """Bind locally generated review evidence before it enters projection."""
         bridge = self._artifact_bridge
         state = self.active_state
         if bridge is None or state is None:
@@ -2657,18 +2497,6 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 raise WorkflowExecutionError(
                     "native reviewer recovery record differs from the rebuilt request"
                 )
-        if any(
-            isinstance(event, ReviewAuditEvent)
-            and event.round_number == invocation.round_number
-            and event.result.reviewer is AgentRole.CLAUDE
-            and event.result.validation is not None
-            and event.result.validation.diff_fingerprint == invocation.fingerprint
-            for event in history.events
-        ):
-            raise WorkflowExecutionError(
-                "native reviewer decision is already mirrored but the workflow step "
-                "did not advance"
-            )
         matching_attestations = tuple(
             item
             for item in chain
@@ -2776,59 +2604,60 @@ class ProductionWorkflowDriver(WorkflowDriver):
         ):
             return None
 
-        mirrored = {
-            (
-                event.round_number,
-                event.result.validation.diff_fingerprint,
-                (
-                    "stop"
-                    if event.result.stopped
-                    else "approved"
-                    if event.result.approval is True
-                    else "denied"
-                ),
-                tuple(item.finding_id for item in event.result.findings),
-            )
-            for event in history.events
-            if isinstance(event, ReviewAuditEvent)
-            and event.result.reviewer is AgentRole.CLAUDE
-            and event.result.validation is not None
-        }
         chain = bridge.store.load_chain()
-        pending: list[tuple[int, ArtifactRecord]] = []
-        logical_prefix = f"review-claude-{unit.work_unit_id}-"
-        for record in chain:
-            payload = record.payload
-            if (
-                not isinstance(payload, ReviewPayload)
-                or payload.reviewer is not Role.CLAUDE
-                or payload.work_unit_id != str(unit.work_unit_id)
-                or payload.transport_schema != NATIVE_CLAUDE_REVIEW_TRANSPORT
-                or not record.logical_id.startswith(logical_prefix)
-            ):
-                continue
-            suffix = record.logical_id.removeprefix(logical_prefix)
-            if not suffix.isdigit() or int(suffix) < 1:
-                raise WorkflowExecutionError(
-                    "native reviewer recovery record has an invalid logical round"
-                )
-            round_number = int(suffix)
-            signature = (
-                round_number,
-                record.fingerprint.sha256,
-                payload.verdict,
-                payload.finding_ids,
+        try:
+            replay = replay_artifacts(
+                chain,
+                state.run_id,
+                allow_incomplete_review_tail=True,
             )
-            if signature not in mirrored:
-                pending.append((round_number, record))
-        if not pending:
-            return None
-        if len(pending) != 1:
+        except ArtifactReplayError as exc:
             raise WorkflowExecutionError(
-                "pre-policy native reviewer recovery has multiple pending decisions"
+                f"pre-policy native reviewer recovery cannot replay records: {exc}"
+            ) from exc
+        pending_record_id = replay.pending_review_record_id
+        logical_prefix = f"review-claude-{unit.work_unit_id}-"
+        if pending_record_id is not None:
+            record = next(
+                (item for item in chain if item.record_id == pending_record_id),
+                None,
             )
-
-        round_number, record = pending[0]
+        else:
+            # A complete review bundle and WorkflowEvent can be durable before
+            # the transition it decides. The current record-derived round and
+            # cursor identify that decision-ahead window without consulting
+            # runtime history or a state cache.
+            logical_id = f"{logical_prefix}{unit.round_number}"
+            candidates = tuple(
+                item
+                for item in chain
+                if isinstance(item.payload, ReviewPayload)
+                and item.logical_id == logical_id
+            )
+            if not candidates:
+                return None
+            if len(candidates) != 1:
+                raise WorkflowExecutionError(
+                    "pre-policy native reviewer recovery has duplicate round authority"
+                )
+            record = candidates[0]
+        if (
+            record is None
+            or not isinstance(record.payload, ReviewPayload)
+            or record.payload.reviewer is not Role.CLAUDE
+            or record.payload.work_unit_id != str(unit.work_unit_id)
+            or record.payload.transport_schema != NATIVE_CLAUDE_REVIEW_TRANSPORT
+            or not record.logical_id.startswith(logical_prefix)
+        ):
+            raise WorkflowExecutionError(
+                "pre-policy native reviewer recovery tail differs from the active work unit"
+            )
+        suffix = record.logical_id.removeprefix(logical_prefix)
+        if not suffix.isdigit() or int(suffix) < 1:
+            raise WorkflowExecutionError(
+                "native reviewer recovery record has an invalid logical round"
+            )
+        round_number = int(suffix)
         payload = record.payload
         assert isinstance(payload, ReviewPayload)
         if payload.request_id is None or payload.response_sha256 is None:
@@ -4225,7 +4054,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 structured_attestation.payload.content_record_id,
             ):
                 raise WorkflowExecutionError(
-                    "structured commit attestation record differs from its state-v3 mirror"
+                    "structured commit attestation differs from the commit request"
                 )
             if (
                 current_review_record is None
@@ -4235,7 +4064,7 @@ class ProductionWorkflowDriver(WorkflowDriver):
                 )
             ):
                 raise WorkflowExecutionError(
-                    "structured commit review record differs from its state-v3 mirror"
+                    "structured commit review differs from the commit request"
                 )
             if (
                 not request.attestation.passed
@@ -4476,39 +4305,46 @@ class ProductionWorkflowDriver(WorkflowDriver):
                     f"structured audit dual-write mismatch: {exc}"
                 ) from exc
             raise
-        replacement_run_id = self._replace_existing_run_id
-        expected = (
-            json.dumps(persisted.to_dict(), indent=2, ensure_ascii=True) + "\n"
-        ).encode("utf-8")
-        self.active_state = persisted
-        self._execute_projection_write(
-            self.state_file,
-            expected,
-            lambda: save_workflow_state(
+        if persisted.effective_protocol_mode is ProtocolMode.LEGACY_STATE_V3:
+            save_workflow_state(
                 self.state_file,
                 persisted,
                 allowed_roots=self.allowed_roots,
-                replace_existing_run_id=replacement_run_id,
-            ),
-        )
-        checkpoint_root = self.checkpoint_dir / persisted.run_id
-        checkpoint_path = workflow_checkpoint_path(
-            checkpoint_root,
-            work_unit_id=persisted.current_work_unit_id,
-            slice_id=persisted.current_slice_id,
-            round_number=persisted.current_work_unit.round_number,
-        )
-        self._execute_projection_write(
-            checkpoint_path,
-            expected,
-            lambda: write_workflow_checkpoint(
-                checkpoint_root,
+                replace_existing_run_id=self._replace_existing_run_id,
+            )
+            write_workflow_checkpoint(
+                self.checkpoint_dir / persisted.run_id,
                 persisted,
                 allowed_roots=self.allowed_roots,
-            ),
+            )
+            self._replace_existing_run_id = None
+            self.active_state = persisted
+            return
+        resolution = resolve_resume_state(self.root, persisted.run_id)
+        projected = resolution.state
+        write_workflow_state_projection(
+            self.state_file,
+            resolution,
+            allowed_roots=self.allowed_roots,
         )
+        checkpoint_root = self.checkpoint_dir / projected.run_id
+        checkpoint_path = workflow_checkpoint_path(
+            checkpoint_root,
+            work_unit_id=projected.current_work_unit_id,
+            slice_id=projected.current_slice_id,
+            round_number=projected.current_work_unit.round_number,
+        )
+        written = write_workflow_projection_checkpoint(
+            checkpoint_root,
+            resolution,
+            allowed_roots=self.allowed_roots,
+        )
+        if written != checkpoint_path.resolve():
+            raise WorkflowExecutionError(
+                "workflow projection checkpoint path differs from its cursor"
+            )
         self._replace_existing_run_id = None
-        self.active_state = persisted
+        self.active_state = projected
 
     def _project_audit(self, state: WorkflowState, history: WorkflowHistory) -> None:
         """Write only managed audit blocks when the persisted plan names a target."""
@@ -4784,6 +4620,20 @@ def _persisted_histories(
     raw = state.runtime_history
     if not isinstance(raw, dict):
         return {}
+    if raw and all(
+        isinstance(key, str)
+        and key.isdigit()
+        and isinstance(value, dict)
+        and "workflow_event_record_refs" in value
+        for key, value in raw.items()
+    ):
+        histories = {
+            int(key): WorkflowHistory(int(key))
+            for key in raw
+        }
+        if structured_replay is not None and read_blob is not None:
+            return _attach_record_events(histories, structured_replay, read_blob)
+        return histories
     candidates: list[object] = []
     if set(raw) == {"current", "archive"}:
         archive = raw.get("archive")
@@ -4955,114 +4805,11 @@ def _attach_record_events(
     return projected
 
 
-def _recoverable_final_denial_mirror_gap(
-    state: WorkflowState,
-    record_reviews: Counter[tuple[object, ...]],
-    mirror_reviews: Counter[tuple[object, ...]],
-    *,
-    chain: tuple[ArtifactRecord, ...] = (),
-) -> Counter[tuple[object, ...]]:
-    """Recognize only the historical final-denial checkpoint ordering defect."""
-    missing_reviews = record_reviews - mirror_reviews
-    if not missing_reviews or mirror_reviews - record_reviews:
-        return Counter()
-    units = {item.work_unit_id: item for item in state.work_units}
-    histories = _persisted_histories(state)
-    recoverable: Counter[tuple[object, ...]] = Counter()
-    for signature, count in missing_reviews.items():
-        work_unit_id, _reviewer, fingerprint, verdict, finding_ids = signature
-        try:
-            numeric_work_unit_id = int(str(work_unit_id))
-        except ValueError:
-            return Counter()
-        reviewed_unit = units.get(numeric_work_unit_id)
-        correction_unit = units.get(numeric_work_unit_id + 1)
-        reviewed_history = histories.get(numeric_work_unit_id)
-        finding_attribution_matches = (
-            _historical_correction_attribution_matches(
-                chain,
-                reviewed_work_unit_id=numeric_work_unit_id,
-                correction_work_unit_id=numeric_work_unit_id + 1,
-                review_signature=signature,
-            )
-            if chain
-            else (
-                correction_unit is not None
-                and set(correction_unit.open_findings).issubset(set(finding_ids))
-            )
-        )
-        if (
-            count != 1
-            or verdict != "denied"
-            or reviewed_unit is None
-            or reviewed_unit.kind is not WorkUnitKind.FINAL_REVIEW
-            or reviewed_unit.status is not WorkUnitStatus.COMPLETED
-            or correction_unit is None
-            or correction_unit.kind is not WorkUnitKind.CORRECTION
-            or not finding_attribution_matches
-            or reviewed_history is None
-            or not any(
-                item.diff_fingerprint == fingerprint
-                for item in reviewed_history.attestations
-            )
-        ):
-            return Counter()
-        recoverable[signature] += 1
-    return recoverable
-
-
-def _historical_correction_attribution_matches(
-    chain: tuple[ArtifactRecord, ...],
-    *,
-    reviewed_work_unit_id: int,
-    correction_work_unit_id: int,
-    review_signature: tuple[object, ...],
-) -> bool:
-    review_records = tuple(
-        record
-        for record in chain
-        if isinstance(record.payload, ReviewPayload)
-        and (
-            record.payload.work_unit_id,
-            record.payload.reviewer.value,
-            record.fingerprint.sha256,
-            record.payload.verdict,
-            record.payload.finding_ids,
-        )
-        == review_signature
-        and record.payload.work_unit_id == str(reviewed_work_unit_id)
-    )
-    try:
-        replay = replay_artifacts(chain, chain[0].run_id)
-        attribution = reduce_findings(replay).correction_for(
-            correction_work_unit_id
-        )
-    except ArtifactReplayError:
-        return False
-    first_rounds = (
-        ()
-        if attribution is None
-        else tuple(
-            item for item in attribution.rounds if item.round_number == 1
-        )
-    )
-    if len(review_records) != 1 or len(first_rounds) != 1:
-        return False
-    review = review_records[0]
-    correction_round = first_rounds[0]
-    positions = {record.record_id: index for index, record in enumerate(chain)}
-    return (
-        positions[review.record_id] < positions[correction_round.record_id]
-        and bool(correction_round.finding_ids)
-        and set(correction_round.finding_ids).issubset(
-            set(review.payload.finding_ids)
-        )
-    )
-
-
 def _recover_final_review_attestation(
     state: WorkflowState,
     current_history: WorkflowHistory,
+    structured_replay: ArtifactReplayResult | None = None,
+    read_blob: Callable[[object], bytes] | None = None,
 ) -> WorkflowHistory:
     """Recover the latest prior attestation at a final-review transition.
 
@@ -5074,7 +4821,7 @@ def _recover_final_review_attestation(
         return current_history
     carried = current_history.attestations[-1:]
     if not carried:
-        histories = _persisted_histories(state)
+        histories = _persisted_histories(state, structured_replay, read_blob)
         prior = tuple(
             history
             for work_unit_id, history in sorted(histories.items())
@@ -5341,8 +5088,17 @@ def _history(
         return WorkflowHistory(state.current_work_unit_id)
     try:
         raw = dict(state.runtime_history)
-        current = raw.get("current") if set(raw) == {"current", "archive"} else raw
-        history = WorkflowHistory.from_dict(current)
+        if raw and all(
+            isinstance(key, str)
+            and key.isdigit()
+            and isinstance(value, dict)
+            and "workflow_event_record_refs" in value
+            for key, value in raw.items()
+        ):
+            history = WorkflowHistory(state.current_work_unit_id)
+        else:
+            current = raw.get("current") if set(raw) == {"current", "archive"} else raw
+            history = WorkflowHistory.from_dict(current)
     except (KeyError, TypeError, ValueError) as exc:
         raise WorkflowExecutionError(
             f"persisted workflow history is invalid: {exc}"
@@ -5628,7 +5384,17 @@ def _history_payload(
     archive: list[object] = []
     previous: object | None = None
     if isinstance(existing, dict):
-        if set(existing) == {"current", "archive"}:
+        if existing and all(
+            isinstance(key, str)
+            and key.isdigit()
+            and isinstance(value, dict)
+            and "workflow_event_record_refs" in value
+            for key, value in existing.items()
+        ):
+            # This is the record-reference projection, not a serialized
+            # WorkflowHistory and therefore never belongs in the legacy archive.
+            previous = None
+        elif set(existing) == {"current", "archive"}:
             raw_archive = existing.get("archive")
             if isinstance(raw_archive, list):
                 archive = list(raw_archive)
@@ -5869,7 +5635,13 @@ def run_production_workflow(
     )
 
     watch_run = bool(getattr(args, "watch_run_id", None))
-    new_watch_task = watch_run and (force_new or not state_file.exists())
+    new_watch_task = watch_run and (
+        force_new
+        or (
+            not state_file.exists()
+            and not watch_run_has_records(root, run_id)
+        )
+    )
     prepared_branch_base: str | None = None
     if new_watch_task:
         if managed_audit_path is not None:
@@ -5902,15 +5674,23 @@ def run_production_workflow(
         bool(args.force_overwrite_state) and not bool(args.resume)
     )
     if state_file.exists() and replacement_requested:
-        existing = load_workflow_state(state_file, allowed_roots=allowed_roots)
+        try:
+            existing = load_workflow_state(state_file, allowed_roots=allowed_roots)
+        except StateSchemaError:
+            # Force replacement is explicitly authorized to discard the cache.
+            # A malformed non-authoritative projection must not veto that action.
+            existing = None
         if isinstance(existing, WorkflowState):
             replacement_run_id = existing.run_id
-    elif state_file.exists():
+    elif (state_file.exists() or bool(args.resume)) and not new_watch_task:
         try:
             loaded = load_resumable_workflow_state(
                 state_file,
                 repository_root=root,
                 allowed_roots=allowed_roots,
+                expected_run_id=(requested_run_id or None),
+                expected_task_file=task_file,
+                expected_task_digest=task_contract.digest,
             )
         except ActiveV2StateError:
             if args.force_overwrite_state:
@@ -6005,7 +5785,21 @@ def run_production_workflow(
 
     for _ in range(100):
         current = state.current_work_unit
-        recovered_history = _recover_final_review_attestation(state, history)
+        structured_replay = None
+        read_blob = None
+        if (
+            current.kind is WorkUnitKind.FINAL_REVIEW
+            and state.effective_protocol_mode is ProtocolMode.STRUCTURED_V2
+        ):
+            resolution = resolve_resume_state(root, state)
+            structured_replay = resolution.replay_result
+            read_blob = ArtifactStore(root, state.run_id).read_blob
+        recovered_history = _recover_final_review_attestation(
+            state,
+            history,
+            structured_replay,
+            read_blob,
+        )
         if recovered_history != history:
             history = recovered_history
             driver.checkpoint(state, history)
@@ -6483,6 +6277,9 @@ def run_pipeline(
                     allowed_roots=tuple(
                         dict.fromkeys((repository_root, task_file.parent.resolve()))
                     ),
+                    expected_run_id=evidence.run_id,
+                    expected_task_file=task_file,
+                    expected_task_digest=evidence.task_digest,
                 )
                 if not isinstance(resumed, WorkflowState):
                     raise ValueError("bound queue recovery requires version-3 state")

@@ -532,7 +532,6 @@ def test_no_production_module_reimplements_finding_reduction() -> None:
         "apply_finding_response", "apply_reviewer_finding_update"
     }
     expected_consumers = {
-        "artifact_migration.py",
         "artifact_projection.py",
         "artifact_replay.py",
         "audit_trail.py",

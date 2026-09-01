@@ -357,37 +357,6 @@ def test_file_intent_reconciles_identical_target_without_rewriting(
     ) == sha256_bytes(content)
 
 
-def test_projection_write_is_ledgered_and_idempotent(tmp_path: Path) -> None:
-    bridge = _bridge(tmp_path)
-    _initialize_ledger(bridge)
-    driver = object.__new__(ProductionWorkflowDriver)
-    driver.root = tmp_path
-    driver._artifact_bridge = bridge
-    driver.active_state = SimpleNamespace(task_digest=DIGEST)
-    target = tmp_path / "projection.json"
-    expected = b'{"status":"projected"}\n'
-    writes = 0
-
-    def perform() -> None:
-        nonlocal writes
-        writes += 1
-        target.write_bytes(expected)
-
-    driver._execute_projection_write(target, expected, perform)
-    driver._execute_projection_write(
-        target,
-        expected,
-        lambda: pytest.fail("completed projection must not be rewritten"),
-    )
-
-    replay = replay_artifacts(bridge.store.load_chain(), bridge.store.run_id)
-    projection = next(
-        item for item in replay.side_effects if item.effect_class == "file_write"
-    )
-    assert writes == 1
-    assert projection.result == sha256_bytes(expected)
-
-
 def test_unknown_file_and_provider_windows_fail_closed(tmp_path: Path) -> None:
     bridge = _bridge(tmp_path)
     target = tmp_path / "result.json"
