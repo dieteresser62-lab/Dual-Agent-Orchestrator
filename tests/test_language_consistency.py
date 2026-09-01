@@ -1147,6 +1147,9 @@ def test_runtime_and_tests_do_not_read_non_authoritative_archives() -> None:
 
 _REPOSITORY_ROOT_NAMES = frozenset(("ROOT", "PROJECT_ROOT", "repository_root"))
 _PATH_READ_METHODS = frozenset(("read_text", "read_bytes", "open"))
+_GITIGNORED_READ_EXEMPTIONS = frozenset(
+    (("tests/conftest.py", "repository_metadata_signature", ".orchestrator"),)
+)
 
 
 def _gitignored_top_level_directories(repository_root: Path = ROOT) -> frozenset[str]:
@@ -1311,6 +1314,9 @@ def _repository_ignored_read_hits(
                     *(tainted.get(name, set()) for name in referenced_names)
                 )
             for value in sorted(values):
+                scope_name = getattr(scope, "name", "<module>")
+                if (path.as_posix(), scope_name, value) in _GITIGNORED_READ_EXEMPTIONS:
+                    continue
                 hits.append(f"{path.as_posix()}:{node.lineno}:{value}")
     return tuple(sorted(set(hits)))
 
@@ -1343,6 +1349,27 @@ def test_repository_code_does_not_read_gitignored_source_paths() -> None:
         ignored_directories,
     )
     assert not hits, "Gitignored repository source reads found:\n" + "\n".join(hits)
+
+
+def test_gitignored_read_exemption_is_bound_to_the_metadata_guard_function() -> None:
+    synthetic = "\n".join(
+        (
+            "from pathlib import Path",
+            "repository_root = Path(__file__).resolve().parents[1]",
+            "def repository_metadata_signature():",
+            "    return (repository_root / '.orchestrator').read_bytes()",
+            "def unrelated_reader():",
+            "    return (repository_root / '.orchestrator').read_bytes()",
+        )
+    )
+
+    hits = _repository_ignored_read_hits(
+        Path("tests/conftest.py"),
+        synthetic,
+        frozenset(("inbox", "outbox", ".orchestrator")),
+    )
+
+    assert hits == ("tests/conftest.py:6:.orchestrator",)
 
 
 @pytest.mark.parametrize("code_tree", ("src", "scripts", "tests"))

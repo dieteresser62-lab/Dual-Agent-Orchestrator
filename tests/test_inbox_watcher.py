@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from agent_runtime import AgentProcessError
+from conftest import assert_isolated_run_root
 from error_classification import classify_exception
 from inbox_watcher import (
     QueueFinalizationDisposition,
@@ -948,6 +949,7 @@ def test_resumable_v3_halt_stops_queue_without_retry_or_poison(
 
 def test_terminal_input_rejection_is_archived_once_and_queue_continues(
     tmp_path: Path,
+    isolated_run_root: Path,
 ) -> None:
     inbox = tmp_path / "inbox"
     outbox = tmp_path / "outbox"
@@ -995,6 +997,9 @@ def test_terminal_input_rejection_is_archived_once_and_queue_continues(
     assert not (inbox / "first.md.attempts").exists()
     assert not watch_identity_path(rejected).exists()
     assert len(list((outbox / "done").glob("*.md"))) == 1
+    run_roots = tuple((isolated_run_root / ".orchestrator/artifacts").iterdir())
+    assert len(run_roots) == 1
+    assert_isolated_run_root(run_roots[0], isolated_run_root)
 
 
 def test_terminal_rejection_move_retry_does_not_execute_task_twice(
@@ -1060,6 +1065,7 @@ def test_terminal_rejection_move_retry_does_not_execute_task_twice(
 
 def test_watch_restart_resumes_same_run_id_and_moves_only_final_workflow(
     tmp_path: Path,
+    isolated_run_root: Path,
 ) -> None:
     inbox = tmp_path / "inbox"
     outbox = tmp_path / "outbox"
@@ -1116,10 +1122,16 @@ def test_watch_restart_resumes_same_run_id_and_moves_only_final_workflow(
     assert not task.exists()
     assert not watch_identity_path(task).exists()
     assert len(list((outbox / "done").glob("*.md"))) == 1
+    actual_run_root = assert_isolated_run_root(
+        isolated_run_root / ".orchestrator" / "artifacts" / run_ids[0],
+        isolated_run_root,
+    )
+    assert actual_run_root.is_dir()
 
 
 def test_watch_keeps_unchanged_bootstrap_denial_resumable_until_external_repair(
     tmp_path: Path,
+    isolated_run_root: Path,
 ) -> None:
     inbox = tmp_path / "inbox"
     outbox = tmp_path / "outbox"
@@ -1181,6 +1193,11 @@ def test_watch_keeps_unchanged_bootstrap_denial_resumable_until_external_repair(
     assert not (inbox / "bootstrap.md.attempts").exists()
     assert list((outbox / "failed").glob("*")) == []
     assert len(list((outbox / "done").glob("*.md"))) == 1
+    actual_run_root = assert_isolated_run_root(
+        isolated_run_root / ".orchestrator" / "artifacts" / calls[0][0],
+        isolated_run_root,
+    )
+    assert actual_run_root.is_dir()
 
 
 def test_non_resumable_policy_halt_stops_once_without_retry_or_poison(
@@ -1230,6 +1247,7 @@ def test_non_resumable_policy_halt_stops_once_without_retry_or_poison(
 
 def test_watch_processes_generated_implementation_handoff_without_restart(
     tmp_path: Path,
+    isolated_run_root: Path,
 ) -> None:
     inbox = tmp_path / "inbox"
     outbox = tmp_path / "outbox"
@@ -1261,10 +1279,17 @@ def test_watch_processes_generated_implementation_handoff_without_restart(
     assert result == 0
     assert calls == ["feature-plan.md", "feature-implement.md"]
     assert len(list((outbox / "done").glob("*.md"))) == 2
+    run_roots = tuple((isolated_run_root / ".orchestrator/artifacts").iterdir())
+    assert len(run_roots) == 2
+    assert all(
+        assert_isolated_run_root(run_root, isolated_run_root).is_dir()
+        for run_root in run_roots
+    )
 
 
 def test_process_interruption_preserves_identity_for_next_watch_process(
     tmp_path: Path,
+    isolated_run_root: Path,
 ) -> None:
     inbox = tmp_path / "inbox"
     outbox = tmp_path / "outbox"
@@ -1306,6 +1331,11 @@ def test_process_interruption_preserves_identity_for_next_watch_process(
         time_fn=lambda: 10_000_000_000.0,
     ) == 0
     assert len(list((outbox / "done").glob("*.md"))) == 1
+    actual_run_root = assert_isolated_run_root(
+        isolated_run_root / ".orchestrator" / "artifacts" / first_run_id[0],
+        isolated_run_root,
+    )
+    assert actual_run_root.is_dir()
 
 
 def test_typed_transient_retry_uses_stable_run_id_and_resume_context(
@@ -1349,6 +1379,7 @@ def test_typed_transient_retry_uses_stable_run_id_and_resume_context(
 
 def test_pre_state_technical_retry_restarts_fresh_with_same_run_id(
     tmp_path: Path,
+    isolated_run_root: Path,
 ) -> None:
     inbox = tmp_path / "inbox"
     outbox = tmp_path / "outbox"
@@ -1386,6 +1417,11 @@ def test_pre_state_technical_retry_restarts_fresh_with_same_run_id(
     assert calls[0][1:] == (False, True)
     assert calls[1][1:] == (False, True)
     assert len(list((outbox / "done").glob("*.md"))) == 1
+    actual_run_root = assert_isolated_run_root(
+        isolated_run_root / ".orchestrator" / "artifacts" / calls[0][0],
+        isolated_run_root,
+    )
+    assert actual_run_root.is_dir()
 
 
 def test_fifo_tasks_receive_distinct_isolated_run_ids(tmp_path: Path) -> None:
