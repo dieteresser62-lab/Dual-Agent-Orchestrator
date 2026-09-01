@@ -1386,6 +1386,8 @@ weiter gelesen. Ihr `evidence`-String bleibt dabei **opak**. Er wird weder an
 schreiben das strukturierte Objekt. Ein alter Review ohne
 `red_state_followup_slice` kann keine rote Attestation autorisieren.
 
+**Quelle entfernt.** Die unten zitierten Laufverzeichnisse unter `.orchestrator/` wurden am 1. September 2026 nach Freigabe des Betreibers gelöscht; alte Ketten sind seit der Entscheidung gegen Rückwärtskompatibilität irrelevant. Der genannte Record ist damit nicht mehr nachprüfbar. Der Befund selbst bleibt gültig und ist durch die S4a-Entscheidung und ihre Tests konserviert.
+
 Die korrigierte S4a-Bestandsprüfung fand 32 persistierte Review-Records. Der
 Record `ar1-c24d40d2bcf557f302bf3b64414ea5142bd8e11f3814315e1013547ab73bbfe3`
 im Run `watch-20260826-122718.749752Z-ffce3cc1140c` enthält im Legacyfeld
