@@ -688,6 +688,296 @@ class ProductionWorkflowDriver:
         else:
             self._artifact_bridge = None
 
+    @staticmethod
+    def _matches_baseline_initialization_prefix(
+        records: tuple[ArtifactRecord, ...], state: WorkflowState
+    ) -> bool:
+        """Recognize every exact cut of the canonical pre-work append sequence.
+
+        This is the protocol grammar for resolution A in S5b.  The expected
+        sequence is derived independently from the immutable state input and
+        covers identity/profile, the ledger initializer, initial workflow and
+        gate projections, task/work-unit facts, and an optional approved-plan
+        handoff.  A non-prefix fact or any previously completed non-ledger effect
+        therefore keeps the ordinary fail-closed resume behavior.
+        """
+
+        binding = state.protocol_binding
+        if binding is None or state.task_digest is None:
+            return False
+        if state.runtime_history is not None or any(
+            unit.invocation_failures
+            or unit.completed_side_effects
+            or unit.gate_decisions
+            for unit in state.work_units
+        ):
+            return False
+        first_domain = next(
+            (
+                index
+                for index, record in enumerate(records)
+                if not isinstance(record.payload, FindingHandoffImportPayload)
+            ),
+            len(records),
+        )
+        prefix = records[first_domain:]
+        if not prefix:
+            return False
+
+        expectations: list[tuple[object, str, str, int]] = []
+
+        def expect(
+            payload: object,
+            logical_id: str,
+            idempotency_key: str,
+            revision: int = 1,
+        ) -> None:
+            expectations.append((payload, logical_id, idempotency_key, revision))
+
+        expected_identity = RunIdentityPayload(
+            task_file=state.task_file,
+            branch=state.branch,
+            branch_base=state.branch_base,
+            execution_mode=state.execution_mode,
+            audit_report_path=state.audit_report_path,
+        )
+        expected_profile = RunProfilePayload(
+            implementer=RoleProfilePayload(
+                binding.codex_profile.model, binding.codex_profile.effort  # allowlist:provider
+            ),
+            reviewer=RoleProfilePayload(
+                binding.claude_profile.model, binding.claude_profile.effort  # allowlist:provider
+            ),
+        )
+        identity_record_id = stable_record_id(
+            state.run_id, RecordType.RUN_IDENTITY, "run-identity", 1
+        )
+        expected_event = WorkflowEventPayload(
+            event_kind="run",
+            work_unit_id=None,
+            slice_id="1",
+            round_number=None,
+            record_refs=(identity_record_id,),
+        )
+        expect(expected_identity, "run-identity", "run-identity")
+        expect(
+            expected_event,
+            f"workflow-event-{identity_record_id}",
+            f"workflow-event:{identity_record_id}",
+        )
+        expect(expected_profile, "run-profile", "run-profile")
+
+        ledger_operation = ("structured-v2-side-effect-ledger",)
+        ledger_key = stable_side_effect_key("ledger", "run", ledger_operation)
+        ledger_digest = hashlib.sha256(ledger_key.encode("utf-8")).hexdigest()
+        ledger_logical_id = f"side-effect-{ledger_digest[:32]}"
+        expect(
+            SideEffectPayload(
+                ledger_key, "ledger", "run", ledger_operation, "intent", None
+            ),
+            ledger_logical_id,
+            f"side-effect-intent:{ledger_digest}",
+            1,
+        )
+        expect(
+            SideEffectPayload(
+                ledger_key,
+                "ledger",
+                "run",
+                ledger_operation,
+                "result",
+                "initialized",
+            ),
+            ledger_logical_id,
+            f"side-effect-result:{ledger_digest}",
+            2,
+        )
+
+        transition_revision = 0
+
+        def expect_transition(payload: WorkflowTransitionPayload) -> None:
+            nonlocal transition_revision
+            transition_revision += 1
+            transition_id = stable_record_id(
+                state.run_id,
+                RecordType.WORKFLOW_TRANSITION,
+                "workflow-transition",
+                transition_revision,
+            )
+            expect(
+                payload,
+                "workflow-transition",
+                f"workflow-transition:{transition_revision}",
+                transition_revision,
+            )
+            expect(
+                WorkflowEventPayload(
+                    "transition",
+                    payload.work_unit_id,
+                    payload.slice_id,
+                    None,
+                    (transition_id,),
+                ),
+                f"workflow-event-{transition_id}",
+                f"workflow-event:{transition_id}",
+            )
+
+        unit_slice_ids = {str(item.slice_id) for item in state.work_units}
+        for item in state.slices:
+            slice_id = str(item.slice_id)
+            if slice_id not in unit_slice_ids:
+                expect_transition(
+                    WorkflowTransitionPayload(
+                        slice_id, item.status.value, None, None, None
+                    )
+                )
+        current_unit_id = str(state.current_work_unit_id)
+        for item in state.work_units:
+            work_unit_id = str(item.work_unit_id)
+            if work_unit_id == current_unit_id:
+                continue
+            slice_status = next(
+                candidate.status.value
+                for candidate in state.slices
+                if candidate.slice_id == item.slice_id
+            )
+            expect_transition(
+                WorkflowTransitionPayload(
+                    str(item.slice_id),
+                    slice_status,
+                    work_unit_id,
+                    item.current_step.value,
+                    item.status.value,
+                )
+            )
+        current = state.current_work_unit
+        expect_transition(
+            WorkflowTransitionPayload(
+                str(state.current_slice_id),
+                state.current_slice.status.value,
+                current_unit_id,
+                state.current_step.value,
+                current.status.value,
+            )
+        )
+        for item in state.work_units:
+            work_unit_id = str(item.work_unit_id)
+            expect(
+                WorkflowPolicyPayload(
+                    work_unit_id, *project_implementer_return_policy(item)
+                ),
+                f"workflow-policy-{work_unit_id}",
+                f"workflow-policy:{work_unit_id}:1",
+            )
+        for item in state.slices:
+            if item.start_commit is None or item.start_fingerprint is None:
+                continue
+            payload = SliceBoundaryPayload(
+                str(item.slice_id),
+                item.start_commit,
+                item.scope_change_groups,
+                item.start_fingerprint,
+            )
+            expect(
+                payload,
+                f"slice-boundary-{payload.slice_id}",
+                f"slice-boundary:{payload.slice_id}:1",
+            )
+        for item in state.work_units:
+            payload = ProductionWorkflowDriver._gate_transition_payload(item)
+            expect(
+                payload,
+                f"gate-transition-{payload.work_unit_id}",
+                f"gate-transition:{payload.work_unit_id}:1",
+            )
+        if state.task_scope_patterns:
+            expect(
+                TaskPayload(
+                    target_branch=state.target_branch or state.branch,
+                    scope_paths=state.task_scope_patterns,
+                    assignment_sha256=state.task_digest,
+                    work_plan_path=state.work_plan_path,
+                ),
+                "task-contract",
+                "task-contract",
+            )
+        if current.kind is not WorkUnitKind.PLAN and state.current_slice.scope_paths:
+            finding_import = next(
+                (
+                    record
+                    for record in records[:first_domain]
+                    if isinstance(record.payload, FindingHandoffImportPayload)
+                ),
+                None,
+            )
+            first_implementation_unit_id = next(
+                item.work_unit_id
+                for item in state.work_units
+                if item.kind is not WorkUnitKind.PLAN
+            )
+            bound_import = (
+                finding_import
+                if current.work_unit_id == first_implementation_unit_id
+                else None
+            )
+            work_unit_payload = (
+                CorrectionWorkUnitPayload(
+                    slice_id=str(current.slice_id),
+                    round_number=current.round_number,
+                    paths=state.current_slice.scope_paths,
+                    finding_ids=current.open_findings,
+                )
+                if current.kind is WorkUnitKind.CORRECTION
+                else WorkUnitPayload(
+                    slice_id=str(current.slice_id),
+                    round_number=current.round_number,
+                    paths=state.current_slice.scope_paths,
+                    open_finding_ids=(
+                        tuple(sorted(current.open_findings))
+                        if bound_import is not None
+                        else ()
+                    ),
+                    finding_import_record_id=(
+                        bound_import.record_id if bound_import is not None else None
+                    ),
+                )
+            )
+            logical_id = f"work-unit-{current.work_unit_id}"
+            expect(
+                work_unit_payload,
+                logical_id,
+                f"{'correction-' if current.kind is WorkUnitKind.CORRECTION else ''}"
+                f"work-unit:{current.work_unit_id}:round:{current.round_number}",
+            )
+        if (
+            state.work_plan_path is not None
+            and state.planned_slices
+            and state.approved_plan_commit is not None
+        ):
+            expect(
+                plan_payload(
+                    work_plan_path=state.work_plan_path,
+                    approved_plan_commit=state.approved_plan_commit,
+                    slices=state.planned_slices,
+                ),
+                "approved-plan",
+                f"approved-plan:{state.approved_plan_commit}",
+            )
+
+        if len(prefix) > len(expectations):
+            return False
+        return all(
+            record.payload == payload
+            and record.logical_id == logical_id
+            and record.idempotency_key == idempotency_key
+            and record.revision == revision
+            and record.fingerprint.sha256 == state.task_digest
+            and record.fingerprint.kind is FingerprintKind.CONTRACT
+            for record, (payload, logical_id, idempotency_key, revision) in zip(
+                prefix, expectations[: len(prefix)], strict=True
+            )
+        )
+
     def assert_structured_decision_context(self) -> None:
         """Reload authoritative records before an external workflow side effect."""
         state = self.active_state
@@ -731,13 +1021,26 @@ class ProductionWorkflowDriver:
                 isinstance(record.payload, FindingHandoffImportPayload)
                 for record in existing_chain
             )
-            existing_replay = replay_artifacts(
-                existing_chain,
-                state.run_id,
-                allow_incomplete_review_tail=True,
-                allow_finding_import_bootstrap=import_only_prefix,
-            )
-            if existing_replay.pending_workflow_event_record_id is not None:
+            try:
+                existing_replay = replay_artifacts(
+                    existing_chain,
+                    state.run_id,
+                    allow_incomplete_review_tail=True,
+                    allow_finding_import_bootstrap=import_only_prefix,
+                )
+            except ArtifactReplayError:
+                if not self._matches_baseline_initialization_prefix(
+                    existing_chain, state
+                ):
+                    raise
+                existing_replay = None
+            if existing_replay is None:
+                # The raw chain is an exact early initializer cut which cannot
+                # yet satisfy the general replay minimum (for example identity
+                # plus its event but no profile).  The idempotent appends below
+                # complete it before any projection reader or external effect.
+                pass
+            elif existing_replay.pending_workflow_event_record_id is not None:
                 self._reconcile_pending_workflow_event(existing_replay)
                 existing_replay = replay_artifacts(
                     bridge.store.load_chain(),
@@ -745,17 +1048,27 @@ class ProductionWorkflowDriver:
                     allow_incomplete_review_tail=True,
                     allow_finding_import_bootstrap=import_only_prefix,
                 )
-            require_workflow_event_prefix(existing_replay)
-            if existing_replay.pending_review_record_id is not None:
+            if existing_replay is not None:
+                require_workflow_event_prefix(existing_replay)
+            if (
+                existing_replay is not None
+                and existing_replay.pending_review_record_id is not None
+            ):
                 # The reviewer recovery path is the only writer allowed to
                 # complete this exact append tail.  Appending baseline facts
                 # here would turn the recoverable suffix into a chain-middle
                 # authority gap.
                 return
-            if not import_only_prefix:
-                require_workflow_status_prefix(existing_replay)
-                require_gate_prefix(existing_replay)
-                require_side_effect_ledger_prefix(existing_replay)
+            if existing_replay is not None and not import_only_prefix:
+                try:
+                    require_workflow_status_prefix(existing_replay)
+                    require_gate_prefix(existing_replay)
+                    require_side_effect_ledger_prefix(existing_replay)
+                except ArtifactResumeError:
+                    if not self._matches_baseline_initialization_prefix(
+                        existing_replay.records, state
+                    ):
+                        raise
         identity_record = bridge.append(
             RunIdentityPayload(
                 task_file=state.task_file,

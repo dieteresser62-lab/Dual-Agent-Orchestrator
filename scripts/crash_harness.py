@@ -9,7 +9,7 @@ converges through normal reconciliation or emits the assignment's stop state.
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 from pathlib import Path
@@ -21,17 +21,29 @@ SOURCE_ROOT = Path(__file__).resolve().parents[1] / "src"
 if str(SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(SOURCE_ROOT))
 
-from artifact_bridge import ArtifactBridge, provider_input_measurement_payload
+from artifact_bridge import (
+    ArtifactBridge,
+    attestation_payload,
+    provider_input_measurement_payload,
+    review_payload_matches_result,
+)
 import artifact_migration
 from artifact_migration import ArtifactResumeError, resolve_resume_state
 from artifact_models import (
     SIDE_EFFECT_CLASSES,
+    BindingPayload,
     FingerprintKind,
+    ReviewPayload,
+    ValidationAttestationPayload,
     canonical_json,
 )
 from artifact_replay import replay_artifacts
 from artifact_store import ArtifactStore
-from dry_run_scenarios import ScriptedInterruption as InjectedCrash
+from dry_run_scenarios import (
+    DryRunScenario,
+    ScriptedInterruption as InjectedCrash,
+    ScriptedWorkflowDriver,
+)
 from orchestrator import OrchestratorConfig, ProductionWorkflowDriver
 from provider_input_budget import ProviderInputComponentSize, ProviderInputMeasurement
 from side_effects import (
@@ -75,6 +87,229 @@ BOUNDARY_ORDER = tuple(item.value for item in SideEffectBoundaryPhase)
 
 class CrashHarnessError(RuntimeError):
     """Raised when the harness cannot produce trustworthy S5 evidence."""
+
+
+class RecordBackedScriptedWorkflowDriver(ScriptedWorkflowDriver):
+    """Run scripted boundaries while production owns every durable record fact."""
+
+    def __init__(self, scenario: DryRunScenario, root: Path) -> None:
+        super().__init__(scenario)
+        self._record_driver = ProductionWorkflowDriver(
+            repository_root=root,
+            state_file=root / ".orchestrator" / f"state-{scenario.name}.json",
+            agents={},
+            config=OrchestratorConfig(repo_root=root),
+            allowed_roots=(root,),
+        )
+
+    def bind_work_unit(self, state: WorkflowState) -> None:
+        super().bind_work_unit(state)
+        self._record_driver._artifact_bridge = ArtifactBridge(  # noqa: SLF001
+            ArtifactStore(self._record_driver.root, state.run_id),
+            now=lambda: FIXED_TIME,
+        )
+        self._record_driver.bind_work_unit(state)
+        self.active_state = self._record_driver.active_state
+
+    def checkpoint(self, state, history) -> None:  # type: ignore[no-untyped-def]
+        self._record_driver.checkpoint(state, history)
+        projected = self._record_driver.active_state
+        if projected is None:  # pragma: no cover - production invariant
+            raise CrashHarnessError("record-backed checkpoint lost its projection")
+        super().checkpoint(projected, history)
+
+    def authoritative_native_findings(self, state, findings):  # type: ignore[no-untyped-def]
+        return self._record_driver.authoritative_native_findings(state, findings)
+
+    def carry_forward_native_findings(self, state, findings):  # type: ignore[no-untyped-def]
+        return self._record_driver.carry_forward_native_findings(state, findings)
+
+    def recover_pending_native_codex(self, invocation, contract, history):  # type: ignore[no-untyped-def]  # allowlist:provider
+        recovered = self._record_driver.recover_pending_native_codex(  # allowlist:provider
+            invocation, contract, history
+        )
+        return recovered or super().recover_pending_native_codex(  # allowlist:provider
+            invocation, contract, history
+        )
+
+    def recover_pending_native_reviewer(self, invocation, contract, history):  # type: ignore[no-untyped-def]
+        recovered = self._record_driver.recover_pending_native_reviewer(
+            invocation, contract, history
+        )
+        return recovered or super().recover_pending_native_reviewer(
+            invocation, contract, history
+        )
+
+    def recover_pending_native_reviewer_before_policy(  # type: ignore[no-untyped-def]
+        self, state, context, history
+    ):
+        recovered = self._record_driver.recover_pending_native_reviewer_before_policy(
+            state, context, history
+        )
+        return recovered or super().recover_pending_native_reviewer_before_policy(
+            state, context, history
+        )
+
+    def recover_pending_validation_attestation(  # type: ignore[no-untyped-def]
+        self, fingerprint, expected_commands, attestation_id
+    ):
+        recovered = self._record_driver.recover_pending_validation_attestation(
+            fingerprint, expected_commands, attestation_id
+        )
+        return recovered or super().recover_pending_validation_attestation(
+            fingerprint, expected_commands, attestation_id
+        )
+
+    def persist_native_codex_contract(self, output, previous_findings) -> None:  # type: ignore[no-untyped-def]  # allowlist:provider
+        state = self._record_driver.active_state
+        if state is None:
+            raise CrashHarnessError("scripted implementer result has no active record state")
+        fingerprint = next(
+            item.fingerprint
+            for item in self.scenario.changes
+            if item.work_unit_id == state.current_work_unit_id
+            and item.round_number == state.current_work_unit.round_number
+        )
+        self._record_driver.persist_native_codex_contract(  # allowlist:provider
+            output,
+            previous_findings,
+            recovery_fingerprint=fingerprint,
+        )
+        super().persist_native_codex_contract(  # allowlist:provider
+            output, previous_findings
+        )
+
+    def persist_native_review_contract(  # type: ignore[no-untyped-def]
+        self, output, fingerprint, round_number, previous_findings
+    ) -> None:
+        self._record_driver.persist_native_review_contract(
+            output, fingerprint, round_number, previous_findings
+        )
+        super().persist_native_review_contract(
+            output, fingerprint, round_number, previous_findings
+        )
+
+    def persist_review_packet(self, packet) -> None:  # type: ignore[no-untyped-def]
+        self._record_driver.persist_review_packet(packet)
+        super().persist_review_packet(packet)
+
+    def persist_validation_request(self, request) -> None:  # type: ignore[no-untyped-def]
+        self._record_driver.persist_validation_request(request)
+        super().persist_validation_request(request)
+
+    def persist_validation_attestation(self, attestation) -> None:  # type: ignore[no-untyped-def]
+        self._record_driver.persist_validation_attestation(attestation)
+        super().persist_validation_attestation(attestation)
+
+    def persist_gate_decision(self, work_unit_id, decision) -> None:  # type: ignore[no-untyped-def]
+        self._record_driver.persist_gate_decision(work_unit_id, decision)
+        super().persist_gate_decision(work_unit_id, decision)
+
+    def persist_gate_transition(self, state) -> None:  # type: ignore[no-untyped-def]
+        self._record_driver.persist_gate_transition(state)
+        super().persist_gate_transition(state)
+
+    def persist_invocation_failure(self, payload) -> None:  # type: ignore[no-untyped-def]
+        self._record_driver.persist_invocation_failure(payload)
+        super().persist_invocation_failure(payload)
+
+    def commit_slice(self, request) -> str:  # type: ignore[no-untyped-def]
+        """Persist the scripted commit as a fully bound record-only transaction."""
+
+        self._record_driver.assert_structured_decision_context()
+        state = self._record_driver.active_state
+        bridge = self._record_driver._artifact_bridge  # noqa: SLF001
+        if state is None or bridge is None:
+            raise CrashHarnessError("scripted commit has no record authority")
+        chain = bridge.store.load_chain()
+        attestation_record = next(
+            (
+                record
+                for record in chain
+                if isinstance(record.payload, ValidationAttestationPayload)
+                and record.logical_id == request.attestation.attestation_id
+                and record.fingerprint.sha256 == request.fingerprint
+            ),
+            None,
+        )
+        approvals = tuple(
+            record
+            for record in chain
+            if isinstance(record.payload, ReviewPayload)
+            and record.payload.verdict == "approved"
+            and record.fingerprint.sha256 == request.fingerprint
+        )
+        current_review = next(
+            (
+                record
+                for record in reversed(approvals)
+                if record.payload.work_unit_id == str(state.current_work_unit_id)
+            ),
+            None,
+        )
+        if (
+            attestation_record is None
+            or current_review is None
+            or attestation_record.payload
+            != attestation_payload(
+                request.attestation,
+                attestation_record.payload.content_record_id,
+            )
+            or not review_payload_matches_result(
+                current_review.payload, request.claude_review  # allowlist:provider
+            )
+        ):
+            raise CrashHarnessError("scripted commit lacks its record-bound approval")
+        if self._commit_index >= len(self.scenario.commits):  # noqa: SLF001
+            raise CrashHarnessError("scripted commit has no declared physical result")
+        declared_commit = self.scenario.commits[self._commit_index]  # noqa: SLF001
+        if (declared_commit.slice_id, declared_commit.fingerprint) != (
+            request.slice_id,
+            request.fingerprint,
+        ):
+            raise CrashHarnessError("scripted commit declaration differs from authorization")
+        commit_ref = declared_commit.commit_ref
+        prior = state.current_slice.start_commit or state.branch_base
+        operation = (
+            "slice_commit",
+            str(request.slice_id),
+            prior,
+            request.fingerprint[:40],
+            request.fingerprint,
+            hashlib.sha256(
+                f"scripted slice {request.slice_id}".encode("utf-8")
+            ).hexdigest(),
+        )
+        spec = SideEffectSpec(
+            "git_commit",
+            str(state.current_work_unit_id),
+            operation,
+            request.fingerprint,
+        )
+        executor = self._record_driver._side_effect_executor(bridge)  # noqa: SLF001
+        should_commit = executor.begin(
+            spec,
+            reconcile=lambda: Reconciliation(ReconciliationOutcome.NOT_OCCURRED),
+        )
+        if not should_commit:
+            raise CrashHarnessError("scripted commit was already completed before its call")
+        performed_commit = super().commit_slice(request)
+        if performed_commit != commit_ref:
+            raise CrashHarnessError("scripted commit returned a foreign result")
+        executor.complete(spec, commit_ref)
+        self._record_driver._mark_completed_side_effect(spec.effect_key)  # noqa: SLF001
+        bridge.append(
+            BindingPayload(
+                binding_kind="commit",
+                target=commit_ref,
+                attestation_id=attestation_record.record_id,
+                approval_ids=tuple(record.record_id for record in approvals),
+            ),
+            logical_id=f"commit-{request.slice_id}-{commit_ref[:12]}",
+            idempotency_key=f"commit:{request.slice_id}:{request.fingerprint}",
+            fingerprint_sha256=request.fingerprint,
+        )
+        return commit_ref
 
 
 @dataclass(frozen=True, slots=True)
@@ -904,8 +1139,13 @@ def _run_journeys(work_root: Path) -> tuple[Mapping[str, object], ...]:
         "#### Akzeptanzkriterien\n\n- Carried findings are closed.\n",
         encoding="utf-8",
     )
+    driver_factory = lambda scenario: RecordBackedScriptedWorkflowDriver(  # noqa: E731
+        scenario, journey_root
+    )
     plan = run_scripted_workflow_resumable(
-        scenario=build_s5_plan_only_scenario(), task_file=plan_task
+        scenario=build_s5_plan_only_scenario(),
+        task_file=plan_task,
+        driver_factory=driver_factory,
     )
     plan_commit = plan.result.state.approved_plan_commit
     if (
@@ -937,25 +1177,44 @@ def _run_journeys(work_root: Path) -> tuple[Mapping[str, object], ...]:
     if handoff_contract.approved_plan_commit != plan_commit:
         raise CrashHarnessError("IMPLEMENT handoff lost its approved-plan binding")
 
+    long_scenario = build_s5_long_run_scenario()
+    independent_scenario = replace(
+        build_s5_long_run_scenario(), name="s5-long-run-independent-v1"
+    )
     long = run_scripted_workflow_resumable(
-        scenario=build_s5_long_run_scenario(), task_file=handoff
+        scenario=long_scenario,
+        task_file=handoff,
+        driver_factory=driver_factory,
     )
     second_long = run_scripted_workflow_resumable(
-        scenario=build_s5_long_run_scenario(), task_file=handoff
+        scenario=independent_scenario,
+        task_file=handoff,
+        driver_factory=driver_factory,
     )
     findings = long.result.history.findings
     second_findings = second_long.result.history.findings
+    journey_resolutions = {
+        "plan": resolve_resume_state(journey_root, "dry-s5-plan-only-v1"),
+        "long": resolve_resume_state(journey_root, f"dry-{long_scenario.name}"),
+        "independent": resolve_resume_state(
+            journey_root, f"dry-{independent_scenario.name}"
+        ),
+    }
     if (
         not long.result.workflow_completed
         or long.result.state.current_step is not WorkflowStep.COMPLETED
         or long.result.state.execution_mode != "IMPLEMENT"
         or long.result.state.approved_plan_commit != plan_commit
         or tuple(item.finding_id for item in findings) != ("C-01", "C-02")
+        or journey_resolutions["long"].state.current_step
+        is not WorkflowStep.COMPLETED
     ):
         raise CrashHarnessError("combined long-run did not close its complete ledger")
     if (
         not second_long.result.workflow_completed
         or tuple(item.finding_id for item in second_findings) != ("C-01", "C-02")
+        or journey_resolutions["independent"].state.current_step
+        is not WorkflowStep.COMPLETED
     ):
         raise CrashHarnessError("independent multi-slice journey did not converge")
     plan_agents = tuple(call for call in plan.calls if call.startswith("agent:"))
@@ -978,8 +1237,12 @@ def _run_journeys(work_root: Path) -> tuple[Mapping[str, object], ...]:
             "approved_plan_commit": plan_commit,
             "handoff_sha256": handoff_sha256,
             "handoff_idempotent": True,
-            "durability_mode": "scripted-state-machine-only",
-            "record_backing_blocked_by": "STRUCTURED-BASELINE-NONRESUMABLE",
+            "durability_mode": "structured-v2-record-chain",
+            "record_run_ids": ["dry-s5-plan-only-v1", f"dry-{long_scenario.name}"],
+            "record_heads": [
+                journey_resolutions["plan"].record_head_id,
+                journey_resolutions["long"].record_head_id,
+            ],
             "end_state": "completed",
         },
         {
@@ -1003,8 +1266,9 @@ def _run_journeys(work_root: Path) -> tuple[Mapping[str, object], ...]:
             "approved_plan_commit": second_long.result.state.approved_plan_commit,
             "handoff_sha256": handoff_sha256,
             "independent_execution": True,
-            "durability_mode": "scripted-state-machine-only",
-            "record_backing_blocked_by": "STRUCTURED-BASELINE-NONRESUMABLE",
+            "durability_mode": "structured-v2-record-chain",
+            "record_run_ids": [f"dry-{independent_scenario.name}"],
+            "record_heads": [journey_resolutions["independent"].record_head_id],
             "end_state": "completed",
         },
     )
@@ -1197,6 +1461,8 @@ def run_provider_free_harness(
     )
     measured_sources = (
         repository_root / "inbox/backlog/00-s5-auftrag-crash-injection-und-harness.md",
+        repository_root
+        / "inbox/backlog/00-s5b-auftrag-baselinepraefix-konvergenz.md",
         repository_root / "schemas/orchestrator-artifact-v2.schema.json",
         repository_root / "src/artifact_models.py",
         repository_root / "src/artifact_bridge.py",
@@ -1226,6 +1492,22 @@ def run_provider_free_harness(
         "harness_implementation_sha256": implementation_digest.hexdigest(),
         "measured_source_paths": measured_source_paths,
         "mode": "provider-free",
+        "baseline_resolution": {
+            "decision": "A",
+            "strategy": "complete-canonical-append-prefix",
+            "rationale": (
+                "an interrupted initializer contains only idempotent record appends "
+                "and no physical effect, so the exact canonical prefix is completed"
+            ),
+            "admission_rule": (
+                "every exact cut of the canonical pre-work record sequence, "
+                "including workflow, gate, task, work-unit, and plan facts"
+            ),
+            "rejection_rule": (
+                "any non-prefix fact before baseline completion or prior non-ledger "
+                "side effect remains fail-closed"
+            ),
+        },
         "record_heads": heads,
         "record_semantic_heads": semantic_heads,
         "invocation_counts": {

@@ -24,6 +24,7 @@ from artifact_models import (
     ValidationAttestationPayload,
     ValidationContentPayload,
     ValidationResult,
+    WorkUnitPayload,
     provider_text_evidence,
 )
 from artifact_replay import ArtifactReplayError, replay_artifacts
@@ -395,6 +396,62 @@ def test_provider_content_recovery_is_bound_to_the_exact_round_without_decision(
     assert recovered[0] == canonical
     assert isinstance(recovered[1].payload, ProviderContentPayload)
     assert recovered[1].payload.round_number == 2
+
+
+def test_agent_result_content_authority_uses_independent_work_unit_round(
+    tmp_path: Path,
+) -> None:
+    store = ArtifactStore(tmp_path, "stale-agent-round")
+    _bind_store(store)
+    bridge = ArtifactBridge(store)
+    bridge.append(
+        WorkUnitPayload("1", 2, ("src/a.py",)),
+        logical_id="work-unit-1",
+        idempotency_key="work-unit:1:round:2",
+        fingerprint_sha256=FINGERPRINT,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    request_id = "native-codex-request-" + "b" * 64
+    canonical = b'{"ready":true}'
+    blob = store.put_blob(canonical)
+    bridge.append(
+        ProviderContentPayload(
+            Role.CODEX,
+            "1",
+            1,
+            "codex_implementation",
+            request_id,
+            blob.sha256,
+            "agent_result",
+            blob.bytes,
+            blob,
+        ),
+        logical_id=f"provider-content-codex-1-{blob.sha256[:12]}",
+        idempotency_key="provider-content:stale-agent-round",
+        fingerprint_sha256=FINGERPRINT,
+    )
+    bridge.append(
+        AgentResultPayload(
+            Role.CODEX,
+            "1",
+            "ready",
+            (),
+            "native-codex-v2",
+            request_id,
+            blob.sha256,
+        ),
+        logical_id="agent-1-codex_implementation-1",
+        idempotency_key="agent-result:stale-agent-round",
+        fingerprint_sha256=FINGERPRINT,
+    )
+
+    with pytest.raises(
+        ArtifactReplayError,
+        match="native decision has no unique earlier provider-content record",
+    ):
+        replay_artifacts(
+            store.load_chain(), store.run_id, require_content_authority=True
+        )
 
 
 def test_validation_recovery_never_reuses_an_earlier_attempt(

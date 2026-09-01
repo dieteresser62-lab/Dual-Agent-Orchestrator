@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Mapping
+from typing import Callable, Mapping
 
 from agent_runtime import (
     AgentInvocationError,
@@ -29,6 +29,7 @@ from contracts import (
     ValidationRecord,
     ValidationStatus,
 )
+from content_authority import ValidationCapture, validation_output_digest
 from finding_reducer import project_open_set
 from gates import TestChangeEvidence
 from review_packets import ReviewPacket
@@ -1163,24 +1164,42 @@ class ScriptedWorkflowDriver:
         )
         if event.status == "incomplete":
             records = records[:-1]
-        attestation_fingerprint = event.attestation_fingerprint or changes.fingerprint
-        digest_payload = json.dumps(
-            {
-                "fingerprint": attestation_fingerprint,
-                "status": event.status,
-                "commands": request.expected_commands,
-                "attempt": request.attempt_number,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
+        recorded_commands = {record.command for record in records}
+        captures = tuple(
+            ValidationCapture(
+                command,
+                (
+                    "missing"
+                    if command not in recorded_commands
+                    else "fail"
+                    if event.status == "fail"
+                    else "pass"
+                ),
+                (
+                    -1
+                    if command not in recorded_commands
+                    else 1
+                    if event.status == "fail"
+                    else 0
+                ),
+                "" if command not in recorded_commands else f"scripted {event.status}",
+                "scripted validation record is missing"
+                if command not in recorded_commands
+                else "",
+                "" if command not in recorded_commands else f"scripted {event.status}",
+            )
+            for command in request.expected_commands
         )
+        attestation_fingerprint = event.attestation_fingerprint or changes.fingerprint
         return ValidationAttestation(
             attestation_id=validation_attestation_id(request),
             diff_fingerprint=attestation_fingerprint,
             expected_commands=request.expected_commands,
             records=records,
-            output_digest=hashlib.sha256(digest_payload.encode()).hexdigest(),
+            output_digest=validation_output_digest(captures),
             summary=f"scripted validation {event.status}",
+            command_specs=tuple(command.command_spec for command in request.commands),
+            content_captures=captures,
         )
 
     def validate_plan(
@@ -1407,12 +1426,17 @@ def render_resilience_evidence(rows: tuple[ResilienceEvidenceRow, ...]) -> str:
 @dataclass
 class ScriptedWorkflowSession:
     scenario: DryRunScenario
+    driver_factory: Callable[[DryRunScenario], ScriptedWorkflowDriver] | None = None
     driver: ScriptedWorkflowDriver = field(init=False)
     clock: ScriptedClock = field(init=False)
     engine: WorkflowEngine = field(init=False)
 
     def __post_init__(self) -> None:
-        self.driver = ScriptedWorkflowDriver(self.scenario)
+        self.driver = (
+            ScriptedWorkflowDriver(self.scenario)
+            if self.driver_factory is None
+            else self.driver_factory(self.scenario)
+        )
         self.clock = ScriptedClock(
             self.scenario.clock_start, self.scenario.interrupt_on_sleep
         )
@@ -1470,13 +1494,16 @@ def build_scenario_state(
     if not scenario.changes:
         raise DryRunScenarioError("scenario requires at least one scripted change set")
     first = scenario.changes[0]
+    task_digest = hashlib.sha256(
+        task_file.read_text(encoding="utf-8").encode("utf-8")
+    ).hexdigest()
     state = init_workflow_state(
         run_id=f"dry-{scenario.name}",
         task_file=str(task_file.resolve()),
         branch=scenario.initial.branch,
         branch_base=first.start_commit,
         slice_count=scenario.initial.slice_count,
-        task_digest=first.fingerprint,
+        task_digest=task_digest,
         execution_mode=scenario.initial.execution_mode,
         task_scope_patterns=scenario.initial.scope_paths or first.paths,
         work_plan_path=scenario.initial.work_plan_path,
@@ -1653,7 +1680,10 @@ def run_scripted_workflow(
 
 
 def run_scripted_workflow_resumable(
-    *, scenario: DryRunScenario, task_file: Path
+    *,
+    scenario: DryRunScenario,
+    task_file: Path,
+    driver_factory: Callable[[DryRunScenario], ScriptedWorkflowDriver] | None = None,
 ) -> ScriptedRunReport:
     """Run one full journey and automatically resume scripted crash checkpoints.
 
@@ -1666,6 +1696,7 @@ def run_scripted_workflow_resumable(
         scenario=scenario,
         task_file=task_file,
         resume_scripted_interruptions=True,
+        driver_factory=driver_factory,
     )
 
 
@@ -1674,8 +1705,9 @@ def _run_scripted_workflow(
     scenario: DryRunScenario,
     task_file: Path,
     resume_scripted_interruptions: bool,
+    driver_factory: Callable[[DryRunScenario], ScriptedWorkflowDriver] | None = None,
 ) -> ScriptedRunReport:
-    session = ScriptedWorkflowSession(scenario)
+    session = ScriptedWorkflowSession(scenario, driver_factory)
     context = build_scenario_context(scenario)
     state = build_scenario_state(scenario, task_file=task_file)
 
@@ -1706,6 +1738,7 @@ def _run_scripted_workflow(
                 updated_at=session.clock.current.isoformat()
             )
             session.driver.checkpoint(current, history)
+            current = session.driver.active_state or current
 
     first = run_unit(state)
     if not first.result.completed:
@@ -1938,7 +1971,7 @@ def build_s5_long_run_scenario() -> DryRunScenario:
                 failure=quota_failure,
             ),
             ScriptedAgentEvent(
-                AgentRole.CODEX, 3, 1, WorkflowStep.CODEX_IMPLEMENTATION,  # allowlist:provider
+                AgentRole.CODEX, 3, 2, WorkflowStep.CODEX_IMPLEMENTATION,  # allowlist:provider
                 output=codex(  # allowlist:provider
                     "implementation_result", dispositions=("C-01",), test_files=[]
                 ),
@@ -1948,7 +1981,7 @@ def build_s5_long_run_scenario() -> DryRunScenario:
                 review(approved=False, blockers=("C-02",), closed=("C-01",)),
             ),
             ScriptedAgentEvent(
-                AgentRole.CODEX, 3, 2, WorkflowStep.CODEX_CORRECTION,  # allowlist:provider
+                AgentRole.CODEX, 3, 3, WorkflowStep.CODEX_CORRECTION,  # allowlist:provider
                 codex("correction_result", dispositions=("C-02",), test_files=[]),  # allowlist:provider
             ),
             ScriptedAgentEvent(
@@ -1970,7 +2003,11 @@ def build_s5_long_run_scenario() -> DryRunScenario:
         changes=(
             ScriptedChange(2, 1, base, slice_one_fp, ("src/first.py",), "slice one"),
             ScriptedChange(3, 1, commit_one, slice_two_fp, ("src/second.py",), "slice two"),
-            ScriptedChange(3, 2, commit_one, correction_fp, ("src/second.py",), "correction"),
+            # The resumed implementation is collected once for its Codex return
+            # and once for review before the correction delta becomes visible.
+            ScriptedChange(3, 2, commit_one, slice_two_fp, ("src/second.py",), "slice two"),
+            ScriptedChange(3, 2, commit_one, slice_two_fp, ("src/second.py",), "slice two"),
+            ScriptedChange(3, 3, commit_one, correction_fp, ("src/second.py",), "correction"),
             ScriptedChange(4, 1, base, final_fp, ("src/first.py", "src/second.py"), "final"),
         ),
         validations=tuple(

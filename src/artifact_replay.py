@@ -1792,9 +1792,17 @@ def _validate_payload_references(
             ),
             None,
         )
-        if decision_unit is not None:
+        if isinstance(decision, AgentResultPayload) and decision_unit is not None:
+            # Implementer output and its provider invocation are both owned by the
+            # current Work-Unit round.  Keep that independent cross-record check;
+            # deriving both values from the decision logical ID would be
+            # tautological and would admit stale implementer output.
             decision_round = decision_unit.round_number
         else:
+            # Reviewer rounds count review attempts within one Work Unit and may
+            # legitimately differ from the Work-Unit return/correction round
+            # after a quota or retry continuation.  Their native logical ID is
+            # the request-bound review-round authority.
             round_suffix = decision_record.logical_id.rsplit("-", 1)[-1]
             if not round_suffix.isdigit():
                 if not require_content_authority:

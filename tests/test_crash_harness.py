@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+from dataclasses import replace
 import json
 from pathlib import Path
 import sys
@@ -11,7 +12,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import crash_harness
-from artifact_models import SIDE_EFFECT_CLASSES
+from artifact_models import (
+    SIDE_EFFECT_CLASSES,
+    Fingerprint,
+    FingerprintKind,
+    WorkflowPolicyPayload,
+)
+from artifact_replay import ArtifactReplayError
 from crash_harness import (
     BOUNDARY_ORDER,
     HARNESS_SCHEMA_VERSION,
@@ -65,7 +72,7 @@ def test_manifest_fails_closed_when_one_ledger_edge_is_missing(tmp_path: Path) -
         CrashHarnessManifest.load(path)
 
 
-def test_crash_matrix_uses_production_resume_and_names_ledger_stop(
+def test_crash_matrix_uses_production_resume_and_converges_every_boundary(
     tmp_path: Path,
 ) -> None:
     payload = run_provider_free_harness(
@@ -80,15 +87,28 @@ def test_crash_matrix_uses_production_resume_and_names_ledger_stop(
     assert result["scenario_version"] == "s5-v1"
     assert result["repository_commit"] == "f" * 40
     assert result["mode"] == "provider-free"
+    assert result["baseline_resolution"] == {
+        "decision": "A",
+        "strategy": "complete-canonical-append-prefix",
+        "rationale": (
+            "an interrupted initializer contains only idempotent record appends "
+            "and no physical effect, so the exact canonical prefix is completed"
+        ),
+        "admission_rule": (
+            "every exact cut of the canonical pre-work record sequence, "
+            "including workflow, gate, task, work-unit, and plan facts"
+        ),
+        "rejection_rule": (
+            "any non-prefix fact before baseline completion or prior non-ledger "
+            "side effect remains fail-closed"
+        ),
+    }
     assert result["invocation_counts"]["real_provider_starts"] == 0
     assert result["invocation_counts"]["real_provider_process_starts"] == 0
     assert result["invocation_counts"]["simulated_agent_starts"] > 0
     assert result["commit_count"] == 5
-    assert result["end_state"] == "stopped"
-    assert result["blocked_acceptance_cases"] == [
-        "baseline-crash-convergence",
-        "record-backed-long-run",
-    ]
+    assert result["end_state"] == "converged"
+    assert result["blocked_acceptance_cases"] == []
     matrix = result["crash_matrix"]
     singles = [row for row in matrix if row["requested_crashes"] == 1]
     repeated = [row for row in matrix if row["requested_crashes"] == 2]
@@ -108,42 +128,24 @@ def test_crash_matrix_uses_production_resume_and_names_ledger_stop(
     }
     converged = [row for row in matrix if row["end_state"] == "converged"]
     stopped = [row for row in matrix if row["end_state"] == "stop_condition"]
-    assert {
-        (row["effect_class"], row["phase"])
-        for row in stopped
-    } == {
-        ("ledger", phase)
-        for phase in (
-            "before_intent",
-            "after_intent",
-            "before_result",
-            "after_result",
-        )
-    }
-    assert all(row["effect_class"] != "ledger" for row in converged)
+    assert len(converged) == len(matrix)
+    assert stopped == []
     assert all(
         row["physical_execution_count"]
-        == (0 if row["effect_class"] == "internal" else 1)
+        == (0 if row["effect_class"] in {"internal", "ledger"} else 1)
         for row in converged
     )
     assert all(row["result_completion_count"] == 1 for row in converged)
-    assert all(row["physical_execution_count"] == 0 for row in stopped)
-    assert all(row["resume_diagnostic_code"] for row in stopped)
     assert all(row["production_resume_attempts"] > 0 for row in matrix)
-    assert all(row["production_resume_successes"] > 0 for row in converged)
-    assert all(row["production_resume_successes"] == 0 for row in stopped)
+    assert all(row["production_resume_successes"] > 0 for row in matrix)
     assert all(
         row["production_boundary_entry"]
         == "ProductionWorkflowDriver.bind_work_unit"
         for row in matrix
         if row["effect_class"] in {"internal", "ledger"}
     )
-    assert all(
-        row["stop_condition_id"] == "STRUCTURED-BASELINE-NONRESUMABLE"
-        and row["stop_scope"]
-        == "run-identity-through-workflow-status-gate-ledger-prefix"
-        for row in stopped
-    )
+    assert all(row.get("stop_condition_id") is None for row in matrix)
+    assert all(row.get("stop_scope") is None for row in matrix)
     assert all(row["observed_crashes"] == row["requested_crashes"] for row in matrix)
     assert all(row["phase"] == "after_effect" for row in repeated)
     assert result["semantic_binding"]["rejected"] is True
@@ -158,21 +160,11 @@ def test_crash_matrix_uses_production_resume_and_names_ledger_stop(
         item["all_injected_crashes_observed"]
         for item in result["workflow_boundary_evidence"].values()
     )
-    assert result["workflow_boundary_evidence"]["baseline_initialization"][
-        "all_cases_converged"
-    ] is False
     assert all(
         item["all_cases_converged"]
-        for role, item in result["workflow_boundary_evidence"].items()
-        if role != "baseline_initialization"
+        for item in result["workflow_boundary_evidence"].values()
     )
-    assert {
-        (item["effect_class"], item["phase"])
-        for item in result["stop_conditions"]
-    } == {
-        (row["effect_class"], row["phase"])
-        for row in stopped
-    }
+    assert result["stop_conditions"] == []
     assert result["record_ahead_evidence"] == {
         "file_write": {
             "physical_execution_count": 1,
@@ -206,11 +198,12 @@ def test_crash_matrix_uses_production_resume_and_names_ledger_stop(
     }
     assert all(item["end_state"] == "completed" for item in journeys.values())
     assert all(
-        item["durability_mode"] == "scripted-state-machine-only"
-        and item["record_backing_blocked_by"]
-        == "STRUCTURED-BASELINE-NONRESUMABLE"
+        item["durability_mode"] == "structured-v2-record-chain"
+        and item["record_run_ids"]
+        and all(item["record_heads"])
         for item in journeys.values()
     )
+    assert all("manual_state_interventions" not in item for item in journeys.values())
     assert journeys["plan-implement-finalreview"]["plan_only_execution_mode"] == "PLAN_ONLY"
     assert journeys["plan-implement-finalreview"]["implement_execution_mode"] == "IMPLEMENT"
     assert journeys["plan-implement-finalreview"]["handoff_idempotent"] is True
@@ -222,6 +215,156 @@ def test_crash_matrix_uses_production_resume_and_names_ledger_stop(
     assert journeys["multi-slice-correction-observation-resume"][
         "finding_statuses"
     ] == ["C-01:CLOSED", "C-02:CLOSED"]
+
+
+def test_baseline_prefix_completion_rejects_any_later_physical_effect(
+    tmp_path: Path,
+) -> None:
+    run_id = "s5b-non-prefix"
+    state = crash_harness._production_state(tmp_path, run_id)
+    injector = crash_harness.CrashInjector(
+        "ledger", crash_harness.SideEffectBoundaryPhase.BEFORE_INTENT
+    )
+    driver = crash_harness._production_driver(tmp_path, injector)
+    bridge = crash_harness.ArtifactBridge(
+        crash_harness.ArtifactStore(tmp_path, run_id),
+        now=lambda: crash_harness.FIXED_TIME,
+    )
+    driver._artifact_bridge = bridge
+
+    with pytest.raises(crash_harness.InjectedCrash):
+        driver.bind_work_unit(state)
+
+    content = b"physical effect after an incomplete baseline"
+    target = tmp_path / "physical-effect.txt"
+    digest = crash_harness.sha256_bytes(content)
+    spec = crash_harness.SideEffectSpec(
+        "file_write", "run", ("physical-effect.txt", digest), state.task_digest
+    )
+    physical_execution_count = 0
+
+    def perform() -> tuple[None, str]:
+        nonlocal physical_execution_count
+        physical_execution_count += 1
+        target.write_bytes(content)
+        return None, digest
+
+    crash_harness.SideEffectExecutor(bridge).execute(
+        spec,
+        reconcile=lambda: crash_harness.Reconciliation(
+            crash_harness.ReconciliationOutcome.NOT_OCCURRED
+        ),
+        perform=perform,
+    )
+    resumed = crash_harness._production_driver(tmp_path)
+    resumed._artifact_bridge = bridge
+
+    with pytest.raises(crash_harness.ArtifactResumeError, match="RECORD-MISSING"):
+        resumed.bind_work_unit(state)
+    assert physical_execution_count == 1
+    assert target.read_bytes() == content
+
+
+def test_every_exact_canonical_baseline_record_cut_converges(tmp_path: Path) -> None:
+    run_id = "s5b-every-prefix-cut"
+    canonical_root = tmp_path / "canonical"
+    canonical_state = crash_harness._production_state(canonical_root, run_id)
+    canonical_driver = crash_harness._production_driver(canonical_root)
+    canonical_driver._artifact_bridge = crash_harness.ArtifactBridge(
+        crash_harness.ArtifactStore(canonical_root, run_id),
+        now=lambda: crash_harness.FIXED_TIME,
+    )
+    canonical_driver.bind_work_unit(canonical_state)
+    canonical = crash_harness.ArtifactStore(canonical_root, run_id).load_chain()
+    assert len(canonical) > 5
+
+    for cut in range(1, len(canonical)):
+        case_root = tmp_path / f"cut-{cut:02d}"
+        state = crash_harness._production_state(case_root, run_id)
+        store = crash_harness.ArtifactStore(case_root, run_id)
+        for record in canonical[:cut]:
+            store.put(record)
+        driver = crash_harness._production_driver(case_root)
+        driver._artifact_bridge = crash_harness.ArtifactBridge(
+            store, now=lambda: crash_harness.FIXED_TIME
+        )
+
+        driver.bind_work_unit(state)
+
+        assert store.load_chain() == canonical
+        assert crash_harness.resolve_resume_state(
+            case_root, run_id
+        ).state.current_step is crash_harness.WorkflowStep.CODEX_IMPLEMENTATION
+
+
+def test_baseline_prefix_completion_rejects_later_workflow_fact(
+    tmp_path: Path,
+) -> None:
+    run_id = "s5b-later-workflow-fact"
+    state = crash_harness._production_state(tmp_path, run_id)
+    injector = crash_harness.CrashInjector(
+        "ledger", crash_harness.SideEffectBoundaryPhase.BEFORE_INTENT
+    )
+    driver = crash_harness._production_driver(tmp_path, injector)
+    bridge = crash_harness.ArtifactBridge(
+        crash_harness.ArtifactStore(tmp_path, run_id),
+        now=lambda: crash_harness.FIXED_TIME,
+    )
+    driver._artifact_bridge = bridge
+    with pytest.raises(crash_harness.InjectedCrash):
+        driver.bind_work_unit(state)
+    bridge.append(
+        WorkflowPolicyPayload("2", 0, 99),
+        logical_id="workflow-policy-2",
+        idempotency_key="workflow-policy:2:1",
+        fingerprint_sha256=state.task_digest,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+
+    resumed = crash_harness._production_driver(tmp_path)
+    resumed._artifact_bridge = bridge
+    with pytest.raises(
+        (crash_harness.ArtifactResumeError, ArtifactReplayError)
+    ):
+        resumed.bind_work_unit(state)
+
+
+@pytest.mark.parametrize("near_miss", ["idempotency", "fingerprint-kind"])
+def test_baseline_prefix_completion_rejects_near_miss_profile(
+    tmp_path: Path, near_miss: str
+) -> None:
+    run_id = f"s5b-near-miss-{near_miss}"
+    canonical_root = tmp_path / "canonical"
+    state = crash_harness._production_state(canonical_root, run_id)
+    driver = crash_harness._production_driver(canonical_root)
+    driver._artifact_bridge = crash_harness.ArtifactBridge(
+        crash_harness.ArtifactStore(canonical_root, run_id),
+        now=lambda: crash_harness.FIXED_TIME,
+    )
+    driver.bind_work_unit(state)
+    canonical = crash_harness.ArtifactStore(canonical_root, run_id).load_chain()
+
+    case_root = tmp_path / "case"
+    case_state = crash_harness._production_state(case_root, run_id)
+    store = crash_harness.ArtifactStore(case_root, run_id)
+    store.put(canonical[0])
+    store.put(canonical[1])
+    profile = canonical[2]
+    if near_miss == "idempotency":
+        profile = replace(profile, idempotency_key="run-profile-near-miss")
+    else:
+        profile = replace(
+            profile,
+            fingerprint=Fingerprint(FingerprintKind.IMPLEMENTATION, state.task_digest),
+        )
+    store.put(profile)
+    resumed = crash_harness._production_driver(case_root)
+    resumed._artifact_bridge = crash_harness.ArtifactBridge(
+        store, now=lambda: crash_harness.FIXED_TIME
+    )
+
+    with pytest.raises(crash_harness.ArtifactResumeError):
+        resumed.bind_work_unit(case_state)
 
 
 def test_harness_result_is_byte_stable_and_self_bound(tmp_path: Path) -> None:
