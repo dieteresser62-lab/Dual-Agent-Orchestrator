@@ -191,6 +191,8 @@ ADDITIONAL_BOUNDARY_MARKERS = {
         "bound success evidence differs from terminal workflow state",
         "Terminal workflow result differs from bound watch task identity",
         "differs from the immutable persisted profile",
+    },
+    "src/workflow_production.py": {
         "persisted task identity differs from --resume task",
         "persisted task contract differs from --resume task",
         "persisted watch run identity differs from inbox task",
@@ -341,7 +343,7 @@ COMPARISON_TARGETS = (
     ("src/orchestrator.py", None, "_attach_record_events"),
     ("src/orchestrator.py", None, "run_pipeline"),
     ("src/orchestrator.py", None, "_apply_resumed_agent_profiles"),
-    ("src/orchestrator.py", None, "run_production_workflow"),
+    ("src/workflow_production.py", None, "run_production_workflow"),
     (
         "src/workflow_baseline.py",
         None,
@@ -453,7 +455,7 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/orchestrator.py:_attach_record_events": 16,
     "src/orchestrator.py:run_pipeline": 20,
     "src/orchestrator.py:_apply_resumed_agent_profiles": 3,
-    "src/orchestrator.py:run_production_workflow": 40,
+    "src/workflow_production.py:run_production_workflow": 40,
     "src/workflow_baseline.py:matches_baseline_initialization_prefix": 24,
     "src/workflow_baseline.py:WorkflowBaseline._persist_structured_baseline": 26,
     "src/orchestrator.py:ProductionWorkflowDriver.assert_structured_decision_context": 4,
@@ -733,9 +735,11 @@ def test_structured_decision_paths_do_not_read_the_state_cache() -> None:
     assert locator_attributes == {"run_id", "strip"}
 
     orchestrator_source = _source("src/orchestrator.py")
-    assert orchestrator_source.count("load_workflow_state(") == 1
+    production_source = _source("src/workflow_production.py")
+    assert orchestrator_source.count("load_workflow_state(") == 0
+    assert production_source.count("load_workflow_state(") == 1
     replacement = _function_node(
-        "src/orchestrator.py", None, "run_production_workflow"
+        "src/workflow_production.py", None, "run_production_workflow"
     )
     replacement_dump = ast.dump(replacement, include_attributes=False)
     assert "replacement_requested" in replacement_dump
@@ -756,6 +760,7 @@ def test_bridge_error_inventory_is_source_bound() -> None:
         "src/artifact_migration.py",
         "src/artifact_bridge.py",
         "src/orchestrator.py",
+        "src/workflow_production.py",
     )
     combined_source = "\n".join(_string_constants(path) for path in paths)
     document = MATRIX_PATH.read_text(encoding="utf-8")
@@ -1104,7 +1109,7 @@ def test_managed_audit_commit_boundary_is_source_and_document_bound() -> None:
         include_attributes=False,
     )
     workflow = ast.dump(
-        _function_node("src/orchestrator.py", None, "run_production_workflow"),
+        _function_node("src/workflow_production.py", None, "run_production_workflow"),
         include_attributes=False,
     )
     commit = ast.dump(

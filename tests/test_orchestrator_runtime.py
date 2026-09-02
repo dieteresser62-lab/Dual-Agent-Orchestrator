@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import orchestrator
 import pytest
+import workflow_production
 import workflow_requests
 from conftest import can_symlink
 from agent_adapters import (
@@ -5344,7 +5345,7 @@ def test_legacy_watch_resume_is_rejected_before_branch_switch(
         raise AssertionError("resume must not prepare or switch branches")
 
     monkeypatch.setattr(
-        orchestrator,
+        workflow_production,
         "prepare_new_watch_task_branch",
         unexpected_prepare,
     )
@@ -6628,7 +6629,7 @@ def test_completed_plan_resume_retries_failed_handoff_without_agents(
         agent_steps.append(invocation.step)
         return _native_review_approval(invocation)
 
-    real_handoff = orchestrator.write_implementation_handoff
+    real_handoff = workflow_production.write_implementation_handoff
     handoff_calls = 0
 
     def fail_once(**kwargs):
@@ -6645,7 +6646,7 @@ def test_completed_plan_resume_retries_failed_handoff_without_agents(
         "assert_structured_decision_context",
         lambda _driver: None,
     )
-    monkeypatch.setattr(orchestrator, "write_implementation_handoff", fail_once)
+    monkeypatch.setattr(workflow_production, "write_implementation_handoff", fail_once)
     monkeypatch.chdir(repository)
 
     with pytest.raises(

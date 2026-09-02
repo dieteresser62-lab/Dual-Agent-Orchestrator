@@ -10,13 +10,12 @@ import shlex
 import time
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
-from typing import Callable, Protocol, get_args, get_type_hints
+from typing import Callable, get_args, get_type_hints
 
 from agent_adapters import (
     AgentAdapter,
     NativeClaudeReviewAdapter,
     NativeCodexAdapter,
-    build_agent_registry,
 )
 from agent_runtime import (
     AgentInvocationError,
@@ -86,16 +85,13 @@ from gates import TestChangeEvidence, detect_test_changes, matches_path_patterns
 from path_policy import PathPolicyError, resolve_path_within_roots
 from git_service import (
     inspect_repository,
-    prepare_new_watch_task_branch,
     require_committed_file_at_head,
     GitTransactionError,
 )
 from plan_handoff import (
-    PlanHandoffError,
     extract_implementation_slices,
     implementation_task_path,
     render_implementation_task,
-    write_implementation_handoff,
 )
 from repo_changes import (
     FinalReviewEvidenceSnapshot,
@@ -110,12 +106,9 @@ from repo_changes import (
 )
 from semantic_markdown import SemanticMarkdownError, canonical_semantic_markdown
 from state_io import (
-    ActiveV2StateError,
-    CompletedV2State,
     StateSchemaError,
     load_resumable_workflow_state,
     load_workflow_state,
-    new_run_id,
     save_workflow_state,
     write_file,
     write_workflow_checkpoint,
@@ -123,7 +116,7 @@ from state_io import (
     write_workflow_state_projection,
     workflow_checkpoint_path,
 )
-from task_contract import TaskContract, TaskMode, parse_task_contract
+from task_contract import TaskContract, TaskMode
 from workflow import (
     CodexInvocation,
     PersistedNativeReviewerReplay,
@@ -133,13 +126,10 @@ from workflow import (
     WorkflowCommitRequest,
     WorkflowContext,
     WorkflowCorrectionBoundary,
-    WorkflowDriver,
     WorkflowEngine,
     WorkflowExecutionError,
     WorkflowHistory,
     WorkflowRunResult,
-    require_driver_capabilities,
-    require_workflow_driver,
 )
 from workflow_recovery import WorkflowRecovery, WorkflowRecoveryDependencies
 from workflow_persistence import (
@@ -170,7 +160,6 @@ from workflow_state import (
     ProtocolBinding,
     ProtocolMode,
     WorkflowState,
-    WorkflowStateValidationError,
     WorkflowStep,
     WorkUnitRecord,
     WorkUnitKind,
@@ -213,6 +202,8 @@ from inbox_watcher import (
     watch_identity_path,
     watch_inbox,
 )
+import workflow_dry_run
+import workflow_production
 
 
 logger = logging.getLogger(__name__)
@@ -253,50 +244,13 @@ def _shorten(value: str | None, maximum: int) -> str:
     return text if len(text) <= maximum else text[: max(0, maximum - 3)] + "..."
 
 
-class ProductionWorkflowLoopDriver(WorkflowDriver, Protocol):
-    """Workflow contract plus capabilities owned only by the production loop."""
-
-    def finalize_audit(self, state: WorkflowState) -> str | None: ...
-
-    def assert_structured_decision_context(self) -> None: ...
-
-    def prepare_finding_handoff(
-        self,
-        *,
-        plan_task_path: Path,
-        work_plan_path: str,
-        target_branch: str,
-        approved_plan_commit: str,
-    ) -> tuple[str, str] | None: ...
-
-    def persist_implementation_handoff(
-        self, handoff_path: Path, approved_plan_commit: str
-    ) -> None: ...
-
-    def _write_side_effect_file(
-        self, path: Path, content: str, *, normalized_text: bool
-    ) -> None: ...
-
-
-PRODUCTION_LOOP_INTERNAL_DRIVER_METHODS = frozenset(
-    {
-        "_write_side_effect_file",
-        "assert_structured_decision_context",
-        "finalize_audit",
-        "persist_implementation_handoff",
-        "prepare_finding_handoff",
-    }
+ProductionWorkflowLoopDriver = workflow_production.ProductionWorkflowLoopDriver
+PRODUCTION_LOOP_INTERNAL_DRIVER_METHODS = (
+    workflow_production.PRODUCTION_LOOP_INTERNAL_DRIVER_METHODS
 )
-
-
-def require_production_workflow_loop_driver(driver: object) -> None:
-    """Fail before the production loop uses an incomplete internal surface."""
-    require_workflow_driver(driver)
-    require_driver_capabilities(
-        driver,
-        methods=PRODUCTION_LOOP_INTERNAL_DRIVER_METHODS,
-        label="production workflow driver internal surface",
-    )
+require_production_workflow_loop_driver = (
+    workflow_production.require_production_workflow_loop_driver
+)
 
 
 class ProductionWorkflowDriver:
@@ -3196,434 +3150,42 @@ def _unused_run_id(repository_root: Path, proposed: str) -> str:
     raise WorkflowExecutionError("could not allocate a unique structured run id")
 
 
+def _production_workflow_dependencies(
+) -> workflow_production.ProductionWorkflowDependencies:
+    """Bind the extracted production entry to orchestrator-owned implementations."""
+    return workflow_production.ProductionWorkflowDependencies(
+        driver_factory=ProductionWorkflowDriver,
+        apply_resumed_agent_profiles=_apply_resumed_agent_profiles,
+        archive_stale_untracked_audit_reports=_archive_stale_untracked_audit_reports,
+        attach_managed_audit_paths=_attach_managed_audit_paths,
+        bound_task_control_paths=_bound_task_control_paths,
+        context=_context,
+        current_gate_approval=_current_gate_approval,
+        fresh_state=_fresh_state,
+        history=_history,
+        inherit_redundant_test_gate=_inherit_redundant_test_gate,
+        initialize_finding_handoff=_initialize_finding_handoff,
+        managed_audit_path=_managed_audit_path,
+        new_watch_task_control_paths=_new_watch_task_control_paths,
+        new_watch_task_preserved_paths=_new_watch_task_preserved_paths,
+        recover_final_review_attestation=_recover_final_review_attestation,
+        recover_legacy_plan_only_post_gate=_recover_legacy_plan_only_post_gate,
+        unused_run_id=_unused_run_id,
+    )
+
+
 def run_production_workflow(
     task_file: Path,
     args: argparse.Namespace,
     *,
     force_new: bool = False,
 ) -> WorkflowRunResult:
-    root = Path.cwd().resolve()
-    state_file = root / ".orchestrator" / "state.json"
-    task_file = task_file.resolve()
-    assignment = task_file.read_text(encoding="utf-8")
-    task_contract = parse_task_contract(
-        assignment,
-        mode_override=getattr(args, "plan_only", None),
-        work_plan_override=getattr(args, "work_plan", None),
-        target_branch_override=getattr(args, "target_branch", None),
-        source_name=task_file.name,
+    return workflow_production.run_production_workflow(
+        task_file,
+        args,
+        _production_workflow_dependencies(),
+        force_new=force_new,
     )
-    if task_contract.informal_intake:
-        logger.info(
-            "Informal inbox intake: derived mode=PLAN_ONLY work_plan=%s scope=%s",
-            task_contract.work_plan_path,
-            ",".join(task_contract.scope_patterns),
-        )
-        assignment += (
-            "\n\nINFORMAL INTAKE (orchestrator-derived, authoritative):\n"
-            "- The text above is the user's idea, not a detailed implementation contract.\n"
-            "- Translate it into a repository-grounded executable work plan. Do not ask "
-            "the user to supply paths, Slices, acceptance criteria, risks, or validation "
-            "bookkeeping that can be determined from the repository.\n"
-            f"- Derived mode: PLAN_ONLY\n"
-            f"- Derived work-plan artifact: {task_contract.work_plan_path}\n"
-            f"- Derived exact planning scope: {', '.join(task_contract.scope_patterns)}\n"
-            "- Stop only for a genuine product choice with materially different outcomes, "
-            "missing authority, secrets, or destructive action."
-        )
-    allowed_roots = tuple(dict.fromkeys((root, task_file.parent.resolve())))
-    requested_run_id = str(getattr(args, "watch_run_id", ""))
-    run_id = requested_run_id or _unused_run_id(root, new_run_id())
-    managed_audit_path = (
-        _managed_audit_path(task_file, task_contract.digest)
-        if task_contract.mode is TaskMode.IMPLEMENT
-        and task_file.parent.name.casefold() == "inbox"
-        else None
-    )
-
-    watch_run = bool(getattr(args, "watch_run_id", None))
-    new_watch_task = watch_run and (
-        force_new
-        or (
-            not state_file.exists()
-            and not watch_run_has_records(root, run_id)
-        )
-    )
-    prepared_branch_base: str | None = None
-    if new_watch_task:
-        if managed_audit_path is not None:
-            configured_outbox = Path(getattr(args, "outbox_dir", "outbox"))
-            if not configured_outbox.is_absolute():
-                configured_outbox = root / configured_outbox
-            _archive_stale_untracked_audit_reports(
-                root,
-                current_audit_path=managed_audit_path,
-                outbox_failed_dir=configured_outbox / "failed",
-            )
-        prepared = prepare_new_watch_task_branch(
-            root,
-            target_branch=task_contract.target_branch,
-            excluded_control_paths=_new_watch_task_control_paths(root, task_file),
-            preserved_task_paths=_new_watch_task_preserved_paths(root, task_contract),
-        )
-        prepared_branch_base = prepared.identity.head
-        logger.info(
-            "Watch target branch ready: action=%s previous=%s target=%s head=%s",
-            prepared.action,
-            prepared.previous_branch,
-            prepared.identity.branch,
-            prepared.identity.head[:12],
-        )
-
-    loaded: WorkflowState | CompletedV2State | None = None
-    replacement_run_id: str | None = None
-    replacement_requested = force_new or (
-        bool(args.force_overwrite_state) and not bool(args.resume)
-    )
-    if state_file.exists() and replacement_requested:
-        try:
-            existing = load_workflow_state(state_file, allowed_roots=allowed_roots)
-        except StateSchemaError:
-            # Force replacement is explicitly authorized to discard the cache.
-            # A malformed non-authoritative projection must not veto that action.
-            existing = None
-        if isinstance(existing, WorkflowState):
-            replacement_run_id = existing.run_id
-    elif (state_file.exists() or bool(args.resume)) and not new_watch_task:
-        try:
-            loaded = load_resumable_workflow_state(
-                state_file,
-                repository_root=root,
-                allowed_roots=allowed_roots,
-                expected_run_id=(requested_run_id or None),
-                expected_task_file=task_file,
-                expected_task_digest=task_contract.digest,
-            )
-        except ActiveV2StateError:
-            if args.force_overwrite_state:
-                loaded = None
-            else:
-                raise
-    effective_resume = bool(args.resume and not new_watch_task)
-    if effective_resume:
-        if isinstance(loaded, CompletedV2State):
-            raise StateSchemaError(
-                "completed version-2 state cannot be resumed; start a new v3 run"
-            )
-        if loaded is None:
-            raise StateSchemaError("--resume requested but no version-3 state exists")
-        state = loaded
-        if state.task_file != str(task_file):
-            raise StateSchemaError("persisted task identity differs from --resume task")
-        if state.task_digest is None:
-            raise StateSchemaError(
-                "persisted state predates the hardened task contract; start a new run "
-                "with --no-resume --force-overwrite-state"
-            )
-        if state.task_digest != task_contract.digest:
-            raise StateSchemaError(
-                "task content changed since the persisted run was created"
-            )
-        if (
-            state.execution_mode != task_contract.mode.value
-            or state.task_scope_patterns != task_contract.scope_patterns
-            or state.work_plan_path != task_contract.work_plan_path
-            or state.target_branch != task_contract.target_branch
-            or state.finding_handoff_source_run_id
-            != task_contract.finding_handoff_source_run_id
-            or state.finding_handoff_export_record_id
-            != task_contract.finding_handoff_export_record_id
-        ):
-            raise StateSchemaError("persisted task contract differs from --resume task")
-        if getattr(args, "watch_run_id", None) and state.run_id != args.watch_run_id:
-            raise StateSchemaError("persisted watch run identity differs from inbox task")
-        if state.audit_report_path is None and managed_audit_path is not None:
-            state = replace(state, audit_report_path=managed_audit_path)
-        _apply_resumed_agent_profiles(args, state)
-    else:
-        if loaded is not None and not args.force_overwrite_state and not force_new:
-            raise StateSchemaError(
-                "existing state requires --resume or --force-overwrite-state"
-            )
-        state = _fresh_state(
-            task_file=task_file,
-            run_id=run_id,
-            repository_root=root,
-            task_contract=task_contract,
-            branch_base_override=prepared_branch_base,
-            audit_report_path=managed_audit_path,
-            codex_profile=AgentProfileBinding(
-                args.agent_settings["codex"].model,
-                args.agent_settings["codex"].effort,
-            ),
-            claude_profile=AgentProfileBinding(
-                args.agent_settings["claude"].model,
-                args.agent_settings["claude"].effort,
-            ),
-        )
-        state = _initialize_finding_handoff(
-            root, state, task_contract, task_file.read_bytes()
-        )
-    state = _attach_managed_audit_paths(state)
-    state = _recover_legacy_plan_only_post_gate(state)
-    state = state.reopen_legacy_quota_resume_diff_gate()
-    config = OrchestratorConfig(
-        dry_run=False,
-        agent_output_mode=args.agent_output,
-        agent_output_max_chars=args.agent_output_max_chars,
-        agent_live_stream=bool(args.agent_live_stream),
-        agent_live_stream_mode=args.agent_live_stream_mode,
-        agent_live_stream_channels=args.agent_live_stream_channels,
-        repo_root=root,
-        strict_preflight=bool(args.strict_preflight),
-        provider_input_budget=args.repo_config.provider_input_budget,
-    )
-    driver: ProductionWorkflowLoopDriver = ProductionWorkflowDriver(
-        repository_root=root,
-        state_file=state_file,
-        agents=build_agent_registry(args.agent_settings),
-        config=config,
-        allowed_roots=allowed_roots,
-        replace_existing_run_id=replacement_run_id,
-    )
-    require_production_workflow_loop_driver(driver)
-    engine = WorkflowEngine(driver)
-    history = _history(state, root)
-    driver.checkpoint(state, history)
-
-    for _ in range(100):
-        current = state.current_work_unit
-        structured_replay = None
-        read_blob = None
-        if (
-            current.kind is WorkUnitKind.FINAL_REVIEW
-            and state.effective_protocol_mode is ProtocolMode.STRUCTURED_V2
-        ):
-            resolution = resolve_resume_state(root, state)
-            structured_replay = resolution.replay_result
-            read_blob = ArtifactStore(root, state.run_id).read_blob
-        recovered_history = _recover_final_review_attestation(
-            state,
-            history,
-            structured_replay,
-            read_blob,
-        )
-        if recovered_history != history:
-            history = recovered_history
-            driver.checkpoint(state, history)
-            state = driver.active_state or state
-            current = state.current_work_unit
-        if current.status in {
-            WorkUnitStatus.WAITING_FOR_QUOTA,
-            WorkUnitStatus.WAITING_FOR_RETRY,
-            WorkUnitStatus.AWAITING_RESUME,
-        }:
-            if not effective_resume:
-                return WorkflowRunResult(state, history)
-            state = state.resume_after_invocation_halt()
-            driver.checkpoint(state, history)
-        elif current.status is WorkUnitStatus.AWAITING_USER_DECISION:
-            reframed = engine.reframe_unexpected_path_stop_gate(state)
-            if reframed != state:
-                state = reframed
-                driver.checkpoint(state, history)
-                current = state.current_work_unit
-                if current.status is WorkUnitStatus.IN_PROGRESS:
-                    continue
-            inherited = _inherit_redundant_test_gate(state)
-            if inherited != state:
-                state = inherited
-                driver.checkpoint(state, history)
-            elif (existing_approval := _current_gate_approval(state)) is not None:
-                decided = engine.decide_current_gate(
-                    state,
-                    history,
-                    approved=True,
-                    rationale=existing_approval.rationale,
-                )
-                state, history = decided.state, decided.history
-            elif args.gate_decision is not None:
-                decided = engine.decide_current_gate(
-                    state,
-                    history,
-                    approved=args.gate_decision,
-                    rationale=args.gate_rationale,
-                )
-                state, history = decided.state, decided.history
-                if not args.gate_decision:
-                    return decided
-            elif (
-                effective_resume
-                and not args.auto_resume
-                and current.gate.fingerprint is None
-            ):
-                state = state.resume_after_user_decision()
-                driver.checkpoint(state, history)
-            else:
-                return WorkflowRunResult(state, history)
-
-        current = state.current_work_unit
-        if (
-            current.status is WorkUnitStatus.IN_PROGRESS
-            and current.kind is WorkUnitKind.SLICE
-            and not state.current_slice.scope_paths
-        ):
-            identity = inspect_repository(root)
-            expected_head = state.current_slice.start_commit
-            if expected_head is None:
-                raise WorkflowExecutionError(
-                    "unbound Slice has no persisted start commit"
-                )
-            if identity.head != expected_head:
-                state = state.await_policy_gate(
-                    reason=GateReason.UNEXPECTED_FILE,
-                    detail=(
-                        "SLICE-HEAD-DRIFT | repository HEAD changed after the "
-                        f"Slice boundary was planned: expected {expected_head}, "
-                        f"found {identity.head}"
-                    ),
-                )
-                driver.checkpoint(state, history)
-                return WorkflowRunResult(state, history)
-            planned = state.planned_slices[state.current_slice_id - 1]
-            start = collect_repository_changes(
-                root,
-                expected_head,
-                excluded_paths=_bound_task_control_paths(root, state),
-            )
-            state = state.bind_current_slice_git_boundary(
-                start_commit=expected_head,
-                scope_paths=planned.scope_paths,
-                start_fingerprint=start.fingerprint,
-            )
-            driver.checkpoint(state, history)
-            current = state.current_work_unit
-        if current.status is WorkUnitStatus.IN_PROGRESS:
-            result = engine.run_current_work_unit(
-                state, _context(args=args, assignment=assignment, state=state), history
-            )
-            state = driver.active_state or result.state
-            if not result.completed:
-                return WorkflowRunResult(state, result.history, result.commit_ref)
-            history = result.history
-            current = state.current_work_unit
-
-        if current.kind is WorkUnitKind.FINAL_REVIEW:
-            audit_commit = driver.finalize_audit(state)
-            return WorkflowRunResult(state, history, audit_commit)
-
-        if current.kind is WorkUnitKind.PLAN:
-            if state.execution_mode == TaskMode.PLAN_ONLY.value:
-                commit_ref = state.current_slice.commit_ref
-                if commit_ref is None:
-                    raise WorkflowExecutionError(
-                        "completed PLAN_ONLY run has no reviewed plan commit"
-                    )
-                try:
-                    recovered = state.bind_completed_plan_commit(commit_ref=commit_ref)
-                except WorkflowStateValidationError as exc:
-                    raise WorkflowExecutionError(
-                        f"could not bind completed PLAN_ONLY commit: {exc}"
-                    ) from exc
-                if recovered is not state:
-                    logger.warning(
-                        "Backfilling the approved-plan state and structured record "
-                        "for a completed PLAN_ONLY run before IMPLEMENT handoff."
-                    )
-                    state = recovered
-                    driver.checkpoint(state, history)
-                    state = driver.active_state or state
-                driver.assert_structured_decision_context()
-                try:
-                    finding_handoff = driver.prepare_finding_handoff(
-                        plan_task_path=task_file,
-                        work_plan_path=state.work_plan_path or "",
-                        target_branch=state.target_branch or state.branch,
-                        approved_plan_commit=commit_ref,
-                    )
-                    handoff = write_implementation_handoff(
-                        plan_task_path=task_file,
-                        repository_root=root,
-                        work_plan_path=state.work_plan_path or "",
-                        target_branch=state.target_branch or state.branch,
-                        approved_plan_commit=commit_ref,
-                        finding_handoff=finding_handoff,
-                        write_content=lambda path, content: driver._write_side_effect_file(
-                            path, content, normalized_text=False
-                        ),
-                    )
-                except (ArtifactBridgeError, ArtifactReplayError, PlanHandoffError) as exc:
-                    raise WorkflowExecutionError(
-                        f"could not create IMPLEMENT handoff: {exc}"
-                    ) from exc
-                driver.persist_implementation_handoff(handoff, commit_ref)
-                logger.info("Implementation handoff ready: %s", handoff)
-                return WorkflowRunResult(state, history, commit_ref)
-            if not state.planned_slices:
-                raise WorkflowExecutionError("completed plan has no persisted SLICE_PLAN")
-            carried_findings = driver.carry_forward_native_findings(
-                state, history.findings
-            )
-            state = state.start_work_unit(
-                slice_id=1,
-                kind=WorkUnitKind.SLICE,
-                step=WorkflowStep.CODEX_IMPLEMENTATION,
-            )
-            history = WorkflowHistory(
-                state.current_work_unit_id,
-                findings=carried_findings,
-            )
-            driver.checkpoint(state, history)
-            state = driver.active_state or state
-            continue
-
-        pending = next(
-            (item for item in state.slices if item.status is SliceStatus.PENDING), None
-        )
-        if pending is not None:
-            identity = inspect_repository(root)
-            carried_findings = driver.carry_forward_native_findings(
-                state, history.findings
-            )
-            state = state.start_work_unit(
-                slice_id=pending.slice_id,
-                kind=WorkUnitKind.SLICE,
-                step=WorkflowStep.CODEX_IMPLEMENTATION,
-                slice_start_commit=identity.head,
-            )
-            history = WorkflowHistory(
-                state.current_work_unit_id,
-                findings=carried_findings,
-            )
-            driver.checkpoint(state, history)
-            state = driver.active_state or state
-            continue
-
-        carried_findings = driver.carry_forward_native_findings(
-            state, history.findings
-        )
-        state = state.start_final_review_work_unit()
-        carried_attestations = history.attestations[-1:]
-        history = WorkflowHistory(
-            state.current_work_unit_id,
-            findings=carried_findings,
-            events=(
-                (
-                    ValidationAuditEvent(
-                        event_id=1,
-                        slice_id=state.current_slice_id,
-                        attestation=carried_attestations[0],
-                    ),
-                )
-                if carried_attestations
-                else ()
-            ),
-            attestations=carried_attestations,
-        )
-        driver.checkpoint(state, history)
-        state = driver.active_state or state
-
-    raise WorkflowExecutionError("workflow session exceeded its deterministic transition bound")
 
 
 def _inherit_redundant_test_gate(state: WorkflowState) -> WorkflowState:
@@ -3731,129 +3293,7 @@ def _recover_legacy_plan_only_post_gate(state: WorkflowState) -> WorkflowState:
 
 
 def run_default_dry_run(task_file: Path, *, run_id: str | None = None):
-    """Exercise plan, two commits, and final review without agents or repository writes."""
-    from dry_run_scenarios import (
-        DryRunScenario,
-        ScriptedAgentEvent,
-        ScriptedChange,
-        ScriptedCommit,
-        ScriptedInitialState,
-        ScriptedValidation,
-        ScriptedWorkflowSession,
-        build_scenario_context,
-        build_scenario_state,
-    )
-
-    base = "a" * 40
-    commit1 = "b" * 40
-    commit2 = "c" * 40
-    plan_fp, first_fp, second_fp, final_fp = (value * 64 for value in "1234")
-
-    def review() -> dict[str, object]:
-        return {
-            "schema_version": "native-agent-review-result-v2",
-            "result_type": "review_result",
-            "request_id": "$BOUND_REQUEST_ID",
-            "reviewer": "claude",
-            "decision": "approved",
-            "new_findings": [],
-            "status_changes": [],
-            "reclassifications": [],
-            "anchors": [],
-            "review_evidence": {
-                "dimensions": "correctness, contracts, failure paths, security, resume",
-                "largest_residual_risk": "runtime drift",
-                "break_condition": "a provider changes its output envelope",
-            },
-            "pre_mortem": "A resumed invocation uses stale evidence.",
-        }
-
-    def codex_result(result_type: str, **fields: object) -> dict[str, object]:
-        return {
-            "schema_version": "native-agent-codex-result-v2",
-            "request_id": "$BOUND_REQUEST_ID",
-            "result_type": result_type,
-            "ready": True,
-            "finding_dispositions": [],
-            **fields,
-        }
-
-    scenario = DryRunScenario(
-        name="default-v3-cutover",
-        initial=ScriptedInitialState(
-            kind=WorkUnitKind.PLAN,
-            slice_count=2,
-            scope_paths=("docs/internal/plan.md", "src/first.py", "src/second.py"),
-        ),
-        agent_events=(
-            ScriptedAgentEvent(AgentRole.CODEX, 1, 1, WorkflowStep.CODEX_PLAN,
-                               codex_result("plan_result", slice_plan=[
-                                   {
-                                       "slice_id": 1,
-                                       "summary": "Execute the first native Slice.",
-                                       "scope_paths": ["src/first.py"],
-                                   },
-                                   {
-                                       "slice_id": 2,
-                                       "summary": "Execute the second native Slice.",
-                                       "scope_paths": ["src/second.py"],
-                                   },
-                               ])),
-            ScriptedAgentEvent(AgentRole.CLAUDE, 1, 1, WorkflowStep.CLAUDE_PLAN_REVIEW,
-                               review()),
-            ScriptedAgentEvent(AgentRole.CODEX, 2, 1, WorkflowStep.CODEX_IMPLEMENTATION,
-                               codex_result("implementation_result", test_files=[])),
-            ScriptedAgentEvent(AgentRole.CLAUDE, 2, 1, WorkflowStep.CLAUDE_SLICE_REVIEW,
-                               review()),
-            ScriptedAgentEvent(AgentRole.CODEX, 3, 1, WorkflowStep.CODEX_IMPLEMENTATION,
-                               codex_result("implementation_result", test_files=[])),
-            ScriptedAgentEvent(AgentRole.CLAUDE, 3, 1, WorkflowStep.CLAUDE_SLICE_REVIEW,
-                               review()),
-            ScriptedAgentEvent(AgentRole.CODEX, 4, 1, WorkflowStep.CODEX_FINAL_REVIEW,
-                               codex_result(
-                                   "final_report_result",
-                                   self_check="The scripted branch passed its bound final self-check.",
-                               )),
-            ScriptedAgentEvent(AgentRole.CLAUDE, 4, 1, WorkflowStep.CLAUDE_FINAL_REVIEW,
-                               review()),
-        ),
-        changes=(
-            ScriptedChange(1, 1, base, plan_fp, ("docs/internal/plan.md",), "plan diff"),
-            ScriptedChange(2, 1, base, first_fp, ("src/first.py",), "first slice diff"),
-            ScriptedChange(3, 1, commit1, second_fp, ("src/second.py",), "second slice diff"),
-            ScriptedChange(4, 1, base, final_fp,
-                           ("src/first.py", "src/second.py"), "full branch diff"),
-        ),
-        validations=tuple(
-            ScriptedValidation(fingerprint, "pass")
-            for fingerprint in (plan_fp, first_fp, second_fp, final_fp)
-        ),
-        commits=(
-            ScriptedCommit(1, first_fp, commit1),
-            ScriptedCommit(2, second_fp, commit2),
-        ),
-    )
-    session = ScriptedWorkflowSession(scenario)
-    context = build_scenario_context(scenario)
-    state = build_scenario_state(scenario, task_file=task_file)
-    if run_id is not None:
-        state = replace(state, run_id=run_id)
-    plan = session.run(state, context)
-    state = plan.result.state.start_work_unit(
-        slice_id=1, kind=WorkUnitKind.SLICE, step=WorkflowStep.CODEX_IMPLEMENTATION
-    ).bind_current_slice_git_boundary(
-        start_commit=base, scope_paths=("src/first.py",), start_fingerprint="0" * 64
-    )
-    first = session.run(state, context)
-    state = first.result.state.start_work_unit(
-        slice_id=2, kind=WorkUnitKind.SLICE, step=WorkflowStep.CODEX_IMPLEMENTATION,
-        slice_start_commit=commit1,
-    ).bind_current_slice_git_boundary(
-        start_commit=commit1, scope_paths=("src/second.py",), start_fingerprint="0" * 64
-    )
-    second = session.run(state, context)
-    final = session.engine.run_final_review(second.result.state, context)
-    return final, tuple(session.driver.calls), dict(session.driver.validation_counts)
+    return workflow_dry_run.run_default_dry_run(task_file, run_id=run_id)
 
 
 def run_pipeline(

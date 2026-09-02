@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from orchestrator import (
+from workflow_production import (
     PRODUCTION_LOOP_INTERNAL_DRIVER_METHODS,
     require_production_workflow_loop_driver,
 )
@@ -22,6 +22,7 @@ from workflow_state import init_workflow_state
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_PATH = ROOT / "src" / "workflow.py"
 ORCHESTRATOR_PATH = ROOT / "src" / "orchestrator.py"
+PRODUCTION_PATH = ROOT / "src" / "workflow_production.py"
 DRY_RUN_PATH = ROOT / "src" / "dry_run_scenarios.py"
 FAKE_PATH = ROOT / "tests" / "test_workflow.py"
 
@@ -156,7 +157,7 @@ def test_workflow_engine_driver_inventory_exactly_matches_protocol() -> None:
 
 
 def test_production_loop_driver_inventory_is_protocol_or_explicitly_internal() -> None:
-    tree = ast.parse(ORCHESTRATOR_PATH.read_text(encoding="utf-8"))
+    tree = ast.parse(PRODUCTION_PATH.read_text(encoding="utf-8"))
     loop = _function_node(tree, "run_production_workflow")
     loop_capabilities = _named_driver_capabilities(loop)
     workflow_capabilities = (

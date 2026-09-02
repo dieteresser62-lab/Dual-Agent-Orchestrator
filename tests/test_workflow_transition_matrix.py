@@ -349,8 +349,8 @@ GATE_SOURCE_MAP = (
         "SLICE-HEAD-DRIFT",
         "unexpected_file",
         "policy",
-        "orchestrator.run_production_workflow",
-        ("orchestrator.run_production_workflow",),
+        "workflow_production.run_production_workflow",
+        ("workflow_production.run_production_workflow",),
         ("slice-boundary-policy-gate",),
     ),
     GateSourceRow(
@@ -551,7 +551,7 @@ GATE_SOURCE_MAP = (
         "instance_failure_or_quota",
         "resume",
         "workflow_state.reopen_legacy_quota_resume_diff_gate",
-        ("orchestrator.run_production_workflow",),
+        ("workflow_production.run_production_workflow",),
         ("legacy-quota-revalidation",),
         r"legacy QUOTA-RESUME-DIFF requires fingerprint-bound repository revalidation",
     ),
@@ -707,9 +707,9 @@ GATE_CALLS = {
 
 EXPECTED_GATE_CALL_SITES = Counter(
     {
-        ("orchestrator.py", "run_production_workflow", "await_policy_gate"): 1,
+        ("workflow_production.py", "run_production_workflow", "await_policy_gate"): 1,
         (
-            "orchestrator.py",
+            "workflow_production.py",
             "run_production_workflow",
             "reopen_legacy_quota_resume_diff_gate",
         ): 1,
