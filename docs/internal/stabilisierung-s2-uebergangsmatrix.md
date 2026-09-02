@@ -1233,8 +1233,9 @@ gebunden. Der produktive Record→Audit-Leser `_attach_record_events()` ist mit
 quellgebundene Inventar umfasst nach Entfernung der drei
 redundanten Review-Event-/Mirrorvergleiche **43** `mismatch(...)`-Aufrufe;
 `resolve_resume_state()` besitzt 117,
-`review_payload_matches_result()` 13 und `persist_native_codex_contract()` 11
-inventarisierte Vergleichsausdrücke. Der nun record-gegen-Mirror gerichtete
+`review_payload_matches_result()` 13 und
+`WorkflowPersistence.persist_native_implementer_contract()` 11 inventarisierte
+Vergleichsausdrücke. Der nun record-gegen-Mirror gerichtete
 Reviewguard `assert_structured_decision_context()` besitzt **11** inventarisierte
 Vergleichsausdrücke; seine vier zusätzlichen Vergleiche binden die getrennt
 ermittelten letzten Reviewrecords an das tatsächlich serialisierte Mirroraggregat.

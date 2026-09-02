@@ -359,7 +359,11 @@ COMPARISON_TARGETS = (
     ("src/workflow_recovery.py", "WorkflowRecovery", "_reconcile_pending_side_effects"),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "authoritative_native_findings"),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "carry_forward_native_findings"),
-    ("src/orchestrator.py", "ProductionWorkflowDriver", "_persist_native_agent_request_bundle"),
+    (
+        "src/workflow_persistence.py",
+        "WorkflowPersistence",
+        "_persist_native_agent_request_bundle",
+    ),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "_write_immutable_file"),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "_write_native_codex_raw_response"),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "_materialize_review_packet"),
@@ -367,7 +371,11 @@ COMPARISON_TARGETS = (
     ("src/workflow_recovery.py", "WorkflowRecovery", "recover_pending_native_implementer"),
     ("src/workflow_recovery.py", "WorkflowRecovery", "recover_pending_native_reviewer"),
     ("src/workflow_recovery.py", "WorkflowRecovery", "recover_pending_native_reviewer_before_policy"),
-    ("src/orchestrator.py", "ProductionWorkflowDriver", "persist_native_codex_contract"),
+    (
+        "src/workflow_persistence.py",
+        "WorkflowPersistence",
+        "persist_native_implementer_contract",
+    ),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "prepare_finding_handoff"),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "checkpoint"),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "_project_audit"),
@@ -454,7 +462,7 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/workflow_recovery.py:WorkflowRecovery._reconcile_pending_side_effects": 34,
     "src/orchestrator.py:ProductionWorkflowDriver.authoritative_native_findings": 9,
     "src/orchestrator.py:ProductionWorkflowDriver.carry_forward_native_findings": 4,
-    "src/orchestrator.py:ProductionWorkflowDriver._persist_native_agent_request_bundle": 4,
+    "src/workflow_persistence.py:WorkflowPersistence._persist_native_agent_request_bundle": 4,
     "src/orchestrator.py:ProductionWorkflowDriver._write_immutable_file": 3,
     "src/orchestrator.py:ProductionWorkflowDriver._write_native_codex_raw_response": 0,
     "src/orchestrator.py:ProductionWorkflowDriver._materialize_review_packet": 3,
@@ -462,7 +470,7 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/workflow_recovery.py:WorkflowRecovery.recover_pending_native_implementer": 42,
     "src/workflow_recovery.py:WorkflowRecovery.recover_pending_native_reviewer": 30,
     "src/workflow_recovery.py:WorkflowRecovery.recover_pending_native_reviewer_before_policy": 31,
-    "src/orchestrator.py:ProductionWorkflowDriver.persist_native_codex_contract": 11,
+    "src/workflow_persistence.py:WorkflowPersistence.persist_native_implementer_contract": 11,
     "src/orchestrator.py:ProductionWorkflowDriver.prepare_finding_handoff": 13,
     "src/orchestrator.py:ProductionWorkflowDriver.checkpoint": 8,
     "src/orchestrator.py:ProductionWorkflowDriver._project_audit": 22,
@@ -609,6 +617,7 @@ def _class_field_names(relative_path: str, class_name: str) -> set[str]:
 def _driver_divergence_messages() -> Counter[str]:
     boundaries = (
         _class_node(_tree("src/orchestrator.py"), "ProductionWorkflowDriver"),
+        _class_node(_tree("src/workflow_persistence.py"), "WorkflowPersistence"),
         _class_node(_tree("src/workflow_recovery.py"), "WorkflowRecovery"),
     )
     values = (
@@ -1072,8 +1081,8 @@ def test_state_schema_field_inventory_is_source_bound() -> None:
 
 def test_attestation_identity_uses_the_record_envelope() -> None:
     node = _function_node(
-        "src/orchestrator.py",
-        "ProductionWorkflowDriver",
+        "src/workflow_persistence.py",
+        "WorkflowPersistence",
         "persist_validation_attestation",
     )
     canonical = ast.dump(node, annotate_fields=True, include_attributes=False)
@@ -1109,6 +1118,12 @@ def test_managed_audit_commit_boundary_is_source_and_document_bound() -> None:
 
 def test_comparison_expression_inventory_has_not_grown() -> None:
     assert _comparison_inventory() == EXPECTED_COMPARISON_COUNTS
+    document = MATRIX_PATH.read_text(encoding="utf-8")
+    assert (
+        "`WorkflowPersistence.persist_native_implementer_contract()` 11 "
+        "inventarisierte\nVergleichsausdrücke"
+    ) in document
+    assert "`persist_native_codex_contract()` 11" not in document
 
 
 def test_recovery_and_preflight_predicate_bodies_are_frozen() -> None:

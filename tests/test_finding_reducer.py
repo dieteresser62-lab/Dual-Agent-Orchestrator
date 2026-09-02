@@ -546,6 +546,7 @@ def test_no_production_module_reimplements_finding_reduction() -> None:
         "review_packets.py",
         "validation_matrix.py",
         "workflow.py",
+        "workflow_persistence.py",
         "workflow_recovery.py",
     }
     actual_consumers: set[str] = set()

@@ -27,13 +27,14 @@
     "src/native_provider_schema.py": {"codex": 10, "claude": 9},
     "src/native_review_contract.py": {"claude": 8},
     "src/native_review_request.py": {"claude": 14},
-    "src/orchestrator.py": {"codex": 96, "claude": 41},
+    "src/orchestrator.py": {"codex": 88, "claude": 35},
     "src/plan_handoff.py": {"claude": 1},
     "src/prompts.py": {"codex": 1, "claude": 1},
     "src/provider_input_budget.py": {"codex": 7, "claude": 4},
     "src/state_io.py": {"codex": 1, "claude": 2},
     "src/task_contract.py": {"codex": 2},
     "src/workflow.py": {"codex": 134, "claude": 69},
+    "src/workflow_persistence.py": {"codex": 8, "claude": 5},
     "src/workflow_recovery.py": {"codex": 20, "claude": 18},
     "src/workflow_state.py": {"codex": 91, "claude": 39}
   }
