@@ -353,10 +353,10 @@ COMPARISON_TARGETS = (
         "_persist_structured_baseline",
     ),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "assert_structured_decision_context"),
-    ("src/orchestrator.py", "ProductionWorkflowDriver", "_start_provider_attempt"),
+    ("src/workflow_recovery.py", "WorkflowRecovery", "_start_provider_attempt"),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "_reconcile_provider_effect"),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "_write_side_effect_file"),
-    ("src/orchestrator.py", "ProductionWorkflowDriver", "_reconcile_pending_side_effects"),
+    ("src/workflow_recovery.py", "WorkflowRecovery", "_reconcile_pending_side_effects"),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "authoritative_native_findings"),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "carry_forward_native_findings"),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "_persist_native_agent_request_bundle"),
@@ -364,9 +364,9 @@ COMPARISON_TARGETS = (
     ("src/orchestrator.py", "ProductionWorkflowDriver", "_write_native_codex_raw_response"),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "_materialize_review_packet"),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "_canonical_native_agent_result"),
-    ("src/orchestrator.py", "ProductionWorkflowDriver", "recover_pending_native_codex"),
-    ("src/orchestrator.py", "ProductionWorkflowDriver", "recover_pending_native_reviewer"),
-    ("src/orchestrator.py", "ProductionWorkflowDriver", "recover_pending_native_reviewer_before_policy"),
+    ("src/workflow_recovery.py", "WorkflowRecovery", "recover_pending_native_implementer"),
+    ("src/workflow_recovery.py", "WorkflowRecovery", "recover_pending_native_reviewer"),
+    ("src/workflow_recovery.py", "WorkflowRecovery", "recover_pending_native_reviewer_before_policy"),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "persist_native_codex_contract"),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "prepare_finding_handoff"),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "checkpoint"),
@@ -448,10 +448,10 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/orchestrator.py:ProductionWorkflowDriver._matches_baseline_initialization_prefix": 24,
     "src/orchestrator.py:ProductionWorkflowDriver._persist_structured_baseline": 26,
     "src/orchestrator.py:ProductionWorkflowDriver.assert_structured_decision_context": 4,
-    "src/orchestrator.py:ProductionWorkflowDriver._start_provider_attempt": 19,
+    "src/workflow_recovery.py:WorkflowRecovery._start_provider_attempt": 19,
     "src/orchestrator.py:ProductionWorkflowDriver._reconcile_provider_effect": 13,
     "src/orchestrator.py:ProductionWorkflowDriver._write_side_effect_file": 3,
-    "src/orchestrator.py:ProductionWorkflowDriver._reconcile_pending_side_effects": 34,
+    "src/workflow_recovery.py:WorkflowRecovery._reconcile_pending_side_effects": 34,
     "src/orchestrator.py:ProductionWorkflowDriver.authoritative_native_findings": 9,
     "src/orchestrator.py:ProductionWorkflowDriver.carry_forward_native_findings": 4,
     "src/orchestrator.py:ProductionWorkflowDriver._persist_native_agent_request_bundle": 4,
@@ -459,9 +459,9 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/orchestrator.py:ProductionWorkflowDriver._write_native_codex_raw_response": 0,
     "src/orchestrator.py:ProductionWorkflowDriver._materialize_review_packet": 3,
     "src/orchestrator.py:ProductionWorkflowDriver._canonical_native_agent_result": 4,
-    "src/orchestrator.py:ProductionWorkflowDriver.recover_pending_native_codex": 42,
-    "src/orchestrator.py:ProductionWorkflowDriver.recover_pending_native_reviewer": 30,
-    "src/orchestrator.py:ProductionWorkflowDriver.recover_pending_native_reviewer_before_policy": 31,
+    "src/workflow_recovery.py:WorkflowRecovery.recover_pending_native_implementer": 42,
+    "src/workflow_recovery.py:WorkflowRecovery.recover_pending_native_reviewer": 30,
+    "src/workflow_recovery.py:WorkflowRecovery.recover_pending_native_reviewer_before_policy": 31,
     "src/orchestrator.py:ProductionWorkflowDriver.persist_native_codex_contract": 11,
     "src/orchestrator.py:ProductionWorkflowDriver.prepare_finding_handoff": 13,
     "src/orchestrator.py:ProductionWorkflowDriver.checkpoint": 8,
@@ -607,10 +607,14 @@ def _class_field_names(relative_path: str, class_name: str) -> set[str]:
 
 
 def _driver_divergence_messages() -> Counter[str]:
-    driver = _class_node(_tree("src/orchestrator.py"), "ProductionWorkflowDriver")
+    boundaries = (
+        _class_node(_tree("src/orchestrator.py"), "ProductionWorkflowDriver"),
+        _class_node(_tree("src/workflow_recovery.py"), "WorkflowRecovery"),
+    )
     values = (
         node.value
-        for node in ast.walk(driver)
+        for boundary in boundaries
+        for node in ast.walk(boundary)
         if isinstance(node, ast.Constant) and isinstance(node.value, str)
     )
     return Counter(
