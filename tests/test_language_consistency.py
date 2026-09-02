@@ -1150,6 +1150,44 @@ _PATH_READ_METHODS = frozenset(("read_text", "read_bytes", "open"))
 _GITIGNORED_READ_EXEMPTIONS = frozenset(
     (("tests/conftest.py", "repository_metadata_signature", ".orchestrator"),)
 )
+_GITIGNORED_READ_EXEMPTIONS_BASELINE = (
+    ROOT / "tests/fixtures/gitignored-read-exemptions-baseline-v1.json"
+)
+
+
+def _gitignored_read_exemption_ratchet_hits(
+    exemptions: frozenset[tuple[str, str, str]] | None = None,
+    baseline_path: Path = _GITIGNORED_READ_EXEMPTIONS_BASELINE,
+) -> tuple[str, ...]:
+    baseline_document = json.loads(baseline_path.read_text(encoding="utf-8"))
+    assert (
+        baseline_document["schema_version"]
+        == "gitignored-read-exemptions-baseline-v1"
+    )
+    entries = baseline_document["exemptions"]
+    assert all(
+        set(entry) == {"source_path", "function", "gitignored_path"}
+        and all(isinstance(value, str) and value for value in entry.values())
+        for entry in entries
+    )
+    baseline = tuple(
+        (
+            entry["source_path"],
+            entry["function"],
+            entry["gitignored_path"],
+        )
+        for entry in entries
+    )
+    assert len(baseline) == len(set(baseline))
+    assert list(baseline) == sorted(baseline)
+
+    current = _GITIGNORED_READ_EXEMPTIONS if exemptions is None else exemptions
+    growth = sorted(current - frozenset(baseline))
+    return tuple(
+        "gitignored read exemption exceeds baseline: "
+        f"{source_path}::{function} -> {gitignored_path}"
+        for source_path, function, gitignored_path in growth
+    )
 
 
 def _gitignored_top_level_directories(repository_root: Path = ROOT) -> frozenset[str]:
@@ -1349,6 +1387,35 @@ def test_repository_code_does_not_read_gitignored_source_paths() -> None:
         ignored_directories,
     )
     assert not hits, "Gitignored repository source reads found:\n" + "\n".join(hits)
+
+
+def test_gitignored_read_exemptions_stay_at_or_below_fixed_baseline() -> None:
+    hits = _gitignored_read_exemption_ratchet_hits()
+    assert not hits, "Gitignored read exemptions increased:\n" + "\n".join(hits)
+
+
+def test_gitignored_read_exemption_ratchet_rejects_growth_and_accepts_shrinkage() -> None:
+    added = (
+        "tests/temporary_probe.py",
+        "unrelated_reader",
+        ".orchestrator",
+    )
+    existing = (
+        "tests/conftest.py",
+        "repository_metadata_signature",
+        ".orchestrator",
+    )
+
+    assert _gitignored_read_exemption_ratchet_hits(
+        _GITIGNORED_READ_EXEMPTIONS | frozenset((added,))
+    ) == (
+        "gitignored read exemption exceeds baseline: "
+        "tests/temporary_probe.py::unrelated_reader -> .orchestrator",
+    )
+    assert existing in _GITIGNORED_READ_EXEMPTIONS
+    assert not _gitignored_read_exemption_ratchet_hits(
+        _GITIGNORED_READ_EXEMPTIONS - frozenset((existing,))
+    )
 
 
 def test_gitignored_read_exemption_is_bound_to_the_metadata_guard_function() -> None:

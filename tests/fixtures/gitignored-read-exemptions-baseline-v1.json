@@ -1,0 +1,10 @@
+{
+  "schema_version": "gitignored-read-exemptions-baseline-v1",
+  "exemptions": [
+    {
+      "source_path": "tests/conftest.py",
+      "function": "repository_metadata_signature",
+      "gitignored_path": ".orchestrator"
+    }
+  ]
+}
