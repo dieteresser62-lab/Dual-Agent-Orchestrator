@@ -1,0 +1,26 @@
+{
+  "schema_version": "function-size-baseline-v1",
+  "threshold_lines": 200,
+  "functions": {
+    "src/agent_runtime.py::run_agent": 295,
+    "src/artifact_models.py::_payload_from_dict": 298,
+    "src/artifact_projection.py::render_replay_sections": 473,
+    "src/artifact_replay.py::_validate_payload_references": 1032,
+    "src/artifact_replay.py::project_workflow_state": 502,
+    "src/cli.py::build_parser": 255,
+    "src/cli.py::parse_args": 202,
+    "src/git_service.py::commit_slice": 210,
+    "src/inbox_watcher.py::watch_inbox": 508,
+    "src/native_review_contract.py::native_review_provider_response_schema": 299,
+    "src/orchestrator.py::ProductionWorkflowDriver.collect_changes": 225,
+    "src/orchestrator.py::run_production_workflow": 428,
+    "src/workflow.py::WorkflowEngine._run_codex": 299,
+    "src/workflow.py::WorkflowEngine._run_review": 268,
+    "src/workflow_baseline.py::WorkflowBaseline._persist_structured_baseline": 237,
+    "src/workflow_baseline.py::matches_baseline_initialization_prefix": 288,
+    "src/workflow_git_commit.py::WorkflowGitCommit.commit_slice": 305,
+    "src/workflow_recovery.py::WorkflowRecovery.recover_pending_native_implementer": 234,
+    "src/workflow_recovery.py::WorkflowRecovery.recover_pending_native_reviewer_before_policy": 218,
+    "src/workflow_state.py::WorkflowState.from_dict": 200
+  }
+}

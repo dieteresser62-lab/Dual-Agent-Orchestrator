@@ -1544,6 +1544,89 @@ def test_productive_path_count_limit_mutation_is_detected_structurally() -> None
     )
 
 
+_FUNCTION_SIZE_BASELINE = ROOT / "tests/fixtures/function-size-baseline-v1.json"
+
+
+def _qualified_function_sizes(node: ast.AST, prefix: str = "") -> list[tuple[str, int]]:
+    """Return each named function with its line span, qualified by enclosing scopes."""
+    found: list[tuple[str, int]] = []
+    for child in getattr(node, "body", ()):
+        if isinstance(child, ast.ClassDef):
+            found.extend(_qualified_function_sizes(child, f"{prefix}{child.name}."))
+        elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            span = child.end_lineno - child.lineno + 1
+            found.append((f"{prefix}{child.name}", span))
+            found.extend(_qualified_function_sizes(child, f"{prefix}{child.name}."))
+    return found
+
+
+def _measured_oversized_functions(source_root: Path, threshold: int) -> dict[str, int]:
+    measured: dict[str, int] = {}
+    for path in sorted(source_root.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for qualname, span in _qualified_function_sizes(tree):
+            if span >= threshold:
+                measured[f"{path.relative_to(ROOT).as_posix()}::{qualname}"] = span
+    return measured
+
+
+def _function_size_hits(
+    measured: dict[str, int] | None = None,
+    baseline_path: Path = _FUNCTION_SIZE_BASELINE,
+) -> tuple[str, ...]:
+    document = json.loads(baseline_path.read_text(encoding="utf-8"))
+    assert document["schema_version"] == "function-size-baseline-v1"
+    threshold = document["threshold_lines"]
+    assert isinstance(threshold, int) and not isinstance(threshold, bool) and threshold > 0
+    baseline = document["functions"]
+    assert all(
+        isinstance(key, str)
+        and "::" in key
+        and isinstance(value, int)
+        and not isinstance(value, bool)
+        and value >= threshold
+        for key, value in baseline.items()
+    )
+    assert list(baseline) == sorted(baseline)
+
+    current = (
+        _measured_oversized_functions(ROOT / "src", threshold)
+        if measured is None
+        else measured
+    )
+    hits: list[str] = []
+    for key, span in sorted(current.items()):
+        recorded = baseline.get(key)
+        if recorded is None:
+            hits.append(f"new function at or above {threshold} lines: {key} ({span})")
+        elif span > recorded:
+            hits.append(f"function grew past its baseline: {key} ({recorded} -> {span})")
+    return tuple(hits)
+
+
+def test_function_size_stays_at_or_below_fixed_baseline() -> None:
+    hits = _function_size_hits()
+    assert not hits, "Oversized functions grew or appeared:\n" + "\n".join(hits)
+
+
+def test_function_size_ratchet_rejects_growth_and_new_entries_and_allows_shrinkage() -> None:
+    document = json.loads(_FUNCTION_SIZE_BASELINE.read_text(encoding="utf-8"))
+    threshold = document["threshold_lines"]
+    baseline = document["functions"]
+    worst = max(baseline, key=lambda key: baseline[key])
+    recorded = baseline[worst]
+
+    assert _function_size_hits({worst: recorded + 1}) == (
+        f"function grew past its baseline: {worst} ({recorded} -> {recorded + 1})",
+    )
+    assert _function_size_hits({"src/probe.py::oversized_probe": threshold}) == (
+        f"new function at or above {threshold} lines: "
+        f"src/probe.py::oversized_probe ({threshold})",
+    )
+    assert _function_size_hits({worst: recorded - 1}) == ()
+    assert _function_size_hits({}) == ()
+
+
 def test_gitignored_read_exemption_is_bound_to_the_metadata_guard_function() -> None:
     synthetic = "\n".join(
         (
