@@ -473,7 +473,10 @@ GATE_SOURCE_MAP = (
         "stop_request",
         "policy",
         "workflow._validate_plan_before_review",
-        ("workflow._validate_plan_before_review",),
+        (
+            "workflow._validate_plan_before_review",
+            "workflow.reframe_unexpected_path_stop_gate",
+        ),
         ("plan-contract-invalid",),
     ),
     GateSourceRow(

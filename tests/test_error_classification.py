@@ -313,7 +313,7 @@ def _record_authority_resume_failure() -> BaseException:
     return ArtifactResumeError("record/native finding authority is incomplete")
 
 
-def test_central_inventory_classifies_all_48_project_error_types_exactly_once() -> None:
+def test_central_inventory_classifies_all_49_project_error_types_exactly_once() -> None:
     declared: dict[str, tuple[str, tuple[str, ...]]] = {}
     for path in (ROOT / "src").glob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -362,7 +362,7 @@ def test_central_inventory_classifies_all_48_project_error_types_exactly_once() 
         for error_type in ERROR_CLASSIFICATIONS
     }
 
-    assert len(named_errors) == 48
+    assert len(named_errors) == 49
     assert registered == project_exceptions
     assert project_exceptions - named_errors == {
         f"{FinalReviewPreflightDenied.__module__}.FinalReviewPreflightDenied",

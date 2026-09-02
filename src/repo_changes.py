@@ -357,6 +357,7 @@ def _read_path_payload(
     relative_path: str,
     *,
     semantic_markdown_paths: frozenset[str] = frozenset(),
+    raw_fingerprint_paths: frozenset[str] = frozenset(),
 ) -> _UntrackedPayload:
     candidate = _safe_untracked_candidate(repository_root, relative_path)
     try:
@@ -395,7 +396,8 @@ def _read_path_payload(
     preview = bytearray()
     markdown_content = (
         bytearray()
-        if (
+        if relative_path not in raw_fingerprint_paths
+        and (
             relative_path in semantic_markdown_paths
             or _uses_semantic_markdown_digest(relative_path)
         )
@@ -580,6 +582,7 @@ def collect_repository_changes(
     merge_base: str,
     *,
     semantic_markdown_paths: Iterable[str] = (),
+    raw_fingerprint_paths: Iterable[str] = (),
     excluded_paths: Iterable[str] = (),
 ) -> RepositoryChanges:
     """Collect all tracked and non-ignored untracked changes since an explicit merge-base."""
@@ -604,6 +607,9 @@ def collect_repository_changes(
 
     semantic_paths = frozenset(
         _normalize_selected_path(path) for path in semantic_markdown_paths
+    )
+    raw_paths = frozenset(
+        _normalize_selected_path(path) for path in raw_fingerprint_paths
     )
     exclusions = frozenset(_normalize_selected_path(path) for path in excluded_paths)
     entries = [
@@ -654,6 +660,7 @@ def collect_repository_changes(
         entry.path
         for entry in entries
         if entry.tracked
+        and entry.path not in raw_paths
         and (
             entry.path in semantic_paths
             or _uses_semantic_markdown_digest(entry.path)
@@ -686,6 +693,7 @@ def collect_repository_changes(
                 root,
                 entry.path,
                 semantic_markdown_paths=semantic_paths,
+                raw_fingerprint_paths=raw_paths,
             )
     fingerprint_entries = tuple(
         _change_fingerprint_entry(entry, payloads) for entry in entries

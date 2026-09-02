@@ -232,7 +232,8 @@ def test_plan_scope_stop_becomes_post_revision_fingerprint_gate() -> None:
     ).with_current_step(WorkflowStep.CODEX_PLAN_REVISION).await_policy_gate(
         reason=GateReason.STOP_REQUEST,
         detail=(
-            "PLAN-CONTRACT-INVALID | The work plan is not safe to hand to "
+            "PLAN-CONTRACT-INVALID | changed_path_outside_scope | "
+            "The work plan is not safe to hand to "
             "reviewers or implementation: internal plan validation found "
             f"out-of-scope planning changes: {hotfix_path}"
         ),

@@ -288,7 +288,7 @@ def _canonical_exact_path(raw: str, slice_id: int) -> str:
         raise PlanHandoffError(f"Slice {slice_id} contains an invalid exact path")
     path = PurePosixPath(raw)
     if path.is_absolute() or ".." in path.parts or any(char in raw for char in "*?["):
-        raise PlanHandoffError(f"Slice {slice_id} contains a non-exact path: {raw}")
+        raise PlanHandoffError(f"Slice {slice_id} contains a non-exact path")
     return path.as_posix()
 
 

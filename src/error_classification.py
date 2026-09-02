@@ -62,6 +62,7 @@ from task_contract import TaskContractError
 from validation_matrix import ValidationMatrixError
 from workflow import (
     NoWorkflowChangesError,
+    PlanContractValidationError,
     ValidationExecutionError,
     WorkflowCommitApprovalRequired,
     WorkflowContractError,
@@ -103,7 +104,7 @@ _TRANSIENT = FailureClass.TRANSIENT
 _REJECT = FailureClass.TERMINAL_REJECTION
 
 
-# Authoritative inventory: all 47 ``*Error`` classes currently defined in
+# Authoritative inventory: all 48 ``*Error`` classes currently defined in
 # ``src/`` plus the schema validator's typed ``SchemaMismatch`` exception and
 # the four project exceptions whose names do not end in ``Error``.  Subclasses
 # are intentionally repeated instead of inheriting an implicit classification.
@@ -138,6 +139,7 @@ ERROR_CLASSIFICATIONS: dict[type[BaseException], tuple[FailureClass, str]] = {
     NativeReviewRequestError: _entry(_HALT, "NATIVE-REVIEW-REQUEST"),
     PathPolicyError: _entry(_HALT, "PATH-POLICY"),
     PlanHandoffError: _entry(_HALT, "PLAN-HANDOFF"),
+    PlanContractValidationError: _entry(_HALT, "PLAN-CONTRACT-VALIDATION"),
     ProviderInputBudgetError: _entry(_HALT, "PROVIDER-BUDGET-CONFIG"),
     ProviderInputBudgetExceeded: _entry(_HALT, "PROVIDER-BUDGET-EXCEEDED"),
     ProviderInputEfficiencyError: _entry(_HALT, "PROVIDER-INPUT-EFFICIENCY"),

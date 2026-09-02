@@ -9,6 +9,7 @@ import time
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from enum import Enum
+from types import MappingProxyType
 from typing import Callable, Protocol
 
 from agent_runtime import (
@@ -145,6 +146,121 @@ AGENT_SANDBOX_VALIDATION_PATTERN = re.compile(
 
 class WorkflowExecutionError(RuntimeError):
     """Raised when the development workflow must stop without advancing a step."""
+
+
+class PlanContractFailureKind(str, Enum):
+    """Closed inventory of failures before a PLAN_ONLY artifact can be reviewed."""
+
+    PERSISTED_SLICE_PLAN_MISSING = "persisted_slice_plan_missing"
+    PLANNED_PATH_OUTSIDE_SCOPE = "planned_path_outside_scope"
+    CHANGED_PATH_OUTSIDE_SCOPE = "changed_path_outside_scope"
+    PLAN_ARTIFACT_SLICE_COUNT_INVALID = "plan_artifact_slice_count_invalid"
+    WORK_PLAN_PATH_NOT_PLANNED = "work_plan_path_not_planned"
+    WORK_PLAN_PATH_NOT_CHANGED = "work_plan_path_not_changed"
+    WORK_PLAN_PATH_UNSAFE_RESOLUTION = "work_plan_path_unsafe_resolution"
+    WORK_PLAN_PATH_NOT_REGULAR = "work_plan_path_not_regular"
+    WORK_PLAN_PATH_NOT_UTF8 = "work_plan_path_not_utf8"
+    WORK_PLAN_SEMANTIC_MARKDOWN_INVALID = "work_plan_semantic_markdown_invalid"
+    WORK_PLAN_PATH_EMPTY = "work_plan_path_empty"
+    WORK_PLAN_HANDOFF_INVALID = "work_plan_handoff_invalid"
+
+
+class PlanContractSecurityClass(str, Enum):
+    INTERNAL_INVARIANT = "internal_invariant"
+    SCOPE_BOUNDARY = "scope_boundary"
+    PATH_BOUNDARY = "path_boundary"
+    SAFE_REPOSITORY_ARTIFACT = "safe_repository_artifact"
+    HANDOFF_STRUCTURE = "handoff_structure"
+
+
+class PlanContractRepairability(str, Enum):
+    FAIL_CLOSED = "fail_closed"
+    REPAIR_ONCE = "repair_once"
+
+
+class PlanContractRepairAction(str, Enum):
+    CREATE_MISSING_FILE = "create_missing_file"
+    UPDATE_EXISTING_FILE = "update_existing_file"
+
+
+@dataclass(frozen=True)
+class PlanContractFailurePolicy:
+    security_class: PlanContractSecurityClass
+    repairability: PlanContractRepairability
+    repair_action: PlanContractRepairAction | None = None
+
+    def __post_init__(self) -> None:
+        repairable = self.repairability is PlanContractRepairability.REPAIR_ONCE
+        if repairable != (self.repair_action is not None):
+            raise ValueError(
+                "plan-contract repair action must match its repairability class"
+            )
+
+
+PLAN_CONTRACT_FAILURE_POLICIES = MappingProxyType({
+    PlanContractFailureKind.PERSISTED_SLICE_PLAN_MISSING: PlanContractFailurePolicy(
+        PlanContractSecurityClass.INTERNAL_INVARIANT,
+        PlanContractRepairability.FAIL_CLOSED,
+    ),
+    PlanContractFailureKind.PLANNED_PATH_OUTSIDE_SCOPE: PlanContractFailurePolicy(
+        PlanContractSecurityClass.SCOPE_BOUNDARY,
+        PlanContractRepairability.FAIL_CLOSED,
+    ),
+    PlanContractFailureKind.CHANGED_PATH_OUTSIDE_SCOPE: PlanContractFailurePolicy(
+        PlanContractSecurityClass.SCOPE_BOUNDARY,
+        PlanContractRepairability.FAIL_CLOSED,
+    ),
+    PlanContractFailureKind.PLAN_ARTIFACT_SLICE_COUNT_INVALID: PlanContractFailurePolicy(
+        PlanContractSecurityClass.INTERNAL_INVARIANT,
+        PlanContractRepairability.FAIL_CLOSED,
+    ),
+    PlanContractFailureKind.WORK_PLAN_PATH_NOT_PLANNED: PlanContractFailurePolicy(
+        PlanContractSecurityClass.INTERNAL_INVARIANT,
+        PlanContractRepairability.FAIL_CLOSED,
+    ),
+    PlanContractFailureKind.WORK_PLAN_PATH_NOT_CHANGED: PlanContractFailurePolicy(
+        PlanContractSecurityClass.SAFE_REPOSITORY_ARTIFACT,
+        PlanContractRepairability.REPAIR_ONCE,
+        PlanContractRepairAction.CREATE_MISSING_FILE,
+    ),
+    PlanContractFailureKind.WORK_PLAN_PATH_UNSAFE_RESOLUTION: PlanContractFailurePolicy(
+        PlanContractSecurityClass.PATH_BOUNDARY,
+        PlanContractRepairability.FAIL_CLOSED,
+    ),
+    PlanContractFailureKind.WORK_PLAN_PATH_NOT_REGULAR: PlanContractFailurePolicy(
+        PlanContractSecurityClass.PATH_BOUNDARY,
+        PlanContractRepairability.FAIL_CLOSED,
+    ),
+    PlanContractFailureKind.WORK_PLAN_PATH_NOT_UTF8: PlanContractFailurePolicy(
+        PlanContractSecurityClass.SAFE_REPOSITORY_ARTIFACT,
+        PlanContractRepairability.REPAIR_ONCE,
+        PlanContractRepairAction.UPDATE_EXISTING_FILE,
+    ),
+    PlanContractFailureKind.WORK_PLAN_SEMANTIC_MARKDOWN_INVALID: PlanContractFailurePolicy(
+        PlanContractSecurityClass.SAFE_REPOSITORY_ARTIFACT,
+        PlanContractRepairability.REPAIR_ONCE,
+        PlanContractRepairAction.UPDATE_EXISTING_FILE,
+    ),
+    PlanContractFailureKind.WORK_PLAN_PATH_EMPTY: PlanContractFailurePolicy(
+        PlanContractSecurityClass.SAFE_REPOSITORY_ARTIFACT,
+        PlanContractRepairability.REPAIR_ONCE,
+        PlanContractRepairAction.UPDATE_EXISTING_FILE,
+    ),
+    PlanContractFailureKind.WORK_PLAN_HANDOFF_INVALID: PlanContractFailurePolicy(
+        PlanContractSecurityClass.HANDOFF_STRUCTURE,
+        PlanContractRepairability.REPAIR_ONCE,
+        PlanContractRepairAction.UPDATE_EXISTING_FILE,
+    ),
+})
+
+
+class PlanContractValidationError(WorkflowExecutionError):
+    """A typed PLAN_ONLY validation failure whose prose has no policy authority."""
+
+    def __init__(self, kind: PlanContractFailureKind, detail: str) -> None:
+        super().__init__(detail)
+        self.kind = kind
+        self.policy = PLAN_CONTRACT_FAILURE_POLICIES[kind]
 
 
 class NoWorkflowChangesError(WorkflowExecutionError):
@@ -1255,12 +1371,18 @@ class WorkflowEngine:
             gate.detail is not None
             and gate.detail.startswith(f"{UNEXPECTED_PATH_RULE_ID} |")
         )
+        plan_contract_kind: PlanContractFailureKind | None = None
+        if gate.detail is not None:
+            plan_gate_parts = gate.detail.split(" | ", 2)
+            if len(plan_gate_parts) == 3 and plan_gate_parts[0] == "PLAN-CONTRACT-INVALID":
+                try:
+                    plan_contract_kind = PlanContractFailureKind(plan_gate_parts[1])
+                except ValueError:
+                    pass
         plan_validation_scope_stop = (
             current.kind is WorkUnitKind.PLAN
-            and gate.detail is not None
-            and gate.detail.startswith("PLAN-CONTRACT-INVALID |")
-            and "internal plan validation found out-of-scope planning changes:"
-            in gate.detail
+            and plan_contract_kind
+            is PlanContractFailureKind.CHANGED_PATH_OUTSIDE_SCOPE
         )
         if (
             current.status is not WorkUnitStatus.AWAITING_USER_DECISION
@@ -1638,14 +1760,16 @@ class WorkflowEngine:
             )
         except WorkflowExecutionError as exc:
             detail = str(exc)
-            missing_plan_artifact = detail.startswith("PLAN_ONLY ") and detail.endswith(
-                " planning must create or update WORK_PLAN_PATH"
+            failure_kind = (
+                exc.kind if isinstance(exc, PlanContractValidationError) else None
+            )
+            failure_policy = (
+                exc.policy if failure_kind is not None else None
             )
             repairable = (
-                missing_plan_artifact
-                or detail.startswith(
-                    "WORK_PLAN_PATH cannot produce an IMPLEMENT handoff:"
-                )
+                failure_policy is not None
+                and failure_policy.repairability
+                is PlanContractRepairability.REPAIR_ONCE
             )
             repair_key = "automatic-plan-contract-repair"
             if repairable and not state.current_work_unit.has_completed_side_effect(
@@ -1659,7 +1783,11 @@ class WorkflowEngine:
                 state = state.mark_side_effect_completed(repair_key)
                 state = state.with_current_step(WorkflowStep.CODEX_PLAN_REVISION)
                 self.driver.checkpoint(state, history)
-                if missing_plan_artifact:
+                assert failure_policy is not None
+                if (
+                    failure_policy.repair_action
+                    is PlanContractRepairAction.CREATE_MISSING_FILE
+                ):
                     repair_action = (
                         "The previous response returned its native JSON record without "
                         "writing the required repository artifact. Create the missing "
@@ -1669,6 +1797,10 @@ class WorkflowEngine:
                         "a receipt and does not replace the file."
                     )
                 else:
+                    assert (
+                        failure_policy.repair_action
+                        is PlanContractRepairAction.UPDATE_EXISTING_FILE
+                    )
                     repair_action = (
                         f"Update the existing file {state.work_plan_path} in the "
                         "repository now so it satisfies the declared work-plan contract, "
@@ -1695,7 +1827,9 @@ class WorkflowEngine:
             state = state.await_policy_gate(
                 reason=GateReason.STOP_REQUEST,
                 detail=(
-                    "PLAN-CONTRACT-INVALID | The work plan is not safe to hand to "
+                    "PLAN-CONTRACT-INVALID | "
+                    f"{failure_kind.value if failure_kind is not None else 'untyped'} | "
+                    "The work plan is not safe to hand to "
                     f"reviewers or implementation: {detail}"
                 ),
             )

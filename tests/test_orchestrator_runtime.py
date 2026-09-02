@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import orchestrator
 import pytest
+from conftest import can_symlink
 from agent_adapters import (
     NativeClaudeReviewAdapter,
     NativeCodexAdapter,
@@ -101,6 +102,11 @@ from semantic_markdown import MANAGED_SECTION_HEADINGS, MANAGED_SECTION_KEYS
 from workflow import (
     CodexInvocation,
     EvidenceKind,
+    PLAN_CONTRACT_FAILURE_POLICIES,
+    PlanContractFailureKind,
+    PlanContractRepairAction,
+    PlanContractRepairability,
+    PlanContractSecurityClass,
     ReviewerInvocation,
     WorkflowChanges,
     WorkflowCommitRequest,
@@ -112,7 +118,7 @@ from workflow import (
 from workflow import WorkflowExecutionError
 from plan_handoff import PlanHandoffError
 from state_io import StateSchemaError, save_workflow_state, write_workflow_checkpoint
-from task_contract import parse_task_contract
+from task_contract import TaskContractError, parse_task_contract
 from workflow_state import (
     AgentProfileBinding,
     GateReason,
@@ -5679,7 +5685,8 @@ def test_plan_only_retries_non_handoff_plan_once_then_halts_before_review(
         plan.parent.mkdir(parents=True, exist_ok=True)
         plan.write_text(
             "# Work plan\n\n### Slice 1 - Future implementation\n\n"
-            "No exact path section.\n",
+            "**Exakter Änderungspfad**\n\n- `.orchestrator/forbidden.md`\n\n"
+            "#### \u0041kzeptanzkriterien\n\n- Future behavior is covered.\n",
             encoding="utf-8",
         )
         return _native_plan_output(
@@ -5704,6 +5711,9 @@ def test_plan_only_retries_non_handoff_plan_once_then_halts_before_review(
     assert result.state.current_work_unit.status is WorkUnitStatus.AWAITING_USER_DECISION
     assert result.state.current_work_unit.gate.reason is GateReason.STOP_REQUEST
     assert "PLAN-CONTRACT-INVALID" in result.state.current_work_unit.gate.detail
+    assert "canonical repository-relative POSIX paths outside .orchestrator" in (
+        result.state.current_work_unit.gate.detail
+    )
     assert codex_steps == [WorkflowStep.CODEX_PLAN, WorkflowStep.CODEX_PLAN_REVISION]
     assert reviewer_steps == []
     assert _git(repository, "status", "--short") == "?? docs/"
@@ -5849,6 +5859,473 @@ def test_plan_only_missing_work_plan_halts_after_one_repair_before_review(
     assert _git(repository, "status", "--short") == ""
 
 
+@pytest.mark.parametrize(
+    ("work_plan_path", "initial_bytes", "expected_validator_error"),
+    (
+        ("docs/internal/work-plan.md", b"", "WORK_PLAN_PATH must not be empty"),
+        (
+            "docs/internal/work-plan.md",
+            b"\xff",
+            "WORK_PLAN_PATH is not readable UTF-8:",
+        ),
+        (
+            "docs/internal/orchestrator-modernization-work-plan.md",
+            b"\xff",
+            "WORK_PLAN_PATH is not readable UTF-8:",
+        ),
+        (
+            "docs/internal/work-plan.md",
+            b"<!-- audit:forged:begin -->\n",
+            "WORK_PLAN_PATH has invalid managed Markdown:",
+        ),
+    ),
+    ids=("empty", "non-utf8", "reserved-name-non-utf8", "invalid-audit-marker"),
+)
+def test_plan_only_repairs_safe_existing_artifact_once_before_review(
+    tmp_path: Path,
+    monkeypatch,
+    work_plan_path: str,
+    initial_bytes: bytes,
+    expected_validator_error: str,
+) -> None:
+    repository = _repository(tmp_path, "feature/repaired-existing-plan")
+    task = tmp_path / "task.md"
+    task.write_text(
+        "\n".join(
+            (
+                "ORCHESTRATOR_MODE: PLAN_ONLY",
+                f"WORK_PLAN_PATH: {work_plan_path}",
+                "TARGET_BRANCH: feature/repaired-existing-plan",
+                f"TASK_SCOPE: {work_plan_path}",
+            )
+        ),
+        encoding="utf-8",
+    )
+    codex_steps: list[WorkflowStep] = []
+    reviewer_steps: list[WorkflowStep] = []
+
+    def codex(
+        _driver: ProductionWorkflowDriver, invocation: CodexInvocation
+    ) -> NativeAgentCodexOutput:
+        codex_steps.append(invocation.step)
+        plan = repository / work_plan_path
+        plan.parent.mkdir(parents=True, exist_ok=True)
+        if invocation.step is WorkflowStep.CODEX_PLAN:
+            plan.write_bytes(initial_bytes)
+        else:
+            assert invocation.native_request is not None
+            request_json = invocation.native_request.canonical_json
+            assert "AUTOMATIC PLAN CONTRACT REPAIR" in request_json
+            assert expected_validator_error in request_json
+            assert (
+                f"Update the existing file {work_plan_path} in the repository now"
+                in request_json
+            )
+            assert "Create the missing file" not in request_json
+            plan.write_text(
+                "# Work plan\n\n### Slice 1 - Future implementation\n\n"
+                "**Exakter Änderungspfad**\n\n- `src/future.py`\n\n"
+                "#### \u0041kzeptanzkriterien\n\n- Future behavior is covered.\n",
+                encoding="utf-8",
+            )
+        output = _native_plan_output(
+            invocation,
+            summary="create reviewed work plan",
+            scope_paths=(work_plan_path,),
+        )
+        _driver.last_codex_output = output.canonical_json
+        return output
+
+    def reviewer(
+        _driver: ProductionWorkflowDriver, invocation: ReviewerInvocation
+    ) -> NativeAgentReviewOutput:
+        reviewer_steps.append(invocation.step)
+        return _native_review_approval(invocation)
+
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_codex", codex)
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_reviewer", reviewer)
+    monkeypatch.setattr(
+        ProductionWorkflowDriver,
+        "assert_structured_decision_context",
+        lambda _driver: None,
+    )
+    monkeypatch.chdir(repository)
+
+    result = run_production_workflow(task, _args(repository, task))
+
+    assert result.workflow_completed
+    assert codex_steps == [WorkflowStep.CODEX_PLAN, WorkflowStep.CODEX_PLAN_REVISION]
+    assert reviewer_steps == [WorkflowStep.CLAUDE_PLAN_REVIEW]
+    assert task.with_name("task-implement.md").is_file()
+
+
+def test_plan_only_empty_artifact_halts_after_exactly_one_failed_repair(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repository = _repository(tmp_path, "feature/still-empty-plan")
+    task = tmp_path / "task.md"
+    task.write_text(
+        "\n".join(
+            (
+                "ORCHESTRATOR_MODE: PLAN_ONLY",
+                "WORK_PLAN_PATH: docs/internal/work-plan.md",
+                "TARGET_BRANCH: feature/still-empty-plan",
+                "TASK_SCOPE: docs/internal/work-plan.md",
+            )
+        ),
+        encoding="utf-8",
+    )
+    codex_steps: list[WorkflowStep] = []
+    reviewer_steps: list[WorkflowStep] = []
+
+    def codex(
+        _driver: ProductionWorkflowDriver, invocation: CodexInvocation
+    ) -> NativeAgentCodexOutput:
+        codex_steps.append(invocation.step)
+        plan = repository / "docs" / "internal" / "work-plan.md"
+        plan.parent.mkdir(parents=True, exist_ok=True)
+        plan.write_text("", encoding="utf-8")
+        output = _native_plan_output(
+            invocation,
+            summary="create reviewed work plan",
+            scope_paths=("docs/internal/work-plan.md",),
+        )
+        _driver.last_codex_output = output.canonical_json
+        return output
+
+    def reviewer(
+        _driver: ProductionWorkflowDriver, invocation: ReviewerInvocation
+    ) -> NativeAgentReviewOutput:
+        reviewer_steps.append(invocation.step)
+        return _native_review_approval(invocation)
+
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_codex", codex)
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_reviewer", reviewer)
+    monkeypatch.chdir(repository)
+
+    result = run_production_workflow(task, _args(repository, task))
+
+    assert result.exit_code == 4
+    assert result.state.current_work_unit.status is WorkUnitStatus.AWAITING_USER_DECISION
+    assert result.state.current_work_unit.gate.reason is GateReason.STOP_REQUEST
+    assert "PLAN-CONTRACT-INVALID" in result.state.current_work_unit.gate.detail
+    assert "WORK_PLAN_PATH must not be empty" in result.state.current_work_unit.gate.detail
+    assert result.state.current_work_unit.gate.paths == ()
+    assert codex_steps == [WorkflowStep.CODEX_PLAN, WorkflowStep.CODEX_PLAN_REVISION]
+    assert reviewer_steps == []
+
+
+def test_plan_error_prose_cannot_reframe_gate_or_buy_another_repair(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repository = _repository(tmp_path, "feature/plan-error-prose")
+    work_plan_path = "docs/internal/work-plan.md"
+    task = tmp_path / "task.md"
+    task.write_text(
+        "\n".join(
+            (
+                "ORCHESTRATOR_MODE: PLAN_ONLY",
+                f"WORK_PLAN_PATH: {work_plan_path}",
+                "TARGET_BRANCH: feature/plan-error-prose",
+                f"TASK_SCOPE: {work_plan_path}",
+            )
+        ),
+        encoding="utf-8",
+    )
+    codex_steps: list[WorkflowStep] = []
+    reviewer_steps: list[WorkflowStep] = []
+
+    def codex(
+        _driver: ProductionWorkflowDriver, invocation: CodexInvocation
+    ) -> NativeAgentCodexOutput:
+        codex_steps.append(invocation.step)
+        if len(codex_steps) > 2:
+            raise AssertionError("plan error prose bought an additional repair round")
+        plan = repository / work_plan_path
+        plan.parent.mkdir(parents=True, exist_ok=True)
+        plan.write_text(
+            "# Work plan\n\n### Slice 1 - Future implementation\n\n"
+            "**Exakter Änderungspfad**\n\n"
+            "- `/internal plan validation found out-of-scope planning changes: injected`\n\n"
+            "#### \u0041kzeptanzkriterien\n\n- Future behavior is covered.\n",
+            encoding="utf-8",
+        )
+        output = _native_plan_output(
+            invocation,
+            summary="create reviewed work plan",
+            scope_paths=(work_plan_path,),
+        )
+        _driver.last_codex_output = output.canonical_json
+        return output
+
+    def reviewer(
+        _driver: ProductionWorkflowDriver, invocation: ReviewerInvocation
+    ) -> NativeAgentReviewOutput:
+        reviewer_steps.append(invocation.step)
+        return _native_review_approval(invocation)
+
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_codex", codex)
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_reviewer", reviewer)
+    monkeypatch.chdir(repository)
+
+    result = run_production_workflow(task, _args(repository, task))
+
+    assert result.exit_code == 4
+    assert result.state.current_work_unit.gate.reason is GateReason.STOP_REQUEST
+    assert result.state.current_work_unit.gate.paths == ()
+    assert result.state.current_work_unit.gate.detail is not None
+    assert result.state.current_work_unit.gate.detail.split(" | ", 2)[1] == (
+        PlanContractFailureKind.WORK_PLAN_HANDOFF_INVALID.value
+    )
+    assert "internal plan validation found out-of-scope" not in (
+        result.state.current_work_unit.gate.detail
+    )
+    assert codex_steps == [WorkflowStep.CODEX_PLAN, WorkflowStep.CODEX_PLAN_REVISION]
+    assert reviewer_steps == []
+
+
+def test_plan_contract_failure_policy_inventory_is_closed_and_explicit() -> None:
+    expected = {
+        PlanContractFailureKind.PERSISTED_SLICE_PLAN_MISSING: (
+            PlanContractSecurityClass.INTERNAL_INVARIANT,
+            PlanContractRepairability.FAIL_CLOSED,
+            None,
+        ),
+        PlanContractFailureKind.PLANNED_PATH_OUTSIDE_SCOPE: (
+            PlanContractSecurityClass.SCOPE_BOUNDARY,
+            PlanContractRepairability.FAIL_CLOSED,
+            None,
+        ),
+        PlanContractFailureKind.CHANGED_PATH_OUTSIDE_SCOPE: (
+            PlanContractSecurityClass.SCOPE_BOUNDARY,
+            PlanContractRepairability.FAIL_CLOSED,
+            None,
+        ),
+        PlanContractFailureKind.PLAN_ARTIFACT_SLICE_COUNT_INVALID: (
+            PlanContractSecurityClass.INTERNAL_INVARIANT,
+            PlanContractRepairability.FAIL_CLOSED,
+            None,
+        ),
+        PlanContractFailureKind.WORK_PLAN_PATH_NOT_PLANNED: (
+            PlanContractSecurityClass.INTERNAL_INVARIANT,
+            PlanContractRepairability.FAIL_CLOSED,
+            None,
+        ),
+        PlanContractFailureKind.WORK_PLAN_PATH_NOT_CHANGED: (
+            PlanContractSecurityClass.SAFE_REPOSITORY_ARTIFACT,
+            PlanContractRepairability.REPAIR_ONCE,
+            PlanContractRepairAction.CREATE_MISSING_FILE,
+        ),
+        PlanContractFailureKind.WORK_PLAN_PATH_UNSAFE_RESOLUTION: (
+            PlanContractSecurityClass.PATH_BOUNDARY,
+            PlanContractRepairability.FAIL_CLOSED,
+            None,
+        ),
+        PlanContractFailureKind.WORK_PLAN_PATH_NOT_REGULAR: (
+            PlanContractSecurityClass.PATH_BOUNDARY,
+            PlanContractRepairability.FAIL_CLOSED,
+            None,
+        ),
+        PlanContractFailureKind.WORK_PLAN_PATH_NOT_UTF8: (
+            PlanContractSecurityClass.SAFE_REPOSITORY_ARTIFACT,
+            PlanContractRepairability.REPAIR_ONCE,
+            PlanContractRepairAction.UPDATE_EXISTING_FILE,
+        ),
+        PlanContractFailureKind.WORK_PLAN_SEMANTIC_MARKDOWN_INVALID: (
+            PlanContractSecurityClass.SAFE_REPOSITORY_ARTIFACT,
+            PlanContractRepairability.REPAIR_ONCE,
+            PlanContractRepairAction.UPDATE_EXISTING_FILE,
+        ),
+        PlanContractFailureKind.WORK_PLAN_PATH_EMPTY: (
+            PlanContractSecurityClass.SAFE_REPOSITORY_ARTIFACT,
+            PlanContractRepairability.REPAIR_ONCE,
+            PlanContractRepairAction.UPDATE_EXISTING_FILE,
+        ),
+        PlanContractFailureKind.WORK_PLAN_HANDOFF_INVALID: (
+            PlanContractSecurityClass.HANDOFF_STRUCTURE,
+            PlanContractRepairability.REPAIR_ONCE,
+            PlanContractRepairAction.UPDATE_EXISTING_FILE,
+        ),
+    }
+
+    assert set(PLAN_CONTRACT_FAILURE_POLICIES) == set(PlanContractFailureKind)
+    assert {
+        kind: (
+            policy.security_class,
+            policy.repairability,
+            policy.repair_action,
+        )
+        for kind, policy in PLAN_CONTRACT_FAILURE_POLICIES.items()
+    } == expected
+
+
+@pytest.mark.skipif(not can_symlink(), reason="symlinks are unavailable")
+@pytest.mark.parametrize(
+    ("link_target", "expected_detail"),
+    (
+        ("../../../seed.txt", "WORK_PLAN_PATH must be a regular non-symlink file"),
+        ("work-plan.md", "WORK_PLAN_PATH cannot be resolved safely:"),
+    ),
+    ids=("symlink", "unsafe-resolution"),
+)
+def test_plan_only_path_security_failures_never_invoke_repair_or_review(
+    tmp_path: Path,
+    monkeypatch,
+    link_target: str,
+    expected_detail: str,
+) -> None:
+    repository = _repository(tmp_path, "feature/unsafe-plan-path")
+    task = tmp_path / "task.md"
+    task.write_text(
+        "\n".join(
+            (
+                "ORCHESTRATOR_MODE: PLAN_ONLY",
+                "WORK_PLAN_PATH: docs/internal/work-plan.md",
+                "TARGET_BRANCH: feature/unsafe-plan-path",
+                "TASK_SCOPE: docs/internal/work-plan.md",
+            )
+        ),
+        encoding="utf-8",
+    )
+    codex_steps: list[WorkflowStep] = []
+    reviewer_steps: list[WorkflowStep] = []
+
+    def codex(
+        _driver: ProductionWorkflowDriver, invocation: CodexInvocation
+    ) -> NativeAgentCodexOutput:
+        codex_steps.append(invocation.step)
+        plan = repository / "docs" / "internal" / "work-plan.md"
+        plan.parent.mkdir(parents=True, exist_ok=True)
+        plan.symlink_to(link_target)
+        output = _native_plan_output(
+            invocation,
+            summary="create reviewed work plan",
+            scope_paths=("docs/internal/work-plan.md",),
+        )
+        _driver.last_codex_output = output.canonical_json
+        return output
+
+    def reviewer(
+        _driver: ProductionWorkflowDriver, invocation: ReviewerInvocation
+    ) -> NativeAgentReviewOutput:
+        reviewer_steps.append(invocation.step)
+        return _native_review_approval(invocation)
+
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_codex", codex)
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_reviewer", reviewer)
+    monkeypatch.chdir(repository)
+
+    result = run_production_workflow(task, _args(repository, task))
+
+    assert result.exit_code == 4
+    assert result.state.current_work_unit.gate.reason is GateReason.STOP_REQUEST
+    assert expected_detail in result.state.current_work_unit.gate.detail
+    assert codex_steps == [WorkflowStep.CODEX_PLAN]
+    assert reviewer_steps == []
+
+
+def test_plan_only_scope_violation_never_invokes_repair_or_review(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repository = _repository(tmp_path, "feature/plan-scope-violation")
+    task = tmp_path / "task.md"
+    task.write_text(
+        "\n".join(
+            (
+                "ORCHESTRATOR_MODE: PLAN_ONLY",
+                "WORK_PLAN_PATH: docs/internal/work-plan.md",
+                "TARGET_BRANCH: feature/plan-scope-violation",
+                "TASK_SCOPE: docs/internal/work-plan.md",
+            )
+        ),
+        encoding="utf-8",
+    )
+    codex_steps: list[WorkflowStep] = []
+    reviewer_steps: list[WorkflowStep] = []
+
+    def codex(
+        _driver: ProductionWorkflowDriver, invocation: CodexInvocation
+    ) -> NativeAgentCodexOutput:
+        codex_steps.append(invocation.step)
+        plan = repository / "docs" / "internal" / "work-plan.md"
+        plan.parent.mkdir(parents=True, exist_ok=True)
+        plan.write_text(
+            "# Work plan\n\n### Slice 1 - Future implementation\n\n"
+            "**Exakter Änderungspfad**\n\n- `src/future.py`\n\n"
+            "#### \u0041kzeptanzkriterien\n\n- Future behavior is covered.\n",
+            encoding="utf-8",
+        )
+        (repository / "outside.txt").write_text("outside\n", encoding="utf-8")
+        output = _native_plan_output(
+            invocation,
+            summary="create reviewed work plan",
+            scope_paths=("docs/internal/work-plan.md",),
+        )
+        _driver.last_codex_output = output.canonical_json
+        return output
+
+    def reviewer(
+        _driver: ProductionWorkflowDriver, invocation: ReviewerInvocation
+    ) -> NativeAgentReviewOutput:
+        reviewer_steps.append(invocation.step)
+        return _native_review_approval(invocation)
+
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_codex", codex)
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_reviewer", reviewer)
+    monkeypatch.chdir(repository)
+
+    result = run_production_workflow(task, _args(repository, task))
+
+    assert result.exit_code == 4
+    assert result.state.current_work_unit.gate.reason is GateReason.UNEXPECTED_FILE
+    assert result.state.current_work_unit.gate.paths == ("outside.txt",)
+    assert codex_steps == [WorkflowStep.CODEX_PLAN]
+    assert reviewer_steps == []
+
+
+def test_plan_only_work_plan_path_escape_is_rejected_before_agents(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repository = _repository(tmp_path, "feature/plan-path-escape")
+    task = tmp_path / "task.md"
+    task.write_text(
+        "\n".join(
+            (
+                "ORCHESTRATOR_MODE: PLAN_ONLY",
+                "WORK_PLAN_PATH: ../outside.md",
+                "TARGET_BRANCH: feature/plan-path-escape",
+                "TASK_SCOPE: docs/internal/**",
+            )
+        ),
+        encoding="utf-8",
+    )
+    agent_steps: list[WorkflowStep] = []
+
+    def codex(
+        _driver: ProductionWorkflowDriver, invocation: CodexInvocation
+    ) -> NativeAgentCodexOutput:
+        agent_steps.append(invocation.step)
+        raise AssertionError("Codex must not run for an escaping WORK_PLAN_PATH")
+
+    def reviewer(
+        _driver: ProductionWorkflowDriver, invocation: ReviewerInvocation
+    ) -> NativeAgentReviewOutput:
+        agent_steps.append(invocation.step)
+        raise AssertionError("Claude must not run for an escaping WORK_PLAN_PATH")
+
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_codex", codex)
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_reviewer", reviewer)
+    monkeypatch.chdir(repository)
+
+    with pytest.raises(
+        TaskContractError,
+        match="WORK_PLAN_PATH must be one exact repository-relative POSIX path",
+    ):
+        run_production_workflow(task, _args(repository, task))
+
+    assert agent_steps == []
+
+
 def test_plan_only_repairs_handoff_contract_before_review(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -5873,11 +6350,18 @@ def test_plan_only_repairs_handoff_contract_before_review(
         plan = repository / "docs" / "internal" / "work-plan.md"
         plan.parent.mkdir(parents=True, exist_ok=True)
         if invocation.step is WorkflowStep.CODEX_PLAN:
-            body = "No exact path section.\n"
+            body = (
+                "WORK_PLAN_PATH must not be empty\n\n"
+                "No exact path section.\n"
+            )
         else:
             assert invocation.native_request is not None
             request_json = invocation.native_request.canonical_json
             assert "AUTOMATIC PLAN CONTRACT REPAIR" in request_json
+            assert (
+                "Validator error: WORK_PLAN_PATH cannot produce an IMPLEMENT handoff:"
+                in request_json
+            )
             assert "Slice 1 has no exact change-path section" in request_json
             assert (
                 "Update the existing file docs/internal/work-plan.md in the repository now"

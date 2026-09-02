@@ -157,6 +157,7 @@ from repo_changes import (
     render_final_review_evidence_cache,
     resolve_merge_base,
 )
+from semantic_markdown import SemanticMarkdownError, canonical_semantic_markdown
 from state_io import (
     ActiveV2StateError,
     CompletedV2State,
@@ -185,6 +186,8 @@ from native_review_request import (
 )
 from workflow import (
     CodexInvocation,
+    PlanContractFailureKind,
+    PlanContractValidationError,
     PersistedNativeReviewerReplay,
     ReviewerInvocation,
     NoWorkflowChangesError,
@@ -3945,7 +3948,31 @@ class ProductionWorkflowDriver:
 
     def collect_changes(self, start_commit: str) -> WorkflowChanges:
         semantic_paths: tuple[str, ...] = ()
+        raw_plan_artifact: str | None = None
         if self.active_state is not None:
+            if (
+                self.active_state.execution_mode == TaskMode.PLAN_ONLY.value
+                and self.active_state.current_work_unit.kind is WorkUnitKind.PLAN
+                and self.active_state.work_plan_path is not None
+            ):
+                candidate = self.root / self.active_state.work_plan_path
+                try:
+                    if not candidate.is_symlink() and candidate.is_file():
+                        content = candidate.read_text(encoding="utf-8")
+                        canonical_semantic_markdown(
+                            content,
+                            path=self.active_state.work_plan_path,
+                            remove_appendix=True,
+                        )
+                except (UnicodeError, SemanticMarkdownError):
+                    # The raw fingerprint still binds every byte. Deferring only the
+                    # text interpretation lets the typed plan validator offer its one
+                    # safe, path-bound rewrite of this regular repository artifact.
+                    raw_plan_artifact = self.active_state.work_plan_path
+                except OSError:
+                    # Preserve the normal semantic collector's fail-closed behavior
+                    # for permissions and unstable filesystem objects.
+                    pass
             candidates = {
                 path
                 for path in (
@@ -4032,6 +4059,9 @@ class ProductionWorkflowDriver:
                 self.root,
                 start_commit,
                 semantic_markdown_paths=semantic_paths,
+                raw_fingerprint_paths=(
+                    (raw_plan_artifact,) if raw_plan_artifact is not None else ()
+                ),
                 excluded_paths=excluded_control_paths,
             )
             if final_review and changes.entries:
@@ -4242,7 +4272,8 @@ class ProductionWorkflowDriver:
         plan_only: bool,
     ) -> ValidationAttestation:
         if self.active_state is None or not self.active_state.planned_slices:
-            raise WorkflowExecutionError(
+            raise PlanContractValidationError(
+                PlanContractFailureKind.PERSISTED_SLICE_PLAN_MISSING,
                 "internal plan validation requires a persisted SLICE_PLAN"
             )
         planned_paths = tuple(
@@ -4260,7 +4291,8 @@ class ProductionWorkflowDriver:
             if scope_patterns and not matches_path_patterns(path, scope_patterns)
         )
         if unexpected_planned:
-            raise WorkflowExecutionError(
+            raise PlanContractValidationError(
+                PlanContractFailureKind.PLANNED_PATH_OUTSIDE_SCOPE,
                 "internal plan validation found out-of-scope SLICE_PLAN paths: "
                 + ", ".join(unexpected_planned)
             )
@@ -4286,7 +4318,8 @@ class ProductionWorkflowDriver:
             )
         )
         if unexpected_actual and not approved_actual:
-            raise WorkflowExecutionError(
+            raise PlanContractValidationError(
+                PlanContractFailureKind.CHANGED_PATH_OUTSIDE_SCOPE,
                 "internal plan validation found out-of-scope planning changes: "
                 + ", ".join(unexpected_actual)
             )
@@ -4299,22 +4332,26 @@ class ProductionWorkflowDriver:
         if plan_only:
             command = "internal:work-plan-contract"
             if len(self.active_state.planned_slices) != 1:
-                raise WorkflowExecutionError(
+                raise PlanContractValidationError(
+                    PlanContractFailureKind.PLAN_ARTIFACT_SLICE_COUNT_INVALID,
                     "PLAN_ONLY requires exactly one executable plan-artifact Slice"
                 )
             if work_plan_path is None or work_plan_path not in planned_paths:
-                raise WorkflowExecutionError(
+                raise PlanContractValidationError(
+                    PlanContractFailureKind.WORK_PLAN_PATH_NOT_PLANNED,
                     "PLAN_ONLY plan does not include WORK_PLAN_PATH"
                 )
             if work_plan_path not in actual_paths:
-                raise WorkflowExecutionError(
+                raise PlanContractValidationError(
+                    PlanContractFailureKind.WORK_PLAN_PATH_NOT_CHANGED,
                     "PLAN_ONLY Codex planning must create or update WORK_PLAN_PATH"
                 )
             candidate = self.root / work_plan_path
             try:
                 resolved_candidate = candidate.resolve()
             except (OSError, RuntimeError, ValueError) as exc:
-                raise WorkflowExecutionError(
+                raise PlanContractValidationError(
+                    PlanContractFailureKind.WORK_PLAN_PATH_UNSAFE_RESOLUTION,
                     f"WORK_PLAN_PATH cannot be resolved safely: {exc}"
                 ) from exc
             if (
@@ -4323,24 +4360,41 @@ class ProductionWorkflowDriver:
                 or candidate.is_symlink()
                 or not candidate.is_file()
             ):
-                raise WorkflowExecutionError(
+                raise PlanContractValidationError(
+                    PlanContractFailureKind.WORK_PLAN_PATH_NOT_REGULAR,
                     "WORK_PLAN_PATH must be a regular non-symlink file"
                 )
             try:
                 content = candidate.read_text(encoding="utf-8")
             except (OSError, UnicodeError) as exc:
-                raise WorkflowExecutionError(
+                raise PlanContractValidationError(
+                    PlanContractFailureKind.WORK_PLAN_PATH_NOT_UTF8,
                     f"WORK_PLAN_PATH is not readable UTF-8: {exc}"
                 ) from exc
+            try:
+                canonical_semantic_markdown(
+                    content,
+                    path=work_plan_path,
+                    remove_appendix=True,
+                )
+            except SemanticMarkdownError as exc:
+                raise PlanContractValidationError(
+                    PlanContractFailureKind.WORK_PLAN_SEMANTIC_MARKDOWN_INVALID,
+                    f"WORK_PLAN_PATH has invalid managed Markdown: {exc}",
+                ) from exc
             if not content.strip():
-                raise WorkflowExecutionError("WORK_PLAN_PATH must not be empty")
+                raise PlanContractValidationError(
+                    PlanContractFailureKind.WORK_PLAN_PATH_EMPTY,
+                    "WORK_PLAN_PATH must not be empty",
+                )
             try:
                 future_slices = extract_implementation_slices(
                     content,
                     plan_stem=Path(work_plan_path).stem,
                 )
-            except PlanHandoffError as exc:
-                raise WorkflowExecutionError(
+            except ValueError as exc:
+                raise PlanContractValidationError(
+                    PlanContractFailureKind.WORK_PLAN_HANDOFF_INVALID,
                     f"WORK_PLAN_PATH cannot produce an IMPLEMENT handoff: {exc}"
                 ) from exc
             detail += f"; future_slices={len(future_slices)}; work_plan={work_plan_path}"
