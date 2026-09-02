@@ -1106,6 +1106,40 @@ def test_r6_wrapped_quota_keeps_policy_despite_deeper_s1_classification() -> Non
     assert persisted.current_work_unit.status is WorkUnitStatus.WAITING_FOR_QUOTA
 
 
+def test_failure_recording_resolves_clock_and_fingerprint_at_call_time() -> None:
+    constructed_at = datetime(2026, 8, 31, 10, 0, tzinfo=timezone.utc)
+    invoked_at = constructed_at + timedelta(minutes=3)
+    late_fingerprint = "f" * 64
+    error = AgentInvocationError(
+        agent_key="codex",
+        kind=AgentFailureKind.NETWORK,
+        invocation_id="late-bound-failure-dependencies",
+        provider_text="network unavailable",
+        received_at=constructed_at,
+        technical_text="connection reset",
+    )
+    driver = FakeDriver(
+        snapshots=[_changes("1", "src/early.py", TEST_FILE)],
+        codex_outputs=[],
+        reviewer_outputs=[],
+    )
+    engine = WorkflowEngine(driver, now_fn=lambda: constructed_at)
+    engine.now_fn = lambda: invoked_at
+    engine._current_invocation_fingerprint = lambda _state: late_fingerprint  # type: ignore[method-assign]
+
+    _persisted, failure = engine._persist_invocation_failure(
+        _slice_state(),
+        WorkflowHistory(2),
+        _context(),
+        AgentRole.CODEX,
+        error,
+    )
+
+    payload = driver.failure_payloads[0]
+    assert payload.decision_at_utc == invoked_at.isoformat()
+    assert payload.diff_fingerprint == failure.diff_fingerprint == late_fingerprint
+
+
 def test_claude_reuses_single_fingerprint_attestation_without_matrix_rerun() -> None:
     changes = _changes("1", "engine/core.py", TEST_FILE)
     driver = FakeDriver(

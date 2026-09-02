@@ -6,7 +6,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from enum import Enum
 from types import MappingProxyType
 from typing import Callable, Protocol
@@ -21,13 +21,12 @@ from agent_runtime import (
     wait_until_transient_retry,
 )
 import workflow_requests
+import workflow_failure_recording
+import workflow_validation_evidence
 from provider_input_budget import ProviderInputBudgetExceeded
 from final_review_preflight import FinalReviewPreflightDenied
 from artifact_models import (
     InvocationFailurePayload,
-    Role,
-    provider_text_evidence,
-    technical_text_evidence,
 )
 from finding_reducer import (
     merge_request_result,
@@ -81,10 +80,7 @@ from review_packets import (
 from validation_matrix import (
     ValidationCommand,
     ValidationMatrix,
-    ValidationMatrixError,
     ValidationRequest,
-    select_validation_request,
-    validation_attestation_id,
 )
 from workflow_state import (
     AgentFailureKind,
@@ -1099,6 +1095,54 @@ class WorkflowEngine:
         self.sleep_fn = sleep_fn
         self.heartbeat_fn = heartbeat_fn
         self._retried_failed_validation_fingerprints: set[str] = set()
+        self._validation_evidence = (
+            workflow_validation_evidence.WorkflowValidationEvidence(
+                workflow_validation_evidence.WorkflowValidationEvidenceDependencies(
+                    validate_plan=lambda changes, **kwargs: self.driver.validate_plan(
+                        changes, **kwargs
+                    ),
+                    persist_validation_attestation=lambda attestation: (
+                        self._persist_structured(
+                            self.driver.persist_validation_attestation,
+                            attestation,
+                        )
+                    ),
+                    persist_validation_request=lambda request: self._persist_structured(
+                        self.driver.persist_validation_request,
+                        request,
+                    ),
+                    recover_pending_validation_attestation=(
+                        lambda *args: self.driver.recover_pending_validation_attestation(
+                            *args
+                        )
+                    ),
+                    validate=lambda changes, request: self.driver.validate(
+                        changes, request
+                    ),
+                    retried_failed_validation_fingerprints=(
+                        self._retried_failed_validation_fingerprints
+                    ),
+                    execution_error=WorkflowExecutionError,
+                    validation_execution_error=ValidationExecutionError,
+                )
+            )
+        )
+        self._failure_recording = workflow_failure_recording.WorkflowFailureRecording(
+            workflow_failure_recording.WorkflowFailureRecordingDependencies(
+                current_invocation_fingerprint=(
+                    lambda state: self._current_invocation_fingerprint(state)
+                ),
+                persist_invocation_failure=lambda payload: self._persist_structured(
+                    self.driver.persist_invocation_failure,
+                    payload,
+                ),
+                checkpoint=lambda state, history: self.driver.checkpoint(
+                    state, history
+                ),
+                now=lambda: self.now_fn(),
+                execution_error=WorkflowExecutionError,
+            )
+        )
 
     def _persist_structured(
         self, sink: Callable[..., None], *args: object
@@ -2511,176 +2555,9 @@ class WorkflowEngine:
         role: AgentRole,
         error: AgentInvocationError,
     ) -> tuple[WorkflowState, InvocationFailureRecord]:
-        unit = state.current_work_unit
-        if error.agent_key != role.value:
-            raise WorkflowExecutionError(
-                "agent failure role differs from the required workflow role"
-            )
-        # S1 is the sole authority for the operational class.  Keep the import
-        # local because that inventory imports the workflow's typed exceptions.
-        from error_classification import classify_exception
-
-        classified = classify_exception(error)
-        fingerprint = self._current_invocation_fingerprint(state)
-        key = (
-            f"{state.run_id}:{unit.work_unit_id}:{state.current_step.value}:"
-            f"{role.value}"
+        return self._failure_recording.persist_invocation_failure(
+            state, history, context, role, error
         )
-        matching_failures = tuple(
-            item
-            for item in unit.invocation_failures
-            if item.idempotency_key == key
-            and item.diff_fingerprint == fingerprint
-        )
-        prior_auto_resumes = sum(
-            item.failure_kind is error.kind and item.automatic_resume
-            for item in matching_failures
-        )
-        quota_policy = context.quota_wait_policy
-        transient_policy = context.transient_retry_policy
-        reset_at = error.quota_reset.reset_at_utc if error.quota_reset else None
-        now_value = self.now_fn()
-        if now_value.tzinfo is None or now_value.utcoffset() is None:
-            raise WorkflowExecutionError("quota clock must return a timezone-aware datetime")
-        now_utc = now_value.astimezone(timezone.utc)
-        quota_resume_at = (
-            reset_at + timedelta(seconds=quota_policy.safety_margin_seconds)
-            if reset_at is not None
-            else None
-        )
-        reset_delay_seconds = (
-            max(0.0, (reset_at - now_utc).total_seconds())
-            if reset_at is not None
-            else None
-        )
-        automatic_quota = (
-            error.kind is AgentFailureKind.QUOTA
-            and quota_policy.automatic
-            and reset_at is not None
-            and (
-                unit.kind is WorkUnitKind.PLAN
-                or fingerprint is not None
-            )
-            and reset_delay_seconds is not None
-            and reset_delay_seconds <= quota_policy.maximum_wait_seconds
-            and prior_auto_resumes < quota_policy.maximum_auto_resumes
-        )
-        automatic_network = (
-            error.kind is AgentFailureKind.NETWORK
-            and transient_policy.automatic
-            and (unit.kind is WorkUnitKind.PLAN or fingerprint is not None)
-            and prior_auto_resumes < transient_policy.maximum_auto_resumes
-        )
-        transient_delay = min(
-            transient_policy.maximum_delay_seconds,
-            transient_policy.initial_delay_seconds * (2 ** prior_auto_resumes),
-        )
-        resume_at = (
-            quota_resume_at if error.kind is AgentFailureKind.QUOTA else
-            now_utc + timedelta(seconds=transient_delay)
-            if automatic_network else
-            None
-        )
-        automatic = automatic_quota or automatic_network
-        prior_continuations = sum(item.automatic_resume for item in matching_failures)
-        provider_marker, provider_digest, provider_bytes = provider_text_evidence(
-            error.provider_text
-        )
-        technical_marker, technical_digest, technical_bytes = (
-            technical_text_evidence(error.technical_text)
-        )
-        received_at = error.received_at.astimezone(timezone.utc).isoformat()
-        decision_at = now_utc.isoformat()
-        safety_margin_seconds = (
-            quota_policy.safety_margin_seconds if reset_at is not None else 0
-        )
-        retry_delay_seconds = (
-            safety_margin_seconds
-            if error.kind is AgentFailureKind.QUOTA and reset_at is not None
-            else transient_delay
-            if automatic_network
-            else 0
-        )
-        record = InvocationFailureRecord(
-            invocation_id=error.invocation_id,
-            idempotency_key=key,
-            role=role.value,
-            failure_kind=error.kind,
-            provider_text=provider_marker,
-            received_at=received_at,
-            step=state.current_step,
-            slice_id=state.current_slice_id,
-            work_unit_id=state.current_work_unit_id,
-            diagnostic_exit_code=(
-                2 if error.kind is AgentFailureKind.QUOTA else 3
-            ),
-            process_exit_code=error.process_exit_code,
-            technical_text=technical_marker,
-            parse_path=(
-                error.quota_reset.parse_path if error.quota_reset else None
-            ),
-            source_timezone=(
-                error.quota_reset.source_timezone if error.quota_reset else None
-            ),
-            reset_at_utc=reset_at.isoformat() if reset_at is not None else None,
-            resume_at_utc=resume_at.isoformat() if resume_at is not None else None,
-            safety_margin_seconds=safety_margin_seconds,
-            auto_resume_count=prior_continuations + (1 if automatic else 0),
-            automatic_resume=automatic,
-            diff_fingerprint=fingerprint,
-        )
-        payload = InvocationFailurePayload(
-            invocation_id=record.invocation_id,
-            idempotency_key=record.idempotency_key,
-            role=Role(role.value),
-            failure_kind=record.failure_kind.value,
-            failure_class=classified.failure_class.value,
-            diagnostic_code=classified.diagnostic_code,
-            provider_text=provider_marker,
-            provider_text_sha256=provider_digest,
-            provider_text_bytes=provider_bytes,
-            technical_text=technical_marker,
-            technical_text_sha256=technical_digest,
-            technical_text_bytes=technical_bytes,
-            received_at=record.received_at,
-            decision_at_utc=decision_at,
-            step=record.step.value,
-            slice_id=str(record.slice_id),
-            work_unit_id=str(record.work_unit_id),
-            diagnostic_exit_code=record.diagnostic_exit_code,
-            process_exit_code=record.process_exit_code,
-            parse_path=record.parse_path,
-            source_timezone=record.source_timezone,
-            reset_at_utc=record.reset_at_utc,
-            resume_at_utc=record.resume_at_utc,
-            safety_margin_seconds=record.safety_margin_seconds,
-            retry_delay_seconds=retry_delay_seconds,
-            auto_resume_count=record.auto_resume_count,
-            automatic_resume=record.automatic_resume,
-            diff_fingerprint=record.diff_fingerprint,
-        )
-        # This append is the decision-ahead authority boundary: no workflow
-        # status, counter, wait, or provider restart is changed before it lands.
-        self._persist_structured(self.driver.persist_invocation_failure, payload)
-        state = state.record_invocation_failure(
-            record, wait_automatically=automatic, updated_at=decision_at
-        )
-        logger.info(
-            "provider invocation terminal role=%s operation=%s physical_attempt=%d "
-            "status=failed failure_kind=%s process_exit_code=%s retry=%s",
-            role.value,
-            state.current_step.value,
-            len(matching_failures) + 1,
-            error.kind.value,
-            (
-                str(error.process_exit_code)
-                if error.process_exit_code is not None
-                else "none"
-            ),
-            "scheduled" if automatic else "halted",
-        )
-        self.driver.checkpoint(state, history)
-        return state, record
 
     def _current_invocation_fingerprint(
         self, state: WorkflowState
@@ -2758,112 +2635,12 @@ class WorkflowEngine:
         *,
         plan_contract: bool = False,
     ) -> tuple[ValidationAttestation, WorkflowHistory]:
-        if plan_contract:
-            matching = tuple(
-                existing
-                for existing in history.attestations
-                if existing.diff_fingerprint == changes.fingerprint
-            )
-            if matching:
-                return matching[-1], history
-            attestation = self.driver.validate_plan(
-                changes,
-                work_plan_path=context.work_plan_path,
-                scope_patterns=context.task_scope_patterns,
-                plan_only=context.plan_only,
-            )
-            if attestation.diff_fingerprint != changes.fingerprint:
-                raise WorkflowExecutionError(
-                    "plan validation attestation fingerprint is foreign"
-                )
-            self._persist_structured(
-                self.driver.persist_validation_attestation, attestation
-            )
-            event = ValidationAuditEvent(
-                event_id=len(history.events) + 1,
-                slice_id=slice_id,
-                attestation=attestation,
-            )
-            return attestation, replace(
-                history,
-                attestations=(*history.attestations, attestation),
-                events=(*history.events, event),
-            )
-        try:
-            request = select_validation_request(
-                context.validation_matrix,
-                diff_fingerprint=changes.fingerprint,
-                changed_paths=changes.user_gate_paths,
-                findings=history.findings,
-            )
-        except ValidationMatrixError as exc:
-            raise ValidationExecutionError(str(exc)) from exc
-        matching = tuple(
-            existing
-            for existing in history.attestations
-            if existing.diff_fingerprint == changes.fingerprint
-        )
-        if matching:
-            existing = matching[-1]
-            retry_incomplete = (
-                not existing.complete and context.retry_incomplete_validation
-            )
-            retry_failed = (
-                existing.complete
-                and not existing.passed
-                and context.retry_failed_validation
-                and changes.fingerprint
-                not in self._retried_failed_validation_fingerprints
-            )
-            if not retry_incomplete and not retry_failed:
-                if not set(request.expected_commands).issubset(
-                    existing.expected_commands
-                ):
-                    raise WorkflowExecutionError(
-                        "validation requirements changed without a new diff fingerprint"
-                    )
-                return existing, history
-            if retry_failed:
-                self._retried_failed_validation_fingerprints.add(
-                    changes.fingerprint
-                )
-            request = replace(request, attempt_number=len(matching) + 1)
-        self._persist_structured(self.driver.persist_validation_request, request)
-        attestation = self.driver.recover_pending_validation_attestation(
-            changes.fingerprint,
-            request.expected_commands,
-            validation_attestation_id(request),
-        )
-        if attestation is None:
-            attestation = self.driver.validate(changes, request)
-        expected_attestation_id = validation_attestation_id(request)
-        if attestation.attestation_id != expected_attestation_id:
-            raise WorkflowExecutionError(
-                "validation attestation id does not match the selected attempt"
-            )
-        if attestation.diff_fingerprint != changes.fingerprint:
-            raise WorkflowExecutionError("validation attestation fingerprint is foreign")
-        if attestation.expected_commands != request.expected_commands:
-            raise WorkflowExecutionError(
-                "validation attestation does not cover the selected matrix"
-            )
-        if any(
-            item.attestation_id == attestation.attestation_id
-            for item in history.attestations
-        ):
-            raise WorkflowExecutionError("validation attestation id was reused")
-        self._persist_structured(
-            self.driver.persist_validation_attestation, attestation
-        )
-        event = ValidationAuditEvent(
-            event_id=len(history.events) + 1,
-            slice_id=slice_id,
-            attestation=attestation,
-        )
-        return attestation, replace(
+        return self._validation_evidence.attestation(
+            changes,
             history,
-            attestations=(*history.attestations, attestation),
-            events=(*history.events, event),
+            context,
+            slice_id,
+            plan_contract=plan_contract,
         )
 
     def _record_review(
@@ -3206,68 +2983,13 @@ class WorkflowEngine:
         *,
         context: WorkflowContext | None = None,
     ) -> tuple[str, ...]:
-        expected_start = state.current_slice.start_commit or state.branch_base
-        if kind is WorkUnitKind.FINAL_REVIEW:
-            if changes.start_commit != state.branch_base:
-                raise WorkflowExecutionError(
-                    "branch final review must use the persisted branch base"
-                )
-            return ()
-        if changes.start_commit != expected_start:
-            raise WorkflowExecutionError("change evidence uses a foreign slice start commit")
-        if kind is WorkUnitKind.PLAN:
-            scope_patterns = (
-                context.task_scope_patterns
-                if context is not None
-                else state.task_scope_patterns
-            )
-            if not scope_patterns:
-                return ()
-            if (
-                context is not None
-                and changes.paths == (".orchestrator/plan-output.md",)
-            ):
-                # The driver renders this virtual path only when the planner
-                # returned a result without changing the repository. PLAN_ONLY
-                # must let its validator diagnose that missing artifact instead of
-                # presenting the virtual evidence path as a user-approved file.
-                return ()
-            unexpected = tuple(
-                path
-                for path in changes.paths
-                if not matches_path_patterns(path, scope_patterns)
-            )
-            if unexpected and any(
-                state.current_work_unit.has_gate_approval(
-                    reason,
-                    changes.fingerprint,
-                    unexpected,
-                )
-                for reason in (
-                    GateReason.UNEXPECTED_FILE,
-                    GateReason.QUOTA_RESUME_DIFF,
-                )
-            ):
-                return ()
-            return unexpected
-        scope = state.current_slice.scope_paths
-        if not scope:
-            raise WorkflowExecutionError("slice review requires a persisted Git boundary")
-        unexpected = tuple(path for path in changes.paths if path not in scope)
-        if unexpected:
-            if state.current_work_unit.has_gate_approval(
-                GateReason.UNEXPECTED_FILE,
-                changes.fingerprint,
-                unexpected,
-            ):
-                return ()
-            if state.current_work_unit.has_gate_approval(
-                GateReason.QUOTA_RESUME_DIFF,
-                changes.fingerprint,
-                unexpected,
-            ):
-                return ()
-        return unexpected
+        return workflow_validation_evidence.validate_change_boundary(
+            state,
+            changes,
+            kind,
+            context=context,
+            execution_error=WorkflowExecutionError,
+        )
 
     def _apply_test_change_gate(
         self,

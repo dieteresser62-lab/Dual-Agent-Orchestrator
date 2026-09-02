@@ -538,7 +538,7 @@ GATE_SOURCE_MAP = (
         "instance_failure_or_quota",
         "resume",
         "workflow_state.record_invocation_failure",
-        ("workflow._persist_invocation_failure",),
+        ("workflow_failure_recording.persist_invocation_failure",),
         ("invocation-failure",),
         (
             r"role=(?:codex|claude) step=[a-z_]+ invocation=[A-Za-z0-9._:-]+ "
@@ -724,7 +724,11 @@ EXPECTED_GATE_CALL_SITES = Counter(
         ("workflow.py", "_apply_review_result", "record_review_denial"): 1,
         ("workflow.py", "_invoke_role", "await_user_gate"): 1,
         ("workflow.py", "_invoke_role", "await_bootstrap_resume"): 1,
-        ("workflow.py", "_persist_invocation_failure", "record_invocation_failure"): 1,
+        (
+            "workflow_failure_recording.py",
+            "persist_invocation_failure",
+            "record_invocation_failure",
+        ): 1,
         ("workflow.py", "_revalidate_waiting_diff", "await_policy_gate"): 2,
         ("workflow.py", "_revalidate_waiting_diff", "await_user_gate"): 1,
         ("workflow.py", "_commit", "await_user_gate"): 3,
