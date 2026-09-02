@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 from dataclasses import replace
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -39,10 +40,20 @@ from crash_harness import (
 MANIFEST = ROOT / "tests/fixtures/crash_harness/manifest-v1.json"
 
 
-def _tracked_repository_snapshot(destination: Path) -> Path:
+def _tracked_repository_snapshot(
+    destination: Path, *, source: Path = ROOT
+) -> Path:
     result = subprocess.run(
-        ("git", "ls-files", "-z", "--"),
-        cwd=ROOT,
+        (
+            "git",
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "-z",
+            "--",
+        ),
+        cwd=source,
         capture_output=True,
         check=True,
     )
@@ -51,12 +62,12 @@ def _tracked_repository_snapshot(destination: Path) -> Path:
         if not raw:
             continue
         relative = Path(os.fsdecode(raw))
-        source = ROOT / relative
-        if not source.is_file():
+        source_path = source / relative
+        if not source_path.is_file():
             continue
         target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, target)
+        shutil.copy2(source_path, target)
     for ignored_root in ("inbox", "outbox", ".orchestrator"):
         assert not (destination / ignored_root).exists()
     subprocess.run(("git", "init", "--quiet"), cwd=destination, check=True)
@@ -127,7 +138,19 @@ def _run_snapshot_harness(
     return output.read_bytes()
 
 
-def test_tracked_implementation_sources_are_recursive_and_ignore_untracked_files(
+def _implementation_source_digest(
+    repository: Path, sources: tuple[Path, ...]
+) -> str:
+    digest = hashlib.sha256()
+    for path in sources:
+        relative = path.resolve().relative_to(repository.resolve()).as_posix()
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def test_implementation_sources_include_untracked_and_exclude_ignored_or_unmatched(
     tmp_path: Path,
 ) -> None:
     repository = tmp_path / "repository"
@@ -139,24 +162,83 @@ def test_tracked_implementation_sources_are_recursive_and_ignore_untracked_files
         Path("src/package/child.py"),
         Path("tests/fixtures/crash_harness/manifest-v1.json"),
     )
-    for relative in (*tracked, Path("src/untracked_backup.py")):
+    for relative in tracked:
         path = repository / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(relative.as_posix(), encoding="utf-8")
+    gitignore = repository / ".gitignore"
+    gitignore.write_text(
+        "inbox/\noutbox/\n.orchestrator/\nschemas/ignored.json\nsrc/ignored.py\n",
+        encoding="utf-8",
+    )
     subprocess.run(("git", "init", "--quiet"), cwd=repository, check=True)
     subprocess.run(
-        ("git", "add", "--", *(relative.as_posix() for relative in tracked)),
+        (
+            "git",
+            "add",
+            "--",
+            ".gitignore",
+            *(relative.as_posix() for relative in tracked),
+        ),
         cwd=repository,
         check=True,
     )
 
+    initial_sources = _tracked_implementation_sources(
+        repository,
+        repository / "tests/fixtures/crash_harness/manifest-v1.json",
+    )
+    initial_digest = _implementation_source_digest(repository, initial_sources)
+
+    excluded = (
+        Path("inbox/ignored.py"),
+        Path("outbox/ignored.py"),
+        Path(".orchestrator/ignored.py"),
+        Path("schemas/ignored.json"),
+        Path("src/ignored.py"),
+        Path("docs/notiz.md"),
+    )
+    for relative in excluded:
+        path = repository / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("excluded\n", encoding="utf-8")
+    filtered_sources = _tracked_implementation_sources(
+        repository,
+        repository / "tests/fixtures/crash_harness/manifest-v1.json",
+    )
+    assert filtered_sources == initial_sources
+    assert _implementation_source_digest(repository, filtered_sources) == initial_digest
+
+    untracked_module = Path("src/untracked_backup.py")
+    (repository / untracked_module).write_text(
+        "VALUE = 'snapshot-import-ok'\n", encoding="utf-8"
+    )
     sources = _tracked_implementation_sources(
         repository,
         repository / "tests/fixtures/crash_harness/manifest-v1.json",
     )
 
     assert tuple(path.relative_to(repository) for path in sources) == tuple(
-        sorted(tracked, key=lambda path: path.as_posix())
+        sorted((*tracked, untracked_module), key=lambda path: path.as_posix())
+    )
+    assert _implementation_source_digest(repository, sources) != initial_digest
+
+    snapshot = _tracked_repository_snapshot(
+        tmp_path / "snapshot", source=repository
+    )
+    assert (snapshot / untracked_module).is_file()
+    assert (snapshot / "docs/notiz.md").is_file()
+    assert all(not (snapshot / relative).exists() for relative in excluded[:-1])
+    program = (
+        "from pathlib import Path; import sys; "
+        "sys.path.insert(0, str(Path(sys.argv[1]) / 'src')); "
+        "import untracked_backup; "
+        "assert untracked_backup.VALUE == 'snapshot-import-ok'"
+    )
+    subprocess.run(
+        (sys.executable, "-I", "-c", program, str(snapshot)),
+        cwd=snapshot,
+        check=True,
     )
 
 
@@ -532,9 +614,48 @@ def test_harness_result_is_byte_stable_and_self_bound(tmp_path: Path) -> None:
     digest = document.pop("artifact_sha256")
     from artifact_models import canonical_json
 
-    import hashlib
-
     assert digest == hashlib.sha256(canonical_json(document)).hexdigest()
+
+    baseline_document = json.loads(first)
+    excluded_paths = (
+        Path("inbox/b34-ignored.txt"),
+        Path("outbox/b34-ignored.txt"),
+        Path(".orchestrator/b34-ignored.txt"),
+        Path("docs/notiz.md"),
+    )
+    for relative in excluded_paths:
+        path = repository / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("must not affect implementation digest\n", encoding="utf-8")
+    outside = json.loads(
+        _run_snapshot_harness(
+            repository,
+            work_root=tmp_path / "outside",
+            manifest=manifest,
+        )
+    )
+    assert (
+        outside["harness_implementation_sha256"]
+        == baseline_document["harness_implementation_sha256"]
+    )
+    assert outside["measured_source_paths"] == baseline_document["measured_source_paths"]
+
+    untracked_module = repository / "src/b34_untracked_digest_probe.py"
+    untracked_module.write_text("VALUE = 'measured'\n", encoding="utf-8")
+    with_module = json.loads(
+        _run_snapshot_harness(
+            repository,
+            work_root=tmp_path / "with-module",
+            manifest=manifest,
+        )
+    )
+    assert (
+        with_module["harness_implementation_sha256"]
+        != baseline_document["harness_implementation_sha256"]
+    )
+    assert "src/b34_untracked_digest_probe.py" in with_module[
+        "measured_source_paths"
+    ]
 
 
 def test_side_effect_executor_exposes_every_boundary_on_execute_and_split_paths() -> None:

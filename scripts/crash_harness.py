@@ -1112,6 +1112,9 @@ def _tracked_implementation_sources(
         (
             "git",
             "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
             "-z",
             "--",
             ":(glob)schemas/**/*.json",
