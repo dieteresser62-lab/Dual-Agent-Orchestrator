@@ -1,0 +1,13 @@
+{
+  "schema_version": "src-layer-edges-baseline-v1",
+  "edges": [
+    {"source": "audit", "target": "recordstore"},
+    {"source": "driver", "target": "audit"},
+    {"source": "driver", "target": "engine"},
+    {"source": "driver", "target": "git"},
+    {"source": "driver", "target": "recordstore"},
+    {"source": "engine", "target": "audit"},
+    {"source": "engine", "target": "recordstore"},
+    {"source": "git", "target": "recordstore"}
+  ]
+}
