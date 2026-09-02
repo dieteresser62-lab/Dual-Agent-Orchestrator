@@ -33,11 +33,12 @@
     "src/provider_input_budget.py": {"codex": 7, "claude": 4},
     "src/state_io.py": {"codex": 1, "claude": 2},
     "src/task_contract.py": {"codex": 2},
-    "src/workflow.py": {"codex": 134, "claude": 69},
+    "src/workflow.py": {"codex": 95, "claude": 68},
     "src/workflow_baseline.py": {"codex": 2, "claude": 2},
     "src/workflow_git_commit.py": {"claude": 2},
     "src/workflow_persistence.py": {"codex": 8, "claude": 5},
     "src/workflow_recovery.py": {"codex": 20, "claude": 18},
+    "src/workflow_requests.py": {"codex": 35, "claude": 1},
     "src/workflow_state.py": {"codex": 91, "claude": 39},
     "src/workflow_validation.py": {"codex": 1}
   }

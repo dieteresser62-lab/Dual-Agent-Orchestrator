@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 import plan_handoff
+import workflow_requests
 
 from agent_adapters import AgentOutputError
 from audit_trail import ReviewAuditEvent
@@ -862,7 +863,8 @@ def test_native_implementation_package_matches_request_open_findings(
         test_changes_approved=True,
     )
 
-    bundle = WorkflowEngine._native_codex_request(
+    bundle = workflow_requests.native_codex_request(
+        execution_error=WorkflowExecutionError,
         state=state,
         context=context,
         history=WorkflowHistory(
@@ -1636,7 +1638,8 @@ Implement TARGET-GOAL-SENTINEL only.
         round_number=1,
         require_test_files_record=True,
     )
-    implementation = WorkflowEngine._native_codex_request(
+    implementation = workflow_requests.native_codex_request(
+        execution_error=WorkflowExecutionError,
         state=implementation_state,
         context=replace(_context(), approved_plan_text=plan),
         history=WorkflowHistory(implementation_state.current_work_unit_id),
@@ -1674,7 +1677,8 @@ Implement TARGET-GOAL-SENTINEL only.
         ("C-01",),
     )
     correction_contract = replace(implementation_contract, round_number=2)
-    correction = WorkflowEngine._native_codex_request(
+    correction = workflow_requests.native_codex_request(
+        execution_error=WorkflowExecutionError,
         state=correction_state,
         context=_context(),
         history=WorkflowHistory(
@@ -2639,7 +2643,8 @@ def test_native_codex_request_builder_covers_plan_and_final_report() -> None:
         require_slice_plan=True,
         plan_artifact_path="docs/internal/plan.md",
     )
-    plan_bundle = WorkflowEngine._native_codex_request(
+    plan_bundle = workflow_requests.native_codex_request(
+        execution_error=WorkflowExecutionError,
         state=plan_state,
         context=_context(),
         history=WorkflowHistory(plan_state.current_work_unit_id),
@@ -2662,7 +2667,8 @@ def test_native_codex_request_builder_covers_plan_and_final_report() -> None:
         1,
         review_fingerprint="f" * 64,
     )
-    final_bundle = WorkflowEngine._native_codex_request(
+    final_bundle = workflow_requests.native_codex_request(
+        execution_error=WorkflowExecutionError,
         state=final_state,
         context=_context(),
         history=WorkflowHistory(final_state.current_work_unit_id),
@@ -2706,7 +2712,9 @@ def test_native_final_review_rejects_missing_codex_report_before_request() -> No
         WorkflowExecutionError,
         match="requires a persisted Codex final report",
     ):
-        WorkflowEngine._native_review_request(
+        workflow_requests.native_review_request(
+            execution_error=WorkflowExecutionError,
+            full_branch_evidence_kind=EvidenceKind.FULL_BRANCH,
             state=state,
             context=_context(),
             history=WorkflowHistory(state.current_work_unit_id),
@@ -2770,7 +2778,9 @@ def test_native_request_builder_covers_plan_slice_and_final_reviews(
         _attestation(changes),
     )
 
-    bundle = WorkflowEngine._native_review_request(
+    bundle = workflow_requests.native_review_request(
+        execution_error=WorkflowExecutionError,
+        full_branch_evidence_kind=EvidenceKind.FULL_BRANCH,
         state=state,
         context=_context(),
         history=history,
@@ -2825,7 +2835,9 @@ def test_native_request_reuses_restored_legacy_review_packet_without_semantic_di
         _attestation(changes),
     )
 
-    bundle = WorkflowEngine._native_review_request(
+    bundle = workflow_requests.native_review_request(
+        execution_error=WorkflowExecutionError,
+        full_branch_evidence_kind=EvidenceKind.FULL_BRANCH,
         state=state,
         context=_context(),
         history=history,

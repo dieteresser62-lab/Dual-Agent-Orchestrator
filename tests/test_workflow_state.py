@@ -3,11 +3,18 @@ from __future__ import annotations
 from dataclasses import replace
 
 import pytest
+import workflow_requests
 
 from artifact_models import technical_text_evidence
 from contracts import CodexStepContract, PlannedSlice, ReadinessMarker
 from native_codex_contract import NativeCodexRequestKind
-from workflow import WorkflowChanges, WorkflowContext, WorkflowEngine, WorkflowHistory
+from workflow import (
+    WorkflowChanges,
+    WorkflowContext,
+    WorkflowEngine,
+    WorkflowExecutionError,
+    WorkflowHistory,
+)
 
 from workflow_state import (
     AgentProfileBinding,
@@ -159,7 +166,8 @@ def test_native_codex_request_projects_fingerprint_bound_paths_and_explanation()
         plan_artifact_path="docs/internal/plan.md",
     )
 
-    bundle = WorkflowEngine._native_codex_request(
+    bundle = workflow_requests.native_codex_request(
+        execution_error=WorkflowExecutionError,
         state=state,
         context=context,
         history=WorkflowHistory(state.current_work_unit_id),

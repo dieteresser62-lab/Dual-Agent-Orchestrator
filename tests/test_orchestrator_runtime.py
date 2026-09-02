@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import orchestrator
 import pytest
+import workflow_requests
 from conftest import can_symlink
 from agent_adapters import (
     NativeClaudeReviewAdapter,
@@ -1223,7 +1224,8 @@ def test_real_codex_canonical_request_embeds_only_configured_agents_file(
         require_slice_plan=True,
         plan_artifact_path="docs/internal/work-plan.md",
     )
-    bundle = WorkflowEngine._native_codex_request(
+    bundle = workflow_requests.native_codex_request(
+        execution_error=WorkflowExecutionError,
         state=state,
         context=context,
         history=WorkflowHistory(state.current_work_unit_id),

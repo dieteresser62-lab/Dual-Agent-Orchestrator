@@ -81,8 +81,11 @@ def test_frozen_baseline_component_bindings_are_internally_complete() -> None:
 
 def test_current_native_request_builder_does_not_restore_workflow_prompt() -> None:
     workflow_source = (ROOT / "src/workflow.py").read_text(encoding="utf-8")
+    request_source = (ROOT / "src/workflow_requests.py").read_text(encoding="utf-8")
     assert '"workflow-prompt"' not in workflow_source
-    assert '"native-policy", "system_policy"' in workflow_source
+    assert '"workflow-prompt"' not in request_source
+    assert '"native-policy", "system_policy"' not in workflow_source
+    assert '"native-policy", "system_policy"' in request_source
 
 
 def _three_slice_plan() -> str:

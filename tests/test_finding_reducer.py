@@ -548,6 +548,7 @@ def test_no_production_module_reimplements_finding_reduction() -> None:
         "workflow.py",
         "workflow_persistence.py",
         "workflow_recovery.py",
+        "workflow_requests.py",
     }
     actual_consumers: set[str] = set()
     for path in (ROOT / "src").rglob("*.py"):
