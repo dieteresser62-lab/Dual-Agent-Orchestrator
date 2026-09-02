@@ -28,7 +28,7 @@ from agent_runtime import (
     run_native_review_agent_checked,
 )
 from artifact_bridge import (
-    ArtifactBridge, ArtifactBridgeError, attestation_payload,
+    ArtifactBridge, ArtifactBridgeError,
     finding_payload as finding_payload,
     review_payload_matches_result,
     finding_handoff_export_payload, finding_handoff_import_payload,
@@ -85,12 +85,7 @@ from contracts import (
 from gates import TestChangeEvidence, detect_test_changes, matches_path_patterns
 from path_policy import PathPolicyError, resolve_path_within_roots
 from git_service import (
-    CommitAuthorization,
-    SliceGitBoundary,
-    commit_slice,
-    inspect_commit_tree,
     inspect_repository,
-    preview_commit_tree,
     prepare_new_watch_task_branch,
     require_committed_file_at_head,
     GitTransactionError,
@@ -135,7 +130,6 @@ from workflow import (
     ReviewerInvocation,
     NoWorkflowChangesError,
     WorkflowChanges,
-    WorkflowCommitApprovalRequired,
     WorkflowCommitRequest,
     WorkflowContext,
     WorkflowCorrectionBoundary,
@@ -164,6 +158,10 @@ from workflow_validation import (
     WorkflowValidationDependencies,
 )
 from workflow_audit import WorkflowAudit, WorkflowAuditDependencies
+from workflow_git_commit import (
+    WorkflowGitCommit,
+    WorkflowGitCommitDependencies,
+)
 from workflow_state import (
     AgentProfileBinding,
     GateReason,
@@ -192,7 +190,6 @@ from side_effects import (
     SideEffectReconciliationError,
     SideEffectSpec,
     reconcile_file_write,
-    reconcile_git_commit,
     reconcile_provider_start,
     sha256_bytes,
 )
@@ -437,6 +434,27 @@ class ProductionWorkflowDriver:
                 overall_audit_entries=_overall_audit_entries,
                 authorized_test_approval=_authorized_test_approval,
                 audit_projection=_audit_projection,
+            )
+        )
+
+    def _git_commit_boundary(self) -> WorkflowGitCommit:
+        """Bind the complete ledger-bracketed Slice commit explicitly."""
+
+        return WorkflowGitCommit(
+            WorkflowGitCommitDependencies(
+                root=lambda: self.root,
+                active_state=lambda: self.active_state,
+                artifact_bridge=lambda: self._artifact_bridge,
+                assert_structured_decision_context=(
+                    self.assert_structured_decision_context
+                ),
+                repository_changes=(
+                    lambda fingerprint: self._repository_changes.get(fingerprint)
+                ),
+                mark_completed_side_effect=self._mark_completed_side_effect,
+                side_effect_executor=self._side_effect_executor,
+                side_effect_spec=self._side_effect_spec,
+                bound_task_control_paths=_bound_task_control_paths,
             )
         )
 
@@ -2031,307 +2049,7 @@ class ProductionWorkflowDriver:
         return WorkflowCorrectionBoundary(identity.head, scope, start.fingerprint)
 
     def commit_slice(self, request: WorkflowCommitRequest) -> str:
-        if self.active_state is None:
-            raise WorkflowExecutionError("slice commit has no active state")
-        self.assert_structured_decision_context()
-        state = self.active_state
-        current = state.current_slice
-        if current.start_commit is None or current.start_fingerprint is None:
-            raise WorkflowExecutionError("slice commit has no persisted Git boundary")
-        boundary = SliceGitBoundary(
-            slice_id=current.slice_id,
-            branch=state.branch,
-            start_commit=current.start_commit,
-            start_fingerprint=current.start_fingerprint,
-            scope_paths=current.scope_paths,
-            semantic_markdown_paths=tuple(
-                sorted(
-                    path
-                    for path in current.scope_paths
-                    if path.startswith("docs/internal/") and path.endswith(".md")
-                )
-            ),
-            excluded_control_paths=_bound_task_control_paths(self.root, state),
-        )
-        summary = next(
-            (
-                item.summary
-                for item in state.planned_slices
-                if item.slice_id == current.slice_id
-            ),
-            "apply approved correction",
-        )
-        reviewed_changes = self._repository_changes.get(request.fingerprint)
-        if reviewed_changes is None:
-            raise WorkflowExecutionError(
-                "slice commit has no canonical repository evidence for its fingerprint"
-            )
-        unexpected_paths = tuple(
-            path
-            for path in reviewed_changes.paths
-            if path not in current.scope_paths
-        )
-        exact_scope_approval = any(
-            state.current_work_unit.has_gate_approval(
-                reason,
-                request.fingerprint,
-                unexpected_paths,
-            )
-            for reason in (
-                GateReason.UNEXPECTED_FILE,
-                GateReason.QUOTA_RESUME_DIFF,
-            )
-        )
-        if unexpected_paths and not exact_scope_approval:
-            raise WorkflowExecutionError(
-                "slice commit has unapproved paths outside its persisted scope"
-            )
-        artifact_bridge = self._artifact_bridge
-        head_approval = next(
-            (
-                decision
-                for decision in reversed(
-                    state.current_work_unit.gate_decisions
-                )
-                if decision.approved
-                and decision.fingerprint == request.fingerprint
-                and decision.paths == (unexpected_paths or reviewed_changes.paths)
-                and decision.reason
-                in {GateReason.UNEXPECTED_FILE, GateReason.QUOTA_RESUME_DIFF}
-            ),
-            None,
-        )
-        identity = inspect_repository(self.root)
-        existing_git_effect = None
-        if artifact_bridge is not None:
-            effect_replay = replay_artifacts(
-                artifact_bridge.store.load_chain(), state.run_id
-            )
-            existing_git_effect = next(
-                (
-                    item
-                    for item in reversed(effect_replay.side_effects)
-                    if item.effect_class == "git_commit"
-                    and item.work_unit_id == str(state.current_work_unit_id)
-                    and len(item.operation) == 6
-                    and item.operation[0] == "slice_commit"
-                    and item.operation[1] == str(request.slice_id)
-                    and item.result is None
-                ),
-                None,
-            )
-        if (
-            existing_git_effect is not None
-            and existing_git_effect.operation[4] != request.fingerprint
-        ):
-            raise WorkflowExecutionError(
-                "pending Slice commit belongs to another reviewed fingerprint"
-            )
-        if existing_git_effect is None:
-            if identity.head == boundary.start_commit:
-                transaction_changes = reviewed_changes
-            else:
-                semantic_transaction_paths = tuple(
-                    sorted(
-                        path
-                        for path in (
-                            *boundary.semantic_markdown_paths,
-                            *unexpected_paths,
-                        )
-                        if path.startswith("docs/internal/")
-                        and path.endswith(".md")
-                    )
-                )
-                transaction_changes = collect_repository_changes(
-                    self.root,
-                    identity.head,
-                    semantic_markdown_paths=semantic_transaction_paths,
-                    excluded_paths=boundary.excluded_control_paths,
-                )
-            expected_tree = preview_commit_tree(self.root, transaction_changes)
-        else:
-            expected_tree = existing_git_effect.operation[3]
-        git_operation = (
-            existing_git_effect.operation
-            if existing_git_effect is not None
-            else (
-                "slice_commit",
-                str(request.slice_id),
-                identity.head,
-                expected_tree,
-                request.fingerprint,
-                hashlib.sha256(summary.encode("utf-8")).hexdigest(),
-            )
-        )
-        own_commit_recovery = False
-        if existing_git_effect is not None and identity.head != git_operation[2]:
-            parent, tree = inspect_commit_tree(self.root, identity.head)
-            own_commit_recovery = reconcile_git_commit(
-                prior_head=git_operation[2],
-                current_head=identity.head,
-                current_parent=parent,
-                expected_tree=git_operation[3],
-                current_tree=tree,
-            ).outcome is ReconciliationOutcome.OCCURRED
-        if (
-            identity.head != current.start_commit
-            and head_approval is None
-            and not own_commit_recovery
-        ):
-            raise WorkflowCommitApprovalRequired(
-                (
-                    "HEAD-DRIFT | the Slice HEAD changed after its persisted start; "
-                    f"approve the exact reviewed fingerprint {request.fingerprint} "
-                    f"and current HEAD {identity.head} before committing"
-                ),
-                unexpected_paths or reviewed_changes.paths,
-            )
-        review_result = request.claude_review
-        structured_attestation = None
-        approval_records: tuple[ArtifactRecord, ...] = ()
-        current_review_record: ArtifactRecord | None = None
-        structured_binding: tuple[str, tuple[str, ...]] | None = None
-        if artifact_bridge is not None:
-            chain = artifact_bridge.store.load_chain()
-            structured_attestation = next(
-                (
-                    item for item in reversed(chain)
-                    if item.record_type.value == "validation_attestation"
-                    and item.fingerprint.sha256 == request.fingerprint
-                    and item.logical_id == request.attestation.attestation_id
-                ),
-                None,
-            )
-            approval_records = tuple(
-                item
-                for item in chain
-                if isinstance(item.payload, ReviewPayload)
-                and item.payload.verdict == "approved"
-                and item.fingerprint.sha256 == request.fingerprint
-            )
-            current_review_record = next(
-                (
-                    item for item in reversed(approval_records)
-                    if item.payload.work_unit_id
-                    == str(state.current_work_unit_id)
-                ),
-                None,
-            )
-            if structured_attestation is None or not approval_records:
-                raise WorkflowExecutionError(
-                    "structured commit binding requires persisted attestation and approvals"
-                )
-            if structured_attestation.payload != attestation_payload(
-                request.attestation,
-                structured_attestation.payload.content_record_id,
-            ):
-                raise WorkflowExecutionError(
-                    "structured commit attestation differs from the commit request"
-                )
-            if (
-                current_review_record is None
-                or not review_payload_matches_result(
-                    current_review_record.payload,
-                    review_result,
-                )
-            ):
-                raise WorkflowExecutionError(
-                    "structured commit review differs from the commit request"
-                )
-            if (
-                not request.attestation.passed
-                and current_review_record.payload.red_state_followup_slice
-                != request.red_state_followup_slice
-            ):
-                raise WorkflowExecutionError(
-                    "red-state commit lacks its fingerprint-bound review record authorization"
-                )
-            structured_binding = (
-                structured_attestation.record_id,
-                tuple(item.record_id for item in approval_records),
-            )
-        if (artifact_bridge is None) != (structured_binding is None):
-            raise WorkflowExecutionError(
-                "structured commit binding was not established before the Git transaction"
-            )
-        def perform_commit():
-            committed = commit_slice(
-                repository_root=self.root,
-                boundary=boundary,
-                authorization=CommitAuthorization(
-                    slice_id=request.slice_id,
-                    diff_fingerprint=request.fingerprint,
-                    attestation=request.attestation,
-                    claude_review=review_result,
-                    findings=request.findings,
-                    red_state_followup_slice=request.red_state_followup_slice,
-                    review_record=current_review_record,
-                    review_work_unit_id=str(state.current_work_unit_id),
-                    approved_head_commit=(
-                        identity.head if head_approval is not None else None
-                    ),
-                    approved_external_paths=(
-                        unexpected_paths if exact_scope_approval else ()
-                    ),
-                ),
-                title=summary,
-            )
-            return committed, committed.commit_hash
-
-        if artifact_bridge is None:
-            result = perform_commit()[0]
-            commit_hash = result.commit_hash
-        else:
-            git_spec = self._side_effect_spec(
-                "git_commit", git_operation, fingerprint=request.fingerprint
-            )
-
-            def reconcile_commit():
-                current_identity = inspect_repository(self.root)
-                if current_identity.head == git_operation[2]:
-                    return reconcile_git_commit(
-                        prior_head=git_operation[2],
-                        current_head=current_identity.head,
-                        current_parent=None,
-                        expected_tree=git_operation[3],
-                        current_tree=None,
-                    )
-                parent, tree = inspect_commit_tree(
-                    self.root, current_identity.head
-                )
-                return reconcile_git_commit(
-                    prior_head=git_operation[2],
-                    current_head=current_identity.head,
-                    current_parent=parent,
-                    expected_tree=git_operation[3],
-                    current_tree=tree,
-                )
-
-            executed = self._side_effect_executor(artifact_bridge).execute(
-                git_spec,
-                reconcile=reconcile_commit,
-                perform=perform_commit,
-            )
-            commit_hash = (
-                executed.commit_hash
-                if hasattr(executed, "commit_hash")
-                else str(executed)
-            )
-            self._mark_completed_side_effect(git_spec.effect_key)
-        if artifact_bridge is not None and structured_binding is not None:
-            attestation_record_id, approval_record_ids = structured_binding
-            artifact_bridge.append(
-                BindingPayload(
-                    binding_kind="commit",
-                    target=commit_hash,
-                    attestation_id=attestation_record_id,
-                    approval_ids=approval_record_ids,
-                ),
-                logical_id=f"commit-{request.slice_id}-{commit_hash[:12]}",
-                idempotency_key=f"commit:{request.slice_id}:{request.fingerprint}",
-                fingerprint_sha256=request.fingerprint,
-            )
-        return commit_hash
+        return self._git_commit_boundary().commit_slice(request)
 
     def finalize_audit(self, state: WorkflowState) -> str | None:
         return self._audit_boundary().finalize_audit(state)

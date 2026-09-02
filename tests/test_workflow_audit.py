@@ -13,6 +13,7 @@ from workflow_state import init_workflow_state
 
 ROOT = Path(__file__).resolve().parents[1]
 AUDIT_PATH = ROOT / "src/workflow_audit.py"
+GIT_COMMIT_PATH = ROOT / "src/workflow_git_commit.py"
 DRIVER_PATH = ROOT / "src/orchestrator.py"
 
 EXPECTED_INTERNAL_IMPORTS = {
@@ -189,17 +190,24 @@ def test_driver_binds_exact_audit_edges_and_keeps_public_facades() -> None:
 
 
 def test_commit_slice_remains_at_the_driver_composition_root() -> None:
+    driver = _class(_tree(DRIVER_PATH), "ProductionWorkflowDriver")
     driver_methods = {
-        node.name
-        for node in _class(_tree(DRIVER_PATH), "ProductionWorkflowDriver").body
-        if isinstance(node, ast.FunctionDef)
+        node.name: node for node in driver.body if isinstance(node, ast.FunctionDef)
     }
     audit_methods = {
         node.name
         for node in _class(_tree(), "WorkflowAudit").body
         if isinstance(node, ast.FunctionDef)
     }
+    git_commit_methods = {
+        node.name
+        for node in _class(_tree(GIT_COMMIT_PATH), "WorkflowGitCommit").body
+        if isinstance(node, ast.FunctionDef)
+    }
     assert "commit_slice" in driver_methods
+    rendered = ast.dump(driver_methods["commit_slice"], include_attributes=False)
+    assert "_git_commit_boundary" in rendered
+    assert "commit_slice" in git_commit_methods
     assert "commit_slice" not in audit_methods
 
 
