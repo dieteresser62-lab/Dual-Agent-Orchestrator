@@ -746,7 +746,7 @@ Tests und Dokumentation zählen nicht):
 | R1, R3 | 4 |
 | RP | 2 |
 
-Zwei von acht Slices hätten `max_productive_files = 10` gerissen. Das Limit
+Zwei von acht Slices hätten die damalige starre Zehnergrenze gerissen. Das Limit
 blockiert also nicht jeden Slice, aber verlässlich die großen.
 
 **`12` — Orchestrator-Kern strukturell zerlegen.** Danach. Seine

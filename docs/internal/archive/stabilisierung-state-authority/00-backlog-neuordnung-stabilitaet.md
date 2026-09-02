@@ -106,7 +106,7 @@ auf `04` vorbedingt. Ist `04` als S4c im Plan erledigt, bleibt: erst die starre
 Grenze ersetzen, dann den Kern zerlegen.
 
 **Belegender Nebenbefund:** Der S3-Commit `898f14e` umfasst 21 Dateien. Über den
-Orchestrator wäre er an `max_productive_files = 10` gescheitert. Der
+Orchestrator wäre er an der damaligen starren Zehnergrenze gescheitert. Der
 Stabilisierungsplan läuft auch deshalb manuell — das ist die konkreteste
 Begründung für `08`, die es gibt.
 

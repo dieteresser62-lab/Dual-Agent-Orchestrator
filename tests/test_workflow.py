@@ -3649,57 +3649,47 @@ Keep complete failed validation evidence reviewable.
     assert driver.commit_calls == []
 
 
-def test_productive_file_limit_halts_before_first_agent_and_rechecks_on_resume() -> None:
-    scope = tuple(f"src/file_{index}.py" for index in range(11))
-    driver = FakeDriver(snapshots=[], codex_outputs=[], reviewer_outputs=[])
-    engine = WorkflowEngine(driver)
-
-    halted = engine.run_current_work_unit(_slice_state(scope), _context())
-
-    assert halted.exit_code == 4
-    assert halted.state.current_work_unit.gate.reason is GateReason.STOP_REQUEST
-    assert "PRODUCTIVE-FILE-LIMIT" in halted.state.current_work_unit.gate.detail
-    assert "src/file_0.py=productive" in halted.state.current_work_unit.gate.detail
-    assert driver.codex_calls == []
-    resumed = halted.state.resume_after_user_decision()
-    halted_again = engine.run_current_work_unit(resumed, _context(), halted.history)
-    assert halted_again.exit_code == 4
-    assert driver.codex_calls == []
-
-
-def test_productive_file_limit_uses_persisted_rename_groups() -> None:
-    rename_group = ("src/renamed_new.py", "src/renamed_old.py")
-    nine_singletons = tuple((f"src/file_{index}.py",) for index in range(9))
-    ten_groups = tuple(sorted((*nine_singletons, rename_group)))
-    ten_paths = tuple(sorted(path for group in ten_groups for path in group))
+def test_fifteen_authorized_productive_paths_reach_implementation_and_review() -> None:
+    productive_paths = tuple(f"src/file_{index}.py" for index in range(15))
+    scope = tuple(sorted((*productive_paths, TEST_FILE)))
+    changes = _changes("1", *scope)
     driver = FakeDriver(
-        snapshots=[],
-        codex_outputs=[_codex_stop("DOMAIN-001")],
+        snapshots=[changes],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[_review_approval(AgentRole.CLAUDE)],
+    )
+
+    result = WorkflowEngine(driver).run_current_work_unit(
+        _slice_state(scope_paths=scope), _context()
+    )
+
+    assert result.completed
+    assert len(driver.codex_calls) == 1
+    assert [call.reviewer for call in driver.reviewer_calls] == [AgentRole.CLAUDE]
+    assert result.state.current_work_unit.gate.status is GateStatus.CLEAR
+
+
+def test_large_authorized_scope_still_rejects_one_unexpected_path() -> None:
+    productive_paths = tuple(f"src/file_{index}.py" for index in range(15))
+    scope = tuple(sorted((*productive_paths, TEST_FILE)))
+    unexpected = "src/not-authorized.py"
+    changes = _changes("1", *scope, unexpected)
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[_codex_ready()],
         reviewer_outputs=[],
     )
-    context = replace(
-        _context(), stop_rules=(StopRule("DOMAIN-001", "stop after limit check"),)
-    )
 
-    allowed = WorkflowEngine(driver).run_current_work_unit(
-        _slice_state(ten_paths, ten_groups), context
-    )
-
-    assert allowed.exit_code == 4
-    assert allowed.state.current_work_unit.gate.detail.startswith("DOMAIN-001 |")
-    assert len(driver.codex_calls) == 1
-
-    eleven_groups = tuple(sorted((*ten_groups, ("src/file_9.py",))))
-    eleven_paths = tuple(sorted(path for group in eleven_groups for path in group))
-    blocked_driver = FakeDriver(snapshots=[], codex_outputs=[], reviewer_outputs=[])
-    blocked = WorkflowEngine(blocked_driver).run_current_work_unit(
-        _slice_state(eleven_paths, eleven_groups), _context()
+    blocked = WorkflowEngine(driver).run_current_work_unit(
+        _slice_state(scope_paths=scope), _context()
     )
 
     assert blocked.exit_code == 4
-    assert "11 productive change units" in blocked.state.current_work_unit.gate.detail
-    assert "12 productive change units" not in blocked.state.current_work_unit.gate.detail
-    assert blocked_driver.codex_calls == []
+    assert blocked.state.current_work_unit.gate.reason is GateReason.UNEXPECTED_FILE
+    assert blocked.state.current_work_unit.gate.detail.startswith("UNEXPECTED-PATH |")
+    assert blocked.state.current_work_unit.gate.paths == (unexpected,)
+    assert len(driver.codex_calls) == 1
+    assert driver.reviewer_calls == []
 
 
 def test_branch_mismatch_halts_before_first_agent() -> None:
@@ -3796,7 +3786,10 @@ def test_repeated_agent_sandbox_validation_stop_still_fails_closed() -> None:
     assert halted.current_work_unit.gate.reason is GateReason.STOP_REQUEST
 
 
-def test_codex_validation_stop_auto_extends_scope_from_completed_approved_slice() -> None:
+def test_codex_validation_stop_auto_extends_large_exact_scope_from_completed_slice() -> None:
+    prior_productive = tuple(f"src/prior_{index}.py" for index in range(14))
+    prior_scope = tuple(sorted((*prior_productive, "tests/prior.py")))
+    current_scope = ("src/current.py", "tests/current.py")
     state = init_workflow_state(
         run_id="run-auto-remediation",
         task_file="/repo/task.md",
@@ -3806,8 +3799,8 @@ def test_codex_validation_stop_auto_extends_scope_from_completed_approved_slice(
         timestamp="2026-08-12T10:00:00+00:00",
     ).bind_slice_plan(
         (
-            PlannedSlice(1, "source adapter", ("src/prior.py", "tests/prior.py")),
-            PlannedSlice(2, "consumer", ("src/current.py", "tests/current.py")),
+            PlannedSlice(1, "source adapter", prior_scope),
+            PlannedSlice(2, "consumer", current_scope),
         ),
         first_start_commit=START_COMMIT,
     ).complete_current_work_unit().start_work_unit(
@@ -3816,7 +3809,7 @@ def test_codex_validation_stop_auto_extends_scope_from_completed_approved_slice(
         step=WorkflowStep.CODEX_IMPLEMENTATION,
     ).bind_current_slice_git_boundary(
         start_commit=START_COMMIT,
-        scope_paths=("src/prior.py", "tests/prior.py"),
+        scope_paths=prior_scope,
         start_fingerprint="0" * 64,
     ).complete_current_slice(
         commit_ref="b" * 40,
@@ -3827,14 +3820,15 @@ def test_codex_validation_stop_auto_extends_scope_from_completed_approved_slice(
         slice_start_commit="b" * 40,
     ).bind_current_slice_git_boundary(
         start_commit="b" * 40,
-        scope_paths=("src/current.py", "tests/current.py"),
+        scope_paths=current_scope,
         start_fingerprint="1" * 64,
     )
+    remediation_paths = ", ".join(prior_scope)
     driver = FakeDriver(
         snapshots=[],
         codex_outputs=[
             "STOP_REQUESTED: VALIDATION-UNAVAILABLE | prior adapter needs normalization\n"
-            "REMEDIATION_PATHS: src/prior.py, tests/prior.py\n"
+            f"REMEDIATION_PATHS: {remediation_paths}\n"
             "STATUS: DONE",
             "TEST_FILES_TOUCHED: tests/current.py,tests/prior.py\n"
             "IMPLEMENTATION_READY: 02 | YES\n"
@@ -3853,16 +3847,17 @@ def test_codex_validation_stop_auto_extends_scope_from_completed_approved_slice(
     )
 
     assert advanced.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
-    assert advanced.current_slice.scope_paths == (
-        "src/current.py",
-        "src/prior.py",
-        "tests/current.py",
-        "tests/prior.py",
+    assert advanced.current_slice.scope_paths == tuple(
+        sorted((*current_scope, *prior_scope))
     )
+    assert len(
+        tuple(path for path in advanced.current_slice.scope_paths if path.startswith("src/"))
+    ) == 15
     assert len(driver.codex_calls) == 2
     assert driver.codex_calls[1].native_request is not None
     assert "AUTOMATIC PRIOR-SLICE REMEDIATION" in driver.codex_calls[1].native_request.canonical_json
-    assert "src/prior.py" in driver.codex_calls[1].native_request.canonical_json
+    assert "src/prior_0.py" in driver.codex_calls[1].native_request.canonical_json
+    assert "src/prior_13.py" in driver.codex_calls[1].native_request.canonical_json
 
 
 def test_codex_reprompts_once_when_remediation_path_is_already_authorized() -> None:
@@ -4379,7 +4374,7 @@ def test_terminable_quota_resumes_same_final_review_for_watch_completion() -> No
     assert any("work_unit=3" in item for item in heartbeats)
 
 
-def test_correction_actual_diff_still_enforces_productive_file_limit() -> None:
+def test_large_correction_preserves_finding_binding_and_review_resume_idempotency() -> None:
     first_branch = _changes(
         "7",
         "src/early.py",
@@ -4387,7 +4382,7 @@ def test_correction_actual_diff_still_enforces_productive_file_limit() -> None:
         full_diff="ORIGINAL BRANCH",
         start_commit=START_COMMIT,
     )
-    productive_paths = tuple(f"src/fix_{index}.py" for index in range(11))
+    productive_paths = tuple(f"src/fix_{index}.py" for index in range(15))
     correction = _changes(
         "8",
         *productive_paths,
@@ -4396,13 +4391,14 @@ def test_correction_actual_diff_still_enforces_productive_file_limit() -> None:
         start_commit="b" * 40,
     )
     broad_scope = tuple(sorted((*productive_paths, TEST_FILE)))
-    driver = FakeDriver(
+    interrupted_driver = FakeDriver(
         snapshots=[first_branch, correction],
         codex_outputs=[
             _final_report(),
             _codex_ready("C-01", slice_id="02"),
         ],
         reviewer_outputs=[_final_denial(AgentRole.CLAUDE, "C-01")],
+        reviewer_failures=[None, RuntimeError("correction review interrupted")],
         correction_boundaries=[
             WorkflowCorrectionBoundary(
                 start_commit="b" * 40,
@@ -4412,17 +4408,69 @@ def test_correction_actual_diff_still_enforces_productive_file_limit() -> None:
         ],
     )
 
-    halted = WorkflowEngine(driver).run_final_review(
-        _completed_single_slice_state(), _context()
+    with pytest.raises(RuntimeError, match="correction review interrupted"):
+        WorkflowEngine(interrupted_driver).run_final_review(
+            _completed_single_slice_state(), _context()
+        )
+
+    assert interrupted_driver.validation_calls == [
+        first_branch.fingerprint,
+        correction.fingerprint,
+    ]
+    assert [call.step for call in interrupted_driver.reviewer_calls] == [
+        WorkflowStep.CLAUDE_FINAL_REVIEW,
+        WorkflowStep.CLAUDE_SLICE_REVIEW,
+    ]
+    correction_review = interrupted_driver.reviewer_calls[1]
+    assert correction_review.fingerprint == correction.fingerprint
+    assert tuple(item.finding_id for item in correction_review.previous_findings) == (
+        "C-01",
     )
 
-    assert halted.exit_code == 4
-    assert halted.state.current_work_unit.kind is WorkUnitKind.CORRECTION
-    assert halted.state.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
-    assert halted.state.current_work_unit.gate.reason is GateReason.STOP_REQUEST
-    assert "PRODUCTIVE-FILE-LIMIT" in halted.state.current_work_unit.gate.detail
-    assert driver.validation_calls == [first_branch.fingerprint]
-    assert [call.reviewer for call in driver.reviewer_calls] == [AgentRole.CLAUDE]
+    persisted = interrupted_driver.checkpoints[-1]
+    persisted_history = interrupted_driver.checkpoint_histories[-1]
+    assert persisted.current_work_unit.kind is WorkUnitKind.CORRECTION
+    assert persisted.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
+    corrected_branch = _changes(
+        "9",
+        "src/early.py",
+        *productive_paths,
+        TEST_FILE,
+        full_diff="CORRECTED BRANCH",
+        start_commit=START_COMMIT,
+    )
+    resumed_driver = FakeDriver(
+        snapshots=[correction, corrected_branch],
+        codex_outputs=[_final_report()],
+        reviewer_outputs=[
+            _review_approval(
+                AgentRole.CLAUDE,
+                finding_status=(
+                    "FINDING_STATUS: C-01 | CLOSED | large correction verified"
+                ),
+                slice_id="02",
+            ),
+            _final_approval(AgentRole.CLAUDE),
+        ],
+        snapshot_index=0,
+    )
+
+    resumed = WorkflowEngine(resumed_driver).run_current_work_unit(
+        persisted,
+        _context(),
+        persisted_history,
+    )
+
+    assert resumed.completed
+    assert [call.step for call in resumed_driver.codex_calls] == [
+        WorkflowStep.CODEX_FINAL_REVIEW
+    ]
+    assert resumed_driver.validation_calls == [corrected_branch.fingerprint]
+    assert [call.step for call in resumed_driver.reviewer_calls] == [
+        WorkflowStep.CLAUDE_SLICE_REVIEW,
+        WorkflowStep.CLAUDE_FINAL_REVIEW,
+    ]
+    assert resumed.history.findings[0].status is FindingStatus.CLOSED
 
 
 def test_native_record_ahead_review_is_mirrored_before_next_policy_or_provider() -> None:

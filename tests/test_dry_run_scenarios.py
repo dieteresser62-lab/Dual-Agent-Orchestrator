@@ -71,6 +71,15 @@ def test_scenario_rejects_retired_contract_repair_channel() -> None:
         DryRunScenario.from_dict(document)
 
 
+def test_scenario_rejects_retired_productive_path_count_option() -> None:
+    document = _scenario_document()
+    retired_option = "max_productive" + "_files"
+    document["context"] = {retired_option: 15}
+
+    with pytest.raises(DryRunScenarioError, match=f"unknown key '{retired_option}'"):
+        DryRunScenario.from_dict(document)
+
+
 def test_scripted_event_requires_exactly_one_native_output_or_failure() -> None:
     with pytest.raises(ValueError, match="exactly one"):
         ScriptedAgentEvent(AgentRole.CODEX, 1, 1, WorkflowStep.CODEX_PLAN)

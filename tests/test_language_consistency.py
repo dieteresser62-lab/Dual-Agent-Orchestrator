@@ -1418,6 +1418,132 @@ def test_gitignored_read_exemption_ratchet_rejects_growth_and_accepts_shrinkage(
     )
 
 
+_COUNTED_PATH_TERMS = frozenset(
+    ("productive", "path", "paths", "scope", "change", "changes", "group", "groups")
+)
+
+
+def _path_count_limit_hits(path: Path, source: str) -> tuple[str, ...]:
+    tree = ast.parse(source)
+
+    def identifier_terms(node: ast.AST) -> set[str]:
+        identifiers = (
+            item.id
+            if isinstance(item, ast.Name)
+            else item.attr
+            for item in ast.walk(node)
+            if isinstance(item, (ast.Name, ast.Attribute))
+        )
+        return {
+            part
+            for identifier in identifiers
+            for part in identifier.casefold().split("_")
+        }
+
+    def counts_paths(node: ast.AST) -> bool:
+        return any(
+            isinstance(item, ast.Call)
+            and isinstance(item.func, ast.Name)
+            and item.func.id == "len"
+            and bool(item.args)
+            and bool(identifier_terms(item.args[0]) & _COUNTED_PATH_TERMS)
+            for item in ast.walk(node)
+        )
+
+    tainted_counts = {
+        target.id
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Assign, ast.AnnAssign))
+        for target in (
+            node.targets if isinstance(node, ast.Assign) else (node.target,)
+        )
+        if isinstance(target, ast.Name)
+        and node.value is not None
+        and counts_paths(node.value)
+    }
+    hits = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Compare):
+            continue
+        operands = (node.left, *node.comparators)
+        bounded_count = any(
+            counts_paths(operand)
+            or any(
+                isinstance(item, ast.Name) and item.id in tainted_counts
+                for item in ast.walk(operand)
+            )
+            for operand in operands
+        )
+        has_ordering = any(
+            isinstance(operator, (ast.Lt, ast.LtE, ast.Gt, ast.GtE))
+            for operator in node.ops
+        )
+        has_numeric_boundary = any(
+            isinstance(operand, ast.Constant)
+            and isinstance(operand.value, int)
+            and not isinstance(operand.value, bool)
+            for operand in operands
+        )
+        if bounded_count and (has_ordering or has_numeric_boundary):
+            hits.append(f"{path.as_posix()}:{node.lineno}")
+    return tuple(hits)
+
+
+def test_productive_path_count_contract_is_absent_from_live_repository() -> None:
+    retired_option = "max_productive" + "_files"
+    live_markers = (
+        "evaluate_productive_file" + "_limit",
+        "PRODUCTIVE_FILE" + "_LIMIT_RULE_ID",
+        "FileLimit" + "Evidence",
+        "PRODUCTIVE-FILE-" + "LIMIT",
+    )
+    tracked = subprocess.run(
+        ("git", "ls-files", "-z"),
+        cwd=ROOT,
+        capture_output=True,
+        check=True,
+    ).stdout.split(b"\0")
+    hits = []
+    for raw_path in tracked:
+        if not raw_path:
+            continue
+        relative = raw_path.decode("utf-8")
+        if relative.startswith("inbox/backlog/"):
+            continue
+        content = (ROOT / relative).read_bytes()
+        if retired_option.encode() in content:
+            hits.append(f"{relative}:{retired_option}")
+        if relative.endswith(".py") and relative.startswith(("src/", "tests/")):
+            hits.extend(
+                f"{relative}:{marker}"
+                for marker in live_markers
+                if marker.encode() in content
+            )
+    assert not hits, "Retired productive-path count contract returned:\n" + "\n".join(hits)
+
+
+def test_productive_path_count_limit_mutation_is_detected_structurally() -> None:
+    production_paths = (
+        Path("src/workflow.py"),
+        Path("src/gates.py"),
+        Path("src/dry_run_scenarios.py"),
+    )
+    assert not tuple(
+        hit
+        for path in production_paths
+        for hit in _path_count_limit_hits(path, (ROOT / path).read_text(encoding="utf-8"))
+    )
+
+    mutation = """def gate(scope_paths):
+    counted_paths = len(scope_paths)
+    if counted_paths > 15:
+        return "stop"
+"""
+    assert _path_count_limit_hits(Path("src/workflow.py"), mutation) == (
+        "src/workflow.py:3",
+    )
+
+
 def test_gitignored_read_exemption_is_bound_to_the_metadata_guard_function() -> None:
     synthetic = "\n".join(
         (

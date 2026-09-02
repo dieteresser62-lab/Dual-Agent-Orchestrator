@@ -506,7 +506,6 @@ class ScriptedContext:
     manual_slice_gate: bool = False
     red_state_followup_slice: str | None = None
     current_branch: str | None = None
-    max_productive_files: int = 10
     quota_wait_policy: QuotaWaitPolicy = QuotaWaitPolicy()
     transient_retry_policy: TransientRetryPolicy = TransientRetryPolicy()
 
@@ -517,7 +516,7 @@ class ScriptedContext:
             set(),
             {
                 "expected_test_files", "test_changes_approved", "manual_slice_gate",
-                "red_state_followup_slice", "current_branch", "max_productive_files",
+                "red_state_followup_slice", "current_branch",
                 "quota_wait_policy",
                 "transient_retry_policy",
             },
@@ -533,8 +532,6 @@ class ScriptedContext:
                 raise DryRunScenarioError(f"scenario.context.{key} must be a boolean")
         red_state = raw.get("red_state_followup_slice")
         branch = raw.get("current_branch")
-        maximum = raw.get("max_productive_files", 10)
-        maximum = _positive_int(maximum, "scenario.context.max_productive_files")
         quota_raw = raw.get("quota_wait_policy", {})
         quota_table = _mapping(quota_raw, "scenario.context.quota_wait_policy")
         _require_exact_keys(
@@ -613,7 +610,6 @@ class ScriptedContext:
                 if branch is not None
                 else None
             ),
-            max_productive_files=maximum,
             quota_wait_policy=quota,
             transient_retry_policy=transient,
         )
@@ -1562,7 +1558,6 @@ def build_scenario_context(scenario: DryRunScenario) -> WorkflowContext:
         test_changes_approved=configured.test_changes_approved,
         manual_slice_gate=configured.manual_slice_gate,
         current_branch=configured.current_branch or scenario.initial.branch,
-        max_productive_files=configured.max_productive_files,
         red_state_followup_slice=configured.red_state_followup_slice,
         quota_wait_policy=configured.quota_wait_policy,
         transient_retry_policy=configured.transient_retry_policy,

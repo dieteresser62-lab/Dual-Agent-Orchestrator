@@ -1150,7 +1150,7 @@ def test_early_slice11_work_unit_shape_loads_without_active_test_evidence() -> N
 def test_policy_gate_roundtrips_and_resumes_at_same_step() -> None:
     state = make_state().await_policy_gate(
         reason=GateReason.STOP_REQUEST,
-        detail="PRODUCTIVE-FILE-LIMIT | eleven productive files",
+        detail="DOMAIN-STOP | operator decision remains required",
         paths=("src/one.py", "src/two.py"),
         updated_at="halted",
     )

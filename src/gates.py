@@ -14,7 +14,6 @@ from repo_changes import RepositoryChanges, fingerprint_change_subset
 
 
 STOP_RULE_ID_PATTERN = re.compile(r"^[A-Z][A-Z0-9_-]*$")
-PRODUCTIVE_FILE_LIMIT_RULE_ID = "PRODUCTIVE-FILE-LIMIT"
 BRANCH_MISMATCH_RULE_ID = "BRANCH-MISMATCH"
 VALIDATION_UNAVAILABLE_RULE_ID = "VALIDATION-UNAVAILABLE"
 UNEXPECTED_PATH_RULE_ID = "UNEXPECTED-PATH"
@@ -69,10 +68,6 @@ class StopRule:
 
 BUILTIN_STOP_RULES = (
     StopRule(
-        PRODUCTIVE_FILE_LIMIT_RULE_ID,
-        "More than the configured maximum number of productive change units is in scope.",
-    ),
-    StopRule(
         BRANCH_MISMATCH_RULE_ID,
         "The active branch differs from the feature branch persisted for this run.",
     ),
@@ -107,56 +102,6 @@ class ChangeGroupClassification:
     def productive(self) -> bool:
         return any(
             item.path_class is PathClass.PRODUCTIVE for item in self.classifications
-        )
-
-
-@dataclass(frozen=True)
-class FileLimitEvidence:
-    maximum: int
-    classified_groups: tuple[ChangeGroupClassification, ...]
-
-    @property
-    def rule_id(self) -> str:
-        return PRODUCTIVE_FILE_LIMIT_RULE_ID
-
-    @property
-    def count(self) -> int:
-        return len(self.productive_groups)
-
-    @property
-    def productive_groups(self) -> tuple[ChangeGroupClassification, ...]:
-        return tuple(group for group in self.classified_groups if group.productive)
-
-    @property
-    def paths(self) -> tuple[str, ...]:
-        return tuple(
-            sorted(
-                {
-                    path
-                    for group in self.productive_groups
-                    for path in group.paths
-                }
-            )
-        )
-
-    @property
-    def detail(self) -> str:
-        classifications = "; ".join(
-            ", ".join(
-                f"{item.path}={item.path_class.value}"
-                + (
-                    f"[{item.matched_pattern}]"
-                    if item.matched_pattern is not None
-                    else "[unknown]"
-                )
-                for item in group.classifications
-            )
-            for group in self.classified_groups
-        )
-        return (
-            f"{self.rule_id} | {self.count} productive change units exceed "
-            f"the configured maximum of {self.maximum}: {', '.join(self.paths)} | "
-            f"classifications: {classifications}"
         )
 
 
@@ -277,21 +222,6 @@ def classify_change_groups(
             )
         )
     return tuple(groups)
-
-
-def evaluate_productive_file_limit(
-    change_groups: Iterable[Iterable[str]],
-    classes: PathClasses,
-    *,
-    maximum: int = 10,
-) -> FileLimitEvidence | None:
-    if isinstance(maximum, bool) or not isinstance(maximum, int) or maximum < 1:
-        raise ValueError("productive file maximum must be a positive integer")
-    classified = classify_change_groups(change_groups, classes)
-    productive = tuple(group for group in classified if group.productive)
-    if len(productive) <= maximum:
-        return None
-    return FileLimitEvidence(maximum, classified)
 
 
 def normalize_path_patterns(

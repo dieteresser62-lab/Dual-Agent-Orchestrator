@@ -94,7 +94,6 @@ from gates import (
     StopRule,
     TestChangeEvidence,
     detect_anchor_changes,
-    evaluate_productive_file_limit,
     matches_path_patterns,
 )
 from prompts import NATIVE_CODEX_SYSTEM_POLICY
@@ -350,7 +349,6 @@ class WorkflowContext:
     current_anchors: tuple[AnchorRecord, ...] = ()
     path_classes: PathClasses = PathClasses()
     stop_rules: tuple[StopRule, ...] = ()
-    max_productive_files: int = 10
     current_branch: str | None = None
     validation_matrix: ValidationMatrix = DEFAULT_WORKFLOW_VALIDATION_MATRIX
     red_state_followup_slice: str | None = None
@@ -390,12 +388,6 @@ class WorkflowContext:
             raise ValueError("declared stop rule ids must be unique")
         if builtin_ids.intersection(rule_ids):
             raise ValueError("declared stop rules cannot shadow built-in rule ids")
-        if (
-            isinstance(self.max_productive_files, bool)
-            or not isinstance(self.max_productive_files, int)
-            or self.max_productive_files < 1
-        ):
-            raise ValueError("max_productive_files must be a positive integer")
         if self.current_branch is not None and not self.current_branch.strip():
             raise ValueError("current_branch must be non-empty when provided")
         if (
@@ -1562,7 +1554,7 @@ class WorkflowEngine:
             if result.stop_request is None:
                 raise WorkflowExecutionError("Codex stop has no structured stop request")
             expanded = self._expand_approved_remediation_scope(
-                state, context, result.stop_request
+                state, result.stop_request
             )
             if expanded is not None:
                 self.driver.checkpoint(expanded, history)
@@ -2045,20 +2037,6 @@ class WorkflowEngine:
             )
             self.driver.checkpoint(state, history)
             return state, history
-        if unit.kind is WorkUnitKind.CORRECTION:
-            evidence = evaluate_productive_file_limit(
-                tuple((path,) for path in changes.paths),
-                context.path_classes,
-                maximum=context.max_productive_files,
-            )
-            if evidence is not None:
-                state = state.await_policy_gate(
-                    reason=GateReason.STOP_REQUEST,
-                    detail=evidence.detail,
-                    paths=evidence.paths,
-                )
-                self.driver.checkpoint(state, history)
-                return state, history
         state, test_changes_approved, halted = self._apply_test_change_gate(
             state, context, changes
         )
@@ -3137,28 +3115,7 @@ class WorkflowEngine:
                 ),
                 True,
             )
-        scope_paths = state.current_slice.scope_paths
-        if state.current_work_unit.kind in {
-            WorkUnitKind.PLAN,
-            WorkUnitKind.CORRECTION,
-            WorkUnitKind.FINAL_REVIEW,
-        } or not scope_paths:
-            return state, False
-        evidence = evaluate_productive_file_limit(
-            state.current_slice.scope_change_groups,
-            context.path_classes,
-            maximum=context.max_productive_files,
-        )
-        if evidence is None:
-            return state, False
-        return (
-            state.await_policy_gate(
-                reason=GateReason.STOP_REQUEST,
-                detail=evidence.detail,
-                paths=evidence.paths,
-            ),
-            True,
-        )
+        return state, False
 
     @staticmethod
     def _halt_for_stop_request(
@@ -3178,7 +3135,6 @@ class WorkflowEngine:
     @staticmethod
     def _expand_approved_remediation_scope(
         state: WorkflowState,
-        context: WorkflowContext,
         stop_request: StopRequest,
     ) -> WorkflowState | None:
         """Add only exact paths from completed approved Slices to the active Slice."""
@@ -3209,14 +3165,7 @@ class WorkflowEngine:
             if state.current_work_unit.has_completed_side_effect(retry_key):
                 return None
             return state.mark_side_effect_completed(retry_key)
-        expanded = state.extend_current_slice_scope(additions)
-        if evaluate_productive_file_limit(
-            expanded.current_slice.scope_change_groups,
-            context.path_classes,
-            maximum=context.max_productive_files,
-        ) is not None:
-            return None
-        return expanded
+        return state.extend_current_slice_scope(additions)
 
     @staticmethod
     def _handoff_agent_sandbox_validation(
