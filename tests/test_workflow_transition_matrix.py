@@ -373,7 +373,7 @@ GATE_SOURCE_MAP = (
         "bootstrap_check",
         "resume",
         "workflow._invoke_role",
-        ("workflow._invoke_role", "orchestrator._bootstrap_fact"),
+        ("workflow._invoke_role", "workflow_baseline.bootstrap_fact"),
         ("provider-input-budget-resume",),
     ),
     GateSourceRow(

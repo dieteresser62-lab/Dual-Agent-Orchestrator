@@ -182,7 +182,7 @@ def test_recovery_module_has_one_way_imports_and_complete_dependency_inventory()
             for node in ast.walk(candidate)
         ):
             importers.append(path.relative_to(ROOT).as_posix())
-    assert importers == ["src/orchestrator.py"]
+    assert importers == ["src/orchestrator.py", "src/workflow_baseline.py"]
     _assert_recovery_edges()
 
 

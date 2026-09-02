@@ -343,13 +343,13 @@ COMPARISON_TARGETS = (
     ("src/orchestrator.py", None, "_apply_resumed_agent_profiles"),
     ("src/orchestrator.py", None, "run_production_workflow"),
     (
-        "src/orchestrator.py",
-        "ProductionWorkflowDriver",
-        "_matches_baseline_initialization_prefix",
+        "src/workflow_baseline.py",
+        None,
+        "matches_baseline_initialization_prefix",
     ),
     (
-        "src/orchestrator.py",
-        "ProductionWorkflowDriver",
+        "src/workflow_baseline.py",
+        "WorkflowBaseline",
         "_persist_structured_baseline",
     ),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "assert_structured_decision_context"),
@@ -453,8 +453,8 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/orchestrator.py:run_pipeline": 20,
     "src/orchestrator.py:_apply_resumed_agent_profiles": 3,
     "src/orchestrator.py:run_production_workflow": 40,
-    "src/orchestrator.py:ProductionWorkflowDriver._matches_baseline_initialization_prefix": 24,
-    "src/orchestrator.py:ProductionWorkflowDriver._persist_structured_baseline": 26,
+    "src/workflow_baseline.py:matches_baseline_initialization_prefix": 24,
+    "src/workflow_baseline.py:WorkflowBaseline._persist_structured_baseline": 26,
     "src/orchestrator.py:ProductionWorkflowDriver.assert_structured_decision_context": 4,
     "src/workflow_recovery.py:WorkflowRecovery._start_provider_attempt": 19,
     "src/orchestrator.py:ProductionWorkflowDriver._reconcile_provider_effect": 13,
@@ -617,6 +617,7 @@ def _class_field_names(relative_path: str, class_name: str) -> set[str]:
 def _driver_divergence_messages() -> Counter[str]:
     boundaries = (
         _class_node(_tree("src/orchestrator.py"), "ProductionWorkflowDriver"),
+        _class_node(_tree("src/workflow_baseline.py"), "WorkflowBaseline"),
         _class_node(_tree("src/workflow_persistence.py"), "WorkflowPersistence"),
         _class_node(_tree("src/workflow_recovery.py"), "WorkflowRecovery"),
     )

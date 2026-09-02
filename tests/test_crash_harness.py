@@ -605,7 +605,7 @@ def test_record_only_injection_uses_the_production_baseline_writer() -> None:
     assert direct_injector_calls == ()
 
     production_tree = ast.parse(
-        (ROOT / "src/orchestrator.py").read_text(encoding="utf-8")
+        (ROOT / "src/workflow_baseline.py").read_text(encoding="utf-8")
     )
     baseline = next(
         node
@@ -627,7 +627,7 @@ def test_record_only_injection_uses_the_production_baseline_writer() -> None:
         for call in ast.walk(baseline)
         if isinstance(call, ast.Call)
         and isinstance(call.func, ast.Attribute)
-        and call.func.attr == "_side_effect_executor"
+        and call.func.attr == "side_effect_executor"
     )
 
     assert record_only_specs == {"internal", "ledger"}
