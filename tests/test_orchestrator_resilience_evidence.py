@@ -12,6 +12,7 @@ import pytest
 import orchestrator
 import agent_runtime
 from agent_runtime import classify_agent_failure
+from artifact_models import technical_text_evidence
 from cli import parse_args
 from contracts import AgentRole, FindingStatus
 from dry_run_scenarios import (
@@ -69,6 +70,9 @@ EXPECTED_SCENARIOS = {
     "slice-correction",
     "structured-output-near-miss",
 }
+SYNTHETIC_TECHNICAL_TEXT = technical_text_evidence(
+    "synthetic invocation failure"
+)[0]
 
 
 def _evidence_node(scenario_id: str) -> str:
@@ -772,6 +776,8 @@ def test_gate_kind_uses_automatic_wait_status_as_resume(
         slice_id=1,
         work_unit_id=2,
         diagnostic_exit_code=2 if quota else 3,
+        process_exit_code=None,
+        technical_text=SYNTHETIC_TECHNICAL_TEXT,
         parse_path="dry:quota" if quota else None,
         source_timezone="UTC" if quota else None,
         reset_at_utc="2026-08-27T12:02:00+00:00" if quota else None,
@@ -832,6 +838,8 @@ def test_gate_kind_covers_reopened_legacy_quota_revalidation() -> None:
         slice_id=1,
         work_unit_id=1,
         diagnostic_exit_code=2,
+        process_exit_code=None,
+        technical_text=SYNTHETIC_TECHNICAL_TEXT,
         automatic_resume=False,
         diff_fingerprint="1" * 64,
     )

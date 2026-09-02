@@ -4,6 +4,7 @@ from dataclasses import replace
 
 import pytest
 
+from artifact_models import technical_text_evidence
 from contracts import CodexStepContract, PlannedSlice, ReadinessMarker
 from native_codex_contract import NativeCodexRequestKind
 from workflow import WorkflowChanges, WorkflowContext, WorkflowEngine, WorkflowHistory
@@ -29,6 +30,11 @@ from workflow_state import (
     init_workflow_state,
     BootstrapCheckFact,
 )
+
+
+SYNTHETIC_TECHNICAL_TEXT = technical_text_evidence(
+    "synthetic invocation failure"
+)[0]
 
 
 def make_state():
@@ -535,6 +541,8 @@ def test_quota_failure_roundtrips_and_resumes_exact_failed_step() -> None:
         slice_id=1,
         work_unit_id=1,
         diagnostic_exit_code=2,
+        process_exit_code=None,
+        technical_text=SYNTHETIC_TECHNICAL_TEXT,
         parse_path="codex:text:relative",
         source_timezone="UTC",
         reset_at_utc="2026-08-12T10:01:00+00:00",
@@ -569,6 +577,8 @@ def test_legacy_quota_resume_diff_gate_reopens_for_fingerprint_revalidation() ->
         slice_id=1,
         work_unit_id=1,
         diagnostic_exit_code=2,
+        process_exit_code=None,
+        technical_text=SYNTHETIC_TECHNICAL_TEXT,
         automatic_resume=False,
         diff_fingerprint="1" * 64,
     )
@@ -667,6 +677,8 @@ def test_network_failure_roundtrips_as_bounded_retry_wait() -> None:
         slice_id=1,
         work_unit_id=1,
         diagnostic_exit_code=3,
+        process_exit_code=None,
+        technical_text=SYNTHETIC_TECHNICAL_TEXT,
         resume_at_utc="2026-08-12T10:00:05+00:00",
         auto_resume_count=1,
         automatic_resume=True,

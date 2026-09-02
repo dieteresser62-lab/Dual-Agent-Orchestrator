@@ -30,6 +30,7 @@ from artifact_models import (
     ValidationAttestationPayload,
     ValidationResult,
     WorkUnitPayload,
+    technical_text_evidence,
 )
 from artifact_migration import resolve_resume_state
 from artifact_replay import ArtifactReplayError, replay_artifacts, replay_findings
@@ -75,6 +76,9 @@ from workflow_state import (
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_ROOT = REPOSITORY_ROOT / "src"
 PREFIX_PATTERN = re.compile(r"^([A-Z][A-Z0-9_-]*) \| ")
+SYNTHETIC_TECHNICAL_TEXT = technical_text_evidence(
+    "synthetic invocation failure"
+)[0]
 
 
 @dataclass(frozen=True)
@@ -1434,6 +1438,8 @@ def _invocation_failure(state: WorkflowState) -> InvocationFailureRecord:
         slice_id=state.current_work_unit.slice_id,
         work_unit_id=state.current_work_unit_id,
         diagnostic_exit_code=3,
+        process_exit_code=None,
+        technical_text=SYNTHETIC_TECHNICAL_TEXT,
         diff_fingerprint="6" * 64,
     )
 

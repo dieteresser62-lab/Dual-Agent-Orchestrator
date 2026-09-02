@@ -42,7 +42,12 @@ from provider_input_efficiency import (
     build_slice_execution_package,
 )
 from final_review_preflight import FinalReviewPreflightDenied
-from artifact_models import InvocationFailurePayload, Role, provider_text_evidence
+from artifact_models import (
+    InvocationFailurePayload,
+    Role,
+    provider_text_evidence,
+    technical_text_evidence,
+)
 from finding_reducer import (
     merge_request_result,
     project_open_set,
@@ -2486,6 +2491,9 @@ class WorkflowEngine:
         provider_marker, provider_digest, provider_bytes = provider_text_evidence(
             error.provider_text
         )
+        technical_marker, technical_digest, technical_bytes = (
+            technical_text_evidence(error.technical_text)
+        )
         received_at = error.received_at.astimezone(timezone.utc).isoformat()
         decision_at = now_utc.isoformat()
         safety_margin_seconds = (
@@ -2511,6 +2519,8 @@ class WorkflowEngine:
             diagnostic_exit_code=(
                 2 if error.kind is AgentFailureKind.QUOTA else 3
             ),
+            process_exit_code=error.process_exit_code,
+            technical_text=technical_marker,
             parse_path=(
                 error.quota_reset.parse_path if error.quota_reset else None
             ),
@@ -2534,12 +2544,16 @@ class WorkflowEngine:
             provider_text=provider_marker,
             provider_text_sha256=provider_digest,
             provider_text_bytes=provider_bytes,
+            technical_text=technical_marker,
+            technical_text_sha256=technical_digest,
+            technical_text_bytes=technical_bytes,
             received_at=record.received_at,
             decision_at_utc=decision_at,
             step=record.step.value,
             slice_id=str(record.slice_id),
             work_unit_id=str(record.work_unit_id),
             diagnostic_exit_code=record.diagnostic_exit_code,
+            process_exit_code=record.process_exit_code,
             parse_path=record.parse_path,
             source_timezone=record.source_timezone,
             reset_at_utc=record.reset_at_utc,
@@ -2557,10 +2571,17 @@ class WorkflowEngine:
             record, wait_automatically=automatic, updated_at=decision_at
         )
         logger.info(
-            "provider invocation terminal role=%s operation=%s physical_attempt=%d status=failed retry=%s",
+            "provider invocation terminal role=%s operation=%s physical_attempt=%d "
+            "status=failed failure_kind=%s process_exit_code=%s retry=%s",
             role.value,
             state.current_step.value,
             len(matching_failures) + 1,
+            error.kind.value,
+            (
+                str(error.process_exit_code)
+                if error.process_exit_code is not None
+                else "none"
+            ),
             "scheduled" if automatic else "halted",
         )
         self.driver.checkpoint(state, history)

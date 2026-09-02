@@ -1499,6 +1499,9 @@ _OPERATIONAL_FAILURE_CLASSES = {
 _PROVIDER_TEXT_MARKER_RE = re.compile(
     r"^\[provider text redacted; sha256=([0-9a-f]{64}); utf8_bytes=([1-9][0-9]*)\]$"
 )
+_TECHNICAL_TEXT_MARKER_RE = re.compile(
+    r"^\[technical text redacted; sha256=([0-9a-f]{64}); utf8_bytes=([1-9][0-9]*)\]$"
+)
 
 
 def provider_text_evidence(provider_text: str) -> tuple[str, str, int]:
@@ -1521,6 +1524,21 @@ def provider_text_evidence(provider_text: str) -> tuple[str, str, int]:
     return marker, digest, len(encoded)
 
 
+def technical_text_evidence(technical_text: str) -> tuple[str, str, int]:
+    """Return bounded immutable evidence without retaining technical bytes."""
+    _require_text(technical_text, "technical_text")
+    existing = _TECHNICAL_TEXT_MARKER_RE.fullmatch(technical_text)
+    if existing is not None:
+        return technical_text, existing.group(1), int(existing.group(2))
+    encoded = technical_text.encode("utf-8")
+    digest = hashlib.sha256(encoded).hexdigest()
+    marker = (
+        f"[technical text redacted; sha256={digest}; "
+        f"utf8_bytes={len(encoded)}]"
+    )
+    return marker, digest, len(encoded)
+
+
 @dataclass(frozen=True, slots=True)
 class InvocationFailurePayload:
     invocation_id: str
@@ -1532,12 +1550,16 @@ class InvocationFailurePayload:
     provider_text: str
     provider_text_sha256: str
     provider_text_bytes: int
+    technical_text: str
+    technical_text_sha256: str
+    technical_text_bytes: int
     received_at: str
     decision_at_utc: str
     step: str
     slice_id: str
     work_unit_id: str
     diagnostic_exit_code: int
+    process_exit_code: int | None
     parse_path: str | None
     source_timezone: str | None
     reset_at_utc: str | None
@@ -1582,6 +1604,25 @@ class InvocationFailurePayload:
             raise ArtifactValidationError(
                 "invocation failure provider text evidence is inconsistent"
             )
+        _require_sha256(
+            self.technical_text_sha256,
+            "invocation failure technical_text_sha256",
+        )
+        _require_positive(
+            self.technical_text_bytes,
+            "invocation failure technical_text_bytes",
+        )
+        technical_marker, technical_digest, technical_byte_count = (
+            technical_text_evidence(self.technical_text)
+        )
+        if (
+            technical_marker != self.technical_text
+            or technical_digest != self.technical_text_sha256
+            or technical_byte_count != self.technical_text_bytes
+        ):
+            raise ArtifactValidationError(
+                "invocation failure technical text evidence is inconsistent"
+            )
         for value, label in (
             (self.received_at, "invocation failure received_at"),
             (self.decision_at_utc, "invocation failure decision_at_utc"),
@@ -1595,6 +1636,13 @@ class InvocationFailurePayload:
         ):
             raise ArtifactValidationError(
                 "invocation failure diagnostic exit code differs from its kind"
+            )
+        if self.process_exit_code is not None and (
+            isinstance(self.process_exit_code, bool)
+            or not isinstance(self.process_exit_code, int)
+        ):
+            raise ArtifactValidationError(
+                "invocation failure process_exit_code must be an integer or null"
             )
         for value, label in (
             (self.safety_margin_seconds, "invocation failure safety margin"),
@@ -2160,9 +2208,12 @@ def _payload_from_dict(record_type: RecordType, raw: Mapping[str, Any]) -> Artif
             data["invocation_id"], data["idempotency_key"], Role(data["role"]),
             data["failure_kind"], data["failure_class"], data["diagnostic_code"],
             data["provider_text"], data["provider_text_sha256"],
-            data["provider_text_bytes"], data["received_at"],
+            data["provider_text_bytes"], data["technical_text"],
+            data["technical_text_sha256"], data["technical_text_bytes"],
+            data["received_at"],
             data["decision_at_utc"], data["step"], data["slice_id"],
             data["work_unit_id"], data["diagnostic_exit_code"],
+            data["process_exit_code"],
             data["parse_path"], data["source_timezone"], data["reset_at_utc"],
             data["resume_at_utc"], data["safety_margin_seconds"],
             data["retry_delay_seconds"], data["auto_resume_count"],

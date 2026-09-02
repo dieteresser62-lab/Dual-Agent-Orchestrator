@@ -130,6 +130,30 @@ def test_claude_session_limit_error_envelope_is_quota_with_automatic_reset() -> 
     assert failure.quota_reset.source_timezone == "Europe/Berlin"
 
 
+def test_quota_classification_preserves_distinct_technical_text() -> None:
+    received = datetime(2026, 8, 20, 16, 34, 33, tzinfo=timezone.utc)
+    technical_text = (
+        "You've hit your session limit · resets 8:40pm (Europe/Berlin)"
+    )
+
+    failure = classify_agent_failure(
+        "claude",
+        AgentOutputError(
+            "review process failed",
+            provider_text="bounded provider summary",
+            technical_text=technical_text,
+            exit_code=1,
+        ),
+        invocation_id="inv-claude-distinct-technical-text",
+        received_at=received,
+    )
+
+    assert isinstance(failure, QuotaReachedError)
+    assert failure.provider_text == "bounded provider summary"
+    assert failure.technical_text == technical_text
+    assert failure.process_exit_code == 1
+
+
 def test_claude_session_limit_review_prose_is_not_a_technical_quota() -> None:
     failure = classify_agent_failure(
         "claude",

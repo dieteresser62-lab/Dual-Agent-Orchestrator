@@ -13,6 +13,10 @@ from contracts import PlannedSlice
 STATE_VERSION = 3
 DEFAULT_MAX_CODEX_RETURNS = 4
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+TECHNICAL_TEXT_MARKER_PATTERN = re.compile(
+    r"^\[technical text redacted; sha256=[0-9a-f]{64}; "
+    r"utf8_bytes=[1-9][0-9]*\]$"
+)
 QUOTA_RESUME_DIFF_PATTERN = re.compile(
     r"^QUOTA-RESUME-DIFF \| .*\bgot ([0-9a-f]{64})$"
 )
@@ -292,6 +296,8 @@ class InvocationFailureRecord:
     slice_id: int
     work_unit_id: int
     diagnostic_exit_code: int
+    process_exit_code: int | None
+    technical_text: str
     parse_path: str | None = None
     source_timezone: str | None = None
     reset_at_utc: str | None = None
@@ -306,6 +312,7 @@ class InvocationFailureRecord:
             (self.invocation_id, "invocation failure invocation_id"),
             (self.idempotency_key, "invocation failure idempotency_key"),
             (self.provider_text, "invocation failure provider_text"),
+            (self.technical_text, "invocation failure technical_text"),
         ):
             _require_non_empty(value, label)
         if self.role not in {"codex", "claude"}:
@@ -320,6 +327,17 @@ class InvocationFailureRecord:
                 raise WorkflowStateValidationError("quota failure requires exit code 2")
         elif self.diagnostic_exit_code != 3:
             raise WorkflowStateValidationError("instance failure requires exit code 3")
+        if self.process_exit_code is not None and (
+            isinstance(self.process_exit_code, bool)
+            or not isinstance(self.process_exit_code, int)
+        ):
+            raise WorkflowStateValidationError(
+                "invocation failure process_exit_code must be an integer or null"
+            )
+        if not TECHNICAL_TEXT_MARKER_PATTERN.fullmatch(self.technical_text):
+            raise WorkflowStateValidationError(
+                "invocation failure technical_text must be redacted evidence"
+            )
         for value, label in (
             (self.safety_margin_seconds, "invocation failure safety margin"),
             (self.auto_resume_count, "invocation failure auto-resume count"),
@@ -387,6 +405,8 @@ class InvocationFailureRecord:
             "slice_id": self.slice_id,
             "work_unit_id": self.work_unit_id,
             "diagnostic_exit_code": self.diagnostic_exit_code,
+            "process_exit_code": self.process_exit_code,
+            "technical_text": self.technical_text,
             "parse_path": self.parse_path,
             "source_timezone": self.source_timezone,
             "reset_at_utc": self.reset_at_utc,
@@ -404,7 +424,8 @@ class InvocationFailureRecord:
             {
                 "invocation_id", "idempotency_key", "role", "failure_kind",
                 "provider_text", "received_at", "step", "slice_id",
-                "work_unit_id", "diagnostic_exit_code", "parse_path",
+                "work_unit_id", "diagnostic_exit_code", "process_exit_code",
+                "technical_text", "parse_path",
                 "source_timezone", "reset_at_utc", "resume_at_utc",
                 "safety_margin_seconds", "auto_resume_count", "automatic_resume",
                 "diff_fingerprint",
@@ -426,6 +447,8 @@ class InvocationFailureRecord:
             slice_id=_positive_int(raw["slice_id"], "invocation failure slice_id"),
             work_unit_id=_positive_int(raw["work_unit_id"], "invocation failure work_unit_id"),
             diagnostic_exit_code=_positive_int(raw["diagnostic_exit_code"], "invocation failure diagnostic_exit_code"),
+            process_exit_code=_optional_int(raw["process_exit_code"], "invocation failure process_exit_code"),
+            technical_text=_string(raw["technical_text"], "invocation failure technical_text"),
             parse_path=_optional_string(raw["parse_path"], "invocation failure parse_path"),
             source_timezone=_optional_string(raw["source_timezone"], "invocation failure source_timezone"),
             reset_at_utc=_optional_string(raw["reset_at_utc"], "invocation failure reset_at_utc"),
@@ -2736,6 +2759,14 @@ def _optional_string(value: object, label: str) -> str | None:
     if value is None:
         return None
     return _string(value, label)
+
+
+def _optional_int(value: object, label: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise WorkflowStateValidationError(f"{label} must be an integer or null")
+    return value
 
 
 def _positive_int(value: object, label: str) -> int:

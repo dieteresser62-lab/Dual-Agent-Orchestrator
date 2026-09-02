@@ -55,6 +55,7 @@ from artifact_models import (
     load_schema,
     validate_artifact_document,
     provider_text_evidence,
+    technical_text_evidence,
 )
 from workflow_state import (
     GateReason,
@@ -71,6 +72,9 @@ CODEX_REQUEST_ID = "native-codex-request-" + "b" * 64
 CLAUDE_REQUEST_ID = "native-review-request-" + "b" * 64
 PROVIDER_MARKER, PROVIDER_DIGEST, PROVIDER_BYTES = provider_text_evidence(
     "provider diagnostic"
+)
+TECHNICAL_MARKER, TECHNICAL_DIGEST, TECHNICAL_BYTES = technical_text_evidence(
+    "technical diagnostic"
 )
 
 
@@ -193,8 +197,9 @@ def _record(payload, *, revision: int = 1) -> ArtifactRecord:  # type: ignore[no
         "invocation-01", "run-01:work-01:claude_slice_review:claude",
         Role.CLAUDE, "network", "transient", "AGENT-INVOCATION",
         PROVIDER_MARKER, PROVIDER_DIGEST, PROVIDER_BYTES,
+        TECHNICAL_MARKER, TECHNICAL_DIGEST, TECHNICAL_BYTES,
         "2026-08-18T11:30:00+00:00", "2026-08-18T11:30:00+00:00",
-        "claude_slice_review", "1", "work-01", 3,
+        "claude_slice_review", "1", "work-01", 3, None,
         None, None, None, "2026-08-18T11:30:05+00:00", 0, 5, 1, True,
         DIGEST,
     ),
@@ -232,6 +237,65 @@ def test_every_record_family_roundtrips_through_model_and_schema(payload) -> Non
 
     assert restored == record
     assert restored.canonical_json() == encoded
+
+
+def test_invocation_failure_technical_evidence_is_redacted_and_exit_null_is_distinct_from_zero() -> None:
+    raw = "secret stderr details"
+    marker, digest, byte_count = technical_text_evidence(raw)
+    payload = InvocationFailurePayload(
+        invocation_id="invocation-process-diagnostic",
+        idempotency_key="run-01:work-01:claude_slice_review:claude",
+        role=Role.CLAUDE,
+        failure_kind="process",
+        failure_class="transient",
+        diagnostic_code="AGENT-PROCESS",
+        provider_text=PROVIDER_MARKER,
+        provider_text_sha256=PROVIDER_DIGEST,
+        provider_text_bytes=PROVIDER_BYTES,
+        technical_text=marker,
+        technical_text_sha256=digest,
+        technical_text_bytes=byte_count,
+        received_at="2026-09-01T18:30:00+00:00",
+        decision_at_utc="2026-09-01T18:30:01+00:00",
+        step="claude_slice_review",
+        slice_id="1",
+        work_unit_id="work-01",
+        diagnostic_exit_code=3,
+        process_exit_code=None,
+        parse_path=None,
+        source_timezone=None,
+        reset_at_utc=None,
+        resume_at_utc=None,
+        safety_margin_seconds=0,
+        retry_delay_seconds=0,
+        auto_resume_count=0,
+        automatic_resume=False,
+        diff_fingerprint=DIGEST,
+    )
+
+    null_document = json.loads(_record(payload).canonical_json())
+    zero_document = json.loads(
+        _record(replace(payload, process_exit_code=0)).canonical_json()
+    )
+    assert null_document["payload"]["process_exit_code"] is None
+    assert zero_document["payload"]["process_exit_code"] == 0
+    assert raw not in json.dumps(null_document, sort_keys=True)
+    with pytest.raises(ArtifactValidationError, match="technical text evidence"):
+        replace(payload, technical_text=raw)
+    raw_document = json.loads(json.dumps(null_document))
+    raw_document["payload"]["technical_text"] = raw
+    with pytest.raises(ArtifactValidationError, match="schema validation failed"):
+        validate_artifact_document(raw_document)
+    for required_field in (
+        "process_exit_code",
+        "technical_text",
+        "technical_text_sha256",
+        "technical_text_bytes",
+    ):
+        legacy_document = json.loads(json.dumps(null_document))
+        legacy_document["payload"].pop(required_field)
+        with pytest.raises(ArtifactValidationError, match="schema validation failed"):
+            validate_artifact_document(legacy_document)
 
 
 def test_slice_boundary_rejects_lossy_or_noncanonical_grouping() -> None:

@@ -22,6 +22,7 @@ from artifact_models import (
     WorkflowCompletionPayload,
     WorkflowPolicyPayload,
     WorkflowTransitionPayload,
+    technical_text_evidence,
 )
 from artifact_store import ArtifactStore
 from contracts import PlannedSlice
@@ -40,6 +41,9 @@ FINGERPRINT = "d" * 64
 EXTERNAL_FINGERPRINT = "9" * 64
 SLICE_COMMIT = "b" * 40
 CORRECTION_COMMIT = "c" * 40
+SYNTHETIC_TECHNICAL_TEXT = technical_text_evidence(
+    "synthetic invocation failure"
+)[0]
 
 
 def _state(step: WorkflowStep):
@@ -101,6 +105,8 @@ def _state_with_approved_correction_external_path():  # type: ignore[no-untyped-
         slice_id=state.current_slice_id,
         work_unit_id=state.current_work_unit_id,
         diagnostic_exit_code=3,
+        process_exit_code=None,
+        technical_text=SYNTHETIC_TECHNICAL_TEXT,
         automatic_resume=False,
         diff_fingerprint="8" * 64,
     )
@@ -287,6 +293,8 @@ def test_preflight_accepts_exact_current_final_review_gate_paths(
         slice_id=state.current_slice_id,
         work_unit_id=state.current_work_unit_id,
         diagnostic_exit_code=3,
+        process_exit_code=None,
+        technical_text=SYNTHETIC_TECHNICAL_TEXT,
         automatic_resume=False,
         diff_fingerprint="c" * 64,
     )

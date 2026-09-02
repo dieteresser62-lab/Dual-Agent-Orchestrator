@@ -220,6 +220,8 @@ WORKFLOW_STATE_FIELD_INVENTORY = {
         "slice_id",
         "work_unit_id",
         "diagnostic_exit_code",
+        "process_exit_code",
+        "technical_text",
         "parse_path",
         "source_timezone",
         "reset_at_utc",

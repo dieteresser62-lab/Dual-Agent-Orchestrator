@@ -37,6 +37,7 @@ from artifact_models import (
     ReviewPayload,
     ValidationAttestationPayload,
     canonical_json,
+    technical_text_evidence,
 )
 from artifact_replay import replay_artifacts
 from artifact_store import ArtifactStore
@@ -1356,6 +1357,10 @@ def prove_typed_failure_continuations() -> tuple[Mapping[str, object], ...]:
             slice_id=1,
             work_unit_id=1,
             diagnostic_exit_code=2 if kind is AgentFailureKind.QUOTA else 3,
+            process_exit_code=(137 if kind is AgentFailureKind.PROCESS else None),
+            technical_text=technical_text_evidence(
+                f"technical {kind.value} diagnostic"
+            )[0],
             reset_at_utc=(
                 "2026-09-01T00:00:04+00:00"
                 if kind is AgentFailureKind.QUOTA

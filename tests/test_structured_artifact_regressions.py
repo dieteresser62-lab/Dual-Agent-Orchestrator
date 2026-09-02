@@ -11,7 +11,11 @@ from pathlib import Path
 import pytest
 
 import orchestrator
-from agent_runtime import NativeAgentCodexOutput
+from agent_runtime import (
+    AgentProcessError,
+    NativeAgentCodexOutput,
+    classify_agent_failure,
+)
 from audit_trail import ReviewAuditEvent, ValidationAuditEvent
 from artifact_bridge import (
     ArtifactBridge,
@@ -47,6 +51,7 @@ from artifact_models import (
     TransientRetryPayload,
     WorkUnitPayload,
     provider_text_evidence,
+    technical_text_evidence,
 )
 from artifact_replay import ArtifactReplayError, replay_artifacts
 from artifact_store import ArtifactStore
@@ -107,6 +112,11 @@ from workflow_state import (
     WorkUnitStatus,
     init_workflow_state,
 )
+
+
+SYNTHETIC_TECHNICAL_TEXT = technical_text_evidence(
+    "synthetic invocation failure"
+)[0]
 
 
 def _git(root: Path, *args: str) -> str:
@@ -409,6 +419,9 @@ def _invocation_failure_payload(
     failure: InvocationFailureRecord,
 ) -> InvocationFailurePayload:
     marker, digest, byte_count = provider_text_evidence(failure.provider_text)
+    technical_marker, technical_digest, technical_byte_count = (
+        technical_text_evidence(failure.technical_text)
+    )
     decision_at = failure.received_at
     retry_delay = (
         failure.safety_margin_seconds
@@ -428,12 +441,16 @@ def _invocation_failure_payload(
         provider_text=marker,
         provider_text_sha256=digest,
         provider_text_bytes=byte_count,
+        technical_text=technical_marker,
+        technical_text_sha256=technical_digest,
+        technical_text_bytes=technical_byte_count,
         received_at=failure.received_at,
         decision_at_utc=decision_at,
         step=failure.step.value,
         slice_id=str(failure.slice_id),
         work_unit_id=str(failure.work_unit_id),
         diagnostic_exit_code=failure.diagnostic_exit_code,
+        process_exit_code=failure.process_exit_code,
         parse_path=failure.parse_path,
         source_timezone=failure.source_timezone,
         reset_at_utc=failure.reset_at_utc,
@@ -444,6 +461,47 @@ def _invocation_failure_payload(
         automatic_resume=failure.automatic_resume,
         diff_fingerprint=failure.diff_fingerprint,
     )
+
+
+def test_process_failure_exit_and_redacted_technical_evidence_reach_authoritative_chain(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/structured-regression")
+    state = _state(repository, "provider-failure-diagnostics")
+    driver = _driver(repository)
+    driver.checkpoint(state, WorkflowHistory(1))
+    active = driver.active_state
+    assert active is not None
+    now = datetime(2026, 9, 1, 18, 30, tzinfo=timezone.utc)
+    raw_technical_text = "stderr sentinel: provider worker was killed"
+    error = classify_agent_failure(
+        AgentRole.CLAUDE.value,
+        AgentProcessError(raw_technical_text, exit_code=137),
+        invocation_id="canary-review-process-failure",
+        received_at=now,
+    )
+
+    WorkflowEngine(driver, now_fn=lambda: now)._persist_invocation_failure(
+        active,
+        WorkflowHistory(active.current_work_unit_id),
+        WorkflowContext("assignment", "plan", "slice"),
+        AgentRole.CLAUDE,
+        error,
+    )
+
+    chain = ArtifactStore(repository, state.run_id).load_chain()
+    failure_records = tuple(
+        record for record in chain
+        if isinstance(record.payload, InvocationFailurePayload)
+    )
+    assert len(failure_records) == 1
+    payload = failure_records[0].payload
+    assert payload.failure_kind == "process"
+    assert payload.process_exit_code == 137
+    assert payload.diagnostic_exit_code == 3
+    assert payload.technical_text.startswith("[technical text redacted; sha256=")
+    assert payload.technical_text_bytes == len(raw_technical_text.encode("utf-8"))
+    assert raw_technical_text.encode("utf-8") not in failure_records[0].canonical_json()
 
 
 @pytest.mark.parametrize(
@@ -1266,6 +1324,8 @@ def test_automatic_quota_pause_persists_matching_chain_record_and_resumes(
         slice_id=state.current_slice_id,
         work_unit_id=state.current_work_unit_id,
         diagnostic_exit_code=2,
+        process_exit_code=None,
+        technical_text=SYNTHETIC_TECHNICAL_TEXT,
         parse_path="codex:text:relative",
         source_timezone="UTC",
         reset_at_utc=datetime(2026, 8, 18, 10, 1, tzinfo=timezone.utc).isoformat(),
@@ -1343,6 +1403,8 @@ def test_record_ahead_failure_resume_is_idempotent_and_does_not_restart_provider
         slice_id=state.current_slice_id,
         work_unit_id=state.current_work_unit_id,
         diagnostic_exit_code=3,
+        process_exit_code=None,
+        technical_text=SYNTHETIC_TECHNICAL_TEXT,
         resume_at_utc="2026-08-31T10:00:05+00:00",
         auto_resume_count=1,
         automatic_resume=True,
@@ -1398,6 +1460,8 @@ def test_gate_transition_after_invocation_failure_supersedes_failure_projection(
         slice_id=state.current_slice_id,
         work_unit_id=state.current_work_unit_id,
         diagnostic_exit_code=3,
+        process_exit_code=None,
+        technical_text=SYNTHETIC_TECHNICAL_TEXT,
         automatic_resume=False,
         diff_fingerprint="c" * 64,
     )
@@ -1457,6 +1521,8 @@ def test_automatic_network_retry_uses_its_own_chain_record_idempotently(
         slice_id=state.current_slice_id,
         work_unit_id=state.current_work_unit_id,
         diagnostic_exit_code=3,
+        process_exit_code=None,
+        technical_text=SYNTHETIC_TECHNICAL_TEXT,
         resume_at_utc=datetime(2026, 8, 18, 10, 0, 5, tzinfo=timezone.utc).isoformat(),
         auto_resume_count=1,
         automatic_resume=True,

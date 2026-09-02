@@ -150,6 +150,7 @@ class QuotaReachedError(AgentInvocationError):
         quota_reset: QuotaReset | None = None,
         exit_code: int | None = None,
         provider_data: Mapping[str, object] | None = None,
+        technical_text: str | None = None,
     ) -> None:
         super().__init__(
             agent_key=agent_key,
@@ -160,7 +161,7 @@ class QuotaReachedError(AgentInvocationError):
             quota_reset=quota_reset,
             exit_code=exit_code,
             provider_data=provider_data,
-            technical_text=detail,
+            technical_text=technical_text or detail,
         )
 
 
@@ -2036,6 +2037,7 @@ def classify_agent_failure(
             quota_reset=reset,
             exit_code=process_exit_code if isinstance(process_exit_code, int) else None,
             provider_data=provider_data,
+            technical_text=technical_text,
         )
     if claude_structured_output_retry_exhaustion:
         # The Claude CLI completed without a model result after exhausting its

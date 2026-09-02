@@ -919,6 +919,51 @@ def _invocation_failure(
     )
 
 
+def test_provider_process_failure_reaches_record_with_actual_diagnostics(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    now = datetime(2026, 9, 1, 18, 30, tzinfo=timezone.utc)
+    raw_technical_text = "stderr sentinel: provider worker was killed"
+    error = classify_agent_failure(
+        AgentRole.CLAUDE.value,
+        AgentProcessError(raw_technical_text, exit_code=137),
+        invocation_id="canary-review-process-failure",
+        received_at=now,
+    )
+    assert error.kind is AgentFailureKind.PROCESS
+    assert error.process_exit_code == 137
+    assert error.technical_text == raw_technical_text
+    driver = FakeDriver(
+        snapshots=[_changes("1", "src/early.py", TEST_FILE)],
+        codex_outputs=[],
+        reviewer_outputs=[],
+    )
+    caplog.set_level("INFO", logger="workflow")
+
+    persisted, failure = WorkflowEngine(
+        driver, now_fn=lambda: now
+    )._persist_invocation_failure(
+        _slice_state(),
+        WorkflowHistory(2),
+        _context(),
+        AgentRole.CLAUDE,
+        error,
+    )
+
+    assert driver.failure_persistence_events == ["failure-record", "checkpoint"]
+    assert persisted.current_work_unit.invocation_failures == (failure,)
+    assert failure.failure_kind is AgentFailureKind.PROCESS
+    payload = driver.failure_payloads[0]
+    assert payload.failure_kind == "process"
+    assert payload.process_exit_code == 137
+    assert payload.diagnostic_exit_code == 3
+    assert raw_technical_text not in payload.technical_text
+    assert payload.technical_text.startswith("[technical text redacted; sha256=")
+    assert payload.technical_text_bytes == len(raw_technical_text.encode("utf-8"))
+    assert "failure_kind=process" in caplog.text
+    assert "process_exit_code=137" in caplog.text
+
+
 @pytest.mark.parametrize(
     ("kind", "expected_automatic", "expected_diagnostic"),
     (
@@ -936,6 +981,7 @@ def test_r6_failure_record_precedes_retry_decision_and_uses_s1_classification(
 
     now = datetime(2026, 8, 31, 10, 0, tzinfo=timezone.utc)
     raw_provider_text = f"secret-provider-diagnostic-{kind.value}"
+    raw_technical_text = f"secret-technical-diagnostic-{kind.value}"
     reset = (
         QuotaReset(
             now + timedelta(seconds=30),
@@ -952,6 +998,7 @@ def test_r6_failure_record_precedes_retry_decision_and_uses_s1_classification(
         provider_text=raw_provider_text,
         received_at=now,
         quota_reset=reset,
+        technical_text=raw_technical_text,
     )
     if kind is AgentFailureKind.PROCESS:
         error.__cause__ = AgentProcessError("provider process exited", exit_code=7)
@@ -980,6 +1027,7 @@ def test_r6_failure_record_precedes_retry_decision_and_uses_s1_classification(
     assert driver.failure_persistence_events == ["failure-record", "checkpoint"]
     assert len(driver.failure_payloads) == 1
     payload = driver.failure_payloads[0]
+    assert payload.failure_kind == kind.value
     assert payload.failure_class == classified.failure_class.value == "transient"
     assert payload.diagnostic_code == classified.diagnostic_code == expected_diagnostic
     assert payload.automatic_resume is expected_automatic
@@ -988,6 +1036,10 @@ def test_r6_failure_record_precedes_retry_decision_and_uses_s1_classification(
     assert payload.provider_text.startswith("[provider text redacted; sha256=")
     assert payload.provider_text_bytes == len(raw_provider_text.encode("utf-8"))
     assert len(payload.provider_text) <= 128
+    assert raw_technical_text not in payload.technical_text
+    assert payload.technical_text.startswith("[technical text redacted; sha256=")
+    assert payload.technical_text_bytes == len(raw_technical_text.encode("utf-8"))
+    assert payload.process_exit_code is None
     assert failure.provider_text == payload.provider_text
     assert persisted.current_work_unit.invocation_failures == (failure,)
     if kind is AgentFailureKind.QUOTA:
