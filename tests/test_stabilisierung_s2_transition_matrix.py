@@ -378,8 +378,8 @@ COMPARISON_TARGETS = (
     ),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "prepare_finding_handoff"),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "checkpoint"),
-    ("src/orchestrator.py", "ProductionWorkflowDriver", "_project_audit"),
-    ("src/orchestrator.py", "ProductionWorkflowDriver", "finalize_audit"),
+    ("src/workflow_audit.py", "WorkflowAudit", "project_audit"),
+    ("src/workflow_audit.py", "WorkflowAudit", "finalize_audit"),
     ("src/orchestrator.py", "ProductionWorkflowDriver", "commit_slice"),
     ("src/inbox_watcher.py", "QueueSuccessEvidence", "__post_init__"),
     ("src/inbox_watcher.py", None, "load_rejection_marker"),
@@ -473,8 +473,8 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/workflow_persistence.py:WorkflowPersistence.persist_native_implementer_contract": 11,
     "src/orchestrator.py:ProductionWorkflowDriver.prepare_finding_handoff": 13,
     "src/orchestrator.py:ProductionWorkflowDriver.checkpoint": 8,
-    "src/orchestrator.py:ProductionWorkflowDriver._project_audit": 22,
-    "src/orchestrator.py:ProductionWorkflowDriver.finalize_audit": 9,
+    "src/workflow_audit.py:WorkflowAudit.project_audit": 22,
+    "src/workflow_audit.py:WorkflowAudit.finalize_audit": 9,
     "src/orchestrator.py:ProductionWorkflowDriver.commit_slice": 45,
     "src/inbox_watcher.py:QueueSuccessEvidence.__post_init__": 5,
     "src/inbox_watcher.py:load_rejection_marker": 9,
@@ -506,7 +506,7 @@ EXPECTED_STRICT_BODY_DIGESTS = {
     "src/final_review_preflight.py:_approved_external_paths": "24a9647addbf8df21fba7ecd0e25164e7237b00eb9c831bd7ee7b9ce1b8f5439",
     "src/orchestrator.py:_persisted_histories": "46d16ba2f5f168dbb9f86da548b7c370305003fa27f39d3979423f76f53b8d86",
     "src/orchestrator.py:_attach_record_events": "7065cd5a4554100a800dd581702c9738d89e6134736908703b715e18c9885d6b",
-    "src/orchestrator.py:ProductionWorkflowDriver.finalize_audit": "cd30a2f259a2f529477c2eccfe43c5b767110ead9d577057876c71c8f7c41276",
+    "src/workflow_audit.py:WorkflowAudit.finalize_audit": "9c93fd3d7b0cecfdadf5205d704929c53626123619bdb07673fe0e8666177c9d",
     "src/git_service.py:commit_managed_audit_report": "ec161c2eafd7369d9eb9ab30b1724ca01815f08ce669e94c4b322770556bc717",
 }
 
@@ -620,6 +620,8 @@ def _driver_divergence_messages() -> Counter[str]:
         _class_node(_tree("src/workflow_baseline.py"), "WorkflowBaseline"),
         _class_node(_tree("src/workflow_persistence.py"), "WorkflowPersistence"),
         _class_node(_tree("src/workflow_recovery.py"), "WorkflowRecovery"),
+        _class_node(_tree("src/workflow_validation.py"), "WorkflowValidation"),
+        _class_node(_tree("src/workflow_audit.py"), "WorkflowAudit"),
     )
     values = (
         node.value
@@ -1095,7 +1097,7 @@ def test_attestation_identity_uses_the_record_envelope() -> None:
 
 def test_managed_audit_commit_boundary_is_source_and_document_bound() -> None:
     finalize = ast.dump(
-        _function_node("src/orchestrator.py", "ProductionWorkflowDriver", "finalize_audit"),
+        _function_node("src/workflow_audit.py", "WorkflowAudit", "finalize_audit"),
         include_attributes=False,
     )
     workflow = ast.dump(

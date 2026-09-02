@@ -26,7 +26,6 @@ from agent_runtime import (
     ProviderAttemptLifecycle,
     run_native_codex_agent_checked,
     run_native_review_agent_checked,
-    run_validation_matrix,
 )
 from artifact_bridge import (
     ArtifactBridge, ArtifactBridgeError, attestation_payload,
@@ -44,7 +43,6 @@ from artifact_models import (
     AgentResultPayload, InvocationFailurePayload, ReviewPayload,
     Role,
     BlobReference, ProviderContentPayload,
-    ValidationAttestationPayload, ValidationContentPayload,
     ProviderInputMeasurementPayload, canonical_json,
     ProviderAttemptPayload, ProviderUsagePayload,
     FindingHandoffExportPayload,
@@ -71,16 +69,7 @@ from audit_trail import (
     OverallAuditEntry,
     ReviewAuditEvent,
     ValidationAuditEvent,
-    project_managed_slice_audit,
-    project_overall_audit,
-    project_structured_slice_audit,
-    project_structured_work_plan_audit,
-    project_work_plan_audit,
-    prepare_managed_overall_document,
-    prepare_managed_slice_document,
-    prepare_managed_work_plan_document,
     managed_slice_document_path,
-    validate_managed_work_plan_document,
 )
 from cli import DEFAULT_AGENTS_FILE, DEFAULT_TASK_FILE
 from contracts import (
@@ -92,16 +81,12 @@ from contracts import (
     PlannedSlice,
     StepContract,
     ValidationAttestation,
-    ValidationCommandSpec,
-    ValidationRecord,
-    ValidationStatus,
 )
 from gates import TestChangeEvidence, detect_test_changes, matches_path_patterns
 from path_policy import PathPolicyError, resolve_path_within_roots
 from git_service import (
     CommitAuthorization,
     SliceGitBoundary,
-    commit_managed_audit_report,
     commit_slice,
     inspect_commit_tree,
     inspect_repository,
@@ -146,8 +131,6 @@ from state_io import (
 from task_contract import TaskContract, TaskMode, parse_task_contract
 from workflow import (
     CodexInvocation,
-    PlanContractFailureKind,
-    PlanContractValidationError,
     PersistedNativeReviewerReplay,
     ReviewerInvocation,
     NoWorkflowChangesError,
@@ -176,6 +159,11 @@ from workflow_baseline import (
     gate_transition_payload,
     matches_baseline_initialization_prefix,
 )
+from workflow_validation import (
+    WorkflowValidation,
+    WorkflowValidationDependencies,
+)
+from workflow_audit import WorkflowAudit, WorkflowAuditDependencies
 from workflow_state import (
     AgentProfileBinding,
     GateReason,
@@ -195,7 +183,6 @@ from workflow_state import (
     BootstrapCheckFact,
     managed_correction_slice_report_path,
 )
-from content_authority import RAW_OUTPUT_DIGEST_V1, ValidationCapture
 from side_effects import (
     file_state_digest,
     Reconciliation,
@@ -414,6 +401,42 @@ class ProductionWorkflowDriver:
                     self._reconcile_pending_workflow_event
                 ),
                 side_effect_executor=self._side_effect_executor,
+            )
+        )
+
+    def _validation_boundary(self) -> WorkflowValidation:
+        """Bind driver-owned resources to one validation operation explicitly."""
+
+        return WorkflowValidation(
+            WorkflowValidationDependencies(
+                root=lambda: self.root,
+                active_state=lambda: self.active_state,
+                artifact_bridge=lambda: self._artifact_bridge,
+                assert_structured_decision_context=(
+                    self.assert_structured_decision_context
+                ),
+                config=lambda: self.config,
+                persistence=self._persistence_boundary,
+            )
+        )
+
+    def _audit_boundary(self) -> WorkflowAudit:
+        """Bind driver-owned resources to one managed audit operation explicitly."""
+
+        return WorkflowAudit(
+            WorkflowAuditDependencies(
+                root=lambda: self.root,
+                artifact_bridge=lambda: self._artifact_bridge,
+                assert_structured_decision_context=(
+                    self.assert_structured_decision_context
+                ),
+                mark_completed_side_effect=self._mark_completed_side_effect,
+                side_effect_executor=self._side_effect_executor,
+                side_effect_spec=self._side_effect_spec,
+                bound_task_control_paths=_bound_task_control_paths,
+                overall_audit_entries=_overall_audit_entries,
+                authorized_test_approval=_authorized_test_approval,
+                audit_projection=_audit_projection,
             )
         )
 
@@ -1515,105 +1538,11 @@ class ProductionWorkflowDriver:
         expected_commands: tuple[str, ...],
         attestation_id: str,
     ) -> ValidationAttestation | None:
-        """Restore exact validation state from its authoritative content blobs."""
-        bridge = self._artifact_bridge
-        if bridge is None:
-            return None
-        chain = bridge.store.load_chain()
-        candidates = tuple(
-            record
-            for record in chain
-            if isinstance(record.payload, ValidationContentPayload)
-            and record.fingerprint.sha256 == fingerprint
-            and record.payload.attestation_id == attestation_id
-            and tuple(
-                (
-                    item.command.argv[0]
-                    if item.command.mode == "legacy_shell"
-                    else shlex.join(item.command.argv)
-                )
-                for item in record.payload.outputs
-            )
-            == expected_commands
+        return self._validation_boundary().recover_pending_validation_attestation(
+            fingerprint,
+            expected_commands,
+            attestation_id,
         )
-        if not candidates:
-            return None
-        if len(candidates) != 1:
-            raise WorkflowExecutionError(
-                "validation recovery has multiple content records"
-            )
-        content_record = candidates[0]
-        payload = content_record.payload
-        assert isinstance(payload, ValidationContentPayload)
-        specs = tuple(
-            (
-                ValidationCommandSpec(legacy_shell=item.command.argv[0])
-                if item.command.mode == "legacy_shell"
-                else ValidationCommandSpec(argv=item.command.argv)
-            )
-            for item in payload.outputs
-        )
-        captures: list[ValidationCapture] = []
-        records: list[ValidationRecord] = []
-        for item, spec in zip(payload.outputs, specs, strict=True):
-            try:
-                stdout = bridge.store.read_blob(item.raw_stdout).decode("utf-8")
-                stderr = bridge.store.read_blob(item.raw_stderr).decode("utf-8")
-                compact = bridge.store.read_blob(item.compact_output).decode("utf-8")
-            except UnicodeDecodeError as exc:
-                raise WorkflowExecutionError(
-                    "validation content is not canonical UTF-8"
-                ) from exc
-            capture = ValidationCapture(
-                spec.display,
-                item.digest_outcome,
-                item.exit_code,
-                stdout,
-                stderr,
-                compact,
-            )
-            captures.append(capture)
-            if item.digest_outcome in {"pass", "fail", "timeout"}:
-                records.append(
-                    ValidationRecord(
-                        ValidationStatus.PASS
-                        if item.digest_outcome == "pass"
-                        else ValidationStatus.FAIL,
-                        spec.display,
-                        item.exit_code,
-                        compact,
-                    )
-                )
-        attestation = ValidationAttestation(
-            attestation_id=payload.attestation_id,
-            diff_fingerprint=fingerprint,
-            expected_commands=expected_commands,
-            records=tuple(records),
-            output_digest=payload.output_digest,
-            summary=payload.summary,
-            command_specs=specs,
-            content_captures=tuple(captures),
-            content_digest_format=payload.digest_format,
-        )
-        result = next(
-            (
-                record for record in chain
-                if record.record_id == payload.result_record_id
-            ),
-            None,
-        )
-        if result is None:
-            self.persist_validation_attestation(attestation)
-        elif (
-            not isinstance(result.payload, ValidationAttestationPayload)
-            or result.payload != attestation_payload(
-                attestation, content_record.record_id
-            )
-        ):
-            raise WorkflowExecutionError(
-                "validation recovery result differs from its content"
-            )
-        return attestation
 
     def persist_validation_request(self, request) -> None:  # type: ignore[no-untyped-def]
         self._persistence_boundary().persist_validation_request(request)
@@ -2044,21 +1973,7 @@ class ProductionWorkflowDriver:
         )
 
     def validate(self, changes: WorkflowChanges, request) -> object:
-        self.assert_structured_decision_context()
-        started = time.monotonic()
-        logger.info(
-            "Validation matrix starting: commands=%s attempt=%s",
-            len(request.commands),
-            request.attempt_number,
-        )
-        attestation = run_validation_matrix(config=self.config, request=request)
-        logger.info(
-            "Validation matrix finished: status=%s elapsed=%.2fs summary=%s",
-            attestation.status.value,
-            time.monotonic() - started,
-            attestation.summary,
-        )
-        return attestation
+        return self._validation_boundary().validate(changes, request)
 
     def validate_plan(
         self,
@@ -2068,147 +1983,11 @@ class ProductionWorkflowDriver:
         scope_patterns: tuple[str, ...],
         plan_only: bool,
     ) -> ValidationAttestation:
-        if self.active_state is None or not self.active_state.planned_slices:
-            raise PlanContractValidationError(
-                PlanContractFailureKind.PERSISTED_SLICE_PLAN_MISSING,
-                "internal plan validation requires a persisted SLICE_PLAN"
-            )
-        planned_paths = tuple(
-            sorted(
-                {
-                    path
-                    for planned in self.active_state.planned_slices
-                    for path in planned.scope_paths
-                }
-            )
-        )
-        unexpected_planned = tuple(
-            path
-            for path in planned_paths
-            if scope_patterns and not matches_path_patterns(path, scope_patterns)
-        )
-        if unexpected_planned:
-            raise PlanContractValidationError(
-                PlanContractFailureKind.PLANNED_PATH_OUTSIDE_SCOPE,
-                "internal plan validation found out-of-scope SLICE_PLAN paths: "
-                + ", ".join(unexpected_planned)
-            )
-        actual_paths = tuple(
-            path
-            for path in changes.paths
-            if path != ".orchestrator/plan-output.md"
-        )
-        unexpected_actual = tuple(
-            path
-            for path in actual_paths
-            if scope_patterns and not matches_path_patterns(path, scope_patterns)
-        )
-        approved_actual = any(
-            self.active_state.current_work_unit.has_gate_approval(
-                reason,
-                changes.fingerprint,
-                unexpected_actual,
-            )
-            for reason in (
-                GateReason.UNEXPECTED_FILE,
-                GateReason.QUOTA_RESUME_DIFF,
-            )
-        )
-        if unexpected_actual and not approved_actual:
-            raise PlanContractValidationError(
-                PlanContractFailureKind.CHANGED_PATH_OUTSIDE_SCOPE,
-                "internal plan validation found out-of-scope planning changes: "
-                + ", ".join(unexpected_actual)
-            )
-
-        command = "internal:slice-plan-contract"
-        detail = (
-            f"slices={len(self.active_state.planned_slices)}; "
-            f"planned_paths={len(planned_paths)}; changed_paths={len(actual_paths)}"
-        )
-        if plan_only:
-            command = "internal:work-plan-contract"
-            if len(self.active_state.planned_slices) != 1:
-                raise PlanContractValidationError(
-                    PlanContractFailureKind.PLAN_ARTIFACT_SLICE_COUNT_INVALID,
-                    "PLAN_ONLY requires exactly one executable plan-artifact Slice"
-                )
-            if work_plan_path is None or work_plan_path not in planned_paths:
-                raise PlanContractValidationError(
-                    PlanContractFailureKind.WORK_PLAN_PATH_NOT_PLANNED,
-                    "PLAN_ONLY plan does not include WORK_PLAN_PATH"
-                )
-            if work_plan_path not in actual_paths:
-                raise PlanContractValidationError(
-                    PlanContractFailureKind.WORK_PLAN_PATH_NOT_CHANGED,
-                    "PLAN_ONLY Codex planning must create or update WORK_PLAN_PATH"
-                )
-            candidate = self.root / work_plan_path
-            try:
-                resolved_candidate = candidate.resolve()
-            except (OSError, RuntimeError, ValueError) as exc:
-                raise PlanContractValidationError(
-                    PlanContractFailureKind.WORK_PLAN_PATH_UNSAFE_RESOLUTION,
-                    f"WORK_PLAN_PATH cannot be resolved safely: {exc}"
-                ) from exc
-            if (
-                not resolved_candidate.is_relative_to(self.root)
-                or resolved_candidate != candidate.absolute()
-                or candidate.is_symlink()
-                or not candidate.is_file()
-            ):
-                raise PlanContractValidationError(
-                    PlanContractFailureKind.WORK_PLAN_PATH_NOT_REGULAR,
-                    "WORK_PLAN_PATH must be a regular non-symlink file"
-                )
-            try:
-                content = candidate.read_text(encoding="utf-8")
-            except (OSError, UnicodeError) as exc:
-                raise PlanContractValidationError(
-                    PlanContractFailureKind.WORK_PLAN_PATH_NOT_UTF8,
-                    f"WORK_PLAN_PATH is not readable UTF-8: {exc}"
-                ) from exc
-            try:
-                canonical_semantic_markdown(
-                    content,
-                    path=work_plan_path,
-                    remove_appendix=True,
-                )
-            except SemanticMarkdownError as exc:
-                raise PlanContractValidationError(
-                    PlanContractFailureKind.WORK_PLAN_SEMANTIC_MARKDOWN_INVALID,
-                    f"WORK_PLAN_PATH has invalid managed Markdown: {exc}",
-                ) from exc
-            if not content.strip():
-                raise PlanContractValidationError(
-                    PlanContractFailureKind.WORK_PLAN_PATH_EMPTY,
-                    "WORK_PLAN_PATH must not be empty",
-                )
-            try:
-                future_slices = extract_implementation_slices(
-                    content,
-                    plan_stem=Path(work_plan_path).stem,
-                )
-            except ValueError as exc:
-                raise PlanContractValidationError(
-                    PlanContractFailureKind.WORK_PLAN_HANDOFF_INVALID,
-                    f"WORK_PLAN_PATH cannot produce an IMPLEMENT handoff: {exc}"
-                ) from exc
-            detail += f"; future_slices={len(future_slices)}; work_plan={work_plan_path}"
-
-        digest = hashlib.sha256(detail.encode("utf-8")).hexdigest()
-        return ValidationAttestation(
-            attestation_id=f"plan-validation-{changes.fingerprint[:12]}",
-            diff_fingerprint=changes.fingerprint,
-            expected_commands=(command,),
-            records=(ValidationRecord(ValidationStatus.PASS, command, 0, detail),),
-            output_digest=digest,
-            summary="internal plan contract passed",
-            command_specs=(ValidationCommandSpec(argv=(command,)),),
-            content_captures=(
-                ValidationCapture(command, "pass", 0, detail, "", detail),
-            ),
-            content_digest_format=RAW_OUTPUT_DIGEST_V1,
+        return self._validation_boundary().validate_plan(
+            changes,
+            work_plan_path=work_plan_path,
+            scope_patterns=scope_patterns,
+            plan_only=plan_only,
         )
 
     def prepare_correction(
@@ -2555,91 +2334,7 @@ class ProductionWorkflowDriver:
         return commit_hash
 
     def finalize_audit(self, state: WorkflowState) -> str | None:
-        if state.audit_report_path is None:
-            return None
-        self.assert_structured_decision_context()
-        bridge = self._artifact_bridge
-        if bridge is None:
-            return commit_managed_audit_report(
-                repository_root=self.root,
-                branch=state.branch,
-                audit_path=state.audit_report_path,
-                excluded_control_paths=_bound_task_control_paths(self.root, state),
-            )
-        replay = replay_artifacts(bridge.store.load_chain(), state.run_id)
-        existing = next(
-            (
-                item
-                for item in reversed(replay.side_effects)
-                if item.effect_class == "git_commit"
-                and item.work_unit_id == str(state.current_work_unit_id)
-                and len(item.operation) == 6
-                and item.operation[:2]
-                == ("audit_commit", state.audit_report_path)
-                and item.result is None
-            ),
-            None,
-        )
-        if existing is None:
-            identity = inspect_repository(self.root)
-            changes = collect_repository_changes(
-                self.root,
-                identity.head,
-                semantic_markdown_paths=(state.audit_report_path,),
-                excluded_paths=_bound_task_control_paths(self.root, state),
-            )
-            if not changes.entries:
-                return identity.head
-            operation = (
-                "audit_commit",
-                state.audit_report_path,
-                identity.head,
-                preview_commit_tree(
-                    self.root,
-                    changes,
-                    force_non_executable_paths=(state.audit_report_path,),
-                ),
-                changes.fingerprint,
-                hashlib.sha256(
-                    b"docs: finalize orchestrator audit"
-                ).hexdigest(),
-            )
-        else:
-            operation = existing.operation
-        spec = self._side_effect_spec(
-            "git_commit", operation, fingerprint=operation[4]
-        )
-
-        def reconcile_audit_commit():
-            identity = inspect_repository(self.root)
-            if identity.head == operation[2]:
-                return reconcile_git_commit(
-                    prior_head=operation[2], current_head=identity.head,
-                    current_parent=None, expected_tree=operation[3],
-                    current_tree=None,
-                )
-            parent, tree = inspect_commit_tree(self.root, identity.head)
-            return reconcile_git_commit(
-                prior_head=operation[2], current_head=identity.head,
-                current_parent=parent, expected_tree=operation[3],
-                current_tree=tree,
-            )
-
-        result = self._side_effect_executor(bridge).execute(
-            spec,
-            reconcile=reconcile_audit_commit,
-            perform=lambda: (
-                committed := commit_managed_audit_report(
-                    repository_root=self.root,
-                    branch=state.branch,
-                    audit_path=state.audit_report_path,
-                    excluded_control_paths=_bound_task_control_paths(self.root, state),
-                ),
-                committed,
-            ),
-        )
-        self._mark_completed_side_effect(spec.effect_key)
-        return str(result)
+        return self._audit_boundary().finalize_audit(state)
 
     def checkpoint(self, state: WorkflowState, history: WorkflowHistory) -> None:
         # B27 inventory: this remains the driver composition root.  It orders the
@@ -2743,173 +2438,10 @@ class ProductionWorkflowDriver:
         self._replace_existing_run_id = None
         self.active_state = projected
 
-    def _project_audit(self, state: WorkflowState, history: WorkflowHistory) -> None:
-        """Write only managed audit blocks when the persisted plan names a target."""
-        unit = state.current_work_unit
-        structured_replay = None
-        if (
-            state.protocol_binding is not None
-            and state.protocol_binding.mode is ProtocolMode.STRUCTURED_V2
-        ):
-            try:
-                structured_replay = resolve_resume_state(
-                    self.root, state
-                ).replay_result
-            except (ArtifactResumeError, ValueError) as exc:
-                raise WorkflowExecutionError(
-                    f"structured audit dual-write mismatch: {exc}"
-                ) from exc
-        if state.audit_report_path is not None:
-            task = Path(state.task_file)
-            try:
-                task_label = task.resolve().relative_to(self.root).as_posix()
-            except ValueError:
-                task_label = task.name
-            document = prepare_managed_overall_document(
-                repository_root=self.root,
-                audit_path=state.audit_report_path,
-                task_name=task.stem,
-                task_file=task_label,
-                run_id=state.run_id,
-                branch=state.branch,
-                task_scope=state.task_scope_patterns,
-            )
-            entries = _overall_audit_entries(
-                state,
-                structured_replay,
-                (
-                    None
-                    if self._artifact_bridge is None
-                    else self._artifact_bridge.store.read_blob
-                ),
-            )
-            if entries:
-                project_overall_audit(document, entries)
-                if structured_replay is not None:
-                    project_structured_work_plan_audit(
-                        document, structured_replay
-                    )
-        if unit.kind is WorkUnitKind.FINAL_REVIEW:
-            return
-        # The Slice audit is part of the authorized Slice commit.  Commit and
-        # subsequent workflow-binding records are projected into the overall
-        # audit only; rewriting the already committed Slice document would leave
-        # a foreign dirty path for the final audit transaction.
-        if state.current_slice.commit_ref is not None:
-            return
-        approval = _authorized_test_approval(unit, structured_replay)
-        projection = _audit_projection(
-            state,
-            unit,
-            history,
-            approval,
-            structured_replay,
-        )
-        if (
-            state.execution_mode == TaskMode.PLAN_ONLY.value
-            and state.work_plan_path is not None
-        ):
-            # Once the reviewed plan has been committed it is immutable input to
-            # the generated IMPLEMENT handoff.  Later commit/binding records stay
-            # in the consolidated record projection and must not dirty the plan.
-            if state.current_slice.commit_ref is not None:
-                return
-            try:
-                document = prepare_managed_work_plan_document(
-                    repository_root=self.root,
-                    work_plan_path=state.work_plan_path,
-                )
-            except ValueError as exc:
-                logger.debug("Work-plan audit target is not ready: %s", exc)
-            else:
-                if history.events:
-                    project_work_plan_audit(document, projection)
-                    if structured_replay is not None:
-                        project_structured_work_plan_audit(
-                            document, structured_replay
-                        )
-                return
-        if unit.kind is WorkUnitKind.PLAN:
-            if state.work_plan_path is not None:
-                try:
-                    document = prepare_managed_work_plan_document(
-                        repository_root=self.root,
-                        work_plan_path=state.work_plan_path,
-                    )
-                except ValueError as exc:
-                    logger.debug("Work-plan audit target is not ready: %s", exc)
-                else:
-                    if history.events:
-                        project_work_plan_audit(document, projection)
-                        if structured_replay is not None:
-                            project_structured_work_plan_audit(
-                                document, structured_replay
-                            )
-                    return
-            if not history.events:
-                return
-            candidates = [Path(state.task_file)]
-            if state.work_plan_path is not None:
-                candidates.append(self.root / state.work_plan_path)
-            candidates.extend(
-                self.root / path
-                for planned in state.planned_slices
-                for path in planned.scope_paths
-                if path.startswith("docs/internal/") and path.endswith("work-plan.md")
-            )
-            for candidate in candidates:
-                try:
-                    document = validate_managed_work_plan_document(
-                        repository_root=self.root, work_plan_path=candidate
-                    )
-                except ValueError:
-                    continue
-                project_work_plan_audit(document, projection)
-                if structured_replay is not None:
-                    project_structured_work_plan_audit(
-                        document, structured_replay
-                    )
-                return
-            logger.debug("No prepared work-plan audit target is present in the Slice plan.")
-            return
-        planned = next(
-            (item for item in state.planned_slices if item.slice_id == state.current_slice_id),
-            None,
-        )
-        scope_paths = (
-            planned.scope_paths if planned is not None else state.current_slice.scope_paths
-        )
-        summary = planned.summary if planned is not None else "Abschlusskorrektur"
-        candidates = tuple(
-            path
-            for path in scope_paths
-            if path.startswith("docs/internal/")
-            and f"-{state.current_slice_id:02d}-" in Path(path).name
-            and Path(path).suffix == ".md"
-        )
-        for path in candidates:
-            try:
-                document = prepare_managed_slice_document(
-                    repository_root=self.root,
-                    work_plan_path=state.audit_report_path
-                    or state.work_plan_path
-                    or "docs/internal/orchestrator-modernization-work-plan.md",
-                    slice_id=state.current_slice_id,
-                    slice_path=path,
-                    title=summary,
-                    scope_paths=scope_paths,
-                    branch=state.branch,
-                )
-            except ValueError:
-                continue
-            project_managed_slice_audit(document, projection)
-            if structured_replay is not None:
-                project_structured_slice_audit(
-                    document,
-                    structured_replay,
-                )
-            return
-        logger.debug("No prepared Slice audit target is present for Slice %s.", state.current_slice_id)
+    def _project_audit(
+        self, state: WorkflowState, history: WorkflowHistory
+    ) -> None:
+        self._audit_boundary().project_audit(state, history)
 
 
 def _authorized_test_approval(
