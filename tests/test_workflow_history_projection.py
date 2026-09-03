@@ -1,21 +1,28 @@
 from __future__ import annotations
 
 import ast
+import base64
 from dataclasses import asdict, replace
+import hashlib
 import json
 from pathlib import Path
 
 import pytest
 
+import artifact_replay as artifact_replay_module
 from artifact_bridge import ArtifactBridge
 from artifact_resume import ArtifactResumeError, require_workflow_event_prefix
 from artifact_models import (
+    BindingPayload,
     CommandSpec,
     CorrectionWorkUnitPayload,
     FingerprintKind,
     FindingSeverity,
     FindingTransitionPayload,
+    GateDecisionPayload,
+    GatePayload,
     GateTransitionPayload,
+    InvocationFailurePayload,
     ProviderContentPayload,
     ReviewPacketPayload,
     ReviewEvidencePayload,
@@ -24,6 +31,7 @@ from artifact_models import (
     RoleProfilePayload,
     RunIdentityPayload,
     RunProfilePayload,
+    STATE_PROJECTION_REDUCER_VERSION,
     SliceBoundaryPayload,
     TaskPayload,
     ValidationAttestationPayload,
@@ -32,6 +40,9 @@ from artifact_models import (
     WorkflowEventPayload,
     WorkflowPolicyPayload,
     WorkflowTransitionPayload,
+    canonical_json,
+    provider_text_evidence,
+    technical_text_evidence,
 )
 from artifact_replay import (
     ArtifactReplayError,
@@ -68,6 +79,44 @@ from workflow_audit_projection import _attach_record_events, _overall_audit_entr
 
 
 RUN_ID = "r9-prefix-projection"
+STATE_PROJECTION_BASELINE = (
+    Path(__file__).parent / "fixtures/state-projection-baseline-v1.json"
+)
+STATE_PROJECTION_BASE_COMMIT = "c6d3963"
+STATE_PROJECTION_FIXED_TIME = "2026-09-03T12:00:00+00:00"
+STATE_PROJECTION_ANCHOR_CASES = (
+    ("minimal-cursor", "standard-validation", 6),
+    ("bounded-slice", "standard-validation", 16),
+    ("halted-review-gate", "standard-validation", 25),
+    ("resumed-review-gate", "standard-validation", 28),
+    ("defined-correction", "standard-validation", 35),
+    ("validated-correction", "standard-validation", 39),
+    ("approved-correction", "standard-validation", 43),
+    ("second-correction-round", "standard-validation", 44),
+    ("carried-validation", "carried-validation", 44),
+    ("gate-override", "gate-override", None),
+    ("invocation-failure", "invocation-failure", None),
+    ("commit-bound", "commit-bound", None),
+    ("denied-final-review", "denied-final-review", None),
+)
+STATE_PROJECTION_HELPERS = (
+    "_ensure_projection_event_prefix",
+    "_index_projection_transitions",
+    "_project_slice_documents",
+    "_index_work_unit_projection_authority",
+    "_project_work_unit_round_and_kind",
+    "_project_work_unit_gate",
+    "_project_work_unit_open_findings",
+    "_project_work_unit_document",
+    "_project_work_unit_documents",
+    "_assemble_workflow_state_document",
+)
+STATE_PROJECTION_SHARED_BOUNDARIES = (
+    "_fail",
+    "_project_bootstrap_fact",
+    "_review_prefix_end",
+    "project_runtime_history_references",
+)
 
 
 def _normalized_independent_mirror(
@@ -494,6 +543,320 @@ def _journey(bridge: ArtifactBridge, *, carried_validation: bool = False):
     return bridge.store.load_chain()
 
 
+def _state_projection_bridge(tmp_path: Path, chain_name: str) -> ArtifactBridge:
+    chain_root = tmp_path / chain_name
+    chain_root.mkdir()
+    return ArtifactBridge(
+        ArtifactStore(chain_root, RUN_ID),
+        now=lambda: STATE_PROJECTION_FIXED_TIME,
+    )
+
+
+def _append_projection_gate_override(bridge: ArtifactBridge) -> None:
+    active_test_fingerprint = "e" * 64
+    active_test_paths = ("tests/test_workflow_history_projection.py",)
+    bridge.append(
+        GateTransitionPayload(
+            "4",
+            "awaiting_user_decision",
+            "stop_request",
+            "operator confirmation is required before correction resumes",
+            "d" * 64,
+            ("src/three.py",),
+            "codex_final_correction",
+            active_test_fingerprint,
+            active_test_paths,
+        ),
+        logical_id="gate-transition-4",
+        idempotency_key="gate-transition:4:anchor-halt",
+        fingerprint_sha256=FINGERPRINT,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    gate = bridge.append(
+        GatePayload(
+            "test-change",
+            "approved",
+            Role.USER,
+            "reviewed exact projection-anchor test delta",
+        ),
+        logical_id="gate-test-change-projection-anchor",
+        idempotency_key="gate:test-change:projection-anchor",
+        fingerprint_sha256=active_test_fingerprint,
+        fingerprint_kind=FingerprintKind.IMPLEMENTATION,
+    )
+    bridge.append(
+        GateDecisionPayload(
+            "4",
+            gate.record_id,
+            active_test_paths,
+            "codex_final_correction",
+        ),
+        logical_id="gate-decision-4-projection-anchor",
+        idempotency_key="gate-decision:4:projection-anchor",
+        fingerprint_sha256=active_test_fingerprint,
+        fingerprint_kind=FingerprintKind.IMPLEMENTATION,
+    )
+
+
+def _append_projection_invocation_failure(bridge: ArtifactBridge) -> None:
+    provider, provider_sha, provider_bytes = provider_text_evidence(
+        "projection provider quota"
+    )
+    technical, technical_sha, technical_bytes = technical_text_evidence(
+        "projection invocation diagnostic"
+    )
+    invocation_id = "projection-quota"
+    bridge.append(
+        InvocationFailurePayload(
+            invocation_id,
+            "invoke:projection-quota:attempt-1",
+            Role.CODEX,
+            "quota",
+            "transient",
+            "AGENT-INVOCATION",
+            provider,
+            provider_sha,
+            provider_bytes,
+            technical,
+            technical_sha,
+            technical_bytes,
+            STATE_PROJECTION_FIXED_TIME,
+            STATE_PROJECTION_FIXED_TIME,
+            "codex_final_correction",
+            "3",
+            "4",
+            2,
+            None,
+            "provider-reset",
+            "UTC",
+            STATE_PROJECTION_FIXED_TIME,
+            "2026-09-03T12:01:00+00:00",
+            60,
+            60,
+            1,
+            True,
+            FINGERPRINT,
+        ),
+        logical_id=f"invocation-failure-{invocation_id}",
+        idempotency_key=f"invocation-failure:{invocation_id}",
+        fingerprint_sha256=FINGERPRINT,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+
+
+def _append_projection_commit_binding(bridge: ArtifactBridge) -> None:
+    chain = bridge.store.load_chain()
+    attestation = next(
+        record
+        for record in reversed(chain)
+        if isinstance(record.payload, ValidationAttestationPayload)
+    )
+    review = next(
+        record
+        for record in reversed(chain)
+        if isinstance(record.payload, ReviewPayload)
+        and record.payload.verdict == "approved"
+    )
+    bridge.append(
+        BindingPayload(
+            "commit",
+            "b42-state-projection-commit",
+            attestation.record_id,
+            (review.record_id,),
+        ),
+        logical_id="commit-3-projection-anchor",
+        idempotency_key="commit:3:projection-anchor",
+        fingerprint_sha256=FINGERPRINT,
+        fingerprint_kind=FingerprintKind.IMPLEMENTATION,
+    )
+
+
+def _append_projection_denied_final_review(bridge: ArtifactBridge) -> None:
+    _append_transition(
+        bridge,
+        revision=8,
+        slice_id="3",
+        slice_status="in_progress",
+        work_unit_id="5",
+        step="claude_final_review",
+        work_unit_status="in_progress",
+    )
+    _append_policy_gate(bridge, work_unit_id="5")
+    bridge.append(
+        WorkUnitPayload("3", 1, ("src/three.py",)),
+        logical_id="work-unit-5",
+        idempotency_key="work-unit:5:round:1",
+        fingerprint_sha256=FINGERPRINT,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    append_provider_decision_authority(
+        bridge,
+        ReviewPayload(
+            Role.CLAUDE,
+            "5",
+            "denied",
+            ("C-01",),
+            None,
+            "native-claude-review-v2",
+            "native-review-request-" + "9" * 64,
+            "a" * 64,
+            review_evidence=ReviewEvidencePayload(
+                "final review found the carried blocker",
+                "the open correction finding can survive into final review",
+                "the final-review work unit loses its reviewer binding",
+            ),
+            pre_mortem="the final review could approve with an open blocker",
+        ),
+        logical_id="review-final-denied-anchor",
+        idempotency_key="review:final:denied-anchor",
+        fingerprint_sha256=FINGERPRINT,
+        operation="claude_final_review",
+    )
+
+
+def _state_projection_anchor_chains(tmp_path: Path) -> dict[str, tuple]:
+    chains: dict[str, tuple] = {}
+    for chain_name, carried_validation in (
+        ("standard-validation", False),
+        ("carried-validation", True),
+    ):
+        bridge = _state_projection_bridge(tmp_path, chain_name)
+        chains[chain_name] = _journey(
+            bridge,
+            carried_validation=carried_validation,
+        )
+
+    for chain_name, append_variant in (
+        ("gate-override", _append_projection_gate_override),
+        ("invocation-failure", _append_projection_invocation_failure),
+        ("commit-bound", _append_projection_commit_binding),
+        ("denied-final-review", _append_projection_denied_final_review),
+    ):
+        bridge = _state_projection_bridge(tmp_path, chain_name)
+        _journey(bridge, carried_validation=False)
+        append_variant(bridge)
+        chains[chain_name] = bridge.store.load_chain()
+    return chains
+
+
+def _state_projection_anchor_entries(tmp_path: Path) -> list[dict[str, object]]:
+    chains = _state_projection_anchor_chains(tmp_path)
+
+    entries: list[dict[str, object]] = []
+    for case_id, chain_name, prefix_length in STATE_PROJECTION_ANCHOR_CASES:
+        prefix = (
+            chains[chain_name]
+            if prefix_length is None
+            else chains[chain_name][:prefix_length]
+        )
+        canonical_document = project_workflow_state(
+            replay_artifacts(prefix, RUN_ID)
+        ).canonical_document
+        record_ids = tuple(record.record_id for record in prefix)
+        entries.append(
+            {
+                "case_id": case_id,
+                "chain_name": chain_name,
+                "prefix_length": len(prefix),
+                "prefix_head_record_id": record_ids[-1],
+                "prefix_record_ids_sha256": hashlib.sha256(
+                    canonical_json(record_ids)
+                ).hexdigest(),
+                "canonical_document_sha256": hashlib.sha256(
+                    canonical_document
+                ).hexdigest(),
+                "canonical_document_base64": base64.b64encode(
+                    canonical_document
+                ).decode("ascii"),
+            }
+        )
+    return entries
+
+
+def _load_state_projection_baseline() -> dict[str, object]:
+    document = json.loads(STATE_PROJECTION_BASELINE.read_text(encoding="utf-8"))
+    assert set(document) == {
+        "schema_version",
+        "source_commit",
+        "reducer_version",
+        "fixed_time",
+        "entries",
+    }
+    assert document["schema_version"] == "state-projection-baseline-v1"
+    assert document["source_commit"] == STATE_PROJECTION_BASE_COMMIT
+    assert document["reducer_version"] == STATE_PROJECTION_REDUCER_VERSION
+    assert document["fixed_time"] == STATE_PROJECTION_FIXED_TIME
+    entries = document["entries"]
+    assert isinstance(entries, list)
+    assert len(entries) == len(STATE_PROJECTION_ANCHOR_CASES)
+    assert len({entry["case_id"] for entry in entries}) == len(entries)
+    for entry in entries:
+        assert set(entry) == {
+            "case_id",
+            "chain_name",
+            "prefix_length",
+            "prefix_head_record_id",
+            "prefix_record_ids_sha256",
+            "canonical_document_sha256",
+            "canonical_document_base64",
+        }
+        assert isinstance(entry["case_id"], str) and entry["case_id"]
+        assert entry["chain_name"] in {
+            chain_name for _case_id, chain_name, _prefix_length
+            in STATE_PROJECTION_ANCHOR_CASES
+        }
+        assert isinstance(entry["prefix_length"], int) and entry["prefix_length"] > 0
+        assert isinstance(entry["prefix_head_record_id"], str)
+        assert isinstance(entry["prefix_record_ids_sha256"], str)
+        canonical_document = base64.b64decode(
+            entry["canonical_document_base64"], validate=True
+        )
+        assert hashlib.sha256(canonical_document).hexdigest() == (
+            entry["canonical_document_sha256"]
+        )
+        assert canonical_json(json.loads(canonical_document)) == canonical_document
+    return document
+
+
+def _anchored_document(document: dict[str, object], case_id: str) -> bytes:
+    entry = next(
+        item for item in document["entries"] if item["case_id"] == case_id
+    )
+    return base64.b64decode(entry["canonical_document_base64"], validate=True)
+
+
+def _assert_state_projection_anchor_case(tmp_path: Path, case_id: str) -> None:
+    _case_id, chain_name, prefix_length = next(
+        item for item in STATE_PROJECTION_ANCHOR_CASES if item[0] == case_id
+    )
+    chain = _state_projection_anchor_chains(tmp_path)[chain_name]
+    prefix = chain if prefix_length is None else chain[:prefix_length]
+    actual = project_workflow_state(replay_artifacts(prefix, RUN_ID)).canonical_document
+    assert actual == _anchored_document(_load_state_projection_baseline(), case_id)
+
+
+def _state_projection_local_call_closure(
+    functions: dict[str, ast.FunctionDef],
+) -> set[str]:
+    closure: set[str] = set()
+    pending = ["project_workflow_state"]
+    boundaries = set(STATE_PROJECTION_SHARED_BOUNDARIES)
+    while pending:
+        function_name = pending.pop()
+        callees = {
+            node.func.id
+            for node in ast.walk(functions[function_name])
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in functions
+        }
+        for callee in callees - closure:
+            closure.add(callee)
+            if callee not in boundaries:
+                pending.append(callee)
+    return closure
+
+
 def _history_mirror(
     state: WorkflowState,
     current: WorkflowHistory,
@@ -718,6 +1081,175 @@ def _independent_mirror_snapshots(
     state = replace(state, work_units=(*state.work_units[:-1], round_two))
     snapshots[44] = _history_mirror(state, correction_history, archive)
     return snapshots
+
+
+def test_state_projection_baseline_matches_pre_cut_bytes(tmp_path: Path) -> None:
+    baseline = _load_state_projection_baseline()
+    expected_entries = _state_projection_anchor_entries(tmp_path)
+    assert baseline["entries"] == expected_entries
+
+    documents = {
+        entry["case_id"]: json.loads(
+            base64.b64decode(entry["canonical_document_base64"], validate=True)
+        )
+        for entry in baseline["entries"]
+    }
+    assert documents["minimal-cursor"]["current_work_unit_id"] == 1
+    assert documents["bounded-slice"]["slices"][0]["scope_paths"] == ["src/one.py"]
+    assert documents["halted-review-gate"]["work_units"][-1]["status"] == (
+        "awaiting_user_decision"
+    )
+    assert documents["resumed-review-gate"]["work_units"][-1]["status"] == (
+        "in_progress"
+    )
+    assert documents["defined-correction"]["work_units"][-1]["kind"] == "correction"
+    assert documents["validated-correction"]["runtime_history"]["4"][
+        "attestation_record_refs"
+    ]
+    assert documents["approved-correction"]["runtime_history"]["4"][
+        "review_record_refs"
+    ]
+    assert documents["second-correction-round"]["work_units"][-1][
+        "round_number"
+    ] == 2
+    assert (
+        documents["carried-validation"]["runtime_history"]["3"][
+            "attestation_record_refs"
+        ]
+    )
+    gate_override = documents["gate-override"]["work_units"][-1]
+    assert gate_override["status"] == "awaiting_user_decision"
+    assert gate_override["gate"]["resume_step"] == "codex_final_correction"
+    assert gate_override["active_test_paths"] == [
+        "tests/test_workflow_history_projection.py"
+    ]
+    failure = documents["invocation-failure"]["work_units"][-1][
+        "invocation_failures"
+    ][0]
+    assert failure["idempotency_key"] == "invoke:projection-quota:attempt-1"
+    assert failure["resume_at_utc"] == "2026-09-03T12:01:00+00:00"
+    assert documents["commit-bound"]["slices"][-1]["commit_ref"] == (
+        "b42-state-projection-commit"
+    )
+    final_review = documents["denied-final-review"]["work_units"][-1]
+    assert final_review["kind"] == "final_review"
+    assert final_review["reviewer"] == "claude"
+    assert final_review["open_findings"] == ["C-01"]
+
+
+def test_state_projection_anchor_detects_omitted_assembly_field(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = artifact_replay_module._assemble_workflow_state_document
+
+    def omit_protocol_binding(*args, **kwargs):
+        document = original(*args, **kwargs)
+        document = dict(document)
+        del document["protocol_binding"]
+        return document
+
+    monkeypatch.setattr(
+        artifact_replay_module,
+        "_assemble_workflow_state_document",
+        omit_protocol_binding,
+    )
+    with pytest.raises(AssertionError):
+        _assert_state_projection_anchor_case(tmp_path, "second-correction-round")
+
+
+def test_state_projection_anchor_detects_schema_valid_value_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = artifact_replay_module._project_work_unit_document
+
+    def change_return_count(*args, **kwargs):
+        document = original(*args, **kwargs)
+        if document["work_unit_id"] == 4:
+            document = dict(document)
+            document["codex_return_count"] = 1
+        return document
+
+    monkeypatch.setattr(
+        artifact_replay_module,
+        "_project_work_unit_document",
+        change_return_count,
+    )
+    with pytest.raises(AssertionError):
+        _assert_state_projection_anchor_case(tmp_path, "second-correction-round")
+
+
+def test_state_projection_anchor_detects_reordered_work_unit_blocks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = artifact_replay_module._project_work_unit_documents
+
+    def reverse_work_units(*args, **kwargs):
+        return list(reversed(original(*args, **kwargs)))
+
+    monkeypatch.setattr(
+        artifact_replay_module,
+        "_project_work_unit_documents",
+        reverse_work_units,
+    )
+    with pytest.raises(ArtifactReplayError) as caught:
+        _assert_state_projection_anchor_case(tmp_path, "second-correction-round")
+    assert caught.value.code is ReplayDiagnosticCode.RECORD_MISSING
+
+
+def test_state_projection_reducer_is_split_into_named_bounded_helpers() -> None:
+    source = Path(project_workflow_state.__code__.co_filename).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    functions = {
+        item.name: item
+        for item in tree.body
+        if isinstance(item, ast.FunctionDef)
+    }
+    assert _state_projection_local_call_closure(functions) == {
+        *STATE_PROJECTION_HELPERS,
+        *STATE_PROJECTION_SHARED_BOUNDARIES,
+    }
+    assert all("_part_" not in name for name in functions)
+    for name in ("project_workflow_state", *STATE_PROJECTION_HELPERS):
+        function = functions[name]
+        assert function.end_lineno is not None
+        assert function.end_lineno - function.lineno + 1 < 200
+
+    projector_source = ast.get_source_segment(source, functions["project_workflow_state"])
+    assert projector_source is not None
+    assert tuple(
+        projector_source.index(name)
+        for name in (
+            "_ensure_projection_event_prefix",
+            "_index_projection_transitions",
+            "_project_slice_documents",
+            "_project_work_unit_documents",
+            "_assemble_workflow_state_document",
+        )
+    ) == tuple(
+        sorted(
+            projector_source.index(name)
+            for name in (
+                "_ensure_projection_event_prefix",
+                "_index_projection_transitions",
+                "_project_slice_documents",
+                "_project_work_unit_documents",
+                "_assemble_workflow_state_document",
+            )
+        )
+    )
+    work_unit_calls = {
+        node.func.id
+        for node in ast.walk(functions["_project_work_unit_document"])
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert {
+        "_project_work_unit_round_and_kind",
+        "_project_work_unit_gate",
+        "_project_work_unit_open_findings",
+    } <= work_unit_calls
 
 
 def test_multi_slice_correction_gate_halt_resume_projects_every_accepted_prefix(
@@ -1225,12 +1757,24 @@ def test_retired_runtime_history_events_cannot_return_to_state() -> None:
 def test_full_state_projector_has_no_filesystem_or_clock_dependency() -> None:
     source = Path(project_workflow_state.__code__.co_filename).read_text(encoding="utf-8")
     tree = ast.parse(source)
-    function = next(
-        item for item in tree.body
-        if isinstance(item, ast.FunctionDef) and item.name == "project_workflow_state"
+    all_functions = {
+        item.name: item
+        for item in tree.body
+        if isinstance(item, ast.FunctionDef)
+    }
+    closure = _state_projection_local_call_closure(all_functions)
+    functions = tuple(
+        all_functions[name]
+        for name in {"project_workflow_state", *closure}
     )
+    assert {function.name for function in functions} == {
+        "project_workflow_state",
+        *STATE_PROJECTION_HELPERS,
+        *STATE_PROJECTION_SHARED_BOUNDARIES,
+    }
     calls = {
         node.func.id if isinstance(node.func, ast.Name) else node.func.attr
+        for function in functions
         for node in ast.walk(function)
         if isinstance(node, ast.Call)
         and isinstance(node.func, (ast.Name, ast.Attribute))

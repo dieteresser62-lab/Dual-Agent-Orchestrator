@@ -44,6 +44,7 @@ from artifact_models import (
     RunProfilePayload,
     QuotaPausePayload,
     SideEffectPayload,
+    SliceSpec,
     SliceBoundaryPayload,
     WorkflowPolicyPayload,
     WorkflowTransitionPayload,
@@ -504,18 +505,29 @@ def replay_findings(
     ).findings
 
 
-def project_workflow_state(replay: ArtifactReplayResult) -> ReplayedWorkflowState:
-    """Project the complete semantic state from records, without filesystem I/O.
+@dataclass(frozen=True, slots=True)
+class _ProjectionTransitionIndex:
+    positions: dict[str, int]
+    transition_history: tuple[ArtifactRecord, ...]
+    latest_workflow_positions: dict[str, int]
+    latest_gate_positions: dict[str, int]
+    failure_statuses: dict[str, tuple[str, str, dict[str, object]]]
+    failure_slice_statuses: dict[str, str]
 
-    Volatile state timestamps are normalized to the first and last record time.
-    Former ``runtime_history`` content is represented by its authoritative
-    record references; embedded review/validation bodies and ``events`` are not
-    recreated as a second authority.
-    """
-    from contracts import FindingClass
-    from finding_reducer import project_open_set, reduce_findings
 
-    records = replay.records
+@dataclass(frozen=True, slots=True)
+class _WorkUnitProjectionIndex:
+    definitions: dict[str, ArtifactRecord]
+    policies: dict[str, WorkflowPolicyPayload]
+    gates: dict[str, GateTransitionPayload]
+    reviewers: dict[str, Role | None]
+    latest_reviews: dict[str, ArtifactRecord]
+
+
+def _ensure_projection_event_prefix(
+    replay: ArtifactReplayResult,
+    records: tuple[ArtifactRecord, ...],
+) -> None:
     if not records:
         _fail(ReplayDiagnosticCode.RECORD_MISSING, "cannot project an empty workflow")
     expected_events = {
@@ -558,41 +570,12 @@ def project_workflow_state(replay: ArtifactReplayResult) -> ReplayedWorkflowStat
             "workflow state projection requires a complete workflow event prefix",
             related,
         )
-    identity = replay.run_identity
-    profile = replay.run_profile
-    task_record = next(
-        (record for record in records if isinstance(record.payload, TaskPayload)),
-        None,
-    )
-    if identity is None or profile is None or task_record is None:
-        _fail(
-            ReplayDiagnosticCode.RECORD_MISSING,
-            "workflow state projection requires run identity, profile, and task",
-        )
-    task = task_record.payload
-    assert isinstance(task, TaskPayload)
-    plan_record = next(
-        (record for record in reversed(records) if isinstance(record.payload, PlanPayload)),
-        None,
-    )
-    plan = None if plan_record is None else plan_record.payload
-    assert plan is None or isinstance(plan, PlanPayload)
-    proposed_plan_record = next(
-        (
-            record
-            for record in reversed(records)
-            if isinstance(record.payload, AgentResultPayload)
-            and record.payload.slice_plan
-        ),
-        None,
-    )
-    proposed_plan = (
-        ()
-        if proposed_plan_record is None
-        else proposed_plan_record.payload.slice_plan
-    )
-    planned_slices = plan.slices if plan is not None else proposed_plan
 
+
+def _index_projection_transitions(
+    replay: ArtifactReplayResult,
+    records: tuple[ArtifactRecord, ...],
+) -> _ProjectionTransitionIndex:
     transition_history = tuple(
         record for record in records
         if isinstance(record.payload, WorkflowTransitionPayload)
@@ -604,21 +587,21 @@ def project_workflow_state(replay: ArtifactReplayResult) -> ReplayedWorkflowStat
         )
     positions = {record.record_id: index for index, record in enumerate(records)}
     latest_transition_positions: dict[str, int] = {}
-    latest_workflow_transition_positions: dict[str, int] = {}
-    latest_gate_transition_positions: dict[str, int] = {}
-    latest_slice_transition_positions: dict[str, int] = {}
+    latest_workflow_positions: dict[str, int] = {}
+    latest_gate_positions: dict[str, int] = {}
+    latest_slice_positions: dict[str, int] = {}
     for record in records:
         payload = record.payload
         if isinstance(payload, WorkflowTransitionPayload):
             if payload.work_unit_id is not None:
                 position = positions[record.record_id]
                 latest_transition_positions[payload.work_unit_id] = position
-                latest_workflow_transition_positions[payload.work_unit_id] = position
-                latest_slice_transition_positions[payload.slice_id] = position
+                latest_workflow_positions[payload.work_unit_id] = position
+                latest_slice_positions[payload.slice_id] = position
         elif isinstance(payload, GateTransitionPayload):
             position = positions[record.record_id]
             latest_transition_positions[payload.work_unit_id] = position
-            latest_gate_transition_positions[payload.work_unit_id] = position
+            latest_gate_positions[payload.work_unit_id] = position
     failure_statuses: dict[str, tuple[str, str, dict[str, object]]] = {}
     failure_positions: dict[str, int] = {}
     for record in records:
@@ -664,8 +647,25 @@ def project_workflow_state(replay: ArtifactReplayResult) -> ReplayedWorkflowStat
         slice_id: status
         for work_unit_id, (slice_id, status, _gate) in failure_statuses.items()
         if failure_positions[work_unit_id]
-        > latest_slice_transition_positions.get(slice_id, -1)
+        > latest_slice_positions.get(slice_id, -1)
     }
+    return _ProjectionTransitionIndex(
+        positions,
+        transition_history,
+        latest_workflow_positions,
+        latest_gate_positions,
+        failure_statuses,
+        failure_slice_statuses,
+    )
+
+
+def _project_slice_documents(
+    replay: ArtifactReplayResult,
+    records: tuple[ArtifactRecord, ...],
+    identity: RunIdentityPayload,
+    planned_slices: Sequence[SliceSpec],
+    transitions: _ProjectionTransitionIndex,
+) -> list[dict[str, object]]:
     slice_ids = {slice_id for slice_id, _status in replay.slice_statuses}
     if planned_slices:
         slice_ids.update(item.slice_id for item in planned_slices)
@@ -699,7 +699,7 @@ def project_workflow_state(replay: ArtifactReplayResult) -> ReplayedWorkflowStat
         slices.append(
             {
                 "slice_id": int(slice_id),
-                "status": failure_slice_statuses.get(
+                "status": transitions.failure_slice_statuses.get(
                     slice_id,
                     dict(replay.slice_statuses).get(slice_id, "pending"),
                 ),
@@ -715,220 +715,302 @@ def project_workflow_state(replay: ArtifactReplayResult) -> ReplayedWorkflowStat
         )
         if commit_ref is not None:
             prior_commit = commit_ref
+    return slices
 
-    unit_payloads: dict[str, ArtifactRecord] = {}
+
+def _index_work_unit_projection_authority(
+    replay: ArtifactReplayResult,
+    records: tuple[ArtifactRecord, ...],
+) -> _WorkUnitProjectionIndex:
+    definitions: dict[str, ArtifactRecord] = {}
     for record in records:
         if isinstance(record.payload, (WorkUnitPayload, CorrectionWorkUnitPayload)):
-            unit_payloads[record.logical_id.removeprefix("work-unit-")] = record
-    policies = {item.work_unit_id: item for item in replay.workflow_policies}
-    gates = {item.work_unit_id: item for item in replay.gate_transitions}
-    reviewers = dict(replay.work_unit_reviewers)
-    latest_review_records: dict[str, ArtifactRecord] = {}
+            definitions[record.logical_id.removeprefix("work-unit-")] = record
+    latest_reviews: dict[str, ArtifactRecord] = {}
     for record in records:
         if (
             isinstance(record.payload, ReviewPayload)
             and record.record_id != replay.pending_review_record_id
         ):
-            latest_review_records[record.payload.work_unit_id] = record
-    work_units: list[dict[str, object]] = []
-    for unit in replay.work_unit_states:
-        definition_record = unit_payloads.get(unit.work_unit_id)
-        definition = None if definition_record is None else definition_record.payload
-        round_candidates = [
-            event.round_number
-            for event in replay.workflow_events
-            if event.work_unit_id == unit.work_unit_id
-            and event.round_number is not None
-        ]
-        gate_history = tuple(
-            record.payload
-            for record in records
-            if isinstance(record.payload, GateTransitionPayload)
-            and record.payload.work_unit_id == unit.work_unit_id
-        )
-        resumed_gate_round = 1 + sum(
-            previous.gate_status != "clear" and current.gate_status == "clear"
-            for previous, current in zip(gate_history, gate_history[1:])
-        )
-        round_candidates.append(resumed_gate_round)
-        if isinstance(definition, (WorkUnitPayload, CorrectionWorkUnitPayload)):
-            round_candidates.append(definition.round_number)
-        round_number = max(round_candidates, default=1)
-        first_step = next(
-            candidate.payload.step
-            for candidate in transition_history
-            if candidate.payload.work_unit_id == unit.work_unit_id
-        )
-        if first_step == "codex_final_correction" and not isinstance(  # allowlist:provider -- canonical state-v3 step
-            definition, CorrectionWorkUnitPayload
-        ):
-            _fail(
-                ReplayDiagnosticCode.RECORD_MISSING,
-                "a correction cursor requires its correction work-unit record",
-                next(
-                    record
-                    for record in transition_history
-                    if record.payload.work_unit_id == unit.work_unit_id
-                ),
-            )
-        kind = (
-            "correction"
-            if isinstance(definition, CorrectionWorkUnitPayload)
-            else "plan"
-            if unit.work_unit_id == "1"
-            or first_step in {"codex_plan", "claude_plan_review", "codex_plan_revision"}  # allowlist:provider -- canonical state-v3 steps
-            else "final_review"
-            if first_step in {"codex_final_review", "claude_final_review"}  # allowlist:provider -- canonical state-v3 steps
-            else "slice"
-        )
-        policy = policies.get(unit.work_unit_id)
-        gate = gates.get(unit.work_unit_id)
-        decisions = tuple(
-            asdict(item)
-            for item in replay.gate_decisions
-            if item.work_unit_id == unit.work_unit_id
-        )
-        failures = tuple(
-            {
-                "invocation_id": item.invocation_id,
-                "idempotency_key": item.idempotency_key,
-                "role": item.role.value,
-                "failure_kind": item.failure_kind,
-                "provider_text": item.provider_text,
-                "technical_text": item.technical_text,
-                "received_at": item.received_at,
-                "step": item.step,
-                "slice_id": int(item.slice_id),
-                "work_unit_id": int(item.work_unit_id),
-                "diagnostic_exit_code": item.diagnostic_exit_code,
-                "process_exit_code": item.process_exit_code,
-                "parse_path": item.parse_path,
-                "source_timezone": item.source_timezone,
-                "reset_at_utc": item.reset_at_utc,
-                "resume_at_utc": item.resume_at_utc,
-                "safety_margin_seconds": item.safety_margin_seconds,
-                "auto_resume_count": item.auto_resume_count,
-                "automatic_resume": item.automatic_resume,
-                "diff_fingerprint": item.diff_fingerprint,
-            }
-            for item in replay.invocation_failures
-            if item.work_unit_id == unit.work_unit_id
-        )
-        failure_projection = failure_statuses.get(unit.work_unit_id)
-        gate_supersedes_transition = latest_gate_transition_positions.get(
-            unit.work_unit_id, -1
-        ) > latest_workflow_transition_positions.get(unit.work_unit_id, -1)
-        projected_unit_status = (
-            failure_projection[1]
-            if failure_projection is not None
-            else gate.gate_status
-            if (
-                gate is not None
-                and gate.gate_status != "clear"
-                and gate_supersedes_transition
-            )
-            else unit.status
-        )
-        gate_document = (
-            failure_projection[2]
-            if failure_projection is not None
-            else
-            {
-                "status": "clear",
-                "reason": "none",
-                "detail": None,
-                "fingerprint": None,
-                "paths": (),
-                "resume_step": None,
-            }
-            if gate is None
-            else {
-                "status": gate.gate_status,
-                "reason": gate.reason,
-                "detail": gate.detail,
-                "fingerprint": gate.fingerprint,
-                "paths": gate.paths,
-                "resume_step": gate.resume_step,
-            }
-        )
-        definition_findings = (
-            definition.finding_ids
-            if isinstance(definition, CorrectionWorkUnitPayload)
-            else definition.open_finding_ids
-            if isinstance(definition, WorkUnitPayload)
-            else ()
-        )
-        latest_review_record = latest_review_records.get(unit.work_unit_id)
-        if latest_review_record is not None:
-            review_payload = latest_review_record.payload
-            assert isinstance(review_payload, ReviewPayload)
-            review_prefix = replay.subset(
-                records[:_review_prefix_end(records, positions, latest_review_record)]
-            )
-            reviewed_findings = reduce_findings(review_prefix).request_subset(
-                finding_ids=review_payload.finding_ids
-            ).findings
-            definition_findings = tuple(
-                finding.finding_id
-                for finding in project_open_set(reviewed_findings).findings
-                if finding.finding_class is FindingClass.BLOCKER
-                and finding.origin.reporter.value == review_payload.reviewer.value
-            )
-        work_units.append(
-            {
-                "work_unit_id": int(unit.work_unit_id),
-                "slice_id": int(unit.slice_id),
-                "kind": kind,
-                "status": projected_unit_status,
-                "current_step": unit.step,
-                "round_number": round_number,
-                "codex_return_count": (  # allowlist:provider -- canonical state-v3 field
-                    0 if policy is None else policy.implementer_return_count
-                ),
-                "max_codex_returns": (  # allowlist:provider -- canonical state-v3 field
-                    4 if policy is None else policy.max_implementer_returns
-                ),
-                "gate": gate_document,
-                "reviewer": (
-                    None if reviewers.get(unit.work_unit_id) is None
-                    else reviewers[unit.work_unit_id].value
-                ),
-                "open_findings": definition_findings,
-                "completed_side_effects": replay.completed_side_effects(
-                    unit.work_unit_id
-                ),
-                "gate_decisions": tuple(
-                    {
-                        "approved": item["approved"],
-                        "reason": item["reason"],
-                        "fingerprint": item["fingerprint"],
-                        "paths": item["paths"],
-                        "rationale": item["rationale"],
-                        "resume_step": item["resume_step"],
-                    }
-                    for item in decisions
-                ),
-                "active_test_fingerprint": (
-                    None if gate is None else gate.active_test_fingerprint
-                ),
-                "active_test_paths": (
-                    () if gate is None else gate.active_test_paths
-                ),
-                "invocation_failures": failures,
-            }
-        )
-
-    import_record = next(
-        (
-            record
-            for record in records
-            if isinstance(record.payload, FindingHandoffImportPayload)
-        ),
-        None,
+            latest_reviews[record.payload.work_unit_id] = record
+    return _WorkUnitProjectionIndex(
+        definitions,
+        {item.work_unit_id: item for item in replay.workflow_policies},
+        {item.work_unit_id: item for item in replay.gate_transitions},
+        dict(replay.work_unit_reviewers),
+        latest_reviews,
     )
-    runtime_history = project_runtime_history_references(replay)
 
-    document = {
+
+def _project_work_unit_round_and_kind(
+    replay: ArtifactReplayResult,
+    unit: ReplayedWorkUnitState,
+    definition: object,
+    transitions: _ProjectionTransitionIndex,
+    records: tuple[ArtifactRecord, ...],
+) -> tuple[int, str]:
+    round_candidates = [
+        event.round_number
+        for event in replay.workflow_events
+        if event.work_unit_id == unit.work_unit_id
+        and event.round_number is not None
+    ]
+    gate_history = tuple(
+        record.payload
+        for record in records
+        if isinstance(record.payload, GateTransitionPayload)
+        and record.payload.work_unit_id == unit.work_unit_id
+    )
+    resumed_gate_round = 1 + sum(
+        previous.gate_status != "clear" and current.gate_status == "clear"
+        for previous, current in zip(gate_history, gate_history[1:])
+    )
+    round_candidates.append(resumed_gate_round)
+    if isinstance(definition, (WorkUnitPayload, CorrectionWorkUnitPayload)):
+        round_candidates.append(definition.round_number)
+    round_number = max(round_candidates, default=1)
+    first_step = next(
+        candidate.payload.step
+        for candidate in transitions.transition_history
+        if candidate.payload.work_unit_id == unit.work_unit_id
+    )
+    if first_step == "codex_final_correction" and not isinstance(  # allowlist:provider -- canonical state-v3 step
+        definition, CorrectionWorkUnitPayload
+    ):
+        _fail(
+            ReplayDiagnosticCode.RECORD_MISSING,
+            "a correction cursor requires its correction work-unit record",
+            next(
+                record
+                for record in transitions.transition_history
+                if record.payload.work_unit_id == unit.work_unit_id
+            ),
+        )
+    kind = (
+        "correction"
+        if isinstance(definition, CorrectionWorkUnitPayload)
+        else "plan"
+        if unit.work_unit_id == "1"
+        or first_step in {"codex_plan", "claude_plan_review", "codex_plan_revision"}  # allowlist:provider -- canonical state-v3 steps
+        else "final_review"
+        if first_step in {"codex_final_review", "claude_final_review"}  # allowlist:provider -- canonical state-v3 steps
+        else "slice"
+    )
+    return round_number, kind
+
+
+def _project_work_unit_gate(
+    unit: ReplayedWorkUnitState,
+    gate: GateTransitionPayload | None,
+    transitions: _ProjectionTransitionIndex,
+) -> tuple[str, dict[str, object]]:
+    failure_projection = transitions.failure_statuses.get(unit.work_unit_id)
+    gate_supersedes_transition = transitions.latest_gate_positions.get(
+        unit.work_unit_id, -1
+    ) > transitions.latest_workflow_positions.get(unit.work_unit_id, -1)
+    projected_status = (
+        failure_projection[1]
+        if failure_projection is not None
+        else gate.gate_status
+        if (
+            gate is not None
+            and gate.gate_status != "clear"
+            and gate_supersedes_transition
+        )
+        else unit.status
+    )
+    gate_document = (
+        failure_projection[2]
+        if failure_projection is not None
+        else
+        {
+            "status": "clear",
+            "reason": "none",
+            "detail": None,
+            "fingerprint": None,
+            "paths": (),
+            "resume_step": None,
+        }
+        if gate is None
+        else {
+            "status": gate.gate_status,
+            "reason": gate.reason,
+            "detail": gate.detail,
+            "fingerprint": gate.fingerprint,
+            "paths": gate.paths,
+            "resume_step": gate.resume_step,
+        }
+    )
+    return projected_status, gate_document
+
+
+def _project_work_unit_open_findings(
+    replay: ArtifactReplayResult,
+    records: tuple[ArtifactRecord, ...],
+    definition: object,
+    latest_review_record: ArtifactRecord | None,
+    positions: dict[str, int],
+) -> tuple[str, ...]:
+    from contracts import FindingClass
+    from finding_reducer import project_open_set, reduce_findings
+
+    definition_findings = (
+        definition.finding_ids
+        if isinstance(definition, CorrectionWorkUnitPayload)
+        else definition.open_finding_ids
+        if isinstance(definition, WorkUnitPayload)
+        else ()
+    )
+    if latest_review_record is None:
+        return definition_findings
+    review_payload = latest_review_record.payload
+    assert isinstance(review_payload, ReviewPayload)
+    review_prefix = replay.subset(
+        records[:_review_prefix_end(records, positions, latest_review_record)]
+    )
+    reviewed_findings = reduce_findings(review_prefix).request_subset(
+        finding_ids=review_payload.finding_ids
+    ).findings
+    return tuple(
+        finding.finding_id
+        for finding in project_open_set(reviewed_findings).findings
+        if finding.finding_class is FindingClass.BLOCKER
+        and finding.origin.reporter.value == review_payload.reviewer.value
+    )
+
+
+def _project_work_unit_document(
+    replay: ArtifactReplayResult,
+    records: tuple[ArtifactRecord, ...],
+    unit: ReplayedWorkUnitState,
+    transitions: _ProjectionTransitionIndex,
+    authority: _WorkUnitProjectionIndex,
+) -> dict[str, object]:
+    definition_record = authority.definitions.get(unit.work_unit_id)
+    definition = None if definition_record is None else definition_record.payload
+    round_number, kind = _project_work_unit_round_and_kind(
+        replay, unit, definition, transitions, records
+    )
+    policy = authority.policies.get(unit.work_unit_id)
+    gate = authority.gates.get(unit.work_unit_id)
+    decisions = tuple(
+        asdict(item)
+        for item in replay.gate_decisions
+        if item.work_unit_id == unit.work_unit_id
+    )
+    failures = tuple(
+        {
+            "invocation_id": item.invocation_id,
+            "idempotency_key": item.idempotency_key,
+            "role": item.role.value,
+            "failure_kind": item.failure_kind,
+            "provider_text": item.provider_text,
+            "technical_text": item.technical_text,
+            "received_at": item.received_at,
+            "step": item.step,
+            "slice_id": int(item.slice_id),
+            "work_unit_id": int(item.work_unit_id),
+            "diagnostic_exit_code": item.diagnostic_exit_code,
+            "process_exit_code": item.process_exit_code,
+            "parse_path": item.parse_path,
+            "source_timezone": item.source_timezone,
+            "reset_at_utc": item.reset_at_utc,
+            "resume_at_utc": item.resume_at_utc,
+            "safety_margin_seconds": item.safety_margin_seconds,
+            "auto_resume_count": item.auto_resume_count,
+            "automatic_resume": item.automatic_resume,
+            "diff_fingerprint": item.diff_fingerprint,
+        }
+        for item in replay.invocation_failures
+        if item.work_unit_id == unit.work_unit_id
+    )
+    projected_status, gate_document = _project_work_unit_gate(
+        unit, gate, transitions
+    )
+    definition_findings = _project_work_unit_open_findings(
+        replay,
+        records,
+        definition,
+        authority.latest_reviews.get(unit.work_unit_id),
+        transitions.positions,
+    )
+    return {
+        "work_unit_id": int(unit.work_unit_id),
+        "slice_id": int(unit.slice_id),
+        "kind": kind,
+        "status": projected_status,
+        "current_step": unit.step,
+        "round_number": round_number,
+        "codex_return_count": (  # allowlist:provider -- canonical state-v3 field
+            0 if policy is None else policy.implementer_return_count
+        ),
+        "max_codex_returns": (  # allowlist:provider -- canonical state-v3 field
+            4 if policy is None else policy.max_implementer_returns
+        ),
+        "gate": gate_document,
+        "reviewer": (
+            None if authority.reviewers.get(unit.work_unit_id) is None
+            else authority.reviewers[unit.work_unit_id].value
+        ),
+        "open_findings": definition_findings,
+        "completed_side_effects": replay.completed_side_effects(unit.work_unit_id),
+        "gate_decisions": tuple(
+            {
+                "approved": item["approved"],
+                "reason": item["reason"],
+                "fingerprint": item["fingerprint"],
+                "paths": item["paths"],
+                "rationale": item["rationale"],
+                "resume_step": item["resume_step"],
+            }
+            for item in decisions
+        ),
+        "active_test_fingerprint": (
+            None if gate is None else gate.active_test_fingerprint
+        ),
+        "active_test_paths": () if gate is None else gate.active_test_paths,
+        "invocation_failures": failures,
+    }
+
+
+def _project_work_unit_documents(
+    replay: ArtifactReplayResult,
+    records: tuple[ArtifactRecord, ...],
+    transitions: _ProjectionTransitionIndex,
+) -> list[dict[str, object]]:
+    authority = _index_work_unit_projection_authority(replay, records)
+    documents = []
+    for unit in replay.work_unit_states:
+        documents.append(
+            _project_work_unit_document(
+                replay,
+                records,
+                unit,
+                transitions,
+                authority,
+            )
+        )
+    return documents
+
+
+def _assemble_workflow_state_document(
+    replay: ArtifactReplayResult,
+    records: tuple[ArtifactRecord, ...],
+    identity: RunIdentityPayload,
+    profile: RunProfilePayload,
+    task: TaskPayload,
+    plan: PlanPayload | None,
+    planned_slices: Sequence[SliceSpec],
+    slices: Sequence[dict[str, object]],
+    work_units: Sequence[dict[str, object]],
+    import_record: ArtifactRecord | None,
+    runtime_history: dict[str, dict[str, tuple[str, ...]]],
+) -> dict[str, object]:
+    # Keep the complete state-v3 assembly together: this is the one schema
+    # boundary where independently projected fact groups become a WorkflowState.
+    # Its named boundary makes omission mutations explicit without splitting
+    # the cohesive mapping into artificial fragments.
+    return {
         "version": 3,
         "run_id": replay.expected_run_id,
         "task_file": identity.task_file,
@@ -990,6 +1072,87 @@ def project_workflow_state(replay: ArtifactReplayResult) -> ReplayedWorkflowStat
             )
         ),
     }
+
+
+def project_workflow_state(replay: ArtifactReplayResult) -> ReplayedWorkflowState:
+    """Project the complete semantic state from records, without filesystem I/O.
+
+    Volatile state timestamps are normalized to the first and last record time.
+    Former ``runtime_history`` content is represented by its authoritative
+    record references; embedded review/validation bodies and ``events`` are not
+    recreated as a second authority.
+    """
+    records = replay.records
+    _ensure_projection_event_prefix(replay, records)
+    identity = replay.run_identity
+    profile = replay.run_profile
+    task_record = next(
+        (record for record in records if isinstance(record.payload, TaskPayload)),
+        None,
+    )
+    if identity is None or profile is None or task_record is None:
+        _fail(
+            ReplayDiagnosticCode.RECORD_MISSING,
+            "workflow state projection requires run identity, profile, and task",
+        )
+    task = task_record.payload
+    assert isinstance(task, TaskPayload)
+    plan_record = next(
+        (record for record in reversed(records) if isinstance(record.payload, PlanPayload)),
+        None,
+    )
+    plan = None if plan_record is None else plan_record.payload
+    assert plan is None or isinstance(plan, PlanPayload)
+    proposed_plan_record = next(
+        (
+            record
+            for record in reversed(records)
+            if isinstance(record.payload, AgentResultPayload)
+            and record.payload.slice_plan
+        ),
+        None,
+    )
+    proposed_plan = (
+        ()
+        if proposed_plan_record is None
+        else proposed_plan_record.payload.slice_plan
+    )
+    planned_slices = plan.slices if plan is not None else proposed_plan
+
+    transitions = _index_projection_transitions(replay, records)
+    slices = _project_slice_documents(
+        replay,
+        records,
+        identity,
+        planned_slices,
+        transitions,
+    )
+
+    work_units = _project_work_unit_documents(replay, records, transitions)
+
+    import_record = next(
+        (
+            record
+            for record in records
+            if isinstance(record.payload, FindingHandoffImportPayload)
+        ),
+        None,
+    )
+    runtime_history = project_runtime_history_references(replay)
+
+    document = _assemble_workflow_state_document(
+        replay,
+        records,
+        identity,
+        profile,
+        task,
+        plan,
+        planned_slices,
+        slices,
+        work_units,
+        import_record,
+        runtime_history,
+    )
     # Parsing the projection through the real state-v3 validator proves that
     # this is a complete state document rather than a look-alike audit view.
     # The import remains local so workflow_state does not acquire a replay
