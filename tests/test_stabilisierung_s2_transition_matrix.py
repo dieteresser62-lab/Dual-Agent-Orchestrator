@@ -190,6 +190,8 @@ ADDITIONAL_BOUNDARY_MARKERS = {
     "src/orchestrator.py": {
         "bound success evidence differs from terminal workflow state",
         "Terminal workflow result differs from bound watch task identity",
+    },
+    "src/workflow_run_setup.py": {
         "differs from the immutable persisted profile",
     },
     "src/workflow_production.py": {
@@ -342,7 +344,7 @@ COMPARISON_TARGETS = (
     ("src/workflow_audit_projection.py", None, "_persisted_histories"),
     ("src/workflow_audit_projection.py", None, "_attach_record_events"),
     ("src/orchestrator.py", None, "run_pipeline"),
-    ("src/orchestrator.py", None, "_apply_resumed_agent_profiles"),
+    ("src/workflow_run_setup.py", None, "_apply_resumed_agent_profiles"),
     ("src/workflow_production.py", None, "run_production_workflow"),
     (
         "src/workflow_baseline.py",
@@ -454,7 +456,7 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/workflow_audit_projection.py:_persisted_histories": 6,
     "src/workflow_audit_projection.py:_attach_record_events": 16,
     "src/orchestrator.py:run_pipeline": 20,
-    "src/orchestrator.py:_apply_resumed_agent_profiles": 3,
+    "src/workflow_run_setup.py:_apply_resumed_agent_profiles": 3,
     "src/workflow_production.py:run_production_workflow": 40,
     "src/workflow_baseline.py:matches_baseline_initialization_prefix": 24,
     "src/workflow_baseline.py:WorkflowBaseline._persist_structured_baseline": 26,
@@ -761,6 +763,7 @@ def test_bridge_error_inventory_is_source_bound() -> None:
         "src/artifact_bridge.py",
         "src/orchestrator.py",
         "src/workflow_production.py",
+        "src/workflow_run_setup.py",
     )
     combined_source = "\n".join(_string_constants(path) for path in paths)
     document = MATRIX_PATH.read_text(encoding="utf-8")
