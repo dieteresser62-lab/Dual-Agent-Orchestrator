@@ -5,7 +5,6 @@
     "src/agent_runtime.py::run_agent": 295,
     "src/artifact_models.py::_payload_from_dict": 298,
     "src/artifact_projection.py::render_replay_sections": 473,
-    "src/artifact_replay.py::_validate_payload_references": 1032,
     "src/artifact_replay.py::project_workflow_state": 502,
     "src/cli.py::build_parser": 255,
     "src/cli.py::parse_args": 202,

@@ -1390,17 +1390,11 @@ def _project_validation_attestation(
     )
 
 
-def _validate_payload_references(
+def _validate_workflow_transitions_and_events(
     chain: tuple[ArtifactRecord, ...],
     records_by_id: dict[str, ArtifactRecord],
-    *,
-    require_content_authority: bool,
-    require_review_authority: bool,
-    allow_incomplete_review_tail: bool,
-) -> str | None:
-    from finding_reducer import reduce_findings
-
-    positions = {record.record_id: index for index, record in enumerate(chain)}
+    positions: dict[str, int],
+) -> dict[str, ArtifactRecord]:
     transition_units: dict[str, ArtifactRecord] = {}
     transition_slices: set[str] = set()
     slice_boundaries: dict[str, SliceBoundaryPayload] = {}
@@ -1517,7 +1511,14 @@ def _validate_payload_references(
                         "review event work unit differs from its referenced review",
                         record,
                     )
+    return transition_units
 
+
+def _validate_invocation_failures_and_retries(
+    chain: tuple[ArtifactRecord, ...],
+    positions: dict[str, int],
+    transition_units: dict[str, ArtifactRecord],
+) -> None:
     invocation_failures: dict[str, tuple[ArtifactRecord, InvocationFailurePayload]] = {}
     for record in chain:
         payload = record.payload
@@ -1619,6 +1620,13 @@ def _validate_payload_references(
                     record,
                 )
 
+
+def _validate_gate_transitions_and_decisions(
+    chain: tuple[ArtifactRecord, ...],
+    records_by_id: dict[str, ArtifactRecord],
+    positions: dict[str, int],
+    transition_units: dict[str, ArtifactRecord],
+) -> None:
     bound_gate_decisions: set[tuple[str, str]] = set()
     for record in chain:
         payload = record.payload
@@ -1690,6 +1698,14 @@ def _validate_payload_references(
                 )
             bound_gate_decisions.add(binding)
 
+
+def _index_validation_content(
+    chain: tuple[ArtifactRecord, ...],
+) -> tuple[
+    tuple[ArtifactRecord, ...],
+    tuple[ArtifactRecord, ...],
+    dict[str, ArtifactRecord],
+]:
     validation_content_records = tuple(
         record for record in chain
         if isinstance(record.payload, ValidationContentPayload)
@@ -1707,6 +1723,16 @@ def _validate_payload_references(
             ReplayDiagnosticCode.RECORD_DUPLICATE,
             "validation content result binding is duplicated",
         )
+    return validation_content_records, attestation_records, content_by_result
+
+
+def _validate_attestation_content_bindings(
+    attestation_records: tuple[ArtifactRecord, ...],
+    content_by_result: dict[str, ArtifactRecord],
+    positions: dict[str, int],
+    *,
+    require_content_authority: bool,
+) -> None:
     for attestation_record in attestation_records:
         attestation = attestation_record.payload
         content_record = content_by_result.get(attestation_record.record_id)
@@ -1753,6 +1779,14 @@ def _validate_payload_references(
                     "validation result differs from its exact content",
                     attestation_record,
                 )
+
+
+def _validate_unbound_validation_content(
+    chain: tuple[ArtifactRecord, ...],
+    validation_content_records: tuple[ArtifactRecord, ...],
+    attestation_records: tuple[ArtifactRecord, ...],
+    positions: dict[str, int],
+) -> None:
     bound_attestation_ids = {record.record_id for record in attestation_records}
     for content_record in validation_content_records:
         if content_record.payload.result_record_id not in bound_attestation_ids:
@@ -1764,6 +1798,13 @@ def _validate_payload_references(
                 content_record,
             )
 
+
+def _validate_provider_decision_content(
+    chain: tuple[ArtifactRecord, ...],
+    positions: dict[str, int],
+    *,
+    require_content_authority: bool,
+) -> tuple[tuple[ArtifactRecord, ...], set[str]]:
     provider_content_records = tuple(
         record for record in chain
         if isinstance(record.payload, ProviderContentPayload)
@@ -1867,6 +1908,15 @@ def _validate_payload_references(
                 content_record,
             )
         bound_provider_records.add(content_record.record_id)
+    return provider_content_records, bound_provider_records
+
+
+def _validate_unbound_provider_content(
+    chain: tuple[ArtifactRecord, ...],
+    provider_content_records: tuple[ArtifactRecord, ...],
+    bound_provider_records: set[str],
+    positions: dict[str, int],
+) -> None:
     for content_record in provider_content_records:
         if content_record.record_id not in bound_provider_records:
             if positions[content_record.record_id] == len(chain) - 1:
@@ -1877,6 +1927,16 @@ def _validate_payload_references(
                 content_record,
             )
 
+
+def _validate_review_anchors(
+    chain: tuple[ArtifactRecord, ...],
+    records_by_id: dict[str, ArtifactRecord],
+    positions: dict[str, int],
+) -> tuple[
+    tuple[ArtifactRecord, ...],
+    tuple[ArtifactRecord, ...],
+    dict[str, ArtifactRecord],
+]:
     review_records = tuple(
         record for record in chain if isinstance(record.payload, ReviewPayload)
     )
@@ -1915,7 +1975,14 @@ def _validate_payload_references(
                 anchor_record,
             )
         anchors_by_review[anchor.review_record_id] = anchor_record
+    return review_records, review_validation_records, anchors_by_review
 
+
+def _validate_review_validation_bindings(
+    review_validation_records: tuple[ArtifactRecord, ...],
+    records_by_id: dict[str, ArtifactRecord],
+    positions: dict[str, int],
+) -> dict[str, ArtifactRecord]:
     validations_by_review: dict[str, ArtifactRecord] = {}
     for binding_record in review_validation_records:
         binding = binding_record.payload
@@ -1955,7 +2022,19 @@ def _validate_payload_references(
                 binding_record,
             )
         validations_by_review[binding.review_record_id] = binding_record
+    return validations_by_review
 
+
+def _validate_required_review_authority(
+    chain: tuple[ArtifactRecord, ...],
+    review_records: tuple[ArtifactRecord, ...],
+    anchors_by_review: dict[str, ArtifactRecord],
+    validations_by_review: dict[str, ArtifactRecord],
+    positions: dict[str, int],
+    *,
+    require_review_authority: bool,
+    allow_incomplete_review_tail: bool,
+) -> str | None:
     pending_review_record_id: str | None = None
     if require_review_authority:
         for review in review_records:
@@ -2016,7 +2095,12 @@ def _validate_payload_references(
                 "review finding transition set is incomplete",
                 review,
             )
+    return pending_review_record_id
 
+
+def _validate_review_packet_bindings(
+    chain: tuple[ArtifactRecord, ...],
+) -> None:
     for packet_record in (
         record for record in chain if isinstance(record.payload, ReviewPacketPayload)
     ):
@@ -2032,6 +2116,10 @@ def _validate_payload_references(
                 packet_record,
             )
 
+
+def _validate_work_unit_revisions(
+    chain: tuple[ArtifactRecord, ...],
+) -> dict[str, ArtifactRecord]:
     work_units: dict[str, ArtifactRecord] = {}
     latest_work_units: dict[str, ArtifactRecord] = {}
     for record in chain:
@@ -2068,10 +2156,12 @@ def _validate_payload_references(
             # boundary forward or make intervening activity look like a
             # forward reference.
             work_units.setdefault(work_unit_id, record)
-    first_work_unit_position = min(
-        (positions[record.record_id] for record in work_units.values()),
-        default=None,
-    )
+    return work_units
+
+
+def _validate_single_finding_import(
+    chain: tuple[ArtifactRecord, ...],
+) -> None:
     import_records = [
         record for record in chain
         if isinstance(record.payload, FindingHandoffImportPayload)
@@ -2082,242 +2172,305 @@ def _validate_payload_references(
             "a run may contain only one finding handoff import",
             import_records[-1],
         )
-    for record in chain:
-        payload = record.payload
-        if isinstance(payload, FindingHandoffExportPayload):
-            if (
-                payload.source_run_id != record.run_id
-                or not record.predecessor_ids
-                or payload.source_head_record_id != record.predecessor_ids[0]
-            ):
-                _fail(
-                    ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
-                    "finding export source run or pre-export head differs",
-                    record,
-                )
-            review = records_by_id.get(payload.approval_review_record_id)
-            if (
-                review is None
-                or not isinstance(review.payload, ReviewPayload)
-                or review.payload.verdict != "approved"
-                or positions[review.record_id] >= positions[record.record_id]
-            ):
-                _fail(
-                    ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
-                    "finding export approval review is not present",
-                    record,
-                )
-            source_records = tuple(
-                records_by_id.get(record_id)
-                for record_id in payload.finding_transition_record_ids
-            )
-            if any(
-                source is None
-                or not isinstance(source.payload, FindingTransitionPayload)
-                or positions[source.record_id] >= positions[record.record_id]
-                for source in source_records
-            ):
-                _fail(
-                    ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
-                    "finding export transition sequence is not present",
-                    record,
-                )
-            actual = tuple(
-                ImportedFindingTransition(source.record_id, source.payload)
-                for source in source_records
-                if source is not None and isinstance(source.payload, FindingTransitionPayload)
-            )
-            ordered_ids = tuple(
-                source.record_id for source in chain[:positions[record.record_id]]
-                if isinstance(source.payload, FindingTransitionPayload)
-            )
-            if (
-                payload.finding_transition_record_ids != ordered_ids
-                or finding_transition_sequence_sha256(actual)
-                != payload.finding_transitions_sha256
-            ):
-                _fail(
-                    ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
-                    "finding export transition order or digest differs",
-                    record,
-                )
-            if not any(
-                isinstance(candidate.payload, PlanPayload)
-                and candidate.payload.approved_plan_commit == payload.approved_plan_commit
-                for candidate in chain[:positions[record.record_id]]
-            ):
-                _fail(
-                    ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
-                    "finding export approved plan commit is not present",
-                    record,
-                )
-        elif isinstance(payload, FindingHandoffImportPayload):
-            if payload.target_run_id != record.run_id:
-                _fail(
-                    ReplayDiagnosticCode.RECORD_RUN_MISMATCH,
-                    "finding import target run differs",
-                    record,
-                )
-            if payload.source_run_id == record.run_id:
-                _fail(
-                    ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
-                    "finding import must retain foreign provenance",
-                    record,
-                )
-            # An import is atomic authority: validate its entire embedded
-            # lifecycle now, not only when a later consumer asks for findings.
-            reduce_findings(_result(record.run_id, (record,)))
-        if isinstance(payload, WorkUnitPayload) and payload.finding_import_record_id is not None:
-            imported = records_by_id.get(payload.finding_import_record_id)
-            if (
-                imported is None
-                or not isinstance(imported.payload, FindingHandoffImportPayload)
-                or positions[imported.record_id] >= positions[record.record_id]
-            ):
-                _fail(
-                    ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
-                    "work unit finding import is not present",
-                    record,
-                )
-            # The import establishes the initial ledger, not an immutable view
-            # of every later round.  Derive the expected open set from the
-            # complete authoritative prefix so reviewer transitions written
-            # before a new work-unit revision are reflected without weakening
-            # the import provenance binding.
-            finding_prefix = tuple(
-                candidate
-                for candidate in chain[:positions[record.record_id]]
-                if isinstance(
-                    candidate.payload,
-                    (FindingHandoffImportPayload, FindingTransitionPayload),
-                )
-            )
-            expected_open = reduce_findings(
-                _result(record.run_id, finding_prefix)
-            ).open_set.finding_ids
-            if payload.open_finding_ids != expected_open:
-                _fail(
-                    ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
-                    "work unit open findings differ from its authoritative finding prefix",
-                    record,
-                )
-        # Planning work units intentionally have no WorkUnitPayload: the plan
-        # record is their authoritative result. Once the first implementation
-        # work unit appears, later work-unit-owned activity must resolve to one
-        # of the persisted work-unit records.
+
+
+def _validate_finding_handoff_record(
+    record: ArtifactRecord,
+    payload: object,
+    chain: tuple[ArtifactRecord, ...],
+    records_by_id: dict[str, ArtifactRecord],
+    positions: dict[str, int],
+    reduce_findings: Callable[..., object],
+) -> None:
+    if isinstance(payload, FindingHandoffExportPayload):
         if (
-            first_work_unit_position is not None
-            and positions[record.record_id] > first_work_unit_position
-            and isinstance(
-                payload,
-                (
-                    AgentResultPayload,
-                    DiagnosticPayload,
-                    ReviewPayload,
-                    ProviderInputMeasurementPayload,
-                    ProviderAttemptPayload,
-                    FinalReviewPreflightPayload,
-                ),
+            payload.source_run_id != record.run_id
+            or not record.predecessor_ids
+            or payload.source_head_record_id != record.predecessor_ids[0]
+        ):
+            _fail(
+                ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+                "finding export source run or pre-export head differs",
+                record,
             )
-            and (
-                payload.work_unit_id not in work_units
-                or positions[work_units[payload.work_unit_id].record_id]
-                >= positions[record.record_id]
-            )
+        review = records_by_id.get(payload.approval_review_record_id)
+        if (
+            review is None
+            or not isinstance(review.payload, ReviewPayload)
+            or review.payload.verdict != "approved"
+            or positions[review.record_id] >= positions[record.record_id]
         ):
             _fail(
                 ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
-                f"work unit {payload.work_unit_id!r} is not present",
+                "finding export approval review is not present",
                 record,
             )
-        if isinstance(payload, BindingPayload):
-            attestation = records_by_id.get(payload.attestation_id)
-            if (
-                attestation is None
-                or not isinstance(attestation.payload, ValidationAttestationPayload)
-                or positions[attestation.record_id] >= positions[record.record_id]
-            ):
-                _fail(
-                    ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
-                    f"validation attestation {payload.attestation_id!r} is not present",
-                    record,
-                )
-            _same_fingerprint(record, attestation)
-            for approval_id in payload.approval_ids:
-                approval = records_by_id.get(approval_id)
-                if (
-                    approval is None
-                    or not isinstance(approval.payload, ReviewPayload)
-                    or approval.payload.verdict != "approved"
-                    or positions[approval.record_id] >= positions[record.record_id]
-                ):
-                    _fail(
-                        ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
-                        f"approved review {approval_id!r} is not present",
-                        record,
-                    )
-                _same_fingerprint(record, approval)
-        elif isinstance(payload, WorkflowCompletionPayload) and payload.final_binding_id is not None:
-            binding = records_by_id.get(payload.final_binding_id)
-            if (
-                binding is None
-                or not isinstance(binding.payload, BindingPayload)
-                or positions[binding.record_id] >= positions[record.record_id]
-            ):
-                _fail(
-                    ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
-                    f"final binding {payload.final_binding_id!r} is not present",
-                    record,
-                )
-            _same_fingerprint(record, binding)
-        elif isinstance(payload, FinalReviewPreflightPayload):
-            measurement = records_by_id.get(payload.measurement_record_id)
-            if (
-                measurement is None
-                or not isinstance(measurement.payload, ProviderInputMeasurementPayload)
-                or positions[measurement.record_id] >= positions[record.record_id]
-            ):
-                _fail(
-                    ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
-                    f"measurement {payload.measurement_record_id!r} is not present",
-                    record,
-                )
-            _same_fingerprint(record, measurement)
-        elif isinstance(payload, ProviderAttemptPayload):
-            measurement = records_by_id.get(payload.measurement_record_id)
-            if (
-                measurement is None
-                or not isinstance(measurement.payload, ProviderInputMeasurementPayload)
-                or positions[measurement.record_id] >= positions[record.record_id]
-            ):
-                _fail(
-                    ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
-                    f"measurement {payload.measurement_record_id!r} is not present",
-                    record,
-                )
-            _same_fingerprint(record, measurement)
-            measured = measurement.payload
-            if (
-                payload.provider != measured.provider
-                or payload.role != measured.role
-                or payload.operation != measured.operation
-                or payload.work_unit_id != measured.work_unit_id
-                or payload.input_digest != measured.input_digest
-            ):
-                _fail(
-                    ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
-                    "provider attempt differs from its bound measurement",
-                    record,
-                )
-        elif isinstance(payload, ResumeCheckPayload):
-            predecessor = record.predecessor_ids[0] if record.predecessor_ids else None
-            if payload.expected_head_id != predecessor:
-                _fail(
-                    ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
-                    "resume check is not bound to its immediate prior head",
-                    record,
-                )
+        source_records = tuple(
+            records_by_id.get(record_id)
+            for record_id in payload.finding_transition_record_ids
+        )
+        if any(
+            source is None
+            or not isinstance(source.payload, FindingTransitionPayload)
+            or positions[source.record_id] >= positions[record.record_id]
+            for source in source_records
+        ):
+            _fail(
+                ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+                "finding export transition sequence is not present",
+                record,
+            )
+        actual = tuple(
+            ImportedFindingTransition(source.record_id, source.payload)
+            for source in source_records
+            if source is not None and isinstance(source.payload, FindingTransitionPayload)
+        )
+        ordered_ids = tuple(
+            source.record_id for source in chain[:positions[record.record_id]]
+            if isinstance(source.payload, FindingTransitionPayload)
+        )
+        if (
+            payload.finding_transition_record_ids != ordered_ids
+            or finding_transition_sequence_sha256(actual)
+            != payload.finding_transitions_sha256
+        ):
+            _fail(
+                ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+                "finding export transition order or digest differs",
+                record,
+            )
+        if not any(
+            isinstance(candidate.payload, PlanPayload)
+            and candidate.payload.approved_plan_commit == payload.approved_plan_commit
+            for candidate in chain[:positions[record.record_id]]
+        ):
+            _fail(
+                ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+                "finding export approved plan commit is not present",
+                record,
+            )
+    elif isinstance(payload, FindingHandoffImportPayload):
+        if payload.target_run_id != record.run_id:
+            _fail(
+                ReplayDiagnosticCode.RECORD_RUN_MISMATCH,
+                "finding import target run differs",
+                record,
+            )
+        if payload.source_run_id == record.run_id:
+            _fail(
+                ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+                "finding import must retain foreign provenance",
+                record,
+            )
+        # An import is atomic authority: validate its entire embedded
+        # lifecycle now, not only when a later consumer asks for findings.
+        reduce_findings(_result(record.run_id, (record,)))
 
+
+def _validate_work_unit_finding_import(
+    record: ArtifactRecord,
+    payload: object,
+    chain: tuple[ArtifactRecord, ...],
+    records_by_id: dict[str, ArtifactRecord],
+    positions: dict[str, int],
+    reduce_findings: Callable[..., object],
+) -> None:
+    if isinstance(payload, WorkUnitPayload) and payload.finding_import_record_id is not None:
+        imported = records_by_id.get(payload.finding_import_record_id)
+        if (
+            imported is None
+            or not isinstance(imported.payload, FindingHandoffImportPayload)
+            or positions[imported.record_id] >= positions[record.record_id]
+        ):
+            _fail(
+                ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+                "work unit finding import is not present",
+                record,
+            )
+        # The import establishes the initial ledger, not an immutable view
+        # of every later round.  Derive the expected open set from the
+        # complete authoritative prefix so reviewer transitions written
+        # before a new work-unit revision are reflected without weakening
+        # the import provenance binding.
+        finding_prefix = tuple(
+            candidate
+            for candidate in chain[:positions[record.record_id]]
+            if isinstance(
+                candidate.payload,
+                (FindingHandoffImportPayload, FindingTransitionPayload),
+            )
+        )
+        expected_open = reduce_findings(
+            _result(record.run_id, finding_prefix)
+        ).open_set.finding_ids
+        if payload.open_finding_ids != expected_open:
+            _fail(
+                ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+                "work unit open findings differ from its authoritative finding prefix",
+                record,
+            )
+
+
+def _validate_work_unit_activity_reference(
+    record: ArtifactRecord,
+    payload: object,
+    work_units: dict[str, ArtifactRecord],
+    first_work_unit_position: int | None,
+    positions: dict[str, int],
+) -> None:
+    # Planning work units intentionally have no WorkUnitPayload: the plan
+    # record is their authoritative result. Once the first implementation
+    # work unit appears, later work-unit-owned activity must resolve to one
+    # of the persisted work-unit records.
+    if (
+        first_work_unit_position is not None
+        and positions[record.record_id] > first_work_unit_position
+        and isinstance(
+            payload,
+            (
+                AgentResultPayload,
+                DiagnosticPayload,
+                ReviewPayload,
+                ProviderInputMeasurementPayload,
+                ProviderAttemptPayload,
+                FinalReviewPreflightPayload,
+            ),
+        )
+        and (
+            payload.work_unit_id not in work_units
+            or positions[work_units[payload.work_unit_id].record_id]
+            >= positions[record.record_id]
+        )
+    ):
+        _fail(
+            ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+            f"work unit {payload.work_unit_id!r} is not present",
+            record,
+        )
+
+
+def _validate_bound_record_references(
+    record: ArtifactRecord,
+    payload: object,
+    records_by_id: dict[str, ArtifactRecord],
+    positions: dict[str, int],
+) -> None:
+    if isinstance(payload, BindingPayload):
+        attestation = records_by_id.get(payload.attestation_id)
+        if (
+            attestation is None
+            or not isinstance(attestation.payload, ValidationAttestationPayload)
+            or positions[attestation.record_id] >= positions[record.record_id]
+        ):
+            _fail(
+                ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+                f"validation attestation {payload.attestation_id!r} is not present",
+                record,
+            )
+        _same_fingerprint(record, attestation)
+        for approval_id in payload.approval_ids:
+            approval = records_by_id.get(approval_id)
+            if (
+                approval is None
+                or not isinstance(approval.payload, ReviewPayload)
+                or approval.payload.verdict != "approved"
+                or positions[approval.record_id] >= positions[record.record_id]
+            ):
+                _fail(
+                    ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+                    f"approved review {approval_id!r} is not present",
+                    record,
+                )
+            _same_fingerprint(record, approval)
+    elif isinstance(payload, WorkflowCompletionPayload) and payload.final_binding_id is not None:
+        binding = records_by_id.get(payload.final_binding_id)
+        if (
+            binding is None
+            or not isinstance(binding.payload, BindingPayload)
+            or positions[binding.record_id] >= positions[record.record_id]
+        ):
+            _fail(
+                ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+                f"final binding {payload.final_binding_id!r} is not present",
+                record,
+            )
+        _same_fingerprint(record, binding)
+    elif isinstance(payload, FinalReviewPreflightPayload):
+        measurement = records_by_id.get(payload.measurement_record_id)
+        if (
+            measurement is None
+            or not isinstance(measurement.payload, ProviderInputMeasurementPayload)
+            or positions[measurement.record_id] >= positions[record.record_id]
+        ):
+            _fail(
+                ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+                f"measurement {payload.measurement_record_id!r} is not present",
+                record,
+            )
+        _same_fingerprint(record, measurement)
+    elif isinstance(payload, ProviderAttemptPayload):
+        measurement = records_by_id.get(payload.measurement_record_id)
+        if (
+            measurement is None
+            or not isinstance(measurement.payload, ProviderInputMeasurementPayload)
+            or positions[measurement.record_id] >= positions[record.record_id]
+        ):
+            _fail(
+                ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+                f"measurement {payload.measurement_record_id!r} is not present",
+                record,
+            )
+        _same_fingerprint(record, measurement)
+        measured = measurement.payload
+        if (
+            payload.provider != measured.provider
+            or payload.role != measured.role
+            or payload.operation != measured.operation
+            or payload.work_unit_id != measured.work_unit_id
+            or payload.input_digest != measured.input_digest
+        ):
+            _fail(
+                ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+                "provider attempt differs from its bound measurement",
+                record,
+            )
+    elif isinstance(payload, ResumeCheckPayload):
+        predecessor = record.predecessor_ids[0] if record.predecessor_ids else None
+        if payload.expected_head_id != predecessor:
+            _fail(
+                ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+                "resume check is not bound to its immediate prior head",
+                record,
+            )
+
+
+def _validate_chain_record_references(
+    chain: tuple[ArtifactRecord, ...],
+    records_by_id: dict[str, ArtifactRecord],
+    positions: dict[str, int],
+    work_units: dict[str, ArtifactRecord],
+    first_work_unit_position: int | None,
+    reduce_findings: Callable[..., object],
+) -> None:
+    for record in chain:
+        payload = record.payload
+        _validate_finding_handoff_record(
+            record, payload, chain, records_by_id, positions, reduce_findings
+        )
+        _validate_work_unit_finding_import(
+            record, payload, chain, records_by_id, positions, reduce_findings
+        )
+        _validate_work_unit_activity_reference(
+            record, payload, work_units, first_work_unit_position, positions
+        )
+        _validate_bound_record_references(
+            record, payload, records_by_id, positions
+        )
+
+
+def _validate_provider_attempt_sequences(
+    chain: tuple[ArtifactRecord, ...],
+) -> None:
     attempts: dict[str, dict[int, list[ArtifactRecord]]] = {}
     for record in chain:
         if isinstance(record.payload, ProviderAttemptPayload):
@@ -2370,6 +2523,10 @@ def _validate_payload_references(
                 ):
                     _fail(ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH, "provider attempt terminal changed immutable fields", terminal)
 
+
+def _validate_side_effect_sequences(
+    chain: tuple[ArtifactRecord, ...],
+) -> None:
     effects: dict[str, list[ArtifactRecord]] = {}
     for record in chain:
         if isinstance(record.payload, SideEffectPayload):
@@ -2421,6 +2578,81 @@ def _validate_payload_references(
                     result,
                 )
 
+
+def _validate_payload_references(
+    chain: tuple[ArtifactRecord, ...],
+    records_by_id: dict[str, ArtifactRecord],
+    *,
+    require_content_authority: bool,
+    require_review_authority: bool,
+    allow_incomplete_review_tail: bool,
+) -> str | None:
+    from finding_reducer import reduce_findings
+
+    positions = {record.record_id: index for index, record in enumerate(chain)}
+    transition_units = _validate_workflow_transitions_and_events(
+        chain, records_by_id, positions
+    )
+    _validate_invocation_failures_and_retries(chain, positions, transition_units)
+    _validate_gate_transitions_and_decisions(
+        chain, records_by_id, positions, transition_units
+    )
+    (
+        validation_content_records,
+        attestation_records,
+        content_by_result,
+    ) = _index_validation_content(chain)
+    _validate_attestation_content_bindings(
+        attestation_records,
+        content_by_result,
+        positions,
+        require_content_authority=require_content_authority,
+    )
+    _validate_unbound_validation_content(
+        chain, validation_content_records, attestation_records, positions
+    )
+    provider_content_records, bound_provider_records = (
+        _validate_provider_decision_content(
+            chain,
+            positions,
+            require_content_authority=require_content_authority,
+        )
+    )
+    _validate_unbound_provider_content(
+        chain, provider_content_records, bound_provider_records, positions
+    )
+    review_records, review_validation_records, anchors_by_review = (
+        _validate_review_anchors(chain, records_by_id, positions)
+    )
+    validations_by_review = _validate_review_validation_bindings(
+        review_validation_records, records_by_id, positions
+    )
+    pending_review_record_id = _validate_required_review_authority(
+        chain,
+        review_records,
+        anchors_by_review,
+        validations_by_review,
+        positions,
+        require_review_authority=require_review_authority,
+        allow_incomplete_review_tail=allow_incomplete_review_tail,
+    )
+    _validate_review_packet_bindings(chain)
+    work_units = _validate_work_unit_revisions(chain)
+    first_work_unit_position = min(
+        (positions[record.record_id] for record in work_units.values()),
+        default=None,
+    )
+    _validate_single_finding_import(chain)
+    _validate_chain_record_references(
+        chain,
+        records_by_id,
+        positions,
+        work_units,
+        first_work_unit_position,
+        reduce_findings,
+    )
+    _validate_provider_attempt_sequences(chain)
+    _validate_side_effect_sequences(chain)
     return pending_review_record_id
 
 

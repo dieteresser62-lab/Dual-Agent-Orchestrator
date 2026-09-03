@@ -75,6 +75,25 @@ FP_A = Fingerprint(FingerprintKind.IMPLEMENTATION, "a" * 64)
 FP_B = Fingerprint(FingerprintKind.IMPLEMENTATION, "b" * 64)
 REQUEST_ID = "native-codex-request-" + "c" * 64
 RESPONSE_SHA = "d" * 64
+VALIDATION_PASSES = (
+    "_validate_workflow_transitions_and_events",
+    "_validate_invocation_failures_and_retries",
+    "_validate_gate_transitions_and_decisions",
+    "_index_validation_content",
+    "_validate_attestation_content_bindings",
+    "_validate_unbound_validation_content",
+    "_validate_provider_decision_content",
+    "_validate_unbound_provider_content",
+    "_validate_review_anchors",
+    "_validate_review_validation_bindings",
+    "_validate_required_review_authority",
+    "_validate_review_packet_bindings",
+    "_validate_work_unit_revisions",
+    "_validate_single_finding_import",
+    "_validate_chain_record_references",
+    "_validate_provider_attempt_sequences",
+    "_validate_side_effect_sequences",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -815,7 +834,14 @@ def _load_baseline() -> dict[str, object]:
         and isinstance(entry["reason"], str)
         for entry in unreachable
     )
-    assert {entry["line"] for entry in unreachable} == {1498, 1635, 1781}
+    entries = document["entries"]
+    assert isinstance(entries, list)
+    unreachable_case_ids = {"site-1498", "site-1635", "site-1781"}
+    assert {entry["line"] for entry in unreachable} == {
+        entry["line"]
+        for entry in entries
+        if isinstance(entry, dict) and entry.get("case_id") in unreachable_case_ids
+    }
     return document
 
 
@@ -849,8 +875,9 @@ def _capture(
     except ArtifactReplayError as error:
         traceback: TracebackType | None = error.__traceback__
         call_lines: list[int] = []
+        emission_lines = {line for line, _ in _source_emissions()}
         while traceback is not None:
-            if traceback.tb_frame.f_code.co_name == "_validate_payload_references":
+            if traceback.tb_lineno in emission_lines:
                 call_lines.append(traceback.tb_lineno)
             traceback = traceback.tb_next
         assert len(call_lines) == 1
@@ -863,7 +890,9 @@ def _assert_entry(
     *,
     validator: Callable[..., str | None] = artifact_replay._validate_payload_references,
 ) -> None:
-    error, line = _capture(validator, _case(int(entry["line"])))
+    case_id = str(entry["case_id"])
+    assert case_id.startswith("site-")
+    error, line = _capture(validator, _case(int(case_id.removeprefix("site-"))))
     assert error.code.value == entry["code"]
     assert error.diagnostic.message == entry["message"]
     assert line == entry["line"]
@@ -871,22 +900,23 @@ def _assert_entry(
 
 def _source_emissions() -> tuple[tuple[int, str], ...]:
     tree = ast.parse(SOURCE.read_text(encoding="utf-8"), filename=str(SOURCE))
-    function = next(
+    functions = tuple(
         node
         for node in tree.body
         if isinstance(node, ast.FunctionDef)
-        and node.name == "_validate_payload_references"
+        and (node.name.startswith("_validate_") or node.name == "_index_validation_content")
     )
     emissions = []
-    for node in ast.walk(function):
-        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
-            continue
-        if node.func.id == "_fail":
-            code = node.args[0]
-            assert isinstance(code, ast.Attribute)
-            emissions.append((node.lineno, code.attr.replace("_", "-")))
-        elif node.func.id == "_same_fingerprint":
-            emissions.append((node.lineno, "RECORD-FINGERPRINT-MISMATCH"))
+    for function in functions:
+        for node in ast.walk(function):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+                continue
+            if node.func.id == "_fail":
+                code = node.args[0]
+                assert isinstance(code, ast.Attribute)
+                emissions.append((node.lineno, code.attr.replace("_", "-")))
+            elif node.func.id == "_same_fingerprint":
+                emissions.append((node.lineno, "RECORD-FINGERPRINT-MISMATCH"))
     return tuple(sorted(emissions))
 
 
@@ -911,6 +941,51 @@ def test_rejection_corpus_baseline_is_complete_and_source_bound() -> None:
     assert len(_load_baseline()["unreachable"]) == 3
 
 
+def test_replay_validator_has_exact_named_pass_order_and_split_chain_pass() -> None:
+    tree = ast.parse(SOURCE.read_text(encoding="utf-8"), filename=str(SOURCE))
+    functions = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+    }
+    validator = functions["_validate_payload_references"]
+    pass_calls = tuple(
+        node.func.id
+        for node in sorted(
+            (
+                child
+                for child in ast.walk(validator)
+                if isinstance(child, ast.Call)
+                and isinstance(child.func, ast.Name)
+                and child.func.id in VALIDATION_PASSES
+            ),
+            key=lambda child: child.lineno,
+        )
+    )
+    assert pass_calls == VALIDATION_PASSES
+
+    chain_pass = functions["_validate_chain_record_references"]
+    split_calls = tuple(
+        node.func.id
+        for node in sorted(
+            (
+                child
+                for child in ast.walk(chain_pass)
+                if isinstance(child, ast.Call)
+                and isinstance(child.func, ast.Name)
+                and child.func.id.startswith("_validate_")
+            ),
+            key=lambda child: child.lineno,
+        )
+    )
+    assert split_calls == (
+        "_validate_finding_handoff_record",
+        "_validate_work_unit_finding_import",
+        "_validate_work_unit_activity_reference",
+        "_validate_bound_record_references",
+    )
+
+
 @pytest.mark.parametrize("entry", _entries(), ids=lambda entry: entry["case_id"])
 def test_every_reachable_rejection_emission_has_a_bound_input(
     entry: dict[str, object],
@@ -920,11 +995,23 @@ def test_every_reachable_rejection_emission_has_a_bound_input(
 
 def test_equal_code_site_swap_is_detected_by_the_corpus() -> None:
     tree = ast.parse(SOURCE.read_text(encoding="utf-8"), filename=str(SOURCE))
+    entries = {str(entry["case_id"]): entry for entry in _entries()}
+    left_entry = entries["site-1424"]
+    right_entry = entries["site-1431"]
+    target_lines = {int(left_entry["line"]), int(right_entry["line"])}
     function = next(
         node
         for node in tree.body
         if isinstance(node, ast.FunctionDef)
-        and node.name == "_validate_payload_references"
+        and target_lines.issubset(
+            {
+                child.lineno
+                for child in ast.walk(node)
+                if isinstance(child, ast.Call)
+                and isinstance(child.func, ast.Name)
+                and child.func.id == "_fail"
+            }
+        )
     )
     calls = {
         node.lineno: node
@@ -933,21 +1020,90 @@ def test_equal_code_site_swap_is_detected_by_the_corpus() -> None:
         and isinstance(node.func, ast.Name)
         and node.func.id == "_fail"
     }
-    left, right = calls[1424], calls[1431]
+    left, right = calls[int(left_entry["line"])], calls[int(right_entry["line"])]
     left.args[1], right.args[1] = right.args[1], left.args[1]
-    module = ast.Module(body=[function], type_ignores=[])
+    validator_function = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_validate_payload_references"
+    )
+    module = ast.Module(body=[function, validator_function], type_ignores=[])
     ast.fix_missing_locations(module)
     namespace = dict(vars(artifact_replay))
     exec(compile(module, "<b40-equal-code-site-swap>", "exec"), namespace)
     mutant = namespace["_validate_payload_references"]
 
-    entries = {int(entry["line"]): entry for entry in _entries()}
-    for line, other_line in ((1424, 1431), (1431, 1424)):
-        error, actual_line = _capture(mutant, _case(line))
-        assert error.code.value == entries[line]["code"]
-        assert actual_line == line
-        assert error.diagnostic.message == entries[other_line]["message"]
-        assert error.diagnostic.message != entries[line]["message"]
+    for entry, other_entry in (
+        (left_entry, right_entry),
+        (right_entry, left_entry),
+    ):
+        case_line = int(str(entry["case_id"]).removeprefix("site-"))
+        error, actual_line = _capture(mutant, _case(case_line))
+        assert error.code.value == entry["code"]
+        assert actual_line == entry["line"]
+        assert error.diagnostic.message == other_entry["message"]
+        assert error.diagnostic.message != entry["message"]
+
+
+def test_validation_pass_order_swap_is_detected() -> None:
+    records: list[ArtifactRecord] = []
+    _append(
+        records,
+        ReviewPacketPayload(
+            "1",
+            "a" * 64,
+            "slice",
+            ("src/a.py",),
+            "7" * 64,
+            3,
+            BlobReference("6" * 64, 3),
+        ),
+        logical_id="review-packet-wrong",
+    )
+    _append(records, _import_payload())
+    _append(records, _import_payload(source_run_id="source-run-2"))
+    case = RejectionInput(tuple(records))
+
+    original_error, _ = _capture(
+        artifact_replay._validate_payload_references, case
+    )
+    assert (
+        original_error.diagnostic.message
+        == "review packet record identity differs from its content binding"
+    )
+
+    tree = ast.parse(SOURCE.read_text(encoding="utf-8"), filename=str(SOURCE))
+    validator_function = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_validate_payload_references"
+    )
+    pass_calls = {
+        node.value.func.id: index
+        for index, node in enumerate(validator_function.body)
+        if isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+    }
+    packet_index = pass_calls["_validate_review_packet_bindings"]
+    import_index = pass_calls["_validate_single_finding_import"]
+    validator_function.body[packet_index], validator_function.body[import_index] = (
+        validator_function.body[import_index],
+        validator_function.body[packet_index],
+    )
+    module = ast.Module(body=[validator_function], type_ignores=[])
+    ast.fix_missing_locations(module)
+    namespace = dict(vars(artifact_replay))
+    exec(compile(module, "<b41-validation-pass-order-swap>", "exec"), namespace)
+    mutant_error, _ = _capture(namespace["_validate_payload_references"], case)
+    assert mutant_error.code is ReplayDiagnosticCode.RECORD_DUPLICATE
+    assert (
+        mutant_error.diagnostic.message
+        == "a run may contain only one finding handoff import"
+    )
+    assert mutant_error.diagnostic.message != original_error.diagnostic.message
 
 
 def test_valid_reference_chain_remains_accepted() -> None:

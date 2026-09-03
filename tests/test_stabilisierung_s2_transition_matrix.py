@@ -324,6 +324,27 @@ COMPARISON_TARGETS = (
     ("src/artifact_resume.py", None, "require_workflow_event_prefix"),
     ("src/artifact_resume.py", None, "require_gate_prefix"),
     ("src/artifact_resume.py", None, "require_side_effect_ledger_prefix"),
+    ("src/artifact_replay.py", None, "_validate_workflow_transitions_and_events"),
+    ("src/artifact_replay.py", None, "_validate_invocation_failures_and_retries"),
+    ("src/artifact_replay.py", None, "_validate_gate_transitions_and_decisions"),
+    ("src/artifact_replay.py", None, "_index_validation_content"),
+    ("src/artifact_replay.py", None, "_validate_attestation_content_bindings"),
+    ("src/artifact_replay.py", None, "_validate_unbound_validation_content"),
+    ("src/artifact_replay.py", None, "_validate_provider_decision_content"),
+    ("src/artifact_replay.py", None, "_validate_unbound_provider_content"),
+    ("src/artifact_replay.py", None, "_validate_review_anchors"),
+    ("src/artifact_replay.py", None, "_validate_review_validation_bindings"),
+    ("src/artifact_replay.py", None, "_validate_required_review_authority"),
+    ("src/artifact_replay.py", None, "_validate_review_packet_bindings"),
+    ("src/artifact_replay.py", None, "_validate_work_unit_revisions"),
+    ("src/artifact_replay.py", None, "_validate_single_finding_import"),
+    ("src/artifact_replay.py", None, "_validate_finding_handoff_record"),
+    ("src/artifact_replay.py", None, "_validate_work_unit_finding_import"),
+    ("src/artifact_replay.py", None, "_validate_work_unit_activity_reference"),
+    ("src/artifact_replay.py", None, "_validate_bound_record_references"),
+    ("src/artifact_replay.py", None, "_validate_chain_record_references"),
+    ("src/artifact_replay.py", None, "_validate_provider_attempt_sequences"),
+    ("src/artifact_replay.py", None, "_validate_side_effect_sequences"),
     ("src/artifact_replay.py", None, "_validate_payload_references"),
     ("src/artifact_bridge.py", None, "finding_handoff_export_payload"),
     ("src/artifact_bridge.py", None, "finding_handoff_import_payload"),
@@ -436,7 +457,28 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/artifact_resume.py:require_workflow_event_prefix": 6,
     "src/artifact_resume.py:require_gate_prefix": 1,
     "src/artifact_resume.py:require_side_effect_ledger_prefix": 4,
-    "src/artifact_replay.py:_validate_payload_references": 188,
+    "src/artifact_replay.py:_validate_workflow_transitions_and_events": 19,
+    "src/artifact_replay.py:_validate_invocation_failures_and_retries": 18,
+    "src/artifact_replay.py:_validate_gate_transitions_and_decisions": 12,
+    "src/artifact_replay.py:_index_validation_content": 1,
+    "src/artifact_replay.py:_validate_attestation_content_bindings": 14,
+    "src/artifact_replay.py:_validate_unbound_validation_content": 2,
+    "src/artifact_replay.py:_validate_provider_decision_content": 17,
+    "src/artifact_replay.py:_validate_unbound_provider_content": 2,
+    "src/artifact_replay.py:_validate_review_anchors": 5,
+    "src/artifact_replay.py:_validate_review_validation_bindings": 8,
+    "src/artifact_replay.py:_validate_required_review_authority": 18,
+    "src/artifact_replay.py:_validate_review_packet_bindings": 2,
+    "src/artifact_replay.py:_validate_work_unit_revisions": 6,
+    "src/artifact_replay.py:_validate_single_finding_import": 1,
+    "src/artifact_replay.py:_validate_finding_handoff_record": 13,
+    "src/artifact_replay.py:_validate_work_unit_finding_import": 4,
+    "src/artifact_replay.py:_validate_work_unit_activity_reference": 4,
+    "src/artifact_replay.py:_validate_bound_record_references": 18,
+    "src/artifact_replay.py:_validate_chain_record_references": 0,
+    "src/artifact_replay.py:_validate_provider_attempt_sequences": 11,
+    "src/artifact_replay.py:_validate_side_effect_sequences": 13,
+    "src/artifact_replay.py:_validate_payload_references": 0,
     "src/artifact_bridge.py:finding_handoff_export_payload": 5,
     "src/artifact_bridge.py:finding_handoff_import_payload": 8,
     "src/artifact_bridge.py:review_payload_matches_result": 13,
@@ -1131,7 +1173,13 @@ def test_managed_audit_commit_boundary_is_source_and_document_bound() -> None:
 
 
 def test_comparison_expression_inventory_has_not_grown() -> None:
-    assert _comparison_inventory() == EXPECTED_COMPARISON_COUNTS
+    actual = _comparison_inventory()
+    assert actual == EXPECTED_COMPARISON_COUNTS
+    assert sum(
+        count
+        for label, count in actual.items()
+        if label.startswith("src/artifact_replay.py:")
+    ) == 188
     document = MATRIX_PATH.read_text(encoding="utf-8")
     assert (
         "`WorkflowPersistence.persist_native_implementer_contract()` 11 "
