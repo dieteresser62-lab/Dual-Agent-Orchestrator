@@ -64,7 +64,7 @@ from workflow_state import (
     WorkflowStateValidationError,
     init_workflow_state,
 )
-from orchestrator import _attach_record_events, _overall_audit_entries
+from workflow_audit_projection import _attach_record_events, _overall_audit_entries
 
 
 RUN_ID = "r9-prefix-projection"

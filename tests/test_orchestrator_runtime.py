@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import orchestrator
 import pytest
+import workflow_audit_projection
 import workflow_production
 import workflow_requests
 from conftest import can_symlink
@@ -1349,7 +1350,11 @@ def test_final_review_attestation_recovery_receives_record_authority(
         seen["read_blob"] = blob_reader
         return {1: WorkflowHistory(1, attestations=(attestation,))}
 
-    monkeypatch.setattr(orchestrator, "_persisted_histories", projected_histories)
+    monkeypatch.setattr(
+        workflow_audit_projection,
+        "_persisted_histories",
+        projected_histories,
+    )
 
     recovered = orchestrator._recover_final_review_attestation(
         state,

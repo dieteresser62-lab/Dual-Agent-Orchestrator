@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -8,6 +9,11 @@ from audit_trail import AuditProjection, OverallAuditEntry
 from orchestrator import ProductionWorkflowDriver
 from workflow import WorkflowHistory
 from workflow_audit import WorkflowAudit, WorkflowAuditDependencies
+from workflow_audit_projection import (
+    _audit_projection,
+    _authorized_test_approval,
+    _overall_audit_entries,
+)
 from workflow_state import init_workflow_state
 
 
@@ -249,13 +255,20 @@ def test_audit_projection_is_byte_identical_for_identical_inputs(
         target_branch="feature/backlog-followups",
         timestamp="2026-09-02T00:00:00+00:00",
     )
-    audit = WorkflowAudit(_dependencies(tmp_path))
+    audit = WorkflowAudit(
+        replace(
+            _dependencies(tmp_path),
+            overall_audit_entries=_overall_audit_entries,
+            authorized_test_approval=_authorized_test_approval,
+            audit_projection=_audit_projection,
+        )
+    )
     history = WorkflowHistory(state.current_work_unit_id)
     target = tmp_path / cast(str, state.audit_report_path)
 
     audit.project_audit(state, history)
     first = target.read_bytes()
-    assert b"Work Unit 01 - Audit" in first
+    assert "Work Unit 01 – Planung".encode("utf-8") in first
     audit.project_audit(state, history)
 
     assert target.read_bytes() == first
