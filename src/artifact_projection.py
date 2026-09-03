@@ -160,23 +160,26 @@ def render_artifact_sections(records: Sequence[ArtifactRecord]) -> Mapping[str, 
     return render_replay_sections(_replay_for_projection(tuple(records)))
 
 
-def render_replay_sections(replay: ArtifactReplayResult) -> Mapping[str, str]:
-    """Render directly from one accepted, immutable replay result."""
-    chain = replay.records
-    digest = replay.semantic_digest
-    final_finding_statuses = dict(project_record_finding_statuses(replay))
-    reviews = {
-        Role.CLAUDE: [],
-    }
-    responses: list[str] = []
-    validations: list[str] = []
-    gates: list[str] = []
-    findings: list[str] = []
-    bindings_and_units: list[str] = []
-    latest_attempts: dict[tuple[str, int], tuple[int, ArtifactRecord]] = {}
-    input_measurements: dict[str, ProviderInputMeasurementPayload] = {}
+@dataclass(slots=True)
+class _ReplayRendering:
+    replay: ArtifactReplayResult
+    final_finding_statuses: dict[str, str]
+    reviews: dict[Role, list[str]]
+    responses: list[str]
+    validations: list[str]
+    gates: list[str]
+    findings: list[str]
+    bindings_and_units: list[str]
+    latest_attempts: dict[tuple[str, int], tuple[int, ArtifactRecord]]
+    input_measurements: dict[str, ProviderInputMeasurementPayload]
+    work_unit_rounds: dict[str, int]
+    convergence: dict[str, dict[str, Any]]
+    review_records_by_id: dict[str, ArtifactRecord]
+
+
+def _new_replay_rendering(replay: ArtifactReplayResult) -> _ReplayRendering:
     work_unit_rounds: dict[str, int] = {}
-    for record in chain:
+    for record in replay.records:
         if (
             isinstance(record.payload, (WorkUnitPayload, CorrectionWorkUnitPayload))
             and record.logical_id.startswith("work-unit-")
@@ -188,314 +191,461 @@ def render_replay_sections(replay: ArtifactReplayResult) -> Mapping[str, str]:
                 record.logical_id.removeprefix("work-unit-"),
                 record.payload.round_number,
             )
-    convergence: dict[str, dict[str, Any]] = {}
-    review_records_by_id = {
-        record.record_id: record
-        for record in chain
-        if isinstance(record.payload, ReviewPayload)
-    }
+    return _ReplayRendering(
+        replay=replay,
+        final_finding_statuses=dict(project_record_finding_statuses(replay)),
+        reviews={Role.CLAUDE: []},
+        responses=[],
+        validations=[],
+        gates=[],
+        findings=[],
+        bindings_and_units=[],
+        latest_attempts={},
+        input_measurements={},
+        work_unit_rounds=work_unit_rounds,
+        convergence={},
+        review_records_by_id={
+            record.record_id: record
+            for record in replay.records
+            if isinstance(record.payload, ReviewPayload)
+        },
+    )
 
-    for sequence, record in enumerate(chain, start=1):
-        payload = record.payload
-        prefix = f"{sequence}. `{_safe(record.record_id)}`"
-        if isinstance(payload, ProviderAttemptPayload):
-            latest_attempts[(payload.logical_operation_id, payload.attempt_number)] = (
-                sequence, record
-            )
-        elif isinstance(payload, ProviderInputMeasurementPayload):
-            input_measurements[record.record_id] = payload
-        if isinstance(payload, AgentResultPayload):
-            transport_schema = _safe(payload.transport_schema or "legacy-text")
-            request_id = _safe(payload.request_id or "–")
-            response_sha256 = payload.response_sha256 or "–"
-            round_number = work_unit_rounds.get(payload.work_unit_id, "–")
-            bindings_and_units.extend((
-                f"### {payload.role.value.title()} · Runde {round_number} · {_safe(payload.outcome)}",
-                "",
-                "| Seq/Record | Rolle | Runde | Status | Work-Unit | Tests | Transport | Request | Response | Fingerprint |",
-                "|---|---|---:|---|---|---|---|---|---|---|",
-                f"| {prefix} | `{payload.role.value}` | `{round_number}` | `{_safe(payload.outcome)}` | "
-                f"`{_safe(payload.work_unit_id)}` | {_codes(payload.test_files)} | "
-                f"`{transport_schema}` | `{request_id}` | `{response_sha256}` | "
-                f"`{record.fingerprint.sha256}` |",
-                "",
-            ))
-        elif isinstance(payload, ReviewPayload):
-            transport_schema = _safe(payload.transport_schema or "legacy-text")
-            request_id = _safe(payload.request_id or "–")
-            response_sha256 = payload.response_sha256 or "–"
-            round_number = work_unit_rounds.get(payload.work_unit_id, "–")
-            reviews[payload.reviewer].extend((
-                f"### {payload.reviewer.value.title()} · Runde {round_number} · {_safe(payload.verdict)}",
-                "",
-                "| Seq/Record | Rolle | Runde | Status | Work-Unit | Findings | Fingerprint | Transport | Request | Response |",
-                "|---|---|---:|---|---|---|---|---|---|---|",
-                f"| {prefix} | `{payload.reviewer.value}` | `{round_number}` | `{_safe(payload.verdict)}` | "
-                f"`{_safe(payload.work_unit_id)}` | {_codes(payload.finding_ids)} | "
-                f"`{record.fingerprint.sha256}` | `{transport_schema}` | `{request_id}` | "
-                f"`{response_sha256}` |",
-                "",
-            ))
-            if payload.review_evidence is not None:
-                reviews[payload.reviewer].extend((
-                    "#### Strukturierte Reviewevidenz",
-                    "",
-                    f"- Prüfdimensionen: {_prose(payload.review_evidence.dimensions)}",
-                    f"- Größtes Restrisiko: {_prose(payload.review_evidence.largest_residual_risk)}",
-                    f"- Realistische Bruchbedingung: {_prose(payload.review_evidence.break_condition)}",
-                    "",
-                ))
-            elif payload.evidence is not None:
-                reviews[payload.reviewer].extend((
-                    "#### Opake Legacy-Reviewevidenz",
-                    "",
-                    f"- Unzerlegter Bestandswert: {_prose(payload.evidence)}",
-                    "",
-                ))
-            if payload.red_state_followup_slice is not None:
-                reviews[payload.reviewer].extend((
-                    "#### Red-State-Autorisierung",
-                    "",
-                    f"- Gebundene Folgeslice: `{_safe(payload.red_state_followup_slice)}`",
-                    "",
-                ))
-            reviews[payload.reviewer].extend((
-                "#### Reviewvertrag",
-                "",
-                f"- Testdateien: {_codes(payload.test_files)}",
-                f"- Pre-Mortem: {_prose(payload.pre_mortem or '–')}",
-            ))
-            if payload.stop_request is not None:
-                reviews[payload.reviewer].extend((
-                    f"- Stop-Regel: `{_safe(payload.stop_request.rule_id)}`",
-                    f"- Stop-Begründung: {_prose(payload.stop_request.rationale)}",
-                    f"- Remediation-Pfade: {_codes(payload.stop_request.remediation_paths)}",
-                ))
-            reviews[payload.reviewer].append("")
-        elif isinstance(payload, ReviewAnchorPayload):
-            review_record = review_records_by_id[payload.review_record_id]
-            review_payload = review_record.payload
-            assert isinstance(review_payload, ReviewPayload)
-            reviews[review_payload.reviewer].extend((
-                "#### Review-Anker",
-                "",
-                f"- Gebundener Reviewrecord: `{_safe(payload.review_record_id)}`",
-            ))
-            if payload.anchors:
-                reviews[review_payload.reviewer].extend((
-                    "",
-                    "| Anchor | Ursprung | Fixture | Erwartung | Toleranz |",
-                    "|---|---|---|---|---|",
-                ))
-                for anchor in payload.anchors:
-                    reviews[review_payload.reviewer].append(
-                        f"| `{_safe(anchor.anchor_id)}` | {_table_prose(anchor.origin)} | "
-                        f"{_table_prose(anchor.input_fixture)} | {_table_prose(anchor.expected)} | "
-                        f"{_table_prose(anchor.tolerance)} |"
-                    )
-            else:
-                reviews[review_payload.reviewer].append("- Anker: keine")
-            reviews[review_payload.reviewer].append("")
-        elif isinstance(payload, ReviewValidationBindingPayload):
-            validations.extend((
-                "### Review-Validierungsbindung",
-                "",
-                "| Seq/Record | Reviewrecord | Attestierungsrecord | Fingerprint |",
-                "|---|---|---|---|",
-                f"| {prefix} | `{_safe(payload.review_record_id)}` | "
-                f"`{_safe(payload.attestation_record_id)}` | `{record.fingerprint.sha256}` |",
-                "",
-            ))
-        elif isinstance(payload, FindingTransitionPayload):
-            round_number = work_unit_rounds.get(payload.work_unit_id or "", "–")
-            line = (
-                f"| {prefix} | `{_safe(payload.finding_id)}` | `{payload.actor.value}` | "
-                f"`{round_number}` | `{_safe(payload.action)}` | `{payload.severity.value}` | "
-                f"`{_safe(payload.finding_status)}` | {_table_prose(payload.rationale)} |"
-            )
-            if not findings:
-                findings.extend((
-                    "### Finding-Ereignisse",
-                    "",
-                    "| Seq/Record | Finding | Rolle | Runde | Aktion | Klasse | Status | Begründung |",
-                    "|---|---|---|---:|---|---|---|---|",
-                ))
-            findings.append(line)
-            if payload.action == "responded":
-                if not responses:
-                    responses.extend((
-                        "### Codex · Findingantworten",
-                        "",
-                        "| Seq/Record | Finding | Rolle | Runde | Aktion | Klasse | Status | Begründung |",
-                        "|---|---|---|---:|---|---|---|---|",
-                    ))
-                responses.append(line)
-            if payload.work_unit_id is not None:
-                row = convergence.setdefault(
-                    payload.finding_id,
-                    {
-                        "work_units": [],
-                        "rounds": [],
-                        "fingerprints": [],
-                        "claude": [],
-                        "codex": [],
-                        "status": payload.finding_status,
-                    },
-                )
-                _append_unique(row["work_units"], payload.work_unit_id)
-                round_number = work_unit_rounds.get(payload.work_unit_id)
-                if round_number is None and payload.origin_round_number is not None:
-                    round_number = payload.origin_round_number
-                if round_number is not None:
-                    _append_unique(row["rounds"], str(round_number))
-                _append_unique(row["fingerprints"], record.fingerprint.sha256)
-                if payload.actor is Role.CLAUDE:
-                    _append_unique(
-                        row["claude"],
-                        f"{payload.action}:{payload.finding_status}",
-                    )
-                elif payload.actor is Role.CODEX and payload.action == "responded":
-                    _append_unique(
-                        row["codex"], payload.response_decision or "legacy-text"
-                    )
-                row["status"] = final_finding_statuses.get(
-                    payload.finding_id, payload.finding_status
-                )
-        elif isinstance(payload, FindingHandoffImportPayload):
-            bindings_and_units.extend((
-                "### Finding-Import · fremde Vorgeschichte",
-                "",
-                "| Seq/Record | Quell-Run | Quell-Head | Export | Plancommit | Review | Taskdigest |",
-                "|---|---|---|---|---|---|---|",
-                f"| {prefix} | `{_safe(payload.source_run_id)}` | `{payload.source_head_record_id}` | "
-                f"`{payload.export_record_id}` | `{payload.approved_plan_commit}` | "
-                f"`{payload.approval_review_record_id}` | `{payload.target_task_sha256}` |",
-                "",
-            ))
-            if not findings:
-                findings.extend((
-                    "### Finding-Ereignisse",
-                    "",
-                    "| Seq/Record | Finding | Rolle | Runde | Aktion | Klasse | Status | Begründung |",
-                    "|---|---|---|---:|---|---|---|---|",
-                ))
-            for imported in payload.transitions:
-                transition = imported.payload
-                findings.append(
-                    f"| {prefix} / `{imported.record_id}` | `{_safe(transition.finding_id)}` | "
-                    f"`{transition.actor.value}` | `{transition.origin_round_number or '–'}` | "
-                    f"`imported:{_safe(transition.action)}` | `{transition.severity.value}` | "
-                    f"`{_safe(transition.finding_status)}` | {_table_prose(transition.rationale)} |"
-                )
-        elif isinstance(payload, FindingHandoffExportPayload):
-            bindings_and_units.extend((
-                "### Finding-Handoff-Export",
-                "",
-                "| Seq/Record | Quell-Run | Prä-Export-Head | Plancommit | Review | Findingrecords | Zieltask | Taskdigest |",
-                "|---|---|---|---|---|---|---|---|",
-                f"| {prefix} | `{_safe(payload.source_run_id)}` | `{payload.source_head_record_id}` | "
-                f"`{payload.approved_plan_commit}` | `{payload.approval_review_record_id}` | "
-                f"{_codes(payload.finding_transition_record_ids)} | `{_safe(payload.target_task_path)}` | "
-                f"`{payload.target_task_sha256}` |",
-                "",
-            ))
-        elif isinstance(payload, ValidationRequestPayload):
-            commands = "; ".join(_command(item.argv, item.mode) for item in payload.commands)
-            validations.extend((
-                "### Validierungsanforderung",
-                "",
-                "| Seq/Record | Rolle | Befehle mit argv-Grenzen |",
-                "|---|---|---|",
-                f"| {prefix} | `{payload.requested_by.value}` | {commands} |",
-                "",
-            ))
-        elif isinstance(payload, ValidationAttestationPayload):
-            validations.extend((
-                "### Validierungsattestierung",
-                "",
-                "| Seq/Record | Rolle | Fingerprint |",
-                "|---|---|---|",
-                f"| {prefix} | `{payload.attested_by.value}` | `{record.fingerprint.sha256}` |",
-                "",
-                "| Status | Exit | Output-Digest | Befehl mit argv-Grenzen |",
-                "|---|---:|---|---|",
-            ))
-            for result in payload.results:
-                validations.append(
-                    f"| `{_safe(result.outcome)}` | `{result.exit_code}` | "
-                    f"`{result.output_sha256}` | {_command(result.command.argv, result.command.mode)} |"
-                )
-        elif isinstance(payload, ProviderInputMeasurementPayload):
-            components = ", ".join(
-                f"{_safe(item.name)}={item.chars}/{item.bytes}"
-                for item in payload.components
-            )
-            violations = ",".join(payload.violated_dimensions) or "none"
-            technical_source = _safe(payload.technical_limit_source or "unknown")
-            validations.append(
-                f"- {prefix}: Providerinput `{payload.provider.value}/{_safe(payload.operation)}` "
-                f"= `{'allowed' if payload.allowed else 'denied'}`; local_input_chars "
-                f"`{payload.total_chars}/{payload.effective_limit_chars}`, local_input_bytes "
-                f"`{payload.total_bytes}/{payload.effective_limit_bytes}`; local_input_digest "
-                f"`{payload.input_digest}`, Policy `{payload.policy_digest}`, Übergang "
-                f"`{payload.transition_fingerprint}`; technisches Limit "
-                f"`{payload.technical_limit_chars}/{payload.technical_limit_bytes}` "
-                f"(Quelle `{technical_source}`); Verletzung `{violations}`, Überhang "
-                f"`{payload.char_overage}/{payload.byte_overage}`, "
-                f"local_input_largest_component `{_safe(payload.largest_component)}`; "
-                f"local_input_component_count `{len(payload.components)}`; Komponenten "
-                f"`{components}`"
-            )
-        elif isinstance(payload, FinalReviewPreflightPayload):
-            affected_records = _codes(payload.affected_record_ids)
-            affected_paths = _codes(payload.affected_paths)
-            validations.append(
-                f"- {prefix}: Finalreview-Preflight `{_safe(payload.operation)}` = "
-                f"`{payload.outcome}`; Fehler `{_safe(payload.error_code or 'none')}`; "
-                f"Kategorie `{_safe(payload.category or 'none')}`; Records "
-                f"{affected_records}; Pfade {affected_paths}; Abhilfe "
-                f"`{_safe(payload.remediation or 'none')}`; "
-                f"Übergang `{payload.transition_fingerprint}`; Messung "
-                f"`{payload.measurement_record_id}`"
-            )
-        elif isinstance(payload, GatePayload):
-            if not gates:
-                gates.extend((
-                    "### Gate-Ereignisse",
-                    "",
-                    "| Seq/Record | Gate | Status | Autorität | Fingerprint | Begründung |",
-                    "|---|---|---|---|---|---|",
-                ))
-            gates.append(
-                f"| {prefix} | `{_safe(payload.gate_kind)}` | `{_safe(payload.decision)}` | "
-                f"`{payload.authority.value}` | `{record.fingerprint.sha256}` | "
-                f"{_table_prose(payload.rationale)} |"
-            )
-        elif isinstance(payload, (WorkUnitPayload, CorrectionWorkUnitPayload)):
-            kind = "Korrektur-Work-Unit" if isinstance(payload, CorrectionWorkUnitPayload) else "Work-Unit"
-            bindings_and_units.extend((
-                f"### {kind} · Slice {_safe(payload.slice_id)} · Runde {payload.round_number}",
-                "",
-                "| Seq/Record | Typ | Slice | Runde | Pfade | Findings |",
-                "|---|---|---|---:|---|---|",
-                f"| {prefix} | {kind} | `{_safe(payload.slice_id)}` | `{payload.round_number}` | "
-                f"{_codes(payload.paths)} | "
-                f"{_codes(payload.finding_ids) if isinstance(payload, CorrectionWorkUnitPayload) else _codes(payload.open_finding_ids)} |",
-                "",
-            ))
-        elif isinstance(payload, BindingPayload):
-            bindings_and_units.extend((
-                f"### Binding · {_safe(payload.binding_kind)}",
-                "",
-                "| Seq/Record | Art | Ziel | Attestierung | Approvals |",
-                "|---|---|---|---|---|",
-                f"| {prefix} | `{_safe(payload.binding_kind)}` | `{_safe(payload.target)}` | "
-                f"`{_safe(payload.attestation_id)}` | {_codes(payload.approval_ids)} |",
-                "",
-            ))
 
+def _collect_provider_rendering_fact(
+    rendering: _ReplayRendering,
+    sequence: int,
+    record: ArtifactRecord,
+) -> None:
+    payload = record.payload
+    if isinstance(payload, ProviderAttemptPayload):
+        rendering.latest_attempts[
+            (payload.logical_operation_id, payload.attempt_number)
+        ] = (sequence, record)
+    elif isinstance(payload, ProviderInputMeasurementPayload):
+        rendering.input_measurements[record.record_id] = payload
+
+
+def _render_agent_result_record(
+    rendering: _ReplayRendering,
+    record: ArtifactRecord,
+    payload: AgentResultPayload,
+    prefix: str,
+) -> None:
+    transport_schema = _safe(payload.transport_schema or "legacy-text")
+    request_id = _safe(payload.request_id or "–")
+    response_sha256 = payload.response_sha256 or "–"
+    round_number = rendering.work_unit_rounds.get(payload.work_unit_id, "–")
+    rendering.bindings_and_units.extend((
+        f"### {payload.role.value.title()} · Runde {round_number} · {_safe(payload.outcome)}",
+        "",
+        "| Seq/Record | Rolle | Runde | Status | Work-Unit | Tests | Transport | Request | Response | Fingerprint |",
+        "|---|---|---:|---|---|---|---|---|---|---|",
+        f"| {prefix} | `{payload.role.value}` | `{round_number}` | `{_safe(payload.outcome)}` | "
+        f"`{_safe(payload.work_unit_id)}` | {_codes(payload.test_files)} | "
+        f"`{transport_schema}` | `{request_id}` | `{response_sha256}` | "
+        f"`{record.fingerprint.sha256}` |",
+        "",
+    ))
+
+
+def _render_review_record(
+    rendering: _ReplayRendering,
+    record: ArtifactRecord,
+    payload: ReviewPayload,
+    prefix: str,
+) -> None:
+    transport_schema = _safe(payload.transport_schema or "legacy-text")
+    request_id = _safe(payload.request_id or "–")
+    response_sha256 = payload.response_sha256 or "–"
+    round_number = rendering.work_unit_rounds.get(payload.work_unit_id, "–")
+    output = rendering.reviews[payload.reviewer]
+    output.extend((
+        f"### {payload.reviewer.value.title()} · Runde {round_number} · {_safe(payload.verdict)}",
+        "",
+        "| Seq/Record | Rolle | Runde | Status | Work-Unit | Findings | Fingerprint | Transport | Request | Response |",
+        "|---|---|---:|---|---|---|---|---|---|---|",
+        f"| {prefix} | `{payload.reviewer.value}` | `{round_number}` | `{_safe(payload.verdict)}` | "
+        f"`{_safe(payload.work_unit_id)}` | {_codes(payload.finding_ids)} | "
+        f"`{record.fingerprint.sha256}` | `{transport_schema}` | `{request_id}` | "
+        f"`{response_sha256}` |",
+        "",
+    ))
+    if payload.review_evidence is not None:
+        output.extend((
+            "#### Strukturierte Reviewevidenz",
+            "",
+            f"- Prüfdimensionen: {_prose(payload.review_evidence.dimensions)}",
+            f"- Größtes Restrisiko: {_prose(payload.review_evidence.largest_residual_risk)}",
+            f"- Realistische Bruchbedingung: {_prose(payload.review_evidence.break_condition)}",
+            "",
+        ))
+    elif payload.evidence is not None:
+        output.extend((
+            "#### Opake Legacy-Reviewevidenz",
+            "",
+            f"- Unzerlegter Bestandswert: {_prose(payload.evidence)}",
+            "",
+        ))
+    if payload.red_state_followup_slice is not None:
+        output.extend((
+            "#### Red-State-Autorisierung",
+            "",
+            f"- Gebundene Folgeslice: `{_safe(payload.red_state_followup_slice)}`",
+            "",
+        ))
+    output.extend((
+        "#### Reviewvertrag",
+        "",
+        f"- Testdateien: {_codes(payload.test_files)}",
+        f"- Pre-Mortem: {_prose(payload.pre_mortem or '–')}",
+    ))
+    if payload.stop_request is not None:
+        output.extend((
+            f"- Stop-Regel: `{_safe(payload.stop_request.rule_id)}`",
+            f"- Stop-Begründung: {_prose(payload.stop_request.rationale)}",
+            f"- Remediation-Pfade: {_codes(payload.stop_request.remediation_paths)}",
+        ))
+    output.append("")
+
+
+def _render_review_anchor_record(
+    rendering: _ReplayRendering,
+    payload: ReviewAnchorPayload,
+) -> None:
+    review_record = rendering.review_records_by_id[payload.review_record_id]
+    review_payload = review_record.payload
+    assert isinstance(review_payload, ReviewPayload)
+    output = rendering.reviews[review_payload.reviewer]
+    output.extend((
+        "#### Review-Anker",
+        "",
+        f"- Gebundener Reviewrecord: `{_safe(payload.review_record_id)}`",
+    ))
+    if payload.anchors:
+        output.extend((
+            "",
+            "| Anchor | Ursprung | Fixture | Erwartung | Toleranz |",
+            "|---|---|---|---|---|",
+        ))
+        for anchor in payload.anchors:
+            output.append(
+                f"| `{_safe(anchor.anchor_id)}` | {_table_prose(anchor.origin)} | "
+                f"{_table_prose(anchor.input_fixture)} | {_table_prose(anchor.expected)} | "
+                f"{_table_prose(anchor.tolerance)} |"
+            )
+    else:
+        output.append("- Anker: keine")
+    output.append("")
+
+
+def _render_review_validation_binding_record(
+    rendering: _ReplayRendering,
+    record: ArtifactRecord,
+    payload: ReviewValidationBindingPayload,
+    prefix: str,
+) -> None:
+    rendering.validations.extend((
+        "### Review-Validierungsbindung",
+        "",
+        "| Seq/Record | Reviewrecord | Attestierungsrecord | Fingerprint |",
+        "|---|---|---|---|",
+        f"| {prefix} | `{_safe(payload.review_record_id)}` | "
+        f"`{_safe(payload.attestation_record_id)}` | `{record.fingerprint.sha256}` |",
+        "",
+    ))
+
+
+def _render_finding_transition_record(
+    rendering: _ReplayRendering,
+    record: ArtifactRecord,
+    payload: FindingTransitionPayload,
+    prefix: str,
+) -> None:
+    round_number = rendering.work_unit_rounds.get(payload.work_unit_id or "", "–")
+    line = (
+        f"| {prefix} | `{_safe(payload.finding_id)}` | `{payload.actor.value}` | "
+        f"`{round_number}` | `{_safe(payload.action)}` | `{payload.severity.value}` | "
+        f"`{_safe(payload.finding_status)}` | {_table_prose(payload.rationale)} |"
+    )
+    if not rendering.findings:
+        rendering.findings.extend((
+            "### Finding-Ereignisse",
+            "",
+            "| Seq/Record | Finding | Rolle | Runde | Aktion | Klasse | Status | Begründung |",
+            "|---|---|---|---:|---|---|---|---|",
+        ))
+    rendering.findings.append(line)
+    if payload.action == "responded":
+        if not rendering.responses:
+            rendering.responses.extend((
+                "### Codex · Findingantworten",
+                "",
+                "| Seq/Record | Finding | Rolle | Runde | Aktion | Klasse | Status | Begründung |",
+                "|---|---|---|---:|---|---|---|---|",
+            ))
+        rendering.responses.append(line)
+    if payload.work_unit_id is None:
+        return
+    row = rendering.convergence.setdefault(
+        payload.finding_id,
+        {
+            "work_units": [],
+            "rounds": [],
+            "fingerprints": [],
+            "claude": [],
+            "codex": [],
+            "status": payload.finding_status,
+        },
+    )
+    _append_unique(row["work_units"], payload.work_unit_id)
+    resolved_round = rendering.work_unit_rounds.get(payload.work_unit_id)
+    if resolved_round is None and payload.origin_round_number is not None:
+        resolved_round = payload.origin_round_number
+    if resolved_round is not None:
+        _append_unique(row["rounds"], str(resolved_round))
+    _append_unique(row["fingerprints"], record.fingerprint.sha256)
+    if payload.actor is Role.CLAUDE:
+        _append_unique(
+            row["claude"],
+            f"{payload.action}:{payload.finding_status}",
+        )
+    elif payload.actor is Role.CODEX and payload.action == "responded":
+        _append_unique(row["codex"], payload.response_decision or "legacy-text")
+    row["status"] = rendering.final_finding_statuses.get(
+        payload.finding_id, payload.finding_status
+    )
+
+
+def _render_finding_handoff_import_record(
+    rendering: _ReplayRendering,
+    payload: FindingHandoffImportPayload,
+    prefix: str,
+) -> None:
+    rendering.bindings_and_units.extend((
+        "### Finding-Import · fremde Vorgeschichte",
+        "",
+        "| Seq/Record | Quell-Run | Quell-Head | Export | Plancommit | Review | Taskdigest |",
+        "|---|---|---|---|---|---|---|",
+        f"| {prefix} | `{_safe(payload.source_run_id)}` | `{payload.source_head_record_id}` | "
+        f"`{payload.export_record_id}` | `{payload.approved_plan_commit}` | "
+        f"`{payload.approval_review_record_id}` | `{payload.target_task_sha256}` |",
+        "",
+    ))
+    if not rendering.findings:
+        rendering.findings.extend((
+            "### Finding-Ereignisse",
+            "",
+            "| Seq/Record | Finding | Rolle | Runde | Aktion | Klasse | Status | Begründung |",
+            "|---|---|---|---:|---|---|---|---|",
+        ))
+    for imported in payload.transitions:
+        transition = imported.payload
+        rendering.findings.append(
+            f"| {prefix} / `{imported.record_id}` | `{_safe(transition.finding_id)}` | "
+            f"`{transition.actor.value}` | `{transition.origin_round_number or '–'}` | "
+            f"`imported:{_safe(transition.action)}` | `{transition.severity.value}` | "
+            f"`{_safe(transition.finding_status)}` | {_table_prose(transition.rationale)} |"
+        )
+
+
+def _render_finding_handoff_export_record(
+    rendering: _ReplayRendering,
+    payload: FindingHandoffExportPayload,
+    prefix: str,
+) -> None:
+    rendering.bindings_and_units.extend((
+        "### Finding-Handoff-Export",
+        "",
+        "| Seq/Record | Quell-Run | Prä-Export-Head | Plancommit | Review | Findingrecords | Zieltask | Taskdigest |",
+        "|---|---|---|---|---|---|---|---|",
+        f"| {prefix} | `{_safe(payload.source_run_id)}` | `{payload.source_head_record_id}` | "
+        f"`{payload.approved_plan_commit}` | `{payload.approval_review_record_id}` | "
+        f"{_codes(payload.finding_transition_record_ids)} | `{_safe(payload.target_task_path)}` | "
+        f"`{payload.target_task_sha256}` |",
+        "",
+    ))
+
+
+def _render_validation_request_record(
+    rendering: _ReplayRendering,
+    payload: ValidationRequestPayload,
+    prefix: str,
+) -> None:
+    commands = "; ".join(_command(item.argv, item.mode) for item in payload.commands)
+    rendering.validations.extend((
+        "### Validierungsanforderung",
+        "",
+        "| Seq/Record | Rolle | Befehle mit argv-Grenzen |",
+        "|---|---|---|",
+        f"| {prefix} | `{payload.requested_by.value}` | {commands} |",
+        "",
+    ))
+
+
+def _render_validation_attestation_record(
+    rendering: _ReplayRendering,
+    record: ArtifactRecord,
+    payload: ValidationAttestationPayload,
+    prefix: str,
+) -> None:
+    rendering.validations.extend((
+        "### Validierungsattestierung",
+        "",
+        "| Seq/Record | Rolle | Fingerprint |",
+        "|---|---|---|",
+        f"| {prefix} | `{payload.attested_by.value}` | `{record.fingerprint.sha256}` |",
+        "",
+        "| Status | Exit | Output-Digest | Befehl mit argv-Grenzen |",
+        "|---|---:|---|---|",
+    ))
+    for result in payload.results:
+        rendering.validations.append(
+            f"| `{_safe(result.outcome)}` | `{result.exit_code}` | "
+            f"`{result.output_sha256}` | {_command(result.command.argv, result.command.mode)} |"
+        )
+
+
+def _render_provider_input_measurement_record(
+    rendering: _ReplayRendering,
+    payload: ProviderInputMeasurementPayload,
+    prefix: str,
+) -> None:
+    components = ", ".join(
+        f"{_safe(item.name)}={item.chars}/{item.bytes}"
+        for item in payload.components
+    )
+    violations = ",".join(payload.violated_dimensions) or "none"
+    technical_source = _safe(payload.technical_limit_source or "unknown")
+    rendering.validations.append(
+        f"- {prefix}: Providerinput `{payload.provider.value}/{_safe(payload.operation)}` "
+        f"= `{'allowed' if payload.allowed else 'denied'}`; local_input_chars "
+        f"`{payload.total_chars}/{payload.effective_limit_chars}`, local_input_bytes "
+        f"`{payload.total_bytes}/{payload.effective_limit_bytes}`; local_input_digest "
+        f"`{payload.input_digest}`, Policy `{payload.policy_digest}`, Übergang "
+        f"`{payload.transition_fingerprint}`; technisches Limit "
+        f"`{payload.technical_limit_chars}/{payload.technical_limit_bytes}` "
+        f"(Quelle `{technical_source}`); Verletzung `{violations}`, Überhang "
+        f"`{payload.char_overage}/{payload.byte_overage}`, "
+        f"local_input_largest_component `{_safe(payload.largest_component)}`; "
+        f"local_input_component_count `{len(payload.components)}`; Komponenten "
+        f"`{components}`"
+    )
+
+
+def _render_final_review_preflight_record(
+    rendering: _ReplayRendering,
+    payload: FinalReviewPreflightPayload,
+    prefix: str,
+) -> None:
+    affected_records = _codes(payload.affected_record_ids)
+    affected_paths = _codes(payload.affected_paths)
+    rendering.validations.append(
+        f"- {prefix}: Finalreview-Preflight `{_safe(payload.operation)}` = "
+        f"`{payload.outcome}`; Fehler `{_safe(payload.error_code or 'none')}`; "
+        f"Kategorie `{_safe(payload.category or 'none')}`; Records "
+        f"{affected_records}; Pfade {affected_paths}; Abhilfe "
+        f"`{_safe(payload.remediation or 'none')}`; "
+        f"Übergang `{payload.transition_fingerprint}`; Messung "
+        f"`{payload.measurement_record_id}`"
+    )
+
+
+def _render_gate_record(
+    rendering: _ReplayRendering,
+    record: ArtifactRecord,
+    payload: GatePayload,
+    prefix: str,
+) -> None:
+    if not rendering.gates:
+        rendering.gates.extend((
+            "### Gate-Ereignisse",
+            "",
+            "| Seq/Record | Gate | Status | Autorität | Fingerprint | Begründung |",
+            "|---|---|---|---|---|---|",
+        ))
+    rendering.gates.append(
+        f"| {prefix} | `{_safe(payload.gate_kind)}` | `{_safe(payload.decision)}` | "
+        f"`{payload.authority.value}` | `{record.fingerprint.sha256}` | "
+        f"{_table_prose(payload.rationale)} |"
+    )
+
+
+def _render_work_unit_record(
+    rendering: _ReplayRendering,
+    payload: WorkUnitPayload | CorrectionWorkUnitPayload,
+    prefix: str,
+) -> None:
+    is_correction = isinstance(payload, CorrectionWorkUnitPayload)
+    kind = "Korrektur-Work-Unit" if is_correction else "Work-Unit"
+    finding_ids = payload.finding_ids if is_correction else payload.open_finding_ids
+    rendering.bindings_and_units.extend((
+        f"### {kind} · Slice {_safe(payload.slice_id)} · Runde {payload.round_number}",
+        "",
+        "| Seq/Record | Typ | Slice | Runde | Pfade | Findings |",
+        "|---|---|---|---:|---|---|",
+        f"| {prefix} | {kind} | `{_safe(payload.slice_id)}` | `{payload.round_number}` | "
+        f"{_codes(payload.paths)} | {_codes(finding_ids)} |",
+        "",
+    ))
+
+
+def _render_binding_record(
+    rendering: _ReplayRendering,
+    payload: BindingPayload,
+    prefix: str,
+) -> None:
+    rendering.bindings_and_units.extend((
+        f"### Binding · {_safe(payload.binding_kind)}",
+        "",
+        "| Seq/Record | Art | Ziel | Attestierung | Approvals |",
+        "|---|---|---|---|---|",
+        f"| {prefix} | `{_safe(payload.binding_kind)}` | `{_safe(payload.target)}` | "
+        f"`{_safe(payload.attestation_id)}` | {_codes(payload.approval_ids)} |",
+        "",
+    ))
+
+
+def _render_record(
+    rendering: _ReplayRendering,
+    sequence: int,
+    record: ArtifactRecord,
+) -> None:
+    payload = record.payload
+    prefix = f"{sequence}. `{_safe(record.record_id)}`"
+    if isinstance(payload, AgentResultPayload):
+        _render_agent_result_record(rendering, record, payload, prefix)
+    elif isinstance(payload, ReviewPayload):
+        _render_review_record(rendering, record, payload, prefix)
+    elif isinstance(payload, ReviewAnchorPayload):
+        _render_review_anchor_record(rendering, payload)
+    elif isinstance(payload, ReviewValidationBindingPayload):
+        _render_review_validation_binding_record(rendering, record, payload, prefix)
+    elif isinstance(payload, FindingTransitionPayload):
+        _render_finding_transition_record(rendering, record, payload, prefix)
+    elif isinstance(payload, FindingHandoffImportPayload):
+        _render_finding_handoff_import_record(rendering, payload, prefix)
+    elif isinstance(payload, FindingHandoffExportPayload):
+        _render_finding_handoff_export_record(rendering, payload, prefix)
+    elif isinstance(payload, ValidationRequestPayload):
+        _render_validation_request_record(rendering, payload, prefix)
+    elif isinstance(payload, ValidationAttestationPayload):
+        _render_validation_attestation_record(rendering, record, payload, prefix)
+    elif isinstance(payload, ProviderInputMeasurementPayload):
+        _render_provider_input_measurement_record(rendering, payload, prefix)
+    elif isinstance(payload, FinalReviewPreflightPayload):
+        _render_final_review_preflight_record(rendering, payload, prefix)
+    elif isinstance(payload, GatePayload):
+        _render_gate_record(rendering, record, payload, prefix)
+    elif isinstance(payload, (WorkUnitPayload, CorrectionWorkUnitPayload)):
+        _render_work_unit_record(rendering, payload, prefix)
+    elif isinstance(payload, BindingPayload):
+        _render_binding_record(rendering, payload, prefix)
+
+
+def _render_provider_attempts(rendering: _ReplayRendering) -> None:
     attempts_by_operation: dict[str, list[tuple[int, ArtifactRecord]]] = {}
-    for (logical_operation_id, _attempt_number), value in latest_attempts.items():
+    for (logical_operation_id, _attempt_number), value in rendering.latest_attempts.items():
         attempts_by_operation.setdefault(logical_operation_id, []).append(value)
     usage_fields = tuple(ProviderUsagePayload.__dataclass_fields__)
     for logical_operation_id in sorted(attempts_by_operation):
@@ -534,7 +684,7 @@ def render_replay_sections(replay: ArtifactReplayResult) -> Mapping[str, str]:
             if isinstance(item.payload, ProviderAttemptPayload)
         )
         measurements = [
-            input_measurements.get(item.payload.measurement_record_id)
+            rendering.input_measurements.get(item.payload.measurement_record_id)
             for _, item in attempts
             if isinstance(item.payload, ProviderAttemptPayload)
         ]
@@ -558,8 +708,8 @@ def render_replay_sections(replay: ArtifactReplayResult) -> Mapping[str, str]:
             if len(attempts) > 1
             else "single-attempt"
         )
-        validations.append(
-            f"- Providerattempt-Summe Run `{_safe(replay.expected_run_id)}` / "
+        rendering.validations.append(
+            f"- Providerattempt-Summe Run `{_safe(rendering.replay.expected_run_id)}` / "
             f"Operation `{_safe(logical_operation_id)}` (`{first.provider.value}/"
             f"{_safe(first.operation)}`; Modell `{_safe(first.model)}`; Effort "
             f"`{_safe(first.effort)}`): Attempts `{len(attempts)}`, offen `{open_count}`, "
@@ -578,8 +728,8 @@ def render_replay_sections(replay: ArtifactReplayResult) -> Mapping[str, str]:
                 )
                 if payload.usage is not None else "unknown"
             )
-            measurement = input_measurements.get(payload.measurement_record_id)
-            validations.append(
+            measurement = rendering.input_measurements.get(payload.measurement_record_id)
+            rendering.validations.append(
                 f"  - {sequence}. `{record.record_id}`: Attempt `{payload.attempt_number}` "
                 f"= `{payload.phase}`; Messung `{payload.measurement_record_id}`; "
                 f"Modell `{_safe(payload.model)}`; Effort `{_safe(payload.effort)}`; "
@@ -589,50 +739,72 @@ def render_replay_sections(replay: ArtifactReplayResult) -> Mapping[str, str]:
                 f"Fehler `{_safe(payload.failure_kind or 'none')}`; Usage `{usage}`"
             )
 
-    header = f"Semantischer Record-Digest: `{digest}`"
+
+def _render_convergence_summary(rendering: _ReplayRendering) -> None:
+    if not rendering.convergence:
+        return
+    rendering.findings.extend(
+        (
+            "",
+            "### Native convergence summary",
+            "",
+            "| Finding | Work units | Rounds | Fingerprints | Claude decisions | Codex dispositions | Final status |",
+            "|---|---|---|---|---|---|---|",
+        )
+    )
+    for finding_id in sorted(rendering.convergence):
+        row = rendering.convergence[finding_id]
+        rendering.findings.append(
+            f"| `{_safe(finding_id)}` | {_table_values(row['work_units'])} | "
+            f"{_table_values(row['rounds'])} | "
+            f"{_table_values(row['fingerprints'])} | "
+            f"{_table_values(row['claude'])} | "
+            f"{_table_values(row['codex'])} | `{_safe(row['status'])}` |"
+        )
+
+
+def _render_record_ledger(records: Sequence[ArtifactRecord]) -> list[str]:
     ledger = [
         "| Seq | Record | Typ | Status | Logische ID | Revision | Fingerprint |",
         "|---:|---|---|---|---|---:|---|",
     ]
-    for sequence, record in enumerate(chain, start=1):
+    for sequence, record in enumerate(records, start=1):
         ledger.append(
             f"| {sequence} | `{record.record_id}` | `{record.record_type.value}` | "
             f"`{record.status}` | `{_safe(record.logical_id)}` | {record.revision} | "
             f"`{record.fingerprint.kind.value}:{record.fingerprint.sha256}` |"
         )
-    if not chain:
+    if not records:
         ledger.append("| – | – | – | – | – | – | – |")
+    return ledger
 
-    if convergence:
-        findings.extend(
-            (
-                "",
-                "### Native convergence summary",
-                "",
-                "| Finding | Work units | Rounds | Fingerprints | Claude decisions | Codex dispositions | Final status |",
-                "|---|---|---|---|---|---|---|",
-            )
-        )
-        for finding_id in sorted(convergence):
-            row = convergence[finding_id]
-            findings.append(
-                f"| `{_safe(finding_id)}` | {_table_values(row['work_units'])} | "
-                f"{_table_values(row['rounds'])} | "
-                f"{_table_values(row['fingerprints'])} | "
-                f"{_table_values(row['claude'])} | "
-                f"{_table_values(row['codex'])} | `{_safe(row['status'])}` |"
-            )
 
+def _finalize_replay_rendering(rendering: _ReplayRendering) -> Mapping[str, str]:
+    header = f"Semantischer Record-Digest: `{rendering.replay.semantic_digest}`"
     sections = {
-        "claude-review": _block(header, reviews[Role.CLAUDE], "Keine Claude-Review-Records."),
-        "codex-responses": _block(header, responses, "Keine Codex-Findingantworten."),
-        "validation-attestation": _block(header, validations, "Keine Validierungsrecords."),
-        "test-approval-premortem": _block(header, gates, "Keine strukturierten Gates."),
-        "findings": _block(header, findings, "Keine Finding-Übergänge."),
-        "decision-table": "\n\n".join((header, "\n".join(ledger))),
-        "approval-status": _block(header, bindings_and_units, "Keine Work-Unit- oder Binding-Records."),
+        "claude-review": _block(header, rendering.reviews[Role.CLAUDE], "Keine Claude-Review-Records."),
+        "codex-responses": _block(header, rendering.responses, "Keine Codex-Findingantworten."),
+        "validation-attestation": _block(header, rendering.validations, "Keine Validierungsrecords."),
+        "test-approval-premortem": _block(header, rendering.gates, "Keine strukturierten Gates."),
+        "findings": _block(header, rendering.findings, "Keine Finding-Übergänge."),
+        "decision-table": "\n\n".join((header, "\n".join(_render_record_ledger(rendering.replay.records)))),
+        "approval-status": _block(header, rendering.bindings_and_units, "Keine Work-Unit- oder Binding-Records."),
     }
     return finalize_projection_bindings(sections)
+
+
+def render_replay_sections(replay: ArtifactReplayResult) -> Mapping[str, str]:
+    """Render directly from one accepted, immutable replay result."""
+    rendering = _new_replay_rendering(replay)
+    chain = replay.records
+
+    for sequence, record in enumerate(chain, start=1):
+        _collect_provider_rendering_fact(rendering, sequence, record)
+        _render_record(rendering, sequence, record)
+
+    _render_provider_attempts(rendering)
+    _render_convergence_summary(rendering)
+    return _finalize_replay_rendering(rendering)
 
 
 _FULL_HEX_PATTERN = re.compile(r"(?<![0-9A-Fa-f])([0-9a-f]{64}|[0-9a-f]{40})(?![0-9A-Fa-f])")
