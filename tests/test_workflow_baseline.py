@@ -35,7 +35,7 @@ DRIVER_PATH = ROOT / "src/orchestrator.py"
 
 EXPECTED_INTERNAL_IMPORTS = {
     "artifact_bridge",
-    "artifact_migration",
+    "artifact_resume",
     "artifact_models",
     "artifact_replay",
     "final_review_preflight",

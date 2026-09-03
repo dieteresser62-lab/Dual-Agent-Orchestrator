@@ -4,12 +4,13 @@ from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
+import subprocess
 
 import pytest
 
-import artifact_migration
+import artifact_resume
 from artifact_bridge import ArtifactBridge
-from artifact_migration import ArtifactResumeError, resolve_resume_state
+from artifact_resume import ArtifactResumeError, resolve_resume_state
 from artifact_models import FingerprintKind, canonical_json
 from artifact_replay import STATE_PROJECTION_REDUCER_VERSION
 from artifact_store import ArtifactStore
@@ -29,6 +30,32 @@ from workflow_state import (
     WorkUnitKind,
     init_workflow_state,
 )
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_retired_resume_module_name_is_absent_from_versioned_tree() -> None:
+    retired_name = b"artifact_" + b"migration"
+    archived_history = "docs/internal/" + "archive/"
+    listed = subprocess.run(
+        ["git", "ls-files", "-z"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+    ).stdout
+    hits: list[str] = []
+    for raw_path in listed.split(b"\0"):
+        if not raw_path:
+            continue
+        relative = raw_path.decode("utf-8")
+        if relative.startswith(("inbox/backlog/", archived_history)):
+            continue
+        path = ROOT / relative
+        if path.is_file() and retired_name in path.read_bytes():
+            hits.append(relative)
+
+    assert not hits, "retired resume module name remains in: " + ", ".join(hits)
 
 
 def _record_run(
@@ -367,14 +394,14 @@ def test_unknown_or_mutated_record_bytes_remain_fail_closed(
     ),
 )
 def test_resume_source_has_no_workflow_cache_field_reader(field: str) -> None:
-    source = Path(artifact_migration.__file__).read_text(encoding="utf-8")
+    source = Path(artifact_resume.__file__).read_text(encoding="utf-8")
 
     assert f"state.{field}" not in source
     assert f"state_or_run_id.{field}" not in source
 
 
 def test_cutover_source_has_no_specialized_recoverable_or_mismatch_language() -> None:
-    source = Path(artifact_migration.__file__).read_text(encoding="utf-8")
+    source = Path(artifact_resume.__file__).read_text(encoding="utf-8")
 
     assert "_recoverable_" not in source
     assert "differs from state-v3" not in source

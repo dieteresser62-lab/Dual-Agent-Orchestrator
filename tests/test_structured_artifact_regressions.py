@@ -24,7 +24,7 @@ from artifact_bridge import (
     finding_payload,
     review_payload,
 )
-from artifact_migration import resolve_resume_state
+from artifact_resume import resolve_resume_state
 from artifact_models import (
     ArtifactRecord,
     BindingPayload,

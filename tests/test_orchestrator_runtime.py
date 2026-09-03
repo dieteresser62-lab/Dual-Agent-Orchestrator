@@ -67,7 +67,7 @@ from artifact_models import (
     canonical_json,
 )
 from artifact_store import ArtifactStore
-from artifact_migration import ArtifactResumeError, resolve_resume_state
+from artifact_resume import ArtifactResumeError, resolve_resume_state
 from cli import parse_args
 from contracts import (
     AgentRole,

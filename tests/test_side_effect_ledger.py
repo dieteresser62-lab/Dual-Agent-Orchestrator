@@ -9,7 +9,7 @@ import inbox_watcher
 import pytest
 
 from artifact_bridge import ArtifactBridge, provider_input_measurement_payload
-from artifact_migration import ArtifactResumeError, require_side_effect_ledger_prefix
+from artifact_resume import ArtifactResumeError, require_side_effect_ledger_prefix
 from artifact_models import (
     ArtifactRecord,
     ArtifactValidationError,

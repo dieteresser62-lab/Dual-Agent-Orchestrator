@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 import orchestrator
-from artifact_migration import ArtifactResumeError
+from artifact_resume import ArtifactResumeError
 from cli import parse_args
 from inbox_watcher import (
     WatchTaskDisposition,

@@ -271,7 +271,7 @@ def test_crash_harness_is_complete_but_not_in_default_slice_validation() -> None
 def test_record_authority_module_headers_match_the_root_contract() -> None:
     required_by_module = {
         "artifact_bridge.py": ("technical authority", "disposable run locator"),
-        "artifact_migration.py": ("only technical authority", "disposable run locator"),
+        "artifact_resume.py": ("only technical authority", "disposable run locator"),
         "artifact_replay.py": ("authoritative structured record chain", "reducer version"),
     }
     for filename, fragments in required_by_module.items():

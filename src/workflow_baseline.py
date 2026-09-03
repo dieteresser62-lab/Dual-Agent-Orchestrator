@@ -16,7 +16,7 @@ from artifact_bridge import (
     plan_payload,
     provider_input_measurement_payload,
 )
-from artifact_migration import (
+from artifact_resume import (
     ArtifactResumeError,
     require_gate_prefix,
     require_side_effect_ledger_prefix,

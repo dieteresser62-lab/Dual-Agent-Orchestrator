@@ -319,11 +319,11 @@ WORKFLOW_STATE_FIELD_INVENTORY = {
 }
 
 COMPARISON_TARGETS = (
-    ("src/artifact_migration.py", None, "resolve_resume_state"),
-    ("src/artifact_migration.py", None, "require_workflow_status_prefix"),
-    ("src/artifact_migration.py", None, "require_workflow_event_prefix"),
-    ("src/artifact_migration.py", None, "require_gate_prefix"),
-    ("src/artifact_migration.py", None, "require_side_effect_ledger_prefix"),
+    ("src/artifact_resume.py", None, "resolve_resume_state"),
+    ("src/artifact_resume.py", None, "require_workflow_status_prefix"),
+    ("src/artifact_resume.py", None, "require_workflow_event_prefix"),
+    ("src/artifact_resume.py", None, "require_gate_prefix"),
+    ("src/artifact_resume.py", None, "require_side_effect_ledger_prefix"),
     ("src/artifact_replay.py", None, "_validate_payload_references"),
     ("src/artifact_bridge.py", None, "finding_handoff_export_payload"),
     ("src/artifact_bridge.py", None, "finding_handoff_import_payload"),
@@ -410,7 +410,7 @@ STRICT_BODY_TARGETS = tuple(
     for target in COMPARISON_TARGETS
     if (
         target[0] in {
-            "src/artifact_migration.py",
+            "src/artifact_resume.py",
             "src/final_review_preflight.py",
         }
         and target[2] != "resolve_resume_state"
@@ -431,11 +431,11 @@ STRICT_BODY_TARGETS = tuple(
 # non-divergence comparison added inside one of these boundaries forces S2's
 # inventory to be reviewed instead of silently aging.
 EXPECTED_COMPARISON_COUNTS = {
-    "src/artifact_migration.py:resolve_resume_state": 1,
-    "src/artifact_migration.py:require_workflow_status_prefix": 3,
-    "src/artifact_migration.py:require_workflow_event_prefix": 6,
-    "src/artifact_migration.py:require_gate_prefix": 1,
-    "src/artifact_migration.py:require_side_effect_ledger_prefix": 4,
+    "src/artifact_resume.py:resolve_resume_state": 1,
+    "src/artifact_resume.py:require_workflow_status_prefix": 3,
+    "src/artifact_resume.py:require_workflow_event_prefix": 6,
+    "src/artifact_resume.py:require_gate_prefix": 1,
+    "src/artifact_resume.py:require_side_effect_ledger_prefix": 4,
     "src/artifact_replay.py:_validate_payload_references": 188,
     "src/artifact_bridge.py:finding_handoff_export_payload": 5,
     "src/artifact_bridge.py:finding_handoff_import_payload": 8,
@@ -503,10 +503,10 @@ EXPECTED_COMPARISON_COUNTS = {
 
 EXPECTED_STRICT_BODY_DIGESTS = {
     "src/artifact_bridge.py:review_payload_matches_result": "b3233be38c3e4729058eba7ffd325fc94d29d4f08bd5ccfd08de0e3557eaf612",
-    "src/artifact_migration.py:require_workflow_status_prefix": "964d356480288034c6dc52de377c2326c06d2db50d6aae52fd2b3d5dbcc5bdec",
-    "src/artifact_migration.py:require_workflow_event_prefix": "baf1ce7cd7ef465131f9779714b33b34d5e929f10c19c48b7a92b68089543d5a",
-    "src/artifact_migration.py:require_gate_prefix": "67196c4e07c9c428033a8bf93726a93adc22a66929cbf975019913bf60979b82",
-    "src/artifact_migration.py:require_side_effect_ledger_prefix": "7803832a9e825309cbbecf6b49d54d9dad15f2eeb0a973d803d90ae324acb7fd",
+    "src/artifact_resume.py:require_workflow_status_prefix": "964d356480288034c6dc52de377c2326c06d2db50d6aae52fd2b3d5dbcc5bdec",
+    "src/artifact_resume.py:require_workflow_event_prefix": "baf1ce7cd7ef465131f9779714b33b34d5e929f10c19c48b7a92b68089543d5a",
+    "src/artifact_resume.py:require_gate_prefix": "67196c4e07c9c428033a8bf93726a93adc22a66929cbf975019913bf60979b82",
+    "src/artifact_resume.py:require_side_effect_ledger_prefix": "7803832a9e825309cbbecf6b49d54d9dad15f2eeb0a973d803d90ae324acb7fd",
     "src/final_review_preflight.py:run_final_review_preflight": "8ea919e177653eee0f5c6ecac64ee1598f58b33126dfa1df6ab1eb0a04caac61",
     "src/final_review_preflight.py:_approved_external_paths": "24a9647addbf8df21fba7ecd0e25164e7237b00eb9c831bd7ee7b9ce1b8f5439",
     "src/workflow_audit_projection.py:_persisted_histories": "46d16ba2f5f168dbb9f86da548b7c370305003fa27f39d3979423f76f53b8d86",
@@ -700,13 +700,13 @@ def test_every_matrix_edge_has_all_fields_and_exactly_one_classification() -> No
 
 
 def test_migration_comparison_inventory_is_source_bound() -> None:
-    source = _source("src/artifact_migration.py")
-    source_strings = _string_constants("src/artifact_migration.py")
+    source = _source("src/artifact_resume.py")
+    source_strings = _string_constants("src/artifact_resume.py")
     document = MATRIX_PATH.read_text(encoding="utf-8")
-    assert _raise_count("src/artifact_migration.py", "mismatch") == 0
+    assert _raise_count("src/artifact_resume.py", "mismatch") == 0
     assert source.count("differs from state-v3") == 0
     assert source.count("_recoverable_") == 0
-    assert _raise_count("src/artifact_migration.py", "ArtifactResumeError") > 0
+    assert _raise_count("src/artifact_resume.py", "ArtifactResumeError") > 0
     for marker in (
         "has no records; restore its record directory before resuming",
         "structured-v2 record chain for run",
@@ -716,7 +716,7 @@ def test_migration_comparison_inventory_is_source_bound() -> None:
     for marker in (
         "`_recoverable_*`: **5 → 0**",
         "`differs from state-v3`: **20 → 0**",
-        "`mismatch(...)` in `artifact_migration.py`: **44 → 0**",
+        "`mismatch(...)` in `artifact_resume.py`: **44 → 0**",
     ):
         assert marker in document
     assert RUN_BINDING_REPLAY_MARKER in _string_constants("src/artifact_replay.py")
@@ -725,7 +725,7 @@ def test_migration_comparison_inventory_is_source_bound() -> None:
 
 def test_structured_decision_paths_do_not_read_the_state_cache() -> None:
     resolver = _function_node(
-        "src/artifact_migration.py", None, "resolve_resume_state"
+        "src/artifact_resume.py", None, "resolve_resume_state"
     )
     locator_attributes = {
         node.attr
@@ -759,7 +759,7 @@ def test_structured_decision_paths_do_not_read_the_state_cache() -> None:
 
 def test_bridge_error_inventory_is_source_bound() -> None:
     paths = (
-        "src/artifact_migration.py",
+        "src/artifact_resume.py",
         "src/artifact_bridge.py",
         "src/orchestrator.py",
         "src/workflow_production.py",

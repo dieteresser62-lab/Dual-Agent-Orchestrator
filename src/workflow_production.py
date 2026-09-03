@@ -9,7 +9,7 @@ from typing import Any, Callable, Protocol
 from agent_adapters import build_agent_registry
 from agent_runtime import OrchestratorConfig
 from artifact_bridge import ArtifactBridgeError
-from artifact_migration import ArtifactResumeError, resolve_resume_state
+from artifact_resume import ArtifactResumeError, resolve_resume_state
 from artifact_replay import ArtifactReplayError
 from artifact_store import ArtifactStore
 from audit_trail import ValidationAuditEvent

@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Callable, Protocol
 
 from artifact_bridge import ArtifactBridge
-from artifact_migration import ArtifactResumeError, resolve_resume_state
+from artifact_resume import ArtifactResumeError, resolve_resume_state
 from artifact_replay import ArtifactReplayResult, replay_artifacts
 from audit_trail import (
     AuditProjection,

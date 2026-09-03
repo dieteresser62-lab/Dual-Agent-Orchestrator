@@ -13,7 +13,7 @@ import pytest
 import repo_changes
 from agent_runtime import AgentProcessError, QuotaReachedError
 from artifact_bridge import ArtifactBridgeError, finding_handoff_export_payload
-from artifact_migration import ArtifactResumeError
+from artifact_resume import ArtifactResumeError
 from artifact_models import (
     AgentResultPayload,
     ArtifactRecord,

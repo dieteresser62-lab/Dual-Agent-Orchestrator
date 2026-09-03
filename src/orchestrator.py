@@ -31,7 +31,7 @@ from artifact_bridge import (
     finding_payload as finding_payload,
     finding_handoff_export_payload,
 )
-from artifact_migration import (
+from artifact_resume import (
     ArtifactResumeError,
     resolve_resume_state,
 )

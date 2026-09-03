@@ -32,7 +32,7 @@ from artifact_models import (
     WorkUnitPayload,
     technical_text_evidence,
 )
-from artifact_migration import resolve_resume_state
+from artifact_resume import resolve_resume_state
 from artifact_replay import ArtifactReplayError, replay_artifacts, replay_findings
 from artifact_store import ArtifactStore
 from content_authority_support import (

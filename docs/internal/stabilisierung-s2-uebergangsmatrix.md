@@ -32,8 +32,8 @@ Die Inventur umfasst 26 Kanten. Die S4b-Abnahme misst im relevanten
 Vorher-/Nachher-Scope:
 
 - `_recoverable_*`: **5 → 0**
-- `differs from state-v3`: **20 → 0** in `artifact_migration.py`
-- `mismatch(...)` in `artifact_migration.py`: **44 → 0**
+- `differs from state-v3`: **20 → 0** in `artifact_resume.py`
+- `mismatch(...)` in `artifact_resume.py`: **44 → 0**
 
 Es gibt in diesen drei Inventaren keinen Rest zu begründen. Die weiterhin
 bewussten Prüfungen sind Record-interne Kausalität, unveränderliche
@@ -1488,7 +1488,7 @@ Record nicht zur aktuell gebundenen Work-unit gehört.
    Bündeln landen, weil bereits der erste Dispatch diese Fakten liest.
 2. **Cursor und Work-unit-/Slice-Status.** Aktuelle IDs/Steps, beide Statusarten,
    `codex_return_count` und `max_codex_returns`. Module: `workflow_state.py`, `workflow.py`,
-   `artifact_models.py`, `artifact_replay.py`, `artifact_migration.py`. Benötigt
+   `artifact_models.py`, `artifact_replay.py`, `artifact_resume.py`. Benötigt
    Bündel 1 und muss vor Side-effect-Reconciliation vorhanden sein.
 3. **Slice-Startgrenze und Scopefingerprint.** `start_commit`,
    `scope_change_groups`, `start_fingerprint`. Module: `git_service.py`,
@@ -1521,7 +1521,7 @@ Record nicht zur aktuell gebundenen Work-unit gehört.
 9. **Restliche Historyprojektion.** Nur die nach Bündel 1 bis 8 noch
    verbleibenden Event-/Auditfelder; normativen Rest recorden, reine
    Darstellungswerte explizit entfernen. Module: `workflow.py`,
-   `audit_trail.py`, `artifact_projection.py`, `artifact_migration.py`. Dieses
+   `audit_trail.py`, `artifact_projection.py`, `artifact_resume.py`. Dieses
    Abschlussbündel hängt von allen vorigen ab und liefert die unmittelbare
    S4b-Vorbedingung.
 

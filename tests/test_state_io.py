@@ -7,7 +7,7 @@ from dataclasses import replace
 
 import pytest
 
-from artifact_migration import ArtifactResumeError
+from artifact_resume import ArtifactResumeError
 
 from state_io import (
     ActiveV2StateError,

@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from artifact_bridge import ArtifactBridge
-from artifact_migration import ArtifactResumeError, require_workflow_event_prefix
+from artifact_resume import ArtifactResumeError, require_workflow_event_prefix
 from artifact_models import (
     CommandSpec,
     CorrectionWorkUnitPayload,

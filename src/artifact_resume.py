@@ -271,7 +271,7 @@ def _validate_finding_handoff(
         )
 
     try:
-        # Lazy import avoids the state_io -> artifact_migration -> bridge ->
+        # Lazy import avoids the state_io -> artifact_resume -> bridge ->
         # task_contract -> audit_trail -> state_io initialization cycle.
         from artifact_bridge import (
             ArtifactBridgeError,

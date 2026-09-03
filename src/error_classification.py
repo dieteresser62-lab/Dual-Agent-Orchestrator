@@ -20,7 +20,7 @@ from agent_runtime import (
     QuotaReachedError,
 )
 from artifact_bridge import ArtifactBridgeError
-from artifact_migration import ArtifactResumeError
+from artifact_resume import ArtifactResumeError
 from artifact_models import ArtifactValidationError
 from artifact_projection import ArtifactProjectionError
 from artifact_replay import ArtifactReplayError

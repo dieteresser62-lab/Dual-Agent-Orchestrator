@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Mapping
 
 from path_policy import PathPolicyError, resolve_path_within_roots
-from artifact_migration import ArtifactResumeError, ResumeResolution, resolve_resume_state
+from artifact_resume import ArtifactResumeError, ResumeResolution, resolve_resume_state
 from artifact_models import canonical_json
 from artifact_replay import STATE_PROJECTION_REDUCER_VERSION
 from workflow_state import ProtocolBinding, WorkflowState, WorkflowStateValidationError

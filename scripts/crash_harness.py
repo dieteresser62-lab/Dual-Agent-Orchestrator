@@ -28,8 +28,8 @@ from artifact_bridge import (
     provider_input_measurement_payload,
     review_payload_matches_result,
 )
-import artifact_migration
-from artifact_migration import ArtifactResumeError, resolve_resume_state
+import artifact_resume
+from artifact_resume import ArtifactResumeError, resolve_resume_state
 from artifact_models import (
     SIDE_EFFECT_CLASSES,
     BindingPayload,
@@ -1020,14 +1020,14 @@ def prove_foreign_reducer_rejected_before_state(root: Path) -> Mapping[str, obje
     ).hexdigest()
     path.write_bytes(canonical_json(document) + b"\n")
     projection_call_count = 0
-    original_project = artifact_migration.project_workflow_state
+    original_project = artifact_resume.project_workflow_state
 
     def count_projection(*args: object, **kwargs: object) -> object:
         nonlocal projection_call_count
         projection_call_count += 1
         return original_project(*args, **kwargs)
 
-    artifact_migration.project_workflow_state = count_projection
+    artifact_resume.project_workflow_state = count_projection
     try:
         try:
             resolve_resume_state(run_root, run_id)
@@ -1040,7 +1040,7 @@ def prove_foreign_reducer_rejected_before_state(root: Path) -> Mapping[str, obje
         else:  # pragma: no cover - fail-closed invariant
             raise CrashHarnessError("foreign reducer binding was accepted")
     finally:
-        artifact_migration.project_workflow_state = original_project
+        artifact_resume.project_workflow_state = original_project
     if projection_call_count != 0:
         raise CrashHarnessError("foreign reducer reached workflow-state projection")
     return {
