@@ -1,0 +1,37 @@
+{
+  "schema_version": "production-entry-derived-terms-b47-v1",
+  "source_commit": "e5657a9a29e0772c45e57e31dd19be713188c1c4",
+  "source_blob": "c3e83c1f014b84e142a1ac439b05c758086bf0bf",
+  "derived_terms": [
+    {
+      "name": "new_watch_task",
+      "assignment_expression": "watch_run and (force_new or (not state_file.exists() and (not watch_run_has_records(root, run_id))))",
+      "read_names": [
+        "force_new",
+        "root",
+        "run_id",
+        "state_file",
+        "watch_run",
+        "watch_run_has_records"
+      ]
+    },
+    {
+      "name": "replacement_requested",
+      "assignment_expression": "force_new or (bool(args.force_overwrite_state) and (not bool(args.resume)))",
+      "read_names": [
+        "args",
+        "bool",
+        "force_new"
+      ]
+    },
+    {
+      "name": "effective_resume",
+      "assignment_expression": "bool(args.resume and (not new_watch_task))",
+      "read_names": [
+        "args",
+        "bool",
+        "new_watch_task"
+      ]
+    }
+  ]
+}

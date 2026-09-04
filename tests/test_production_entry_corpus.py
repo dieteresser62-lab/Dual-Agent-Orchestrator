@@ -7,8 +7,9 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
+import sys
 import time
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
@@ -24,6 +25,12 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "src/workflow_production.py"
 STATIC_BASELINE = ROOT / "tests/fixtures/production-entry-pre-b46-v1.json"
 RUNTIME_BASELINE = ROOT / "tests/fixtures/production-entry-runtime-pre-b46-v1.json"
+RUNTIME_B47_EXTENSION = (
+    ROOT / "tests/fixtures/production-entry-runtime-b47-extension-v1.json"
+)
+DERIVED_TERMS_BASELINE = (
+    ROOT / "tests/fixtures/production-entry-derived-terms-b47-v1.json"
+)
 SOURCE_TEXT = SOURCE.read_text(encoding="utf-8")
 SOURCE_TREE = ast.parse(SOURCE_TEXT, filename=str(SOURCE))
 ENTRY_HELPERS = frozenset(
@@ -171,7 +178,86 @@ SCENARIOS: tuple[dict[str, Any], ...] = (
         "classification": "new",
         "state_exists": True,
     },
+    {
+        "scenario_id": "watch-records-without-state",
+        "classification": "resuming",
+        "watch_run_id": "watch-records-without-state",
+        "persisted_run_id": "watch-records-without-state",
+        "resume": True,
+        "records_exist": True,
+        "bind_branch_prepared": True,
+    },
+    {
+        "scenario_id": "watch-records-without-state-force-new",
+        "classification": "new",
+        "watch_run_id": "watch-records-without-state-force-new",
+        "persisted_run_id": "watch-records-without-state-force-new",
+        "resume": True,
+        "records_exist": True,
+        "force_new": True,
+        "bind_branch_prepared": True,
+    },
+    {
+        "scenario_id": "watch-records-with-state",
+        "classification": "resuming",
+        "watch_run_id": "watch-records-with-state",
+        "persisted_run_id": "watch-records-with-state",
+        "state_exists": True,
+        "resume": True,
+        "records_exist": True,
+        "bind_branch_prepared": True,
+    },
+    {
+        "scenario_id": "watch-without-records-or-state",
+        "classification": "new",
+        "watch_run_id": "watch-without-records-or-state",
+        "persisted_run_id": "watch-without-records-or-state",
+        "resume": True,
+        "bind_branch_prepared": True,
+    },
 )
+
+DERIVED_TERM_NAMES = (
+    "new_watch_task",
+    "replacement_requested",
+    "effective_resume",
+)
+TERM_MUTATION_SCENARIOS = {
+    "new_watch_task": "watch-records-without-state",
+    "replacement_requested": "existing-state-without-selection",
+    "effective_resume": "watch-without-records-or-state",
+}
+TERM_MUTATION_EXPECTATIONS = {
+    "new_watch_task": {
+        "classification": "new",
+        "new_watch_task": True,
+        "branch_prepared": True,
+        "has_loop_boundary": True,
+        "driver_factory_calls": [{"replace_existing_run_id": None}],
+        "has_first_checkpoint": True,
+        "error_type": None,
+    },
+    "replacement_requested": {
+        "classification": "replacing",
+        "new_watch_task": False,
+        "branch_prepared": None,
+        "has_loop_boundary": True,
+        "driver_factory_calls": [
+            {"replace_existing_run_id": "persisted-run"}
+        ],
+        "has_first_checkpoint": True,
+        "error_type": None,
+    },
+    "effective_resume": {
+        "classification": "new",
+        "new_watch_task": True,
+        "branch_prepared": True,
+        "has_loop_boundary": False,
+        "driver_factory_calls": [],
+        "has_first_checkpoint": False,
+        "error_type": "StateSchemaError",
+    },
+}
 
 
 def _function(tree: ast.Module, name: str) -> ast.FunctionDef:
@@ -201,6 +287,40 @@ def _decision_fact(node: ast.If, ordinal: int) -> dict[str, object]:
                 for descendant in ast.walk(node.test)
                 if isinstance(descendant, ast.Name)
                 and isinstance(descendant.ctx, ast.Load)
+            }
+        ),
+    }
+
+
+def _assignment(tree: ast.Module, name: str) -> ast.Assign:
+    owner_name = (
+        "_read_production_task"
+        if name == "new_watch_task"
+        else "run_production_workflow"
+    )
+    owner = _function(tree, owner_name)
+    matches = [
+        node
+        for node in ast.walk(owner)
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == name
+    ]
+    assert len(matches) == 1
+    return matches[0]
+
+
+def _assignment_fact(tree: ast.Module, name: str) -> dict[str, object]:
+    assignment = _assignment(tree, name)
+    return {
+        "name": name,
+        "assignment_expression": ast.unparse(assignment.value),
+        "read_names": sorted(
+            {
+                node.id
+                for node in ast.walk(assignment.value)
+                if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
             }
         ),
     }
@@ -343,7 +463,12 @@ def _state_projection(state: object, scenario_root: Path) -> dict[str, object]:
     }
 
 
-def _run_scenario(base: Path, spec: dict[str, Any]) -> dict[str, object]:
+def _run_scenario(
+    base: Path,
+    spec: dict[str, Any],
+    *,
+    production_module: ModuleType = workflow_production,
+) -> dict[str, object]:
     scenario_root = base / spec["scenario_id"]
     inbox = scenario_root / "inbox"
     inbox.mkdir(parents=True)
@@ -354,7 +479,9 @@ def _run_scenario(base: Path, spec: dict[str, Any]) -> dict[str, object]:
         state_file.parent.mkdir(parents=True)
         state_file.write_text("pre-cut cache sentinel\n", encoding="utf-8")
 
-    loaded_state = _state(task.resolve(), "persisted-run")
+    loaded_state = _state(
+        task.resolve(), spec.get("persisted_run_id", "persisted-run")
+    )
     mutation = spec.get("mutation")
     if mutation is not None:
         object.__setattr__(loaded_state, mutation[0], mutation[1])
@@ -362,6 +489,11 @@ def _run_scenario(base: Path, spec: dict[str, Any]) -> dict[str, object]:
     checkpoint_records: list[dict[str, object]] = []
     boundary_states: list[dict[str, object]] = []
     factory_calls: list[dict[str, object]] = []
+    fresh_state_calls: list[None] = []
+    load_workflow_calls: list[None] = []
+    resumed_profile_calls: list[None] = []
+    prepared_branch_calls: list[None] = []
+    observed_new_watch_task: list[bool] = []
 
     class CapturingDriver:
         def checkpoint(self, state, history) -> None:
@@ -382,6 +514,7 @@ def _run_scenario(base: Path, spec: dict[str, Any]) -> dict[str, object]:
         return CapturingDriver()
 
     def fresh_state(**kwargs):
+        fresh_state_calls.append(None)
         contract = kwargs["task_contract"]
         return init_workflow_state(
             run_id=kwargs["run_id"],
@@ -400,9 +533,12 @@ def _run_scenario(base: Path, spec: dict[str, Any]) -> dict[str, object]:
             timestamp="2026-09-04T00:00:00+00:00",
         )
 
-    dependencies = workflow_production.ProductionWorkflowDependencies(
+    def apply_resumed_agent_profiles(_args, _state) -> None:
+        resumed_profile_calls.append(None)
+
+    dependencies = production_module.ProductionWorkflowDependencies(
         driver_factory=driver_factory,
-        apply_resumed_agent_profiles=lambda _args, _state: None,
+        apply_resumed_agent_profiles=apply_resumed_agent_profiles,
         archive_stale_untracked_audit_reports=lambda *_args, **_kwargs: None,
         attach_managed_audit_paths=lambda state: state,
         bound_task_control_paths=lambda *_args: (),
@@ -426,6 +562,7 @@ def _run_scenario(base: Path, spec: dict[str, Any]) -> dict[str, object]:
     )
 
     def load_workflow(*_args, **_kwargs):
+        load_workflow_calls.append(None)
         if spec.get("load_error") == "StateSchemaError":
             raise StateSchemaError("replacement cache is malformed")
         return loaded_state
@@ -443,35 +580,53 @@ def _run_scenario(base: Path, spec: dict[str, Any]) -> dict[str, object]:
             head="b" * 40,
         ),
     )
+
+    def prepare_branch(*_args, **_kwargs):
+        prepared_branch_calls.append(None)
+        return prepared
+
     error: dict[str, str] | None = None
     with pytest.MonkeyPatch.context() as monkeypatch:
         monkeypatch.chdir(scenario_root)
-        monkeypatch.setattr(workflow_production, "new_run_id", lambda: "candidate-run")
+        original_prepare_new_watch_task = production_module._prepare_new_watch_task
+
+        def capture_new_watch_task(**kwargs):
+            observed_new_watch_task.append(kwargs["new_watch_task"])
+            return original_prepare_new_watch_task(**kwargs)
+
         monkeypatch.setattr(
-            workflow_production, "watch_run_has_records", lambda *_args: False
+            production_module,
+            "_prepare_new_watch_task",
+            capture_new_watch_task,
+        )
+        monkeypatch.setattr(production_module, "new_run_id", lambda: "candidate-run")
+        monkeypatch.setattr(
+            production_module,
+            "watch_run_has_records",
+            lambda *_args: spec.get("records_exist", False),
         )
         monkeypatch.setattr(
-            workflow_production,
+            production_module,
             "prepare_new_watch_task_branch",
-            lambda *_args, **_kwargs: prepared,
+            prepare_branch,
         )
-        monkeypatch.setattr(workflow_production, "load_workflow_state", load_workflow)
+        monkeypatch.setattr(production_module, "load_workflow_state", load_workflow)
         monkeypatch.setattr(
-            workflow_production, "load_resumable_workflow_state", load_resumable
-        )
-        monkeypatch.setattr(
-            workflow_production, "build_agent_registry", lambda _settings: {}
+            production_module, "load_resumable_workflow_state", load_resumable
         )
         monkeypatch.setattr(
-            workflow_production,
+            production_module, "build_agent_registry", lambda _settings: {}
+        )
+        monkeypatch.setattr(
+            production_module,
             "require_production_workflow_loop_driver",
             lambda _driver: None,
         )
         monkeypatch.setattr(
-            workflow_production, "WorkflowEngine", lambda _driver: object()
+            production_module, "WorkflowEngine", lambda _driver: object()
         )
         try:
-            workflow_production.run_production_workflow(
+            production_module.run_production_workflow(
                 task,
                 args,
                 dependencies,
@@ -482,19 +637,82 @@ def _run_scenario(base: Path, spec: dict[str, Any]) -> dict[str, object]:
         except (ActiveV2StateError, StateSchemaError) as exc:
             error = {"type": type(exc).__name__, "message": str(exc)}
 
-    new_watch_task = bool(args.watch_run_id) and (
-        spec.get("force_new", False) or not spec.get("state_exists", False)
-    )
+    if resumed_profile_calls:
+        classification = "resuming"
+    elif fresh_state_calls:
+        classification = "replacing" if load_workflow_calls else "new"
+    else:
+        classification = spec["classification"]
+    assert len(observed_new_watch_task) == 1
+    new_watch_task = observed_new_watch_task[0]
     state_projection = boundary_states[0] if boundary_states else None
-    return {
+    result = {
         "scenario_id": spec["scenario_id"],
-        "classification": spec["classification"],
+        "classification": classification,
         "new_watch_task": new_watch_task,
         "state_at_loop_boundary": state_projection,
         "driver_factory_calls": factory_calls,
         "first_checkpoint_records": checkpoint_records,
         "error": error,
     }
+    if spec.get("bind_branch_prepared"):
+        result["branch_prepared"] = bool(prepared_branch_calls)
+    return result
+
+
+def _remove_derived_term_conjunct(tree: ast.Module, name: str) -> None:
+    expression = _assignment(tree, name).value
+    if name == "new_watch_task":
+        assert isinstance(expression, ast.BoolOp) and isinstance(expression.op, ast.And)
+        choice = expression.values[1]
+        assert isinstance(choice, ast.BoolOp) and isinstance(choice.op, ast.Or)
+        record_guard = choice.values[1]
+        assert isinstance(record_guard, ast.BoolOp) and isinstance(
+            record_guard.op, ast.And
+        )
+        assert ast.unparse(record_guard.values[1]) == (
+            "not watch_run_has_records(root, run_id)"
+        )
+        choice.values[1] = record_guard.values[0]
+        return
+    if name == "replacement_requested":
+        assert isinstance(expression, ast.BoolOp) and isinstance(expression.op, ast.Or)
+        overwrite_guard = expression.values[1]
+        assert isinstance(overwrite_guard, ast.BoolOp) and isinstance(
+            overwrite_guard.op, ast.And
+        )
+        assert ast.unparse(overwrite_guard.values[0]) == (
+            "bool(args.force_overwrite_state)"
+        )
+        expression.values[1] = overwrite_guard.values[1]
+        return
+    if name == "effective_resume":
+        assert isinstance(expression, ast.Call) and len(expression.args) == 1
+        resume_guard = expression.args[0]
+        assert isinstance(resume_guard, ast.BoolOp) and isinstance(
+            resume_guard.op, ast.And
+        )
+        assert ast.unparse(resume_guard.values[1]) == "not new_watch_task"
+        expression.args[0] = resume_guard.values[0]
+        return
+    raise AssertionError(f"unbound derived term: {name}")
+
+
+def _compile_derived_term_mutant(name: str) -> ModuleType:
+    tree = copy.deepcopy(SOURCE_TREE)
+    _remove_derived_term_conjunct(tree, name)
+    ast.fix_missing_locations(tree)
+    module_name = f"_b47_workflow_production_mutant_{name}"
+    mutant = ModuleType(module_name)
+    mutant.__file__ = str(SOURCE)
+    mutant.__package__ = ""
+    sys.modules[module_name] = mutant
+    try:
+        exec(compile(tree, str(SOURCE), "exec"), mutant.__dict__)
+    except BaseException:
+        sys.modules.pop(module_name, None)
+        raise
+    return mutant
 
 
 _CORPUS_BUILD_COUNT = 0
@@ -517,6 +735,17 @@ def _load_json(path: Path) -> dict[str, object]:
     document = json.loads(path.read_text(encoding="utf-8"))
     assert isinstance(document, dict)
     return document
+
+
+def _expected_runtime_corpus() -> dict[str, object]:
+    baseline = _load_json(RUNTIME_BASELINE)
+    extension = _load_json(RUNTIME_B47_EXTENSION)
+    assert extension["schema_version"] == "production-entry-runtime-b47-extension-v1"
+    assert extension["extends"] == RUNTIME_BASELINE.name
+    return {
+        **baseline,
+        "scenarios": [*baseline["scenarios"], *extension["scenarios"]],
+    }
 
 
 @pytest.fixture(scope="session")
@@ -560,10 +789,36 @@ def test_four_catchers_and_transition_loop_match_pre_cut_anchor() -> None:
     ]
 
 
+def test_b47_product_source_remains_byte_identical_to_b46() -> None:
+    baseline = _load_json(DERIVED_TERMS_BASELINE)
+    assert baseline["schema_version"] == "production-entry-derived-terms-b47-v1"
+    anchored_blob = subprocess.check_output(
+        (
+            "git",
+            "rev-parse",
+            f"{baseline['source_commit']}:src/workflow_production.py",
+        ),
+        cwd=ROOT,
+        text=True,
+    ).strip()
+    working_blob = subprocess.check_output(
+        ("git", "hash-object", str(SOURCE)), cwd=ROOT, text=True
+    ).strip()
+    assert anchored_blob == baseline["source_blob"]
+    assert working_blob == baseline["source_blob"]
+
+
+def test_b47_derived_term_assignments_are_anchored() -> None:
+    baseline = _load_json(DERIVED_TERMS_BASELINE)
+    assert [
+        _assignment_fact(SOURCE_TREE, name) for name in DERIVED_TERM_NAMES
+    ] == baseline["derived_terms"]
+
+
 def test_provider_free_runtime_corpus_matches_pre_cut_baseline(
     production_entry_corpus: BuiltEntryCorpus,
 ) -> None:
-    assert production_entry_corpus.document == _load_json(RUNTIME_BASELINE)
+    assert production_entry_corpus.document == _expected_runtime_corpus()
 
 
 def test_runtime_scenarios_are_built_once_and_cover_all_entry_contract_guards(
@@ -590,6 +845,72 @@ def test_runtime_scenarios_are_built_once_and_cover_all_entry_contract_guards(
             assert len(item["first_checkpoint_records"]) == 1
         else:
             assert item["first_checkpoint_records"] == []
+
+
+def test_watch_record_authority_scenarios_bind_entry_outcomes(
+    production_entry_corpus: BuiltEntryCorpus,
+) -> None:
+    scenarios = {
+        item["scenario_id"]: item
+        for item in production_entry_corpus.document["scenarios"]
+    }
+    expected = {
+        "watch-records-without-state": ("resuming", False),
+        "watch-records-without-state-force-new": ("new", True),
+        "watch-records-with-state": ("resuming", False),
+        "watch-without-records-or-state": ("new", True),
+    }
+    assert list(scenarios)[-4:] == list(expected)
+    for scenario_id, (classification, branch_prepared) in expected.items():
+        scenario = scenarios[scenario_id]
+        assert scenario["classification"] == classification
+        assert scenario["new_watch_task"] is branch_prepared
+        assert scenario["branch_prepared"] is branch_prepared
+        assert scenario["state_at_loop_boundary"] is not None
+        assert scenario["state_at_loop_boundary"]["run_id"] == scenario_id
+        assert scenario["driver_factory_calls"] == [
+            {"replace_existing_run_id": None}
+        ]
+        assert scenario["first_checkpoint_records"] == [
+            {
+                "checkpoint_ordinal": 1,
+                "state_run_id": scenario_id,
+                "history_work_unit_id": 1,
+            }
+        ]
+
+
+@pytest.mark.parametrize("term_name", DERIVED_TERM_NAMES)
+def test_removing_a_derived_term_conjunct_turns_runtime_corpus_red(
+    term_name: str, tmp_path: Path
+) -> None:
+    scenario_id = TERM_MUTATION_SCENARIOS[term_name]
+    spec = next(spec for spec in SCENARIOS if spec["scenario_id"] == scenario_id)
+    expected = next(
+        scenario
+        for scenario in _expected_runtime_corpus()["scenarios"]
+        if scenario["scenario_id"] == scenario_id
+    )
+    control = _run_scenario(tmp_path / term_name / "control", spec)
+    assert control == expected
+    mutant = _compile_derived_term_mutant(term_name)
+    try:
+        actual = _run_scenario(
+            tmp_path / term_name / "mutant", spec, production_module=mutant
+        )
+    finally:
+        sys.modules.pop(mutant.__name__, None)
+    assert actual != expected
+    actual_projection = {
+        "classification": actual["classification"],
+        "new_watch_task": actual["new_watch_task"],
+        "branch_prepared": actual.get("branch_prepared"),
+        "has_loop_boundary": actual["state_at_loop_boundary"] is not None,
+        "driver_factory_calls": actual["driver_factory_calls"],
+        "has_first_checkpoint": bool(actual["first_checkpoint_records"]),
+        "error_type": actual["error"]["type"] if actual["error"] else None,
+    }
+    assert actual_projection == TERM_MUTATION_EXPECTATIONS[term_name]
 
 
 def test_swapping_two_entry_decisions_turns_static_anchor_red() -> None:

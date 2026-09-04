@@ -1,0 +1,126 @@
+{
+  "schema_version": "production-entry-runtime-b47-extension-v1",
+  "extends": "production-entry-runtime-pre-b46-v1.json",
+  "scenarios": [
+    {
+      "scenario_id": "watch-records-without-state",
+      "classification": "resuming",
+      "new_watch_task": false,
+      "state_at_loop_boundary": {
+        "run_id": "watch-records-without-state",
+        "task_file": "inbox/task.md",
+        "task_digest": "ad1c6afb4e52e2609713266898950abddf771215aa1c5dfca335332c510bf56b",
+        "execution_mode": "IMPLEMENT",
+        "task_scope_patterns": [
+          "src/workflow_production.py",
+          "tests/test_production_entry_corpus.py"
+        ],
+        "audit_report_path": "docs/internal/task-audit.md"
+      },
+      "driver_factory_calls": [
+        {
+          "replace_existing_run_id": null
+        }
+      ],
+      "first_checkpoint_records": [
+        {
+          "checkpoint_ordinal": 1,
+          "state_run_id": "watch-records-without-state",
+          "history_work_unit_id": 1
+        }
+      ],
+      "error": null,
+      "branch_prepared": false
+    },
+    {
+      "scenario_id": "watch-records-without-state-force-new",
+      "classification": "new",
+      "new_watch_task": true,
+      "state_at_loop_boundary": {
+        "run_id": "watch-records-without-state-force-new",
+        "task_file": "inbox/task.md",
+        "task_digest": "ad1c6afb4e52e2609713266898950abddf771215aa1c5dfca335332c510bf56b",
+        "execution_mode": "IMPLEMENT",
+        "task_scope_patterns": [
+          "src/workflow_production.py",
+          "tests/test_production_entry_corpus.py"
+        ],
+        "audit_report_path": "docs/internal/task-audit.md"
+      },
+      "driver_factory_calls": [
+        {
+          "replace_existing_run_id": null
+        }
+      ],
+      "first_checkpoint_records": [
+        {
+          "checkpoint_ordinal": 1,
+          "state_run_id": "watch-records-without-state-force-new",
+          "history_work_unit_id": 1
+        }
+      ],
+      "error": null,
+      "branch_prepared": true
+    },
+    {
+      "scenario_id": "watch-records-with-state",
+      "classification": "resuming",
+      "new_watch_task": false,
+      "state_at_loop_boundary": {
+        "run_id": "watch-records-with-state",
+        "task_file": "inbox/task.md",
+        "task_digest": "ad1c6afb4e52e2609713266898950abddf771215aa1c5dfca335332c510bf56b",
+        "execution_mode": "IMPLEMENT",
+        "task_scope_patterns": [
+          "src/workflow_production.py",
+          "tests/test_production_entry_corpus.py"
+        ],
+        "audit_report_path": "docs/internal/task-audit.md"
+      },
+      "driver_factory_calls": [
+        {
+          "replace_existing_run_id": null
+        }
+      ],
+      "first_checkpoint_records": [
+        {
+          "checkpoint_ordinal": 1,
+          "state_run_id": "watch-records-with-state",
+          "history_work_unit_id": 1
+        }
+      ],
+      "error": null,
+      "branch_prepared": false
+    },
+    {
+      "scenario_id": "watch-without-records-or-state",
+      "classification": "new",
+      "new_watch_task": true,
+      "state_at_loop_boundary": {
+        "run_id": "watch-without-records-or-state",
+        "task_file": "inbox/task.md",
+        "task_digest": "ad1c6afb4e52e2609713266898950abddf771215aa1c5dfca335332c510bf56b",
+        "execution_mode": "IMPLEMENT",
+        "task_scope_patterns": [
+          "src/workflow_production.py",
+          "tests/test_production_entry_corpus.py"
+        ],
+        "audit_report_path": "docs/internal/task-audit.md"
+      },
+      "driver_factory_calls": [
+        {
+          "replace_existing_run_id": null
+        }
+      ],
+      "first_checkpoint_records": [
+        {
+          "checkpoint_ordinal": 1,
+          "state_run_id": "watch-without-records-or-state",
+          "history_work_unit_id": 1
+        }
+      ],
+      "error": null,
+      "branch_prepared": true
+    }
+  ]
+}
