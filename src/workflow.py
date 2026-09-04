@@ -94,6 +94,7 @@ from workflow_state import (
     WorkflowState,
     WorkflowStep,
     WorkUnitKind,
+    WorkUnitRecord,
     WorkUnitStatus,
     NATIVE_CLAUDE_REVIEW_TRANSPORT,
     NATIVE_CODEX_RESULT_TRANSPORT,
@@ -1435,12 +1436,18 @@ class WorkflowEngine:
             resume_step=next_step,
         )
 
-    def _run_codex(
+    def _prepare_agent_dispatch(
         self,
         state: WorkflowState,
         context: WorkflowContext,
         history: WorkflowHistory,
-    ) -> tuple[WorkflowState, WorkflowHistory]:
+    ) -> tuple[
+        bool,
+        CodexStepContract,  # allowlist:provider -- typed boundary
+        CodexInvocation,  # allowlist:provider -- typed boundary
+        NativeAgentCodexOutput | None,  # allowlist:provider -- typed boundary
+        WorkflowHistory,
+    ]:
         unit = state.current_work_unit
         is_plan = state.current_step in (
             WorkflowStep.CODEX_PLAN,
@@ -1547,6 +1554,17 @@ class WorkflowEngine:
                 )
             else:
                 history = authoritative_history
+        return is_plan, contract, invocation, recovered, history
+
+    def _run_codex(
+        self,
+        state: WorkflowState,
+        context: WorkflowContext,
+        history: WorkflowHistory,
+    ) -> tuple[WorkflowState, WorkflowHistory]:
+        is_plan, contract, invocation, recovered, history = (
+            self._prepare_agent_dispatch(state, context, history)
+        )
         state, output = self._invoke_role(
             state,
             history,
@@ -1554,6 +1572,24 @@ class WorkflowEngine:
             AgentRole.CODEX,
             lambda: recovered or self.driver.invoke_codex(invocation),
         )
+        return self._apply_agent_output(
+            state,
+            context,
+            history,
+            is_plan,
+            invocation,
+            output,
+        )
+
+    def _apply_agent_output(
+        self,
+        state: WorkflowState,
+        context: WorkflowContext,
+        history: WorkflowHistory,
+        is_plan: bool,
+        invocation: CodexInvocation,  # allowlist:provider -- typed boundary
+        output: NativeAgentCodexOutput | None,  # allowlist:provider -- typed boundary
+    ) -> tuple[WorkflowState, WorkflowHistory]:
         if output is None:
             return state, history
         if not isinstance(output, NativeAgentCodexOutput):
@@ -2023,119 +2059,42 @@ class WorkflowEngine:
         self.driver.checkpoint(state, history)
         return state, history
 
-    def _run_review(
+    def _collect_review_dispatch_changes(
+        self,
+        start_commit: str,
+    ) -> WorkflowChanges:
+        return self.driver.collect_changes(start_commit)
+
+    def _collect_review_dispatch_attestation(
+        self,
+        changes: WorkflowChanges,
+        history: WorkflowHistory,
+        context: WorkflowContext,
+        unit: WorkUnitRecord,
+        is_plan_review: bool,
+    ) -> tuple[ValidationAttestation, WorkflowHistory]:
+        return self._attestation(
+            changes,
+            history,
+            context,
+            unit.slice_id,
+            plan_contract=(
+                (is_plan_review and unit.kind is WorkUnitKind.PLAN)
+                or context.plan_only
+            ),
+        )
+
+    def _select_review_evidence(
         self,
         state: WorkflowState,
         context: WorkflowContext,
         history: WorkflowHistory,
         reviewer: AgentRole,
-    ) -> tuple[WorkflowState, WorkflowHistory]:
-        unit = state.current_work_unit
-        if reviewer is not AgentRole.CLAUDE:
-            raise WorkflowExecutionError("only Claude may execute review steps")
-        is_plan_review = state.current_step is WorkflowStep.CLAUDE_PLAN_REVIEW
-        is_final_review = state.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW
-        start_commit = state.branch_base if is_final_review else (
-            state.current_slice.start_commit or state.branch_base
-        )
-        try:
-            changes = self.driver.collect_changes(start_commit)
-        except NoWorkflowChangesError as exc:
-            state = state.await_policy_gate(
-                reason=GateReason.STOP_REQUEST,
-                detail=f"NO-IMPLEMENTATION-CHANGES | {exc}",
-            )
-            self.driver.checkpoint(state, history)
-            return state, history
-        unexpected = self._validate_change_boundary(
-            state, changes, unit.kind, context=context
-        )
-        if unexpected:
-            state = state.await_user_gate(
-                reason=GateReason.UNEXPECTED_FILE,
-                detail=(
-                    f"{UNEXPECTED_PATH_RULE_ID} | canonical changes contain paths "
-                    f"outside the persisted Slice scope: {', '.join(unexpected)}"
-                ),
-                fingerprint=changes.fingerprint,
-                paths=unexpected,
-            )
-            self.driver.checkpoint(state, history)
-            return state, history
-        state, test_changes_approved, halted = self._apply_test_change_gate(
-            state, context, changes
-        )
-        if halted:
-            self.driver.checkpoint(state, history)
-            return state, history
-        detected_test_changes = (
-            self.driver.detect_test_changes(changes, context.test_path_patterns)
-            if context.dynamic_test_scope
-            else None
-        )
-        expected_test_files = (
-            detected_test_changes.paths
-            if detected_test_changes is not None
-            else ()
-            if context.dynamic_test_scope
-            else context.expected_test_files
-        )
-        try:
-            attestation, history = self._attestation(
-                changes,
-                history,
-                context,
-                unit.slice_id,
-                plan_contract=(
-                    (is_plan_review and unit.kind is WorkUnitKind.PLAN)
-                    or context.plan_only
-                ),
-            )
-        except ValidationExecutionError as exc:
-            state = state.await_policy_gate(
-                reason=GateReason.STOP_REQUEST,
-                detail=f"{VALIDATION_UNAVAILABLE_RULE_ID} | {exc}",
-            )
-            self.driver.checkpoint(state, history)
-            return state, history
-        # Project the newly appended attestation before
-        # invoking Claude. The idempotent checkpoint protects record-ahead recovery.
-        self.driver.checkpoint(state, history)
-        if not attestation.complete:
-            raise WorkflowExecutionError(
-                "validation attestation is incomplete and cannot be overridden"
-            )
-        review_round = (
-            1
-            + sum(
-                isinstance(event, ReviewAuditEvent)
-                and event.result.reviewer is reviewer
-                for event in history.events
-            )
-        )
-        contract = StepContract(
-            name=f"work-unit-{unit.work_unit_id}-{state.current_step.value}",
-            reviewer=reviewer,
-            approval_marker=(
-                ApprovalMarker.PLAN
-                if is_plan_review
-                else ApprovalMarker.FINAL
-                if is_final_review
-                else ApprovalMarker.SLICE
-            ),
-            slice_id="FINAL" if is_final_review else f"{unit.slice_id:02d}",
-            round_number=review_round,
-            review_fingerprint=changes.fingerprint,
-            validation_attestation=attestation,
-            expected_test_files=(expected_test_files if not is_plan_review else ()),
-            test_changes_approved=test_changes_approved,
-            red_state_followup_slice=context.red_state_followup_slice,
-            existing_finding_ids=tuple(
-                sorted(finding.finding_id for finding in history.findings)
-            ),
-            allow_new_observations=unit.kind is not WorkUnitKind.CORRECTION,
-        )
-        review_packet: ReviewPacket | None = None
+        unit: WorkUnitRecord,
+        changes: WorkflowChanges,
+        is_plan_review: bool,
+        is_final_review: bool,
+    ) -> tuple[EvidenceKind, str]:
         if is_final_review:
             evidence_kind = EvidenceKind.FULL_BRANCH
             review_diff = changes.full_diff
@@ -2162,57 +2121,65 @@ class WorkflowEngine:
         else:
             evidence_kind = EvidenceKind.FULL_SLICE
             review_diff = changes.full_diff
-        if (
-            not is_plan_review
-            and not is_final_review
-            and context.approved_plan_text is not None
-        ):
-            start_fingerprint = state.current_slice.start_fingerprint
-            if start_fingerprint is None:
-                raise WorkflowExecutionError(
-                    "Slice review packet requires a persisted start fingerprint"
-                )
-            packet_purpose = (
-                "correction"
-                if evidence_kind is EvidenceKind.CORRECTION_DELTA
-                else "slice"
-            )
-            try:
-                packet_paths = tuple(
-                    path
-                    for path in changes.paths
-                    if path != context.audit_report_path
-                    and not path.startswith(".orchestrator/")
-                    and not path.startswith("docs/internal/slice-")
-                )
-                excluded_packet_paths = tuple(
-                    path for path in changes.paths if path not in packet_paths
-                )
-                review_packet = build_review_packet(
-                    purpose=packet_purpose,
-                    fingerprint=changes.fingerprint,
-                    start_fingerprint=start_fingerprint,
-                    paths=packet_paths,
-                    review_diff=exclude_review_diff_paths(
-                        review_diff, excluded_packet_paths
-                    ),
-                    plan_text=context.approved_plan_text,
-                    slice_id=unit.slice_id,
-                    attestation=attestation,
-                    findings=history.findings,
-                    affected_finding_ids=(
-                        unit.open_findings
-                        if packet_purpose == "correction"
-                        else ()
-                    ),
-                )
-            except ReviewPacketError as exc:
-                raise WorkflowExecutionError(
-                    f"canonical review packet could not be built: {exc}"
-                ) from exc
-            self._persist_structured(self.driver.persist_review_packet, review_packet)
-            history = replace(history, active_review_packet=review_packet)
-            self.driver.checkpoint(state, history)
+        return evidence_kind, review_diff
+
+    def _build_review_dispatch_packet(
+        self,
+        context: WorkflowContext,
+        history: WorkflowHistory,
+        unit: WorkUnitRecord,
+        changes: WorkflowChanges,
+        review_diff: str,
+        attestation: ValidationAttestation,
+        start_fingerprint: str,
+        packet_purpose: str,
+    ) -> ReviewPacket:
+        packet_paths = tuple(
+            path
+            for path in changes.paths
+            if path != context.audit_report_path
+            and not path.startswith(".orchestrator/")
+            and not path.startswith("docs/internal/slice-")
+        )
+        excluded_packet_paths = tuple(
+            path for path in changes.paths if path not in packet_paths
+        )
+        return build_review_packet(
+            purpose=packet_purpose,
+            fingerprint=changes.fingerprint,
+            start_fingerprint=start_fingerprint,
+            paths=packet_paths,
+            review_diff=exclude_review_diff_paths(
+                review_diff, excluded_packet_paths
+            ),
+            plan_text=context.approved_plan_text,
+            slice_id=unit.slice_id,
+            attestation=attestation,
+            findings=history.findings,
+            affected_finding_ids=(
+                unit.open_findings
+                if packet_purpose == "correction"
+                else ()
+            ),
+        )
+
+    def _dispatch_native_review(
+        self,
+        state: WorkflowState,
+        context: WorkflowContext,
+        history: WorkflowHistory,
+        reviewer: AgentRole,
+        unit: WorkUnitRecord,
+        contract: StepContract,
+        changes: WorkflowChanges,
+        evidence_kind: EvidenceKind,
+        review_diff: str,
+        review_packet: ReviewPacket | None,
+        expected_test_files: tuple[str, ...],
+        is_plan_review: bool,
+        is_final_review: bool,
+        review_round: int,
+    ) -> tuple[WorkflowState, WorkflowHistory]:
         native_request = workflow_requests.native_review_request(
             state=state,
             context=context,
@@ -2290,6 +2257,176 @@ class WorkflowEngine:
             is_plan_review=is_plan_review,
             is_final_review=is_final_review,
             user_gate_paths=changes.user_gate_paths,
+        )
+
+    def _run_review(
+        self,
+        state: WorkflowState,
+        context: WorkflowContext,
+        history: WorkflowHistory,
+        reviewer: AgentRole,
+    ) -> tuple[WorkflowState, WorkflowHistory]:
+        unit = state.current_work_unit
+        if reviewer is not AgentRole.CLAUDE:
+            raise WorkflowExecutionError("only Claude may execute review steps")
+        is_plan_review = state.current_step is WorkflowStep.CLAUDE_PLAN_REVIEW
+        is_final_review = state.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW
+        start_commit = state.branch_base if is_final_review else (
+            state.current_slice.start_commit or state.branch_base
+        )
+        try:
+            changes = self._collect_review_dispatch_changes(start_commit)
+        except NoWorkflowChangesError as exc:
+            state = state.await_policy_gate(
+                reason=GateReason.STOP_REQUEST,
+                detail=f"NO-IMPLEMENTATION-CHANGES | {exc}",
+            )
+            self.driver.checkpoint(state, history)
+            return state, history
+        unexpected = self._validate_change_boundary(
+            state, changes, unit.kind, context=context
+        )
+        if unexpected:
+            state = state.await_user_gate(
+                reason=GateReason.UNEXPECTED_FILE,
+                detail=(
+                    f"{UNEXPECTED_PATH_RULE_ID} | canonical changes contain paths "
+                    f"outside the persisted Slice scope: {', '.join(unexpected)}"
+                ),
+                fingerprint=changes.fingerprint,
+                paths=unexpected,
+            )
+            self.driver.checkpoint(state, history)
+            return state, history
+        state, test_changes_approved, halted = self._apply_test_change_gate(
+            state, context, changes
+        )
+        if halted:
+            self.driver.checkpoint(state, history)
+            return state, history
+        detected_test_changes = (
+            self.driver.detect_test_changes(changes, context.test_path_patterns)
+            if context.dynamic_test_scope
+            else None
+        )
+        expected_test_files = (
+            detected_test_changes.paths
+            if detected_test_changes is not None
+            else ()
+            if context.dynamic_test_scope
+            else context.expected_test_files
+        )
+        try:
+            attestation, history = self._collect_review_dispatch_attestation(
+                changes,
+                history,
+                context,
+                unit,
+                is_plan_review,
+            )
+        except ValidationExecutionError as exc:
+            state = state.await_policy_gate(
+                reason=GateReason.STOP_REQUEST,
+                detail=f"{VALIDATION_UNAVAILABLE_RULE_ID} | {exc}",
+            )
+            self.driver.checkpoint(state, history)
+            return state, history
+        # Project the newly appended attestation before
+        # invoking Claude. The idempotent checkpoint protects record-ahead recovery.
+        self.driver.checkpoint(state, history)
+        if not attestation.complete:
+            raise WorkflowExecutionError(
+                "validation attestation is incomplete and cannot be overridden"
+            )
+        review_round = (
+            1
+            + sum(
+                isinstance(event, ReviewAuditEvent)
+                and event.result.reviewer is reviewer
+                for event in history.events
+            )
+        )
+        contract = StepContract(
+            name=f"work-unit-{unit.work_unit_id}-{state.current_step.value}",
+            reviewer=reviewer,
+            approval_marker=(
+                ApprovalMarker.PLAN
+                if is_plan_review
+                else ApprovalMarker.FINAL
+                if is_final_review
+                else ApprovalMarker.SLICE
+            ),
+            slice_id="FINAL" if is_final_review else f"{unit.slice_id:02d}",
+            round_number=review_round,
+            review_fingerprint=changes.fingerprint,
+            validation_attestation=attestation,
+            expected_test_files=(expected_test_files if not is_plan_review else ()),
+            test_changes_approved=test_changes_approved,
+            red_state_followup_slice=context.red_state_followup_slice,
+            existing_finding_ids=tuple(
+                sorted(finding.finding_id for finding in history.findings)
+            ),
+            allow_new_observations=unit.kind is not WorkUnitKind.CORRECTION,
+        )
+        review_packet: ReviewPacket | None = None
+        evidence_kind, review_diff = self._select_review_evidence(
+            state,
+            context,
+            history,
+            reviewer,
+            unit,
+            changes,
+            is_plan_review,
+            is_final_review,
+        )
+        if (
+            not is_plan_review
+            and not is_final_review
+            and context.approved_plan_text is not None
+        ):
+            start_fingerprint = state.current_slice.start_fingerprint
+            if start_fingerprint is None:
+                raise WorkflowExecutionError(
+                    "Slice review packet requires a persisted start fingerprint"
+                )
+            packet_purpose = (
+                "correction"
+                if evidence_kind is EvidenceKind.CORRECTION_DELTA
+                else "slice"
+            )
+            try:
+                review_packet = self._build_review_dispatch_packet(
+                    context,
+                    history,
+                    unit,
+                    changes,
+                    review_diff,
+                    attestation,
+                    start_fingerprint,
+                    packet_purpose,
+                )
+            except ReviewPacketError as exc:
+                raise WorkflowExecutionError(
+                    f"canonical review packet could not be built: {exc}"
+                ) from exc
+            self._persist_structured(self.driver.persist_review_packet, review_packet)
+            history = replace(history, active_review_packet=review_packet)
+            self.driver.checkpoint(state, history)
+        return self._dispatch_native_review(
+            state,
+            context,
+            history,
+            reviewer,
+            unit,
+            contract,
+            changes,
+            evidence_kind,
+            review_diff,
+            review_packet,
+            expected_test_files,
+            is_plan_review,
+            is_final_review,
+            review_round,
         )
 
     def _apply_review_result(

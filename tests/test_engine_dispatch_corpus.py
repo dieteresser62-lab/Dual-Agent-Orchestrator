@@ -27,8 +27,30 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_PATH = ROOT / "src/workflow.py"
 STATIC_BASELINE = ROOT / "tests/fixtures/engine-dispatch-static-pre-b51-v1.json"
 RUNTIME_BASELINE = ROOT / "tests/fixtures/engine-dispatch-runtime-pre-b51-v1.json"
+PRE_B52_BASELINE = ROOT / "tests/fixtures/engine-dispatch-pre-b52-v1.json"
+FUNCTION_SIZE_BASELINE = ROOT / "tests/fixtures/function-size-baseline-v1.json"
+RECORD_SEQUENCE_BASELINE = (
+    ROOT / "tests/fixtures/workflow-record-sequence-baseline-v1.json"
+)
 SOURCE_COMMIT = "b762dde73296b94a61f028328d09409a07922f2e"
 SOURCE_BLOB = "6eef6884f82c4ae0b184f40bc4222384562d0351"
+PRE_B52_COMMIT = "b0134099e27fe05a1d6036b2b1578de51ad7ce91"
+RECORD_SEQUENCE_BLOB = "26fb661c8fa382f90e70fb921e3d950da5cae09b"
+
+
+DISPATCH_HELPERS = {
+    "_run_codex": (
+        "_prepare_agent_dispatch",
+        "_apply_agent_output",
+    ),
+    "_run_review": (
+        "_collect_review_dispatch_changes",
+        "_collect_review_dispatch_attestation",
+        "_select_review_evidence",
+        "_build_review_dispatch_packet",
+        "_dispatch_native_review",
+    ),
+}
 
 
 SCENARIOS: tuple[dict[str, str], ...] = (
@@ -214,8 +236,98 @@ def _enclosing_statement(
     return current
 
 
+def _direct_dispatch_helper_call(
+    statement: ast.stmt,
+    helper_names: frozenset[str],
+) -> ast.Call | None:
+    value: ast.expr | None = None
+    if isinstance(statement, ast.Assign):
+        value = statement.value
+    elif isinstance(statement, ast.Return):
+        value = statement.value
+    if (
+        isinstance(value, ast.Call)
+        and isinstance(value.func, ast.Attribute)
+        and isinstance(value.func.value, ast.Name)
+        and value.func.value.id == "self"
+        and value.func.attr in helper_names
+    ):
+        return value
+    return None
+
+
+def _assignment_matches_terminal_return(
+    statement: ast.Assign,
+    terminal: ast.Return,
+) -> bool:
+    return (
+        len(statement.targets) == 1
+        and terminal.value is not None
+        and ast.unparse(statement.targets[0]) == ast.unparse(terminal.value)
+    )
+
+
+def _logical_dispatch_function(tree: ast.Module, name: str) -> ast.FunctionDef:
+    function = copy.deepcopy(_function(tree, name))
+    helper_names = DISPATCH_HELPERS[name]
+    helpers = {
+        helper_name: copy.deepcopy(_function(tree, helper_name))
+        for helper_name in helper_names
+    }
+    observed_calls = [
+        call.func.attr
+        for call in _ordered(function, ast.Call)
+        if isinstance(call.func, ast.Attribute)
+        and isinstance(call.func.value, ast.Name)
+        and call.func.value.id == "self"
+        and call.func.attr in helper_names
+    ]
+    if not observed_calls:
+        return function
+    assert observed_calls == list(helper_names)
+
+    def expand_body(body: list[ast.stmt]) -> list[ast.stmt]:
+        expanded: list[ast.stmt] = []
+        for statement in body:
+            call = _direct_dispatch_helper_call(statement, frozenset(helper_names))
+            if call is not None:
+                helper = helpers[call.func.attr]
+                parameters = [argument.arg for argument in helper.args.args[1:]]
+                assert not call.keywords
+                assert [ast.unparse(argument) for argument in call.args] == parameters
+                helper_body = copy.deepcopy(helper.body)
+                terminal = helper_body[-1]
+                assert isinstance(terminal, ast.Return)
+                if isinstance(statement, ast.Assign):
+                    assert len(_ordered(helper, ast.Return)) == 1
+                    if _assignment_matches_terminal_return(statement, terminal):
+                        helper_body.pop()
+                    else:
+                        helper_body[-1] = ast.Assign(
+                            targets=copy.deepcopy(statement.targets),
+                            value=terminal.value,
+                        )
+                expanded.extend(expand_body(helper_body))
+                continue
+            for field in ("body", "orelse", "finalbody"):
+                child = getattr(statement, field, None)
+                if isinstance(child, list) and child:
+                    setattr(statement, field, expand_body(child))
+            if isinstance(statement, ast.Try):
+                for handler in statement.handlers:
+                    handler.body = expand_body(handler.body)
+            expanded.append(statement)
+        return expanded
+
+    function.body = expand_body(function.body)
+    ast.fix_missing_locations(function)
+    logical = ast.parse(ast.unparse(function)).body[0]
+    assert isinstance(logical, ast.FunctionDef)
+    return logical
+
+
 def _static_layer(tree: ast.Module, name: str) -> dict[str, object]:
-    function = _function(tree, name)
+    function = _logical_dispatch_function(tree, name)
     conditions = _ordered(function, ast.If)
     raises = _ordered(function, ast.Raise)
     returns = _ordered(function, ast.Return)
@@ -301,13 +413,19 @@ def _static_document(source: str | None = None) -> dict[str, object]:
 def _checkpoint_site_map() -> dict[tuple[str, int], str]:
     tree = ast.parse(WORKFLOW_PATH.read_text("utf-8"))
     result: dict[tuple[str, int], str] = {}
-    for function_name in ("_run_codex", "_run_review"):
-        function = _function(tree, function_name)
+    checkpoint_owners = {
+        "_run_codex": ("_apply_agent_output",),
+        "_run_review": ("_run_review",),
+    }
+    for logical_name, owners in checkpoint_owners.items():
         checkpoints = [
-            item for item in _ordered(function, ast.Call) if _is_checkpoint(item)
+            (owner, call)
+            for owner in owners
+            for call in _ordered(_function(tree, owner), ast.Call)
+            if _is_checkpoint(call)
         ]
-        for ordinal, call in enumerate(checkpoints, 1):
-            result[(function_name, call.lineno)] = f"{function_name}#{ordinal}"
+        for ordinal, (owner, call) in enumerate(checkpoints, 1):
+            result[(owner, call.lineno)] = f"{logical_name}#{ordinal}"
     return result
 
 
@@ -676,7 +794,7 @@ def _remove_first_condition(function_name: str) -> Callable[[ast.Module], None]:
 
 
 def _shift_first_checkpoint(tree: ast.Module) -> None:
-    function = _function(tree, "_run_codex")
+    function = _function(tree, "_apply_agent_output")
     checkpoint = next(
         node for node in _ordered(function, ast.Call) if _is_checkpoint(node)
     )
@@ -697,7 +815,7 @@ def _shift_first_checkpoint(tree: ast.Module) -> None:
 
 
 def _change_first_codex_provider_request_field(tree: ast.Module) -> None:
-    function = _function(tree, "_run_codex")
+    function = _function(tree, "_prepare_agent_dispatch")
     request_call = next(
         node
         for node in _ordered(function, ast.Call)
@@ -733,6 +851,60 @@ def _assert_runtime_matches(
         assert actual_by_id[scenario_id] == expected_scenario, scenario_id
 
 
+GUARDED_REVIEW_HELPERS = {
+    "_collect_review_dispatch_changes": "NoWorkflowChangesError",
+    "_collect_review_dispatch_attestation": "ValidationExecutionError",
+    "_build_review_dispatch_packet": "ReviewPacketError",
+}
+
+
+def _guarded_review_helper_catchers(tree: ast.Module) -> dict[str, str]:
+    function = _function(tree, "_run_review")
+    parents = _parent_map(function)
+    result: dict[str, str] = {}
+    for call in _ordered(function, ast.Call):
+        if (
+            not isinstance(call.func, ast.Attribute)
+            or not isinstance(call.func.value, ast.Name)
+            or call.func.value.id != "self"
+            or call.func.attr not in GUARDED_REVIEW_HELPERS
+        ):
+            continue
+        current: ast.AST = call
+        while current in parents and not isinstance(current, ast.Try):
+            current = parents[current]
+        assert isinstance(current, ast.Try), call.func.attr
+        assert any(call in tuple(ast.walk(statement)) for statement in current.body)
+        assert len(current.handlers) == 1
+        result[call.func.attr] = ast.unparse(current.handlers[0].type)
+    return result
+
+
+def _move_packet_helper_out_of_catcher(tree: ast.Module) -> None:
+    function = _function(tree, "_run_review")
+    parents = _parent_map(function)
+    call = next(
+        item
+        for item in _ordered(function, ast.Call)
+        if isinstance(item.func, ast.Attribute)
+        and item.func.attr == "_build_review_dispatch_packet"
+    )
+    statement = _enclosing_statement(call, parents)
+    current: ast.AST = call
+    while current in parents and not isinstance(current, ast.Try):
+        current = parents[current]
+    assert isinstance(current, ast.Try)
+    current.body.remove(statement)
+    current.body.append(ast.Pass())
+    for node in ast.walk(function):
+        for field in ("body", "orelse", "finalbody"):
+            body = getattr(node, field, None)
+            if isinstance(body, list) and current in body:
+                body.insert(body.index(current), statement)
+                return
+    raise AssertionError("review packet catcher parent not found")
+
+
 def test_static_dispatch_corpus_is_cleartext_complete_and_source_bound() -> None:
     baseline = json.loads(STATIC_BASELINE.read_text("utf-8"))
     assert _static_document() == baseline
@@ -750,23 +922,29 @@ def test_static_dispatch_corpus_is_cleartext_complete_and_source_bound() -> None
     assert all("read_names" in item for layer in (codex, review) for item in layer["conditions"])
 
 
-def test_workflow_source_is_byte_identical_to_the_b50_prestate() -> None:
+def test_b52_pre_cut_anchor_binds_the_immediate_b51_source() -> None:
+    baseline = json.loads(PRE_B52_BASELINE.read_text("utf-8"))
+    assert baseline == {
+        "schema_version": "engine-dispatch-pre-b52-v1",
+        "source_commit": PRE_B52_COMMIT,
+        "source_blob": SOURCE_BLOB,
+    }
     anchored_blob = subprocess.run(
-        ["git", "rev-parse", f"{SOURCE_COMMIT}:src/workflow.py"],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-    actual_blob = subprocess.run(
-        ["git", "hash-object", str(WORKFLOW_PATH)],
+        ["git", "rev-parse", f"{PRE_B52_COMMIT}:src/workflow.py"],
         cwd=ROOT,
         check=True,
         capture_output=True,
         text=True,
     ).stdout.strip()
     assert anchored_blob == SOURCE_BLOB
-    assert actual_blob == SOURCE_BLOB
+    b51_corpus_blob = subprocess.run(
+        ["git", "rev-parse", f"{SOURCE_COMMIT}:src/workflow.py"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert b51_corpus_blob == SOURCE_BLOB
 
 
 def test_runtime_corpus_is_built_once_and_each_rejection_matches(
@@ -848,7 +1026,7 @@ def test_checkpoint_and_provider_dispatch_evidence_is_scenario_local(
 @pytest.mark.parametrize(
     ("function_name", "scenario_id"),
     (
-        ("_run_codex", "codex-correction-missing-start-fingerprint"),
+        ("_prepare_agent_dispatch", "codex-correction-missing-start-fingerprint"),
         ("_run_review", "review-non-claude"),
     ),
 )
@@ -890,3 +1068,51 @@ def test_changing_one_provider_request_builder_field_names_the_scenario() -> Non
     mutant["scenarios"][index] = observed
     with pytest.raises(AssertionError, match=scenario_id):
         _assert_runtime_matches(mutant, baseline)
+
+
+def test_extracted_review_calls_remain_inside_their_original_catchers() -> None:
+    tree = ast.parse(WORKFLOW_PATH.read_text("utf-8"))
+    assert _guarded_review_helper_catchers(tree) == GUARDED_REVIEW_HELPERS
+    function = _function(tree, "_run_review")
+    assert [ast.unparse(item.type) for item in _ordered(function, ast.ExceptHandler)] == [
+        "NoWorkflowChangesError",
+        "ValidationExecutionError",
+        "ReviewPacketError",
+    ]
+
+
+def test_moving_review_helper_out_of_its_catcher_turns_binding_red() -> None:
+    tree = ast.parse(WORKFLOW_PATH.read_text("utf-8"))
+    _move_packet_helper_out_of_catcher(tree)
+    with pytest.raises(AssertionError, match="_build_review_dispatch_packet"):
+        _guarded_review_helper_catchers(tree)
+
+
+def test_dispatch_entrypoints_and_new_helpers_stay_below_b32_threshold() -> None:
+    tree = ast.parse(WORKFLOW_PATH.read_text("utf-8"))
+    names = {
+        "_run_codex",
+        "_prepare_agent_dispatch",
+        "_apply_agent_output",
+        "_run_review",
+        *DISPATCH_HELPERS["_run_review"],
+    }
+    spans = {
+        name: _function(tree, name).end_lineno - _function(tree, name).lineno + 1
+        for name in names
+    }
+    assert all(span < 200 for span in spans.values()), spans
+    size_baseline = json.loads(FUNCTION_SIZE_BASELINE.read_text("utf-8"))
+    assert "src/workflow.py::WorkflowEngine._run_codex" not in size_baseline["functions"]
+    assert "src/workflow.py::WorkflowEngine._run_review" not in size_baseline["functions"]
+
+
+def test_b25_record_sequence_baseline_remains_byte_identical() -> None:
+    actual_blob = subprocess.run(
+        ["git", "hash-object", str(RECORD_SEQUENCE_BASELINE)],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert actual_blob == RECORD_SEQUENCE_BLOB
