@@ -1,0 +1,205 @@
+{
+  "schema_version": "workflow-recovery-runtime-pre-b53-v1",
+  "source_commit": "881e944fea9442012aecb7c20b519ea5a2b83bbf",
+  "source_blob": "f3b3cfb77c5b27b8c60d35c7c347095ea8b2514d",
+  "scenarios": [
+    {
+      "scenario_id": "implementer-success",
+      "path": "implementer",
+      "source_aborts": [],
+      "outcome": "recovered",
+      "adopted_record_id": "ar1-1111111111111111111111111111111111111111111111111111111111111111",
+      "state": {
+        "ready": true,
+        "request_id": "native-codex-request-0b399180ea55133ee982e06dec17e5e71051cc9e94e6a6a2a360c957cf5e989d",
+        "recovery_fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "content_binding": {
+          "role": "codex",
+          "work_unit_id": 1,
+          "round_number": 1,
+          "operation": "codex_implementation",
+          "request_id": "native-codex-request-0b399180ea55133ee982e06dec17e5e71051cc9e94e6a6a2a360c957cf5e989d",
+          "response_sha256": "12dcb176a354f275a7047f2b6a1d71c1587f82934fb2a60817c4a5b189cd6184",
+          "fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      },
+      "provider_start_count": 0
+    },
+    {
+      "scenario_id": "implementer-missing-provider-content",
+      "path": "implementer",
+      "source_aborts": [1],
+      "outcome": "raised",
+      "error_type": "WorkflowExecutionError",
+      "message": "native agent recovery record has no authoritative provider content",
+      "provider_start_count": 0
+    },
+    {
+      "scenario_id": "implementer-missing-original-binding-findings",
+      "path": "implementer",
+      "source_aborts": [4],
+      "outcome": "raised",
+      "error_type": "WorkflowExecutionError",
+      "message": "native agent recovery has no durable original request binding",
+      "provider_start_count": 0
+    },
+    {
+      "scenario_id": "implementer-missing-original-binding-request-id",
+      "path": "implementer",
+      "source_aborts": [5],
+      "outcome": "raised",
+      "error_type": "WorkflowExecutionError",
+      "message": "native agent recovery has no durable original request binding",
+      "provider_start_count": 0
+    },
+    {
+      "scenario_id": "implementer-request-time-replay-failure",
+      "path": "implementer",
+      "source_aborts": [6],
+      "outcome": "raised",
+      "error_type": "WorkflowExecutionError",
+      "message": "native agent request-time finding replay failed: RECORD-MISSING: B53 injected replay gap",
+      "provider_start_count": 0
+    },
+    {
+      "scenario_id": "implementer-request-time-finding-subset",
+      "path": "implementer",
+      "source_aborts": [7],
+      "outcome": "raised",
+      "error_type": "WorkflowExecutionError",
+      "message": "native agent request-time finding subset is incomplete",
+      "provider_start_count": 0
+    },
+    {
+      "scenario_id": "implementer-raw-response-not-object",
+      "path": "implementer",
+      "source_aborts": [8, 10],
+      "outcome": "raised",
+      "error_type": "WorkflowExecutionError",
+      "message": "native Codex recovery response no longer validates: native Codex raw response is not an object",
+      "provider_start_count": 0
+    },
+    {
+      "scenario_id": "implementer-raw-response-noncanonical",
+      "path": "implementer",
+      "source_aborts": [9, 10],
+      "outcome": "raised",
+      "error_type": "WorkflowExecutionError",
+      "message": "native Codex recovery response no longer validates: native Codex raw response is not canonical JSON",
+      "provider_start_count": 0
+    },
+    {
+      "scenario_id": "implementer-bound-response-invalid",
+      "path": "implementer",
+      "source_aborts": [10],
+      "outcome": "raised",
+      "error_type": "WorkflowExecutionError",
+      "message": "native Codex recovery response no longer validates: request-mismatch: response request_id does not match bound request",
+      "provider_start_count": 0
+    },
+    {
+      "scenario_id": "implementer-record-binding-divergent",
+      "path": "implementer",
+      "source_aborts": [11],
+      "outcome": "raised",
+      "error_type": "WorkflowExecutionError",
+      "message": "native Codex recovery record differs from its durable binding",
+      "provider_start_count": 0
+    },
+    {
+      "scenario_id": "implementer-result-divergent",
+      "path": "implementer",
+      "source_aborts": [12],
+      "outcome": "raised",
+      "error_type": "WorkflowExecutionError",
+      "message": "native Codex recovery result differs from its durable record",
+      "provider_start_count": 0
+    },
+    {
+      "scenario_id": "reviewer-success",
+      "path": "reviewer",
+      "source_aborts": [],
+      "outcome": "recovered",
+      "adopted_record_id": "ar1-2222222222222222222222222222222222222222222222222222222222222222",
+      "state": {
+        "approved": true,
+        "fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "request_id": "native-review-request-fd894b4da471f8995767537bc67fa15da5b34934c093e48b38928ddfc5f6a11d",
+        "round_number": 1,
+        "content_binding": {
+          "role": "claude",
+          "work_unit_id": 1,
+          "round_number": 1,
+          "operation": "claude_slice_review",
+          "request_id": "native-review-request-fd894b4da471f8995767537bc67fa15da5b34934c093e48b38928ddfc5f6a11d",
+          "response_sha256": "4567f297b391a4bcd019f0d09995b8c61273b8fc9ad6717a0c5549e3268630e8",
+          "fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      },
+      "provider_start_count": 0
+    },
+    {
+      "scenario_id": "reviewer-replay-failure",
+      "path": "reviewer",
+      "source_aborts": [1],
+      "outcome": "raised",
+      "error_type": "WorkflowExecutionError",
+      "message": "pre-policy native reviewer recovery cannot replay records: RECORD-MISSING: B53 injected replay gap",
+      "provider_start_count": 0
+    },
+    {
+      "scenario_id": "reviewer-duplicate-round-authority",
+      "path": "reviewer",
+      "source_aborts": [2],
+      "outcome": "raised",
+      "error_type": "WorkflowExecutionError",
+      "message": "pre-policy native reviewer recovery has duplicate round authority",
+      "provider_start_count": 0
+    },
+    {
+      "scenario_id": "reviewer-active-unit-divergent",
+      "path": "reviewer",
+      "source_aborts": [3],
+      "outcome": "raised",
+      "error_type": "WorkflowExecutionError",
+      "message": "pre-policy native reviewer recovery tail differs from the active work unit",
+      "provider_start_count": 0
+    },
+    {
+      "scenario_id": "reviewer-attestation-missing",
+      "path": "reviewer",
+      "source_aborts": [6],
+      "outcome": "raised",
+      "error_type": "WorkflowExecutionError",
+      "message": "pre-policy native reviewer recovery requires one complete authoritative attestation",
+      "provider_start_count": 0
+    },
+    {
+      "scenario_id": "reviewer-raw-response-not-object",
+      "path": "reviewer",
+      "source_aborts": [8, 9],
+      "outcome": "raised",
+      "error_type": "WorkflowExecutionError",
+      "message": "pre-policy native reviewer response no longer validates: native response log must contain a JSON object",
+      "provider_start_count": 0
+    },
+    {
+      "scenario_id": "reviewer-bound-response-invalid",
+      "path": "reviewer",
+      "source_aborts": [9],
+      "outcome": "raised",
+      "error_type": "WorkflowExecutionError",
+      "message": "pre-policy native reviewer response no longer validates: request-mismatch: response request_id does not match bound context",
+      "provider_start_count": 0
+    },
+    {
+      "scenario_id": "reviewer-result-divergent",
+      "path": "reviewer",
+      "source_aborts": [10],
+      "outcome": "raised",
+      "error_type": "WorkflowExecutionError",
+      "message": "pre-policy native reviewer result differs from its decision record",
+      "provider_start_count": 0
+    }
+  ]
+}

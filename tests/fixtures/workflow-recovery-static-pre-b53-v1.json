@@ -1,0 +1,386 @@
+{
+  "schema_version": "workflow-recovery-static-pre-b53-v1",
+  "source_commit": "881e944fea9442012aecb7c20b519ea5a2b83bbf",
+  "source_blob": "f3b3cfb77c5b27b8c60d35c7c347095ea8b2514d",
+  "layers": [
+    {
+      "path": "implementer",
+      "function": "WorkflowRecovery.recover_pending_native_implementer",
+      "line_count": 234,
+      "conditions": [
+        {
+          "ordinal": 1,
+          "expression": "state is None or bridge is None or bundle is None or (state.protocol_binding is None) or (state.protocol_binding.codex_result_transport != NATIVE_IMPLEMENTER_TRANSPORT) or (state.current_work_unit_id != invocation.work_unit_id) or (state.current_step is not invocation.step)",
+          "read_names": ["NATIVE_IMPLEMENTER_TRANSPORT", "bridge", "bundle", "invocation", "state"]
+        },
+        {
+          "ordinal": 2,
+          "expression": "persisted_content is None",
+          "read_names": ["persisted_content"]
+        },
+        {
+          "ordinal": 3,
+          "expression": "candidate is None",
+          "read_names": ["candidate"]
+        },
+        {
+          "ordinal": 4,
+          "expression": "response_sha256 != content_payload.response_sha256",
+          "read_names": ["content_payload", "response_sha256"]
+        },
+        {
+          "ordinal": 5,
+          "expression": "candidate is not None and candidate.payload.response_sha256 != response_sha256",
+          "read_names": ["candidate", "response_sha256"]
+        },
+        {
+          "ordinal": 6,
+          "expression": "candidate is not None and recovery_bound.context.previous_findings",
+          "read_names": ["candidate", "recovery_bound"]
+        },
+        {
+          "ordinal": 7,
+          "expression": "not prior_attempts",
+          "read_names": ["prior_attempts"]
+        },
+        {
+          "ordinal": 8,
+          "expression": "recovery_bundle is None and candidate is not None and (candidate.payload.request_id != bundle.bound_context.request_id)",
+          "read_names": ["bundle", "candidate", "recovery_bundle"]
+        },
+        {
+          "ordinal": 9,
+          "expression": "original_attempt_record is None",
+          "read_names": ["original_attempt_record"]
+        },
+        {
+          "ordinal": 10,
+          "expression": "not prior_attempts",
+          "read_names": ["prior_attempts"]
+        },
+        {
+          "ordinal": 11,
+          "expression": "original_attempt_record is not None",
+          "read_names": ["original_attempt_record"]
+        },
+        {
+          "ordinal": 12,
+          "expression": "any((finding_id not in request_findings_by_id for finding_id in offered_ids))",
+          "read_names": ["any", "finding_id", "offered_ids", "request_findings_by_id"]
+        },
+        {
+          "ordinal": 13,
+          "expression": "not isinstance(document, dict)",
+          "read_names": ["dict", "document", "isinstance"]
+        },
+        {
+          "ordinal": 14,
+          "expression": "canonical_native_implementer_json(document) != canonical",
+          "read_names": ["canonical", "canonical_native_implementer_json", "document"]
+        },
+        {
+          "ordinal": 15,
+          "expression": "validate_against_bundle",
+          "read_names": ["validate_against_bundle"]
+        },
+        {
+          "ordinal": 16,
+          "expression": "candidate is None",
+          "read_names": ["candidate"]
+        },
+        {
+          "ordinal": 17,
+          "expression": "payload.role is not Role.CODEX or payload.work_unit_id != str(invocation.work_unit_id) or payload.transport_schema != NATIVE_IMPLEMENTER_TRANSPORT or (payload.request_id != recovery_bound.request_id) or (payload.response_sha256 != response_sha256)",
+          "read_names": ["NATIVE_IMPLEMENTER_TRANSPORT", "Role", "invocation", "payload", "recovery_bound", "response_sha256", "str"]
+        },
+        {
+          "ordinal": 18,
+          "expression": "payload != expected_payload",
+          "read_names": ["expected_payload", "payload"]
+        }
+      ],
+      "aborts": [
+        {
+          "ordinal": 1,
+          "exception_type": "WorkflowExecutionError",
+          "message": "'native agent recovery record has no authoritative provider content'",
+          "condition_path": ["persisted_content is None"]
+        },
+        {
+          "ordinal": 2,
+          "exception_type": "WorkflowExecutionError",
+          "message": "'native provider content digest differs from its record'",
+          "condition_path": ["response_sha256 != content_payload.response_sha256"]
+        },
+        {
+          "ordinal": 3,
+          "exception_type": "WorkflowExecutionError",
+          "message": "'native implementer recovery raw response digest differs from its record'",
+          "condition_path": ["candidate is not None and candidate.payload.response_sha256 != response_sha256"]
+        },
+        {
+          "ordinal": 4,
+          "exception_type": "WorkflowExecutionError",
+          "message": "'native agent recovery has no durable original request binding'",
+          "condition_path": ["candidate is not None and recovery_bound.context.previous_findings", "not prior_attempts"]
+        },
+        {
+          "ordinal": 5,
+          "exception_type": "WorkflowExecutionError",
+          "message": "'native agent recovery has no durable original request binding'",
+          "condition_path": ["recovery_bundle is None and candidate is not None and (candidate.payload.request_id != bundle.bound_context.request_id)", "original_attempt_record is None", "not prior_attempts"]
+        },
+        {
+          "ordinal": 6,
+          "exception_type": "WorkflowExecutionError",
+          "message": "f'native agent request-time finding replay failed: {exc}'",
+          "condition_path": ["original_attempt_record is not None"]
+        },
+        {
+          "ordinal": 7,
+          "exception_type": "WorkflowExecutionError",
+          "message": "'native agent request-time finding subset is incomplete'",
+          "condition_path": ["original_attempt_record is not None", "any((finding_id not in request_findings_by_id for finding_id in offered_ids))"]
+        },
+        {
+          "ordinal": 8,
+          "exception_type": "ValueError",
+          "message": "'native Codex raw response is not an object'",
+          "condition_path": ["not isinstance(document, dict)"]
+        },
+        {
+          "ordinal": 9,
+          "exception_type": "ValueError",
+          "message": "'native Codex raw response is not canonical JSON'",
+          "condition_path": ["canonical_native_implementer_json(document) != canonical"]
+        },
+        {
+          "ordinal": 10,
+          "exception_type": "WorkflowExecutionError",
+          "message": "f'native Codex recovery response no longer validates: {exc}'",
+          "condition_path": []
+        },
+        {
+          "ordinal": 11,
+          "exception_type": "WorkflowExecutionError",
+          "message": "'native Codex recovery record differs from its durable binding'",
+          "condition_path": ["payload.role is not Role.CODEX or payload.work_unit_id != str(invocation.work_unit_id) or payload.transport_schema != NATIVE_IMPLEMENTER_TRANSPORT or (payload.request_id != recovery_bound.request_id) or (payload.response_sha256 != response_sha256)"]
+        },
+        {
+          "ordinal": 12,
+          "exception_type": "WorkflowExecutionError",
+          "message": "'native Codex recovery result differs from its durable record'",
+          "condition_path": ["payload != expected_payload"]
+        }
+      ],
+      "returns": [
+        {
+          "ordinal": 1,
+          "expression": "None",
+          "condition_path": ["state is None or bridge is None or bundle is None or (state.protocol_binding is None) or (state.protocol_binding.codex_result_transport != NATIVE_IMPLEMENTER_TRANSPORT) or (state.current_work_unit_id != invocation.work_unit_id) or (state.current_step is not invocation.step)"]
+        },
+        {
+          "ordinal": 2,
+          "expression": "None",
+          "condition_path": ["persisted_content is None", "candidate is None"]
+        },
+        {
+          "ordinal": 3,
+          "expression": "output",
+          "condition_path": ["candidate is None"]
+        },
+        {
+          "ordinal": 4,
+          "expression": "output",
+          "condition_path": []
+        }
+      ],
+      "catchers": [
+        {"ordinal": 1, "exception_type": "ArtifactReplayError"},
+        {"ordinal": 2, "exception_type": "(ValueError, TypeError)"}
+      ]
+    },
+    {
+      "path": "reviewer",
+      "function": "WorkflowRecovery.recover_pending_native_reviewer_before_policy",
+      "line_count": 218,
+      "conditions": [
+        {
+          "ordinal": 1,
+          "expression": "bridge is None or self._dependencies.active_state() is None or state.protocol_binding is None or (state.protocol_binding.claude_review_transport != NATIVE_REVIEW_TRANSPORT) or (state.current_step not in {WorkflowStep.CLAUDE_PLAN_REVIEW, WorkflowStep.CLAUDE_SLICE_REVIEW, WorkflowStep.CLAUDE_FINAL_REVIEW}) or (self._dependencies.active_state().run_id != state.run_id) or (self._dependencies.active_state().current_work_unit_id != unit.work_unit_id)",
+          "read_names": ["NATIVE_REVIEW_TRANSPORT", "WorkflowStep", "bridge", "self", "state", "unit"]
+        },
+        {
+          "ordinal": 2,
+          "expression": "pending_record_id is not None",
+          "read_names": ["pending_record_id"]
+        },
+        {
+          "ordinal": 3,
+          "expression": "not candidates",
+          "read_names": ["candidates"]
+        },
+        {
+          "ordinal": 4,
+          "expression": "len(candidates) != 1",
+          "read_names": ["candidates", "len"]
+        },
+        {
+          "ordinal": 5,
+          "expression": "record is None or not isinstance(record.payload, ReviewPayload) or record.payload.reviewer is not Role.CLAUDE or (record.payload.work_unit_id != str(unit.work_unit_id)) or (record.payload.transport_schema != NATIVE_REVIEW_TRANSPORT) or (not record.logical_id.startswith(logical_prefix))",
+          "read_names": ["NATIVE_REVIEW_TRANSPORT", "ReviewPayload", "Role", "isinstance", "logical_prefix", "record", "str", "unit"]
+        },
+        {
+          "ordinal": 6,
+          "expression": "not suffix.isdigit() or int(suffix) < 1",
+          "read_names": ["int", "suffix"]
+        },
+        {
+          "ordinal": 7,
+          "expression": "payload.request_id is None or payload.response_sha256 is None",
+          "read_names": ["payload"]
+        },
+        {
+          "ordinal": 8,
+          "expression": "len(matching_attestations) != 1 or len(authoritative_attestations) != 1",
+          "read_names": ["authoritative_attestations", "len", "matching_attestations"]
+        },
+        {
+          "ordinal": 9,
+          "expression": "persisted_content is None",
+          "read_names": ["persisted_content"]
+        },
+        {
+          "ordinal": 10,
+          "expression": "not isinstance(document, dict)",
+          "read_names": ["dict", "document", "isinstance"]
+        },
+        {
+          "ordinal": 11,
+          "expression": "not review_payload_matches_result(payload, result)",
+          "read_names": ["payload", "result", "review_payload_matches_result"]
+        }
+      ],
+      "aborts": [
+        {
+          "ordinal": 1,
+          "exception_type": "WorkflowExecutionError",
+          "message": "f'pre-policy native reviewer recovery cannot replay records: {exc}'",
+          "condition_path": []
+        },
+        {
+          "ordinal": 2,
+          "exception_type": "WorkflowExecutionError",
+          "message": "'pre-policy native reviewer recovery has duplicate round authority'",
+          "condition_path": ["else: pending_record_id is not None", "len(candidates) != 1"]
+        },
+        {
+          "ordinal": 3,
+          "exception_type": "WorkflowExecutionError",
+          "message": "'pre-policy native reviewer recovery tail differs from the active work unit'",
+          "condition_path": ["record is None or not isinstance(record.payload, ReviewPayload) or record.payload.reviewer is not Role.CLAUDE or (record.payload.work_unit_id != str(unit.work_unit_id)) or (record.payload.transport_schema != NATIVE_REVIEW_TRANSPORT) or (not record.logical_id.startswith(logical_prefix))"]
+        },
+        {
+          "ordinal": 4,
+          "exception_type": "WorkflowExecutionError",
+          "message": "'native reviewer recovery record has an invalid logical round'",
+          "condition_path": ["not suffix.isdigit() or int(suffix) < 1"]
+        },
+        {
+          "ordinal": 5,
+          "exception_type": "WorkflowExecutionError",
+          "message": "'pre-policy native reviewer recovery lacks its request binding'",
+          "condition_path": ["payload.request_id is None or payload.response_sha256 is None"]
+        },
+        {
+          "ordinal": 6,
+          "exception_type": "WorkflowExecutionError",
+          "message": "'pre-policy native reviewer recovery requires one complete authoritative attestation'",
+          "condition_path": ["len(matching_attestations) != 1 or len(authoritative_attestations) != 1"]
+        },
+        {
+          "ordinal": 7,
+          "exception_type": "WorkflowExecutionError",
+          "message": "'pre-policy native reviewer recovery has no authoritative provider content'",
+          "condition_path": ["persisted_content is None"]
+        },
+        {
+          "ordinal": 8,
+          "exception_type": "ValueError",
+          "message": "'native response log must contain a JSON object'",
+          "condition_path": ["not isinstance(document, dict)"]
+        },
+        {
+          "ordinal": 9,
+          "exception_type": "WorkflowExecutionError",
+          "message": "f'pre-policy native reviewer response no longer validates: {exc}'",
+          "condition_path": []
+        },
+        {
+          "ordinal": 10,
+          "exception_type": "WorkflowExecutionError",
+          "message": "'pre-policy native reviewer result differs from its decision record'",
+          "condition_path": ["not review_payload_matches_result(payload, result)"]
+        }
+      ],
+      "returns": [
+        {
+          "ordinal": 1,
+          "expression": "None",
+          "condition_path": ["bridge is None or self._dependencies.active_state() is None or state.protocol_binding is None or (state.protocol_binding.claude_review_transport != NATIVE_REVIEW_TRANSPORT) or (state.current_step not in {WorkflowStep.CLAUDE_PLAN_REVIEW, WorkflowStep.CLAUDE_SLICE_REVIEW, WorkflowStep.CLAUDE_FINAL_REVIEW}) or (self._dependencies.active_state().run_id != state.run_id) or (self._dependencies.active_state().current_work_unit_id != unit.work_unit_id)"]
+        },
+        {
+          "ordinal": 2,
+          "expression": "None",
+          "condition_path": ["else: pending_record_id is not None", "not candidates"]
+        },
+        {
+          "ordinal": 3,
+          "expression": "PersistedNativeReviewerReplay(output=output, fingerprint=record.fingerprint.sha256, round_number=round_number)",
+          "condition_path": []
+        }
+      ],
+      "catchers": [
+        {"ordinal": 1, "exception_type": "ArtifactReplayError"},
+        {"ordinal": 2, "exception_type": "(json.JSONDecodeError, ValueError, NativeReviewContractError)"}
+      ]
+    }
+  ],
+  "unreachable_aborts": [
+    {
+      "path": "implementer",
+      "abort_ordinal": 2,
+      "exception_type": "WorkflowExecutionError",
+      "message": "native provider content digest differs from its record",
+      "reason": "The production content_text boundary reads the BlobReference through ArtifactStore.read_blob; ProviderContentPayload binds response_sha256 to that blob and read_blob verifies the bytes, so recomputing the same bytes cannot differ without a SHA-256 collision."
+    },
+    {
+      "path": "implementer",
+      "abort_ordinal": 3,
+      "exception_type": "WorkflowExecutionError",
+      "message": "native implementer recovery raw response digest differs from its record",
+      "reason": "content_text is called with candidate.payload.response_sha256 and can return only the uniquely matching ProviderContentPayload; its verified blob bytes therefore hash to the candidate digest."
+    },
+    {
+      "path": "reviewer",
+      "abort_ordinal": 4,
+      "exception_type": "WorkflowExecutionError",
+      "message": "native reviewer recovery record has an invalid logical round",
+      "reason": "A replay-selected pending review already passed provider-decision validation, which requires a numeric logical-id suffix; the fallback branch constructs the logical id from the positive current WorkUnit round."
+    },
+    {
+      "path": "reviewer",
+      "abort_ordinal": 5,
+      "exception_type": "WorkflowExecutionError",
+      "message": "pre-policy native reviewer recovery lacks its request binding",
+      "reason": "ArtifactStore.load_chain returns schema-validated ArtifactRecord values and ReviewPayload rejects a missing request_id or response_sha256 during construction."
+    },
+    {
+      "path": "reviewer",
+      "abort_ordinal": 7,
+      "exception_type": "WorkflowExecutionError",
+      "message": "pre-policy native reviewer recovery has no authoritative provider content",
+      "reason": "Structured-v2 replay requires exactly one earlier fingerprint-matched provider content record and binds its operation to the latest WorkflowTransition when one exists; state restoration binds current_step to that record-derived cursor, so the production content_text lookup repeats the resulting role, work-unit, round, operation, request, response, and fingerprint binding."
+    }
+  ]
+}
