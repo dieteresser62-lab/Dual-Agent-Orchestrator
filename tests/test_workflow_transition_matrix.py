@@ -349,8 +349,8 @@ GATE_SOURCE_MAP = (
         "SLICE-HEAD-DRIFT",
         "unexpected_file",
         "policy",
-        "workflow_production.run_production_workflow",
-        ("workflow_production.run_production_workflow",),
+        "workflow_production._run_production_transition_loop",
+        ("workflow_production._run_production_transition_loop",),
         ("slice-boundary-policy-gate",),
     ),
     GateSourceRow(
@@ -707,7 +707,11 @@ GATE_CALLS = {
 
 EXPECTED_GATE_CALL_SITES = Counter(
     {
-        ("workflow_production.py", "run_production_workflow", "await_policy_gate"): 1,
+        (
+            "workflow_production.py",
+            "_run_production_transition_loop",
+            "await_policy_gate",
+        ): 1,
         (
             "workflow_production.py",
             "run_production_workflow",

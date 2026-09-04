@@ -122,10 +122,16 @@ def test_production_dependency_inventory_is_exact_and_fully_consumed() -> None:
     declared = tuple(
         field.name for field in fields(workflow_production.ProductionWorkflowDependencies)
     )
-    loop = _function(_tree(PRODUCTION_PATH), "run_production_workflow")
+    production_tree = _tree(PRODUCTION_PATH)
+    dependency_consumers = (
+        _function(production_tree, "run_production_workflow"),
+        _function(production_tree, "_run_production_transition_loop"),
+        _function(production_tree, "_recover_final_review_history"),
+    )
     consumed = {
         node.attr
-        for node in ast.walk(loop)
+        for consumer in dependency_consumers
+        for node in ast.walk(consumer)
         if isinstance(node, ast.Attribute)
         and isinstance(node.value, ast.Name)
         and node.value.id == "dependencies"

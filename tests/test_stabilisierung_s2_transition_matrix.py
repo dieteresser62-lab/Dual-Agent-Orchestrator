@@ -370,7 +370,9 @@ COMPARISON_TARGETS = (
     ("src/workflow_production.py", None, "_prepare_new_watch_task"),
     ("src/workflow_production.py", None, "_validate_resumed_state"),
     ("src/workflow_production.py", None, "_create_production_state"),
+    ("src/workflow_production.py", None, "_recover_final_review_history"),
     ("src/workflow_production.py", None, "run_production_workflow"),
+    ("src/workflow_production.py", None, "_run_production_transition_loop"),
     (
         "src/workflow_baseline.py",
         None,
@@ -518,7 +520,9 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/workflow_production.py:_prepare_new_watch_task": 1,
     "src/workflow_production.py:_validate_resumed_state": 10,
     "src/workflow_production.py:_create_production_state": 0,
-    "src/workflow_production.py:run_production_workflow": 27,
+    "src/workflow_production.py:_recover_final_review_history": 2,
+    "src/workflow_production.py:run_production_workflow": 4,
+    "src/workflow_production.py:_run_production_transition_loop": 21,
     "src/workflow_baseline.py:matches_baseline_initialization_prefix": 24,
     "src/workflow_baseline.py:WorkflowBaseline._persist_structured_baseline": 26,
     "src/orchestrator.py:ProductionWorkflowDriver.assert_structured_decision_context": 4,
@@ -1183,9 +1187,15 @@ def test_managed_audit_commit_boundary_is_source_and_document_bound() -> None:
         _function_node("src/workflow_audit.py", "WorkflowAudit", "finalize_audit"),
         include_attributes=False,
     )
-    workflow = ast.dump(
-        _function_node("src/workflow_production.py", None, "run_production_workflow"),
-        include_attributes=False,
+    workflow = "\n".join(
+        ast.dump(
+            _function_node("src/workflow_production.py", None, function_name),
+            include_attributes=False,
+        )
+        for function_name in (
+            "run_production_workflow",
+            "_run_production_transition_loop",
+        )
     )
     commit = ast.dump(
         _function_node("src/git_service.py", None, "commit_managed_audit_report"),

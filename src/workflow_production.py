@@ -313,6 +313,132 @@ def _create_production_state(
     )
 
 
+def _recover_final_review_history(
+    root: Path,
+    state: WorkflowState,
+    current: Any,
+    history: WorkflowHistory,
+    dependencies: ProductionWorkflowDependencies,
+) -> WorkflowHistory:
+    structured_replay = None
+    read_blob = None
+    if (
+        current.kind is WorkUnitKind.FINAL_REVIEW
+        and state.effective_protocol_mode is ProtocolMode.STRUCTURED_V2
+    ):
+        resolution = resolve_resume_state(root, state)
+        structured_replay = resolution.replay_result
+        read_blob = ArtifactStore(root, state.run_id).read_blob
+    recovered_history = dependencies.recover_final_review_attestation(
+        state,
+        history,
+        structured_replay,
+        read_blob,
+    )
+    return recovered_history
+
+
+def _prepare_plan_implementation_handoff(
+    *,
+    driver: ProductionWorkflowLoopDriver,
+    task_file: Path,
+    root: Path,
+    state: WorkflowState,
+    commit_ref: str,
+) -> Path:
+    finding_handoff = driver.prepare_finding_handoff(
+        plan_task_path=task_file,
+        work_plan_path=state.work_plan_path or "",
+        target_branch=state.target_branch or state.branch,
+        approved_plan_commit=commit_ref,
+    )
+    handoff = write_implementation_handoff(
+        plan_task_path=task_file,
+        repository_root=root,
+        work_plan_path=state.work_plan_path or "",
+        target_branch=state.target_branch or state.branch,
+        approved_plan_commit=commit_ref,
+        finding_handoff=finding_handoff,
+        write_content=lambda path, content: driver._write_side_effect_file(
+            path, content, normalized_text=False
+        ),
+    )
+    return handoff
+
+
+def _start_first_slice(
+    state: WorkflowState,
+    history: WorkflowHistory,
+    driver: ProductionWorkflowLoopDriver,
+) -> tuple[WorkflowState, WorkflowHistory]:
+    carried_findings = driver.carry_forward_native_findings(
+        state, history.findings
+    )
+    state = state.start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    )
+    history = WorkflowHistory(
+        state.current_work_unit_id,
+        findings=carried_findings,
+    )
+    return state, history
+
+
+def _start_pending_slice(
+    root: Path,
+    state: WorkflowState,
+    pending: Any,
+    history: WorkflowHistory,
+    driver: ProductionWorkflowLoopDriver,
+) -> tuple[WorkflowState, WorkflowHistory]:
+    identity = inspect_repository(root)
+    carried_findings = driver.carry_forward_native_findings(
+        state, history.findings
+    )
+    state = state.start_work_unit(
+        slice_id=pending.slice_id,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+        slice_start_commit=identity.head,
+    )
+    history = WorkflowHistory(
+        state.current_work_unit_id,
+        findings=carried_findings,
+    )
+    return state, history
+
+
+def _start_final_review(
+    state: WorkflowState,
+    history: WorkflowHistory,
+    driver: ProductionWorkflowLoopDriver,
+) -> tuple[WorkflowState, WorkflowHistory]:
+    carried_findings = driver.carry_forward_native_findings(
+        state, history.findings
+    )
+    state = state.start_final_review_work_unit()
+    carried_attestations = history.attestations[-1:]
+    history = WorkflowHistory(
+        state.current_work_unit_id,
+        findings=carried_findings,
+        events=(
+            (
+                ValidationAuditEvent(
+                    event_id=1,
+                    slice_id=state.current_slice_id,
+                    attestation=carried_attestations[0],
+                ),
+            )
+            if carried_attestations
+            else ()
+        ),
+        attestations=carried_attestations,
+    )
+    return state, history
+
+
 def run_production_workflow(
     task_file: Path, args: argparse.Namespace, dependencies: ProductionWorkflowDependencies,
     *,
@@ -430,22 +556,38 @@ def run_production_workflow(
     history = dependencies.history(state, root)
     driver.checkpoint(state, history)
 
+    return _run_production_transition_loop(
+        root=root,
+        task_file=task_file,
+        assignment=assignment,
+        args=args,
+        dependencies=dependencies,
+        state=state,
+        history=history,
+        effective_resume=effective_resume,
+        driver=driver,
+        engine=engine,
+    )
+
+
+def _run_production_transition_loop(
+    *,
+    root: Path,
+    task_file: Path,
+    assignment: str,
+    args: argparse.Namespace,
+    dependencies: ProductionWorkflowDependencies,
+    state: WorkflowState,
+    history: WorkflowHistory,
+    effective_resume: bool,
+    driver: ProductionWorkflowLoopDriver,
+    engine: WorkflowEngine,
+) -> WorkflowRunResult:
+
     for _ in range(100):
         current = state.current_work_unit
-        structured_replay = None
-        read_blob = None
-        if (
-            current.kind is WorkUnitKind.FINAL_REVIEW
-            and state.effective_protocol_mode is ProtocolMode.STRUCTURED_V2
-        ):
-            resolution = resolve_resume_state(root, state)
-            structured_replay = resolution.replay_result
-            read_blob = ArtifactStore(root, state.run_id).read_blob
-        recovered_history = dependencies.recover_final_review_attestation(
-            state,
-            history,
-            structured_replay,
-            read_blob,
+        recovered_history = _recover_final_review_history(
+            root, state, current, history, dependencies
         )
         if recovered_history != history:
             history = recovered_history
@@ -574,22 +716,12 @@ def run_production_workflow(
                     state = driver.active_state or state
                 driver.assert_structured_decision_context()
                 try:
-                    finding_handoff = driver.prepare_finding_handoff(
-                        plan_task_path=task_file,
-                        work_plan_path=state.work_plan_path or "",
-                        target_branch=state.target_branch or state.branch,
-                        approved_plan_commit=commit_ref,
-                    )
-                    handoff = write_implementation_handoff(
-                        plan_task_path=task_file,
-                        repository_root=root,
-                        work_plan_path=state.work_plan_path or "",
-                        target_branch=state.target_branch or state.branch,
-                        approved_plan_commit=commit_ref,
-                        finding_handoff=finding_handoff,
-                        write_content=lambda path, content: driver._write_side_effect_file(
-                            path, content, normalized_text=False
-                        ),
+                    handoff = _prepare_plan_implementation_handoff(
+                        driver=driver,
+                        task_file=task_file,
+                        root=root,
+                        state=state,
+                        commit_ref=commit_ref,
                     )
                 except (ArtifactBridgeError, ArtifactReplayError, PlanHandoffError) as exc:
                     raise WorkflowExecutionError(
@@ -600,18 +732,7 @@ def run_production_workflow(
                 return WorkflowRunResult(state, history, commit_ref)
             if not state.planned_slices:
                 raise WorkflowExecutionError("completed plan has no persisted SLICE_PLAN")
-            carried_findings = driver.carry_forward_native_findings(
-                state, history.findings
-            )
-            state = state.start_work_unit(
-                slice_id=1,
-                kind=WorkUnitKind.SLICE,
-                step=WorkflowStep.CODEX_IMPLEMENTATION,
-            )
-            history = WorkflowHistory(
-                state.current_work_unit_id,
-                findings=carried_findings,
-            )
+            state, history = _start_first_slice(state, history, driver)
             driver.checkpoint(state, history)
             state = driver.active_state or state
             continue
@@ -620,45 +741,14 @@ def run_production_workflow(
             (item for item in state.slices if item.status is SliceStatus.PENDING), None
         )
         if pending is not None:
-            identity = inspect_repository(root)
-            carried_findings = driver.carry_forward_native_findings(
-                state, history.findings
-            )
-            state = state.start_work_unit(
-                slice_id=pending.slice_id,
-                kind=WorkUnitKind.SLICE,
-                step=WorkflowStep.CODEX_IMPLEMENTATION,
-                slice_start_commit=identity.head,
-            )
-            history = WorkflowHistory(
-                state.current_work_unit_id,
-                findings=carried_findings,
+            state, history = _start_pending_slice(
+                root, state, pending, history, driver
             )
             driver.checkpoint(state, history)
             state = driver.active_state or state
             continue
 
-        carried_findings = driver.carry_forward_native_findings(
-            state, history.findings
-        )
-        state = state.start_final_review_work_unit()
-        carried_attestations = history.attestations[-1:]
-        history = WorkflowHistory(
-            state.current_work_unit_id,
-            findings=carried_findings,
-            events=(
-                (
-                    ValidationAuditEvent(
-                        event_id=1,
-                        slice_id=state.current_slice_id,
-                        attestation=carried_attestations[0],
-                    ),
-                )
-                if carried_attestations
-                else ()
-            ),
-            attestations=carried_attestations,
-        )
+        state, history = _start_final_review(state, history, driver)
         driver.checkpoint(state, history)
         state = driver.active_state or state
 

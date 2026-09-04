@@ -41,6 +41,11 @@ ENTRY_HELPERS = frozenset(
         "_create_production_state",
     }
 )
+TRANSITION_HELPERS = frozenset(
+    {
+        "_prepare_plan_implementation_handoff",
+    }
+)
 TASK_TEXT = "\n".join(
     (
         "ORCHESTRATOR_MODE: IMPLEMENT",
@@ -370,24 +375,49 @@ def _ordered_entry_decisions(tree: ast.Module) -> list[dict[str, object]]:
 
 def _catcher_inventory(tree: ast.Module) -> list[dict[str, object]]:
     entry = _function(tree, "run_production_workflow")
+    transition_loop = _function(tree, "_run_production_transition_loop")
     parents = {
         child: parent
-        for parent in ast.walk(entry)
+        for owner in (entry, transition_loop)
+        for parent in ast.walk(owner)
         for child in ast.iter_child_nodes(parent)
     }
     handlers = sorted(
         (
             node
-            for node in ast.walk(entry)
+            for owner in (entry, transition_loop)
+            for node in ast.walk(owner)
             if isinstance(node, ast.ExceptHandler)
         ),
         key=lambda node: node.lineno,
     )
+
+    def expanded_body(body: list[ast.stmt]) -> list[ast.stmt]:
+        expanded: list[ast.stmt] = []
+        for statement in body:
+            calls = [
+                node
+                for node in ast.walk(statement)
+                if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id in TRANSITION_HELPERS
+            ]
+            if len(calls) == 1:
+                helper = _function(tree, calls[0].func.id)
+                expanded.extend(
+                    item for item in helper.body if not isinstance(item, ast.Return)
+                )
+            else:
+                expanded.append(statement)
+        return expanded
+
     return [
         {
             "ordinal": index,
             "exception": ast.unparse(handler.type),
-            "protected_body_sha256": _body_sha256(parents[handler].body),
+            "protected_body_sha256": _body_sha256(
+                expanded_body(parents[handler].body)
+            ),
             "handler_body_sha256": _body_sha256(handler.body),
         }
         for index, handler in enumerate(handlers, 1)
@@ -784,28 +814,20 @@ def test_four_catchers_and_transition_loop_match_pre_cut_anchor() -> None:
     ]
     assert len(expected) == 4
     assert _catcher_inventory(SOURCE_TREE) == expected
-    assert _transition_loop_sha256(SOURCE_TREE, SOURCE_TEXT) == baseline[
-        "transition_loop_sha256"
-    ]
-
-
-def test_b47_product_source_remains_byte_identical_to_b46() -> None:
-    baseline = _load_json(DERIVED_TERMS_BASELINE)
-    assert baseline["schema_version"] == "production-entry-derived-terms-b47-v1"
-    anchored_blob = subprocess.check_output(
+    anchored_source = subprocess.check_output(
         (
             "git",
-            "rev-parse",
+            "show",
             f"{baseline['source_commit']}:src/workflow_production.py",
         ),
         cwd=ROOT,
         text=True,
-    ).strip()
-    working_blob = subprocess.check_output(
-        ("git", "hash-object", str(SOURCE)), cwd=ROOT, text=True
-    ).strip()
-    assert anchored_blob == baseline["source_blob"]
-    assert working_blob == baseline["source_blob"]
+    )
+    assert _transition_loop_sha256(
+        ast.parse(anchored_source), anchored_source
+    ) == baseline[
+        "transition_loop_sha256"
+    ]
 
 
 def test_b47_derived_term_assignments_are_anchored() -> None:

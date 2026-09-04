@@ -158,8 +158,20 @@ def test_workflow_engine_driver_inventory_exactly_matches_protocol() -> None:
 
 def test_production_loop_driver_inventory_is_protocol_or_explicitly_internal() -> None:
     tree = ast.parse(PRODUCTION_PATH.read_text(encoding="utf-8"))
-    loop = _function_node(tree, "run_production_workflow")
-    loop_capabilities = _named_driver_capabilities(loop)
+    loop_functions = (
+        "run_production_workflow",
+        "_run_production_transition_loop",
+        "_prepare_plan_implementation_handoff",
+        "_start_first_slice",
+        "_start_pending_slice",
+        "_start_final_review",
+    )
+    loop_capabilities = frozenset().union(
+        *(
+            _named_driver_capabilities(_function_node(tree, name))
+            for name in loop_functions
+        )
+    )
     workflow_capabilities = (
         MANDATORY_WORKFLOW_DRIVER_METHODS
         | MANDATORY_WORKFLOW_DRIVER_STATE_ATTRIBUTES
