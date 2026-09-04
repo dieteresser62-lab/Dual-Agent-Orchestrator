@@ -1,0 +1,531 @@
+{
+  "schema_version": "engine-dispatch-static-pre-b51-v1",
+  "source_commit": "b762dde73296b94a61f028328d09409a07922f2e",
+  "source_blob": "6eef6884f82c4ae0b184f40bc4222384562d0351",
+  "layers": [
+    {
+      "function": "workflow.py::WorkflowEngine._run_codex",
+      "conditions": [
+        {
+          "ordinal": 1,
+          "expression": "request_kind is workflow_requests.NativeCodexRequestKind.CORRECTION",
+          "read_names": [
+            "request_kind",
+            "workflow_requests"
+          ]
+        },
+        {
+          "ordinal": 2,
+          "expression": "correction_start is None",
+          "read_names": [
+            "correction_start"
+          ]
+        },
+        {
+          "ordinal": 3,
+          "expression": "recovered is None and native_request is not None",
+          "read_names": [
+            "native_request",
+            "recovered"
+          ]
+        },
+        {
+          "ordinal": 4,
+          "expression": "authoritative_history.findings != history.findings",
+          "read_names": [
+            "authoritative_history",
+            "history"
+          ]
+        },
+        {
+          "ordinal": 5,
+          "expression": "output is None",
+          "read_names": [
+            "output"
+          ]
+        },
+        {
+          "ordinal": 6,
+          "expression": "not isinstance(output, NativeAgentCodexOutput)",
+          "read_names": [
+            "NativeAgentCodexOutput",
+            "isinstance",
+            "output"
+          ]
+        },
+        {
+          "ordinal": 7,
+          "expression": "result.stopped",
+          "read_names": [
+            "result"
+          ]
+        },
+        {
+          "ordinal": 8,
+          "expression": "result.stop_request is None",
+          "read_names": [
+            "result"
+          ]
+        },
+        {
+          "ordinal": 9,
+          "expression": "expanded is not None",
+          "read_names": [
+            "expanded"
+          ]
+        },
+        {
+          "ordinal": 10,
+          "expression": "added_paths",
+          "read_names": [
+            "added_paths"
+          ]
+        },
+        {
+          "ordinal": 11,
+          "expression": "validation_handoff is not None",
+          "read_names": [
+            "validation_handoff"
+          ]
+        },
+        {
+          "ordinal": 12,
+          "expression": "result.ready is not True",
+          "read_names": [
+            "result"
+          ]
+        },
+        {
+          "ordinal": 13,
+          "expression": "is_plan and result.slice_plan",
+          "read_names": [
+            "is_plan",
+            "result"
+          ]
+        },
+        {
+          "ordinal": 14,
+          "expression": "unexpected_plan_paths",
+          "read_names": [
+            "unexpected_plan_paths"
+          ]
+        },
+        {
+          "ordinal": 15,
+          "expression": "context.plan_only",
+          "read_names": [
+            "context"
+          ]
+        },
+        {
+          "ordinal": 16,
+          "expression": "len(result.slice_plan) != 1",
+          "read_names": [
+            "len",
+            "result"
+          ]
+        },
+        {
+          "ordinal": 17,
+          "expression": "context.work_plan_path not in result.slice_plan[0].scope_paths",
+          "read_names": [
+            "context",
+            "result"
+          ]
+        },
+        {
+          "ordinal": 18,
+          "expression": "context.audit_report_path is not None and (not context.plan_only)",
+          "read_names": [
+            "context"
+          ]
+        },
+        {
+          "ordinal": 19,
+          "expression": "is_plan and context.plan_only",
+          "read_names": [
+            "context",
+            "is_plan"
+          ]
+        },
+        {
+          "ordinal": 20,
+          "expression": "halted",
+          "read_names": [
+            "halted"
+          ]
+        }
+      ],
+      "aborts": [
+        {
+          "ordinal": 1,
+          "exception_type": "WorkflowExecutionError",
+          "message_expression": "'native Codex correction requires a persisted start fingerprint'"
+        },
+        {
+          "ordinal": 2,
+          "exception_type": "WorkflowContractError",
+          "message_expression": "'Codex returned a non-native result'"
+        },
+        {
+          "ordinal": 3,
+          "exception_type": "WorkflowExecutionError",
+          "message_expression": "'Codex stop has no structured stop request'"
+        },
+        {
+          "ordinal": 4,
+          "exception_type": "WorkflowExecutionError",
+          "message_expression": "f'TASK-SCOPE | SLICE_PLAN contains paths outside the declared task scope: {', '.join(unexpected_plan_paths)}'"
+        },
+        {
+          "ordinal": 5,
+          "exception_type": "WorkflowExecutionError",
+          "message_expression": "'PLAN_ONLY requires exactly one executable Slice for the plan artifact'"
+        },
+        {
+          "ordinal": 6,
+          "exception_type": "WorkflowExecutionError",
+          "message_expression": "'PLAN_ONLY Slice must include the declared WORK_PLAN_PATH'"
+        }
+      ],
+      "returns": [
+        {
+          "ordinal": 1,
+          "expression": "(state, history)"
+        },
+        {
+          "ordinal": 2,
+          "expression": "self._run_codex(expanded, expanded_context, history)"
+        },
+        {
+          "ordinal": 3,
+          "expression": "self._run_codex(validation_handoff, handoff_context, history)"
+        },
+        {
+          "ordinal": 4,
+          "expression": "(state, history)"
+        },
+        {
+          "ordinal": 5,
+          "expression": "(state, history)"
+        },
+        {
+          "ordinal": 6,
+          "expression": "(state, history)"
+        },
+        {
+          "ordinal": 7,
+          "expression": "(state, history)"
+        }
+      ],
+      "catchers": [],
+      "checkpoints": [
+        {
+          "ordinal": 1,
+          "state_expression": "expanded",
+          "history_expression": "history",
+          "statement_path": "body[21].body[2].body[0]",
+          "after_condition_count": 9,
+          "enclosing_condition_ordinals": [
+            7,
+            9
+          ]
+        },
+        {
+          "ordinal": 2,
+          "state_expression": "validation_handoff",
+          "history_expression": "history",
+          "statement_path": "body[21].body[4].body[0]",
+          "after_condition_count": 11,
+          "enclosing_condition_ordinals": [
+            7,
+            11
+          ]
+        },
+        {
+          "ordinal": 3,
+          "state_expression": "state",
+          "history_expression": "history",
+          "statement_path": "body[21].body[6]",
+          "after_condition_count": 11,
+          "enclosing_condition_ordinals": [
+            7
+          ]
+        },
+        {
+          "ordinal": 4,
+          "state_expression": "state",
+          "history_expression": "history",
+          "statement_path": "body[22].body[1]",
+          "after_condition_count": 12,
+          "enclosing_condition_ordinals": [
+            12
+          ]
+        },
+        {
+          "ordinal": 5,
+          "state_expression": "state",
+          "history_expression": "history",
+          "statement_path": "body[27]",
+          "after_condition_count": 20,
+          "enclosing_condition_ordinals": []
+        }
+      ]
+    },
+    {
+      "function": "workflow.py::WorkflowEngine._run_review",
+      "conditions": [
+        {
+          "ordinal": 1,
+          "expression": "reviewer is not AgentRole.CLAUDE",
+          "read_names": [
+            "AgentRole",
+            "reviewer"
+          ]
+        },
+        {
+          "ordinal": 2,
+          "expression": "unexpected",
+          "read_names": [
+            "unexpected"
+          ]
+        },
+        {
+          "ordinal": 3,
+          "expression": "halted",
+          "read_names": [
+            "halted"
+          ]
+        },
+        {
+          "ordinal": 4,
+          "expression": "not attestation.complete",
+          "read_names": [
+            "attestation"
+          ]
+        },
+        {
+          "ordinal": 5,
+          "expression": "is_final_review",
+          "read_names": [
+            "is_final_review"
+          ]
+        },
+        {
+          "ordinal": 6,
+          "expression": "context.approved_plan_text is not None and (unit.kind is WorkUnitKind.CORRECTION or unit.round_number > 1)",
+          "read_names": [
+            "WorkUnitKind",
+            "context",
+            "unit"
+          ]
+        },
+        {
+          "ordinal": 7,
+          "expression": "correction_start is None",
+          "read_names": [
+            "correction_start"
+          ]
+        },
+        {
+          "ordinal": 8,
+          "expression": "reviewer is AgentRole.CLAUDE and history.last_claude_fingerprint is not None",
+          "read_names": [
+            "AgentRole",
+            "history",
+            "reviewer"
+          ]
+        },
+        {
+          "ordinal": 9,
+          "expression": "not is_plan_review and (not is_final_review) and (context.approved_plan_text is not None)",
+          "read_names": [
+            "context",
+            "is_final_review",
+            "is_plan_review"
+          ]
+        },
+        {
+          "ordinal": 10,
+          "expression": "start_fingerprint is None",
+          "read_names": [
+            "start_fingerprint"
+          ]
+        },
+        {
+          "ordinal": 11,
+          "expression": "native_output is not None and (not isinstance(native_output, NativeAgentReviewOutput))",
+          "read_names": [
+            "NativeAgentReviewOutput",
+            "isinstance",
+            "native_output"
+          ]
+        },
+        {
+          "ordinal": 12,
+          "expression": "native_output is None and native_request is not None",
+          "read_names": [
+            "native_output",
+            "native_request"
+          ]
+        },
+        {
+          "ordinal": 13,
+          "expression": "output is None",
+          "read_names": [
+            "output"
+          ]
+        },
+        {
+          "ordinal": 14,
+          "expression": "output is None",
+          "read_names": [
+            "output"
+          ]
+        },
+        {
+          "ordinal": 15,
+          "expression": "not isinstance(output, NativeAgentReviewOutput)",
+          "read_names": [
+            "NativeAgentReviewOutput",
+            "isinstance",
+            "output"
+          ]
+        }
+      ],
+      "aborts": [
+        {
+          "ordinal": 1,
+          "exception_type": "WorkflowExecutionError",
+          "message_expression": "'only Claude may execute review steps'"
+        },
+        {
+          "ordinal": 2,
+          "exception_type": "WorkflowExecutionError",
+          "message_expression": "'validation attestation is incomplete and cannot be overridden'"
+        },
+        {
+          "ordinal": 3,
+          "exception_type": "WorkflowExecutionError",
+          "message_expression": "'correction review requires a persisted start fingerprint'"
+        },
+        {
+          "ordinal": 4,
+          "exception_type": "WorkflowExecutionError",
+          "message_expression": "'Slice review packet requires a persisted start fingerprint'"
+        },
+        {
+          "ordinal": 5,
+          "exception_type": "WorkflowExecutionError",
+          "message_expression": "f'canonical review packet could not be built: {exc}'"
+        },
+        {
+          "ordinal": 6,
+          "exception_type": "WorkflowExecutionError",
+          "message_expression": "'native reviewer recovery returned an invalid result contract'"
+        },
+        {
+          "ordinal": 7,
+          "exception_type": "WorkflowContractError",
+          "message_expression": "'Claude returned a non-native review result'"
+        }
+      ],
+      "returns": [
+        {
+          "ordinal": 1,
+          "expression": "(state, history)"
+        },
+        {
+          "ordinal": 2,
+          "expression": "(state, history)"
+        },
+        {
+          "ordinal": 3,
+          "expression": "(state, history)"
+        },
+        {
+          "ordinal": 4,
+          "expression": "(state, history)"
+        },
+        {
+          "ordinal": 5,
+          "expression": "(state, history)"
+        },
+        {
+          "ordinal": 6,
+          "expression": "self._apply_review_result(state=state, context=context, history=history, reviewer=reviewer, result=result, fingerprint=changes.fingerprint, round_number=review_round, is_plan_review=is_plan_review, is_final_review=is_final_review, user_gate_paths=changes.user_gate_paths)"
+        }
+      ],
+      "catchers": [
+        {
+          "ordinal": 1,
+          "exception_type": "NoWorkflowChangesError"
+        },
+        {
+          "ordinal": 2,
+          "exception_type": "ValidationExecutionError"
+        },
+        {
+          "ordinal": 3,
+          "exception_type": "ReviewPacketError"
+        }
+      ],
+      "checkpoints": [
+        {
+          "ordinal": 1,
+          "state_expression": "state",
+          "history_expression": "history",
+          "statement_path": "body[5].handlers[0].body[1]",
+          "after_condition_count": 1,
+          "enclosing_condition_ordinals": []
+        },
+        {
+          "ordinal": 2,
+          "state_expression": "state",
+          "history_expression": "history",
+          "statement_path": "body[7].body[1]",
+          "after_condition_count": 2,
+          "enclosing_condition_ordinals": [
+            2
+          ]
+        },
+        {
+          "ordinal": 3,
+          "state_expression": "state",
+          "history_expression": "history",
+          "statement_path": "body[9].body[0]",
+          "after_condition_count": 3,
+          "enclosing_condition_ordinals": [
+            3
+          ]
+        },
+        {
+          "ordinal": 4,
+          "state_expression": "state",
+          "history_expression": "history",
+          "statement_path": "body[12].handlers[0].body[1]",
+          "after_condition_count": 3,
+          "enclosing_condition_ordinals": []
+        },
+        {
+          "ordinal": 5,
+          "state_expression": "state",
+          "history_expression": "history",
+          "statement_path": "body[13]",
+          "after_condition_count": 3,
+          "enclosing_condition_ordinals": []
+        },
+        {
+          "ordinal": 6,
+          "state_expression": "state",
+          "history_expression": "history",
+          "statement_path": "body[19].body[6]",
+          "after_condition_count": 10,
+          "enclosing_condition_ordinals": [
+            9
+          ]
+        }
+      ]
+    }
+  ]
+}

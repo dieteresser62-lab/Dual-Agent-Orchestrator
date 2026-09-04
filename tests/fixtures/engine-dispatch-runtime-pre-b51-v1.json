@@ -1,0 +1,324 @@
+{
+  "schema_version": "engine-dispatch-runtime-pre-b51-v1",
+  "source_commit": "b762dde73296b94a61f028328d09409a07922f2e",
+  "source_blob": "6eef6884f82c4ae0b184f40bc4222384562d0351",
+  "scenarios": [
+    {
+      "scenario_id": "codex-correction-missing-start-fingerprint",
+      "path": "codex",
+      "trigger_mode": "state-contract-injection",
+      "reachable": true,
+      "structural_reason": null,
+      "expected_error": {
+        "type": "WorkflowExecutionError",
+        "message": "native Codex correction requires a persisted start fingerprint"
+      },
+      "actual_error": {
+        "type": "WorkflowExecutionError",
+        "message": "native Codex correction requires a persisted start fingerprint"
+      },
+      "checkpoints": [],
+      "provider_input": null,
+      "provider_dispatch_count": 0,
+      "real_provider_start_count": 0
+    },
+    {
+      "scenario_id": "codex-non-native-result",
+      "path": "codex",
+      "trigger_mode": "provider-contract-injection",
+      "reachable": true,
+      "structural_reason": null,
+      "expected_error": {
+        "type": "WorkflowContractError",
+        "message": "Codex returned a non-native result"
+      },
+      "actual_error": {
+        "type": "WorkflowContractError",
+        "message": "Codex returned a non-native result"
+      },
+      "checkpoints": [],
+      "provider_input": {
+        "canonical_json": "{\"assignment\":\"Implement Slice 10\",\"authorized_paths\":[\"src/early.py\",\"src/latest.py\",\"tests/test_workflow.py\"],\"base_commit\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"codex_contract\":{\"enforce_expected_test_files\":true,\"expected_test_files\":[\"tests/test_workflow.py\"],\"name\":\"work-unit-2-codex_implementation\",\"plan_artifact_path\":null,\"readiness_kind\":\"implementation\",\"require_slice_plan\":false,\"require_test_files_record\":true,\"review_fingerprint\":null,\"round_number\":1,\"slice_id\":\"01\",\"test_changes_approved\":true,\"validation_attestation\":null},\"current_fingerprint\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"evidence_manifest\":[{\"byte_count\":213,\"content\":\"Return exactly one request-bound JSON result matching the supplied writer schema. Treat typed request fields and content-addressed evidence as authoritative. Do not emit Markdown wrappers or legacy result markers.\",\"delivery\":\"inline\",\"evidence_id\":\"native-policy\",\"kind\":\"system_policy\",\"sha256\":\"5cbaf133e85115fd268b2a5fd3c8e26dcb7eb7563107682e4b07690c3faf37aa\",\"source_path\":null}],\"open_findings\":[],\"operation\":\"codex_implementation\",\"request_id\":\"native-codex-request-85642a908b09cad2599b784dc7fcf0f4523f75e1cb49abbf616f6bf6bbbfad4c\",\"request_type\":\"implementation\",\"response_contract\":{\"schema_sha256\":\"eb16b2652f73fbb2f0693ba42b379575b4ae92750a86ee47e5ec89c38a222e41\",\"schema_version\":\"native-agent-codex-result-v2\"},\"run_id\":\"run-1\",\"schema_version\":\"native-agent-codex-request-v2\",\"target_branch\":\"feature/workflow\",\"transport\":\"native-codex-v2\",\"work_context\":\"PLAN\\nCodex implements; Claude reviews and approves each round.\\n\\nCURRENT SLICE\\nAsymmetric state-v3 workflow engine.\\n\\nEXACT CURRENT SLICE ALLOWLIST\\nPLAN STEP: not bound yet\\n\\nAPPROVED PLAN ANCHORS\\nNONE\\n\\nCURRENT ANCHORS\\nNONE\\n\\nMACHINE STOP RULES (complete, untruncated)\\nBRANCH-MISMATCH | The active branch differs from the feature branch persisted for this run.\\nVALIDATION-UNAVAILABLE | Required validation cannot be executed and has no approved replacement.\\nUNEXPECTED-PATH | The canonical diff contains a path outside the persisted Slice scope.\\nCONTRACT-UNCLEAR | The current step contract is technically ambiguous and requires user direction.\",\"work_unit_id\":\"2\"}",
+        "sha256": "b0e07e4feab69d9c898d8561762d39b0a8b18f9cec28eb630a495452c493f86e",
+        "utf8_bytes": 2243
+      },
+      "provider_dispatch_count": 1,
+      "real_provider_start_count": 0
+    },
+    {
+      "scenario_id": "codex-stop-missing-request",
+      "path": "codex",
+      "trigger_mode": "provider-contract-injection",
+      "reachable": true,
+      "structural_reason": null,
+      "expected_error": {
+        "type": "WorkflowExecutionError",
+        "message": "Codex stop has no structured stop request"
+      },
+      "actual_error": {
+        "type": "WorkflowExecutionError",
+        "message": "Codex stop has no structured stop request"
+      },
+      "checkpoints": [],
+      "provider_input": {
+        "canonical_json": "{\"assignment\":\"Implement Slice 10\",\"authorized_paths\":[\"src/early.py\",\"src/latest.py\",\"tests/test_workflow.py\"],\"base_commit\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"codex_contract\":{\"enforce_expected_test_files\":true,\"expected_test_files\":[\"tests/test_workflow.py\"],\"name\":\"work-unit-2-codex_implementation\",\"plan_artifact_path\":null,\"readiness_kind\":\"implementation\",\"require_slice_plan\":false,\"require_test_files_record\":true,\"review_fingerprint\":null,\"round_number\":1,\"slice_id\":\"01\",\"test_changes_approved\":true,\"validation_attestation\":null},\"current_fingerprint\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"evidence_manifest\":[{\"byte_count\":213,\"content\":\"Return exactly one request-bound JSON result matching the supplied writer schema. Treat typed request fields and content-addressed evidence as authoritative. Do not emit Markdown wrappers or legacy result markers.\",\"delivery\":\"inline\",\"evidence_id\":\"native-policy\",\"kind\":\"system_policy\",\"sha256\":\"5cbaf133e85115fd268b2a5fd3c8e26dcb7eb7563107682e4b07690c3faf37aa\",\"source_path\":null}],\"open_findings\":[],\"operation\":\"codex_implementation\",\"request_id\":\"native-codex-request-85642a908b09cad2599b784dc7fcf0f4523f75e1cb49abbf616f6bf6bbbfad4c\",\"request_type\":\"implementation\",\"response_contract\":{\"schema_sha256\":\"eb16b2652f73fbb2f0693ba42b379575b4ae92750a86ee47e5ec89c38a222e41\",\"schema_version\":\"native-agent-codex-result-v2\"},\"run_id\":\"run-1\",\"schema_version\":\"native-agent-codex-request-v2\",\"target_branch\":\"feature/workflow\",\"transport\":\"native-codex-v2\",\"work_context\":\"PLAN\\nCodex implements; Claude reviews and approves each round.\\n\\nCURRENT SLICE\\nAsymmetric state-v3 workflow engine.\\n\\nEXACT CURRENT SLICE ALLOWLIST\\nPLAN STEP: not bound yet\\n\\nAPPROVED PLAN ANCHORS\\nNONE\\n\\nCURRENT ANCHORS\\nNONE\\n\\nMACHINE STOP RULES (complete, untruncated)\\nBRANCH-MISMATCH | The active branch differs from the feature branch persisted for this run.\\nVALIDATION-UNAVAILABLE | Required validation cannot be executed and has no approved replacement.\\nUNEXPECTED-PATH | The canonical diff contains a path outside the persisted Slice scope.\\nCONTRACT-UNCLEAR | The current step contract is technically ambiguous and requires user direction.\",\"work_unit_id\":\"2\"}",
+        "sha256": "b0e07e4feab69d9c898d8561762d39b0a8b18f9cec28eb630a495452c493f86e",
+        "utf8_bytes": 2243
+      },
+      "provider_dispatch_count": 1,
+      "real_provider_start_count": 0
+    },
+    {
+      "scenario_id": "codex-plan-outside-task-scope",
+      "path": "codex",
+      "trigger_mode": "production-input",
+      "reachable": true,
+      "structural_reason": null,
+      "expected_error": {
+        "type": "WorkflowExecutionError",
+        "message": "TASK-SCOPE | SLICE_PLAN contains paths outside the declared task scope: src/outside.py"
+      },
+      "actual_error": {
+        "type": "WorkflowExecutionError",
+        "message": "TASK-SCOPE | SLICE_PLAN contains paths outside the declared task scope: src/outside.py"
+      },
+      "checkpoints": [],
+      "provider_input": {
+        "canonical_json": "{\"assignment\":\"Implement Slice 10\",\"authorized_paths\":[\"docs/internal/plan.md\"],\"base_commit\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"codex_contract\":{\"enforce_expected_test_files\":true,\"expected_test_files\":[],\"name\":\"work-unit-1-codex_plan\",\"plan_artifact_path\":null,\"readiness_kind\":\"plan\",\"require_slice_plan\":true,\"require_test_files_record\":false,\"review_fingerprint\":null,\"round_number\":1,\"slice_id\":\"01\",\"test_changes_approved\":true,\"validation_attestation\":null},\"current_fingerprint\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"evidence_manifest\":[{\"byte_count\":213,\"content\":\"Return exactly one request-bound JSON result matching the supplied writer schema. Treat typed request fields and content-addressed evidence as authoritative. Do not emit Markdown wrappers or legacy result markers.\",\"delivery\":\"inline\",\"evidence_id\":\"native-policy\",\"kind\":\"system_policy\",\"sha256\":\"5cbaf133e85115fd268b2a5fd3c8e26dcb7eb7563107682e4b07690c3faf37aa\",\"source_path\":null}],\"open_findings\":[],\"operation\":\"codex_plan\",\"request_id\":\"native-codex-request-e5bd2cc9f357800a49d914f3379e47937002ed956ab60af268dd40716452f107\",\"request_type\":\"plan\",\"response_contract\":{\"schema_sha256\":\"e2074c6571e0e7b9d6aee41b9b06d6537ec320f98d9e9c336318addb9a18fc56\",\"schema_version\":\"native-agent-codex-result-v2\"},\"run_id\":\"b51-plan-run\",\"schema_version\":\"native-agent-codex-request-v2\",\"target_branch\":\"feature/workflow\",\"transport\":\"native-codex-v2\",\"work_context\":\"PLAN\\nCodex implements; Claude reviews and approves each round.\\n\\nCURRENT SLICE\\nAsymmetric state-v3 workflow engine.\\n\\nEXACT CURRENT SLICE ALLOWLIST\\nPLAN STEP: not bound yet\\n\\nAPPROVED PLAN ANCHORS\\nNONE\\n\\nCURRENT ANCHORS\\nNONE\\n\\nMACHINE STOP RULES (complete, untruncated)\\nBRANCH-MISMATCH | The active branch differs from the feature branch persisted for this run.\\nVALIDATION-UNAVAILABLE | Required validation cannot be executed and has no approved replacement.\\nUNEXPECTED-PATH | The canonical diff contains a path outside the persisted Slice scope.\\nCONTRACT-UNCLEAR | The current step contract is technically ambiguous and requires user direction.\",\"work_unit_id\":\"1\"}",
+        "sha256": "4036ea94c4976f6a61ae4ecd06fb0d7ebbc412e099dc9222107a42dbb275d386",
+        "utf8_bytes": 2154
+      },
+      "provider_dispatch_count": 1,
+      "real_provider_start_count": 0
+    },
+    {
+      "scenario_id": "codex-plan-only-multiple-slices",
+      "path": "codex",
+      "trigger_mode": "provider-contract-injection",
+      "reachable": true,
+      "structural_reason": null,
+      "expected_error": {
+        "type": "WorkflowExecutionError",
+        "message": "PLAN_ONLY requires exactly one executable Slice for the plan artifact"
+      },
+      "actual_error": {
+        "type": "WorkflowExecutionError",
+        "message": "PLAN_ONLY requires exactly one executable Slice for the plan artifact"
+      },
+      "checkpoints": [],
+      "provider_input": {
+        "canonical_json": "{\"assignment\":\"Implement Slice 10\",\"authorized_paths\":[\"docs/internal/plan.md\"],\"base_commit\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"codex_contract\":{\"enforce_expected_test_files\":true,\"expected_test_files\":[],\"name\":\"work-unit-1-codex_plan\",\"plan_artifact_path\":\"docs/internal/plan.md\",\"readiness_kind\":\"plan\",\"require_slice_plan\":true,\"require_test_files_record\":false,\"review_fingerprint\":null,\"round_number\":1,\"slice_id\":\"01\",\"test_changes_approved\":true,\"validation_attestation\":null},\"current_fingerprint\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"evidence_manifest\":[{\"byte_count\":213,\"content\":\"Return exactly one request-bound JSON result matching the supplied writer schema. Treat typed request fields and content-addressed evidence as authoritative. Do not emit Markdown wrappers or legacy result markers.\",\"delivery\":\"inline\",\"evidence_id\":\"native-policy\",\"kind\":\"system_policy\",\"sha256\":\"5cbaf133e85115fd268b2a5fd3c8e26dcb7eb7563107682e4b07690c3faf37aa\",\"source_path\":null}],\"open_findings\":[],\"operation\":\"codex_plan\",\"request_id\":\"native-codex-request-eecab562288e65a17905739d18369b09ac7f906bb57451eeb4e50854b633bdf5\",\"request_type\":\"plan\",\"response_contract\":{\"schema_sha256\":\"e2074c6571e0e7b9d6aee41b9b06d6537ec320f98d9e9c336318addb9a18fc56\",\"schema_version\":\"native-agent-codex-result-v2\"},\"run_id\":\"b51-plan-run\",\"schema_version\":\"native-agent-codex-request-v2\",\"target_branch\":\"feature/workflow\",\"transport\":\"native-codex-v2\",\"work_context\":\"PLAN\\nCodex implements; Claude reviews and approves each round.\\n\\nCURRENT SLICE\\nAsymmetric state-v3 workflow engine.\\n\\nEXACT CURRENT SLICE ALLOWLIST\\nPLAN STEP: not bound yet\\n\\nAPPROVED PLAN ANCHORS\\nNONE\\n\\nCURRENT ANCHORS\\nNONE\\n\\nMACHINE STOP RULES (complete, untruncated)\\nBRANCH-MISMATCH | The active branch differs from the feature branch persisted for this run.\\nVALIDATION-UNAVAILABLE | Required validation cannot be executed and has no approved replacement.\\nUNEXPECTED-PATH | The canonical diff contains a path outside the persisted Slice scope.\\nCONTRACT-UNCLEAR | The current step contract is technically ambiguous and requires user direction.\",\"work_unit_id\":\"1\"}",
+        "sha256": "878e3e47e96365c604c363215adca192f81dfc87a1c891af6a2546cb555f824f",
+        "utf8_bytes": 2173
+      },
+      "provider_dispatch_count": 1,
+      "real_provider_start_count": 0
+    },
+    {
+      "scenario_id": "codex-plan-only-missing-work-plan-path",
+      "path": "codex",
+      "trigger_mode": "provider-contract-injection",
+      "reachable": true,
+      "structural_reason": null,
+      "expected_error": {
+        "type": "WorkflowExecutionError",
+        "message": "PLAN_ONLY Slice must include the declared WORK_PLAN_PATH"
+      },
+      "actual_error": {
+        "type": "WorkflowExecutionError",
+        "message": "PLAN_ONLY Slice must include the declared WORK_PLAN_PATH"
+      },
+      "checkpoints": [],
+      "provider_input": {
+        "canonical_json": "{\"assignment\":\"Implement Slice 10\",\"authorized_paths\":[\"docs/internal/other.md\",\"docs/internal/plan.md\"],\"base_commit\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"codex_contract\":{\"enforce_expected_test_files\":true,\"expected_test_files\":[],\"name\":\"work-unit-1-codex_plan\",\"plan_artifact_path\":\"docs/internal/plan.md\",\"readiness_kind\":\"plan\",\"require_slice_plan\":true,\"require_test_files_record\":false,\"review_fingerprint\":null,\"round_number\":1,\"slice_id\":\"01\",\"test_changes_approved\":true,\"validation_attestation\":null},\"current_fingerprint\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"evidence_manifest\":[{\"byte_count\":213,\"content\":\"Return exactly one request-bound JSON result matching the supplied writer schema. Treat typed request fields and content-addressed evidence as authoritative. Do not emit Markdown wrappers or legacy result markers.\",\"delivery\":\"inline\",\"evidence_id\":\"native-policy\",\"kind\":\"system_policy\",\"sha256\":\"5cbaf133e85115fd268b2a5fd3c8e26dcb7eb7563107682e4b07690c3faf37aa\",\"source_path\":null}],\"open_findings\":[],\"operation\":\"codex_plan\",\"request_id\":\"native-codex-request-42a3feb7471ac152759e4adf9743cd9f2763d4f65faacde91a6c6ddc3908d323\",\"request_type\":\"plan\",\"response_contract\":{\"schema_sha256\":\"e2074c6571e0e7b9d6aee41b9b06d6537ec320f98d9e9c336318addb9a18fc56\",\"schema_version\":\"native-agent-codex-result-v2\"},\"run_id\":\"b51-plan-run\",\"schema_version\":\"native-agent-codex-request-v2\",\"target_branch\":\"feature/workflow\",\"transport\":\"native-codex-v2\",\"work_context\":\"PLAN\\nCodex implements; Claude reviews and approves each round.\\n\\nCURRENT SLICE\\nAsymmetric state-v3 workflow engine.\\n\\nEXACT CURRENT SLICE ALLOWLIST\\nPLAN STEP: not bound yet\\n\\nAPPROVED PLAN ANCHORS\\nNONE\\n\\nCURRENT ANCHORS\\nNONE\\n\\nMACHINE STOP RULES (complete, untruncated)\\nBRANCH-MISMATCH | The active branch differs from the feature branch persisted for this run.\\nVALIDATION-UNAVAILABLE | Required validation cannot be executed and has no approved replacement.\\nUNEXPECTED-PATH | The canonical diff contains a path outside the persisted Slice scope.\\nCONTRACT-UNCLEAR | The current step contract is technically ambiguous and requires user direction.\",\"work_unit_id\":\"1\"}",
+        "sha256": "acffad899ab0f2fa972bb2c9cfac7b867d185c6d44685bc44e630062a33eec2c",
+        "utf8_bytes": 2198
+      },
+      "provider_dispatch_count": 1,
+      "real_provider_start_count": 0
+    },
+    {
+      "scenario_id": "review-non-claude",
+      "path": "review",
+      "trigger_mode": "caller-contract-injection",
+      "reachable": true,
+      "structural_reason": null,
+      "expected_error": {
+        "type": "WorkflowExecutionError",
+        "message": "only Claude may execute review steps"
+      },
+      "actual_error": {
+        "type": "WorkflowExecutionError",
+        "message": "only Claude may execute review steps"
+      },
+      "checkpoints": [],
+      "provider_input": null,
+      "provider_dispatch_count": 0,
+      "real_provider_start_count": 0
+    },
+    {
+      "scenario_id": "review-incomplete-attestation",
+      "path": "review",
+      "trigger_mode": "driver-contract-injection",
+      "reachable": true,
+      "structural_reason": null,
+      "expected_error": {
+        "type": "WorkflowExecutionError",
+        "message": "validation attestation is incomplete and cannot be overridden"
+      },
+      "actual_error": {
+        "type": "WorkflowExecutionError",
+        "message": "validation attestation is incomplete and cannot be overridden"
+      },
+      "checkpoints": [
+        {
+          "checkpoint_site": "_run_review#5",
+          "step": "claude_slice_review",
+          "work_unit_status": "in_progress",
+          "work_unit_kind": "slice"
+        }
+      ],
+      "provider_input": null,
+      "provider_dispatch_count": 0,
+      "real_provider_start_count": 0
+    },
+    {
+      "scenario_id": "review-correction-missing-start-fingerprint",
+      "path": "review",
+      "trigger_mode": "state-contract-injection",
+      "reachable": true,
+      "structural_reason": null,
+      "expected_error": {
+        "type": "WorkflowExecutionError",
+        "message": "correction review requires a persisted start fingerprint"
+      },
+      "actual_error": {
+        "type": "WorkflowExecutionError",
+        "message": "correction review requires a persisted start fingerprint"
+      },
+      "checkpoints": [
+        {
+          "checkpoint_site": "_run_review#5",
+          "step": "claude_slice_review",
+          "work_unit_status": "in_progress",
+          "work_unit_kind": "plan"
+        }
+      ],
+      "provider_input": null,
+      "provider_dispatch_count": 0,
+      "real_provider_start_count": 0
+    },
+    {
+      "scenario_id": "review-slice-packet-missing-start-fingerprint",
+      "path": "review",
+      "trigger_mode": "state-contract-injection",
+      "reachable": true,
+      "structural_reason": null,
+      "expected_error": {
+        "type": "WorkflowExecutionError",
+        "message": "Slice review packet requires a persisted start fingerprint"
+      },
+      "actual_error": {
+        "type": "WorkflowExecutionError",
+        "message": "Slice review packet requires a persisted start fingerprint"
+      },
+      "checkpoints": [
+        {
+          "checkpoint_site": "_run_review#5",
+          "step": "claude_slice_review",
+          "work_unit_status": "in_progress",
+          "work_unit_kind": "plan"
+        }
+      ],
+      "provider_input": null,
+      "provider_dispatch_count": 0,
+      "real_provider_start_count": 0
+    },
+    {
+      "scenario_id": "review-packet-builder-error",
+      "path": "review",
+      "trigger_mode": "packet-builder-failure",
+      "reachable": true,
+      "structural_reason": null,
+      "expected_error": {
+        "type": "WorkflowExecutionError",
+        "message": "canonical review packet could not be built: packet probe"
+      },
+      "actual_error": {
+        "type": "WorkflowExecutionError",
+        "message": "canonical review packet could not be built: packet probe"
+      },
+      "checkpoints": [
+        {
+          "checkpoint_site": "_run_review#5",
+          "step": "claude_slice_review",
+          "work_unit_status": "in_progress",
+          "work_unit_kind": "slice"
+        }
+      ],
+      "provider_input": null,
+      "provider_dispatch_count": 0,
+      "real_provider_start_count": 0
+    },
+    {
+      "scenario_id": "review-invalid-recovery-contract",
+      "path": "review",
+      "trigger_mode": "recovery-contract-injection",
+      "reachable": true,
+      "structural_reason": null,
+      "expected_error": {
+        "type": "WorkflowExecutionError",
+        "message": "native reviewer recovery returned an invalid result contract"
+      },
+      "actual_error": {
+        "type": "WorkflowExecutionError",
+        "message": "native reviewer recovery returned an invalid result contract"
+      },
+      "checkpoints": [
+        {
+          "checkpoint_site": "_run_review#5",
+          "step": "claude_slice_review",
+          "work_unit_status": "in_progress",
+          "work_unit_kind": "slice"
+        }
+      ],
+      "provider_input": {
+        "canonical_json": "{\"acceptance_criteria\":[\"Asymmetric state-v3 workflow engine.\",\"The decision must satisfy the bound review contract and the fingerprint-matching deterministic validation attestation.\",\"The reviewed changes must remain within the exact authorized path boundary and preserve resume/idempotency invariants.\"],\"authorized_paths\":[\"src/early.py\",\"tests/test_workflow.py\"],\"base_commit\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"current_fingerprint\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"evidence_manifest\":[{\"byte_count\":18,\"content\":\"Implement Slice 10\",\"delivery\":\"inline\",\"evidence_id\":\"assignment\",\"kind\":\"assignment\",\"sha256\":\"e26e79094d51269104175e79014004f9ba07a56c7874d20cc8dc736229b88e92\",\"source_path\":null},{\"byte_count\":640,\"content\":\"PLAN\\nCodex implements; Claude reviews and approves each round.\\n\\nCURRENT SLICE\\nAsymmetric state-v3 workflow engine.\\n\\nEXACT CURRENT SLICE ALLOWLIST\\nPLAN STEP: not bound yet\\n\\nAPPROVED PLAN ANCHORS\\nNONE\\n\\nCURRENT ANCHORS\\nNONE\\n\\nMACHINE STOP RULES (complete, untruncated)\\nBRANCH-MISMATCH | The active branch differs from the feature branch persisted for this run.\\nVALIDATION-UNAVAILABLE | Required validation cannot be executed and has no approved replacement.\\nUNEXPECTED-PATH | The canonical diff contains a path outside the persisted Slice scope.\\nCONTRACT-UNCLEAR | The current step contract is technically ambiguous and requires user direction.\",\"delivery\":\"inline\",\"evidence_id\":\"distilled-context\",\"kind\":\"workflow_context\",\"sha256\":\"666f4dcc39cc0e87e5ac56b6887179c47363357cb1d0f3513aa1977b127f45f5\",\"source_path\":null},{\"byte_count\":302,\"content\":\"diff --git a/src/early.py b/src/early.py\\nindex 1111111..2222222 100644\\n--- a/src/early.py\\n+++ b/src/early.py\\n@@ -1 +1 @@\\n-old\\n+new\\ndiff --git a/tests/test_workflow.py b/tests/test_workflow.py\\nindex 1111111..2222222 100644\\n--- a/tests/test_workflow.py\\n+++ b/tests/test_workflow.py\\n@@ -1 +1 @@\\n-old\\n+new\\n\",\"delivery\":\"inline\",\"evidence_id\":\"review-diff\",\"kind\":\"full_slice\",\"sha256\":\"12002e7a215bccce1cb33cea9981cccd3b3bdf76a3182963eb0cf0560181b69d\",\"source_path\":null}],\"operation\":\"claude_slice_review\",\"persistence_protocol\":\"structured-v2\",\"request_id\":\"native-review-request-4da2c215a89fe0dd655ae8f4493b1b42e798ca421d0b5a3fb87d35c57b96c702\",\"request_type\":\"review_request\",\"response_contract\":{\"schema_sha256\":\"1069a9607e5d7fa270494c1a2655f9875409e662cd35973c4c608f0f027fdb7b\",\"schema_version\":\"native-agent-review-result-v2\"},\"review_contract\":{\"allow_new_observations\":true,\"anchor_origin\":null,\"approval_marker\":\"SLICE_APPROVAL\",\"next_finding_id\":\"C-01\",\"previous_findings\":[],\"red_state_followup_slice\":null,\"round_number\":1,\"slice_id\":\"01\",\"test_changes_approved\":true,\"test_files\":[\"tests/test_workflow.py\"],\"validation_attestation\":{\"attestation_id\":\"validation-bbbbbbbbbbbb\",\"command_specs\":[{\"argv\":[],\"legacy_shell\":\"python3 -m pytest tests/ -v\"}],\"diff_fingerprint\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"expected_commands\":[\"python3 -m pytest tests/ -v\"],\"output_digest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"records\":[{\"command\":\"python3 -m pytest tests/ -v\",\"exit_code\":0,\"output\":\"\",\"status\":\"PASS\"}],\"summary\":\"tests passed\"},\"validation_command_prefixes\":[[\"python3\",\"-m\",\"pytest\"]]},\"review_kind\":\"slice\",\"reviewer\":\"claude\",\"run_id\":\"run-1\",\"schema_version\":\"native-agent-review-request-v2\",\"target_branch\":\"feature/workflow\",\"transport\":\"native-claude-review-v2\",\"work_unit_id\":\"2\"}",
+        "sha256": "7f6ce06f9c4700a4e70852da5fe5eb6bd11d64ef4ce17924bb9eec03f8594d3a",
+        "utf8_bytes": 3518
+      },
+      "provider_dispatch_count": 0,
+      "real_provider_start_count": 0
+    },
+    {
+      "scenario_id": "review-non-native-result",
+      "path": "review",
+      "trigger_mode": "provider-contract-injection",
+      "reachable": true,
+      "structural_reason": null,
+      "expected_error": {
+        "type": "WorkflowContractError",
+        "message": "Claude returned a non-native review result"
+      },
+      "actual_error": {
+        "type": "WorkflowContractError",
+        "message": "Claude returned a non-native review result"
+      },
+      "checkpoints": [
+        {
+          "checkpoint_site": "_run_review#5",
+          "step": "claude_slice_review",
+          "work_unit_status": "in_progress",
+          "work_unit_kind": "slice"
+        }
+      ],
+      "provider_input": {
+        "canonical_json": "{\"acceptance_criteria\":[\"Asymmetric state-v3 workflow engine.\",\"The decision must satisfy the bound review contract and the fingerprint-matching deterministic validation attestation.\",\"The reviewed changes must remain within the exact authorized path boundary and preserve resume/idempotency invariants.\"],\"authorized_paths\":[\"src/early.py\",\"tests/test_workflow.py\"],\"base_commit\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"current_fingerprint\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"evidence_manifest\":[{\"byte_count\":18,\"content\":\"Implement Slice 10\",\"delivery\":\"inline\",\"evidence_id\":\"assignment\",\"kind\":\"assignment\",\"sha256\":\"e26e79094d51269104175e79014004f9ba07a56c7874d20cc8dc736229b88e92\",\"source_path\":null},{\"byte_count\":640,\"content\":\"PLAN\\nCodex implements; Claude reviews and approves each round.\\n\\nCURRENT SLICE\\nAsymmetric state-v3 workflow engine.\\n\\nEXACT CURRENT SLICE ALLOWLIST\\nPLAN STEP: not bound yet\\n\\nAPPROVED PLAN ANCHORS\\nNONE\\n\\nCURRENT ANCHORS\\nNONE\\n\\nMACHINE STOP RULES (complete, untruncated)\\nBRANCH-MISMATCH | The active branch differs from the feature branch persisted for this run.\\nVALIDATION-UNAVAILABLE | Required validation cannot be executed and has no approved replacement.\\nUNEXPECTED-PATH | The canonical diff contains a path outside the persisted Slice scope.\\nCONTRACT-UNCLEAR | The current step contract is technically ambiguous and requires user direction.\",\"delivery\":\"inline\",\"evidence_id\":\"distilled-context\",\"kind\":\"workflow_context\",\"sha256\":\"666f4dcc39cc0e87e5ac56b6887179c47363357cb1d0f3513aa1977b127f45f5\",\"source_path\":null},{\"byte_count\":302,\"content\":\"diff --git a/src/early.py b/src/early.py\\nindex 1111111..2222222 100644\\n--- a/src/early.py\\n+++ b/src/early.py\\n@@ -1 +1 @@\\n-old\\n+new\\ndiff --git a/tests/test_workflow.py b/tests/test_workflow.py\\nindex 1111111..2222222 100644\\n--- a/tests/test_workflow.py\\n+++ b/tests/test_workflow.py\\n@@ -1 +1 @@\\n-old\\n+new\\n\",\"delivery\":\"inline\",\"evidence_id\":\"review-diff\",\"kind\":\"full_slice\",\"sha256\":\"12002e7a215bccce1cb33cea9981cccd3b3bdf76a3182963eb0cf0560181b69d\",\"source_path\":null}],\"operation\":\"claude_slice_review\",\"persistence_protocol\":\"structured-v2\",\"request_id\":\"native-review-request-4da2c215a89fe0dd655ae8f4493b1b42e798ca421d0b5a3fb87d35c57b96c702\",\"request_type\":\"review_request\",\"response_contract\":{\"schema_sha256\":\"1069a9607e5d7fa270494c1a2655f9875409e662cd35973c4c608f0f027fdb7b\",\"schema_version\":\"native-agent-review-result-v2\"},\"review_contract\":{\"allow_new_observations\":true,\"anchor_origin\":null,\"approval_marker\":\"SLICE_APPROVAL\",\"next_finding_id\":\"C-01\",\"previous_findings\":[],\"red_state_followup_slice\":null,\"round_number\":1,\"slice_id\":\"01\",\"test_changes_approved\":true,\"test_files\":[\"tests/test_workflow.py\"],\"validation_attestation\":{\"attestation_id\":\"validation-bbbbbbbbbbbb\",\"command_specs\":[{\"argv\":[],\"legacy_shell\":\"python3 -m pytest tests/ -v\"}],\"diff_fingerprint\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"expected_commands\":[\"python3 -m pytest tests/ -v\"],\"output_digest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"records\":[{\"command\":\"python3 -m pytest tests/ -v\",\"exit_code\":0,\"output\":\"\",\"status\":\"PASS\"}],\"summary\":\"tests passed\"},\"validation_command_prefixes\":[[\"python3\",\"-m\",\"pytest\"]]},\"review_kind\":\"slice\",\"reviewer\":\"claude\",\"run_id\":\"run-1\",\"schema_version\":\"native-agent-review-request-v2\",\"target_branch\":\"feature/workflow\",\"transport\":\"native-claude-review-v2\",\"work_unit_id\":\"2\"}",
+        "sha256": "7f6ce06f9c4700a4e70852da5fe5eb6bd11d64ef4ce17924bb9eec03f8594d3a",
+        "utf8_bytes": 3518
+      },
+      "provider_dispatch_count": 1,
+      "real_provider_start_count": 0
+    }
+  ]
+}
