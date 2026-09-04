@@ -445,6 +445,27 @@ COMPARISON_TARGETS = (
     ("src/side_effects.py", None, "reconcile_queue_move"),
     ("src/side_effects.py", None, "reconcile_git_commit"),
 )
+COMPARISON_HELPERS = {
+    (
+        "src/workflow_recovery.py",
+        "WorkflowRecovery",
+        "recover_pending_native_implementer",
+    ): (
+        "_bind_native_implementer_request",
+        "_replay_native_implementer_request_findings",
+        "_bind_native_implementer_request_findings",
+        "_parse_native_implementer_recovery",
+    ),
+    (
+        "src/workflow_recovery.py",
+        "WorkflowRecovery",
+        "recover_pending_native_reviewer_before_policy",
+    ): (
+        "_replay_pending_native_reviewer",
+        "_build_pending_native_reviewer_context",
+        "_parse_pending_native_reviewer_response",
+    ),
+}
 
 STRICT_BODY_TARGETS = tuple(
     target
@@ -667,10 +688,20 @@ def _function_node(relative_path: str, class_name: str | None, name: str) -> ast
 def _comparison_inventory() -> dict[str, int]:
     result: dict[str, int] = {}
     for relative_path, class_name, function_name in COMPARISON_TARGETS:
-        node = _function_node(relative_path, class_name, function_name)
+        nodes = [
+            _function_node(relative_path, class_name, name)
+            for name in (
+                function_name,
+                *COMPARISON_HELPERS.get(
+                    (relative_path, class_name, function_name),
+                    (),
+                ),
+            )
+        ]
         label = ".".join(part for part in (class_name, function_name) if part)
         result[f"{relative_path}:{label}"] = sum(
             isinstance(item, ast.Compare)
+            for node in nodes
             for item in ast.walk(node)
         )
     return result

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import copy
 import hashlib
 import json
 import subprocess
@@ -70,8 +71,16 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE_PATH = ROOT / "src/workflow_recovery.py"
 STATIC_BASELINE = ROOT / "tests/fixtures/workflow-recovery-static-pre-b53-v1.json"
 RUNTIME_BASELINE = ROOT / "tests/fixtures/workflow-recovery-runtime-pre-b53-v1.json"
+PRE_B54_BASELINE = ROOT / "tests/fixtures/workflow-recovery-pre-b54-v1.json"
+HELPER_BINDINGS = ROOT / "tests/fixtures/workflow-recovery-helper-bindings-b54-v1.json"
+FUNCTION_SIZE_BASELINE = ROOT / "tests/fixtures/function-size-baseline-v1.json"
+RECORD_SEQUENCE_BASELINE = (
+    ROOT / "tests/fixtures/workflow-record-sequence-baseline-v1.json"
+)
 SOURCE_COMMIT = "881e944fea9442012aecb7c20b519ea5a2b83bbf"
 SOURCE_BLOB = "f3b3cfb77c5b27b8c60d35c7c347095ea8b2514d"
+PRE_B54_COMMIT = "e538d96be18e6857250f6a86ab6f6c499e40d0b0"
+RECORD_SEQUENCE_BLOB = "26fb661c8fa382f90e70fb921e3d950da5cae09b"
 RUN_ID = "b53-recovery-corpus"
 FINGERPRINT = "b" * 64
 IMPLEMENTER_RECORD_ID = "ar1-" + "1" * 64
@@ -89,6 +98,27 @@ REVIEW_RESPONSE_SHA256 = (
     "4567f297b391a4bcd019f0d09995b8c61273b8fc9ad6717a0c5549e3268630e8"
 )
 
+RECOVERY_HELPERS = {
+    "recover_pending_native_implementer": (
+        "_bind_native_implementer_request",
+        "_replay_native_implementer_request_findings",
+        "_bind_native_implementer_request_findings",
+        "_parse_native_implementer_recovery",
+    ),
+    "recover_pending_native_reviewer_before_policy": (
+        "_replay_pending_native_reviewer",
+        "_build_pending_native_reviewer_context",
+        "_parse_pending_native_reviewer_response",
+    ),
+}
+CAUGHT_HELPERS = {
+    "_replay_native_implementer_request_findings": "ArtifactReplayError",
+    "_parse_native_implementer_recovery": "(ValueError, TypeError)",
+    "_replay_pending_native_reviewer": "ArtifactReplayError",
+    "_parse_pending_native_reviewer_response": (
+        "(json.JSONDecodeError, ValueError, NativeReviewContractError)"
+    ),
+}
 
 @dataclass(frozen=True)
 class ScenarioSpec:
@@ -259,8 +289,94 @@ def _condition_path(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> list[str]
     return list(reversed(conditions))
 
 
+def _direct_recovery_helper_call(
+    statement: ast.stmt,
+    helper_names: frozenset[str],
+) -> ast.Call | None:
+    if not isinstance(statement, ast.Assign):
+        return None
+    value = statement.value
+    if (
+        isinstance(value, ast.Call)
+        and isinstance(value.func, ast.Attribute)
+        and isinstance(value.func.value, ast.Name)
+        and value.func.value.id == "self"
+        and value.func.attr in helper_names
+    ):
+        return value
+    return None
+
+
+def _logical_recovery_function(tree: ast.Module, name: str) -> ast.FunctionDef:
+    function = copy.deepcopy(_function(tree, name))
+    helper_names = RECOVERY_HELPERS[name]
+    helpers = {
+        helper_name: copy.deepcopy(_function(tree, helper_name))
+        for helper_name in helper_names
+    }
+    observed_calls = [
+        call.func.attr
+        for call in _ordered(function, ast.Call)
+        if isinstance(call.func, ast.Attribute)
+        and isinstance(call.func.value, ast.Name)
+        and call.func.value.id == "self"
+        and call.func.attr in helper_names
+    ]
+    assert observed_calls == list(helper_names)
+
+    def expand_body(body: list[ast.stmt]) -> list[ast.stmt]:
+        expanded: list[ast.stmt] = []
+        for statement in body:
+            call = _direct_recovery_helper_call(
+                statement,
+                frozenset(helper_names),
+            )
+            if call is not None:
+                helper = helpers[call.func.attr]
+                parameters = [argument.arg for argument in helper.args.args[1:]]
+                assert not call.keywords
+                assert [ast.unparse(argument) for argument in call.args] == parameters
+                helper_body = copy.deepcopy(helper.body)
+                terminal = helper_body[-1]
+                assert isinstance(terminal, ast.Return)
+                assert terminal.value is not None
+                helper_body[-1] = ast.Assign(
+                    targets=copy.deepcopy(statement.targets),
+                    value=terminal.value,
+                )
+                expanded.extend(expand_body(helper_body))
+                continue
+            for field in ("body", "orelse", "finalbody"):
+                child = getattr(statement, field, None)
+                if isinstance(child, list) and child:
+                    setattr(statement, field, expand_body(child))
+            if isinstance(statement, ast.Try):
+                for handler in statement.handlers:
+                    handler.body = expand_body(handler.body)
+            expanded.append(statement)
+        return expanded
+
+    function.body = expand_body(function.body)
+    ast.fix_missing_locations(function)
+    logical = ast.parse(ast.unparse(function)).body[0]
+    assert isinstance(logical, ast.FunctionDef)
+    return logical
+
+
+def _pre_cut_line_count(name: str) -> int:
+    source = subprocess.run(
+        ["git", "show", f"{PRE_B54_COMMIT}:src/workflow_recovery.py"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    function = _function(ast.parse(source), name)
+    return function.end_lineno - function.lineno + 1
+
+
 def _static_layer(tree: ast.Module, name: str, path: str) -> dict[str, object]:
-    function = _function(tree, name)
+    function = _logical_recovery_function(tree, name)
     parents = _parent_map(function)
     conditions = _ordered(function, ast.If)
     raises = _ordered(function, ast.Raise)
@@ -269,7 +385,7 @@ def _static_layer(tree: ast.Module, name: str, path: str) -> dict[str, object]:
     return {
         "path": path,
         "function": f"WorkflowRecovery.{name}",
-        "line_count": function.end_lineno - function.lineno + 1,
+        "line_count": _pre_cut_line_count(name),
         "conditions": [
             {
                 "ordinal": index,
@@ -1105,6 +1221,91 @@ def _remove_condition_with_message(
     return transform
 
 
+def _helper_catcher_bindings(tree: ast.Module) -> dict[str, str]:
+    parents = _parent_map(tree)
+    bindings: dict[str, str] = {}
+    for helper_name in CAUGHT_HELPERS:
+        calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "self"
+            and node.func.attr == helper_name
+        ]
+        assert len(calls) == 1, helper_name
+        current: ast.AST = calls[0]
+        while current in parents:
+            child = current
+            current = parents[current]
+            if isinstance(current, ast.Try) and child in current.body:
+                assert len(current.handlers) == 1, helper_name
+                bindings[helper_name] = ast.unparse(current.handlers[0].type)
+                break
+        else:
+            raise AssertionError(f"helper call left its catcher: {helper_name}")
+    return bindings
+
+
+def _move_helper_call_out_of_catcher(
+    helper_name: str,
+) -> Callable[[ast.Module], None]:
+    def transform(tree: ast.Module) -> None:
+        parents = _parent_map(tree)
+        call = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == helper_name
+        )
+        current: ast.AST = call
+        while current in parents:
+            child = current
+            current = parents[current]
+            if isinstance(current, ast.Try) and child in current.body:
+                catcher = current
+                statement = child
+                break
+        else:
+            raise AssertionError(helper_name)
+        for node in ast.walk(tree):
+            for field in ("body", "orelse", "finalbody"):
+                body = getattr(node, field, None)
+                if isinstance(body, list) and catcher in body:
+                    body.insert(body.index(catcher), statement)
+                    catcher.body.remove(statement)
+                    if not catcher.body:
+                        catcher.body.append(ast.Pass())
+                    return
+        raise AssertionError(f"catcher parent not found: {helper_name}")
+
+    return transform
+
+
+def _swap_pending_reviewer_record(tree: ast.Module) -> None:
+    function = _function(tree, "recover_pending_native_reviewer_before_policy")
+    assignment = next(
+        node
+        for node in ast.walk(function)
+        if isinstance(node, ast.Assign)
+        and any(ast.unparse(target) == "record" for target in node.targets)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id == "next"
+    )
+    generator = assignment.value.args[0]
+    assert isinstance(generator, ast.GeneratorExp)
+    generator.generators[0].ifs = [
+        ast.parse(
+            "isinstance(item.payload, ReviewPayload) "
+            "and item.record_id != pending_record_id",
+            mode="eval",
+        ).body
+    ]
+
+
 def _load_mutant(transform: Callable[[ast.Module], None]) -> ModuleType:
     tree = ast.parse(SOURCE_PATH.read_text("utf-8"))
     transform(tree)
@@ -1141,23 +1342,75 @@ def test_static_recovery_corpus_is_cleartext_complete_and_source_bound() -> None
     )
 
 
-def test_recovery_source_is_byte_identical_to_the_b52_poststate() -> None:
+def test_b54_pre_cut_anchor_binds_the_immediate_b53_source() -> None:
+    pre_cut = json.loads(PRE_B54_BASELINE.read_text("utf-8"))
+    assert pre_cut == {
+        "schema_version": "workflow-recovery-pre-b54-v1",
+        "source_commit": PRE_B54_COMMIT,
+        "source_blob": SOURCE_BLOB,
+    }
     anchored_blob = subprocess.run(
+        ["git", "rev-parse", f"{PRE_B54_COMMIT}:src/workflow_recovery.py"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    b53_corpus_blob = subprocess.run(
         ["git", "rev-parse", f"{SOURCE_COMMIT}:src/workflow_recovery.py"],
         cwd=ROOT,
         check=True,
         capture_output=True,
         text=True,
     ).stdout.strip()
-    actual_blob = subprocess.run(
-        ["git", "hash-object", str(SOURCE_PATH)],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
     assert anchored_blob == SOURCE_BLOB
-    assert actual_blob == SOURCE_BLOB
+    assert b53_corpus_blob == SOURCE_BLOB
+
+
+def test_b54_helpers_and_previous_catchers_are_explicitly_bound() -> None:
+    binding = json.loads(HELPER_BINDINGS.read_text("utf-8"))
+    assert binding["schema_version"] == "workflow-recovery-helper-bindings-b54-v1"
+    expected_helpers = [
+        helper
+        for helpers in RECOVERY_HELPERS.values()
+        for helper in helpers
+    ]
+    assert [item["helper"] for item in binding["helpers"]] == expected_helpers
+    assert {
+        item["helper"]: item["catcher"]
+        for item in binding["helpers"]
+        if item["catcher"] is not None
+    } == CAUGHT_HELPERS
+    tree = ast.parse(SOURCE_PATH.read_text("utf-8"))
+    assert _helper_catcher_bindings(tree) == CAUGHT_HELPERS
+
+
+def test_all_five_unreachable_checks_remain_individually_structural() -> None:
+    binding = json.loads(HELPER_BINDINGS.read_text("utf-8"))
+    static = json.loads(STATIC_BASELINE.read_text("utf-8"))
+    expected = {
+        (item["path"], item["abort_ordinal"])
+        for item in static["unreachable_aborts"]
+    }
+    post_cut = binding["unreachable_aborts"]
+    assert len(post_cut) == 5
+    assert {(item["path"], item["abort_ordinal"]) for item in post_cut} == expected
+    assert all(item["status"] == "structurally_unreachable" for item in post_cut)
+    assert all(item["reason"].strip() for item in post_cut)
+
+    tree = ast.parse(SOURCE_PATH.read_text("utf-8"))
+    layers = {item["path"]: item for item in static["layers"]}
+    functions = [node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)]
+    for item in post_cut:
+        abort = layers[item["path"]]["aborts"][item["abort_ordinal"] - 1]
+        owners = [
+            function.name
+            for function in functions
+            for raised in _ordered(function, ast.Raise)
+            if _raise_type_and_message(raised)
+            == (abort["exception_type"], abort["message"])
+        ]
+        assert owners == [item["owner"]], (item, owners)
 
 
 def test_each_abort_is_triggered_or_structurally_unreachable(
@@ -1274,3 +1527,76 @@ def test_removing_one_condition_per_path_names_the_red_scenario(
             {"scenarios": [actual_scenario]},
             {"scenarios": [expected_scenario]},
         )
+
+
+def test_moving_a_recovery_helper_out_of_its_catcher_turns_binding_red() -> None:
+    tree = ast.parse(SOURCE_PATH.read_text("utf-8"))
+    helper_name = "_parse_pending_native_reviewer_response"
+    _move_helper_call_out_of_catcher(helper_name)(tree)
+    ast.fix_missing_locations(tree)
+    compile(tree, "<b54-helper-outside-catcher>", "exec")
+    with pytest.raises(AssertionError, match=helper_name):
+        _helper_catcher_bindings(tree)
+
+
+def test_swapping_the_adopted_reviewer_record_names_the_success_scenario(
+    runtime_corpus: dict[str, object],
+) -> None:
+    module = _load_mutant(_swap_pending_reviewer_record)
+    scenario_id = "reviewer-success"
+    spec = next(item for item in SCENARIOS if item.scenario_id == scenario_id)
+    actual_scenario = _run_scenario(module, spec, {"count": 0})
+    expected_scenario = next(
+        item
+        for item in runtime_corpus["scenarios"]
+        if item["scenario_id"] == scenario_id
+    )
+    with pytest.raises(AssertionError, match=scenario_id):
+        _assert_runtime_matches(
+            {"scenarios": [actual_scenario]},
+            {"scenarios": [expected_scenario]},
+        )
+
+
+def test_b54_entries_and_helpers_are_below_the_b32_threshold() -> None:
+    tree = ast.parse(SOURCE_PATH.read_text("utf-8"))
+    names = {
+        *RECOVERY_HELPERS,
+        *(helper for helpers in RECOVERY_HELPERS.values() for helper in helpers),
+    }
+    spans = {
+        name: _function(tree, name).end_lineno - _function(tree, name).lineno + 1
+        for name in names
+    }
+    assert all(span < 200 for span in spans.values()), spans
+    size_baseline = json.loads(FUNCTION_SIZE_BASELINE.read_text("utf-8"))
+    assert (
+        "src/workflow_recovery.py::WorkflowRecovery."
+        "recover_pending_native_implementer"
+    ) not in size_baseline["functions"]
+    assert (
+        "src/workflow_recovery.py::WorkflowRecovery."
+        "recover_pending_native_reviewer_before_policy"
+    ) not in size_baseline["functions"]
+
+
+def test_b25_record_sequence_baseline_remains_byte_identical() -> None:
+    actual_blob = subprocess.run(
+        ["git", "hash-object", str(RECORD_SEQUENCE_BASELINE)],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    head_blob = subprocess.run(
+        [
+            "git",
+            "rev-parse",
+            f"HEAD:{RECORD_SEQUENCE_BASELINE.relative_to(ROOT).as_posix()}",
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert actual_blob == head_blob == RECORD_SEQUENCE_BLOB

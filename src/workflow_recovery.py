@@ -13,7 +13,7 @@ import logging
 import re
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
-from typing import Callable, Protocol
+from typing import Any, Callable, Protocol
 
 from agent_runtime import (
     NativeAgentCodexOutput as NativeAgentImplementerOutput,
@@ -35,13 +35,15 @@ from artifact_models import (
     Role,
     ValidationAttestationPayload,
 )
-from artifact_replay import ArtifactReplayError, replay_artifacts
+from artifact_replay import ArtifactReplayError, ArtifactReplayResult, replay_artifacts
 from contracts import (
     AgentRole,
     ApprovalMarker,
     CodexStepContract as ImplementerStepContract,
+    ContractResult,
     FindingRecord,
     StepContract,
+    ValidationAttestation,
 )
 from final_review_preflight import FINAL_REVIEW_OPERATIONS
 from finding_reducer import reduce_findings
@@ -93,6 +95,7 @@ from workflow_state import (
     WorkflowState,
     WorkflowStep,
     WorkUnitKind,
+    WorkUnitRecord,
 )
 
 
@@ -478,6 +481,136 @@ class WorkflowRecovery:
         )
         return started, spec, response_path
 
+    def _bind_native_implementer_request(
+        self,
+        chain: tuple[ArtifactRecord, ...],
+        candidate: ArtifactRecord | None,
+        invocation: ImplementerInvocation,
+        bundle: NativeImplementerRequestBundle,
+    ) -> tuple[
+        NativeImplementerRequestBundle | None,
+        Any,
+        bool,
+        ArtifactRecord | None,
+    ]:
+        recovery_bundle = self._dependencies.load_agent_request_bundle(invocation, bundle)
+        recovery_bound = (
+            recovery_bundle.bound_context
+            if recovery_bundle is not None
+            else bundle.bound_context
+        )
+        validate_against_bundle = recovery_bundle is not None or candidate is None
+        original_attempt_record = None
+        if candidate is not None and recovery_bound.context.previous_findings:
+            candidate_index = chain.index(candidate)
+            prior_attempts = tuple(
+                item
+                for item in chain[:candidate_index]
+                if isinstance(item.payload, ProviderAttemptPayload)
+                and item.payload.provider is candidate.payload.role
+                and item.payload.work_unit_id == str(invocation.work_unit_id)
+                and item.payload.operation == invocation.step.value
+                and item.payload.phase == "started"
+            )
+            if not prior_attempts:
+                raise WorkflowExecutionError(
+                    "native agent recovery has no durable original request binding"
+                )
+            original_attempt_record = prior_attempts[-1]
+        if (
+            recovery_bundle is None
+            and candidate is not None
+            and candidate.payload.request_id != bundle.bound_context.request_id
+        ):
+            if original_attempt_record is None:
+                candidate_index = chain.index(candidate)
+                prior_attempts = tuple(
+                    item
+                    for item in chain[:candidate_index]
+                    if isinstance(item.payload, ProviderAttemptPayload)
+                    and item.payload.provider is candidate.payload.role
+                    and item.payload.work_unit_id == str(invocation.work_unit_id)
+                    and item.payload.operation == invocation.step.value
+                    and item.payload.phase == "started"
+                )
+                if not prior_attempts:
+                    raise WorkflowExecutionError(
+                        "native agent recovery has no durable original request binding"
+                    )
+                original_attempt_record = prior_attempts[-1]
+            original_request_id = candidate.payload.request_id
+            recovery_bound = type(bundle.bound_context)(
+                context=replace(
+                    bundle.bound_context.context,
+                    current_fingerprint=(
+                        original_attempt_record.payload.binding_fingerprint
+                    ),
+                ),
+                request_id=original_request_id,
+                request_digest=original_request_id.rsplit("-", 1)[-1],
+            )
+            validate_against_bundle = False
+        return (
+            recovery_bundle,
+            recovery_bound,
+            validate_against_bundle,
+            original_attempt_record,
+        )
+
+    def _replay_native_implementer_request_findings(
+        self,
+        chain: tuple[ArtifactRecord, ...],
+        original_attempt_record: ArtifactRecord,
+        state: WorkflowState,
+    ) -> dict[str, FindingRecord]:
+        request_replay = replay_artifacts(
+            chain[: chain.index(original_attempt_record)], state.run_id
+        )
+        return {
+            item.finding_id: item
+            for item in reduce_findings(request_replay).ledger.findings
+        }
+
+    def _bind_native_implementer_request_findings(
+        self,
+        recovery_bound: Any,
+        request_findings_by_id: dict[str, FindingRecord],
+    ) -> Any:
+        offered_ids = tuple(
+            item.finding_id for item in recovery_bound.context.previous_findings
+        )
+        if any(finding_id not in request_findings_by_id for finding_id in offered_ids):
+            raise WorkflowExecutionError(
+                "native agent request-time finding subset is incomplete"
+            )
+        return type(recovery_bound)(
+            context=replace(
+                recovery_bound.context,
+                previous_findings=tuple(
+                    request_findings_by_id[finding_id] for finding_id in offered_ids
+                ),
+            ),
+            request_id=recovery_bound.request_id,
+            request_digest=recovery_bound.request_digest,
+        )
+
+    def _parse_native_implementer_recovery(
+        self,
+        canonical: str,
+        validate_against_bundle: bool,
+        recovery_bundle: NativeImplementerRequestBundle | None,
+        bundle: NativeImplementerRequestBundle,
+        recovery_bound: Any,
+    ) -> Any:
+        document = json.loads(canonical)
+        if not isinstance(document, dict):
+            raise ValueError("native Codex raw response is not an object")
+        if canonical_native_implementer_json(document) != canonical:
+            raise ValueError("native Codex raw response is not canonical JSON")
+        if validate_against_bundle:
+            validate_native_implementer_response(document, recovery_bundle or bundle)
+        return parse_bound_native_implementer_result(document, recovery_bound)
+
     def recover_pending_native_implementer(
         self,
         invocation: ImplementerInvocation,
@@ -547,105 +680,41 @@ class WorkflowRecovery:
             raise WorkflowExecutionError(
                 "native implementer recovery raw response digest differs from its record"
             )
-        recovery_bundle = self._dependencies.load_agent_request_bundle(invocation, bundle)
-        recovery_bound = (
-            recovery_bundle.bound_context if recovery_bundle is not None else bundle.bound_context
+        (
+            recovery_bundle,
+            recovery_bound,
+            validate_against_bundle,
+            original_attempt_record,
+        ) = self._bind_native_implementer_request(
+            chain,
+            candidate,
+            invocation,
+            bundle,
         )
-        validate_against_bundle = recovery_bundle is not None or candidate is None
-        original_attempt_record = None
-        if candidate is not None and recovery_bound.context.previous_findings:
-            candidate_index = chain.index(candidate)
-            prior_attempts = tuple(
-                item
-                for item in chain[:candidate_index]
-                if isinstance(item.payload, ProviderAttemptPayload)
-                and item.payload.provider is candidate.payload.role
-                and item.payload.work_unit_id == str(invocation.work_unit_id)
-                and item.payload.operation == invocation.step.value
-                and item.payload.phase == "started"
-            )
-            if not prior_attempts:
-                raise WorkflowExecutionError(
-                    "native agent recovery has no durable original request binding"
-                )
-            original_attempt_record = prior_attempts[-1]
-        if (
-            recovery_bundle is None
-            and candidate is not None
-            and candidate.payload.request_id != bundle.bound_context.request_id
-        ):
-            if original_attempt_record is None:
-                candidate_index = chain.index(candidate)
-                prior_attempts = tuple(
-                    item
-                    for item in chain[:candidate_index]
-                    if isinstance(item.payload, ProviderAttemptPayload)
-                    and item.payload.provider is candidate.payload.role
-                    and item.payload.work_unit_id == str(invocation.work_unit_id)
-                    and item.payload.operation == invocation.step.value
-                    and item.payload.phase == "started"
-                )
-                if not prior_attempts:
-                    raise WorkflowExecutionError(
-                        "native agent recovery has no durable original request binding"
-                    )
-                original_attempt_record = prior_attempts[-1]
-            original_request_id = candidate.payload.request_id
-            recovery_bound = type(bundle.bound_context)(
-                context=replace(
-                    bundle.bound_context.context,
-                    current_fingerprint=(
-                        original_attempt_record.payload.binding_fingerprint
-                    ),
-                ),
-                request_id=original_request_id,
-                request_digest=original_request_id.rsplit("-", 1)[-1],
-            )
-            validate_against_bundle = False
         if original_attempt_record is not None:
             try:
-                request_replay = replay_artifacts(
-                    chain[: chain.index(original_attempt_record)], state.run_id
+                request_findings_by_id = (
+                    self._replay_native_implementer_request_findings(
+                        chain,
+                        original_attempt_record,
+                        state,
+                    )
                 )
-                request_findings_by_id = {
-                    item.finding_id: item
-                    for item in reduce_findings(request_replay).ledger.findings
-                }
             except ArtifactReplayError as exc:
                 raise WorkflowExecutionError(
                     f"native agent request-time finding replay failed: {exc}"
                 ) from exc
-            offered_ids = tuple(
-                item.finding_id
-                for item in recovery_bound.context.previous_findings
-            )
-            if any(finding_id not in request_findings_by_id for finding_id in offered_ids):
-                raise WorkflowExecutionError(
-                    "native agent request-time finding subset is incomplete"
-                )
-            recovery_bound = type(recovery_bound)(
-                context=replace(
-                    recovery_bound.context,
-                    previous_findings=tuple(
-                        request_findings_by_id[finding_id]
-                        for finding_id in offered_ids
-                    ),
-                ),
-                request_id=recovery_bound.request_id,
-                request_digest=recovery_bound.request_digest,
+            recovery_bound = self._bind_native_implementer_request_findings(
+                recovery_bound,
+                request_findings_by_id,
             )
         try:
-            document = json.loads(canonical)
-            if not isinstance(document, dict):
-                raise ValueError("native Codex raw response is not an object")
-            if canonical_native_implementer_json(document) != canonical:
-                raise ValueError("native Codex raw response is not canonical JSON")
-            if validate_against_bundle:
-                validate_native_implementer_response(
-                    document, recovery_bundle or bundle
-                )
-            result = parse_bound_native_implementer_result(
-                document, recovery_bound
+            result = self._parse_native_implementer_recovery(
+                canonical,
+                validate_against_bundle,
+                recovery_bundle,
+                bundle,
+                recovery_bound,
             )
         except (ValueError, TypeError) as exc:
             raise WorkflowExecutionError(
@@ -713,6 +782,91 @@ class WorkflowRecovery:
         self._dependencies.store_implementer_output(canonical)
         return output
 
+    def _replay_pending_native_reviewer(
+        self,
+        chain: tuple[ArtifactRecord, ...],
+        state: WorkflowState,
+    ) -> ArtifactReplayResult:
+        return replay_artifacts(
+            chain,
+            state.run_id,
+            allow_incomplete_review_tail=True,
+        )
+
+    def _build_pending_native_reviewer_context(
+        self,
+        state: WorkflowState,
+        context: WorkflowContext,
+        history: WorkflowHistory,
+        unit: WorkUnitRecord,
+        record: ArtifactRecord,
+        round_number: int,
+        attestation: ValidationAttestation,
+    ) -> NativeReviewContext:
+        expected_test_files = (
+            tuple(
+                path
+                for path in history.active_review_packet.manifest.paths
+                if matches_path_patterns(path, context.test_path_patterns)
+            )
+            if history.active_review_packet is not None
+            and history.active_review_packet.fingerprint
+            == record.fingerprint.sha256
+            else ()
+            if state.current_step is WorkflowStep.CLAUDE_PLAN_REVIEW
+            else context.expected_test_files
+        )
+        approval_marker = (
+            ApprovalMarker.PLAN
+            if state.current_step is WorkflowStep.CLAUDE_PLAN_REVIEW
+            else ApprovalMarker.FINAL
+            if state.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW
+            else ApprovalMarker.SLICE
+        )
+        return NativeReviewContext(
+            run_id=state.run_id,
+            work_unit_id=str(unit.work_unit_id),
+            operation=state.current_step.value,
+            diff_fingerprint=record.fingerprint.sha256,
+            reviewer=AgentRole.CLAUDE,
+            approval_marker=approval_marker,
+            slice_id=(
+                "FINAL"
+                if approval_marker is ApprovalMarker.FINAL
+                else f"{unit.slice_id:02d}"
+            ),
+            round_number=round_number,
+            previous_findings=history.findings,
+            validation_attestation=attestation,
+            test_files=tuple(sorted(set(expected_test_files))),
+            test_changes_approved=context.test_changes_approved,
+            allow_new_observations=unit.kind is not WorkUnitKind.CORRECTION,
+            validation_command_prefixes=(
+                context.validation_matrix.finding_command_prefixes
+            ),
+            red_state_followup_slice=context.red_state_followup_slice,
+        )
+
+    def _parse_pending_native_reviewer_response(
+        self,
+        canonical: str,
+        native_context: NativeReviewContext,
+        payload: ReviewPayload,
+        request_digest: str,
+    ) -> ContractResult:
+        document = json.loads(canonical)
+        if not isinstance(document, dict):
+            raise ValueError("native response log must contain a JSON object")
+        validate_native_review_provider_response_for_context(document, native_context)
+        return parse_bound_native_contract_result(
+            document,
+            BoundNativeReviewContext(
+                context=native_context,
+                request_id=payload.request_id,
+                request_digest=request_digest,
+            ),
+        )
+
     def recover_pending_native_reviewer_before_policy(
         self,
         state: WorkflowState,
@@ -747,11 +901,7 @@ class WorkflowRecovery:
 
         chain = bridge.store.load_chain()
         try:
-            replay = replay_artifacts(
-                chain,
-                state.run_id,
-                allow_incomplete_review_tail=True,
-            )
+            replay = self._replay_pending_native_reviewer(chain, state)
         except ArtifactReplayError as exc:
             raise WorkflowExecutionError(
                 f"pre-policy native reviewer recovery cannot replay records: {exc}"
@@ -841,62 +991,22 @@ class WorkflowRecovery:
                 "provider content"
             )
         canonical, _content_payload = persisted_content
-        expected_test_files = (
-            tuple(
-                path
-                for path in history.active_review_packet.manifest.paths
-                if matches_path_patterns(path, context.test_path_patterns)
-            )
-            if history.active_review_packet is not None
-            and history.active_review_packet.fingerprint
-            == record.fingerprint.sha256
-            else ()
-            if state.current_step is WorkflowStep.CLAUDE_PLAN_REVIEW
-            else context.expected_test_files
-        )
-        approval_marker = (
-            ApprovalMarker.PLAN
-            if state.current_step is WorkflowStep.CLAUDE_PLAN_REVIEW
-            else ApprovalMarker.FINAL
-            if state.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW
-            else ApprovalMarker.SLICE
-        )
-        native_context = NativeReviewContext(
-            run_id=state.run_id,
-            work_unit_id=str(unit.work_unit_id),
-            operation=state.current_step.value,
-            diff_fingerprint=record.fingerprint.sha256,
-            reviewer=AgentRole.CLAUDE,
-            approval_marker=approval_marker,
-            slice_id=(
-                "FINAL" if approval_marker is ApprovalMarker.FINAL else f"{unit.slice_id:02d}"
-            ),
-            round_number=round_number,
-            previous_findings=history.findings,
-            validation_attestation=attestation,
-            test_files=tuple(sorted(set(expected_test_files))),
-            test_changes_approved=context.test_changes_approved,
-            allow_new_observations=unit.kind is not WorkUnitKind.CORRECTION,
-            validation_command_prefixes=(
-                context.validation_matrix.finding_command_prefixes
-            ),
-            red_state_followup_slice=context.red_state_followup_slice,
+        native_context = self._build_pending_native_reviewer_context(
+            state,
+            context,
+            history,
+            unit,
+            record,
+            round_number,
+            attestation,
         )
         request_digest = payload.request_id.removeprefix("native-review-request-")
         try:
-            document = json.loads(canonical)
-            if not isinstance(document, dict):
-                raise ValueError("native response log must contain a JSON object")
-            validate_native_review_provider_response_for_context(
-                document, native_context
-            )
-            result = parse_bound_native_contract_result(
-                document,
-                BoundNativeReviewContext(
-                    context=native_context,
-                    request_id=payload.request_id,
-                    request_digest=request_digest,
-                ),
+            result = self._parse_pending_native_reviewer_response(
+                canonical,
+                native_context,
+                payload,
+                request_digest,
             )
         except (json.JSONDecodeError, ValueError, NativeReviewContractError) as exc:
             raise WorkflowExecutionError(

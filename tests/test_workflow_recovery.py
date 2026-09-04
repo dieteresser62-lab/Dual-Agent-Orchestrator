@@ -83,6 +83,19 @@ EXPECTED_RECOVERY_EDGES = {
         "persist_review_contract",
     },
 }
+RECOVERY_EDGE_HELPERS = {
+    "recover_pending_native_implementer": (
+        "_bind_native_implementer_request",
+        "_replay_native_implementer_request_findings",
+        "_bind_native_implementer_request_findings",
+        "_parse_native_implementer_recovery",
+    ),
+    "recover_pending_native_reviewer_before_policy": (
+        "_replay_pending_native_reviewer",
+        "_build_pending_native_reviewer_context",
+        "_parse_pending_native_reviewer_response",
+    ),
+}
 
 
 def _recovery_tree(source: str | None = None) -> ast.Module:
@@ -98,12 +111,20 @@ def _recovery_dependency_edges(source: str | None = None) -> dict[str, set[str]]
         for node in tree.body
         if isinstance(node, ast.ClassDef) and node.name == "WorkflowRecovery"
     )
+    functions = {
+        node.name: node
+        for node in recovery.body
+        if isinstance(node, ast.FunctionDef)
+    }
     result: dict[str, set[str]] = {}
-    for node in recovery.body:
-        if not isinstance(node, ast.FunctionDef) or node.name not in EXPECTED_RECOVERY_EDGES:
-            continue
-        result[node.name] = {
+    for method in EXPECTED_RECOVERY_EDGES:
+        nodes = [
+            functions[name]
+            for name in (method, *RECOVERY_EDGE_HELPERS.get(method, ()))
+        ]
+        result[method] = {
             item.attr
+            for node in nodes
             for item in ast.walk(node)
             if isinstance(item, ast.Attribute)
             and isinstance(item.value, ast.Attribute)

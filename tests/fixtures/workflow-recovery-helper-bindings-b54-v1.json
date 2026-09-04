@@ -1,0 +1,77 @@
+{
+  "schema_version": "workflow-recovery-helper-bindings-b54-v1",
+  "helpers": [
+    {
+      "path": "implementer",
+      "helper": "_bind_native_implementer_request",
+      "catcher": null
+    },
+    {
+      "path": "implementer",
+      "helper": "_replay_native_implementer_request_findings",
+      "catcher": "ArtifactReplayError"
+    },
+    {
+      "path": "implementer",
+      "helper": "_bind_native_implementer_request_findings",
+      "catcher": null
+    },
+    {
+      "path": "implementer",
+      "helper": "_parse_native_implementer_recovery",
+      "catcher": "(ValueError, TypeError)"
+    },
+    {
+      "path": "reviewer",
+      "helper": "_replay_pending_native_reviewer",
+      "catcher": "ArtifactReplayError"
+    },
+    {
+      "path": "reviewer",
+      "helper": "_build_pending_native_reviewer_context",
+      "catcher": null
+    },
+    {
+      "path": "reviewer",
+      "helper": "_parse_pending_native_reviewer_response",
+      "catcher": "(json.JSONDecodeError, ValueError, NativeReviewContractError)"
+    }
+  ],
+  "unreachable_aborts": [
+    {
+      "path": "implementer",
+      "abort_ordinal": 2,
+      "status": "structurally_unreachable",
+      "owner": "recover_pending_native_implementer",
+      "reason": "The provider-content digest check remains before the first extracted helper call, so no new seam separates the verified blob bytes from this comparison."
+    },
+    {
+      "path": "implementer",
+      "abort_ordinal": 3,
+      "status": "structurally_unreachable",
+      "owner": "recover_pending_native_implementer",
+      "reason": "The candidate digest check remains beside the provider-content digest check and before the first extracted helper call; its content_text binding is unchanged."
+    },
+    {
+      "path": "reviewer",
+      "abort_ordinal": 4,
+      "status": "structurally_unreachable",
+      "owner": "recover_pending_native_reviewer_before_policy",
+      "reason": "The logical-round check remains in the entry function immediately after record selection, and no helper boundary was introduced between selection and validation."
+    },
+    {
+      "path": "reviewer",
+      "abort_ordinal": 5,
+      "status": "structurally_unreachable",
+      "owner": "recover_pending_native_reviewer_before_policy",
+      "reason": "The request-binding check remains in the entry function immediately after payload selection, so ReviewPayload construction still rejects missing bindings before this path."
+    },
+    {
+      "path": "reviewer",
+      "abort_ordinal": 7,
+      "status": "structurally_unreachable",
+      "owner": "recover_pending_native_reviewer_before_policy",
+      "reason": "The exact content_text lookup and its rejection remain together in the entry function before the context-builder seam; all seven lookup bindings are unchanged."
+    }
+  ]
+}
