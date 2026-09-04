@@ -25,7 +25,7 @@ from state_io import (
     load_workflow_state,
     new_run_id,
 )
-from task_contract import TaskMode, parse_task_contract
+from task_contract import TaskContract, TaskMode, parse_task_contract
 from workflow import (
     WorkflowDriver,
     WorkflowEngine,
@@ -120,12 +120,29 @@ class ProductionWorkflowDependencies:
     unused_run_id: Callable[..., Any]
 
 
-def run_production_workflow(
-    task_file: Path, args: argparse.Namespace, dependencies: ProductionWorkflowDependencies,
+@dataclass(frozen=True, slots=True)
+class _ProductionTask:
+    root: Path
+    state_file: Path
+    task_file: Path
+    assignment: str
+    task_contract: TaskContract
+    allowed_roots: tuple[Path, ...]
+    requested_run_id: str
+    run_id: str
+    managed_audit_path: str | None
+    new_watch_task: bool
+
+
+def _read_production_task(
+    root: Path,
+    task_file: Path,
+    args: argparse.Namespace,
     *,
-    force_new: bool = False,
-) -> WorkflowRunResult:
-    root = Path.cwd().resolve()
+    force_new: bool,
+    unused_run_id: Callable[..., str],
+    managed_audit_path_for: Callable[..., str | None],
+) -> _ProductionTask:
     state_file = root / ".orchestrator" / "state.json"
     task_file = task_file.resolve()
     assignment = task_file.read_text(encoding="utf-8")
@@ -156,9 +173,9 @@ def run_production_workflow(
         )
     allowed_roots = tuple(dict.fromkeys((root, task_file.parent.resolve())))
     requested_run_id = str(getattr(args, "watch_run_id", ""))
-    run_id = requested_run_id or dependencies.unused_run_id(root, new_run_id())
+    run_id = requested_run_id or unused_run_id(root, new_run_id())
     managed_audit_path = (
-        dependencies.managed_audit_path(task_file, task_contract.digest)
+        managed_audit_path_for(task_file, task_contract.digest)
         if task_contract.mode is TaskMode.IMPLEMENT
         and task_file.parent.name.casefold() == "inbox"
         else None
@@ -172,13 +189,39 @@ def run_production_workflow(
             and not watch_run_has_records(root, run_id)
         )
     )
+    return _ProductionTask(
+        root=root,
+        state_file=state_file,
+        task_file=task_file,
+        assignment=assignment,
+        task_contract=task_contract,
+        allowed_roots=allowed_roots,
+        requested_run_id=requested_run_id,
+        run_id=run_id,
+        managed_audit_path=managed_audit_path,
+        new_watch_task=new_watch_task,
+    )
+
+
+def _prepare_new_watch_task(
+    *,
+    new_watch_task: bool,
+    managed_audit_path: str | None,
+    args: argparse.Namespace,
+    root: Path,
+    task_file: Path,
+    task_contract: TaskContract,
+    archive_stale_untracked_audit_reports: Callable[..., Any],
+    new_watch_task_control_paths: Callable[..., Any],
+    new_watch_task_preserved_paths: Callable[..., Any],
+) -> str | None:
     prepared_branch_base: str | None = None
     if new_watch_task:
         if managed_audit_path is not None:
             configured_outbox = Path(getattr(args, "outbox_dir", "outbox"))
             if not configured_outbox.is_absolute():
                 configured_outbox = root / configured_outbox
-            dependencies.archive_stale_untracked_audit_reports(
+            archive_stale_untracked_audit_reports(
                 root,
                 current_audit_path=managed_audit_path,
                 outbox_failed_dir=configured_outbox / "failed",
@@ -186,8 +229,8 @@ def run_production_workflow(
         prepared = prepare_new_watch_task_branch(
             root,
             target_branch=task_contract.target_branch,
-            excluded_control_paths=dependencies.new_watch_task_control_paths(root, task_file),
-            preserved_task_paths=dependencies.new_watch_task_preserved_paths(root, task_contract),
+            excluded_control_paths=new_watch_task_control_paths(root, task_file),
+            preserved_task_paths=new_watch_task_preserved_paths(root, task_contract),
         )
         prepared_branch_base = prepared.identity.head
         logger.info(
@@ -197,6 +240,115 @@ def run_production_workflow(
             prepared.identity.branch,
             prepared.identity.head[:12],
         )
+    return prepared_branch_base
+
+
+def _validate_resumed_state(
+    loaded: WorkflowState | CompletedV2State | None,
+    task_file: Path,
+    task_contract: TaskContract,
+) -> WorkflowState:
+    if isinstance(loaded, CompletedV2State):
+        raise StateSchemaError(
+            "completed version-2 state cannot be resumed; start a new v3 run"
+        )
+    if loaded is None:
+        raise StateSchemaError("--resume requested but no version-3 state exists")
+    state = loaded
+    if state.task_file != str(task_file):
+        raise StateSchemaError("persisted task identity differs from --resume task")
+    if state.task_digest is None:
+        raise StateSchemaError(
+            "persisted state predates the hardened task contract; start a new run "
+            "with --no-resume --force-overwrite-state"
+        )
+    if state.task_digest != task_contract.digest:
+        raise StateSchemaError(
+            "task content changed since the persisted run was created"
+        )
+    if (
+        state.execution_mode != task_contract.mode.value
+        or state.task_scope_patterns != task_contract.scope_patterns
+        or state.work_plan_path != task_contract.work_plan_path
+        or state.target_branch != task_contract.target_branch
+        or state.finding_handoff_source_run_id
+        != task_contract.finding_handoff_source_run_id
+        or state.finding_handoff_export_record_id
+        != task_contract.finding_handoff_export_record_id
+    ):
+        raise StateSchemaError("persisted task contract differs from --resume task")
+    return state
+
+
+def _create_production_state(
+    *,
+    task_file: Path,
+    run_id: str,
+    root: Path,
+    task_contract: TaskContract,
+    prepared_branch_base: str | None,
+    managed_audit_path: str | None,
+    agent_settings: dict[str, Any],
+    fresh_state: Callable[..., WorkflowState],
+    initialize_finding_handoff: Callable[..., WorkflowState],
+) -> WorkflowState:
+    state = fresh_state(
+        task_file=task_file,
+        run_id=run_id,
+        repository_root=root,
+        task_contract=task_contract,
+        branch_base_override=prepared_branch_base,
+        audit_report_path=managed_audit_path,
+        codex_profile=AgentProfileBinding(
+            agent_settings["codex"].model,
+            agent_settings["codex"].effort,
+        ),
+        claude_profile=AgentProfileBinding(
+            agent_settings["claude"].model,
+            agent_settings["claude"].effort,
+        ),
+    )
+    return initialize_finding_handoff(
+        root, state, task_contract, task_file.read_bytes()
+    )
+
+
+def run_production_workflow(
+    task_file: Path, args: argparse.Namespace, dependencies: ProductionWorkflowDependencies,
+    *,
+    force_new: bool = False,
+) -> WorkflowRunResult:
+    root = Path.cwd().resolve()
+    task = _read_production_task(
+        root,
+        task_file,
+        args,
+        force_new=force_new,
+        unused_run_id=dependencies.unused_run_id,
+        managed_audit_path_for=dependencies.managed_audit_path,
+    )
+    state_file = task.state_file
+    task_file = task.task_file
+    assignment = task.assignment
+    task_contract = task.task_contract
+    allowed_roots = task.allowed_roots
+    requested_run_id = task.requested_run_id
+    run_id = task.run_id
+    managed_audit_path = task.managed_audit_path
+    new_watch_task = task.new_watch_task
+    prepared_branch_base = _prepare_new_watch_task(
+        new_watch_task=new_watch_task,
+        managed_audit_path=managed_audit_path,
+        args=args,
+        root=root,
+        task_file=task_file,
+        task_contract=task_contract,
+        archive_stale_untracked_audit_reports=(
+            dependencies.archive_stale_untracked_audit_reports
+        ),
+        new_watch_task_control_paths=dependencies.new_watch_task_control_paths,
+        new_watch_task_preserved_paths=dependencies.new_watch_task_preserved_paths,
+    )
 
     loaded: WorkflowState | CompletedV2State | None = None
     replacement_run_id: str | None = None
@@ -229,35 +381,7 @@ def run_production_workflow(
                 raise
     effective_resume = bool(args.resume and not new_watch_task)
     if effective_resume:
-        if isinstance(loaded, CompletedV2State):
-            raise StateSchemaError(
-                "completed version-2 state cannot be resumed; start a new v3 run"
-            )
-        if loaded is None:
-            raise StateSchemaError("--resume requested but no version-3 state exists")
-        state = loaded
-        if state.task_file != str(task_file):
-            raise StateSchemaError("persisted task identity differs from --resume task")
-        if state.task_digest is None:
-            raise StateSchemaError(
-                "persisted state predates the hardened task contract; start a new run "
-                "with --no-resume --force-overwrite-state"
-            )
-        if state.task_digest != task_contract.digest:
-            raise StateSchemaError(
-                "task content changed since the persisted run was created"
-            )
-        if (
-            state.execution_mode != task_contract.mode.value
-            or state.task_scope_patterns != task_contract.scope_patterns
-            or state.work_plan_path != task_contract.work_plan_path
-            or state.target_branch != task_contract.target_branch
-            or state.finding_handoff_source_run_id
-            != task_contract.finding_handoff_source_run_id
-            or state.finding_handoff_export_record_id
-            != task_contract.finding_handoff_export_record_id
-        ):
-            raise StateSchemaError("persisted task contract differs from --resume task")
+        state = _validate_resumed_state(loaded, task_file, task_contract)
         if getattr(args, "watch_run_id", None) and state.run_id != args.watch_run_id:
             raise StateSchemaError("persisted watch run identity differs from inbox task")
         if state.audit_report_path is None and managed_audit_path is not None:
@@ -268,24 +392,16 @@ def run_production_workflow(
             raise StateSchemaError(
                 "existing state requires --resume or --force-overwrite-state"
             )
-        state = dependencies.fresh_state(
+        state = _create_production_state(
             task_file=task_file,
             run_id=run_id,
-            repository_root=root,
+            root=root,
             task_contract=task_contract,
-            branch_base_override=prepared_branch_base,
-            audit_report_path=managed_audit_path,
-            codex_profile=AgentProfileBinding(
-                args.agent_settings["codex"].model,
-                args.agent_settings["codex"].effort,
-            ),
-            claude_profile=AgentProfileBinding(
-                args.agent_settings["claude"].model,
-                args.agent_settings["claude"].effort,
-            ),
-        )
-        state = dependencies.initialize_finding_handoff(
-            root, state, task_contract, task_file.read_bytes()
+            prepared_branch_base=prepared_branch_base,
+            managed_audit_path=managed_audit_path,
+            agent_settings=args.agent_settings,
+            fresh_state=dependencies.fresh_state,
+            initialize_finding_handoff=dependencies.initialize_finding_handoff,
         )
     state = dependencies.attach_managed_audit_paths(state)
     state = dependencies.recover_legacy_plan_only_post_gate(state)

@@ -15,7 +15,7 @@
     "src/workflow_baseline.py::WorkflowBaseline._persist_structured_baseline": 237,
     "src/workflow_baseline.py::matches_baseline_initialization_prefix": 288,
     "src/workflow_git_commit.py::WorkflowGitCommit.commit_slice": 305,
-    "src/workflow_production.py::run_production_workflow": 428,
+    "src/workflow_production.py::run_production_workflow": 350,
     "src/workflow_recovery.py::WorkflowRecovery.recover_pending_native_implementer": 234,
     "src/workflow_recovery.py::WorkflowRecovery.recover_pending_native_reviewer_before_policy": 218,
     "src/workflow_state.py::WorkflowState.from_dict": 200
