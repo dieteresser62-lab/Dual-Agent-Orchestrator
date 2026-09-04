@@ -627,6 +627,69 @@ def resume_slice(
     return changes
 
 
+def _stage_slice_transaction(
+    *,
+    identity: RepositoryIdentity,
+    boundary: SliceGitBoundary,
+    transaction_boundary: SliceGitBoundary,
+    transaction_changes: RepositoryChanges,
+    update_paths: tuple[str, ...],
+    content_paths: tuple[str, ...],
+    message: str,
+) -> None:
+    if update_paths:
+        _git(
+            identity.repository_root,
+            "add",
+            "-u",
+            "--",
+            *(f":(top,literal){path}" for path in update_paths),
+        )
+    if content_paths:
+        _git(
+            identity.repository_root,
+            "add",
+            "--",
+            *(f":(top,literal){path}" for path in content_paths),
+        )
+    markdown_paths = tuple(
+        path for path in content_paths if path.lower().endswith(".md")
+    )
+    if markdown_paths:
+        _git(
+            identity.repository_root,
+            "add",
+            "--chmod=-x",
+            "--",
+            *(f":(top,literal){path}" for path in markdown_paths),
+        )
+    staged_after = _staged_paths(identity.repository_root)
+    if staged_after != transaction_changes.paths:
+        raise GitTransactionError(
+            "staged paths do not exactly match the slice transaction: "
+            + ", ".join(staged_after)
+        )
+    if identity.head == boundary.start_commit:
+        final_changes = _collect_boundary_changes(identity.repository_root, boundary)
+    else:
+        final_changes = _collect_boundary_changes(
+            identity.repository_root, transaction_boundary
+        )
+    if final_changes.fingerprint != transaction_changes.fingerprint:
+        raise GitTransactionError("slice fingerprint changed during exact staging")
+
+    _git(
+        identity.repository_root,
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-m",
+        message,
+    )
+
+
 def commit_slice(
     *,
     repository_root: Path,
@@ -689,6 +752,7 @@ def commit_slice(
             }
         )
     )
+    transaction_boundary = boundary
     if identity.head == boundary.start_commit:
         transaction_changes = reviewed_changes
     else:
@@ -746,58 +810,14 @@ def commit_slice(
         )
     )
     try:
-        if update_paths:
-            _git(
-                identity.repository_root,
-                "add",
-                "-u",
-                "--",
-                *(f":(top,literal){path}" for path in update_paths),
-            )
-        if content_paths:
-            _git(
-                identity.repository_root,
-                "add",
-                "--",
-                *(f":(top,literal){path}" for path in content_paths),
-            )
-        markdown_paths = tuple(
-            path for path in content_paths if path.lower().endswith(".md")
-        )
-        if markdown_paths:
-            _git(
-                identity.repository_root,
-                "add",
-                "--chmod=-x",
-                "--",
-                *(f":(top,literal){path}" for path in markdown_paths),
-            )
-        staged_after = _staged_paths(identity.repository_root)
-        if staged_after != transaction_changes.paths:
-            raise GitTransactionError(
-                "staged paths do not exactly match the slice transaction: "
-                + ", ".join(staged_after)
-            )
-        if identity.head == boundary.start_commit:
-            final_changes = _collect_boundary_changes(
-                identity.repository_root, boundary
-            )
-        else:
-            final_changes = _collect_boundary_changes(
-                identity.repository_root, transaction_boundary
-            )
-        if final_changes.fingerprint != transaction_changes.fingerprint:
-            raise GitTransactionError("slice fingerprint changed during exact staging")
-
-        _git(
-            identity.repository_root,
-            "-c",
-            "core.hooksPath=/dev/null",
-            "-c",
-            "commit.gpgsign=false",
-            "commit",
-            "-m",
-            message,
+        _stage_slice_transaction(
+            identity=identity,
+            boundary=boundary,
+            transaction_boundary=transaction_boundary,
+            transaction_changes=transaction_changes,
+            update_paths=update_paths,
+            content_paths=content_paths,
+            message=message,
         )
     except GitTransactionError:
         current_head = os.fsdecode(

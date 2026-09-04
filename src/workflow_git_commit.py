@@ -22,6 +22,7 @@ from artifact_models import ArtifactRecord, BindingPayload, ReviewPayload
 from artifact_replay import replay_artifacts
 from git_service import (
     CommitAuthorization,
+    RepositoryIdentity,
     SliceGitBoundary,
     commit_slice,
     inspect_commit_tree,
@@ -40,7 +41,7 @@ from workflow import (
     WorkflowCommitRequest,
     WorkflowExecutionError,
 )
-from workflow_state import GateReason, WorkflowState
+from workflow_state import GateDecisionRecord, GateReason, SliceRecord, WorkflowState
 
 
 class RootProvider(Protocol):
@@ -94,13 +95,27 @@ class WorkflowGitCommitDependencies:
     bound_task_control_paths: BoundTaskControlPaths
 
 
+@dataclass(frozen=True)
+class _CommitContext:
+    root: Path
+    state: WorkflowState
+    current: SliceRecord
+    boundary: SliceGitBoundary
+    summary: str
+    reviewed_changes: RepositoryChanges
+    unexpected_paths: tuple[str, ...]
+    exact_scope_approval: bool
+    artifact_bridge: ArtifactBridge | None
+    head_approval: GateDecisionRecord | None
+
+
 class WorkflowGitCommit:
     """Authorize and execute exactly one ledger-bracketed Slice commit."""
 
     def __init__(self, dependencies: WorkflowGitCommitDependencies) -> None:
         self._dependencies = dependencies
 
-    def commit_slice(self, request: WorkflowCommitRequest) -> str:
+    def _prepare_commit_context(self, request: WorkflowCommitRequest) -> _CommitContext:
         if self._dependencies.active_state() is None:
             raise WorkflowExecutionError("slice commit has no active state")
         self._dependencies.assert_structured_decision_context()
@@ -170,6 +185,33 @@ class WorkflowGitCommit:
             ),
             None,
         )
+        return _CommitContext(
+            root=root,
+            state=state,
+            current=current,
+            boundary=boundary,
+            summary=summary,
+            reviewed_changes=reviewed_changes,
+            unexpected_paths=unexpected_paths,
+            exact_scope_approval=exact_scope_approval,
+            artifact_bridge=artifact_bridge,
+            head_approval=head_approval,
+        )
+
+    def _prepare_git_operation(
+        self,
+        context: _CommitContext,
+        request: WorkflowCommitRequest,
+    ) -> tuple[RepositoryIdentity, tuple[str, ...]]:
+        root = context.root
+        state = context.state
+        current = context.current
+        boundary = context.boundary
+        summary = context.summary
+        reviewed_changes = context.reviewed_changes
+        unexpected_paths = context.unexpected_paths
+        artifact_bridge = context.artifact_bridge
+        head_approval = context.head_approval
         identity = inspect_repository(root)
         existing_git_effect = None
         if artifact_bridge is not None:
@@ -258,7 +300,17 @@ class WorkflowGitCommit:
                 ),
                 unexpected_paths or reviewed_changes.paths,
             )
-        review_result = request.claude_review
+
+        return identity, git_operation
+
+    def _resolve_structured_binding(
+        self,
+        context: _CommitContext,
+        request: WorkflowCommitRequest,
+        review_result: object,
+    ) -> tuple[tuple[str, tuple[str, ...]] | None, ArtifactRecord | None]:
+        artifact_bridge = context.artifact_bridge
+        state = context.state
         structured_attestation = None
         approval_records: tuple[ArtifactRecord, ...] = ()
         current_review_record: ArtifactRecord | None = None
@@ -320,6 +372,26 @@ class WorkflowGitCommit:
                 structured_attestation.record_id,
                 tuple(item.record_id for item in approval_records),
             )
+        return structured_binding, current_review_record
+
+    def commit_slice(self, request: WorkflowCommitRequest) -> str:
+        context = self._prepare_commit_context(request)
+        root = context.root
+        state = context.state
+        boundary = context.boundary
+        summary = context.summary
+        reviewed_changes = context.reviewed_changes
+        unexpected_paths = context.unexpected_paths
+        exact_scope_approval = context.exact_scope_approval
+        artifact_bridge = context.artifact_bridge
+        head_approval = context.head_approval
+        identity, git_operation = self._prepare_git_operation(context, request)
+        review_result = request.claude_review
+        structured_binding, current_review_record = self._resolve_structured_binding(
+            context,
+            request,
+            review_result,
+        )
         if (artifact_bridge is None) != (structured_binding is None):
             raise WorkflowExecutionError(
                 "structured commit binding was not established before the Git transaction"

@@ -411,6 +411,9 @@ COMPARISON_TARGETS = (
     ("src/orchestrator.py", "ProductionWorkflowDriver", "checkpoint"),
     ("src/workflow_audit.py", "WorkflowAudit", "project_audit"),
     ("src/workflow_audit.py", "WorkflowAudit", "finalize_audit"),
+    ("src/workflow_git_commit.py", "WorkflowGitCommit", "_prepare_commit_context"),
+    ("src/workflow_git_commit.py", "WorkflowGitCommit", "_prepare_git_operation"),
+    ("src/workflow_git_commit.py", "WorkflowGitCommit", "_resolve_structured_binding"),
     ("src/workflow_git_commit.py", "WorkflowGitCommit", "commit_slice"),
     ("src/inbox_watcher.py", "QueueSuccessEvidence", "__post_init__"),
     ("src/inbox_watcher.py", None, "load_rejection_marker"),
@@ -454,7 +457,13 @@ STRICT_BODY_TARGETS = tuple(
         and target[2] != "resolve_resume_state"
     )
     or target[2] == "review_payload_matches_result"
-    or target[2] == "commit_slice"
+    or target[2]
+    in {
+        "_prepare_commit_context",
+        "_prepare_git_operation",
+        "_resolve_structured_binding",
+        "commit_slice",
+    }
     or target[2]
     in {
         "_persisted_histories",
@@ -545,7 +554,10 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/orchestrator.py:ProductionWorkflowDriver.checkpoint": 8,
     "src/workflow_audit.py:WorkflowAudit.project_audit": 22,
     "src/workflow_audit.py:WorkflowAudit.finalize_audit": 9,
-    "src/workflow_git_commit.py:WorkflowGitCommit.commit_slice": 45,
+    "src/workflow_git_commit.py:WorkflowGitCommit._prepare_commit_context": 9,
+    "src/workflow_git_commit.py:WorkflowGitCommit._prepare_git_operation": 17,
+    "src/workflow_git_commit.py:WorkflowGitCommit._resolve_structured_binding": 11,
+    "src/workflow_git_commit.py:WorkflowGitCommit.commit_slice": 8,
     "src/inbox_watcher.py:QueueSuccessEvidence.__post_init__": 5,
     "src/inbox_watcher.py:load_rejection_marker": 9,
     "src/inbox_watcher.py:load_watch_identity": 4,
@@ -588,7 +600,10 @@ EXPECTED_STRICT_BODY_DIGESTS = {
     "src/workflow_audit_projection.py:_persisted_histories": "46d16ba2f5f168dbb9f86da548b7c370305003fa27f39d3979423f76f53b8d86",
     "src/workflow_audit_projection.py:_attach_record_events": "7065cd5a4554100a800dd581702c9738d89e6134736908703b715e18c9885d6b",
     "src/workflow_audit.py:WorkflowAudit.finalize_audit": "9c93fd3d7b0cecfdadf5205d704929c53626123619bdb07673fe0e8666177c9d",
-    "src/workflow_git_commit.py:WorkflowGitCommit.commit_slice": "37651f2522c04a12338da97d03230816d9928a1506d6e67f1302c0ea25215a31",
+    "src/workflow_git_commit.py:WorkflowGitCommit._prepare_commit_context": "4206352e640b15e4d4b11a03b8abf1834b6ed7e8338cc139829d2a760d27b16c",
+    "src/workflow_git_commit.py:WorkflowGitCommit._prepare_git_operation": "659e82c4f8261e00f34937995780d08e6374df40a0ef32751473322c7c85de7a",
+    "src/workflow_git_commit.py:WorkflowGitCommit._resolve_structured_binding": "b87c01e79bb399c4b540a8d74d5f5eac75d3db0489f9a011c52631c40c2a691b",
+    "src/workflow_git_commit.py:WorkflowGitCommit.commit_slice": "c591b7e4901da89f1d2d0d5af987f4714060ea44b52cba6845020c794eebb3fb",
     "src/git_service.py:commit_managed_audit_report": "ec161c2eafd7369d9eb9ab30b1724ca01815f08ce669e94c4b322770556bc717",
 }
 

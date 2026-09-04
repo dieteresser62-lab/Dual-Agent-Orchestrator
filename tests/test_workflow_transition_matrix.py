@@ -341,7 +341,7 @@ GATE_SOURCE_MAP = (
         "unexpected_file",
         "user",
         "workflow._commit",
-        ("workflow_git_commit.commit_slice",),
+        ("workflow_git_commit._prepare_git_operation",),
         ("head-drift-user-gate",),
         forwarded_exception="WorkflowCommitApprovalRequired",
     ),

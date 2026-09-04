@@ -16,7 +16,8 @@ ROOT = Path(__file__).resolve().parents[1]
 UPPER_PATH = ROOT / "src/workflow_git_commit.py"
 LOWER_PATH = ROOT / "src/git_service.py"
 STATIC_BASELINE = ROOT / "tests/fixtures/commit-boundary-pre-b49-v1.json"
-RUNTIME_BASELINE = ROOT / "tests/fixtures/commit-boundary-runtime-pre-b49-v1.json"
+RUNTIME_BASELINE = ROOT / "tests/fixtures/commit-boundary-runtime-post-b50-v1.json"
+PRE_CUT_BASELINE = ROOT / "tests/fixtures/commit-boundary-pre-b50-v1.json"
 SOURCE_COMMIT = "da1aa24b30f369a86600ec257418b9e517ac6e86"
 UPPER_BLOB = "afcfffc6baa0704b8f44fbc771f7c314ec1bdfb6"
 LOWER_BLOB = "2c3dc4b973551dd7ea18439e300000a6abf3f5b0"
@@ -81,11 +82,71 @@ def _exception_message(node: ast.Raise) -> str | None:
     return ast.unparse(node.exc.args[0])
 
 
-def _static_layer(path: Path, owner: str | None) -> dict[str, object]:
-    source = path.read_text(encoding="utf-8")
+def _static_layer(
+    path: Path, owner: str | None, source: str | None = None
+) -> dict[str, object]:
+    source = source if source is not None else path.read_text(encoding="utf-8")
     function = _function(source, owner, "commit_slice")
-    decisions = _ordered(function, ast.If)
-    raises = _ordered(function, ast.Raise)
+    if owner is not None:
+        context = _function(source, owner, "_prepare_commit_context")
+        operation = _function(source, owner, "_prepare_git_operation")
+        binding = _function(source, owner, "_resolve_structured_binding")
+        helper_names = {
+            "_prepare_commit_context",
+            "_prepare_git_operation",
+            "_resolve_structured_binding",
+        }
+        helper_calls = [
+            node.func.attr
+            for node in _ordered(function, ast.Call)
+            if isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "self"
+            and node.func.attr in helper_names
+        ]
+        assert helper_calls == [
+            "_prepare_commit_context",
+            "_prepare_git_operation",
+            "_resolve_structured_binding",
+        ]
+        decisions = [
+            *(_ordered(context, ast.If)),
+            *(_ordered(operation, ast.If)),
+            *(_ordered(binding, ast.If)),
+            *(_ordered(function, ast.If)),
+        ]
+        raises = [
+            *(_ordered(context, ast.Raise)),
+            *(_ordered(operation, ast.Raise)),
+            *(_ordered(binding, ast.Raise)),
+            *(_ordered(function, ast.Raise)),
+        ]
+    else:
+        staging = _function(source, None, "_stage_slice_transaction")
+        function_decisions = _ordered(function, ast.If)
+        function_raises = _ordered(function, ast.Raise)
+        staging_calls = [
+            node
+            for node in _ordered(function, ast.Call)
+            if isinstance(node.func, ast.Name)
+            and node.func.id == "_stage_slice_transaction"
+        ]
+        assert len(staging_calls) == 1
+        staging_call = staging_calls[0]
+        decision_split = sum(
+            node.lineno < staging_call.lineno for node in function_decisions
+        )
+        raise_split = sum(node.lineno < staging_call.lineno for node in function_raises)
+        decisions = [
+            *function_decisions[:decision_split],
+            *(_ordered(staging, ast.If)),
+            *function_decisions[decision_split:],
+        ]
+        raises = [
+            *function_raises[:raise_split],
+            *(_ordered(staging, ast.Raise)),
+            *function_raises[raise_split:],
+        ]
     returns = _ordered(function, ast.Return)
     catchers = _ordered(function, ast.ExceptHandler)
     return {
@@ -255,6 +316,12 @@ UPPER_SCENARIOS: tuple[dict[str, Any], ...] = (
         "config": {"structured": "red-state-mismatch"},
         "type": "WorkflowExecutionError",
         "message": "red-state commit lacks its fingerprint-bound review record authorization",
+    },
+    {
+        "scenario_id": "upper-structured-binding-xor",
+        "config": {"structured": "broken-binding-helper"},
+        "type": "WorkflowExecutionError",
+        "message": "structured commit binding was not established before the Git transaction",
     },
 )
 
@@ -473,6 +540,12 @@ def _run_upper(
         patch.setattr(target, "commit_slice", fake_commit_slice)
         patch.setattr(target, "attestation_payload", lambda *_args: object() if config.get("structured") == "attestation-mismatch" else bridge.store.load_chain()[0].payload)
         patch.setattr(target, "review_payload_matches_result", lambda *_args: config.get("structured") != "review-mismatch")
+        if config.get("structured") == "broken-binding-helper":
+            patch.setattr(
+                target.WorkflowGitCommit,
+                "_resolve_structured_binding",
+                lambda *_args: (None, None),
+            )
         try:
             target.WorkflowGitCommit(deps).commit_slice(request)
         except BaseException as caught:  # corpus records mutant mismatches too
@@ -480,6 +553,11 @@ def _run_upper(
     return {
         "scenario_id": scenario["scenario_id"],
         "layer": "workflow_git_commit",
+        "trigger_mode": (
+            "helper-contract-injection"
+            if config.get("structured") == "broken-binding-helper"
+            else "production-input"
+        ),
         "reachable": True,
         "structural_reason": None,
         "expected_error": {"type": scenario["type"], "message": scenario["message"]},
@@ -599,6 +677,7 @@ def _run_lower(
     return {
         "scenario_id": scenario["scenario_id"],
         "layer": "git_service",
+        "trigger_mode": "production-input",
         "reachable": True,
         "structural_reason": None,
         "expected_error": {"type": scenario["type"], "message": scenario["message"]},
@@ -624,32 +703,14 @@ def _successful_upper_bracket() -> dict[str, object]:
 
 @pytest.fixture(scope="session")
 def runtime_corpus() -> dict[str, object]:
+    global _RUNTIME_BUILD_COUNT
+    _RUNTIME_BUILD_COUNT += 1
     scenarios = [*(_run_upper(item) for item in UPPER_SCENARIOS)]
-    scenarios.append(
-        {
-            "scenario_id": "upper-structured-binding-xor",
-            "layer": "workflow_git_commit",
-            "reachable": False,
-            "structural_reason": (
-                "artifact_bridge is assigned once. With None, structured_binding remains "
-                "None. With a bridge, every preceding structured guard either raises or "
-                "execution reaches the unconditional structured_binding assignment as the "
-                "last statement of that if-body; therefore the XOR cannot be true."
-            ),
-            "expected_error": {
-                "type": "WorkflowExecutionError",
-                "message": "structured commit binding was not established before the Git transaction",
-            },
-            "actual_error": None,
-            "commit_count": 0,
-            "side_effect_payloads": [],
-        }
-    )
     scenarios.extend(_run_lower(item) for item in LOWER_SCENARIOS)
     scenarios.append(_successful_upper_bracket())
     return {
-        "schema_version": "commit-boundary-runtime-pre-b49-v1",
-        "source_commit": SOURCE_COMMIT,
+        "schema_version": "commit-boundary-runtime-post-b50-v1",
+        "source_commit": "864363a608840ab42db97bee551670d02c42c993",
         "source_blobs": {
             "src/workflow_git_commit.py": UPPER_BLOB,
             "src/git_service.py": LOWER_BLOB,
@@ -673,7 +734,10 @@ def _load_mutant(path: Path, transform: object) -> ModuleType:
     return module
 
 
-def _remove_first_condition(owner: str | None) -> object:
+_RUNTIME_BUILD_COUNT = 0
+
+
+def _remove_first_condition(owner: str | None, function_name: str) -> object:
     def transform(tree: ast.Module) -> None:
         body: list[ast.stmt] = tree.body
         if owner:
@@ -685,10 +749,35 @@ def _remove_first_condition(owner: str | None) -> object:
         function = next(
             node
             for node in body
-            if isinstance(node, ast.FunctionDef) and node.name == "commit_slice"
+            if isinstance(node, ast.FunctionDef) and node.name == function_name
         )
         assert isinstance(function.body[0], ast.If)
         del function.body[0]
+
+    return transform
+
+
+def _remove_first_raising_condition(owner: str | None, function_name: str) -> object:
+    def transform(tree: ast.Module) -> None:
+        body: list[ast.stmt] = tree.body
+        if owner:
+            body = next(
+                node.body
+                for node in tree.body
+                if isinstance(node, ast.ClassDef) and node.name == owner
+            )
+        function = next(
+            node
+            for node in body
+            if isinstance(node, ast.FunctionDef) and node.name == function_name
+        )
+        index = next(
+            index
+            for index, statement in enumerate(function.body)
+            if isinstance(statement, ast.If)
+            and any(isinstance(node, ast.Raise) for node in ast.walk(statement))
+        )
+        del function.body[index]
 
     return transform
 
@@ -697,7 +786,8 @@ def _swap_first_two_rejections(tree: ast.Module) -> None:
     function = next(
         node
         for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "commit_slice"
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_prepare_commit_context"
     )
     raises = _ordered(function, ast.Raise)
     raises[0].exc, raises[1].exc = copy.deepcopy(raises[1].exc), copy.deepcopy(raises[0].exc)
@@ -717,7 +807,7 @@ def test_static_corpus_is_cleartext_complete_and_source_bound() -> None:
     assert all("read_names" in item for item in (*upper["conditions"], *lower["conditions"]))
 
 
-def test_product_sources_are_byte_identical_to_b49_vorstate() -> None:
+def test_b49_vorstate_anchor_resolves_both_original_product_blobs() -> None:
     for path, expected_blob in ((UPPER_PATH, UPPER_BLOB), (LOWER_PATH, LOWER_BLOB)):
         anchored_blob = subprocess.run(
             ["git", "rev-parse", f"{SOURCE_COMMIT}:{path.relative_to(ROOT).as_posix()}"],
@@ -726,22 +816,40 @@ def test_product_sources_are_byte_identical_to_b49_vorstate() -> None:
             capture_output=True,
             text=True,
         ).stdout.strip()
-        actual_blob = subprocess.run(
-            ["git", "hash-object", str(path)],
+        assert anchored_blob == expected_blob
+
+
+def test_b50_pre_cut_anchor_binds_immediate_source_commit_and_both_blobs() -> None:
+    baseline = json.loads(PRE_CUT_BASELINE.read_text(encoding="utf-8"))
+    assert baseline["schema_version"] == "commit-boundary-pre-b50-v1"
+    for relative, expected_blob in baseline["sources"].items():
+        anchored_blob = subprocess.run(
+            ["git", "rev-parse", f'{baseline["source_commit"]}:{relative}'],
             cwd=ROOT,
             check=True,
             capture_output=True,
             text=True,
         ).stdout.strip()
-        assert anchored_blob == expected_blob
-        assert actual_blob == expected_blob
+        assert anchored_blob == expected_blob, relative
 
 
 def test_runtime_corpus_is_built_once_and_every_reachable_rejection_matches(
     runtime_corpus: dict[str, object],
 ) -> None:
     baseline = json.loads(RUNTIME_BASELINE.read_text(encoding="utf-8"))
-    assert runtime_corpus == baseline
+    assert runtime_corpus["schema_version"] == baseline["schema_version"]
+    assert runtime_corpus["source_commit"] == baseline["source_commit"]
+    assert runtime_corpus["source_blobs"] == baseline["source_blobs"]
+    actual_by_id = {
+        item["scenario_id"]: item for item in runtime_corpus["scenarios"]
+    }
+    expected_by_id = {
+        item["scenario_id"]: item for item in baseline["scenarios"]
+    }
+    assert actual_by_id.keys() == expected_by_id.keys()
+    for scenario_id, expected in expected_by_id.items():
+        assert actual_by_id[scenario_id] == expected, scenario_id
+    assert _RUNTIME_BUILD_COUNT == 1
     scenarios = runtime_corpus["scenarios"]
     rejections = [item for item in scenarios if item["expected_error"] is not None]
     assert len(rejections) == 23
@@ -769,6 +877,7 @@ def test_runtime_corpus_is_built_once_and_every_reachable_rejection_matches(
 def test_success_path_records_exactly_one_intent_result_pair(
     runtime_corpus: dict[str, object],
 ) -> None:
+    assert _RUNTIME_BUILD_COUNT == 1
     success = next(
         item
         for item in runtime_corpus["scenarios"]
@@ -783,14 +892,25 @@ def test_success_path_records_exactly_one_intent_result_pair(
 
 
 def test_removing_one_upper_condition_makes_its_scenario_red() -> None:
-    mutant = _load_mutant(UPPER_PATH, _remove_first_condition("WorkflowGitCommit"))
+    mutant = _load_mutant(
+        UPPER_PATH,
+        _remove_first_condition("WorkflowGitCommit", "_prepare_commit_context"),
+    )
     observed = _run_upper(UPPER_SCENARIOS[0], mutant)
     assert observed["actual_error"] != observed["expected_error"]
 
 
 def test_removing_one_lower_condition_makes_its_scenario_red() -> None:
-    mutant = _load_mutant(LOWER_PATH, _remove_first_condition(None))
-    observed = _run_lower(LOWER_SCENARIOS[0], mutant)
+    mutant = _load_mutant(
+        LOWER_PATH,
+        _remove_first_raising_condition(None, "_stage_slice_transaction"),
+    )
+    scenario = next(
+        item
+        for item in LOWER_SCENARIOS
+        if item["scenario_id"] == "lower-staged-set-mismatch"
+    )
+    observed = _run_lower(scenario, mutant)
     assert observed["actual_error"] != observed["expected_error"]
 
 
@@ -798,6 +918,69 @@ def test_swapping_two_rejections_is_detected() -> None:
     mutant = _load_mutant(UPPER_PATH, _swap_first_two_rejections)
     observed = _run_upper(UPPER_SCENARIOS[0], mutant)
     assert observed["actual_error"] != observed["expected_error"]
+
+
+def test_moving_a_condition_between_layers_is_detected() -> None:
+    upper_tree = ast.parse(UPPER_PATH.read_text(encoding="utf-8"))
+    upper_class = next(
+        node
+        for node in upper_tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "WorkflowGitCommit"
+    )
+    context = next(
+        node
+        for node in upper_class.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_prepare_commit_context"
+    )
+    moved_condition = context.body.pop(0)
+    assert isinstance(moved_condition, ast.If)
+
+    lower_tree = ast.parse(LOWER_PATH.read_text(encoding="utf-8"))
+    lower_commit = next(
+        node
+        for node in lower_tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "commit_slice"
+    )
+    lower_commit.body.insert(0, moved_condition)
+    ast.fix_missing_locations(upper_tree)
+    ast.fix_missing_locations(lower_tree)
+
+    upper = _static_layer(UPPER_PATH, "WorkflowGitCommit", ast.unparse(upper_tree))
+    lower = _static_layer(LOWER_PATH, None, ast.unparse(lower_tree))
+    baseline_upper, baseline_lower = _static_document()["layers"]
+    assert upper != baseline_upper
+    assert lower != baseline_lower
+    assert len(upper["conditions"]) == 18
+    assert len(lower["conditions"]) == 20
+
+
+def test_commit_entrypoints_shrink_below_the_b32_threshold() -> None:
+    for path, owner in ((UPPER_PATH, "WorkflowGitCommit"), (LOWER_PATH, None)):
+        function = _function(path.read_text(encoding="utf-8"), owner, "commit_slice")
+        assert function.end_lineno is not None
+        assert function.end_lineno - function.lineno + 1 < 200
+
+
+def test_lower_extracted_helper_remains_inside_the_original_catcher() -> None:
+    source = LOWER_PATH.read_text(encoding="utf-8")
+    function = _function(source, None, "commit_slice")
+    catchers = _ordered(function, ast.ExceptHandler)
+    assert len(catchers) == 1
+    assert ast.unparse(catchers[0].type) == "GitTransactionError"
+    guarded_try = next(
+        node
+        for node in ast.walk(function)
+        if isinstance(node, ast.Try)
+        and any(
+            isinstance(child, ast.Call)
+            and isinstance(child.func, ast.Name)
+            and child.func.id == "_stage_slice_transaction"
+            for statement in node.body
+            for child in ast.walk(statement)
+        )
+    )
+    assert guarded_try.handlers == catchers
 
 
 def test_baseline_facts_are_cleartext_not_digest_only() -> None:
@@ -810,4 +993,3 @@ def test_baseline_facts_are_cleartext_not_digest_only() -> None:
     ):
         assert message in static_text
         assert message in runtime_text
-    assert "artifact_bridge is assigned once" in runtime_text
