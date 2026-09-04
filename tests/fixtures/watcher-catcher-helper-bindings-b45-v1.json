@@ -1,0 +1,73 @@
+{
+  "schema_version": "watcher-catcher-helper-bindings-b45-v1",
+  "pre_cut_map": "tests/fixtures/watcher-catcher-map-pre-b45-v1.json",
+  "handler_body_sha_change_reasons": {},
+  "helpers": [
+    {
+      "helper": "_rename_stuck_task",
+      "catcher_id": "stuck-cleanup",
+      "region": "protected_body",
+      "pre_cut_block": "rename the stuck task and delete its four queue sidecars"
+    },
+    {
+      "helper": "_prepare_watch_invocation",
+      "catcher_id": "watch-interrupt",
+      "region": "protected_body",
+      "pre_cut_block": "prepare callback arguments and persist the started identity"
+    },
+    {
+      "helper": "_process_watch_task",
+      "catcher_id": "task-processing",
+      "region": "protected_body",
+      "pre_cut_block": "invoke the provider callback, validate bindings, persist identity changes, and translate legacy results"
+    },
+    {
+      "helper": "_strengthen_rejected_result",
+      "catcher_id": "watch-interrupt",
+      "region": "protected_body",
+      "pre_cut_block": "re-check the record boundary immediately before terminal rejection"
+    },
+    {
+      "helper": "_begin_rejected_archive",
+      "catcher_id": "rejection-archive",
+      "region": "protected_body",
+      "pre_cut_block": "persist the rejection marker and move the rejected task"
+    },
+    {
+      "helper": "_finish_rejected_archive",
+      "catcher_id": "rejection-archive",
+      "region": "protected_body",
+      "pre_cut_block": "clean sidecars and log the rejection result"
+    },
+    {
+      "helper": "_move_poison_task",
+      "catcher_id": "poison-archive",
+      "region": "protected_body",
+      "pre_cut_block": "move or recoverably quarantine the poison task"
+    },
+    {
+      "helper": "_finish_poison_archive",
+      "catcher_id": "poison-archive",
+      "region": "protected_body",
+      "pre_cut_block": "clean sidecars and log the poison result"
+    },
+    {
+      "helper": "_finalize_new_bound_success",
+      "catcher_id": "watch-interrupt",
+      "region": "protected_body",
+      "pre_cut_block": "publish bound success for a newly completed structured task"
+    },
+    {
+      "helper": "_recover_bound_success",
+      "catcher_id": "watch-interrupt",
+      "region": "protected_body",
+      "pre_cut_block": "recover an already published bound success"
+    },
+    {
+      "helper": "_archive_completed_task",
+      "catcher_id": "done-archive",
+      "region": "protected_body",
+      "pre_cut_block": "raise a prior finalization failure or move the completed task and clean sidecars"
+    }
+  ]
+}

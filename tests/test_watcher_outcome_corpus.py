@@ -33,6 +33,8 @@ from task_contract import TaskContractError
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "src/inbox_watcher.py"
 BASELINE = ROOT / "tests/fixtures/watcher-outcome-corpus-v1.json"
+PRE_CUT_MAP = ROOT / "tests/fixtures/watcher-catcher-map-pre-b45-v1.json"
+HELPER_BINDINGS = ROOT / "tests/fixtures/watcher-catcher-helper-bindings-b45-v1.json"
 SOURCE_TEXT = SOURCE.read_text(encoding="utf-8")
 SOURCE_TREE = ast.parse(SOURCE_TEXT, filename=str(SOURCE))
 
@@ -42,6 +44,7 @@ class CatcherSpec:
     catcher_id: str
     exception: str
     protected_call: str
+    helper_call: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,16 +54,28 @@ class BuiltCorpus:
 
 
 CATCHER_SPECS = (
-    CatcherSpec("stuck-cleanup", "Exception", "task_file.rename"),
+    CatcherSpec(
+        "stuck-cleanup", "Exception", "task_file.rename", "_rename_stuck_task"
+    ),
     CatcherSpec("rejection-marker-load", "ValueError", "load_rejection_marker"),
     CatcherSpec("watch-identity-load", "ValueError", "load_or_create_watch_identity"),
-    CatcherSpec("task-processing", "Exception", "process_task"),
+    CatcherSpec("task-processing", "Exception", "process_task", "_process_watch_task"),
     CatcherSpec("rejection-report", "Exception", "write_rejected_failure_report"),
-    CatcherSpec("rejection-archive", "Exception", "save_rejection_marker"),
+    CatcherSpec(
+        "rejection-archive",
+        "Exception",
+        "save_rejection_marker",
+        "_begin_rejected_archive",
+    ),
     CatcherSpec("poison-report", "Exception", "write_poison_failure_report"),
-    CatcherSpec("poison-archive", "Exception", "move_to_outbox"),
+    CatcherSpec("poison-archive", "Exception", "move_to_outbox", "_move_poison_task"),
     CatcherSpec("legacy-success-marker", "Exception", "write_success_marker"),
-    CatcherSpec("done-archive", "Exception", "delete_attempt_sidecar"),
+    CatcherSpec(
+        "done-archive",
+        "Exception",
+        "delete_attempt_sidecar",
+        "_archive_completed_task",
+    ),
     CatcherSpec("fallback-failed-archive", "Exception", "move_to_outbox"),
     CatcherSpec("watch-interrupt", "KeyboardInterrupt", "list_inbox_tasks"),
 )
@@ -82,6 +97,11 @@ SCENARIO_IDS = (
 )
 
 _CORPUS_BUILD_COUNT = 0
+
+EXTRACTED_HELPERS = frozenset(
+    binding["helper"]
+    for binding in json.loads(HELPER_BINDINGS.read_text(encoding="utf-8"))["helpers"]
+)
 
 
 class _StopScenario(BaseException):
@@ -128,6 +148,15 @@ def _protected_calls(protected_try: ast.Try) -> set[str]:
     }
 
 
+def _function_calls(function: ast.FunctionDef) -> set[str]:
+    return {
+        name
+        for node in ast.walk(function)
+        if isinstance(node, ast.Call)
+        if (name := _call_name(node)) is not None
+    }
+
+
 def _body_sha256(handler: ast.ExceptHandler) -> str:
     semantic_body = ast.dump(
         ast.Module(body=handler.body, type_ignores=[]),
@@ -146,12 +175,19 @@ def _handler_inventory(tree: ast.Module) -> list[dict[str, object]]:
         for node in ast.walk(function)
         for child in ast.iter_child_nodes(node)
     }
+    module_functions = {
+        node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)
+    }
     inventory: list[dict[str, object]] = []
     for spec, handler in zip(CATCHER_SPECS, handlers, strict=True):
         protected_try = parent_map[handler]
         assert isinstance(protected_try, ast.Try)
         assert _exception_name(handler) == spec.exception
-        assert spec.protected_call in _protected_calls(protected_try)
+        protected_calls = _protected_calls(protected_try)
+        if spec.helper_call is not None:
+            assert spec.helper_call in protected_calls
+            protected_calls.update(_function_calls(module_functions[spec.helper_call]))
+        assert spec.protected_call in protected_calls
         inventory.append(
             {
                 "catcher_id": spec.catcher_id,
@@ -161,6 +197,126 @@ def _handler_inventory(tree: ast.Module) -> list[dict[str, object]]:
             }
         )
     return inventory
+
+
+def _helper_catcher_binding(tree: ast.Module, helper_name: str) -> tuple[str, str]:
+    function = _watch_function(tree)
+    handlers = _handlers(function)
+    catcher_by_handler = dict(
+        zip(handlers, (spec.catcher_id for spec in CATCHER_SPECS), strict=True)
+    )
+    parent_map = {
+        child: node
+        for node in ast.walk(function)
+        for child in ast.iter_child_nodes(node)
+    }
+    calls = [
+        node
+        for node in ast.walk(function)
+        if isinstance(node, ast.Call) and _call_name(node) == helper_name
+    ]
+    assert len(calls) == 1, helper_name
+    current: ast.AST = calls[0]
+    while current in parent_map:
+        parent = parent_map[current]
+        if isinstance(parent, ast.ExceptHandler):
+            return catcher_by_handler[parent], "handler_body"
+        if isinstance(parent, ast.Try) and current in parent.body:
+            assert len(parent.handlers) == 1
+            return catcher_by_handler[parent.handlers[0]], "protected_body"
+        current = parent
+    raise AssertionError(f"helper call has no catcher binding: {helper_name}")
+
+
+def _loop_control_signature(tree: ast.Module) -> tuple[int, str, str]:
+    function = _watch_function(tree)
+    loops = [node for node in ast.walk(function) if isinstance(node, ast.While)]
+    assert len(loops) == 1
+    loop = loops[0]
+    controls = [
+        type(node).__name__
+        + ":"
+        + (
+            ast.dump(node.value, include_attributes=False)
+            if isinstance(node, ast.Return) and node.value is not None
+            else ""
+        )
+        for node in sorted(
+            (
+                item
+                for item in ast.walk(loop)
+                if isinstance(item, (ast.Continue, ast.Break, ast.Return))
+            ),
+            key=lambda item: item.lineno,
+        )
+    ]
+    digest = hashlib.sha256("\n".join(controls).encode("utf-8")).hexdigest()
+    return len(controls), digest, ast.dump(loop.test, include_attributes=False)
+
+
+def _move_helper_call_before_catcher(
+    tree: ast.Module, helper_name: str
+) -> ast.Module:
+    function = _watch_function(tree)
+    parent_map = {
+        child: node
+        for node in ast.walk(function)
+        for child in ast.iter_child_nodes(node)
+    }
+    call = next(
+        node
+        for node in ast.walk(function)
+        if isinstance(node, ast.Call) and _call_name(node) == helper_name
+    )
+    statement: ast.AST = call
+    while not (
+        isinstance(parent_map.get(statement), ast.Try)
+        and statement in parent_map[statement].body
+    ):
+        statement = parent_map[statement]
+    protected_try = parent_map[statement]
+    assert isinstance(protected_try, ast.Try)
+    container = parent_map[protected_try]
+    statement_list = next(
+        candidate
+        for _field, candidate in ast.iter_fields(container)
+        if isinstance(candidate, list) and protected_try in candidate
+    )
+    protected_try.body.remove(statement)
+    statement_list.insert(statement_list.index(protected_try), statement)
+    ast.fix_missing_locations(tree)
+    return tree
+
+
+def _move_product_call_between_helpers(
+    tree: ast.Module,
+    call_name: str,
+    *,
+    source_helper: str,
+    destination_helper: str,
+) -> ast.Module:
+    functions = {
+        node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)
+    }
+    source = functions[source_helper]
+    destination = functions[destination_helper]
+    parent_map = {
+        child: node
+        for node in ast.walk(source)
+        for child in ast.iter_child_nodes(node)
+    }
+    call = next(
+        node
+        for node in ast.walk(source)
+        if isinstance(node, ast.Call) and _call_name(node) == call_name
+    )
+    statement: ast.AST = call
+    while parent_map[statement] is not source:
+        statement = parent_map[statement]
+    source.body.remove(statement)
+    destination.body.insert(-1, statement)
+    ast.fix_missing_locations(tree)
+    return tree
 
 
 @lru_cache(maxsize=2)
@@ -187,7 +343,13 @@ def _instrumented_code(
         ast.copy_location(recorder, handler.body[0])
         handler.body.insert(0, recorder)
 
-    module = ast.Module(body=[function], type_ignores=[])
+    helper_functions = [
+        copy.deepcopy(node)
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name in EXTRACTED_HELPERS
+    ]
+    assert {helper.name for helper in helper_functions} == EXTRACTED_HELPERS
+    module = ast.Module(body=[*helper_functions, function], type_ignores=[])
     ast.fix_missing_locations(module)
     return compile(module, "<b44-instrumented-watch>", "exec"), inventory_tree
 
@@ -641,3 +803,114 @@ def test_scenarios_are_built_once(
 ) -> None:
     assert _CORPUS_BUILD_COUNT == 1
     assert watcher_outcome_corpus.build_seconds > 0
+
+
+def test_b45_helpers_remain_inside_their_pre_cut_catchers() -> None:
+    pre_cut = json.loads(PRE_CUT_MAP.read_text(encoding="utf-8"))
+    bindings = json.loads(HELPER_BINDINGS.read_text(encoding="utf-8"))
+    assert pre_cut["schema_version"] == "watcher-catcher-map-pre-b45-v1"
+    assert pre_cut["source_commit"] == "16033429628a164c95c808830f74c3139faaca52"
+    assert pre_cut["source_blob"] == "34e6c3a384e1c2dfaabe521b2261496a7800df6b"
+    assert bindings["schema_version"] == "watcher-catcher-helper-bindings-b45-v1"
+    assert bindings["pre_cut_map"] == PRE_CUT_MAP.relative_to(ROOT).as_posix()
+
+    pre_cut_catchers = {
+        item["catcher_id"]: item for item in pre_cut["catchers"]
+    }
+    assert list(pre_cut_catchers) == [spec.catcher_id for spec in CATCHER_SPECS]
+    assert [item["exception"] for item in pre_cut_catchers.values()] == [
+        spec.exception for spec in CATCHER_SPECS
+    ]
+
+    actual_bindings = {
+        item["helper"]: _helper_catcher_binding(SOURCE_TREE, item["helper"])
+        for item in bindings["helpers"]
+    }
+    expected_bindings = {
+        item["helper"]: (item["catcher_id"], item["region"])
+        for item in bindings["helpers"]
+    }
+    assert actual_bindings == expected_bindings
+    assert set(actual_bindings) == EXTRACTED_HELPERS
+    assert all(item["pre_cut_block"] for item in bindings["helpers"])
+
+    helper_nodes = {
+        node.name: node
+        for node in SOURCE_TREE.body
+        if isinstance(node, ast.FunctionDef) and node.name in EXTRACTED_HELPERS
+    }
+    assert set(helper_nodes) == EXTRACTED_HELPERS
+    assert not any(
+        isinstance(descendant, ast.ExceptHandler)
+        for helper in helper_nodes.values()
+        for descendant in ast.walk(helper)
+    )
+    module_private_functions = {
+        node.name
+        for node in SOURCE_TREE.body
+        if isinstance(node, ast.FunctionDef) and node.name.startswith("_")
+    }
+    called_private_functions = {
+        name
+        for node in ast.walk(_watch_function(SOURCE_TREE))
+        if isinstance(node, ast.Call)
+        if (name := _call_name(node)) in module_private_functions
+    }
+    assert called_private_functions == EXTRACTED_HELPERS
+
+
+def test_b45_catcher_bodies_and_loop_control_match_the_pre_cut_map() -> None:
+    pre_cut = json.loads(PRE_CUT_MAP.read_text(encoding="utf-8"))
+    bindings = json.loads(HELPER_BINDINGS.read_text(encoding="utf-8"))
+    current_handlers = {
+        item["catcher_id"]: item for item in _handler_inventory(SOURCE_TREE)
+    }
+    pre_cut_sha = {
+        item["catcher_id"]: item["handler_body_sha256"]
+        for item in pre_cut["catchers"]
+    }
+    changed = {
+        catcher_id
+        for catcher_id, item in current_handlers.items()
+        if item["body_sha256"] != pre_cut_sha[catcher_id]
+    }
+    assert changed == set(bindings["handler_body_sha_change_reasons"])
+    assert all(bindings["handler_body_sha_change_reasons"].values())
+
+    count, digest, test_ast = _loop_control_signature(SOURCE_TREE)
+    assert count == pre_cut["loop_control_count"]
+    assert digest == pre_cut["loop_control_sha256"]
+    assert test_ast == pre_cut["while_test_ast"]
+
+
+def test_b45_moving_a_helper_call_outside_its_catcher_turns_binding_red() -> None:
+    bindings = json.loads(HELPER_BINDINGS.read_text(encoding="utf-8"))
+    expected = {
+        item["helper"]: (item["catcher_id"], item["region"])
+        for item in bindings["helpers"]
+    }
+    mutant = _move_helper_call_before_catcher(
+        copy.deepcopy(SOURCE_TREE), "_move_poison_task"
+    )
+    compile(mutant, "<b45-helper-outside-catcher>", "exec")
+    actual = {
+        helper: _helper_catcher_binding(mutant, helper) for helper in expected
+    }
+    assert actual["_move_poison_task"] == ("watch-interrupt", "protected_body")
+    assert actual != expected
+
+
+def test_b45_moving_a_product_call_between_helpers_turns_inventory_red() -> None:
+    mutant = _move_product_call_between_helpers(
+        copy.deepcopy(SOURCE_TREE),
+        "process_task",
+        source_helper="_process_watch_task",
+        destination_helper="_prepare_watch_invocation",
+    )
+    compile(mutant, "<b45-product-call-in-wrong-helper>", "exec")
+    assert _helper_catcher_binding(mutant, "_process_watch_task") == (
+        "task-processing",
+        "protected_body",
+    )
+    with pytest.raises(AssertionError):
+        _handler_inventory(mutant)

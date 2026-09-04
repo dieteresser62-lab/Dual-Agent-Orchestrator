@@ -1,0 +1,95 @@
+{
+  "schema_version": "watcher-catcher-map-pre-b45-v1",
+  "source_commit": "16033429628a164c95c808830f74c3139faaca52",
+  "source_blob": "34e6c3a384e1c2dfaabe521b2261496a7800df6b",
+  "watch_inbox_lines": 508,
+  "while_test_ast": "Constant(value=True)",
+  "loop_control_count": 15,
+  "loop_control_sha256": "9440dbb66ba6d7246104b254b4db8ad0efd4d18f5292239965414f17c618beae",
+  "catchers": [
+    {
+      "catcher_id": "stuck-cleanup",
+      "exception": "Exception",
+      "pre_cut_line": 1179,
+      "protected_blocks": ["rename the stuck task and delete its four queue sidecars"],
+      "handler_body_sha256": "0270fe0f5cb7ffb6735508e2da66054dbcaeae097c58b13ab05585e567aae7f7"
+    },
+    {
+      "catcher_id": "rejection-marker-load",
+      "exception": "ValueError",
+      "pre_cut_line": 1200,
+      "protected_blocks": ["load and validate the persisted rejection marker"],
+      "handler_body_sha256": "526a849ef23d0dbc2cdebc93b3b179d651cb85b28fffa8185fb3083f1df87a16"
+    },
+    {
+      "catcher_id": "watch-identity-load",
+      "exception": "ValueError",
+      "pre_cut_line": 1210,
+      "protected_blocks": ["load or create the persistent Watch run identity"],
+      "handler_body_sha256": "1057434d54e6cdf293c4ed742d6e22481e379d71013d09e1273a73830d507040"
+    },
+    {
+      "catcher_id": "task-processing",
+      "exception": "Exception",
+      "pre_cut_line": 1296,
+      "protected_blocks": ["invoke the provider callback", "validate result run and protocol binding", "persist identity changes", "translate legacy integer results"],
+      "handler_body_sha256": "c82a399240f72f814817e450ab8e2c645ca4e4ed7a3a225b42fca8895999b3fc"
+    },
+    {
+      "catcher_id": "rejection-report",
+      "exception": "Exception",
+      "pre_cut_line": 1344,
+      "protected_blocks": ["write the terminal rejection report"],
+      "handler_body_sha256": "93523e8cc1003a5d75cf37b18ea26bab2682850a14410830f908c1690c6ecda2"
+    },
+    {
+      "catcher_id": "rejection-archive",
+      "exception": "Exception",
+      "pre_cut_line": 1361,
+      "protected_blocks": ["persist the rejection marker", "move the rejected task", "clean sidecars and log the rejection result"],
+      "handler_body_sha256": "040c69648a1c60f7b40f9b80c6056d26227024dfea06af866be7e924f9a5040a"
+    },
+    {
+      "catcher_id": "poison-report",
+      "exception": "Exception",
+      "pre_cut_line": 1431,
+      "protected_blocks": ["write the poison failure report"],
+      "handler_body_sha256": "3751609662639892b8c05e2c0c02dde4e2ef13b369c6a1394e1fcd89ade95a2a"
+    },
+    {
+      "catcher_id": "poison-archive",
+      "exception": "Exception",
+      "pre_cut_line": 1448,
+      "protected_blocks": ["move or recoverably quarantine the poison task", "clean sidecars and log the poison result"],
+      "handler_body_sha256": "2182405852b00960fe4045cec03cf09cf6db67b1a520627f9274967256f4bdfc"
+    },
+    {
+      "catcher_id": "legacy-success-marker",
+      "exception": "Exception",
+      "pre_cut_line": 1510,
+      "protected_blocks": ["write the legacy timestamp success marker"],
+      "handler_body_sha256": "650185028493e82858e0f30f2282cc8f59a03b43211b61cfa14e5e1f199cb5c6"
+    },
+    {
+      "catcher_id": "done-archive",
+      "exception": "Exception",
+      "pre_cut_line": 1553,
+      "protected_blocks": ["raise a prior queue finalization failure", "move the completed task and clean sidecars"],
+      "handler_body_sha256": "111f0101da90d8a0d85f6f21feb0cbdf854a65cd795d52fabc93ffae17d68986"
+    },
+    {
+      "catcher_id": "fallback-failed-archive",
+      "exception": "Exception",
+      "pre_cut_line": 1581,
+      "protected_blocks": ["move a repeatedly unarchivable task to failed and clean sidecars"],
+      "handler_body_sha256": "9d9caac862cbc0f46f9c8e2c60adfb19de27b02008238169552a6fe80fa33d58"
+    },
+    {
+      "catcher_id": "watch-interrupt",
+      "exception": "KeyboardInterrupt",
+      "pre_cut_line": 1616,
+      "protected_blocks": ["the complete polling and task-processing loop"],
+      "handler_body_sha256": "f9a80828c10e279d9573936e0f8429bd4b2cec5a87e357c6f855e6e4d538df60"
+    }
+  ]
+}

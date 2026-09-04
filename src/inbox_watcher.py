@@ -1110,6 +1110,260 @@ def release_inbox_lock(lock_handle: TextIO | None) -> None:
         lock_handle.close()
 
 
+@dataclass(frozen=True)
+class _WatchProcessingResult:
+    task_result: WatchTaskResult
+    run_id_failed: bool = False
+    protocol_mode_failed: bool = False
+    bind_protocol_mode: bool = False
+    reset_started: bool = False
+
+
+def _rename_stuck_task(task_file: Path, stuck_destination: Path) -> None:
+    task_file.rename(stuck_destination)
+    delete_attempt_sidecar(task_file)
+    delete_success_marker(task_file)
+    delete_watch_identity(task_file)
+    delete_rejection_marker(task_file)
+
+
+def _prepare_watch_invocation(
+    task_file: Path,
+    identity: WatchTaskIdentity,
+    args: argparse.Namespace,
+) -> tuple[WatchTaskIdentity, argparse.Namespace, bool]:
+    task_args = copy.copy(args)
+    task_args.watch_run_id = identity.run_id
+    task_args.resume = identity.started
+    task_args.force_overwrite_state = not identity.started
+    force_new = not identity.started
+    if not identity.started:
+        identity = replace(identity, started=True)
+        save_watch_identity(task_file, identity)
+    return identity, task_args, force_new
+
+
+def _process_watch_task(
+    task_file: Path,
+    task_args: argparse.Namespace,
+    force_new: bool,
+    identity: WatchTaskIdentity,
+    process_task: Callable[
+        [Path, argparse.Namespace, bool], int | WatchTaskResult
+    ],
+) -> _WatchProcessingResult:
+    raw_result = process_task(task_file, task_args, force_new)
+    if isinstance(raw_result, WatchTaskResult):
+        task_result = raw_result
+        if task_result.run_id != identity.run_id:
+            logger.error(
+                "Workflow result run id %s differs from persisted watch "
+                "identity %s for %s.",
+                task_result.run_id,
+                identity.run_id,
+                task_file.name,
+            )
+            return _WatchProcessingResult(task_result, run_id_failed=True)
+        if (
+            identity.protocol_mode is not None
+            and task_result.protocol_mode is not None
+            and task_result.protocol_mode != identity.protocol_mode
+        ):
+            logger.error(
+                "Workflow protocol mode %s differs from persisted watch "
+                "identity %s for %s.",
+                task_result.protocol_mode,
+                identity.protocol_mode,
+                task_file.name,
+            )
+            return _WatchProcessingResult(
+                task_result, protocol_mode_failed=True
+            )
+        bind_protocol_mode = (
+            identity.sidecar_version == 2
+            and identity.protocol_mode is None
+            and task_result.protocol_mode is not None
+        )
+        reset_started = (
+            task_result.disposition is WatchTaskDisposition.TECHNICAL_FAILURE
+            and not task_result.resume_available
+        )
+        return _WatchProcessingResult(
+            task_result,
+            bind_protocol_mode=bind_protocol_mode,
+            reset_started=reset_started,
+        )
+
+    exit_code = int(raw_result)
+    if exit_code == 0 or exit_code in {2, 3, 4}:
+        task_result = WatchTaskResult(
+            exit_code=exit_code,
+            run_id=identity.run_id,
+            disposition=(
+                WatchTaskDisposition.COMPLETED
+                if exit_code == 0
+                else WatchTaskDisposition.RESUMABLE_HALT
+            ),
+            status="legacy",
+            step="legacy",
+            work_unit_id=1,
+            gate_reason="legacy",
+            failure_detail=(None if exit_code == 0 else f"legacy exit code {exit_code}"),
+        )
+    else:
+        task_result = WatchTaskResult.from_failure(
+            classify_exception(RuntimeError(f"legacy exit code {exit_code}")),
+            run_id=identity.run_id,
+            records_written=watch_run_has_records(Path.cwd(), identity.run_id),
+        )
+    return _WatchProcessingResult(task_result)
+
+
+def _strengthen_rejected_result(task_result: WatchTaskResult) -> WatchTaskResult:
+    # Re-check the lifecycle boundary immediately before publishing a terminal
+    # rejection. A concurrently visible record can only strengthen the result
+    # into an operator halt.
+    assert task_result.classified_failure is not None
+    return WatchTaskResult.from_failure(
+        task_result.classified_failure,
+        run_id=task_result.run_id,
+        records_written=watch_run_has_records(Path.cwd(), task_result.run_id),
+        protocol_mode=task_result.protocol_mode,
+    )
+
+
+def _begin_rejected_archive(
+    task_file: Path,
+    outbox_failed_dir: Path,
+    task_result: WatchTaskResult,
+    rejected_name: str,
+    *,
+    task_rejected_already: bool,
+) -> Path:
+    if not task_rejected_already:
+        save_rejection_marker(task_file, task_result)
+    return move_to_outbox(
+        task_file,
+        outbox_failed_dir,
+        source_name=rejected_name,
+    )
+
+
+def _finish_rejected_archive(
+    task_file: Path,
+    destination: Path,
+    task_result: WatchTaskResult,
+    report: Path | None,
+) -> None:
+    delete_attempt_sidecar(task_file)
+    delete_success_marker(task_file)
+    delete_watch_identity(task_file)
+    delete_rejection_marker(task_file)
+    logger.warning(
+        "Task rejected without retry and moved to failed outbox: %s diagnostic=%s",
+        destination,
+        task_result.gate_reason,
+    )
+    if report is not None:
+        logger.warning("Rejection report written: %s", report)
+
+
+def _move_poison_task(
+    task_file: Path,
+    outbox_failed_dir: Path,
+    task_result: WatchTaskResult,
+    identity: WatchTaskIdentity | None,
+    poison_name: str,
+    quarantine_diagnostics: list[str],
+) -> Path:
+    return (
+        move_poison_to_outbox_recoverably(
+            task_file,
+            outbox_failed_dir,
+            repository_root=Path.cwd(),
+            run_id=task_result.run_id,
+            task_digest=identity.task_digest,
+            source_name=poison_name,
+            quarantine_diagnostic=quarantine_diagnostics.append,
+        )
+        if identity is not None
+        else move_to_outbox(
+            task_file,
+            outbox_failed_dir,
+            source_name=poison_name,
+        )
+    )
+
+
+def _finish_poison_archive(
+    task_file: Path,
+    destination: Path,
+    report: Path | None,
+    *,
+    attempts: int,
+    max_retries: int,
+) -> None:
+    delete_attempt_sidecar(task_file)
+    delete_success_marker(task_file)
+    delete_watch_identity(task_file)
+    delete_rejection_marker(task_file)
+    logger.warning(
+        "Task marked poison after %s/%s failures and moved to failed outbox: %s",
+        attempts,
+        max_retries,
+        destination,
+    )
+    if report is not None:
+        logger.warning("Poison failure report written: %s", report)
+
+
+def _finalize_new_bound_success(
+    task_file: Path,
+    inbox_dir: Path,
+    outbox_dir: Path,
+    identity: WatchTaskIdentity,
+) -> QueueFinalizationResult:
+    return finalize_queue_success(
+        task_file,
+        inbox_dir=inbox_dir,
+        outbox_dir=outbox_dir,
+        run_id=identity.run_id,
+        task_digest=identity.task_digest,
+        protocol_mode=identity.protocol_mode or "structured-v2",
+        publish=True,
+        repository_root=Path.cwd(),
+    )
+
+
+def _recover_bound_success(
+    task_file: Path,
+    inbox_dir: Path,
+    outbox_dir: Path,
+) -> QueueFinalizationResult:
+    return finalize_queue_success(
+        task_file,
+        inbox_dir=inbox_dir,
+        outbox_dir=outbox_dir,
+        repository_root=Path.cwd(),
+    )
+
+
+def _archive_completed_task(
+    task_file: Path,
+    outbox_done_dir: Path,
+    bound_failure: str | None,
+) -> None:
+    # Compatibility for timestamp-only success markers from older watchers.
+    if bound_failure is not None:
+        raise RuntimeError(bound_failure)
+    destination = move_to_outbox(task_file, outbox_done_dir)
+    delete_attempt_sidecar(task_file)
+    delete_success_marker(task_file)
+    delete_watch_identity(task_file)
+    delete_rejection_marker(task_file)
+    logger.info("Moved task to done outbox: %s", destination)
+
+
 def watch_inbox(
     *,
     inbox_dir: Path,
@@ -1171,16 +1425,11 @@ def watch_inbox(
                         stuck_destination.name,
                     )
                     try:
-                        task_file.rename(stuck_destination)
-                        delete_attempt_sidecar(task_file)
-                        delete_success_marker(task_file)
-                        delete_watch_identity(task_file)
-                        delete_rejection_marker(task_file)
+                        _rename_stuck_task(task_file, stuck_destination)
                     except Exception:
                         logger.exception("Failed to rename stuck task %s.", task_file)
                     continue
 
-            exit_code: int | None = None
             task_result: WatchTaskResult | None = None
             task_succeeded_already = has_success_marker(task_file)
             task_rejected_already = rejection_marker_path(task_file).exists()
@@ -1214,85 +1463,30 @@ def watch_inbox(
                         exc,
                     )
                     return 4
-                task_args = copy.copy(args)
-                task_args.watch_run_id = identity.run_id
-                task_args.resume = identity.started
-                task_args.force_overwrite_state = not identity.started
-                force_new = not identity.started
-                if not identity.started:
-                    identity = replace(identity, started=True)
-                    save_watch_identity(task_file, identity)
+                identity, task_args, force_new = _prepare_watch_invocation(
+                    task_file, identity, args
+                )
                 try:
-                    raw_result = process_task(task_file, task_args, force_new)
-                    if isinstance(raw_result, WatchTaskResult):
-                        task_result = raw_result
-                        if task_result.run_id != identity.run_id:
-                            logger.error(
-                                "Workflow result run id %s differs from persisted watch "
-                                "identity %s for %s.",
-                                task_result.run_id,
-                                identity.run_id,
-                                task_file.name,
-                            )
-                            return 4
-                        if (
-                            identity.protocol_mode is not None
-                            and task_result.protocol_mode is not None
-                            and task_result.protocol_mode != identity.protocol_mode
-                        ):
-                            logger.error(
-                                "Workflow protocol mode %s differs from persisted watch "
-                                "identity %s for %s.",
-                                task_result.protocol_mode,
-                                identity.protocol_mode,
-                                task_file.name,
-                            )
-                            return 4
-                        if (
-                            identity.sidecar_version == 2
-                            and identity.protocol_mode is None
-                            and task_result.protocol_mode is not None
-                        ):
-                            identity = replace(identity, protocol_mode=task_result.protocol_mode)
-                            save_watch_identity(task_file, identity)
-                        if (
-                            task_result.disposition
-                            is WatchTaskDisposition.TECHNICAL_FAILURE
-                            and not task_result.resume_available
-                        ):
-                            identity = replace(identity, started=False)
-                            save_watch_identity(task_file, identity)
-                    else:
-                        exit_code = int(raw_result)
-                        if exit_code == 0 or exit_code in {2, 3, 4}:
-                            task_result = WatchTaskResult(
-                                exit_code=exit_code,
-                                run_id=identity.run_id,
-                                disposition=(
-                                    WatchTaskDisposition.COMPLETED
-                                    if exit_code == 0
-                                    else WatchTaskDisposition.RESUMABLE_HALT
-                                ),
-                                status="legacy",
-                                step="legacy",
-                                work_unit_id=1,
-                                gate_reason="legacy",
-                                failure_detail=(
-                                    None
-                                    if exit_code == 0
-                                    else f"legacy exit code {exit_code}"
-                                ),
-                            )
-                        else:
-                            task_result = WatchTaskResult.from_failure(
-                                classify_exception(
-                                    RuntimeError(f"legacy exit code {exit_code}")
-                                ),
-                                run_id=identity.run_id,
-                                records_written=watch_run_has_records(
-                                    Path.cwd(), identity.run_id
-                                ),
-                            )
+                    processing = _process_watch_task(
+                        task_file,
+                        task_args,
+                        force_new,
+                        identity,
+                        process_task,
+                    )
+                    task_result = processing.task_result
+                    if processing.run_id_failed:
+                        return 4
+                    if processing.protocol_mode_failed:
+                        return 4
+                    if processing.bind_protocol_mode:
+                        identity = replace(
+                            identity, protocol_mode=task_result.protocol_mode
+                        )
+                        save_watch_identity(task_file, identity)
+                    if processing.reset_started:
+                        identity = replace(identity, started=False)
+                        save_watch_identity(task_file, identity)
                 except Exception as exc:
                     classified = enforce_record_start_boundary(
                         classify_exception(exc),
@@ -1313,18 +1507,7 @@ def watch_inbox(
                 task_result is not None
                 and task_result.disposition is WatchTaskDisposition.REJECTED
             ):
-                # Re-check the lifecycle boundary immediately before publishing a
-                # terminal rejection. A concurrently visible record can only
-                # strengthen the result into an operator halt.
-                assert task_result.classified_failure is not None
-                task_result = WatchTaskResult.from_failure(
-                    task_result.classified_failure,
-                    run_id=task_result.run_id,
-                    records_written=watch_run_has_records(
-                        Path.cwd(), task_result.run_id
-                    ),
-                    protocol_mode=task_result.protocol_mode,
-                )
+                task_result = _strengthen_rejected_result(task_result)
 
             if (
                 task_result is not None
@@ -1332,10 +1515,12 @@ def watch_inbox(
             ):
                 rejected_name = f"{task_file.name}.rejected"
                 try:
-                    if not task_rejected_already:
-                        save_rejection_marker(task_file, task_result)
-                    destination = move_to_outbox(
-                        task_file, outbox_failed_dir, source_name=rejected_name
+                    destination = _begin_rejected_archive(
+                        task_file,
+                        outbox_failed_dir,
+                        task_result,
+                        rejected_name,
+                        task_rejected_already=task_rejected_already,
                     )
                     try:
                         report = write_rejected_failure_report(
@@ -1346,18 +1531,12 @@ def watch_inbox(
                         logger.exception(
                             "Failed to write rejection report for %s.", destination
                         )
-                    delete_attempt_sidecar(task_file)
-                    delete_success_marker(task_file)
-                    delete_watch_identity(task_file)
-                    delete_rejection_marker(task_file)
-                    logger.warning(
-                        "Task rejected without retry and moved to failed outbox: %s "
-                        "diagnostic=%s",
+                    _finish_rejected_archive(
+                        task_file,
                         destination,
-                        task_result.gate_reason,
+                        task_result,
+                        report,
                     )
-                    if report is not None:
-                        logger.warning("Rejection report written: %s", report)
                 except Exception:
                     logger.exception(
                         "Failed to move rejected task %s to outbox.", task_file
@@ -1398,23 +1577,17 @@ def watch_inbox(
                     poison_name = f"{task_file.name}.poison"
                     quarantine_diagnostics: list[str] = []
                     try:
-                        destination = (
-                            move_poison_to_outbox_recoverably(
-                                task_file,
-                                outbox_failed_dir,
-                                repository_root=Path.cwd(),
-                                run_id=task_result.run_id,
-                                task_digest=identity.task_digest,
-                                source_name=poison_name,
-                                quarantine_diagnostic=quarantine_diagnostics.append,
-                            )
-                            if task_result.protocol_mode == "structured-v2"
-                            and identity is not None
-                            else move_to_outbox(
-                                task_file,
-                                outbox_failed_dir,
-                                source_name=poison_name,
-                            )
+                        destination = _move_poison_task(
+                            task_file,
+                            outbox_failed_dir,
+                            task_result,
+                            (
+                                identity
+                                if task_result.protocol_mode == "structured-v2"
+                                else None
+                            ),
+                            poison_name,
+                            quarantine_diagnostics,
                         )
                         report: Path | None = None
                         try:
@@ -1433,18 +1606,13 @@ def watch_inbox(
                                 "Failed to write poison failure report for %s.",
                                 destination,
                             )
-                        delete_attempt_sidecar(task_file)
-                        delete_success_marker(task_file)
-                        delete_watch_identity(task_file)
-                        delete_rejection_marker(task_file)
-                        logger.warning(
-                            "Task marked poison after %s/%s failures and moved to failed outbox: %s",
-                            attempts,
-                            max_retries,
+                        _finish_poison_archive(
+                            task_file,
                             destination,
+                            report,
+                            attempts=attempts,
+                            max_retries=max_retries,
                         )
-                        if report is not None:
-                            logger.warning("Poison failure report written: %s", report)
                     except Exception:
                         logger.exception("Failed to move poison task %s to outbox.", task_file)
                 else:
@@ -1478,15 +1646,11 @@ def watch_inbox(
             if bound_completion:
                 assert task_result is not None
                 assert identity is not None
-                queue_result = finalize_queue_success(
+                queue_result = _finalize_new_bound_success(
                     task_file,
-                    inbox_dir=inbox_dir,
-                    outbox_dir=outbox_dir,
-                    run_id=identity.run_id,
-                    task_digest=identity.task_digest,
-                    protocol_mode=identity.protocol_mode or "structured-v2",
-                    publish=True,
-                    repository_root=Path.cwd(),
+                    inbox_dir,
+                    outbox_dir,
+                    identity,
                 )
                 if queue_result.disposition is QueueFinalizationDisposition.COMPLETED:
                     logger.info("Moved task to done outbox: %s", queue_result.destination)
@@ -1510,11 +1674,8 @@ def watch_inbox(
                 except Exception as exc:
                     bound_failure = f"{type(exc).__name__}: {exc}"
             elif has_bound_queue_success_marker(task_file):
-                queue_result = finalize_queue_success(
-                    task_file,
-                    inbox_dir=inbox_dir,
-                    outbox_dir=outbox_dir,
-                    repository_root=Path.cwd(),
+                queue_result = _recover_bound_success(
+                    task_file, inbox_dir, outbox_dir
                 )
                 if queue_result.disposition is QueueFinalizationDisposition.COMPLETED:
                     logger.info(
@@ -1541,15 +1702,7 @@ def watch_inbox(
                 return 1
 
             try:
-                # Compatibility for timestamp-only success markers from older watchers.
-                if bound_failure is not None:
-                    raise RuntimeError(bound_failure)
-                destination = move_to_outbox(task_file, outbox_done_dir)
-                delete_attempt_sidecar(task_file)
-                delete_success_marker(task_file)
-                delete_watch_identity(task_file)
-                delete_rejection_marker(task_file)
-                logger.info("Moved task to done outbox: %s", destination)
+                _archive_completed_task(task_file, outbox_done_dir, bound_failure)
             except Exception:
                 # Keep retry accounting symmetrical with processing failures.
                 attempts = read_attempt_count(task_file) + 1
