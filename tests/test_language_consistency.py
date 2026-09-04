@@ -1601,30 +1601,54 @@ def _function_size_hits(
             hits.append(f"new function at or above {threshold} lines: {key} ({span})")
         elif span > recorded:
             hits.append(f"function grew past its baseline: {key} ({recorded} -> {span})")
+    for key, recorded in sorted(baseline.items()):
+        if key not in current:
+            hits.append(
+                f"stale baseline entry keeps unearned headroom: {key} "
+                f"({recorded} recorded, now below {threshold})"
+            )
     return tuple(hits)
 
 
 def test_function_size_stays_at_or_below_fixed_baseline() -> None:
     hits = _function_size_hits()
-    assert not hits, "Oversized functions grew or appeared:\n" + "\n".join(hits)
+    assert not hits, "Function size baseline is out of date:\n" + "\n".join(hits)
 
 
-def test_function_size_ratchet_rejects_growth_and_new_entries_and_allows_shrinkage() -> None:
-    document = json.loads(_FUNCTION_SIZE_BASELINE.read_text(encoding="utf-8"))
-    threshold = document["threshold_lines"]
-    baseline = document["functions"]
-    worst = max(baseline, key=lambda key: baseline[key])
-    recorded = baseline[worst]
-
-    assert _function_size_hits({worst: recorded + 1}) == (
-        f"function grew past its baseline: {worst} ({recorded} -> {recorded + 1})",
+def test_function_size_ratchet_rejects_growth_new_entries_and_stale_headroom(
+    tmp_path: Path,
+) -> None:
+    threshold = 200
+    recorded = 300
+    probe = "src/probe.py::recorded_probe"
+    baseline_path = tmp_path / "function-size-baseline-v1.json"
+    baseline_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "function-size-baseline-v1",
+                "threshold_lines": threshold,
+                "functions": {probe: recorded},
+            }
+        ),
+        encoding="utf-8",
     )
-    assert _function_size_hits({"src/probe.py::oversized_probe": threshold}) == (
+
+    assert _function_size_hits({probe: recorded + 1}, baseline_path) == (
+        f"function grew past its baseline: {probe} ({recorded} -> {recorded + 1})",
+    )
+    assert _function_size_hits(
+        {probe: recorded, "src/probe.py::oversized_probe": threshold}, baseline_path
+    ) == (
         f"new function at or above {threshold} lines: "
         f"src/probe.py::oversized_probe ({threshold})",
     )
-    assert _function_size_hits({worst: recorded - 1}) == ()
-    assert _function_size_hits({}) == ()
+    assert _function_size_hits({probe: recorded - 1}, baseline_path) == ()
+    # A function that shrinks below the threshold must leave the baseline; the
+    # recorded span would otherwise stay available as unearned headroom.
+    assert _function_size_hits({}, baseline_path) == (
+        f"stale baseline entry keeps unearned headroom: {probe} "
+        f"({recorded} recorded, now below {threshold})",
+    )
 
 
 def test_gitignored_read_exemption_is_bound_to_the_metadata_guard_function() -> None:
