@@ -1063,6 +1063,68 @@ def test_terminal_rejection_move_retry_does_not_execute_task_twice(
     assert len(list((outbox / "failed").glob("*.rejected"))) == 1
 
 
+def test_reloaded_rejection_promoted_by_records_halts_without_identity_read(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    inbox = tmp_path / "inbox"
+    outbox = tmp_path / "outbox"
+    inbox.mkdir()
+    task = inbox / "invalid.md"
+    task.write_text("invalid", encoding="utf-8")
+    calls = 0
+
+    def process(_task: Path, args: Namespace, _force_new: bool) -> WatchTaskResult:
+        nonlocal calls
+        calls += 1
+        return WatchTaskResult.from_failure(
+            classify_exception(TaskContractError("invalid target branch")),
+            run_id=args.watch_run_id,
+            records_written=False,
+        )
+
+    import inbox_watcher as watcher
+
+    def fail_rejected_move(*_args, **_kwargs):
+        raise OSError("temporary outbox failure")
+
+    monkeypatch.setattr(watcher, "move_to_outbox", fail_rejected_move)
+
+    assert watch_inbox(
+        inbox_dir=inbox,
+        outbox_dir=outbox,
+        poll_interval=0.01,
+        args=_args(),
+        process_task=process,
+        time_fn=lambda: 10_000_000_000.0,
+    ) == 1
+    assert calls == 1
+    identity = json.loads(
+        watch_identity_path(task).read_text(encoding="utf-8")
+    )
+    records = (
+        tmp_path
+        / ".orchestrator"
+        / "artifacts"
+        / identity["run_id"]
+        / "records"
+    )
+    records.mkdir(parents=True)
+    (records / "0001.json").write_text("{}\n", encoding="utf-8")
+
+    assert watch_inbox(
+        inbox_dir=inbox,
+        outbox_dir=outbox,
+        poll_interval=0.01,
+        args=_args(),
+        process_task=process,
+        time_fn=lambda: 10_000_000_000.0,
+    ) == 4
+    assert calls == 1
+    assert task.exists()
+    assert rejection_marker_path(task).exists()
+
+
 def test_watch_restart_resumes_same_run_id_and_moves_only_final_workflow(
     tmp_path: Path,
     isolated_run_root: Path,

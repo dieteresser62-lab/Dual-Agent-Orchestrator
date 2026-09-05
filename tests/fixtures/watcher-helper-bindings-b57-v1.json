@@ -1,0 +1,71 @@
+{
+  "schema_version": "watcher-helper-bindings-b57-v1",
+  "pre_cut": "tests/fixtures/watcher-pre-b57-v1.json",
+  "handler_body_sha_change_reasons": {
+    "task-processing": "The handler now calls _processing_crash_result in place of the same inlined classification, result construction, and logging block.",
+    "done-archive": "The handler delegates its failed-archive protected body, failure logging, and retry logging to three helpers without moving its continue or either nested catcher.",
+    "fallback-failed-archive": "The handler now calls _log_failed_archive_error in place of the same marker-sensitive logging branch."
+  },
+  "helpers": [
+    {
+      "helper": "_processing_crash_result",
+      "catcher_id": "task-processing",
+      "region": "handler_body"
+    },
+    {
+      "helper": "_log_resumable_pause",
+      "catcher_id": "watch-interrupt",
+      "region": "protected_body"
+    },
+    {
+      "helper": "_log_technical_failure_result",
+      "catcher_id": "watch-interrupt",
+      "region": "protected_body"
+    },
+    {
+      "helper": "_log_bound_completion",
+      "catcher_id": "watch-interrupt",
+      "region": "protected_body"
+    },
+    {
+      "helper": "_bound_finalization_failure",
+      "catcher_id": "watch-interrupt",
+      "region": "protected_body"
+    },
+    {
+      "helper": "_log_bound_recovery",
+      "catcher_id": "watch-interrupt",
+      "region": "protected_body"
+    },
+    {
+      "helper": "_bound_recovery_failure",
+      "catcher_id": "watch-interrupt",
+      "region": "protected_body"
+    },
+    {
+      "helper": "_log_bound_success_pause",
+      "catcher_id": "watch-interrupt",
+      "region": "protected_body"
+    },
+    {
+      "helper": "_archive_failed_task",
+      "catcher_id": "fallback-failed-archive",
+      "region": "protected_body"
+    },
+    {
+      "helper": "_log_failed_archive_error",
+      "catcher_id": "fallback-failed-archive",
+      "region": "handler_body"
+    },
+    {
+      "helper": "_log_archive_retry",
+      "catcher_id": "done-archive",
+      "region": "handler_body"
+    },
+    {
+      "helper": "_log_watch_task_completion",
+      "catcher_id": "watch-interrupt",
+      "region": "protected_body"
+    }
+  ]
+}

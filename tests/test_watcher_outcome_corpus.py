@@ -10,6 +10,7 @@ import json
 import os
 from argparse import Namespace
 from pathlib import Path
+import subprocess
 import time
 from types import CodeType
 from typing import Callable
@@ -35,6 +36,17 @@ SOURCE = ROOT / "src/inbox_watcher.py"
 BASELINE = ROOT / "tests/fixtures/watcher-outcome-corpus-v1.json"
 PRE_CUT_MAP = ROOT / "tests/fixtures/watcher-catcher-map-pre-b45-v1.json"
 HELPER_BINDINGS = ROOT / "tests/fixtures/watcher-catcher-helper-bindings-b45-v1.json"
+B57_PRE_CUT = ROOT / "tests/fixtures/watcher-pre-b57-v1.json"
+B57_HELPER_BINDINGS = (
+    ROOT / "tests/fixtures/watcher-helper-bindings-b57-v1.json"
+)
+FUNCTION_SIZE_BASELINE = ROOT / "tests/fixtures/function-size-baseline-v1.json"
+RECORD_SEQUENCE_BASELINE = (
+    ROOT / "tests/fixtures/workflow-record-sequence-baseline-v1.json"
+)
+PRE_B57_COMMIT = "8c633cc2ed006e474ff4aea3229950206d1fe066"
+PRE_B57_BLOB = "99965b3e92fea8a681447359f6aa9e54a813162f"
+RECORD_SEQUENCE_BLOB = "26fb661c8fa382f90e70fb921e3d950da5cae09b"
 SOURCE_TEXT = SOURCE.read_text(encoding="utf-8")
 SOURCE_TREE = ast.parse(SOURCE_TEXT, filename=str(SOURCE))
 
@@ -98,10 +110,17 @@ SCENARIO_IDS = (
 
 _CORPUS_BUILD_COUNT = 0
 
-EXTRACTED_HELPERS = frozenset(
+B45_HELPERS = frozenset(
     binding["helper"]
     for binding in json.loads(HELPER_BINDINGS.read_text(encoding="utf-8"))["helpers"]
 )
+B57_HELPERS = tuple(
+    binding["helper"]
+    for binding in json.loads(B57_HELPER_BINDINGS.read_text(encoding="utf-8"))[
+        "helpers"
+    ]
+)
+EXTRACTED_HELPERS = B45_HELPERS | frozenset(B57_HELPERS)
 
 
 class _StopScenario(BaseException):
@@ -166,8 +185,104 @@ def _body_sha256(handler: ast.ExceptHandler) -> str:
     return hashlib.sha256(semantic_body.encode("utf-8")).hexdigest()
 
 
+def _direct_b57_helper_call(
+    statement: ast.stmt,
+) -> tuple[str, ast.Call] | None:
+    value: ast.expr | None = None
+    if isinstance(statement, ast.Expr):
+        value = statement.value
+    elif isinstance(statement, ast.Assign):
+        value = statement.value
+    if (
+        isinstance(value, ast.Call)
+        and isinstance(value.func, ast.Name)
+        and value.func.id in B57_HELPERS
+    ):
+        return value.func.id, value
+    return None
+
+
+def _logical_watch_function(tree: ast.Module) -> ast.FunctionDef:
+    function = copy.deepcopy(_watch_function(tree))
+    helpers = {
+        node.name: copy.deepcopy(node)
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name in B57_HELPERS
+    }
+    assert set(helpers) == set(B57_HELPERS)
+    observed_calls = [
+        node.func.id
+        for node in sorted(
+            (item for item in ast.walk(function) if isinstance(item, ast.Call)),
+            key=lambda item: (item.lineno, item.col_offset),
+        )
+        if isinstance(node.func, ast.Name) and node.func.id in B57_HELPERS
+    ]
+    assert observed_calls == list(B57_HELPERS)
+
+    def expand_body(body: list[ast.stmt]) -> list[ast.stmt]:
+        expanded: list[ast.stmt] = []
+        for statement in body:
+            direct = _direct_b57_helper_call(statement)
+            if direct is not None:
+                helper_name, call = direct
+                helper = helpers[helper_name]
+                parameters = [argument.arg for argument in helper.args.args]
+                assert not call.keywords
+                assert [ast.unparse(argument) for argument in call.args] == parameters
+                helper_body = copy.deepcopy(helper.body)
+                if isinstance(statement, ast.Assign):
+                    terminal = helper_body[-1]
+                    assert isinstance(terminal, ast.Return)
+                    assert terminal.value is not None
+                    if (
+                        len(statement.targets) == 1
+                        and ast.unparse(statement.targets[0])
+                        == ast.unparse(terminal.value)
+                    ):
+                        helper_body.pop()
+                    else:
+                        helper_body[-1] = ast.Assign(
+                            targets=copy.deepcopy(statement.targets),
+                            value=terminal.value,
+                        )
+                else:
+                    assert not any(
+                        isinstance(item, ast.Return) for item in ast.walk(helper)
+                    )
+                expanded.extend(expand_body(helper_body))
+                continue
+            for field in ("body", "orelse", "finalbody"):
+                child = getattr(statement, field, None)
+                if isinstance(child, list) and child:
+                    setattr(statement, field, expand_body(child))
+            if isinstance(statement, ast.Try):
+                for handler in statement.handlers:
+                    handler.body = expand_body(handler.body)
+            expanded.append(statement)
+        return expanded
+
+    function.body = expand_body(function.body)
+    ast.fix_missing_locations(function)
+    logical = ast.parse(ast.unparse(function)).body[0]
+    assert isinstance(logical, ast.FunctionDef)
+    return logical
+
+
+@lru_cache(maxsize=1)
+def _pre_b57_watch_function() -> ast.FunctionDef:
+    source = subprocess.run(
+        ["git", "show", f"{PRE_B57_COMMIT}:src/inbox_watcher.py"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    return _watch_function(ast.parse(source))
+
+
 def _handler_inventory(tree: ast.Module) -> list[dict[str, object]]:
-    function = _watch_function(tree)
+    function = _logical_watch_function(tree)
     handlers = _handlers(function)
     assert len(handlers) == len(CATCHER_SPECS)
     parent_map = {
@@ -254,6 +369,35 @@ def _loop_control_signature(tree: ast.Module) -> tuple[int, str, str]:
     return len(controls), digest, ast.dump(loop.test, include_attributes=False)
 
 
+def _all_control_sequence(function: ast.FunctionDef) -> tuple[str, ...]:
+    return tuple(
+        type(node).__name__
+        + ":"
+        + (
+            ast.dump(node.value, include_attributes=False)
+            if isinstance(node, ast.Return) and node.value is not None
+            else ""
+        )
+        for node in sorted(
+            (
+                item
+                for item in ast.walk(function)
+                if isinstance(item, (ast.Continue, ast.Return))
+            ),
+            key=lambda item: item.lineno,
+        )
+    )
+
+
+def _assert_logical_watch_matches_pre_b57(
+    tree: ast.Module, *, failure_label: str = "B57 logical watch drift"
+) -> None:
+    actual = ast.dump(_logical_watch_function(tree), include_attributes=False)
+    expected = ast.dump(_pre_b57_watch_function(), include_attributes=False)
+    if actual != expected:
+        raise AssertionError(failure_label)
+
+
 def _move_helper_call_before_catcher(
     tree: ast.Module, helper_name: str
 ) -> ast.Module:
@@ -283,6 +427,8 @@ def _move_helper_call_before_catcher(
         if isinstance(candidate, list) and protected_try in candidate
     )
     protected_try.body.remove(statement)
+    if not protected_try.body:
+        protected_try.body.append(ast.Pass())
     statement_list.insert(statement_list.index(protected_try), statement)
     ast.fix_missing_locations(tree)
     return tree
@@ -831,15 +977,15 @@ def test_b45_helpers_remain_inside_their_pre_cut_catchers() -> None:
         for item in bindings["helpers"]
     }
     assert actual_bindings == expected_bindings
-    assert set(actual_bindings) == EXTRACTED_HELPERS
+    assert set(actual_bindings) == B45_HELPERS
     assert all(item["pre_cut_block"] for item in bindings["helpers"])
 
     helper_nodes = {
         node.name: node
         for node in SOURCE_TREE.body
-        if isinstance(node, ast.FunctionDef) and node.name in EXTRACTED_HELPERS
+        if isinstance(node, ast.FunctionDef) and node.name in B45_HELPERS
     }
-    assert set(helper_nodes) == EXTRACTED_HELPERS
+    assert set(helper_nodes) == B45_HELPERS
     assert not any(
         isinstance(descendant, ast.ExceptHandler)
         for helper in helper_nodes.values()
@@ -914,3 +1060,149 @@ def test_b45_moving_a_product_call_between_helpers_turns_inventory_red() -> None
     )
     with pytest.raises(AssertionError):
         _handler_inventory(mutant)
+
+
+def test_b57_pre_cut_anchor_binds_the_immediate_b56_source() -> None:
+    anchor = json.loads(B57_PRE_CUT.read_text(encoding="utf-8"))
+    assert anchor == {
+        "schema_version": "watcher-pre-b57-v1",
+        "source_commit": PRE_B57_COMMIT,
+        "source_blob": PRE_B57_BLOB,
+    }
+    anchored_blob = subprocess.run(
+        ["git", "rev-parse", f"{PRE_B57_COMMIT}:src/inbox_watcher.py"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert anchored_blob == PRE_B57_BLOB
+
+
+def test_b57_helpers_inline_to_the_exact_pre_cut_watch_function() -> None:
+    _assert_logical_watch_matches_pre_b57(SOURCE_TREE)
+
+
+def test_b57_helpers_remain_inside_their_pre_cut_catchers() -> None:
+    document = json.loads(B57_HELPER_BINDINGS.read_text(encoding="utf-8"))
+    assert document["schema_version"] == "watcher-helper-bindings-b57-v1"
+    assert document["pre_cut"] == B57_PRE_CUT.relative_to(ROOT).as_posix()
+    expected = {
+        item["helper"]: (item["catcher_id"], item["region"])
+        for item in document["helpers"]
+    }
+    actual = {
+        helper: _helper_catcher_binding(SOURCE_TREE, helper) for helper in expected
+    }
+    assert actual == expected
+    assert tuple(expected) == B57_HELPERS
+
+    helper_nodes = {
+        node.name: node
+        for node in SOURCE_TREE.body
+        if isinstance(node, ast.FunctionDef) and node.name in B57_HELPERS
+    }
+    assert set(helper_nodes) == set(B57_HELPERS)
+    assert not any(
+        isinstance(descendant, ast.ExceptHandler)
+        for helper in helper_nodes.values()
+        for descendant in ast.walk(helper)
+    )
+
+
+def test_b57_documents_each_physically_changed_handler_body() -> None:
+    document = json.loads(B57_HELPER_BINDINGS.read_text(encoding="utf-8"))
+    pre_handlers = dict(
+        zip(CATCHER_SPECS, _handlers(_pre_b57_watch_function()), strict=True)
+    )
+    current_handlers = dict(
+        zip(CATCHER_SPECS, _handlers(_watch_function(SOURCE_TREE)), strict=True)
+    )
+    changed = {
+        spec.catcher_id
+        for spec in CATCHER_SPECS
+        if _body_sha256(current_handlers[spec]) != _body_sha256(pre_handlers[spec])
+    }
+    assert changed == set(document["handler_body_sha_change_reasons"])
+    assert all(document["handler_body_sha_change_reasons"].values())
+
+
+def test_b57_keeps_while_and_all_returns_and_continues_in_source_order() -> None:
+    current = _watch_function(SOURCE_TREE)
+    pre_cut = _pre_b57_watch_function()
+    current_while = next(node for node in ast.walk(current) if isinstance(node, ast.While))
+    pre_cut_while = next(node for node in ast.walk(pre_cut) if isinstance(node, ast.While))
+    assert ast.dump(current_while.test, include_attributes=False) == ast.dump(
+        pre_cut_while.test, include_attributes=False
+    )
+    assert _all_control_sequence(current) == _all_control_sequence(pre_cut)
+    assert sum(isinstance(node, ast.Return) for node in ast.walk(current)) == 10
+    assert sum(isinstance(node, ast.Continue) for node in ast.walk(current)) == 7
+
+
+def test_b57_moving_a_helper_out_of_its_catcher_names_the_helper() -> None:
+    helper_name = "_archive_failed_task"
+    mutant = _move_helper_call_before_catcher(copy.deepcopy(SOURCE_TREE), helper_name)
+    compile(mutant, "<b57-helper-outside-catcher>", "exec")
+    with pytest.raises(AssertionError, match=helper_name):
+        expected = json.loads(
+            B57_HELPER_BINDINGS.read_text(encoding="utf-8")
+        )["helpers"]
+        for item in expected:
+            actual = _helper_catcher_binding(mutant, item["helper"])
+            if actual != (item["catcher_id"], item["region"]):
+                raise AssertionError(item["helper"])
+
+
+def test_b57_swapping_two_queue_decisions_names_the_ordering() -> None:
+    tree = copy.deepcopy(SOURCE_TREE)
+    function = _watch_function(tree)
+    loop = next(node for node in ast.walk(function) if isinstance(node, ast.While))
+    rejected = next(
+        node
+        for node in loop.body
+        if isinstance(node, ast.If)
+        and "WatchTaskDisposition.REJECTED" in ast.unparse(node.test)
+        and any(isinstance(item, ast.Try) for item in ast.walk(node))
+    )
+    resumable = next(
+        node
+        for node in loop.body
+        if isinstance(node, ast.If)
+        and "WatchTaskDisposition.RESUMABLE_HALT" in ast.unparse(node.test)
+    )
+    left = loop.body.index(rejected)
+    right = loop.body.index(resumable)
+    loop.body[left], loop.body[right] = loop.body[right], loop.body[left]
+    ast.fix_missing_locations(tree)
+    compile(tree, "<b57-swapped-queue-decisions>", "exec")
+    with pytest.raises(AssertionError, match="rejection-archive-before-resumable-halt"):
+        _assert_logical_watch_matches_pre_b57(
+            tree, failure_label="rejection-archive-before-resumable-halt"
+        )
+
+
+def test_b57_watch_entry_shrinks_and_helpers_stay_below_threshold() -> None:
+    size_baseline = json.loads(FUNCTION_SIZE_BASELINE.read_text(encoding="utf-8"))
+    watch = _watch_function(SOURCE_TREE)
+    watch_span = watch.end_lineno - watch.lineno + 1
+    assert watch_span < 407
+    assert size_baseline["functions"]["src/inbox_watcher.py::watch_inbox"] == watch_span
+    helper_spans = {
+        node.name: node.end_lineno - node.lineno + 1
+        for node in SOURCE_TREE.body
+        if isinstance(node, ast.FunctionDef) and node.name in B57_HELPERS
+    }
+    assert set(helper_spans) == set(B57_HELPERS)
+    assert all(span < 200 for span in helper_spans.values()), helper_spans
+
+
+def test_b57_keeps_the_b25_record_sequence_baseline_byte_identical() -> None:
+    actual_blob = subprocess.run(
+        ["git", "hash-object", str(RECORD_SEQUENCE_BASELINE)],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert actual_blob == RECORD_SEQUENCE_BLOB

@@ -1364,6 +1364,188 @@ def _archive_completed_task(
     logger.info("Moved task to done outbox: %s", destination)
 
 
+def _processing_crash_result(
+    task_file: Path,
+    identity: WatchTaskIdentity,
+    exc: Exception,
+) -> WatchTaskResult:
+    classified = enforce_record_start_boundary(
+        classify_exception(exc),
+        records_written=watch_run_has_records(Path.cwd(), identity.run_id),
+    )
+    task_result = WatchTaskResult.from_failure(
+        classified,
+        run_id=identity.run_id,
+        records_written=watch_run_has_records(Path.cwd(), identity.run_id),
+    )
+    logger.exception("Task processing crashed for %s.", task_file)
+    return task_result
+
+
+def _log_resumable_pause(
+    task_file: Path,
+    task_result: WatchTaskResult,
+) -> None:
+    logger.warning(
+        "Pausing watch queue for resumable task %s: run=%s work-unit=%s "
+        "step=%s status=%s gate=%s detail=%s exit=%s",
+        task_file.name,
+        task_result.run_id,
+        task_result.work_unit_id,
+        task_result.step,
+        task_result.status,
+        task_result.gate_reason,
+        task_result.failure_detail or "(none)",
+        task_result.exit_code,
+    )
+
+
+def _log_technical_failure_result(
+    task_file: Path, task_result: WatchTaskResult
+) -> None:
+    logger.info(
+        "Task finished with exit code %s: %s",
+        task_result.exit_code,
+        task_file.name,
+    )
+
+
+def _log_bound_completion(
+    task_file: Path,
+    task_result: WatchTaskResult,
+    queue_result: QueueFinalizationResult,
+) -> None:
+    logger.info("Moved task to done outbox: %s", queue_result.destination)
+    logger.info(
+        "Task finished with exit code %s: %s",
+        task_result.exit_code,
+        task_file.name,
+    )
+
+
+def _bound_finalization_failure(
+    task_file: Path, queue_result: QueueFinalizationResult
+) -> str:
+    logger.error(
+        "Bound queue finalization failed for %s: %s",
+        task_file.name,
+        queue_result.detail,
+    )
+    return queue_result.detail or "bound queue finalization failed"
+
+
+def _log_bound_recovery(task_file: Path) -> None:
+    logger.info(
+        "Task bookkeeping completed for previously succeeded task: %s",
+        task_file.name,
+    )
+
+
+def _bound_recovery_failure(
+    task_file: Path, queue_result: QueueFinalizationResult
+) -> str:
+    logger.error(
+        "Bound queue recovery failed for %s: %s",
+        task_file.name,
+        queue_result.detail,
+    )
+    return queue_result.detail or "bound queue recovery failed"
+
+
+def _log_bound_success_pause(task_file: Path, bound_failure: str) -> None:
+    # Bound evidence must never be redirected to failed/stuck: it names the
+    # sole safe destination and is the recovery authority for a direct resume.
+    logger.error(
+        "Pausing watch queue with recoverable bound success evidence for %s: %s",
+        task_file.name,
+        bound_failure,
+    )
+
+
+def _archive_failed_task(
+    task_file: Path,
+    outbox_failed_dir: Path,
+    failed_name: str,
+    attempts: int,
+    max_retries: int,
+    marker_exists: bool,
+) -> None:
+    destination = move_to_outbox(
+        task_file, outbox_failed_dir, source_name=failed_name
+    )
+    delete_attempt_sidecar(task_file)
+    delete_success_marker(task_file)
+    delete_watch_identity(task_file)
+    delete_rejection_marker(task_file)
+    if marker_exists:
+        logger.warning(
+            "Task SUCCEEDED (exit 0) but move to done/ failed (%s/%s). "
+            "Marking as move_error despite successful execution: %s",
+            attempts,
+            max_retries,
+            destination,
+        )
+    else:
+        logger.warning(
+            "Task marked poison after %s/%s failures and moved to failed outbox: %s",
+            attempts,
+            max_retries,
+            destination,
+        )
+
+
+def _log_failed_archive_error(task_file: Path, marker_exists: bool) -> None:
+    if marker_exists:
+        logger.exception(
+            "Failed to move succeeded-but-unmoved task %s to failed outbox.",
+            task_file,
+        )
+    else:
+        logger.exception("Failed to move poison task %s to outbox.", task_file)
+
+
+def _log_archive_retry(
+    task_file: Path,
+    attempts: int,
+    max_retries: int,
+    marker_exists: bool,
+) -> None:
+    if marker_exists:
+        logger.warning(
+            "Task SUCCEEDED (exit 0) but move to done/ failed (%s/%s). "
+            "Leaving in inbox to retry move only: %s",
+            attempts,
+            max_retries,
+            task_file.name,
+        )
+    else:
+        logger.warning(
+            "Task move to done failed (%s/%s). Leaving in inbox for retry: %s",
+            attempts,
+            max_retries,
+            task_file.name,
+        )
+
+
+def _log_watch_task_completion(
+    task_file: Path,
+    task_succeeded_already: bool,
+    task_result: WatchTaskResult | None,
+) -> None:
+    if task_succeeded_already:
+        logger.info(
+            "Task bookkeeping completed for previously succeeded task: %s",
+            task_file.name,
+        )
+    else:
+        assert task_result is not None
+        logger.info(
+            "Task finished with exit code %s: %s",
+            task_result.exit_code,
+            task_file.name,
+        )
+
+
 def watch_inbox(
     *,
     inbox_dir: Path,
@@ -1488,20 +1670,9 @@ def watch_inbox(
                         identity = replace(identity, started=False)
                         save_watch_identity(task_file, identity)
                 except Exception as exc:
-                    classified = enforce_record_start_boundary(
-                        classify_exception(exc),
-                        records_written=watch_run_has_records(
-                            Path.cwd(), identity.run_id
-                        ),
+                    task_result = _processing_crash_result(
+                        task_file, identity, exc
                     )
-                    task_result = WatchTaskResult.from_failure(
-                        classified,
-                        run_id=identity.run_id,
-                        records_written=watch_run_has_records(
-                            Path.cwd(), identity.run_id
-                        ),
-                    )
-                    logger.exception("Task processing crashed for %s.", task_file)
 
             if (
                 task_result is not None
@@ -1551,18 +1722,7 @@ def watch_inbox(
                 if not task_result.resume_available:
                     identity = replace(identity, started=False)
                     save_watch_identity(task_file, identity)
-                logger.warning(
-                    "Pausing watch queue for resumable task %s: run=%s work-unit=%s "
-                    "step=%s status=%s gate=%s detail=%s exit=%s",
-                    task_file.name,
-                    task_result.run_id,
-                    task_result.work_unit_id,
-                    task_result.step,
-                    task_result.status,
-                    task_result.gate_reason,
-                    task_result.failure_detail or "(none)",
-                    task_result.exit_code,
-                )
+                _log_resumable_pause(task_file, task_result)
                 return task_result.exit_code
 
             failed = (
@@ -1623,11 +1783,7 @@ def watch_inbox(
                         task_file.name,
                     )
                 assert task_result is not None
-                logger.info(
-                    "Task finished with exit code %s: %s",
-                    task_result.exit_code,
-                    task_file.name,
-                )
+                _log_technical_failure_result(task_file, task_result)
                 continue
 
             if not task_succeeded_already and (
@@ -1653,19 +1809,11 @@ def watch_inbox(
                     identity,
                 )
                 if queue_result.disposition is QueueFinalizationDisposition.COMPLETED:
-                    logger.info("Moved task to done outbox: %s", queue_result.destination)
-                    logger.info(
-                        "Task finished with exit code %s: %s",
-                        task_result.exit_code,
-                        task_file.name,
-                    )
+                    _log_bound_completion(task_file, task_result, queue_result)
                     continue
-                logger.error(
-                    "Bound queue finalization failed for %s: %s",
-                    task_file.name,
-                    queue_result.detail,
+                bound_failure = _bound_finalization_failure(
+                    task_file, queue_result
                 )
-                bound_failure = queue_result.detail or "bound queue finalization failed"
             elif not task_succeeded_already:
                 # Legacy integer callbacks retain the historical timestamp marker and
                 # move primitive; production structured results use bound evidence.
@@ -1678,27 +1826,15 @@ def watch_inbox(
                     task_file, inbox_dir, outbox_dir
                 )
                 if queue_result.disposition is QueueFinalizationDisposition.COMPLETED:
-                    logger.info(
-                        "Task bookkeeping completed for previously succeeded task: %s",
-                        task_file.name,
-                    )
+                    _log_bound_recovery(task_file)
                     continue
                 if queue_result.disposition is QueueFinalizationDisposition.FAILED:
-                    logger.error(
-                        "Bound queue recovery failed for %s: %s",
-                        task_file.name,
-                        queue_result.detail,
+                    bound_failure = _bound_recovery_failure(
+                        task_file, queue_result
                     )
-                    bound_failure = queue_result.detail or "bound queue recovery failed"
 
             if bound_failure is not None and has_bound_queue_success_marker(task_file):
-                # Bound evidence must never be redirected to failed/stuck: it names the
-                # sole safe destination and is the recovery authority for a direct resume.
-                logger.error(
-                    "Pausing watch queue with recoverable bound success evidence for %s: %s",
-                    task_file.name,
-                    bound_failure,
-                )
+                _log_bound_success_pause(task_file, bound_failure)
                 return 1
 
             try:
@@ -1709,63 +1845,31 @@ def watch_inbox(
                 write_attempt_count(task_file, attempts)
                 marker_exists = has_success_marker(task_file)
                 if attempts >= max_retries:
-                    failed_name = f"{task_file.name}.move_error" if marker_exists else f"{task_file.name}.poison"
+                    failed_name = (
+                        f"{task_file.name}.move_error"
+                        if marker_exists
+                        else f"{task_file.name}.poison"
+                    )
                     try:
-                        destination = move_to_outbox(task_file, outbox_failed_dir, source_name=failed_name)
-                        delete_attempt_sidecar(task_file)
-                        delete_success_marker(task_file)
-                        delete_watch_identity(task_file)
-                        delete_rejection_marker(task_file)
-                        if marker_exists:
-                            logger.warning(
-                                "Task SUCCEEDED (exit 0) but move to done/ failed (%s/%s). "
-                                "Marking as move_error despite successful execution: %s",
-                                attempts,
-                                max_retries,
-                                destination,
-                            )
-                        else:
-                            logger.warning(
-                                "Task marked poison after %s/%s failures and moved to failed outbox: %s",
-                                attempts,
-                                max_retries,
-                                destination,
-                            )
+                        _archive_failed_task(
+                            task_file,
+                            outbox_failed_dir,
+                            failed_name,
+                            attempts,
+                            max_retries,
+                            marker_exists,
+                        )
                     except Exception:
-                        if marker_exists:
-                            logger.exception(
-                                "Failed to move succeeded-but-unmoved task %s to failed outbox.",
-                                task_file,
-                            )
-                        else:
-                            logger.exception("Failed to move poison task %s to outbox.", task_file)
+                        _log_failed_archive_error(task_file, marker_exists)
                 else:
-                    if marker_exists:
-                        logger.warning(
-                            "Task SUCCEEDED (exit 0) but move to done/ failed (%s/%s). "
-                            "Leaving in inbox to retry move only: %s",
-                            attempts,
-                            max_retries,
-                            task_file.name,
-                        )
-                    else:
-                        logger.warning(
-                            "Task move to done failed (%s/%s). Leaving in inbox for retry: %s",
-                            attempts,
-                            max_retries,
-                            task_file.name,
-                        )
+                    _log_archive_retry(
+                        task_file, attempts, max_retries, marker_exists
+                    )
                 continue
 
-            if task_succeeded_already:
-                logger.info("Task bookkeeping completed for previously succeeded task: %s", task_file.name)
-            else:
-                assert task_result is not None
-                logger.info(
-                    "Task finished with exit code %s: %s",
-                    task_result.exit_code,
-                    task_file.name,
-                )
+            _log_watch_task_completion(
+                task_file, task_succeeded_already, task_result
+            )
     except KeyboardInterrupt:
         logger.info("Watch mode stopped.")
         return 0
