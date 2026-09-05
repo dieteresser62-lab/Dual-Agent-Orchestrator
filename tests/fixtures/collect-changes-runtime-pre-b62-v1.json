@@ -1,0 +1,114 @@
+{
+  "schema_version": "collect-changes-runtime-pre-b62-v1",
+  "source_commit": "2b963abd454de0142779d59d656f86684d6e11de",
+  "source_blob": "ca1510789851a576c9e3bb1cbef804cea211ecc1",
+  "scenarios": [
+    {
+      "scenario_id": "unicode-plan-raw-fallback",
+      "catcher": "(UnicodeError, SemanticMarkdownError)",
+      "outcome": {
+        "kind": "returned",
+        "evidence": {
+          "paths": ["docs/internal/work-plan.md"],
+          "digest": "1111111111111111111111111111111111111111111111111111111111111111",
+          "raw_plan_artifact": "docs/internal/work-plan.md",
+          "semantic_paths": ["docs/internal/work-plan.md"],
+          "full_diff": "unicode-plan-raw-fallback evidence",
+          "gate_paths": ["docs/internal/work-plan.md"]
+        },
+        "collection_count": 1
+      },
+      "provider_start_count": 0,
+      "orchestrator_control_created": false
+    },
+    {
+      "scenario_id": "oserror-plan-suppressed",
+      "catcher": "OSError",
+      "outcome": {
+        "kind": "returned",
+        "evidence": {
+          "paths": ["docs/internal/work-plan.md"],
+          "digest": "2222222222222222222222222222222222222222222222222222222222222222",
+          "raw_plan_artifact": null,
+          "semantic_paths": ["docs/internal/work-plan.md"],
+          "full_diff": "oserror-plan-suppressed evidence",
+          "gate_paths": ["docs/internal/work-plan.md"]
+        },
+        "collection_count": 1
+      },
+      "provider_start_count": 0,
+      "orchestrator_control_created": false
+    },
+    {
+      "scenario_id": "valueerror-snapshot-rethrown",
+      "catcher": "ValueError",
+      "outcome": {
+        "kind": "raised",
+        "error_type": "WorkflowExecutionError",
+        "message": "final-review repository changed during evidence collection",
+        "cause_type": "ValueError"
+      },
+      "provider_start_count": 0,
+      "orchestrator_control_created": false
+    },
+    {
+      "scenario_id": "side-effect-cache-target-invalid",
+      "catcher": "SideEffectReconciliationError",
+      "outcome": {
+        "kind": "returned",
+        "evidence": {
+          "paths": ["docs/internal/final-review.md", "src/runtime.py"],
+          "digest": "4444444444444444444444444444444444444444444444444444444444444444",
+          "raw_plan_artifact": null,
+          "semantic_paths": ["docs/internal/final-review.md", "docs/internal/work-plan.md"],
+          "full_diff": "compacted final-review evidence",
+          "gate_paths": ["docs/internal/final-review.md", "src/runtime.py"]
+        },
+        "cache": {
+          "target": "cache.json",
+          "content_digest": "2187dc25fb58645a894bbf8384607244d19da499bd8faeb847e969827d5c462a",
+          "target_digest_after_catch": "invalid",
+          "write_count": 0
+        }
+      },
+      "provider_start_count": 0,
+      "orchestrator_control_created": false
+    },
+    {
+      "scenario_id": "final-review-memory-cache-success",
+      "catcher": null,
+      "outcome": {
+        "kind": "returned",
+        "evidence": {
+          "paths": ["docs/internal/work-plan.md", "src/runtime.py"],
+          "digest": "5555555555555555555555555555555555555555555555555555555555555555",
+          "raw_plan_artifact": null,
+          "semantic_paths": ["docs/internal/final-review.md", "docs/internal/work-plan.md"],
+          "full_diff": "cache-derived compact evidence",
+          "gate_paths": ["docs/internal/work-plan.md", "src/runtime.py"]
+        },
+        "plan_artifact": "docs/internal/work-plan.md",
+        "cache": {
+          "source": "memory_snapshot",
+          "repository_digest": "5555555555555555555555555555555555555555555555555555555555555555",
+          "derived_content": "cache-derived compact evidence",
+          "reuse_count": 1,
+          "collection_count": 0
+        }
+      },
+      "provider_start_count": 0,
+      "orchestrator_control_created": false
+    },
+    {
+      "scenario_id": "no-workflow-changes-abort",
+      "catcher": null,
+      "outcome": {
+        "kind": "raised",
+        "error_type": "NoWorkflowChangesError",
+        "message": "the current review boundary contains no repository changes"
+      },
+      "provider_start_count": 0,
+      "orchestrator_control_created": false
+    }
+  ]
+}

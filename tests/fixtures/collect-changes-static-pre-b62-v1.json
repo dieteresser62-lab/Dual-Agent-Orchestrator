@@ -1,0 +1,128 @@
+{
+  "schema_version": "collect-changes-static-pre-b62-v1",
+  "source_commit": "2b963abd454de0142779d59d656f86684d6e11de",
+  "source_blob": "ca1510789851a576c9e3bb1cbef804cea211ecc1",
+  "function": "ProductionWorkflowDriver.collect_changes",
+  "line_count": 225,
+  "conditions": [
+    {
+      "ordinal": 1,
+      "expression": "self.active_state is not None",
+      "read_names": ["self"]
+    },
+    {
+      "ordinal": 2,
+      "expression": "self.active_state.execution_mode == TaskMode.PLAN_ONLY.value and self.active_state.current_work_unit.kind is WorkUnitKind.PLAN and (self.active_state.work_plan_path is not None)",
+      "read_names": ["TaskMode", "WorkUnitKind", "self"]
+    },
+    {
+      "ordinal": 3,
+      "expression": "not candidate.is_symlink() and candidate.is_file()",
+      "read_names": ["candidate"]
+    },
+    {
+      "ordinal": 4,
+      "expression": "final_review",
+      "read_names": ["final_review"]
+    },
+    {
+      "ordinal": 5,
+      "expression": "memory_snapshot is not None and memory_snapshot.matches(probe, start_commit=start_commit, semantic_markdown_paths=semantic_paths, excluded_paths=excluded_control_paths, audit_path=audit_path)",
+      "read_names": ["audit_path", "excluded_control_paths", "memory_snapshot", "probe", "semantic_paths", "start_commit"]
+    },
+    {
+      "ordinal": 6,
+      "expression": "disk_snapshot is not None and disk_snapshot.matches(probe, start_commit=start_commit, semantic_markdown_paths=semantic_paths, excluded_paths=excluded_control_paths, audit_path=audit_path)",
+      "read_names": ["audit_path", "disk_snapshot", "excluded_control_paths", "probe", "semantic_paths", "start_commit"]
+    },
+    {
+      "ordinal": 7,
+      "expression": "snapshot is not None",
+      "read_names": ["snapshot"]
+    },
+    {
+      "ordinal": 8,
+      "expression": "memory_snapshot is not None or cache_path.exists()",
+      "read_names": ["cache_path", "memory_snapshot"]
+    },
+    {
+      "ordinal": 9,
+      "expression": "snapshot is not None",
+      "read_names": ["snapshot"]
+    },
+    {
+      "ordinal": 10,
+      "expression": "final_review and changes.entries",
+      "read_names": ["changes", "final_review"]
+    },
+    {
+      "ordinal": 11,
+      "expression": "self._artifact_bridge is not None and (prior_authority is None and current_digest in {'absent', cache_digest})",
+      "read_names": ["cache_digest", "current_digest", "prior_authority", "self"]
+    },
+    {
+      "ordinal": 12,
+      "expression": "prior_authority != cache_digest or current_digest != cache_digest",
+      "read_names": ["cache_digest", "current_digest", "prior_authority"]
+    },
+    {
+      "ordinal": 13,
+      "expression": "snapshot.audit_summary is not None",
+      "read_names": ["snapshot"]
+    },
+    {
+      "ordinal": 14,
+      "expression": "changes.entries",
+      "read_names": ["changes"]
+    },
+    {
+      "ordinal": 15,
+      "expression": "self.active_state is not None and self.active_state.current_work_unit.kind is WorkUnitKind.PLAN and self.last_codex_output",
+      "read_names": ["WorkUnitKind", "self"]
+    }
+  ],
+  "aborts": [
+    {
+      "ordinal": 1,
+      "exception_type": "WorkflowExecutionError",
+      "message": "'final-review repository changed during evidence collection'"
+    },
+    {
+      "ordinal": 2,
+      "exception_type": "NoWorkflowChangesError",
+      "message": "'the current review boundary contains no repository changes'"
+    }
+  ],
+  "catchers": [
+    {
+      "ordinal": 1,
+      "exception_type": "(UnicodeError, SemanticMarkdownError)",
+      "behavior": "mitigates",
+      "body": ["raw_plan_artifact = self.active_state.work_plan_path"]
+    },
+    {
+      "ordinal": 2,
+      "exception_type": "OSError",
+      "behavior": "mitigates",
+      "body": ["pass"]
+    },
+    {
+      "ordinal": 3,
+      "exception_type": "ValueError",
+      "behavior": "rethrows",
+      "body": ["raise WorkflowExecutionError('final-review repository changed during evidence collection') from exc"]
+    },
+    {
+      "ordinal": 4,
+      "exception_type": "SideEffectReconciliationError",
+      "behavior": "mitigates",
+      "body": ["current_digest = 'invalid'"]
+    }
+  ],
+  "returns": [
+    {
+      "ordinal": 1,
+      "expression": "rendered"
+    }
+  ]
+}
