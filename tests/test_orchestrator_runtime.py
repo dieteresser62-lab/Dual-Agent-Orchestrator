@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
+import agent_runtime
 import orchestrator
 import pytest
 import workflow_audit_projection
@@ -24,8 +25,10 @@ from agent_runtime import (
     AgentInvocationError,
     NativeAgentCodexOutput,
     NativeAgentReviewOutput,
+    ProviderAttemptLifecycle,
     QuotaReset,
     QuotaWaitPolicy,
+    run_native_codex_agent_checked,
 )
 from audit_trail import AuditProjection, ValidationAuditEvent, _render_test_approval
 from artifact_models import (
@@ -136,7 +139,12 @@ from workflow_state import (
     init_workflow_state,
 )
 from workflow_state import AgentFailureKind
-from provider_input_budget import default_provider_input_budget_policy
+from provider_input_budget import (
+    PreparedProviderInput,
+    ProviderInputComponent,
+    default_provider_input_budget_policy,
+    measure_provider_input,
+)
 from native_review_contract import (
     NativeReviewContext,
     canonical_native_review_json,
@@ -168,7 +176,7 @@ from content_authority_support import (
     append_provider_decision_authority,
     append_validation_authority,
 )
-from side_effects import SideEffectBoundaryPhase
+from side_effects import SideEffectBoundaryPhase, SideEffectReconciliationError
 
 
 def _append_run_binding(bridge: ArtifactBridge, state: WorkflowState) -> None:
@@ -579,6 +587,201 @@ def _write_task(path: Path, branch: str, *scope: str) -> None:
         ),
         encoding="utf-8",
     )
+
+
+def _failed_codex_attempt_harness(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    branch = "feature/attempt-bound-failure-log"
+    repository = _repository(tmp_path, branch)
+    task = repository / "task.md"
+    _write_task(task, branch, "src/runtime.py")
+    task_digest = hashlib.sha256(task.read_bytes()).hexdigest()
+    state = init_workflow_state(
+        run_id="attempt-bound-failure-log",
+        task_file=str(task),
+        branch=branch,
+        branch_base=_git(repository, "rev-parse", "HEAD"),
+        slice_count=1,
+        task_digest=task_digest,
+        task_scope_patterns=("src/runtime.py",),
+        target_branch=branch,
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V2,
+            "2",
+            codex_result_transport="native-codex-v2",
+        ),
+    )
+
+    class FakeAdapter:
+        name = "codex"
+        model = "test-model"
+        effort = "high"
+        metadata: dict[str, object] = {}
+
+    adapter = FakeAdapter()
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={"codex": adapter},  # type: ignore[dict-item]
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    driver.bind_work_unit(state)
+    measurement = measure_provider_input(
+        PreparedProviderInput(
+            command=("codex", "exec"),
+            stdin_text="provider request",
+            components=(
+                ProviderInputComponent("stdin_prompt", "provider request"),
+            ),
+        ),
+        provider="codex",
+        role="codex",
+        operation=WorkflowStep.CODEX_PLAN.value,
+        binding_fingerprint=task_digest,
+        policy=default_provider_input_budget_policy(),
+    )
+    invocation = CodexInvocation(
+        state.current_work_unit_id,
+        WorkflowStep.CODEX_PLAN,
+        1,
+        "",
+    )
+    raw_response_path = driver._native_codex_response_path(invocation)
+    lifecycle = ProviderAttemptLifecycle(
+        start=lambda measured, bootstrap: driver._start_provider_attempt(
+            measured,
+            bootstrap,
+            operation_instance="round:1",
+            durable_response_path=raw_response_path,
+        ),
+        terminal=driver._finish_provider_attempt,
+        durable_response_path=lambda handle: handle[2],
+        failure_path=driver._provider_attempt_failure_path,
+    )
+    pending_failures: list[str] = []
+
+    def fail_native_codex(*_args, **kwargs):  # type: ignore[no-untyped-def]
+        bootstrap = kwargs["pre_start_callback"](measurement)
+        kwargs["attempt_invocation"].begin(measurement, bootstrap)
+        raise RuntimeError(pending_failures.pop(0))
+
+    monkeypatch.setattr(agent_runtime, "run_native_codex_agent", fail_native_codex)
+
+    def fail_attempt(message: str) -> None:
+        pending_failures.append(message)
+        with pytest.raises(AgentInvocationError, match=message):
+            run_native_codex_agent_checked(
+                adapter=adapter,  # type: ignore[arg-type]
+                bundle=object(),  # type: ignore[arg-type]
+                raw_response_path=raw_response_path,
+                config=orchestrator.OrchestratorConfig(repo_root=repository),
+                write_file=driver._write_native_codex_raw_response,
+                shorten=lambda value, _maximum: value or "",
+                operation=WorkflowStep.CODEX_PLAN.value,
+                binding_fingerprint=task_digest,
+                pre_start_callback=driver._persist_provider_bootstrap,
+                provider_attempt_lifecycle=lifecycle,
+            )
+
+    return repository, driver, state, raw_response_path, fail_attempt
+
+
+def test_codex_failure_logs_are_attempt_bound_and_leave_no_open_file_intent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository, driver, state, raw_path, fail_attempt = (
+        _failed_codex_attempt_harness(tmp_path, monkeypatch)
+    )
+    messages = (
+        "expired provider token",
+        "slice plan invalid",
+        "third provider failure",
+    )
+
+    for message in messages:
+        fail_attempt(message)
+        assert driver._reconcile_pending_side_effects(
+            driver.active_state or state
+        ) is False
+
+    expected_paths = tuple(
+        driver._provider_attempt_response_path(raw_path, attempt).with_suffix(
+            raw_path.suffix + ".failure.json"
+        )
+        for attempt in range(1, 4)
+    )
+    assert tuple(path.is_file() for path in expected_paths) == (True, True, True)
+    assert tuple(
+        json.loads(path.read_text(encoding="utf-8"))["provider_text"]
+        for path in expected_paths
+    ) == messages
+
+    legacy_path = raw_path.with_suffix(raw_path.suffix + ".failure.json")
+    legacy_content = '{"legacy":"unchanged"}'
+    legacy_path.write_text(legacy_content, encoding="utf-8")
+    fail_attempt("fourth provider failure")
+    assert driver._reconcile_pending_side_effects(driver.active_state or state) is False
+    assert legacy_path.read_text(encoding="utf-8") == legacy_content
+
+    all_paths = (
+        *expected_paths,
+        driver._provider_attempt_response_path(raw_path, 4).with_suffix(
+            raw_path.suffix + ".failure.json"
+        ),
+    )
+    failure_targets = tuple(
+        path.resolve().relative_to(repository).as_posix() for path in all_paths
+    )
+    file_effects = tuple(
+        record.payload
+        for record in ArtifactStore(repository, state.run_id).load_chain()
+        if isinstance(record.payload, SideEffectPayload)
+        and record.payload.effect_class == "file_write"
+        and record.payload.operation[0].endswith(".failure.json")
+    )
+    assert tuple(effect.operation[0] for effect in file_effects[::2]) == failure_targets
+    assert tuple(effect.phase for effect in file_effects) == (
+        "intent",
+        "result",
+    ) * 4
+    assert all(
+        effect.operation == file_effects[index - 1].operation
+        for index, effect in enumerate(file_effects)
+        if effect.phase == "result"
+    )
+
+
+def test_removing_failure_log_attempt_suffix_recreates_the_open_intent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def without_attempt_suffix(response_path: Path) -> Path:
+        base_stem, separator, _attempt = response_path.stem.rpartition(".attempt-")
+        assert separator
+        base = response_path.with_name(base_stem + response_path.suffix)
+        return base.with_suffix(base.suffix + ".failure.json")
+
+    monkeypatch.setattr(
+        ProductionWorkflowDriver,
+        "_provider_attempt_failure_path",
+        staticmethod(without_attempt_suffix),
+    )
+    _repository_path, driver, state, _raw_path, fail_attempt = (
+        _failed_codex_attempt_harness(tmp_path, monkeypatch)
+    )
+
+    fail_attempt("first distinct failure")
+    assert driver._reconcile_pending_side_effects(driver.active_state or state) is False
+    fail_attempt("second distinct failure")
+    with pytest.raises(
+        SideEffectReconciliationError,
+        match="has no durable identical target",
+    ):
+        driver._reconcile_pending_side_effects(driver.active_state or state)
 
 
 def _review(role: AgentRole, marker: str) -> str:

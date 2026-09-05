@@ -754,6 +754,10 @@ class ProductionWorkflowDriver:
             f"{base.stem}.attempt-{attempt_number}{base.suffix}"
         )
 
+    @staticmethod
+    def _provider_attempt_failure_path(response_path: Path) -> Path:
+        return response_path.with_suffix(response_path.suffix + ".failure.json")
+
     def _start_provider_attempt(
         self,
         measurement: ProviderInputMeasurement,
@@ -935,6 +939,7 @@ class ProductionWorkflowDriver:
                         ),
                         terminal=self._finish_provider_attempt,
                         durable_response_path=lambda handle: handle[2],
+                        failure_path=self._provider_attempt_failure_path,
                     )
                     if self._artifact_bridge is not None
                     else None

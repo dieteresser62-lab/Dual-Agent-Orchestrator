@@ -518,6 +518,7 @@ class ProviderAttemptLifecycle:
     start: Callable[[ProviderInputMeasurement, object | None], object]
     terminal: Callable[[object, float, str | None, ProviderUsagePayload | None], None]
     durable_response_path: Callable[[object], Path] | None = None
+    failure_path: Callable[[Path], Path] | None = None
     monotonic_fn: Callable[[], float] = time.monotonic
 
 
@@ -536,6 +537,12 @@ class _ProviderAttemptInvocation:
         if self.handle is None or self.lifecycle.durable_response_path is None:
             return fallback
         return self.lifecycle.durable_response_path(self.handle)
+
+    def failure_path(self, fallback: Path) -> Path:
+        response_path = self.response_path(fallback)
+        if self.lifecycle.failure_path is not None:
+            return self.lifecycle.failure_path(response_path)
+        return response_path.with_suffix(response_path.suffix + ".failure.json")
 
     def finish(self, failure_kind: AgentFailureKind | None, metadata: Mapping[str, object] | None) -> None:
         if self.handle is None or self.monotonic_started is None or self.terminalized:
@@ -1608,8 +1615,12 @@ def run_native_codex_agent_checked(
         )
         if attempt_invocation is not None:
             attempt_invocation.finish(failure.kind, adapter.metadata)
-        failure_path = raw_response_path.with_suffix(
-            raw_response_path.suffix + ".failure.json"
+        failure_path = (
+            attempt_invocation.failure_path(raw_response_path)
+            if attempt_invocation is not None
+            else raw_response_path.with_suffix(
+                raw_response_path.suffix + ".failure.json"
+            )
         )
         try:
             write_file(
