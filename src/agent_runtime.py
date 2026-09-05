@@ -959,6 +959,135 @@ def print_agent_output(
     logger.info("%s", shorten(output, config.agent_output_max_chars))
 
 
+def _run_agent_process(
+    adapter: AgentAdapter,
+    command_parts: list[str],
+    stdin_text: str | None,
+    *,
+    config: OrchestratorConfig,
+    env: dict[str, str],
+    execution_root: Path,
+    timeout_seconds: int,
+    agent_key: str,
+) -> StreamResult | subprocess.CompletedProcess[str]:
+    """Start one provider process and retain ownership through its cleanup boundary."""
+    if config.agent_live_stream:
+        # Stream mode captures stdout/stderr incrementally while still preserving full output.
+        process = subprocess.Popen(
+            command_parts,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+            cwd=execution_root,
+            bufsize=1,
+        )
+        assert process.stdin is not None
+        assert process.stdout is not None
+        assert process.stderr is not None
+
+        if stdin_text is not None:
+            process.stdin.write(stdin_text)
+        process.stdin.close()
+
+        stream_queue: queue.Queue[tuple[str, str | None]] = queue.Queue()
+        stdout_chunks: list[str] = []
+        stderr_chunks: list[str] = []
+        start = time.monotonic()
+        stream_state: dict[str, str | bool] = {
+            "skip_prompt_echo": False,
+            "last_emitted_line": "",
+        }
+
+        def read_stream(stream: TextIO, channel: str) -> None:
+            # Use sentinel None to signal channel completion to the main loop.
+            try:
+                while True:
+                    line = stream.readline()
+                    if line == "":
+                        break
+                    stream_queue.put((channel, line))
+            finally:
+                stream_queue.put((channel, None))
+                try:
+                    stream.close()
+                except Exception:
+                    pass
+
+        threads = [
+            threading.Thread(
+                target=read_stream,
+                args=(process.stdout, "stdout"),
+                daemon=True,
+            ),
+            threading.Thread(
+                target=read_stream,
+                args=(process.stderr, "stderr"),
+                daemon=True,
+            ),
+        ]
+        for thread in threads:
+            thread.start()
+
+        completed_channels: set[str] = set()
+        heartbeat_interval_seconds = 30.0
+        last_heartbeat = start
+        while len(completed_channels) < 2:
+            if time.monotonic() - start > timeout_seconds:
+                process.kill()
+                raise subprocess.TimeoutExpired(command_parts, timeout_seconds)
+            now = time.monotonic()
+            if now - last_heartbeat >= heartbeat_interval_seconds:
+                elapsed = int(now - start)
+                logger.info("[AGENT] %s still running (elapsed: %ss)", agent_key, elapsed)
+                last_heartbeat = now
+            try:
+                channel, line = stream_queue.get(timeout=0.2)
+            except queue.Empty:
+                continue
+
+            if line is None:
+                completed_channels.add(channel)
+                continue
+            if channel == "stdout":
+                stdout_chunks.append(line)
+            else:
+                stderr_chunks.append(line)
+
+            if config.agent_live_stream_channels == "stdout" and channel != "stdout":
+                continue
+            if config.agent_live_stream_channels == "stderr" and channel != "stderr":
+                continue
+            if config.agent_live_stream_mode == "full":
+                logger.info("[%s:%s] %s", agent_key, channel, line.rstrip())
+            else:
+                rendered = _compact_stream_text(adapter, channel, line, stream_state)
+                if rendered is not None:
+                    logger.info("[%s:%s] %s", agent_key, channel, rendered)
+
+        for thread in threads:
+            thread.join(timeout=1)
+        process.wait(timeout=5)
+        result = StreamResult(
+            process.returncode if process.returncode is not None else 1,
+            "".join(stdout_chunks),
+            "".join(stderr_chunks),
+        )
+    else:
+        result = subprocess.run(
+            command_parts,
+            input=stdin_text,
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=execution_root,
+            timeout=timeout_seconds,
+            check=False,
+        )
+    return result
+
+
 def run_agent(
     adapter: AgentAdapter,
     prompt: str,
@@ -1078,120 +1207,16 @@ def run_agent(
         if attempt_invocation is not None:
             attempt_invocation.begin(measurement, bootstrap_context)
 
-        if config.agent_live_stream:
-            # Stream mode captures stdout/stderr incrementally while still preserving full output.
-            process = subprocess.Popen(
-                command_parts,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                env=env,
-                cwd=execution_root,
-                bufsize=1,
-            )
-            assert process.stdin is not None
-            assert process.stdout is not None
-            assert process.stderr is not None
-
-            if stdin_text is not None:
-                process.stdin.write(stdin_text)
-            process.stdin.close()
-
-            stream_queue: queue.Queue[tuple[str, str | None]] = queue.Queue()
-            stdout_chunks: list[str] = []
-            stderr_chunks: list[str] = []
-            start = time.monotonic()
-            stream_state: dict[str, str | bool] = {
-                "skip_prompt_echo": False,
-                "last_emitted_line": "",
-            }
-
-            def read_stream(stream: TextIO, channel: str) -> None:
-                # Use sentinel None to signal channel completion to the main loop.
-                try:
-                    while True:
-                        line = stream.readline()
-                        if line == "":
-                            break
-                        stream_queue.put((channel, line))
-                finally:
-                    stream_queue.put((channel, None))
-                    try:
-                        stream.close()
-                    except Exception:
-                        pass
-
-            threads = [
-                threading.Thread(
-                    target=read_stream,
-                    args=(process.stdout, "stdout"),
-                    daemon=True,
-                ),
-                threading.Thread(
-                    target=read_stream,
-                    args=(process.stderr, "stderr"),
-                    daemon=True,
-                ),
-            ]
-            for thread in threads:
-                thread.start()
-
-            completed_channels: set[str] = set()
-            heartbeat_interval_seconds = 30.0
-            last_heartbeat = start
-            while len(completed_channels) < 2:
-                if time.monotonic() - start > timeout_seconds:
-                    process.kill()
-                    raise subprocess.TimeoutExpired(command_parts, timeout_seconds)
-                now = time.monotonic()
-                if now - last_heartbeat >= heartbeat_interval_seconds:
-                    elapsed = int(now - start)
-                    logger.info("[AGENT] %s still running (elapsed: %ss)", agent_key, elapsed)
-                    last_heartbeat = now
-                try:
-                    channel, line = stream_queue.get(timeout=0.2)
-                except queue.Empty:
-                    continue
-
-                if line is None:
-                    completed_channels.add(channel)
-                    continue
-                if channel == "stdout":
-                    stdout_chunks.append(line)
-                else:
-                    stderr_chunks.append(line)
-
-                if config.agent_live_stream_channels == "stdout" and channel != "stdout":
-                    continue
-                if config.agent_live_stream_channels == "stderr" and channel != "stderr":
-                    continue
-                if config.agent_live_stream_mode == "full":
-                    logger.info("[%s:%s] %s", agent_key, channel, line.rstrip())
-                else:
-                    rendered = _compact_stream_text(adapter, channel, line, stream_state)
-                    if rendered is not None:
-                        logger.info("[%s:%s] %s", agent_key, channel, rendered)
-
-            for thread in threads:
-                thread.join(timeout=1)
-            process.wait(timeout=5)
-            result = StreamResult(
-                process.returncode if process.returncode is not None else 1,
-                "".join(stdout_chunks),
-                "".join(stderr_chunks),
-            )
-        else:
-            result = subprocess.run(
-                command_parts,
-                input=stdin_text,
-                capture_output=True,
-                text=True,
-                env=env,
-                cwd=execution_root,
-                timeout=timeout_seconds,
-                check=False,
-            )
+        result = _run_agent_process(
+            adapter,
+            command_parts,
+            stdin_text,
+            config=config,
+            env=env,
+            execution_root=execution_root,
+            timeout_seconds=timeout_seconds,
+            agent_key=agent_key,
+        )
 
         stdout = (result.stdout or "").strip()
         stderr = (result.stderr or "").strip()

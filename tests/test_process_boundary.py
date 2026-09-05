@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 from collections import deque
+import copy
 from dataclasses import dataclass
 import json
 from pathlib import Path
@@ -28,6 +29,7 @@ from provider_input_budget import (
 ROOT = Path(__file__).resolve().parents[1]
 PRE_CUT = ROOT / "tests/fixtures/process-boundary-pre-b59-v1.json"
 CORPUS = ROOT / "tests/fixtures/process-boundary-corpus-v1.json"
+B60_PRE_CUT = ROOT / "tests/fixtures/process-boundary-pre-b60-v1.json"
 AGENT_SOURCE = ROOT / "src/agent_runtime.py"
 
 
@@ -39,6 +41,7 @@ def _load_json(path: Path) -> dict[str, Any]:
 
 PRE_CUT_DOCUMENT = _load_json(PRE_CUT)
 CORPUS_DOCUMENT = _load_json(CORPUS)
+B60_PRE_CUT_DOCUMENT = _load_json(B60_PRE_CUT)
 SCENARIOS = tuple(CORPUS_DOCUMENT["scenarios"])
 SCENARIO_IDS = tuple(case["scenario_id"] for case in SCENARIOS)
 
@@ -53,25 +56,41 @@ def _git(*args: str) -> str:
     ).stdout.strip()
 
 
-def _run_agent_function(source: str) -> ast.FunctionDef:
-    tree = ast.parse(source)
+def _top_level_function(tree: ast.Module, name: str) -> ast.FunctionDef:
     functions = [
         node
         for node in tree.body
-        if isinstance(node, ast.FunctionDef) and node.name == "run_agent"
+        if isinstance(node, ast.FunctionDef) and node.name == name
     ]
     assert len(functions) == 1
     return functions[0]
+
+
+def _run_agent_function(source: str) -> ast.FunctionDef:
+    return _top_level_function(ast.parse(source), "run_agent")
+
+
+def _call_name(node: ast.Call) -> str | None:
+    target = node.func
+    if isinstance(target, ast.Name):
+        return target.id
+    if isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name):
+        return f"{target.value.id}.{target.attr}"
+    return None
+
+
+def _ordered_nodes(function: ast.FunctionDef, node_type: type[ast.AST]) -> list[ast.AST]:
+    return sorted(
+        (node for node in ast.walk(function) if isinstance(node, node_type)),
+        key=lambda node: (node.lineno, node.col_offset),
+    )
 
 
 def _source_inventory(source: str) -> dict[str, object]:
     function = _run_agent_function(source)
 
     def ordered(node_type: type[ast.AST]) -> list[ast.AST]:
-        return sorted(
-            (node for node in ast.walk(function) if isinstance(node, node_type)),
-            key=lambda node: (node.lineno, node.col_offset),
-        )
+        return _ordered_nodes(function, node_type)
 
     conditions = [
         {
@@ -134,8 +153,198 @@ def _source_inventory(source: str) -> dict[str, object]:
     }
 
 
+def _active_catchers(source: str) -> tuple[dict[str, object], ...]:
+    tree = ast.parse(source)
+    handlers: list[ast.ExceptHandler] = []
+    for function_name in ("_run_agent_process", "run_agent"):
+        function = _top_level_function(tree, function_name)
+        handlers.extend(
+            node
+            for node in _ordered_nodes(function, ast.ExceptHandler)
+            if isinstance(node, ast.ExceptHandler)
+        )
+    handlers.sort(key=lambda node: (node.lineno, node.col_offset))
+    expected = PRE_CUT_DOCUMENT["catchers"]
+    assert [ast.unparse(node.type) for node in handlers] == [
+        item["type"] for item in expected
+    ]
+    return tuple(
+        {
+            "catcher_id": prior["catcher_id"],
+            "type": ast.unparse(handler.type),
+            "body_lines": tuple(
+                line
+                for statement in handler.body
+                for line in range(statement.lineno, statement.end_lineno + 1)
+            ),
+            "scenario_id": prior["scenario_id"],
+        }
+        for prior, handler in zip(expected, handlers, strict=True)
+    )
+
+
+def _active_return_sites(source: str) -> tuple[dict[str, object], ...]:
+    function = _run_agent_function(source)
+    returns = {
+        ast.unparse(node.value): node.lineno
+        for node in _ordered_nodes(function, ast.Return)
+        if isinstance(node, ast.Return) and node.value is not None
+    }
+    return tuple(
+        {
+            "line": returns[item["expression"]],
+            "expression": item["expression"],
+            "scenario_ids": tuple(item["scenario_ids"]),
+        }
+        for item in PRE_CUT_DOCUMENT["returns"]
+    )
+
+
+def _assert_process_helper_binding(tree_or_source: ast.Module | str) -> dict[str, object]:
+    tree = ast.parse(tree_or_source) if isinstance(tree_or_source, str) else tree_or_source
+    contract = B60_PRE_CUT_DOCUMENT["post_cut_contract"]
+    helper_name = str(contract["helper"])
+    helper = _top_level_function(tree, helper_name)
+    runner = _top_level_function(tree, "run_agent")
+
+    process_call_names = set(contract["lifecycle_calls"])
+    helper_calls = [
+        _call_name(node)
+        for node in _ordered_nodes(helper, ast.Call)
+        if isinstance(node, ast.Call) and _call_name(node) in process_call_names
+    ]
+    runner_process_calls = [
+        _call_name(node)
+        for node in _ordered_nodes(runner, ast.Call)
+        if isinstance(node, ast.Call) and _call_name(node) in process_call_names
+    ]
+    assert helper_calls == contract["lifecycle_calls"], (
+        f"{helper_name}: process lifecycle must own "
+        f"{contract['lifecycle_calls']!r}, got {helper_calls!r}"
+    )
+    assert not runner_process_calls, "run_agent retains provider process lifecycle calls"
+
+    helper_callsites = [
+        node
+        for node in _ordered_nodes(runner, ast.Call)
+        if isinstance(node, ast.Call) and _call_name(node) == helper_name
+    ]
+    assert len(helper_callsites) == 1, f"{helper_name}: expected exactly one run_agent callsite"
+    helper_call = helper_callsites[0]
+    protecting_tries = [
+        node
+        for node in _ordered_nodes(runner, ast.Try)
+        if isinstance(node, ast.Try)
+        and any(helper_call in tuple(ast.walk(statement)) for statement in node.body)
+        and any(
+            handler.type is not None
+            and ast.unparse(handler.type) == contract["enclosing_catcher"]
+            for handler in node.handlers
+        )
+    ]
+    assert len(protecting_tries) == 1, (
+        f"{helper_name}: call must remain inside the prior "
+        f"{contract['enclosing_catcher']} catcher"
+    )
+
+    decode_calls = [
+        node
+        for node in ast.walk(helper)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "decode"
+    ]
+    assert not decode_calls, f"{helper_name}: partial stream chunks must not be decoded"
+    popen_calls = [
+        node
+        for node in ast.walk(helper)
+        if isinstance(node, ast.Call) and _call_name(node) == "subprocess.Popen"
+    ]
+    assert len(popen_calls) == 1
+    text_keywords = [
+        keyword.value
+        for keyword in popen_calls[0].keywords
+        if keyword.arg == "text"
+    ]
+    assert len(text_keywords) == 1 and isinstance(text_keywords[0], ast.Constant)
+    assert text_keywords[0].value is True
+
+    assert helper.end_lineno is not None
+    assert runner.end_lineno is not None
+    helper_span = helper.end_lineno - helper.lineno + 1
+    runner_span = runner.end_lineno - runner.lineno + 1
+    assert helper_span < B60_PRE_CUT_DOCUMENT["function_size_threshold"]
+    assert runner_span < B60_PRE_CUT_DOCUMENT["function_size_threshold"]
+    return {
+        "helper_span_lines": helper_span,
+        "run_agent_span_lines": runner_span,
+        "lifecycle_calls": helper_calls,
+    }
+
+
+def _logical_run_agent(source: str) -> ast.FunctionDef:
+    tree = ast.parse(source)
+    runner = copy.deepcopy(_top_level_function(tree, "run_agent"))
+    helper_name = str(B60_PRE_CUT_DOCUMENT["post_cut_contract"]["helper"])
+    helper = copy.deepcopy(_top_level_function(tree, helper_name))
+    observed_calls = [
+        node
+        for node in _ordered_nodes(runner, ast.Call)
+        if isinstance(node, ast.Call) and _call_name(node) == helper_name
+    ]
+    assert len(observed_calls) == 1, helper_name
+
+    def expand_body(body: list[ast.stmt]) -> list[ast.stmt]:
+        expanded: list[ast.stmt] = []
+        for statement in body:
+            if (
+                isinstance(statement, ast.Assign)
+                and isinstance(statement.value, ast.Call)
+                and _call_name(statement.value) == helper_name
+            ):
+                call = statement.value
+                positional_parameters = [item.arg for item in helper.args.args]
+                keyword_parameters = [item.arg for item in helper.args.kwonlyargs]
+                assert [ast.unparse(item) for item in call.args] == positional_parameters
+                assert [item.arg for item in call.keywords] == keyword_parameters
+                assert [ast.unparse(item.value) for item in call.keywords] == keyword_parameters
+                helper_body = copy.deepcopy(helper.body)
+                if (
+                    helper_body
+                    and isinstance(helper_body[0], ast.Expr)
+                    and isinstance(helper_body[0].value, ast.Constant)
+                    and isinstance(helper_body[0].value.value, str)
+                ):
+                    helper_body.pop(0)
+                terminal = helper_body[-1]
+                assert isinstance(terminal, ast.Return) and terminal.value is not None
+                assert len(statement.targets) == 1
+                assert ast.unparse(statement.targets[0]) == ast.unparse(terminal.value)
+                helper_body.pop()
+                expanded.extend(helper_body)
+                continue
+            for field in ("body", "orelse", "finalbody"):
+                child = getattr(statement, field, None)
+                if isinstance(child, list) and child:
+                    setattr(statement, field, expand_body(child))
+            if isinstance(statement, ast.Try):
+                for handler in statement.handlers:
+                    handler.body = expand_body(handler.body)
+            expanded.append(statement)
+        return expanded
+
+    runner.body = expand_body(runner.body)
+    logical = ast.parse(ast.unparse(runner)).body[0]
+    assert isinstance(logical, ast.FunctionDef)
+    return logical
+
+
 def _compile_run_agent_mutation(*, removed_call: str | None = None, drop_stderr: bool = False) -> Any:
-    function = _run_agent_function(AGENT_SOURCE.read_text(encoding="utf-8"))
+    tree = ast.parse(AGENT_SOURCE.read_text(encoding="utf-8"))
+    functions = [
+        _top_level_function(tree, "_run_agent_process"),
+        _top_level_function(tree, "run_agent"),
+    ]
 
     class Mutation(ast.NodeTransformer):
         replacements = 0
@@ -172,13 +381,46 @@ def _compile_run_agent_mutation(*, removed_call: str | None = None, drop_stderr:
             return node
 
     mutation = Mutation()
-    mutated = mutation.visit(function)
-    assert isinstance(mutated, ast.FunctionDef)
+    module = ast.Module(body=functions, type_ignores=[])
+    mutated = mutation.visit(module)
+    assert isinstance(mutated, ast.Module)
     assert mutation.replacements == 1
-    module = ast.fix_missing_locations(ast.Module(body=[mutated], type_ignores=[]))
+    module = ast.fix_missing_locations(mutated)
     namespace = dict(vars(agent_runtime))
     exec(compile(module, str(AGENT_SOURCE), "exec"), namespace)
     return namespace["run_agent"]
+
+
+def _helper_call_outside_timeout_mutation(source: str) -> ast.Module:
+    tree = ast.parse(source)
+    runner = _top_level_function(tree, "run_agent")
+    helper_name = B60_PRE_CUT_DOCUMENT["post_cut_contract"]["helper"]
+    outer_try = next(
+        node
+        for node in runner.body
+        if isinstance(node, ast.Try)
+        and any(
+            isinstance(call, ast.Call) and _call_name(call) == helper_name
+            for statement in node.body
+            for call in ast.walk(statement)
+        )
+    )
+    call_statement = next(
+        statement
+        for statement in outer_try.body
+        if any(
+            isinstance(call, ast.Call) and _call_name(call) == helper_name
+            for call in ast.walk(statement)
+        )
+    )
+    outer_try.body.remove(call_statement)
+    runner.body.insert(runner.body.index(outer_try), call_statement)
+    return ast.fix_missing_locations(tree)
+
+
+ACTIVE_SOURCE = AGENT_SOURCE.read_text(encoding="utf-8")
+ACTIVE_CATCHERS = _active_catchers(ACTIVE_SOURCE)
+ACTIVE_RETURN_SITES = _active_return_sites(ACTIVE_SOURCE)
 
 
 def _limited_budget_policy(char_limit: int, byte_limit: int) -> ProviderInputBudgetPolicy:
@@ -534,7 +776,7 @@ def _execute_scenario(
 
     catcher_ids = tuple(
         item["catcher_id"]
-        for item in PRE_CUT_DOCUMENT["catchers"]
+        for item in ACTIVE_CATCHERS
         if traced_lines.intersection(item["body_lines"])
     )
     return ScenarioResult(
@@ -638,9 +880,6 @@ def test_b59_anchor_binds_the_byte_identical_pre_cut_source_and_static_inventory
         )
         == PRE_CUT_DOCUMENT["source_blob"]
     )
-    assert _git("hash-object", str(AGENT_SOURCE)) == PRE_CUT_DOCUMENT["source_blob"]
-    assert _git("diff", "--", PRE_CUT_DOCUMENT["source_path"]) == ""
-
     source = _git(
         "show",
         f"{PRE_CUT_DOCUMENT['source_commit']}:{PRE_CUT_DOCUMENT['source_path']}",
@@ -665,6 +904,58 @@ def test_b59_anchor_binds_the_byte_identical_pre_cut_source_and_static_inventory
     assert len(PRE_CUT_DOCUMENT["aborts"]) == PRE_CUT_DOCUMENT["abort_count"]
     assert len(PRE_CUT_DOCUMENT["returns"]) == PRE_CUT_DOCUMENT["return_count"]
     assert len(PRE_CUT_DOCUMENT["catchers"]) == PRE_CUT_DOCUMENT["catcher_count"]
+
+
+def test_b60_anchor_binds_b59_source_corpus_and_guard_baselines() -> None:
+    assert B60_PRE_CUT_DOCUMENT["schema_version"] == "process-boundary-pre-b60-v1"
+    assert B60_PRE_CUT_DOCUMENT["source_commit"] == (
+        "b7876c3062500530a1b426528a4c44d8d778d241"
+    )
+    for path_key, blob_key in (
+        ("source_path", "source_blob"),
+        ("b59_pre_cut_path", "b59_pre_cut_blob"),
+        ("b59_corpus_path", "b59_corpus_blob"),
+        ("b59_test_path", "b59_test_blob"),
+        ("function_size_baseline_path", "function_size_baseline_pre_blob"),
+    ):
+        assert (
+            _git(
+                "rev-parse",
+                f"{B60_PRE_CUT_DOCUMENT['source_commit']}:{B60_PRE_CUT_DOCUMENT[path_key]}",
+            )
+            == B60_PRE_CUT_DOCUMENT[blob_key]
+        ), B60_PRE_CUT_DOCUMENT[path_key]
+
+    for path_key, blob_key in (
+        ("b59_pre_cut_path", "b59_pre_cut_blob"),
+        ("b59_corpus_path", "b59_corpus_blob"),
+    ):
+        path = str(B60_PRE_CUT_DOCUMENT[path_key])
+        assert _git("hash-object", str(ROOT / path)) == B60_PRE_CUT_DOCUMENT[blob_key]
+        assert _git("diff", "--", path) == ""
+
+
+def test_b60_process_helper_owns_lifecycle_inside_the_prior_timeout_catcher() -> None:
+    binding = _assert_process_helper_binding(ACTIVE_SOURCE)
+    contract = B60_PRE_CUT_DOCUMENT["post_cut_contract"]
+    assert binding["lifecycle_calls"] == contract["lifecycle_calls"]
+    assert [item["type"] for item in ACTIVE_CATCHERS] == contract[
+        "catcher_types_in_source_order"
+    ]
+    assert len(ACTIVE_CATCHERS) == PRE_CUT_DOCUMENT["catcher_count"] == 5
+
+
+def test_b60_helper_inlines_to_the_exact_pre_cut_run_agent() -> None:
+    pre_cut_source = _git(
+        "show",
+        f"{B60_PRE_CUT_DOCUMENT['source_commit']}:{B60_PRE_CUT_DOCUMENT['source_path']}",
+    )
+    logical = _logical_run_agent(ACTIVE_SOURCE)
+    pre_cut = _run_agent_function(pre_cut_source)
+    assert ast.dump(logical, include_attributes=False) == ast.dump(
+        pre_cut,
+        include_attributes=False,
+    )
 
 
 def test_every_abort_is_reachable_and_bound_to_its_exact_type_and_message() -> None:
@@ -722,7 +1013,7 @@ def test_every_scenario_ends_without_an_open_or_real_process(
 def test_all_five_catchers_execute_in_their_bound_scenarios(
     process_boundary_corpus: ProcessBoundaryCorpus,
 ) -> None:
-    for catcher in PRE_CUT_DOCUMENT["catchers"]:
+    for catcher in ACTIVE_CATCHERS:
         result = process_boundary_corpus.results[catcher["scenario_id"]]
         assert catcher["catcher_id"] in result.catcher_ids, catcher["catcher_id"]
 
@@ -730,7 +1021,7 @@ def test_all_five_catchers_execute_in_their_bound_scenarios(
 def test_both_return_sites_execute_in_their_bound_scenarios(
     process_boundary_corpus: ProcessBoundaryCorpus,
 ) -> None:
-    for return_site in PRE_CUT_DOCUMENT["returns"]:
+    for return_site in ACTIVE_RETURN_SITES:
         assert any(
             return_site["line"]
             in process_boundary_corpus.results[scenario_id].executed_source_lines
@@ -775,6 +1066,14 @@ def test_dropping_live_stderr_join_turns_the_consumer_boundary_red(
     assert scenario_id in message and "validated_stderr_bytes_hex" in message
 
 
+def test_moving_process_helper_outside_timeout_catcher_turns_static_binding_red() -> None:
+    mutated = _helper_call_outside_timeout_mutation(ACTIVE_SOURCE)
+    with pytest.raises(AssertionError) as captured:
+        _assert_process_helper_binding(mutated)
+    message = str(captured.value)
+    assert "_run_agent_process" in message and "subprocess.TimeoutExpired" in message
+
+
 def test_process_boundary_corpus_builds_once_per_session_and_is_fast(
     process_boundary_corpus: ProcessBoundaryCorpus,
 ) -> None:
@@ -783,10 +1082,20 @@ def test_process_boundary_corpus_builds_once_per_session_and_is_fast(
     assert 0 <= process_boundary_corpus.build_elapsed_seconds < 10
 
 
-def test_b59_keeps_b21_b23_b25_and_b32_guards_and_baselines_byte_identical() -> None:
-    for path, blob in PRE_CUT_DOCUMENT["protected_blobs"].items():
+def test_b60_keeps_b21_b23_and_b25_guards_and_baselines_byte_identical() -> None:
+    for path, blob in B60_PRE_CUT_DOCUMENT["protected_blobs"].items():
         assert _git("hash-object", str(ROOT / path)) == blob, path
         assert (
-            _git("rev-parse", f"{PRE_CUT_DOCUMENT['source_commit']}:{path}") == blob
+            _git("rev-parse", f"{B60_PRE_CUT_DOCUMENT['source_commit']}:{path}") == blob
         ), path
     assert _git("status", "--porcelain", "--", ".orchestrator") == ""
+
+
+def test_b60_removes_run_agent_from_the_b32_size_ratchet() -> None:
+    baseline_path = ROOT / B60_PRE_CUT_DOCUMENT["function_size_baseline_path"]
+    baseline = _load_json(baseline_path)
+    assert baseline["threshold_lines"] == B60_PRE_CUT_DOCUMENT["function_size_threshold"]
+    assert "src/agent_runtime.py::run_agent" not in baseline["functions"]
+    binding = _assert_process_helper_binding(ACTIVE_SOURCE)
+    assert binding["run_agent_span_lines"] < baseline["threshold_lines"]
+    assert binding["helper_span_lines"] < baseline["threshold_lines"]

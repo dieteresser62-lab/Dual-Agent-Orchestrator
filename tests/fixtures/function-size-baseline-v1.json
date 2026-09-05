@@ -2,7 +2,6 @@
   "schema_version": "function-size-baseline-v1",
   "threshold_lines": 200,
   "functions": {
-    "src/agent_runtime.py::run_agent": 295,
     "src/cli.py::build_parser": 255,
     "src/cli.py::parse_args": 202,
     "src/inbox_watcher.py::watch_inbox": 329,
