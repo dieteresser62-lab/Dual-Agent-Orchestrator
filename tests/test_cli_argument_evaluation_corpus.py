@@ -25,8 +25,16 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE_PATH = ROOT / "src/cli.py"
 STATIC_BASELINE = ROOT / "tests/fixtures/cli-argument-evaluation-pre-b64-v1.json"
 RUNTIME_BASELINE = ROOT / "tests/fixtures/cli-argument-evaluation-corpus-v1.json"
+B65_PRE_CUT = ROOT / "tests/fixtures/cli-argument-evaluation-pre-b65-v1.json"
 SOURCE_COMMIT = "36fb8a8edb9d2c4bea861b3198c268240473f649"
 SOURCE_BLOB = "366d01322ca79a3ba120f3ddb1d66f403f3c7c97"
+B65_HELPERS = (
+    "_resolve_skip_git_check",
+    "_resolve_live_stream_channels",
+    "_resolve_resume_state",
+)
+B65_CAUGHT_CALL = "resolve_agent_settings"
+B65_BOUND_CALLS = (B65_CAUGHT_CALL, *B65_HELPERS)
 
 
 @dataclass(frozen=True)
@@ -233,6 +241,119 @@ def _parse_args_function(tree: ast.Module) -> ast.FunctionDef:
     return matches[0]
 
 
+def _top_level_function(tree: ast.Module, name: str) -> ast.FunctionDef:
+    matches = tuple(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == name
+    )
+    assert len(matches) == 1, name
+    return matches[0]
+
+
+def _direct_b65_helper_call(statement: ast.stmt) -> ast.Call | None:
+    value: ast.expr | None = None
+    if isinstance(statement, ast.Expr):
+        value = statement.value
+    elif isinstance(statement, ast.Assign):
+        value = statement.value
+    if (
+        isinstance(value, ast.Call)
+        and isinstance(value.func, ast.Name)
+        and value.func.id in B65_HELPERS
+    ):
+        return value
+    return None
+
+
+def _logical_parse_args_function(tree: ast.Module) -> ast.FunctionDef:
+    function = copy.deepcopy(_parse_args_function(tree))
+    helpers = {
+        name: copy.deepcopy(_top_level_function(tree, name))
+        for name in B65_HELPERS
+    }
+    observed = [
+        call.func.id
+        for call in _ordered(function, ast.Call)
+        if isinstance(call.func, ast.Name) and call.func.id in B65_HELPERS
+    ]
+    assert observed == list(B65_HELPERS)
+
+    def expand_body(body: list[ast.stmt]) -> list[ast.stmt]:
+        expanded: list[ast.stmt] = []
+        for statement in body:
+            call = _direct_b65_helper_call(statement)
+            if call is not None:
+                helper = helpers[call.func.id]
+                parameters = [argument.arg for argument in helper.args.args]
+                assert not call.keywords
+                assert [ast.unparse(argument) for argument in call.args] == parameters
+                helper_body = copy.deepcopy(helper.body)
+                if isinstance(statement, ast.Assign):
+                    terminal = helper_body.pop()
+                    assert isinstance(terminal, ast.Return)
+                    assert terminal.value is not None
+                    helper_body.append(
+                        ast.Assign(
+                            targets=copy.deepcopy(statement.targets),
+                            value=terminal.value,
+                        )
+                    )
+                else:
+                    assert not any(
+                        isinstance(node, ast.Return)
+                        for child in helper_body
+                        for node in ast.walk(child)
+                    )
+                expanded.extend(expand_body(helper_body))
+                continue
+            for field in ("body", "orelse", "finalbody"):
+                child = getattr(statement, field, None)
+                if isinstance(child, list) and child:
+                    setattr(statement, field, expand_body(child))
+            if isinstance(statement, ast.Try):
+                for handler in statement.handlers:
+                    handler.body = expand_body(handler.body)
+            expanded.append(statement)
+        return expanded
+
+    function.body = expand_body(function.body)
+    ast.fix_missing_locations(function)
+    logical = ast.parse(ast.unparse(function)).body[0]
+    assert isinstance(logical, ast.FunctionDef)
+    return logical
+
+
+def _b65_call_catcher_bindings(tree: ast.Module) -> dict[str, str | None]:
+    function = _parse_args_function(tree)
+    parents = {
+        child: parent
+        for parent in ast.walk(function)
+        for child in ast.iter_child_nodes(parent)
+    }
+    bindings: dict[str, str | None] = {}
+    for helper_name in B65_BOUND_CALLS:
+        calls = [
+            node
+            for node in ast.walk(function)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == helper_name
+        ]
+        assert len(calls) == 1, helper_name
+        current: ast.AST = calls[0]
+        binding: str | None = None
+        while current in parents:
+            child = current
+            current = parents[current]
+            if isinstance(current, ast.Try) and child in current.body:
+                assert len(current.handlers) == 1, helper_name
+                binding = ast.unparse(current.handlers[0].type)
+                break
+        bindings[helper_name] = binding
+    return bindings
+
+
 def _ordered(node: ast.AST, kind: type[ast.AST]) -> list[ast.AST]:
     return sorted(
         (item for item in ast.walk(node) if isinstance(item, kind)),
@@ -277,7 +398,11 @@ def _handler_classification(handler: ast.ExceptHandler) -> str:
 
 
 def _static_document() -> dict[str, object]:
-    function = _parse_args_function(ast.parse(SOURCE_PATH.read_text(encoding="utf-8")))
+    tree = ast.parse(SOURCE_PATH.read_text(encoding="utf-8"))
+    function = _logical_parse_args_function(tree)
+    pre_cut_function = _parse_args_function(
+        ast.parse(_git("show", f"{SOURCE_COMMIT}:src/cli.py"))
+    )
     conditions = _ordered(function, ast.If)
     raises = _ordered(function, ast.Raise)
     parser_errors = [
@@ -294,7 +419,9 @@ def _static_document() -> dict[str, object]:
         "source_path": "src/cli.py",
         "source_blob": SOURCE_BLOB,
         "function": "parse_args",
-        "function_span_lines": function.end_lineno - function.lineno + 1,
+        "function_span_lines": (
+            pre_cut_function.end_lineno - pre_cut_function.lineno + 1
+        ),
         "conditions": [
             {
                 "ordinal": ordinal,
@@ -651,6 +778,27 @@ def _load_mutant_without_dry_run_dependency() -> ModuleType:
     return module
 
 
+def _move_agent_resolution_outside_catcher(tree: ast.Module) -> None:
+    function = _parse_args_function(tree)
+    catcher = next(
+        node
+        for node in function.body
+        if isinstance(node, ast.Try)
+        and len(node.handlers) == 1
+        and ast.unparse(node.handlers[0].type) == "AgentConfigError"
+    )
+    assert len(catcher.body) == 1
+    helper_statement = catcher.body.pop()
+    assert isinstance(helper_statement, ast.Assign)
+    assert isinstance(helper_statement.value, ast.Call)
+    assert isinstance(helper_statement.value.func, ast.Name)
+    assert helper_statement.value.func.id == B65_CAUGHT_CALL
+    catcher.body.append(ast.Pass())
+    catcher_index = function.body.index(catcher)
+    function.body.insert(catcher_index, helper_statement)
+    ast.fix_missing_locations(tree)
+
+
 def test_static_parse_args_contract_is_complete_and_source_ordered() -> None:
     actual = _static_document()
     expected = _load_json(STATIC_BASELINE)
@@ -669,20 +817,79 @@ def test_static_parse_args_contract_is_complete_and_source_ordered() -> None:
     assert actual["unreachable_rejections"] == []
 
 
-def test_b64_anchor_and_b21_b23_b32_baselines_are_byte_identical() -> None:
+def test_b64_historical_anchor_and_protected_baselines_are_byte_identical() -> None:
     baseline = _load_json(STATIC_BASELINE)
     assert _git("rev-parse", f"{SOURCE_COMMIT}:src/cli.py") == SOURCE_BLOB
-    assert _git("hash-object", str(SOURCE_PATH)) == SOURCE_BLOB
-    assert _git("diff", "--", "src/cli.py") == ""
-    guarded = {
-        str(baseline["function_size_baseline_path"]): baseline[
-            "function_size_baseline_blob"
-        ],
-        **baseline["protected_blobs"],
-    }
-    for path, blob in guarded.items():
+    function_size_path = str(baseline["function_size_baseline_path"])
+    assert (
+        _git("rev-parse", f"{SOURCE_COMMIT}:{function_size_path}")
+        == baseline["function_size_baseline_blob"]
+    )
+    for path, blob in baseline["protected_blobs"].items():
         assert _git("rev-parse", f"{SOURCE_COMMIT}:{path}") == blob, path
         assert _git("hash-object", str(ROOT / path)) == blob, path
+
+
+def test_b65_anchor_helpers_and_b21_b23_b32_contract_are_bound() -> None:
+    anchor = _load_json(B65_PRE_CUT)
+    commit = str(anchor["source_commit"])
+    source_path = str(anchor["source_path"])
+    assert _git("rev-parse", f"{commit}:{source_path}") == anchor["source_blob"]
+
+    for path, blob in anchor["b64_artifacts"].items():
+        assert _git("rev-parse", f"{commit}:{path}") == blob, path
+        if path != "tests/test_cli_argument_evaluation_corpus.py":
+            assert _git("hash-object", str(ROOT / path)) == blob, path
+            assert _git("diff", "--", path) == "", path
+
+    function_size_path = str(anchor["function_size_baseline_path"])
+    assert (
+        _git("rev-parse", f"{commit}:{function_size_path}")
+        == anchor["function_size_baseline_pre_blob"]
+    )
+    size_baseline = _load_json(ROOT / function_size_path)
+    assert "src/cli.py::parse_args" not in size_baseline["functions"]
+
+    sequence_path = str(anchor["workflow_record_sequence_path"])
+    sequence_blob = anchor["workflow_record_sequence_blob"]
+    assert _git("rev-parse", f"{commit}:{sequence_path}") == sequence_blob
+    assert _git("hash-object", str(ROOT / sequence_path)) == sequence_blob
+    assert _git("diff", "--", sequence_path) == ""
+
+    pre_cut_tree = ast.parse(_git("show", f"{commit}:{source_path}"))
+    active_tree = ast.parse(SOURCE_PATH.read_text(encoding="utf-8"))
+    assert ast.dump(
+        _top_level_function(active_tree, "build_parser"), include_attributes=False
+    ) == ast.dump(
+        _top_level_function(pre_cut_tree, "build_parser"), include_attributes=False
+    )
+    assert ast.dump(
+        _logical_parse_args_function(active_tree), include_attributes=False
+    ) == ast.dump(
+        _parse_args_function(pre_cut_tree), include_attributes=False
+    )
+
+    expected_helpers = anchor["post_cut_contract"]["helpers"]
+    assert [item["helper"] for item in expected_helpers] == list(B65_HELPERS)
+    expected_bindings = {
+        item["helper"]: item["catcher"] for item in expected_helpers
+    }
+    caught_call = anchor["post_cut_contract"]["caught_call"]
+    expected_bindings[caught_call["call"]] = caught_call["catcher"]
+    assert _b65_call_catcher_bindings(active_tree) == expected_bindings
+
+    parse_args_function = _parse_args_function(active_tree)
+    assert parse_args_function.end_lineno is not None
+    parse_args_lines = (
+        parse_args_function.end_lineno - parse_args_function.lineno + 1
+    )
+    assert parse_args_lines <= anchor["post_cut_contract"][
+        "maximum_parse_args_lines"
+    ]
+    for helper_name in B65_HELPERS:
+        helper = _top_level_function(active_tree, helper_name)
+        assert helper.end_lineno is not None
+        assert helper.end_lineno - helper.lineno + 1 < 200, helper_name
 
 
 @pytest.mark.parametrize("scenario_id", [spec.scenario_id for spec in REJECTION_SPECS])
@@ -772,8 +979,21 @@ def test_removing_a_flag_dependency_names_its_rejection_scenario(
     actual, _namespace = _run_scenario(
         _load_mutant_without_dry_run_dependency(), spec, tmp_path / "mutant"
     )
+    assert expected["outcome"]["kind"] == "parser_error"
+    assert actual["outcome"]["kind"] == "success"
     with pytest.raises(AssertionError, match=spec.scenario_id):
         _assert_scenario_matches(actual, expected)
+
+
+def test_moving_agent_resolution_outside_its_catcher_turns_binding_red() -> None:
+    tree = ast.parse(SOURCE_PATH.read_text(encoding="utf-8"))
+    _move_agent_resolution_outside_catcher(tree)
+    compile(tree, "<b65-agent-resolution-outside-catcher>", "exec")
+    with pytest.raises(AssertionError, match=B65_CAUGHT_CALL):
+        bindings = _b65_call_catcher_bindings(tree)
+        assert bindings[B65_CAUGHT_CALL] == "AgentConfigError", (
+            f"{B65_CAUGHT_CALL} left AgentConfigError catcher"
+        )
 
 
 def test_argument_corpus_builds_exactly_once_without_processes_or_writes(

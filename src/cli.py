@@ -882,6 +882,16 @@ def parse_args(
     except AgentConfigError as exc:
         raise ConfigError(str(exc)) from exc
 
+    _resolve_skip_git_check(args, env)
+    _resolve_live_stream_channels(args, env)
+    _resolve_resume_state(args, repo_root)
+    return args
+
+
+def _resolve_skip_git_check(
+    args: argparse.Namespace,
+    env: Mapping[str, str],
+) -> None:
     if args.skip_git_check is None:
         env_skip = _parse_env_bool("RUN_TASK_SKIP_GIT_CHECK", env)
         if env_skip is not None:
@@ -896,6 +906,11 @@ def parse_args(
     else:
         args.skip_git_check_source = "cli"
 
+
+def _resolve_live_stream_channels(
+    args: argparse.Namespace,
+    env: Mapping[str, str],
+) -> None:
     args.configuration_warnings = []
     if args.agent_live_stream_channels is None:
         channels = env.get(
@@ -909,6 +924,11 @@ def parse_args(
             channels = DEFAULT_WATCH_STREAM_CHANNELS
         args.agent_live_stream_channels = channels
 
+
+def _resolve_resume_state(
+    args: argparse.Namespace,
+    repo_root: Path,
+) -> None:
     state_exists, state_completed, state_frozen = _read_state_for_auto_resume(
         repo_root / ".orchestrator" / "state.json"
     )
@@ -923,8 +943,6 @@ def parse_args(
     elif state_completed and not args.watch:
         args.force_overwrite_state = True
         args.completed_state_replaced = True
-
-    return args
 
 
 def run_cli(

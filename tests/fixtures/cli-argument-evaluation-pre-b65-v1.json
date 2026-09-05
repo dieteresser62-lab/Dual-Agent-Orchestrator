@@ -1,0 +1,40 @@
+{
+  "schema_version": "cli-argument-evaluation-pre-b65-v1",
+  "source_commit": "fcdcea1dec74ae35c9b5b28593b0b77bf6818c86",
+  "source_path": "src/cli.py",
+  "source_blob": "366d01322ca79a3ba120f3ddb1d66f403f3c7c97",
+  "b64_artifacts": {
+    "tests/test_cli_argument_evaluation_corpus.py": "d8fa84263be144fb92da6f72f4ba04a95dee39f0",
+    "tests/fixtures/cli-argument-evaluation-pre-b64-v1.json": "507f4d9065c95da0939aaf3f1cc4911f255b7f02",
+    "tests/fixtures/cli-argument-evaluation-corpus-v1.json": "659cca0c886eeadebf0a513865efee3e88ac3d64"
+  },
+  "function_size_baseline_path": "tests/fixtures/function-size-baseline-v1.json",
+  "function_size_baseline_pre_blob": "4d23a25bfa81e00f19d5089570284ace36fbb641",
+  "workflow_record_sequence_path": "tests/fixtures/workflow-record-sequence-baseline-v1.json",
+  "workflow_record_sequence_blob": "26fb661c8fa382f90e70fb921e3d950da5cae09b",
+  "post_cut_contract": {
+    "maximum_parse_args_lines": 199,
+    "function_size_entry_removed": true,
+    "caught_call": {
+      "call": "resolve_agent_settings",
+      "catcher": "AgentConfigError"
+    },
+    "helpers": [
+      {
+        "helper": "_resolve_skip_git_check",
+        "catcher": null,
+        "responsibility": "Resolve CLI, environment, watch, and default Git-check precedence."
+      },
+      {
+        "helper": "_resolve_live_stream_channels",
+        "catcher": null,
+        "responsibility": "Resolve live-stream channels and preserve the existing warning fallback."
+      },
+      {
+        "helper": "_resolve_resume_state",
+        "catcher": null,
+        "responsibility": "Project persisted run state into resume and replacement flags."
+      }
+    ]
+  }
+}
