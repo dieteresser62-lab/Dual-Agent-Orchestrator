@@ -1,0 +1,2557 @@
+{
+  "schema_version": "workflow-baseline-runtime-pre-b55-v1",
+  "source_commit": "444f5188200814373b7dfcdee1c114e1a9fda8a0",
+  "source_blob": "1b82c80f9840a2193adb5c3ef241a4ecc08f5b42",
+  "chains": {
+    "empty": [],
+    "identity-prefix": [
+      {
+        "record_type": "run_identity",
+        "logical_id": "run-identity",
+        "idempotency_key": "run-identity",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "task_file": "inbox/baseline.md",
+          "branch": "feature/backlog-followups",
+          "branch_base": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "execution_mode": "IMPLEMENT",
+          "audit_report_path": null
+        }
+      }
+    ],
+    "base-complete": [
+      {
+        "record_type": "run_identity",
+        "logical_id": "run-identity",
+        "idempotency_key": "run-identity",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "task_file": "inbox/baseline.md",
+          "branch": "feature/backlog-followups",
+          "branch_base": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "execution_mode": "IMPLEMENT",
+          "audit_report_path": null
+        }
+      },
+      {
+        "record_type": "workflow_event",
+        "logical_id": "workflow-event-ar1-d000c59bd6c68d3c47fbc5786408e4465c77fd937216647b00136f227d0f8da5",
+        "idempotency_key": "workflow-event:ar1-d000c59bd6c68d3c47fbc5786408e4465c77fd937216647b00136f227d0f8da5",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "event_kind": "run",
+          "work_unit_id": null,
+          "slice_id": "1",
+          "round_number": null,
+          "record_refs": [
+            "ar1-d000c59bd6c68d3c47fbc5786408e4465c77fd937216647b00136f227d0f8da5"
+          ]
+        }
+      },
+      {
+        "record_type": "run_profile",
+        "logical_id": "run-profile",
+        "idempotency_key": "run-profile",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "implementer": {
+            "model": "gpt-5.6-sol",
+            "effort": "medium"
+          },
+          "reviewer": {
+            "model": "sonnet",
+            "effort": "high"
+          },
+          "reducer_version": "structured-v2-schema-2-state-v3-v1"
+        }
+      },
+      {
+        "record_type": "side_effect",
+        "logical_id": "side-effect-ffe0553e669054c224a2416d999cd3e9",
+        "idempotency_key": "side-effect-intent:ffe0553e669054c224a2416d999cd3e9bd74c6a573f4dd9aa35daecfa20b4b94",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "effect_key": "side-effect:ledger:e8f90fa3a2603bd3ad6f30282bf45c64",
+          "effect_class": "ledger",
+          "work_unit_id": "run",
+          "operation": [
+            "structured-v2-side-effect-ledger"
+          ],
+          "phase": "intent",
+          "result": null
+        }
+      },
+      {
+        "record_type": "side_effect",
+        "logical_id": "side-effect-ffe0553e669054c224a2416d999cd3e9",
+        "idempotency_key": "side-effect-result:ffe0553e669054c224a2416d999cd3e9bd74c6a573f4dd9aa35daecfa20b4b94",
+        "revision": 2,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "effect_key": "side-effect:ledger:e8f90fa3a2603bd3ad6f30282bf45c64",
+          "effect_class": "ledger",
+          "work_unit_id": "run",
+          "operation": [
+            "structured-v2-side-effect-ledger"
+          ],
+          "phase": "result",
+          "result": "initialized"
+        }
+      },
+      {
+        "record_type": "workflow_transition",
+        "logical_id": "workflow-transition",
+        "idempotency_key": "workflow-transition:1",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "slice_id": "1",
+          "slice_status": "in_progress",
+          "work_unit_id": "1",
+          "step": "completed",
+          "work_unit_status": "completed"
+        }
+      },
+      {
+        "record_type": "workflow_event",
+        "logical_id": "workflow-event-ar1-37ffc80bac26b08362812711df40fc9fe0fe01b5e6e08b8ebc9e1b28b67d921a",
+        "idempotency_key": "workflow-event:ar1-37ffc80bac26b08362812711df40fc9fe0fe01b5e6e08b8ebc9e1b28b67d921a",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "event_kind": "transition",
+          "work_unit_id": "1",
+          "slice_id": "1",
+          "round_number": null,
+          "record_refs": [
+            "ar1-37ffc80bac26b08362812711df40fc9fe0fe01b5e6e08b8ebc9e1b28b67d921a"
+          ]
+        }
+      },
+      {
+        "record_type": "workflow_transition",
+        "logical_id": "workflow-transition",
+        "idempotency_key": "workflow-transition:2",
+        "revision": 2,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "slice_id": "1",
+          "slice_status": "in_progress",
+          "work_unit_id": "2",
+          "step": "codex_implementation",
+          "work_unit_status": "in_progress"
+        }
+      },
+      {
+        "record_type": "workflow_event",
+        "logical_id": "workflow-event-ar1-33c00ad8f8c9efa55db5cf5477ed79c344f9009bd9de6f21446ce3bbcc5111e0",
+        "idempotency_key": "workflow-event:ar1-33c00ad8f8c9efa55db5cf5477ed79c344f9009bd9de6f21446ce3bbcc5111e0",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "event_kind": "transition",
+          "work_unit_id": "2",
+          "slice_id": "1",
+          "round_number": null,
+          "record_refs": [
+            "ar1-33c00ad8f8c9efa55db5cf5477ed79c344f9009bd9de6f21446ce3bbcc5111e0"
+          ]
+        }
+      },
+      {
+        "record_type": "workflow_policy",
+        "logical_id": "workflow-policy-1",
+        "idempotency_key": "workflow-policy:1:1",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "work_unit_id": "1",
+          "implementer_return_count": 0,
+          "max_implementer_returns": 4
+        }
+      },
+      {
+        "record_type": "workflow_policy",
+        "logical_id": "workflow-policy-2",
+        "idempotency_key": "workflow-policy:2:1",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "work_unit_id": "2",
+          "implementer_return_count": 0,
+          "max_implementer_returns": 4
+        }
+      },
+      {
+        "record_type": "slice_boundary",
+        "logical_id": "slice-boundary-1",
+        "idempotency_key": "slice-boundary:1:1",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "slice_id": "1",
+          "start_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "scope_change_groups": [
+            [
+              "src/baseline.py"
+            ]
+          ],
+          "start_fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        }
+      },
+      {
+        "record_type": "gate_transition",
+        "logical_id": "gate-transition-1",
+        "idempotency_key": "gate-transition:1:1",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "work_unit_id": "1",
+          "gate_status": "clear",
+          "reason": "none",
+          "detail": null,
+          "fingerprint": null,
+          "paths": [],
+          "resume_step": null,
+          "active_test_fingerprint": null,
+          "active_test_paths": []
+        }
+      },
+      {
+        "record_type": "gate_transition",
+        "logical_id": "gate-transition-2",
+        "idempotency_key": "gate-transition:2:1",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "work_unit_id": "2",
+          "gate_status": "clear",
+          "reason": "none",
+          "detail": null,
+          "fingerprint": null,
+          "paths": [],
+          "resume_step": null,
+          "active_test_fingerprint": null,
+          "active_test_paths": []
+        }
+      },
+      {
+        "record_type": "task",
+        "logical_id": "task-contract",
+        "idempotency_key": "task-contract",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "target_branch": "feature/backlog-followups",
+          "scope_paths": [
+            "src/baseline.py"
+          ],
+          "assignment_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "work_plan_path": null
+        }
+      },
+      {
+        "record_type": "work_unit",
+        "logical_id": "work-unit-2",
+        "idempotency_key": "work-unit:2:round:1",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "slice_id": "1",
+          "round_number": 1,
+          "paths": [
+            "src/baseline.py"
+          ],
+          "open_finding_ids": [],
+          "finding_import_record_id": null
+        }
+      }
+    ],
+    "orphan-complete": [
+      {
+        "record_type": "run_identity",
+        "logical_id": "run-identity",
+        "idempotency_key": "run-identity",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "task_file": "inbox/baseline.md",
+          "branch": "feature/backlog-followups",
+          "branch_base": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "execution_mode": "IMPLEMENT",
+          "audit_report_path": null
+        }
+      },
+      {
+        "record_type": "workflow_event",
+        "logical_id": "workflow-event-ar1-3690751003008f20841c5f1d3ed791ac949a34baf4c791b15598651fa42d2838",
+        "idempotency_key": "workflow-event:ar1-3690751003008f20841c5f1d3ed791ac949a34baf4c791b15598651fa42d2838",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "event_kind": "run",
+          "work_unit_id": null,
+          "slice_id": "1",
+          "round_number": null,
+          "record_refs": [
+            "ar1-3690751003008f20841c5f1d3ed791ac949a34baf4c791b15598651fa42d2838"
+          ]
+        }
+      },
+      {
+        "record_type": "run_profile",
+        "logical_id": "run-profile",
+        "idempotency_key": "run-profile",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "implementer": {
+            "model": "gpt-5.6-sol",
+            "effort": "medium"
+          },
+          "reviewer": {
+            "model": "sonnet",
+            "effort": "high"
+          },
+          "reducer_version": "structured-v2-schema-2-state-v3-v1"
+        }
+      },
+      {
+        "record_type": "side_effect",
+        "logical_id": "side-effect-ffe0553e669054c224a2416d999cd3e9",
+        "idempotency_key": "side-effect-intent:ffe0553e669054c224a2416d999cd3e9bd74c6a573f4dd9aa35daecfa20b4b94",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "effect_key": "side-effect:ledger:e8f90fa3a2603bd3ad6f30282bf45c64",
+          "effect_class": "ledger",
+          "work_unit_id": "run",
+          "operation": [
+            "structured-v2-side-effect-ledger"
+          ],
+          "phase": "intent",
+          "result": null
+        }
+      },
+      {
+        "record_type": "side_effect",
+        "logical_id": "side-effect-ffe0553e669054c224a2416d999cd3e9",
+        "idempotency_key": "side-effect-result:ffe0553e669054c224a2416d999cd3e9bd74c6a573f4dd9aa35daecfa20b4b94",
+        "revision": 2,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "effect_key": "side-effect:ledger:e8f90fa3a2603bd3ad6f30282bf45c64",
+          "effect_class": "ledger",
+          "work_unit_id": "run",
+          "operation": [
+            "structured-v2-side-effect-ledger"
+          ],
+          "phase": "result",
+          "result": "initialized"
+        }
+      },
+      {
+        "record_type": "workflow_transition",
+        "logical_id": "workflow-transition",
+        "idempotency_key": "workflow-transition:1",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "slice_id": "2",
+          "slice_status": "pending",
+          "work_unit_id": null,
+          "step": null,
+          "work_unit_status": null
+        }
+      },
+      {
+        "record_type": "workflow_event",
+        "logical_id": "workflow-event-ar1-de0d176fbbe893f3170ff8e76da58060cfc7bca3492ac8b084438abd8daa19ef",
+        "idempotency_key": "workflow-event:ar1-de0d176fbbe893f3170ff8e76da58060cfc7bca3492ac8b084438abd8daa19ef",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "event_kind": "transition",
+          "work_unit_id": null,
+          "slice_id": "2",
+          "round_number": null,
+          "record_refs": [
+            "ar1-de0d176fbbe893f3170ff8e76da58060cfc7bca3492ac8b084438abd8daa19ef"
+          ]
+        }
+      },
+      {
+        "record_type": "workflow_transition",
+        "logical_id": "workflow-transition",
+        "idempotency_key": "workflow-transition:2",
+        "revision": 2,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "slice_id": "1",
+          "slice_status": "in_progress",
+          "work_unit_id": "1",
+          "step": "completed",
+          "work_unit_status": "completed"
+        }
+      },
+      {
+        "record_type": "workflow_event",
+        "logical_id": "workflow-event-ar1-37cd530ed2f2947697a3dbe7677225ac6dbd7e13663731fa8939f6fd8a37af16",
+        "idempotency_key": "workflow-event:ar1-37cd530ed2f2947697a3dbe7677225ac6dbd7e13663731fa8939f6fd8a37af16",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "event_kind": "transition",
+          "work_unit_id": "1",
+          "slice_id": "1",
+          "round_number": null,
+          "record_refs": [
+            "ar1-37cd530ed2f2947697a3dbe7677225ac6dbd7e13663731fa8939f6fd8a37af16"
+          ]
+        }
+      },
+      {
+        "record_type": "workflow_transition",
+        "logical_id": "workflow-transition",
+        "idempotency_key": "workflow-transition:3",
+        "revision": 3,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "slice_id": "1",
+          "slice_status": "in_progress",
+          "work_unit_id": "2",
+          "step": "codex_implementation",
+          "work_unit_status": "in_progress"
+        }
+      },
+      {
+        "record_type": "workflow_event",
+        "logical_id": "workflow-event-ar1-963896171f178acc217ceda7e2b7e35d4424dd8762340121e8366cb1c2f11fc8",
+        "idempotency_key": "workflow-event:ar1-963896171f178acc217ceda7e2b7e35d4424dd8762340121e8366cb1c2f11fc8",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "event_kind": "transition",
+          "work_unit_id": "2",
+          "slice_id": "1",
+          "round_number": null,
+          "record_refs": [
+            "ar1-963896171f178acc217ceda7e2b7e35d4424dd8762340121e8366cb1c2f11fc8"
+          ]
+        }
+      },
+      {
+        "record_type": "workflow_policy",
+        "logical_id": "workflow-policy-1",
+        "idempotency_key": "workflow-policy:1:1",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "work_unit_id": "1",
+          "implementer_return_count": 0,
+          "max_implementer_returns": 4
+        }
+      },
+      {
+        "record_type": "workflow_policy",
+        "logical_id": "workflow-policy-2",
+        "idempotency_key": "workflow-policy:2:1",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "work_unit_id": "2",
+          "implementer_return_count": 0,
+          "max_implementer_returns": 4
+        }
+      },
+      {
+        "record_type": "slice_boundary",
+        "logical_id": "slice-boundary-1",
+        "idempotency_key": "slice-boundary:1:1",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "slice_id": "1",
+          "start_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "scope_change_groups": [
+            [
+              "src/baseline.py"
+            ]
+          ],
+          "start_fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        }
+      },
+      {
+        "record_type": "gate_transition",
+        "logical_id": "gate-transition-1",
+        "idempotency_key": "gate-transition:1:1",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "work_unit_id": "1",
+          "gate_status": "clear",
+          "reason": "none",
+          "detail": null,
+          "fingerprint": null,
+          "paths": [],
+          "resume_step": null,
+          "active_test_fingerprint": null,
+          "active_test_paths": []
+        }
+      },
+      {
+        "record_type": "gate_transition",
+        "logical_id": "gate-transition-2",
+        "idempotency_key": "gate-transition:2:1",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "work_unit_id": "2",
+          "gate_status": "clear",
+          "reason": "none",
+          "detail": null,
+          "fingerprint": null,
+          "paths": [],
+          "resume_step": null,
+          "active_test_fingerprint": null,
+          "active_test_paths": []
+        }
+      },
+      {
+        "record_type": "task",
+        "logical_id": "task-contract",
+        "idempotency_key": "task-contract",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "target_branch": "feature/backlog-followups",
+          "scope_paths": [
+            "src/baseline.py"
+          ],
+          "assignment_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "work_plan_path": null
+        }
+      },
+      {
+        "record_type": "work_unit",
+        "logical_id": "work-unit-2",
+        "idempotency_key": "work-unit:2:round:1",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "slice_id": "1",
+          "round_number": 1,
+          "paths": [
+            "src/baseline.py"
+          ],
+          "open_finding_ids": [],
+          "finding_import_record_id": null
+        }
+      }
+    ],
+    "planned-complete": [
+      {
+        "record_type": "run_identity",
+        "logical_id": "run-identity",
+        "idempotency_key": "run-identity",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "task_file": "inbox/baseline.md",
+          "branch": "feature/backlog-followups",
+          "branch_base": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "execution_mode": "IMPLEMENT",
+          "audit_report_path": null
+        }
+      },
+      {
+        "record_type": "workflow_event",
+        "logical_id": "workflow-event-ar1-8f7eb65b998e5f42865f4d2d98c2680add0d8d98bc5093992ec82c5df085fe4a",
+        "idempotency_key": "workflow-event:ar1-8f7eb65b998e5f42865f4d2d98c2680add0d8d98bc5093992ec82c5df085fe4a",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "event_kind": "run",
+          "work_unit_id": null,
+          "slice_id": "1",
+          "round_number": null,
+          "record_refs": [
+            "ar1-8f7eb65b998e5f42865f4d2d98c2680add0d8d98bc5093992ec82c5df085fe4a"
+          ]
+        }
+      },
+      {
+        "record_type": "run_profile",
+        "logical_id": "run-profile",
+        "idempotency_key": "run-profile",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "implementer": {
+            "model": "gpt-5.6-sol",
+            "effort": "medium"
+          },
+          "reviewer": {
+            "model": "sonnet",
+            "effort": "high"
+          },
+          "reducer_version": "structured-v2-schema-2-state-v3-v1"
+        }
+      },
+      {
+        "record_type": "side_effect",
+        "logical_id": "side-effect-ffe0553e669054c224a2416d999cd3e9",
+        "idempotency_key": "side-effect-intent:ffe0553e669054c224a2416d999cd3e9bd74c6a573f4dd9aa35daecfa20b4b94",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "effect_key": "side-effect:ledger:e8f90fa3a2603bd3ad6f30282bf45c64",
+          "effect_class": "ledger",
+          "work_unit_id": "run",
+          "operation": [
+            "structured-v2-side-effect-ledger"
+          ],
+          "phase": "intent",
+          "result": null
+        }
+      },
+      {
+        "record_type": "side_effect",
+        "logical_id": "side-effect-ffe0553e669054c224a2416d999cd3e9",
+        "idempotency_key": "side-effect-result:ffe0553e669054c224a2416d999cd3e9bd74c6a573f4dd9aa35daecfa20b4b94",
+        "revision": 2,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "effect_key": "side-effect:ledger:e8f90fa3a2603bd3ad6f30282bf45c64",
+          "effect_class": "ledger",
+          "work_unit_id": "run",
+          "operation": [
+            "structured-v2-side-effect-ledger"
+          ],
+          "phase": "result",
+          "result": "initialized"
+        }
+      },
+      {
+        "record_type": "workflow_transition",
+        "logical_id": "workflow-transition",
+        "idempotency_key": "workflow-transition:1",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "slice_id": "1",
+          "slice_status": "in_progress",
+          "work_unit_id": "1",
+          "step": "completed",
+          "work_unit_status": "completed"
+        }
+      },
+      {
+        "record_type": "workflow_event",
+        "logical_id": "workflow-event-ar1-af9fe44103302ba2524c6d108b187fc8e42572e51561ecf5767e90b91049e976",
+        "idempotency_key": "workflow-event:ar1-af9fe44103302ba2524c6d108b187fc8e42572e51561ecf5767e90b91049e976",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "event_kind": "transition",
+          "work_unit_id": "1",
+          "slice_id": "1",
+          "round_number": null,
+          "record_refs": [
+            "ar1-af9fe44103302ba2524c6d108b187fc8e42572e51561ecf5767e90b91049e976"
+          ]
+        }
+      },
+      {
+        "record_type": "workflow_transition",
+        "logical_id": "workflow-transition",
+        "idempotency_key": "workflow-transition:2",
+        "revision": 2,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "slice_id": "1",
+          "slice_status": "in_progress",
+          "work_unit_id": "2",
+          "step": "codex_implementation",
+          "work_unit_status": "in_progress"
+        }
+      },
+      {
+        "record_type": "workflow_event",
+        "logical_id": "workflow-event-ar1-67ad92c71d4aba40579174f529c2f8eacbfd85c9cb6095dc8f8fc6565bfbf9d5",
+        "idempotency_key": "workflow-event:ar1-67ad92c71d4aba40579174f529c2f8eacbfd85c9cb6095dc8f8fc6565bfbf9d5",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "event_kind": "transition",
+          "work_unit_id": "2",
+          "slice_id": "1",
+          "round_number": null,
+          "record_refs": [
+            "ar1-67ad92c71d4aba40579174f529c2f8eacbfd85c9cb6095dc8f8fc6565bfbf9d5"
+          ]
+        }
+      },
+      {
+        "record_type": "workflow_policy",
+        "logical_id": "workflow-policy-1",
+        "idempotency_key": "workflow-policy:1:1",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "work_unit_id": "1",
+          "implementer_return_count": 0,
+          "max_implementer_returns": 4
+        }
+      },
+      {
+        "record_type": "workflow_policy",
+        "logical_id": "workflow-policy-2",
+        "idempotency_key": "workflow-policy:2:1",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "work_unit_id": "2",
+          "implementer_return_count": 0,
+          "max_implementer_returns": 4
+        }
+      },
+      {
+        "record_type": "slice_boundary",
+        "logical_id": "slice-boundary-1",
+        "idempotency_key": "slice-boundary:1:1",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "slice_id": "1",
+          "start_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "scope_change_groups": [
+            [
+              "src/baseline.py"
+            ]
+          ],
+          "start_fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        }
+      },
+      {
+        "record_type": "gate_transition",
+        "logical_id": "gate-transition-1",
+        "idempotency_key": "gate-transition:1:1",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "work_unit_id": "1",
+          "gate_status": "clear",
+          "reason": "none",
+          "detail": null,
+          "fingerprint": null,
+          "paths": [],
+          "resume_step": null,
+          "active_test_fingerprint": null,
+          "active_test_paths": []
+        }
+      },
+      {
+        "record_type": "gate_transition",
+        "logical_id": "gate-transition-2",
+        "idempotency_key": "gate-transition:2:1",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "work_unit_id": "2",
+          "gate_status": "clear",
+          "reason": "none",
+          "detail": null,
+          "fingerprint": null,
+          "paths": [],
+          "resume_step": null,
+          "active_test_fingerprint": null,
+          "active_test_paths": []
+        }
+      },
+      {
+        "record_type": "task",
+        "logical_id": "task-contract",
+        "idempotency_key": "task-contract",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "target_branch": "feature/backlog-followups",
+          "scope_paths": [
+            "src/baseline.py"
+          ],
+          "assignment_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "work_plan_path": "docs/work-plan.md"
+        }
+      },
+      {
+        "record_type": "work_unit",
+        "logical_id": "work-unit-2",
+        "idempotency_key": "work-unit:2:round:1",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "slice_id": "1",
+          "round_number": 1,
+          "paths": [
+            "src/baseline.py"
+          ],
+          "open_finding_ids": [],
+          "finding_import_record_id": null
+        }
+      },
+      {
+        "record_type": "plan",
+        "logical_id": "approved-plan",
+        "idempotency_key": "approved-plan:dddddddddddddddddddddddddddddddddddddddd",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "work_plan_path": "docs/work-plan.md",
+          "approved_plan_commit": "dddddddddddddddddddddddddddddddddddddddd",
+          "slices": [
+            {
+              "slice_id": "1",
+              "summary": "baseline",
+              "paths": [
+                "src/baseline.py"
+              ]
+            }
+          ]
+        }
+      }
+    ],
+    "overlong-base": [
+      {
+        "record_type": "run_identity",
+        "logical_id": "run-identity",
+        "idempotency_key": "run-identity",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "task_file": "inbox/baseline.md",
+          "branch": "feature/backlog-followups",
+          "branch_base": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "execution_mode": "IMPLEMENT",
+          "audit_report_path": null
+        }
+      },
+      {
+        "record_type": "workflow_event",
+        "logical_id": "workflow-event-ar1-d000c59bd6c68d3c47fbc5786408e4465c77fd937216647b00136f227d0f8da5",
+        "idempotency_key": "workflow-event:ar1-d000c59bd6c68d3c47fbc5786408e4465c77fd937216647b00136f227d0f8da5",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "event_kind": "run",
+          "work_unit_id": null,
+          "slice_id": "1",
+          "round_number": null,
+          "record_refs": [
+            "ar1-d000c59bd6c68d3c47fbc5786408e4465c77fd937216647b00136f227d0f8da5"
+          ]
+        }
+      },
+      {
+        "record_type": "run_profile",
+        "logical_id": "run-profile",
+        "idempotency_key": "run-profile",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "implementer": {
+            "model": "gpt-5.6-sol",
+            "effort": "medium"
+          },
+          "reviewer": {
+            "model": "sonnet",
+            "effort": "high"
+          },
+          "reducer_version": "structured-v2-schema-2-state-v3-v1"
+        }
+      },
+      {
+        "record_type": "side_effect",
+        "logical_id": "side-effect-ffe0553e669054c224a2416d999cd3e9",
+        "idempotency_key": "side-effect-intent:ffe0553e669054c224a2416d999cd3e9bd74c6a573f4dd9aa35daecfa20b4b94",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "effect_key": "side-effect:ledger:e8f90fa3a2603bd3ad6f30282bf45c64",
+          "effect_class": "ledger",
+          "work_unit_id": "run",
+          "operation": [
+            "structured-v2-side-effect-ledger"
+          ],
+          "phase": "intent",
+          "result": null
+        }
+      },
+      {
+        "record_type": "side_effect",
+        "logical_id": "side-effect-ffe0553e669054c224a2416d999cd3e9",
+        "idempotency_key": "side-effect-result:ffe0553e669054c224a2416d999cd3e9bd74c6a573f4dd9aa35daecfa20b4b94",
+        "revision": 2,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "effect_key": "side-effect:ledger:e8f90fa3a2603bd3ad6f30282bf45c64",
+          "effect_class": "ledger",
+          "work_unit_id": "run",
+          "operation": [
+            "structured-v2-side-effect-ledger"
+          ],
+          "phase": "result",
+          "result": "initialized"
+        }
+      },
+      {
+        "record_type": "workflow_transition",
+        "logical_id": "workflow-transition",
+        "idempotency_key": "workflow-transition:1",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "slice_id": "1",
+          "slice_status": "in_progress",
+          "work_unit_id": "1",
+          "step": "completed",
+          "work_unit_status": "completed"
+        }
+      },
+      {
+        "record_type": "workflow_event",
+        "logical_id": "workflow-event-ar1-37ffc80bac26b08362812711df40fc9fe0fe01b5e6e08b8ebc9e1b28b67d921a",
+        "idempotency_key": "workflow-event:ar1-37ffc80bac26b08362812711df40fc9fe0fe01b5e6e08b8ebc9e1b28b67d921a",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "event_kind": "transition",
+          "work_unit_id": "1",
+          "slice_id": "1",
+          "round_number": null,
+          "record_refs": [
+            "ar1-37ffc80bac26b08362812711df40fc9fe0fe01b5e6e08b8ebc9e1b28b67d921a"
+          ]
+        }
+      },
+      {
+        "record_type": "workflow_transition",
+        "logical_id": "workflow-transition",
+        "idempotency_key": "workflow-transition:2",
+        "revision": 2,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "slice_id": "1",
+          "slice_status": "in_progress",
+          "work_unit_id": "2",
+          "step": "codex_implementation",
+          "work_unit_status": "in_progress"
+        }
+      },
+      {
+        "record_type": "workflow_event",
+        "logical_id": "workflow-event-ar1-33c00ad8f8c9efa55db5cf5477ed79c344f9009bd9de6f21446ce3bbcc5111e0",
+        "idempotency_key": "workflow-event:ar1-33c00ad8f8c9efa55db5cf5477ed79c344f9009bd9de6f21446ce3bbcc5111e0",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "event_kind": "transition",
+          "work_unit_id": "2",
+          "slice_id": "1",
+          "round_number": null,
+          "record_refs": [
+            "ar1-33c00ad8f8c9efa55db5cf5477ed79c344f9009bd9de6f21446ce3bbcc5111e0"
+          ]
+        }
+      },
+      {
+        "record_type": "workflow_policy",
+        "logical_id": "workflow-policy-1",
+        "idempotency_key": "workflow-policy:1:1",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "work_unit_id": "1",
+          "implementer_return_count": 0,
+          "max_implementer_returns": 4
+        }
+      },
+      {
+        "record_type": "workflow_policy",
+        "logical_id": "workflow-policy-2",
+        "idempotency_key": "workflow-policy:2:1",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "work_unit_id": "2",
+          "implementer_return_count": 0,
+          "max_implementer_returns": 4
+        }
+      },
+      {
+        "record_type": "slice_boundary",
+        "logical_id": "slice-boundary-1",
+        "idempotency_key": "slice-boundary:1:1",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "slice_id": "1",
+          "start_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "scope_change_groups": [
+            [
+              "src/baseline.py"
+            ]
+          ],
+          "start_fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        }
+      },
+      {
+        "record_type": "gate_transition",
+        "logical_id": "gate-transition-1",
+        "idempotency_key": "gate-transition:1:1",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "work_unit_id": "1",
+          "gate_status": "clear",
+          "reason": "none",
+          "detail": null,
+          "fingerprint": null,
+          "paths": [],
+          "resume_step": null,
+          "active_test_fingerprint": null,
+          "active_test_paths": []
+        }
+      },
+      {
+        "record_type": "gate_transition",
+        "logical_id": "gate-transition-2",
+        "idempotency_key": "gate-transition:2:1",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "work_unit_id": "2",
+          "gate_status": "clear",
+          "reason": "none",
+          "detail": null,
+          "fingerprint": null,
+          "paths": [],
+          "resume_step": null,
+          "active_test_fingerprint": null,
+          "active_test_paths": []
+        }
+      },
+      {
+        "record_type": "task",
+        "logical_id": "task-contract",
+        "idempotency_key": "task-contract",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "target_branch": "feature/backlog-followups",
+          "scope_paths": [
+            "src/baseline.py"
+          ],
+          "assignment_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "work_plan_path": null
+        }
+      },
+      {
+        "record_type": "work_unit",
+        "logical_id": "work-unit-2",
+        "idempotency_key": "work-unit:2:round:1",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "slice_id": "1",
+          "round_number": 1,
+          "paths": [
+            "src/baseline.py"
+          ],
+          "open_finding_ids": [],
+          "finding_import_record_id": null
+        }
+      },
+      {
+        "record_type": "work_unit",
+        "logical_id": "work-unit-2",
+        "idempotency_key": "work-unit:2:round:1",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "slice_id": "1",
+          "round_number": 1,
+          "paths": [
+            "src/baseline.py"
+          ],
+          "open_finding_ids": [],
+          "finding_import_record_id": null
+        }
+      }
+    ],
+    "already-active": [
+      {
+        "record_type": "run_identity",
+        "logical_id": "run-identity",
+        "idempotency_key": "run-identity",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "task_file": "inbox/baseline.md",
+          "branch": "feature/backlog-followups",
+          "branch_base": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "execution_mode": "IMPLEMENT",
+          "audit_report_path": null
+        }
+      },
+      {
+        "record_type": "workflow_event",
+        "logical_id": "workflow-event-ar1-3995dac451ff47de673969f3650f974c576b741d93a1328687ce3d6d3b6ed554",
+        "idempotency_key": "workflow-event:ar1-3995dac451ff47de673969f3650f974c576b741d93a1328687ce3d6d3b6ed554",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "event_kind": "run",
+          "work_unit_id": null,
+          "slice_id": "1",
+          "round_number": null,
+          "record_refs": [
+            "ar1-3995dac451ff47de673969f3650f974c576b741d93a1328687ce3d6d3b6ed554"
+          ]
+        }
+      },
+      {
+        "record_type": "run_profile",
+        "logical_id": "run-profile",
+        "idempotency_key": "run-profile",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "implementer": {
+            "model": "gpt-5.6-sol",
+            "effort": "medium"
+          },
+          "reviewer": {
+            "model": "sonnet",
+            "effort": "high"
+          },
+          "reducer_version": "structured-v2-schema-2-state-v3-v1"
+        }
+      },
+      {
+        "record_type": "side_effect",
+        "logical_id": "side-effect-ffe0553e669054c224a2416d999cd3e9",
+        "idempotency_key": "side-effect-intent:ffe0553e669054c224a2416d999cd3e9bd74c6a573f4dd9aa35daecfa20b4b94",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "effect_key": "side-effect:ledger:e8f90fa3a2603bd3ad6f30282bf45c64",
+          "effect_class": "ledger",
+          "work_unit_id": "run",
+          "operation": [
+            "structured-v2-side-effect-ledger"
+          ],
+          "phase": "intent",
+          "result": null
+        }
+      },
+      {
+        "record_type": "side_effect",
+        "logical_id": "side-effect-ffe0553e669054c224a2416d999cd3e9",
+        "idempotency_key": "side-effect-result:ffe0553e669054c224a2416d999cd3e9bd74c6a573f4dd9aa35daecfa20b4b94",
+        "revision": 2,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "effect_key": "side-effect:ledger:e8f90fa3a2603bd3ad6f30282bf45c64",
+          "effect_class": "ledger",
+          "work_unit_id": "run",
+          "operation": [
+            "structured-v2-side-effect-ledger"
+          ],
+          "phase": "result",
+          "result": "initialized"
+        }
+      },
+      {
+        "record_type": "side_effect",
+        "logical_id": "side-effect-fce93a2ea31baf96766e9461dbb4b27f",
+        "idempotency_key": "side-effect-intent:fce93a2ea31baf96766e9461dbb4b27f9796fd971abe6d07ac008ff40e2be8b7",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "effect_key": "side-effect:internal:009a7d714eb3269fc43b2833114d687e",
+          "effect_class": "internal",
+          "work_unit_id": "2",
+          "operation": [
+            "baseline-active-marker"
+          ],
+          "phase": "intent",
+          "result": null
+        }
+      },
+      {
+        "record_type": "side_effect",
+        "logical_id": "side-effect-fce93a2ea31baf96766e9461dbb4b27f",
+        "idempotency_key": "side-effect-result:fce93a2ea31baf96766e9461dbb4b27f9796fd971abe6d07ac008ff40e2be8b7",
+        "revision": 2,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "effect_key": "side-effect:internal:009a7d714eb3269fc43b2833114d687e",
+          "effect_class": "internal",
+          "work_unit_id": "2",
+          "operation": [
+            "baseline-active-marker"
+          ],
+          "phase": "result",
+          "result": "completed"
+        }
+      },
+      {
+        "record_type": "workflow_transition",
+        "logical_id": "workflow-transition",
+        "idempotency_key": "workflow-transition:1",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "slice_id": "1",
+          "slice_status": "in_progress",
+          "work_unit_id": "1",
+          "step": "completed",
+          "work_unit_status": "completed"
+        }
+      },
+      {
+        "record_type": "workflow_event",
+        "logical_id": "workflow-event-ar1-f1afafb3965ce1b5f46dd77a4d3ede35addb557b40863e6dbd111f99aa97c95d",
+        "idempotency_key": "workflow-event:ar1-f1afafb3965ce1b5f46dd77a4d3ede35addb557b40863e6dbd111f99aa97c95d",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "event_kind": "transition",
+          "work_unit_id": "1",
+          "slice_id": "1",
+          "round_number": null,
+          "record_refs": [
+            "ar1-f1afafb3965ce1b5f46dd77a4d3ede35addb557b40863e6dbd111f99aa97c95d"
+          ]
+        }
+      },
+      {
+        "record_type": "workflow_transition",
+        "logical_id": "workflow-transition",
+        "idempotency_key": "workflow-transition:2",
+        "revision": 2,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "slice_id": "1",
+          "slice_status": "in_progress",
+          "work_unit_id": "2",
+          "step": "codex_implementation",
+          "work_unit_status": "in_progress"
+        }
+      },
+      {
+        "record_type": "workflow_event",
+        "logical_id": "workflow-event-ar1-93eb124c18aa7dc5705bfa20a96c76169f7349644d3e4b7f554c63955e2477ac",
+        "idempotency_key": "workflow-event:ar1-93eb124c18aa7dc5705bfa20a96c76169f7349644d3e4b7f554c63955e2477ac",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "event_kind": "transition",
+          "work_unit_id": "2",
+          "slice_id": "1",
+          "round_number": null,
+          "record_refs": [
+            "ar1-93eb124c18aa7dc5705bfa20a96c76169f7349644d3e4b7f554c63955e2477ac"
+          ]
+        }
+      },
+      {
+        "record_type": "workflow_policy",
+        "logical_id": "workflow-policy-1",
+        "idempotency_key": "workflow-policy:1:1",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "work_unit_id": "1",
+          "implementer_return_count": 0,
+          "max_implementer_returns": 4
+        }
+      },
+      {
+        "record_type": "workflow_policy",
+        "logical_id": "workflow-policy-2",
+        "idempotency_key": "workflow-policy:2:1",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "work_unit_id": "2",
+          "implementer_return_count": 0,
+          "max_implementer_returns": 4
+        }
+      },
+      {
+        "record_type": "slice_boundary",
+        "logical_id": "slice-boundary-1",
+        "idempotency_key": "slice-boundary:1:1",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "slice_id": "1",
+          "start_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "scope_change_groups": [
+            [
+              "src/baseline.py"
+            ]
+          ],
+          "start_fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        }
+      },
+      {
+        "record_type": "gate_transition",
+        "logical_id": "gate-transition-1",
+        "idempotency_key": "gate-transition:1:1",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "work_unit_id": "1",
+          "gate_status": "clear",
+          "reason": "none",
+          "detail": null,
+          "fingerprint": null,
+          "paths": [],
+          "resume_step": null,
+          "active_test_fingerprint": null,
+          "active_test_paths": []
+        }
+      },
+      {
+        "record_type": "gate_transition",
+        "logical_id": "gate-transition-2",
+        "idempotency_key": "gate-transition:2:1",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "work_unit_id": "2",
+          "gate_status": "clear",
+          "reason": "none",
+          "detail": null,
+          "fingerprint": null,
+          "paths": [],
+          "resume_step": null,
+          "active_test_fingerprint": null,
+          "active_test_paths": []
+        }
+      },
+      {
+        "record_type": "task",
+        "logical_id": "task-contract",
+        "idempotency_key": "task-contract",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "target_branch": "feature/backlog-followups",
+          "scope_paths": [
+            "src/baseline.py"
+          ],
+          "assignment_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "work_plan_path": null
+        }
+      },
+      {
+        "record_type": "work_unit",
+        "logical_id": "work-unit-2",
+        "idempotency_key": "work-unit:2:round:1",
+        "revision": 1,
+        "fingerprint": {
+          "kind": "contract",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "payload": {
+          "slice_id": "1",
+          "round_number": 1,
+          "paths": [
+            "src/baseline.py"
+          ],
+          "open_finding_ids": [],
+          "finding_import_record_id": null
+        }
+      }
+    ]
+  },
+  "decision_table": [
+    {
+      "scenario_id": "valid-identity-prefix",
+      "target_condition": null,
+      "rationale": "The first canonical domain record is an executable baseline prefix.",
+      "input_state": {
+        "task_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "protocol_binding": {
+          "mode": "structured-v2",
+          "codex_profile": {
+            "model": "gpt-5.6-sol",
+            "effort": "medium"
+          },
+          "claude_profile": {
+            "model": "sonnet",
+            "effort": "high"
+          }
+        },
+        "runtime_history_present": false,
+        "current_work_unit_id": 2,
+        "task_scope_patterns": [
+          "src/baseline.py"
+        ],
+        "work_plan_path": null,
+        "approved_plan_commit": null,
+        "planned_slice_ids": [],
+        "slices": [
+          {
+            "slice_id": 1,
+            "start_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "start_fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          }
+        ],
+        "work_units": [
+          {
+            "work_unit_id": 1,
+            "slice_id": 1,
+            "kind": "plan",
+            "invocation_failures": 0,
+            "completed_side_effects": [],
+            "gate_decisions": 0
+          },
+          {
+            "work_unit_id": 2,
+            "slice_id": 1,
+            "kind": "slice",
+            "invocation_failures": 0,
+            "completed_side_effects": [],
+            "gate_decisions": 0
+          }
+        ]
+      },
+      "reference_chain": "identity-prefix",
+      "input_chain": "identity-prefix",
+      "reference_expected": null,
+      "reference_actual": null,
+      "single_difference": null,
+      "expected": true,
+      "actual": true
+    },
+    {
+      "scenario_id": "valid-complete-baseline",
+      "target_condition": null,
+      "rationale": "The complete canonical pre-work append sequence remains admissible.",
+      "input_state": {
+        "task_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "protocol_binding": {
+          "mode": "structured-v2",
+          "codex_profile": {
+            "model": "gpt-5.6-sol",
+            "effort": "medium"
+          },
+          "claude_profile": {
+            "model": "sonnet",
+            "effort": "high"
+          }
+        },
+        "runtime_history_present": false,
+        "current_work_unit_id": 2,
+        "task_scope_patterns": [
+          "src/baseline.py"
+        ],
+        "work_plan_path": null,
+        "approved_plan_commit": null,
+        "planned_slice_ids": [],
+        "slices": [
+          {
+            "slice_id": 1,
+            "start_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "start_fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          }
+        ],
+        "work_units": [
+          {
+            "work_unit_id": 1,
+            "slice_id": 1,
+            "kind": "plan",
+            "invocation_failures": 0,
+            "completed_side_effects": [],
+            "gate_decisions": 0
+          },
+          {
+            "work_unit_id": 2,
+            "slice_id": 1,
+            "kind": "slice",
+            "invocation_failures": 0,
+            "completed_side_effects": [],
+            "gate_decisions": 0
+          }
+        ]
+      },
+      "reference_chain": "base-complete",
+      "input_chain": "base-complete",
+      "reference_expected": null,
+      "reference_actual": null,
+      "single_difference": null,
+      "expected": true,
+      "actual": true
+    },
+    {
+      "scenario_id": "condition-01-missing-protocol-binding",
+      "target_condition": 1,
+      "rationale": "Only state.protocol_binding differs from the valid identity prefix.",
+      "input_state": {
+        "task_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "protocol_binding": null,
+        "runtime_history_present": false,
+        "current_work_unit_id": 2,
+        "task_scope_patterns": [
+          "src/baseline.py"
+        ],
+        "work_plan_path": null,
+        "approved_plan_commit": null,
+        "planned_slice_ids": [],
+        "slices": [
+          {
+            "slice_id": 1,
+            "start_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "start_fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          }
+        ],
+        "work_units": [
+          {
+            "work_unit_id": 1,
+            "slice_id": 1,
+            "kind": "plan",
+            "invocation_failures": 0,
+            "completed_side_effects": [],
+            "gate_decisions": 0
+          },
+          {
+            "work_unit_id": 2,
+            "slice_id": 1,
+            "kind": "slice",
+            "invocation_failures": 0,
+            "completed_side_effects": [],
+            "gate_decisions": 0
+          }
+        ]
+      },
+      "reference_chain": "identity-prefix",
+      "input_chain": "identity-prefix",
+      "reference_expected": true,
+      "reference_actual": true,
+      "single_difference": {
+        "path": "state.protocol_binding",
+        "reference": {
+          "mode": "structured-v2",
+          "schema_version": "2",
+          "claude_review_transport": "native-claude-review-v2",
+          "codex_result_transport": "native-codex-v2",
+          "codex_profile": {
+            "model": "gpt-5.6-sol",
+            "effort": "medium"
+          },
+          "claude_profile": {
+            "model": "sonnet",
+            "effort": "high"
+          }
+        },
+        "input": null
+      },
+      "expected": false,
+      "actual": false
+    },
+    {
+      "scenario_id": "condition-02-prior-runtime-history",
+      "target_condition": 2,
+      "rationale": "Only runtime_history changes from absent to present.",
+      "input_state": {
+        "task_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "protocol_binding": {
+          "mode": "structured-v2",
+          "codex_profile": {
+            "model": "gpt-5.6-sol",
+            "effort": "medium"
+          },
+          "claude_profile": {
+            "model": "sonnet",
+            "effort": "high"
+          }
+        },
+        "runtime_history_present": true,
+        "current_work_unit_id": 2,
+        "task_scope_patterns": [
+          "src/baseline.py"
+        ],
+        "work_plan_path": null,
+        "approved_plan_commit": null,
+        "planned_slice_ids": [],
+        "slices": [
+          {
+            "slice_id": 1,
+            "start_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "start_fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          }
+        ],
+        "work_units": [
+          {
+            "work_unit_id": 1,
+            "slice_id": 1,
+            "kind": "plan",
+            "invocation_failures": 0,
+            "completed_side_effects": [],
+            "gate_decisions": 0
+          },
+          {
+            "work_unit_id": 2,
+            "slice_id": 1,
+            "kind": "slice",
+            "invocation_failures": 0,
+            "completed_side_effects": [],
+            "gate_decisions": 0
+          }
+        ]
+      },
+      "reference_chain": "identity-prefix",
+      "input_chain": "identity-prefix",
+      "reference_expected": true,
+      "reference_actual": true,
+      "single_difference": {
+        "path": "state.runtime_history",
+        "reference": null,
+        "input": {}
+      },
+      "expected": false,
+      "actual": false
+    },
+    {
+      "scenario_id": "condition-03-empty-domain-prefix",
+      "target_condition": 3,
+      "rationale": "Only the canonical identity record is removed.",
+      "input_state": {
+        "task_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "protocol_binding": {
+          "mode": "structured-v2",
+          "codex_profile": {
+            "model": "gpt-5.6-sol",
+            "effort": "medium"
+          },
+          "claude_profile": {
+            "model": "sonnet",
+            "effort": "high"
+          }
+        },
+        "runtime_history_present": false,
+        "current_work_unit_id": 2,
+        "task_scope_patterns": [
+          "src/baseline.py"
+        ],
+        "work_plan_path": null,
+        "approved_plan_commit": null,
+        "planned_slice_ids": [],
+        "slices": [
+          {
+            "slice_id": 1,
+            "start_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "start_fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          }
+        ],
+        "work_units": [
+          {
+            "work_unit_id": 1,
+            "slice_id": 1,
+            "kind": "plan",
+            "invocation_failures": 0,
+            "completed_side_effects": [],
+            "gate_decisions": 0
+          },
+          {
+            "work_unit_id": 2,
+            "slice_id": 1,
+            "kind": "slice",
+            "invocation_failures": 0,
+            "completed_side_effects": [],
+            "gate_decisions": 0
+          }
+        ]
+      },
+      "reference_chain": "identity-prefix",
+      "input_chain": "empty",
+      "reference_expected": true,
+      "reference_actual": true,
+      "single_difference": {
+        "path": "records.removed_suffix",
+        "reference": [
+          "run_identity"
+        ],
+        "input": []
+      },
+      "expected": false,
+      "actual": false
+    },
+    {
+      "scenario_id": "condition-04-orphan-slice-now-owned",
+      "target_condition": 4,
+      "rationale": "Only the prior work unit slice_id changes, so slice 2 is no longer orphaned.",
+      "input_state": {
+        "task_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "protocol_binding": {
+          "mode": "structured-v2",
+          "codex_profile": {
+            "model": "gpt-5.6-sol",
+            "effort": "medium"
+          },
+          "claude_profile": {
+            "model": "sonnet",
+            "effort": "high"
+          }
+        },
+        "runtime_history_present": false,
+        "current_work_unit_id": 2,
+        "task_scope_patterns": [
+          "src/baseline.py"
+        ],
+        "work_plan_path": null,
+        "approved_plan_commit": null,
+        "planned_slice_ids": [],
+        "slices": [
+          {
+            "slice_id": 1,
+            "start_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "start_fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          },
+          {
+            "slice_id": 2,
+            "start_commit": null,
+            "start_fingerprint": null
+          }
+        ],
+        "work_units": [
+          {
+            "work_unit_id": 1,
+            "slice_id": 2,
+            "kind": "plan",
+            "invocation_failures": 0,
+            "completed_side_effects": [],
+            "gate_decisions": 0
+          },
+          {
+            "work_unit_id": 2,
+            "slice_id": 1,
+            "kind": "slice",
+            "invocation_failures": 0,
+            "completed_side_effects": [],
+            "gate_decisions": 0
+          }
+        ]
+      },
+      "reference_chain": "orphan-complete",
+      "input_chain": "orphan-complete",
+      "reference_expected": true,
+      "reference_actual": true,
+      "single_difference": {
+        "path": "state.work_units[0].slice_id",
+        "reference": 1,
+        "input": 2
+      },
+      "expected": false,
+      "actual": false
+    },
+    {
+      "scenario_id": "condition-05-current-unit-selection",
+      "target_condition": 5,
+      "rationale": "Only current_work_unit_id changes, reversing the skipped unit.",
+      "input_state": {
+        "task_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "protocol_binding": {
+          "mode": "structured-v2",
+          "codex_profile": {
+            "model": "gpt-5.6-sol",
+            "effort": "medium"
+          },
+          "claude_profile": {
+            "model": "sonnet",
+            "effort": "high"
+          }
+        },
+        "runtime_history_present": false,
+        "current_work_unit_id": 1,
+        "task_scope_patterns": [
+          "src/baseline.py"
+        ],
+        "work_plan_path": null,
+        "approved_plan_commit": null,
+        "planned_slice_ids": [],
+        "slices": [
+          {
+            "slice_id": 1,
+            "start_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "start_fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          }
+        ],
+        "work_units": [
+          {
+            "work_unit_id": 1,
+            "slice_id": 1,
+            "kind": "plan",
+            "invocation_failures": 0,
+            "completed_side_effects": [],
+            "gate_decisions": 0
+          },
+          {
+            "work_unit_id": 2,
+            "slice_id": 1,
+            "kind": "slice",
+            "invocation_failures": 0,
+            "completed_side_effects": [],
+            "gate_decisions": 0
+          }
+        ]
+      },
+      "reference_chain": "base-complete",
+      "input_chain": "base-complete",
+      "reference_expected": true,
+      "reference_actual": true,
+      "single_difference": {
+        "path": "state.current_work_unit_id",
+        "reference": 2,
+        "input": 1
+      },
+      "expected": false,
+      "actual": false
+    },
+    {
+      "scenario_id": "condition-06-missing-slice-start-commit",
+      "target_condition": 6,
+      "rationale": "Only the bound Slice start_commit is removed.",
+      "input_state": {
+        "task_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "protocol_binding": {
+          "mode": "structured-v2",
+          "codex_profile": {
+            "model": "gpt-5.6-sol",
+            "effort": "medium"
+          },
+          "claude_profile": {
+            "model": "sonnet",
+            "effort": "high"
+          }
+        },
+        "runtime_history_present": false,
+        "current_work_unit_id": 2,
+        "task_scope_patterns": [
+          "src/baseline.py"
+        ],
+        "work_plan_path": null,
+        "approved_plan_commit": null,
+        "planned_slice_ids": [],
+        "slices": [
+          {
+            "slice_id": 1,
+            "start_commit": null,
+            "start_fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          }
+        ],
+        "work_units": [
+          {
+            "work_unit_id": 1,
+            "slice_id": 1,
+            "kind": "plan",
+            "invocation_failures": 0,
+            "completed_side_effects": [],
+            "gate_decisions": 0
+          },
+          {
+            "work_unit_id": 2,
+            "slice_id": 1,
+            "kind": "slice",
+            "invocation_failures": 0,
+            "completed_side_effects": [],
+            "gate_decisions": 0
+          }
+        ]
+      },
+      "reference_chain": "base-complete",
+      "input_chain": "base-complete",
+      "reference_expected": true,
+      "reference_actual": true,
+      "single_difference": {
+        "path": "state.slices[0].start_commit",
+        "reference": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "input": null
+      },
+      "expected": false,
+      "actual": false
+    },
+    {
+      "scenario_id": "condition-07-task-scope-disabled",
+      "target_condition": 7,
+      "rationale": "Only task_scope_patterns changes, suppressing the task-contract expectation.",
+      "input_state": {
+        "task_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "protocol_binding": {
+          "mode": "structured-v2",
+          "codex_profile": {
+            "model": "gpt-5.6-sol",
+            "effort": "medium"
+          },
+          "claude_profile": {
+            "model": "sonnet",
+            "effort": "high"
+          }
+        },
+        "runtime_history_present": false,
+        "current_work_unit_id": 2,
+        "task_scope_patterns": [],
+        "work_plan_path": null,
+        "approved_plan_commit": null,
+        "planned_slice_ids": [],
+        "slices": [
+          {
+            "slice_id": 1,
+            "start_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "start_fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          }
+        ],
+        "work_units": [
+          {
+            "work_unit_id": 1,
+            "slice_id": 1,
+            "kind": "plan",
+            "invocation_failures": 0,
+            "completed_side_effects": [],
+            "gate_decisions": 0
+          },
+          {
+            "work_unit_id": 2,
+            "slice_id": 1,
+            "kind": "slice",
+            "invocation_failures": 0,
+            "completed_side_effects": [],
+            "gate_decisions": 0
+          }
+        ]
+      },
+      "reference_chain": "base-complete",
+      "input_chain": "base-complete",
+      "reference_expected": true,
+      "reference_actual": true,
+      "single_difference": {
+        "path": "state.task_scope_patterns.length",
+        "reference": 1,
+        "input": 0
+      },
+      "expected": false,
+      "actual": false
+    },
+    {
+      "scenario_id": "condition-08-current-unit-kind-plan",
+      "target_condition": 8,
+      "rationale": "Only the current work-unit kind changes from Slice to Plan.",
+      "input_state": {
+        "task_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "protocol_binding": {
+          "mode": "structured-v2",
+          "codex_profile": {
+            "model": "gpt-5.6-sol",
+            "effort": "medium"
+          },
+          "claude_profile": {
+            "model": "sonnet",
+            "effort": "high"
+          }
+        },
+        "runtime_history_present": false,
+        "current_work_unit_id": 2,
+        "task_scope_patterns": [
+          "src/baseline.py"
+        ],
+        "work_plan_path": null,
+        "approved_plan_commit": null,
+        "planned_slice_ids": [],
+        "slices": [
+          {
+            "slice_id": 1,
+            "start_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "start_fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          }
+        ],
+        "work_units": [
+          {
+            "work_unit_id": 1,
+            "slice_id": 1,
+            "kind": "plan",
+            "invocation_failures": 0,
+            "completed_side_effects": [],
+            "gate_decisions": 0
+          },
+          {
+            "work_unit_id": 2,
+            "slice_id": 1,
+            "kind": "plan",
+            "invocation_failures": 0,
+            "completed_side_effects": [],
+            "gate_decisions": 0
+          }
+        ]
+      },
+      "reference_chain": "base-complete",
+      "input_chain": "base-complete",
+      "reference_expected": true,
+      "reference_actual": true,
+      "single_difference": {
+        "path": "state.work_units[1].kind",
+        "reference": "slice",
+        "input": "plan"
+      },
+      "expected": false,
+      "actual": false
+    },
+    {
+      "scenario_id": "condition-09-approved-plan-commit-missing",
+      "target_condition": 9,
+      "rationale": "Only approved_plan_commit is removed from an otherwise bound plan.",
+      "input_state": {
+        "task_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "protocol_binding": {
+          "mode": "structured-v2",
+          "codex_profile": {
+            "model": "gpt-5.6-sol",
+            "effort": "medium"
+          },
+          "claude_profile": {
+            "model": "sonnet",
+            "effort": "high"
+          }
+        },
+        "runtime_history_present": false,
+        "current_work_unit_id": 2,
+        "task_scope_patterns": [
+          "src/baseline.py"
+        ],
+        "work_plan_path": "docs/work-plan.md",
+        "approved_plan_commit": null,
+        "planned_slice_ids": [
+          1
+        ],
+        "slices": [
+          {
+            "slice_id": 1,
+            "start_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "start_fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          }
+        ],
+        "work_units": [
+          {
+            "work_unit_id": 1,
+            "slice_id": 1,
+            "kind": "plan",
+            "invocation_failures": 0,
+            "completed_side_effects": [],
+            "gate_decisions": 0
+          },
+          {
+            "work_unit_id": 2,
+            "slice_id": 1,
+            "kind": "slice",
+            "invocation_failures": 0,
+            "completed_side_effects": [],
+            "gate_decisions": 0
+          }
+        ]
+      },
+      "reference_chain": "planned-complete",
+      "input_chain": "planned-complete",
+      "reference_expected": true,
+      "reference_actual": true,
+      "single_difference": {
+        "path": "state.approved_plan_commit",
+        "reference": "dddddddddddddddddddddddddddddddddddddddd",
+        "input": null
+      },
+      "expected": false,
+      "actual": false
+    },
+    {
+      "scenario_id": "condition-10-overlong-prefix",
+      "target_condition": 10,
+      "rationale": "Only one record is appended beyond the complete canonical baseline.",
+      "input_state": {
+        "task_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "protocol_binding": {
+          "mode": "structured-v2",
+          "codex_profile": {
+            "model": "gpt-5.6-sol",
+            "effort": "medium"
+          },
+          "claude_profile": {
+            "model": "sonnet",
+            "effort": "high"
+          }
+        },
+        "runtime_history_present": false,
+        "current_work_unit_id": 2,
+        "task_scope_patterns": [
+          "src/baseline.py"
+        ],
+        "work_plan_path": null,
+        "approved_plan_commit": null,
+        "planned_slice_ids": [],
+        "slices": [
+          {
+            "slice_id": 1,
+            "start_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "start_fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          }
+        ],
+        "work_units": [
+          {
+            "work_unit_id": 1,
+            "slice_id": 1,
+            "kind": "plan",
+            "invocation_failures": 0,
+            "completed_side_effects": [],
+            "gate_decisions": 0
+          },
+          {
+            "work_unit_id": 2,
+            "slice_id": 1,
+            "kind": "slice",
+            "invocation_failures": 0,
+            "completed_side_effects": [],
+            "gate_decisions": 0
+          }
+        ]
+      },
+      "reference_chain": "base-complete",
+      "input_chain": "overlong-base",
+      "reference_expected": true,
+      "reference_actual": true,
+      "single_difference": {
+        "path": "records.added_suffix",
+        "reference": [],
+        "input": [
+          "work_unit"
+        ]
+      },
+      "expected": false,
+      "actual": false
+    },
+    {
+      "scenario_id": "already-active-chain",
+      "target_condition": null,
+      "rationale": "A completed non-ledger internal side effect makes the chain active.",
+      "input_state": {
+        "task_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "protocol_binding": {
+          "mode": "structured-v2",
+          "codex_profile": {
+            "model": "gpt-5.6-sol",
+            "effort": "medium"
+          },
+          "claude_profile": {
+            "model": "sonnet",
+            "effort": "high"
+          }
+        },
+        "runtime_history_present": false,
+        "current_work_unit_id": 2,
+        "task_scope_patterns": [
+          "src/baseline.py"
+        ],
+        "work_plan_path": null,
+        "approved_plan_commit": null,
+        "planned_slice_ids": [],
+        "slices": [
+          {
+            "slice_id": 1,
+            "start_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "start_fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          }
+        ],
+        "work_units": [
+          {
+            "work_unit_id": 1,
+            "slice_id": 1,
+            "kind": "plan",
+            "invocation_failures": 0,
+            "completed_side_effects": [],
+            "gate_decisions": 0
+          },
+          {
+            "work_unit_id": 2,
+            "slice_id": 1,
+            "kind": "slice",
+            "invocation_failures": 0,
+            "completed_side_effects": [
+              "baseline-active-marker"
+            ],
+            "gate_decisions": 0
+          }
+        ]
+      },
+      "reference_chain": "already-active",
+      "input_chain": "already-active",
+      "reference_expected": null,
+      "reference_actual": null,
+      "single_difference": null,
+      "expected": false,
+      "actual": false
+    }
+  ],
+  "unreachable_conditions": [],
+  "persistence_aborts": [
+    {
+      "scenario_id": "missing-protocol-binding",
+      "outcome": "raised",
+      "error_type": "WorkflowExecutionError",
+      "message": "structured baseline requires the immutable protocol binding"
+    },
+    {
+      "scenario_id": "artifact-replay-rejected",
+      "outcome": "raised",
+      "error_type": "ArtifactReplayError",
+      "message": "RECORD-MISSING: B55 injected replay rejection"
+    },
+    {
+      "scenario_id": "artifact-resume-rejected",
+      "outcome": "raised",
+      "error_type": "ArtifactResumeError",
+      "message": "RECORD-MISSING: B55 injected resume rejection"
+    }
+  ],
+  "persistence_success": {
+    "written_records": [
+      {
+        "record_type": "run_identity",
+        "record_id": "ar1-d000c59bd6c68d3c47fbc5786408e4465c77fd937216647b00136f227d0f8da5"
+      },
+      {
+        "record_type": "workflow_event",
+        "record_id": "ar1-1ec663965aeb11f3ffb4d11b514c95fb011e01b120e4192727f3a1d778668bb2"
+      },
+      {
+        "record_type": "run_profile",
+        "record_id": "ar1-2304e422ed4ac14bc7e92f8f6fcd42fd8efe89fe8134b0a3631c8da4dd430954"
+      },
+      {
+        "record_type": "side_effect",
+        "record_id": "ar1-29e24362459ee0e18c1dd63c8243939c36070fcd4de9a106e2b91f7a509a5740"
+      },
+      {
+        "record_type": "side_effect",
+        "record_id": "ar1-4772c71444d0d9c159ccba34befa9b3b99e5edecfe9b9523a27ab085cfab7160"
+      },
+      {
+        "record_type": "workflow_transition",
+        "record_id": "ar1-37ffc80bac26b08362812711df40fc9fe0fe01b5e6e08b8ebc9e1b28b67d921a"
+      },
+      {
+        "record_type": "workflow_event",
+        "record_id": "ar1-6da1aa624204cf97214d3fd1d005c77f62f870e7b39c3df0d79c9f48ab3d2f85"
+      },
+      {
+        "record_type": "workflow_transition",
+        "record_id": "ar1-33c00ad8f8c9efa55db5cf5477ed79c344f9009bd9de6f21446ce3bbcc5111e0"
+      },
+      {
+        "record_type": "workflow_event",
+        "record_id": "ar1-a9a64f8def6b2f03787ed59e1059d28197390a4b16476db57df2deb81a9987d0"
+      },
+      {
+        "record_type": "workflow_policy",
+        "record_id": "ar1-94c69ffd7f81d1cc190051191785e8fdfc7b676c4b12a4abb8c5bffcd79e3da4"
+      },
+      {
+        "record_type": "workflow_policy",
+        "record_id": "ar1-406e406a432610fe1d1a21beb8df76e9a259d2d2519a2fd55925846176229fff"
+      },
+      {
+        "record_type": "slice_boundary",
+        "record_id": "ar1-7c857cd99f6be36ed24ba2fef6b83a557981682e2393d701e1d30a03aabe25f6"
+      },
+      {
+        "record_type": "gate_transition",
+        "record_id": "ar1-9ebc33b5fd818f3aa02142e5a7067341220e8aca16f21e1a9a12c2fdb4a58a56"
+      },
+      {
+        "record_type": "gate_transition",
+        "record_id": "ar1-efa66469112559075033dc2f82762baabee8befa1cd30c138f47fc849969cb9d"
+      },
+      {
+        "record_type": "task",
+        "record_id": "ar1-1807364ba9bbd5aa6352f1bc6335d5525015e06b9e934d9ea04d17f6e57d8ff8"
+      },
+      {
+        "record_type": "work_unit",
+        "record_id": "ar1-87906758079893a85ac922d12176d09fa749ec8a67d3d471d8fec6ce4aad5ee6"
+      }
+    ]
+  }
+}

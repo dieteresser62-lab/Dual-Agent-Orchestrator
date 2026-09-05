@@ -1,0 +1,295 @@
+{
+  "schema_version": "workflow-baseline-static-pre-b55-v1",
+  "source_commit": "444f5188200814373b7dfcdee1c114e1a9fda8a0",
+  "source_blob": "1b82c80f9840a2193adb5c3ef241a4ecc08f5b42",
+  "functions": [
+    {
+      "function": "matches_baseline_initialization_prefix",
+      "line_count": 288,
+      "conditions": [
+        {
+          "ordinal": 1,
+          "expression": "binding is None or state.task_digest is None",
+          "read_names": [
+            "binding",
+            "state"
+          ]
+        },
+        {
+          "ordinal": 2,
+          "expression": "state.runtime_history is not None or any((unit.invocation_failures or unit.completed_side_effects or unit.gate_decisions for unit in state.work_units))",
+          "read_names": [
+            "any",
+            "state",
+            "unit"
+          ]
+        },
+        {
+          "ordinal": 3,
+          "expression": "not prefix",
+          "read_names": [
+            "prefix"
+          ]
+        },
+        {
+          "ordinal": 4,
+          "expression": "slice_id not in unit_slice_ids",
+          "read_names": [
+            "slice_id",
+            "unit_slice_ids"
+          ]
+        },
+        {
+          "ordinal": 5,
+          "expression": "work_unit_id == current_unit_id",
+          "read_names": [
+            "current_unit_id",
+            "work_unit_id"
+          ]
+        },
+        {
+          "ordinal": 6,
+          "expression": "item.start_commit is None or item.start_fingerprint is None",
+          "read_names": [
+            "item"
+          ]
+        },
+        {
+          "ordinal": 7,
+          "expression": "state.task_scope_patterns",
+          "read_names": [
+            "state"
+          ]
+        },
+        {
+          "ordinal": 8,
+          "expression": "current.kind is not WorkUnitKind.PLAN and state.current_slice.scope_paths",
+          "read_names": [
+            "WorkUnitKind",
+            "current",
+            "state"
+          ]
+        },
+        {
+          "ordinal": 9,
+          "expression": "state.work_plan_path is not None and state.planned_slices and (state.approved_plan_commit is not None)",
+          "read_names": [
+            "state"
+          ]
+        },
+        {
+          "ordinal": 10,
+          "expression": "len(prefix) > len(expectations)",
+          "read_names": [
+            "expectations",
+            "len",
+            "prefix"
+          ]
+        }
+      ],
+      "returns": [
+        {
+          "ordinal": 1,
+          "expression": "False"
+        },
+        {
+          "ordinal": 2,
+          "expression": "False"
+        },
+        {
+          "ordinal": 3,
+          "expression": "False"
+        },
+        {
+          "ordinal": 4,
+          "expression": "False"
+        },
+        {
+          "ordinal": 5,
+          "expression": "all((record.payload == payload and record.logical_id == logical_id and (record.idempotency_key == idempotency_key) and (record.revision == revision) and (record.fingerprint.sha256 == state.task_digest) and (record.fingerprint.kind is FingerprintKind.CONTRACT) for record, (payload, logical_id, idempotency_key, revision) in zip(prefix, expectations[:len(prefix)], strict=True)))"
+        }
+      ],
+      "aborts": [],
+      "catchers": []
+    },
+    {
+      "function": "WorkflowBaseline._persist_structured_baseline",
+      "line_count": 237,
+      "conditions": [
+        {
+          "ordinal": 1,
+          "expression": "bridge is None or state.task_digest is None",
+          "read_names": [
+            "bridge",
+            "state"
+          ]
+        },
+        {
+          "ordinal": 2,
+          "expression": "binding is None",
+          "read_names": [
+            "binding"
+          ]
+        },
+        {
+          "ordinal": 3,
+          "expression": "existing_chain",
+          "read_names": [
+            "existing_chain"
+          ]
+        },
+        {
+          "ordinal": 4,
+          "expression": "not matches_baseline_initialization_prefix(existing_chain, state)",
+          "read_names": [
+            "existing_chain",
+            "matches_baseline_initialization_prefix",
+            "state"
+          ]
+        },
+        {
+          "ordinal": 5,
+          "expression": "existing_replay is None",
+          "read_names": [
+            "existing_replay"
+          ]
+        },
+        {
+          "ordinal": 6,
+          "expression": "existing_replay.pending_workflow_event_record_id is not None",
+          "read_names": [
+            "existing_replay"
+          ]
+        },
+        {
+          "ordinal": 7,
+          "expression": "existing_replay is not None",
+          "read_names": [
+            "existing_replay"
+          ]
+        },
+        {
+          "ordinal": 8,
+          "expression": "existing_replay is not None and existing_replay.pending_review_record_id is not None",
+          "read_names": [
+            "existing_replay"
+          ]
+        },
+        {
+          "ordinal": 9,
+          "expression": "existing_replay is not None and (not import_only_prefix)",
+          "read_names": [
+            "existing_replay",
+            "import_only_prefix"
+          ]
+        },
+        {
+          "ordinal": 10,
+          "expression": "not matches_baseline_initialization_prefix(existing_replay.records, state)",
+          "read_names": [
+            "existing_replay",
+            "matches_baseline_initialization_prefix",
+            "state"
+          ]
+        },
+        {
+          "ordinal": 11,
+          "expression": "ledger_key not in completed_effect_keys",
+          "read_names": [
+            "completed_effect_keys",
+            "ledger_key"
+          ]
+        },
+        {
+          "ordinal": 12,
+          "expression": "existing_replay is not None",
+          "read_names": [
+            "existing_replay"
+          ]
+        },
+        {
+          "ordinal": 13,
+          "expression": "marker.startswith('side-effect:')",
+          "read_names": [
+            "marker"
+          ]
+        },
+        {
+          "ordinal": 14,
+          "expression": "stable_side_effect_key('internal', str(work_unit.work_unit_id), operation) in completed_effect_keys",
+          "read_names": [
+            "completed_effect_keys",
+            "operation",
+            "stable_side_effect_key",
+            "str",
+            "work_unit"
+          ]
+        },
+        {
+          "ordinal": 15,
+          "expression": "state.task_scope_patterns",
+          "read_names": [
+            "state"
+          ]
+        },
+        {
+          "ordinal": 16,
+          "expression": "unit.kind is not WorkUnitKind.PLAN and state.current_slice.scope_paths",
+          "read_names": [
+            "WorkUnitKind",
+            "state",
+            "unit"
+          ]
+        },
+        {
+          "ordinal": 17,
+          "expression": "prior is None or prior.payload != work_unit_payload",
+          "read_names": [
+            "prior",
+            "work_unit_payload"
+          ]
+        }
+      ],
+      "returns": [
+        {
+          "ordinal": 1,
+          "expression": "None"
+        },
+        {
+          "ordinal": 2,
+          "expression": "None"
+        }
+      ],
+      "aborts": [
+        {
+          "ordinal": 1,
+          "exception_type": "WorkflowExecutionError",
+          "message": "'structured baseline requires the immutable protocol binding'",
+          "source_expression": "raise WorkflowExecutionError('structured baseline requires the immutable protocol binding')"
+        },
+        {
+          "ordinal": 2,
+          "exception_type": "ArtifactReplayError",
+          "message": "re-raise caught exception unchanged",
+          "source_expression": "raise"
+        },
+        {
+          "ordinal": 3,
+          "exception_type": "ArtifactResumeError",
+          "message": "re-raise caught exception unchanged",
+          "source_expression": "raise"
+        }
+      ],
+      "catchers": [
+        {
+          "ordinal": 1,
+          "exception_type": "ArtifactReplayError"
+        },
+        {
+          "ordinal": 2,
+          "exception_type": "ArtifactResumeError"
+        }
+      ]
+    }
+  ]
+}
