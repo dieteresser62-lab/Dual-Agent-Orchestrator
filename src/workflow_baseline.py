@@ -70,6 +70,7 @@ from workflow_persistence import WorkflowPersistence
 from workflow_recovery import WorkflowRecovery
 from workflow_state import (
     BootstrapCheckFact,
+    ProtocolBinding,
     WorkflowState,
     WorkUnitKind,
     WorkUnitRecord,
@@ -95,51 +96,11 @@ def gate_transition_payload(unit: WorkUnitRecord) -> GateTransitionPayload:
     )
 
 
-def matches_baseline_initialization_prefix(
-    records: tuple[ArtifactRecord, ...], state: WorkflowState
-) -> bool:
-    """Recognize every exact cut of the canonical pre-work append sequence.
-
-    This is the protocol grammar for resolution A in S5b.  The expected
-    sequence is derived independently from the immutable state input and
-    covers identity/profile, the ledger initializer, initial workflow and
-    gate projections, task/work-unit facts, and an optional approved-plan
-    handoff.  A non-prefix fact or any previously completed non-ledger effect
-    therefore keeps the ordinary fail-closed resume behavior.
-    """
-
-    binding = state.protocol_binding
-    if binding is None or state.task_digest is None:
-        return False
-    if state.runtime_history is not None or any(
-        unit.invocation_failures
-        or unit.completed_side_effects
-        or unit.gate_decisions
-        for unit in state.work_units
-    ):
-        return False
-    first_domain = next(
-        (
-            index
-            for index, record in enumerate(records)
-            if not isinstance(record.payload, FindingHandoffImportPayload)
-        ),
-        len(records),
-    )
-    prefix = records[first_domain:]
-    if not prefix:
-        return False
-
-    expectations: list[tuple[object, str, str, int]] = []
-
-    def expect(
-        payload: object,
-        logical_id: str,
-        idempotency_key: str,
-        revision: int = 1,
-    ) -> None:
-        expectations.append((payload, logical_id, idempotency_key, revision))
-
+def _append_baseline_identity_expectations(
+    state: WorkflowState,
+    binding: ProtocolBinding,
+    expect: Callable[..., None],
+) -> None:
     expected_identity = RunIdentityPayload(
         task_file=state.task_file,
         branch=state.branch,
@@ -199,6 +160,11 @@ def matches_baseline_initialization_prefix(
         2,
     )
 
+
+def _append_baseline_transition_expectations(
+    state: WorkflowState,
+    expect: Callable[..., None],
+) -> WorkUnitRecord:
     transition_revision = 0
 
     def expect_transition(payload: WorkflowTransitionPayload) -> None:
@@ -296,6 +262,17 @@ def matches_baseline_initialization_prefix(
             f"gate-transition-{payload.work_unit_id}",
             f"gate-transition:{payload.work_unit_id}:1",
         )
+
+    return current
+
+
+def _append_baseline_contract_expectations(
+    records: tuple[ArtifactRecord, ...],
+    state: WorkflowState,
+    first_domain: int,
+    current: WorkUnitRecord,
+    expect: Callable[..., None],
+) -> None:
     if state.task_scope_patterns:
         expect(
             TaskPayload(
@@ -355,6 +332,58 @@ def matches_baseline_initialization_prefix(
             f"{'correction-' if current.kind is WorkUnitKind.CORRECTION else ''}"
             f"work-unit:{current.work_unit_id}:round:{current.round_number}",
         )
+
+
+def matches_baseline_initialization_prefix(
+    records: tuple[ArtifactRecord, ...], state: WorkflowState
+) -> bool:
+    """Recognize every exact cut of the canonical pre-work append sequence.
+
+    This is the protocol grammar for resolution A in S5b.  The expected
+    sequence is derived independently from the immutable state input and
+    covers identity/profile, the ledger initializer, initial workflow and
+    gate projections, task/work-unit facts, and an optional approved-plan
+    handoff.  A non-prefix fact or any previously completed non-ledger effect
+    therefore keeps the ordinary fail-closed resume behavior.
+    """
+
+    binding = state.protocol_binding
+    if binding is None or state.task_digest is None:
+        return False
+    if state.runtime_history is not None or any(
+        unit.invocation_failures
+        or unit.completed_side_effects
+        or unit.gate_decisions
+        for unit in state.work_units
+    ):
+        return False
+    first_domain = next(
+        (
+            index
+            for index, record in enumerate(records)
+            if not isinstance(record.payload, FindingHandoffImportPayload)
+        ),
+        len(records),
+    )
+    prefix = records[first_domain:]
+    if not prefix:
+        return False
+
+    expectations: list[tuple[object, str, str, int]] = []
+
+    def expect(
+        payload: object,
+        logical_id: str,
+        idempotency_key: str,
+        revision: int = 1,
+    ) -> None:
+        expectations.append((payload, logical_id, idempotency_key, revision))
+
+    _append_baseline_identity_expectations(state, binding, expect)
+    current = _append_baseline_transition_expectations(state, expect)
+    _append_baseline_contract_expectations(
+        records, state, first_domain, current, expect
+    )
     if (
         state.work_plan_path is not None
         and state.planned_slices
@@ -441,71 +470,34 @@ class WorkflowBaseline:
     def __init__(self, dependencies: WorkflowBaselineDependencies) -> None:
         self._dependencies = dependencies
 
-    def _persist_structured_baseline(self, state: WorkflowState) -> None:
-        bridge = self._dependencies.artifact_bridge()
-        if bridge is None or state.task_digest is None:
-            return
-        contract_fingerprint = state.task_digest
-        binding = state.protocol_binding
-        if binding is None:
-            raise WorkflowExecutionError(
-                "structured baseline requires the immutable protocol binding"
-            )
-        existing_chain = bridge.store.load_chain()
-        existing_replay = None
-        if existing_chain:
-            import_only_prefix = all(
-                isinstance(record.payload, FindingHandoffImportPayload)
-                for record in existing_chain
-            )
-            try:
-                existing_replay = replay_artifacts(
-                    existing_chain,
-                    state.run_id,
-                    allow_incomplete_review_tail=True,
-                    allow_finding_import_bootstrap=import_only_prefix,
-                )
-            except ArtifactReplayError:
-                if not matches_baseline_initialization_prefix(
-                    existing_chain, state
-                ):
-                    raise
-                existing_replay = None
-            if existing_replay is None:
-                # The raw chain is an exact early initializer cut which cannot
-                # yet satisfy the general replay minimum (for example identity
-                # plus its event but no profile).  The idempotent appends below
-                # complete it before any projection reader or external effect.
-                pass
-            elif existing_replay.pending_workflow_event_record_id is not None:
-                self._dependencies.reconcile_pending_workflow_event(existing_replay)
-                existing_replay = replay_artifacts(
-                    bridge.store.load_chain(),
-                    state.run_id,
-                    allow_incomplete_review_tail=True,
-                    allow_finding_import_bootstrap=import_only_prefix,
-                )
-            if existing_replay is not None:
-                require_workflow_event_prefix(existing_replay)
-            if (
-                existing_replay is not None
-                and existing_replay.pending_review_record_id is not None
-            ):
-                # The reviewer recovery path is the only writer allowed to
-                # complete this exact append tail.  Appending baseline facts
-                # here would turn the recoverable suffix into a chain-middle
-                # authority gap.
-                return
-            if existing_replay is not None and not import_only_prefix:
-                try:
-                    require_workflow_status_prefix(existing_replay)
-                    require_gate_prefix(existing_replay)
-                    require_side_effect_ledger_prefix(existing_replay)
-                except ArtifactResumeError:
-                    if not matches_baseline_initialization_prefix(
-                        existing_replay.records, state
-                    ):
-                        raise
+    def _replay_existing_baseline_chain(
+        self,
+        existing_chain: tuple[ArtifactRecord, ...],
+        state: WorkflowState,
+        import_only_prefix: bool,
+    ) -> ArtifactReplayResult:
+        return replay_artifacts(
+            existing_chain,
+            state.run_id,
+            allow_incomplete_review_tail=True,
+            allow_finding_import_bootstrap=import_only_prefix,
+        )
+
+    def _require_existing_baseline_prefix(
+        self, existing_replay: ArtifactReplayResult
+    ) -> None:
+        require_workflow_status_prefix(existing_replay)
+        require_gate_prefix(existing_replay)
+        require_side_effect_ledger_prefix(existing_replay)
+
+    def _append_baseline_identity_and_ledger(
+        self,
+        state: WorkflowState,
+        bridge: ArtifactBridge,
+        binding: ProtocolBinding,
+        contract_fingerprint: str,
+        existing_replay: ArtifactReplayResult | None,
+    ) -> tuple[WorkflowPersistence, set[str]]:
         persistence = self._dependencies.persistence()
         identity_record = bridge.append(
             RunIdentityPayload(
@@ -544,9 +536,7 @@ class WorkflowBaseline:
         ledger_operation = ("structured-v2-side-effect-ledger",)
         completed_effect_keys = {
             item.effect_key
-            for item in (
-                () if existing_replay is None else existing_replay.side_effects
-            )
+            for item in (() if existing_replay is None else existing_replay.side_effects)
             if item.result is not None
         }
         ledger_key = stable_side_effect_key("ledger", "run", ledger_operation)
@@ -560,15 +550,22 @@ class WorkflowBaseline:
             )
             self._dependencies.side_effect_executor(bridge).execute(
                 ledger_spec,
-                reconcile=lambda: Reconciliation(
-                    ReconciliationOutcome.NOT_OCCURRED
-                ),
+                reconcile=lambda: Reconciliation(ReconciliationOutcome.NOT_OCCURRED),
                 perform=lambda: (None, "initialized"),
             )
         if existing_replay is not None:
             self._dependencies.recovery()._reconcile_pending_side_effects(
                 state, existing_replay
             )
+        return persistence, completed_effect_keys
+
+    def _append_completed_internal_effects(
+        self,
+        state: WorkflowState,
+        bridge: ArtifactBridge,
+        contract_fingerprint: str,
+        completed_effect_keys: set[str],
+    ) -> None:
         for work_unit in state.work_units:
             for marker in work_unit.completed_side_effects:
                 if marker.startswith("side-effect:"):
@@ -592,6 +589,14 @@ class WorkflowBaseline:
                     ),
                     perform=lambda: (None, "completed"),
                 )
+
+    def _append_baseline_state_facts(
+        self,
+        state: WorkflowState,
+        bridge: ArtifactBridge,
+        persistence: WorkflowPersistence,
+        contract_fingerprint: str,
+    ) -> None:
         persistence._persist_workflow_snapshot(state)
         persistence._persist_slice_boundaries(state)
         persistence._persist_gate_snapshot(state)
@@ -678,6 +683,76 @@ class WorkflowBaseline:
                     fingerprint_kind=FingerprintKind.CONTRACT,
                 )
         persistence._persist_structured_tail(state)
+
+    def _persist_structured_baseline(self, state: WorkflowState) -> None:
+        bridge = self._dependencies.artifact_bridge()
+        if bridge is None or state.task_digest is None:
+            return
+        contract_fingerprint = state.task_digest
+        binding = state.protocol_binding
+        if binding is None:
+            raise WorkflowExecutionError(
+                "structured baseline requires the immutable protocol binding"
+            )
+        existing_chain = bridge.store.load_chain()
+        existing_replay = None
+        if existing_chain:
+            import_only_prefix = all(
+                isinstance(record.payload, FindingHandoffImportPayload)
+                for record in existing_chain
+            )
+            try:
+                existing_replay = self._replay_existing_baseline_chain(
+                    existing_chain, state, import_only_prefix
+                )
+            except ArtifactReplayError:
+                if not matches_baseline_initialization_prefix(
+                    existing_chain, state
+                ):
+                    raise
+                existing_replay = None
+            if existing_replay is None:
+                # The raw chain is an exact early initializer cut which cannot
+                # yet satisfy the general replay minimum (for example identity
+                # plus its event but no profile).  The idempotent appends below
+                # complete it before any projection reader or external effect.
+                pass
+            elif existing_replay.pending_workflow_event_record_id is not None:
+                self._dependencies.reconcile_pending_workflow_event(existing_replay)
+                existing_replay = replay_artifacts(
+                    bridge.store.load_chain(),
+                    state.run_id,
+                    allow_incomplete_review_tail=True,
+                    allow_finding_import_bootstrap=import_only_prefix,
+                )
+            if existing_replay is not None:
+                require_workflow_event_prefix(existing_replay)
+            if (
+                existing_replay is not None
+                and existing_replay.pending_review_record_id is not None
+            ):
+                # The reviewer recovery path is the only writer allowed to
+                # complete this exact append tail.  Appending baseline facts
+                # here would turn the recoverable suffix into a chain-middle
+                # authority gap.
+                return
+            if existing_replay is not None and not import_only_prefix:
+                try:
+                    self._require_existing_baseline_prefix(existing_replay)
+                except ArtifactResumeError:
+                    if not matches_baseline_initialization_prefix(
+                        existing_replay.records, state
+                    ):
+                        raise
+        persistence, completed_effect_keys = self._append_baseline_identity_and_ledger(
+            state, bridge, binding, contract_fingerprint, existing_replay
+        )
+        self._append_completed_internal_effects(
+            state, bridge, contract_fingerprint, completed_effect_keys
+        )
+        self._append_baseline_state_facts(
+            state, bridge, persistence, contract_fingerprint
+        )
 
     def _persist_provider_bootstrap(
         self, measurement: ProviderInputMeasurement

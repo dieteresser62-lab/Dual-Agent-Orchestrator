@@ -1,0 +1,62 @@
+{
+  "schema_version": "workflow-baseline-helper-bindings-b56-v1",
+  "helpers": [
+    {
+      "path": "predicate",
+      "helper": "_append_baseline_identity_expectations",
+      "catcher": null
+    },
+    {
+      "path": "predicate",
+      "helper": "_append_baseline_transition_expectations",
+      "catcher": null
+    },
+    {
+      "path": "predicate",
+      "helper": "_append_baseline_contract_expectations",
+      "catcher": null
+    },
+    {
+      "path": "persistence",
+      "helper": "_replay_existing_baseline_chain",
+      "catcher": "ArtifactReplayError"
+    },
+    {
+      "path": "persistence",
+      "helper": "_require_existing_baseline_prefix",
+      "catcher": "ArtifactResumeError"
+    },
+    {
+      "path": "persistence",
+      "helper": "_append_baseline_identity_and_ledger",
+      "catcher": null
+    },
+    {
+      "path": "persistence",
+      "helper": "_append_completed_internal_effects",
+      "catcher": null
+    },
+    {
+      "path": "persistence",
+      "helper": "_append_baseline_state_facts",
+      "catcher": null
+    }
+  ],
+  "strict_neighborhood": {
+    "status": "preserved_contiguous_in_entry",
+    "statements": [
+      {
+        "kind": "If",
+        "expression": "state.work_plan_path is not None and state.planned_slices and (state.approved_plan_commit is not None)"
+      },
+      {
+        "kind": "If",
+        "expression": "len(prefix) > len(expectations)"
+      },
+      {
+        "kind": "Return",
+        "expression": "all((record.payload == payload and record.logical_id == logical_id and (record.idempotency_key == idempotency_key) and (record.revision == revision) and (record.fingerprint.sha256 == state.task_digest) and (record.fingerprint.kind is FingerprintKind.CONTRACT) for record, (payload, logical_id, idempotency_key, revision) in zip(prefix, expectations[:len(prefix)], strict=True)))"
+      }
+    ]
+  }
+}

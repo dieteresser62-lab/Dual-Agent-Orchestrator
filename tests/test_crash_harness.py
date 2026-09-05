@@ -728,15 +728,22 @@ def test_record_only_injection_uses_the_production_baseline_writer() -> None:
     production_tree = ast.parse(
         (ROOT / "src/workflow_baseline.py").read_text(encoding="utf-8")
     )
-    baseline = next(
+    baseline_writer_names = {
+        "_persist_structured_baseline",
+        "_append_baseline_identity_and_ledger",
+        "_append_completed_internal_effects",
+    }
+    baseline_writers = tuple(
         node
         for node in ast.walk(production_tree)
         if isinstance(node, ast.FunctionDef)
-        and node.name == "_persist_structured_baseline"
+        and node.name in baseline_writer_names
     )
+    assert {node.name for node in baseline_writers} == baseline_writer_names
     record_only_specs = {
         call.args[0].value
-        for call in ast.walk(baseline)
+        for writer in baseline_writers
+        for call in ast.walk(writer)
         if isinstance(call, ast.Call)
         and isinstance(call.func, ast.Name)
         and call.func.id == "SideEffectSpec"
@@ -745,7 +752,8 @@ def test_record_only_injection_uses_the_production_baseline_writer() -> None:
     }
     executor_calls = tuple(
         call
-        for call in ast.walk(baseline)
+        for writer in baseline_writers
+        for call in ast.walk(writer)
         if isinstance(call, ast.Call)
         and isinstance(call.func, ast.Attribute)
         and call.func.attr == "side_effect_executor"

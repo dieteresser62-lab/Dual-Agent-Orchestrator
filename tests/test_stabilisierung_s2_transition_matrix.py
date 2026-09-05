@@ -447,6 +447,26 @@ COMPARISON_TARGETS = (
 )
 COMPARISON_HELPERS = {
     (
+        "src/workflow_baseline.py",
+        None,
+        "matches_baseline_initialization_prefix",
+    ): (
+        "_append_baseline_identity_expectations",
+        "_append_baseline_transition_expectations",
+        "_append_baseline_contract_expectations",
+    ),
+    (
+        "src/workflow_baseline.py",
+        "WorkflowBaseline",
+        "_persist_structured_baseline",
+    ): (
+        "_replay_existing_baseline_chain",
+        "_require_existing_baseline_prefix",
+        "_append_baseline_identity_and_ledger",
+        "_append_completed_internal_effects",
+        "_append_baseline_state_facts",
+    ),
+    (
         "src/workflow_recovery.py",
         "WorkflowRecovery",
         "recover_pending_native_implementer",

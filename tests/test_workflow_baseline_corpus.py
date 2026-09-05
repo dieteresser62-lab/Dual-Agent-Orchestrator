@@ -38,11 +38,40 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE_PATH = ROOT / "src/workflow_baseline.py"
 STATIC_BASELINE = ROOT / "tests/fixtures/workflow-baseline-static-pre-b55-v1.json"
 RUNTIME_BASELINE = ROOT / "tests/fixtures/workflow-baseline-runtime-pre-b55-v1.json"
+PRE_B56_BASELINE = ROOT / "tests/fixtures/workflow-baseline-pre-b56-v1.json"
+HELPER_BINDINGS = (
+    ROOT / "tests/fixtures/workflow-baseline-helper-bindings-b56-v1.json"
+)
+FUNCTION_SIZE_BASELINE = ROOT / "tests/fixtures/function-size-baseline-v1.json"
+RECORD_SEQUENCE_BASELINE = (
+    ROOT / "tests/fixtures/workflow-record-sequence-baseline-v1.json"
+)
 SOURCE_COMMIT = "444f5188200814373b7dfcdee1c114e1a9fda8a0"
 SOURCE_BLOB = "1b82c80f9840a2193adb5c3ef241a4ecc08f5b42"
+PRE_B56_COMMIT = "cb00bc0c4270147c417d4d89c011ca6cb24e6ed1"
+RECORD_SEQUENCE_BLOB = "26fb661c8fa382f90e70fb921e3d950da5cae09b"
 STAMP = "2026-09-05T00:00:00+00:00"
 BRANCH_BASE = "b" * 40
 TASK_DIGEST = "a" * 64
+
+BASELINE_HELPERS = {
+    "matches_baseline_initialization_prefix": (
+        "_append_baseline_identity_expectations",
+        "_append_baseline_transition_expectations",
+        "_append_baseline_contract_expectations",
+    ),
+    "_persist_structured_baseline": (
+        "_replay_existing_baseline_chain",
+        "_require_existing_baseline_prefix",
+        "_append_baseline_identity_and_ledger",
+        "_append_completed_internal_effects",
+        "_append_baseline_state_facts",
+    ),
+}
+CAUGHT_HELPERS = {
+    "_replay_existing_baseline_chain": "ArtifactReplayError",
+    "_require_existing_baseline_prefix": "ArtifactResumeError",
+}
 
 
 @dataclass(frozen=True)
@@ -127,10 +156,130 @@ def _raise_detail(
     return ast.unparse(node.exc), ""
 
 
+def _direct_baseline_helper_call(
+    statement: ast.stmt, helper_names: frozenset[str]
+) -> tuple[str, ast.Call] | None:
+    value: ast.expr | None = None
+    if isinstance(statement, ast.Expr):
+        value = statement.value
+    elif isinstance(statement, ast.Assign):
+        value = statement.value
+    if not isinstance(value, ast.Call):
+        return None
+    if isinstance(value.func, ast.Name) and value.func.id in helper_names:
+        return value.func.id, value
+    if (
+        isinstance(value.func, ast.Attribute)
+        and isinstance(value.func.value, ast.Name)
+        and value.func.value.id == "self"
+        and value.func.attr in helper_names
+    ):
+        return value.func.attr, value
+    return None
+
+
+def _logical_baseline_function(
+    tree: ast.Module, name: str, *, class_name: str | None = None
+) -> ast.FunctionDef:
+    function = copy.deepcopy(_function(tree, name, class_name=class_name))
+    helper_names = BASELINE_HELPERS[name]
+    helpers = {
+        helper_name: copy.deepcopy(
+            _function(
+                tree,
+                helper_name,
+                class_name=(
+                    "WorkflowBaseline"
+                    if name == "_persist_structured_baseline"
+                    else None
+                ),
+            )
+        )
+        for helper_name in helper_names
+    }
+    observed_calls = [
+        (
+            call.func.id
+            if isinstance(call.func, ast.Name)
+            else cast(ast.Attribute, call.func).attr
+        )
+        for call in _ordered(function, ast.Call)
+        if (
+            isinstance(call.func, ast.Name)
+            and call.func.id in helper_names
+        )
+        or (
+            isinstance(call.func, ast.Attribute)
+            and isinstance(call.func.value, ast.Name)
+            and call.func.value.id == "self"
+            and call.func.attr in helper_names
+        )
+    ]
+    assert observed_calls == list(helper_names)
+
+    def expand_body(body: list[ast.stmt]) -> list[ast.stmt]:
+        expanded: list[ast.stmt] = []
+        for statement in body:
+            direct = _direct_baseline_helper_call(
+                statement, frozenset(helper_names)
+            )
+            if direct is not None:
+                helper_name, call = direct
+                helper = helpers[helper_name]
+                parameters = [argument.arg for argument in helper.args.args]
+                if class_name is not None:
+                    assert parameters[0] == "self"
+                    parameters = parameters[1:]
+                assert not call.keywords
+                assert [ast.unparse(argument) for argument in call.args] == parameters
+                helper_body = copy.deepcopy(helper.body)
+                if isinstance(statement, ast.Assign):
+                    terminal = helper_body[-1]
+                    assert isinstance(terminal, ast.Return)
+                    assert terminal.value is not None
+                    helper_body[-1] = ast.Assign(
+                        targets=copy.deepcopy(statement.targets),
+                        value=terminal.value,
+                    )
+                else:
+                    assert not any(
+                        isinstance(item, ast.Return) for item in ast.walk(helper)
+                    )
+                expanded.extend(expand_body(helper_body))
+                continue
+            for field in ("body", "orelse", "finalbody"):
+                child = getattr(statement, field, None)
+                if isinstance(child, list) and child:
+                    setattr(statement, field, expand_body(child))
+            if isinstance(statement, ast.Try):
+                for handler in statement.handlers:
+                    handler.body = expand_body(handler.body)
+            expanded.append(statement)
+        return expanded
+
+    function.body = expand_body(function.body)
+    ast.fix_missing_locations(function)
+    logical = ast.parse(ast.unparse(function)).body[0]
+    assert isinstance(logical, ast.FunctionDef)
+    return logical
+
+
+def _pre_cut_line_count(name: str, *, class_name: str | None = None) -> int:
+    source = subprocess.run(
+        ["git", "show", f"{PRE_B56_COMMIT}:src/workflow_baseline.py"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    function = _function(ast.parse(source), name, class_name=class_name)
+    return function.end_lineno - function.lineno + 1
+
+
 def _static_function(
     tree: ast.Module, name: str, *, class_name: str | None = None
 ) -> dict[str, object]:
-    function = _function(tree, name, class_name=class_name)
+    function = _logical_baseline_function(tree, name, class_name=class_name)
     parents = _parent_map(function)
     conditions = _ordered(function, ast.If)
     returns = _ordered(function, ast.Return)
@@ -139,7 +288,7 @@ def _static_function(
     qualified = name if class_name is None else f"{class_name}.{name}"
     return {
         "function": qualified,
-        "line_count": function.end_lineno - function.lineno + 1,
+        "line_count": _pre_cut_line_count(name, class_name=class_name),
         "conditions": [
             {
                 "ordinal": index,
@@ -756,6 +905,83 @@ def _expected_runtime() -> dict[str, object]:
     return json.loads(RUNTIME_BASELINE.read_text("utf-8"))
 
 
+def _helper_catcher_bindings(tree: ast.Module) -> dict[str, str]:
+    function = _function(
+        tree, "_persist_structured_baseline", class_name="WorkflowBaseline"
+    )
+    parents = _parent_map(function)
+    bindings: dict[str, str] = {}
+    for helper_name in CAUGHT_HELPERS:
+        calls = [
+            node
+            for node in ast.walk(function)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "self"
+            and node.func.attr == helper_name
+        ]
+        assert len(calls) == 1, helper_name
+        current: ast.AST = calls[0]
+        while current in parents:
+            child = current
+            current = parents[current]
+            if isinstance(current, ast.Try) and child in current.body:
+                assert len(current.handlers) == 1, helper_name
+                bindings[helper_name] = ast.unparse(current.handlers[0].type)
+                break
+        else:
+            raise AssertionError(f"helper call left its catcher: {helper_name}")
+    return bindings
+
+
+def _move_helper_call_out_of_catcher(tree: ast.Module, helper_name: str) -> None:
+    function = _function(
+        tree, "_persist_structured_baseline", class_name="WorkflowBaseline"
+    )
+    parents = _parent_map(function)
+    call = next(
+        node
+        for node in ast.walk(function)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == helper_name
+    )
+    current: ast.AST = call
+    while current in parents:
+        child = current
+        current = parents[current]
+        if isinstance(current, ast.Try) and child in current.body:
+            catcher = current
+            statement = child
+            break
+    else:
+        raise AssertionError(helper_name)
+    for node in ast.walk(function):
+        for field in ("body", "orelse", "finalbody"):
+            body = getattr(node, field, None)
+            if isinstance(body, list) and catcher in body:
+                body.insert(body.index(catcher), statement)
+                catcher.body.remove(statement)
+                if not catcher.body:
+                    catcher.body.append(ast.Pass())
+                return
+    raise AssertionError(f"catcher parent not found: {helper_name}")
+
+
+def _strict_neighborhood(tree: ast.Module) -> list[dict[str, str]]:
+    function = _function(tree, "matches_baseline_initialization_prefix")
+    statements = function.body[-3:]
+    assert isinstance(statements[0], ast.If)
+    assert isinstance(statements[1], ast.If)
+    assert isinstance(statements[2], ast.Return)
+    return [
+        {"kind": "If", "expression": ast.unparse(statements[0].test)},
+        {"kind": "If", "expression": ast.unparse(statements[1].test)},
+        {"kind": "Return", "expression": ast.unparse(statements[2].value)},
+    ]
+
+
 def _assert_named_entry(
     actual_entries: list[dict[str, object]],
     expected_entries: list[dict[str, object]],
@@ -787,7 +1013,7 @@ def test_static_inventory_is_complete_cleartext_and_source_ordered() -> None:
     )
 
 
-def test_source_anchor_binds_pre_b55_bytes_and_worktree_is_identical() -> None:
+def test_source_anchor_binds_pre_b55_bytes() -> None:
     anchored_blob = subprocess.run(
         ["git", "rev-parse", f"{SOURCE_COMMIT}:src/workflow_baseline.py"],
         cwd=ROOT,
@@ -795,15 +1021,52 @@ def test_source_anchor_binds_pre_b55_bytes_and_worktree_is_identical() -> None:
         capture_output=True,
         text=True,
     ).stdout.strip()
-    worktree_blob = subprocess.run(
-        ["git", "hash-object", str(SOURCE_PATH)],
+    assert anchored_blob == SOURCE_BLOB
+
+
+def test_b56_pre_cut_anchor_binds_the_immediate_b55_source() -> None:
+    pre_cut = json.loads(PRE_B56_BASELINE.read_text("utf-8"))
+    assert pre_cut == {
+        "schema_version": "workflow-baseline-pre-b56-v1",
+        "source_commit": PRE_B56_COMMIT,
+        "source_blob": SOURCE_BLOB,
+    }
+    anchored_blob = subprocess.run(
+        ["git", "rev-parse", f"{PRE_B56_COMMIT}:src/workflow_baseline.py"],
         cwd=ROOT,
         check=True,
         capture_output=True,
         text=True,
     ).stdout.strip()
     assert anchored_blob == SOURCE_BLOB
-    assert worktree_blob == SOURCE_BLOB
+
+
+def test_b56_helpers_and_previous_catchers_are_explicitly_bound() -> None:
+    binding = json.loads(HELPER_BINDINGS.read_text("utf-8"))
+    assert binding["schema_version"] == "workflow-baseline-helper-bindings-b56-v1"
+    expected_helpers = [
+        helper for helpers in BASELINE_HELPERS.values() for helper in helpers
+    ]
+    assert [item["helper"] for item in binding["helpers"]] == expected_helpers
+    assert {
+        item["helper"]: item["catcher"]
+        for item in binding["helpers"]
+        if item["catcher"] is not None
+    } == CAUGHT_HELPERS
+    tree = ast.parse(SOURCE_PATH.read_text("utf-8"))
+    assert _helper_catcher_bindings(tree) == CAUGHT_HELPERS
+
+
+def test_strict_zip_and_both_adjacent_checks_remain_in_one_neighborhood() -> None:
+    binding = json.loads(HELPER_BINDINGS.read_text("utf-8"))
+    neighborhood = binding["strict_neighborhood"]
+    assert neighborhood["status"] == "preserved_contiguous_in_entry"
+    tree = ast.parse(SOURCE_PATH.read_text("utf-8"))
+    actual = _strict_neighborhood(tree)
+    assert actual == neighborhood["statements"]
+    assert "state.approved_plan_commit is not None" in actual[0]["expression"]
+    assert "len(prefix) > len(expectations)" in actual[1]["expression"]
+    assert "strict=True" in actual[2]["expression"]
 
 
 DECISION_IDS = (
@@ -909,6 +1172,47 @@ def test_removing_prior_activity_condition_names_and_turns_its_near_miss_red(
             mutated(case.records, case.state),
             case.expected,
         )
+
+
+def test_moving_a_baseline_helper_out_of_its_catcher_turns_binding_red() -> None:
+    tree = ast.parse(SOURCE_PATH.read_text("utf-8"))
+    helper_name = "_require_existing_baseline_prefix"
+    _move_helper_call_out_of_catcher(tree, helper_name)
+    ast.fix_missing_locations(tree)
+    compile(tree, "<b56-helper-outside-catcher>", "exec")
+    with pytest.raises(AssertionError, match=helper_name):
+        _helper_catcher_bindings(tree)
+
+
+def test_b56_entries_and_helpers_are_below_the_b32_threshold() -> None:
+    tree = ast.parse(SOURCE_PATH.read_text("utf-8"))
+    spans: dict[str, int] = {}
+    for entry, helpers in BASELINE_HELPERS.items():
+        owner = "WorkflowBaseline" if entry == "_persist_structured_baseline" else None
+        for name in (entry, *helpers):
+            function = _function(tree, name, class_name=owner)
+            spans[name] = function.end_lineno - function.lineno + 1
+    assert all(span < 200 for span in spans.values()), spans
+    size_baseline = json.loads(FUNCTION_SIZE_BASELINE.read_text("utf-8"))
+    assert (
+        "src/workflow_baseline.py::matches_baseline_initialization_prefix"
+        not in size_baseline["functions"]
+    )
+    assert (
+        "src/workflow_baseline.py::WorkflowBaseline._persist_structured_baseline"
+        not in size_baseline["functions"]
+    )
+
+
+def test_b25_record_sequence_baseline_remains_byte_identical() -> None:
+    actual_blob = subprocess.run(
+        ["git", "hash-object", str(RECORD_SEQUENCE_BASELINE)],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert actual_blob == RECORD_SEQUENCE_BLOB
 
 
 def test_runtime_scenarios_are_built_exactly_once(
