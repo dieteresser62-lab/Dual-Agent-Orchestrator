@@ -1,0 +1,33 @@
+{
+  "schema_version": "watcher-helper-bindings-b61-v1",
+  "pre_cut": "tests/fixtures/watcher-pre-b61-v1.json",
+  "handler_body_sha_change_reasons": {
+    "done-archive": "The handler now calls _handle_completed_archive_failure in place of the same retry accounting, fallback archive catcher, and marker-sensitive logging block."
+  },
+  "helpers": [
+    {
+      "helper": "_handle_stuck_task",
+      "catcher_id": "watch-interrupt",
+      "region": "protected_body",
+      "owned_catchers": ["stuck-cleanup"]
+    },
+    {
+      "helper": "_archive_rejected_watch_task",
+      "catcher_id": "rejection-archive",
+      "region": "protected_body",
+      "owned_catchers": ["rejection-report"]
+    },
+    {
+      "helper": "_archive_poisoned_watch_task",
+      "catcher_id": "poison-archive",
+      "region": "protected_body",
+      "owned_catchers": ["poison-report"]
+    },
+    {
+      "helper": "_handle_completed_archive_failure",
+      "catcher_id": "done-archive",
+      "region": "handler_body",
+      "owned_catchers": ["fallback-failed-archive"]
+    }
+  ]
+}

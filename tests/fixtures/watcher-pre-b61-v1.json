@@ -1,0 +1,20 @@
+{
+  "schema_version": "watcher-pre-b61-v1",
+  "source_commit": "496a4854c40081a81ef2a8904ac4985fd4585d1d",
+  "source_blob": "30581cdc366f48579f1f3f8c8f94ce69575948d0",
+  "source_path": "src/inbox_watcher.py",
+  "function_size_baseline_pre_blob": "63082a085a8f43af923a02efaf06b2f42724c870",
+  "protected_blobs": {
+    "tests/fixtures/watcher-outcome-corpus-v1.json": "7b41aa497b56bfb9533fdc985bc1f3e688623573",
+    "tests/fixtures/watcher-catcher-map-pre-b45-v1.json": "ca668ea2c4d68b088db763cd0a4699dd1b87e598",
+    "tests/fixtures/watcher-catcher-helper-bindings-b45-v1.json": "af0ca31deb7ec8c91d75611d71a60d33d57f6f36",
+    "tests/fixtures/watcher-helper-bindings-b57-v1.json": "f9a4ef7d83a456ad8b4f4a08e059d2a6e0b4f53d",
+    "tests/fixtures/watcher-pre-b57-v1.json": "5aeb38509ce2fed914477a4ec2f4f393a70820d9",
+    "tests/fixtures/workflow-record-sequence-baseline-v1.json": "26fb661c8fa382f90e70fb921e3d950da5cae09b"
+  },
+  "watch_inbox_lines": 329,
+  "return_count": 10,
+  "continue_count": 7,
+  "catcher_count": 12,
+  "exception_catcher_count": 9
+}

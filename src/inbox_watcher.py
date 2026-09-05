@@ -1546,6 +1546,132 @@ def _log_watch_task_completion(
         )
 
 
+def _handle_stuck_task(
+    task_file: Path,
+    current_attempts: int,
+    stuck_limit: int,
+) -> None:
+    stuck_destination = task_file.with_suffix(".md.stuck")
+    logger.critical(
+        "Task %s stuck after %s attempts (limit %s). Renaming to %s for manual intervention.",
+        task_file.name,
+        current_attempts,
+        stuck_limit,
+        stuck_destination.name,
+    )
+    try:
+        _rename_stuck_task(task_file, stuck_destination)
+    except Exception:
+        logger.exception("Failed to rename stuck task %s.", task_file)
+
+
+def _archive_rejected_watch_task(
+    task_file: Path,
+    outbox_failed_dir: Path,
+    task_result: WatchTaskResult,
+    rejected_name: str,
+    task_rejected_already: bool,
+) -> None:
+    destination = _begin_rejected_archive(
+        task_file,
+        outbox_failed_dir,
+        task_result,
+        rejected_name,
+        task_rejected_already=task_rejected_already,
+    )
+    try:
+        report = write_rejected_failure_report(
+            destination, task_result=task_result
+        )
+    except Exception:
+        report = None
+        logger.exception(
+            "Failed to write rejection report for %s.", destination
+        )
+    _finish_rejected_archive(
+        task_file,
+        destination,
+        task_result,
+        report,
+    )
+
+
+def _archive_poisoned_watch_task(
+    task_file: Path,
+    outbox_failed_dir: Path,
+    task_result: WatchTaskResult,
+    structured_identity: WatchTaskIdentity | None,
+    poison_name: str,
+    quarantine_diagnostics: list[str],
+    attempts: int,
+    max_retries: int,
+) -> None:
+    destination = _move_poison_task(
+        task_file,
+        outbox_failed_dir,
+        task_result,
+        structured_identity,
+        poison_name,
+        quarantine_diagnostics,
+    )
+    report: Path | None = None
+    try:
+        report = write_poison_failure_report(
+            destination,
+            attempts=attempts,
+            task_result=task_result,
+            exception_detail=(
+                quarantine_diagnostics[-1]
+                if quarantine_diagnostics
+                else None
+            ),
+        )
+    except Exception:
+        logger.exception(
+            "Failed to write poison failure report for %s.",
+            destination,
+        )
+    _finish_poison_archive(
+        task_file,
+        destination,
+        report,
+        attempts=attempts,
+        max_retries=max_retries,
+    )
+
+
+def _handle_completed_archive_failure(
+    task_file: Path,
+    outbox_failed_dir: Path,
+    max_retries: int,
+) -> None:
+    # Keep retry accounting symmetrical with processing failures.
+    attempts = read_attempt_count(task_file) + 1
+    write_attempt_count(task_file, attempts)
+    marker_exists = has_success_marker(task_file)
+    if attempts >= max_retries:
+        failed_name = (
+            f"{task_file.name}.move_error"
+            if marker_exists
+            else f"{task_file.name}.poison"
+        )
+        try:
+            _archive_failed_task(
+                task_file,
+                outbox_failed_dir,
+                failed_name,
+                attempts,
+                max_retries,
+                marker_exists,
+            )
+        except Exception:
+            _log_failed_archive_error(task_file, marker_exists)
+    else:
+        _log_archive_retry(
+            task_file, attempts, max_retries, marker_exists
+        )
+
+
 def watch_inbox(
     *,
     inbox_dir: Path,
@@ -1598,18 +1724,7 @@ def watch_inbox(
             if stuck_limit > 0:
                 current_attempts = read_attempt_count(task_file)
                 if current_attempts >= stuck_limit:
-                    stuck_destination = task_file.with_suffix(".md.stuck")
-                    logger.critical(
-                        "Task %s stuck after %s attempts (limit %s). Renaming to %s for manual intervention.",
-                        task_file.name,
-                        current_attempts,
-                        stuck_limit,
-                        stuck_destination.name,
-                    )
-                    try:
-                        _rename_stuck_task(task_file, stuck_destination)
-                    except Exception:
-                        logger.exception("Failed to rename stuck task %s.", task_file)
+                    _handle_stuck_task(task_file, current_attempts, stuck_limit)
                     continue
 
             task_result: WatchTaskResult | None = None
@@ -1686,27 +1801,12 @@ def watch_inbox(
             ):
                 rejected_name = f"{task_file.name}.rejected"
                 try:
-                    destination = _begin_rejected_archive(
+                    _archive_rejected_watch_task(
                         task_file,
                         outbox_failed_dir,
                         task_result,
                         rejected_name,
-                        task_rejected_already=task_rejected_already,
-                    )
-                    try:
-                        report = write_rejected_failure_report(
-                            destination, task_result=task_result
-                        )
-                    except Exception:
-                        report = None
-                        logger.exception(
-                            "Failed to write rejection report for %s.", destination
-                        )
-                    _finish_rejected_archive(
-                        task_file,
-                        destination,
-                        task_result,
-                        report,
+                        task_rejected_already,
                     )
                 except Exception:
                     logger.exception(
@@ -1737,7 +1837,7 @@ def watch_inbox(
                     poison_name = f"{task_file.name}.poison"
                     quarantine_diagnostics: list[str] = []
                     try:
-                        destination = _move_poison_task(
+                        _archive_poisoned_watch_task(
                             task_file,
                             outbox_failed_dir,
                             task_result,
@@ -1748,33 +1848,13 @@ def watch_inbox(
                             ),
                             poison_name,
                             quarantine_diagnostics,
-                        )
-                        report: Path | None = None
-                        try:
-                            report = write_poison_failure_report(
-                                destination,
-                                attempts=attempts,
-                                task_result=task_result,
-                                exception_detail=(
-                                    quarantine_diagnostics[-1]
-                                    if quarantine_diagnostics
-                                    else None
-                                ),
-                            )
-                        except Exception:
-                            logger.exception(
-                                "Failed to write poison failure report for %s.",
-                                destination,
-                            )
-                        _finish_poison_archive(
-                            task_file,
-                            destination,
-                            report,
-                            attempts=attempts,
-                            max_retries=max_retries,
+                            attempts,
+                            max_retries,
                         )
                     except Exception:
-                        logger.exception("Failed to move poison task %s to outbox.", task_file)
+                        logger.exception(
+                            "Failed to move poison task %s to outbox.", task_file
+                        )
                 else:
                     logger.warning(
                         "Task failed (%s/%s). Leaving in inbox for retry: %s",
@@ -1840,31 +1920,9 @@ def watch_inbox(
             try:
                 _archive_completed_task(task_file, outbox_done_dir, bound_failure)
             except Exception:
-                # Keep retry accounting symmetrical with processing failures.
-                attempts = read_attempt_count(task_file) + 1
-                write_attempt_count(task_file, attempts)
-                marker_exists = has_success_marker(task_file)
-                if attempts >= max_retries:
-                    failed_name = (
-                        f"{task_file.name}.move_error"
-                        if marker_exists
-                        else f"{task_file.name}.poison"
-                    )
-                    try:
-                        _archive_failed_task(
-                            task_file,
-                            outbox_failed_dir,
-                            failed_name,
-                            attempts,
-                            max_retries,
-                            marker_exists,
-                        )
-                    except Exception:
-                        _log_failed_archive_error(task_file, marker_exists)
-                else:
-                    _log_archive_retry(
-                        task_file, attempts, max_retries, marker_exists
-                    )
+                _handle_completed_archive_failure(
+                    task_file, outbox_failed_dir, max_retries
+                )
                 continue
 
             _log_watch_task_completion(

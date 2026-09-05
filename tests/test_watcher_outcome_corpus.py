@@ -40,12 +40,18 @@ B57_PRE_CUT = ROOT / "tests/fixtures/watcher-pre-b57-v1.json"
 B57_HELPER_BINDINGS = (
     ROOT / "tests/fixtures/watcher-helper-bindings-b57-v1.json"
 )
+B61_PRE_CUT = ROOT / "tests/fixtures/watcher-pre-b61-v1.json"
+B61_HELPER_BINDINGS = (
+    ROOT / "tests/fixtures/watcher-helper-bindings-b61-v1.json"
+)
 FUNCTION_SIZE_BASELINE = ROOT / "tests/fixtures/function-size-baseline-v1.json"
 RECORD_SEQUENCE_BASELINE = (
     ROOT / "tests/fixtures/workflow-record-sequence-baseline-v1.json"
 )
 PRE_B57_COMMIT = "8c633cc2ed006e474ff4aea3229950206d1fe066"
 PRE_B57_BLOB = "99965b3e92fea8a681447359f6aa9e54a813162f"
+PRE_B61_COMMIT = "496a4854c40081a81ef2a8904ac4985fd4585d1d"
+PRE_B61_BLOB = "30581cdc366f48579f1f3f8c8f94ce69575948d0"
 RECORD_SEQUENCE_BLOB = "26fb661c8fa382f90e70fb921e3d950da5cae09b"
 SOURCE_TEXT = SOURCE.read_text(encoding="utf-8")
 SOURCE_TREE = ast.parse(SOURCE_TEXT, filename=str(SOURCE))
@@ -120,6 +126,14 @@ B57_HELPERS = tuple(
         "helpers"
     ]
 )
+B61_BINDINGS_DOCUMENT = json.loads(B61_HELPER_BINDINGS.read_text(encoding="utf-8"))
+B61_HELPERS = tuple(
+    binding["helper"] for binding in B61_BINDINGS_DOCUMENT["helpers"]
+)
+B61_OWNED_CATCHERS = {
+    binding["helper"]: tuple(binding["owned_catchers"])
+    for binding in B61_BINDINGS_DOCUMENT["helpers"]
+}
 EXTRACTED_HELPERS = B45_HELPERS | frozenset(B57_HELPERS)
 
 
@@ -202,8 +216,88 @@ def _direct_b57_helper_call(
     return None
 
 
-def _logical_watch_function(tree: ast.Module) -> ast.FunctionDef:
+def _direct_b61_helper_call(
+    statement: ast.stmt,
+) -> tuple[str, ast.Call] | None:
+    if (
+        isinstance(statement, ast.Expr)
+        and isinstance(statement.value, ast.Call)
+        and isinstance(statement.value.func, ast.Name)
+        and statement.value.func.id in B61_HELPERS
+    ):
+        return statement.value.func.id, statement.value
+    return None
+
+
+def _logical_pre_b61_watch_function(tree: ast.Module) -> ast.FunctionDef:
     function = copy.deepcopy(_watch_function(tree))
+    helpers = {
+        node.name: copy.deepcopy(node)
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name in B61_HELPERS
+    }
+    assert set(helpers) == set(B61_HELPERS)
+    observed_calls = [
+        node.func.id
+        for node in sorted(
+            (item for item in ast.walk(function) if isinstance(item, ast.Call)),
+            key=lambda item: (item.lineno, item.col_offset),
+        )
+        if isinstance(node.func, ast.Name) and node.func.id in B61_HELPERS
+    ]
+    if not observed_calls:
+        return function
+    assert observed_calls == list(B61_HELPERS)
+
+    def expand_body(body: list[ast.stmt]) -> list[ast.stmt]:
+        expanded: list[ast.stmt] = []
+        for statement in body:
+            direct = _direct_b61_helper_call(statement)
+            if direct is not None:
+                helper_name, call = direct
+                helper = helpers[helper_name]
+                parameters = [argument.arg for argument in helper.args.args]
+                assert not call.keywords
+                assert len(call.args) == len(parameters)
+                assert not any(
+                    isinstance(item, ast.Return) for item in ast.walk(helper)
+                )
+                arguments = dict(zip(parameters, call.args, strict=True))
+
+                class SubstituteArguments(ast.NodeTransformer):
+                    def visit_Name(self, node: ast.Name) -> ast.expr:
+                        if isinstance(node.ctx, ast.Load) and node.id in arguments:
+                            return ast.copy_location(
+                                copy.deepcopy(arguments[node.id]), node
+                            )
+                        return node
+
+                substituted = [
+                    SubstituteArguments().visit(copy.deepcopy(item))
+                    for item in helper.body
+                ]
+                assert all(isinstance(item, ast.stmt) for item in substituted)
+                expanded.extend(expand_body(substituted))
+                continue
+            for field in ("body", "orelse", "finalbody"):
+                child = getattr(statement, field, None)
+                if isinstance(child, list) and child:
+                    setattr(statement, field, expand_body(child))
+            if isinstance(statement, ast.Try):
+                for handler in statement.handlers:
+                    handler.body = expand_body(handler.body)
+            expanded.append(statement)
+        return expanded
+
+    function.body = expand_body(function.body)
+    ast.fix_missing_locations(function)
+    logical = ast.parse(ast.unparse(function)).body[0]
+    assert isinstance(logical, ast.FunctionDef)
+    return logical
+
+
+def _logical_watch_function(tree: ast.Module) -> ast.FunctionDef:
+    function = _logical_pre_b61_watch_function(tree)
     helpers = {
         node.name: copy.deepcopy(node)
         for node in tree.body
@@ -218,6 +312,8 @@ def _logical_watch_function(tree: ast.Module) -> ast.FunctionDef:
         )
         if isinstance(node.func, ast.Name) and node.func.id in B57_HELPERS
     ]
+    if not observed_calls:
+        return function
     assert observed_calls == list(B57_HELPERS)
 
     def expand_body(body: list[ast.stmt]) -> list[ast.stmt]:
@@ -281,6 +377,18 @@ def _pre_b57_watch_function() -> ast.FunctionDef:
     return _watch_function(ast.parse(source))
 
 
+@lru_cache(maxsize=1)
+def _pre_b61_watch_function() -> ast.FunctionDef:
+    source = subprocess.run(
+        ["git", "show", f"{PRE_B61_COMMIT}:src/inbox_watcher.py"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    return _watch_function(ast.parse(source))
+
+
 def _handler_inventory(tree: ast.Module) -> list[dict[str, object]]:
     function = _logical_watch_function(tree)
     handlers = _handlers(function)
@@ -314,12 +422,47 @@ def _handler_inventory(tree: ast.Module) -> list[dict[str, object]]:
     return inventory
 
 
-def _helper_catcher_binding(tree: ast.Module, helper_name: str) -> tuple[str, str]:
-    function = _watch_function(tree)
-    handlers = _handlers(function)
-    catcher_by_handler = dict(
-        zip(handlers, (spec.catcher_id for spec in CATCHER_SPECS), strict=True)
+def _physical_handlers_by_id(tree: ast.Module) -> dict[str, ast.ExceptHandler]:
+    handlers: dict[str, ast.ExceptHandler] = {}
+    functions = {
+        node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)
+    }
+    moved_catchers: set[str] = set()
+    for helper_name, catcher_ids in B61_OWNED_CATCHERS.items():
+        owned = _handlers(functions[helper_name])
+        assert len(owned) == len(catcher_ids), helper_name
+        handlers.update(dict(zip(catcher_ids, owned, strict=True)))
+        moved_catchers.update(catcher_ids)
+
+    remaining_specs = [
+        spec for spec in CATCHER_SPECS if spec.catcher_id not in moved_catchers
+    ]
+    remaining = _handlers(_watch_function(tree))
+    assert len(remaining) == len(remaining_specs)
+    handlers.update(
+        {
+            spec.catcher_id: handler
+            for spec, handler in zip(remaining_specs, remaining, strict=True)
+        }
     )
+    assert set(handlers) == {spec.catcher_id for spec in CATCHER_SPECS}
+    return handlers
+
+
+def _helper_catcher_binding(tree: ast.Module, helper_name: str) -> tuple[str, str]:
+    if helper_name in B61_HELPERS:
+        function = _watch_function(tree)
+        catcher_by_handler = {
+            handler: catcher_id
+            for catcher_id, handler in _physical_handlers_by_id(tree).items()
+            if handler in set(_handlers(function))
+        }
+    else:
+        function = _logical_pre_b61_watch_function(tree)
+        handlers = _handlers(function)
+        catcher_by_handler = dict(
+            zip(handlers, (spec.catcher_id for spec in CATCHER_SPECS), strict=True)
+        )
     parent_map = {
         child: node
         for node in ast.walk(function)
@@ -401,6 +544,10 @@ def _assert_logical_watch_matches_pre_b57(
 def _move_helper_call_before_catcher(
     tree: ast.Module, helper_name: str
 ) -> ast.Module:
+    if helper_name not in B61_HELPERS:
+        logical = _logical_pre_b61_watch_function(tree)
+        index = tree.body.index(_watch_function(tree))
+        tree.body[index] = logical
     function = _watch_function(tree)
     parent_map = {
         child: node
@@ -470,12 +617,13 @@ def _instrumented_code(
     swap: tuple[str, str] | None,
 ) -> tuple[CodeType, ast.Module]:
     tree = copy.deepcopy(SOURCE_TREE)
-    function = _watch_function(tree)
+    function = _logical_watch_function(tree)
     handlers = _handlers(function)
     by_id = dict(zip((spec.catcher_id for spec in CATCHER_SPECS), handlers, strict=True))
     if swap is not None:
         left, right = (by_id[catcher_id] for catcher_id in swap)
         left.body, right.body = copy.deepcopy(right.body), copy.deepcopy(left.body)
+    tree.body[tree.body.index(_watch_function(tree))] = copy.deepcopy(function)
     inventory_tree = copy.deepcopy(tree)
 
     for spec, handler in zip(CATCHER_SPECS, handlers, strict=True):
@@ -492,9 +640,9 @@ def _instrumented_code(
     helper_functions = [
         copy.deepcopy(node)
         for node in tree.body
-        if isinstance(node, ast.FunctionDef) and node.name in EXTRACTED_HELPERS
+        if isinstance(node, ast.FunctionDef) and node.name in B45_HELPERS
     ]
-    assert {helper.name for helper in helper_functions} == EXTRACTED_HELPERS
+    assert {helper.name for helper in helper_functions} == B45_HELPERS
     module = ast.Module(body=[*helper_functions, function], type_ignores=[])
     ast.fix_missing_locations(module)
     return compile(module, "<b44-instrumented-watch>", "exec"), inventory_tree
@@ -944,6 +1092,65 @@ def test_instrumented_clean_success_matches_production_function(
     assert not (tmp_path / ".orchestrator").exists()
 
 
+@pytest.mark.parametrize(
+    ("protocol_mode", "expected_destination", "expected_attempts", "logs_failure"),
+    (
+        ("structured-v2", "inbox/*.md", 1, True),
+        (None, "outbox/failed/*.poison", 0, False),
+    ),
+)
+def test_real_watcher_preserves_future_unbound_identity_poison_semantics(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    protocol_mode: str | None,
+    expected_destination: str,
+    expected_attempts: int,
+    logs_failure: bool,
+) -> None:
+    inbox = tmp_path / "future-technical-rejection" / "inbox"
+    outbox = tmp_path / "future-technical-rejection" / "outbox"
+    inbox.mkdir(parents=True)
+    task = inbox / "task.md"
+    task.write_text("future technical rejection", encoding="utf-8")
+    rejection_marker_path(task).write_text("{}\n", encoding="utf-8")
+    result = WatchTaskResult.from_failure(
+        classify_exception(AgentProcessError("future transient marker")),
+        run_id="watch-b61-future-transient-marker",
+        records_written=False,
+        protocol_mode=protocol_mode,
+    )
+    list_calls = 0
+    real_list = inbox_watcher.list_inbox_tasks
+
+    def list_once(path: Path) -> list[Path]:
+        nonlocal list_calls
+        list_calls += 1
+        if list_calls > 1:
+            raise _StopScenario
+        return real_list(path)
+
+    monkeypatch.setattr(inbox_watcher, "list_inbox_tasks", list_once)
+    monkeypatch.setattr(inbox_watcher, "load_rejection_marker", lambda _task: result)
+    with pytest.raises(_StopScenario):
+        inbox_watcher.watch_inbox(
+            inbox_dir=inbox,
+            outbox_dir=outbox,
+            poll_interval=0,
+            args=_args(),
+            process_task=lambda *_args: pytest.fail("provider must not run"),
+            min_file_age_seconds=0,
+            max_retries=1,
+            sleep_fn=lambda _seconds: None,
+            time_fn=lambda: 10_000_000_000.0,
+        )
+
+    assert _destination(task, outbox) == expected_destination
+    assert inbox_watcher.read_attempt_count(task) == expected_attempts
+    assert ("Failed to move poison task" in caplog.text) is logs_failure
+    assert ("UnboundLocalError" in caplog.text) is logs_failure
+
+
 def test_scenarios_are_built_once(
     watcher_outcome_corpus: BuiltCorpus,
 ) -> None:
@@ -998,7 +1205,7 @@ def test_b45_helpers_remain_inside_their_pre_cut_catchers() -> None:
     }
     called_private_functions = {
         name
-        for node in ast.walk(_watch_function(SOURCE_TREE))
+        for node in ast.walk(_logical_pre_b61_watch_function(SOURCE_TREE))
         if isinstance(node, ast.Call)
         if (name := _call_name(node)) in module_private_functions
     }
@@ -1116,7 +1323,11 @@ def test_b57_documents_each_physically_changed_handler_body() -> None:
         zip(CATCHER_SPECS, _handlers(_pre_b57_watch_function()), strict=True)
     )
     current_handlers = dict(
-        zip(CATCHER_SPECS, _handlers(_watch_function(SOURCE_TREE)), strict=True)
+        zip(
+            CATCHER_SPECS,
+            _handlers(_logical_pre_b61_watch_function(SOURCE_TREE)),
+            strict=True,
+        )
     )
     changed = {
         spec.catcher_id
@@ -1206,3 +1417,184 @@ def test_b57_keeps_the_b25_record_sequence_baseline_byte_identical() -> None:
         text=True,
     ).stdout.strip()
     assert actual_blob == RECORD_SEQUENCE_BLOB
+
+
+def test_b61_pre_cut_anchor_binds_b60_and_all_protected_fixtures() -> None:
+    anchor = json.loads(B61_PRE_CUT.read_text(encoding="utf-8"))
+    assert anchor == {
+        "schema_version": "watcher-pre-b61-v1",
+        "source_commit": PRE_B61_COMMIT,
+        "source_blob": PRE_B61_BLOB,
+        "source_path": "src/inbox_watcher.py",
+        "function_size_baseline_pre_blob": (
+            "63082a085a8f43af923a02efaf06b2f42724c870"
+        ),
+        "protected_blobs": {
+            "tests/fixtures/watcher-outcome-corpus-v1.json": (
+                "7b41aa497b56bfb9533fdc985bc1f3e688623573"
+            ),
+            "tests/fixtures/watcher-catcher-map-pre-b45-v1.json": (
+                "ca668ea2c4d68b088db763cd0a4699dd1b87e598"
+            ),
+            "tests/fixtures/watcher-catcher-helper-bindings-b45-v1.json": (
+                "af0ca31deb7ec8c91d75611d71a60d33d57f6f36"
+            ),
+            "tests/fixtures/watcher-helper-bindings-b57-v1.json": (
+                "f9a4ef7d83a456ad8b4f4a08e059d2a6e0b4f53d"
+            ),
+            "tests/fixtures/watcher-pre-b57-v1.json": (
+                "5aeb38509ce2fed914477a4ec2f4f393a70820d9"
+            ),
+            "tests/fixtures/workflow-record-sequence-baseline-v1.json": (
+                RECORD_SEQUENCE_BLOB
+            ),
+        },
+        "watch_inbox_lines": 329,
+        "return_count": 10,
+        "continue_count": 7,
+        "catcher_count": 12,
+        "exception_catcher_count": 9,
+    }
+    assert subprocess.run(
+        ["git", "rev-parse", f"{PRE_B61_COMMIT}:src/inbox_watcher.py"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip() == PRE_B61_BLOB
+    assert subprocess.run(
+        [
+            "git",
+            "rev-parse",
+            f"{PRE_B61_COMMIT}:tests/fixtures/function-size-baseline-v1.json",
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip() == anchor["function_size_baseline_pre_blob"]
+    for path, expected_blob in anchor["protected_blobs"].items():
+        assert subprocess.run(
+            ["git", "rev-parse", f"{PRE_B61_COMMIT}:{path}"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip() == expected_blob
+        assert subprocess.run(
+            ["git", "hash-object", str(ROOT / path)],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip() == expected_blob
+
+
+def test_b61_helpers_inline_to_the_exact_b60_watch_function() -> None:
+    actual = ast.dump(
+        _logical_pre_b61_watch_function(SOURCE_TREE), include_attributes=False
+    )
+    expected = ast.dump(_pre_b61_watch_function(), include_attributes=False)
+    assert actual == expected
+    assert _handler_inventory(SOURCE_TREE) == _load_baseline()["handlers"]
+
+
+def test_b61_helpers_remain_inside_their_pre_cut_catchers() -> None:
+    document = json.loads(B61_HELPER_BINDINGS.read_text(encoding="utf-8"))
+    assert document["schema_version"] == "watcher-helper-bindings-b61-v1"
+    assert document["pre_cut"] == B61_PRE_CUT.relative_to(ROOT).as_posix()
+    expected = {
+        item["helper"]: (item["catcher_id"], item["region"])
+        for item in document["helpers"]
+    }
+    actual = {
+        helper: _helper_catcher_binding(SOURCE_TREE, helper) for helper in expected
+    }
+    assert actual == expected
+    assert tuple(expected) == B61_HELPERS
+
+    helper_nodes = {
+        node.name: node
+        for node in SOURCE_TREE.body
+        if isinstance(node, ast.FunctionDef) and node.name in B61_HELPERS
+    }
+    assert set(helper_nodes) == set(B61_HELPERS)
+    assert {
+        item["helper"]: tuple(item["owned_catchers"])
+        for item in document["helpers"]
+    } == B61_OWNED_CATCHERS
+
+
+def test_b61_preserves_all_twelve_physical_catchers_without_narrowing() -> None:
+    document = json.loads(B61_HELPER_BINDINGS.read_text(encoding="utf-8"))
+    pre_handlers = dict(
+        zip(CATCHER_SPECS, _handlers(_pre_b61_watch_function()), strict=True)
+    )
+    current_handlers = _physical_handlers_by_id(SOURCE_TREE)
+    assert len(current_handlers) == 12
+    assert Counter(_exception_name(handler) for handler in current_handlers.values()) == {
+        "Exception": 9,
+        "ValueError": 2,
+        "KeyboardInterrupt": 1,
+    }
+    changed = {
+        spec.catcher_id
+        for spec in CATCHER_SPECS
+        if _body_sha256(current_handlers[spec.catcher_id])
+        != _body_sha256(pre_handlers[spec])
+    }
+    assert changed == set(document["handler_body_sha_change_reasons"])
+    assert all(document["handler_body_sha_change_reasons"].values())
+
+
+def test_b61_keeps_while_and_all_returns_and_continues_in_source_order() -> None:
+    anchor = json.loads(B61_PRE_CUT.read_text(encoding="utf-8"))
+    current = _watch_function(SOURCE_TREE)
+    pre_cut = _pre_b61_watch_function()
+    current_while = next(node for node in ast.walk(current) if isinstance(node, ast.While))
+    pre_cut_while = next(node for node in ast.walk(pre_cut) if isinstance(node, ast.While))
+    assert ast.dump(current_while.test, include_attributes=False) == ast.dump(
+        pre_cut_while.test, include_attributes=False
+    )
+    assert _all_control_sequence(current) == _all_control_sequence(pre_cut)
+    assert sum(isinstance(node, ast.Return) for node in ast.walk(current)) == anchor[
+        "return_count"
+    ]
+    assert sum(isinstance(node, ast.Continue) for node in ast.walk(current)) == anchor[
+        "continue_count"
+    ]
+
+
+def test_b61_moving_a_helper_out_of_its_catcher_names_the_helper() -> None:
+    helper_name = "_archive_rejected_watch_task"
+    mutant = _move_helper_call_before_catcher(copy.deepcopy(SOURCE_TREE), helper_name)
+    compile(mutant, "<b61-helper-outside-catcher>", "exec")
+    with pytest.raises(AssertionError, match=helper_name):
+        expected = json.loads(
+            B61_HELPER_BINDINGS.read_text(encoding="utf-8")
+        )["helpers"]
+        for item in expected:
+            actual = _helper_catcher_binding(mutant, item["helper"])
+            if actual != (item["catcher_id"], item["region"]):
+                raise AssertionError(item["helper"])
+
+
+def test_b61_watch_entry_shrinks_and_helpers_stay_below_threshold() -> None:
+    anchor = json.loads(B61_PRE_CUT.read_text(encoding="utf-8"))
+    size_baseline = json.loads(FUNCTION_SIZE_BASELINE.read_text(encoding="utf-8"))
+    watch = _watch_function(SOURCE_TREE)
+    watch_span = watch.end_lineno - watch.lineno + 1
+    threshold = size_baseline["threshold_lines"]
+    baseline_key = "src/inbox_watcher.py::watch_inbox"
+    assert watch_span < anchor["watch_inbox_lines"]
+    if watch_span < threshold:
+        assert baseline_key not in size_baseline["functions"]
+    else:
+        assert size_baseline["functions"][baseline_key] == watch_span
+    helper_spans = {
+        node.name: node.end_lineno - node.lineno + 1
+        for node in SOURCE_TREE.body
+        if isinstance(node, ast.FunctionDef) and node.name in B61_HELPERS
+    }
+    assert set(helper_spans) == set(B61_HELPERS)
+    assert all(span < threshold for span in helper_spans.values()), helper_spans

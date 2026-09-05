@@ -459,6 +459,16 @@ COMPARISON_TARGETS = (
 )
 COMPARISON_HELPERS = {
     (
+        "src/inbox_watcher.py",
+        None,
+        "watch_inbox",
+    ): (
+        "_handle_stuck_task",
+        "_archive_rejected_watch_task",
+        "_archive_poisoned_watch_task",
+        "_handle_completed_archive_failure",
+    ),
+    (
         "src/workflow_baseline.py",
         None,
         "matches_baseline_initialization_prefix",
