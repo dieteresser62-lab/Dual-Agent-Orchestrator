@@ -1,0 +1,8 @@
+{
+  "schema_version": "payload-dispatch-pre-b58-v1",
+  "source_commit": "5ed020e1e64263a54c54ea93ad30642cda769a82",
+  "source_blob": "21b4abf0fac890ad05a532a3573567efc65e1d67",
+  "dispatch_branch_count": 36,
+  "constructed_payload_class_count": 41,
+  "unknown_type_error": "unsupported record_type: unknown_record_type"
+}

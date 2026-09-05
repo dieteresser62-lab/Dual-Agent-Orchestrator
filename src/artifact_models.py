@@ -20,7 +20,7 @@ import math
 from pathlib import Path, PurePosixPath
 import re
 from functools import lru_cache
-from typing import Any, ClassVar, Mapping, Sequence, TypeAlias
+from typing import Any, Callable, ClassVar, Mapping, Sequence, TypeAlias
 
 from schema_validation import (
     SchemaDefinitionError,
@@ -1967,60 +1967,59 @@ def validate_artifact_document(document: Mapping[str, Any]) -> None:
         ) from None
 
 
-def _payload_from_dict(record_type: RecordType, raw: Mapping[str, Any]) -> ArtifactPayload:
-    data = dict(raw)
-    if record_type is RecordType.RUN_IDENTITY:
-        return RunIdentityPayload(
+_PAYLOAD_READERS: dict[
+    RecordType, Callable[[Mapping[str, Any]], ArtifactPayload]
+] = {
+    RecordType.RUN_IDENTITY: lambda data: RunIdentityPayload(
             data["task_file"], data["branch"], data["branch_base"],
             data["execution_mode"], data["audit_report_path"],
-        )
-    if record_type is RecordType.RUN_PROFILE:
-        return RunProfilePayload(
+        ),
+    RecordType.RUN_PROFILE: lambda data: RunProfilePayload(
             RoleProfilePayload(**data["implementer"]),
             RoleProfilePayload(**data["reviewer"]),
             data["reducer_version"],
-        )
-    if record_type is RecordType.WORKFLOW_TRANSITION:
-        return WorkflowTransitionPayload(
+        ),
+    RecordType.WORKFLOW_TRANSITION: lambda data: WorkflowTransitionPayload(
             data["slice_id"], data["slice_status"], data["work_unit_id"],
             data["step"], data["work_unit_status"],
-        )
-    if record_type is RecordType.WORKFLOW_EVENT:
-        return WorkflowEventPayload(
+        ),
+    RecordType.WORKFLOW_EVENT: lambda data: WorkflowEventPayload(
             data["event_kind"], data["work_unit_id"], data["slice_id"],
             data["round_number"], tuple(data["record_refs"]),
-        )
-    if record_type is RecordType.WORKFLOW_POLICY:
-        return WorkflowPolicyPayload(
+        ),
+    RecordType.WORKFLOW_POLICY: lambda data: WorkflowPolicyPayload(
             data["work_unit_id"], data["implementer_return_count"],
             data["max_implementer_returns"],
-        )
-    if record_type is RecordType.SLICE_BOUNDARY:
-        return SliceBoundaryPayload(
+        ),
+    RecordType.SLICE_BOUNDARY: lambda data: SliceBoundaryPayload(
             data["slice_id"],
             data["start_commit"],
             tuple(tuple(group) for group in data["scope_change_groups"]),
             data["start_fingerprint"],
-        )
-    if record_type is RecordType.TASK:
-        return TaskPayload(
+        ),
+    RecordType.TASK: lambda data: TaskPayload(
             data["target_branch"],
             tuple(data["scope_paths"]),
             data["assignment_sha256"],
             data["work_plan_path"],
-        )
-    if record_type is RecordType.PLAN:
-        slices = tuple(SliceSpec(item["slice_id"], item["summary"], tuple(item["paths"])) for item in data["slices"])
-        return PlanPayload(data["work_plan_path"], data["approved_plan_commit"], slices)
-    if record_type is RecordType.WORK_UNIT:
-        return WorkUnitPayload(
+        ),
+    RecordType.PLAN: lambda data: PlanPayload(
+        data["work_plan_path"],
+        data["approved_plan_commit"],
+        tuple(
+            SliceSpec(item["slice_id"], item["summary"], tuple(item["paths"]))
+            for item in data["slices"]
+        ),
+    ),
+    RecordType.WORK_UNIT: lambda data: WorkUnitPayload(
             data["slice_id"], data["round_number"], tuple(data["paths"]),
             tuple(data.get("open_finding_ids", ())), data.get("finding_import_record_id"),
-        )
-    if record_type is RecordType.CORRECTION_WORK_UNIT:
-        return CorrectionWorkUnitPayload(data["slice_id"], data["round_number"], tuple(data["paths"]), tuple(data["finding_ids"]))
-    if record_type is RecordType.AGENT_RESULT:
-        return AgentResultPayload(
+        ),
+    RecordType.CORRECTION_WORK_UNIT: lambda data: CorrectionWorkUnitPayload(
+        data["slice_id"], data["round_number"], tuple(data["paths"]),
+        tuple(data["finding_ids"]),
+    ),
+    RecordType.AGENT_RESULT: lambda data: AgentResultPayload(
             Role(data["role"]),
             data["work_unit_id"],
             data["outcome"],
@@ -2032,13 +2031,12 @@ def _payload_from_dict(record_type: RecordType, raw: Mapping[str, Any]) -> Artif
                 SliceSpec(item["slice_id"], item["summary"], tuple(item["paths"]))
                 for item in data["slice_plan"]
             ),
-        )
-    if record_type is RecordType.DIAGNOSTIC:
-        return DiagnosticPayload(Role(data["role"]), data["work_unit_id"], data["attempt"], data["output_sha256"], data["reason"])
-    if record_type is RecordType.REVIEW:
-        structured_evidence = data.get("review_evidence")
-        stop_request = data.get("stop_request")
-        return ReviewPayload(
+        ),
+    RecordType.DIAGNOSTIC: lambda data: DiagnosticPayload(
+        Role(data["role"]), data["work_unit_id"], data["attempt"],
+        data["output_sha256"], data["reason"],
+    ),
+    RecordType.REVIEW: lambda data: ReviewPayload(
             Role(data["reviewer"]),
             data["work_unit_id"],
             data["verdict"],
@@ -2049,11 +2047,11 @@ def _payload_from_dict(record_type: RecordType, raw: Mapping[str, Any]) -> Artif
             data["response_sha256"],
             (
                 None
-                if structured_evidence is None
+                if data.get("review_evidence") is None
                 else ReviewEvidencePayload(
-                    structured_evidence["dimensions"],
-                    structured_evidence["largest_residual_risk"],
-                    structured_evidence["break_condition"],
+                    data["review_evidence"]["dimensions"],
+                    data["review_evidence"]["largest_residual_risk"],
+                    data["review_evidence"]["break_condition"],
                 )
             ),
             data.get("red_state_followup_slice"),
@@ -2061,16 +2059,15 @@ def _payload_from_dict(record_type: RecordType, raw: Mapping[str, Any]) -> Artif
             data["pre_mortem"],
             (
                 None
-                if stop_request is None
+                if data.get("stop_request") is None
                 else ReviewStopRequestPayload(
-                    stop_request["rule_id"],
-                    stop_request["rationale"],
-                    tuple(stop_request["remediation_paths"]),
+                    data["stop_request"]["rule_id"],
+                    data["stop_request"]["rationale"],
+                    tuple(data["stop_request"]["remediation_paths"]),
                 )
             ),
-        )
-    if record_type is RecordType.REVIEW_ANCHOR:
-        return ReviewAnchorPayload(
+        ),
+    RecordType.REVIEW_ANCHOR: lambda data: ReviewAnchorPayload(
             data["review_record_id"],
             tuple(
                 ReviewAnchor(
@@ -2082,14 +2079,12 @@ def _payload_from_dict(record_type: RecordType, raw: Mapping[str, Any]) -> Artif
                 )
                 for item in data["anchors"]
             ),
-        )
-    if record_type is RecordType.REVIEW_VALIDATION_BINDING:
-        return ReviewValidationBindingPayload(
+        ),
+    RecordType.REVIEW_VALIDATION_BINDING: lambda data: ReviewValidationBindingPayload(
             data["review_record_id"],
             data["attestation_record_id"],
-        )
-    if record_type is RecordType.FINDING_TRANSITION:
-        return FindingTransitionPayload(
+        ),
+    RecordType.FINDING_TRANSITION: lambda data: FindingTransitionPayload(
             finding_id=data["finding_id"],
             reporter=Role(data["reporter"]),
             actor=Role(data["actor"]),
@@ -2103,17 +2098,15 @@ def _payload_from_dict(record_type: RecordType, raw: Mapping[str, Any]) -> Artif
             origin_slice_id=data.get("origin_slice_id"),
             origin_round_number=data.get("origin_round_number"),
             response_decision=data.get("response_decision"),
-        )
-    if record_type is RecordType.FINDING_HANDOFF_EXPORT:
-        return FindingHandoffExportPayload(
+        ),
+    RecordType.FINDING_HANDOFF_EXPORT: lambda data: FindingHandoffExportPayload(
             data["source_run_id"], data["source_head_record_id"],
             data["approved_plan_commit"], data["approval_review_record_id"],
             tuple(data["finding_transition_record_ids"]),
             data["finding_transitions_sha256"], data["target_task_path"],
             data["target_task_sha256"], Role(data["authority"]),
-        )
-    if record_type is RecordType.FINDING_HANDOFF_IMPORT:
-        return FindingHandoffImportPayload(
+        ),
+    RecordType.FINDING_HANDOFF_IMPORT: lambda data: FindingHandoffImportPayload(
             data["source_run_id"], data["source_head_record_id"],
             data["approved_plan_commit"], data["approval_review_record_id"],
             data["export_record_id"], data["target_run_id"],
@@ -2126,12 +2119,15 @@ def _payload_from_dict(record_type: RecordType, raw: Mapping[str, Any]) -> Artif
                 for item in data["transitions"]
             ),
             Role(data["authority"]),
-        )
-    if record_type is RecordType.VALIDATION_REQUEST:
-        commands = tuple(CommandSpec(item["family"], tuple(item["argv"]), item["mode"]) for item in data["commands"])
-        return ValidationRequestPayload(commands, Role(data["requested_by"]))
-    if record_type is RecordType.VALIDATION_CONTENT:
-        return ValidationContentPayload(
+        ),
+    RecordType.VALIDATION_REQUEST: lambda data: ValidationRequestPayload(
+        tuple(
+            CommandSpec(item["family"], tuple(item["argv"]), item["mode"])
+            for item in data["commands"]
+        ),
+        Role(data["requested_by"]),
+    ),
+    RecordType.VALIDATION_CONTENT: lambda data: ValidationContentPayload(
             data["attestation_id"],
             data["result_record_id"],
             data["digest_format"],
@@ -2153,20 +2149,26 @@ def _payload_from_dict(record_type: RecordType, raw: Mapping[str, Any]) -> Artif
                 )
                 for item in data["outputs"]
             ),
-        )
-    if record_type is RecordType.VALIDATION_ATTESTATION:
-        results = tuple(
-            ValidationResult(CommandSpec(item["command"]["family"], tuple(item["command"]["argv"]), item["command"]["mode"]), item["outcome"], item["exit_code"], item["output_sha256"])
-            for item in data["results"]
-        )
-        return ValidationAttestationPayload(
-            results,
+        ),
+    RecordType.VALIDATION_ATTESTATION: lambda data: ValidationAttestationPayload(
+            tuple(
+                ValidationResult(
+                    CommandSpec(
+                        item["command"]["family"],
+                        tuple(item["command"]["argv"]),
+                        item["command"]["mode"],
+                    ),
+                    item["outcome"],
+                    item["exit_code"],
+                    item["output_sha256"],
+                )
+                for item in data["results"]
+            ),
             Role(data["attested_by"]),
             data["output_digest"],
             data["content_record_id"],
-        )
-    if record_type is RecordType.PROVIDER_CONTENT:
-        return ProviderContentPayload(
+        ),
+    RecordType.PROVIDER_CONTENT: lambda data: ProviderContentPayload(
             Role(data["role"]),
             data["work_unit_id"],
             data["round_number"],
@@ -2176,9 +2178,8 @@ def _payload_from_dict(record_type: RecordType, raw: Mapping[str, Any]) -> Artif
             data["content_kind"],
             data["content_bytes"],
             BlobReference(**data["blob"]),
-        )
-    if record_type is RecordType.REVIEW_PACKET:
-        return ReviewPacketPayload(
+        ),
+    RecordType.REVIEW_PACKET: lambda data: ReviewPacketPayload(
             data["work_unit_id"],
             data["fingerprint"],
             data["purpose"],
@@ -2186,25 +2187,26 @@ def _payload_from_dict(record_type: RecordType, raw: Mapping[str, Any]) -> Artif
             data["diff_coverage_sha256"],
             data["content_bytes"],
             BlobReference(**data["blob"]),
-        )
-    if record_type is RecordType.GATE:
-        return GatePayload(data["gate_kind"], data["decision"], Role(data["authority"]), data["rationale"])
-    if record_type is RecordType.GATE_TRANSITION:
-        return GateTransitionPayload(
+        ),
+    RecordType.GATE: lambda data: GatePayload(
+        data["gate_kind"], data["decision"], Role(data["authority"]),
+        data["rationale"],
+    ),
+    RecordType.GATE_TRANSITION: lambda data: GateTransitionPayload(
             data["work_unit_id"], data["gate_status"], data["reason"],
             data["detail"], data["fingerprint"], tuple(data["paths"]),
             data["resume_step"], data["active_test_fingerprint"],
             tuple(data["active_test_paths"]),
-        )
-    if record_type is RecordType.GATE_DECISION:
-        return GateDecisionPayload(
+        ),
+    RecordType.GATE_DECISION: lambda data: GateDecisionPayload(
             data["work_unit_id"], data["gate_record_id"], tuple(data["paths"]),
             data["resume_step"],
-        )
-    if record_type is RecordType.BINDING:
-        return BindingPayload(data["binding_kind"], data["target"], data["attestation_id"], tuple(data["approval_ids"]))
-    if record_type is RecordType.INVOCATION_FAILURE:
-        return InvocationFailurePayload(
+        ),
+    RecordType.BINDING: lambda data: BindingPayload(
+        data["binding_kind"], data["target"], data["attestation_id"],
+        tuple(data["approval_ids"]),
+    ),
+    RecordType.INVOCATION_FAILURE: lambda data: InvocationFailurePayload(
             data["invocation_id"], data["idempotency_key"], Role(data["role"]),
             data["failure_kind"], data["failure_class"], data["diagnostic_code"],
             data["provider_text"], data["provider_text_sha256"],
@@ -2218,22 +2220,23 @@ def _payload_from_dict(record_type: RecordType, raw: Mapping[str, Any]) -> Artif
             data["resume_at_utc"], data["safety_margin_seconds"],
             data["retry_delay_seconds"], data["auto_resume_count"],
             data["automatic_resume"], data["diff_fingerprint"],
-        )
-    if record_type is RecordType.QUOTA_PAUSE:
-        return QuotaPausePayload(Role(data["role"]), data["repository_fingerprint"], data["retry_at"])
-    if record_type is RecordType.TRANSIENT_RETRY:
-        return TransientRetryPayload(
+        ),
+    RecordType.QUOTA_PAUSE: lambda data: QuotaPausePayload(
+        Role(data["role"]), data["repository_fingerprint"], data["retry_at"],
+    ),
+    RecordType.TRANSIENT_RETRY: lambda data: TransientRetryPayload(
             Role(data["role"]),
             data["repository_fingerprint"],
             data["retry_at"],
             data["attempt"],
-        )
-    if record_type is RecordType.RESUME_CHECK:
-        return ResumeCheckPayload(data["expected_head_id"], data["repository_fingerprint"], data["outcome"])
-    if record_type is RecordType.WORKFLOW_COMPLETION:
-        return WorkflowCompletionPayload(data["outcome"], data["final_binding_id"])
-    if record_type is RecordType.PROVIDER_INPUT_MEASUREMENT:
-        return ProviderInputMeasurementPayload(
+        ),
+    RecordType.RESUME_CHECK: lambda data: ResumeCheckPayload(
+        data["expected_head_id"], data["repository_fingerprint"], data["outcome"],
+    ),
+    RecordType.WORKFLOW_COMPLETION: lambda data: WorkflowCompletionPayload(
+        data["outcome"], data["final_binding_id"],
+    ),
+    RecordType.PROVIDER_INPUT_MEASUREMENT: lambda data: ProviderInputMeasurementPayload(
             Role(data["provider"]), Role(data["role"]), data["operation"], data["work_unit_id"],
             data["transition_fingerprint"], data["relevant_record_head"], data["input_digest"], data["policy_digest"],
             tuple(ProviderInputComponentPayload(item["name"], item["chars"], item["bytes"]) for item in data["components"]),
@@ -2241,30 +2244,36 @@ def _payload_from_dict(record_type: RecordType, raw: Mapping[str, Any]) -> Artif
             data["technical_limit_chars"], data["technical_limit_bytes"], data["technical_limit_source"],
             data["effective_limit_chars"], data["effective_limit_bytes"], data["allowed"],
             tuple(data["violated_dimensions"]), data["char_overage"], data["byte_overage"], data["largest_component"],
-        )
-    if record_type is RecordType.PROVIDER_ATTEMPT:
-        usage = data["usage"]
-        return ProviderAttemptPayload(
+        ),
+    RecordType.PROVIDER_ATTEMPT: lambda data: ProviderAttemptPayload(
             Role(data["provider"]), Role(data["role"]), data["operation"], data["work_unit_id"],
             data["logical_operation_id"], data["binding_fingerprint"], data["measurement_record_id"],
             data["input_digest"], data["attempt_number"], data["phase"], data["started_at"],
             data["ended_at"], data["duration_seconds"], data["failure_kind"],
-            ProviderUsagePayload(**usage) if usage is not None else None,
+            ProviderUsagePayload(**data["usage"]) if data["usage"] is not None else None,
             data["model"], data["effort"],
-        )
-    if record_type is RecordType.SIDE_EFFECT:
-        return SideEffectPayload(
+        ),
+    RecordType.SIDE_EFFECT: lambda data: SideEffectPayload(
             data["effect_key"], data["effect_class"], data["work_unit_id"],
             tuple(data["operation"]), data["phase"], data["result"],
-        )
-    if record_type is RecordType.FINAL_REVIEW_PREFLIGHT:
-        return FinalReviewPreflightPayload(
+        ),
+    RecordType.FINAL_REVIEW_PREFLIGHT: lambda data: FinalReviewPreflightPayload(
             Role(data["provider"]), Role(data["role"]), data["operation"], data["work_unit_id"],
             data["transition_fingerprint"], data["relevant_record_head"], data["measurement_record_id"],
             data["outcome"], data["category"], data["error_code"], tuple(data["affected_record_ids"]),
             tuple(data["affected_paths"]), data["remediation"],
-        )
-    raise ArtifactValidationError(f"unsupported record_type: {record_type}")
+        ),
+}
+
+
+def _payload_from_dict(record_type: RecordType, raw: Mapping[str, Any]) -> ArtifactPayload:
+    data = dict(raw)
+    lookup_type = record_type if isinstance(record_type, RecordType) else object()
+    try:
+        reader = _PAYLOAD_READERS[lookup_type]  # type: ignore[index]
+    except (KeyError, TypeError):
+        raise ArtifactValidationError(f"unsupported record_type: {record_type}") from None
+    return reader(data)
 
 
 def _json_value(value: Any) -> Any:
