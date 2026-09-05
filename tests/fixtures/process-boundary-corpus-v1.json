@@ -1,0 +1,96 @@
+{
+  "schema_version": "process-boundary-corpus-v1",
+  "pre_cut": "tests/fixtures/process-boundary-pre-b59-v1.json",
+  "scenarios": [
+    {
+      "scenario_id": "normal-live",
+      "description": "Live-Prozess liest stdout und stderr jeweils in zwei Stücken vollständig und wartet auf das Ende.",
+      "trigger": {"mode": "live", "stdout_chunks": ["Erste Hälfte: ä\n", "Zweite Hälfte: Ω\n"], "stderr_chunks": ["Warnung ", "vollständig\n"], "returncode": 0},
+      "expected": {"output": "Erste Hälfte: ä\nZweite Hälfte: Ω", "error_chain": [], "process_lifecycle": ["Popen", "wait"], "open_processes": 0, "stdout_bytes_hex": "45727374652048c3a46c6674653a20c3a40a5a77656974652048c3a46c6674653a20cea90a", "stderr_bytes_hex": "5761726e756e6720766f6c6c7374c3a46e6469670a", "validated_stderr_bytes_hex": "5761726e756e6720766f6c6c7374c3a46e646967", "catcher_ids": [], "thread_errors": [], "cleanup_calls": 1, "double_process_starts": 1, "real_process_starts": 0}
+    },
+    {
+      "scenario_id": "timeout-live",
+      "description": "Die Live-Leseschleife überschreitet das Limit, tötet den Prozess und der Timeout-Fänger übersetzt den internen Abbruch.",
+      "trigger": {"mode": "live", "stdout_chunks": [], "stderr_chunks": [], "returncode": 0, "stall_stream_threads": true},
+      "expected": {"output": null, "error_chain": [{"type": "AgentProcessError", "message": "codex timed out after 1s."}, {"type": "TimeoutExpired", "message": "Command '['provider-double', '--scenario', 'timeout-live']' timed out after 1 seconds"}], "process_lifecycle": ["Popen", "kill"], "open_processes": 0, "stdout_bytes_hex": "", "stderr_bytes_hex": "", "validated_stderr_bytes_hex": "", "catcher_ids": ["timeout-expired"], "thread_errors": [], "cleanup_calls": 1, "double_process_starts": 1, "real_process_starts": 0}
+    },
+    {
+      "scenario_id": "agent-output-error-run",
+      "description": "Der Adapter lehnt die vollständig gelesene Providerhülle ab; der Fänger ergänzt den Exitcode und wirft denselben Fehler weiter.",
+      "trigger": {"mode": "run", "stdout_chunks": ["{\"status\":\"ERROR\"}\n"], "stderr_chunks": ["Ablehnung vollständig\n"], "returncode": 9, "validate_error": "provider rejected envelope"},
+      "expected": {"output": null, "error_chain": [{"type": "AgentOutputError", "message": "provider rejected envelope"}], "error_exit_code": 9, "process_lifecycle": ["run"], "open_processes": 0, "stdout_bytes_hex": "7b22737461747573223a224552524f52227d0a", "stderr_bytes_hex": "41626c65686e756e6720766f6c6c7374c3a46e6469670a", "validated_stderr_bytes_hex": "41626c65686e756e6720766f6c6c7374c3a46e646967", "catcher_ids": ["agent-output-error"], "thread_errors": [], "cleanup_calls": 1, "double_process_starts": 1, "real_process_starts": 0}
+    },
+    {
+      "scenario_id": "queue-empty-live",
+      "description": "Die Leseschleife erhält zunächst queue.Empty und liest danach beide stdout-Stücke vollständig.",
+      "trigger": {"mode": "live", "stdout_chunks": ["queue-", "vollständig\n"], "stderr_chunks": [], "returncode": 0, "queue_empty_count": 1},
+      "expected": {"output": "queue-vollständig", "error_chain": [], "process_lifecycle": ["Popen", "wait"], "open_processes": 0, "stdout_bytes_hex": "71756575652d766f6c6c7374c3a46e6469670a", "stderr_bytes_hex": "", "validated_stderr_bytes_hex": "", "catcher_ids": ["queue-empty"], "thread_errors": [], "cleanup_calls": 1, "double_process_starts": 1, "real_process_starts": 0}
+    },
+    {
+      "scenario_id": "stream-close-error-live",
+      "description": "stdout und stderr werden vollständig gelesen; der stdout-close-Fehler wird vom inneren Exception-Fänger aufgenommen.",
+      "trigger": {"mode": "live", "stdout_chunks": ["close-", "fang\n"], "stderr_chunks": ["stderr-", "geteilt\n"], "returncode": 0, "stdout_close_error": "stdout close failed"},
+      "expected": {"output": "close-fang", "error_chain": [], "process_lifecycle": ["Popen", "wait"], "open_processes": 0, "stdout_bytes_hex": "636c6f73652d66616e670a", "stderr_bytes_hex": "7374646572722d67657465696c740a", "validated_stderr_bytes_hex": "7374646572722d67657465696c74", "catcher_ids": ["read-stream-close-exception"], "thread_errors": [], "cleanup_calls": 1, "double_process_starts": 1, "real_process_starts": 0}
+    },
+    {
+      "scenario_id": "stream-read-abort-live",
+      "description": "stdout bricht nach zwei gelesenen Stücken ab; der Kanalabschluss bleibt signalisiert, stderr bleibt vollständig und wait räumt den Prozess ab.",
+      "trigger": {"mode": "live", "stdout_chunks": ["vor-", "Abbruch\n"], "stderr_chunks": ["stderr bleibt\n"], "returncode": 0, "stdout_read_error": "stream interrupted"},
+      "expected": {"output": "vor-Abbruch", "error_chain": [], "process_lifecycle": ["Popen", "wait"], "open_processes": 0, "stdout_bytes_hex": "766f722d416262727563680a", "stderr_bytes_hex": "73746465727220626c656962740a", "validated_stderr_bytes_hex": "73746465727220626c65696274", "catcher_ids": [], "thread_errors": ["RuntimeError: stream interrupted"], "cleanup_calls": 1, "double_process_starts": 1, "real_process_starts": 0}
+    },
+    {
+      "scenario_id": "cleanup-error-run",
+      "description": "Der synchrone Doppelgänger endet und liefert die Ausgabe vollständig; der abschließende Adapter-Cleanup-Fehler wird gefangen.",
+      "trigger": {"mode": "run", "stdout_chunks": ["Erfolg trotz Cleanup\n"], "stderr_chunks": [], "returncode": 0, "cleanup_error": "cleanup failed"},
+      "expected": {"output": "Erfolg trotz Cleanup", "error_chain": [], "process_lifecycle": ["run"], "open_processes": 0, "stdout_bytes_hex": "4572666f6c672074726f747a20436c65616e75700a", "stderr_bytes_hex": "", "validated_stderr_bytes_hex": "", "catcher_ids": ["cleanup-exception"], "thread_errors": [], "cleanup_calls": 1, "double_process_starts": 1, "real_process_starts": 0}
+    },
+    {
+      "scenario_id": "unregistered-provider",
+      "description": "Ein nicht registrierter Adapter wird vor Vorbereitung und Prozessstart abgelehnt.",
+      "trigger": {"mode": "preflight-rejection", "adapter_name": "unknown-provider"},
+      "expected": {"output": null, "error_chain": [{"type": "ProviderInputBudgetError", "message": "adapter 'unknown-provider' has no provider input budget registration"}], "process_lifecycle": [], "open_processes": 0, "stdout_bytes_hex": "", "stderr_bytes_hex": "", "validated_stderr_bytes_hex": "", "catcher_ids": [], "thread_errors": [], "cleanup_calls": 0, "double_process_starts": 0, "real_process_starts": 0}
+    },
+    {
+      "scenario_id": "reviewer-execution-root",
+      "description": "Ein Reviewer darf keinen aufruferbestimmten Ausführungsroot erhalten und wird vor Prozessstart abgelehnt.",
+      "trigger": {"mode": "preflight-rejection", "adapter_name": "claude", "reviewer": true, "execution_root_override": "existing"},
+      "expected": {"output": null, "error_chain": [{"type": "ValueError", "message": "reviewer execution roots are owned by reviewer workspaces"}], "process_lifecycle": [], "open_processes": 0, "stdout_bytes_hex": "", "stderr_bytes_hex": "", "validated_stderr_bytes_hex": "", "catcher_ids": [], "thread_errors": [], "cleanup_calls": 0, "double_process_starts": 0, "real_process_starts": 0}
+    },
+    {
+      "scenario_id": "missing-execution-root",
+      "description": "Ein nicht vorhandener Ausführungsroot wird vor Prozessstart abgelehnt.",
+      "trigger": {"mode": "preflight-rejection", "missing_execution_root": true},
+      "expected": {"output": null, "error_chain": [{"type": "ValueError", "message": "agent execution root must be an existing directory"}], "process_lifecycle": [], "open_processes": 0, "stdout_bytes_hex": "", "stderr_bytes_hex": "", "validated_stderr_bytes_hex": "", "catcher_ids": [], "thread_errors": [], "cleanup_calls": 0, "double_process_starts": 0, "real_process_starts": 0}
+    },
+    {
+      "scenario_id": "missing-operation",
+      "description": "Ein instrumentiert registrierter Provider ohne Standardoperation wird vor Prozessstart abgelehnt.",
+      "trigger": {"mode": "preflight-rejection", "adapter_name": "registered-provider", "register_without_operation": true},
+      "expected": {"output": null, "error_chain": [{"type": "ValueError", "message": "provider input operation is required for registered-provider"}], "process_lifecycle": [], "open_processes": 0, "stdout_bytes_hex": "", "stderr_bytes_hex": "", "validated_stderr_bytes_hex": "", "catcher_ids": [], "thread_errors": [], "cleanup_calls": 1, "double_process_starts": 0, "real_process_starts": 0}
+    },
+    {
+      "scenario_id": "budget-exceeded",
+      "description": "Vier Eingabezeichen überschreiten die auf drei Zeichen und Bytes gesetzte lokale Grenze; kein Prozess startet.",
+      "trigger": {"mode": "preflight-rejection", "prompt": "four", "budget_chars": 3, "budget_bytes": 3},
+      "expected": {"output": null, "error_chain": [{"type": "ProviderInputBudgetExceeded", "message": "provider input budget exceeded: provider=codex role=codex operation=codex_implementation dimensions=chars,bytes chars=4/3 bytes=4/3"}], "process_lifecycle": [], "open_processes": 0, "stdout_bytes_hex": "", "stderr_bytes_hex": "", "validated_stderr_bytes_hex": "", "catcher_ids": [], "thread_errors": [], "cleanup_calls": 1, "double_process_starts": 0, "real_process_starts": 0}
+    },
+    {
+      "scenario_id": "nonzero-exit-run",
+      "description": "Der synchrone Doppelgänger liefert beide Ausgabekanäle vollständig und ein Fehlercode bindet die stderr-Ablehnung.",
+      "trigger": {"mode": "run", "stdout_chunks": ["Fallback-Ausgabe\n"], "stderr_chunks": ["Provider fehlgeschlagen\n"], "returncode": 7},
+      "expected": {"output": null, "error_chain": [{"type": "AgentProcessError", "message": "Provider fehlgeschlagen"}], "error_exit_code": 7, "process_lifecycle": ["run"], "open_processes": 0, "stdout_bytes_hex": "46616c6c6261636b2d417573676162650a", "stderr_bytes_hex": "50726f7669646572206665686c67657363686c6167656e0a", "validated_stderr_bytes_hex": "50726f7669646572206665686c67657363686c6167656e", "catcher_ids": [], "thread_errors": [], "cleanup_calls": 1, "double_process_starts": 1, "real_process_starts": 0}
+    },
+    {
+      "scenario_id": "empty-output-run",
+      "description": "Nur Whitespace wird vollständig gelesen und danach als leere Providerantwort abgelehnt.",
+      "trigger": {"mode": "run", "stdout_chunks": [" \n"], "stderr_chunks": [], "returncode": 0},
+      "expected": {"output": null, "error_chain": [{"type": "AgentProcessError", "message": "codex returned empty output."}], "error_exit_code": 0, "process_lifecycle": ["run"], "open_processes": 0, "stdout_bytes_hex": "200a", "stderr_bytes_hex": "", "validated_stderr_bytes_hex": "", "catcher_ids": [], "thread_errors": [], "cleanup_calls": 1, "double_process_starts": 1, "real_process_starts": 0}
+    },
+    {
+      "scenario_id": "dry-run-rejected",
+      "description": "Die frühe Dry-run-Returnstelle delegiert an den nativen Szenarienzwang, der ohne Skript ablehnt; kein Prozess startet.",
+      "trigger": {"mode": "dry-run"},
+      "expected": {"output": null, "error_chain": [{"type": "AgentProcessError", "message": "native dry-run requires an explicit scripted JSON scenario via --dry-run-scenario"}], "process_lifecycle": [], "open_processes": 0, "stdout_bytes_hex": "", "stderr_bytes_hex": "", "validated_stderr_bytes_hex": "", "catcher_ids": [], "thread_errors": [], "cleanup_calls": 0, "double_process_starts": 0, "real_process_starts": 0}
+    }
+  ]
+}

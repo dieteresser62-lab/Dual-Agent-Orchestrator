@@ -1,0 +1,83 @@
+{
+  "schema_version": "process-boundary-pre-b59-v1",
+  "source_commit": "610fc3170788f641a074a5c3ed1a3a623d472b67",
+  "source_blob": "1f8914ae1e28ef0a3d981013e8731ec3a2e46fcd",
+  "source_path": "src/agent_runtime.py",
+  "function": "run_agent",
+  "function_span_lines": 295,
+  "condition_count": 31,
+  "abort_count": 10,
+  "return_count": 2,
+  "catcher_count": 5,
+  "protected_blobs": {
+    "tests/conftest.py": "1545d657329ccd409afce0501d7a4f53a12dac26",
+    "tests/test_test_run_isolation.py": "6bd1c9e1c23a1600fd628ada54c62153d8cd6051",
+    "tests/fixtures/gitignored-read-exemptions-baseline-v1.json": "d36f7ec5dc62ff70991156b8d02a4d45fcae8930",
+    "tests/fixtures/function-size-baseline-v1.json": "8dcc74770524f06a9ca2222c8398f48b5320b0c5",
+    "tests/fixtures/provider-name-coupling-baseline-v1.json": "05d503f957d385d7630a7aa5697463dd23cc9a5c",
+    "tests/fixtures/workflow-record-sequence-baseline-v1.json": "26fb661c8fa382f90e70fb921e3d950da5cae09b"
+  },
+  "conditions": [
+    {"line": 979, "expression": "config.dry_run", "read_names": ["config"]},
+    {"line": 981, "expression": "agent_key not in PROVIDER_OPERATIONS", "read_names": ["PROVIDER_OPERATIONS", "agent_key"]},
+    {"line": 992, "expression": "execution_root_override is not None and adapter.reviewer", "read_names": ["adapter", "execution_root_override"]},
+    {"line": 994, "expression": "not execution_root.is_dir()", "read_names": ["execution_root"]},
+    {"line": 1001, "expression": "adapter.reviewer", "read_names": ["adapter"]},
+    {"line": 1002, "expression": "not reviewer_repository_required", "read_names": ["reviewer_repository_required"]},
+    {"line": 1013, "expression": "prepared_provider_input is not None", "read_names": ["prepared_provider_input"]},
+    {"line": 1015, "expression": "callable(prepare_input)", "read_names": ["callable", "prepare_input"]},
+    {"line": 1028, "expression": "effective_operation is None", "read_names": ["effective_operation"]},
+    {"line": 1060, "expression": "not measurement.allowed", "read_names": ["measurement"]},
+    {"line": 1068, "expression": "adapter.reviewer", "read_names": ["adapter"]},
+    {"line": 1078, "expression": "attempt_invocation is not None", "read_names": ["attempt_invocation"]},
+    {"line": 1081, "expression": "config.agent_live_stream", "read_names": ["config"]},
+    {"line": 1097, "expression": "stdin_text is not None", "read_names": ["stdin_text"]},
+    {"line": 1115, "expression": "line == ''", "read_names": ["line"]},
+    {"line": 1144, "expression": "time.monotonic() - start > timeout_seconds", "read_names": ["start", "time", "timeout_seconds"]},
+    {"line": 1148, "expression": "now - last_heartbeat >= heartbeat_interval_seconds", "read_names": ["heartbeat_interval_seconds", "last_heartbeat", "now"]},
+    {"line": 1157, "expression": "line is None", "read_names": ["line"]},
+    {"line": 1160, "expression": "channel == 'stdout'", "read_names": ["channel"]},
+    {"line": 1165, "expression": "config.agent_live_stream_channels == 'stdout' and channel != 'stdout'", "read_names": ["channel", "config"]},
+    {"line": 1167, "expression": "config.agent_live_stream_channels == 'stderr' and channel != 'stderr'", "read_names": ["channel", "config"]},
+    {"line": 1169, "expression": "config.agent_live_stream_mode == 'full'", "read_names": ["config"]},
+    {"line": 1173, "expression": "rendered is not None", "read_names": ["rendered"]},
+    {"line": 1202, "expression": "exc.exit_code is None", "read_names": ["exc"]},
+    {"line": 1205, "expression": "result.returncode != 0", "read_names": ["result"]},
+    {"line": 1208, "expression": "not output", "read_names": ["output"]},
+    {"line": 1214, "expression": "config.agent_live_stream and config.agent_live_stream_mode == 'compact'", "read_names": ["config"]},
+    {"line": 1216, "expression": "summary_lines", "read_names": ["summary_lines"]},
+    {"line": 1222, "expression": "normalized_usage is not None", "read_names": ["normalized_usage"]},
+    {"line": 1223, "expression": "config.agent_live_stream_mode == 'full' or config.agent_output_mode == 'full'", "read_names": ["config"]},
+    {"line": 1255, "expression": "workspace is not None", "read_names": ["workspace"]}
+  ],
+  "aborts": [
+    {"line": 982, "expression": "ProviderInputBudgetError(f'adapter {agent_key!r} has no provider input budget registration')", "exception_type": "ProviderInputBudgetError", "message": "adapter 'unknown-provider' has no provider input budget registration", "scenario_id": "unregistered-provider", "error_chain_index": 0},
+    {"line": 993, "expression": "ValueError('reviewer execution roots are owned by reviewer workspaces')", "exception_type": "ValueError", "message": "reviewer execution roots are owned by reviewer workspaces", "scenario_id": "reviewer-execution-root", "error_chain_index": 0},
+    {"line": 995, "expression": "ValueError('agent execution root must be an existing directory')", "exception_type": "ValueError", "message": "agent execution root must be an existing directory", "scenario_id": "missing-execution-root", "error_chain_index": 0},
+    {"line": 1029, "expression": "ValueError(f'provider input operation is required for {agent_key}')", "exception_type": "ValueError", "message": "provider input operation is required for registered-provider", "scenario_id": "missing-operation", "error_chain_index": 0},
+    {"line": 1061, "expression": "ProviderInputBudgetExceeded(measurement)", "exception_type": "ProviderInputBudgetExceeded", "message": "provider input budget exceeded: provider=codex role=codex operation=codex_implementation dimensions=chars,bytes chars=4/3 bytes=4/3", "scenario_id": "budget-exceeded", "error_chain_index": 0},
+    {"line": 1146, "expression": "subprocess.TimeoutExpired(command_parts, timeout_seconds)", "exception_type": "TimeoutExpired", "message": "Command '['provider-double', '--scenario', 'timeout-live']' timed out after 1 seconds", "scenario_id": "timeout-live", "error_chain_index": 1},
+    {"line": 1204, "expression": null, "exception_type": "AgentOutputError", "message": "provider rejected envelope", "scenario_id": "agent-output-error-run", "error_chain_index": 0},
+    {"line": 1207, "expression": "AgentProcessError(error_text, exit_code=result.returncode)", "exception_type": "AgentProcessError", "message": "Provider fehlgeschlagen", "scenario_id": "nonzero-exit-run", "error_chain_index": 0},
+    {"line": 1209, "expression": "AgentProcessError(f'{agent_key} returned empty output.', exit_code=result.returncode, kind_hint=AgentFailureKind.OUTPUT)", "exception_type": "AgentProcessError", "message": "codex returned empty output.", "scenario_id": "empty-output-run", "error_chain_index": 0},
+    {"line": 1246, "expression": "AgentProcessError(f'{agent_key} timed out after {timeout_seconds}s.', kind_hint=AgentFailureKind.TIMEOUT)", "exception_type": "AgentProcessError", "message": "codex timed out after 1s.", "scenario_id": "timeout-live", "error_chain_index": 0}
+  ],
+  "unreachable_aborts": [],
+  "returns": [
+    {"line": 980, "expression": "build_dry_run_agent_output(agent_key, prompt)", "scenario_ids": ["dry-run-rejected"]},
+    {"line": 1244, "expression": "output", "scenario_ids": ["normal-live", "queue-empty-live", "stream-close-error-live", "stream-read-abort-live", "cleanup-error-run"]}
+  ],
+  "catchers": [
+    {"catcher_id": "read-stream-close-exception", "line": 1122, "type": "Exception", "body_lines": [1123], "scenario_id": "stream-close-error-live"},
+    {"catcher_id": "queue-empty", "line": 1154, "type": "queue.Empty", "body_lines": [1155], "scenario_id": "queue-empty-live"},
+    {"catcher_id": "agent-output-error", "line": 1201, "type": "AgentOutputError", "body_lines": [1202, 1203, 1204], "scenario_id": "agent-output-error-run"},
+    {"catcher_id": "timeout-expired", "line": 1245, "type": "subprocess.TimeoutExpired", "body_lines": [1246, 1247, 1248, 1249], "scenario_id": "timeout-live"},
+    {"catcher_id": "cleanup-exception", "line": 1253, "type": "Exception", "body_lines": [1254], "scenario_id": "cleanup-error-run"}
+  ],
+  "process_calls": [
+    {"line": 1083, "call": "subprocess.Popen"},
+    {"line": 1145, "call": "process.kill"},
+    {"line": 1178, "call": "process.wait"},
+    {"line": 1185, "call": "subprocess.run"}
+  ]
+}
