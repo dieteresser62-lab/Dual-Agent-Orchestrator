@@ -1,0 +1,77 @@
+{
+  "schema_version": "cli-argument-evaluation-pre-b64-v1",
+  "source_commit": "36fb8a8edb9d2c4bea861b3198c268240473f649",
+  "source_path": "src/cli.py",
+  "source_blob": "366d01322ca79a3ba120f3ddb1d66f403f3c7c97",
+  "function": "parse_args",
+  "function_span_lines": 202,
+  "conditions": [
+    {"ordinal": 1, "expression": "args.task_path and args.task_file", "read_names": ["args"]},
+    {"ordinal": 2, "expression": "args.dry_run_scenario and (not args.dry_run)", "read_names": ["args"]},
+    {"ordinal": 3, "expression": "args.dry_run_report and (not args.dry_run_scenario)", "read_names": ["args"]},
+    {"ordinal": 4, "expression": "not config_path.is_absolute()", "read_names": ["config_path"]},
+    {"ordinal": 5, "expression": "config_value is not None and (not config_path.is_file())", "read_names": ["config_path", "config_value"]},
+    {"ordinal": 6, "expression": "args.manual_slice_gate is None", "read_names": ["args"]},
+    {"ordinal": 7, "expression": "args.test_change_gate is None", "read_names": ["args"]},
+    {"ordinal": 8, "expression": "args.plan_gate is None", "read_names": ["args"]},
+    {"ordinal": 9, "expression": "quota_automatic is None", "read_names": ["quota_automatic"]},
+    {"ordinal": 10, "expression": "quota_automatic is None", "read_names": ["quota_automatic"]},
+    {"ordinal": 11, "expression": "argument is not None", "read_names": ["argument"]},
+    {"ordinal": 12, "expression": "raw is None or not raw.strip()", "read_names": ["raw"]},
+    {"ordinal": 13, "expression": "transient_automatic is None", "read_names": ["transient_automatic"]},
+    {"ordinal": 14, "expression": "transient_automatic is None", "read_names": ["transient_automatic"]},
+    {"ordinal": 15, "expression": "gate_decision is not None", "read_names": ["gate_decision"]},
+    {"ordinal": 16, "expression": "args.resume is not True", "read_names": ["args"]},
+    {"ordinal": 17, "expression": "not (args.gate_rationale or '').strip()", "read_names": ["args"]},
+    {"ordinal": 18, "expression": "args.gate_rationale is not None", "read_names": ["args"]},
+    {"ordinal": 19, "expression": "args.test_command is None", "read_names": ["args"]},
+    {"ordinal": 20, "expression": "'RUN_TASK_TEST_CMD' in env", "read_names": ["env"]},
+    {"ordinal": 21, "expression": "repo_config.validation.default_command is not None", "read_names": ["repo_config"]},
+    {"ordinal": 22, "expression": "repo_config.validation_declared", "read_names": ["repo_config"]},
+    {"ordinal": 23, "expression": "args.skip_git_check is None", "read_names": ["args"]},
+    {"ordinal": 24, "expression": "env_skip is not None", "read_names": ["env_skip"]},
+    {"ordinal": 25, "expression": "args.watch", "read_names": ["args"]},
+    {"ordinal": 26, "expression": "args.agent_live_stream_channels is None", "read_names": ["args"]},
+    {"ordinal": 27, "expression": "channels not in WATCH_STREAM_CHANNELS", "read_names": ["WATCH_STREAM_CHANNELS", "channels"]},
+    {"ordinal": 28, "expression": "args.resume is None", "read_names": ["args"]},
+    {"ordinal": 29, "expression": "args.resume", "read_names": ["args"]},
+    {"ordinal": 30, "expression": "state_completed and (not args.watch)", "read_names": ["args", "state_completed"]}
+  ],
+  "raises": [
+    {"ordinal": 1, "scenario_id": "explicit-config-missing", "exception_type": "ConfigError", "message_expression": "f'Explicit configuration file does not exist: {config_path.resolve()}'"},
+    {"ordinal": 2, "scenario_id": "quota-environment-not-integer", "exception_type": "ConfigError", "message_expression": "f'{environment_name} must be an integer'"},
+    {"ordinal": 3, "scenario_id": "invalid-agent-setting", "exception_type": "ConfigError", "message_expression": "str(exc)"}
+  ],
+  "parser_errors": [
+    {"ordinal": 1, "scenario_id": "task-file-source-conflict", "message_expression": "'task file must be provided either positionally or with --task-file, not both'"},
+    {"ordinal": 2, "scenario_id": "dry-run-scenario-without-dry-run", "message_expression": "'--dry-run-scenario requires --dry-run'"},
+    {"ordinal": 3, "scenario_id": "dry-run-report-without-scenario", "message_expression": "'--dry-run-report requires --dry-run-scenario'"},
+    {"ordinal": 4, "scenario_id": "invalid-quota-policy", "message_expression": "str(exc)"},
+    {"ordinal": 5, "scenario_id": "invalid-transient-retry-policy", "message_expression": "str(exc)"},
+    {"ordinal": 6, "scenario_id": "gate-decision-without-resume", "message_expression": "'--approve-gate/--reject-gate requires explicit --resume'"},
+    {"ordinal": 7, "scenario_id": "gate-decision-without-rationale", "message_expression": "'an explicit gate decision requires --gate-rationale'"},
+    {"ordinal": 8, "scenario_id": "gate-rationale-without-decision", "message_expression": "'--gate-rationale requires --approve-gate or --reject-gate'"}
+  ],
+  "returns": [
+    {"ordinal": 1, "scenario_id": "valid-explicit-quota-arguments", "expression": "argument"},
+    {"ordinal": 2, "scenario_id": "valid-default-arguments", "expression": "default"},
+    {"ordinal": 3, "scenario_id": "valid-quota-environment-integer", "expression": "int(raw.strip())"},
+    {"ordinal": 4, "scenario_id": "valid-explicit-gate-decision", "expression": "args"}
+  ],
+  "catchers": [
+    {"ordinal": 1, "scenario_id": "quota-environment-not-integer", "exception_type": "ValueError", "classification": "rethrows", "body": ["raise ConfigError(f'{environment_name} must be an integer') from exc"]},
+    {"ordinal": 2, "scenario_id": "invalid-quota-policy", "exception_type": "ValueError", "classification": "mitigates", "body": ["parser.error(str(exc))"]},
+    {"ordinal": 3, "scenario_id": "invalid-transient-retry-policy", "exception_type": "ValueError", "classification": "mitigates", "body": ["parser.error(str(exc))"]},
+    {"ordinal": 4, "scenario_id": "invalid-agent-setting", "exception_type": "AgentConfigError", "classification": "rethrows", "body": ["raise ConfigError(str(exc)) from exc"]}
+  ],
+  "unreachable_rejections": [],
+  "function_size_baseline_path": "tests/fixtures/function-size-baseline-v1.json",
+  "function_size_baseline_blob": "4d23a25bfa81e00f19d5089570284ace36fbb641",
+  "protected_blobs": {
+    "tests/conftest.py": "1545d657329ccd409afce0501d7a4f53a12dac26",
+    "tests/test_test_run_isolation.py": "6bd1c9e1c23a1600fd628ada54c62153d8cd6051",
+    "tests/fixtures/gitignored-read-exemptions-baseline-v1.json": "d36f7ec5dc62ff70991156b8d02a4d45fcae8930",
+    "tests/fixtures/provider-name-coupling-baseline-v1.json": "05d503f957d385d7630a7aa5697463dd23cc9a5c",
+    "tests/fixtures/workflow-record-sequence-baseline-v1.json": "26fb661c8fa382f90e70fb921e3d950da5cae09b"
+  }
+}
