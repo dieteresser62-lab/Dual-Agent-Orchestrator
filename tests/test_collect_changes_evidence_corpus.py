@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import copy
 import hashlib
 import json
 import subprocess
@@ -19,12 +20,34 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE_PATH = ROOT / "src/orchestrator.py"
 STATIC_BASELINE = ROOT / "tests/fixtures/collect-changes-static-pre-b62-v1.json"
 RUNTIME_BASELINE = ROOT / "tests/fixtures/collect-changes-runtime-pre-b62-v1.json"
+PRE_B63_BASELINE = ROOT / "tests/fixtures/collect-changes-pre-b63-v1.json"
+HELPER_BINDINGS = ROOT / "tests/fixtures/collect-changes-helper-bindings-b63-v1.json"
+FUNCTION_SIZE_BASELINE = ROOT / "tests/fixtures/function-size-baseline-v1.json"
+RECORD_SEQUENCE_BASELINE = ROOT / "tests/fixtures/workflow-record-sequence-baseline-v1.json"
 SOURCE_COMMIT = "2b963abd454de0142779d59d656f86684d6e11de"
 SOURCE_BLOB = "ca1510789851a576c9e3bb1cbef804cea211ecc1"
+PRE_B63_COMMIT = "689a0368a327dbf2c0ec076e248bfff047310341"
+RECORD_SEQUENCE_BLOB = "26fb661c8fa382f90e70fb921e3d950da5cae09b"
 START_COMMIT = "a" * 40
 PLAN_PATH = "docs/internal/work-plan.md"
 AUDIT_PATH = "docs/internal/final-review.md"
 SOURCE_CHANGE_PATH = "src/runtime.py"
+COLLECT_CHANGE_HELPERS = (
+    "_collect_change_path_selection",
+    "_reuse_final_review_evidence",
+    "_collect_fresh_final_review_evidence",
+    "_read_semantic_plan_artifact",
+    "_build_final_review_snapshot",
+    "_final_review_cache_target_digest",
+)
+CAUGHT_HELPERS = {
+    "_read_semantic_plan_artifact": (
+        "(UnicodeError, SemanticMarkdownError)",
+        "OSError",
+    ),
+    "_build_final_review_snapshot": ("ValueError",),
+    "_final_review_cache_target_digest": ("SideEffectReconciliationError",),
+}
 
 
 @dataclass(frozen=True)
@@ -65,17 +88,233 @@ class _FakeSnapshot:
         return self.changes
 
 
-def _method(tree: ast.Module) -> ast.FunctionDef:
-    driver = next(
+def _driver_class(tree: ast.Module) -> ast.ClassDef:
+    return next(
         node
         for node in tree.body
         if isinstance(node, ast.ClassDef) and node.name == "ProductionWorkflowDriver"
     )
+
+
+def _method(tree: ast.Module, name: str = "collect_changes") -> ast.FunctionDef:
+    driver = _driver_class(tree)
     return next(
         node
         for node in driver.body
-        if isinstance(node, ast.FunctionDef) and node.name == "collect_changes"
+        if isinstance(node, ast.FunctionDef) and node.name == name
     )
+
+
+def _direct_helper_call(
+    statement: ast.stmt, helper_names: frozenset[str]
+) -> tuple[str, ast.Call] | None:
+    value: ast.expr | None = None
+    if isinstance(statement, ast.Expr):
+        value = statement.value
+    elif isinstance(statement, ast.Assign):
+        value = statement.value
+    if (
+        isinstance(value, ast.Call)
+        and isinstance(value.func, ast.Attribute)
+        and isinstance(value.func.value, ast.Name)
+        and value.func.value.id == "self"
+        and value.func.attr in helper_names
+    ):
+        return value.func.attr, value
+    return None
+
+
+def _logical_collect_changes(tree: ast.Module) -> ast.FunctionDef:
+    function = copy.deepcopy(_method(tree))
+    helper_names = frozenset(COLLECT_CHANGE_HELPERS)
+    helpers = {
+        name: copy.deepcopy(_method(tree, name)) for name in COLLECT_CHANGE_HELPERS
+    }
+
+    def expand_body(body: list[ast.stmt]) -> list[ast.stmt]:
+        expanded: list[ast.stmt] = []
+        for statement in body:
+            direct = _direct_helper_call(statement, helper_names)
+            if direct is not None:
+                helper_name, call = direct
+                helper = helpers[helper_name]
+                parameters = [argument.arg for argument in helper.args.args]
+                assert parameters[0] == "self"
+                assert not call.keywords
+                assert [ast.unparse(argument) for argument in call.args] == parameters[1:]
+                helper_body = copy.deepcopy(helper.body)
+                if (
+                    helper_body
+                    and isinstance(helper_body[0], ast.Expr)
+                    and isinstance(helper_body[0].value, ast.Constant)
+                    and isinstance(helper_body[0].value.value, str)
+                ):
+                    helper_body.pop(0)
+                helper_body = expand_body(helper_body)
+                if isinstance(statement, ast.Assign):
+                    terminal = helper_body[-1]
+                    assert isinstance(terminal, ast.Return)
+                    assert terminal.value is not None
+                    assert len(statement.targets) == 1
+                    if ast.unparse(statement.targets[0]) == ast.unparse(terminal.value):
+                        helper_body.pop()
+                    else:
+                        helper_body[-1] = ast.Assign(
+                            targets=copy.deepcopy(statement.targets),
+                            value=terminal.value,
+                        )
+                else:
+                    assert not any(
+                        isinstance(node, ast.Return) for node in ast.walk(helper)
+                    )
+                expanded.extend(helper_body)
+                continue
+            for field in ("body", "orelse", "finalbody"):
+                child = getattr(statement, field, None)
+                if isinstance(child, list) and child:
+                    setattr(statement, field, expand_body(child))
+            if isinstance(statement, ast.Try):
+                for handler in statement.handlers:
+                    handler.body = expand_body(handler.body)
+            expanded.append(statement)
+        return expanded
+
+    function.body = expand_body(function.body)
+    ast.fix_missing_locations(function)
+    logical = ast.parse(ast.unparse(function)).body[0]
+    assert isinstance(logical, ast.FunctionDef)
+    return logical
+
+
+def _pre_b62_method() -> ast.FunctionDef:
+    source = subprocess.check_output(
+        ("git", "show", f"{SOURCE_COMMIT}:src/orchestrator.py"),
+        cwd=ROOT,
+        text=True,
+    )
+    return _method(ast.parse(source))
+
+
+def _parent_map(node: ast.AST) -> dict[ast.AST, ast.AST]:
+    return {
+        child: parent
+        for parent in ast.walk(node)
+        for child in ast.iter_child_nodes(parent)
+    }
+
+
+def _caught_helper_context(
+    tree: ast.Module, helper_name: str
+) -> tuple[str, ast.Try]:
+    expected = CAUGHT_HELPERS[helper_name]
+    owners = [
+        name
+        for name in COLLECT_CHANGE_HELPERS
+        if name != helper_name
+        and any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == helper_name
+            for node in ast.walk(_method(tree, name))
+        )
+    ]
+    assert len(owners) == 1, helper_name
+    owner = _method(tree, owners[0])
+    parents = _parent_map(owner)
+    call = next(
+        node
+        for node in ast.walk(owner)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == helper_name
+    )
+    current: ast.AST = call
+    while current in parents:
+        child = current
+        current = parents[current]
+        if isinstance(current, ast.Try) and any(
+            child in tuple(ast.walk(statement)) for statement in current.body
+        ):
+            return owners[0], current
+    raise AssertionError(f"{helper_name} left its catcher {expected}")
+
+
+def _caught_helper_bindings(tree: ast.Module) -> dict[str, tuple[str, ...]]:
+    return {
+        helper_name: tuple(
+            ast.unparse(handler.type)
+            for handler in _caught_helper_context(tree, helper_name)[1].handlers
+        )
+        for helper_name in CAUGHT_HELPERS
+    }
+
+
+def _helper_binding_document(tree: ast.Module) -> dict[str, object]:
+    method_names = ("collect_changes", *COLLECT_CHANGE_HELPERS)
+    call_graph = {
+        name: [
+            node.func.attr
+            for node in _ordered(_method(tree, name), ast.Call)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "self"
+            and node.func.attr in COLLECT_CHANGE_HELPERS
+        ]
+        for name in method_names
+    }
+    caught_helpers: list[dict[str, object]] = []
+    for helper_name in CAUGHT_HELPERS:
+        owner_name, protecting_try = _caught_helper_context(tree, helper_name)
+        caught_helpers.append(
+            {
+                "helper": helper_name,
+                "owner": owner_name,
+                "catchers": [
+                    {
+                        "type": ast.unparse(handler.type),
+                        "classification": _handler_behavior(handler),
+                        "effect": "\n".join(
+                            ast.unparse(statement) for statement in handler.body
+                        ),
+                    }
+                    for handler in protecting_try.handlers
+                ],
+            }
+        )
+    return {
+        "schema_version": "collect-changes-helper-bindings-b63-v1",
+        "call_graph": call_graph,
+        "caught_helpers": caught_helpers,
+    }
+
+
+def _move_helper_out_of_catcher(tree: ast.Module, helper_name: str) -> None:
+    owner_name, protecting_try = _caught_helper_context(tree, helper_name)
+    owner = _method(tree, owner_name)
+    call_statement = next(
+        statement
+        for statement in ast.walk(owner)
+        if isinstance(statement, (ast.Expr, ast.Assign))
+        and _direct_helper_call(statement, frozenset({helper_name})) is not None
+    )
+    parent = _parent_map(owner)[protecting_try]
+    body = next(
+        getattr(parent, field)
+        for field in ("body", "orelse", "finalbody")
+        if isinstance(getattr(parent, field, None), list)
+        and protecting_try in getattr(parent, field)
+    )
+    body.insert(body.index(protecting_try), call_statement)
+    for node in ast.walk(protecting_try):
+        for field in ("body", "orelse", "finalbody"):
+            statements = getattr(node, field, None)
+            if isinstance(statements, list) and call_statement in statements:
+                statements.remove(call_statement)
+                if not statements:
+                    statements.append(ast.Pass())
+                return
+    raise AssertionError(helper_name)
 
 
 def _ordered(node: ast.AST, kind: type[ast.AST]) -> list[ast.AST]:
@@ -109,9 +348,10 @@ def _handler_behavior(handler: ast.ExceptHandler) -> str:
 
 
 def _static_document(source: str | None = None) -> dict[str, object]:
-    function = _method(
+    function = _logical_collect_changes(
         ast.parse(SOURCE_PATH.read_text(encoding="utf-8") if source is None else source)
     )
+    pre_b62 = _pre_b62_method()
     conditions = _ordered(function, ast.If)
     aborts = _ordered(function, ast.Raise)
     catchers = _ordered(function, ast.ExceptHandler)
@@ -121,7 +361,9 @@ def _static_document(source: str | None = None) -> dict[str, object]:
         "source_commit": SOURCE_COMMIT,
         "source_blob": SOURCE_BLOB,
         "function": "ProductionWorkflowDriver.collect_changes",
-        "line_count": function.end_lineno - function.lineno + 1,
+        # This is frozen pre-cut inventory metadata. Worktree equivalence is
+        # enforced independently by the logical AST comparison below.
+        "line_count": pre_b62.end_lineno - pre_b62.lineno + 1,
         "conditions": [
             {
                 "ordinal": ordinal,
@@ -516,6 +758,10 @@ def _load_baseline(path: Path) -> dict[str, object]:
     return document
 
 
+def _git(*args: str) -> str:
+    return subprocess.check_output(("git", *args), cwd=ROOT, text=True).strip()
+
+
 def _scenario(document: dict[str, object], scenario_id: str) -> dict[str, object]:
     scenarios = document["scenarios"]
     assert isinstance(scenarios, list)
@@ -530,9 +776,9 @@ def _assert_scenario_matches(
         raise AssertionError(scenario_id)
 
 
-def _load_mutant(transform: Callable[[ast.FunctionDef], None]) -> ModuleType:
+def _load_mutant(transform: Callable[[ast.Module], None]) -> ModuleType:
     tree = ast.parse(SOURCE_PATH.read_text(encoding="utf-8"))
-    transform(_method(tree))
+    transform(tree)
     ast.fix_missing_locations(tree)
     module = ModuleType(f"_b62_collect_changes_mutant_{id(tree)}")
     module.__file__ = str(SOURCE_PATH)
@@ -546,35 +792,113 @@ def _load_mutant(transform: Callable[[ast.FunctionDef], None]) -> ModuleType:
 
 def _replace_catcher_body(
     exception_type: str, replacement: list[ast.stmt]
-) -> Callable[[ast.FunctionDef], None]:
-    def transform(function: ast.FunctionDef) -> None:
-        handler = next(
+) -> Callable[[ast.Module], None]:
+    def transform(tree: ast.Module) -> None:
+        handlers = [
             item
-            for item in ast.walk(function)
+            for method_name in ("collect_changes", *COLLECT_CHANGE_HELPERS)
+            for item in ast.walk(_method(tree, method_name))
             if isinstance(item, ast.ExceptHandler)
             and ast.unparse(item.type) == exception_type
-        )
-        handler.body = replacement
+        ]
+        assert len(handlers) == 1, exception_type
+        handlers[0].body = replacement
 
     return transform
 
 
-def test_pre_b62_source_anchor_and_worktree_bytes_are_exact() -> None:
+def test_b63_anchor_binds_the_b62_source_corpus_and_guards() -> None:
+    anchor = _load_baseline(PRE_B63_BASELINE)
+    assert anchor["schema_version"] == "collect-changes-pre-b63-v1"
+    assert anchor["source_commit"] == PRE_B63_COMMIT
+    for path_key, blob_key in (
+        ("source_path", "source_blob"),
+        ("b62_test_path", "b62_test_blob"),
+        ("b62_static_path", "b62_static_blob"),
+        ("b62_runtime_path", "b62_runtime_blob"),
+        ("cohesion_guard_path", "cohesion_guard_blob"),
+        ("function_size_baseline_path", "function_size_baseline_pre_blob"),
+    ):
+        path = str(anchor[path_key])
+        assert _git("rev-parse", f"{PRE_B63_COMMIT}:{path}") == anchor[blob_key], path
+
+    for path_key, blob_key in (
+        ("b62_static_path", "b62_static_blob"),
+        ("b62_runtime_path", "b62_runtime_blob"),
+    ):
+        path = str(anchor[path_key])
+        assert _git("hash-object", str(ROOT / path)) == anchor[blob_key], path
+        assert _git("diff", "--", path) == "", path
+
+
+def test_pre_b62_source_anchor_and_logical_collect_changes_are_exact() -> None:
     anchored_blob = subprocess.check_output(
         ("git", "rev-parse", f"{SOURCE_COMMIT}:src/orchestrator.py"),
         cwd=ROOT,
         text=True,
     ).strip()
-    worktree_blob = subprocess.run(
-        ("git", "hash-object", "--", "src/orchestrator.py"),
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-
     assert anchored_blob == SOURCE_BLOB
-    assert worktree_blob == SOURCE_BLOB
+    logical = _logical_collect_changes(
+        ast.parse(SOURCE_PATH.read_text(encoding="utf-8"))
+    )
+    assert ast.dump(logical, include_attributes=False) == ast.dump(
+        _pre_b62_method(), include_attributes=False
+    )
+
+
+def test_b63_helper_call_graph_catchers_and_mitigations_are_exact() -> None:
+    tree = ast.parse(SOURCE_PATH.read_text(encoding="utf-8"))
+    assert _helper_binding_document(tree) == _load_baseline(HELPER_BINDINGS)
+    assert _caught_helper_bindings(tree) == CAUGHT_HELPERS
+    driver = _driver_class(tree)
+    for helper_name in COLLECT_CHANGE_HELPERS:
+        calls = [
+            node
+            for node in ast.walk(driver)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "self"
+            and node.func.attr == helper_name
+        ]
+        assert len(calls) == 1, helper_name
+
+
+@pytest.mark.parametrize("helper_name", tuple(CAUGHT_HELPERS))
+def test_moving_a_helper_outside_its_catcher_names_the_helper(
+    helper_name: str,
+) -> None:
+    tree = ast.parse(SOURCE_PATH.read_text(encoding="utf-8"))
+    _move_helper_out_of_catcher(tree, helper_name)
+    with pytest.raises(AssertionError, match=helper_name):
+        _caught_helper_bindings(tree)
+
+
+def test_b63_removes_collect_changes_from_the_b32_size_ratchet() -> None:
+    anchor = _load_baseline(PRE_B63_BASELINE)
+    baseline = _load_baseline(FUNCTION_SIZE_BASELINE)
+    threshold = int(anchor["function_size_threshold"])
+    assert baseline["threshold_lines"] == threshold
+    functions = baseline["functions"]
+    assert isinstance(functions, dict)
+    assert "src/orchestrator.py::ProductionWorkflowDriver.collect_changes" not in functions
+    tree = ast.parse(SOURCE_PATH.read_text(encoding="utf-8"))
+    for name in ("collect_changes", *COLLECT_CHANGE_HELPERS):
+        method = _method(tree, name)
+        assert method.end_lineno is not None
+        assert method.end_lineno - method.lineno + 1 < threshold, name
+
+
+def test_b63_keeps_b21_b23_and_b25_guards_and_baselines_byte_identical() -> None:
+    anchor = _load_baseline(PRE_B63_BASELINE)
+    protected = anchor["protected_blobs"]
+    assert isinstance(protected, dict)
+    assert protected[RECORD_SEQUENCE_BASELINE.relative_to(ROOT).as_posix()] == (
+        RECORD_SEQUENCE_BLOB
+    )
+    for path, blob in protected.items():
+        assert _git("hash-object", str(ROOT / path)) == blob, path
+        assert _git("rev-parse", f"{PRE_B63_COMMIT}:{path}") == blob, path
 
 
 def test_static_collect_changes_contract_is_complete_and_source_ordered() -> None:

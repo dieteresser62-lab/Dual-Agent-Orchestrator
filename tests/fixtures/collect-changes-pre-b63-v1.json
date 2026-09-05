@@ -1,0 +1,24 @@
+{
+  "schema_version": "collect-changes-pre-b63-v1",
+  "source_commit": "689a0368a327dbf2c0ec076e248bfff047310341",
+  "source_path": "src/orchestrator.py",
+  "source_blob": "ca1510789851a576c9e3bb1cbef804cea211ecc1",
+  "b62_test_path": "tests/test_collect_changes_evidence_corpus.py",
+  "b62_test_blob": "8991345ea9a538a1a1e493ebb0f309253550a963",
+  "b62_static_path": "tests/fixtures/collect-changes-static-pre-b62-v1.json",
+  "b62_static_blob": "e1da7fdcff4e64ae32eb39a324844c70b471bc81",
+  "b62_runtime_path": "tests/fixtures/collect-changes-runtime-pre-b62-v1.json",
+  "b62_runtime_blob": "dfe209cc30f82afbfc86ca91a9a2850d4a0701b6",
+  "cohesion_guard_path": "tests/test_collect_changes_cohesion.py",
+  "cohesion_guard_blob": "f9202ace39be203916083909d1912015dfffd7fa",
+  "function_size_baseline_path": "tests/fixtures/function-size-baseline-v1.json",
+  "function_size_baseline_pre_blob": "c3145b2ff99b68ddc88a1cefcde5fe7ae8cddc71",
+  "function_size_threshold": 200,
+  "protected_blobs": {
+    "tests/conftest.py": "1545d657329ccd409afce0501d7a4f53a12dac26",
+    "tests/test_test_run_isolation.py": "6bd1c9e1c23a1600fd628ada54c62153d8cd6051",
+    "tests/fixtures/gitignored-read-exemptions-baseline-v1.json": "d36f7ec5dc62ff70991156b8d02a4d45fcae8930",
+    "tests/fixtures/provider-name-coupling-baseline-v1.json": "05d503f957d385d7630a7aa5697463dd23cc9a5c",
+    "tests/fixtures/workflow-record-sequence-baseline-v1.json": "26fb661c8fa382f90e70fb921e3d950da5cae09b"
+  }
+}

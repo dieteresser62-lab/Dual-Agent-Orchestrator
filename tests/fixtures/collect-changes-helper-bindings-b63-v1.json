@@ -1,0 +1,61 @@
+{
+  "schema_version": "collect-changes-helper-bindings-b63-v1",
+  "call_graph": {
+    "collect_changes": [
+      "_collect_change_path_selection",
+      "_reuse_final_review_evidence",
+      "_collect_fresh_final_review_evidence"
+    ],
+    "_collect_change_path_selection": [
+      "_read_semantic_plan_artifact"
+    ],
+    "_reuse_final_review_evidence": [],
+    "_collect_fresh_final_review_evidence": [
+      "_build_final_review_snapshot",
+      "_final_review_cache_target_digest"
+    ],
+    "_read_semantic_plan_artifact": [],
+    "_build_final_review_snapshot": [],
+    "_final_review_cache_target_digest": []
+  },
+  "caught_helpers": [
+    {
+      "helper": "_read_semantic_plan_artifact",
+      "owner": "_collect_change_path_selection",
+      "catchers": [
+        {
+          "type": "(UnicodeError, SemanticMarkdownError)",
+          "classification": "mitigates",
+          "effect": "raw_plan_artifact = self.active_state.work_plan_path"
+        },
+        {
+          "type": "OSError",
+          "classification": "mitigates",
+          "effect": "pass"
+        }
+      ]
+    },
+    {
+      "helper": "_build_final_review_snapshot",
+      "owner": "_collect_fresh_final_review_evidence",
+      "catchers": [
+        {
+          "type": "ValueError",
+          "classification": "rethrows",
+          "effect": "raise WorkflowExecutionError('final-review repository changed during evidence collection') from exc"
+        }
+      ]
+    },
+    {
+      "helper": "_final_review_cache_target_digest",
+      "owner": "_collect_fresh_final_review_evidence",
+      "catchers": [
+        {
+          "type": "SideEffectReconciliationError",
+          "classification": "mitigates",
+          "effect": "current_digest = 'invalid'"
+        }
+      ]
+    }
+  ]
+}

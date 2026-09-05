@@ -84,6 +84,7 @@ from repo_changes import (
     FinalReviewEvidenceSnapshot,
     RepositoryChangeError,
     RepositoryChanges,
+    RepositorySnapshotProbe,
     build_final_review_evidence_snapshot,
     collect_repository_changes,
     load_final_review_evidence_cache,
@@ -1651,7 +1652,20 @@ class ProductionWorkflowDriver:
             raise WorkflowExecutionError("finding handoff export identity is unstable")
         return state.run_id, export_id
 
-    def collect_changes(self, start_commit: str) -> WorkflowChanges:
+    def _read_semantic_plan_artifact(self, candidate: Path) -> None:
+        """Read and validate the plan operation protected by its two mitigations."""
+
+        if not candidate.is_symlink() and candidate.is_file():
+            content = candidate.read_text(encoding="utf-8")
+            canonical_semantic_markdown(
+                content,
+                path=self.active_state.work_plan_path,
+                remove_appendix=True,
+            )
+
+    def _collect_change_path_selection(self) -> tuple[tuple[str, ...], str | None]:
+        """Select semantic evidence paths while owning both plan mitigations."""
+
         semantic_paths: tuple[str, ...] = ()
         raw_plan_artifact: str | None = None
         if self.active_state is not None:
@@ -1662,13 +1676,7 @@ class ProductionWorkflowDriver:
             ):
                 candidate = self.root / self.active_state.work_plan_path
                 try:
-                    if not candidate.is_symlink() and candidate.is_file():
-                        content = candidate.read_text(encoding="utf-8")
-                        canonical_semantic_markdown(
-                            content,
-                            path=self.active_state.work_plan_path,
-                            remove_appendix=True,
-                        )
+                    self._read_semantic_plan_artifact(candidate)
                 except (UnicodeError, SemanticMarkdownError):
                     # The raw fingerprint still binds every byte. Deferring only the
                     # text interpretation lets the typed plan validator offer its one
@@ -1690,16 +1698,18 @@ class ProductionWorkflowDriver:
                 and path.endswith(".md")
             }
             semantic_paths = tuple(sorted(candidates))
-        excluded_control_paths = _bound_task_control_paths(
-            self.root, self.active_state
-        )
-        final_review = (
-            self.active_state is not None
-            and self.active_state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
-        )
-        audit_path = (
-            self.active_state.audit_report_path if final_review else None
-        )
+        return semantic_paths, raw_plan_artifact
+
+    def _reuse_final_review_evidence(
+        self,
+        start_commit: str,
+        semantic_paths: tuple[str, ...],
+        excluded_control_paths: tuple[str, ...],
+        final_review: bool,
+        audit_path: str | None,
+    ) -> FinalReviewEvidenceSnapshot | None:
+        """Reuse only evidence matching the current repository and boundaries."""
+
         snapshot: FinalReviewEvidenceSnapshot | None = None
         probe = None
         cache_path: Path | None = None
@@ -1756,94 +1766,165 @@ class ProductionWorkflowDriver:
                     "Final review evidence cache invalidated by the live repository "
                     "or controlling boundaries"
                 )
-        if snapshot is not None:
-            changes = snapshot.repository_changes(self.root)
-        else:
-            collection_started = time.monotonic()
-            changes = collect_repository_changes(
+        return snapshot
+
+    def _build_final_review_snapshot(
+        self,
+        changes: RepositoryChanges,
+        probe: RepositorySnapshotProbe,
+        start_commit: str,
+        semantic_paths: tuple[str, ...],
+        excluded_control_paths: tuple[str, ...],
+        audit_path: str | None,
+        elapsed_ms: int,
+    ) -> FinalReviewEvidenceSnapshot:
+        """Build the snapshot operation protected by its ValueError translation."""
+
+        return build_final_review_evidence_snapshot(
+            changes,
+            probe,
+            start_commit=start_commit,
+            semantic_markdown_paths=semantic_paths,
+            excluded_paths=excluded_control_paths,
+            audit_path=audit_path,
+            collection_elapsed_ms=elapsed_ms,
+        )
+
+    def _final_review_cache_target_digest(self, cache_path: Path) -> str:
+        """Read the cache target state protected by the invalid-digest mitigation."""
+
+        return file_state_digest(cache_path)
+
+    def _collect_fresh_final_review_evidence(
+        self,
+        start_commit: str,
+        semantic_paths: tuple[str, ...],
+        raw_plan_artifact: str | None,
+        excluded_control_paths: tuple[str, ...],
+        final_review: bool,
+        audit_path: str | None,
+        snapshot: FinalReviewEvidenceSnapshot | None,
+    ) -> tuple[RepositoryChanges, FinalReviewEvidenceSnapshot | None]:
+        """Collect fresh evidence while owning both collection mitigations."""
+
+        collection_started = time.monotonic()
+        changes = collect_repository_changes(
+            self.root,
+            start_commit,
+            semantic_markdown_paths=semantic_paths,
+            raw_fingerprint_paths=(
+                (raw_plan_artifact,) if raw_plan_artifact is not None else ()
+            ),
+            excluded_paths=excluded_control_paths,
+        )
+        if final_review and changes.entries:
+            # Re-probe after the expensive collection. A concurrent repository or
+            # index mutation is denied instead of being written into a stale cache.
+            probe = probe_repository_snapshot(
                 self.root,
                 start_commit,
                 semantic_markdown_paths=semantic_paths,
-                raw_fingerprint_paths=(
-                    (raw_plan_artifact,) if raw_plan_artifact is not None else ()
-                ),
                 excluded_paths=excluded_control_paths,
             )
-            if final_review and changes.entries:
-                # Re-probe after the expensive collection. A concurrent repository or
-                # index mutation is denied instead of being written into a stale cache.
-                probe = probe_repository_snapshot(
-                    self.root,
+            elapsed_ms = max(
+                0, round((time.monotonic() - collection_started) * 1000)
+            )
+            try:
+                snapshot = self._build_final_review_snapshot(
+                    changes,
+                    probe,
                     start_commit,
-                    semantic_markdown_paths=semantic_paths,
-                    excluded_paths=excluded_control_paths,
+                    semantic_paths,
+                    excluded_control_paths,
+                    audit_path,
+                    elapsed_ms,
                 )
-                elapsed_ms = max(
-                    0, round((time.monotonic() - collection_started) * 1000)
+            except ValueError as exc:
+                raise WorkflowExecutionError(
+                    "final-review repository changed during evidence collection"
+                ) from exc
+            self._final_review_evidence_snapshot = snapshot
+            self._final_review_evidence_collections += 1
+            cache_path = self._final_review_evidence_cache_path(
+                start_commit=start_commit,
+                semantic_markdown_paths=semantic_paths,
+                excluded_paths=excluded_control_paths,
+                audit_path=audit_path,
+                repository_identity_digest=probe.identity_digest,
+            )
+            cache_content = render_final_review_evidence_cache(snapshot)
+            cache_digest = sha256_bytes(cache_content.encode("utf-8"))
+            prior_authority = self._final_review_cache_authorized_digest(
+                cache_path, repository_fingerprint=snapshot.repository_fingerprint
+            )
+            try:
+                current_digest = self._final_review_cache_target_digest(cache_path)
+            except SideEffectReconciliationError:
+                # A non-regular or unstable cache target has no authority.
+                # Keep the freshly collected in-memory evidence, but do not
+                # follow, replace, or otherwise repair that filesystem node.
+                current_digest = "invalid"
+            if self._artifact_bridge is not None and (
+                prior_authority is None and current_digest in {"absent", cache_digest}
+            ):
+                self._write_side_effect_file(
+                    cache_path,
+                    cache_content,
+                    normalized_text=False,
+                    fingerprint=snapshot.repository_fingerprint,
                 )
-                try:
-                    snapshot = build_final_review_evidence_snapshot(
-                        changes,
-                        probe,
-                        start_commit=start_commit,
-                        semantic_markdown_paths=semantic_paths,
-                        excluded_paths=excluded_control_paths,
-                        audit_path=audit_path,
-                        collection_elapsed_ms=elapsed_ms,
-                    )
-                except ValueError as exc:
-                    raise WorkflowExecutionError(
-                        "final-review repository changed during evidence collection"
-                    ) from exc
-                self._final_review_evidence_snapshot = snapshot
-                self._final_review_evidence_collections += 1
-                cache_path = self._final_review_evidence_cache_path(
-                    start_commit=start_commit,
-                    semantic_markdown_paths=semantic_paths,
-                    excluded_paths=excluded_control_paths,
-                    audit_path=audit_path,
-                    repository_identity_digest=probe.identity_digest,
+            elif prior_authority != cache_digest or current_digest != cache_digest:
+                # A missing or modified cache is never repaired from its own
+                # contents. The freshly collected repository evidence remains
+                # usable only in this process; a later resume will collect again.
+                logger.warning(
+                    "Final review evidence cache is absent, modified, or lacks "
+                    "append-only authority; resume will collect it again"
                 )
-                cache_content = render_final_review_evidence_cache(snapshot)
-                cache_digest = sha256_bytes(cache_content.encode("utf-8"))
-                prior_authority = self._final_review_cache_authorized_digest(
-                    cache_path, repository_fingerprint=snapshot.repository_fingerprint
+            if snapshot.audit_summary is not None:
+                logger.info(
+                    "Final review evidence compacted: audit=%s original_chars=%s "
+                    "evidence_chars=%s fingerprint=%s elapsed_ms=%s collection=%s",
+                    snapshot.audit_summary.audit_path,
+                    len(snapshot.canonical_diff),
+                    len(snapshot.evidence_diff),
+                    snapshot.repository_fingerprint,
+                    snapshot.collection_elapsed_ms,
+                    self._final_review_evidence_collections,
                 )
-                try:
-                    current_digest = file_state_digest(cache_path)
-                except SideEffectReconciliationError:
-                    # A non-regular or unstable cache target has no authority.
-                    # Keep the freshly collected in-memory evidence, but do not
-                    # follow, replace, or otherwise repair that filesystem node.
-                    current_digest = "invalid"
-                if self._artifact_bridge is not None and (
-                    prior_authority is None and current_digest in {"absent", cache_digest}
-                ):
-                    self._write_side_effect_file(
-                        cache_path,
-                        cache_content,
-                        normalized_text=False,
-                        fingerprint=snapshot.repository_fingerprint,
-                    )
-                elif prior_authority != cache_digest or current_digest != cache_digest:
-                    # A missing or modified cache is never repaired from its own
-                    # contents. The freshly collected repository evidence remains
-                    # usable only in this process; a later resume will collect again.
-                    logger.warning(
-                        "Final review evidence cache is absent, modified, or lacks "
-                        "append-only authority; resume will collect it again"
-                    )
-                if snapshot.audit_summary is not None:
-                    logger.info(
-                        "Final review evidence compacted: audit=%s original_chars=%s "
-                        "evidence_chars=%s fingerprint=%s elapsed_ms=%s collection=%s",
-                        snapshot.audit_summary.audit_path,
-                        len(snapshot.canonical_diff),
-                        len(snapshot.evidence_diff),
-                        snapshot.repository_fingerprint,
-                        snapshot.collection_elapsed_ms,
-                        self._final_review_evidence_collections,
-                    )
+        return changes, snapshot
+
+    def collect_changes(self, start_commit: str) -> WorkflowChanges:
+        semantic_paths, raw_plan_artifact = self._collect_change_path_selection()
+        excluded_control_paths = _bound_task_control_paths(
+            self.root, self.active_state
+        )
+        final_review = (
+            self.active_state is not None
+            and self.active_state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
+        )
+        audit_path = (
+            self.active_state.audit_report_path if final_review else None
+        )
+        snapshot = self._reuse_final_review_evidence(
+            start_commit,
+            semantic_paths,
+            excluded_control_paths,
+            final_review,
+            audit_path,
+        )
+        if snapshot is not None:
+            changes = snapshot.repository_changes(self.root)
+        else:
+            changes, snapshot = self._collect_fresh_final_review_evidence(
+                start_commit,
+                semantic_paths,
+                raw_plan_artifact,
+                excluded_control_paths,
+                final_review,
+                audit_path,
+                snapshot,
+            )
         if changes.entries:
             review_diff = (
                 snapshot.evidence_diff if snapshot is not None else changes.diff_text
