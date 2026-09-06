@@ -49,7 +49,7 @@ SYNTHETIC_TECHNICAL_TEXT = technical_text_evidence(
 def _state(step: WorkflowStep):
     state = init_workflow_state(
         run_id="preflight-run", task_file="/repo/task.md", branch="feature/preflight",
-        branch_base="a" * 40, slice_count=1,
+        branch_base="a" * 40, first_slice_start_commit="a" * 40, slice_count=1,
     ).bind_slice_plan(
         (PlannedSlice(1, "implementation", ("src/one.py",)),),
         first_start_commit="a" * 40,
@@ -64,7 +64,7 @@ def _state(step: WorkflowStep):
 def _state_with_approved_external_path():  # type: ignore[no-untyped-def]
     state = init_workflow_state(
         run_id="preflight-run", task_file="/repo/task.md", branch="feature/preflight",
-        branch_base="a" * 40, slice_count=1,
+        branch_base="a" * 40, first_slice_start_commit="a" * 40, slice_count=1,
     ).bind_slice_plan(
         (PlannedSlice(1, "implementation", ("src/one.py",)),),
         first_start_commit="a" * 40,

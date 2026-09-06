@@ -348,6 +348,7 @@ def _state(
         task_file="inbox/baseline.md",
         branch="feature/backlog-followups",
         branch_base=BRANCH_BASE,
+        first_slice_start_commit=BRANCH_BASE,
         slice_count=slice_count,
         task_digest=TASK_DIGEST,
         task_scope_patterns=("src/baseline.py",),

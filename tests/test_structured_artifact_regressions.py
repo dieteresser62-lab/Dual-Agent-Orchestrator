@@ -147,6 +147,7 @@ def _state(repository: Path, run_id: str = "structured-regression"):
         task_file=str(task),
         branch="feature/structured-regression",
         branch_base=head,
+        first_slice_start_commit=head,
         slice_count=1,
         task_digest=hashlib.sha256(task.read_bytes()).hexdigest(),
         task_scope_patterns=("src/runtime.py",),
@@ -698,6 +699,7 @@ def _legacy_final_denial_recovery_case(
             correction.task_file,
             correction.branch,
             correction.branch_base,
+            correction.slices[0].start_commit,
             correction.execution_mode,
             correction.audit_report_path,
         ),
@@ -1135,6 +1137,7 @@ def test_legacy_final_review_keeps_budget_fact_without_structured_preflight(
         task_file=str(task),
         branch="feature/legacy-final-review",
         branch_base=head,
+        first_slice_start_commit=head,
         slice_count=1,
         task_scope_patterns=("src/runtime.py",),
         protocol_binding=None,
@@ -1182,6 +1185,7 @@ def test_final_preflight_denial_exposes_affected_paths_on_resume_gate(
         task_file=str(repository / "task.md"),
         branch="feature/preflight-paths",
         branch_base=_git(repository, "rev-parse", "HEAD"),
+        first_slice_start_commit=_git(repository, "rev-parse", "HEAD"),
         slice_count=1,
     )
     driver = _driver(repository)

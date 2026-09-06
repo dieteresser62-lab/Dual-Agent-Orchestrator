@@ -1498,6 +1498,7 @@ def build_scenario_state(
         task_file=str(task_file.resolve()),
         branch=scenario.initial.branch,
         branch_base=first.start_commit,
+        first_slice_start_commit=first.start_commit,
         slice_count=scenario.initial.slice_count,
         task_digest=task_digest,
         execution_mode=scenario.initial.execution_mode,

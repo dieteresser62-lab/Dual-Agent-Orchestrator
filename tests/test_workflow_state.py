@@ -50,6 +50,7 @@ def make_state():
         task_file="/repo/task.md",
         branch="feature/state-v3",
         branch_base="a" * 40,
+        first_slice_start_commit="a" * 40,
         slice_count=3,
         timestamp="2026-08-11T10:00:00+00:00",
     )
@@ -72,6 +73,20 @@ def test_init_workflow_state_uses_v3_and_one_based_ids() -> None:
     assert state.current_slice.start_commit == "a" * 40
     assert state.current_slice.commit_ref is None
     assert state.slices[1].start_commit is None
+
+
+def test_init_workflow_state_does_not_inherit_first_slice_start_from_branch_base() -> None:
+    state = init_workflow_state(
+        run_id="measured-first-slice",
+        task_file="/repo/task.md",
+        branch="feature/measured-first-slice",
+        branch_base="a" * 40,
+        first_slice_start_commit="b" * 40,
+        slice_count=1,
+    )
+
+    assert state.branch_base == "a" * 40
+    assert state.current_slice.start_commit == "b" * 40
 
 
 def test_bootstrap_facts_roundtrip_idempotently_and_use_a_resume_gate() -> None:
@@ -146,6 +161,7 @@ def test_native_codex_request_projects_fingerprint_bound_paths_and_explanation()
         task_file="/repo/task.md",
         branch="feature/native-scope",
         branch_base="a" * 40,
+        first_slice_start_commit="a" * 40,
         slice_count=1,
         task_digest="b" * 64,
         task_scope_patterns=("docs/internal/plan.md",),
@@ -235,6 +251,7 @@ def test_plan_scope_stop_becomes_post_revision_fingerprint_gate() -> None:
         task_file="/repo/inbox/plan.md",
         branch="feature/plan-scope-reframe",
         branch_base="a" * 40,
+        first_slice_start_commit="a" * 40,
         slice_count=1,
         task_scope_patterns=(plan_path,),
     ).with_current_step(WorkflowStep.CODEX_PLAN_REVISION).await_policy_gate(
@@ -279,6 +296,7 @@ def test_plan_pre_review_scope_drift_gates_without_reinvoking_codex() -> None:
         task_file="/repo/inbox/plan.md",
         branch="feature/plan-pre-review-gate",
         branch_base="a" * 40,
+        first_slice_start_commit="a" * 40,
         slice_count=1,
         task_scope_patterns=(plan_path,),
     ).with_current_step(WorkflowStep.CODEX_PLAN_REVISION)
@@ -343,6 +361,7 @@ def test_hardened_task_contract_roundtrips_in_state() -> None:
         task_file="/repo/task.md",
         branch="feature/plan",
         branch_base="a" * 40,
+        first_slice_start_commit="a" * 40,
         slice_count=1,
         task_digest="b" * 64,
         execution_mode="PLAN_ONLY",
@@ -457,6 +476,7 @@ def test_init_rejects_non_one_based_slice_count(slice_count: int) -> None:
             task_file="/repo/task.md",
             branch="feature/state-v3",
             branch_base="abc123",
+            first_slice_start_commit="abc123",
             slice_count=slice_count,
         )
 
@@ -780,7 +800,14 @@ def test_state_roundtrip_preserves_full_structure() -> None:
 
 
 def test_multi_slice_transition_persists_start_and_commit_references() -> None:
-    state = make_state()
+    state = init_workflow_state(
+        run_id="measured-slice-starts",
+        task_file="/repo/task.md",
+        branch="feature/measured-slice-starts",
+        branch_base="0" * 40,
+        first_slice_start_commit="a" * 40,
+        slice_count=2,
+    )
     plan_done = state.complete_current_work_unit(updated_at="plan-done")
     slice_one = plan_done.start_work_unit(
         slice_id=1,
@@ -808,6 +835,8 @@ def test_multi_slice_transition_persists_start_and_commit_references() -> None:
     resumed = WorkflowState.from_dict(slice_two.to_dict()).resume_cursor()
 
     assert slice_two.slices[0].status is SliceStatus.COMPLETED
+    assert slice_two.branch_base == "0" * 40
+    assert slice_two.slices[0].start_commit == "a" * 40
     assert slice_two.slices[0].commit_ref == "b" * 40
     assert slice_two.current_slice.start_commit == "b" * 40
     assert slice_two.current_work_unit_id == 3
@@ -823,6 +852,7 @@ def test_completed_plan_commit_binding_is_exact_and_idempotent() -> None:
         task_file="/repo/plan.md",
         branch="feature/plan-only-binding",
         branch_base="a" * 40,
+        first_slice_start_commit="a" * 40,
         slice_count=1,
         execution_mode="PLAN_ONLY",
         work_plan_path="docs/internal/work-plan.md",
@@ -857,6 +887,7 @@ def test_final_review_references_committed_slice_and_appends_bounded_correction(
         task_file="/repo/task.md",
         branch="feature/state-v3",
         branch_base="a" * 40,
+        first_slice_start_commit="a" * 40,
         slice_count=1,
         timestamp="2026-08-11T10:00:00+00:00",
     ).bind_slice_plan(
@@ -917,6 +948,7 @@ def test_correction_slice_remediation_scope_includes_current_slice_report_path()
         task_file="/repo/task.md",
         branch="feature/state-v3",
         branch_base="a" * 40,
+        first_slice_start_commit="a" * 40,
         slice_count=1,
         audit_report_path=audit_path,
         timestamp="2026-08-11T10:00:00+00:00",

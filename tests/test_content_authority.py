@@ -69,6 +69,7 @@ def _bind_store(store: ArtifactStore) -> None:
             "inbox/backlog/content-authority.md",
             "feature/content-authority",
             "b" * 40,
+            "b" * 40,
             "IMPLEMENT",
             None,
         ),
@@ -104,6 +105,7 @@ def _validation_driver(store: ArtifactStore) -> ProductionWorkflowDriver:
         task_file=str(store.repository_root / "task.md"),
         branch="feature/content-authority",
         branch_base="b" * 40,
+        first_slice_start_commit="b" * 40,
         slice_count=1,
     )
     return driver

@@ -76,6 +76,7 @@ HARNESS_SCHEMA_VERSION = "provider-free-crash-harness-v1"
 RESULT_SCHEMA_VERSION = "provider-free-crash-harness-result-v1"
 FIXED_TIME = "2026-09-01T00:00:00+00:00"
 FINGERPRINT = "a" * 64
+FIRST_SLICE_START_COMMIT = "c" * 40
 LEDGER_ORDER = (
     "git_commit",
     "provider_start",
@@ -89,6 +90,17 @@ BOUNDARY_ORDER = tuple(item.value for item in SideEffectBoundaryPhase)
 
 class CrashHarnessError(RuntimeError):
     """Raised when the harness cannot produce trustworthy S5 evidence."""
+
+
+def _require_measured_first_slice_start_commit(state: WorkflowState) -> None:
+    """Prove replay retained the measured boundary instead of inferring the base."""
+
+    if state.branch_base == FIRST_SLICE_START_COMMIT:
+        raise CrashHarnessError("measured first Slice start commit equals branch base")
+    if state.slices[0].start_commit != FIRST_SLICE_START_COMMIT:
+        raise CrashHarnessError(
+            "replayed first Slice start commit differs from the measured boundary"
+        )
 
 
 class RecordBackedScriptedWorkflowDriver(ScriptedWorkflowDriver):
@@ -424,6 +436,7 @@ def _production_state(root: Path, run_id: str) -> WorkflowState:
         task_file="inbox/s5-harness.md",
         branch="feature/state-authority-consolidation",
         branch_base="b" * 40,
+        first_slice_start_commit=FIRST_SLICE_START_COMMIT,
         slice_count=1,
         task_digest=FINGERPRINT,
         task_scope_patterns=("src/harness.py",),
@@ -436,7 +449,7 @@ def _production_state(root: Path, run_id: str) -> WorkflowState:
         step=WorkflowStep.CODEX_IMPLEMENTATION,  # allowlist:provider -- persisted step
         updated_at=FIXED_TIME,
     ).bind_current_slice_git_boundary(
-        start_commit="b" * 40,
+        start_commit=FIRST_SLICE_START_COMMIT,
         scope_paths=("src/harness.py",),
         start_fingerprint="c" * 64,
         updated_at=FIXED_TIME,
@@ -474,6 +487,7 @@ def _production_baseline(
     )
     driver.bind_work_unit(state)
     resolution = resolve_resume_state(root, run_id)
+    _require_measured_first_slice_start_commit(resolution.state)
     if resolution.state.current_step is not WorkflowStep.CODEX_IMPLEMENTATION:  # allowlist:provider
         raise CrashHarnessError("production baseline projected a foreign cursor")
     return ArtifactBridge(
@@ -625,7 +639,8 @@ def _run_baseline_stop_case(
         else:
             if injector.crash_count:
                 production_resume_successes += 1
-            resolve_resume_state(case_root, run_id)
+            resolution = resolve_resume_state(case_root, run_id)
+            _require_measured_first_slice_start_commit(resolution.state)
             break
     else:
         raise CrashHarnessError("baseline crash case exceeded its retry bound")
@@ -730,6 +745,7 @@ def _run_crash_case(
         nonlocal production_resume_attempts, production_resume_successes
         production_resume_attempts += 1
         resolution = resolve_resume_state(case_root, run_id)
+        _require_measured_first_slice_start_commit(resolution.state)
         production_resume_successes += 1
         return resolution
 
@@ -1344,6 +1360,7 @@ def prove_typed_failure_continuations() -> tuple[Mapping[str, object], ...]:
             task_file="inbox/backlog/s5.md",
             branch="feature/state-authority-consolidation",
             branch_base="a" * 40,
+            first_slice_start_commit=FIRST_SLICE_START_COMMIT,
             slice_count=1,
             protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
             timestamp=FIXED_TIME,

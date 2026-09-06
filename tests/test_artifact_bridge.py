@@ -44,7 +44,7 @@ def _bound_bridge(
     store = ArtifactStore(root, run_id)
     setup = ArtifactBridge(store, now=lambda: "2026-08-18T09:00:00+00:00")
     setup.append(
-        RunIdentityPayload("task.md", "feature/test", "b" * 40, "IMPLEMENT", None),
+        RunIdentityPayload("task.md", "feature/test", "b" * 40, "b" * 40, "IMPLEMENT", None),
         logical_id="run-identity",
         idempotency_key="run-identity",
         fingerprint_sha256=DIGEST,
@@ -77,7 +77,7 @@ def test_bridge_constructs_lossless_handoff_only_from_accepted_replay() -> None:
         return record
     append(
         "run-identity",
-        RunIdentityPayload("task.md", "feature/test", "b" * 40, "PLAN_ONLY", None),
+        RunIdentityPayload("task.md", "feature/test", "b" * 40, "b" * 40, "PLAN_ONLY", None),
     )
     append(
         "run-profile",

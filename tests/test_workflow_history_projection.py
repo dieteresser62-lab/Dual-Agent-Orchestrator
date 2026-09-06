@@ -309,6 +309,7 @@ def _journey(bridge: ArtifactBridge, *, carried_validation: bool = False):
             "inbox/backlog/r9.md",
             "feature/state-authority-consolidation",
             "b" * 40,
+            "b" * 40,
             "IMPLEMENT",
             None,
         ),
@@ -771,6 +772,24 @@ def _state_projection_anchor_entries(tmp_path: Path) -> list[dict[str, object]]:
             }
         )
     return entries
+
+
+def test_first_slice_projection_uses_structural_start_even_when_equal_to_base(
+    tmp_path: Path,
+) -> None:
+    bridge = _state_projection_bridge(tmp_path, "identity-start-equals-base")
+    chain = _journey(bridge)
+    boundary_index = next(
+        index
+        for index, record in enumerate(chain)
+        if isinstance(record.payload, SliceBoundaryPayload)
+    )
+    replay = replay_artifacts(chain[:boundary_index], RUN_ID)
+
+    assert replay.run_identity is not None
+    assert replay.run_identity.first_slice_start_commit == "b" * 40
+    assert replay.run_identity.first_slice_start_commit == replay.run_identity.branch_base
+    assert project_workflow_state(replay).state.current_slice.start_commit == "b" * 40
 
 
 def _load_state_projection_baseline() -> dict[str, object]:
@@ -1655,7 +1674,7 @@ def test_review_cannot_authorize_its_own_foreign_finding_origin(
 def test_chain_without_workflow_events_is_rejected_fail_closed(tmp_path: Path) -> None:
     bridge = ArtifactBridge(ArtifactStore(tmp_path, "r9-pre-event-chain"))
     bridge.append(
-        RunIdentityPayload("task.md", "feature/r9", "b" * 40, "IMPLEMENT", None),
+        RunIdentityPayload("task.md", "feature/r9", "b" * 40, "b" * 40, "IMPLEMENT", None),
         logical_id="run-identity",
         idempotency_key="run-identity",
         fingerprint_sha256=FINGERPRINT,

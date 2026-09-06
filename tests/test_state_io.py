@@ -233,6 +233,7 @@ def make_v3_state(tmp_path: Path) -> WorkflowState:
         task_file=str(task_file),
         branch="feature/state-v3",
         branch_base="b" * 40,
+        first_slice_start_commit="b" * 40,
         slice_count=2,
         timestamp="2026-08-11T12:00:00+00:00",
     )

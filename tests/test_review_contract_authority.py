@@ -44,7 +44,7 @@ FINGERPRINT = "d" * 64
 def _bridge(tmp_path, run_id: str) -> ArtifactBridge:  # type: ignore[no-untyped-def]
     bridge = ArtifactBridge(ArtifactStore(tmp_path, run_id))
     bridge.append(
-        RunIdentityPayload("task.md", "feature/review", "b" * 40, "IMPLEMENT", None),
+        RunIdentityPayload("task.md", "feature/review", "b" * 40, "b" * 40, "IMPLEMENT", None),
         logical_id="run-identity",
         idempotency_key="run-identity",
         fingerprint_sha256=FINGERPRINT,

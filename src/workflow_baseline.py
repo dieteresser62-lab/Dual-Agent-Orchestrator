@@ -105,6 +105,7 @@ def _append_baseline_identity_expectations(
         task_file=state.task_file,
         branch=state.branch,
         branch_base=state.branch_base,
+        first_slice_start_commit=state.slices[0].start_commit,
         execution_mode=state.execution_mode,
         audit_report_path=state.audit_report_path,
     )
@@ -348,7 +349,12 @@ def matches_baseline_initialization_prefix(
     """
 
     binding = state.protocol_binding
-    if binding is None or state.task_digest is None:
+    if (
+        binding is None
+        or state.task_digest is None
+        or not state.slices
+        or not state.slices[0].start_commit
+    ):
         return False
     if state.runtime_history is not None or any(
         unit.invocation_failures
@@ -504,6 +510,7 @@ class WorkflowBaseline:
                 task_file=state.task_file,
                 branch=state.branch,
                 branch_base=state.branch_base,
+                first_slice_start_commit=state.slices[0].start_commit,
                 execution_mode=state.execution_mode,
                 audit_report_path=state.audit_report_path,
             ),

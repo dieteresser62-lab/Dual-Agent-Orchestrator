@@ -136,6 +136,7 @@ def _build_case(case: dict[str, Any]) -> tuple[ArtifactRecord, ...]:
             "inbox/backlog/finding-reducer.md",
             "feature/finding-reducer",
             "b" * 40,
+            "b" * 40,
             "IMPLEMENT",
             None,
         ),

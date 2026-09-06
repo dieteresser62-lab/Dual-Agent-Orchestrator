@@ -187,6 +187,7 @@ def _append_run_binding(bridge: ArtifactBridge, state: WorkflowState) -> None:
             state.task_file,
             state.branch,
             state.branch_base,
+            state.slices[0].start_commit,
             state.execution_mode,
             state.audit_report_path,
         ),
@@ -304,6 +305,7 @@ def test_invoke_reviewer_dispatches_native_adapter_with_snapshot_boundary_and_pr
         task_file=str(repository / "task.md"),
         branch="feature/native-review-dispatch",
         branch_base=_git(repository, "rev-parse", "HEAD"),
+        first_slice_start_commit=_git(repository, "rev-parse", "HEAD"),
         slice_count=1,
         task_digest="a" * 64,
         task_scope_patterns=("src/runtime.py",),
@@ -603,6 +605,7 @@ def _failed_codex_attempt_harness(
         task_file=str(task),
         branch=branch,
         branch_base=_git(repository, "rev-parse", "HEAD"),
+        first_slice_start_commit=_git(repository, "rev-parse", "HEAD"),
         slice_count=1,
         task_digest=task_digest,
         task_scope_patterns=("src/runtime.py",),
@@ -929,6 +932,7 @@ def test_run_records_exist_before_first_workflow_dispatch(
         str(task.resolve()),
         "feature/run-binding-order",
         _git(repository, "merge-base", "HEAD", "master"),
+        _git(repository, "rev-parse", "HEAD"),
         "IMPLEMENT",
         None,
     )
@@ -977,6 +981,7 @@ def test_final_review_structured_records_use_branch_wide_fingerprint(
         task_file=str(repository / "task.md"),
         branch="feature/final-fingerprint",
         branch_base=branch_base,
+        first_slice_start_commit=branch_base,
         slice_count=1,
     ).bind_slice_plan(
         (PlannedSlice(1, "implementation", ("current.txt",)),),
@@ -1031,6 +1036,7 @@ def test_review_packet_materialization_reuses_bytes_and_rejects_cache_mismatch(
     driver.active_state = init_workflow_state(
         run_id="packet-run", task_file="/repo/task.md",
         branch="feature/packet-cache", branch_base="a" * 40,
+        first_slice_start_commit="a" * 40,
         slice_count=1, timestamp="2026-08-21T10:00:00+00:00",
     )
     canonical = json.dumps(
@@ -1090,6 +1096,7 @@ def test_quota_auto_wait_boundary_uses_reset_span_without_safety_margin(
         task_file="task.md",
         branch="feature/quota-boundary",
         branch_base="a" * 40,
+        first_slice_start_commit="a" * 40,
         slice_count=1,
     )
     reset_at = (
@@ -1159,6 +1166,7 @@ def test_commit_backstop_rejects_yes_reviews_bound_to_failed_attestation(
         task_file=str(tmp_path / "task.md"),
         branch="feature/red-attestation-backstop",
         branch_base=start_commit,
+        first_slice_start_commit=start_commit,
         slice_count=1,
     ).bind_current_slice_git_boundary(
         start_commit=start_commit,
@@ -1225,6 +1233,7 @@ def test_structured_red_state_commit_requires_exact_chain_records_before_git(
         task_file=str(tmp_path / "task.md"),
         branch="feature/structured-red-state",
         branch_base=start_commit,
+        first_slice_start_commit=start_commit,
         slice_count=1,
         task_digest="a" * 64,
         task_scope_patterns=(changed_path,),
@@ -1360,6 +1369,7 @@ def test_runtime_context_auto_authorizes_scoped_test_changes_unless_gate_enabled
         task_file=str(task),
         branch="feature/automatic-tests",
         branch_base=_git(repository, "rev-parse", "HEAD"),
+        first_slice_start_commit=_git(repository, "rev-parse", "HEAD"),
         slice_count=1,
     )
     monkeypatch.chdir(repository)
@@ -1406,6 +1416,7 @@ def test_real_codex_canonical_request_embeds_only_configured_agents_file(
         task_file=str(task),
         branch="feature/transport-boundary",
         branch_base=_git(repository, "rev-parse", "HEAD"),
+        first_slice_start_commit=_git(repository, "rev-parse", "HEAD"),
         slice_count=1,
         task_digest="a" * 64,
         task_scope_patterns=("docs/internal/work-plan.md",),
@@ -1478,6 +1489,7 @@ def test_final_review_recovers_latest_prior_attestation_after_transition_checkpo
         task_file="task.md",
         branch="feature/final-attestation",
         branch_base="a" * 40,
+        first_slice_start_commit="a" * 40,
         slice_count=1,
         timestamp="2026-08-21T12:00:00+00:00",
     ).bind_slice_plan(
@@ -1528,6 +1540,7 @@ def test_final_review_attestation_recovery_receives_record_authority(
         task_file="task.md",
         branch="feature/final-record-authority",
         branch_base="a" * 40,
+        first_slice_start_commit="a" * 40,
         slice_count=1,
     ).bind_slice_plan(
         (PlannedSlice(1, "implementation", ("src/core.py",)),),
@@ -1595,6 +1608,7 @@ def test_bind_work_unit_preserves_latest_driver_owned_runtime_history(
         task_file=str(task),
         branch="feature/runtime-history",
         branch_base=_git(repository, "rev-parse", "HEAD"),
+        first_slice_start_commit=_git(repository, "rev-parse", "HEAD"),
         slice_count=1,
     )
     old_history = WorkflowHistory(1).to_dict()
@@ -1646,6 +1660,7 @@ def test_final_review_compacts_generated_audit_without_weakening_fingerprint(
         task_file=str(tmp_path / "task.md"),
         branch="feature/final-review-evidence",
         branch_base=head,
+        first_slice_start_commit=head,
         slice_count=1,
         task_scope_patterns=(audit_path, source_path),
         audit_report_path=audit_path,
@@ -1727,6 +1742,7 @@ def test_final_review_evidence_never_silently_truncates_diff_content(
         task_file=str(tmp_path / "task.md"),
         branch="feature/complete-final-review-evidence",
         branch_base=head,
+        first_slice_start_commit=head,
         slice_count=1,
         task_scope_patterns=(audit_path, source_path),
         audit_report_path=audit_path,
@@ -1793,6 +1809,7 @@ def _final_review_evidence_driver(
         task_file=str(tmp_path / "task.md"),
         branch="feature/final-review-cache",
         branch_base=head,
+        first_slice_start_commit=head,
         slice_count=1,
         task_scope_patterns=(audit_path, source_path),
         audit_report_path=audit_path,
@@ -1906,6 +1923,7 @@ def test_final_review_semantically_empty_diff_retains_metadata_fallback(
         task_file=str(tmp_path / "task.md"),
         branch="feature/final-review-cache",
         branch_base=head,
+        first_slice_start_commit=head,
         slice_count=1,
         task_scope_patterns=(semantic_path,),
     ).bind_current_slice_git_boundary(
@@ -2201,6 +2219,7 @@ def test_structured_bind_persists_contract_and_active_work_unit_once(
         task_file=str(task),
         branch="feature/structured-bind",
         branch_base=head,
+        first_slice_start_commit=head,
         slice_count=1,
         task_digest="a" * 64,
         task_scope_patterns=("src/runtime.py",),
@@ -2356,6 +2375,7 @@ def test_r9_resume_reconciles_one_durable_transition_without_its_event(
         task_file=str(task),
         branch="feature/r9-event-recovery",
         branch_base=head,
+        first_slice_start_commit=head,
         slice_count=1,
         task_digest="a" * 64,
         task_scope_patterns=("src/runtime.py",),
@@ -2422,6 +2442,7 @@ def test_r2_policy_records_denial_count_and_limit_extension_as_separate_facts(
         task_file=str(task),
         branch="feature/r2-policy",
         branch_base=head,
+        first_slice_start_commit=head,
         slice_count=1,
         task_digest="a" * 64,
         task_scope_patterns=("src/runtime.py",),
@@ -2490,6 +2511,7 @@ def test_r3_slice_boundary_precedes_reader_and_keeps_measured_start_after_tree_c
         task_file=str(task),
         branch="feature/r3-boundary-order",
         branch_base=head,
+        first_slice_start_commit=head,
         slice_count=1,
         task_digest="a" * 64,
         task_scope_patterns=("src/one.py", "src/old.py"),
@@ -2562,6 +2584,7 @@ def test_r3_each_slice_start_writes_one_boundary_and_scope_extension_is_revision
         task_file=str(task),
         branch="feature/r3-boundary-count",
         branch_base=head,
+        first_slice_start_commit=head,
         slice_count=2,
         task_digest="a" * 64,
         task_scope_patterns=("src/shared.py", "tests/shared.py"),
@@ -2637,6 +2660,7 @@ def test_r3_scope_extension_checkpoint_accepts_older_subset_revision(
         task_file=str(task),
         branch="feature/r3-scope-extension-resume",
         branch_base=head,
+        first_slice_start_commit=head,
         slice_count=1,
         task_digest="a" * 64,
         task_scope_patterns=("docs/extra.md", "src/runtime.py"),
@@ -2709,6 +2733,7 @@ def test_native_review_record_ahead_recovery_reuses_bound_json_without_provider(
         task_file=str(task),
         branch="feature/native-record-ahead",
         branch_base=head,
+        first_slice_start_commit=head,
         slice_count=1,
         task_digest="a" * 64,
         task_scope_patterns=("src/runtime.py",),
@@ -2973,6 +2998,7 @@ def test_native_codex_record_ahead_recovery_reuses_raw_json_without_provider(
         task_file=str(task),
         branch="feature/native-codex-record-ahead",
         branch_base=head,
+        first_slice_start_commit=head,
         slice_count=1,
         task_digest=hashlib.sha256(
             task.read_text(encoding="utf-8").encode("utf-8")
@@ -3204,6 +3230,7 @@ def test_native_review_persists_open_status_rationale_for_authoritative_replay(
         task_file=str(tmp_path / "task.md"),
         branch="feature/native-open-rationale-replay",
         branch_base=head,
+        first_slice_start_commit=head,
         slice_count=1,
         task_digest="a" * 64,
         task_scope_patterns=("src/runtime.py",),
@@ -3294,6 +3321,7 @@ def _finding_transition_driver(
         task_file=str(tmp_path / "task.md"),
         branch=f"feature/{run_id}",
         branch_base=head,
+        first_slice_start_commit=head,
         slice_count=1,
         task_digest="a" * 64,
         task_scope_patterns=("src/runtime.py",),
@@ -3656,6 +3684,7 @@ def test_native_codex_record_ahead_recovery_completes_finding_responses(
             task_file=str(task),
             branch="feature/native-codex-finding-recovery",
             branch_base=head,
+            first_slice_start_commit=head,
             slice_count=1,
             task_digest=hashlib.sha256(
                 task.read_text(encoding="utf-8").encode("utf-8")
@@ -4001,6 +4030,7 @@ def test_combined_native_finding_authority_ignores_projection_drift(
             task_file=str(task),
             branch="feature/combined-native-authority",
             branch_base=head,
+            first_slice_start_commit=head,
             slice_count=1,
             task_digest=hashlib.sha256(
                 task.read_text(encoding="utf-8").encode("utf-8")
@@ -4256,6 +4286,7 @@ def test_native_codex_plan_and_final_recovery_are_raw_and_record_ahead_safe(
         task_file=str(task),
         branch=branch,
         branch_base=head,
+        first_slice_start_commit=head,
         slice_count=1,
         task_digest=task_digest,
         task_scope_patterns=("src/runtime.py",),
@@ -4450,6 +4481,7 @@ def test_structured_bind_survives_round_number_increase_within_same_work_unit(
         task_file=str(task),
         branch="feature/structured-round-transition",
         branch_base=head,
+        first_slice_start_commit=head,
         slice_count=1,
         task_digest="a" * 64,
         task_scope_patterns=("src/runtime.py",),
@@ -4580,6 +4612,7 @@ def test_correction_work_unit_persists_correction_work_unit_payload_with_finding
         task_file=str(task),
         branch="feature/structured-correction",
         branch_base=head,
+        first_slice_start_commit=head,
         slice_count=1,
         task_digest="a" * 64,
         task_scope_patterns=("src/runtime.py",),
@@ -4638,6 +4671,7 @@ def test_structured_checkpoint_projects_record_chain_into_slice_and_overall_audi
         task_file=str(task),
         branch="feature/structured-audit",
         branch_base=head,
+        first_slice_start_commit=head,
         slice_count=1,
         task_digest="a" * 64,
         task_scope_patterns=(slice_path, "src/runtime.py"),
@@ -4689,6 +4723,7 @@ def test_structured_checkpoint_stops_before_audit_on_mirror_mismatch(
         task_file=str(task),
         branch="feature/structured-audit-mismatch",
         branch_base=head,
+        first_slice_start_commit=head,
         slice_count=1,
         task_digest="a" * 64,
         task_scope_patterns=("src/runtime.py",),
@@ -4722,6 +4757,7 @@ def test_checkpoint_archives_latest_driver_history_across_work_unit_transition(
         task_file=str(task),
         branch="feature/runtime-history-checkpoint",
         branch_base=head,
+        first_slice_start_commit=head,
         slice_count=1,
     ).bind_current_slice_git_boundary(
         start_commit=head,
@@ -4883,6 +4919,7 @@ def test_legacy_approved_inbox_plan_gets_deferred_audit_paths_before_slice_start
         task_file="/repo/inbox/RundungsDiff.md",
         branch="codex/rounding",
         branch_base="a" * 40,
+        first_slice_start_commit="a" * 40,
         slice_count=1,
         audit_report_path="docs/internal/rundungsdiff-review-12345678.md",
     ).bind_slice_plan(
@@ -4909,6 +4946,7 @@ def test_handoff_slice_document_is_reused_instead_of_adding_a_second_one() -> No
         task_file="/repo/inbox/Stress_Replay-implement.md",
         branch="codex/stress-replay",
         branch_base="a" * 40,
+        first_slice_start_commit="a" * 40,
         slice_count=1,
         audit_report_path="docs/internal/stress-replay-implement-review-12345678.md",
     ).bind_slice_plan(
@@ -4939,6 +4977,7 @@ def test_legacy_approved_inbox_plan_cannot_retrofit_after_slice_boundary() -> No
         task_file="/repo/inbox/RundungsDiff.md",
         branch="codex/rounding",
         branch_base="a" * 40,
+        first_slice_start_commit="a" * 40,
         slice_count=1,
         audit_report_path="docs/internal/rundungsdiff-review-12345678.md",
     ).bind_slice_plan(
@@ -4965,6 +5004,7 @@ def test_final_correction_rejects_audit_only_persisted_scope(tmp_path: Path) -> 
         task_file=str(task),
         branch="feature/audit-only-correction",
         branch_base=_git(repository, "rev-parse", "HEAD"),
+        first_slice_start_commit=_git(repository, "rev-parse", "HEAD"),
         slice_count=1,
         audit_report_path=audit_path,
     ).bind_slice_plan(
@@ -5004,6 +5044,7 @@ def test_runtime_inherits_exact_prior_test_gate_before_early_resume_return() -> 
         task_file="/repo/inbox/rounding.md",
         branch="feature/rounding",
         branch_base="a" * 40,
+        first_slice_start_commit="a" * 40,
         slice_count=1,
     ).complete_current_work_unit().start_work_unit(
         slice_id=1,
@@ -5051,6 +5092,7 @@ def test_runtime_recognizes_exact_reopened_gate_approval_for_plain_resume() -> N
         task_file="/repo/inbox/native-review.md",
         branch="feature/native-review",
         branch_base="b" * 40,
+        first_slice_start_commit="b" * 40,
         slice_count=1,
     ).await_user_gate(
         reason=GateReason.UNEXPECTED_FILE,
@@ -5086,6 +5128,7 @@ def test_audit_test_approval_is_projected_from_gate_record_authority_and_time(
         task_file=str(tmp_path / "task.md"),
         branch="feature/gate-audit",
         branch_base="b" * 40,
+        first_slice_start_commit="b" * 40,
         slice_count=1,
         task_digest="c" * 64,
         task_scope_patterns=paths,
@@ -5197,6 +5240,7 @@ def test_r5_gate_pending_decision_and_resume_records_precede_state_readers(
         task_file=str(task),
         branch="feature/r5-gate-order",
         branch_base=head,
+        first_slice_start_commit=head,
         slice_count=1,
         task_digest="d" * 64,
         task_scope_patterns=("src/runtime.py",),
@@ -5269,6 +5313,7 @@ def test_r5_repeated_identical_rejection_remains_resume_safe(tmp_path: Path) -> 
         task_file=str(task),
         branch="feature/r5-repeat-rejection",
         branch_base=head,
+        first_slice_start_commit=head,
         slice_count=1,
         task_digest="d" * 64,
         task_scope_patterns=("src/runtime.py",),
@@ -5320,6 +5365,7 @@ def test_runtime_does_not_reuse_gate_approval_for_changed_fingerprint() -> None:
         task_file="/repo/inbox/native-review.md",
         branch="feature/native-review",
         branch_base="b" * 40,
+        first_slice_start_commit="b" * 40,
         slice_count=1,
     ).await_user_gate(
         reason=GateReason.UNEXPECTED_FILE,
@@ -5731,6 +5777,73 @@ def test_direct_task_still_requires_target_branch_to_be_active(
     assert _git(repository, "branch", "--show-current") == "master"
 
 
+def test_branch_head_beyond_base_reaches_first_slice_implementation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = _repository(tmp_path, "feature/measured-first-slice")
+    branch_base = _git(repository, "rev-parse", "master")
+    (repository / "prior.txt").write_text("prior branch work\n", encoding="utf-8")
+    _git(repository, "add", "prior.txt")
+    _git(repository, "commit", "-m", "prior branch work")
+    measured_head = _git(repository, "rev-parse", "HEAD")
+    task = tmp_path / "task.md"
+    _write_task(
+        task,
+        "feature/measured-first-slice",
+        "prior.txt",
+        "src/one.py",
+    )
+    reached: dict[str, WorkflowState] = {}
+    bound_records: list[ArtifactRecord] = []
+
+    class ImplementationReached(RuntimeError):
+        pass
+
+    def codex(
+        driver: ProductionWorkflowDriver, invocation: CodexInvocation
+    ) -> NativeAgentCodexOutput:
+        if invocation.step is WorkflowStep.CODEX_PLAN:
+            (repository / "src").mkdir()
+            (repository / "src/one.py").write_text("value = 1\n", encoding="utf-8")
+            return _native_plan_output(
+                invocation,
+                summary="add file",
+                scope_paths=("prior.txt", "src/one.py"),
+            )
+        reached["state"] = driver.active_state
+        bound_records.extend(
+            ArtifactStore(repository, driver.active_state.run_id).load_chain()
+        )
+        raise ImplementationReached
+
+    monkeypatch.setattr(ProductionWorkflowDriver, "invoke_codex", codex)
+    monkeypatch.setattr(
+        ProductionWorkflowDriver,
+        "invoke_reviewer",
+        lambda _driver, invocation: _native_review_approval(invocation),
+    )
+    monkeypatch.chdir(repository)
+
+    with pytest.raises(ImplementationReached):
+        run_production_workflow(task, _args(repository, task))
+
+    state = reached["state"]
+    assert branch_base != measured_head
+    assert state.branch_base == branch_base
+    assert state.current_slice.start_commit == measured_head
+    assert state.current_slice.scope_paths == ("prior.txt", "src/one.py")
+    identity_record = next(
+        record
+        for record in bound_records
+        if record.record_type is RecordType.RUN_IDENTITY
+    )
+    assert identity_record.idempotency_key == "run-identity"
+    assert identity_record.payload.first_slice_start_commit == measured_head
+    assert all(
+        measured_head not in record.idempotency_key for record in bound_records
+    )
+
+
 def test_head_drift_after_plan_becomes_typed_persisted_halt(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -5739,9 +5852,12 @@ def test_head_drift_after_plan_becomes_typed_persisted_halt(
     _write_task(task, "feature/head-drift", "src/one.py")
 
     def codex(
-        driver: ProductionWorkflowDriver, invocation: CodexInvocation
+        _driver: ProductionWorkflowDriver, invocation: CodexInvocation
     ) -> NativeAgentCodexOutput:
-        _git(repository, "commit", "--allow-empty", "-m", "external drift")
+        (repository / "src").mkdir()
+        (repository / "src/one.py").write_text("value = 1\n", encoding="utf-8")
+        _git(repository, "add", "src/one.py")
+        _git(repository, "commit", "-m", "external drift")
         return _native_plan_output(
             invocation, summary="add file", scope_paths=("src/one.py",)
         )
@@ -5756,8 +5872,8 @@ def test_head_drift_after_plan_becomes_typed_persisted_halt(
     result = run_production_workflow(task, _args(repository, task))
 
     assert result.exit_code == 4
-    assert result.state.current_work_unit.gate.reason.value == "stop_request"
-    assert "NO-IMPLEMENTATION-CHANGES" in result.state.current_work_unit.gate.detail
+    assert result.state.current_work_unit.gate.reason.value == "unexpected_file"
+    assert "SLICE-HEAD-DRIFT" in result.state.current_work_unit.gate.detail
     persisted = json.loads(
         (repository / ".orchestrator" / "state.json").read_text(encoding="utf-8")
     )
@@ -5818,6 +5934,7 @@ def test_internal_plan_validation_honors_exact_approved_hotfix_paths(
         task_file="/repo/inbox/plan.md",
         branch="feature/approved-plan-hotfix",
         branch_base="b" * 40,
+        first_slice_start_commit="b" * 40,
         slice_count=1,
         task_scope_patterns=(work_plan,),
     ).bind_slice_plan(
@@ -6882,6 +6999,7 @@ def test_finding_handoff_import_precedes_baseline_and_binds_first_work_unit(
         task_file=str(repository / "inbox" / "source-plan.md"),
         branch="feature/finding-import",
         branch_base=_git(repository, "rev-parse", "HEAD"),
+        first_slice_start_commit=_git(repository, "rev-parse", "HEAD"),
         slice_count=1,
         task_digest="a" * 64,
         execution_mode="PLAN_ONLY",
@@ -6974,6 +7092,7 @@ def test_finding_handoff_import_precedes_baseline_and_binds_first_work_unit(
         task_file=str(task),
         branch="feature/finding-import",
         branch_base=_git(repository, "rev-parse", "HEAD"),
+        first_slice_start_commit=_git(repository, "rev-parse", "HEAD"),
         slice_count=1,
         task_digest=contract.digest,
         execution_mode="IMPLEMENT",
@@ -7043,6 +7162,7 @@ def _finding_export_driver(
         task_file=str(task),
         branch="feature/finding-export",
         branch_base=_git(repository, "rev-parse", "HEAD"),
+        first_slice_start_commit=_git(repository, "rev-parse", "HEAD"),
         slice_count=1,
         task_digest="a" * 64,
         execution_mode="PLAN_ONLY",

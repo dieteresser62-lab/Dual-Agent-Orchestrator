@@ -60,6 +60,7 @@ def _codex_bundle() -> workflow_requests.NativeCodexRequestBundle:
         task_file="/repo/inbox/backlog/00-b31.md",
         branch="feature/backlog-followups",
         branch_base="a" * 40,
+        first_slice_start_commit="a" * 40,
         slice_count=1,
         task_digest="b" * 64,
         task_scope_patterns=("docs/internal/b31-plan.md", "src/workflow_requests.py"),
@@ -90,6 +91,7 @@ def _review_bundle() -> workflow_requests.NativeReviewRequestBundle:
         task_file="/repo/inbox/backlog/00-b31.md",
         branch="feature/backlog-followups",
         branch_base="a" * 40,
+        first_slice_start_commit="a" * 40,
         slice_count=1,
         timestamp="2026-09-02T10:00:00+00:00",
     ).with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW)
@@ -255,6 +257,7 @@ Bring the six explicitly scoped documents to one consistent end state.
             task_file="/repo/inbox/b72.md",
             branch="feature/backlog-followups",
             branch_base="a" * 40,
+            first_slice_start_commit="a" * 40,
             slice_count=1,
             task_digest="b" * 64,
             task_scope_patterns=scope_paths,

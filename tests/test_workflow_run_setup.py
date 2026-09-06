@@ -252,6 +252,7 @@ def test_context_matches_every_workflow_context_field(
         task_file=str(tmp_path / "task.md"),
         branch="feature/context-field-equality",
         branch_base="a" * 40,
+        first_slice_start_commit="a" * 40,
         slice_count=1,
         execution_mode="IMPLEMENT",
         task_scope_patterns=("src/core.py",),

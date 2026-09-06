@@ -1609,6 +1609,7 @@ def _state() -> WorkflowState:
         task_file="/repo/task.md",
         branch="feature/transition-matrix",
         branch_base="a" * 40,
+        first_slice_start_commit="a" * 40,
         slice_count=1,
         task_digest="b" * 64,
         task_scope_patterns=("src/runtime.py",),
@@ -2522,6 +2523,7 @@ def _driver_state(root: Path) -> tuple[ProductionWorkflowDriver, WorkflowState]:
         task_file=str(task),
         branch="feature/transition-matrix",
         branch_base=head,
+        first_slice_start_commit=head,
         slice_count=1,
         task_digest=hashlib.sha256(task.read_bytes()).hexdigest(),
         task_scope_patterns=("src/runtime.py",),
@@ -2867,7 +2869,7 @@ def test_record_replay_matrix_has_independent_literal_oracle_and_failure_windows
     # A damaged lineage fails at replay rather than being healed by the mirror.
     orphan = ArtifactBridge(ArtifactStore(driver.root, "orphan-transition"))
     orphan.append(
-        RunIdentityPayload("task.md", "feature/test", "b" * 40, "IMPLEMENT", None),
+        RunIdentityPayload("task.md", "feature/test", "b" * 40, "b" * 40, "IMPLEMENT", None),
         logical_id="run-identity",
         idempotency_key="run-identity",
         fingerprint_sha256="9" * 64,

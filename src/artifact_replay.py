@@ -691,7 +691,7 @@ def _project_slice_documents(
         start_commit = (
             boundary.start_commit
             if boundary is not None
-            else identity.branch_base
+            else identity.first_slice_start_commit
             if slice_id == "1"
             else prior_commit
         )

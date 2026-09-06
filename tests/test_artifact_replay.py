@@ -102,6 +102,7 @@ def _append(
                 "inbox/backlog/replay.md",
                 "feature/replay",
                 "b" * 40,
+                "b" * 40,
                 "IMPLEMENT",
                 None,
             ),
@@ -138,6 +139,7 @@ def _chain() -> tuple[ArtifactRecord, ...]:
         RunIdentityPayload(
             "inbox/backlog/replay.md",
             "feature/replay",
+            "b" * 40,
             "b" * 40,
             "IMPLEMENT",
             None,
@@ -212,6 +214,7 @@ def test_replay_projects_run_identity_and_profiles_without_external_state() -> N
         task_file="C:\\workspace\\inbox\\r1.md",
         branch="feature/run-identity",
         branch_base="b" * 40,
+        first_slice_start_commit="b" * 40,
         execution_mode="PLAN_ONLY",
         audit_report_path=None,
     )
@@ -240,6 +243,7 @@ def test_pre_r1_chain_without_complete_run_binding_is_rejected(missing: str) -> 
             RunIdentityPayload(
                 "inbox/backlog/replay.md",
                 "feature/replay",
+                "b" * 40,
                 "b" * 40,
                 "IMPLEMENT",
                 None,
@@ -448,6 +452,7 @@ def test_reviewer_projection_matches_state_v3_before_and_after_denial() -> None:
         task_file="task.md",
         branch="feature/reviewer-projection",
         branch_base="a" * 40,
+        first_slice_start_commit="a" * 40,
         slice_count=1,
     )
     records: list[ArtifactRecord] = []

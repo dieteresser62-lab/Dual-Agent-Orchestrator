@@ -255,6 +255,7 @@ def test_recovery_directly_completes_a_durable_internal_intent(
             "inbox/backlog/recovery.md",
             "feature/recovery",
             "b" * 40,
+            "b" * 40,
             "IMPLEMENT",
             None,
         ),

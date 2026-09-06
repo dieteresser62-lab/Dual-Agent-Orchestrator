@@ -9,7 +9,7 @@
       "conditions": [
         {
           "ordinal": 1,
-          "expression": "binding is None or state.task_digest is None",
+          "expression": "binding is None or state.task_digest is None or (not state.slices) or (not state.slices[0].start_commit)",
           "read_names": [
             "binding",
             "state"

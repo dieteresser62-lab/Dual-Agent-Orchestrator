@@ -529,10 +529,10 @@ def _case(line: int) -> RejectionInput:  # noqa: C901, PLR0912, PLR0915
         domain = _append(records, _transition())
         _event("run", domain, work_unit_id=None, records=records)
     elif line == 1490:
-        domain = _append(records, RunIdentityPayload("inbox/b40.md", "feature/b40", "1" * 40, "IMPLEMENT", None))
+        domain = _append(records, RunIdentityPayload("inbox/b40.md", "feature/b40", "1" * 40, "1" * 40, "IMPLEMENT", None))
         _event("run", domain, work_unit_id=None, fingerprint=FP_B, records=records)
     elif line == 1498:
-        domain = _append(records, RunIdentityPayload("inbox/b40.md", "feature/b40", "1" * 40, "IMPLEMENT", None))
+        domain = _append(records, RunIdentityPayload("inbox/b40.md", "feature/b40", "1" * 40, "1" * 40, "IMPLEMENT", None))
         event = _event("run", domain, work_unit_id=None, records=records)
         object.__setattr__(event.payload, "work_unit_id", "1")
     elif line == 1508:
@@ -612,7 +612,7 @@ def _case(line: int) -> RejectionInput:  # noqa: C901, PLR0912, PLR0915
     elif line == 1761:
         output, _ = _validation_parts()
         _append(records, ValidationContentPayload("validation-1", "ar1-" + "4" * 64, "validation-matrix-v1", "e" * 64, "orphan", (output,)))
-        _append(records, RunIdentityPayload("inbox/b40.md", "feature/b40", "1" * 40, "IMPLEMENT", None))
+        _append(records, RunIdentityPayload("inbox/b40.md", "feature/b40", "1" * 40, "1" * 40, "IMPLEMENT", None))
     elif line == 1781:
         payload = _agent()
         decision = _append(records, payload)
@@ -628,7 +628,7 @@ def _case(line: int) -> RejectionInput:  # noqa: C901, PLR0912, PLR0915
     elif line == 1874:
         blob = BlobReference(RESPONSE_SHA, 3)
         _append(records, ProviderContentPayload(Role.CODEX, "1", 1, "codex_implementation", REQUEST_ID, RESPONSE_SHA, "agent_result", 3, blob))
-        _append(records, RunIdentityPayload("inbox/b40.md", "feature/b40", "1" * 40, "IMPLEMENT", None))
+        _append(records, RunIdentityPayload("inbox/b40.md", "feature/b40", "1" * 40, "1" * 40, "IMPLEMENT", None))
     elif line == 1906:
         _append(records, ReviewAnchorPayload("ar1-" + "4" * 64, ()), logical_id="review-anchors-missing")
     elif line == 1912:
@@ -664,10 +664,10 @@ def _case(line: int) -> RejectionInput:  # noqa: C901, PLR0912, PLR0915
         _append(records, _import_payload())
         _append(records, _import_payload(source_run_id="source-run-2"))
     elif line == 2093:
-        previous = _append(records, RunIdentityPayload("inbox/b40.md", "feature/b40", "1" * 40, "IMPLEMENT", None))
+        previous = _append(records, RunIdentityPayload("inbox/b40.md", "feature/b40", "1" * 40, "1" * 40, "IMPLEMENT", None))
         _append(records, _export_payload(source_head=previous.record_id, approval_review_id="ar1-" + "4" * 64, source_run_id="wrong-run"))
     elif line == 2105:
-        previous = _append(records, RunIdentityPayload("inbox/b40.md", "feature/b40", "1" * 40, "IMPLEMENT", None))
+        previous = _append(records, RunIdentityPayload("inbox/b40.md", "feature/b40", "1" * 40, "1" * 40, "IMPLEMENT", None))
         _append(records, _export_payload(source_head=previous.record_id, approval_review_id="ar1-" + "4" * 64))
     elif line == 2120:
         review = _append(records, _review(), logical_id="review-claude-1-1")

@@ -72,6 +72,7 @@ def _record_run(
         task_file=str(task),
         branch="feature/cutover",
         branch_base="b" * 40,
+        first_slice_start_commit="b" * 40,
         slice_count=1,
         task_digest="a" * 64,
         task_scope_patterns=("src/cutover.py",),

@@ -56,7 +56,7 @@ def _bind_records(
     for logical_id, payload in (
         (
             "run-identity",
-            RunIdentityPayload("task.md", "feature/test", "b" * 40, "IMPLEMENT", None),
+            RunIdentityPayload("task.md", "feature/test", "b" * 40, "b" * 40, "IMPLEMENT", None),
         ),
         (
             "run-profile",
@@ -85,7 +85,7 @@ def _bind_bridge(bridge: ArtifactBridge) -> None:
     for logical_id, payload in (
         (
             "run-identity",
-            RunIdentityPayload("task.md", "feature/test", "b" * 40, "IMPLEMENT", None),
+            RunIdentityPayload("task.md", "feature/test", "b" * 40, "b" * 40, "IMPLEMENT", None),
         ),
         (
             "run-profile",

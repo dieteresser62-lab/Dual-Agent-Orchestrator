@@ -148,6 +148,7 @@ def _record(payload, *, revision: int = 1) -> ArtifactRecord:  # type: ignore[no
         "C:\\workspace\\inbox\\task.md",
         "feature/records",
         "legacy-base-ref",
+        "b" * 40,
         "IMPLEMENT",
         "docs/internal/task-audit.md",
     ),
@@ -241,6 +242,25 @@ def test_every_record_family_roundtrips_through_model_and_schema(payload) -> Non
 
     assert restored == record
     assert restored.canonical_json() == encoded
+
+
+def test_run_identity_without_structural_first_slice_start_is_rejected() -> None:
+    identity = RunIdentityPayload(
+        "task.md",
+        "feature/identity",
+        "a" * 40,
+        "a" * 40,
+        "IMPLEMENT",
+        None,
+    )
+    legacy_document = _record(identity).to_dict()
+    legacy_document["payload"].pop("first_slice_start_commit")
+
+    with pytest.raises(ArtifactValidationError, match="schema validation failed"):
+        ArtifactRecord.from_dict(legacy_document)
+
+    with pytest.raises(ArtifactValidationError, match="40-character Git SHA"):
+        replace(identity, first_slice_start_commit="main")
 
 
 def test_invocation_failure_technical_evidence_is_redacted_and_exit_null_is_distinct_from_zero() -> None:

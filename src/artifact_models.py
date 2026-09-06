@@ -146,6 +146,7 @@ class RunIdentityPayload:
     task_file: str
     branch: str
     branch_base: str
+    first_slice_start_commit: str
     execution_mode: str
     audit_report_path: str | None
     status: ClassVar[str] = "bound"
@@ -155,6 +156,10 @@ class RunIdentityPayload:
         _require_text(self.task_file, "task_file")
         _require_text(self.branch, "branch")
         _require_text(self.branch_base, "branch_base")
+        if not re.fullmatch(r"[0-9a-f]{40}", self.first_slice_start_commit):
+            raise ArtifactValidationError(
+                "first_slice_start_commit must be a lowercase 40-character Git SHA"
+            )
         if self.execution_mode not in {"IMPLEMENT", "PLAN_ONLY"}:
             raise ArtifactValidationError("execution_mode is invalid")
         if self.audit_report_path is not None:
@@ -1991,7 +1996,8 @@ _PAYLOAD_READERS: dict[
 ] = {
     RecordType.RUN_IDENTITY: lambda data: RunIdentityPayload(
             data["task_file"], data["branch"], data["branch_base"],
-            data["execution_mode"], data["audit_report_path"],
+            data["first_slice_start_commit"], data["execution_mode"],
+            data["audit_report_path"],
         ),
     RecordType.RUN_PROFILE: lambda data: RunProfilePayload(
             RoleProfilePayload(**data["implementer"]),

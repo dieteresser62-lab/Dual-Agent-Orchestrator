@@ -350,7 +350,7 @@ def test_structured_projection_uses_accepted_replay_and_is_a_byte_equal_noop(
     document = _document(tmp_path)
     bridge = ArtifactBridge(ArtifactStore(tmp_path, "audit-replay"))
     bridge.append(
-        RunIdentityPayload("task.md", "feature/test", "b" * 40, "IMPLEMENT", None),
+        RunIdentityPayload("task.md", "feature/test", "b" * 40, "b" * 40, "IMPLEMENT", None),
         logical_id="run-identity",
         idempotency_key="run-identity",
         fingerprint_sha256="a" * 64,

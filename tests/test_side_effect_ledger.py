@@ -62,6 +62,7 @@ def _bridge(tmp_path: Path, run_id: str = "side-effect-run") -> ArtifactBridge:
             "inbox/backlog/side-effect.md",
             "feature/side-effect-ledger",
             "b" * 40,
+            "b" * 40,
             "IMPLEMENT",
             None,
         ),

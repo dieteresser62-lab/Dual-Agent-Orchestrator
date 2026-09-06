@@ -5,7 +5,7 @@
     {
       "record_type": "run_identity",
       "expected_class": "RunIdentityPayload",
-      "input": {"task_file": "inbox/task.md", "branch": "feature/payload", "branch_base": "1111111111111111111111111111111111111111", "execution_mode": "IMPLEMENT", "audit_report_path": "docs/internal/audit.md"}
+      "input": {"task_file": "inbox/task.md", "branch": "feature/payload", "branch_base": "1111111111111111111111111111111111111111", "first_slice_start_commit": "1111111111111111111111111111111111111111", "execution_mode": "IMPLEMENT", "audit_report_path": "docs/internal/audit.md"}
     },
     {
       "record_type": "run_profile",
@@ -185,7 +185,7 @@
   ],
   "unknown_type": {
     "record_type": "unknown_record_type",
-    "input": {"task_file": "inbox/task.md", "branch": "feature/payload", "branch_base": "1111111111111111111111111111111111111111", "execution_mode": "IMPLEMENT", "audit_report_path": "docs/internal/audit.md"},
+    "input": {"task_file": "inbox/task.md", "branch": "feature/payload", "branch_base": "1111111111111111111111111111111111111111", "first_slice_start_commit": "1111111111111111111111111111111111111111", "execution_mode": "IMPLEMENT", "audit_report_path": "docs/internal/audit.md"},
     "expected_error": "unsupported record_type: unknown_record_type"
   }
 }

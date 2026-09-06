@@ -126,6 +126,7 @@ def _accepted_replay(
             "inbox/backlog/00-b43-auftrag-replay-rendering-zerlegen.md",
             "feature/backlog-followups",
             "b" * 40,
+            "b" * 40,
             "IMPLEMENT",
             None,
         ),

@@ -217,6 +217,7 @@ def test_incomplete_driver_fails_before_first_bound_use() -> None:
         task_file="inbox/s4c.md",
         branch="feature/state-authority-consolidation",
         branch_base="a" * 40,
+        first_slice_start_commit="a" * 40,
         slice_count=1,
         timestamp="2026-09-01T00:00:00+00:00",
     )
@@ -235,6 +236,7 @@ def test_gate_reframe_rejects_missing_collector_before_state_transition() -> Non
         task_file="inbox/s4c.md",
         branch="feature/state-authority-consolidation",
         branch_base="a" * 40,
+        first_slice_start_commit="a" * 40,
         slice_count=1,
         timestamp="2026-09-01T00:00:00+00:00",
     )

@@ -92,11 +92,12 @@
     },
     "run_identity": {
       "type": "object", "additionalProperties": false,
-      "required": ["task_file", "branch", "branch_base", "execution_mode", "audit_report_path"],
+      "required": ["task_file", "branch", "branch_base", "first_slice_start_commit", "execution_mode", "audit_report_path"],
       "properties": {
         "task_file": {"$ref": "#/$defs/non_empty"},
         "branch": {"$ref": "#/$defs/non_empty"},
         "branch_base": {"$ref": "#/$defs/non_empty"},
+        "first_slice_start_commit": {"$ref": "#/$defs/git_sha"},
         "execution_mode": {"enum": ["IMPLEMENT", "PLAN_ONLY"]},
         "audit_report_path": {"oneOf": [{"$ref": "#/$defs/path"}, {"type": "null"}]}
       }

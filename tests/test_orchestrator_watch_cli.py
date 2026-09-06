@@ -123,6 +123,7 @@ def test_nonterminal_direct_resume_keeps_bound_watch_task_in_inbox(
         task_file=str(task.resolve()),
         branch="feature/resume",
         branch_base="a" * 40,
+        first_slice_start_commit="a" * 40,
         slice_count=1,
         task_digest=digest,
         task_scope_patterns=("src/**",),
@@ -274,6 +275,7 @@ def test_pipeline_exposes_bootstrap_denial_as_resumable_exit_four(
         task_file=str(task),
         branch="feature/bootstrap",
         branch_base="a" * 40,
+        first_slice_start_commit="a" * 40,
         slice_count=1,
         protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
     ).await_bootstrap_resume(

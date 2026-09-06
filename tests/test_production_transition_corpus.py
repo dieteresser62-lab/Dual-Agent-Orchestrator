@@ -409,6 +409,7 @@ def _base_state(task: Path, *, plan_only: bool = False) -> WorkflowState:
         task_file=str(task.resolve()),
         branch="feature/backlog-followups",
         branch_base=START_COMMIT,
+        first_slice_start_commit=START_COMMIT,
         slice_count=1,
         task_digest="a" * 64,
         execution_mode="PLAN_ONLY" if plan_only else "IMPLEMENT",

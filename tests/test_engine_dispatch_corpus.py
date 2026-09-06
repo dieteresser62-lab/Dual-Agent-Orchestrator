@@ -487,6 +487,7 @@ def _plan_state(scope: tuple[str, ...] = ("docs/internal/plan.md",)) -> object:
         task_file="/repo/task.md",
         branch="feature/workflow",
         branch_base="a" * 40,
+        first_slice_start_commit="a" * 40,
         slice_count=1,
         task_digest="d" * 64,
         task_scope_patterns=scope,

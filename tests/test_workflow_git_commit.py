@@ -171,6 +171,7 @@ def _bridge(root: Path, run_id: str) -> ArtifactBridge:
             "inbox/backlog/commit.md",
             "feature/backlog-followups",
             "b" * 40,
+            "b" * 40,
             "IMPLEMENT",
             None,
         ),
@@ -348,6 +349,7 @@ def test_git_commit_intent_result_bracket_and_open_intent_reconciliation(
         task_file="inbox/backlog/b30.md",
         branch="feature/b30-commit-bracket",
         branch_base=start_commit,
+        first_slice_start_commit=start_commit,
         slice_count=1,
         task_digest=DIGEST,
         task_scope_patterns=(changed_path,),
@@ -486,6 +488,7 @@ def test_head_drift_still_requires_exact_commit_approval(tmp_path: Path) -> None
         task_file="inbox/backlog/b30.md",
         branch="feature/b30-head-drift",
         branch_base=start_commit,
+        first_slice_start_commit=start_commit,
         slice_count=1,
     ).bind_current_slice_git_boundary(
         start_commit=start_commit,

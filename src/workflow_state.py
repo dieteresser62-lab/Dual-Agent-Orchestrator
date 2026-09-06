@@ -2573,7 +2573,7 @@ def init_workflow_state(
     branch: str,
     branch_base: str,
     slice_count: int,
-    first_slice_start_commit: str | None = None,
+    first_slice_start_commit: str,
     task_digest: str | None = None,
     execution_mode: str = "IMPLEMENT",
     task_scope_patterns: tuple[str, ...] = (),
@@ -2587,12 +2587,13 @@ def init_workflow_state(
     timestamp: str | None = None,
 ) -> WorkflowState:
     _require_positive_int(slice_count, "slice_count")
+    _require_non_empty(first_slice_start_commit, "first_slice_start_commit")
     stamp = timestamp or _now_iso()
     slices = tuple(
         SliceRecord(
             slice_id=slice_id,
             status=SliceStatus.IN_PROGRESS if slice_id == 1 else SliceStatus.PENDING,
-            start_commit=(first_slice_start_commit or branch_base) if slice_id == 1 else None,
+            start_commit=first_slice_start_commit if slice_id == 1 else None,
         )
         for slice_id in range(1, slice_count + 1)
     )

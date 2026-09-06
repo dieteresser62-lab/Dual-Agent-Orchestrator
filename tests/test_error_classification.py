@@ -94,6 +94,7 @@ def _invalid_recovery_response(tmp_path: Path) -> BaseException:
         task_file=str(tmp_path / "task.md"),
         branch="feature/corpus",
         branch_base="a" * 40,
+        first_slice_start_commit="a" * 40,
         slice_count=1,
         protocol_binding=ProtocolBinding(
             ProtocolMode.STRUCTURED_V2,
@@ -218,6 +219,7 @@ def _mismatched_persisted_request(tmp_path: Path) -> BaseException:
         task_file=str(tmp_path / "task.md"),
         branch="feature/corpus",
         branch_base="a" * 40,
+        first_slice_start_commit="a" * 40,
         slice_count=1,
         protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
     )
@@ -287,6 +289,7 @@ def _checkpoint_failure_with_prior_quota(tmp_path: Path) -> BaseException:
         task_file=str(tmp_path / "task.md"),
         branch="feature/corpus",
         branch_base="a" * 40,
+        first_slice_start_commit="a" * 40,
         slice_count=1,
         protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
     )

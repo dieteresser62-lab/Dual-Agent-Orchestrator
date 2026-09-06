@@ -143,6 +143,7 @@ def _active_slice_state():
         task_file="/repo/task.md",
         branch="feature/dry-resilience",
         branch_base="a" * 40,
+        first_slice_start_commit="a" * 40,
         slice_count=1,
         task_digest="b" * 64,
         task_scope_patterns=("src/runtime.py",),
@@ -824,6 +825,7 @@ def test_gate_kind_covers_reopened_legacy_quota_revalidation() -> None:
         task_file="/repo/task.md",
         branch="feature/dry-resilience",
         branch_base="a" * 40,
+        first_slice_start_commit="a" * 40,
         slice_count=1,
         timestamp="2026-08-27T12:00:00+00:00",
     )
