@@ -26,21 +26,22 @@ from native_codex_contract import (
     native_codex_provider_response_schema,
     parse_bound_native_codex_contract_result,
 )
-from native_provider_schema import registered_exceptions
+from native_provider_schema import (
+    defensive_provider_projection,
+    registered_exceptions,
+)
 from orchestrator_diagnostics import OrchestratorDiagnostic
 from schema_validation import SchemaMismatch, validate_schema_document
 
 
-# B68 audit: these writer-valid/domain-invalid rules remain uncommunicated to
-# Codex.  There are more than three, so the requested stop condition keeps them
-# as an explicit inventory instead of turning B68 into a partial bundle fix.
-_REMAINING_PROVIDER_CONTRACT_GAPS = (
-    "finding_dispositions: canonical order and exactly-once uniqueness",
-    "safe_text: non-blank and NUL-free",
-    "safe_path: canonical repository-relative POSIX paths outside .orchestrator",
-    "slice_plan.slice_id: contiguous and one-based",
-    "stop_result.remediation_paths: canonical sorted order",
-    "work_result.test_files: canonical sorted order",
+_COMMUNICATED_PROVIDER_CONTRACT_RULES = (
+    "planned_slice.scope_paths",
+    "finding_dispositions",
+    "safe_text",
+    "safe_path",
+    "slice_plan.slice_id",
+    "stop_result.remediation_paths",
+    "work_result.test_files",
 )
 
 
@@ -378,11 +379,14 @@ def test_writer_schema_leaves_only_registered_disposition_order_exception() -> N
             {"finding_id": "C-01", "decision": "accepted", "rationale": "fixed"},
         ],
     }
+    provider_output = json.loads(json.dumps(duplicate))
 
     validate_schema_document({"result": duplicate}, schema)
     with pytest.raises(NativeCodexContractError) as raised:
         parse_bound_native_codex_contract_result(duplicate, bound)
     assert raised.value.code is NativeCodexErrorCode.FINDING_REFERENCE_INVALID
+    assert raised.value.detail == "finding dispositions must be sorted and unique"
+    assert duplicate == provider_output
 
 
 def test_writer_schema_keeps_safe_path_validation_fail_closed_locally() -> None:
@@ -398,11 +402,16 @@ def test_writer_schema_keeps_safe_path_validation_fail_closed_locally() -> None:
         "test_files": ["../escape.py"],
         "finding_dispositions": [],
     }
+    provider_output = json.loads(json.dumps(response))
 
     validate_schema_document({"result": response}, schema)
     with pytest.raises(NativeCodexContractError) as raised:
         parse_bound_native_codex_contract_result(response, bound)
     assert raised.value.code is NativeCodexErrorCode.SCHEMA_INVALID
+    assert raised.value.detail == (
+        "schema validation failed at <response>: must match exactly one allowed schema"
+    )
+    assert response == provider_output
 
 
 def test_writer_schema_keeps_nonblank_text_validation_fail_closed_locally() -> None:
@@ -414,11 +423,16 @@ def test_writer_schema_keeps_nonblank_text_validation_fail_closed_locally() -> N
         "finding_dispositions": [],
         "self_check": "   ",
     }
+    provider_output = json.loads(json.dumps(response))
 
     validate_schema_document({"result": response}, schema)
     with pytest.raises(NativeCodexContractError) as raised:
         parse_bound_native_codex_contract_result(response, bound)
     assert raised.value.code is NativeCodexErrorCode.SCHEMA_INVALID
+    assert raised.value.detail == (
+        "schema validation failed at <response>: must match exactly one allowed schema"
+    )
+    assert response == provider_output
 
 
 @pytest.mark.parametrize("enforce_expected", [True, False])
@@ -439,11 +453,14 @@ def test_writer_schema_keeps_test_file_order_fail_closed_locally(
         "test_files": ["tests/b.py", "tests/a.py"],
         "finding_dispositions": [],
     }
+    provider_output = json.loads(json.dumps(response))
 
     validate_schema_document({"result": response}, schema)
     with pytest.raises(NativeCodexContractError) as raised:
         parse_bound_native_codex_contract_result(response, bound)
     assert raised.value.code is NativeCodexErrorCode.TEST_FILES_INVALID
+    assert raised.value.detail == "test_files must be sorted and unique"
+    assert response == provider_output
 
 
 def test_writer_schema_keeps_slice_path_order_fail_closed_locally() -> None:
@@ -482,33 +499,76 @@ def test_writer_schema_keeps_slice_path_order_fail_closed_locally() -> None:
             "scope_paths": ["src/contract.py", "tests/test_contract.py"],
         }
     ]
+    provider_output = json.loads(json.dumps(response))
     validate_schema_document({"result": response}, schema)
     with pytest.raises(NativeCodexContractError) as raised:
         parse_bound_native_codex_contract_result(response, bound)
     assert raised.value.code is NativeCodexErrorCode.SLICE_PLAN_INVALID
+    assert raised.value.detail == "slice plan ids must be contiguous and 1-based"
+    assert response == provider_output
 
 
-def test_b68_remaining_provider_contract_gap_inventory_is_explicit() -> None:
-    assert len(_REMAINING_PROVIDER_CONTRACT_GAPS) > 3
-    assert _REMAINING_PROVIDER_CONTRACT_GAPS == (
-        "finding_dispositions: canonical order and exactly-once uniqueness",
-        "safe_text: non-blank and NUL-free",
-        "safe_path: canonical repository-relative POSIX paths outside .orchestrator",
-        "slice_plan.slice_id: contiguous and one-based",
-        "stop_result.remediation_paths: canonical sorted order",
-        "work_result.test_files: canonical sorted order",
+def test_all_seven_local_contract_rules_survive_provider_projection() -> None:
+    projected = defensive_provider_projection(
+        load_native_codex_schema(),
+        provider="codex",
+        required_features=("closed_object", "min_max_items", "nested_any_of"),
     )
-    exception_ids = {
-        str(item["exception_id"]) for item in registered_exceptions("codex")
+    definitions = projected["$defs"]
+    finding_dispositions = [
+        definitions[result_name]["properties"]["finding_dispositions"]
+        for result_name in (
+            "plan_result",
+            "implementation_result",
+            "correction_result",
+            "final_report_result",
+        )
+    ]
+    test_files = [
+        definitions[result_name]["properties"]["test_files"]
+        for result_name in ("implementation_result", "correction_result")
+    ]
+    rules = {
+        "planned_slice.scope_paths": (
+            [definitions["planned_slice"]["properties"]["scope_paths"]],
+            "Each scope_paths array must be non-empty, contain no duplicates, "
+            "and list paths in ascending lexicographic order.",
+        ),
+        "finding_dispositions": (
+            finding_dispositions,
+            "List exactly one disposition for every open finding in ascending "
+            "finding_id order, with no duplicate finding_id.",
+        ),
+        "safe_text": (
+            [definitions["safe_text"]],
+            "Text must contain at least one non-whitespace character and must "
+            "not contain NUL.",
+        ),
+        "safe_path": (
+            [definitions["safe_path"]],
+            "Paths must be canonical repository-relative POSIX paths without "
+            "traversal and must remain outside .orchestrator.",
+        ),
+        "slice_plan.slice_id": (
+            [definitions["plan_result"]["properties"]["slice_plan"]],
+            "slice_id values must start at 1 and increase contiguously in "
+            "slice_plan order.",
+        ),
+        "stop_result.remediation_paths": (
+            [definitions["stop_result"]["properties"]["remediation_paths"]],
+            "List canonical remediation_paths in ascending lexicographic order "
+            "with no duplicates.",
+        ),
+        "work_result.test_files": (
+            test_files,
+            "List canonical test_files paths in ascending lexicographic order "
+            "with no duplicates.",
+        ),
     }
-    assert {
-        "codex-disposition-order-and-uniqueness",
-        "codex-nonblank-safe-text",
-        "codex-safe-path-lookaround",
-        "codex-slice-plan-path-order",
-        "codex-stop-remediation-path-order",
-        "codex-test-file-path-order",
-    } <= exception_ids
+
+    assert tuple(rules) == _COMMUNICATED_PROVIDER_CONTRACT_RULES
+    for nodes, expected_description in rules.values():
+        assert all(node["description"] == expected_description for node in nodes)
 
 
 def test_writer_schema_keeps_stop_path_order_fail_closed_locally() -> None:
@@ -520,11 +580,14 @@ def test_writer_schema_keeps_stop_path_order_fail_closed_locally() -> None:
         "rationale": "The correction requires additional paths.",
         "remediation_paths": ["tests/test_contract.py", "src/contract.py"],
     }
+    provider_output = json.loads(json.dumps(response))
 
     validate_schema_document({"result": response}, schema)
     with pytest.raises(NativeCodexContractError) as raised:
         parse_bound_native_codex_contract_result(response, bound)
     assert raised.value.code is NativeCodexErrorCode.STOP_CONTENT_INVALID
+    assert raised.value.detail == "remediation_paths must be sorted and unique"
+    assert response == provider_output
 
 
 def test_writer_schema_keeps_cyclic_request_id_binding_fail_closed_locally() -> None:

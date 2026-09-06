@@ -16,10 +16,12 @@
     },
     "safe_text": {
       "type": "string",
+      "description": "Text must contain at least one non-whitespace character and must not contain NUL.",
       "pattern": "^(?=.*\\S)[^\\u0000]{1,12000}$"
     },
     "safe_path": {
       "type": "string",
+      "description": "Paths must be canonical repository-relative POSIX paths without traversal and must remain outside .orchestrator.",
       "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\u0000\\r\\n]{1,1000}$"
     },
     "finding_disposition": {
@@ -61,12 +63,14 @@
         "ready": { "type": "boolean" },
         "slice_plan": {
           "type": "array",
+          "description": "slice_id values must start at 1 and increase contiguously in slice_plan order.",
           "minItems": 1,
           "maxItems": 64,
           "items": { "$ref": "#/$defs/planned_slice" }
         },
         "finding_dispositions": {
           "type": "array",
+          "description": "List exactly one disposition for every open finding in ascending finding_id order, with no duplicate finding_id.",
           "maxItems": 128,
           "items": { "$ref": "#/$defs/finding_disposition" }
         }
@@ -83,12 +87,14 @@
         "ready": { "type": "boolean" },
         "test_files": {
           "type": "array",
+          "description": "List canonical test_files paths in ascending lexicographic order with no duplicates.",
           "maxItems": 1000,
           "uniqueItems": true,
           "items": { "$ref": "#/$defs/safe_path" }
         },
         "finding_dispositions": {
           "type": "array",
+          "description": "List exactly one disposition for every open finding in ascending finding_id order, with no duplicate finding_id.",
           "maxItems": 128,
           "items": { "$ref": "#/$defs/finding_disposition" }
         }
@@ -105,12 +111,14 @@
         "ready": { "type": "boolean" },
         "test_files": {
           "type": "array",
+          "description": "List canonical test_files paths in ascending lexicographic order with no duplicates.",
           "maxItems": 1000,
           "uniqueItems": true,
           "items": { "$ref": "#/$defs/safe_path" }
         },
         "finding_dispositions": {
           "type": "array",
+          "description": "List exactly one disposition for every open finding in ascending finding_id order, with no duplicate finding_id.",
           "maxItems": 128,
           "items": { "$ref": "#/$defs/finding_disposition" }
         }
@@ -127,6 +135,7 @@
         "ready": { "type": "boolean" },
         "finding_dispositions": {
           "type": "array",
+          "description": "List exactly one disposition for every open finding in ascending finding_id order, with no duplicate finding_id.",
           "maxItems": 128,
           "items": { "$ref": "#/$defs/finding_disposition" }
         },
@@ -145,6 +154,7 @@
         "rationale": { "$ref": "#/$defs/safe_text" },
         "remediation_paths": {
           "type": "array",
+          "description": "List canonical remediation_paths in ascending lexicographic order with no duplicates.",
           "maxItems": 1000,
           "uniqueItems": true,
           "items": { "$ref": "#/$defs/safe_path" }

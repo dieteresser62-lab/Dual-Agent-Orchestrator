@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 from dataclasses import replace
 
@@ -14,7 +15,12 @@ from contracts import (
     FindingStatus,
     ReadinessMarker,
 )
-from native_codex_contract import NativeCodexContext, NativeCodexRequestKind
+import native_codex_contract
+from native_codex_contract import (
+    NativeCodexContext,
+    NativeCodexRequestKind,
+    load_native_codex_schema,
+)
 from native_codex_request import (
     NativeCodexRequestBundle,
     NativeCodexEvidenceInput,
@@ -95,6 +101,54 @@ def test_plan_request_tells_provider_the_scope_path_order_contract() -> None:
             bundle.provider_response_schema_json.encode("utf-8")
         ).hexdigest()
     )
+
+
+def test_b69_request_anchor_change_is_description_digest_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current_bundle = build_native_codex_request(_spec())
+    b68_schema = copy.deepcopy(load_native_codex_schema())
+    definitions = b68_schema["$defs"]
+    definitions["safe_text"].pop("description")
+    definitions["safe_path"].pop("description")
+    definitions["plan_result"]["properties"]["slice_plan"].pop("description")
+    for result_name in (
+        "plan_result",
+        "implementation_result",
+        "correction_result",
+        "final_report_result",
+    ):
+        definitions[result_name]["properties"]["finding_dispositions"].pop(
+            "description"
+        )
+    for result_name in ("implementation_result", "correction_result"):
+        definitions[result_name]["properties"]["test_files"].pop("description")
+    definitions["stop_result"]["properties"]["remediation_paths"].pop(
+        "description"
+    )
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            native_codex_contract,
+            "load_native_codex_schema",
+            lambda: copy.deepcopy(b68_schema),
+        )
+        b68_bundle = build_native_codex_request(_spec())
+
+    current = copy.deepcopy(current_bundle.document)
+    b68 = copy.deepcopy(b68_bundle.document)
+    assert current["request_id"] != b68["request_id"]
+    assert current["response_contract"]["schema_sha256"] != (
+        b68["response_contract"]["schema_sha256"]
+    )
+    assert current["response_contract"]["schema_version"] == (
+        b68["response_contract"]["schema_version"]
+    )
+    b68["request_id"] = current["request_id"]
+    b68["response_contract"]["schema_sha256"] = current["response_contract"][
+        "schema_sha256"
+    ]
+    assert b68 == current
 
 
 def test_request_kinds_bind_distinct_writer_schema_digests() -> None:
