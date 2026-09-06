@@ -72,6 +72,7 @@ from provider_input_budget import (
     default_provider_input_budget_policy,
     measure_provider_input,
 )
+from orchestrator_diagnostics import OrchestratorDiagnostic
 
 TEST_OUTPUT_LIMIT = 7000
 ERROR_TRUNCATION_LIMIT = 1200
@@ -123,7 +124,12 @@ class AgentInvocationError(RuntimeError):
         quota_reset: QuotaReset | None = None,
         provider_data: Mapping[str, object] | None = None,
         technical_text: str | None = None,
+        orchestrator_diagnostic: OrchestratorDiagnostic | None = None,
     ) -> None:
+        if orchestrator_diagnostic is not None and not isinstance(
+            orchestrator_diagnostic, OrchestratorDiagnostic
+        ):
+            raise TypeError("orchestrator diagnostic must be a closed enum member")
         self.agent_key = agent_key
         self.kind = kind
         self.invocation_id = invocation_id
@@ -133,10 +139,16 @@ class AgentInvocationError(RuntimeError):
         self.quota_reset = quota_reset
         self.provider_data = dict(provider_data) if provider_data is not None else None
         self.technical_text = technical_text or provider_text
+        self.orchestrator_diagnostic = orchestrator_diagnostic
         label = "quota/rate limit reached" if kind is AgentFailureKind.QUOTA else f"{kind.value} failure"
         super().__init__(
             f"{agent_key} {label} [invocation {invocation_id}]: {provider_text}"
         )
+
+    @property
+    def readable_orchestrator_diagnostic(self) -> str | None:
+        diagnostic = self.orchestrator_diagnostic
+        return diagnostic.text if isinstance(diagnostic, OrchestratorDiagnostic) else None
 
 
 class QuotaReachedError(AgentInvocationError):
@@ -151,6 +163,7 @@ class QuotaReachedError(AgentInvocationError):
         exit_code: int | None = None,
         provider_data: Mapping[str, object] | None = None,
         technical_text: str | None = None,
+        orchestrator_diagnostic: OrchestratorDiagnostic | None = None,
     ) -> None:
         super().__init__(
             agent_key=agent_key,
@@ -162,6 +175,7 @@ class QuotaReachedError(AgentInvocationError):
             exit_code=exit_code,
             provider_data=provider_data,
             technical_text=technical_text or detail,
+            orchestrator_diagnostic=orchestrator_diagnostic,
         )
 
 
@@ -1534,6 +1548,7 @@ def run_native_codex_agent(
             "native Codex result violates its bound contract",
             provider_data=document,
             technical_text=f"{exc.code.value}: {exc.detail}",
+            orchestrator_diagnostic=getattr(exc, "orchestrator_diagnostic", None),
         ) from exc
     return NativeAgentCodexOutput(
         result=result,
@@ -2028,6 +2043,9 @@ def classify_agent_failure(
     stamp = (received_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
     provider_text = str(getattr(exc, "provider_text", "") or str(exc) or type(exc).__name__)
     technical_text = str(getattr(exc, "technical_text", "") or provider_text)
+    orchestrator_diagnostic = getattr(exc, "orchestrator_diagnostic", None)
+    if not isinstance(orchestrator_diagnostic, OrchestratorDiagnostic):
+        orchestrator_diagnostic = None
     raw_provider_data = getattr(exc, "provider_data", None)
     provider_data = _sanitize_provider_diagnostic(raw_provider_data)
     process_exit_code = getattr(exc, "exit_code", None)
@@ -2074,6 +2092,7 @@ def classify_agent_failure(
             exit_code=process_exit_code if isinstance(process_exit_code, int) else None,
             provider_data=provider_data,
             technical_text=technical_text,
+            orchestrator_diagnostic=orchestrator_diagnostic,
         )
     if claude_structured_output_retry_exhaustion:
         # The Claude CLI completed without a model result after exhausting its
@@ -2113,6 +2132,7 @@ def classify_agent_failure(
         exit_code=process_exit_code if isinstance(process_exit_code, int) else None,
         provider_data=provider_data,
         technical_text=technical_text,
+        orchestrator_diagnostic=orchestrator_diagnostic,
     )
 
 

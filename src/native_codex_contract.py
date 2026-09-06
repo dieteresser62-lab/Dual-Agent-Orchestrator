@@ -17,6 +17,7 @@ from contracts import (
     FindingResponseDecision,
     FindingStatus,
     PlannedSlice,
+    planned_slice_path_diagnostic,
     ReadinessMarker,
     StopRequest,
 )
@@ -31,6 +32,7 @@ from schema_validation import (
     check_schema,
     validate_schema_document,
 )
+from orchestrator_diagnostics import OrchestratorDiagnostic
 from native_provider_schema import defensive_provider_projection
 
 
@@ -58,9 +60,20 @@ class NativeCodexErrorCode(StrEnum):
 class NativeCodexContractError(ValueError):
     """A stable machine-readable native Codex contract failure."""
 
-    def __init__(self, code: NativeCodexErrorCode, detail: str) -> None:
+    def __init__(
+        self,
+        code: NativeCodexErrorCode,
+        detail: str,
+        *,
+        orchestrator_diagnostic: OrchestratorDiagnostic | None = None,
+    ) -> None:
+        if orchestrator_diagnostic is not None and not isinstance(
+            orchestrator_diagnostic, OrchestratorDiagnostic
+        ):
+            raise TypeError("orchestrator diagnostic must be a closed enum member")
         self.code = code
         self.detail = detail
+        self.orchestrator_diagnostic = orchestrator_diagnostic
         super().__init__(f"{code.value}: {detail}")
 
 
@@ -380,6 +393,14 @@ def parse_native_codex_response(
             f"{bound_context.context.request_kind.value} request requires {expected_type}",
         )
     if result_type == "plan_result":
+        for item in document["slice_plan"]:
+            diagnostic = planned_slice_path_diagnostic(tuple(item["scope_paths"]))
+            if diagnostic is not None:
+                raise NativeCodexContractError(
+                    NativeCodexErrorCode.SLICE_PLAN_INVALID,
+                    diagnostic.detail,
+                    orchestrator_diagnostic=diagnostic,
+                )
         try:
             slices = tuple(
                 PlannedSlice(
@@ -391,7 +412,8 @@ def parse_native_codex_response(
             )
         except ValueError as exc:
             raise NativeCodexContractError(
-                NativeCodexErrorCode.SLICE_PLAN_INVALID, str(exc)
+                NativeCodexErrorCode.SLICE_PLAN_INVALID,
+                str(exc),
             ) from exc
         if tuple(item.slice_id for item in slices) != tuple(range(1, len(slices) + 1)):
             raise NativeCodexContractError(

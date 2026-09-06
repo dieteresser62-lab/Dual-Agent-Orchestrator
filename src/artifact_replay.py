@@ -2839,7 +2839,7 @@ def _semantic_facts(records: tuple[ArtifactRecord, ...]) -> tuple[ReplayFact, ..
             fingerprint_kind=record.fingerprint.kind.value,
             fingerprint_sha256=record.fingerprint.sha256,
             predecessor_ids=record.predecessor_ids,
-            payload_json=canonical_json(asdict(record.payload)),
+            payload_json=canonical_json(_semantic_payload_document(record.payload)),
         )
         for record in records
     )
@@ -3160,6 +3160,16 @@ def _fail(
     raise ArtifactReplayError(
         ReplayDiagnostic(code, message, None if record is None else record.record_id)
     )
+
+
+def _semantic_payload_document(payload: object) -> dict[str, object]:
+    raw = asdict(payload)  # type: ignore[arg-type]
+    if (
+        isinstance(payload, InvocationFailurePayload)
+        and payload.orchestrator_diagnostic is None
+    ):
+        raw.pop("orchestrator_diagnostic", None)
+    return raw
 
 
 __all__ = [

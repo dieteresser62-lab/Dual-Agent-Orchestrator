@@ -135,6 +135,7 @@ class WorkflowFailureRecording:
         technical_marker, technical_digest, technical_bytes = (
             technical_text_evidence(error.technical_text)
         )
+        orchestrator_diagnostic = error.readable_orchestrator_diagnostic
         received_at = error.received_at.astimezone(timezone.utc).isoformat()
         decision_at = now_utc.isoformat()
         safety_margin_seconds = (
@@ -200,6 +201,7 @@ class WorkflowFailureRecording:
             auto_resume_count=record.auto_resume_count,
             automatic_resume=record.automatic_resume,
             diff_fingerprint=record.diff_fingerprint,
+            orchestrator_diagnostic=orchestrator_diagnostic,
         )
         # Decision-ahead authority boundary: the append must complete before
         # workflow status/counters, waits, or provider restarts can change.
@@ -209,7 +211,8 @@ class WorkflowFailureRecording:
         )
         logger.info(
             "provider invocation terminal role=%s operation=%s physical_attempt=%d "
-            "status=failed failure_kind=%s process_exit_code=%s retry=%s",
+            "status=failed failure_kind=%s process_exit_code=%s retry=%s "
+            "diagnostic_code=%s orchestrator_diagnostic=%s",
             role.value,
             state.current_step.value,
             len(matching_failures) + 1,
@@ -220,6 +223,8 @@ class WorkflowFailureRecording:
                 else "none"
             ),
             "scheduled" if automatic else "halted",
+            classified.diagnostic_code,
+            payload.orchestrator_diagnostic or "redacted",
         )
         self._dependencies.checkpoint(state, history)
         return state, record

@@ -28,6 +28,7 @@ from schema_validation import (
     check_schema,
     validate_schema_document,
 )
+from orchestrator_diagnostics import ORCHESTRATOR_DIAGNOSTIC_TEXTS
 
 SCHEMA_VERSION = "2"
 STATE_PROJECTION_REDUCER_VERSION = "structured-v2-schema-2-state-v3-v1"
@@ -1569,6 +1570,7 @@ class InvocationFailurePayload:
     auto_resume_count: int
     automatic_resume: bool
     diff_fingerprint: str | None
+    orchestrator_diagnostic: str | None = None
     status: ClassVar[str] = "classified"
     record_type: ClassVar[RecordType] = RecordType.INVOCATION_FAILURE
 
@@ -1622,6 +1624,13 @@ class InvocationFailurePayload:
         ):
             raise ArtifactValidationError(
                 "invocation failure technical text evidence is inconsistent"
+            )
+        if (
+            self.orchestrator_diagnostic is not None
+            and self.orchestrator_diagnostic not in ORCHESTRATOR_DIAGNOSTIC_TEXTS
+        ):
+            raise ArtifactValidationError(
+                "invocation failure orchestrator diagnostic is not allowlisted"
             )
         for value, label in (
             (self.received_at, "invocation failure received_at"),
@@ -1816,6 +1825,22 @@ ArtifactPayload: TypeAlias = (
 )
 
 
+def artifact_payload_document(payload: ArtifactPayload) -> dict[str, Any]:
+    """Serialize one payload while preserving its optional-field wire shape."""
+    raw = asdict(payload)
+    if isinstance(payload, ReviewPayload):
+        if payload.review_evidence is None:
+            raw.pop("review_evidence", None)
+        if payload.red_state_followup_slice is None:
+            raw.pop("red_state_followup_slice", None)
+    if (
+        isinstance(payload, InvocationFailurePayload)
+        and payload.orchestrator_diagnostic is None
+    ):
+        raw.pop("orchestrator_diagnostic", None)
+    return _json_value(raw)
+
+
 @dataclass(frozen=True, slots=True)
 class ArtifactRecord:
     record_id: str
@@ -1900,13 +1925,7 @@ class ArtifactRecord:
 
     def to_dict(self) -> dict[str, Any]:
         raw = asdict(self)
-        if self.record_type is RecordType.REVIEW:
-            payload = raw["payload"]
-            if isinstance(payload, dict):
-                if payload.get("review_evidence") is None:
-                    payload.pop("review_evidence", None)
-                if payload.get("red_state_followup_slice") is None:
-                    payload.pop("red_state_followup_slice", None)
+        raw["payload"] = artifact_payload_document(self.payload)
         return _json_value(raw)
 
     def canonical_json(self) -> bytes:
@@ -2220,6 +2239,7 @@ _PAYLOAD_READERS: dict[
             data["resume_at_utc"], data["safety_margin_seconds"],
             data["retry_delay_seconds"], data["auto_resume_count"],
             data["automatic_resume"], data["diff_fingerprint"],
+            data.get("orchestrator_diagnostic"),
         ),
     RecordType.QUOTA_PAUSE: lambda data: QuotaPausePayload(
         Role(data["role"]), data["repository_fingerprint"], data["retry_at"],

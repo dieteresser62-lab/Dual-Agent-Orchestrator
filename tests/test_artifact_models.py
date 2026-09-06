@@ -64,6 +64,10 @@ from workflow_state import (
     WorkflowStep,
     WorkUnitStatus,
 )
+from orchestrator_diagnostics import (
+    ORCHESTRATOR_DIAGNOSTIC_TEXTS,
+    OrchestratorDiagnostic,
+)
 
 
 DIGEST = "a" * 64
@@ -296,6 +300,66 @@ def test_invocation_failure_technical_evidence_is_redacted_and_exit_null_is_dist
         legacy_document["payload"].pop(required_field)
         with pytest.raises(ArtifactValidationError, match="schema validation failed"):
             validate_artifact_document(legacy_document)
+
+
+def test_invocation_failure_orchestrator_diagnostic_is_closed_and_optional() -> None:
+    diagnostic = OrchestratorDiagnostic.SLICE_PLAN_PATHS_INVALID.text
+    raw = "provider-controlled diagnostic mutation"
+    marker, digest, byte_count = technical_text_evidence(raw)
+    payload = InvocationFailurePayload(
+        invocation_id="invocation-readable-diagnostic",
+        idempotency_key="run-01:work-01:codex_plan:codex",
+        role=Role.CODEX,
+        failure_kind="output",
+        failure_class="resumable_halt",
+        diagnostic_code="NATIVE-IMPLEMENTER-CONTRACT",
+        provider_text=PROVIDER_MARKER,
+        provider_text_sha256=PROVIDER_DIGEST,
+        provider_text_bytes=PROVIDER_BYTES,
+        technical_text=marker,
+        technical_text_sha256=digest,
+        technical_text_bytes=byte_count,
+        received_at="2026-09-05T22:13:08+00:00",
+        decision_at_utc="2026-09-05T22:13:09+00:00",
+        step="codex_plan",
+        slice_id="1",
+        work_unit_id="work-01",
+        diagnostic_exit_code=3,
+        process_exit_code=None,
+        parse_path=None,
+        source_timezone=None,
+        reset_at_utc=None,
+        resume_at_utc=None,
+        safety_margin_seconds=0,
+        retry_delay_seconds=0,
+        auto_resume_count=0,
+        automatic_resume=False,
+        diff_fingerprint=DIGEST,
+        orchestrator_diagnostic=diagnostic,
+    )
+    document = json.loads(_record(payload).canonical_json())
+    assert document["payload"]["orchestrator_diagnostic"] == diagnostic
+    assert raw not in document["payload"]["orchestrator_diagnostic"]
+    assert ArtifactRecord.from_dict(document) == _record(payload)
+
+    legacy_document = json.loads(json.dumps(document))
+    legacy_document["payload"].pop("orchestrator_diagnostic")
+    validate_artifact_document(legacy_document)
+    assert ArtifactRecord.from_dict(legacy_document).payload == replace(
+        payload, orchestrator_diagnostic=None
+    )
+
+    with pytest.raises(ArtifactValidationError, match="not allowlisted"):
+        replace(payload, orchestrator_diagnostic=raw)
+    mutated_document = json.loads(json.dumps(document))
+    mutated_document["payload"]["orchestrator_diagnostic"] = raw
+    with pytest.raises(ArtifactValidationError, match="schema validation failed"):
+        validate_artifact_document(mutated_document)
+
+    schema_values = load_schema()["$defs"]["invocation_failure"]["properties"][
+        "orchestrator_diagnostic"
+    ]["enum"]
+    assert set(schema_values) == {None, *ORCHESTRATOR_DIAGNOSTIC_TEXTS}
 
 
 def test_slice_boundary_rejects_lossy_or_noncanonical_grouping() -> None:

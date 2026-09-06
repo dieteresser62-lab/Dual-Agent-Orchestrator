@@ -49,7 +49,12 @@ from contracts import (
     apply_reviewer_finding_update,
 )
 from gates import PathClasses, StopRule, TestChangeEvidence as GateTestChangeEvidence
-from native_codex_contract import NativeCodexRequestKind
+from native_codex_contract import (
+    NativeCodexContractError,
+    NativeCodexErrorCode,
+    NativeCodexRequestKind,
+)
+from orchestrator_diagnostics import OrchestratorDiagnostic
 from inbox_watcher import WatchTaskDisposition, WatchTaskResult
 from orchestrator import run_v3_final_review, run_v3_work_unit
 from review_packets import ReviewPacket
@@ -1055,6 +1060,100 @@ def test_r6_failure_record_precedes_retry_decision_and_uses_s1_classification(
     else:
         assert payload.retry_delay_seconds == 0
         assert payload.resume_at_utc is None
+
+
+def test_contract_diagnostic_is_readable_but_injected_provider_text_stays_redacted(
+    caplog,
+) -> None:
+    now = datetime(2026, 9, 5, 22, 13, 8, tzinfo=timezone.utc)
+    injected_provider_text = "secret text copied from the provider response"
+    diagnostic = OrchestratorDiagnostic.SLICE_PLAN_PATHS_INVALID
+    contract_error = NativeCodexContractError(
+        NativeCodexErrorCode.SLICE_PLAN_INVALID,
+        injected_provider_text,
+        orchestrator_diagnostic=diagnostic,
+    )
+    output_error = AgentOutputError(
+        "native Codex result violates its bound contract",
+        technical_text=injected_provider_text,
+        orchestrator_diagnostic=diagnostic,
+    )
+    output_error.__cause__ = contract_error
+    error = classify_agent_failure(
+        AgentRole.CODEX.value,
+        output_error,
+        invocation_id="canary-20260905-221308Z",
+        received_at=now,
+    )
+    error.__cause__ = output_error
+    driver = FakeDriver(
+        snapshots=[_changes("1", "src/early.py", TEST_FILE)],
+        codex_outputs=[],
+        reviewer_outputs=[],
+    )
+    caplog.set_level("INFO", logger="workflow")
+
+    persisted, failure = WorkflowEngine(
+        driver, now_fn=lambda: now
+    )._persist_invocation_failure(
+        _slice_state(),
+        WorkflowHistory(2),
+        _context(),
+        AgentRole.CODEX,
+        error,
+    )
+
+    payload = driver.failure_payloads[0]
+    assert payload.diagnostic_code == "NATIVE-IMPLEMENTER-CONTRACT"
+    assert payload.orchestrator_diagnostic == diagnostic.text
+    assert persisted.current_work_unit.invocation_failures == (failure,)
+    assert injected_provider_text not in payload.provider_text
+    assert injected_provider_text not in payload.technical_text
+    assert injected_provider_text not in caplog.text
+    assert payload.provider_text.startswith("[provider text redacted; sha256=")
+    assert payload.technical_text.startswith("[technical text redacted; sha256=")
+    assert "diagnostic_code=NATIVE-IMPLEMENTER-CONTRACT" in caplog.text
+    assert f"orchestrator_diagnostic={diagnostic.text}" in caplog.text
+
+
+def test_mutated_orchestrator_diagnostic_cannot_expose_provider_text(caplog) -> None:
+    now = datetime(2026, 9, 5, 22, 13, 8, tzinfo=timezone.utc)
+    injected_provider_text = "provider-controlled diagnostic mutation"
+    output_error = AgentOutputError(
+        "native Codex result violates its bound contract",
+        technical_text=injected_provider_text,
+        orchestrator_diagnostic=(
+            OrchestratorDiagnostic.SLICE_PLAN_PATHS_INVALID
+        ),
+    )
+    error = classify_agent_failure(
+        AgentRole.CODEX.value,
+        output_error,
+        invocation_id="mutated-provider-diagnostic",
+        received_at=now,
+    )
+    error.orchestrator_diagnostic = injected_provider_text  # type: ignore[assignment]
+    driver = FakeDriver(
+        snapshots=[_changes("1", "src/early.py", TEST_FILE)],
+        codex_outputs=[],
+        reviewer_outputs=[],
+    )
+    caplog.set_level("INFO", logger="workflow")
+
+    WorkflowEngine(driver, now_fn=lambda: now)._persist_invocation_failure(
+        _slice_state(),
+        WorkflowHistory(2),
+        _context(),
+        AgentRole.CODEX,
+        error,
+    )
+
+    payload = driver.failure_payloads[0]
+    assert payload.orchestrator_diagnostic is None
+    assert injected_provider_text not in payload.provider_text
+    assert injected_provider_text not in payload.technical_text
+    assert injected_provider_text not in caplog.text
+    assert "orchestrator_diagnostic=redacted" in caplog.text
 
 
 def test_r6_wrapped_quota_keeps_policy_despite_deeper_s1_classification() -> None:

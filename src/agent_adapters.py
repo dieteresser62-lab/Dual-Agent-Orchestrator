@@ -32,6 +32,7 @@ from native_provider_schema import (
     exact_cli_version_pattern,
     normalize_transport_profile,
 )
+from orchestrator_diagnostics import OrchestratorDiagnostic
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -51,11 +52,17 @@ class AgentOutputError(RuntimeError):
         provider_data: dict[str, object] | None = None,
         technical_text: str | None = None,
         exit_code: int | None = None,
+        orchestrator_diagnostic: OrchestratorDiagnostic | None = None,
     ) -> None:
+        if orchestrator_diagnostic is not None and not isinstance(
+            orchestrator_diagnostic, OrchestratorDiagnostic
+        ):
+            raise TypeError("orchestrator diagnostic must be a closed enum member")
         self.provider_text = provider_text or message
         self.provider_data = provider_data
         self.technical_text = technical_text or self.provider_text
         self.exit_code = exit_code
+        self.orchestrator_diagnostic = orchestrator_diagnostic
         super().__init__(message)
 
 
@@ -468,6 +475,7 @@ class NativeCodexAdapter(_BaseAdapter):
                 "native Codex response violates the local result schema",
                 provider_data=document,
                 technical_text=f"{exc.code.value}: {exc.detail}",
+                orchestrator_diagnostic=exc.orchestrator_diagnostic,
             ) from exc
 
     def cleanup(self) -> None:

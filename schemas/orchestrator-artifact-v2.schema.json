@@ -363,6 +363,7 @@
         "technical_text": {"type": "string", "maxLength": 128, "pattern": "^\\[technical text redacted; sha256=[0-9a-f]{64}; utf8_bytes=[1-9][0-9]*\\]$"},
         "technical_text_sha256": {"$ref": "#/$defs/sha256"},
         "technical_text_bytes": {"type": "integer", "minimum": 1},
+        "orchestrator_diagnostic": {"enum": [null, "slice-plan-invalid: planned slice paths must be sorted, unique, and non-empty"]},
         "received_at": {"type": "string", "format": "date-time"},
         "decision_at_utc": {"type": "string", "format": "date-time"},
         "step": {"$ref": "#/$defs/identifier"},

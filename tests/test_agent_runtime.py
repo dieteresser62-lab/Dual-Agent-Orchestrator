@@ -82,6 +82,7 @@ from native_codex_request import (
     build_native_codex_request,
 )
 from contracts import CodexStepContract, ReadinessMarker
+from orchestrator_diagnostics import OrchestratorDiagnostic
 
 
 def _runtime_native_codex_bundle():  # type: ignore[no-untyped-def]
@@ -287,9 +288,9 @@ def test_native_codex_exposes_schema_valid_bytes_before_domain_rejection(
         "finding_dispositions": [],
         "slice_plan": [
             {
-                "slice_id": 2,
-                "summary": "Non-contiguous domain-invalid slice.",
-                "scope_paths": ["src/native_codex_contract.py"],
+                "slice_id": 1,
+                "summary": "Unsorted domain-invalid slice paths.",
+                "scope_paths": ["src/z.py", "src/a.py"],
             }
         ],
     }
@@ -326,7 +327,12 @@ def test_native_codex_exposes_schema_valid_bytes_before_domain_rejection(
             binding_fingerprint="a" * 64,
             validated_response_callback=persisted.append,
         )
-    assert "slice-plan-invalid" in raised.value.technical_text
+    assert raised.value.technical_text == (
+        "slice-plan-invalid: planned slice paths must be sorted, unique, and non-empty"
+    )
+    assert raised.value.orchestrator_diagnostic is (
+        OrchestratorDiagnostic.SLICE_PLAN_PATHS_INVALID
+    )
     assert persisted == [canonical]
 
 

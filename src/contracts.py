@@ -12,6 +12,7 @@ from content_authority import (
     ValidationCapture,
     validation_output_digest,
 )
+from orchestrator_diagnostics import OrchestratorDiagnostic
 
 
 SOURCE_FINDING_ID_PATTERN = re.compile(r"^C-(0[1-9]|[1-9][0-9]*)$")
@@ -467,9 +468,10 @@ class PlannedSlice:
             raise ValueError("planned slice id must be 1-based")
         if not self.summary.strip():
             raise ValueError("planned slice summary must not be empty")
-        normalized = tuple(sorted(set(self.scope_paths)))
-        if not normalized or normalized != self.scope_paths:
-            raise ValueError("planned slice paths must be sorted, unique, and non-empty")
+        diagnostic = planned_slice_path_diagnostic(self.scope_paths)
+        if diagnostic is not None:
+            raise ValueError(diagnostic.detail)
+        normalized = self.scope_paths
         for raw_path in normalized:
             path = PurePosixPath(raw_path)
             if (
@@ -483,6 +485,16 @@ class PlannedSlice:
                 raise ValueError(
                     "planned slice paths must be canonical repository-relative POSIX paths outside .orchestrator"
                 )
+
+
+def planned_slice_path_diagnostic(
+    scope_paths: tuple[str, ...],
+) -> OrchestratorDiagnostic | None:
+    """Return a typed local diagnosis for the closed path-set invariant."""
+    normalized = tuple(sorted(set(scope_paths)))
+    if not normalized or normalized != scope_paths:
+        return OrchestratorDiagnostic.SLICE_PLAN_PATHS_INVALID
+    return None
 
 
 @dataclass(frozen=True)
