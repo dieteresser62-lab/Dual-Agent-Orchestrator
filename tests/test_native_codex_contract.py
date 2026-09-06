@@ -668,6 +668,29 @@ def test_b71_projected_schema_has_all_descriptions_and_no_ref_siblings() -> None
     assert ref_siblings == []
 
 
+def test_b78_writer_schema_closes_stop_rule_vocabulary() -> None:
+    bound = _bound(NativeCodexRequestKind.IMPLEMENTATION)
+    schema = native_codex_provider_response_schema(bound.context)
+    rule_id = schema["$defs"]["stop_result"]["properties"]["rule_id"]
+    assert rule_id == {
+        "description": "Identifies the rule that blocks the current step.",
+        "type": "string",
+        "enum": sorted(bound.context.known_stop_rule_ids),
+    }
+
+    response = {
+        **_base(bound, "stop_result"),
+        "rule_id": "SCOPE-DECISION-REQUIRED",
+        "rationale": "A stale guard requires a scope decision.",
+        "remediation_paths": [],
+    }
+    with pytest.raises(SchemaMismatch):
+        validate_schema_document({"result": response}, schema)
+
+    response["rule_id"] = "CONTRACT-UNCLEAR"
+    validate_schema_document({"result": response}, schema)
+
+
 def test_b71_provider_guard_rejects_description_beside_any_ref(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

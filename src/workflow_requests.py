@@ -131,6 +131,7 @@ def native_codex_request(
         current_fingerprint=current_fingerprint,
         request_kind=request_kind,
         contract=contract,
+        known_stop_rule_ids=context.known_stop_rule_ids,
         previous_findings=native_findings,
     )
     evidence = [

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 import json
 from pathlib import Path, PurePosixPath
@@ -26,6 +26,7 @@ from finding_reducer import (
     apply_finding_responses,
     project_open_set,
 )
+from gates import BUILTIN_STOP_RULES, STOP_RULE_ID_PATTERN
 from schema_validation import (
     SchemaDefinitionError,
     SchemaMismatch,
@@ -95,6 +96,9 @@ class NativeCodexContext:
     current_fingerprint: str
     request_kind: NativeCodexRequestKind
     contract: CodexStepContract
+    known_stop_rule_ids: frozenset[str] = field(
+        default_factory=lambda: frozenset(rule.id for rule in BUILTIN_STOP_RULES)
+    )
     previous_findings: tuple[FindingRecord, ...] = ()
 
     def __post_init__(self) -> None:
@@ -114,10 +118,20 @@ class NativeCodexContext:
                 NativeCodexErrorCode.CONTEXT_INVALID,
                 "request_kind is invalid",
             )
-        if not isinstance(self.contract, CodexStepContract):
+        stop_rule_ids_valid = (
+            isinstance(self.known_stop_rule_ids, frozenset)
+            and bool(self.known_stop_rule_ids)
+            and all(
+                isinstance(rule_id, str)
+                and STOP_RULE_ID_PATTERN.fullmatch(rule_id) is not None
+                for rule_id in self.known_stop_rule_ids
+            )
+        )
+        if not isinstance(self.contract, CodexStepContract) or not stop_rule_ids_valid:
             raise NativeCodexContractError(
                 NativeCodexErrorCode.CONTEXT_INVALID,
-                "native Codex context requires CodexStepContract",
+                "native Codex context requires CodexStepContract and a non-empty "
+                "frozenset of known stop rule ids",
             )
         finding_ids = tuple(item.finding_id for item in self.previous_findings)
         if finding_ids != tuple(sorted(set(finding_ids))):
@@ -251,6 +265,16 @@ def native_codex_provider_response_schema(
         provider=provider,
         required_features=("closed_object", "min_max_items", "nested_any_of"),
     )
+    stop_rule_id = schema["$defs"]["stop_result"]["properties"]["rule_id"]
+    projected_stop_rule_id = {
+        "type": "string",
+        "enum": sorted(context.known_stop_rule_ids),
+    }
+    if "description" in stop_rule_id:
+        projected_stop_rule_id["description"] = stop_rule_id["description"]
+    schema["$defs"]["stop_result"]["properties"][
+        "rule_id"
+    ] = projected_stop_rule_id
     required = schema["$defs"]["plan_result"]["required"]
     if "finding_dispositions" not in required:
         required.append("finding_dispositions")

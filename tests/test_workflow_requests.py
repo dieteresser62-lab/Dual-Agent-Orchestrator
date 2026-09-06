@@ -16,6 +16,7 @@ from contracts import (
     ValidationRecord,
     ValidationStatus,
 )
+from gates import StopRule
 from native_codex_contract import NativeCodexRequestKind
 from workflow import (
     EvidenceKind,
@@ -32,7 +33,7 @@ from workflow_state import WorkflowStep, init_workflow_state
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 PRE_CUT_CODEX_REQUEST_SHA256 = (
-    "43e8cd31628d019f15b8469d80f83aa32ff6b0f032af7631420c77cac161da76"
+    "902f2560f295da26d225095273bf9e5b054fd2eb6dbc61ff16ff4f803583dbb2"
 )
 PRE_CUT_REVIEW_REQUEST_SHA256 = (
     "20b26dedb26a8d3affe2657458876531dfc46c3b95aa821ef356958c1ecbee0d"
@@ -54,7 +55,9 @@ def _context() -> WorkflowContext:
     )
 
 
-def _codex_bundle() -> workflow_requests.NativeCodexRequestBundle:
+def _codex_bundle(
+    *, context: WorkflowContext | None = None
+) -> workflow_requests.NativeCodexRequestBundle:
     state = init_workflow_state(
         run_id="b31-request-builder",
         task_file="/repo/inbox/backlog/00-b31.md",
@@ -77,7 +80,7 @@ def _codex_bundle() -> workflow_requests.NativeCodexRequestBundle:
     )
     return workflow_requests.native_codex_request(
         state=state,
-        context=_context(),
+        context=_context() if context is None else context,
         history=WorkflowHistory(state.current_work_unit_id),
         contract=contract,
         request_kind=NativeCodexRequestKind.PLAN,
@@ -226,6 +229,23 @@ def test_canonical_request_anchor_detects_omitted_and_reordered_fields() -> None
         reordered, ensure_ascii=False, separators=(",", ":"), sort_keys=True
     )
     assert _canonical_digest(reordered_bytes) != original_digest
+
+
+def test_b78_codex_request_projects_the_exact_runtime_stop_rule_set() -> None:
+    context = replace(
+        _context(),
+        stop_rules=(StopRule("DOMAIN-001", "A configured domain decision is required."),),
+    )
+    bundle = _codex_bundle(context=context)
+    rule_id = bundle.provider_response_schema["$defs"]["stop_result"][
+        "properties"
+    ]["rule_id"]
+
+    assert rule_id["enum"] == sorted(context.known_stop_rule_ids)
+    assert "DOMAIN-001" in rule_id["enum"]
+    assert "DOMAIN-001 | A configured domain decision is required." in (
+        bundle.document["work_context"]
+    )
 
 
 def test_plan_review_request_binds_whether_a_repository_plan_artifact_exists() -> None:

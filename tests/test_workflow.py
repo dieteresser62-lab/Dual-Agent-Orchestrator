@@ -3892,6 +3892,23 @@ def test_codex_stop_request_halts_same_step_without_retry_or_repair() -> None:
     assert driver.checkpoint_histories[-1].findings == (finding,)
 
 
+def test_contract_unclear_stop_request_becomes_a_policy_gate() -> None:
+    driver = FakeDriver(
+        snapshots=[],
+        codex_outputs=[_codex_stop("CONTRACT-UNCLEAR")],
+        reviewer_outputs=[],
+    )
+
+    result = WorkflowEngine(driver).run_current_work_unit(_slice_state(), _context())
+
+    assert result.exit_code == 4
+    assert result.state.current_work_unit.status is WorkUnitStatus.AWAITING_USER_DECISION
+    assert result.state.current_work_unit.gate.reason is GateReason.STOP_REQUEST
+    assert result.state.current_work_unit.gate.detail == (
+        "CONTRACT-UNCLEAR | domain semantics require user direction"
+    )
+
+
 def test_codex_agent_sandbox_validation_stop_is_handed_back_automatically() -> None:
     driver = FakeDriver(
         snapshots=[],
