@@ -570,7 +570,7 @@ def prepare_managed_overall_document(
     scope = ", ".join(f"`{item}`" for item in task_scope)
     markdown = "\n".join(
         (
-            f"# Overall audit – {task_name}",
+            f"# Gesamtaudit – {task_name}",
             "",
             "Dieses Dokument wird vom Orchestrator geführt. Slice-Dokumente entstehen "
             "erst beim tatsächlichen Beginn ihrer Implementierung.",

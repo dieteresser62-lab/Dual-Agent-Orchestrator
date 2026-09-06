@@ -412,7 +412,7 @@ def _overall_audit_entries(
             None,
         )
         if unit.kind is WorkUnitKind.PLAN:
-            label = "Work Unit %02d – Planung" % unit.work_unit_id
+            label = "Arbeitseinheit %02d – Planung" % unit.work_unit_id
             summary = "Planung und Review der geordneten Implementierungsslices"
             scope = tuple(
                 sorted(
@@ -428,13 +428,13 @@ def _overall_audit_entries(
                 )
             )
         elif unit.kind is WorkUnitKind.FINAL_REVIEW:
-            label = "Work Unit %02d – Gesamtreview" % unit.work_unit_id
+            label = "Arbeitseinheit %02d – Gesamtreview" % unit.work_unit_id
             summary = "Branchweite Gesamtabnahme durch Codex und Claude"
             scope = tuple(
                 sorted({path for item in state.planned_slices for path in item.scope_paths})
             )
         else:
-            label = "Work Unit %02d – Slice %02d" % (
+            label = "Arbeitseinheit %02d – Slice %02d" % (
                 unit.work_unit_id,
                 unit.slice_id,
             )

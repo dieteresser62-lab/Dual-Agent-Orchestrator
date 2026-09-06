@@ -489,18 +489,27 @@ def test_overall_audit_aggregates_plan_and_slice_reviews(tmp_path: Path) -> None
         branch="codex/bug",
         task_scope=("src/bug.py",),
     )
+    english_provider_evidence = "Review evidence stays in the provider's own words."
+    reviewed_result = replace(
+        _review(),
+        evidence=ReviewEvidence(
+            dimensions=english_provider_evidence,
+            largest_residual_risk="An English residual risk remains quoted.",
+            break_condition="A future writer rewrites provider output.",
+        ),
+    )
     entries = (
         OverallAuditEntry(
-            label="Work Unit 01 – Planung",
+            label="Arbeitseinheit 01 – Planung",
             summary="Plan erstellen",
             scope_paths=("src/bug.py",),
             projection=AuditProjection(
                 slice_id=1,
-                events=(ReviewAuditEvent(1, 1, 1, _review()),),
+                events=(ReviewAuditEvent(1, 1, 1, reviewed_result),),
             ),
         ),
         OverallAuditEntry(
-            label="Work Unit 02 – Slice 01",
+            label="Arbeitseinheit 02 – Slice 01",
             summary="Bug beheben",
             scope_paths=("src/bug.py",),
             projection=AuditProjection(slice_id=1),
@@ -509,8 +518,11 @@ def test_overall_audit_aggregates_plan_and_slice_reviews(tmp_path: Path) -> None
 
     rendered = project_overall_audit(document, entries)
 
-    assert "Work Unit 01 – Planung" in rendered
-    assert "Work Unit 02 – Slice 01" in rendered
+    assert rendered.startswith("# Gesamtaudit – Bug\n")
+    assert "# Overall audit" not in rendered
+    assert english_provider_evidence in rendered
+    assert "Arbeitseinheit 01 – Planung" in rendered
+    assert "Arbeitseinheit 02 – Slice 01" in rendered
     assert "### Claude · Runde 1 · approved" in rendered
     assert project_overall_audit(document, entries) == rendered
 

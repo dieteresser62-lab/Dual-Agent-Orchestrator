@@ -1513,6 +1513,10 @@ def test_final_review_audit_reuses_carried_attestation(tmp_path: Path) -> None:
     final_entry = next(
         item for item in entries if item.projection.review_work_unit_id == "5"
     )
+    assert entries[0].label == "Arbeitseinheit 01 – Planung"
+    assert final_entry.label == "Arbeitseinheit 05 – Gesamtreview"
+    assert any(" – Slice " in item.label for item in entries)
+    assert all("Work Unit" not in item.label for item in entries)
     assert final_entry.projection.events == (
         ValidationAuditEvent(1, 3, attestation),
         ReviewAuditEvent(2, 3, 1, review_contract.result, ("FINAL",)),

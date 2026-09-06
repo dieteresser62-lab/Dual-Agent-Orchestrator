@@ -120,7 +120,7 @@ def _dependencies(root: Path) -> WorkflowAuditDependencies:
         bound_task_control_paths=lambda _root, _state: (),
         overall_audit_entries=lambda _state, _replay, _reader: (
             OverallAuditEntry(
-                label="Work Unit 01 - Audit",
+                label="Arbeitseinheit 01 - Audit",
                 summary="Identische Projektion pruefen",
                 scope_paths=("src/orchestrator.py",),
                 projection=AuditProjection(slice_id=1),
@@ -268,7 +268,7 @@ def test_audit_projection_is_byte_identical_for_identical_inputs(
 
     audit.project_audit(state, history)
     first = target.read_bytes()
-    assert "Work Unit 01 – Planung".encode("utf-8") in first
+    assert "Arbeitseinheit 01 – Planung".encode("utf-8") in first
     audit.project_audit(state, history)
 
     assert target.read_bytes() == first

@@ -32,6 +32,37 @@ USER_MARKDOWN_FILES = (
     *REFERENCE_DOC_FILES,
 )
 USER_DOC_FILES = (*USER_MARKDOWN_FILES, ROOT / "workflow.puml")
+AUDIT_TRAIL_PATH = ROOT / "src" / "audit_trail.py"
+WORKFLOW_AUDIT_PROJECTION_PATH = ROOT / "src" / "workflow_audit_projection.py"
+_AUDIT_FRAME_WRITERS = frozenset(
+    {
+        "prepare_managed_work_plan_document",
+        "prepare_managed_overall_document",
+        "prepare_managed_slice_document",
+        "project_overall_audit",
+        "_render_reviews",
+        "_render_validations",
+        "_render_test_approval",
+        "_render_findings",
+        "_render_codex_responses",
+        "_render_decision_table",
+        "_render_approval_status",
+    }
+)
+_AUDIT_FRAME_CONSTANTS = frozenset(
+    {
+        "GENERIC_WORK_PLAN_AUDIT_HEADING",
+        "REQUIRED_SLICE_HEADINGS",
+        "SLICE_MANAGED_SECTION_HEADINGS",
+    }
+)
+_FORBIDDEN_ENGLISH_AUDIT_FRAME_FRAGMENTS = (
+    "# Overall audit",
+    "Work Unit",
+    "## Review evidence",
+    "## Review contract",
+    "## Review anchor",
+)
 ALLOWLIST_FILENAME_PATTERNS: tuple[str, ...] = ()
 GERMAN_TOKENS = [  # allowlist:german
     "Aufgabe",
@@ -333,6 +364,117 @@ def test_active_markdown_user_documentation_is_german() -> None:
         text = path.read_text(encoding="utf-8")
         assert all(fragment in text for fragment in required_fragments), path.name
         assert not any(heading in text for heading in forbidden_english_headings), path.name
+
+
+def _audit_frame_language_hits(
+    source: str,
+    *,
+    writer_names: frozenset[str],
+    constant_names: frozenset[str] = frozenset(),
+) -> tuple[str, ...]:
+    """Inspect only orchestrator-owned literals, never interpolated provider fields."""
+    tree = ast.parse(source)
+    literal_nodes: list[ast.AST] = []
+    docstring_nodes: set[int] = set()
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name in writer_names:
+                literal_nodes.append(node)
+                if (
+                    node.body
+                    and isinstance(node.body[0], ast.Expr)
+                    and isinstance(node.body[0].value, ast.Constant)
+                    and isinstance(node.body[0].value.value, str)
+                ):
+                    docstring_nodes.add(id(node.body[0].value))
+            continue
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else (node.target,)
+        if any(
+            isinstance(target, ast.Name) and target.id in constant_names
+            for target in targets
+        ):
+            literal_nodes.append(node)
+
+    literals = (
+        child.value
+        for node in literal_nodes
+        for child in ast.walk(node)
+        if isinstance(child, ast.Constant) and isinstance(child.value, str)
+        and id(child) not in docstring_nodes
+    )
+    return tuple(
+        sorted(
+            {
+                forbidden
+                for literal in literals
+                for forbidden in _FORBIDDEN_ENGLISH_AUDIT_FRAME_FRAGMENTS
+                if forbidden.casefold() in literal.casefold()
+            }
+        )
+    )
+
+
+def _generated_audit_frame_language_hits(
+    source_overrides: dict[Path, str] | None = None,
+) -> tuple[str, ...]:
+    bindings = {
+        AUDIT_TRAIL_PATH: (_AUDIT_FRAME_WRITERS, _AUDIT_FRAME_CONSTANTS),
+        WORKFLOW_AUDIT_PROJECTION_PATH: (
+            frozenset({"_overall_audit_entries"}),
+            frozenset(),
+        ),
+    }
+    overrides = source_overrides or {}
+    return tuple(
+        f"{path.relative_to(ROOT).as_posix()}: {hit}"
+        for path, (writer_names, constant_names) in bindings.items()
+        for hit in _audit_frame_language_hits(
+            overrides.get(path, path.read_text(encoding="utf-8")),
+            writer_names=writer_names,
+            constant_names=constant_names,
+        )
+    )
+
+
+def test_generated_audit_frame_has_no_english_headings() -> None:
+    assert _generated_audit_frame_language_hits() == ()
+
+
+def test_generated_audit_frame_guard_rejects_an_english_heading_mutation() -> None:
+    source = AUDIT_TRAIL_PATH.read_text(encoding="utf-8")
+    mutated = source.replace("# Gesamtaudit", "# Overall audit", 1)
+
+    assert mutated != source
+    assert _generated_audit_frame_language_hits(
+        {AUDIT_TRAIL_PATH: mutated}
+    ) == ("src/audit_trail.py: # Overall audit",)
+
+
+def test_generated_audit_frame_guard_rejects_an_english_work_unit_mutation() -> None:
+    source = WORKFLOW_AUDIT_PROJECTION_PATH.read_text(encoding="utf-8")
+    mutated = source.replace("Arbeitseinheit", "Work Unit")
+
+    assert mutated != source
+    assert _generated_audit_frame_language_hits(
+        {WORKFLOW_AUDIT_PROJECTION_PATH: mutated}
+    ) == ("src/workflow_audit_projection.py: Work Unit",)
+
+
+def test_generated_audit_frame_guard_ignores_english_provider_evidence() -> None:
+    source = AUDIT_TRAIL_PATH.read_text(encoding="utf-8")
+    english_review_evidence = (
+        "# Overall audit; review evidence remains verbatim provider output."
+    )
+    source_with_external_provider_fixture = (
+        source + f"\nPROVIDER_REVIEW_EVIDENCE = {english_review_evidence!r}\n"
+    )
+
+    assert english_review_evidence not in source
+    assert _generated_audit_frame_language_hits(
+        {AUDIT_TRAIL_PATH: source_with_external_provider_fixture}
+    ) == ()
 
 
 def test_readme_documents_exactly_the_public_long_cli_options() -> None:
