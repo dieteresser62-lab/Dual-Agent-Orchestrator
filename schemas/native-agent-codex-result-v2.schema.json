@@ -42,6 +42,7 @@
         "summary": { "$ref": "#/$defs/safe_text" },
         "scope_paths": {
           "type": "array",
+          "description": "Each scope_paths array must be non-empty, contain no duplicates, and list paths in ascending lexicographic order.",
           "minItems": 1,
           "maxItems": 1000,
           "uniqueItems": true,

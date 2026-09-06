@@ -79,6 +79,24 @@ def test_native_codex_request_is_deterministic_and_digest_bound() -> None:
     )
 
 
+def test_plan_request_tells_provider_the_scope_path_order_contract() -> None:
+    bundle = build_native_codex_request(_spec())
+    scope_paths = bundle.provider_response_schema["$defs"]["planned_slice"][
+        "properties"
+    ]["scope_paths"]
+
+    assert scope_paths["description"] == (
+        "Each scope_paths array must be non-empty, contain no duplicates, and "
+        "list paths in ascending lexicographic order."
+    )
+    assert "uniqueItems" not in scope_paths
+    assert bundle.document["response_contract"]["schema_sha256"] == (
+        __import__("hashlib").sha256(
+            bundle.provider_response_schema_json.encode("utf-8")
+        ).hexdigest()
+    )
+
+
 def test_request_kinds_bind_distinct_writer_schema_digests() -> None:
     base = _spec()
     readiness = {

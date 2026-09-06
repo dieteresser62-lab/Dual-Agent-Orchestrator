@@ -11,15 +11,15 @@
       "adopted_record_id": "ar1-1111111111111111111111111111111111111111111111111111111111111111",
       "state": {
         "ready": true,
-        "request_id": "native-codex-request-0b399180ea55133ee982e06dec17e5e71051cc9e94e6a6a2a360c957cf5e989d",
+        "request_id": "native-codex-request-7538b7836aa15471c09a19a96ab572f7593589a4736d730a762eca60e2b91d36",
         "recovery_fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "content_binding": {
           "role": "codex",
           "work_unit_id": 1,
           "round_number": 1,
           "operation": "codex_implementation",
-          "request_id": "native-codex-request-0b399180ea55133ee982e06dec17e5e71051cc9e94e6a6a2a360c957cf5e989d",
-          "response_sha256": "12dcb176a354f275a7047f2b6a1d71c1587f82934fb2a60817c4a5b189cd6184",
+          "request_id": "native-codex-request-7538b7836aa15471c09a19a96ab572f7593589a4736d730a762eca60e2b91d36",
+          "response_sha256": "dd0a10ff57385c973d3d522991177711b4673da6aab70fb52e62f061c488af01",
           "fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         }
       },

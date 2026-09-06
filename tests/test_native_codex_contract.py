@@ -27,7 +27,21 @@ from native_codex_contract import (
     parse_bound_native_codex_contract_result,
 )
 from native_provider_schema import registered_exceptions
+from orchestrator_diagnostics import OrchestratorDiagnostic
 from schema_validation import SchemaMismatch, validate_schema_document
+
+
+# B68 audit: these writer-valid/domain-invalid rules remain uncommunicated to
+# Codex.  There are more than three, so the requested stop condition keeps them
+# as an explicit inventory instead of turning B68 into a partial bundle fix.
+_REMAINING_PROVIDER_CONTRACT_GAPS = (
+    "finding_dispositions: canonical order and exactly-once uniqueness",
+    "safe_text: non-blank and NUL-free",
+    "safe_path: canonical repository-relative POSIX paths outside .orchestrator",
+    "slice_plan.slice_id: contiguous and one-based",
+    "stop_result.remediation_paths: canonical sorted order",
+    "work_result.test_files: canonical sorted order",
+)
 
 
 def _finding() -> FindingRecord:
@@ -447,11 +461,19 @@ def test_writer_schema_keeps_slice_path_order_fail_closed_locally() -> None:
         ],
         "finding_dispositions": [],
     }
+    provider_output = json.loads(json.dumps(response))
 
     validate_schema_document({"result": response}, schema)
     with pytest.raises(NativeCodexContractError) as raised:
         parse_bound_native_codex_contract_result(response, bound)
     assert raised.value.code is NativeCodexErrorCode.SLICE_PLAN_INVALID
+    assert raised.value.detail == (
+        "planned slice paths must be sorted, unique, and non-empty"
+    )
+    assert raised.value.orchestrator_diagnostic is (
+        OrchestratorDiagnostic.SLICE_PLAN_PATHS_INVALID
+    )
+    assert response == provider_output
 
     response["slice_plan"] = [
         {
@@ -464,6 +486,29 @@ def test_writer_schema_keeps_slice_path_order_fail_closed_locally() -> None:
     with pytest.raises(NativeCodexContractError) as raised:
         parse_bound_native_codex_contract_result(response, bound)
     assert raised.value.code is NativeCodexErrorCode.SLICE_PLAN_INVALID
+
+
+def test_b68_remaining_provider_contract_gap_inventory_is_explicit() -> None:
+    assert len(_REMAINING_PROVIDER_CONTRACT_GAPS) > 3
+    assert _REMAINING_PROVIDER_CONTRACT_GAPS == (
+        "finding_dispositions: canonical order and exactly-once uniqueness",
+        "safe_text: non-blank and NUL-free",
+        "safe_path: canonical repository-relative POSIX paths outside .orchestrator",
+        "slice_plan.slice_id: contiguous and one-based",
+        "stop_result.remediation_paths: canonical sorted order",
+        "work_result.test_files: canonical sorted order",
+    )
+    exception_ids = {
+        str(item["exception_id"]) for item in registered_exceptions("codex")
+    }
+    assert {
+        "codex-disposition-order-and-uniqueness",
+        "codex-nonblank-safe-text",
+        "codex-safe-path-lookaround",
+        "codex-slice-plan-path-order",
+        "codex-stop-remediation-path-order",
+        "codex-test-file-path-order",
+    } <= exception_ids
 
 
 def test_writer_schema_keeps_stop_path_order_fail_closed_locally() -> None:

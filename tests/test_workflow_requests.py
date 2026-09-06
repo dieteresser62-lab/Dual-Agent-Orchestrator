@@ -30,7 +30,7 @@ from workflow_state import WorkflowStep, init_workflow_state
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 PRE_CUT_CODEX_REQUEST_SHA256 = (
-    "1b5421c966c84b8c2fd315154fca1a38abe058233cd14952dcf6441774880ba8"
+    "2c55523800b88fddd4b58dd4cd8be72837d98f636c7a7c9c65210e1a3693dade"
 )
 PRE_CUT_REVIEW_REQUEST_SHA256 = (
     "20b26dedb26a8d3affe2657458876531dfc46c3b95aa821ef356958c1ecbee0d"
