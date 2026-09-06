@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 import hashlib
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, TypeAlias
 
 from schema_validation import (
@@ -168,6 +168,7 @@ class NativeReviewContext:
     anchor_origin: str | None = None
     validation_command_prefixes: tuple[tuple[str, ...], ...] = ()
     red_state_followup_slice: str | None = None
+    plan_artifact_path: str | None = None
 
     def __post_init__(self) -> None:
         for label, value in (
@@ -233,6 +234,26 @@ class NativeReviewContext:
                 NativeReviewErrorCode.CONTEXT_INVALID,
                 "red_state_followup_slice must be non-empty when present",
             )
+        if self.plan_artifact_path is not None:
+            path = PurePosixPath(self.plan_artifact_path)
+            if (
+                not self.plan_artifact_path.strip()
+                or "\\" in self.plan_artifact_path
+                or path.is_absolute()
+                or ".." in path.parts
+                or any(character in self.plan_artifact_path for character in "*?[")
+                or self.plan_artifact_path != path.as_posix()
+                or path.suffix.lower() != ".md"
+            ):
+                raise NativeReviewContractError(
+                    NativeReviewErrorCode.CONTEXT_INVALID,
+                    "plan_artifact_path must be one exact repository-relative Markdown path",
+                )
+            if self.approval_marker is not ApprovalMarker.PLAN:
+                raise NativeReviewContractError(
+                    NativeReviewErrorCode.CONTEXT_INVALID,
+                    "plan_artifact_path is valid only for a plan review",
+                )
         normalized_prefixes = tuple(dict.fromkeys(self.validation_command_prefixes))
         if normalized_prefixes != self.validation_command_prefixes or any(
             not prefix
@@ -1229,7 +1250,7 @@ def _validate_decision(
 
 def native_review_context_binding(context: NativeReviewContext) -> dict[str, Any]:
     """Return the canonical provider-independent domain-context binding."""
-    return {
+    binding = {
         "run_id": context.run_id,
         "work_unit_id": context.work_unit_id,
         "operation": context.operation,
@@ -1251,6 +1272,9 @@ def native_review_context_binding(context: NativeReviewContext) -> dict[str, Any
         ],
         "red_state_followup_slice": context.red_state_followup_slice,
     }
+    if context.approval_marker is ApprovalMarker.PLAN:
+        binding["plan_artifact_path"] = context.plan_artifact_path
+    return binding
 
 
 # Private compatibility alias for the original provider-independent request-id

@@ -754,6 +754,36 @@ def test_request_schema_loads_and_build_is_canonical_and_deterministic() -> None
     assert first.evidence_assets == ()
 
 
+def test_only_plan_requests_carry_the_mandatory_artifact_path_decision() -> None:
+    slice_bundle = build_native_review_request(_spec())
+    assert "plan_artifact_path" not in slice_bundle.document["review_contract"]
+
+    plan_spec = replace(
+        _spec(),
+        review_kind=NativeReviewKind.PLAN,
+        context=replace(
+            _context(),
+            operation="claude_plan_review",
+            approval_marker=ApprovalMarker.PLAN,
+            plan_artifact_path=None,
+        ),
+    )
+    plan_bundle = build_native_review_request(plan_spec)
+    assert plan_bundle.document["review_contract"]["plan_artifact_path"] is None
+
+    missing = dict(plan_bundle.document)
+    missing["review_contract"] = dict(missing["review_contract"])
+    missing["review_contract"].pop("plan_artifact_path")
+    with pytest.raises(NativeReviewRequestError, match="plan reviews alone"):
+        validate_native_review_request_document(missing)
+
+    extra = dict(slice_bundle.document)
+    extra["review_contract"] = dict(extra["review_contract"])
+    extra["review_contract"]["plan_artifact_path"] = None
+    with pytest.raises(NativeReviewRequestError, match="plan reviews alone"):
+        validate_native_review_request_document(extra)
+
+
 @pytest.mark.parametrize(
     "mutate",
     (

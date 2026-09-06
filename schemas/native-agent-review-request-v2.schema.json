@@ -305,6 +305,10 @@
         "red_state_followup_slice": {
           "type": ["string", "null"],
           "minLength": 1
+        },
+        "plan_artifact_path": {
+          "type": ["string", "null"],
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\u0000\\r\\n]{1,1000}\\.[mM][dD]$"
         }
       },
       "required": [

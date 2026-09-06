@@ -351,6 +351,18 @@ def validate_native_review_request_document(document: Mapping[str, Any]) -> None
             NativeReviewRequestErrorCode.SCHEMA_INVALID,
             f"schema validation failed at {location}: {exc.message}",
         ) from None
+    review_contract = document.get("review_contract")
+    has_plan_artifact_path = (
+        isinstance(review_contract, Mapping)
+        and "plan_artifact_path" in review_contract
+    )
+    if (document.get("review_kind") == NativeReviewKind.PLAN.value) != (
+        has_plan_artifact_path
+    ):
+        raise NativeReviewRequestError(
+            NativeReviewRequestErrorCode.SCHEMA_INVALID,
+            "plan reviews alone must bind review_contract.plan_artifact_path",
+        )
 
 
 def validate_native_review_provider_response(
@@ -479,6 +491,28 @@ def _review_context_request_projection(
             NativeReviewRequestErrorCode.CONTEXT_INVALID,
             "native review context has no supported review operation",
         )
+    review_contract = {
+        "approval_marker": context_binding["approval_marker"],
+        "slice_id": context_binding["slice_id"],
+        "round_number": context_binding["round_number"],
+        "next_finding_id": next_native_finding_id(context),
+        "previous_findings": context_binding["previous_findings"],
+        "validation_attestation": context_binding["validation_attestation"],
+        "test_files": context_binding["test_files"],
+        "test_changes_approved": context_binding["test_changes_approved"],
+        "allow_new_observations": context_binding["allow_new_observations"],
+        "anchor_origin": context_binding["anchor_origin"],
+        "validation_command_prefixes": context_binding[
+            "validation_command_prefixes"
+        ],
+        "red_state_followup_slice": context_binding[
+            "red_state_followup_slice"
+        ],
+    }
+    if review_kind == NativeReviewKind.PLAN.value:
+        review_contract["plan_artifact_path"] = context_binding[
+            "plan_artifact_path"
+        ]
     return {
         "reviewer": "claude",
         "run_id": context.run_id,
@@ -486,24 +520,7 @@ def _review_context_request_projection(
         "operation": context.operation,
         "review_kind": review_kind,
         "current_fingerprint": context.diff_fingerprint,
-        "review_contract": {
-            "approval_marker": context_binding["approval_marker"],
-            "slice_id": context_binding["slice_id"],
-            "round_number": context_binding["round_number"],
-            "next_finding_id": next_native_finding_id(context),
-            "previous_findings": context_binding["previous_findings"],
-            "validation_attestation": context_binding["validation_attestation"],
-            "test_files": context_binding["test_files"],
-            "test_changes_approved": context_binding["test_changes_approved"],
-            "allow_new_observations": context_binding["allow_new_observations"],
-            "anchor_origin": context_binding["anchor_origin"],
-            "validation_command_prefixes": context_binding[
-                "validation_command_prefixes"
-            ],
-            "red_state_followup_slice": context_binding[
-                "red_state_followup_slice"
-            ],
-        },
+        "review_contract": review_contract,
     }
 
 

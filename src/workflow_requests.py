@@ -240,6 +240,11 @@ def native_review_request(
         ApprovalMarker.SLICE: NativeReviewKind.SLICE,
         ApprovalMarker.FINAL: NativeReviewKind.FINAL,
     }[contract.approval_marker]
+    plan_artifact_path = (
+        context.work_plan_path
+        if review_kind is NativeReviewKind.PLAN and context.plan_only
+        else None
+    )
     native_context = NativeReviewContext(
         run_id=state.run_id,
         work_unit_id=str(state.current_work_unit_id),
@@ -259,6 +264,7 @@ def native_review_request(
             context.validation_matrix.finding_command_prefixes
         ),
         red_state_followup_slice=contract.red_state_followup_slice,
+        plan_artifact_path=plan_artifact_path,
     )
     evidence: list[NativeReviewEvidenceInput] = [
         NativeReviewEvidenceInput("assignment", "assignment", context.assignment),
@@ -292,15 +298,31 @@ def native_review_request(
                 history.codex_final_report,
             )
         )
+    artifact_criterion = (
+        f"The PLAN_ONLY artifact contract is active for exact path "
+        f"{plan_artifact_path}; require that repository plan artifact and its "
+        "mandated Slice structure."
+        if plan_artifact_path is not None
+        else (
+            "No repository plan artifact is bound to this planning review. "
+            "Review the request-bound SLICE_PLAN; the reviewer must not require "
+            "PLAN_ONLY artifact structure."
+            if review_kind is NativeReviewKind.PLAN
+            else None
+        )
+    )
     acceptance_criteria = tuple(
         dict.fromkeys(
-            (
+            criterion
+            for criterion in (
                 context.slice_summary.strip(),
+                artifact_criterion,
                 "The decision must satisfy the bound review contract and the "
                 "fingerprint-matching deterministic validation attestation.",
                 "The reviewed changes must remain within the exact authorized "
                 "path boundary and preserve resume/idempotency invariants.",
             )
+            if criterion is not None
         )
     )
     return build_native_review_request(

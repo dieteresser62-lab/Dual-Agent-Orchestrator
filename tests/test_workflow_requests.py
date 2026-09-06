@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
@@ -24,6 +25,7 @@ from workflow import (
     WorkflowHistory,
 )
 import workflow_requests
+from task_contract import TaskMode, parse_task_contract
 from workflow_state import WorkflowStep, init_workflow_state
 
 
@@ -222,3 +224,119 @@ def test_canonical_request_anchor_detects_omitted_and_reordered_fields() -> None
         reordered, ensure_ascii=False, separators=(",", ":"), sort_keys=True
     )
     assert _canonical_digest(reordered_bytes) != original_digest
+
+
+def test_plan_review_request_binds_whether_a_repository_plan_artifact_exists() -> None:
+    informal_scoped_text = """# Documentation end state
+
+TARGET_BRANCH: feature/documentation-consistency-overhaul
+TASK_SCOPE: README.md, Quickstart.md, workflow.puml, docs/reference/architecture-and-domain-concept.md, docs/reference/market-comparison.md, docs/internal/ORCHESTRATOR_ROADMAP_PHASE_2_PLUS.md
+
+Bring the six explicitly scoped documents to one consistent end state.
+"""
+    informal_scoped = parse_task_contract(
+        informal_scoped_text,
+        source_name="canary-dokumentation-endzustand.md",
+    )
+    assert informal_scoped.mode is TaskMode.IMPLEMENT
+    assert informal_scoped.work_plan_path is None
+
+    def plan_review_request(
+        *,
+        execution_mode: TaskMode,
+        scope_paths: tuple[str, ...],
+        work_plan_path: str | None,
+        assignment: str,
+    ) -> dict[str, object]:
+        fingerprint = "e" * 64
+        change_paths = tuple(sorted(scope_paths))
+        state = init_workflow_state(
+            run_id=f"b72-{execution_mode.value.lower()}",
+            task_file="/repo/inbox/b72.md",
+            branch="feature/backlog-followups",
+            branch_base="a" * 40,
+            slice_count=1,
+            task_digest="b" * 64,
+            task_scope_patterns=scope_paths,
+            target_branch="feature/backlog-followups",
+            execution_mode=execution_mode.value,
+            work_plan_path=work_plan_path,
+            timestamp="2026-09-06T10:00:00+00:00",
+        ).with_current_step(WorkflowStep.CLAUDE_PLAN_REVIEW)
+        context = replace(
+            _context(),
+            assignment=assignment,
+            slice_summary="Review the request-bound executable Slice plan.",
+            plan_only=execution_mode is TaskMode.PLAN_ONLY,
+            task_scope_patterns=scope_paths,
+            work_plan_path=work_plan_path,
+        )
+        changes = WorkflowChanges(
+            start_commit="a" * 40,
+            fingerprint=fingerprint,
+            paths=change_paths,
+            full_diff="request-bound planning evidence",
+        )
+        contract = StepContract(
+            name="b72-plan-review",
+            reviewer=AgentRole.CLAUDE,
+            approval_marker=ApprovalMarker.PLAN,
+            slice_id="01",
+            round_number=1,
+            review_fingerprint=fingerprint,
+            test_changes_approved=True,
+        )
+        return workflow_requests.native_review_request(
+            state=state,
+            context=context,
+            history=WorkflowHistory(state.current_work_unit_id),
+            contract=contract,
+            changes=changes,
+            evidence_kind=EvidenceKind.FULL_SLICE,
+            review_diff=changes.full_diff,
+            review_packet=None,
+            expected_test_files=(),
+            execution_error=WorkflowExecutionError,
+            full_branch_evidence_kind=EvidenceKind.FULL_BRANCH,
+        ).document
+
+    direct_request = plan_review_request(
+        execution_mode=informal_scoped.mode,
+        scope_paths=informal_scoped.scope_patterns,
+        work_plan_path=informal_scoped.work_plan_path,
+        assignment=informal_scoped_text,
+    )
+    direct_contract = direct_request["review_contract"]
+    assert isinstance(direct_contract, dict)
+    assert direct_contract["plan_artifact_path"] is None
+    assert any(
+        "No repository plan artifact is bound" in criterion
+        and "must not require PLAN_ONLY artifact structure" in criterion
+        for criterion in direct_request["acceptance_criteria"]
+    )
+    assert direct_request["authorized_paths"] == sorted(informal_scoped.scope_patterns)
+    assert not any(
+        path.startswith(".orchestrator/")
+        for path in direct_request["authorized_paths"]
+    )
+
+    explicit_text = """ORCHESTRATOR_MODE: PLAN_ONLY
+WORK_PLAN_PATH: docs/internal/explicit-work-plan.MD
+TARGET_BRANCH: feature/backlog-followups
+TASK_SCOPE: docs/internal/explicit-work-plan.MD
+"""
+    explicit = parse_task_contract(explicit_text, source_name="explicit.md")
+    explicit_request = plan_review_request(
+        execution_mode=explicit.mode,
+        scope_paths=explicit.scope_patterns,
+        work_plan_path=explicit.work_plan_path,
+        assignment=explicit_text,
+    )
+    explicit_contract = explicit_request["review_contract"]
+    assert isinstance(explicit_contract, dict)
+    assert explicit_contract["plan_artifact_path"] == explicit.work_plan_path
+    assert any(
+        "PLAN_ONLY artifact contract is active" in criterion
+        and explicit.work_plan_path in criterion
+        for criterion in explicit_request["acceptance_criteria"]
+    )

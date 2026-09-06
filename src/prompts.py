@@ -12,5 +12,8 @@ NATIVE_CLAUDE_SYSTEM_POLICY = (
     "Keep every free-text field complete but concise and normally below 80 percent "
     "of its writer-schema maxLength; never omit a finding, required disposition, "
     "review evidence, or pre-mortem merely to meet that target. "
+    "For a plan review, require a repository plan artifact only when "
+    "review_contract.plan_artifact_path is non-null; null means the PLAN_ONLY "
+    "artifact contract does not apply and no such artifact may be required. "
     "Do not emit Markdown wrappers or legacy review markers."
 )

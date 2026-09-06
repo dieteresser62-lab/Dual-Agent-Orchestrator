@@ -93,6 +93,22 @@ def _context(
     )
 
 
+def test_plan_artifact_path_is_exact_and_reserved_for_plan_reviews() -> None:
+    plan = replace(
+        _context(approval=ApprovalMarker.PLAN),
+        operation="claude_plan_review",
+        plan_artifact_path="docs/internal/plan.md",
+    )
+    assert plan.plan_artifact_path == "docs/internal/plan.md"
+
+    with pytest.raises(NativeReviewContractError, match="only for a plan review"):
+        replace(_context(), plan_artifact_path="docs/internal/plan.md")
+    with pytest.raises(NativeReviewContractError, match="repository-relative"):
+        replace(plan, plan_artifact_path="../plan.md")
+    with pytest.raises(NativeReviewContractError, match="repository-relative"):
+        replace(plan, plan_artifact_path="docs//plan.md")
+
+
 def _review(context: NativeReviewContext, *, approved: bool = True) -> dict[str, object]:
     return {
         "schema_version": "native-agent-review-result-v2",
