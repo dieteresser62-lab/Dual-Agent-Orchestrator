@@ -32,7 +32,7 @@ from provider_input_budget import (
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_AGENTS_FILE = (PROJECT_ROOT / "AGENTS.md").resolve()
+DEFAULT_AGENTS_FILE = "AGENTS.md"
 DEFAULT_CONFIG_NAME = "orchestrator.toml"
 DEFAULT_TASK_FILE = "task.md"
 DEFAULT_TEST_COMMAND = ""
@@ -885,6 +885,10 @@ def parse_args(
     _resolve_skip_git_check(args, env)
     _resolve_live_stream_channels(args, env)
     _resolve_resume_state(args, repo_root)
+    args.agents_file_explicit = any(
+        token == "--agents-file" or token.startswith("--agents-file=")
+        for token in raw_argv
+    )
     return args
 
 
@@ -953,6 +957,22 @@ def run_cli(
     find_task_file_fn: Callable[[str | None], Path],
 ) -> int:
     logger = logging.getLogger(__name__)
+    agents_path = Path(str(args.agents_file)).expanduser()
+    if not agents_path.is_absolute():
+        agents_path = Path.cwd() / agents_path
+    agents_path = agents_path.resolve()
+    args.agents_file = str(agents_path)
+    args.agents_file_warning_emitted = False
+    if not agents_path.is_file():
+        if args.agents_file_explicit:
+            logger.error("Explicit --agents-file does not exist: %s", agents_path)
+            return 1
+        logger.warning(
+            "Default repository agents file is missing: %s; continuing without "
+            "repository agent instructions.",
+            agents_path,
+        )
+        args.agents_file_warning_emitted = True
     if args.auto_resume:
         logger.info("Existing unfinished state detected; resuming current run.")
     if args.state_was_frozen:

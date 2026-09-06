@@ -261,6 +261,8 @@ def test_root_roles_share_plan_only_transport_and_validation_tiers() -> None:
             "creates or updates the exact repository file at `WORK_PLAN_PATH`",
             "`SLICE_PLAN` record for that path as a receipt",
             "correct” explicitly means create the missing file",
+            "path is written as a bullet with the path enclosed in backticks",
+            "standalone line `**Akzeptanzkriterien**`",
             "configured `--agents-file` (root `AGENTS.md` by default)",
             "does not append `CLAUDE.md` or `CODEX.md`",
             "Codex CLI may also discover `AGENTS.md`",

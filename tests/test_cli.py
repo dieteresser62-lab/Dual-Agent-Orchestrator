@@ -115,6 +115,76 @@ def test_task_file_accepts_positional_compatibility_path(tmp_path: Path) -> None
     assert args.task_file == "work.md"
 
 
+def test_default_agents_file_resolves_from_repository_working_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "AGENTS.md").write_text("repository contract\n", encoding="utf-8")
+    args = parse_args([], cwd=tmp_path, environ={})
+    observed: list[str] = []
+    monkeypatch.chdir(tmp_path)
+
+    result = run_cli(
+        args,
+        run_pipeline_fn=lambda _task, runtime_args: observed.append(runtime_args.agents_file) or 0,
+        watch_inbox_fn=lambda **_kwargs: 0,
+        find_task_file_fn=lambda _path: tmp_path / "task.md",
+    )
+
+    assert result == 0
+    assert observed == [str((tmp_path / "AGENTS.md").resolve())]
+
+
+def test_missing_default_agents_file_warns_and_continues(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    args = parse_args([], cwd=tmp_path, environ={})
+    called = False
+
+    def pipeline(_task: Path, _args: object) -> int:
+        nonlocal called
+        called = True
+        return 0
+
+    monkeypatch.chdir(tmp_path)
+    with caplog.at_level(logging.WARNING):
+        result = run_cli(
+            args,
+            run_pipeline_fn=pipeline,
+            watch_inbox_fn=lambda **_kwargs: 0,
+            find_task_file_fn=lambda _path: tmp_path / "task.md",
+        )
+
+    assert result == 0
+    assert called is True
+    assert "Default repository agents file is missing" in caplog.text
+
+
+def test_explicit_missing_agents_file_fails_closed_before_pipeline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    missing = tmp_path / "missing-agents.md"
+    args = parse_args(["--agents-file", str(missing)], cwd=tmp_path, environ={})
+    called = False
+
+    def pipeline(_task: Path, _args: object) -> int:
+        nonlocal called
+        called = True
+        return 0
+
+    monkeypatch.chdir(tmp_path)
+    with caplog.at_level(logging.ERROR):
+        result = run_cli(
+            args,
+            run_pipeline_fn=pipeline,
+            watch_inbox_fn=lambda **_kwargs: 0,
+            find_task_file_fn=lambda _path: tmp_path / "task.md",
+        )
+
+    assert result == 1
+    assert called is False
+    assert f"Explicit --agents-file does not exist: {missing}" in caplog.text
+
+
 @pytest.mark.parametrize(
     ("argv", "resume_explicit", "task_explicit"),
     (

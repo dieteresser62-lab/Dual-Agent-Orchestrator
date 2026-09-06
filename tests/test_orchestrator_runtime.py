@@ -6691,6 +6691,8 @@ def test_plan_only_repairs_handoff_contract_before_review(
                 in request_json
             )
             assert "Slice 1 has no exact change-path section" in request_json
+            assert "path as a bullet with the path enclosed in backticks" in request_json
+            assert "standalone line `**Akzeptanzkriterien**`" in request_json  # allowlist:german -- canonical plan contract
             assert (
                 "Update the existing file docs/internal/work-plan.md in the repository now"
                 in request_json
@@ -6989,7 +6991,7 @@ def test_completed_plan_resume_retries_failed_handoff_without_agents(
     assert task.with_name("resume-implement.md").is_file()
 
 
-def test_finding_handoff_import_precedes_baseline_and_binds_first_work_unit(
+def test_finding_handoff_implement_start_completes_baseline_and_binds_first_work_unit(
     tmp_path: Path,
 ) -> None:
     repository = _repository(tmp_path, "feature/finding-import")
@@ -7126,7 +7128,8 @@ def test_finding_handoff_import_precedes_baseline_and_binds_first_work_unit(
         config=orchestrator.OrchestratorConfig(repo_root=repository),
         allowed_roots=(repository,),
     )
-    driver.bind_work_unit(imported_state)
+    history = orchestrator._history(imported_state, repository)
+    driver.checkpoint(imported_state, history)
     local = ArtifactStore(repository, imported_state.run_id).load_chain()
     imports = tuple(
         record for record in local
@@ -7135,6 +7138,8 @@ def test_finding_handoff_import_precedes_baseline_and_binds_first_work_unit(
     unit = next(record.payload for record in local if isinstance(record.payload, WorkUnitPayload))
 
     assert len(imports) == 1
+    assert sum(isinstance(record.payload, RunIdentityPayload) for record in local) == 1
+    assert sum(isinstance(record.payload, RunProfilePayload) for record in local) == 1
     assert imported_state.current_work_unit.open_findings == ("C-01",)
     assert replay_findings(replay_artifacts(local, imported_state.run_id))[0].finding_id == "C-01"
     assert unit.finding_import_record_id == imports[0].record_id
@@ -7151,7 +7156,7 @@ def _finding_export_driver(
     plan.write_text(
         "# Plan\n\n### Slice 1 - implementation\n\n"
         "**Exakter Änderungspfad**\n\n- `src/core.py`\n\n"
-        "#### Akzeptanz" "kriterien\n\n- The behavior is covered.\n",
+        "#### Akzeptanzkriterien\n\n- The behavior is covered.\n",  # allowlist:german -- plan contract fixture
         encoding="utf-8",
     )
     task = repository / "inbox" / "plan.md"

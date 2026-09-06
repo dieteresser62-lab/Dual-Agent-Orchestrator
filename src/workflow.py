@@ -1869,7 +1869,10 @@ class WorkflowEngine:
                         "Keep the approved task scope unchanged, "
                         "use contiguous `### Slice N - title` sections, and put the "
                         "standalone heading `**Exakter Änderungspfad**` before bullet-listed "
-                        "exact paths in every future Slice. Emit the normal PLAN_READY and "
+                        "exact paths in every future Slice. Write each exact repository-relative "
+                        "path as a bullet with the path enclosed in backticks, and include the "
+                        "standalone line `**Akzeptanzkriterien**` in every future Slice. Emit the "  # allowlist:german -- canonical plan contract
+                        "normal PLAN_READY and "
                         "single PLAN_ONLY SLICE_PLAN records; do not request user input."
                     ),
                 )

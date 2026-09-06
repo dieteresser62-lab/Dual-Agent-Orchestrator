@@ -2246,6 +2246,7 @@ def _history(
                 require_content_authority=True,
                 require_review_authority=True,
                 allow_incomplete_review_tail=True,
+                allow_finding_import_bootstrap=True,
             )
             history = _attach_record_events(
                 {history.work_unit_id: history}, replay, store.read_blob

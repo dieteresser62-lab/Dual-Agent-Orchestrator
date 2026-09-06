@@ -659,6 +659,52 @@ def test_import_bound_work_unit_revisions_follow_authoritative_finding_prefix() 
     ) == ("C-02",)
 
 
+def test_finding_import_bootstrap_rejects_any_additional_record_without_identity() -> None:
+    opened = ImportedFindingTransition(
+        "ar1-" + "1" * 64,
+        FindingTransitionPayload(
+            "C-01", Role.CLAUDE, Role.CLAUDE, "opened",
+            FindingSeverity.OBSERVATION, "open", "Carry it.", "plan-review",
+            "Imported observation.", "It remains visible.", "plan", 1,
+        ),
+    )
+    transitions = (opened,)
+    imported = ArtifactRecord.create(
+        run_id="run-replay",
+        logical_id="finding-import",
+        revision=1,
+        fingerprint=FP,
+        predecessor_ids=(),
+        created_at="2026-08-21T10:00:00+00:00",
+        idempotency_key="replay:finding-import",
+        payload=FindingHandoffImportPayload(
+            "source-run", "ar1-" + "2" * 64, "3" * 40,
+            "ar1-" + "4" * 64, "ar1-" + "5" * 64, "run-replay", "6" * 64,
+            finding_transition_sequence_sha256(transitions), transitions,
+            Role.ORCHESTRATOR,
+        ),
+    )
+    foreign = ArtifactRecord.create(
+        run_id="run-replay",
+        logical_id="work-unit-1",
+        revision=1,
+        fingerprint=FP,
+        predecessor_ids=(imported.record_id,),
+        created_at="2026-08-21T10:00:01+00:00",
+        idempotency_key="replay:work-unit-1",
+        payload=WorkUnitPayload("1", 1, ("src/a.py",)),
+    )
+
+    with pytest.raises(ArtifactReplayError) as caught:
+        replay_artifacts(
+            (imported, foreign),
+            "run-replay",
+            allow_finding_import_bootstrap=True,
+        )
+
+    assert caught.value.code is ReplayDiagnosticCode.RECORD_MISSING
+
+
 def test_import_bound_work_unit_revision_rejects_unproven_open_finding() -> None:
     opened = ImportedFindingTransition(
         "ar1-" + "1" * 64,

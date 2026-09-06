@@ -239,6 +239,7 @@ def test_context_matches_every_workflow_context_field(
         ),
         test_command="python3 -m pytest 'tests/a b.py'",
         agents_file=str(tmp_path / "missing-AGENTS.md"),
+        agents_file_explicit=False,
         test_change_gate=True,
         manual_slice_gate=True,
         retry_incomplete_validation=True,

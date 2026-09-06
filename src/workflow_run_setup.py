@@ -78,11 +78,20 @@ def _context(
             rules=validation_matrix.rules,
         )
     agents_path = Path(str(args.agents_file)).expanduser().resolve()
-    shared_instructions = (
-        agents_path.read_text(encoding="utf-8")[:12_000]
-        if agents_path.is_file()
-        else ""
-    )
+    if agents_path.is_file():
+        shared_instructions = agents_path.read_text(encoding="utf-8")[:12_000]
+    elif not args.agents_file_explicit:
+        shared_instructions = ""
+        if not getattr(args, "agents_file_warning_emitted", False):
+            logger.warning(
+                "Default repository agents file is missing: %s; continuing without "
+                "repository agent instructions.",
+                agents_path,
+            )
+    else:
+        raise WorkflowExecutionError(
+            f"Explicit --agents-file does not exist: {agents_path}"
+        )
     effective_assignment = assignment
     if shared_instructions:
         effective_assignment += (

@@ -35,6 +35,10 @@ B65_HELPERS = (
 )
 B65_CAUGHT_CALL = "resolve_agent_settings"
 B65_BOUND_CALLS = (B65_CAUGHT_CALL, *B65_HELPERS)
+B81_AGENTS_FILE_EXPLICIT_VALUE = (
+    "any((token == '--agents-file' or token.startswith('--agents-file=') "
+    "for token in raw_argv))"
+)
 
 
 @dataclass(frozen=True)
@@ -268,6 +272,17 @@ def _direct_b65_helper_call(statement: ast.stmt) -> ast.Call | None:
 
 def _logical_parse_args_function(tree: ast.Module) -> ast.FunctionDef:
     function = copy.deepcopy(_parse_args_function(tree))
+    origin_assignments = [
+        statement
+        for statement in function.body
+        if isinstance(statement, ast.Assign)
+        and [ast.unparse(target) for target in statement.targets]
+        == ["args.agents_file_explicit"]
+    ]
+    assert len(origin_assignments) == 1
+    origin_assignment = origin_assignments[0]
+    assert ast.unparse(origin_assignment.value) == B81_AGENTS_FILE_EXPLICIT_VALUE
+    function.body.remove(origin_assignment)
     helpers = {
         name: copy.deepcopy(_top_level_function(tree, name))
         for name in B65_HELPERS
@@ -507,6 +522,7 @@ def _normalize_namespace(namespace: argparse.Namespace) -> dict[str, object]:
     normalized = {
         key: _normalize_value(value) for key, value in sorted(vars(namespace).items())
     }
+    assert isinstance(normalized.pop("agents_file_explicit"), bool)
     agents_file = Path(str(normalized["agents_file"])).resolve()
     if agents_file == (ROOT / "AGENTS.md").resolve():
         normalized["agents_file"] = "<ROOT>/AGENTS.md"
