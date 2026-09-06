@@ -166,8 +166,8 @@ def test_b70_request_anchor_change_is_description_digest_only(
         definitions[result_name]["properties"]["ready"].pop("description")
     stop = definitions["stop_result"]
     stop.pop("description")
-    stop["properties"]["rule_id"].pop("description")
-    stop["properties"]["rationale"].pop("description")
+    stop["properties"]["rule_id"] = {"$ref": "#/$defs/safe_text"}
+    stop["properties"]["rationale"] = {"$ref": "#/$defs/safe_text"}
 
     with monkeypatch.context() as patch:
         patch.setattr(
@@ -191,6 +191,53 @@ def test_b70_request_anchor_change_is_description_digest_only(
         "schema_sha256"
     ]
     assert b69 == current
+
+
+def test_b71_request_anchor_change_is_schema_digest_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current_bundle = build_native_codex_request(_spec())
+    b70_schema = copy.deepcopy(load_native_codex_schema())
+    definitions = b70_schema["$defs"]
+    stop_properties = definitions["stop_result"]["properties"]
+    rule_description = stop_properties["rule_id"]["description"]
+    rationale_description = stop_properties["rationale"]["description"]
+    stop_properties["rule_id"] = {
+        "$ref": "#/$defs/safe_text",
+        "description": rule_description,
+    }
+    stop_properties["rationale"] = {
+        "$ref": "#/$defs/safe_text",
+        "description": rationale_description,
+    }
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            native_codex_contract,
+            "load_native_codex_schema",
+            lambda: copy.deepcopy(b70_schema),
+        )
+        patch.setattr(
+            native_codex_contract,
+            "assert_projected_provider_schema",
+            lambda *_args, **_kwargs: None,
+        )
+        b70_bundle = build_native_codex_request(_spec())
+
+    current = copy.deepcopy(current_bundle.document)
+    b70 = copy.deepcopy(b70_bundle.document)
+    assert current["request_id"] != b70["request_id"]
+    assert current["response_contract"]["schema_sha256"] != (
+        b70["response_contract"]["schema_sha256"]
+    )
+    assert current["response_contract"]["schema_version"] == (
+        b70["response_contract"]["schema_version"]
+    )
+    b70["request_id"] = current["request_id"]
+    b70["response_contract"]["schema_sha256"] = current["response_contract"][
+        "schema_sha256"
+    ]
+    assert b70 == current
 
 
 def test_plan_request_explains_when_to_return_stop_result() -> None:

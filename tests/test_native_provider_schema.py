@@ -8,6 +8,7 @@ import pytest
 import native_provider_schema
 from native_provider_schema import (
     NativeProviderSchemaError,
+    assert_projected_provider_schema,
     assert_provider_capabilities,
     compatible_cli_version,
     defensive_provider_projection,
@@ -198,3 +199,31 @@ def test_defensive_projection_does_not_mutate_reader_schema() -> None:
     assert base == before
     assert "pattern" not in projected["properties"]["path"]
     assert "uniqueItems" not in projected["properties"]["items"]
+
+
+@pytest.mark.parametrize(
+    ("violation", "message"),
+    (
+        ("root_any_of", "root must not use anyOf"),
+        ("optional_property", "every object property must be required"),
+        ("open_object", "object must set additionalProperties false"),
+    ),
+)
+def test_projected_schema_guard_enforces_other_codex_provider_rules(
+    violation: str, message: str
+) -> None:
+    schema = {
+        "type": "object",
+        "properties": {"value": {"type": "string"}},
+        "required": ["value"],
+        "additionalProperties": False,
+    }
+    if violation == "root_any_of":
+        schema["anyOf"] = [{"type": "object"}]
+    elif violation == "optional_property":
+        schema["required"] = []
+    else:
+        schema["additionalProperties"] = True
+
+    with pytest.raises(NativeProviderSchemaError, match=message):
+        assert_projected_provider_schema(schema, provider="codex")

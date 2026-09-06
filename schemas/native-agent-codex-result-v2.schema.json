@@ -164,12 +164,16 @@
         "result_type": { "type": "string", "const": "stop_result" },
         "request_id": { "$ref": "#/$defs/request_id" },
         "rule_id": {
-          "$ref": "#/$defs/safe_text",
-          "description": "Identifies the rule that blocks the current step."
+          "description": "Identifies the rule that blocks the current step.",
+          "anyOf": [
+            { "$ref": "#/$defs/safe_text" }
+          ]
         },
         "rationale": {
-          "$ref": "#/$defs/safe_text",
-          "description": "Explains the blocker that prevents the current step from being performed."
+          "description": "Explains the blocker that prevents the current step from being performed.",
+          "anyOf": [
+            { "$ref": "#/$defs/safe_text" }
+          ]
         },
         "remediation_paths": {
           "type": "array",

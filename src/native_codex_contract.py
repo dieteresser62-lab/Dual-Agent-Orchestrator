@@ -33,7 +33,10 @@ from schema_validation import (
     validate_schema_document,
 )
 from orchestrator_diagnostics import OrchestratorDiagnostic
-from native_provider_schema import defensive_provider_projection
+from native_provider_schema import (
+    assert_projected_provider_schema,
+    defensive_provider_projection,
+)
 
 
 SCHEMA_VERSION = "native-agent-codex-result-v2"
@@ -242,9 +245,10 @@ def native_codex_provider_response_schema(
             NativeCodexErrorCode.CONTEXT_INVALID,
             "provider schema projection requires NativeCodexContext",
         )
+    provider = "codex"
     schema = defensive_provider_projection(
         load_native_codex_schema(),
-        provider="codex",
+        provider=provider,
         required_features=("closed_object", "min_max_items", "nested_any_of"),
     )
     required = schema["$defs"]["plan_result"]["required"]
@@ -323,7 +327,7 @@ def native_codex_provider_response_schema(
                     {"$ref": f"#/$defs/{ready_true_name}"}
                 )
             result_refs[0:1] = readiness_refs
-    return {
+    projected_schema = {
         "title": f"Native Codex {context.request_kind.value} writer projection",
         "type": "object",
         "properties": {
@@ -333,6 +337,8 @@ def native_codex_provider_response_schema(
         "additionalProperties": False,
         "$defs": schema["$defs"],
     }
+    assert_projected_provider_schema(projected_schema, provider=provider)
+    return projected_schema
 
 
 def validate_native_codex_document(document: Mapping[str, Any]) -> None:

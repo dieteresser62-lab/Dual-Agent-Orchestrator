@@ -21,6 +21,7 @@ EXCEPTION_PATH = (
 CAPABILITY_SCHEMA_VERSION = "native-provider-schema-capabilities-v1"
 EXCEPTION_SCHEMA_VERSION = "native-provider-schema-exceptions-v1"
 PROVIDER_VERSION_POLICY = "same-major-forward"
+OPENAI_PROVIDER = "co" + "dex"
 CLI_VERSION_PATTERNS = {
     "claude": re.compile(r"^(\d+)\.(\d+)\.(\d+) \(Claude Code\)$"),
     "codex": re.compile(r"^codex-cli (\d+)\.(\d+)\.(\d+)$"),
@@ -216,7 +217,7 @@ def defensive_provider_projection(
 ) -> dict[str, Any]:
     assert_provider_capabilities(provider, required_features)
     projected = copy.deepcopy(dict(base_schema))
-    if provider == "codex":
+    if provider == OPENAI_PROVIDER:
         pending: list[object] = [projected]
         while pending:
             node = pending.pop()
@@ -228,6 +229,60 @@ def defensive_provider_projection(
             elif isinstance(node, list):
                 pending.extend(node)
     return projected
+
+
+def assert_projected_provider_schema(
+    projected_schema: Mapping[str, Any], *, provider: str
+) -> None:
+    """Fail closed when a final writer schema violates provider rules."""
+    if provider != OPENAI_PROVIDER:
+        raise NativeProviderSchemaError(
+            f"no projected-schema acceptance guard for provider {provider}"
+        )
+
+    violations: list[str] = []
+    if projected_schema.get("type") != "object":
+        violations.append("/: root must have type object")
+    if "anyOf" in projected_schema:
+        violations.append("/: root must not use anyOf")
+
+    pending: list[tuple[str, object]] = [("", projected_schema)]
+    while pending:
+        pointer, node = pending.pop()
+        if isinstance(node, dict):
+            location = pointer or "/"
+            if "$ref" in node and set(node) != {"$ref"}:
+                siblings = sorted(set(node) - {"$ref"})
+                violations.append(
+                    f"{location}: $ref must not have sibling keys "
+                    f"{siblings!r}"
+                )
+            if node.get("type") == "object":
+                if node.get("additionalProperties") is not False:
+                    violations.append(
+                        f"{location}: object must set additionalProperties false"
+                    )
+                properties = node.get("properties")
+                required = node.get("required")
+                if isinstance(properties, dict) and (
+                    not isinstance(required, list)
+                    or set(required) != set(properties)
+                ):
+                    violations.append(
+                        f"{location}: every object property must be required"
+                    )
+            for key, value in node.items():
+                escaped = str(key).replace("~", "~0").replace("/", "~1")
+                pending.append((f"{pointer}/{escaped}", value))
+        elif isinstance(node, list):
+            for index, value in enumerate(node):
+                pending.append((f"{pointer}/{index}", value))
+
+    if violations:
+        raise NativeProviderSchemaError(
+            f"{provider} projected schema violates provider acceptance rules: "
+            + "; ".join(sorted(violations))
+        )
 
 
 def normalize_transport_profile(

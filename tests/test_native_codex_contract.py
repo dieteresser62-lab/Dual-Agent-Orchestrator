@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import copy
 import json
 from dataclasses import replace
 
 import pytest
+
+import native_codex_contract
 
 from contracts import (
     AgentRole,
@@ -27,6 +30,7 @@ from native_codex_contract import (
     parse_bound_native_codex_contract_result,
 )
 from native_provider_schema import (
+    NativeProviderSchemaError,
     defensive_provider_projection,
     registered_exceptions,
 )
@@ -617,6 +621,12 @@ def test_b70_semantic_descriptions_survive_provider_projection() -> None:
     assert stop["properties"]["rationale"]["description"] == (
         "Explains the blocker that prevents the current step from being performed."
     )
+    assert stop["properties"]["rule_id"]["anyOf"] == [
+        {"$ref": "#/$defs/safe_text"}
+    ]
+    assert stop["properties"]["rationale"]["anyOf"] == [
+        {"$ref": "#/$defs/safe_text"}
+    ]
     for kind in NativeCodexRequestKind:
         writer_definitions = native_codex_provider_response_schema(
             _bound(kind).context
@@ -629,6 +639,55 @@ def test_b70_semantic_descriptions_survive_provider_projection() -> None:
                 assert definition["properties"]["ready"]["description"] == (
                     ready_description
                 )
+
+
+def test_b71_projected_schema_has_all_descriptions_and_no_ref_siblings() -> None:
+    schema = native_codex_provider_response_schema(
+        _bound(NativeCodexRequestKind.PLAN).context
+    )
+    descriptions: list[str] = []
+    ref_siblings: list[tuple[str, ...]] = []
+    pending: list[object] = [schema]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, dict):
+            if "description" in node:
+                descriptions.append(node["description"])
+            if "$ref" in node and set(node) != {"$ref"}:
+                ref_siblings.append(tuple(sorted(set(node) - {"$ref"})))
+            pending.extend(node.values())
+        elif isinstance(node, list):
+            pending.extend(node)
+
+    assert len(descriptions) == 18
+    assert "Identifies the rule that blocks the current step." in descriptions
+    assert (
+        "Explains the blocker that prevents the current step from being performed."
+        in descriptions
+    )
+    assert ref_siblings == []
+
+
+def test_b71_provider_guard_rejects_description_beside_any_ref(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    invalid = copy.deepcopy(load_native_codex_schema())
+    invalid["$defs"]["planned_slice"]["properties"]["summary"][
+        "description"
+    ] = "A future description beside a ref must fail closed."
+    monkeypatch.setattr(
+        native_codex_contract,
+        "load_native_codex_schema",
+        lambda: copy.deepcopy(invalid),
+    )
+
+    with pytest.raises(
+        NativeProviderSchemaError,
+        match=r"/\$defs/planned_slice/properties/summary: \$ref must not have sibling",
+    ):
+        native_codex_provider_response_schema(
+            _bound(NativeCodexRequestKind.PLAN).context
+        )
 
 
 def test_b70_remaining_provider_semantic_gap_inventory_is_explicit() -> None:
