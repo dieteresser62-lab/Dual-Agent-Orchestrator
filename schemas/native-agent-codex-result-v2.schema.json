@@ -60,7 +60,10 @@
         "schema_version": { "type": "string", "const": "native-agent-codex-result-v2" },
         "result_type": { "type": "string", "const": "plan_result" },
         "request_id": { "$ref": "#/$defs/request_id" },
-        "ready": { "type": "boolean" },
+        "ready": {
+          "type": "boolean",
+          "description": "Set ready to true only when the requested step is complete and orchestration may continue. A false value halts the step but does not document a blocker; if the step cannot be performed, return stop_result instead."
+        },
         "slice_plan": {
           "type": "array",
           "description": "slice_id values must start at 1 and increase contiguously in slice_plan order.",
@@ -84,7 +87,10 @@
         "schema_version": { "type": "string", "const": "native-agent-codex-result-v2" },
         "result_type": { "type": "string", "const": "implementation_result" },
         "request_id": { "$ref": "#/$defs/request_id" },
-        "ready": { "type": "boolean" },
+        "ready": {
+          "type": "boolean",
+          "description": "Set ready to true only when the requested step is complete and orchestration may continue. A false value halts the step but does not document a blocker; if the step cannot be performed, return stop_result instead."
+        },
         "test_files": {
           "type": "array",
           "description": "List canonical test_files paths in ascending lexicographic order with no duplicates.",
@@ -108,7 +114,10 @@
         "schema_version": { "type": "string", "const": "native-agent-codex-result-v2" },
         "result_type": { "type": "string", "const": "correction_result" },
         "request_id": { "$ref": "#/$defs/request_id" },
-        "ready": { "type": "boolean" },
+        "ready": {
+          "type": "boolean",
+          "description": "Set ready to true only when the requested step is complete and orchestration may continue. A false value halts the step but does not document a blocker; if the step cannot be performed, return stop_result instead."
+        },
         "test_files": {
           "type": "array",
           "description": "List canonical test_files paths in ascending lexicographic order with no duplicates.",
@@ -132,7 +141,10 @@
         "schema_version": { "type": "string", "const": "native-agent-codex-result-v2" },
         "result_type": { "type": "string", "const": "final_report_result" },
         "request_id": { "$ref": "#/$defs/request_id" },
-        "ready": { "type": "boolean" },
+        "ready": {
+          "type": "boolean",
+          "description": "Set ready to true only when the requested step is complete and orchestration may continue. A false value halts the step but does not document a blocker; if the step cannot be performed, return stop_result instead."
+        },
         "finding_dispositions": {
           "type": "array",
           "description": "List exactly one disposition for every open finding in ascending finding_id order, with no duplicate finding_id.",
@@ -146,12 +158,19 @@
     },
     "stop_result": {
       "type": "object",
+      "description": "Return stop_result instead of plan_result, implementation_result, correction_result, or final_report_result with ready false when the current step cannot be performed; rule_id and rationale document the blocker.",
       "properties": {
         "schema_version": { "type": "string", "const": "native-agent-codex-result-v2" },
         "result_type": { "type": "string", "const": "stop_result" },
         "request_id": { "$ref": "#/$defs/request_id" },
-        "rule_id": { "$ref": "#/$defs/safe_text" },
-        "rationale": { "$ref": "#/$defs/safe_text" },
+        "rule_id": {
+          "$ref": "#/$defs/safe_text",
+          "description": "Identifies the rule that blocks the current step."
+        },
+        "rationale": {
+          "$ref": "#/$defs/safe_text",
+          "description": "Explains the blocker that prevents the current step from being performed."
+        },
         "remediation_paths": {
           "type": "array",
           "description": "List canonical remediation_paths in ascending lexicographic order with no duplicates.",

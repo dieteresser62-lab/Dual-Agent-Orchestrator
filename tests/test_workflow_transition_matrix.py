@@ -2287,7 +2287,7 @@ def test_resume_oracle_is_idempotent_and_fails_closed_on_changed_evidence() -> N
 
     policy = _slice_state().await_policy_gate(
         reason=GateReason.STOP_REQUEST,
-        detail="CODEX-NOT-READY | documented blocker",
+        detail="CODEX-NOT-READY | ready=false does not document a blocker",
     )
     resumed = policy.resume_after_user_decision()
     assert resumed.current_work_unit.round_number == 2

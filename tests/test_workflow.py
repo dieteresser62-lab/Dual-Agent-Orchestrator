@@ -4176,7 +4176,8 @@ def test_codex_not_ready_persists_gate_and_resumes_same_step() -> None:
     assert result.state.current_work_unit.gate.reason is GateReason.STOP_REQUEST
     assert result.state.current_work_unit.gate.detail == (
         "CODEX-NOT-READY | Codex reported the current step as not ready; "
-        "resolve the documented blocker before resuming the same step"
+        "ready=false does not document a blocker; resolve why the result was not ready "
+        "before resuming the same step"
     )
     assert driver.reviewer_calls == []
     assert not hasattr(driver, "repair_review_contract")
@@ -4212,6 +4213,11 @@ def test_plan_not_ready_persists_gate_and_resumes_plan_step() -> None:
     assert result.state.current_step is WorkflowStep.CODEX_PLAN
     assert result.state.current_work_unit.status is WorkUnitStatus.AWAITING_USER_DECISION
     assert result.state.current_work_unit.gate.reason is GateReason.STOP_REQUEST
+    assert result.state.current_work_unit.gate.detail == (
+        "CODEX-NOT-READY | Codex reported the current step as not ready; "
+        "ready=false does not document a blocker; resolve why the result was not ready "
+        "before resuming the same step"
+    )
     resumed = result.state.resume_after_user_decision()
     assert resumed.current_step is WorkflowStep.CODEX_PLAN
     assert resumed.current_work_unit.status is WorkUnitStatus.IN_PROGRESS

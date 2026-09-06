@@ -44,6 +44,20 @@ _COMMUNICATED_PROVIDER_CONTRACT_RULES = (
     "work_result.test_files",
 )
 
+# B70 semantic audit: these meanings remain unstated after the six requested
+# field descriptions and the stop-result routing instruction are added.  There
+# are more than three, so the task's stop condition keeps this as an explicit
+# inventory rather than expanding the Slice into opportunistic contract prose.
+_REMAINING_PROVIDER_SEMANTIC_GAPS = (
+    "plan_result, implementation_result, correction_result, and "
+    "final_report_result: task-specific result purposes",
+    "planned_slice.slice_id, summary, and scope_paths: execution semantics",
+    "finding_disposition.finding_id, decision, and rationale: lifecycle effects",
+    "work_result.test_files: whether paths denote touched or executed tests",
+    "final_report_result.self_check: required semantic content",
+    "stop_result.remediation_paths: operational meaning beyond canonical form",
+)
+
 
 def _finding() -> FindingRecord:
     return FindingRecord(
@@ -569,6 +583,65 @@ def test_all_seven_local_contract_rules_survive_provider_projection() -> None:
     assert tuple(rules) == _COMMUNICATED_PROVIDER_CONTRACT_RULES
     for nodes, expected_description in rules.values():
         assert all(node["description"] == expected_description for node in nodes)
+
+
+def test_b70_semantic_descriptions_survive_provider_projection() -> None:
+    projected = defensive_provider_projection(
+        load_native_codex_schema(),
+        provider="codex",
+        required_features=("closed_object", "min_max_items", "nested_any_of"),
+    )
+    definitions = projected["$defs"]
+    result_names = (
+        "plan_result",
+        "implementation_result",
+        "correction_result",
+        "final_report_result",
+    )
+    ready_description = (
+        "Set ready to true only when the requested step is complete and "
+        "orchestration may continue. A false value halts the step but does not "
+        "document a blocker; if the step cannot be performed, return "
+        "stop_result instead."
+    )
+
+    assert all(
+        definitions[result_name]["properties"]["ready"]["description"]
+        == ready_description
+        for result_name in result_names
+    )
+    stop = definitions["stop_result"]
+    assert stop["properties"]["rule_id"]["description"] == (
+        "Identifies the rule that blocks the current step."
+    )
+    assert stop["properties"]["rationale"]["description"] == (
+        "Explains the blocker that prevents the current step from being performed."
+    )
+    for kind in NativeCodexRequestKind:
+        writer_definitions = native_codex_provider_response_schema(
+            _bound(kind).context
+        )["$defs"]
+        assert writer_definitions[
+            f"{kind.value}_result"
+        ]["properties"]["ready"]["description"] == ready_description
+        for definition_name, definition in writer_definitions.items():
+            if definition_name.startswith(f"bound_{kind.value}_result_ready_"):
+                assert definition["properties"]["ready"]["description"] == (
+                    ready_description
+                )
+
+
+def test_b70_remaining_provider_semantic_gap_inventory_is_explicit() -> None:
+    assert len(_REMAINING_PROVIDER_SEMANTIC_GAPS) > 3
+    assert _REMAINING_PROVIDER_SEMANTIC_GAPS == (
+        "plan_result, implementation_result, correction_result, and "
+        "final_report_result: task-specific result purposes",
+        "planned_slice.slice_id, summary, and scope_paths: execution semantics",
+        "finding_disposition.finding_id, decision, and rationale: lifecycle effects",
+        "work_result.test_files: whether paths denote touched or executed tests",
+        "final_report_result.self_check: required semantic content",
+        "stop_result.remediation_paths: operational meaning beyond canonical form",
+    )
 
 
 def test_writer_schema_keeps_stop_path_order_fail_closed_locally() -> None:

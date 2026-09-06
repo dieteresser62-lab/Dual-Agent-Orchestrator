@@ -151,6 +151,63 @@ def test_b69_request_anchor_change_is_description_digest_only(
     assert b68 == current
 
 
+def test_b70_request_anchor_change_is_description_digest_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current_bundle = build_native_codex_request(_spec())
+    b69_schema = copy.deepcopy(load_native_codex_schema())
+    definitions = b69_schema["$defs"]
+    for result_name in (
+        "plan_result",
+        "implementation_result",
+        "correction_result",
+        "final_report_result",
+    ):
+        definitions[result_name]["properties"]["ready"].pop("description")
+    stop = definitions["stop_result"]
+    stop.pop("description")
+    stop["properties"]["rule_id"].pop("description")
+    stop["properties"]["rationale"].pop("description")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            native_codex_contract,
+            "load_native_codex_schema",
+            lambda: copy.deepcopy(b69_schema),
+        )
+        b69_bundle = build_native_codex_request(_spec())
+
+    current = copy.deepcopy(current_bundle.document)
+    b69 = copy.deepcopy(b69_bundle.document)
+    assert current["request_id"] != b69["request_id"]
+    assert current["response_contract"]["schema_sha256"] != (
+        b69["response_contract"]["schema_sha256"]
+    )
+    assert current["response_contract"]["schema_version"] == (
+        b69["response_contract"]["schema_version"]
+    )
+    b69["request_id"] = current["request_id"]
+    b69["response_contract"]["schema_sha256"] = current["response_contract"][
+        "schema_sha256"
+    ]
+    assert b69 == current
+
+
+def test_plan_request_explains_when_to_return_stop_result() -> None:
+    bundle = build_native_codex_request(_spec())
+    definitions = bundle.provider_response_schema["$defs"]
+
+    assert definitions["stop_result"]["description"] == (
+        "Return stop_result instead of plan_result, implementation_result, "
+        "correction_result, or final_report_result with ready false when the "
+        "current step cannot be performed; rule_id and rationale document the "
+        "blocker."
+    )
+    assert "return stop_result instead" in definitions["plan_result"]["properties"][
+        "ready"
+    ]["description"]
+
+
 def test_request_kinds_bind_distinct_writer_schema_digests() -> None:
     base = _spec()
     readiness = {

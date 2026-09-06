@@ -303,10 +303,7 @@ def native_codex_provider_response_schema(
         if not contract.test_changes_approved:
             ready_false_name = f"bound_{expected_result}_ready_false"
             ready_false = copy.deepcopy(work_result)
-            ready_false["properties"]["ready"] = {
-                "type": "boolean",
-                "const": False,
-            }
+            ready_false["properties"]["ready"]["const"] = False
             schema["$defs"][ready_false_name] = ready_false
             readiness_refs: list[dict[str, str]] = [
                 {"$ref": f"#/$defs/{ready_false_name}"}
@@ -318,10 +315,7 @@ def native_codex_provider_response_schema(
             if not fixed_nonempty_tests:
                 ready_true_name = f"bound_{expected_result}_ready_true_no_tests"
                 ready_true = copy.deepcopy(work_result)
-                ready_true["properties"]["ready"] = {
-                    "type": "boolean",
-                    "const": True,
-                }
+                ready_true["properties"]["ready"]["const"] = True
                 ready_true["properties"]["test_files"]["minItems"] = 0
                 ready_true["properties"]["test_files"]["maxItems"] = 0
                 schema["$defs"][ready_true_name] = ready_true

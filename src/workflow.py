@@ -1698,7 +1698,8 @@ class WorkflowEngine:
                 reason=GateReason.STOP_REQUEST,
                 detail=(
                     "CODEX-NOT-READY | Codex reported the current step as not ready; "
-                    "resolve the documented blocker before resuming the same step"
+                    "ready=false does not document a blocker; resolve why the result "
+                    "was not ready before resuming the same step"
                 ),
             )
             self.driver.checkpoint(state, history)
