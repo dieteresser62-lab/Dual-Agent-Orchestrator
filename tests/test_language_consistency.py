@@ -34,7 +34,25 @@ USER_MARKDOWN_FILES = (
 USER_DOC_FILES = (*USER_MARKDOWN_FILES, ROOT / "workflow.puml")
 AUDIT_TRAIL_PATH = ROOT / "src" / "audit_trail.py"
 WORKFLOW_AUDIT_PROJECTION_PATH = ROOT / "src" / "workflow_audit_projection.py"
-_AUDIT_FRAME_WRITERS = frozenset(
+_AUDIT_FRAME_ENTRY_POINTS_BY_PATH = {
+    # This is the guard's sole operational inventory: helpers and constants are
+    # discovered transitively from these audit-generation entry points.
+    AUDIT_TRAIL_PATH: frozenset(
+        {
+            "prepare_managed_work_plan_document",
+            "prepare_managed_overall_document",
+            "prepare_managed_slice_document",
+            "project_slice_audit",
+            "project_managed_slice_audit",
+            "project_work_plan_audit",
+            "project_overall_audit",
+            "project_structured_slice_audit",
+            "project_structured_work_plan_audit",
+        }
+    ),
+    WORKFLOW_AUDIT_PROJECTION_PATH: frozenset({"_overall_audit_entries"}),
+}
+_B73_AUDIT_FRAME_WRITER_REGRESSION_SET = frozenset(
     {
         "prepare_managed_work_plan_document",
         "prepare_managed_overall_document",
@@ -47,13 +65,6 @@ _AUDIT_FRAME_WRITERS = frozenset(
         "_render_codex_responses",
         "_render_decision_table",
         "_render_approval_status",
-    }
-)
-_AUDIT_FRAME_CONSTANTS = frozenset(
-    {
-        "GENERIC_WORK_PLAN_AUDIT_HEADING",
-        "REQUIRED_SLICE_HEADINGS",
-        "SLICE_MANAGED_SECTION_HEADINGS",
     }
 )
 _FORBIDDEN_ENGLISH_AUDIT_FRAME_FRAGMENTS = (
@@ -366,36 +377,104 @@ def test_active_markdown_user_documentation_is_german() -> None:
         assert not any(heading in text for heading in forbidden_english_headings), path.name
 
 
-def _audit_frame_language_hits(
-    source: str,
-    *,
-    writer_names: frozenset[str],
-    constant_names: frozenset[str] = frozenset(),
-) -> tuple[str, ...]:
-    """Inspect only orchestrator-owned literals, never interpolated provider fields."""
+def _audit_frame_call_closure(
+    source: str, entry_points: frozenset[str]
+) -> tuple[ast.Module, frozenset[str]]:
+    """Follow direct calls between the audit modules' module-level functions."""
     tree = ast.parse(source)
-    literal_nodes: list[ast.AST] = []
-    docstring_nodes: set[int] = set()
-    for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            if node.name in writer_names:
-                literal_nodes.append(node)
-                if (
-                    node.body
-                    and isinstance(node.body[0], ast.Expr)
-                    and isinstance(node.body[0].value, ast.Constant)
-                    and isinstance(node.body[0].value.value, str)
-                ):
-                    docstring_nodes.add(id(node.body[0].value))
+    functions = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    missing = entry_points - functions.keys()
+    assert not missing, f"missing audit-frame entry points: {sorted(missing)}"
+
+    reachable: set[str] = set()
+    pending = list(entry_points)
+    while pending:
+        name = pending.pop()
+        if name in reachable:
             continue
+        reachable.add(name)
+        for child in ast.walk(functions[name]):
+            if not isinstance(child, ast.Call) or not isinstance(child.func, ast.Name):
+                continue
+            called_name = child.func.id
+            if called_name in functions and called_name not in reachable:
+                pending.append(called_name)
+    return tree, frozenset(reachable)
+
+
+def _referenced_module_assignments(
+    tree: ast.Module, function_nodes: tuple[ast.AST, ...]
+) -> tuple[ast.AST, ...]:
+    def bound_names(target: ast.AST) -> tuple[str, ...]:
+        if isinstance(target, ast.Name):
+            return (target.id,)
+        if isinstance(target, ast.Starred):
+            return bound_names(target.value)
+        if isinstance(target, (ast.List, ast.Tuple)):
+            return tuple(
+                name for item in target.elts for name in bound_names(item)
+            )
+        return ()
+
+    assignments: dict[str, ast.Assign | ast.AnnAssign] = {}
+    for node in tree.body:
         if not isinstance(node, (ast.Assign, ast.AnnAssign)):
             continue
         targets = node.targets if isinstance(node, ast.Assign) else (node.target,)
-        if any(
-            isinstance(target, ast.Name) and target.id in constant_names
-            for target in targets
+        for target in targets:
+            for name in bound_names(target):
+                assignments[name] = node
+
+    selected: dict[int, ast.Assign | ast.AnnAssign] = {}
+    pending = {
+        child.id
+        for node in function_nodes
+        for child in ast.walk(node)
+        if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load)
+        and child.id in assignments
+    }
+    while pending:
+        name = pending.pop()
+        node = assignments[name]
+        if id(node) in selected:
+            continue
+        selected[id(node)] = node
+        pending.update(
+            child.id
+            for child in ast.walk(node)
+            if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load)
+            and child.id in assignments and id(assignments[child.id]) not in selected
+        )
+    return tuple(selected.values())
+
+
+def _audit_frame_language_hits(
+    source: str, *, entry_points: frozenset[str]
+) -> tuple[str, ...]:
+    """Inspect reachable frame literals, never interpolated provider fields."""
+    tree, writer_names = _audit_frame_call_closure(source, entry_points)
+    functions = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    function_nodes = tuple(functions[name] for name in writer_names)
+    literal_nodes: list[ast.AST] = []
+    docstring_nodes: set[int] = set()
+    for node in function_nodes:
+        literal_nodes.append(node)
+        if (
+            node.body
+            and isinstance(node.body[0], ast.Expr)
+            and isinstance(node.body[0].value, ast.Constant)
+            and isinstance(node.body[0].value.value, str)
         ):
-            literal_nodes.append(node)
+            docstring_nodes.add(id(node.body[0].value))
+    literal_nodes.extend(_referenced_module_assignments(tree, function_nodes))
 
     literals = (
         child.value
@@ -419,27 +498,78 @@ def _audit_frame_language_hits(
 def _generated_audit_frame_language_hits(
     source_overrides: dict[Path, str] | None = None,
 ) -> tuple[str, ...]:
-    bindings = {
-        AUDIT_TRAIL_PATH: (_AUDIT_FRAME_WRITERS, _AUDIT_FRAME_CONSTANTS),
-        WORKFLOW_AUDIT_PROJECTION_PATH: (
-            frozenset({"_overall_audit_entries"}),
-            frozenset(),
-        ),
-    }
     overrides = source_overrides or {}
     return tuple(
         f"{path.relative_to(ROOT).as_posix()}: {hit}"
-        for path, (writer_names, constant_names) in bindings.items()
+        for path, entry_points in _AUDIT_FRAME_ENTRY_POINTS_BY_PATH.items()
         for hit in _audit_frame_language_hits(
             overrides.get(path, path.read_text(encoding="utf-8")),
-            writer_names=writer_names,
-            constant_names=constant_names,
+            entry_points=entry_points,
         )
     )
 
 
 def test_generated_audit_frame_has_no_english_headings() -> None:
     assert _generated_audit_frame_language_hits() == ()
+
+
+def test_audit_frame_call_closure_contains_every_b73_writer() -> None:
+    source = AUDIT_TRAIL_PATH.read_text(encoding="utf-8")
+    _, reachable = _audit_frame_call_closure(
+        source, _AUDIT_FRAME_ENTRY_POINTS_BY_PATH[AUDIT_TRAIL_PATH]
+    )
+
+    assert _B73_AUDIT_FRAME_WRITER_REGRESSION_SET <= reachable
+
+
+def _source_with_new_audit_writer(
+    source: str, *, reachable_from: str | None
+) -> str:
+    lines = source.splitlines(keepends=True)
+    if reachable_from is not None:
+        tree = ast.parse(source)
+        entry_point = next(
+            node
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == reachable_from
+        )
+        first_statement = entry_point.body[0]
+        insert_after = (
+            first_statement.end_lineno
+            if isinstance(first_statement, ast.Expr)
+            and isinstance(first_statement.value, ast.Constant)
+            and isinstance(first_statement.value.value, str)
+            else entry_point.lineno
+        )
+        assert insert_after is not None
+        lines.insert(insert_after, "    _render_new_audit_frame()\n")
+    return "".join(lines) + (
+        "\n\ndef _render_new_audit_frame() -> str:\n"
+        '    return "# Overall audit"\n'
+    )
+
+
+@pytest.mark.parametrize(
+    "entry_point",
+    sorted(_AUDIT_FRAME_ENTRY_POINTS_BY_PATH[AUDIT_TRAIL_PATH]),
+)
+def test_generated_audit_frame_guard_rejects_a_new_reachable_writer(
+    entry_point: str,
+) -> None:
+    source = AUDIT_TRAIL_PATH.read_text(encoding="utf-8")
+    mutated = _source_with_new_audit_writer(source, reachable_from=entry_point)
+
+    assert _generated_audit_frame_language_hits(
+        {AUDIT_TRAIL_PATH: mutated}
+    ) == ("src/audit_trail.py: # Overall audit",)
+
+
+def test_generated_audit_frame_guard_ignores_a_new_unreachable_writer() -> None:
+    source = AUDIT_TRAIL_PATH.read_text(encoding="utf-8")
+    mutated = _source_with_new_audit_writer(source, reachable_from=None)
+
+    assert _generated_audit_frame_language_hits({AUDIT_TRAIL_PATH: mutated}) == ()
 
 
 def test_generated_audit_frame_guard_rejects_an_english_heading_mutation() -> None:
