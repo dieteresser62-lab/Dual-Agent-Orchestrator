@@ -322,6 +322,46 @@ def test_invocation_failure_technical_evidence_is_redacted_and_exit_null_is_dist
             validate_artifact_document(legacy_document)
 
 
+def test_automatic_output_retry_is_limited_to_native_claude_review_form() -> None:
+    marker, digest, byte_count = technical_text_evidence("schema-invalid")
+    payload = InvocationFailurePayload(
+        invocation_id="native-review-form-output",
+        idempotency_key="run-01:work-01:claude_slice_review:claude",
+        role=Role.CLAUDE,
+        failure_kind="output",
+        failure_class="transient",
+        diagnostic_code="NATIVE-REVIEW-FORM",
+        provider_text=PROVIDER_MARKER,
+        provider_text_sha256=PROVIDER_DIGEST,
+        provider_text_bytes=PROVIDER_BYTES,
+        technical_text=marker,
+        technical_text_sha256=digest,
+        technical_text_bytes=byte_count,
+        received_at="2026-09-07T20:24:00+00:00",
+        decision_at_utc="2026-09-07T20:24:00+00:00",
+        step="claude_slice_review",
+        slice_id="1",
+        work_unit_id="work-01",
+        diagnostic_exit_code=3,
+        process_exit_code=None,
+        parse_path=None,
+        source_timezone=None,
+        reset_at_utc=None,
+        resume_at_utc="2026-09-07T20:24:02+00:00",
+        safety_margin_seconds=0,
+        retry_delay_seconds=2,
+        auto_resume_count=1,
+        automatic_resume=True,
+        diff_fingerprint=DIGEST,
+    )
+
+    assert payload.failure_kind == "output"
+    with pytest.raises(ArtifactValidationError):
+        replace(payload, diagnostic_code="AGENT-OUTPUT")
+    with pytest.raises(ArtifactValidationError):
+        replace(payload, role=Role.CODEX, step="codex_implementation")
+
+
 def test_invocation_failure_orchestrator_diagnostic_is_closed_and_optional() -> None:
     diagnostic = OrchestratorDiagnostic.SLICE_PLAN_PATHS_INVALID.text
     raw = "provider-controlled diagnostic mutation"

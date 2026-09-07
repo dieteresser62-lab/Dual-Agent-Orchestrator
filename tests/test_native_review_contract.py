@@ -21,6 +21,7 @@ from contracts import (
 )
 from gates import detect_anchor_changes
 from native_review_contract import (
+    NATIVE_REVIEW_RETRYABLE_FORM_CODES,
     NativeFinding,
     NativeProseAcceptance,
     NativeReclassification,
@@ -722,3 +723,11 @@ def test_stop_request_has_explicit_safe_contract_result_defaults() -> None:
     assert result.evidence is None
     assert result.pre_mortem is None
     assert result.validation is context.validation_attestation
+
+
+def test_retryable_form_code_inventory_excludes_only_local_and_identity_bindings() -> None:
+    assert set(NativeReviewErrorCode) - set(NATIVE_REVIEW_RETRYABLE_FORM_CODES) == {
+        NativeReviewErrorCode.CONTEXT_INVALID,
+        NativeReviewErrorCode.REQUEST_MISMATCH,
+        NativeReviewErrorCode.REVIEWER_MISMATCH,
+    }

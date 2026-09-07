@@ -41,7 +41,10 @@ from native_codex_request import (  # allowlist:provider -- typed module boundar
     NativeCodexRequestError as NativeImplementerRequestError,  # allowlist:provider
 )
 from native_provider_schema import NativeProviderSchemaError
-from native_review_contract import NativeReviewContractError
+from native_review_contract import (
+    NativeReviewContractError,
+    is_retryable_native_review_form_error,
+)
 from native_review_request import NativeReviewRequestError
 from path_policy import PathPolicyError
 from plan_handoff import PlanHandoffError
@@ -188,6 +191,15 @@ def classify_exception(error: BaseException) -> ClassifiedFailure:
 
     for depth in range(len(chain) - 1, -1, -1):
         candidate = chain[depth]
+        if is_retryable_native_review_form_error(candidate):
+            return ClassifiedFailure(
+                failure_class=_TRANSIENT,
+                diagnostic_code="NATIVE-REVIEW-FORM",
+                exception_type=type(candidate).__name__,
+                detail=f"{type(error).__name__}: {error}",
+                cause_depth=depth,
+                explicitly_mapped=True,
+            )
         assignment = ERROR_CLASSIFICATIONS.get(type(candidate))
         if assignment is None:
             continue

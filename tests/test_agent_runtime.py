@@ -68,6 +68,7 @@ from contracts import (
     ValidationRecord,
     ValidationStatus,
 )
+from native_review_contract import NativeReviewContractError, NativeReviewErrorCode
 from native_review_contract import NativeReviewContext
 from native_review_request import (
     NativeReviewEvidenceInput,
@@ -727,10 +728,15 @@ def test_native_review_runtime_returns_bound_contract_without_marker_validation(
             shorten=lambda value, _maximum: value or "",
             operation="claude_slice_review",
             binding_fingerprint=fingerprint,
-            validated_response_callback=persisted.append,
+            response_callback=persisted.append,
         )
     assert "schema-invalid" in raised.value.technical_text
-    assert persisted == []
+    assert "variant 'bound_slice_initial_approved' failed" in raised.value.technical_text
+    assert (
+        "result.new_findings.0.finding_class: must equal 'OBSERVATION'"
+        in raised.value.technical_text
+    )
+    assert persisted == [returned["canonical"]]
 
 
 def test_native_review_checked_preserves_schema_valid_domain_rejection(
@@ -739,7 +745,7 @@ def test_native_review_checked_preserves_schema_valid_domain_rejection(
     canonical = '{"schema_version":"native-agent-review-result-v2"}'
 
     def reject_after_persist(*args, **kwargs):  # type: ignore[no-untyped-def]
-        kwargs["validated_response_callback"](canonical)
+        kwargs["response_callback"](canonical)
         raise AgentOutputError(
             "native review result violates its bound contract",
             technical_text="approval-invalid: approval contains an open blocker",
@@ -976,6 +982,33 @@ def test_claude_structured_output_retry_exhaustion_is_bounded_transient() -> Non
         "type": "result",
         "subtype": "error_max_structured_output_retries",
     }
+
+
+@pytest.mark.parametrize(
+    ("code", "expected_kind"),
+    (
+        (NativeReviewErrorCode.SCHEMA_INVALID, AgentFailureKind.OUTPUT),
+        (NativeReviewErrorCode.APPROVAL_INVALID, AgentFailureKind.OUTPUT),
+        (NativeReviewErrorCode.REQUEST_MISMATCH, AgentFailureKind.OUTPUT),
+        (NativeReviewErrorCode.REVIEWER_MISMATCH, AgentFailureKind.OUTPUT),
+        (NativeReviewErrorCode.CONTEXT_INVALID, AgentFailureKind.OUTPUT),
+    ),
+)
+def test_native_review_contract_failure_kind_is_output_for_all_codes(
+    code: NativeReviewErrorCode, expected_kind: AgentFailureKind
+) -> None:
+    contract_error = NativeReviewContractError(code, "review rejected")
+    output_error = AgentOutputError(
+        "native review result violates its bound contract",
+        technical_text=f"{code.value}: review rejected",
+    )
+    output_error.__cause__ = contract_error
+
+    failure = classify_agent_failure(
+        "claude", output_error, invocation_id=f"review-{code.value}"
+    )
+
+    assert failure.kind is expected_kind
 
 
 def test_claude_adapter_structured_output_retry_exhaustion_is_bounded_transient() -> None:

@@ -410,7 +410,10 @@ class WorkflowPersistence:
                     or failure.resume_at_utc is None
                 ):
                     continue
-                if failure.failure_kind is AgentFailureKind.NETWORK:
+                if failure.automatic_resume and failure.failure_kind in {
+                    AgentFailureKind.NETWORK,
+                    AgentFailureKind.OUTPUT,
+                }:
                     bridge.append(
                         TransientRetryPayload(
                             role=Role(failure.role),

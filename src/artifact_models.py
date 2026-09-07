@@ -1717,10 +1717,20 @@ class InvocationFailurePayload:
             raise ArtifactValidationError(
                 "invocation failure without quota reset cannot carry a margin"
             )
-        if self.failure_kind == "network" and self.automatic_resume:
+        automatic_review_form = (
+            self.failure_kind == "output"
+            and self.role is Role.CLAUDE  # allowlist:provider -- bound reviewer role
+            and self.diagnostic_code == "NATIVE-REVIEW-FORM"
+            and self.step.startswith(f"{self.role.value}_")
+            and self.step.endswith("_review")
+        )
+        automatic_transient = self.automatic_resume and (
+            self.failure_kind == "network" or automatic_review_form
+        )
+        if automatic_transient:
             if self.resume_at_utc is None or self.retry_delay_seconds < 1:
                 raise ArtifactValidationError(
-                    "automatic network retry requires target and positive delay"
+                    "automatic transient retry requires target and positive delay"
                 )
             decision = datetime.fromisoformat(
                 self.decision_at_utc.replace("Z", "+00:00")
@@ -1730,7 +1740,7 @@ class InvocationFailurePayload:
             )
             if resume != decision + timedelta(seconds=self.retry_delay_seconds):
                 raise ArtifactValidationError(
-                    "network retry target is not derived from decision plus delay"
+                    "transient retry target is not derived from decision plus delay"
                 )
         elif self.failure_kind != "quota" and (
             self.resume_at_utc is not None or self.retry_delay_seconds != 0
@@ -1739,9 +1749,9 @@ class InvocationFailurePayload:
                 "unscheduled invocation failure carries retry timing"
             )
         if self.automatic_resume:
-            if self.failure_kind not in {"quota", "network"}:
+            if self.failure_kind not in {"quota", "network"} and not automatic_review_form:
                 raise ArtifactValidationError(
-                    "automatic resume is limited to quota and network failures"
+                    "automatic resume is limited to quota, network, and native review form failures"
                 )
             if self.resume_at_utc is None or self.auto_resume_count < 1:
                 raise ArtifactValidationError(

@@ -101,6 +101,20 @@ def test_schema_rejects_contentless_review_at_transport_boundary() -> None:
     _assert_schema_error(document)
 
 
+def test_schema_error_names_variants_and_their_concrete_conditions() -> None:
+    document = _review()
+    document.pop("decision")
+
+    with pytest.raises(NativeReviewContractError) as raised:
+        validate_native_review_document(document)
+
+    detail = raised.value.detail
+    assert "variant 'review_result' failed" in detail
+    assert "decision: is required" in detail
+    assert "variant 'stop_request' failed" in detail
+    assert "rule_id: is required" in detail
+
+
 def test_schema_rejects_open_shell_string_and_empty_argv() -> None:
     shell = _review()
     shell["decision"] = "denied"

@@ -1044,6 +1044,22 @@ class ProductionWorkflowDriver:
             )
         )
 
+    def _native_reviewer_response_path(self, invocation: ReviewerInvocation) -> Path:
+        state = self.active_state
+        if state is None:
+            raise WorkflowExecutionError("native reviewer response has no active state")
+        return (
+            self.root
+            / ".orchestrator"
+            / "artifacts"
+            / state.run_id
+            / "native-review-responses"
+            / (
+                f"work-unit-{invocation.work_unit_id:04d}-"
+                f"{invocation.step.value}-round-{invocation.round_number:04d}.json"
+            )
+        )
+
     def _native_agent_request_path(self, invocation: object) -> Path:
         state = self.active_state
         if state is None:
@@ -1179,8 +1195,11 @@ class ProductionWorkflowDriver:
                 "native Codex raw response verification failed"
             )
 
-    def _write_native_codex_raw_response(self, path: Path, content: str) -> None:
+    def _write_native_agent_raw_response(self, path: Path, content: str) -> None:
         self._write_side_effect_file(path, content, normalized_text=False)
+
+    def _write_native_codex_raw_response(self, path: Path, content: str) -> None:
+        self._write_native_agent_raw_response(path, content)
 
     def _native_agent_response_files(
         self, invocation: CodexInvocation
@@ -1219,10 +1238,7 @@ class ProductionWorkflowDriver:
             raise WorkflowExecutionError(
                 "configured Claude adapter is not the native review transport"
             )
-        review_log_path = self.log_dir / (
-            f"work-unit-{invocation.work_unit_id:04d}-"
-            f"{invocation.step.value}-round-{invocation.round_number:04d}.log"
-        )
+        raw_response_path = self._native_reviewer_response_path(invocation)
         return run_native_review_agent_checked(
                 adapter=native_adapter,
                 bundle=invocation.native_request,
@@ -1232,7 +1248,8 @@ class ProductionWorkflowDriver:
                 ),
                 config=self.config,
                 log_dir=self.log_dir,
-                write_file=self._write_text_side_effect_file,
+                raw_response_path=raw_response_path,
+                write_file=self._write_native_agent_raw_response,
                 shorten=_shorten,
                 reviewer_manifest_paths=manifest_paths,
                 operation=invocation.step.value,
@@ -1244,10 +1261,11 @@ class ProductionWorkflowDriver:
                             measurement,
                             bootstrap,
                             operation_instance=f"round:{invocation.round_number}",
-                            durable_response_path=review_log_path,
+                            durable_response_path=raw_response_path,
                         ),
                         terminal=self._finish_provider_attempt,
                         durable_response_path=lambda handle: handle[2],
+                        failure_path=self._provider_attempt_failure_path,
                     )
                     if self._artifact_bridge is not None
                     else None

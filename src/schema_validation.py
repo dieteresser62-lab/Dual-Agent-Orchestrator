@@ -45,6 +45,56 @@ def validate_schema_document(value: Any, schema: Mapping[str, Any]) -> None:
     _validate_schema_node(value, schema, schema, ())
 
 
+def describe_one_of_failure(
+    value: Any,
+    schema: Mapping[str, Any],
+    *,
+    path: tuple[str | int, ...],
+) -> str | None:
+    """Describe every named variant at one failed ``oneOf`` location."""
+    node: Any = schema
+    candidate: Any = value
+    for part in path:
+        if not isinstance(node, Mapping):
+            return None
+        properties = node.get("properties")
+        if not isinstance(properties, Mapping) or part not in properties:
+            return None
+        node = properties[part]
+        if isinstance(candidate, Mapping):
+            candidate = candidate.get(part)
+        else:
+            return None
+    if not isinstance(node, Mapping) or not isinstance(node.get("oneOf"), list):
+        return None
+    failures: list[str] = []
+    for index, branch in enumerate(node["oneOf"]):
+        if not isinstance(branch, Mapping):
+            return None
+        label = _schema_variant_label(branch, index)
+        try:
+            _validate_schema_node(candidate, branch, schema, path)
+        except SchemaMismatch as exc:
+            location = ".".join(str(part) for part in exc.path) or "<response>"
+            failures.append(f"variant {label!r} failed at {location}: {exc.message}")
+        else:
+            failures.append(f"variant {label!r} matched")
+    return "; ".join(failures)
+
+
+def _schema_variant_label(branch: Mapping[str, Any], index: int) -> str:
+    reference = branch.get("$ref")
+    if isinstance(reference, str):
+        return reference.rsplit("/", 1)[-1]
+    properties = branch.get("properties")
+    if isinstance(properties, Mapping):
+        for discriminator in ("result_type", "decision", "kind"):
+            rule = properties.get(discriminator)
+            if isinstance(rule, Mapping) and isinstance(rule.get("const"), str):
+                return f"{discriminator}={rule['const']}"
+    return f"oneOf[{index}]"
+
+
 def _check_schema_node(node: Any, root: Mapping[str, Any], location: str) -> None:
     if not isinstance(node, dict):
         raise SchemaDefinitionError(

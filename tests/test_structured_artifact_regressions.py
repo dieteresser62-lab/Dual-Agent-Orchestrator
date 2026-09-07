@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 import orchestrator
+from agent_adapters import AgentOutputError
 from agent_runtime import (
     AgentProcessError,
     NativeAgentCodexOutput,
@@ -78,6 +79,7 @@ from contracts import (
     ValidationStatus,
 )
 from orchestrator import ProductionWorkflowDriver
+from native_review_contract import NativeReviewContractError, NativeReviewErrorCode
 from review_packets import build_review_packet
 from final_review_preflight import (
     FinalReviewPreflightDenied,
@@ -1571,6 +1573,79 @@ def test_automatic_network_retry_uses_its_own_chain_record_idempotently(
             if isinstance(record.payload, TransientRetryPayload)
         )
     ) == 1
+
+
+def test_schema_invalid_review_records_failure_then_existing_transient_retry(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/structured-regression")
+    state = _state(repository, "structured-review-form-retry")
+    head = _git(repository, "rev-parse", "HEAD")
+    state = state.complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CLAUDE_SLICE_REVIEW,
+    ).bind_current_slice_git_boundary(
+        start_commit=head,
+        scope_paths=("src/runtime.py",),
+        start_fingerprint="b" * 64,
+    )
+    driver = _driver(repository)
+    driver.checkpoint(state, WorkflowHistory(state.current_work_unit_id))
+    active = driver.active_state
+    assert active is not None
+    driver.collect_changes = lambda _start: WorkflowChanges(  # type: ignore[method-assign]
+        start_commit=head,
+        fingerprint="c" * 64,
+        paths=("src/runtime.py",),
+        full_diff="diff --git a/src/runtime.py b/src/runtime.py\n",
+    )
+    now = datetime(2026, 9, 7, 20, 24, tzinfo=timezone.utc)
+    contract_error = NativeReviewContractError(
+        NativeReviewErrorCode.SCHEMA_INVALID,
+        "variant 'bound_slice_initial_approved' failed at status_changes",
+    )
+    output_error = AgentOutputError(
+        "native review result violates its bound contract",
+        technical_text=f"{contract_error.code.value}: {contract_error.detail}",
+    )
+    output_error.__cause__ = contract_error
+    failure_error = classify_agent_failure(
+        AgentRole.CLAUDE.value,
+        output_error,
+        invocation_id="review-form-retry-1",
+        received_at=now,
+    )
+    failure_error.__cause__ = output_error
+
+    waiting, failure = WorkflowEngine(
+        driver, now_fn=lambda: now
+    )._persist_invocation_failure(
+        active,
+        WorkflowHistory(active.current_work_unit_id),
+        WorkflowContext("assignment", "plan", "slice"),
+        AgentRole.CLAUDE,
+        failure_error,
+    )
+    driver.checkpoint(waiting, WorkflowHistory(waiting.current_work_unit_id))
+
+    chain = ArtifactStore(repository, state.run_id).load_chain()
+    failure_record = next(
+        record for record in chain
+        if isinstance(record.payload, InvocationFailurePayload)
+        and record.payload.invocation_id == failure.invocation_id
+    )
+    retry_record = next(
+        record for record in chain
+        if isinstance(record.payload, TransientRetryPayload)
+        and record.payload.attempt == 1
+    )
+    assert chain.index(failure_record) < chain.index(retry_record)
+    assert failure_record.payload.failure_kind == "output"
+    assert failure_record.payload.failure_class == "transient"
+    assert failure_record.payload.diagnostic_code == "NATIVE-REVIEW-FORM"
+    assert retry_record.payload.role is Role.CLAUDE
+    assert retry_record.payload.repository_fingerprint == "c" * 64
 
 
 def test_structured_resume_accepts_mirrored_stopped_review(tmp_path: Path) -> None:

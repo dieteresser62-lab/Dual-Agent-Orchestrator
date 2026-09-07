@@ -353,6 +353,14 @@ def test_invoke_reviewer_dispatches_native_adapter_with_snapshot_boundary_and_pr
     assert driver.invoke_reviewer(invocation) is expected
     assert captured["adapter"] is adapter
     assert captured["reviewer_manifest_paths"] is None
+    assert captured["raw_response_path"] == driver._native_reviewer_response_path(
+        invocation
+    )
+    assert captured["write_file"].__self__ is driver
+    assert (
+        captured["write_file"].__func__
+        is ProductionWorkflowDriver._write_native_agent_raw_response
+    )
     lifecycle = captured["provider_attempt_lifecycle"]
     assert lifecycle is not None
     assert callable(lifecycle.start)
@@ -368,7 +376,6 @@ def test_invoke_reviewer_dispatches_native_adapter_with_snapshot_boundary_and_pr
 
     assert driver.invoke_reviewer(direct_implement_slice) is expected
     assert captured["reviewer_manifest_paths"] is None
-
     canonical_packet = json.dumps(
         {
             "schema": "review-packet-v1",
@@ -402,6 +409,66 @@ def test_invoke_reviewer_dispatches_native_adapter_with_snapshot_boundary_and_pr
 
     assert driver.invoke_reviewer(slice_invocation) is expected
     assert captured["reviewer_manifest_paths"] == ("src/runtime.py",)
+
+
+def test_rejected_reviewer_response_uses_side_effect_ledger_and_exact_bytes(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/native-review-response")
+    task = repository / "task.md"
+    task.write_text("review response persistence\n", encoding="utf-8")
+    head = _git(repository, "rev-parse", "HEAD")
+    state = init_workflow_state(
+        run_id="native-review-response",
+        task_file=str(task),
+        branch="feature/native-review-response",
+        branch_base=head,
+        first_slice_start_commit=head,
+        slice_count=1,
+        task_digest=hashlib.sha256(task.read_bytes()).hexdigest(),
+        task_scope_patterns=("src/runtime.py",),
+        target_branch="feature/native-review-response",
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V2,
+            "2",
+            codex_result_transport="native-codex-v2",
+            claude_review_transport="native-claude-review-v2",
+        ),
+    ).with_current_step(WorkflowStep.CLAUDE_PLAN_REVIEW)
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    driver.checkpoint(state, WorkflowHistory(state.current_work_unit_id))
+    invocation = ReviewerInvocation(
+        work_unit_id=state.current_work_unit_id,
+        step=WorkflowStep.CLAUDE_PLAN_REVIEW,
+        reviewer=AgentRole.CLAUDE,
+        round_number=1,
+        evidence_kind=EvidenceKind.FULL_SLICE,
+        fingerprint=state.task_digest or "a" * 64,
+        paths=(),
+        prompt="review",
+    )
+    raw = '{"result_type":"review_result","decision":"invalid"}'
+    base = driver._native_reviewer_response_path(invocation)
+    target = driver._provider_attempt_response_path(base, 1)
+
+    driver._write_native_agent_raw_response(target, raw)
+
+    assert target.read_bytes() == raw.encode("utf-8")
+    effects = tuple(
+        record.payload
+        for record in ArtifactStore(repository, state.run_id).load_chain()
+        if isinstance(record.payload, SideEffectPayload)
+        and record.payload.effect_class == "file_write"
+        and record.payload.operation[0].endswith(target.name)
+    )
+    assert tuple(effect.phase for effect in effects) == ("intent", "result")
+    assert effects[0].operation == effects[1].operation
 from plan_handoff import render_implementation_task
 from native_codex_contract import (
     NativeCodexContext,

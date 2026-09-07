@@ -138,6 +138,18 @@ class Reviewer(str, Enum):
     CLAUDE = "claude"
 
 
+def is_native_review_output_retry(
+    failure_kind: AgentFailureKind, role: str, step: WorkflowStep
+) -> bool:
+    """Whether state-v3 can represent the typed native-review retry path."""
+    return (
+        failure_kind is AgentFailureKind.OUTPUT
+        and role in {reviewer.value for reviewer in Reviewer}
+        and step.value.startswith(f"{role}_")
+        and step.value.endswith("_review")
+    )
+
+
 class ProtocolMode(str, Enum):
     LEGACY_STATE_V3 = "legacy-state-v3"
     STRUCTURED_V1 = "structured-v1"
@@ -368,12 +380,19 @@ class InvocationFailureRecord:
             raise WorkflowStateValidationError(
                 "automatic resume requires a resume timestamp"
             )
-        if self.automatic_resume and self.failure_kind not in {
-            AgentFailureKind.QUOTA,
-            AgentFailureKind.NETWORK,
-        }:
+        automatic_review_output = is_native_review_output_retry(
+            self.failure_kind, self.role, self.step
+        )
+        if (
+            self.automatic_resume
+            and self.failure_kind not in {
+                AgentFailureKind.QUOTA,
+                AgentFailureKind.NETWORK,
+            }
+            and not automatic_review_output
+        ):
             raise WorkflowStateValidationError(
-                "automatic resume is limited to quota and network failures"
+                "automatic resume is limited to quota, network, and native review form failures"
             )
         if self.failure_kind is AgentFailureKind.QUOTA and self.automatic_resume and not has_reset:
             raise WorkflowStateValidationError(
@@ -2123,16 +2142,24 @@ class WorkflowState:
             raise WorkflowStateValidationError(
                 "invocation wait mode differs from persisted failure evidence"
             )
-        if wait_automatically and failure.failure_kind not in {
-            AgentFailureKind.QUOTA,
-            AgentFailureKind.NETWORK,
-        }:
+        automatic_review_output = is_native_review_output_retry(
+            failure.failure_kind, failure.role, failure.step
+        )
+        if (
+            wait_automatically
+            and failure.failure_kind not in {
+                AgentFailureKind.QUOTA,
+                AgentFailureKind.NETWORK,
+            }
+            and not automatic_review_output
+        ):
             raise WorkflowStateValidationError(
-                "only quota and network failures may wait automatically"
+                "only quota, network, and native review form failures may wait automatically"
             )
         automatic_quota = wait_automatically and failure.failure_kind is AgentFailureKind.QUOTA
         automatic_transient = wait_automatically and failure.failure_kind in {
             AgentFailureKind.NETWORK,
+            AgentFailureKind.OUTPUT,
         }
         status = (
             WorkUnitStatus.WAITING_FOR_QUOTA if automatic_quota else

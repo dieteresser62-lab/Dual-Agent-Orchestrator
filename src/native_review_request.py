@@ -22,6 +22,7 @@ from schema_validation import (
     SchemaDefinitionError,
     SchemaMismatch,
     check_schema,
+    describe_one_of_failure,
     validate_schema_document,
 )
 from review_packets import ReviewPacket, ReviewPacketError
@@ -390,9 +391,13 @@ def _validate_native_review_provider_response_schema(
         validate_schema_document({"result": dict(document)}, schema)
     except SchemaMismatch as exc:
         location = ".".join(str(item) for item in exc.path) or "<response>"
+        variants = describe_one_of_failure(
+            {"result": dict(document)}, schema, path=exc.path
+        )
+        detail = variants or exc.message
         raise NativeReviewRequestError(
             NativeReviewRequestErrorCode.SCHEMA_INVALID,
-            f"provider response schema failed at {location}: {exc.message}",
+            f"provider response schema failed at {location}: {detail}",
         ) from None
 
 

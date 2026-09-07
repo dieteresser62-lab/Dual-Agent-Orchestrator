@@ -46,12 +46,14 @@ from native_review_contract import (
     NativeReviewContext,
     NativeReviewContractError,
     NativeReviewErrorCode,
+    is_retryable_native_review_form_error,
     parse_bound_native_contract_result,
     validate_native_review_document,
 )
 from native_review_request import (
     NativeReviewRequestBundle,
     NativeReviewRequestError,
+    NativeReviewRequestErrorCode,
     validate_native_review_provider_response,
 )
 from native_provider_schema import (
@@ -1323,7 +1325,7 @@ def run_native_review_agent(
     binding_fingerprint: str,
     pre_start_callback: Callable[[ProviderInputMeasurement], object | None] | None = None,
     attempt_invocation: _ProviderAttemptInvocation | None = None,
-    validated_response_callback: Callable[[str], None] | None = None,
+    response_callback: Callable[[str], None] | None = None,
 ) -> NativeAgentReviewOutput:
     """Run one native Claude review without legacy marker or repair parsing."""
     prepare = getattr(adapter, "prepare_native_provider_input", None)
@@ -1343,26 +1345,54 @@ def run_native_review_agent(
         attempt_invocation=attempt_invocation,
         prepared_provider_input=prepared,
     )
+    if response_callback is not None:
+        response_callback(canonical)
     try:
         document = json.loads(canonical)
         if not isinstance(document, dict):
             raise AgentOutputError("native review result must be a JSON object")
-        validate_native_review_document(document)
-        validate_native_review_provider_response(document, bundle)
-        if document.get("request_id") != bundle.bound_context.request_id:
+        response_request_id = document.get("request_id")
+        if (
+            isinstance(response_request_id, str)
+            and response_request_id != bundle.bound_context.request_id
+        ):
             raise NativeReviewContractError(
                 NativeReviewErrorCode.REQUEST_MISMATCH,
                 "response request_id does not match bound request",
             )
-        if validated_response_callback is not None:
-            validated_response_callback(canonical)
+        response_reviewer = document.get("reviewer")
+        if (
+            isinstance(response_reviewer, str)
+            and response_reviewer != bundle.bound_context.context.reviewer.value
+        ):
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.REVIEWER_MISMATCH,
+                "response reviewer does not match bound request",
+            )
+        validate_native_review_document(document)
+        validate_native_review_provider_response(document, bundle)
         result = parse_bound_native_contract_result(document, bundle.bound_context)
     except json.JSONDecodeError as exc:
         raise AgentOutputError(
             "native review result is not valid JSON",
             technical_text=f"native-json-invalid: {exc}",
         ) from exc
-    except (NativeReviewContractError, NativeReviewRequestError) as exc:
+    except NativeReviewContractError as exc:
+        raise AgentOutputError(
+            "native review result violates its bound contract",
+            provider_data=document,
+            technical_text=f"{exc.code.value}: {exc.detail}",
+        ) from exc
+    except NativeReviewRequestError as exc:
+        if exc.code is NativeReviewRequestErrorCode.SCHEMA_INVALID:
+            form_error = NativeReviewContractError(
+                NativeReviewErrorCode.SCHEMA_INVALID, exc.detail
+            )
+            raise AgentOutputError(
+                "native review result violates its bound contract",
+                provider_data=document,
+                technical_text=f"{form_error.code.value}: {form_error.detail}",
+            ) from form_error
         raise AgentOutputError(
             "native review result violates its bound contract",
             provider_data=document,
@@ -1383,6 +1413,7 @@ def run_native_review_agent_checked(
     log_prefix: str,
     config: OrchestratorConfig,
     log_dir: Path,
+    raw_response_path: Path | None = None,
     write_file: Callable[[Path, str], None],
     shorten: Callable[[str | None, int], str],
     reviewer_manifest_paths: tuple[str, ...] | None,
@@ -1394,12 +1425,7 @@ def run_native_review_agent_checked(
         Callable[[NativeAgentReviewOutput], None] | None
     ) = None,
 ) -> NativeAgentReviewOutput:
-    """Run one physical native review with the established attempt telemetry.
-
-    This deliberately has no marker validation, text repair, or provider retry.
-    Domain/schema rejection is a single typed output failure owned by the
-    workflow's resumable correction boundary.
-    """
+    """Run and durably capture one native review attempt before validation."""
     invocation_id = uuid.uuid4().hex
     attempt_invocation = (
         _ProviderAttemptInvocation(provider_attempt_lifecycle)
@@ -1407,6 +1433,7 @@ def run_native_review_agent_checked(
         else None
     )
     log_path = log_dir / f"{log_prefix}.attempt-1.log"
+    response_path = raw_response_path or log_path
     try:
         output = run_native_review_agent(
             adapter,
@@ -1418,17 +1445,17 @@ def run_native_review_agent_checked(
             binding_fingerprint=binding_fingerprint,
             pre_start_callback=pre_start_callback,
             attempt_invocation=attempt_invocation,
-            validated_response_callback=lambda canonical: write_file(
-                attempt_invocation.response_path(log_path)
+            response_callback=lambda canonical: write_file(
+                attempt_invocation.response_path(response_path)
                 if attempt_invocation is not None
-                else log_path,
+                else response_path,
                 canonical,
             ),
         )
         actual_log_path = (
-            attempt_invocation.response_path(log_path)
+            attempt_invocation.response_path(response_path)
             if attempt_invocation is not None
-            else log_path
+            else response_path
         )
         print_agent_output(
             adapter.name,
@@ -1457,7 +1484,13 @@ def run_native_review_agent_checked(
         )
         if attempt_invocation is not None:
             attempt_invocation.finish(failure.kind, adapter.metadata)
-        failure_path = log_dir / f"{log_prefix}.attempt-1.failure.json"
+        failure_path = (
+            attempt_invocation.failure_path(response_path)
+            if attempt_invocation is not None
+            else log_dir / f"{log_prefix}.attempt-1.failure.json"
+            if raw_response_path is None
+            else response_path.with_suffix(response_path.suffix + ".failure.json")
+        )
         write_file(
             failure_path,
             json.dumps(
@@ -2032,6 +2065,17 @@ def _is_claude_structured_output_retry_exhaustion(
     )
 
 
+def _exception_chain(error: BaseException) -> tuple[BaseException, ...]:
+    chain: list[BaseException] = []
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        chain.append(current)
+        current = current.__cause__
+    return tuple(chain)
+
+
 def classify_agent_failure(
     agent_key: str,
     exc: BaseException,
@@ -2072,6 +2116,14 @@ def classify_agent_failure(
             agent_key, exc, provider_data
         )
     )
+    native_review_form_failure = next(
+        (
+            candidate
+            for candidate in _exception_chain(exc)
+            if is_retryable_native_review_form_error(candidate)
+        ),
+        None,
+    )
     if (
         is_quota_or_rate_limit_error(technical_text)
         or is_quota_or_rate_limit_error(structured_text)
@@ -2094,7 +2146,11 @@ def classify_agent_failure(
             technical_text=technical_text,
             orchestrator_diagnostic=orchestrator_diagnostic,
         )
-    if claude_structured_output_retry_exhaustion:
+    if native_review_form_failure is not None:
+        # Keep the recorded cause honest. The workflow layer separately grants
+        # this exact provider-authored review form/content path a bounded retry.
+        kind = AgentFailureKind.OUTPUT
+    elif claude_structured_output_retry_exhaustion:
         # The Claude CLI completed without a model result after exhausting its
         # provider-internal schema retries. Reuse the existing bounded,
         # fingerprint-bound transient retry policy instead of treating this

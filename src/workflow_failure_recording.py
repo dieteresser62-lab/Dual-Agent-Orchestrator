@@ -25,6 +25,7 @@ from workflow_state import (
     InvocationFailureRecord,
     WorkflowState,
     WorkUnitKind,
+    is_native_review_output_retry,
 )
 
 
@@ -110,8 +111,14 @@ class WorkflowFailureRecording:
             and reset_delay_seconds <= quota_policy.maximum_wait_seconds
             and prior_auto_resumes < quota_policy.maximum_auto_resumes
         )
-        automatic_network = (
-            error.kind is AgentFailureKind.NETWORK
+        automatic_review_form = (
+            is_native_review_output_retry(
+                error.kind, role.value, state.current_step
+            )
+            and classified.diagnostic_code == "NATIVE-REVIEW-FORM"
+        )
+        automatic_transient = (
+            (error.kind is AgentFailureKind.NETWORK or automatic_review_form)
             and transient_policy.automatic
             and (unit.kind is WorkUnitKind.PLAN or fingerprint is not None)
             and prior_auto_resumes < transient_policy.maximum_auto_resumes
@@ -124,10 +131,10 @@ class WorkflowFailureRecording:
             quota_resume_at
             if error.kind is AgentFailureKind.QUOTA
             else now_utc + timedelta(seconds=transient_delay)
-            if automatic_network
+            if automatic_transient
             else None
         )
-        automatic = automatic_quota or automatic_network
+        automatic = automatic_quota or automatic_transient
         prior_continuations = sum(item.automatic_resume for item in matching_failures)
         provider_marker, provider_digest, provider_bytes = provider_text_evidence(
             error.provider_text
@@ -145,7 +152,7 @@ class WorkflowFailureRecording:
             safety_margin_seconds
             if error.kind is AgentFailureKind.QUOTA and reset_at is not None
             else transient_delay
-            if automatic_network
+            if automatic_transient
             else 0
         )
         record = InvocationFailureRecord(

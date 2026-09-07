@@ -18,6 +18,7 @@ from schema_validation import (
     SchemaDefinitionError,
     SchemaMismatch,
     check_schema,
+    describe_one_of_failure,
     validate_schema_document,
 )
 from contracts import (
@@ -71,6 +72,39 @@ class NativeReviewErrorCode(StrEnum):
     REVIEW_CONTENT_MISSING = "review-content-missing"
     STOP_CONTENT_INVALID = "stop-content-invalid"
     APPROVAL_INVALID = "approval-invalid"
+
+
+NATIVE_REVIEW_RETRYABLE_FORM_CODES: frozenset[NativeReviewErrorCode] = frozenset(
+    {
+        NativeReviewErrorCode.SCHEMA_INVALID,  # Provider output can satisfy the closed shape on another attempt.
+        NativeReviewErrorCode.FINDING_ID_INVALID,  # Provider output can select the next allowed finding id.
+        NativeReviewErrorCode.FINDING_REFERENCE_UNKNOWN,  # Provider output can reference a finding present in the bound request.
+        NativeReviewErrorCode.FINDING_REFERENCE_NOT_OPEN,  # Provider output can omit updates for findings that are no longer open.
+        NativeReviewErrorCode.FINDING_EVENT_CONFLICT,  # Provider output can emit one non-conflicting event per finding.
+        NativeReviewErrorCode.FINDING_UPDATE_MISSING,  # Provider output can supply every required own-finding disposition.
+        NativeReviewErrorCode.FINDING_CONTENT_INVALID,  # Provider output can replace malformed finding content.
+        NativeReviewErrorCode.ACCEPTANCE_INVALID,  # Provider output can use the allowed typed acceptance form.
+        NativeReviewErrorCode.ANCHOR_INVALID,  # Provider output can supply anchors consistent with the bound review.
+        NativeReviewErrorCode.REVIEW_CONTENT_MISSING,  # Provider output can supply the required review evidence.
+        NativeReviewErrorCode.STOP_CONTENT_INVALID,  # Provider output can supply a complete typed stop request.
+        NativeReviewErrorCode.APPROVAL_INVALID,  # Provider output can make its decision consistent with its finding events.
+    }
+)
+
+# Local context construction cannot be repaired by asking the provider again.
+assert NativeReviewErrorCode.CONTEXT_INVALID not in NATIVE_REVIEW_RETRYABLE_FORM_CODES
+# A foreign request id is a binding violation, not a response-form failure.
+assert NativeReviewErrorCode.REQUEST_MISMATCH not in NATIVE_REVIEW_RETRYABLE_FORM_CODES
+# A foreign reviewer is an identity violation, not a response-form failure.
+assert NativeReviewErrorCode.REVIEWER_MISMATCH not in NATIVE_REVIEW_RETRYABLE_FORM_CODES
+
+
+def is_retryable_native_review_form_error(error: BaseException) -> bool:
+    """Return whether a provider can repair this review response on retry."""
+    return (
+        isinstance(error, NativeReviewContractError)
+        and error.code in NATIVE_REVIEW_RETRYABLE_FORM_CODES
+    )
 
 
 class NativeReviewContractError(ValueError):
@@ -711,9 +745,11 @@ def validate_native_review_document(document: Mapping[str, Any]) -> None:
         validate_schema_document(document, schema)
     except SchemaMismatch as exc:
         location = ".".join(str(part) for part in exc.path) or "<response>"
+        variants = describe_one_of_failure(document, schema, path=exc.path)
+        detail = variants or exc.message
         raise NativeReviewContractError(
             NativeReviewErrorCode.SCHEMA_INVALID,
-            f"schema validation failed at {location}: {exc.message}",
+            f"schema validation failed at {location}: {detail}",
         ) from None
 
 

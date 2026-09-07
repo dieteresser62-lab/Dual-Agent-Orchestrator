@@ -54,6 +54,7 @@ from native_codex_contract import (
     NativeCodexErrorCode,
     NativeCodexRequestKind,
 )
+from native_review_contract import NativeReviewContractError, NativeReviewErrorCode
 from orchestrator_diagnostics import OrchestratorDiagnostic
 from inbox_watcher import WatchTaskDisposition, WatchTaskResult
 from orchestrator import run_v3_final_review, run_v3_work_unit
@@ -928,6 +929,28 @@ def _invocation_failure(
     )
 
 
+def _native_review_contract_failure(
+    code: NativeReviewErrorCode,
+    invocation_id: str,
+    *,
+    received_at: datetime,
+) -> AgentInvocationError:
+    contract_error = NativeReviewContractError(code, "provider-authored review rejected")
+    output_error = AgentOutputError(
+        "native review result violates its bound contract",
+        technical_text=f"{code.value}: {contract_error.detail}",
+    )
+    output_error.__cause__ = contract_error
+    failure = classify_agent_failure(
+        AgentRole.CLAUDE.value,
+        output_error,
+        invocation_id=invocation_id,
+        received_at=received_at,
+    )
+    failure.__cause__ = output_error
+    return failure
+
+
 def test_provider_process_failure_reaches_record_with_actual_diagnostics(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -978,6 +1001,7 @@ def test_provider_process_failure_reaches_record_with_actual_diagnostics(
     (
         (AgentFailureKind.QUOTA, True, "AGENT-INVOCATION"),
         (AgentFailureKind.NETWORK, True, "AGENT-INVOCATION"),
+        (AgentFailureKind.OUTPUT, False, "AGENT-INVOCATION"),
         (AgentFailureKind.PROCESS, False, "AGENT-PROCESS"),
     ),
 )
@@ -3614,6 +3638,154 @@ def test_claude_network_retry_keeps_configured_two_resume_ceiling() -> None:
         item.automatic_resume
         for item in result.state.current_work_unit.invocation_failures
     ] == [True, True]
+    assert all(
+        item.failure_kind is AgentFailureKind.NETWORK
+        for item in result.state.current_work_unit.invocation_failures
+    )
+
+
+def test_schema_invalid_review_retries_and_records_failure_before_continuation() -> None:
+    now = [datetime(2026, 9, 7, 20, 24, tzinfo=timezone.utc)]
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[_review_approval(AgentRole.CLAUDE)],
+        reviewer_failures=[
+            _native_review_contract_failure(
+                NativeReviewErrorCode.SCHEMA_INVALID,
+                "review-schema-invalid-1",
+                received_at=now[0],
+            ),
+            None,
+        ],
+    )
+
+    def sleep(seconds: float) -> None:
+        now[0] += timedelta(seconds=seconds)
+
+    result = WorkflowEngine(
+        driver, now_fn=lambda: now[0], sleep_fn=sleep
+    ).run_current_work_unit(_slice_state(), _context())
+
+    assert result.completed
+    assert len(driver.reviewer_calls) == 2
+    assert [event[0] for event in driver.structured_events].count(
+        "invocation-failure"
+    ) == 1
+    failure = driver.failure_payloads[0]
+    assert failure.failure_class == "transient"
+    assert failure.diagnostic_code == "NATIVE-REVIEW-FORM"
+    assert failure.failure_kind == "output"
+    assert failure.automatic_resume is True
+    assert result.state.current_work_unit.invocation_failures[0].auto_resume_count == 1
+
+
+def test_other_review_output_failure_halts_without_automatic_retry() -> None:
+    now = datetime(2026, 9, 7, 20, 24, tzinfo=timezone.utc)
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[],
+        reviewer_failures=[
+            _invocation_failure(
+                AgentRole.CLAUDE,
+                AgentFailureKind.OUTPUT,
+                "review-output-not-form",
+                received_at=now,
+            )
+        ],
+    )
+
+    result = WorkflowEngine(driver, now_fn=lambda: now).run_current_work_unit(
+        _slice_state(), _context()
+    )
+
+    assert not result.completed
+    assert len(driver.reviewer_calls) == 1
+    assert result.state.current_work_unit.status is WorkUnitStatus.AWAITING_RESUME
+    failure = driver.failure_payloads[0]
+    assert failure.failure_kind == "output"
+    assert failure.diagnostic_code == "AGENT-INVOCATION"
+    assert failure.automatic_resume is False
+
+
+def test_foreign_review_request_id_halts_without_retry() -> None:
+    now = datetime(2026, 9, 7, 20, 24, tzinfo=timezone.utc)
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[],
+        reviewer_failures=[
+            _native_review_contract_failure(
+                NativeReviewErrorCode.REQUEST_MISMATCH,
+                "review-request-mismatch",
+                received_at=now,
+            )
+        ],
+    )
+
+    result = WorkflowEngine(driver, now_fn=lambda: now).run_current_work_unit(
+        _slice_state(), _context()
+    )
+
+    assert not result.completed
+    assert len(driver.reviewer_calls) == 1
+    assert result.state.current_work_unit.status is WorkUnitStatus.AWAITING_RESUME
+    failure = driver.failure_payloads[0]
+    assert failure.failure_class == "resumable_halt"
+    assert failure.diagnostic_code == "NATIVE-REVIEW-CONTRACT"
+    assert failure.automatic_resume is False
+
+
+def test_schema_invalid_review_retry_limit_halts_resumably() -> None:
+    now = [datetime(2026, 9, 7, 20, 24, tzinfo=timezone.utc)]
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    failures = [
+        _native_review_contract_failure(
+            NativeReviewErrorCode.SCHEMA_INVALID,
+            f"review-schema-invalid-{attempt}",
+            received_at=now[0],
+        )
+        for attempt in range(1, 4)
+    ]
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[],
+        reviewer_failures=failures,
+    )
+
+    def sleep(seconds: float) -> None:
+        now[0] += timedelta(seconds=seconds)
+
+    context = replace(
+        _context(),
+        transient_retry_policy=TransientRetryPolicy(maximum_auto_resumes=2),
+    )
+    result = WorkflowEngine(
+        driver, now_fn=lambda: now[0], sleep_fn=sleep
+    ).run_current_work_unit(_slice_state(), context)
+
+    assert not result.completed
+    assert len(driver.reviewer_calls) == 3
+    assert [item.automatic_resume for item in driver.failure_payloads] == [
+        True,
+        True,
+        False,
+    ]
+    assert [item.failure_kind for item in driver.failure_payloads] == [
+        "output",
+        "output",
+        "output",
+    ]
+    assert result.state.current_work_unit.status is WorkUnitStatus.AWAITING_RESUME
+    assert result.state.current_work_unit.gate.resume_step is WorkflowStep.CLAUDE_SLICE_REVIEW
+    resumed = result.state.resume_after_invocation_halt()
+    assert resumed.current_work_unit.status is WorkUnitStatus.IN_PROGRESS
+    assert resumed.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
 
 
 def test_collect_changes_exception_during_resume_becomes_policy_halt() -> None:
