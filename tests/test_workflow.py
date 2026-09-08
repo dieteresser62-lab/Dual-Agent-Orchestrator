@@ -5,6 +5,7 @@ import json
 import re
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 import plan_handoff
@@ -76,6 +77,7 @@ from workflow import (
     WorkflowHistory,
     WorkflowRunResult,
     ValidationExecutionError,
+    _review_round_number,
 )
 from workflow_state import (
     AgentFailureKind,
@@ -93,6 +95,15 @@ from workflow_state import (
 
 TEST_FILE = "tests/test_workflow.py"
 START_COMMIT = "a" * 40
+
+
+def test_foreign_invocation_resume_does_not_advance_reviewer_round() -> None:
+    unit = SimpleNamespace(
+        round_number=2,
+        invocation_failures=(SimpleNamespace(role=AgentRole.CODEX.value),),
+    )
+
+    assert _review_round_number(unit, WorkflowHistory(3), AgentRole.CLAUDE) == 1
 
 
 def _test_native_codex_output(

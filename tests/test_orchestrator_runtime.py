@@ -26,6 +26,7 @@ from agent_runtime import (
     NativeAgentCodexOutput,
     NativeAgentReviewOutput,
     ProviderAttemptLifecycle,
+    ProviderRequestRoundRequired,
     QuotaReset,
     QuotaWaitPolicy,
     run_native_codex_agent_checked,
@@ -177,6 +178,7 @@ from content_authority_support import (
     append_validation_authority,
 )
 from side_effects import SideEffectBoundaryPhase, SideEffectReconciliationError
+from workflow_recovery import _require_provider_input_round
 
 
 def _append_run_binding(bridge: ArtifactBridge, state: WorkflowState) -> None:
@@ -943,6 +945,30 @@ def test_recomposed_request_opens_new_round_and_operation_but_binding_drift_stop
     changed_bootstrap = driver._persist_provider_bootstrap(changed_request)
     active = driver.active_state
     assert active is not None
+    with pytest.raises(ProviderRequestRoundRequired):
+        driver._start_provider_attempt(
+            changed_request,
+            changed_bootstrap,
+            operation_instance="round:1",
+            durable_response_path=repository / ".orchestrator" / "changed.json",
+        )
+    assert (
+        resolve_resume_state(repository, state.run_id)
+        .state.current_work_unit.round_number
+        == 1
+    )
+
+    # This is the durable tail left by a crash immediately before the work-unit
+    # round revision.  Its cursor and policy are safe to repeat, but replay must
+    # still expose round 1 until the authoritative work-unit fact is appended.
+    pending_round = active.start_recomposed_request_round()
+    driver._persist_recomposed_round_prerequisites(pending_round)
+    assert (
+        resolve_resume_state(repository, state.run_id)
+        .state.current_work_unit.round_number
+        == 1
+    )
+
     history = WorkflowHistory(active.current_work_unit_id)
     advanced, output = WorkflowEngine(driver)._invoke_role(
         active,
@@ -961,12 +987,34 @@ def test_recomposed_request_opens_new_round_and_operation_but_binding_drift_stop
     assert advanced.current_work_unit.round_number == 2
     active = driver.active_state
     assert active is not None and active.current_work_unit.round_number == 2
+    replayed = resolve_resume_state(repository, state.run_id).state
+    assert replayed.current_work_unit.round_number == 2
+    chain = ArtifactStore(repository, state.run_id).load_chain()
+    round_records = tuple(
+        record
+        for record in chain
+        if isinstance(record.payload, WorkUnitPayload)
+        and record.logical_id == f"work-unit-{state.current_work_unit_id}"
+    )
+    assert tuple(record.payload.round_number for record in round_records) == (1, 2)
+    round_record_index = chain.index(round_records[-1])
+    transition, event, policy = chain[round_record_index - 3 : round_record_index]
+    assert isinstance(transition.payload, WorkflowTransitionPayload)
+    assert transition.payload.step == WorkflowStep.CODEX_IMPLEMENTATION.value
+    assert isinstance(event.payload, WorkflowEventPayload)
+    assert event.payload.record_refs == (transition.record_id,)
+    assert isinstance(policy.payload, WorkflowPolicyPayload)
+    assert policy.idempotency_key.endswith("recomposed-round:2")
+    assert sum(
+        record.idempotency_key.endswith("recomposed-round:2") for record in chain
+    ) == 1
     second = driver._start_provider_attempt(
         changed_request,
         changed_bootstrap,
         operation_instance="round:2",
         durable_response_path=repository / ".orchestrator" / "changed.json",
     )
+    _require_provider_input_round((first[0], second[0]), changed_request)
     chain = ArtifactStore(repository, state.run_id).load_chain()
     attempts = tuple(
         record.payload

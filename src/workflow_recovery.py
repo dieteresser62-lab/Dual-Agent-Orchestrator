@@ -143,13 +143,15 @@ def _require_provider_input_round(
     prior_input_digest = next(
         (
             record.payload.input_digest
-            for record in prior_records
+            for record in reversed(prior_records)
             if isinstance(record.payload, ProviderAttemptPayload)
-            and record.payload.input_digest != measurement.input_digest
         ),
         None,
     )
-    if prior_input_digest is not None:
+    if (
+        prior_input_digest is not None
+        and prior_input_digest != measurement.input_digest
+    ):
         raise ProviderRequestRoundRequired(
             binding_fingerprint=measurement.binding_fingerprint,
             previous_input_digest=prior_input_digest,

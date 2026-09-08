@@ -82,6 +82,7 @@ from workflow_state import (
     WorkflowStep,
     WorkUnitKind,
     WorkUnitRecord,
+    WorkUnitStatus,
     project_implementer_return_policy,
 )
 
@@ -145,6 +146,24 @@ class WorkflowPersistence:
 
     def __init__(self, dependencies: WorkflowPersistenceDependencies) -> None:
         self._dependencies = dependencies
+
+    @staticmethod
+    def is_recomposed_round_checkpoint(
+        active_state: WorkflowState | None,
+        state: WorkflowState,
+    ) -> bool:
+        """Recognize the sole same-step in-progress round advance."""
+
+        return (
+            active_state is not None
+            and active_state.run_id == state.run_id
+            and active_state.current_work_unit_id == state.current_work_unit_id
+            and active_state.current_work_unit.status is WorkUnitStatus.IN_PROGRESS
+            and state.current_work_unit.status is WorkUnitStatus.IN_PROGRESS
+            and active_state.current_step is state.current_step
+            and state.current_work_unit.round_number
+            == active_state.current_work_unit.round_number + 1
+        )
 
     @property
     def _artifact_bridge(self) -> ArtifactBridge | None:
@@ -288,6 +307,56 @@ class WorkflowPersistence:
                 fingerprint_sha256=state.task_digest,
                 fingerprint_kind=FingerprintKind.CONTRACT,
             )
+
+    def _persist_recomposed_round_prerequisites(
+        self, state: WorkflowState
+    ) -> None:
+        """Persist the R2 cursor and policy before its work-unit round revision."""
+
+        bridge = self._artifact_bridge
+        if bridge is None or state.task_digest is None:
+            return
+        unit = state.current_work_unit
+        work_unit_id = str(unit.work_unit_id)
+        idempotency_key = (
+            f"workflow-policy:{work_unit_id}:"
+            f"recomposed-round:{unit.round_number}"
+        )
+        chain = bridge.store.current_chain()
+        if any(record.idempotency_key == idempotency_key for record in chain):
+            return
+        self._dependencies.append_workflow_transition(
+            WorkflowTransitionPayload(
+                str(state.current_slice_id),
+                state.current_slice.status.value,
+                work_unit_id,
+                state.current_step.value,
+                unit.status.value,
+            ),
+            state.task_digest,
+        )
+        policy = WorkflowPolicyPayload(
+            work_unit_id,
+            *project_implementer_return_policy(unit),
+        )
+        chain = bridge.store.current_chain()
+        logical_id = f"workflow-policy-{work_unit_id}"
+        revision = 1 + max(
+            (
+                record.revision
+                for record in chain
+                if record.record_type is RecordType.WORKFLOW_POLICY
+                and record.logical_id == logical_id
+            ),
+            default=0,
+        )
+        bridge.append(
+            policy,
+            logical_id=logical_id,
+            idempotency_key=idempotency_key,
+            fingerprint_sha256=state.task_digest,
+            fingerprint_kind=FingerprintKind.CONTRACT,
+        )
 
     def _persist_slice_boundaries(self, state: WorkflowState) -> None:
         """Append exact Slice Git/scope facts before any guarded side effect."""

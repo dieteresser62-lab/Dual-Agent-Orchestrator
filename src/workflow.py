@@ -1081,6 +1081,27 @@ class WorkflowRunResult:
         )
 
 
+def _review_round_number(
+    unit: WorkUnitRecord,
+    history: WorkflowHistory,
+    reviewer: AgentRole,
+) -> int:
+    """Keep reviewer rounds independent from another role's resume rounds."""
+
+    completed_review_rounds = sum(
+        isinstance(event, ReviewAuditEvent)
+        and event.result.reviewer is reviewer
+        for event in history.events
+    )
+    foreign_invocation_rounds = sum(
+        failure.role != reviewer.value for failure in unit.invocation_failures
+    )
+    return max(
+        1 + completed_review_rounds,
+        unit.round_number - foreign_invocation_rounds,
+    )
+
+
 class WorkflowEngine:
     """Additive state-v3 engine for the Codex/Claude chain."""
 
@@ -2343,14 +2364,7 @@ class WorkflowEngine:
             raise WorkflowExecutionError(
                 "validation attestation is incomplete and cannot be overridden"
             )
-        review_round = max(
-            unit.round_number,
-            1 + sum(
-                isinstance(event, ReviewAuditEvent)
-                and event.result.reviewer is reviewer
-                for event in history.events
-            ),
-        )
+        review_round = _review_round_number(unit, history, reviewer)
         contract = StepContract(
             name=f"work-unit-{unit.work_unit_id}-{state.current_step.value}",
             reviewer=reviewer,

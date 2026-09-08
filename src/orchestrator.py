@@ -700,6 +700,11 @@ class ProductionWorkflowDriver:
     def _persist_workflow_snapshot(self, state: WorkflowState) -> None:
         self._persistence_boundary()._persist_workflow_snapshot(state)
 
+    def _persist_recomposed_round_prerequisites(
+        self, state: WorkflowState
+    ) -> None:
+        self._persistence_boundary()._persist_recomposed_round_prerequisites(state)
+
     def _persist_slice_boundaries(self, state: WorkflowState) -> None:
         self._persistence_boundary()._persist_slice_boundaries(state)
 
@@ -2251,6 +2256,10 @@ class ProductionWorkflowDriver:
         # engine invocation.  Merge the driver-owned ledger before archiving the
         # completed unit, otherwise the audit can bind the new commit to an older
         # (possibly denying) reviewer result.
+        recomposed_round = WorkflowPersistence.is_recomposed_round_checkpoint(
+            self.active_state,
+            state,
+        )
         if (
             self.active_state is not None
             and self.active_state.run_id == state.run_id
@@ -2293,6 +2302,8 @@ class ProductionWorkflowDriver:
         )
         try:
             self._bind_artifact_store(persisted)
+            if recomposed_round:
+                self._persist_recomposed_round_prerequisites(persisted)
             self._persist_structured_baseline(persisted)
             self._project_audit(persisted, history)
         except Exception as exc:
