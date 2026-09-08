@@ -95,6 +95,15 @@ REVIEW_SNAPSHOT_EXCLUDED_ROOTS = frozenset(
         "tmp",
     }
 )
+REVIEW_SNAPSHOT_AUDIT_PATH_PATTERNS = (
+    re.compile(
+        r"^docs/internal/[a-z0-9]+(?:-[a-z0-9]+)*-review-[0-9a-f]{8}\.md$"
+    ),
+    re.compile(
+        r"^docs/internal/slice-[a-z0-9]+(?:-[a-z0-9]+)*-"
+        r"[0-9]{2,}-[a-z0-9]+(?:-[a-z0-9]+)*\.md$"
+    ),
+)
 
 
 @dataclass(frozen=True)
@@ -603,6 +612,11 @@ def _review_snapshot_paths(source: Path) -> tuple[PurePosixPath, ...] | None:
         if path.is_absolute() or not path.parts or ".." in path.parts:
             raise RuntimeError(f"git returned unsafe reviewer snapshot path: {raw!r}")
         if path.parts[0] in REVIEW_SNAPSHOT_EXCLUDED_ROOTS:
+            continue
+        if any(
+            pattern.fullmatch(path.as_posix())
+            for pattern in REVIEW_SNAPSHOT_AUDIT_PATH_PATTERNS
+        ):
             continue
         paths.append(path)
     return tuple(sorted(set(paths), key=lambda item: item.as_posix()))

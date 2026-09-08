@@ -1515,6 +1515,88 @@ def test_read_only_reviewer_workspace_blocks_writes_and_preserves_source(tmp_pat
     assert not workspace.container.exists()
 
 
+def test_packetless_reviewer_workspace_omits_morphcook_audit_projection(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    internal = source / "docs" / "internal"
+    internal.mkdir(parents=True)
+    files = {
+        "morphcook-spec-arbeitsplan.md": "work plan\n",
+        "morphcook-spec-implement-review-89abcdef.md": "overall audit\n",
+        "slice-morphcook-spec-arbeitsplan-07-domain-model.md": "slice audit\n",
+        "architecture-notes.md": "other internal documentation\n",
+    }
+    for name, content in files.items():
+        (internal / name).write_text(content, encoding="utf-8")
+    agent_runtime.subprocess.run(
+        ["git", "init", "--quiet"], cwd=source, capture_output=True, check=True
+    )
+
+    workspace = create_read_only_reviewer_workspace(source)
+    try:
+        copied_internal = workspace.root / "docs" / "internal"
+        assert (copied_internal / "morphcook-spec-arbeitsplan.md").is_file()
+        assert (copied_internal / "architecture-notes.md").is_file()
+        assert not (
+            copied_internal / "morphcook-spec-implement-review-89abcdef.md"
+        ).exists()
+        assert not (
+            copied_internal / "slice-morphcook-spec-arbeitsplan-07-domain-model.md"
+        ).exists()
+    finally:
+        workspace.cleanup()
+
+
+def test_packetless_reviewer_workspace_without_audit_projection_is_unchanged(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    internal = source / "docs" / "internal"
+    internal.mkdir(parents=True)
+    expected = {
+        "docs/internal/morphcook-spec-arbeitsplan.md": "work plan\n",
+        "docs/internal/review-guidance.md": "guidance\n",
+        "src/product.py": "VALUE = 1\n",
+    }
+    for relative, content in expected.items():
+        target = source / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    agent_runtime.subprocess.run(
+        ["git", "init", "--quiet"], cwd=source, capture_output=True, check=True
+    )
+
+    workspace = create_read_only_reviewer_workspace(source)
+    try:
+        actual = {
+            path.relative_to(workspace.root).as_posix(): path.read_text(encoding="utf-8")
+            for path in workspace.root.rglob("*")
+            if path.is_file()
+        }
+        assert actual == expected
+    finally:
+        workspace.cleanup()
+
+
+def test_audit_shaped_manifest_path_remains_visible_to_packet_review(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    audit_path = "docs/internal/morphcook-spec-implement-review-89abcdef.md"
+    audit = source / audit_path
+    audit.parent.mkdir(parents=True)
+    audit.write_text("packet-selected audit\n", encoding="utf-8")
+
+    workspace = create_read_only_reviewer_workspace(source, (audit_path,))
+    try:
+        assert (workspace.root / audit_path).read_text(encoding="utf-8") == (
+            "packet-selected audit\n"
+        )
+    finally:
+        workspace.cleanup()
+
+
 def test_manifest_reviewer_workspace_contains_only_exact_files(tmp_path: Path) -> None:
     source = tmp_path / "source"
     (source / "src").mkdir(parents=True)
