@@ -213,7 +213,9 @@ class _ReviewPayload:
 
 class _Bridge:
     def __init__(self, chain: list[object]) -> None:
-        self.store = SimpleNamespace(load_chain=lambda: tuple(chain))
+        self.store = SimpleNamespace(
+            load_chain=lambda: tuple(chain), current_chain=lambda: tuple(chain)
+        )
         self.bindings: list[object] = []
 
     def append(self, payload: object, **_kwargs: object) -> object:

@@ -3,9 +3,13 @@ from __future__ import annotations
 from dataclasses import replace
 import hashlib
 import json
+import logging
 from pathlib import Path
+import time
 
 import pytest
+
+import artifact_store as artifact_store_module
 
 from artifact_models import (
     ArtifactRecord, Fingerprint, FingerprintKind, RecordType, TaskPayload,
@@ -23,6 +27,7 @@ def make_record(
     logical_id: str,
     payload=None,  # type: ignore[no-untyped-def]
     *,
+    run_id: str = "run-1",
     revision: int = 1,
     predecessors: tuple[str, ...] = (),
     idempotency_key: str | None = None,
@@ -30,7 +35,7 @@ def make_record(
 ) -> ArtifactRecord:
     payload = payload or WorkUnitPayload("1", revision, ("src/a.py",))
     return ArtifactRecord.create(
-        run_id="run-1", logical_id=logical_id, revision=revision,
+        run_id=run_id, logical_id=logical_id, revision=revision,
         fingerprint=Fingerprint(FingerprintKind.IMPLEMENTATION, DIGEST),
         predecessor_ids=predecessors, created_at=created_at,
         idempotency_key=idempotency_key or f"effect-{logical_id}-{revision}",
@@ -259,6 +264,167 @@ def test_append_index_observes_records_published_by_a_later_store_instance(
     third = first_store.put(make_record("three", predecessors=(second.record_id,)))
 
     assert first_store.load_chain() == (first, second, third)
+
+
+def test_process_local_chain_reuses_validated_records_without_rereading(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    writer = ArtifactStore(tmp_path, "run-1")
+    first = writer.put(make_record("one"))
+    reader = ArtifactStore(tmp_path, "run-1")
+    assert reader.current_chain() == (first,)
+    original_read = artifact_store_module._read_record
+    reads = 0
+
+    def counted_read(path: Path):  # type: ignore[no-untyped-def]
+        nonlocal reads
+        reads += 1
+        return original_read(path)
+
+    monkeypatch.setattr(artifact_store_module, "_read_record", counted_read)
+
+    assert reader.current_chain() == (first,)
+    assert reader.current_chain() == (first,)
+    assert reads == 0
+
+
+def test_process_local_chain_defers_content_tampering_to_explicit_reload(
+    tmp_path: Path,
+) -> None:
+    store = ArtifactStore(tmp_path, "run-1")
+    first = store.put(make_record("one"))
+    assert store.current_chain() == (first,)
+    path = store.records_dir / f"{first.record_id}.json"
+    envelope = json.loads(path.read_text(encoding="utf-8"))
+    envelope["record"]["logical_id"] = "tampered"
+    path.write_text(json.dumps(envelope), encoding="utf-8")
+
+    assert store.current_chain() == (first,)
+    with pytest.raises(ArtifactCorruptionError, match="digest mismatch"):
+        store.load_chain()
+
+
+def test_process_local_chain_lookup_cost_does_not_grow_with_chain_length(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    stores: dict[str, ArtifactStore] = {}
+    for run_id, record_count in (("small", 1), ("large", 64)):
+        store = ArtifactStore(tmp_path, run_id)
+        predecessor_ids: tuple[str, ...] = ()
+        for ordinal in range(record_count):
+            record = make_record(
+                f"record-{ordinal}",
+                run_id=run_id,
+                predecessors=predecessor_ids,
+            )
+            write_envelope(store.records_dir / f"{record.record_id}.json", record)
+            predecessor_ids = (record.record_id,)
+        assert len(store.load_chain()) == record_count
+        stores[run_id] = store
+
+    directory_checks = {run_id: 0 for run_id in stores}
+    head_checks = {run_id: 0 for run_id in stores}
+    original_directory_stamp = ArtifactStore._records_directory_stamp
+    original_read_head_cache = ArtifactStore._read_head_cache
+
+    def counted_directory_stamp(store: ArtifactStore):  # type: ignore[no-untyped-def]
+        directory_checks[store.run_id] += 1
+        return original_directory_stamp(store)
+
+    def counted_read_head_cache(store: ArtifactStore):  # type: ignore[no-untyped-def]
+        head_checks[store.run_id] += 1
+        return original_read_head_cache(store)
+
+    def reject_individual_file_touch(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("warm current_chain touched an individual artifact file")
+
+    monkeypatch.setattr(ArtifactStore, "_records_directory_stamp", counted_directory_stamp)
+    monkeypatch.setattr(ArtifactStore, "_read_head_cache", counted_read_head_cache)
+    monkeypatch.setattr(ArtifactStore, "_artifact_file_stamp", reject_individual_file_touch)
+
+    for store in stores.values():
+        store.current_chain()
+        store.current_chain()
+        store.current_chain()
+
+    assert directory_checks == {"small": 3, "large": 3}
+    assert head_checks == {"small": 3, "large": 3}
+
+
+@pytest.mark.parametrize("mutation", ("delete", "rename"))
+def test_process_local_chain_rebuilds_after_record_removal_or_rename(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mutation: str
+) -> None:
+    store = ArtifactStore(tmp_path, "run-1")
+    first = store.put(make_record("one"))
+    second = store.put(make_record("two", predecessors=(first.record_id,)))
+    assert store.current_chain() == (first, second)
+    path = store.records_dir / f"{first.record_id}.json"
+    if mutation == "delete":
+        path.unlink()
+    else:
+        path.rename(path.with_suffix(".moved"))
+
+    rebuilds = 0
+    original_load_chain = store.load_chain
+
+    def counted_load_chain():  # type: ignore[no-untyped-def]
+        nonlocal rebuilds
+        rebuilds += 1
+        return original_load_chain()
+
+    monkeypatch.setattr(store, "load_chain", counted_load_chain)
+
+    if mutation == "delete":
+        with pytest.raises(ArtifactCorruptionError, match="missing predecessor"):
+            store.current_chain()
+    else:
+        with pytest.raises(ArtifactCorruptionError, match="unexpected entry"):
+            store.current_chain()
+    assert rebuilds == 1
+
+
+def test_process_local_chain_rebuilds_after_external_append(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    first_store = ArtifactStore(tmp_path, "run-1")
+    first = first_store.put(make_record("one"))
+    assert first_store.current_chain() == (first,)
+    second_store = ArtifactStore(tmp_path, "run-1")
+    second = second_store.put(make_record("two", predecessors=(first.record_id,)))
+    original_read = artifact_store_module._read_record
+    reads = 0
+
+    def counted_read(path: Path):  # type: ignore[no-untyped-def]
+        nonlocal reads
+        reads += 1
+        return original_read(path)
+
+    monkeypatch.setattr(artifact_store_module, "_read_record", counted_read)
+
+    assert first_store.current_chain() == (first, second)
+    assert reads == 2
+
+
+def test_slow_full_chain_validation_emits_configured_progress(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    writer = ArtifactStore(tmp_path, "run-1")
+    record = writer.put(make_record("one"))
+    reader = ArtifactStore(tmp_path, "run-1", progress_threshold_seconds=0.01)
+    original_read = artifact_store_module._read_record
+
+    def slow_read(path: Path):  # type: ignore[no-untyped-def]
+        time.sleep(0.05)
+        return original_read(path)
+
+    monkeypatch.setattr(artifact_store_module, "_read_record", slow_read)
+    caplog.set_level(logging.INFO, logger="artifact_store")
+
+    assert reader.load_chain() == (record,)
+    assert "phase=full-chain-validation threshold=0.01s" in caplog.text
 
 
 def test_cache_refresh_passes_expected_progress_without_instance_state(

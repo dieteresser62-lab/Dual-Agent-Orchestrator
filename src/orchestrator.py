@@ -554,7 +554,11 @@ class ProductionWorkflowDriver:
         self._bind_artifact_store(state)
         self._persist_structured_baseline(state)
         if self._artifact_bridge is not None:
-            self.active_state = resolve_resume_state(self.root, state.run_id).state
+            self.active_state = resolve_resume_state(
+                self.root,
+                state.run_id,
+                validated_store=self._artifact_bridge.store,
+            ).state
             state = self.active_state
         if state.current_work_unit.kind is WorkUnitKind.PLAN and not self.last_codex_output:
             artifact = (
@@ -575,7 +579,13 @@ class ProductionWorkflowDriver:
                 or self._artifact_bridge.store.run_id != state.run_id
             ):
                 self._artifact_bridge = ArtifactBridge(
-                    ArtifactStore(self.root, state.run_id)
+                    ArtifactStore(
+                        self.root,
+                        state.run_id,
+                        progress_threshold_seconds=(
+                            self.config.phase_progress_threshold_seconds
+                        ),
+                    )
                 )
         else:
             self._artifact_bridge = None
@@ -587,16 +597,27 @@ class ProductionWorkflowDriver:
         return matches_baseline_initialization_prefix(records, state)
 
     def assert_structured_decision_context(self) -> None:
-        """Reload authoritative records before an external workflow side effect."""
+        """Revalidate the authoritative chain before an external side effect."""
         state = self.active_state
         if state is None or state.effective_protocol_mode is ProtocolMode.LEGACY_STATE_V3:
             return
         try:
-            resolution = resolve_resume_state(self.root, state)
+            bridge = self._artifact_bridge
+            if bridge is None:
+                raise WorkflowExecutionError(
+                    "structured decision context has no artifact store"
+                )
+            resolution = resolve_resume_state(
+                self.root, state, validated_store=bridge.store
+            )
             if self._reconcile_pending_side_effects(
                 resolution.state, resolution.replay_result
             ):
-                resolution = resolve_resume_state(self.root, resolution.state)
+                resolution = resolve_resume_state(
+                    self.root,
+                    resolution.state,
+                    validated_store=bridge.store,
+                )
         except (ArtifactResumeError, ValueError) as exc:
             raise WorkflowExecutionError(
                 f"structured decision context is not resumable: {exc}"
@@ -668,7 +689,7 @@ class ProductionWorkflowDriver:
     ) -> None:
         bridge = self._artifact_bridge
         assert bridge is not None
-        chain = bridge.store.load_chain()
+        chain = bridge.store.current_chain()
         revision = 1 + max(
             (
                 record.revision for record in chain
@@ -784,7 +805,7 @@ class ProductionWorkflowDriver:
         attempt_number = int(spec.operation[5])
         matching_attempt_records = tuple(
             record.payload
-            for record in bridge.store.load_chain()
+            for record in bridge.store.current_chain()
             if isinstance(record.payload, ProviderAttemptPayload)
             and record.payload.provider.value == spec.operation[0]
             and record.payload.operation == spec.operation[1]
@@ -869,7 +890,12 @@ class ProductionWorkflowDriver:
             self._replace_existing_run_id = None
             self.active_state = state
             return
-        resolution = resolve_resume_state(self.root, state.run_id)
+        bridge = self._artifact_bridge
+        resolution = resolve_resume_state(
+            self.root,
+            state.run_id,
+            validated_store=(None if bridge is None else bridge.store),
+        )
         write_workflow_state_projection(
             self.state_file,
             resolution,
@@ -977,7 +1003,7 @@ class ProductionWorkflowDriver:
             )
         try:
             replay = replay_artifacts(
-                bridge.store.load_chain(), state.run_id, allow_empty=True
+                bridge.store.current_chain(), state.run_id, allow_empty=True
             )
             reduced = reduce_findings(replay)
             if state.current_work_unit.kind is WorkUnitKind.CORRECTION:
@@ -1019,7 +1045,7 @@ class ProductionWorkflowDriver:
             )
         try:
             replay = replay_artifacts(
-                bridge.store.load_chain(), state.run_id, allow_empty=True
+                bridge.store.current_chain(), state.run_id, allow_empty=True
             )
             projected = reduce_findings(replay).ledger.findings
         except ArtifactReplayError as exc:
@@ -1348,7 +1374,7 @@ class ProductionWorkflowDriver:
             return None
         matches = tuple(
             record
-            for record in (chain if chain is not None else bridge.store.load_chain())
+            for record in (chain if chain is not None else bridge.store.current_chain())
             if isinstance(record.payload, ProviderContentPayload)
             and record.payload.role is role
             and record.payload.work_unit_id == str(work_unit_id)
@@ -1584,7 +1610,7 @@ class ProductionWorkflowDriver:
         state = self.active_state
         if bridge is None or state is None:
             return None
-        chain = bridge.store.load_chain()
+        chain = bridge.store.current_chain()
         replay = replay_artifacts(chain, state.run_id)
         transitions = tuple(
             record for record in replay.records
@@ -2023,7 +2049,7 @@ class ProductionWorkflowDriver:
         if bridge is None:
             return None
         target = path.resolve().relative_to(self.root).as_posix()
-        for record in reversed(bridge.store.load_chain()):
+        for record in reversed(bridge.store.current_chain()):
             payload = record.payload
             if (
                 isinstance(payload, SideEffectPayload)
@@ -2195,7 +2221,12 @@ class ProductionWorkflowDriver:
             self._replace_existing_run_id = None
             self.active_state = persisted
             return
-        resolution = resolve_resume_state(self.root, persisted.run_id)
+        bridge = self._artifact_bridge
+        resolution = resolve_resume_state(
+            self.root,
+            persisted.run_id,
+            validated_store=(None if bridge is None else bridge.store),
+        )
         projected = resolution.state
         write_workflow_state_projection(
             self.state_file,

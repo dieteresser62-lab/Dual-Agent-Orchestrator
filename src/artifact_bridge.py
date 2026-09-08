@@ -685,7 +685,7 @@ class ArtifactBridge:
         effort: str = "unknown",
     ) -> ArtifactRecord:
         """Persist one physical provider start after all local preflights pass."""
-        chain = self.store.load_chain()
+        chain = self.store.current_chain()
         replay_artifacts(chain, self.store.run_id)
         if (
             measurement_record not in chain
@@ -811,7 +811,7 @@ class ArtifactBridge:
         usage: ProviderUsagePayload | None,
     ) -> ArtifactRecord:
         """Persist the sole terminal revision for a previously durable start."""
-        chain = self.store.load_chain()
+        chain = self.store.current_chain()
         if started_record not in chain:
             raise ArtifactBridgeError(
                 "provider attempt start is not in the accepted chain"

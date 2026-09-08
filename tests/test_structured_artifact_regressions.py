@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+import artifact_store as artifact_store_module
 import orchestrator
 from agent_adapters import AgentOutputError
 from agent_runtime import (
@@ -199,26 +200,26 @@ def test_first_checkpoint_bootstraps_authoritative_chain_idempotently(
     )
 
 
-def test_external_side_effect_guard_loads_and_replays_the_chain_once(
+def test_external_side_effect_guard_reuses_the_process_local_chain(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repository = _repository(tmp_path, "feature/structured-regression")
     state = _state(repository, "structured-single-replay")
     driver = _driver(repository)
     driver.checkpoint(state, WorkflowHistory(1))
-    original_load_chain = ArtifactStore.load_chain
-    calls = 0
+    original_read = artifact_store_module._read_record
+    reads = 0
 
-    def counted_load_chain(store: ArtifactStore):
-        nonlocal calls
-        calls += 1
-        return original_load_chain(store)
+    def counted_read(path: Path):  # type: ignore[no-untyped-def]
+        nonlocal reads
+        reads += 1
+        return original_read(path)
 
-    monkeypatch.setattr(ArtifactStore, "load_chain", counted_load_chain)
+    monkeypatch.setattr(artifact_store_module, "_read_record", counted_read)
 
     driver.assert_structured_decision_context()
 
-    assert calls == 1
+    assert reads == 0
 
 
 def test_not_ready_final_report_resumes_without_a_final_report_mirror(

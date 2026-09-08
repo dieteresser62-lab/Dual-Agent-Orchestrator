@@ -359,6 +359,7 @@ class OrchestratorConfig:
     agent_live_stream_channels: str = "both"
     repo_root: Path = field(default_factory=lambda: Path.cwd().resolve())
     strict_preflight: bool = False
+    phase_progress_threshold_seconds: float = 30.0
     provider_input_budget: ProviderInputBudgetPolicy = field(
         default_factory=default_provider_input_budget_policy
     )

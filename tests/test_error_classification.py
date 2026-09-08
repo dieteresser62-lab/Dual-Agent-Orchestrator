@@ -130,6 +130,7 @@ def _invalid_recovery_response(tmp_path: Path) -> BaseException:
     driver._artifact_bridge = SimpleNamespace(  # noqa: SLF001
         store=SimpleNamespace(
             load_chain=lambda: (content_record,),
+            current_chain=lambda: (content_record,),
             read_blob=lambda _reference: b"[]",
         )
     )

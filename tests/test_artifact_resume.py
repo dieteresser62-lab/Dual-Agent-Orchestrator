@@ -9,6 +9,7 @@ import subprocess
 import pytest
 
 import artifact_resume
+import artifact_store as artifact_store_module
 from artifact_bridge import ArtifactBridge
 from artifact_resume import ArtifactResumeError, resolve_resume_state
 from artifact_models import FingerprintKind, canonical_json
@@ -136,6 +137,63 @@ def test_resume_projects_records_and_uses_state_only_as_run_locator(
     assert resolved.state == projected
     assert resolved.state.branch == "feature/cutover"
     assert resolved.state.task_scope_patterns == ("src/cutover.py",)
+
+
+def test_process_local_resolution_is_warm_but_explicit_resume_fully_reloads(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    locator, projected, driver = _record_run(tmp_path)
+    assert driver._artifact_bridge is not None
+    store = driver._artifact_bridge.store
+    assert store.current_chain()
+    original_read = artifact_store_module._read_record
+    reads = 0
+
+    def counted_read(path: Path):  # type: ignore[no-untyped-def]
+        nonlocal reads
+        reads += 1
+        return original_read(path)
+
+    monkeypatch.setattr(artifact_store_module, "_read_record", counted_read)
+
+    warm = resolve_resume_state(tmp_path, locator, validated_store=store)
+    assert warm.state == projected
+    assert reads == 0
+
+    resumed = resolve_resume_state(tmp_path, locator.run_id)
+    assert resumed.state == projected
+    assert reads == len(store.current_chain())
+
+
+def test_driver_configures_artifact_phase_progress_threshold(tmp_path: Path) -> None:
+    task = tmp_path / "task.md"
+    task.write_text("task", encoding="utf-8")
+    state = init_workflow_state(
+        run_id="configured-progress",
+        task_file=str(task),
+        branch="feature/cutover",
+        branch_base="b" * 40,
+        first_slice_start_commit="b" * 40,
+        slice_count=1,
+        task_digest="a" * 64,
+        task_scope_patterns=("src/cutover.py",),
+        target_branch="feature/cutover",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+    )
+    driver = ProductionWorkflowDriver(
+        repository_root=tmp_path,
+        state_file=tmp_path / ".orchestrator" / "state.json",
+        agents={},
+        config=OrchestratorConfig(
+            repo_root=tmp_path, phase_progress_threshold_seconds=0.25
+        ),
+        allowed_roots=(tmp_path,),
+    )
+
+    driver._bind_artifact_store(state)
+
+    assert driver._artifact_bridge is not None
+    assert driver._artifact_bridge.store.progress_threshold_seconds == 0.25
 
 
 def test_authoritative_side_effect_result_projects_without_a_mirror_write(

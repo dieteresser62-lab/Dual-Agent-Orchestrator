@@ -189,7 +189,7 @@ class WorkflowRecovery:
         if bridge is None:
             return False
         if replay is None:
-            replay = replay_artifacts(bridge.store.load_chain(), state.run_id)
+            replay = replay_artifacts(bridge.store.current_chain(), state.run_id)
         records = {record.record_id: record for record in replay.records}
         changed = False
 
@@ -372,7 +372,7 @@ class WorkflowRecovery:
             durable_response_path.resolve().relative_to(self._dependencies.root)
         except ValueError as exc:
             raise WorkflowExecutionError("provider response target is outside the repository") from exc
-        replay = replay_artifacts(bridge.store.load_chain(), state.run_id)
+        replay = replay_artifacts(bridge.store.current_chain(), state.run_id)
         instance = operation_instance or "default"
         operation_prefix = (
             measurement.provider,
@@ -637,7 +637,7 @@ class WorkflowRecovery:
             f"agent-{invocation.work_unit_id}-{invocation.step.value}-"
             f"{invocation.round_number}"
         )
-        chain = bridge.store.load_chain()
+        chain = bridge.store.current_chain()
         candidates = tuple(
             item
             for item in chain
@@ -899,7 +899,7 @@ class WorkflowRecovery:
         ):
             return None
 
-        chain = bridge.store.load_chain()
+        chain = bridge.store.current_chain()
         try:
             replay = self._replay_pending_native_reviewer(chain, state)
         except ArtifactReplayError as exc:
@@ -1067,7 +1067,7 @@ class WorkflowRecovery:
         logical_id = (
             f"review-claude-{invocation.work_unit_id}-{invocation.round_number}"
         )
-        chain = bridge.store.load_chain()
+        chain = bridge.store.current_chain()
         candidates = tuple(
             item
             for item in chain

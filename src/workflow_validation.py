@@ -89,7 +89,7 @@ class WorkflowValidation:
         bridge = self._dependencies.artifact_bridge()
         if bridge is None:
             return None
-        chain = bridge.store.load_chain()
+        chain = bridge.store.current_chain()
         candidates = tuple(
             record
             for record in chain

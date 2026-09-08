@@ -216,7 +216,7 @@ class WorkflowGitCommit:
         existing_git_effect = None
         if artifact_bridge is not None:
             effect_replay = replay_artifacts(
-                artifact_bridge.store.load_chain(), state.run_id
+                artifact_bridge.store.current_chain(), state.run_id
             )
             existing_git_effect = next(
                 (
@@ -316,7 +316,7 @@ class WorkflowGitCommit:
         current_review_record: ArtifactRecord | None = None
         structured_binding: tuple[str, tuple[str, ...]] | None = None
         if artifact_bridge is not None:
-            chain = artifact_bridge.store.load_chain()
+            chain = artifact_bridge.store.current_chain()
             structured_attestation = next(
                 (
                     item

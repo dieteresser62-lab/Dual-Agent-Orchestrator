@@ -179,7 +179,7 @@ class WorkflowPersistence:
         bridge = self._artifact_bridge
         if bridge is None or state.task_digest is None:
             return
-        replay = replay_artifacts(bridge.store.load_chain(), state.run_id)
+        replay = replay_artifacts(bridge.store.current_chain(), state.run_id)
         recorded_slices = dict(replay.slice_statuses)
         recorded_units = {
             item.work_unit_id: item for item in replay.work_unit_states
@@ -269,7 +269,7 @@ class WorkflowPersistence:
             )
             if recorded_policies.get(work_unit_id) == policy:
                 continue
-            chain = bridge.store.load_chain()
+            chain = bridge.store.current_chain()
             logical_id = f"workflow-policy-{work_unit_id}"
             revision = 1 + max(
                 (
@@ -292,7 +292,7 @@ class WorkflowPersistence:
         bridge = self._artifact_bridge
         if bridge is None or state.task_digest is None:
             return
-        replay = replay_artifacts(bridge.store.load_chain(), state.run_id)
+        replay = replay_artifacts(bridge.store.current_chain(), state.run_id)
         recorded = {item.slice_id: item for item in replay.slice_boundaries}
         for item in state.slices:
             if item.start_commit is None or item.start_fingerprint is None:
@@ -306,7 +306,7 @@ class WorkflowPersistence:
             if recorded.get(payload.slice_id) == payload:
                 continue
             logical_id = f"slice-boundary-{payload.slice_id}"
-            chain = bridge.store.load_chain()
+            chain = bridge.store.current_chain()
             revision = 1 + max(
                 (
                     record.revision for record in chain
@@ -349,7 +349,7 @@ class WorkflowPersistence:
         bridge = self._artifact_bridge
         if bridge is None or state.task_digest is None:
             return
-        chain = bridge.store.load_chain()
+        chain = bridge.store.current_chain()
         replay = replay_artifacts(chain, state.run_id)
         recorded = {
             payload.work_unit_id: payload for payload in replay.gate_transitions
@@ -467,7 +467,7 @@ class WorkflowPersistence:
                 )
             )
         ):
-            chain = bridge.store.load_chain()
+            chain = bridge.store.current_chain()
             final_binding = next(
                 (
                     item
@@ -619,7 +619,7 @@ class WorkflowPersistence:
             request_id=output.request_id,
             response_sha256=output.response_sha256,
         )
-        chain = bridge.store.load_chain()
+        chain = bridge.store.current_chain()
         canonical = self._dependencies.canonical_agent_result(
             tuple(
                 record
@@ -757,7 +757,7 @@ class WorkflowPersistence:
             )
         attestation_records = tuple(
             record
-            for record in bridge.store.load_chain()
+            for record in bridge.store.current_chain()
             if isinstance(record.payload, ValidationAttestationPayload)
             and record.logical_id == output.result.validation.attestation_id
             and record.fingerprint.sha256 == fingerprint
@@ -901,7 +901,7 @@ class WorkflowPersistence:
                 legacy_record = next(
                     (
                         record
-                        for record in bridge.store.load_chain()
+                        for record in bridge.store.current_chain()
                         if record.idempotency_key == legacy_key
                     ),
                     None,
@@ -1115,7 +1115,7 @@ class WorkflowPersistence:
         bridge = self._artifact_bridge
         if bridge is None:
             return
-        chain = bridge.store.load_chain()
+        chain = bridge.store.current_chain()
         commit_binding = next(
             (
                 item

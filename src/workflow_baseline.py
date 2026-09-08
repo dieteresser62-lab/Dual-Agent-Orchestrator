@@ -622,7 +622,7 @@ class WorkflowBaseline:
             )
         unit = state.current_work_unit
         if unit.kind is not WorkUnitKind.PLAN and state.current_slice.scope_paths:
-            chain = bridge.store.load_chain()
+            chain = bridge.store.current_chain()
             finding_import = next(
                 (
                     record
@@ -701,7 +701,7 @@ class WorkflowBaseline:
             raise WorkflowExecutionError(
                 "structured baseline requires the immutable protocol binding"
             )
-        existing_chain = bridge.store.load_chain()
+        existing_chain = bridge.store.current_chain()
         existing_replay = None
         if existing_chain:
             import_only_prefix = all(
@@ -727,7 +727,7 @@ class WorkflowBaseline:
             elif existing_replay.pending_workflow_event_record_id is not None:
                 self._dependencies.reconcile_pending_workflow_event(existing_replay)
                 existing_replay = replay_artifacts(
-                    bridge.store.load_chain(),
+                    bridge.store.current_chain(),
                     state.run_id,
                     allow_incomplete_review_tail=True,
                     allow_finding_import_bootstrap=import_only_prefix,
@@ -770,7 +770,7 @@ class WorkflowBaseline:
         if state is None:
             raise WorkflowExecutionError("provider bootstrap has no active state")
         bridge = self._dependencies.artifact_bridge()
-        chain = bridge.store.load_chain() if bridge is not None else ()
+        chain = bridge.store.current_chain() if bridge is not None else ()
         record_head = relevant_record_head(chain)
         final_review_changes = (
             self._dependencies.collect_changes(state.branch_base)
@@ -818,7 +818,7 @@ class WorkflowBaseline:
         ):
             return measurement_record
         assert measurement_record is not None
-        current_chain = bridge.store.load_chain()
+        current_chain = bridge.store.current_chain()
         repository_paths = (
             final_review_changes.paths
             if final_review_changes is not None

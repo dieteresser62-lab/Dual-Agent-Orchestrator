@@ -231,6 +231,9 @@ class _Store:
     def load_chain(self) -> tuple[_Record, ...]:
         return self.chain
 
+    def current_chain(self) -> tuple[_Record, ...]:
+        return self.chain
+
 
 @dataclass(frozen=True)
 class _Bridge:

@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 import hashlib
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import re
 import shlex
+import stat
 import tempfile
+import threading
+from typing import Iterator
 
 from artifact_models import (
     ArtifactRecord,
@@ -33,6 +38,7 @@ _BLOB_NAME_RE = re.compile(r"^([0-9a-f]{64})\.blob$")
 logger = logging.getLogger(__name__)
 _INVALID_CACHE = object()
 _EMPTY_CHAIN_SHA256 = hashlib.sha256(b"artifact-chain-v1").hexdigest()
+DEFAULT_PHASE_PROGRESS_THRESHOLD_SECONDS = 30.0
 
 
 class ArtifactStoreError(ValueError):
@@ -63,10 +69,24 @@ class _RecordsDirectoryStamp:
     changed_ns: int | None
 
 
+@dataclass(frozen=True, slots=True)
+class _ArtifactFileStamp:
+    """Cheap change detector for bytes validated earlier in this process."""
+
+    device: int
+    inode: int
+    mode: int
+    size: int
+    modified_ns: int
+    changed_ns: int
+
+
 @dataclass(slots=True)
 class _AppendIndex:
     """Process-local derivative of one fully validated record prefix."""
 
+    run_id: str
+    chain: tuple[ArtifactRecord, ...]
     by_idempotency_key: dict[str, tuple[str, ArtifactRecord]]
     record_ids: set[str]
     revision_keys: set[tuple[RecordType, str, int]]
@@ -75,6 +95,8 @@ class _AppendIndex:
     record_count: int
     chain_sha256: str
     records_dir_stamp: _RecordsDirectoryStamp
+    record_file_stamps: dict[str, _ArtifactFileStamp]
+    blob_file_stamps: dict[str, _ArtifactFileStamp]
 
     def head_document(self) -> dict[str, object]:
         return {
@@ -92,19 +114,58 @@ class ArtifactStore:
     stale. Dot-prefixed temporary files are deliberately excluded from scans.
     """
 
-    def __init__(self, repository_root: Path, run_id: str) -> None:
+    def __init__(
+        self,
+        repository_root: Path,
+        run_id: str,
+        *,
+        progress_threshold_seconds: float = DEFAULT_PHASE_PROGRESS_THRESHOLD_SECONDS,
+    ) -> None:
         if not isinstance(run_id, str) or _RUN_ID_RE.fullmatch(run_id) is None:
             raise ArtifactStoreError("run_id is not a safe artifact path component")
         root = Path(repository_root).resolve()
         if not root.is_dir():
             raise ArtifactStoreError("repository_root must be an existing directory")
+        if (
+            isinstance(progress_threshold_seconds, bool)
+            or not isinstance(progress_threshold_seconds, (int, float))
+            or not math.isfinite(float(progress_threshold_seconds))
+            or progress_threshold_seconds <= 0
+        ):
+            raise ArtifactStoreError("progress threshold must be a positive finite number")
         self.repository_root = root
         self.run_id = run_id
+        self.progress_threshold_seconds = float(progress_threshold_seconds)
         self.run_dir = self._confined(root / ".orchestrator" / "artifacts" / run_id)
         self.records_dir = self._confined(self.run_dir / "records")
         self.blobs_dir = self._confined(self.run_dir / "blobs")
         self.head_path = self._confined(self.run_dir / "head.json")
         self._append_index: _AppendIndex | None = None
+
+    @contextmanager
+    def progress_phase(self, phase: str) -> Iterator[None]:
+        """Log once while a configured slow phase is still running."""
+        if not isinstance(phase, str) or not phase.strip():
+            raise ArtifactStoreError("progress phase must be a non-empty string")
+        finished = threading.Event()
+
+        def report() -> None:
+            if not finished.is_set():
+                logger.info(
+                    "Artifact phase still running: run=%s phase=%s threshold=%gs",
+                    self.run_id,
+                    phase,
+                    self.progress_threshold_seconds,
+                )
+
+        timer = threading.Timer(self.progress_threshold_seconds, report)
+        timer.daemon = True
+        timer.start()
+        try:
+            yield
+        finally:
+            finished.set()
+            timer.cancel()
 
     def put_blob(self, content: bytes) -> BlobReference:
         """Publish immutable run-bound content and return its recordable binding."""
@@ -241,17 +302,38 @@ class ArtifactStore:
             raise ArtifactConflictError(f"record target already exists: {target.name}")
         try:
             _atomic_write(target, envelope)
+            published_before = self._artifact_file_stamp(target)
             published = _read_record(target)
+            published_stamp = self._artifact_file_stamp(target)
+            if published_before != published_stamp:
+                raise ArtifactCorruptionError(
+                    "published record changed during verification"
+                )
             if published != record:
                 raise ArtifactCorruptionError(
                     "published record differs from the append candidate"
                 )
             _validate_store_invariants(published, persisted=True)
+            published_blob_stamps = self._validate_record_blobs((published,))
 
             # A second writer which completed its own cache update after our
             # pre-write guard makes the prior proof stale.  Re-scan instead of
             # letting either cache choose the winner.
-            if not self._head_cache_matches(index):
+            expected_record_stamps = dict(index.record_file_stamps)
+            expected_record_stamps[target.name] = published_stamp
+            if (
+                not self._head_cache_matches(index)
+                or not self._file_stamps_match(
+                    self.records_dir, expected_record_stamps
+                )
+                or any(
+                    not self._file_stamp_matches(self.blobs_dir / name, expected)
+                    for name, expected in {
+                        **index.blob_file_stamps,
+                        **published_blob_stamps,
+                    }.items()
+                )
+            ):
                 self._append_index = None
                 recovered = self.load_chain()
                 result = next(
@@ -263,7 +345,6 @@ class ArtifactStore:
                         "published record was not recovered by store scan"
                     )
                 return result
-
             prior_document = index.head_document()
             index.by_idempotency_key[record.idempotency_key] = (semantic, published)
             index.record_ids.add(record.record_id)
@@ -278,6 +359,9 @@ class ArtifactStore:
             index.chain_sha256 = _extend_chain_sha256(
                 index.chain_sha256, record.record_id
             )
+            index.chain = (*index.chain, published)
+            index.record_file_stamps[target.name] = published_stamp
+            index.blob_file_stamps.update(published_blob_stamps)
             index.records_dir_stamp = self._records_directory_stamp()
             self._refresh_append_head_cache(index, prior_document)
             return published
@@ -289,8 +373,14 @@ class ArtifactStore:
             raise
 
     def load_chain(self) -> tuple[ArtifactRecord, ...]:
-        """Load and fully validate the authoritative chain in append order."""
-        return self._load_chain()
+        """Explicitly reload and fully validate the authoritative chain."""
+        with self.progress_phase("full-chain-validation"):
+            return self._load_chain()
+
+    def current_chain(self) -> tuple[ArtifactRecord, ...]:
+        """Return the process-local validated prefix, rebuilding on any drift."""
+        with self.progress_phase("process-local-chain-validation"):
+            return self._ensure_append_index().chain
 
     def _load_chain(
         self,
@@ -303,11 +393,13 @@ class ArtifactStore:
             if self.head_path.exists():
                 self._refresh_cache_with_context((), expected_cache_chain)
             self._append_index = _build_append_index(
-                (), self._records_directory_stamp()
+                self.run_id, (), self._records_directory_stamp(), {}, {}
             )
             return ()
         self._confined(self.records_dir)
+        initial_directory_stamp = self._records_directory_stamp()
         records: dict[str, ArtifactRecord] = {}
+        record_file_stamps: dict[str, _ArtifactFileStamp] = {}
         semantics_by_key: dict[str, str] = {}
         revisions: set[tuple[RecordType, str, int]] = set()
         for path in sorted(self.records_dir.iterdir(), key=lambda item: item.name):
@@ -319,7 +411,14 @@ class ArtifactStore:
                     f"unexpected entry in artifact records directory: {path.name!r}"
                 )
             confined = self._confined(path)
+            before = self._artifact_file_stamp(confined)
             record = _read_record(confined)
+            after = self._artifact_file_stamp(confined)
+            if before != after:
+                raise ArtifactCorruptionError(
+                    f"record changed during validation: {path.name!r}"
+                )
+            record_file_stamps[path.name] = after
             if record.record_id != match.group(1):
                 raise ArtifactCorruptionError(
                     f"record filename does not match record_id: {path.name!r}"
@@ -351,19 +450,36 @@ class ArtifactStore:
             records[record.record_id] = record
 
         ordered = _order_chain(records)
-        self._validate_record_blobs(ordered)
+        blob_file_stamps = self._validate_record_blobs(ordered)
+        final_directory_stamp = self._records_directory_stamp()
+        record_binding_matches = self._file_stamps_match(
+            self.records_dir, record_file_stamps
+        )
+        blob_binding_matches = all(
+            self._file_stamp_matches(self.blobs_dir / name, expected)
+            for name, expected in blob_file_stamps.items()
+        )
+        if (
+            initial_directory_stamp != final_directory_stamp
+            or not record_binding_matches
+            or not blob_binding_matches
+        ):
+            raise ArtifactCorruptionError(
+                "artifact chain changed during validation"
+            )
         self._refresh_cache_with_context(ordered, expected_cache_chain)
         self._append_index = _build_append_index(
-            ordered, self._records_directory_stamp()
+            self.run_id,
+            ordered,
+            final_directory_stamp,
+            record_file_stamps,
+            blob_file_stamps,
         )
         return ordered
 
     def _ensure_append_index(self) -> _AppendIndex:
         index = self._append_index
-        if index is not None and (
-            index.records_dir_stamp != self._records_directory_stamp()
-            or not self._head_cache_matches(index)
-        ):
+        if index is not None and not self._derivative_matches(index):
             logger.warning(
                 "Discarding stale artifact append index for run %s", self.run_id
             )
@@ -375,6 +491,62 @@ class ArtifactStore:
         if index is None:  # pragma: no cover - defensive postcondition
             raise ArtifactStoreError("validated append index was not reconstructed")
         return index
+
+    def _derivative_matches(self, index: _AppendIndex) -> bool:
+        # Content stamps belong to the explicit full-chain validation above.
+        # The hot lookup deliberately uses only constant-cost chain proofs:
+        # structural record changes update the directory stamp, while a
+        # cooperating append also advances the reconstructable head cache.
+        return (
+            index.run_id == self.run_id
+            and index.records_dir_stamp == self._records_directory_stamp()
+            and self._head_cache_matches(index)
+        )
+
+    def _file_stamps_match(
+        self,
+        directory: Path,
+        expected: dict[str, _ArtifactFileStamp],
+    ) -> bool:
+        if not expected and not directory.exists():
+            return True
+        try:
+            actual = {
+                path.name: self._artifact_file_stamp(path)
+                for path in directory.iterdir()
+                if not (path.name.startswith(".") and path.name.endswith(".tmp"))
+            }
+        except (FileNotFoundError, OSError, ArtifactStoreError):
+            return False
+        return actual == expected
+
+    def _file_stamp_matches(
+        self, path: Path, expected: _ArtifactFileStamp
+    ) -> bool:
+        try:
+            return self._artifact_file_stamp(path) == expected
+        except (FileNotFoundError, OSError, ArtifactStoreError):
+            return False
+
+    def _artifact_file_stamp(self, path: Path) -> _ArtifactFileStamp:
+        if path.is_symlink():
+            raise ArtifactStoreError(
+                f"artifact path is not a regular file: {path.name!r}"
+            )
+        confined = self._confined(path)
+        metadata = confined.lstat()
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ArtifactStoreError(
+                f"artifact path is not a regular file: {confined.name!r}"
+            )
+        return _ArtifactFileStamp(
+            metadata.st_dev,
+            metadata.st_ino,
+            metadata.st_mode,
+            metadata.st_size,
+            metadata.st_mtime_ns,
+            metadata.st_ctime_ns,
+        )
 
     def _records_directory_stamp(self) -> _RecordsDirectoryStamp:
         try:
@@ -458,13 +630,30 @@ class ArtifactStore:
             raise ArtifactStoreError("blob digest is not a safe artifact filename")
         return self._confined(self.blobs_dir / f"{sha256}.blob")
 
-    def _validate_record_blobs(self, chain: tuple[ArtifactRecord, ...]) -> None:
+    def _validate_record_blobs(
+        self, chain: tuple[ArtifactRecord, ...]
+    ) -> dict[str, _ArtifactFileStamp]:
         validated: dict[BlobReference, bytes] = {}
+        file_stamps: dict[str, _ArtifactFileStamp] = {}
 
         def content(reference: BlobReference) -> bytes:
             persisted = validated.get(reference)
             if persisted is None:
+                path = self._blob_path(reference.sha256)
+                try:
+                    before = self._artifact_file_stamp(path)
+                except (OSError, ArtifactStoreError):
+                    # Preserve read_blob()'s stable fail-closed diagnostic for
+                    # missing, linked, or otherwise invalid blob targets.
+                    self.read_blob(reference)
+                    raise  # pragma: no cover - read_blob always rejects here
                 persisted = self.read_blob(reference)
+                after = self._artifact_file_stamp(path)
+                if before != after:
+                    raise ArtifactCorruptionError(
+                        f"artifact blob changed during validation: {path.name!r}"
+                    )
+                file_stamps[path.name] = after
                 validated[reference] = persisted
             return persisted
 
@@ -515,6 +704,7 @@ class ArtifactStore:
                     raise ArtifactCorruptionError(
                         "review packet blob differs from its record metadata"
                     )
+        return file_stamps
 
     def _confined(self, path: Path) -> Path:
         try:
@@ -581,8 +771,11 @@ def _extend_chain_sha256(prior_sha256: str, record_id: str) -> str:
 
 
 def _build_append_index(
+    run_id: str,
     chain: tuple[ArtifactRecord, ...],
     records_dir_stamp: _RecordsDirectoryStamp,
+    record_file_stamps: dict[str, _ArtifactFileStamp],
+    blob_file_stamps: dict[str, _ArtifactFileStamp],
 ) -> _AppendIndex:
     by_idempotency_key: dict[str, tuple[str, ArtifactRecord]] = {}
     record_ids: set[str] = set()
@@ -603,6 +796,8 @@ def _build_append_index(
         )
         chain_sha256 = _extend_chain_sha256(chain_sha256, record.record_id)
     return _AppendIndex(
+        run_id=run_id,
+        chain=chain,
         by_idempotency_key=by_idempotency_key,
         record_ids=record_ids,
         revision_keys=revision_keys,
@@ -611,6 +806,8 @@ def _build_append_index(
         record_count=len(chain),
         chain_sha256=chain_sha256,
         records_dir_stamp=records_dir_stamp,
+        record_file_stamps=record_file_stamps,
+        blob_file_stamps=blob_file_stamps,
     )
 
 

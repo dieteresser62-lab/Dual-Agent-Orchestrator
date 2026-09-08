@@ -601,6 +601,9 @@ class _Store:
     def load_chain(self) -> tuple[object, ...]:
         return self.chain
 
+    def current_chain(self) -> tuple[object, ...]:
+        return self.chain
+
 
 class _Bridge:
     def __init__(self, chain: tuple[object, ...]) -> None:

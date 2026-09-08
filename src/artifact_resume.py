@@ -186,6 +186,8 @@ def require_side_effect_ledger_prefix(replay: ArtifactReplayResult) -> None:
 def resolve_resume_state(
     repository_root: Path,
     state_or_run_id: WorkflowState | str,
+    *,
+    validated_store: ArtifactStore | None = None,
 ) -> ResumeResolution:
     """Project one resumable state solely from its authoritative record chain.
 
@@ -203,8 +205,17 @@ def resolve_resume_state(
         )
 
     try:
-        store = ArtifactStore(repository_root, run_id)
-        chain = store.load_chain()
+        root = Path(repository_root).resolve()
+        if validated_store is None:
+            store = ArtifactStore(root, run_id)
+            chain = store.load_chain()
+        else:
+            store = validated_store
+            if store.repository_root != root or store.run_id != run_id:
+                raise ArtifactStoreError(
+                    "process-local artifact derivative belongs to another chain"
+                )
+            chain = store.current_chain()
     except ArtifactStoreError as exc:
         raise ArtifactResumeError(
             f"structured-v2 record chain for run {run_id!r} is invalid: {exc}; "
@@ -219,12 +230,13 @@ def resolve_resume_state(
         )
 
     try:
-        replay = replay_artifacts(
-            chain,
-            run_id,
-            require_content_authority=True,
-            allow_incomplete_review_tail=True,
-        )
+        with store.progress_phase("artifact-replay"):
+            replay = replay_artifacts(
+                chain,
+                run_id,
+                require_content_authority=True,
+                allow_incomplete_review_tail=True,
+            )
         require_workflow_event_prefix(replay, allow_incomplete_tail=True)
         require_workflow_status_prefix(replay)
         require_gate_prefix(replay)

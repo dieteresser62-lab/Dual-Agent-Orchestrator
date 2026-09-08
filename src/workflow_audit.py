@@ -142,7 +142,7 @@ class WorkflowAudit:
                     self._dependencies.root(), state
                 ),
             )
-        replay = replay_artifacts(bridge.store.load_chain(), state.run_id)
+        replay = replay_artifacts(bridge.store.current_chain(), state.run_id)
         existing = next(
             (
                 item
@@ -235,8 +235,11 @@ class WorkflowAudit:
             and state.protocol_binding.mode is ProtocolMode.STRUCTURED_V2
         ):
             try:
+                bridge = self._dependencies.artifact_bridge()
                 structured_replay = resolve_resume_state(
-                    self._dependencies.root(), state
+                    self._dependencies.root(),
+                    state,
+                    validated_store=(None if bridge is None else bridge.store),
                 ).replay_result
             except (ArtifactResumeError, ValueError) as exc:
                 raise WorkflowExecutionError(

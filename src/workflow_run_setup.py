@@ -383,7 +383,7 @@ def _initialize_finding_handoff(
             fingerprint_kind=FingerprintKind.CONTRACT,
         )
         local_replay = replay_artifacts(
-            bridge.store.load_chain(),
+            bridge.store.current_chain(),
             state.run_id,
             allow_finding_import_bootstrap=True,
         )
