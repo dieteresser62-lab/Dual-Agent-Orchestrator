@@ -191,6 +191,7 @@ from inbox_watcher import (
     load_queue_success_evidence,
     load_watch_identity,
     success_marker_path,
+    write_pre_baseline_halt_diagnostic,
     watch_run_has_records,
     watch_identity_path,
     watch_inbox,
@@ -2553,7 +2554,7 @@ def run_pipeline(
             exc,
         )
         if watch_invocation and watch_run_id is not None:
-            return WatchTaskResult.from_failure(
+            task_result = WatchTaskResult.from_failure(
                 failure,
                 run_id=watch_run_id,
                 records_written=records_written,
@@ -2563,6 +2564,16 @@ def run_pipeline(
                     else "structured-v2"
                 ),
             )
+            try:
+                write_pre_baseline_halt_diagnostic(
+                    Path.cwd(), task_result, error=exc
+                )
+            except Exception as diagnostic_error:
+                logger.warning(
+                    "Pre-baseline halt diagnostic could not be written: %s",
+                    diagnostic_error,
+                )
+            return task_result
         return 1
 
     if watch_invocation and getattr(args, "watch_run_id", None) is not None:

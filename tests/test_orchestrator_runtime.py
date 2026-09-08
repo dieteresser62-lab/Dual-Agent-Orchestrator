@@ -5816,6 +5816,7 @@ def test_watch_state_schema_error_is_a_single_non_retryable_policy_halt(
         raise StateSchemaError("deterministic state conflict")
 
     monkeypatch.setattr(orchestrator, "run_production_workflow", fail)
+    monkeypatch.chdir(repository)
 
     result = run_pipeline(task, args, force_new=True)
 

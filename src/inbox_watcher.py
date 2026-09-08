@@ -19,13 +19,16 @@ from typing import Callable, TextIO
 
 from error_classification import (
     ClassifiedFailure,
+    ERROR_CLASSIFICATIONS,
     FailureClass,
     classify_exception,
     enforce_record_start_boundary,
 )
 from artifact_bridge import ArtifactBridge, ArtifactBridgeError
+from artifact_models import RecordType, provider_text_evidence
 from artifact_store import ArtifactStore
 from artifact_replay import replay_artifacts
+from orchestrator_diagnostics import OrchestratorDiagnostic
 from side_effects import (
     ReconciliationOutcome,
     SideEffectExecutor,
@@ -1057,6 +1060,137 @@ def write_rejected_failure_report(
         "failure_class": failure.failure_class.value,
         "diagnostic_code": failure.diagnostic_code,
         "failure_detail": task_result.failure_detail,
+    }
+    atomic_write_file(report_path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    return report_path
+
+
+def watch_run_has_baseline(repository_root: Path, run_id: str) -> bool:
+    """Report whether the durable chain contains its identity/profile baseline.
+
+    An unreadable chain is treated conservatively as already baseline-bound so
+    this diagnostic path can never compete with an existing authoritative
+    failure location merely because inspection itself failed.
+    """
+
+    if WATCH_RUN_ID_PATTERN.fullmatch(run_id) is None:
+        return True
+    try:
+        chain = ArtifactStore(Path(repository_root).resolve(), run_id).load_chain()
+    except (OSError, ValueError):
+        return True
+    record_types = tuple(record.record_type for record in chain)
+    return (
+        record_types.count(RecordType.RUN_IDENTITY) == 1
+        and record_types.count(RecordType.RUN_PROFILE) == 1
+    )
+
+
+def pre_baseline_halt_diagnostic_path(
+    repository_root: Path, run_id: str
+) -> Path:
+    """Return the single discoverable non-authoritative halt report path."""
+
+    if WATCH_RUN_ID_PATTERN.fullmatch(run_id) is None:
+        raise ValueError("pre-baseline diagnostic requires a safe run id")
+    return (
+        Path(repository_root).resolve()
+        / ".orchestrator"
+        / "logs"
+        / f"{run_id}.pipeline.pre-baseline.failure.json"
+    )
+
+
+def write_pre_baseline_halt_diagnostic(
+    repository_root: Path,
+    task_result: WatchTaskResult,
+    *,
+    error: BaseException,
+) -> Path | None:
+    """Persist source-separated evidence for a halt without a baseline."""
+
+    failure = task_result.classified_failure
+    if (
+        task_result.disposition is not WatchTaskDisposition.RESUMABLE_HALT
+        or failure is None
+        or failure.failure_class is not FailureClass.RESUMABLE_HALT
+    ):
+        return None
+    if watch_run_has_baseline(repository_root, task_result.run_id):
+        return None
+
+    chain: list[BaseException] = []
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        chain.append(current)
+        current = current.__cause__
+
+    provider_parts: list[str] = []
+    for candidate in chain:
+        provider_text = getattr(candidate, "provider_text", None)
+        if (
+            isinstance(provider_text, str)
+            and provider_text.strip()
+            and provider_text not in provider_parts
+        ):
+            provider_parts.append(provider_text)
+
+    source_is_known = all(
+        type(candidate) in ERROR_CLASSIFICATIONS for candidate in chain
+    )
+    if provider_parts:
+        readable_diagnostic = next(
+            (
+                diagnostic.text
+                for candidate in chain
+                if isinstance(
+                    diagnostic := getattr(candidate, "orchestrator_diagnostic", None),
+                    OrchestratorDiagnostic,
+                )
+            ),
+            None,
+        )
+        last_cause = readable_diagnostic or (
+            f"{failure.exception_type}: provider-origin detail redacted "
+            f"({failure.diagnostic_code})"
+        )
+        provider_source = "\n".join(provider_parts)
+    elif source_is_known:
+        last_cause = failure.detail
+        provider_source = None
+    else:
+        # Unknown exception text has no trustworthy source boundary. Treat it
+        # as provider-origin evidence instead of risking disclosure.
+        last_cause = (
+            f"{failure.exception_type}: unclassified detail redacted "
+            f"({failure.diagnostic_code})"
+        )
+        provider_source = failure.detail
+
+    if provider_source is None:
+        provider_marker = None
+        provider_sha256 = None
+        provider_bytes = 0
+    else:
+        provider_marker, provider_sha256, provider_bytes = provider_text_evidence(
+            provider_source
+        )
+    report_path = pre_baseline_halt_diagnostic_path(
+        repository_root, task_result.run_id
+    )
+    payload = {
+        "version": 1,
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+        "failure_class": failure.failure_class.value,
+        "diagnostic_code": failure.diagnostic_code,
+        "run_id": task_result.run_id,
+        "step": task_result.step,
+        "last_cause": last_cause,
+        "provider_text": provider_marker,
+        "provider_text_sha256": provider_sha256,
+        "provider_text_bytes": provider_bytes,
     }
     atomic_write_file(report_path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
     return report_path
