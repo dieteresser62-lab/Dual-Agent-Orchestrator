@@ -527,7 +527,7 @@ def native_review_provider_response_schema(
         items={"$ref": "#/$defs/bound_approved_finding"},
     )
     approved["properties"]["status_changes"].update(
-        minItems=0 if context.approval_marker is ApprovalMarker.SLICE else len(own_open_ids),
+        minItems=0,
         maxItems=len(own_open_ids),
         items={"$ref": "#/$defs/bound_status_change"},
     )
@@ -573,22 +573,6 @@ def native_review_provider_response_schema(
             maxItems=len(own_open_ids),
             items={"$ref": "#/$defs/bound_approved_reclassification"},
         )
-        if context.approval_marker is not ApprovalMarker.SLICE:
-            approved["anyOf"] = [
-                {
-                    "properties": {
-                        "status_changes": {
-                            "minItems": status_count,
-                            "maxItems": status_count,
-                        },
-                        "reclassifications": {
-                            "minItems": len(own_open_ids) - status_count,
-                            "maxItems": len(own_open_ids) - status_count,
-                        },
-                    },
-                }
-                for status_count in range(len(own_open_ids) + 1)
-            ]
     approved["properties"]["review_evidence"] = {
         "$ref": "#/$defs/evidence"
     }
@@ -1098,18 +1082,21 @@ def _validate_response_events(
                     "validation command is outside configured families",
                 )
     touched = set(status_ids) | set(class_ids)
-    for finding in context.previous_findings:
-        if (
-            response.approved
-            and context.approval_marker is not ApprovalMarker.SLICE
-            and finding.finding_id in previous_open_ids
-            and finding.origin.reporter is context.reviewer
-            and finding.finding_id not in touched
-        ):
-            raise NativeReviewContractError(
-                NativeReviewErrorCode.FINDING_UPDATE_MISSING,
-                f"missing update for previous open finding {finding.finding_id}",
-            )
+    missing_dispositions = tuple(
+        finding.finding_id
+        for finding in context.previous_findings
+        if response.approved
+        and context.approval_marker is not ApprovalMarker.SLICE
+        and finding.finding_id in previous_open_ids
+        and finding.origin.reporter is context.reviewer
+        and finding.finding_id not in touched
+    )
+    if missing_dispositions:
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.FINDING_UPDATE_MISSING,
+            "missing updates for previous open findings: "
+            + ", ".join(missing_dispositions),
+        )
     if response.anchors and context.anchor_origin is None:
         raise NativeReviewContractError(
             NativeReviewErrorCode.ANCHOR_INVALID,

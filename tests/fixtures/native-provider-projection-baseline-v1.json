@@ -9,7 +9,7 @@
     {
       "provider": "claude",
       "form": "final",
-      "sha256": "9ddf9bc9f833c74cfe1f32b997ccd6475c12fdceaf127b3e4cfb800b2ed2231a"
+      "sha256": "160420f85834f9150ffb86d1b463ae38cc8a728abb08052ddbc965d75d9c0f2c"
     },
     {
       "provider": "claude",
@@ -19,7 +19,7 @@
     {
       "provider": "claude",
       "form": "plan",
-      "sha256": "4ddd1ba953d9018eb89e6d5597b691c88dc2169656f6e7ead76bf193021e412d"
+      "sha256": "98889eaf289b9bb83ad5de466aafeebbee9f96c5070d0e8fe0e0118d74347858"
     },
     {
       "provider": "codex",

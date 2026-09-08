@@ -316,7 +316,11 @@ def _review_bound(form: str) -> BoundNativeReviewContext:
         approval_marker=marker,
         slice_id="01" if marker is not ApprovalMarker.FINAL else "final",
         round_number=2 if convergence else 1,
-        previous_findings=(_finding(),) if convergence else (),
+        previous_findings=(
+            (_finding(),)
+            if form in ("plan", "convergence", "final")
+            else ()
+        ),
         validation_attestation=_attestation(),
         test_files=("tests/test_native_contract_differential.py",),
         test_changes_approved=True,

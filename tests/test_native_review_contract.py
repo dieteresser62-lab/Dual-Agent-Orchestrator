@@ -363,7 +363,7 @@ def test_slice_writer_accepts_one_new_finding_without_ten_open_dispositions() ->
     "approval",
     (ApprovalMarker.PLAN, ApprovalMarker.FINAL),
 )
-def test_non_slice_approval_still_requires_complete_open_disposition(
+def test_non_slice_approval_defers_complete_open_disposition_to_domain_contract(
     approval: ApprovalMarker,
 ) -> None:
     prior = _finding(
@@ -375,12 +375,211 @@ def test_non_slice_approval_still_requires_complete_open_disposition(
     document = _review(context)
     writer = native_review_provider_response_schema(context)
 
-    with pytest.raises(SchemaMismatch):
-        validate_schema_document({"result": document}, writer)
-    _assert_error(
-        document,
-        context,
-        NativeReviewErrorCode.FINDING_UPDATE_MISSING,
+    validate_schema_document({"result": document}, writer)
+    with pytest.raises(NativeReviewContractError) as raised:
+        parse_native_contract_result(document, context)
+    assert raised.value.code is NativeReviewErrorCode.FINDING_UPDATE_MISSING
+    assert raised.value.detail == (
+        "missing updates for previous open findings: C-01"
+    )
+
+
+def test_large_non_slice_approval_accepts_complete_mixed_disposition() -> None:
+    previous = tuple(
+        _finding(f"C-{number:02d}", AgentRole.CLAUDE)
+        for number in range(1, 34)
+    )
+    context = _context(approval=ApprovalMarker.PLAN, previous=previous)
+    document = _review(context)
+    document["status_changes"] = [
+        {
+            "finding_id": f"C-{number:02d}",
+            "status": "CLOSED",
+            "rationale": "The reviewed correction closes this blocker.",
+        }
+        for number in range(1, 31)
+    ]
+    document["reclassifications"] = [
+        {
+            "finding_id": f"C-{number:02d}",
+            "finding_class": "OBSERVATION",
+            "rationale": "The remaining risk is non-blocking follow-up work.",
+        }
+        for number in range(31, 34)
+    ]
+
+    writer = native_review_provider_response_schema(context)
+    validate_schema_document({"result": document}, writer)
+    result = parse_native_contract_result(document, context)
+
+    assert result.approval is True
+    assert tuple(
+        item.finding_id
+        for item in result.findings
+        if item.status is FindingStatus.OPEN
+    ) == (
+        "C-31",
+        "C-32",
+        "C-33",
+    )
+
+
+def test_large_final_denial_accepts_thirty_closures_and_three_escalations() -> None:
+    previous = tuple(
+        _finding(
+            f"C-{number:02d}",
+            AgentRole.CLAUDE,
+            finding_class=(
+                FindingClass.BLOCKER
+                if number <= 30
+                else FindingClass.OBSERVATION
+            ),
+        )
+        for number in range(1, 34)
+    )
+    context = _context(approval=ApprovalMarker.FINAL, previous=previous)
+    document = _review(context, approved=False)
+    document["status_changes"] = [
+        {
+            "finding_id": f"C-{number:02d}",
+            "status": "CLOSED",
+            "rationale": "The branch correction closes this blocker.",
+        }
+        for number in range(1, 31)
+    ]
+    document["reclassifications"] = [
+        {
+            "finding_id": f"C-{number:02d}",
+            "finding_class": "BLOCKER",
+            "rationale": "The final review escalates this remaining defect.",
+        }
+        for number in range(31, 34)
+    ]
+
+    writer = native_review_provider_response_schema(context)
+    validate_schema_document({"result": document}, writer)
+    result = parse_native_contract_result(document, context)
+
+    assert result.approval is False
+    assert tuple(
+        (item.finding_id, item.finding_class)
+        for item in result.findings
+        if item.status is FindingStatus.OPEN
+    ) == (
+        ("C-31", FindingClass.BLOCKER),
+        ("C-32", FindingClass.BLOCKER),
+        ("C-33", FindingClass.BLOCKER),
+    )
+
+
+@pytest.mark.parametrize(
+    ("kept_reclassification_ids", "missing_ids"),
+    ((range(31, 33), ("C-33",)), (range(31, 32), ("C-32", "C-33"))),
+)
+def test_large_non_slice_approval_names_every_missing_disposition(
+    kept_reclassification_ids: range,
+    missing_ids: tuple[str, ...],
+) -> None:
+    previous = tuple(
+        _finding(f"C-{number:02d}", AgentRole.CLAUDE)
+        for number in range(1, 34)
+    )
+    context = _context(approval=ApprovalMarker.PLAN, previous=previous)
+    document = _review(context)
+    document["status_changes"] = [
+        {
+            "finding_id": f"C-{number:02d}",
+            "status": "CLOSED",
+            "rationale": "The reviewed correction closes this blocker.",
+        }
+        for number in range(1, 31)
+    ]
+    document["reclassifications"] = [
+        {
+            "finding_id": f"C-{number:02d}",
+            "finding_class": "OBSERVATION",
+            "rationale": "The remaining risk is non-blocking follow-up work.",
+        }
+        for number in kept_reclassification_ids
+    ]
+
+    validate_schema_document(
+        {"result": document}, native_review_provider_response_schema(context)
+    )
+    with pytest.raises(NativeReviewContractError) as raised:
+        parse_native_contract_result(document, context)
+
+    assert raised.value.code is NativeReviewErrorCode.FINDING_UPDATE_MISSING
+    assert raised.value.detail == (
+        "missing updates for previous open findings: " + ", ".join(missing_ids)
+    )
+
+
+@pytest.mark.parametrize(
+    ("last_closed_id", "missing_ids"),
+    ((32, ("C-33",)), (31, ("C-32", "C-33"))),
+)
+def test_large_final_approval_names_every_missing_disposition(
+    last_closed_id: int,
+    missing_ids: tuple[str, ...],
+) -> None:
+    previous = tuple(
+        _finding(f"C-{number:02d}", AgentRole.CLAUDE)
+        for number in range(1, 34)
+    )
+    context = _context(approval=ApprovalMarker.FINAL, previous=previous)
+    document = _review(context)
+    document["status_changes"] = [
+        {
+            "finding_id": f"C-{number:02d}",
+            "status": "CLOSED",
+            "rationale": "The branch correction closes this blocker.",
+        }
+        for number in range(1, last_closed_id + 1)
+    ]
+
+    validate_schema_document(
+        {"result": document}, native_review_provider_response_schema(context)
+    )
+    with pytest.raises(NativeReviewContractError) as raised:
+        parse_native_contract_result(document, context)
+
+    assert raised.value.code is NativeReviewErrorCode.FINDING_UPDATE_MISSING
+    assert raised.value.detail == (
+        "missing updates for previous open findings: " + ", ".join(missing_ids)
+    )
+
+
+@pytest.mark.parametrize(
+    ("approval", "branch_name"),
+    (
+        (ApprovalMarker.PLAN, "plan"),
+        (ApprovalMarker.FINAL, "final"),
+    ),
+)
+def test_large_non_slice_schema_has_no_disposition_partition_branch_list(
+    approval: ApprovalMarker,
+    branch_name: str,
+) -> None:
+    def approval_schema(finding_count: int) -> dict[str, object]:
+        previous = tuple(
+            _finding(f"C-{number:02d}", AgentRole.CLAUDE)
+            for number in range(1, finding_count + 1)
+        )
+        context = _context(approval=approval, previous=previous)
+        return native_review_provider_response_schema(context)["$defs"][
+            f"bound_{branch_name}_approved"
+        ]
+
+    one_finding = approval_schema(1)
+    thirty_three_findings = approval_schema(33)
+
+    assert thirty_three_findings["anyOf"] == one_finding["anyOf"]
+    assert len(thirty_three_findings["anyOf"]) == 4
+    assert not any(
+        {"status_changes", "reclassifications"}
+        <= set(branch.get("properties", {}))
+        for branch in thirty_three_findings["anyOf"]
     )
 
 
@@ -431,6 +630,46 @@ def test_closed_own_finding_is_neither_writer_offered_nor_locally_mutable() -> N
     with pytest.raises(NativeReviewContractError) as raised:
         native_response_to_contract_result(direct_reclassification, context)
     assert raised.value.code is NativeReviewErrorCode.FINDING_REFERENCE_NOT_OPEN
+
+
+@pytest.mark.parametrize(
+    ("finding_id", "error_code"),
+    (
+        ("C-99", NativeReviewErrorCode.FINDING_REFERENCE_UNKNOWN),
+        ("C-02", NativeReviewErrorCode.FINDING_REFERENCE_NOT_OPEN),
+    ),
+)
+def test_domain_rejects_unknown_or_non_open_disposition(
+    finding_id: str,
+    error_code: NativeReviewErrorCode,
+) -> None:
+    context = _context(
+        previous=(
+            _finding("C-01", AgentRole.CLAUDE),
+            _finding(
+                "C-02",
+                AgentRole.CLAUDE,
+                status=FindingStatus.CLOSED,
+            ),
+        )
+    )
+    base = parse_native_review_response(_review(context, approved=False), context)
+    assert isinstance(base, NativeReviewResult)
+    response = replace(
+        base,
+        status_changes=(
+            NativeStatusChange(
+                finding_id,
+                FindingStatus.CLOSED,
+                "Apply only to a known open finding.",
+            ),
+        ),
+    )
+
+    with pytest.raises(NativeReviewContractError) as raised:
+        native_response_to_contract_result(response, context)
+
+    assert raised.value.code is error_code
 
 
 def test_denial_cannot_create_its_required_blocker_by_reopening_closed_blocker() -> None:
