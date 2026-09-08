@@ -302,7 +302,12 @@ def test_review_packet_record_size_stays_bounded_as_diff_content_grows(
         packet = _large_packet(target)
         _append_review_packet(store, packet)
         packet_sizes.append(len(packet.canonical_bytes))
-        record_sizes.append(next(store.records_dir.glob("*.json")).stat().st_size)
+        packet_record = next(
+            item
+            for item in store.load_chain()
+            if isinstance(item.payload, ReviewPacketPayload)
+        )
+        record_sizes.append(len(packet_record.canonical_json()))
         replay = replay_artifacts(
             ArtifactStore(root, store.run_id).load_chain(), store.run_id
         )

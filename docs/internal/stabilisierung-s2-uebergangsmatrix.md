@@ -832,7 +832,7 @@ Tabelle inventarisiert daher 30 Stämme, während der AST-Zähler 32 direkte
 | `structured commit attestation differs from the commit request` | B07/A14; Record ↔ unmittelbar auszuführender irreversibler Commit, **bleibt bewusst** |
 | `provider attempt measurement context diverged` | A11/B04 |
 | `pre-policy native reviewer recovery tail differs from the active work unit` | B06; Record-interne Zuordnung des Crash-Tails, **bleibt bewusst** |
-| `native agent request differs from its persisted recovery artifact` | B05 |
+| `native agent request immutable binding differs: field=binding_fingerprint previous=` | B05/B92 |
 | `native Codex raw response differs from its persisted artifact` | B05 |
 | `content-addressed review packet cache differs from canonical bytes` | B06 |
 | `native agent recovery has divergent agent-result records` | B05 |

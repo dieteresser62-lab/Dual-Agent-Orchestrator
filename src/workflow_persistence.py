@@ -9,6 +9,7 @@ one-way: the driver imports persistence, never conversely.
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Protocol
@@ -16,6 +17,7 @@ from typing import Callable, Protocol
 from agent_runtime import (
     NativeAgentCodexOutput as NativeAgentImplementerOutput,
     NativeAgentReviewOutput,
+    ProviderRequestRoundRequired,
 )
 from artifact_bridge import (
     ArtifactBridge,
@@ -497,24 +499,61 @@ class WorkflowPersistence:
         path = self._dependencies.native_agent_request_path(invocation)
         content = self._dependencies.native_agent_request_bundle_json(bundle)
         if path.exists():
-            if not path.is_file() or path.read_text(encoding="utf-8") != content:
+            if not path.is_file():
                 raise WorkflowExecutionError(
-                    "native agent request differs from its persisted recovery artifact"
+                    "native agent request recovery artifact is not a regular file"
                 )
+            previous = path.read_text(encoding="utf-8")
+            if previous != content:
+                self._raise_request_binding_difference(previous, content)
             return
         path.parent.mkdir(parents=True, exist_ok=True)
         try:
             with path.open("x", encoding="utf-8", newline="") as stream:
                 stream.write(content)
         except FileExistsError:
-            if not path.is_file() or path.read_text(encoding="utf-8") != content:
+            if not path.is_file():
                 raise WorkflowExecutionError(
-                    "native agent request differs from its persisted recovery artifact"
+                    "native agent request recovery artifact is not a regular file"
                 )
+            previous = path.read_text(encoding="utf-8")
+            if previous != content:
+                self._raise_request_binding_difference(previous, content)
         if path.read_text(encoding="utf-8") != content:
             raise WorkflowExecutionError(
                 "native agent request recovery artifact verification failed"
             )
+
+    @staticmethod
+    def _raise_request_binding_difference(previous: str, current: str) -> None:
+        def binding(document_text: str) -> str:
+            try:
+                wrapper = json.loads(document_text)
+                request = json.loads(wrapper["canonical_request"])
+                value = request["current_fingerprint"]
+            except (KeyError, TypeError, json.JSONDecodeError) as exc:
+                raise WorkflowExecutionError(
+                    "persisted native agent request binding is invalid"
+                ) from exc
+            if not isinstance(value, str):
+                raise WorkflowExecutionError(
+                    "persisted native agent request binding is invalid"
+                )
+            return value
+
+        previous_binding = binding(previous)
+        current_binding = binding(current)
+        if previous_binding != current_binding:
+            raise WorkflowExecutionError(
+                "native agent request immutable binding differs: "
+                f"field=binding_fingerprint previous={previous_binding[:12]} "
+                f"current={current_binding[:12]}"
+            )
+        raise ProviderRequestRoundRequired(
+            binding_fingerprint=current_binding,
+            previous_input_digest=hashlib.sha256(previous.encode("utf-8")).hexdigest(),
+            current_input_digest=hashlib.sha256(current.encode("utf-8")).hexdigest(),
+        )
 
     def persist_review_packet(self, packet: ReviewPacket) -> None:
         """Bind locally generated review evidence before it enters projection."""

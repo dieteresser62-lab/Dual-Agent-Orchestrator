@@ -112,10 +112,11 @@
     },
     "run_profile": {
       "type": "object", "additionalProperties": false,
-      "required": ["implementer", "reviewer", "reducer_version"],
+      "required": ["implementer", "reviewer", "orchestrator_code_version", "reducer_version"],
       "properties": {
         "implementer": {"$ref": "#/$defs/role_profile"},
         "reviewer": {"$ref": "#/$defs/role_profile"},
+        "orchestrator_code_version": {"$ref": "#/$defs/sha256"},
         "reducer_version": {"const": "structured-v2-schema-2-state-v3-v1"}
       }
     },

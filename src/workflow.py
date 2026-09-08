@@ -15,6 +15,7 @@ from agent_runtime import (
     AgentInvocationError,
     NativeAgentCodexOutput,
     NativeAgentReviewOutput,
+    ProviderRequestRoundRequired,
     QuotaWaitPolicy,
     TransientRetryPolicy,
     wait_until_quota_resume,
@@ -2342,13 +2343,13 @@ class WorkflowEngine:
             raise WorkflowExecutionError(
                 "validation attestation is incomplete and cannot be overridden"
             )
-        review_round = (
-            1
-            + sum(
+        review_round = max(
+            unit.round_number,
+            1 + sum(
                 isinstance(event, ReviewAuditEvent)
                 and event.result.reviewer is reviewer
                 for event in history.events
-            )
+            ),
         )
         contract = StepContract(
             name=f"work-unit-{unit.work_unit_id}-{state.current_step.value}",
@@ -2641,6 +2642,21 @@ class WorkflowEngine:
                     fingerprint=fingerprint,
                     paths=affected_paths,
                 )
+                self.driver.checkpoint(state, history)
+                return state, None
+            except ProviderRequestRoundRequired as changed:
+                logger.warning(
+                    "Provider request composition changed with unchanged Slice binding; "
+                    "opening a new round: work_unit=%s round=%s->%s "
+                    "binding_fingerprint=%s previous_input=%s current_input=%s",
+                    state.current_work_unit_id,
+                    state.current_work_unit.round_number,
+                    state.current_work_unit.round_number + 1,
+                    changed.binding_fingerprint,
+                    changed.previous_input_digest,
+                    changed.current_input_digest,
+                )
+                state = state.start_recomposed_request_round()
                 self.driver.checkpoint(state, history)
                 return state, None
             except AgentInvocationError as error:

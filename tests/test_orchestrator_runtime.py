@@ -854,6 +854,136 @@ def test_removing_failure_log_attempt_suffix_recreates_the_open_intent(
         driver._reconcile_pending_side_effects(driver.active_state or state)
 
 
+def test_recomposed_request_opens_new_round_and_operation_but_binding_drift_stops(
+    tmp_path: Path,
+) -> None:
+    branch = "feature/request-recomposition"
+    repository = _repository(tmp_path, branch)
+    task = repository / "task.md"
+    _write_task(task, branch, "src/runtime.py")
+    head = _git(repository, "rev-parse", "HEAD")
+    state = (
+        init_workflow_state(
+            run_id="request-recomposition",
+            task_file=str(task),
+            branch=branch,
+            branch_base=head,
+            first_slice_start_commit=head,
+            slice_count=1,
+            task_digest=hashlib.sha256(task.read_bytes()).hexdigest(),
+            task_scope_patterns=("src/runtime.py",),
+            target_branch=branch,
+            protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+        )
+        .complete_current_work_unit()
+        .start_work_unit(
+            slice_id=1,
+            kind=WorkUnitKind.SLICE,
+            step=WorkflowStep.CODEX_IMPLEMENTATION,
+        )
+        .bind_current_slice_git_boundary(
+            start_commit=head,
+            scope_paths=("src/runtime.py",),
+            start_fingerprint="b" * 64,
+        )
+    )
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={"codex": SimpleNamespace(model="test", effort="high")},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    driver.bind_work_unit(state)
+    binding = "c" * 64
+
+    def measurement(text: str, fingerprint: str = binding):
+        return measure_provider_input(
+            PreparedProviderInput(
+                command=("codex", "exec"),
+                stdin_text=text,
+                components=(ProviderInputComponent("stdin_prompt", text),),
+            ),
+            provider="codex",
+            role="codex",
+            operation=WorkflowStep.CODEX_IMPLEMENTATION.value,
+            binding_fingerprint=fingerprint,
+            policy=default_provider_input_budget_policy(),
+        )
+
+    first_measurement = measurement("original request")
+    first_bootstrap = driver._persist_provider_bootstrap(first_measurement)
+    first = driver._start_provider_attempt(
+        first_measurement,
+        first_bootstrap,
+        operation_instance="round:1",
+        durable_response_path=repository / ".orchestrator" / "first.json",
+    )
+    driver._finish_provider_attempt(first, 1.0, "runtime", None)
+
+    changed_binding_measurement = measurement("changed binding", "d" * 64)
+    changed_binding_bootstrap = driver._persist_provider_bootstrap(
+        changed_binding_measurement
+    )
+    with pytest.raises(
+        WorkflowExecutionError,
+        match=(
+            "field=binding_fingerprint first=cccccccccccc "
+            "current=dddddddddddd"
+        ),
+    ):
+        driver._start_provider_attempt(
+            changed_binding_measurement,
+            changed_binding_bootstrap,
+            operation_instance="round:1",
+            durable_response_path=repository / ".orchestrator" / "foreign.json",
+        )
+
+    changed_request = measurement("recomposed request")
+    changed_bootstrap = driver._persist_provider_bootstrap(changed_request)
+    active = driver.active_state
+    assert active is not None
+    history = WorkflowHistory(active.current_work_unit_id)
+    advanced, output = WorkflowEngine(driver)._invoke_role(
+        active,
+        history,
+        WorkflowContext("assignment", "plan", "slice"),
+        AgentRole.CODEX,
+        lambda: driver._start_provider_attempt(
+            changed_request,
+            changed_bootstrap,
+            operation_instance="round:1",
+            durable_response_path=repository / ".orchestrator" / "changed.json",
+        ),
+    )
+
+    assert output is None
+    assert advanced.current_work_unit.round_number == 2
+    active = driver.active_state
+    assert active is not None and active.current_work_unit.round_number == 2
+    second = driver._start_provider_attempt(
+        changed_request,
+        changed_bootstrap,
+        operation_instance="round:2",
+        durable_response_path=repository / ".orchestrator" / "changed.json",
+    )
+    chain = ArtifactStore(repository, state.run_id).load_chain()
+    attempts = tuple(
+        record.payload
+        for record in chain
+        if isinstance(record.payload, ProviderAttemptPayload)
+    )
+    first_terminal = next(
+        payload
+        for payload in attempts
+        if payload.logical_operation_id == first[0].payload.logical_operation_id
+        and payload.phase == "failed"
+    )
+    assert first_terminal.failure_kind == "runtime"
+    assert second[0].payload.logical_operation_id != first[0].payload.logical_operation_id
+    assert second[0].payload.attempt_number == 1
+
+
 def _review(role: AgentRole, marker: str) -> str:
     return "\n".join(
         (
@@ -1006,6 +1136,7 @@ def test_run_records_exist_before_first_workflow_dispatch(
     assert observed["profile"] == RunProfilePayload(
         RoleProfilePayload("gpt-order", "max"),
         RoleProfilePayload("opus-order", "max"),
+        orchestrator.orchestrator_code_version(),
     )
 
 
@@ -3173,7 +3304,10 @@ def test_native_codex_record_ahead_recovery_reuses_raw_json_without_provider(
     rebuilt_invocation = replace(invocation, native_request=rebuilt_bundle)
     with pytest.raises(
         WorkflowExecutionError,
-        match="request differs from its persisted recovery artifact",
+        match=(
+            "field=binding_fingerprint previous=cccccccccccc "
+            "current=dddddddddddd"
+        ),
     ):
         driver._persist_native_agent_request_bundle(rebuilt_invocation)
     bridge = driver._artifact_bridge

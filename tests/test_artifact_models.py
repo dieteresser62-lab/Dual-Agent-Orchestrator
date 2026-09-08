@@ -91,9 +91,22 @@ def test_run_profile_record_fields_are_role_keyed() -> None:
     assert asdict(profile) == {
         "implementer": {"model": "implementer-model", "effort": "medium"},
         "reviewer": {"model": "reviewer-model", "effort": "high"},
+        "orchestrator_code_version": profile.orchestrator_code_version,
         "reducer_version": "structured-v2-schema-2-state-v3-v1",
     }
     assert not {"codex", "claude"} & set(asdict(profile))
+
+
+def test_run_profile_without_orchestrator_code_version_is_rejected() -> None:
+    profile = RunProfilePayload(
+        RoleProfilePayload("implementer-model", "medium"),
+        RoleProfilePayload("reviewer-model", "high"),
+    )
+    document = _record(profile).to_dict()
+    document["payload"].pop("orchestrator_code_version")
+
+    with pytest.raises(ArtifactValidationError, match="schema validation failed"):
+        ArtifactRecord.from_dict(document)
 
 
 def _agent_result(

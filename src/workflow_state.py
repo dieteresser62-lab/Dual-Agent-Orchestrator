@@ -2275,6 +2275,23 @@ class WorkflowState:
             updated_unit, slices=slices, updated_at=updated_at
         )
 
+    def start_recomposed_request_round(
+        self, *, updated_at: str | None = None
+    ) -> "WorkflowState":
+        """Advance only the round identity after local request recomposition."""
+
+        current = self.current_work_unit
+        if current.status is not WorkUnitStatus.IN_PROGRESS:
+            raise WorkflowStateValidationError(
+                "only an in-progress work unit can recompose its provider request"
+            )
+        updated_unit = replace(current, round_number=current.round_number + 1)
+        return self._replace_current_unit(
+            updated_unit,
+            slices=self._slices_with_current_status(SliceStatus.IN_PROGRESS),
+            updated_at=updated_at,
+        )
+
     def resume_after_user_decision(self, *, updated_at: str | None = None) -> WorkflowState:
         current = self.current_work_unit
         if current.status is not WorkUnitStatus.AWAITING_USER_DECISION:

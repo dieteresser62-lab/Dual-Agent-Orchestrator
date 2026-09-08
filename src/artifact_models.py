@@ -183,6 +183,7 @@ class RoleProfilePayload:
 class RunProfilePayload:
     implementer: RoleProfilePayload
     reviewer: RoleProfilePayload
+    orchestrator_code_version: str = "0" * 64
     reducer_version: str = STATE_PROJECTION_REDUCER_VERSION
     status: ClassVar[str] = "bound"
     record_type: ClassVar[RecordType] = RecordType.RUN_PROFILE
@@ -192,6 +193,9 @@ class RunProfilePayload:
             raise ArtifactValidationError("implementer profile is invalid")
         if not isinstance(self.reviewer, RoleProfilePayload):
             raise ArtifactValidationError("reviewer profile is invalid")
+        _require_sha256(
+            self.orchestrator_code_version, "orchestrator_code_version"
+        )
         if self.reducer_version != STATE_PROJECTION_REDUCER_VERSION:
             raise ArtifactValidationError(
                 "run profile reducer_version is unsupported"
@@ -2012,6 +2016,7 @@ _PAYLOAD_READERS: dict[
     RecordType.RUN_PROFILE: lambda data: RunProfilePayload(
             RoleProfilePayload(**data["implementer"]),
             RoleProfilePayload(**data["reviewer"]),
+            data["orchestrator_code_version"],
             data["reducer_version"],
         ),
     RecordType.WORKFLOW_TRANSITION: lambda data: WorkflowTransitionPayload(

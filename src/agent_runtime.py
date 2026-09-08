@@ -162,6 +162,26 @@ class AgentInvocationError(RuntimeError):
         return diagnostic.text if isinstance(diagnostic, OrchestratorDiagnostic) else None
 
 
+class ProviderRequestRoundRequired(RuntimeError):
+    """A rebuilt request changed while its repository binding stayed identical."""
+
+    def __init__(
+        self,
+        *,
+        binding_fingerprint: str,
+        previous_input_digest: str,
+        current_input_digest: str,
+    ) -> None:
+        self.binding_fingerprint = binding_fingerprint
+        self.previous_input_digest = previous_input_digest
+        self.current_input_digest = current_input_digest
+        super().__init__(
+            "provider request composition changed for unchanged binding_fingerprint "
+            f"{binding_fingerprint[:12]}: {previous_input_digest[:12]} -> "
+            f"{current_input_digest[:12]}"
+        )
+
+
 class QuotaReachedError(AgentInvocationError):
     def __init__(
         self,
@@ -1489,6 +1509,8 @@ def run_native_review_agent_checked(
         if attempt_invocation is not None:
             attempt_invocation.finish(failure.kind, adapter.metadata)
         raise
+    except ProviderRequestRoundRequired:
+        raise
     except ProviderInputBudgetExceeded:
         raise
     except Exception as exc:
@@ -1668,6 +1690,8 @@ def run_native_codex_agent_checked(
         if attempt_invocation is not None:
             attempt_invocation.finish(failure.kind, adapter.metadata)
         raise
+    except ProviderRequestRoundRequired:
+        raise
     except ProviderInputBudgetExceeded:
         raise
     except Exception as exc:
@@ -1695,6 +1719,7 @@ def run_native_codex_agent_checked(
                         "invocation_id": failure.invocation_id,
                         "provider_text": failure.provider_text,
                         "provider_diagnostic": failure.provider_data,
+                        "technical_text": failure.technical_text,
                         "received_at": failure.received_at.isoformat(),
                         "process_exit_code": failure.process_exit_code,
                     },
@@ -2100,8 +2125,21 @@ def classify_agent_failure(
 ) -> AgentInvocationError:
     """Classify one failed invocation without retrying or substituting its role."""
     stamp = (received_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
-    provider_text = str(getattr(exc, "provider_text", "") or str(exc) or type(exc).__name__)
-    technical_text = str(getattr(exc, "technical_text", "") or provider_text)
+    explicit_provider_text = getattr(exc, "provider_text", None)
+    raw_exception_text = str(exc) or type(exc).__name__
+    explicit_technical_text = getattr(exc, "technical_text", None)
+    technical_text = str(
+        explicit_technical_text
+        if isinstance(explicit_technical_text, str) and explicit_technical_text
+        else raw_exception_text
+        if isinstance(explicit_provider_text, str) and explicit_provider_text
+        else f"{type(exc).__name__}: {raw_exception_text}"
+    )
+    provider_text = str(
+        explicit_provider_text
+        if isinstance(explicit_provider_text, str) and explicit_provider_text
+        else raw_exception_text
+    )
     orchestrator_diagnostic = getattr(exc, "orchestrator_diagnostic", None)
     if not isinstance(orchestrator_diagnostic, OrchestratorDiagnostic):
         orchestrator_diagnostic = None

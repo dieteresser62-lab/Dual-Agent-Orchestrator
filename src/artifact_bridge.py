@@ -75,6 +75,55 @@ class ArtifactBridgeError(RuntimeError):
 logger = logging.getLogger(__name__)
 
 
+def _foreign_provider_binding_error(
+    chain: tuple[ArtifactRecord, ...],
+    measurement: ProviderInputMeasurementPayload,
+    binding_fingerprint: str,
+    operation_instance: str | None,
+    prior: tuple[ArtifactRecord, ...],
+) -> ArtifactBridgeError | None:
+    if prior:
+        return None
+    prior_same_operation = tuple(
+        record
+        for record in chain
+        if isinstance(record.payload, ProviderAttemptPayload)
+        and record.payload.provider == measurement.provider
+        and record.payload.role == measurement.role
+        and record.payload.operation == measurement.operation
+        and record.payload.work_unit_id == measurement.work_unit_id
+        and record.payload.logical_operation_id
+        in {
+            logical_provider_operation_id(
+                run_id=record.run_id,
+                work_unit_id=measurement.work_unit_id,
+                provider=measurement.provider,
+                operation=measurement.operation,
+                binding_fingerprint=record.payload.binding_fingerprint,
+                operation_instance=operation_instance,
+            ),
+            logical_provider_operation_id(
+                run_id=record.run_id,
+                work_unit_id=measurement.work_unit_id,
+                provider=measurement.provider,
+                operation=measurement.operation,
+                binding_fingerprint=record.payload.binding_fingerprint,
+            ),
+        }
+    )
+    if not prior_same_operation:
+        return None
+    first = prior_same_operation[0].payload
+    if first.binding_fingerprint == binding_fingerprint:
+        return None
+    return ArtifactBridgeError(
+        "provider attempt immutable binding differs from its first attempt: "
+        "field=binding_fingerprint "
+        f"first={first.binding_fingerprint[:12]} "
+        f"current={binding_fingerprint[:12]}"
+    )
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -711,6 +760,14 @@ class ArtifactBridge:
             if isinstance(record.payload, ProviderAttemptPayload)
             and record.payload.logical_operation_id == logical_operation_id
         )
+        if binding_error := _foreign_provider_binding_error(
+            chain,
+            measurement,
+            binding_fingerprint,
+            operation_instance,
+            prior,
+        ):
+            raise binding_error
         if operation_instance is not None and not prior:
             legacy_operation_id = logical_provider_operation_id(
                 run_id=self.store.run_id,
@@ -741,15 +798,33 @@ class ArtifactBridge:
                 prior = legacy_prior
         for record in prior:
             payload = record.payload
-            if (
-                payload.provider != measurement.provider
-                or payload.role != measurement.role
-                or payload.operation != measurement.operation
-                or payload.work_unit_id != measurement.work_unit_id
-                or payload.binding_fingerprint != binding_fingerprint
-                or payload.input_digest != measurement.input_digest
-            ):
-                raise ArtifactBridgeError("provider attempt immutable binding differs from its first attempt")
+            comparisons = (
+                ("provider", payload.provider.value, measurement.provider.value),
+                ("role", payload.role.value, measurement.role.value),
+                ("operation", payload.operation, measurement.operation),
+                ("work_unit_id", payload.work_unit_id, measurement.work_unit_id),
+                (
+                    "binding_fingerprint",
+                    payload.binding_fingerprint,
+                    binding_fingerprint,
+                ),
+                ("input_digest", payload.input_digest, measurement.input_digest),
+            )
+            difference = next(
+                (
+                    (field, first, current)
+                    for field, first, current in comparisons
+                    if first != current
+                ),
+                None,
+            )
+            if difference is not None:
+                field, first, current = difference
+                raise ArtifactBridgeError(
+                    "provider attempt immutable binding differs from its first "
+                    f"attempt: field={field} first={first[:12]} "
+                    f"current={current[:12]}"
+                )
         if prior:
             latest_attempt = max(record.payload.attempt_number for record in prior)
             latest_records = tuple(

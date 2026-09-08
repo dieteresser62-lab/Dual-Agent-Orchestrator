@@ -9,7 +9,14 @@ from typing import Any, cast
 import pytest
 
 from artifact_bridge import ArtifactBridge
-from artifact_models import FingerprintKind, RunIdentityPayload
+from artifact_models import (
+    FingerprintKind,
+    RoleProfilePayload,
+    RunIdentityPayload,
+    RunProfilePayload,
+    WorkflowEventPayload,
+    stable_record_id,
+)
 from artifact_store import ArtifactStore
 from workflow import WorkflowExecutionError
 from workflow_baseline import (
@@ -39,6 +46,7 @@ EXPECTED_INTERNAL_IMPORTS = {
     "artifact_models",
     "artifact_replay",
     "final_review_preflight",
+    "orchestrator_version",
     "provider_input_budget",
     "side_effects",
     "workflow",
@@ -296,6 +304,57 @@ def test_exact_prefix_admitted_and_every_named_prior_fact_rejected(
     assert not matches_baseline_initialization_prefix(
         prefix,
         _with_work_unit_fact(state, "completed_side_effects", ("completed",)),
+    )
+
+
+def test_incomplete_profile_prefix_preserves_persisted_code_version(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _state(tmp_path)
+    bridge = ArtifactBridge(ArtifactStore(tmp_path, state.run_id))
+    identity = _identity_prefix(tmp_path, state)[0]
+    identity_record_id = stable_record_id(
+        state.run_id, identity.payload.record_type, "run-identity", 1
+    )
+    event = bridge.append(
+        WorkflowEventPayload(
+            event_kind="run",
+            work_unit_id=None,
+            slice_id="1",
+            round_number=None,
+            record_refs=(identity_record_id,),
+        ),
+        logical_id=f"workflow-event-{identity_record_id}",
+        idempotency_key=f"workflow-event:{identity_record_id}",
+        fingerprint_sha256=cast(str, state.task_digest),
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    binding = cast(ProtocolBinding, state.protocol_binding)
+    persisted_version = "d" * 64
+    profile = bridge.append(
+        RunProfilePayload(
+            implementer=RoleProfilePayload(
+                binding.codex_profile.model,
+                binding.codex_profile.effort,
+            ),
+            reviewer=RoleProfilePayload(
+                binding.claude_profile.model,
+                binding.claude_profile.effort,
+            ),
+            orchestrator_code_version=persisted_version,
+        ),
+        logical_id="run-profile",
+        idempotency_key="run-profile",
+        fingerprint_sha256=cast(str, state.task_digest),
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    monkeypatch.setattr(
+        "workflow_baseline.orchestrator_code_version", lambda: "e" * 64
+    )
+
+    assert matches_baseline_initialization_prefix(
+        (identity, event, profile), state
     )
 
 

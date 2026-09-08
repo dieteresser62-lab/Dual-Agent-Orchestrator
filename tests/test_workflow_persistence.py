@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import ast
+import hashlib
+import json
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 
+from agent_runtime import ProviderRequestRoundRequired
 from artifact_bridge import ArtifactBridge
 from artifact_models import ProviderContentPayload, Role
 from artifact_store import ArtifactStore
@@ -80,6 +83,39 @@ DRIVER_FACADES = {
     "persist_gate_transition": "persist_gate_transition",
     "persist_implementation_handoff": "persist_implementation_handoff",
 }
+
+
+def test_changed_request_with_same_binding_requests_a_new_round() -> None:
+    def bundle(assignment: str, fingerprint: str) -> str:
+        return json.dumps(
+            {
+                "canonical_request": json.dumps(
+                    {
+                        "assignment": assignment,
+                        "current_fingerprint": fingerprint,
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+    fingerprint = "a" * 64
+    previous = bundle("old composition", fingerprint)
+    current = bundle("new composition", fingerprint)
+
+    with pytest.raises(ProviderRequestRoundRequired) as raised:
+        WorkflowPersistence._raise_request_binding_difference(previous, current)
+
+    assert raised.value.binding_fingerprint == fingerprint
+    assert raised.value.previous_input_digest == hashlib.sha256(
+        previous.encode("utf-8")
+    ).hexdigest()
+    assert raised.value.current_input_digest == hashlib.sha256(
+        current.encode("utf-8")
+    ).hexdigest()
 
 
 def _tree(path: Path = PERSISTENCE_PATH, source: str | None = None) -> ast.Module:

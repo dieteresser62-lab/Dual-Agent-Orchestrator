@@ -585,11 +585,49 @@ def test_provider_attempt_rejects_changed_digest_for_same_operation(tmp_path: Pa
         fingerprint_sha256=DIGEST,
     )
 
-    with pytest.raises(ArtifactBridgeError, match="immutable binding"):
+    with pytest.raises(
+        ArtifactBridgeError,
+        match=(
+            "field=input_digest first=cccccccccccc current=eeeeeeeeeeee"
+        ),
+    ):
         bridge.start_provider_attempt(
             measurement_record=changed_measurement,
             binding_fingerprint=DIGEST,
             work_unit_id="1",
+        )
+
+
+def test_provider_attempt_rejects_changed_binding_with_both_short_values(
+    tmp_path: Path,
+) -> None:
+    bridge = _bound_bridge(tmp_path, "run-binding-change")
+    measurement = bridge.append(
+        _measurement(), logical_id="measurement-binding-1",
+        idempotency_key="measurement:binding:1", fingerprint_sha256=DIGEST,
+    )
+    first = bridge.start_provider_attempt(
+        measurement_record=measurement,
+        binding_fingerprint=DIGEST,
+        work_unit_id="1",
+        operation_instance="round:1",
+    )
+    bridge.finish_provider_attempt(
+        first, duration_seconds=1.0, failure_kind="runtime", usage=None,
+    )
+
+    with pytest.raises(
+        ArtifactBridgeError,
+        match=(
+            "field=binding_fingerprint first=aaaaaaaaaaaa "
+            "current=ffffffffffff"
+        ),
+    ):
+        bridge.start_provider_attempt(
+            measurement_record=measurement,
+            binding_fingerprint="f" * 64,
+            work_unit_id="1",
+            operation_instance="round:1",
         )
 
 

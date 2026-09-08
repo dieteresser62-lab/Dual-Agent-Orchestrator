@@ -17,6 +17,7 @@ from agent_runtime import (
     AgentCompatibilityError,
     AgentInvocationError,
     AgentProcessError,
+    ProviderRequestRoundRequired,
     QuotaReachedError,
 )
 from artifact_bridge import ArtifactBridgeError
@@ -109,7 +110,7 @@ _REJECT = FailureClass.TERMINAL_REJECTION
 
 # Authoritative inventory: all 48 ``*Error`` classes currently defined in
 # ``src/`` plus the schema validator's typed ``SchemaMismatch`` exception and
-# the four project exceptions whose names do not end in ``Error``.  Subclasses
+# the five project exceptions whose names do not end in ``Error``.  Subclasses
 # are intentionally repeated instead of inheriting an implicit classification.
 # This keeps the complete assignment readable and auditable in one place.
 ERROR_CLASSIFICATIONS: dict[type[BaseException], tuple[FailureClass, str]] = {
@@ -121,6 +122,7 @@ ERROR_CLASSIFICATIONS: dict[type[BaseException], tuple[FailureClass, str]] = {
     QuotaReachedError: _entry(_TRANSIENT, "PROVIDER-QUOTA"),
     AgentCompatibilityError: _entry(_HALT, "AGENT-COMPATIBILITY"),
     AgentProcessError: _entry(_TRANSIENT, "AGENT-PROCESS"),
+    ProviderRequestRoundRequired: _entry(_HALT, "PROVIDER-REQUEST-ROUND"),
     ArtifactBridgeError: _entry(_HALT, "ARTIFACT-BRIDGE"),
     ArtifactValidationError: _entry(_HALT, "ARTIFACT-VALIDATION"),
     ArtifactResumeError: _entry(_HALT, "ARTIFACT-RESUME"),

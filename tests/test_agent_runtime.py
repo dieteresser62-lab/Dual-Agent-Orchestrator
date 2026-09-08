@@ -984,6 +984,32 @@ def test_claude_structured_output_retry_exhaustion_is_bounded_transient() -> Non
     }
 
 
+def test_builtin_failure_keeps_provider_and_technical_evidence_independent() -> None:
+    failure = classify_agent_failure(
+        "codex",
+        RuntimeError("internal diagnostic sentinel"),
+        invocation_id="builtin-independent-evidence",
+    )
+
+    assert failure.provider_text == "internal diagnostic sentinel"
+    assert failure.technical_text == "RuntimeError: internal diagnostic sentinel"
+    assert failure.provider_text != failure.technical_text
+
+
+def test_compatibility_failure_preserves_detail_and_separates_diagnostic() -> None:
+    failure = classify_agent_failure(
+        "claude",
+        agent_runtime.AgentCompatibilityError("unsupported CLI version 9.9"),
+        invocation_id="compatibility-independent-evidence",
+    )
+
+    assert failure.provider_text == "unsupported CLI version 9.9"
+    assert failure.technical_text == (
+        "AgentCompatibilityError: unsupported CLI version 9.9"
+    )
+    assert failure.provider_text != failure.technical_text
+
+
 @pytest.mark.parametrize(
     ("code", "expected_kind"),
     (

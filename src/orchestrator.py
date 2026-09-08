@@ -196,6 +196,7 @@ from inbox_watcher import (
     watch_identity_path,
     watch_inbox,
 )
+from orchestrator_version import orchestrator_code_version
 import workflow_dry_run
 import workflow_production
 from workflow_run_setup import (
@@ -295,6 +296,7 @@ class ProductionWorkflowDriver:
         self._artifact_bridge: ArtifactBridge | None = None
         self._replace_existing_run_id = replace_existing_run_id
         self._side_effect_boundary_observer = side_effect_boundary_observer
+        self._reported_code_version_changes: set[tuple[str, str]] = set()
 
     def _recovery_boundary(self) -> WorkflowRecovery:
         """Bind driver-owned state to one recovery operation explicitly."""
@@ -636,6 +638,64 @@ class ProductionWorkflowDriver:
 
     def _persist_structured_baseline(self, state: WorkflowState) -> None:
         self._baseline_boundary()._persist_structured_baseline(state)
+        self._record_orchestrator_code_version_change(state)
+
+    def _record_orchestrator_code_version_change(
+        self, state: WorkflowState
+    ) -> None:
+        bridge = self._artifact_bridge
+        if bridge is None or state.task_digest is None:
+            return
+        replay = replay_artifacts(bridge.store.current_chain(), state.run_id)
+        profile = replay.run_profile
+        if profile is None:
+            return
+        persisted = profile.orchestrator_code_version
+        current = orchestrator_code_version()
+        if persisted == current:
+            return
+        reason = (
+            "Orchestrator code version changed | "
+            f"persisted={persisted} current={current}"
+        )
+        version_pair = (persisted, current)
+        if version_pair not in self._reported_code_version_changes:
+            logger.warning(
+                "Orchestrator code version changed before provider start: "
+                "persisted=%s current=%s; request changes will open a new round "
+                "only while binding_fingerprint remains unchanged.",
+                persisted,
+                current,
+            )
+            self._reported_code_version_changes.add(version_pair)
+        if any(
+            isinstance(record.payload, DiagnosticPayload)
+            and record.payload.role is Role.ORCHESTRATOR
+            and record.payload.reason == reason
+            for record in replay.records
+        ):
+            return
+        prior = tuple(
+            record
+            for record in replay.records
+            if isinstance(record.payload, DiagnosticPayload)
+            and record.logical_id == "orchestrator-code-version-diff"
+        )
+        bridge.append(
+            DiagnosticPayload(
+                role=Role.ORCHESTRATOR,
+                work_unit_id=str(state.current_work_unit_id),
+                attempt=len(prior) + 1,
+                output_sha256=hashlib.sha256(reason.encode("utf-8")).hexdigest(),
+                reason=reason,
+            ),
+            logical_id="orchestrator-code-version-diff",
+            idempotency_key=(
+                f"orchestrator-code-version-diff:{persisted}:{current}"
+            ),
+            fingerprint_sha256=state.task_digest,
+            fingerprint_kind=FingerprintKind.CONTRACT,
+        )
 
     def _persist_workflow_snapshot(self, state: WorkflowState) -> None:
         self._persistence_boundary()._persist_workflow_snapshot(state)
@@ -1581,6 +1641,40 @@ class ProductionWorkflowDriver:
         self, payload: InvocationFailurePayload
     ) -> None:
         self._persistence_boundary().persist_invocation_failure(payload)
+        state = self.active_state
+        if state is None:
+            raise WorkflowExecutionError(
+                "invocation failure diagnostic has no active workflow"
+            )
+        attempt = len(state.current_work_unit.invocation_failures) + 1
+        round_number = state.current_work_unit.round_number
+        path = self.log_dir / (
+            f"{state.run_id}.work-unit-{payload.work_unit_id}."
+            f"round-{round_number:04d}.attempt-{attempt:04d}.failure.json"
+        )
+        document = {
+            "version": 1,
+            "run_id": state.run_id,
+            "work_unit_id": payload.work_unit_id,
+            "round_number": round_number,
+            "attempt_number": attempt,
+            "invocation_id": payload.invocation_id,
+            "role": payload.role.value,
+            "step": payload.step,
+            "failure_kind": payload.failure_kind,
+            "failure_class": payload.failure_class,
+            "diagnostic_code": payload.diagnostic_code,
+            "provider_text": payload.provider_text,
+            "provider_text_sha256": payload.provider_text_sha256,
+            "provider_text_bytes": payload.provider_text_bytes,
+            "technical_text": payload.technical_text,
+            "technical_text_sha256": payload.technical_text_sha256,
+            "technical_text_bytes": payload.technical_text_bytes,
+            "recorded_at": payload.decision_at_utc,
+        }
+        self._write_immutable_file(
+            path, canonical_json(document).decode("utf-8")
+        )
 
     def persist_gate_decision(
         self, work_unit_id: int, decision: GateDecisionRecord

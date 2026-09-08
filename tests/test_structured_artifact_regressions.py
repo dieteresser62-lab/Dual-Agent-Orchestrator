@@ -31,6 +31,7 @@ from artifact_models import (
     ArtifactRecord,
     BindingPayload,
     CorrectionWorkUnitPayload,
+    DiagnosticPayload,
     FindingSeverity,
     FindingTransitionPayload,
     FingerprintKind,
@@ -478,9 +479,15 @@ def test_process_failure_exit_and_redacted_technical_evidence_reach_authoritativ
     assert active is not None
     now = datetime(2026, 9, 1, 18, 30, tzinfo=timezone.utc)
     raw_technical_text = "stderr sentinel: provider worker was killed"
+    raw_provider_text = "provider process rejected the request"
     error = classify_agent_failure(
         AgentRole.CLAUDE.value,
-        AgentProcessError(raw_technical_text, exit_code=137),
+        AgentOutputError(
+            "review invocation failed",
+            provider_text=raw_provider_text,
+            technical_text=raw_technical_text,
+            exit_code=137,
+        ),
         invocation_id="canary-review-process-failure",
         received_at=now,
     )
@@ -503,9 +510,64 @@ def test_process_failure_exit_and_redacted_technical_evidence_reach_authoritativ
     assert payload.failure_kind == "process"
     assert payload.process_exit_code == 137
     assert payload.diagnostic_exit_code == 3
+    assert payload.provider_text_sha256 != payload.technical_text_sha256
     assert payload.technical_text.startswith("[technical text redacted; sha256=")
     assert payload.technical_text_bytes == len(raw_technical_text.encode("utf-8"))
     assert raw_technical_text.encode("utf-8") not in failure_records[0].canonical_json()
+    diagnostic_path = (
+        repository
+        / ".orchestrator"
+        / "logs"
+        / (
+            f"{state.run_id}.work-unit-{active.current_work_unit_id}."
+            "round-0001.attempt-0001.failure.json"
+        )
+    )
+    diagnostic = json.loads(diagnostic_path.read_text(encoding="utf-8"))
+    assert diagnostic["run_id"] == state.run_id
+    assert diagnostic["work_unit_id"] == str(active.current_work_unit_id)
+    assert diagnostic["round_number"] == diagnostic["attempt_number"] == 1
+    assert diagnostic["provider_text_sha256"] != diagnostic["technical_text_sha256"]
+
+
+def test_code_version_change_is_warned_and_recorded_before_provider_start(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    repository = _repository(tmp_path, "feature/structured-regression")
+    state = _state(repository, "code-version-resume")
+    driver = _driver(repository)
+    driver.checkpoint(state, WorkflowHistory(1))
+    active = driver.active_state
+    assert active is not None
+    chain_before = ArtifactStore(repository, state.run_id).load_chain()
+    profile = next(
+        record.payload
+        for record in chain_before
+        if isinstance(record.payload, RunProfilePayload)
+    )
+    changed_version = (
+        "f" * 64
+        if profile.orchestrator_code_version != "f" * 64
+        else "e" * 64
+    )
+    monkeypatch.setattr(orchestrator, "orchestrator_code_version", lambda: changed_version)
+    caplog.set_level("WARNING")
+
+    driver.checkpoint(active, WorkflowHistory(active.current_work_unit_id))
+
+    chain = ArtifactStore(repository, state.run_id).load_chain()
+    diagnostic = next(
+        record
+        for record in chain
+        if isinstance(record.payload, DiagnosticPayload)
+        and record.logical_id == "orchestrator-code-version-diff"
+    )
+    assert profile.orchestrator_code_version in diagnostic.payload.reason
+    assert changed_version in diagnostic.payload.reason
+    assert not any(isinstance(record.payload, ProviderAttemptPayload) for record in chain)
+    assert "changed before provider start" in caplog.text
 
 
 @pytest.mark.parametrize(

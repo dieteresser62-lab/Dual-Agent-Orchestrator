@@ -58,6 +58,7 @@ from final_review_preflight import (
     run_final_review_preflight,
     transition_fingerprint,
 )
+from orchestrator_version import orchestrator_code_version
 from provider_input_budget import ProviderInputMeasurement
 from side_effects import (
     Reconciliation,
@@ -96,10 +97,17 @@ def gate_transition_payload(unit: WorkUnitRecord) -> GateTransitionPayload:
     )
 
 
+def _resume_code_version(existing_replay: ArtifactReplayResult | None) -> str:
+    if existing_replay is not None and existing_replay.run_profile is not None:
+        return existing_replay.run_profile.orchestrator_code_version
+    return orchestrator_code_version()
+
+
 def _append_baseline_identity_expectations(
     state: WorkflowState,
     binding: ProtocolBinding,
     expect: Callable[..., None],
+    code_version: str | None = None,
 ) -> None:
     expected_identity = RunIdentityPayload(
         task_file=state.task_file,
@@ -116,6 +124,7 @@ def _append_baseline_identity_expectations(
         reviewer=RoleProfilePayload(
             binding.claude_profile.model, binding.claude_profile.effort  # allowlist:provider
         ),
+        orchestrator_code_version=code_version or orchestrator_code_version(),
     )
     identity_record_id = stable_record_id(
         state.run_id, RecordType.RUN_IDENTITY, "run-identity", 1
@@ -385,7 +394,20 @@ def matches_baseline_initialization_prefix(
     ) -> None:
         expectations.append((payload, logical_id, idempotency_key, revision))
 
-    _append_baseline_identity_expectations(state, binding, expect)
+    code_version = next(
+        (
+            record.payload.orchestrator_code_version
+            for record in prefix
+            if isinstance(record.payload, RunProfilePayload)
+        ),
+        None,
+    )
+    _append_baseline_identity_expectations(
+        state,
+        binding,
+        expect,
+        code_version,
+    )
     current = _append_baseline_transition_expectations(state, expect)
     _append_baseline_contract_expectations(
         records, state, first_domain, current, expect
@@ -534,6 +556,7 @@ class WorkflowBaseline:
                 reviewer=RoleProfilePayload(
                     binding.claude_profile.model, binding.claude_profile.effort
                 ),
+                orchestrator_code_version=_resume_code_version(existing_replay),
             ),
             logical_id="run-profile",
             idempotency_key="run-profile",

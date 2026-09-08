@@ -11,7 +11,11 @@ from typing import Callable
 import pytest
 
 import repo_changes
-from agent_runtime import AgentProcessError, QuotaReachedError
+from agent_runtime import (
+    AgentProcessError,
+    ProviderRequestRoundRequired,
+    QuotaReachedError,
+)
 from artifact_bridge import ArtifactBridgeError, finding_handoff_export_payload
 from artifact_resume import ArtifactResumeError
 from artifact_models import (
@@ -372,6 +376,7 @@ def test_central_inventory_classifies_all_49_project_error_types_exactly_once() 
         f"{FinalReviewPreflightDenied.__module__}.FinalReviewPreflightDenied",
         f"{WorkflowCommitApprovalRequired.__module__}.WorkflowCommitApprovalRequired",
         f"{ProviderInputBudgetExceeded.__module__}.ProviderInputBudgetExceeded",
+        f"{ProviderRequestRoundRequired.__module__}.ProviderRequestRoundRequired",
         f"{ScriptedInterruption.__module__}.ScriptedInterruption",
     }
     assert set(ERROR_CLASSIFICATIONS.values())

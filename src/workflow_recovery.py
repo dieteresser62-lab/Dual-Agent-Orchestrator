@@ -18,6 +18,7 @@ from typing import Any, Callable, Protocol
 from agent_runtime import (
     NativeAgentCodexOutput as NativeAgentImplementerOutput,
     NativeAgentReviewOutput,
+    ProviderRequestRoundRequired,
 )
 from artifact_bridge import (
     ArtifactBridge,
@@ -100,6 +101,60 @@ from workflow_state import (
 
 
 logger = logging.getLogger(__name__)
+
+
+def _require_provider_start_binding(
+    replay: ArtifactReplayResult,
+    measurement: ProviderInputMeasurement,
+    work_unit_id: str,
+    instance: str,
+) -> None:
+    related_starts = tuple(
+        item
+        for item in replay.side_effects
+        if item.effect_class == "provider_start"
+        and item.work_unit_id == work_unit_id
+        and len(item.operation) == 7
+        and item.operation[0] == measurement.provider
+        and item.operation[1] == measurement.operation
+        and item.operation[4] == instance
+    )
+    foreign_binding = next(
+        (
+            item.operation[3]
+            for item in related_starts
+            if item.operation[3] != measurement.binding_fingerprint
+        ),
+        None,
+    )
+    if foreign_binding is not None:
+        raise WorkflowExecutionError(
+            "provider attempt immutable binding differs from its first attempt: "
+            "field=binding_fingerprint "
+            f"first={foreign_binding[:12]} "
+            f"current={measurement.binding_fingerprint[:12]}"
+        )
+
+
+def _require_provider_input_round(
+    prior_records: tuple[ArtifactRecord, ...],
+    measurement: ProviderInputMeasurement,
+) -> None:
+    prior_input_digest = next(
+        (
+            record.payload.input_digest
+            for record in prior_records
+            if isinstance(record.payload, ProviderAttemptPayload)
+            and record.payload.input_digest != measurement.input_digest
+        ),
+        None,
+    )
+    if prior_input_digest is not None:
+        raise ProviderRequestRoundRequired(
+            binding_fingerprint=measurement.binding_fingerprint,
+            previous_input_digest=prior_input_digest,
+            current_input_digest=measurement.input_digest,
+        )
 
 
 class SideEffectSpecFactory(Protocol):
@@ -397,6 +452,12 @@ class WorkflowRecovery:
                 *PurePosixPath(operation[6]).parts
             )
         else:
+            _require_provider_start_binding(
+                replay,
+                measurement,
+                str(state.current_work_unit_id),
+                instance,
+            )
             logical_operation_id = logical_provider_operation_id(
                 run_id=state.run_id,
                 work_unit_id=str(state.current_work_unit_id),
@@ -437,6 +498,7 @@ class WorkflowRecovery:
                     for record in legacy_records
                 ):
                     prior_records = legacy_records
+            _require_provider_input_round(prior_records, measurement)
             attempt_number = max(
                 (
                     record.payload.attempt_number
