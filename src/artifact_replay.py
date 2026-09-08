@@ -847,33 +847,33 @@ def _project_work_unit_gate(
 def _project_work_unit_open_findings(
     replay: ArtifactReplayResult,
     records: tuple[ArtifactRecord, ...],
-    definition: object,
+    unit: ReplayedWorkUnitState, definition: object,
     latest_review_record: ArtifactRecord | None,
     positions: dict[str, int],
 ) -> tuple[str, ...]:
     from contracts import FindingClass
     from finding_reducer import project_open_set, reduce_findings
-
     definition_findings = (
-        definition.finding_ids
-        if isinstance(definition, CorrectionWorkUnitPayload)
-        else definition.open_finding_ids
-        if isinstance(definition, WorkUnitPayload)
-        else ()
+        definition.finding_ids if isinstance(definition, CorrectionWorkUnitPayload)
+        else definition.open_finding_ids if isinstance(definition, WorkUnitPayload) else ()
     )
     if latest_review_record is None:
+        is_current = unit.work_unit_id == replay.workflow_cursor.work_unit_id
+        if isinstance(definition, WorkUnitPayload) and is_current:
+            return reduce_findings(replay).open_set.finding_ids
         return definition_findings
     review_payload = latest_review_record.payload
     assert isinstance(review_payload, ReviewPayload)
     review_prefix = replay.subset(
         records[:_review_prefix_end(records, positions, latest_review_record)]
     )
+    if isinstance(definition, WorkUnitPayload):
+        return reduce_findings(review_prefix).open_set.finding_ids
     reviewed_findings = reduce_findings(review_prefix).request_subset(
         finding_ids=review_payload.finding_ids
     ).findings
     return tuple(
-        finding.finding_id
-        for finding in project_open_set(reviewed_findings).findings
+        finding.finding_id for finding in project_open_set(reviewed_findings).findings
         if finding.finding_class is FindingClass.BLOCKER
         and finding.origin.reporter.value == review_payload.reviewer.value
     )
@@ -930,7 +930,7 @@ def _project_work_unit_document(
     definition_findings = _project_work_unit_open_findings(
         replay,
         records,
-        definition,
+        unit, definition,
         authority.latest_reviews.get(unit.work_unit_id),
         transitions.positions,
     )

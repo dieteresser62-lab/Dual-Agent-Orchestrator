@@ -11,7 +11,11 @@ import pytest
 
 import artifact_replay as artifact_replay_module
 from artifact_bridge import ArtifactBridge
-from artifact_resume import ArtifactResumeError, require_workflow_event_prefix
+from artifact_resume import (
+    ArtifactResumeError,
+    ResumeResolution,
+    require_workflow_event_prefix,
+)
 from artifact_models import (
     BindingPayload,
     CommandSpec,
@@ -59,6 +63,8 @@ from content_authority_support import (
     append_provider_decision_authority,
     append_validation_authority,
 )
+from finding_reducer import reduce_findings
+from state_io import write_workflow_state_projection
 from workflow import WorkflowHistory
 from workflow_state import (
     AgentProfileBinding,
@@ -1154,6 +1160,223 @@ def test_state_projection_baseline_matches_pre_cut_bytes(tmp_path: Path) -> None
     assert final_review["kind"] == "final_review"
     assert final_review["reviewer"] == "claude"
     assert final_review["open_findings"] == ["C-01"]
+
+
+def test_multi_slice_open_findings_match_authoritative_reduction_in_state_cache(
+    tmp_path: Path,
+) -> None:
+    bridge = _state_projection_bridge(tmp_path, "multi-slice-open-findings")
+    _journey(bridge)
+    bridge.append(
+        FindingTransitionPayload(
+            "C-01",
+            Role.CLAUDE,
+            Role.CLAUDE,
+            "status_changed",
+            FindingSeverity.BLOCKER,
+            "closed",
+            "the earlier correction finding is resolved",
+            "4",
+        ),
+        logical_id="finding-C-01",
+        idempotency_key="finding:C-01:closed",
+        fingerprint_sha256=FINGERPRINT,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+
+    _append_transition(
+        bridge,
+        revision=8,
+        slice_id="4",
+        slice_status="in_progress",
+        work_unit_id="5",
+        step="claude_slice_review",
+        work_unit_status="in_progress",
+    )
+    _append_policy_gate(bridge, work_unit_id="5")
+    _append_boundary(
+        bridge, slice_id="4", path="src/four.py", fingerprint="4" * 64
+    )
+    bridge.append(
+        WorkUnitPayload("4", 1, ("src/four.py",)),
+        logical_id="work-unit-5",
+        idempotency_key="work-unit:5:round:1",
+        fingerprint_sha256=FINGERPRINT,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    bridge.append(
+        FindingTransitionPayload(
+            "C-02",
+            Role.CLAUDE,
+            Role.CLAUDE,
+            "opened",
+            FindingSeverity.OBSERVATION,
+            "open",
+            "the first Slice review records an observation",
+            "5",
+            "first Slice observation",
+            "the observation remains visible in the state mirror",
+            "04",
+            1,
+        ),
+        logical_id="finding-C-02",
+        idempotency_key="finding:C-02:opened",
+        fingerprint_sha256=FINGERPRINT,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    append_provider_decision_authority(
+        bridge,
+        ReviewPayload(
+            Role.CLAUDE,
+            "5",
+            "approved",
+            ("C-02",),
+            None,
+            "native-claude-review-v2",
+            "native-review-request-" + "2" * 64,
+            "3" * 64,
+            review_evidence=ReviewEvidencePayload(
+                "first Slice finding projection",
+                "a later Slice could lose the open observation",
+                "the state mirror becomes empty while the ledger remains open",
+            ),
+            pre_mortem="the next Slice could reconstruct findings from its empty definition",
+        ),
+        logical_id="review-slice-findings-1",
+        idempotency_key="review:slice-findings:1",
+        fingerprint_sha256=FINGERPRINT,
+        operation="claude_slice_review",
+    )
+
+    _append_transition(
+        bridge,
+        revision=9,
+        slice_id="5",
+        slice_status="in_progress",
+        work_unit_id="6",
+        step="claude_slice_review",
+        work_unit_status="in_progress",
+    )
+    _append_policy_gate(bridge, work_unit_id="6")
+    _append_boundary(
+        bridge, slice_id="5", path="src/five.py", fingerprint="5" * 64
+    )
+    bridge.append(
+        WorkUnitPayload("5", 1, ("src/five.py",)),
+        logical_id="work-unit-6",
+        idempotency_key="work-unit:6:round:1",
+        fingerprint_sha256=FINGERPRINT,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    next_slice_replay = replay_artifacts(bridge.store.load_chain(), RUN_ID)
+    next_slice_open = reduce_findings(next_slice_replay).open_set.finding_ids
+    assert next_slice_open == ("C-02",)
+    assert project_workflow_state(
+        next_slice_replay
+    ).state.current_work_unit.open_findings == next_slice_open
+    bridge.append(
+        FindingTransitionPayload(
+            "C-02",
+            Role.CLAUDE,
+            Role.CODEX,
+            "responded",
+            FindingSeverity.OBSERVATION,
+            "open",
+            "Codex accepts the observation",
+            "6",
+            response_decision="accepted",
+        ),
+        logical_id="finding-C-02",
+        idempotency_key="finding:C-02:responded",
+        fingerprint_sha256=FINGERPRINT,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    bridge.append(
+        FindingTransitionPayload(
+            "C-02",
+            Role.CLAUDE,
+            Role.CLAUDE,
+            "status_changed",
+            FindingSeverity.OBSERVATION,
+            "closed",
+            "the accepted observation is resolved",
+            "6",
+        ),
+        logical_id="finding-C-02",
+        idempotency_key="finding:C-02:closed",
+        fingerprint_sha256=FINGERPRINT,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    bridge.append(
+        FindingTransitionPayload(
+            "C-03",
+            Role.CLAUDE,
+            Role.CLAUDE,
+            "opened",
+            FindingSeverity.OBSERVATION,
+            "open",
+            "the second Slice review records another observation",
+            "6",
+            "second Slice observation",
+            "the remaining observation matches the reduced open set",
+            "05",
+            1,
+        ),
+        logical_id="finding-C-03",
+        idempotency_key="finding:C-03:opened",
+        fingerprint_sha256=FINGERPRINT,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    append_provider_decision_authority(
+        bridge,
+        ReviewPayload(
+            Role.CLAUDE,
+            "6",
+            "approved",
+            ("C-02", "C-03"),
+            None,
+            "native-claude-review-v2",
+            "native-review-request-" + "4" * 64,
+            "5" * 64,
+            review_evidence=ReviewEvidencePayload(
+                "second Slice finding projection",
+                "a closed finding could remain in the state mirror",
+                "the projected set diverges from the authoritative reduction",
+            ),
+            pre_mortem="a status transition could be ignored during state replay",
+        ),
+        logical_id="review-slice-findings-2",
+        idempotency_key="review:slice-findings:2",
+        fingerprint_sha256=FINGERPRINT,
+        operation="claude_slice_review",
+    )
+
+    replay = replay_artifacts(bridge.store.load_chain(), RUN_ID)
+    reduction = reduce_findings(replay)
+    projected = project_workflow_state(replay)
+    assert reduction.open_set.finding_ids == ("C-03",)
+    assert projected.state.work_units[-2].open_findings == ("C-02",)
+    assert projected.state.current_work_unit.open_findings == (
+        reduction.open_set.finding_ids
+    )
+    closed = next(item for item in reduction.ledger.findings if item.finding_id == "C-02")
+    assert closed.responses[0].decision.value == "ACCEPTED"
+    assert "C-02" not in projected.state.current_work_unit.open_findings
+
+    state_file = tmp_path / ".orchestrator" / "state.json"
+    write_workflow_state_projection(
+        state_file,
+        ResumeResolution(
+            projected.state,
+            ProtocolMode.STRUCTURED_V2,
+            replay.records[-1].record_id,
+            replay,
+        ),
+        allowed_roots=(tmp_path, Path.cwd()),
+    )
+    cached = json.loads(state_file.read_text(encoding="utf-8"))
+    assert cached["reducer_version"] == "structured-v2-schema-2-state-v3-v1"
+    assert cached["state"]["work_units"][-1]["open_findings"] == ["C-03"]
 
 
 def test_state_projection_anchor_detects_omitted_assembly_field(
