@@ -19,6 +19,7 @@ from contracts import (
     ValidationRecord,
     ValidationStatus,
 )
+from finding_reducer import project_reviewer_persistence_transitions
 from gates import detect_anchor_changes
 from native_review_contract import (
     NATIVE_REVIEW_RETRYABLE_FORM_CODES,
@@ -288,27 +289,99 @@ def test_new_finding_id_must_belong_to_claude() -> None:
     _assert_error(document, context, NativeReviewErrorCode.SCHEMA_INVALID)
 
 
-def test_denial_preserves_omitted_open_finding_but_approval_requires_update() -> None:
-    own = _finding("C-01", AgentRole.CLAUDE)
-    context = _context(previous=(own,))
+def test_slice_review_preserves_omitted_open_finding_when_decision_allows_it() -> None:
+    blocker = _finding("C-01", AgentRole.CLAUDE)
+    denied_context = _context(previous=(blocker,))
 
-    denied = _review(context, approved=False)
-    result = parse_native_contract_result(denied, context)
+    denied = _review(denied_context, approved=False)
+    result = parse_native_contract_result(denied, denied_context)
     assert result.approval is False
     assert result.findings[0].status is FindingStatus.OPEN
 
-    missing_from_approval = _review(context, approved=True)
-    _assert_error(
-        missing_from_approval,
-        context,
-        NativeReviewErrorCode.FINDING_UPDATE_MISSING,
+    observation = _finding(
+        "C-01",
+        AgentRole.CLAUDE,
+        finding_class=FindingClass.OBSERVATION,
     )
+    context = _context(previous=(observation,))
 
-    updated = _review(context, approved=False)
+    approved = _review(context, approved=True)
+    result = parse_native_contract_result(approved, context)
+    assert result.approval is True
+    assert result.findings[0].status is FindingStatus.OPEN
+
+    updated = _review(denied_context, approved=False)
     updated["status_changes"] = [
         {"finding_id": "C-01", "status": "OPEN", "rationale": "Still reproducible"}
     ]
-    assert parse_native_contract_result(updated, context).findings[0].status is FindingStatus.OPEN
+    assert (
+        parse_native_contract_result(updated, denied_context).findings[0].status
+        is FindingStatus.OPEN
+    )
+
+
+def test_slice_writer_accepts_one_new_finding_without_ten_open_dispositions() -> None:
+    previous = tuple(
+        _finding(
+            f"C-{number:02d}",
+            AgentRole.CLAUDE,
+            finding_class=FindingClass.OBSERVATION,
+        )
+        for number in range(1, 11)
+    )
+    context = _context(previous=previous)
+    document = _review(context)
+    document["new_findings"] = [
+        {
+            "finding_id": "C-11",
+            "finding_class": "OBSERVATION",
+            "summary": "A new cross-cutting follow-up remains.",
+            "acceptance_test": {
+                "kind": "prose",
+                "text": "Address the follow-up in a later slice.",
+            },
+        }
+    ]
+
+    writer = native_review_provider_response_schema(context)
+    validate_schema_document({"result": document}, writer)
+    result = parse_native_contract_result(document, context)
+
+    assert tuple(item.finding_id for item in result.findings) == tuple(
+        f"C-{number:02d}" for number in range(1, 12)
+    )
+    transitions = project_reviewer_persistence_transitions(
+        previous,
+        result.findings,
+        work_unit_id="2",
+    )
+    assert tuple(item.finding.finding_id for item in transitions) == ("C-11",)
+    assert tuple(item.action for item in transitions) == ("opened",)
+
+
+@pytest.mark.parametrize(
+    "approval",
+    (ApprovalMarker.PLAN, ApprovalMarker.FINAL),
+)
+def test_non_slice_approval_still_requires_complete_open_disposition(
+    approval: ApprovalMarker,
+) -> None:
+    prior = _finding(
+        "C-01",
+        AgentRole.CLAUDE,
+        finding_class=FindingClass.OBSERVATION,
+    )
+    context = _context(approval=approval, previous=(prior,))
+    document = _review(context)
+    writer = native_review_provider_response_schema(context)
+
+    with pytest.raises(SchemaMismatch):
+        validate_schema_document({"result": document}, writer)
+    _assert_error(
+        document,
+        context,
+        NativeReviewErrorCode.FINDING_UPDATE_MISSING,
+    )
 
 
 def test_closed_own_finding_is_neither_writer_offered_nor_locally_mutable() -> None:

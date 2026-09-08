@@ -28,6 +28,7 @@ from native_review_contract import (
     NativeReviewErrorCode,
     load_native_review_schema,
     parse_bound_native_contract_result,
+    parse_native_contract_result,
     validate_native_review_document,
 )
 from native_review_request import (
@@ -231,14 +232,17 @@ def test_writer_projection_defensively_copies_the_same_reader_instance() -> None
     assert json.dumps(base, sort_keys=True, separators=(",", ":")) == before
 
 
-def test_writer_schema_closes_bound_findings_anchors_and_convergence_observations() -> None:
+def test_writer_schema_bounds_touched_findings_anchors_and_convergence_observations() -> None:
     prior = _prior_finding()
     initial = replace(_context(), previous_findings=(prior,), anchor_origin=None)
     schema = native_review_provider_response_schema(initial)
     approved = _writer_response()
+    approved["request_id"] = initial.request_id
 
-    with pytest.raises(SchemaMismatch):
-        validate_schema_document({"result": approved}, schema)
+    validate_schema_document({"result": approved}, schema)
+    with pytest.raises(NativeReviewContractError) as missing_blocker:
+        parse_native_contract_result(approved, initial)
+    assert missing_blocker.value.code is NativeReviewErrorCode.APPROVAL_INVALID
     approved["status_changes"] = [
         {"finding_id": "C-01", "status": "OPEN", "rationale": "not fixed"}
     ]
@@ -300,7 +304,7 @@ def test_initial_slice_approval_can_record_an_open_observation() -> None:
     validate_schema_document({"result": approved}, schema)
 
 
-def test_initial_slice_approval_can_reclassify_own_blocker_to_observation() -> None:
+def test_initial_slice_approval_can_reclassify_blocker_and_omit_observation() -> None:
     blocker = _prior_finding("C-01")
     observation = _prior_finding(
         "C-02", finding_class=FindingClass.OBSERVATION
@@ -341,12 +345,19 @@ def test_initial_slice_approval_can_reclassify_own_blocker_to_observation() -> N
         ("C-02", FindingClass.OBSERVATION, FindingStatus.OPEN),
     )
 
-    missing_disposition = json.loads(json.dumps(approved))
-    missing_disposition["status_changes"] = []
-    with pytest.raises(SchemaMismatch):
-        validate_schema_document(
-            {"result": missing_disposition}, bundle.provider_response_schema
-        )
+    sparse_disposition = json.loads(json.dumps(approved))
+    sparse_disposition["status_changes"] = []
+    validate_schema_document(
+        {"result": sparse_disposition}, bundle.provider_response_schema
+    )
+    sparse_result = parse_bound_native_contract_result(
+        sparse_disposition, bundle.bound_context
+    )
+    assert sparse_result.approval is True
+    assert tuple(item.finding_id for item in sparse_result.findings) == (
+        "C-01",
+        "C-02",
+    )
 
     convergence_context = replace(
         context, round_number=2, allow_new_observations=False

@@ -451,7 +451,6 @@ def native_review_provider_response_schema(
         ),
         ApprovalMarker.FINAL: "final",
     }[context.approval_marker]
-
     approved_finding = _bound_review_definition(
         definitions["finding"], finding_ids=new_ids
     )
@@ -528,7 +527,7 @@ def native_review_provider_response_schema(
         items={"$ref": "#/$defs/bound_approved_finding"},
     )
     approved["properties"]["status_changes"].update(
-        minItems=len(own_open_ids),
+        minItems=0 if context.approval_marker is ApprovalMarker.SLICE else len(own_open_ids),
         maxItems=len(own_open_ids),
         items={"$ref": "#/$defs/bound_status_change"},
     )
@@ -574,21 +573,22 @@ def native_review_provider_response_schema(
             maxItems=len(own_open_ids),
             items={"$ref": "#/$defs/bound_approved_reclassification"},
         )
-        approved["anyOf"] = [
-            {
-                "properties": {
-                    "status_changes": {
-                        "minItems": status_count,
-                        "maxItems": status_count,
-                    },
-                    "reclassifications": {
-                        "minItems": len(own_open_ids) - status_count,
-                        "maxItems": len(own_open_ids) - status_count,
+        if context.approval_marker is not ApprovalMarker.SLICE:
+            approved["anyOf"] = [
+                {
+                    "properties": {
+                        "status_changes": {
+                            "minItems": status_count,
+                            "maxItems": status_count,
+                        },
+                        "reclassifications": {
+                            "minItems": len(own_open_ids) - status_count,
+                            "maxItems": len(own_open_ids) - status_count,
+                        },
                     },
                 }
-            }
-            for status_count in range(len(own_open_ids) + 1)
-        ]
+                for status_count in range(len(own_open_ids) + 1)
+            ]
     approved["properties"]["review_evidence"] = {
         "$ref": "#/$defs/evidence"
     }
@@ -1101,6 +1101,7 @@ def _validate_response_events(
     for finding in context.previous_findings:
         if (
             response.approved
+            and context.approval_marker is not ApprovalMarker.SLICE
             and finding.finding_id in previous_open_ids
             and finding.origin.reporter is context.reviewer
             and finding.finding_id not in touched
