@@ -542,7 +542,12 @@ def native_codex_response_to_contract_result(
             12000,
             NativeCodexErrorCode.RESULT_CONTENT_INVALID,
         )
-    findings = _apply_dispositions(prior, dispositions)
+    findings = _apply_dispositions(
+        prior,
+        dispositions,
+        work_unit_id=context.work_unit_id,
+        round_number=context.contract.round_number,
+    )
     return CodexContractResult(
         ready=response.ready,
         stopped=False,
@@ -593,6 +598,9 @@ def _parse_dispositions(
 def _apply_dispositions(
     prior: tuple[FindingRecord, ...],
     dispositions: tuple[NativeFindingDisposition, ...],
+    *,
+    work_unit_id: str,
+    round_number: int,
 ) -> tuple[FindingRecord, ...]:
     try:
         return apply_finding_responses(
@@ -606,7 +614,8 @@ def _apply_dispositions(
         )
     except ValueError as exc:
         raise NativeCodexContractError(
-            NativeCodexErrorCode.FINDING_REFERENCE_INVALID, str(exc)
+            NativeCodexErrorCode.FINDING_REFERENCE_INVALID,
+            f"{exc} (context: work-unit={work_unit_id} round={round_number})",
         ) from exc
 
 

@@ -549,6 +549,7 @@ class WorkflowRecovery:
         self,
         chain: tuple[ArtifactRecord, ...],
         candidate: ArtifactRecord | None,
+        content_record: ArtifactRecord,
         invocation: ImplementerInvocation,
         bundle: NativeImplementerRequestBundle,
     ) -> tuple[
@@ -565,43 +566,37 @@ class WorkflowRecovery:
         )
         validate_against_bundle = recovery_bundle is not None or candidate is None
         original_attempt_record = None
-        if candidate is not None and recovery_bound.context.previous_findings:
-            candidate_index = chain.index(candidate)
-            prior_attempts = tuple(
-                item
-                for item in chain[:candidate_index]
-                if isinstance(item.payload, ProviderAttemptPayload)
-                and item.payload.provider is candidate.payload.role
-                and item.payload.work_unit_id == str(invocation.work_unit_id)
-                and item.payload.operation == invocation.step.value
-                and item.payload.phase == "started"
-            )
-            if not prior_attempts:
-                raise WorkflowExecutionError(
-                    "native agent recovery has no durable original request binding"
-                )
+        response_anchor = candidate or content_record
+        response_role = (
+            candidate.payload.role
+            if candidate is not None
+            else content_record.payload.role
+        )
+        response_index = chain.index(response_anchor)
+        prior_attempts = tuple(
+            item
+            for item in chain[:response_index]
+            if isinstance(item.payload, ProviderAttemptPayload)
+            and item.payload.provider is response_role
+            and item.payload.work_unit_id == str(invocation.work_unit_id)
+            and item.payload.operation == invocation.step.value
+            and item.payload.phase == "started"
+        )
+        if prior_attempts:
             original_attempt_record = prior_attempts[-1]
+        elif recovery_bound.context.previous_findings:
+            raise WorkflowExecutionError(
+                "native agent recovery has no durable original request binding"
+            )
         if (
             recovery_bundle is None
             and candidate is not None
             and candidate.payload.request_id != bundle.bound_context.request_id
         ):
             if original_attempt_record is None:
-                candidate_index = chain.index(candidate)
-                prior_attempts = tuple(
-                    item
-                    for item in chain[:candidate_index]
-                    if isinstance(item.payload, ProviderAttemptPayload)
-                    and item.payload.provider is candidate.payload.role
-                    and item.payload.work_unit_id == str(invocation.work_unit_id)
-                    and item.payload.operation == invocation.step.value
-                    and item.payload.phase == "started"
+                raise WorkflowExecutionError(
+                    "native agent recovery has no durable original request binding"
                 )
-                if not prior_attempts:
-                    raise WorkflowExecutionError(
-                        "native agent recovery has no durable original request binding"
-                    )
-                original_attempt_record = prior_attempts[-1]
             original_request_id = candidate.payload.request_id
             recovery_bound = type(bundle.bound_context)(
                 context=replace(
@@ -639,10 +634,20 @@ class WorkflowRecovery:
         self,
         recovery_bound: Any,
         request_findings_by_id: dict[str, FindingRecord],
+        state: WorkflowState,
     ) -> Any:
         offered_ids = tuple(
             item.finding_id for item in recovery_bound.context.previous_findings
         )
+        if not offered_ids:
+            # Structured resume rehydrates event references before the full
+            # finding ledger. Recover the exact request-time set from the
+            # authoritative prefix instead of that empty transient history.
+            offered_ids = (
+                tuple(state.current_work_unit.open_findings)
+                if recovery_bound.context.request_kind.value == "correction"
+                else tuple(request_findings_by_id)
+            )
         if any(finding_id not in request_findings_by_id for finding_id in offered_ids):
             raise WorkflowExecutionError(
                 "native agent request-time finding subset is incomplete"
@@ -752,6 +757,7 @@ class WorkflowRecovery:
         ) = self._bind_native_implementer_request(
             chain,
             candidate,
+            content_record,
             invocation,
             bundle,
         )
@@ -771,6 +777,7 @@ class WorkflowRecovery:
             recovery_bound = self._bind_native_implementer_request_findings(
                 recovery_bound,
                 request_findings_by_id,
+                state,
             )
         try:
             result = self._parse_native_implementer_recovery(

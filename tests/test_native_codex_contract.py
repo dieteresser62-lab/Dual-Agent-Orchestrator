@@ -979,6 +979,90 @@ def test_native_result_rejects_missing_or_foreign_dispositions() -> None:
     with pytest.raises(NativeCodexContractError) as raised:
         parse_bound_native_codex_contract_result(document, bound)
     assert raised.value.code is NativeCodexErrorCode.FINDING_REFERENCE_INVALID
+    assert raised.value.detail == (
+        "missing disposition for C-01 "
+        "(context: work-unit=work-unit-1 round=1)"
+    )
+
+    document["finding_dispositions"] = [
+        {
+            "finding_id": "C-02",
+            "decision": "accepted",
+            "rationale": "This finding was never offered in the bound context.",
+        }
+    ]
+    with pytest.raises(NativeCodexContractError) as raised:
+        parse_bound_native_codex_contract_result(document, bound)
+    assert raised.value.code is NativeCodexErrorCode.FINDING_REFERENCE_INVALID
+    assert raised.value.detail == (
+        "missing disposition for C-01 "
+        "(context: work-unit=work-unit-1 round=1)"
+    )
+
+
+def test_native_result_rejects_disposition_to_closed_finding_with_context() -> None:
+    closed = replace(
+        _finding(),
+        status=FindingStatus.CLOSED,
+        status_rationale="The reviewer closed this finding before the request.",
+    )
+    bound = _bound(
+        NativeCodexRequestKind.CORRECTION,
+        findings=(closed,),
+        expected_tests=(),
+        test_changes_approved=True,
+    )
+    document = {
+        **_base(bound, "correction_result"),
+        "ready": True,
+        "test_files": [],
+        "finding_dispositions": [
+            {
+                "finding_id": "C-01",
+                "decision": "accepted",
+                "rationale": "This closed finding must remain unavailable.",
+            }
+        ],
+    }
+
+    with pytest.raises(NativeCodexContractError) as raised:
+        parse_bound_native_codex_contract_result(document, bound)
+
+    assert raised.value.code is NativeCodexErrorCode.FINDING_REFERENCE_INVALID
+    assert raised.value.detail == (
+        "disposition references non-open finding C-01 "
+        "(context: work-unit=work-unit-1 round=1)"
+    )
+
+
+def test_native_result_rejects_unknown_finding_with_context() -> None:
+    bound = _bound(
+        NativeCodexRequestKind.CORRECTION,
+        findings=(),
+        expected_tests=(),
+        test_changes_approved=True,
+    )
+    document = {
+        **_base(bound, "correction_result"),
+        "ready": True,
+        "test_files": [],
+        "finding_dispositions": [
+            {
+                "finding_id": "C-99",
+                "decision": "accepted",
+                "rationale": "This identifier is absent from the bound context.",
+            }
+        ],
+    }
+
+    with pytest.raises(NativeCodexContractError) as raised:
+        parse_bound_native_codex_contract_result(document, bound)
+
+    assert raised.value.code is NativeCodexErrorCode.FINDING_REFERENCE_INVALID
+    assert raised.value.detail == (
+        "disposition references non-open finding C-99 "
+        "(context: work-unit=work-unit-1 round=1)"
+    )
 
 
 def test_native_and_legacy_corrections_share_open_finding_completeness() -> None:

@@ -35,13 +35,13 @@
         },
         {
           "ordinal": 6,
-          "expression": "candidate is not None and recovery_bound.context.previous_findings",
-          "read_names": ["candidate", "recovery_bound"]
+          "expression": "prior_attempts",
+          "read_names": ["prior_attempts"]
         },
         {
           "ordinal": 7,
-          "expression": "not prior_attempts",
-          "read_names": ["prior_attempts"]
+          "expression": "recovery_bound.context.previous_findings",
+          "read_names": ["recovery_bound"]
         },
         {
           "ordinal": 8,
@@ -55,13 +55,13 @@
         },
         {
           "ordinal": 10,
-          "expression": "not prior_attempts",
-          "read_names": ["prior_attempts"]
+          "expression": "original_attempt_record is not None",
+          "read_names": ["original_attempt_record"]
         },
         {
           "ordinal": 11,
-          "expression": "original_attempt_record is not None",
-          "read_names": ["original_attempt_record"]
+          "expression": "not offered_ids",
+          "read_names": ["offered_ids"]
         },
         {
           "ordinal": 12,
@@ -122,13 +122,13 @@
           "ordinal": 4,
           "exception_type": "WorkflowExecutionError",
           "message": "'native agent recovery has no durable original request binding'",
-          "condition_path": ["candidate is not None and recovery_bound.context.previous_findings", "not prior_attempts"]
+          "condition_path": ["else: prior_attempts", "recovery_bound.context.previous_findings"]
         },
         {
           "ordinal": 5,
           "exception_type": "WorkflowExecutionError",
           "message": "'native agent recovery has no durable original request binding'",
-          "condition_path": ["recovery_bundle is None and candidate is not None and (candidate.payload.request_id != bundle.bound_context.request_id)", "original_attempt_record is None", "not prior_attempts"]
+          "condition_path": ["recovery_bundle is None and candidate is not None and (candidate.payload.request_id != bundle.bound_context.request_id)", "original_attempt_record is None"]
         },
         {
           "ordinal": 6,

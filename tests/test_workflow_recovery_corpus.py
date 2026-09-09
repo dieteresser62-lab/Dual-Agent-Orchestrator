@@ -36,6 +36,10 @@ from contracts import (
     AgentRole,
     ApprovalMarker,
     CodexStepContract,
+    FindingClass,
+    FindingOrigin,
+    FindingRecord,
+    FindingStatus,
     ReadinessMarker,
     ValidationAttestation,
     ValidationRecord,
@@ -877,6 +881,166 @@ def _run_implementer_scenario(
             }
     result["provider_start_count"] = provider_counter["count"] - before
     return result
+
+
+def test_implementer_recovery_replays_prior_work_unit_findings_for_empty_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    finding = FindingRecord(
+        finding_id="C-02",
+        finding_class=FindingClass.OBSERVATION,
+        status=FindingStatus.OPEN,
+        summary="A finding opened in an earlier work unit remains open.",
+        acceptance_test="Recovery accepts its request-bound disposition.",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
+    contract = CodexStepContract(
+        "b97-implementer",
+        ReadinessMarker.IMPLEMENTATION,
+        "16",
+        2,
+        require_test_files_record=True,
+        expected_test_files=(),
+        test_changes_approved=True,
+    )
+
+    def request(previous_findings: tuple[FindingRecord, ...]):
+        return build_native_codex_request(
+            NativeCodexRequestSpec(
+                context=NativeCodexContext(
+                    run_id=RUN_ID,
+                    work_unit_id="17",
+                    operation=WorkflowStep.CODEX_IMPLEMENTATION.value,
+                    current_fingerprint=FINGERPRINT,
+                    request_kind=NativeCodexRequestKind.IMPLEMENTATION,
+                    contract=contract,
+                    previous_findings=previous_findings,
+                ),
+                target_branch="feature/recovery-response-kontext",
+                base_commit="a" * 40,
+                authorized_paths=("src/workflow_recovery.py",),
+                assignment="Recover the request-bound finding context.",
+                work_context="B97 provider-free recovery regression.",
+                evidence=(
+                    NativeCodexEvidenceInput(
+                        "b97-task",
+                        "orchestrator_instruction",
+                        "Recover exactly once in the original finding context.",
+                    ),
+                ),
+            )
+        )
+
+    original_bundle = request((finding,))
+    rebuilt_bundle = request(())
+    document = {
+        "schema_version": "native-agent-codex-result-v2",
+        "result_type": "implementation_result",
+        "request_id": original_bundle.bound_context.request_id,
+        "ready": True,
+        "test_files": [],
+        "finding_dispositions": [
+            {
+                "finding_id": "C-02",
+                "decision": "accepted",
+                "rationale": "The earlier finding remains valid and open.",
+            }
+        ],
+    }
+    canonical = canonical_native_codex_json(document)
+    parsed = parse_bound_native_codex_contract_result(
+        document, original_bundle.bound_context
+    )
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    content = _Record(
+        "ar1-" + "8" * 64,
+        "content-b97",
+        _FingerprintRef(FINGERPRINT),
+        ProviderContentPayload(
+            role=Role.CODEX,
+            work_unit_id="17",
+            round_number=2,
+            operation=WorkflowStep.CODEX_IMPLEMENTATION.value,
+            request_id=original_bundle.bound_context.request_id,
+            response_sha256=digest,
+            content_kind="agent_result",
+            content_bytes=len(canonical.encode("utf-8")),
+            blob=BlobReference(digest, len(canonical.encode("utf-8"))),
+        ),
+    )
+    candidate = _Record(
+        "ar1-" + "9" * 64,
+        "agent-17-codex_implementation-2",
+        _FingerprintRef(FINGERPRINT),
+        agent_result_payload(
+            parsed,
+            role=AgentRole.CODEX,
+            work_unit_id=17,
+            transport_schema=recovery_module.NATIVE_IMPLEMENTER_TRANSPORT,
+            request_id=original_bundle.bound_context.request_id,
+            response_sha256=digest,
+        ),
+    )
+    base_attempt = _attempt_record()
+    attempt = replace(
+        base_attempt,
+        payload=replace(base_attempt.payload, work_unit_id="17"),
+    )
+    state = SimpleNamespace(
+        run_id=RUN_ID,
+        current_work_unit_id=17,
+        current_step=WorkflowStep.CODEX_IMPLEMENTATION,
+        current_work_unit=SimpleNamespace(
+            kind=WorkUnitKind.SLICE,
+            open_findings=("C-02",),
+        ),
+        protocol_binding=SimpleNamespace(
+            codex_result_transport=recovery_module.NATIVE_IMPLEMENTER_TRANSPORT
+        ),
+    )
+    capture: dict[str, object] = {}
+    provider_counter = {"count": 0}
+    dependencies = _dependencies(
+        recovery_module,
+        state=state,
+        chain=(attempt, content, candidate),
+        persisted_content=(canonical, content),
+        capture=capture,
+        provider_counter=provider_counter,
+    )
+    monkeypatch.setattr(
+        recovery_module,
+        "replay_artifacts",
+        lambda *_args, **_kwargs: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        recovery_module,
+        "reduce_findings",
+        lambda _replay: SimpleNamespace(
+            ledger=SimpleNamespace(findings=(finding,))
+        ),
+    )
+    invocation = CodexInvocation(
+        17,
+        WorkflowStep.CODEX_IMPLEMENTATION,
+        2,
+        "",
+        native_request=rebuilt_bundle,
+    )
+
+    output = recovery_module.WorkflowRecovery(
+        dependencies
+    ).recover_pending_native_implementer(
+        invocation,
+        contract,
+        WorkflowHistory(17),
+    )
+
+    assert output is not None
+    assert output.result.findings[0].responses[-1].rationale == (
+        "The earlier finding remains valid and open."
+    )
+    assert provider_counter["count"] == 0
 
 
 def _reviewer_base() -> dict[str, object]:

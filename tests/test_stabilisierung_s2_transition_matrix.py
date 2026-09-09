@@ -609,7 +609,7 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/orchestrator.py:ProductionWorkflowDriver._write_native_codex_raw_response": 0,
     "src/orchestrator.py:ProductionWorkflowDriver._materialize_review_packet": 3,
     "src/orchestrator.py:ProductionWorkflowDriver._canonical_native_agent_result": 4,
-    "src/workflow_recovery.py:WorkflowRecovery.recover_pending_native_implementer": 42,
+    "src/workflow_recovery.py:WorkflowRecovery.recover_pending_native_implementer": 39,
     "src/workflow_recovery.py:WorkflowRecovery.recover_pending_native_reviewer": 30,
     "src/workflow_recovery.py:WorkflowRecovery.recover_pending_native_reviewer_before_policy": 31,
     "src/workflow_persistence.py:WorkflowPersistence.persist_native_implementer_contract": 11,
