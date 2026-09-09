@@ -5,6 +5,12 @@ from __future__ import annotations
 from enum import StrEnum
 
 
+STRUCTURED_OUTPUT_RETRY_EXHAUSTED_SUBTYPE = (
+    "error_max_structured_output_retries"
+)
+STRUCTURED_OUTPUT_DIAGNOSTIC_CODE = "PROVIDER-STRUCTURED-OUTPUT"
+
+
 class OrchestratorDiagnostic(StrEnum):
     """Diagnostics whose complete rendered text is owned by this repository."""
 

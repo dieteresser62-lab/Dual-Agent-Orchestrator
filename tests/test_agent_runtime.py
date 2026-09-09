@@ -963,7 +963,7 @@ def test_runtime_executes_structured_validation_request(tmp_path: Path) -> None:
 
 
 
-def test_claude_structured_output_retry_exhaustion_is_bounded_transient() -> None:
+def test_structured_output_retry_exhaustion_is_classified_as_output() -> None:
     failure = classify_agent_failure(
         "claude",
         agent_runtime.AgentProcessError(
@@ -977,11 +977,16 @@ def test_claude_structured_output_retry_exhaustion_is_bounded_transient() -> Non
         invocation_id="claude-structured-output-1",
     )
 
-    assert failure.kind is AgentFailureKind.NETWORK
+    assert failure.kind is AgentFailureKind.OUTPUT
     assert failure.provider_data == {
         "type": "result",
         "subtype": "error_max_structured_output_retries",
     }
+    assert failure.technical_text == (
+        "AgentProcessError: provider_diagnostic.subtype="
+        "error_max_structured_output_retries"
+    )
+    assert failure.provider_text != failure.technical_text
 
 
 def test_builtin_failure_keeps_provider_and_technical_evidence_independent() -> None:
@@ -1037,7 +1042,7 @@ def test_native_review_contract_failure_kind_is_output_for_all_codes(
     assert failure.kind is expected_kind
 
 
-def test_claude_adapter_structured_output_retry_exhaustion_is_bounded_transient() -> None:
+def test_adapter_structured_output_retry_exhaustion_is_classified_as_output() -> None:
     failure = classify_agent_failure(
         "claude",
         agent_runtime.AgentOutputError(
@@ -1052,25 +1057,20 @@ def test_claude_adapter_structured_output_retry_exhaustion_is_bounded_transient(
         invocation_id="claude-adapter-structured-output-1",
     )
 
-    assert failure.kind is AgentFailureKind.NETWORK
+    assert failure.kind is AgentFailureKind.OUTPUT
     assert failure.provider_data == {
         "type": "result",
         "subtype": "error_max_structured_output_retries",
     }
+    assert failure.provider_text != failure.technical_text
 
 
 @pytest.mark.parametrize(
     ("agent_key", "provider_data"),
     (
-        (
-            "codex",
-            {
-                "type": "result",
-                "subtype": "error_max_structured_output_retries",
-            },
-        ),
         ("claude", {"type": "result", "subtype": "different_error"}),
-        ("claude", {"type": "different", "subtype": "error_max_structured_output_retries"}),
+        ("codex", {"type": "result", "subtype": "different_error"}),
+        ("claude", {"type": "result"}),
     ),
 )
 def test_structured_output_retry_classification_rejects_near_misses(
@@ -1087,6 +1087,16 @@ def test_structured_output_retry_classification_rejects_near_misses(
     )
 
     assert failure.kind is AgentFailureKind.PROCESS
+
+
+def test_transport_failure_remains_network() -> None:
+    failure = classify_agent_failure(
+        "claude",
+        agent_runtime.AgentProcessError("connection reset", exit_code=1),
+        invocation_id="true-network-failure",
+    )
+
+    assert failure.kind is AgentFailureKind.NETWORK
 
 
 def test_failed_provider_attempt_uses_injected_clock_and_allowlisted_usage() -> None:

@@ -183,6 +183,10 @@ from error_classification import (
     classify_exception,
     enforce_record_start_boundary,
 )
+from orchestrator_diagnostics import (
+    STRUCTURED_OUTPUT_DIAGNOSTIC_CODE,
+    STRUCTURED_OUTPUT_RETRY_EXHAUSTED_SUBTYPE,
+)
 from inbox_watcher import (
     QueueFinalizationDisposition,
     WatchTaskDisposition,
@@ -1685,6 +1689,12 @@ class ProductionWorkflowDriver:
             "failure_kind": payload.failure_kind,
             "failure_class": payload.failure_class,
             "diagnostic_code": payload.diagnostic_code,
+            "orchestrator_diagnostic": payload.orchestrator_diagnostic,
+            "provider_diagnostic_subtype": (
+                STRUCTURED_OUTPUT_RETRY_EXHAUSTED_SUBTYPE
+                if payload.diagnostic_code == STRUCTURED_OUTPUT_DIAGNOSTIC_CODE
+                else None
+            ),
             "provider_text": payload.provider_text,
             "provider_text_sha256": payload.provider_text_sha256,
             "provider_text_bytes": payload.provider_text_bytes,

@@ -530,6 +530,63 @@ def test_process_failure_exit_and_redacted_technical_evidence_reach_authoritativ
     assert diagnostic["provider_text_sha256"] != diagnostic["technical_text_sha256"]
 
 
+def test_structured_output_subtype_reaches_safe_halt_diagnostic(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    repository = _repository(tmp_path, "feature/structured-regression")
+    state = _state(repository, "structured-output-diagnostic")
+    driver = _driver(repository)
+    driver.checkpoint(state, WorkflowHistory(1))
+    active = driver.active_state
+    assert active is not None
+    now = datetime(2026, 9, 9, 2, 22, tzinfo=timezone.utc)
+    provider_text = "native Claude error"
+    error = classify_agent_failure(
+        AgentRole.CLAUDE.value,
+        AgentOutputError(
+            provider_text,
+            provider_text=provider_text,
+            technical_text=provider_text,
+            exit_code=1,
+            provider_data={
+                "type": "result",
+                "subtype": "error_max_structured_output_retries",
+            },
+        ),
+        invocation_id="structured-output-diagnostic-1",
+        received_at=now,
+    )
+
+    caplog.set_level("INFO", logger="workflow")
+    WorkflowEngine(driver, now_fn=lambda: now)._persist_invocation_failure(
+        active,
+        WorkflowHistory(active.current_work_unit_id),
+        WorkflowContext("assignment", "plan", "slice"),
+        AgentRole.CLAUDE,
+        error,
+    )
+
+    payload = next(
+        record.payload
+        for record in ArtifactStore(repository, state.run_id).load_chain()
+        if isinstance(record.payload, InvocationFailurePayload)
+    )
+    assert payload.failure_kind == "output"
+    assert payload.diagnostic_code == "PROVIDER-STRUCTURED-OUTPUT"
+    assert payload.provider_text_sha256 != payload.technical_text_sha256
+    diagnostic_path = next((repository / ".orchestrator" / "logs").glob("*.failure.json"))
+    diagnostic_text = diagnostic_path.read_text(encoding="utf-8")
+    diagnostic = json.loads(diagnostic_text)
+    assert (
+        diagnostic["provider_diagnostic_subtype"]
+        == "error_max_structured_output_retries"
+    )
+    assert provider_text not in diagnostic_text
+    assert "error_max_structured_output_retries" in caplog.text
+    assert provider_text not in caplog.text
+
+
 def test_code_version_change_is_warned_and_recorded_before_provider_start(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

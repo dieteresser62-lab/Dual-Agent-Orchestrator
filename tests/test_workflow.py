@@ -3662,6 +3662,60 @@ def test_claude_network_retry_keeps_configured_two_resume_ceiling() -> None:
     )
 
 
+def test_claude_structured_output_failure_keeps_bounded_retry_and_safe_diagnostic(
+    caplog,
+) -> None:
+    now = [datetime(2026, 9, 9, 8, 0, tzinfo=timezone.utc)]
+    failures = [
+        classify_agent_failure(
+            "claude",
+            AgentProcessError(
+                "native Claude error",
+                exit_code=1,
+                provider_data={
+                    "type": "result",
+                    "subtype": "error_max_structured_output_retries",
+                },
+            ),
+            invocation_id=f"structured-output-{attempt}",
+            received_at=now[0],
+        )
+        for attempt in range(1, 3)
+    ]
+    driver = FakeDriver(
+        snapshots=[_changes("1", "src/early.py", TEST_FILE)],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[_review_approval(AgentRole.CLAUDE)],
+        reviewer_failures=[*failures, None],
+    )
+
+    def sleep(seconds: float) -> None:
+        now[0] += timedelta(seconds=seconds)
+
+    caplog.set_level("INFO", logger="workflow")
+    result = WorkflowEngine(
+        driver, now_fn=lambda: now[0], sleep_fn=sleep
+    ).run_current_work_unit(_slice_state(), _context())
+
+    assert result.completed
+    assert len(driver.reviewer_calls) == 3
+    assert [item.failure_kind for item in driver.failure_payloads] == [
+        "output",
+        "output",
+    ]
+    assert all(item.automatic_resume for item in driver.failure_payloads)
+    assert all(
+        item.diagnostic_code == "PROVIDER-STRUCTURED-OUTPUT"
+        for item in driver.failure_payloads
+    )
+    assert all(
+        item.provider_text_sha256 != item.technical_text_sha256
+        for item in driver.failure_payloads
+    )
+    assert "error_max_structured_output_retries" in caplog.text
+    assert "native Claude error" not in caplog.text
+
+
 def test_codex_timeout_retries_automatically_without_operator_input() -> None:
     now = [datetime(2026, 9, 9, 8, 0, tzinfo=timezone.utc)]
     changes = _changes("1", "src/early.py", TEST_FILE)

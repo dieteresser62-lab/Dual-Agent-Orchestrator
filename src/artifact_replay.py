@@ -2000,27 +2000,27 @@ def _validate_provider_decision_content(
             ),
             None,
         )
-        if isinstance(decision, AgentResultPayload) and decision_unit is not None:
-            # Implementer output and its provider invocation are both owned by the
-            # current Work-Unit round.  Keep that independent cross-record check;
-            # deriving both values from the decision logical ID would be
-            # tautological and would admit stale implementer output.
-            decision_round = decision_unit.round_number
-        else:
-            # Reviewer rounds count review attempts within one Work Unit and may
-            # legitimately differ from the Work-Unit return/correction round
-            # after a quota or retry continuation.  Their native logical ID is
-            # the request-bound review-round authority.
-            round_suffix = decision_record.logical_id.rsplit("-", 1)[-1]
-            if not round_suffix.isdigit():
-                if not require_content_authority:
-                    continue
-                _fail(
-                    ReplayDiagnosticCode.RECORD_MISSING,
-                    "native decision has no work-unit or logical round binding",
-                    decision_record,
-                )
-            decision_round = int(round_suffix)
+        minimum_round = decision_unit.round_number if (
+            isinstance(decision, AgentResultPayload) and decision_unit is not None
+        ) else 1
+        # The decision logical ID is the durable authority for the invocation
+        # round. For implementers, a WorkUnitPayload additionally supplies the
+        # minimum round, while continuation can advance beyond that immutable
+        # boundary. Reviewer attempts have their own one-based round sequence.
+        # ProviderContentPayload stores either round separately, so comparison
+        # remains an independent cross-record check rather than deriving both
+        # values from the decision logical ID. This still rejects stale content
+        # from an earlier invocation round.
+        round_suffix = decision_record.logical_id.rsplit("-", 1)[-1]
+        if not round_suffix.isdigit() or int(round_suffix) < minimum_round:
+            if not require_content_authority:
+                continue
+            _fail(
+                ReplayDiagnosticCode.RECORD_MISSING,
+                "native decision has no work-unit or logical round binding",
+                decision_record,
+            )
+        decision_round = int(round_suffix)
         candidates = tuple(
             content_record
             for content_record in provider_content_records
@@ -2037,7 +2037,7 @@ def _validate_provider_decision_content(
                 continue
             _fail(
                 ReplayDiagnosticCode.RECORD_MISSING,
-                "native decision has no unique earlier provider-content record",
+                _provider_content_mismatch_detail(provider_content_records, decision_record, role, decision_round, positions),
                 decision_record,
             )
         content_record = candidates[0]
@@ -2740,6 +2740,52 @@ def _validate_side_effect_sequences(
                     "side effect result changed its immutable intent binding",
                     result,
                 )
+
+
+def _provider_content_mismatch_detail(
+    provider_records: tuple[ArtifactRecord, ...],
+    decision_record: ArtifactRecord,
+    role: Role,
+    decision_round: int,
+    positions: dict[str, int],
+) -> str:
+    """Name the first failed immutable binding without exposing provider bytes."""
+    decision = decision_record.payload
+    assert isinstance(decision, (AgentResultPayload, ReviewPayload))
+    same_request = tuple(
+        record
+        for record in provider_records
+        if record.payload.request_id == decision.request_id
+    )
+    prefix = "native decision has no unique earlier provider-content record"
+    if not same_request:
+        return (
+            f"{prefix}: feature=request_id expected={decision.request_id!r} "
+            "actual='<missing>'"
+        )
+    earlier = tuple(
+        record
+        for record in same_request
+        if positions[record.record_id] < positions[decision_record.record_id]
+    )
+    if not earlier:
+        return f"{prefix}: feature=record_order expected='earlier' actual='later'"
+    comparisons = (
+        ("role", role.value, lambda record: record.payload.role.value),
+        ("work_unit_id", decision.work_unit_id, lambda record: record.payload.work_unit_id),
+        ("round_number", decision_round, lambda record: record.payload.round_number),
+        ("response_sha256", decision.response_sha256, lambda record: record.payload.response_sha256),
+        ("fingerprint", decision_record.fingerprint.sha256, lambda record: record.fingerprint.sha256),
+    )
+    candidates = earlier
+    for feature, expected, value_of in comparisons:
+        actual_values = tuple(dict.fromkeys(value_of(record) for record in candidates))
+        narrowed = tuple(record for record in candidates if value_of(record) == expected)
+        if not narrowed:
+            actual = actual_values[0] if len(actual_values) == 1 else actual_values
+            return f"{prefix}: feature={feature} expected={expected!r} actual={actual!r}"
+        candidates = narrowed
+    return f"{prefix}: feature=candidate_count expected=1 actual={len(candidates)}"
 
 
 def _validate_payload_references(

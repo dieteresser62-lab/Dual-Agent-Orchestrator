@@ -28,13 +28,13 @@
     {
       "dimension": "availability",
       "evidence_test": "tests/test_orchestrator_resilience_evidence.py::test_provider_free_resilience_scenario[exact-structured-output-retry]",
-      "expected_result": "Nur der exakte Claude-Diagnoseenvelope wird transient klassifiziert und ohne verworfenen Modellinhalt wiederholbar.",
+      "expected_result": "Der Strukturfehler-Subtype wird als Output typisiert und bleibt ohne verworfenen Modellinhalt transient wiederholbar.",
       "scenario_id": "exact-structured-output-retry"
     },
     {
       "dimension": "security",
       "evidence_test": "tests/test_orchestrator_resilience_evidence.py::test_provider_free_resilience_scenario[structured-output-near-miss]",
-      "expected_result": "Provider-, Typ-, Subtyp- und Vollständigkeits-Near-Misses bleiben fail-closed.",
+      "expected_result": "Nicht passende oder fehlende Strukturfehler-Subtypes bleiben fail-closed.",
       "scenario_id": "structured-output-near-miss"
     },
     {

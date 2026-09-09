@@ -16,6 +16,7 @@ EXPECTED_INTERNAL_IMPORTS = {
     "artifact_models",
     "contracts",
     "error_classification",
+    "orchestrator_diagnostics",
     "workflow_state",
 }
 EXPECTED_FAILURE_EDGES = {

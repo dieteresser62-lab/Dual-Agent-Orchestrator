@@ -552,7 +552,7 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/artifact_replay.py:_index_validation_content": 1,
     "src/artifact_replay.py:_validate_attestation_content_bindings": 14,
     "src/artifact_replay.py:_validate_unbound_validation_content": 2,
-    "src/artifact_replay.py:_validate_provider_decision_content": 17,
+    "src/artifact_replay.py:_validate_provider_decision_content": 18,
     "src/artifact_replay.py:_validate_unbound_provider_content": 2,
     "src/artifact_replay.py:_validate_review_anchors": 5,
     "src/artifact_replay.py:_validate_review_validation_bindings": 8,
@@ -1319,7 +1319,7 @@ def test_comparison_expression_inventory_has_not_grown() -> None:
         count
         for label, count in actual.items()
         if label.startswith("src/artifact_replay.py:")
-    ) == 188
+    ) == 189
     document = MATRIX_PATH.read_text(encoding="utf-8")
     assert (
         "`WorkflowPersistence.persist_native_implementer_contract()` 11 "

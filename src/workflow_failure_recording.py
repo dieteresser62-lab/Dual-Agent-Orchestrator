@@ -12,7 +12,10 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
-from agent_runtime import AgentInvocationError
+from agent_runtime import (
+    AgentInvocationError,
+    is_structured_output_retry_exhaustion,
+)
 from artifact_models import (
     InvocationFailurePayload,
     Role,
@@ -20,6 +23,10 @@ from artifact_models import (
     technical_text_evidence,
 )
 from contracts import AgentRole
+from orchestrator_diagnostics import (
+    STRUCTURED_OUTPUT_DIAGNOSTIC_CODE,
+    STRUCTURED_OUTPUT_RETRY_EXHAUSTED_SUBTYPE,
+)
 from workflow_state import (
     AgentFailureKind,
     InvocationFailureRecord,
@@ -44,6 +51,43 @@ class WorkflowFailureRecordingDependencies:
     execution_error: ErrorType
 
 
+def _log_invocation_failure(
+    *,
+    role: AgentRole,
+    operation: str,
+    physical_attempt: int,
+    error: AgentInvocationError,
+    automatic: bool,
+    retryable_transient: bool,
+    transient_automatic: bool,
+    prior_auto_resumes: int,
+    maximum_auto_resumes: int,
+    diagnostic_code: str,
+    provider_subtype: str,
+    orchestrator_diagnostic: str | None,
+) -> None:
+    logger.info(
+        "provider invocation terminal role=%s operation=%s physical_attempt=%d "
+        "status=failed failure_kind=%s process_exit_code=%s retry=%s "
+        "attempts_exhausted=%s diagnostic_code=%s provider_subtype=%s "
+        "orchestrator_diagnostic=%s",
+        role.value,
+        operation,
+        physical_attempt,
+        error.kind.value,
+        str(error.process_exit_code) if error.process_exit_code is not None else "none",
+        "scheduled" if automatic else "halted",
+        str(physical_attempt)
+        if retryable_transient
+        and transient_automatic
+        and prior_auto_resumes >= maximum_auto_resumes
+        else "none",
+        diagnostic_code,
+        provider_subtype,
+        orchestrator_diagnostic or "redacted",
+    )
+
+
 class WorkflowFailureRecording:
     """Build and append failure evidence before changing retry state."""
 
@@ -66,7 +110,6 @@ class WorkflowFailureRecording:
         # S1 is the sole authority for the operational class. Keep this import
         # local because that inventory imports workflow's typed exceptions.
         from error_classification import FailureClass, classify_exception
-
         classified = classify_exception(error)
         fingerprint = self._dependencies.current_invocation_fingerprint(state)
         key = (
@@ -111,15 +154,20 @@ class WorkflowFailureRecording:
             and reset_delay_seconds <= quota_policy.maximum_wait_seconds
             and prior_auto_resumes < quota_policy.maximum_auto_resumes
         )
+        native_review_retry = is_native_review_output_retry(
+            error.kind, role.value, state.current_step
+        )
         automatic_review_form = (
-            is_native_review_output_retry(
-                error.kind, role.value, state.current_step
-            )
-            and classified.diagnostic_code == "NATIVE-REVIEW-FORM"
+            native_review_retry and classified.diagnostic_code == "NATIVE-REVIEW-FORM"
+        )
+        automatic_structured_output = (
+            native_review_retry
+            and is_structured_output_retry_exhaustion(error.provider_data)
+            and classified.diagnostic_code == STRUCTURED_OUTPUT_DIAGNOSTIC_CODE
         )
         retryable_transient = error.kind in {
             AgentFailureKind.NETWORK, AgentFailureKind.TIMEOUT
-        } or automatic_review_form
+        } or automatic_review_form or automatic_structured_output
         automatic_transient = (
             retryable_transient
             and transient_policy.automatic
@@ -146,6 +194,11 @@ class WorkflowFailureRecording:
             technical_text_evidence(error.technical_text)
         )
         orchestrator_diagnostic = error.readable_orchestrator_diagnostic
+        provider_subtype = (
+            STRUCTURED_OUTPUT_RETRY_EXHAUSTED_SUBTYPE
+            if classified.diagnostic_code == STRUCTURED_OUTPUT_DIAGNOSTIC_CODE
+            else "none"
+        )
         received_at = error.received_at.astimezone(timezone.utc).isoformat()
         decision_at = now_utc.isoformat()
         safety_margin_seconds = (
@@ -224,26 +277,19 @@ class WorkflowFailureRecording:
         state = state.record_invocation_failure(
             record, wait_automatically=automatic, updated_at=decision_at
         )
-        logger.info(
-            "provider invocation terminal role=%s operation=%s physical_attempt=%d "
-            "status=failed failure_kind=%s process_exit_code=%s retry=%s "
-            "attempts_exhausted=%s diagnostic_code=%s orchestrator_diagnostic=%s",
-            role.value,
-            state.current_step.value,
-            len(matching_failures) + 1,
-            error.kind.value,
-            (
-                str(error.process_exit_code)
-                if error.process_exit_code is not None
-                else "none"
-            ),
-            "scheduled" if automatic else "halted",
-            str(len(matching_failures) + 1)
-            if retryable_transient and transient_policy.automatic
-            and prior_auto_resumes >= transient_policy.maximum_auto_resumes
-            else "none",
-            classified.diagnostic_code,
-            payload.orchestrator_diagnostic or "redacted",
+        _log_invocation_failure(
+            role=role,
+            operation=state.current_step.value,
+            physical_attempt=len(matching_failures) + 1,
+            error=error,
+            automatic=automatic,
+            retryable_transient=retryable_transient,
+            transient_automatic=transient_policy.automatic,
+            prior_auto_resumes=prior_auto_resumes,
+            maximum_auto_resumes=transient_policy.maximum_auto_resumes,
+            diagnostic_code=classified.diagnostic_code,
+            provider_subtype=provider_subtype,
+            orchestrator_diagnostic=payload.orchestrator_diagnostic,
         )
         self._dependencies.checkpoint(state, history)
         return state, record

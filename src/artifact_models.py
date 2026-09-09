@@ -28,7 +28,10 @@ from schema_validation import (
     check_schema,
     validate_schema_document,
 )
-from orchestrator_diagnostics import ORCHESTRATOR_DIAGNOSTIC_TEXTS
+from orchestrator_diagnostics import (
+    ORCHESTRATOR_DIAGNOSTIC_TEXTS,
+    STRUCTURED_OUTPUT_DIAGNOSTIC_CODE,
+)
 
 SCHEMA_VERSION = "2"
 STATE_PROJECTION_REDUCER_VERSION = "structured-v2-schema-2-state-v3-v1"
@@ -1727,7 +1730,10 @@ class InvocationFailurePayload:
         automatic_review_form = (
             self.failure_kind == "output"
             and self.role is Role.CLAUDE  # allowlist:provider -- bound reviewer role
-            and self.diagnostic_code == "NATIVE-REVIEW-FORM"
+            and self.diagnostic_code in {
+                "NATIVE-REVIEW-FORM",
+                STRUCTURED_OUTPUT_DIAGNOSTIC_CODE,
+            }
             and self.step.startswith(f"{self.role.value}_")
             and self.step.endswith("_review")
         )

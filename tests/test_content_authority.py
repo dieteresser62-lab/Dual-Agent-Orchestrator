@@ -15,6 +15,7 @@ from artifact_models import (
     AgentResultPayload,
     CommandSpec,
     ProviderContentPayload,
+    ReviewPayload,
     ReviewPacketPayload,
     Role,
     RoleProfilePayload,
@@ -27,7 +28,11 @@ from artifact_models import (
     WorkUnitPayload,
     provider_text_evidence,
 )
-from artifact_replay import ArtifactReplayError, replay_artifacts
+from artifact_replay import (
+    ArtifactReplayError,
+    _validate_provider_decision_content,
+    replay_artifacts,
+)
 from artifact_store import ArtifactCorruptionError, ArtifactStore
 from content_authority import (
     VALIDATION_MATRIX_DIGEST_V1,
@@ -163,6 +168,57 @@ def _append_review_packet(store: ArtifactStore, packet) -> None:  # type: ignore
         logical_id=f"review-packet-1-{packet.fingerprint[:12]}",
         idempotency_key=f"review-packet:1:{packet.digest}",
         fingerprint_sha256=packet.fingerprint,
+    )
+
+
+def _append_implementer_pair(
+    store: ArtifactStore,
+    *,
+    invocation_round: int,
+    content_round: int | None = None,
+    content_count: int = 1,
+) -> None:
+    _bind_store(store)
+    bridge = ArtifactBridge(store)
+    bridge.append(
+        WorkUnitPayload("1", 1, ("src/a.py",)),
+        logical_id="work-unit-1",
+        idempotency_key="work-unit:1:round:1",
+        fingerprint_sha256=FINGERPRINT,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    request_id = "native-codex-request-" + "b" * 64
+    blob = store.put_blob(b'{"ready":true}')
+    for index in range(content_count):
+        bridge.append(
+            ProviderContentPayload(
+                Role.CODEX,
+                "1",
+                content_round or invocation_round,
+                "codex_implementation",
+                request_id,
+                blob.sha256,
+                "agent_result",
+                blob.bytes,
+                blob,
+            ),
+            logical_id=f"provider-content-codex-1-{index}",
+            idempotency_key=f"provider-content:test:{index}",
+            fingerprint_sha256=FINGERPRINT,
+        )
+    bridge.append(
+        AgentResultPayload(
+            Role.CODEX,
+            "1",
+            "ready",
+            (),
+            "native-codex-v2",
+            request_id,
+            blob.sha256,
+        ),
+        logical_id=f"agent-1-codex_implementation-{invocation_round}",
+        idempotency_key=f"agent-result:test:{invocation_round}",
+        fingerprint_sha256=FINGERPRINT,
     )
 
 
@@ -405,10 +461,60 @@ def test_provider_content_recovery_is_bound_to_the_exact_round_without_decision(
     assert recovered[1].payload.round_number == 2
 
 
+def test_implementer_pair_after_initial_work_unit_round_replays(
+    tmp_path: Path,
+) -> None:
+    store = ArtifactStore(tmp_path, "round-two")
+    _append_implementer_pair(store, invocation_round=2)
+
+    replay = replay_artifacts(
+        store.load_chain(), store.run_id, require_content_authority=True
+    )
+
+    assert any(isinstance(record.payload, AgentResultPayload) for record in replay.records)
+    assert replay.provider_contents[0].round_number == 2
+
+
+@pytest.mark.parametrize(
+    ("content_count", "expected_feature"),
+    ((0, "feature=request_id"), (2, "feature=candidate_count")),
+)
+def test_implementer_pair_missing_or_ambiguous_content_is_rejected(
+    tmp_path: Path, content_count: int, expected_feature: str
+) -> None:
+    store = ArtifactStore(tmp_path, f"provider-cardinality-{content_count}")
+    _append_implementer_pair(
+        store, invocation_round=2, content_count=content_count
+    )
+
+    with pytest.raises(ArtifactReplayError) as raised:
+        replay_artifacts(
+            store.load_chain(), store.run_id, require_content_authority=True
+        )
+
+    assert expected_feature in str(raised.value)
+    assert "expected=" in str(raised.value)
+    assert "actual=" in str(raised.value)
+
+
 def test_agent_result_content_authority_uses_independent_work_unit_round(
     tmp_path: Path,
 ) -> None:
     store = ArtifactStore(tmp_path, "stale-agent-round")
+    _append_implementer_pair(store, invocation_round=2, content_round=1)
+
+    with pytest.raises(ArtifactReplayError) as raised:
+        replay_artifacts(
+            store.load_chain(), store.run_id, require_content_authority=True
+        )
+
+    assert "feature=round_number expected=2 actual=1" in str(raised.value)
+
+
+def test_reviewer_round_remains_independent_from_work_unit_round(
+    tmp_path: Path,
+) -> None:
+    store = ArtifactStore(tmp_path, "independent-review-round")
     _bind_store(store)
     bridge = ArtifactBridge(store)
     bridge.append(
@@ -418,47 +524,49 @@ def test_agent_result_content_authority_uses_independent_work_unit_round(
         fingerprint_sha256=FINGERPRINT,
         fingerprint_kind=FingerprintKind.CONTRACT,
     )
-    request_id = "native-codex-request-" + "b" * 64
-    canonical = b'{"ready":true}'
-    blob = store.put_blob(canonical)
+    request_id = "native-review-request-" + "b" * 64
+    blob = store.put_blob(b'{"approved":true}')
     bridge.append(
         ProviderContentPayload(
-            Role.CODEX,
+            Role.CLAUDE,
             "1",
             1,
-            "codex_implementation",
+            "claude_slice_review",
             request_id,
             blob.sha256,
-            "agent_result",
+            "review_result",
             blob.bytes,
             blob,
         ),
-        logical_id=f"provider-content-codex-1-{blob.sha256[:12]}",
-        idempotency_key="provider-content:stale-agent-round",
+        logical_id="provider-content-claude-1-1",
+        idempotency_key="provider-content:review-round:1",
         fingerprint_sha256=FINGERPRINT,
     )
     bridge.append(
-        AgentResultPayload(
-            Role.CODEX,
+        ReviewPayload(
+            Role.CLAUDE,
             "1",
-            "ready",
+            "approved",
             (),
-            "native-codex-v2",
+            "review round remains independently bound",
+            "native-claude-review-v2",
             request_id,
             blob.sha256,
         ),
-        logical_id="agent-1-codex_implementation-1",
-        idempotency_key="agent-result:stale-agent-round",
+        logical_id="review-claude-1-1",
+        idempotency_key="review:review-round:1",
         fingerprint_sha256=FINGERPRINT,
     )
 
-    with pytest.raises(
-        ArtifactReplayError,
-        match="native decision has no unique earlier provider-content record",
-    ):
-        replay_artifacts(
-            store.load_chain(), store.run_id, require_content_authority=True
-        )
+    chain = store.load_chain()
+    provider_records, bound_records = _validate_provider_decision_content(
+        chain,
+        {record.record_id: index for index, record in enumerate(chain)},
+        require_content_authority=True,
+    )
+
+    assert provider_records[0].payload.round_number == 1
+    assert bound_records == {provider_records[0].record_id}
 
 
 def test_validation_recovery_never_reuses_an_earlier_attempt(

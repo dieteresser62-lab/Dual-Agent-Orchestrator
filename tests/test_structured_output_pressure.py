@@ -374,12 +374,12 @@ def test_all_request_specific_claude_writer_forms_have_deterministic_metrics() -
         assert definition_count >= 15
 
 
-def test_exact_retry_envelope_is_transient_but_near_misses_remain_fail_closed() -> None:
+def test_exact_retry_subtype_is_output_but_near_misses_remain_fail_closed() -> None:
     manifest = _manifest()
     diagnostic = manifest["diagnostic"]
     assert isinstance(diagnostic, dict)
     exact = diagnostic["exact_envelope"]
-    assert diagnostic["classification"] == "provider_exhaustion_unknown_local_cause"
+    assert diagnostic["classification"] == "structured_output_failure"
     assert diagnostic["persists_rejected_model_content"] is False
 
     for error_type in (agent_runtime.AgentProcessError, agent_runtime.AgentOutputError):
@@ -392,12 +392,12 @@ def test_exact_retry_envelope_is_transient_but_near_misses_remain_fail_closed() 
             ),
             invocation_id="structured-output-pressure-exact",
         )
-        assert failure.kind.value == "network"
+        assert failure.kind.value == "output"
         assert failure.provider_data == exact
 
     near_misses = (
-        ("codex", exact),
-        ("claude", {**exact, "type": "error"}),
+        ("codex", {**exact, "subtype": "different_error"}),
+        ("claude", {"type": "error", "subtype": "different_error"}),
         ("claude", {**exact, "subtype": "error_max_structured_output_retry"}),
         ("claude", {"type": "result"}),
     )

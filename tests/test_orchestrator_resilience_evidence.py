@@ -101,11 +101,11 @@ EVIDENCE_ORACLE = {
     ),
     "exact-structured-output-retry": (
         "availability",
-        "Nur der exakte Claude-Diagnoseenvelope wird transient klassifiziert und ohne verworfenen Modellinhalt wiederholbar.",
+        "Der Strukturfehler-Subtype wird als Output typisiert und bleibt ohne verworfenen Modellinhalt transient wiederholbar.",
     ),
     "structured-output-near-miss": (
         "security",
-        "Provider-, Typ-, Subtyp- und Vollständigkeits-Near-Misses bleiben fail-closed.",
+        "Nicht passende oder fehlende Strukturfehler-Subtypes bleiben fail-closed.",
     ),
     "record-ahead-resume": (
         "availability",
@@ -491,12 +491,12 @@ def _run_structured_output_probe(scenario_id: str) -> None:
             ),
             invocation_id=scenario_id,
         )
-        assert failure.kind.value == "network"
+        assert failure.kind.value == "output"
         assert failure.provider_data == exact
         return
     near_misses = (
-        ("codex", exact),
-        ("claude", {**exact, "type": "error"}),
+        ("codex", {**exact, "subtype": "error_max_structured_output_retry"}),
+        ("claude", {"type": "error", "subtype": "different_error"}),
         ("claude", {**exact, "subtype": "error_max_structured_output_retry"}),
         ("claude", {"type": "result"}),
     )

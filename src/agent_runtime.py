@@ -74,7 +74,10 @@ from provider_input_budget import (
     default_provider_input_budget_policy,
     measure_provider_input,
 )
-from orchestrator_diagnostics import OrchestratorDiagnostic
+from orchestrator_diagnostics import (
+    OrchestratorDiagnostic,
+    STRUCTURED_OUTPUT_RETRY_EXHAUSTED_SUBTYPE,
+)
 
 TEST_OUTPUT_LIMIT = 7000
 ERROR_TRUNCATION_LIMIT = 1200
@@ -2090,18 +2093,14 @@ def _sanitize_provider_diagnostic(value: object) -> dict[str, object] | None:
     return sanitized or None
 
 
-def _is_claude_structured_output_retry_exhaustion(
-    agent_key: str,
-    exc: BaseException,
+def is_structured_output_retry_exhaustion(
     provider_data: Mapping[str, object] | None,
 ) -> bool:
-    """Route only Claude's exact provider-side structured-output exhaustion as transient."""
+    """Recognize a provider-side failure to produce schema-conforming output."""
     return (
-        agent_key == "claude"
-        and isinstance(exc, (AgentProcessError, AgentOutputError))
-        and isinstance(provider_data, Mapping)
-        and provider_data.get("type") == "result"
-        and provider_data.get("subtype") == "error_max_structured_output_retries"
+        isinstance(provider_data, Mapping)
+        and provider_data.get("subtype")
+        == STRUCTURED_OUTPUT_RETRY_EXHAUSTED_SUBTYPE
     )
 
 
@@ -2147,6 +2146,17 @@ def classify_agent_failure(
     provider_data = _sanitize_provider_diagnostic(raw_provider_data)
     process_exit_code = getattr(exc, "exit_code", None)
     kind_hint = getattr(exc, "kind_hint", None)
+    structured_output_retry_exhaustion = (
+        isinstance(exc, (AgentProcessError, AgentOutputError))
+        and is_structured_output_retry_exhaustion(provider_data)
+    )
+    if structured_output_retry_exhaustion:
+        technical_text = (
+            f"{type(exc).__name__}: provider_diagnostic.subtype="
+            f"{STRUCTURED_OUTPUT_RETRY_EXHAUSTED_SUBTYPE}"
+        )
+        if technical_text == provider_text:
+            technical_text += "; classified=output"
     lowered = technical_text.lower()
     structured_text = (
         json.dumps(provider_data, ensure_ascii=False, sort_keys=True)
@@ -2163,11 +2173,6 @@ def classify_agent_failure(
             )
         )
         and _CLAUDE_SESSION_LIMIT_PATTERN.search(technical_text) is not None
-    )
-    claude_structured_output_retry_exhaustion = (
-        _is_claude_structured_output_retry_exhaustion(
-            agent_key, exc, provider_data
-        )
     )
     native_review_form_failure = next(
         (
@@ -2203,12 +2208,10 @@ def classify_agent_failure(
         # Keep the recorded cause honest. The workflow layer separately grants
         # this exact provider-authored review form/content path a bounded retry.
         kind = AgentFailureKind.OUTPUT
-    elif claude_structured_output_retry_exhaustion:
-        # The Claude CLI completed without a model result after exhausting its
-        # provider-internal schema retries. Reuse the existing bounded,
-        # fingerprint-bound transient retry policy instead of treating this
-        # exact provider envelope as a permanent local process defect.
-        kind = AgentFailureKind.NETWORK
+    elif structured_output_retry_exhaustion:
+        # The provider completed, but its internal retries did not produce a
+        # schema-conforming result. Keep that cause distinct from transport.
+        kind = AgentFailureKind.OUTPUT
     elif isinstance(kind_hint, AgentFailureKind):
         kind = kind_hint
     elif isinstance(exc, subprocess.TimeoutExpired) or "timed out" in lowered or "timeout" in lowered:

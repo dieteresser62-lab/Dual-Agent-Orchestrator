@@ -71,7 +71,7 @@
   ],
   "diagnostic": {
     "exact_envelope": {"type": "result", "subtype": "error_max_structured_output_retries"},
-    "classification": "provider_exhaustion_unknown_local_cause",
+    "classification": "structured_output_failure",
     "persists_rejected_model_content": false
   },
   "optional_live_canary": {

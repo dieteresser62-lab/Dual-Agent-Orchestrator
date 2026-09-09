@@ -19,6 +19,7 @@ from agent_runtime import (
     AgentProcessError,
     ProviderRequestRoundRequired,
     QuotaReachedError,
+    is_structured_output_retry_exhaustion,
 )
 from artifact_bridge import ArtifactBridgeError
 from artifact_resume import ArtifactResumeError
@@ -47,6 +48,7 @@ from native_review_contract import (
     is_retryable_native_review_form_error,
 )
 from native_review_request import NativeReviewRequestError
+from orchestrator_diagnostics import STRUCTURED_OUTPUT_DIAGNOSTIC_CODE
 from path_policy import PathPolicyError
 from plan_handoff import PlanHandoffError
 from provider_input_budget import ProviderInputBudgetError, ProviderInputBudgetExceeded
@@ -190,6 +192,22 @@ def classify_exception(error: BaseException) -> ClassifiedFailure:
         # let an older transient provider error override a later deterministic
         # checkpoint or record-authority failure.
         current = current.__cause__
+
+    if (
+        isinstance(error, AgentInvocationError)
+        and is_structured_output_retry_exhaustion(error.provider_data)
+    ):
+        return ClassifiedFailure(
+            failure_class=_TRANSIENT,
+            diagnostic_code=STRUCTURED_OUTPUT_DIAGNOSTIC_CODE,
+            exception_type=type(error).__name__,
+            detail=(
+                f"{type(error).__name__}: provider_diagnostic.subtype="
+                "error_max_structured_output_retries"
+            ),
+            cause_depth=0,
+            explicitly_mapped=True,
+        )
 
     for depth in range(len(chain) - 1, -1, -1):
         candidate = chain[depth]
