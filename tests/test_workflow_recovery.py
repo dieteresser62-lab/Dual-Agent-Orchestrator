@@ -11,13 +11,18 @@ from artifact_bridge import ArtifactBridge
 from artifact_models import (
     FingerprintKind,
     RoleProfilePayload,
+    ReviewPayload,
+    Role,
     RunIdentityPayload,
     RunProfilePayload,
 )
 from artifact_replay import replay_artifacts
 from artifact_store import ArtifactStore
-from workflow import WorkflowExecutionError
+from contracts import AgentRole, FindingClass, FindingOrigin, FindingRecord, FindingStatus
+from test_workflow import _attestation, _changes, _completed_single_slice_state, _context
+from workflow import WorkflowExecutionError, WorkflowHistory
 from workflow_recovery import WorkflowRecovery, WorkflowRecoveryDependencies
+from workflow_state import WorkflowStep
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -310,3 +315,53 @@ def test_recovery_directly_completes_a_durable_internal_intent(
         if item.effect_class == "internal" and item.operation == operation
     )
     assert recovered.result == "completed"
+
+
+def test_final_review_recovery_rebuilds_exact_record_bound_finding_subset(
+    tmp_path: Path,
+) -> None:
+    findings = tuple(
+        FindingRecord(
+            finding_id=f"C-{number:02d}",
+            finding_class=FindingClass.BLOCKER,
+            status=FindingStatus.OPEN,
+            summary=f"Final finding {number}.",
+            acceptance_test=f"Finding {number} is dispositioned.",
+            origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+        )
+        for number in range(1, 4)
+    )
+    state = _completed_single_slice_state().start_final_review_work_unit()
+    state = state.with_current_step(WorkflowStep.CLAUDE_FINAL_REVIEW)
+    changes = _changes("d", "src/early.py")
+    attestation = _attestation(changes)
+    payload = ReviewPayload(
+        reviewer=Role.CLAUDE,
+        work_unit_id=str(state.current_work_unit_id),
+        verdict="denied",
+        finding_ids=("C-02", "C-03"),
+        evidence="Bound recovery evidence.",
+        transport_schema="native-claude-review-v2",
+        request_id="native-review-request-" + "a" * 64,
+        response_sha256="b" * 64,
+    )
+    record = SimpleNamespace(
+        payload=payload,
+        fingerprint=SimpleNamespace(sha256=changes.fingerprint),
+    )
+
+    native_context = WorkflowRecovery(
+        _dependencies(tmp_path)
+    )._build_pending_native_reviewer_context(
+        state,
+        _context(),
+        WorkflowHistory(state.current_work_unit_id, findings=findings),
+        state.current_work_unit,
+        cast(Any, record),
+        2,
+        attestation,
+    )
+
+    assert tuple(
+        item.finding_id for item in native_context.previous_findings
+    ) == ("C-02", "C-03")

@@ -33,6 +33,7 @@ from artifact_replay import (
 )
 from finding_reducer import (
     FindingReduction,
+    project_final_review_dispositions,
     reduce_findings,
 )
 
@@ -351,6 +352,47 @@ def test_six_named_projections_are_independent_and_immutable() -> None:
     ) == ("opened", "status_changed", "opened")
     with pytest.raises((AttributeError, TypeError)):
         reduction.open_set.findings += ()  # type: ignore[misc]
+
+
+def test_final_review_pending_dispositions_are_derived_from_chain_boundary() -> None:
+    records = _build_case(
+        {
+            "events": [
+                {"op": "work", "work_unit": "2", "open_ids": []},
+                *(
+                    {
+                        "op": "open",
+                        "finding_id": f"C-{number:02d}",
+                        "work_unit": "2",
+                        "class": "OBSERVATION",
+                    }
+                    for number in range(1, 6)
+                ),
+                # open_ids is deliberately empty: the projection must use the
+                # accepted transition prefix, never this mirror-like field.
+                {"op": "work", "work_unit": "3", "open_ids": []},
+                {
+                    "op": "review",
+                    "work_unit": "3",
+                    "round": 1,
+                    "verdict": "denied",
+                    "finding_ids": [f"C-{number:02d}" for number in range(1, 6)],
+                },
+                {"op": "close", "finding_id": "C-01", "work_unit": "3"},
+                {"op": "close", "finding_id": "C-02", "work_unit": "3"},
+            ]
+        }
+    )
+
+    projection = project_final_review_dispositions(
+        replay_artifacts(records, RUN_ID), "3"
+    )
+
+    assert projection.initial_finding_ids == (
+        "C-01", "C-02", "C-03", "C-04", "C-05"
+    )
+    assert projection.dispositioned_finding_ids == ("C-01", "C-02")
+    assert projection.pending.finding_ids == ("C-03", "C-04", "C-05")
 
 
 def test_reducer_is_pure_deterministic_and_does_not_mutate_records() -> None:

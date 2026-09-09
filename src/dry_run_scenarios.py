@@ -914,6 +914,8 @@ class ScriptedWorkflowDriver:
     _commit_index: int = 0
     _active_identity: tuple[int, int] | None = None
     _change_positions: dict[tuple[int, int], int] = field(default_factory=dict)
+    _final_review_entry_ids: dict[int, tuple[str, ...]] = field(default_factory=dict)
+    _final_review_dispositioned_ids: dict[int, set[str]] = field(default_factory=dict)
 
     def bind_work_unit(self, state: WorkflowState) -> None:
         self.active_state = state
@@ -928,6 +930,22 @@ class ScriptedWorkflowDriver:
         """Provide the provider-free replay boundary used by native dry-runs."""
         _ = state
         return self.durable_findings or findings
+
+    def authoritative_final_review_findings(
+        self, state: WorkflowState, findings: tuple[FindingRecord, ...]
+    ) -> tuple[FindingRecord, ...]:
+        """Emulate the record-derived final-review delivery projection."""
+
+        unit_id = state.current_work_unit_id
+        ledger = self.durable_findings or findings
+        initial_ids = self._final_review_entry_ids.setdefault(
+            unit_id, project_open_set(ledger).finding_ids
+        )
+        dispositioned = self._final_review_dispositioned_ids.setdefault(
+            unit_id, set()
+        )
+        pending = frozenset(initial_ids) - dispositioned
+        return tuple(item for item in ledger if item.finding_id in pending)
 
     def carry_forward_native_findings(
         self, state: WorkflowState, findings: tuple[FindingRecord, ...]
@@ -959,6 +977,20 @@ class ScriptedWorkflowDriver:
         """Mirror the complete reviewer result as the scripted durable ledger."""
         _ = (fingerprint, round_number)
         ledger = {item.finding_id: item for item in self.durable_findings or previous_findings}
+        previous_by_id = {item.finding_id: item for item in previous_findings}
+        if (
+            self.active_state is not None
+            and self.active_state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
+        ):
+            dispositioned = self._final_review_dispositioned_ids.setdefault(
+                self.active_state.current_work_unit_id, set()
+            )
+            dispositioned.update(
+                item.finding_id
+                for item in output.result.findings
+                if item.finding_id in previous_by_id
+                and item != previous_by_id[item.finding_id]
+            )
         ledger.update({item.finding_id: item for item in output.result.findings})
         self.durable_findings = tuple(ledger[key] for key in sorted(ledger))
         self.structured_events.append(

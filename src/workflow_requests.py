@@ -41,6 +41,9 @@ from review_packets import ReviewPacket
 from workflow_state import SliceStatus, WorkflowState, WorkUnitKind
 
 
+MAX_FINAL_REVIEW_DISPOSITION_ROUNDS = 4
+
+
 def native_codex_request(
     *,
     state: WorkflowState,
@@ -318,6 +321,20 @@ def native_review_request(
             for criterion in (
                 context.slice_summary.strip(),
                 artifact_criterion,
+                (
+                    "This is final-review disposition delivery round "
+                    f"{contract.round_number} of "
+                    f"{MAX_FINAL_REVIEW_DISPOSITION_ROUNDS}. "
+                    "review_contract.previous_findings contains exactly the "
+                    "still-undispositioned finding identifiers. Approval requires "
+                    "one status change or reclassification for every listed "
+                    "identifier; an incomplete approved response is rejected with "
+                    "all missing identifiers named. If the round delivers only a "
+                    "non-empty subset, deny it as an intermediate delivery; that "
+                    "subset is never an approval."
+                    if review_kind is NativeReviewKind.FINAL
+                    else None
+                ),
                 "The decision must satisfy the bound review contract and the "
                 "fingerprint-matching deterministic validation attestation.",
                 "The reviewed changes must remain within the exact authorized "

@@ -589,7 +589,15 @@ def native_review_provider_response_schema(
         anchor_count=64 if context.anchor_origin is not None else 0,
     )
     denied["properties"]["new_findings"].update(
-        minItems=0 if own_open_blockers else 1,
+        minItems=(
+            0
+            if own_open_blockers
+            or (
+                context.approval_marker is ApprovalMarker.FINAL
+                and own_open_ids
+            )
+            else 1
+        ),
         maxItems=len(new_ids),
         items={"$ref": "#/$defs/bound_denied_finding"},
     )
@@ -1220,10 +1228,26 @@ def _validate_decision(
     )
     if not response.approved:
         if not own_open_blockers:
-            raise NativeReviewContractError(
-                NativeReviewErrorCode.APPROVAL_INVALID,
-                "denied review requires an open own BLOCKER",
+            touched = {
+                *(item.finding_id for item in response.status_changes),
+                *(item.finding_id for item in response.reclassifications),
+            }
+            remaining_own = tuple(
+                item
+                for item in open_findings
+                if item.origin.reporter is context.reviewer
+                and item.finding_id not in touched
             )
+            if not (
+                context.approval_marker is ApprovalMarker.FINAL
+                and touched
+                and remaining_own
+            ):
+                raise NativeReviewContractError(
+                    NativeReviewErrorCode.APPROVAL_INVALID,
+                    "denied review requires an open own BLOCKER or a partial "
+                    "final-review disposition round",
+                )
         return
     validation = context.validation_attestation
     if (

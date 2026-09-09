@@ -177,10 +177,12 @@ def _assert_projection_compensated(
     return actual
 
 
-def _finding() -> FindingRecord:
+def _finding(
+    finding_class: FindingClass = FindingClass.BLOCKER,
+) -> FindingRecord:
     return FindingRecord(
         "C-01",
-        FindingClass.BLOCKER,
+        finding_class,
         FindingStatus.OPEN,
         "Close the bound contract.",
         "A focused regression passes.",
@@ -302,6 +304,7 @@ def _review_bound(form: str) -> BoundNativeReviewContext:
         "initial_slice": ApprovalMarker.SLICE,
         "convergence": ApprovalMarker.SLICE,
         "final": ApprovalMarker.FINAL,
+        "final_observation": ApprovalMarker.FINAL,
     }[form]
     context = NativeReviewContext(
         run_id="differential-claude",
@@ -317,8 +320,14 @@ def _review_bound(form: str) -> BoundNativeReviewContext:
         slice_id="01" if marker is not ApprovalMarker.FINAL else "final",
         round_number=2 if convergence else 1,
         previous_findings=(
-            (_finding(),)
-            if form in ("plan", "convergence", "final")
+            (
+                _finding(
+                    FindingClass.OBSERVATION
+                    if form == "final_observation"
+                    else FindingClass.BLOCKER
+                ),
+            )
+            if form in ("plan", "convergence", "final", "final_observation")
             else ()
         ),
         validation_attestation=_attestation(),
@@ -363,7 +372,7 @@ def _review_response(bound: BoundNativeReviewContext) -> dict[str, object]:
     }
 
 
-def test_all_eight_writer_forms_accept_their_local_domain_result() -> None:
+def test_all_writer_forms_accept_their_local_domain_result() -> None:
     actual: list[dict[str, str]] = []
     for kind in NativeCodexRequestKind:
         bound = _codex_bound(kind)
@@ -378,7 +387,9 @@ def test_all_eight_writer_forms_accept_their_local_domain_result() -> None:
                 "sha256": hashlib.sha256(_canonical(writer).encode("utf-8")).hexdigest(),
             }
         )
-    for form in ("plan", "initial_slice", "convergence", "final"):
+    for form in (
+        "plan", "initial_slice", "convergence", "final", "final_observation"
+    ):
         bound = _review_bound(form)
         response = _review_response(bound)
         writer = native_review_provider_response_schema(bound.context)

@@ -50,6 +50,7 @@ from contracts import (
     apply_reviewer_finding_update,
 )
 from gates import PathClasses, StopRule, TestChangeEvidence as GateTestChangeEvidence
+from finding_reducer import project_open_set
 from native_codex_contract import (
     NativeCodexContractError,
     NativeCodexErrorCode,
@@ -464,6 +465,13 @@ class FakeDriver:
         if self.authoritative_finding_error is not None:
             raise WorkflowExecutionError(self.authoritative_finding_error)
         return mirror_findings
+
+    def authoritative_final_review_findings(
+        self,
+        _state: WorkflowState,
+        mirror_findings: tuple[FindingRecord, ...],
+    ) -> tuple[FindingRecord, ...]:
+        return project_open_set(mirror_findings).findings
 
     def carry_forward_native_findings(
         self,
@@ -2569,6 +2577,148 @@ def test_combined_native_final_restart_rebinds_codex_and_claude_without_legacy_p
         WorkflowStep.CODEX_FINAL_REVIEW.value,
         WorkflowStep.CLAUDE_FINAL_REVIEW.value,
     ]
+
+
+@dataclass
+class BatchedFinalReviewDriver(FakeDriver):
+    batch_size: int = 25
+    approve_complete: bool = True
+    pending_ids: tuple[str, ...] = ()
+    requested_ids: list[tuple[str, ...]] = field(default_factory=list)
+
+    def authoritative_final_review_findings(
+        self,
+        _state: WorkflowState,
+        mirror_findings: tuple[FindingRecord, ...],
+    ) -> tuple[FindingRecord, ...]:
+        pending = frozenset(self.pending_ids)
+        return tuple(
+            item for item in mirror_findings if item.finding_id in pending
+        )
+
+    def invoke_reviewer(
+        self, invocation: ReviewerInvocation
+    ) -> NativeAgentReviewOutput:
+        self.reviewer_calls.append(invocation)
+        offered = tuple(item.finding_id for item in invocation.previous_findings)
+        self.requested_ids.append(offered)
+        selected = offered[: self.batch_size]
+        complete = len(selected) == len(offered) and self.approve_complete
+        lines = [
+            *(
+                f"FINDING_STATUS: {finding_id} | CLOSED | "
+                "The bound final-review round disposes this finding."
+                for finding_id in selected
+            ),
+            f"FINAL_APPROVAL: {'YES' if complete else 'NO'}",
+            "REVIEW_EVIDENCE: final disposition coverage | stale open finding | "
+            "a missing identifier reaches approval",
+        ]
+        if complete:
+            lines.append(
+                "PRE_MORTEM: A later change could bypass the final disposition ledger."
+            )
+        return _test_native_review_output(invocation, "\n".join(lines))
+
+    def persist_native_review_contract(
+        self,
+        output: NativeAgentReviewOutput,
+        _fingerprint: str,
+        _round_number: int,
+        previous_findings: tuple[FindingRecord, ...],
+    ) -> None:
+        current = {item.finding_id: item for item in output.result.findings}
+        disposed = {
+            item.finding_id
+            for item in previous_findings
+            if current[item.finding_id] != item
+        }
+        self.pending_ids = tuple(
+            finding_id
+            for finding_id in self.pending_ids
+            if finding_id not in disposed
+        )
+
+
+def _batched_final_review_case(
+    finding_count: int,
+    *,
+    batch_size: int,
+    approve_complete: bool = True,
+) -> tuple[WorkflowRunResult, BatchedFinalReviewDriver]:
+    findings = tuple(
+        FindingRecord(
+            finding_id=f"C-{number:02d}",
+            finding_class=FindingClass.BLOCKER,
+            status=FindingStatus.OPEN,
+            summary=f"Final review finding {number}.",
+            acceptance_test=f"Disposition {number} is recorded.",
+            origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+        )
+        for number in range(1, finding_count + 1)
+    )
+    state = replace(
+        _completed_single_slice_state().start_final_review_work_unit(),
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V2,
+            "2",
+            claude_review_transport="native-claude-review-v2",
+            codex_result_transport="native-codex-v2",
+        ),
+    ).with_current_step(WorkflowStep.CLAUDE_FINAL_REVIEW)
+    history = WorkflowHistory(
+        state.current_work_unit_id,
+        findings=findings,
+        codex_final_report='{"result_type":"final_report_result"}',
+    )
+    changes = _changes("f", "src/early.py", TEST_FILE)
+    driver = BatchedFinalReviewDriver(
+        snapshots=[changes],
+        codex_outputs=[],
+        reviewer_outputs=[],
+        batch_size=batch_size,
+        approve_complete=approve_complete,
+        pending_ids=tuple(item.finding_id for item in findings),
+    )
+    return WorkflowEngine(driver).run_current_work_unit(
+        state, _context(), history
+    ), driver
+
+
+def test_final_review_disposes_seventy_five_findings_over_bound_rounds() -> None:
+    result, driver = _batched_final_review_case(75, batch_size=25)
+
+    assert result.workflow_completed
+    assert len(driver.requested_ids) == 3
+    assert tuple(len(item) for item in driver.requested_ids) == (75, 50, 25)
+    assert [item.round_number for item in driver.reviewer_calls] == [1, 2, 3]
+    assert driver.requested_ids[1] == tuple(
+        f"C-{number:02d}" for number in range(26, 76)
+    )
+    assert project_open_set(result.history.findings).finding_ids == ()
+
+
+def test_final_review_with_few_findings_completes_in_one_round() -> None:
+    result, driver = _batched_final_review_case(3, batch_size=25)
+
+    assert result.workflow_completed
+    assert driver.requested_ids == [("C-01", "C-02", "C-03")]
+
+
+def test_exhausted_final_review_rounds_halt_resumably_with_named_remainder() -> None:
+    result, driver = _batched_final_review_case(
+        5, batch_size=1, approve_complete=False
+    )
+
+    assert len(driver.requested_ids) == 4
+    assert [item.round_number for item in driver.reviewer_calls] == [1, 2, 3, 4]
+    assert result.state.current_work_unit.status is WorkUnitStatus.AWAITING_USER_DECISION
+    assert result.state.current_work_unit.gate.reason is GateReason.STOP_REQUEST
+    assert result.state.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW
+    assert result.state.current_work_unit.gate.detail is not None
+    assert "FINAL-REVIEW-ROUNDS-EXHAUSTED" in result.state.current_work_unit.gate.detail
+    assert "missing dispositions: C-05" in result.state.current_work_unit.gate.detail
+    assert "C-01" not in result.state.current_work_unit.gate.detail
 
 
 def test_combined_native_post_correction_final_transition_carries_complete_ledger(

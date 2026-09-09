@@ -521,6 +521,12 @@ class WorkflowDriver(Protocol):
         _projected_findings: tuple[FindingRecord, ...],
     ) -> tuple[FindingRecord, ...]: ...
 
+    def authoritative_final_review_findings(
+        self,
+        state: WorkflowState,
+        _projected_findings: tuple[FindingRecord, ...],
+    ) -> tuple[FindingRecord, ...]: ...
+
     def carry_forward_native_findings(
         self,
         state: WorkflowState,
@@ -629,6 +635,7 @@ class WorkflowDriver(Protocol):
 
 MANDATORY_WORKFLOW_DRIVER_METHODS = frozenset(
     {
+        "authoritative_final_review_findings",
         "authoritative_native_findings",
         "bind_work_unit",
         "carry_forward_native_findings",
@@ -1222,16 +1229,40 @@ class WorkflowEngine:
             recovered_step = state.current_step
             is_plan_review = recovered_step is WorkflowStep.CLAUDE_PLAN_REVIEW
             is_final_review = recovered_step is WorkflowStep.CLAUDE_FINAL_REVIEW
+            recovered_result = pending_native.output.result
+            recovered_requested_ids: tuple[str, ...] | None = None
+            recovered_new_ids: tuple[str, ...] = ()
+            if is_final_review and pending_native.output.context is not None:
+                recovered_offered = pending_native.output.context.previous_findings
+                recovered_requested_ids = tuple(
+                    item.finding_id for item in recovered_offered
+                )
+                recovered_new_ids = tuple(
+                    item.finding_id
+                    for item in recovered_result.findings
+                    if item.finding_id not in frozenset(recovered_requested_ids)
+                )
+                if recovered_offered != history.findings:
+                    recovered_result = replace(
+                        recovered_result,
+                        findings=self._merge_review_request_subset(
+                            history.findings,
+                            recovered_offered,
+                            recovered_result.findings,
+                        ),
+                    )
             state, active_history = self._apply_review_result(
                 state=state,
                 context=context,
                 history=active_history,
                 reviewer=AgentRole.CLAUDE,
-                result=pending_native.output.result,
+                result=recovered_result,
                 fingerprint=pending_native.fingerprint,
                 round_number=pending_native.round_number,
                 is_plan_review=is_plan_review,
                 is_final_review=is_final_review,
+                final_review_requested_ids=recovered_requested_ids,
+                final_review_new_finding_ids=recovered_new_ids,
             )
             if state.current_work_unit.status is not WorkUnitStatus.IN_PROGRESS:
                 return WorkflowRunResult(state, active_history)
@@ -2205,11 +2236,13 @@ class WorkflowEngine:
         is_plan_review: bool,
         is_final_review: bool,
         review_round: int,
+        request_findings: tuple[FindingRecord, ...],
     ) -> tuple[WorkflowState, WorkflowHistory]:
+        request_history = replace(history, findings=request_findings)
         native_request = workflow_requests.native_review_request(
             state=state,
             context=context,
-            history=history,
+            history=request_history,
             contract=contract,
             changes=changes,
             evidence_kind=evidence_kind,
@@ -2234,11 +2267,11 @@ class WorkflowEngine:
             prompt="",
             review_packet=review_packet,
             native_request=native_request,
-            previous_findings=history.findings,
+            previous_findings=request_findings,
         )
         native_output = (
             self.driver.recover_pending_native_reviewer(
-                invocation, contract, history
+                invocation, contract, request_history
             )
             if native_request is not None
             else None
@@ -2270,7 +2303,23 @@ class WorkflowEngine:
             output,
             changes.fingerprint,
             review_round,
-            history.findings,
+            request_findings,
+        )
+        request_result = result
+        if request_findings != history.findings:
+            result = replace(
+                result,
+                findings=self._merge_review_request_subset(
+                    history.findings,
+                    request_findings,
+                    result.findings,
+                ),
+            )
+        requested_ids = tuple(item.finding_id for item in request_findings)
+        new_ids = tuple(
+            item.finding_id
+            for item in request_result.findings
+            if item.finding_id not in frozenset(requested_ids)
         )
         return self._apply_review_result(
             state=state,
@@ -2283,6 +2332,8 @@ class WorkflowEngine:
             is_plan_review=is_plan_review,
             is_final_review=is_final_review,
             user_gate_paths=changes.user_gate_paths,
+            final_review_requested_ids=(requested_ids if is_final_review else None),
+            final_review_new_finding_ids=new_ids,
         )
 
     def _run_review(
@@ -2365,6 +2416,20 @@ class WorkflowEngine:
                 "validation attestation is incomplete and cannot be overridden"
             )
         review_round = _review_round_number(unit, history, reviewer)
+        request_findings = history.findings
+        if is_final_review:
+            request_findings = self.driver.authoritative_final_review_findings(
+                state, history.findings
+            )
+            if (
+                review_round > workflow_requests.MAX_FINAL_REVIEW_DISPOSITION_ROUNDS
+                and request_findings
+            ):
+                state = self._halt_exhausted_final_review_rounds(
+                    state, request_findings
+                )
+                self.driver.checkpoint(state, history)
+                return state, history
         contract = StepContract(
             name=f"work-unit-{unit.work_unit_id}-{state.current_step.value}",
             reviewer=reviewer,
@@ -2446,6 +2511,7 @@ class WorkflowEngine:
             is_plan_review,
             is_final_review,
             review_round,
+            request_findings,
         )
 
     def _apply_review_result(
@@ -2461,6 +2527,8 @@ class WorkflowEngine:
         is_plan_review: bool,
         is_final_review: bool,
         user_gate_paths: tuple[str, ...] = (),
+        final_review_requested_ids: tuple[str, ...] | None = None,
+        final_review_new_finding_ids: tuple[str, ...] = (),
     ) -> tuple[WorkflowState, WorkflowHistory]:
         """Mirror one durable verdict and perform its deterministic transition."""
         unit = state.current_work_unit
@@ -2536,6 +2604,29 @@ class WorkflowEngine:
         else:
             own_ids = tuple(item.finding_id for item in result.own_open_blockers)
             if is_final_review:
+                if (
+                    final_review_requested_ids is not None
+                    and not final_review_new_finding_ids
+                ):
+                    remaining = self.driver.authoritative_final_review_findings(
+                        state, history.findings
+                    )
+                    if remaining:
+                        exhausted = (
+                            round_number
+                            >= workflow_requests.MAX_FINAL_REVIEW_DISPOSITION_ROUNDS
+                        )
+                        state = self._record_final_review_delivery_round(
+                            state,
+                            history,
+                            advance=not exhausted,
+                        )
+                        if exhausted:
+                            state = self._halt_exhausted_final_review_rounds(
+                                state, remaining
+                            )
+                        self.driver.checkpoint(state, history)
+                        return state, history
                 # Persist the denying final-review event while the final-review
                 # work unit is still current. Starting the correction unit first
                 # would archive the driver's older projection and leave the already
@@ -2570,6 +2661,79 @@ class WorkflowEngine:
             )
         self.driver.checkpoint(state, history)
         return state, history
+
+    @staticmethod
+    def _record_final_review_delivery_round(
+        state: WorkflowState,
+        history: WorkflowHistory,
+        *,
+        advance: bool,
+    ) -> WorkflowState:
+        current = state.current_work_unit
+        updated = replace(
+            current,
+            round_number=current.round_number + (1 if advance else 0),
+            reviewer=Reviewer.CLAUDE,  # allowlist:provider -- persisted reviewer role
+            open_findings=project_open_set(history.findings).finding_ids,
+        )
+        return replace(
+            state,
+            work_units=tuple(
+                updated if item.work_unit_id == current.work_unit_id else item
+                for item in state.work_units
+            ),
+        )
+
+    @staticmethod
+    def _merge_review_request_subset(
+        authoritative: tuple[FindingRecord, ...],
+        offered: tuple[FindingRecord, ...],
+        returned: tuple[FindingRecord, ...],
+    ) -> tuple[FindingRecord, ...]:
+        """Merge one subset-bound reviewer result into the complete ledger."""
+
+        authoritative_by_id = {item.finding_id: item for item in authoritative}
+        offered_by_id = {item.finding_id: item for item in offered}
+        returned_by_id = {item.finding_id: item for item in returned}
+        if not set(offered_by_id).issubset(returned_by_id):
+            raise WorkflowExecutionError(
+                "native review result omits an offered final-review finding"
+            )
+        if any(
+            authoritative_by_id.get(finding_id) != finding
+            for finding_id, finding in offered_by_id.items()
+        ):
+            raise WorkflowExecutionError(
+                "offered final-review finding subset differs from the complete ledger"
+            )
+        foreign_existing = (
+            set(returned_by_id) - set(offered_by_id)
+        ).intersection(authoritative_by_id)
+        if foreign_existing:
+            raise WorkflowExecutionError(
+                "native review result mutates an unoffered final-review finding: "
+                + ", ".join(sorted(foreign_existing))
+            )
+        merged = dict(authoritative_by_id)
+        merged.update(returned_by_id)
+        return tuple(merged[key] for key in sorted(merged))
+
+    @staticmethod
+    def _halt_exhausted_final_review_rounds(
+        state: WorkflowState,
+        pending: tuple[FindingRecord, ...],
+    ) -> WorkflowState:
+        missing = tuple(item.finding_id for item in pending)
+        return state.await_policy_gate(
+            reason=GateReason.STOP_REQUEST,
+            detail=(
+                "FINAL-REVIEW-ROUNDS-EXHAUSTED | "
+                "The bound "
+                f"{workflow_requests.MAX_FINAL_REVIEW_DISPOSITION_ROUNDS} final-review "
+                "delivery rounds are exhausted; missing dispositions: "
+                + ", ".join(missing)
+            ),
+        )
 
     def _invoke_role(
         self,

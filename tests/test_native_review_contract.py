@@ -472,6 +472,39 @@ def test_large_final_denial_accepts_thirty_closures_and_three_escalations() -> N
     )
 
 
+def test_final_denial_accepts_nonempty_partial_observation_delivery() -> None:
+    previous = tuple(
+        _finding(
+            f"C-{number:02d}",
+            AgentRole.CLAUDE,
+            finding_class=FindingClass.OBSERVATION,
+        )
+        for number in range(1, 4)
+    )
+    context = _context(approval=ApprovalMarker.FINAL, previous=previous)
+    document = _review(context, approved=False)
+    document["new_findings"] = []
+    document["status_changes"] = [
+        {
+            "finding_id": "C-01",
+            "status": "CLOSED",
+            "rationale": "The final review disposes this carried observation.",
+        }
+    ]
+
+    validate_schema_document(
+        {"result": document}, native_review_provider_response_schema(context)
+    )
+    result = parse_native_contract_result(document, context)
+
+    assert result.approval is False
+    assert tuple(
+        item.finding_id
+        for item in result.findings
+        if item.status is FindingStatus.OPEN
+    ) == ("C-02", "C-03")
+
+
 @pytest.mark.parametrize(
     ("kept_reclassification_ids", "missing_ids"),
     ((range(31, 33), ("C-33",)), (range(31, 32), ("C-32", "C-33"))),
@@ -547,6 +580,35 @@ def test_large_final_approval_names_every_missing_disposition(
     assert raised.value.code is NativeReviewErrorCode.FINDING_UPDATE_MISSING
     assert raised.value.detail == (
         "missing updates for previous open findings: " + ", ".join(missing_ids)
+    )
+
+
+def test_seventy_five_finding_final_approval_names_exact_missing_dispositions() -> None:
+    previous = tuple(
+        _finding(f"C-{number:02d}", AgentRole.CLAUDE)
+        for number in range(1, 76)
+    )
+    context = _context(approval=ApprovalMarker.FINAL, previous=previous)
+    document = _review(context)
+    document["status_changes"] = [
+        {
+            "finding_id": f"C-{number:02d}",
+            "status": "CLOSED",
+            "rationale": "The branch correction closes this blocker.",
+        }
+        for number in range(1, 33)
+    ]
+
+    validate_schema_document(
+        {"result": document}, native_review_provider_response_schema(context)
+    )
+    with pytest.raises(NativeReviewContractError) as raised:
+        parse_native_contract_result(document, context)
+
+    assert raised.value.code is NativeReviewErrorCode.FINDING_UPDATE_MISSING
+    assert raised.value.detail == (
+        "missing updates for previous open findings: "
+        + ", ".join(f"C-{number:02d}" for number in range(33, 76))
     )
 
 

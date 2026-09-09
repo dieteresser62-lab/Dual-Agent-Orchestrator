@@ -13,6 +13,11 @@
     },
     {
       "provider": "claude",
+      "form": "final_observation",
+      "sha256": "160420f85834f9150ffb86d1b463ae38cc8a728abb08052ddbc965d75d9c0f2c"
+    },
+    {
+      "provider": "claude",
       "form": "initial_slice",
       "sha256": "70187e6ab499518eb8f29b8f11af6b4befff7c83043829eefb8a68c228e85e70"
     },

@@ -56,7 +56,7 @@ from artifact_replay import (
     pending_workflow_event_payload,
     replay_artifacts,
 )
-from finding_reducer import reduce_findings
+from finding_reducer import project_final_review_dispositions, reduce_findings
 from provider_input_budget import ProviderInputMeasurement
 from review_packets import ReviewPacket
 from cli import DEFAULT_AGENTS_FILE, DEFAULT_TASK_FILE
@@ -1109,6 +1109,41 @@ class ProductionWorkflowDriver:
         except (ArtifactReplayError, ValueError) as exc:
             raise WorkflowExecutionError(
                 f"authoritative finding replay failed: {exc}"
+            ) from exc
+        return projected
+
+    def authoritative_final_review_findings(
+        self,
+        state: WorkflowState,
+        _projected_findings: tuple[FindingRecord, ...],
+    ) -> tuple[FindingRecord, ...]:
+        """Return only still-undispositioned final-review Findings from records."""
+
+        active = self.active_state
+        bridge = self._artifact_bridge
+        if (
+            active is None
+            or bridge is None
+            or active.run_id != state.run_id
+            or active.current_work_unit_id != state.current_work_unit_id
+            or state.current_work_unit.kind is not WorkUnitKind.FINAL_REVIEW
+            or state.protocol_binding is None
+            or state.protocol_binding.claude_review_transport  # allowlist:provider -- protocol binding
+            != NATIVE_CLAUDE_REVIEW_TRANSPORT  # allowlist:provider -- protocol binding
+        ):
+            raise WorkflowExecutionError(
+                "final-review finding replay lacks its immutable state binding"
+            )
+        try:
+            replay = replay_artifacts(
+                bridge.store.current_chain(), state.run_id, allow_empty=True
+            )
+            projected = project_final_review_dispositions(
+                replay, state.current_work_unit_id
+            ).pending.findings
+        except (ArtifactReplayError, ValueError) as exc:
+            raise WorkflowExecutionError(
+                f"authoritative final-review finding replay failed: {exc}"
             ) from exc
         return projected
 

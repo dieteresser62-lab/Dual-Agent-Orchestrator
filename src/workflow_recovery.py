@@ -887,6 +887,17 @@ class WorkflowRecovery:
             if state.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW
             else ApprovalMarker.SLICE
         )
+        payload = record.payload
+        assert isinstance(payload, ReviewPayload)
+        offered_ids = dict.fromkeys(payload.finding_ids, True)
+        final_previous_findings = tuple(
+            item
+            for item in history.findings
+            if offered_ids.get(item.finding_id, False)
+        )
+        previous_findings = {
+            ApprovalMarker.FINAL: final_previous_findings,
+        }.get(approval_marker, history.findings)
         return NativeReviewContext(
             run_id=state.run_id,
             work_unit_id=str(unit.work_unit_id),
@@ -900,7 +911,7 @@ class WorkflowRecovery:
                 else f"{unit.slice_id:02d}"
             ),
             round_number=round_number,
-            previous_findings=history.findings,
+            previous_findings=previous_findings,
             validation_attestation=attestation,
             test_files=tuple(sorted(set(expected_test_files))),
             test_changes_approved=context.test_changes_approved,
@@ -1090,7 +1101,7 @@ class WorkflowRecovery:
             output,
             record.fingerprint.sha256,
             round_number,
-            history.findings,
+            native_context.previous_findings,
         )
         logger.warning(
             "Mirroring request-bound native Claude review before current-diff "

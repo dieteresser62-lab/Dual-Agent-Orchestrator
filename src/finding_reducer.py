@@ -125,6 +125,16 @@ class FindingStatusTransitionsProjection:
 
 
 @dataclass(frozen=True, slots=True)
+class FinalReviewDispositionProjection:
+    """Record-derived delivery progress for one final-review work unit."""
+
+    work_unit_id: str
+    initial_finding_ids: tuple[str, ...]
+    dispositioned_finding_ids: tuple[str, ...]
+    pending: FindingRequestProjection
+
+
+@dataclass(frozen=True, slots=True)
 class FindingRecordedStatusProjection:
     """Last explicitly recorded status for one Finding lineage."""
 
@@ -261,6 +271,61 @@ def project_open_set(
     canonical = _canonical_findings(findings)
     return FindingOpenSetProjection(
         tuple(item for item in canonical if item.status is FindingStatus.OPEN)
+    )
+
+
+def project_final_review_dispositions(
+    replay: ArtifactReplayResult,
+    work_unit_id: int | str,
+) -> FinalReviewDispositionProjection:
+    """Derive the exact undispositioned final-review set from the record chain.
+
+    The first WorkUnit record is the immutable entry boundary. Findings open at
+    that boundary require one reviewer-owned status change or reclassification
+    in this work unit. Runtime history and the state mirror are deliberately not
+    inputs to this projection.
+    """
+
+    target = str(work_unit_id)
+    boundary_positions = tuple(
+        index
+        for index, record in enumerate(replay.records)
+        if isinstance(record.payload, WorkUnitPayload)
+        and record.logical_id == f"work-unit-{target}"
+    )
+    if not boundary_positions:
+        raise ValueError(
+            f"final review work unit {target} has no record-chain boundary"
+        )
+    boundary = boundary_positions[0]
+    entry_findings = _reduce_events(_transition_events(replay.records[:boundary]))
+    initial_ids = project_open_set(entry_findings).finding_ids
+    dispositioned = tuple(
+        sorted(
+            {
+                event.payload.finding_id
+                for event in _transition_events(replay.records[boundary + 1 :])
+                if event.payload.work_unit_id == target
+                and event.payload.finding_id in frozenset(initial_ids)
+                and event.payload.action in {"status_changed", "reclassified"}
+            }
+        )
+    )
+    pending_ids = tuple(
+        finding_id
+        for finding_id in initial_ids
+        if finding_id not in frozenset(dispositioned)
+    )
+    pending = reduce_findings(replay).request_subset(finding_ids=pending_ids)
+    if pending.finding_ids != pending_ids:
+        raise ValueError(
+            "final review pending finding projection differs from its entry set"
+        )
+    return FinalReviewDispositionProjection(
+        work_unit_id=target,
+        initial_finding_ids=initial_ids,
+        dispositioned_finding_ids=dispositioned,
+        pending=FindingRequestProjection(target, pending.finding_ids, pending.findings),
     )
 
 
