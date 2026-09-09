@@ -759,6 +759,7 @@ def test_gate_kind_uses_iteration_limit_state_semantics_not_fingerprint() -> Non
     (
         (AgentFailureKind.QUOTA, GateStatus.WAITING_FOR_QUOTA),
         (AgentFailureKind.NETWORK, GateStatus.WAITING_FOR_RETRY),
+        (AgentFailureKind.TIMEOUT, GateStatus.WAITING_FOR_RETRY),
     ),
 )
 def test_gate_kind_uses_automatic_wait_status_as_resume(

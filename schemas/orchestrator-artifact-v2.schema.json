@@ -342,7 +342,8 @@
         "work_unit_id": {"$ref": "#/$defs/identifier"},
         "gate_record_id": {"$ref": "#/$defs/identifier"},
         "paths": {"$ref": "#/$defs/paths"},
-        "resume_step": {"oneOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]}
+        "resume_step": {"oneOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]},
+        "invocation_id": {"$ref": "#/$defs/identifier"}
       }
     },
     "binding": {

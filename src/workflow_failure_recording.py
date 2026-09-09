@@ -65,7 +65,7 @@ class WorkflowFailureRecording:
             )
         # S1 is the sole authority for the operational class. Keep this import
         # local because that inventory imports workflow's typed exceptions.
-        from error_classification import classify_exception
+        from error_classification import FailureClass, classify_exception
 
         classified = classify_exception(error)
         fingerprint = self._dependencies.current_invocation_fingerprint(state)
@@ -117,8 +117,11 @@ class WorkflowFailureRecording:
             )
             and classified.diagnostic_code == "NATIVE-REVIEW-FORM"
         )
+        retryable_transient = error.kind in {
+            AgentFailureKind.NETWORK, AgentFailureKind.TIMEOUT
+        } or automatic_review_form
         automatic_transient = (
-            (error.kind is AgentFailureKind.NETWORK or automatic_review_form)
+            retryable_transient
             and transient_policy.automatic
             and (unit.kind is WorkUnitKind.PLAN or fingerprint is not None)
             and prior_auto_resumes < transient_policy.maximum_auto_resumes
@@ -179,12 +182,17 @@ class WorkflowFailureRecording:
             automatic_resume=automatic,
             diff_fingerprint=fingerprint,
         )
+        effective_failure_class = FailureClass.TRANSIENT if automatic else (
+            FailureClass.RESUMABLE_HALT
+            if classified.failure_class is FailureClass.TRANSIENT
+            else classified.failure_class
+        )
         payload = InvocationFailurePayload(
             invocation_id=record.invocation_id,
             idempotency_key=record.idempotency_key,
             role=Role(role.value),
             failure_kind=record.failure_kind.value,
-            failure_class=classified.failure_class.value,
+            failure_class=effective_failure_class.value,
             diagnostic_code=classified.diagnostic_code,
             provider_text=provider_marker,
             provider_text_sha256=provider_digest,
@@ -219,7 +227,7 @@ class WorkflowFailureRecording:
         logger.info(
             "provider invocation terminal role=%s operation=%s physical_attempt=%d "
             "status=failed failure_kind=%s process_exit_code=%s retry=%s "
-            "diagnostic_code=%s orchestrator_diagnostic=%s",
+            "attempts_exhausted=%s diagnostic_code=%s orchestrator_diagnostic=%s",
             role.value,
             state.current_step.value,
             len(matching_failures) + 1,
@@ -230,6 +238,10 @@ class WorkflowFailureRecording:
                 else "none"
             ),
             "scheduled" if automatic else "halted",
+            str(len(matching_failures) + 1)
+            if retryable_transient and transient_policy.automatic
+            and prior_auto_resumes >= transient_policy.maximum_auto_resumes
+            else "none",
             classified.diagnostic_code,
             payload.orchestrator_diagnostic or "redacted",
         )

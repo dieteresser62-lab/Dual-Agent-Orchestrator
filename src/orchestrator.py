@@ -728,6 +728,21 @@ class ProductionWorkflowDriver:
         bridge = self._artifact_bridge
         assert bridge is not None
         unit_id = str(work_unit_id)
+        invocation_id = None
+        if decision.reason is GateReason.QUOTA_RESUME_DIFF:
+            invocation_id = next(
+                (
+                    record.payload.invocation_id
+                    for record in reversed(bridge.store.current_chain())
+                    if isinstance(record.payload, InvocationFailurePayload)
+                    and record.payload.work_unit_id == unit_id
+                ),
+                None,
+            )
+            if invocation_id is None:
+                raise WorkflowExecutionError(
+                    "quota-resume-diff decision has no authoritative invocation failure"
+                )
         logical_id = f"gate-decision-{unit_id}-{gate_record.record_id[:20]}"
         return bridge.append(
             GateDecisionPayload(
@@ -739,6 +754,7 @@ class ProductionWorkflowDriver:
                     if decision.resume_step is None
                     else decision.resume_step.value
                 ),
+                invocation_id=invocation_id,
             ),
             logical_id=logical_id,
             idempotency_key=f"gate-decision:{unit_id}:{gate_record.record_id}",

@@ -483,6 +483,7 @@ class WorkflowPersistence:
                     continue
                 if failure.automatic_resume and failure.failure_kind in {
                     AgentFailureKind.NETWORK,
+                    AgentFailureKind.TIMEOUT,
                     AgentFailureKind.OUTPUT,
                 }:
                     bridge.append(

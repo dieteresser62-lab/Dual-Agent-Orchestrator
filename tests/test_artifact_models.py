@@ -257,6 +257,23 @@ def test_every_record_family_roundtrips_through_model_and_schema(payload) -> Non
     assert restored.canonical_json() == encoded
 
 
+def test_gate_decision_optional_invocation_binding_is_backward_compatible() -> None:
+    historical = GateDecisionPayload(
+        "work-01", "gate-record-01", ("src/runtime.py",), "codex_implementation"
+    )
+    bound = replace(historical, invocation_id="timeout-invocation-17")
+
+    historical_document = _record(historical).to_dict()
+    bound_document = _record(bound).to_dict()
+
+    assert "invocation_id" not in historical_document["payload"]
+    assert bound_document["payload"]["invocation_id"] == "timeout-invocation-17"
+    validate_artifact_document(historical_document)
+    validate_artifact_document(bound_document)
+    assert ArtifactRecord.from_dict(historical_document).payload == historical
+    assert ArtifactRecord.from_dict(bound_document).payload == bound
+
+
 def test_run_identity_without_structural_first_slice_start_is_rejected() -> None:
     identity = RunIdentityPayload(
         "task.md",

@@ -1008,17 +1008,19 @@ def test_provider_process_failure_reaches_record_with_actual_diagnostics(
 
 
 @pytest.mark.parametrize(
-    ("kind", "expected_automatic", "expected_diagnostic"),
+    ("kind", "expected_automatic", "expected_class", "expected_diagnostic"),
     (
-        (AgentFailureKind.QUOTA, True, "AGENT-INVOCATION"),
-        (AgentFailureKind.NETWORK, True, "AGENT-INVOCATION"),
-        (AgentFailureKind.OUTPUT, False, "AGENT-INVOCATION"),
-        (AgentFailureKind.PROCESS, False, "AGENT-PROCESS"),
+        (AgentFailureKind.QUOTA, True, "transient", "AGENT-INVOCATION"),
+        (AgentFailureKind.NETWORK, True, "transient", "AGENT-INVOCATION"),
+        (AgentFailureKind.TIMEOUT, True, "transient", "AGENT-INVOCATION"),
+        (AgentFailureKind.OUTPUT, False, "resumable_halt", "AGENT-INVOCATION"),
+        (AgentFailureKind.PROCESS, False, "resumable_halt", "AGENT-PROCESS"),
     ),
 )
 def test_r6_failure_record_precedes_retry_decision_and_uses_s1_classification(
     kind: AgentFailureKind,
     expected_automatic: bool,
+    expected_class: str,
     expected_diagnostic: str,
 ) -> None:
     from error_classification import classify_exception
@@ -1072,7 +1074,8 @@ def test_r6_failure_record_precedes_retry_decision_and_uses_s1_classification(
     assert len(driver.failure_payloads) == 1
     payload = driver.failure_payloads[0]
     assert payload.failure_kind == kind.value
-    assert payload.failure_class == classified.failure_class.value == "transient"
+    assert classified.failure_class.value == "transient"
+    assert payload.failure_class == expected_class
     assert payload.diagnostic_code == classified.diagnostic_code == expected_diagnostic
     assert payload.automatic_resume is expected_automatic
     assert payload.auto_resume_count == (1 if expected_automatic else 0)
@@ -1091,7 +1094,7 @@ def test_r6_failure_record_precedes_retry_decision_and_uses_s1_classification(
         assert payload.source_timezone == "UTC"
         assert payload.retry_delay_seconds == payload.safety_margin_seconds == 7
         assert payload.resume_at_utc == "2026-08-31T10:00:37+00:00"
-    elif kind is AgentFailureKind.NETWORK:
+    elif kind in {AgentFailureKind.NETWORK, AgentFailureKind.TIMEOUT}:
         assert payload.retry_delay_seconds == 5
         assert payload.resume_at_utc == "2026-08-31T10:00:05+00:00"
     else:
@@ -1230,7 +1233,7 @@ def test_r6_wrapped_quota_keeps_policy_despite_deeper_s1_classification() -> Non
 
     payload = driver.failure_payloads[0]
     assert failure.failure_kind is AgentFailureKind.QUOTA
-    assert payload.failure_class == "resumable_halt"
+    assert payload.failure_class == "transient"
     assert payload.diagnostic_code == "AGENT-OUTPUT"
     assert payload.automatic_resume is failure.automatic_resume is True
     assert payload.auto_resume_count == failure.auto_resume_count == 1
@@ -3539,6 +3542,10 @@ def test_changed_fingerprint_during_quota_wait_halts_before_retry() -> None:
         is GateReason.QUOTA_RESUME_DIFF
     )
     assert "QUOTA-RESUME-DIFF" in (result.state.current_work_unit.gate.detail or "")
+    assert "src/early.py" in (result.state.current_work_unit.gate.detail or "")
+    assert "--resume --approve-gate" in (
+        result.state.current_work_unit.gate.detail or ""
+    )
     assert len(driver.codex_calls) == 1
 
     gate = result.state.current_work_unit.gate
@@ -3653,6 +3660,85 @@ def test_claude_network_retry_keeps_configured_two_resume_ceiling() -> None:
         item.failure_kind is AgentFailureKind.NETWORK
         for item in result.state.current_work_unit.invocation_failures
     )
+
+
+def test_codex_timeout_retries_automatically_without_operator_input() -> None:
+    now = [datetime(2026, 9, 9, 8, 0, tzinfo=timezone.utc)]
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    driver = FakeDriver(
+        snapshots=[changes] * 8,
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[_review_approval(AgentRole.CLAUDE)],
+        codex_failures=[
+            _invocation_failure(
+                AgentRole.CODEX,
+                AgentFailureKind.TIMEOUT,
+                "timeout-then-success",
+                received_at=now[0],
+            ),
+            None,
+        ],
+    )
+
+    def sleep(seconds: float) -> None:
+        now[0] += timedelta(seconds=seconds)
+
+    result = WorkflowEngine(
+        driver, now_fn=lambda: now[0], sleep_fn=sleep
+    ).run_current_work_unit(_slice_state(), _context())
+
+    assert result.completed
+    assert len(driver.codex_calls) == 2
+    failure = driver.failure_payloads[0]
+    assert failure.failure_kind == "timeout"
+    assert failure.failure_class == "transient"
+    assert failure.automatic_resume is True
+
+
+def test_codex_timeout_retry_limit_reports_exhausted_attempts(caplog) -> None:
+    now = [datetime(2026, 9, 9, 8, 0, tzinfo=timezone.utc)]
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    driver = FakeDriver(
+        snapshots=[changes] * 8,
+        codex_outputs=[],
+        reviewer_outputs=[],
+        codex_failures=[
+            _invocation_failure(
+                AgentRole.CODEX,
+                AgentFailureKind.TIMEOUT,
+                f"timeout-{attempt}",
+                received_at=now[0],
+            )
+            for attempt in range(1, 4)
+        ],
+    )
+
+    def sleep(seconds: float) -> None:
+        now[0] += timedelta(seconds=seconds)
+
+    caplog.set_level("INFO", logger="workflow")
+    context = replace(
+        _context(),
+        transient_retry_policy=TransientRetryPolicy(maximum_auto_resumes=2),
+    )
+    result = WorkflowEngine(
+        driver, now_fn=lambda: now[0], sleep_fn=sleep
+    ).run_current_work_unit(_slice_state(), context)
+
+    assert not result.completed
+    assert len(driver.codex_calls) == 3
+    assert [item.automatic_resume for item in driver.failure_payloads] == [
+        True,
+        True,
+        False,
+    ]
+    assert [item.failure_class for item in driver.failure_payloads] == [
+        "transient",
+        "transient",
+        "resumable_halt",
+    ]
+    assert result.state.current_work_unit.status is WorkUnitStatus.AWAITING_RESUME
+    assert "attempts_exhausted=3" in caplog.text
 
 
 def test_schema_invalid_review_retries_and_records_failure_before_continuation() -> None:

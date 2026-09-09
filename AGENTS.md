@@ -47,6 +47,7 @@
 - A complete accepted baseline contains exactly one early `RunIdentity` and `RunProfile`, binding task path, branch identity, branch base, execution mode, audit path, both role-keyed agent profiles, and the reducer version. The initializer may finish only the exact canonical incomplete baseline prefix described above; every malformed, non-prefix, or already-active chain remains rejected fail-closed without synthesized facts.
 - Outside that exact baseline-prefix completion, every resumable R2 chain must already contain role-named `WorkflowTransition` and `WorkflowPolicy` records before the next dispatch; a missing R2 status or policy fact is rejected fail-closed without backfill.
 - Every bound Slice persists an exact `SliceBoundary` record before scope validation or a guarded side effect; the measured start commit/fingerprint are immutable, grouped scope is lossless, and a missing R3 boundary is rejected fail-closed.
+- An operator resolves a `QUOTA-RESUME-DIFF` gate only after reviewing its fingerprint and paths, using `--task-file <unchanged-task> --resume --approve-gate --gate-rationale "<reviewed reason>"`. Without that explicit approval the run remains halted. The resulting user `Gate` and `GateDecision` records bind the decision time, confirmed fingerprint, affected paths, and originating invocation ID.
 
 ## PLAN_ONLY repository artifact
 

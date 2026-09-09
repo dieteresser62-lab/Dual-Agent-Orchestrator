@@ -143,6 +143,9 @@ def _normalized_payload_fields(payload: object) -> object:
     if isinstance(payload, artifact_models.InvocationFailurePayload):
         if payload.orchestrator_diagnostic is None:
             raw.pop("orchestrator_diagnostic", None)
+    if isinstance(payload, artifact_models.GateDecisionPayload):
+        if payload.invocation_id is None:
+            raw.pop("invocation_id", None)
     return artifact_models._json_value(raw)  # type: ignore[arg-type]
 
 

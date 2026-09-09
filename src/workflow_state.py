@@ -388,6 +388,7 @@ class InvocationFailureRecord:
             and self.failure_kind not in {
                 AgentFailureKind.QUOTA,
                 AgentFailureKind.NETWORK,
+                AgentFailureKind.TIMEOUT,
             }
             and not automatic_review_output
         ):
@@ -2150,15 +2151,17 @@ class WorkflowState:
             and failure.failure_kind not in {
                 AgentFailureKind.QUOTA,
                 AgentFailureKind.NETWORK,
+                AgentFailureKind.TIMEOUT,
             }
             and not automatic_review_output
         ):
             raise WorkflowStateValidationError(
-                "only quota, network, and native review form failures may wait automatically"
+                "only quota, network, timeout, and native review form failures may wait automatically"
             )
         automatic_quota = wait_automatically and failure.failure_kind is AgentFailureKind.QUOTA
         automatic_transient = wait_automatically and failure.failure_kind in {
             AgentFailureKind.NETWORK,
+            AgentFailureKind.TIMEOUT,
             AgentFailureKind.OUTPUT,
         }
         status = (

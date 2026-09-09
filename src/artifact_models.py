@@ -1460,6 +1460,7 @@ class GateDecisionPayload:
     gate_record_id: str
     paths: tuple[str, ...]
     resume_step: str | None
+    invocation_id: str | None = None
     status: ClassVar[str] = "bound"
     record_type: ClassVar[RecordType] = RecordType.GATE_DECISION
 
@@ -1471,6 +1472,8 @@ class GateDecisionPayload:
             raise ArtifactValidationError("gate decision paths must be sorted")
         if self.resume_step is not None and self.resume_step not in _WORKFLOW_STEPS:
             raise ArtifactValidationError("gate decision resume_step is invalid")
+        if self.invocation_id is not None:
+            _require_identifier(self.invocation_id, "gate decision invocation_id")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1729,7 +1732,7 @@ class InvocationFailurePayload:
             and self.step.endswith("_review")
         )
         automatic_transient = self.automatic_resume and (
-            self.failure_kind == "network" or automatic_review_form
+            self.failure_kind in {"network", "timeout"} or automatic_review_form
         )
         if automatic_transient:
             if self.resume_at_utc is None or self.retry_delay_seconds < 1:
@@ -1753,9 +1756,9 @@ class InvocationFailurePayload:
                 "unscheduled invocation failure carries retry timing"
             )
         if self.automatic_resume:
-            if self.failure_kind not in {"quota", "network"} and not automatic_review_form:
+            if self.failure_kind not in {"quota", "network", "timeout"} and not automatic_review_form:
                 raise ArtifactValidationError(
-                    "automatic resume is limited to quota, network, and native review form failures"
+                    "automatic resume is limited to quota, network, timeout, and native review form failures"
                 )
             if self.resume_at_utc is None or self.auto_resume_count < 1:
                 raise ArtifactValidationError(
@@ -1857,6 +1860,8 @@ def artifact_payload_document(payload: ArtifactPayload) -> dict[str, Any]:
         and payload.orchestrator_diagnostic is None
     ):
         raw.pop("orchestrator_diagnostic", None)
+    if isinstance(payload, GateDecisionPayload) and payload.invocation_id is None:
+        raw.pop("invocation_id", None)
     return _json_value(raw)
 
 
@@ -2240,7 +2245,7 @@ _PAYLOAD_READERS: dict[
         ),
     RecordType.GATE_DECISION: lambda data: GateDecisionPayload(
             data["work_unit_id"], data["gate_record_id"], tuple(data["paths"]),
-            data["resume_step"],
+            data["resume_step"], data.get("invocation_id"),
         ),
     RecordType.BINDING: lambda data: BindingPayload(
         data["binding_kind"], data["target"], data["attestation_id"],

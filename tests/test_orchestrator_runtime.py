@@ -29,6 +29,7 @@ from agent_runtime import (
     ProviderRequestRoundRequired,
     QuotaReset,
     QuotaWaitPolicy,
+    TransientRetryPolicy,
     run_native_codex_agent_checked,
 )
 from audit_trail import AuditProjection, ValidationAuditEvent, _render_test_approval
@@ -5550,6 +5551,95 @@ def test_r5_gate_pending_decision_and_resume_records_precede_state_readers(
         "src/runtime.py",
     )
     assert result.state.current_work_unit.gate_decisions[0].resume_step is WorkflowStep.CODEX_PLAN
+
+
+def test_quota_resume_diff_approval_record_binds_timeout_invocation_and_time(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/quota-resume-approval")
+    task = repository / "task.md"
+    task.write_text("resume task", encoding="utf-8")
+    head = _git(repository, "rev-parse", "HEAD")
+    state = init_workflow_state(
+        run_id="quota-resume-approval",
+        task_file=str(task),
+        branch="feature/quota-resume-approval",
+        branch_base=head,
+        first_slice_start_commit=head,
+        slice_count=1,
+        task_digest="d" * 64,
+        task_scope_patterns=("src/runtime.py",),
+        target_branch="feature/quota-resume-approval",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+    )
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    history = WorkflowHistory(state.current_work_unit_id)
+    driver.checkpoint(state, history)
+    invocation_id = "timeout-invocation-17"
+    failure = AgentInvocationError(
+        agent_key="codex",
+        kind=AgentFailureKind.TIMEOUT,
+        invocation_id=invocation_id,
+        provider_text="codex timed out",
+        received_at=datetime(2026, 9, 9, 8, 0, tzinfo=timezone.utc),
+    )
+    halted, _ = WorkflowEngine(driver)._persist_invocation_failure(
+        state,
+        history,
+        WorkflowContext(
+            "assignment",
+            "plan",
+            "slice",
+            transient_retry_policy=TransientRetryPolicy(automatic=False),
+        ),
+        AgentRole.CODEX,
+        failure,
+    )
+    fingerprint = "e" * 64
+    paths = ("src/runtime.py",)
+    pending = halted.resume_after_invocation_halt().await_user_gate(
+        reason=GateReason.QUOTA_RESUME_DIFF,
+        detail=(
+            "QUOTA-RESUME-DIFF | repository changed while the role was waiting; "
+            f"paths={paths[0]}; continue with --resume --approve-gate"
+        ),
+        fingerprint=fingerprint,
+        paths=paths,
+        resume_step=WorkflowStep.CODEX_PLAN,
+    )
+    driver.checkpoint(pending, history)
+
+    before = ArtifactStore(repository, state.run_id).load_chain()
+    assert pending.current_work_unit.status is WorkUnitStatus.AWAITING_USER_DECISION
+    assert not any(isinstance(record.payload, GatePayload) for record in before)
+
+    result = WorkflowEngine(driver).decide_current_gate(
+        pending,
+        history,
+        approved=True,
+        rationale="reviewed the exact changed path",
+    )
+
+    chain = ArtifactStore(repository, state.run_id).load_chain()
+    decision_record = next(
+        record
+        for record in chain
+        if isinstance(record.payload, GateDecisionPayload)
+    )
+    assert decision_record.payload.invocation_id == invocation_id
+    assert decision_record.fingerprint.sha256 == fingerprint
+    assert datetime.fromisoformat(decision_record.created_at).tzinfo is not None
+    assert result.state.current_work_unit.status is WorkUnitStatus.IN_PROGRESS
+    assert (
+        f"quota-resume-diff:{invocation_id}:{fingerprint}"
+        in result.state.current_work_unit.completed_side_effects
+    )
 
 
 def test_r5_repeated_identical_rejection_remains_resume_safe(tmp_path: Path) -> None:

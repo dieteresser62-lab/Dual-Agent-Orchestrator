@@ -2784,11 +2784,14 @@ class WorkflowEngine:
         fingerprint_changed = changes.fingerprint != failure.diff_fingerprint
         if (unexpected or fingerprint_changed) and not acknowledged:
             paths = unexpected or changes.user_gate_paths
+            path_text = ", ".join(paths) or "(none)"
             halted = state.await_user_gate(
                 reason=GateReason.QUOTA_RESUME_DIFF,
                 detail=(
                     "QUOTA-RESUME-DIFF | repository changed while the role was waiting; "
-                    f"expected {failure.diff_fingerprint}, got {changes.fingerprint}"
+                    f"expected {failure.diff_fingerprint}, got {changes.fingerprint}; "
+                    f"paths={path_text}; continue with --resume --approve-gate "
+                    "--gate-rationale '<reviewed reason>' and the unchanged --task-file"
                 ),
                 fingerprint=changes.fingerprint,
                 paths=paths,

@@ -613,7 +613,7 @@ def _index_projection_transitions(
         ):
             continue
         automatic_quota = payload.automatic_resume and payload.failure_kind == "quota"
-        automatic_retry = payload.automatic_resume and payload.failure_kind in {"network", "output"}
+        automatic_retry = payload.automatic_resume and payload.failure_kind in {"network", "timeout", "output"}
         status = (
             "waiting_for_quota"
             if automatic_quota
@@ -1761,7 +1761,7 @@ def _validate_invocation_failures_and_retries(
                 )
             failure_record, failure = failure_entry
             expected_kinds = (
-                {"quota"} if isinstance(payload, QuotaPausePayload) else {"network", "output"}
+                {"quota"} if isinstance(payload, QuotaPausePayload) else {"network", "timeout", "output"}
             )
             if (
                 positions[failure_record.record_id] >= positions[record.record_id]
