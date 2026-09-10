@@ -292,7 +292,9 @@ def native_codex_provider_response_schema(
         "final_report_result",
     ):
         items = schema["$defs"][result_name]["properties"]["finding_dispositions"]
-        items["minItems"] = len(open_ids)
+        items["minItems"] = (
+            len(open_ids) if result_name == "final_report_result" else 0
+        )
         items["maxItems"] = len(open_ids)
 
     contract = context.contract
@@ -547,6 +549,7 @@ def native_codex_response_to_contract_result(
         dispositions,
         work_unit_id=context.work_unit_id,
         round_number=context.contract.round_number,
+        require_complete=isinstance(response, NativeFinalReportResult),
     )
     return CodexContractResult(
         ready=response.ready,
@@ -601,8 +604,15 @@ def _apply_dispositions(
     *,
     work_unit_id: str,
     round_number: int,
+    require_complete: bool,
 ) -> tuple[FindingRecord, ...]:
     try:
+        if require_complete:
+            open_ids = project_open_set(prior).finding_ids
+            disposition_ids = tuple(item.finding_id for item in dispositions)
+            missing = sorted(set(open_ids) - set(disposition_ids))
+            if missing:
+                raise ValueError(f"missing disposition for {missing[0]}")
         return apply_finding_responses(
             prior,
             tuple(

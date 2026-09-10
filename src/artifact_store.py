@@ -95,8 +95,6 @@ class _AppendIndex:
     record_count: int
     chain_sha256: str
     records_dir_stamp: _RecordsDirectoryStamp
-    record_file_stamps: dict[str, _ArtifactFileStamp]
-    blob_file_stamps: dict[str, _ArtifactFileStamp]
 
     def head_document(self) -> dict[str, object]:
         return {
@@ -314,26 +312,17 @@ class ArtifactStore:
                     "published record differs from the append candidate"
                 )
             _validate_store_invariants(published, persisted=True)
-            published_blob_stamps = self._validate_record_blobs((published,))
+            self._validate_record_blobs((published,))
 
-            # A second writer which completed its own cache update after our
-            # pre-write guard makes the prior proof stale.  Re-scan instead of
-            # letting either cache choose the winner.
-            expected_record_stamps = dict(index.record_file_stamps)
-            expected_record_stamps[target.name] = published_stamp
-            if (
-                not self._head_cache_matches(index)
-                or not self._file_stamps_match(
-                    self.records_dir, expected_record_stamps
-                )
-                or any(
-                    not self._file_stamp_matches(self.blobs_dir / name, expected)
-                    for name, expected in {
-                        **index.blob_file_stamps,
-                        **published_blob_stamps,
-                    }.items()
-                )
-            ):
+            # The prefix was fully validated when the process-local index was
+            # built and its directory/head proofs were checked immediately
+            # before publication.  Re-statting every prefix record and blob at
+            # this point made each append O(chain length), especially on 9p.
+            # Verify only the newly published record and its referenced blobs;
+            # explicit load/resume paths retain the complete fail-closed scan.
+            # A cooperating second writer which completed its cache update
+            # after our pre-write guard still invalidates the head proof.
+            if not self._head_cache_matches(index):
                 self._append_index = None
                 recovered = self.load_chain()
                 result = next(
@@ -360,8 +349,6 @@ class ArtifactStore:
                 index.chain_sha256, record.record_id
             )
             index.chain = (*index.chain, published)
-            index.record_file_stamps[target.name] = published_stamp
-            index.blob_file_stamps.update(published_blob_stamps)
             index.records_dir_stamp = self._records_directory_stamp()
             self._refresh_append_head_cache(index, prior_document)
             return published
@@ -393,7 +380,7 @@ class ArtifactStore:
             if self.head_path.exists():
                 self._refresh_cache_with_context((), expected_cache_chain)
             self._append_index = _build_append_index(
-                self.run_id, (), self._records_directory_stamp(), {}, {}
+                self.run_id, (), self._records_directory_stamp()
             )
             return ()
         self._confined(self.records_dir)
@@ -472,8 +459,6 @@ class ArtifactStore:
             self.run_id,
             ordered,
             final_directory_stamp,
-            record_file_stamps,
-            blob_file_stamps,
         )
         return ordered
 
@@ -774,8 +759,6 @@ def _build_append_index(
     run_id: str,
     chain: tuple[ArtifactRecord, ...],
     records_dir_stamp: _RecordsDirectoryStamp,
-    record_file_stamps: dict[str, _ArtifactFileStamp],
-    blob_file_stamps: dict[str, _ArtifactFileStamp],
 ) -> _AppendIndex:
     by_idempotency_key: dict[str, tuple[str, ArtifactRecord]] = {}
     record_ids: set[str] = set()
@@ -806,8 +789,6 @@ def _build_append_index(
         record_count=len(chain),
         chain_sha256=chain_sha256,
         records_dir_stamp=records_dir_stamp,
-        record_file_stamps=record_file_stamps,
-        blob_file_stamps=blob_file_stamps,
     )
 
 

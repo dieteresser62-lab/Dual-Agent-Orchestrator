@@ -467,21 +467,17 @@ def apply_finding_responses(
     prior: Sequence[FindingRecord],
     responses: Sequence[FindingResponseEvent],
 ) -> tuple[FindingRecord, ...]:
-    """Apply the exact response set to the open Finding projection."""
+    """Apply a sorted response subset to the open Finding projection."""
     canonical = _canonical_findings(prior)
-    open_ids = project_open_set(canonical).finding_ids
+    open_ids = set(project_open_set(canonical).finding_ids)
     response_ids = tuple(item.finding_id for item in responses)
     if response_ids != tuple(sorted(set(response_ids))):
         raise ValueError("finding responses must be sorted and unique")
-    if response_ids != open_ids:
-        missing = sorted(set(open_ids) - set(response_ids))
-        unexpected = sorted(set(response_ids) - set(open_ids))
-        detail = (
-            f"missing disposition for {missing[0]}"
-            if missing
-            else f"disposition references non-open finding {unexpected[0]}"
+    unexpected = sorted(set(response_ids) - open_ids)
+    if unexpected:
+        raise ValueError(
+            f"disposition references non-open finding {unexpected[0]}"
         )
-        raise ValueError(detail)
     by_id = {item.finding_id: item for item in canonical}
     for response in responses:
         by_id[response.finding_id] = apply_finding_response(

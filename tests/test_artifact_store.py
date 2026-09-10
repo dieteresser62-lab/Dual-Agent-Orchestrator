@@ -351,6 +351,59 @@ def test_process_local_chain_lookup_cost_does_not_grow_with_chain_length(
     assert head_checks == {"small": 3, "large": 3}
 
 
+def test_warm_append_file_checks_are_constant_at_300_and_3000_records(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    stores: dict[int, ArtifactStore] = {}
+    for record_count in (300, 3000):
+        run_id = f"run-{record_count}"
+        store = ArtifactStore(tmp_path, run_id)
+        predecessor_ids: tuple[str, ...] = ()
+        for ordinal in range(record_count):
+            record = make_record(
+                f"record-{ordinal}",
+                run_id=run_id,
+                predecessors=predecessor_ids,
+            )
+            write_envelope(store.records_dir / f"{record.record_id}.json", record)
+            predecessor_ids = (record.record_id,)
+        assert len(store.load_chain()) == record_count
+        stores[record_count] = store
+
+    file_checks = {record_count: 0 for record_count in stores}
+    full_prefix_checks = {record_count: 0 for record_count in stores}
+    original_file_stamp = ArtifactStore._artifact_file_stamp
+    original_file_stamps_match = ArtifactStore._file_stamps_match
+
+    def counted_file_stamp(store: ArtifactStore, path: Path):  # type: ignore[no-untyped-def]
+        file_checks[int(store.run_id.removeprefix("run-"))] += 1
+        return original_file_stamp(store, path)
+
+    def counted_file_stamps_match(  # type: ignore[no-untyped-def]
+        store: ArtifactStore,
+        directory: Path,
+        expected: dict[str, object],
+    ) -> bool:
+        full_prefix_checks[int(store.run_id.removeprefix("run-"))] += 1
+        return original_file_stamps_match(store, directory, expected)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(ArtifactStore, "_artifact_file_stamp", counted_file_stamp)
+    monkeypatch.setattr(ArtifactStore, "_file_stamps_match", counted_file_stamps_match)
+
+    for record_count, store in stores.items():
+        predecessor = store.current_chain()[-1].record_id
+        store.put(
+            make_record(
+                "appended",
+                run_id=store.run_id,
+                predecessors=(predecessor,),
+            )
+        )
+
+    assert file_checks == {300: 2, 3000: 2}
+    assert full_prefix_checks == {300: 0, 3000: 0}
+
+
 @pytest.mark.parametrize("mutation", ("delete", "rename"))
 def test_process_local_chain_rebuilds_after_record_removal_or_rename(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mutation: str

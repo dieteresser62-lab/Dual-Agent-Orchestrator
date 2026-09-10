@@ -73,7 +73,7 @@
         },
         "finding_dispositions": {
           "type": "array",
-          "description": "List exactly one disposition for every open finding in ascending finding_id order, with no duplicate finding_id.",
+          "description": "List dispositions in ascending finding_id order with no duplicate finding_id. Omit unchanged open findings except in final_report_result, which requires every open finding.",
           "maxItems": 128,
           "items": { "$ref": "#/$defs/finding_disposition" }
         }
@@ -100,7 +100,7 @@
         },
         "finding_dispositions": {
           "type": "array",
-          "description": "List exactly one disposition for every open finding in ascending finding_id order, with no duplicate finding_id.",
+          "description": "List dispositions in ascending finding_id order with no duplicate finding_id. Omit unchanged open findings except in final_report_result, which requires every open finding.",
           "maxItems": 128,
           "items": { "$ref": "#/$defs/finding_disposition" }
         }
@@ -127,7 +127,7 @@
         },
         "finding_dispositions": {
           "type": "array",
-          "description": "List exactly one disposition for every open finding in ascending finding_id order, with no duplicate finding_id.",
+          "description": "List dispositions in ascending finding_id order with no duplicate finding_id. Omit unchanged open findings except in final_report_result, which requires every open finding.",
           "maxItems": 128,
           "items": { "$ref": "#/$defs/finding_disposition" }
         }
@@ -147,7 +147,7 @@
         },
         "finding_dispositions": {
           "type": "array",
-          "description": "List exactly one disposition for every open finding in ascending finding_id order, with no duplicate finding_id.",
+          "description": "List dispositions in ascending finding_id order with no duplicate finding_id. Omit unchanged open findings except in final_report_result, which requires every open finding.",
           "maxItems": 128,
           "items": { "$ref": "#/$defs/finding_disposition" }
         },

@@ -29,6 +29,7 @@
 - A correction-Slice review is a convergence round: neither reviewer may introduce a new `OBSERVATION` or reclassify a finding into a new `OBSERVATION`. Put non-actionable future ideas and residual risks in `review_evidence`; report a newly discovered actionable defect as a `BLOCKER` and deny the correction Slice.
 - A final reviewer must not create a new `OBSERVATION`. Record non-actionable future ideas and residual risks in `review_evidence`; report any defect that still requires work as a `BLOCKER` with a denied decision so the orchestrator creates a bounded correction work unit.
 - Only the reporting reviewer may close or reclassify its finding. Codex may answer it through `finding_dispositions`; rejection does not close it.
+- Codex `finding_dispositions` are sparse during plan, implementation, and correction work: Codex reports only findings for which it has a new answer, while omitted open findings retain their complete state and produce no response transition. The final branch report remains complete and answers every still-open finding.
 - Only an open `BLOCKER` may extend the orchestrator validation matrix with a typed `validation_command` acceptance test from a configured command family. An `OBSERVATION` uses a typed prose acceptance test and cannot extend or pause the matrix.
 - Missing, inconsistent, or unparsable verdicts are denials. A stop request replaces readiness or approval.
 - Exhausted watch retries move a task to `outbox/failed/*.poison` and persist the final technical diagnosis beside it as `*.poison.error.json`.

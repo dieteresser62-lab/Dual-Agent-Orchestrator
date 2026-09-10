@@ -558,6 +558,60 @@ def test_structured_finding_projection_rebuilds_reviewer_owned_history() -> None
     assert findings[0].responses[0].decision is FindingResponseDecision.ACCEPTED
 
 
+def test_sparse_response_chain_preserves_the_verbose_chain_open_finding_set() -> None:
+    sparse: list[ArtifactRecord] = []
+    verbose: list[ArtifactRecord] = []
+    for records in (sparse, verbose):
+        for number in (1, 2):
+            _append(
+                records,
+                f"finding-C-{number:02d}",
+                FindingTransitionPayload(
+                    finding_id=f"C-{number:02d}",
+                    reporter=Role.CLAUDE,
+                    actor=Role.CLAUDE,
+                    action="opened",
+                    severity=FindingSeverity.OBSERVATION,
+                    finding_status="open",
+                    rationale="Keep this observation open.",
+                    work_unit_id="1",
+                    summary=f"Observation {number}.",
+                    acceptance_test="A later slice may address it.",
+                    origin_slice_id="1",
+                    origin_round_number=1,
+                ),
+            )
+    _append(
+        verbose,
+        "finding-C-01",
+        FindingTransitionPayload(
+            finding_id="C-01",
+            reporter=Role.CLAUDE,
+            actor=Role.CODEX,
+            action="responded",
+            severity=FindingSeverity.OBSERVATION,
+            finding_status="open",
+            rationale="No new answer is needed in this slice.",
+            work_unit_id="1",
+            response_decision="rejected",
+        ),
+        revision=2,
+    )
+
+    sparse_findings = replay_findings(replay_artifacts(sparse, "run-replay"))
+    verbose_findings = replay_findings(replay_artifacts(verbose, "run-replay"))
+
+    assert tuple(
+        item.finding_id
+        for item in sparse_findings
+        if item.status is FindingStatus.OPEN
+    ) == tuple(
+        item.finding_id
+        for item in verbose_findings
+        if item.status is FindingStatus.OPEN
+    ) == ("C-01", "C-02")
+
+
 def test_import_replays_source_order_then_accepts_local_reviewer_transition() -> None:
     source = (
         ImportedFindingTransition(
