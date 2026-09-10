@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from enum import Enum
+from functools import partial
 from types import MappingProxyType
 from typing import Callable, Protocol
 
@@ -1249,6 +1250,9 @@ class WorkflowEngine:
                             history.findings,
                             recovered_offered,
                             recovered_result.findings,
+                            review_type=(
+                                "final review" if is_final_review else "slice review"
+                            ),
                         ),
                     )
             state, active_history = self._apply_review_result(
@@ -2220,6 +2224,34 @@ class WorkflowEngine:
             ),
         )
 
+    @staticmethod
+    def _build_native_review_request(
+        *,
+        state: WorkflowState,
+        context: WorkflowContext,
+        history: WorkflowHistory,
+        contract: StepContract,
+        changes: WorkflowChanges,
+        evidence_kind: EvidenceKind,
+        review_diff: str,
+        review_packet: ReviewPacket | None,
+        expected_test_files: tuple[str, ...],
+        is_plan_review: bool,
+    ) -> workflow_requests.NativeReviewRequestBundle:
+        return workflow_requests.native_review_request(
+            state=state,
+            context=context,
+            history=history,
+            contract=contract,
+            changes=changes,
+            evidence_kind=evidence_kind,
+            review_diff=review_diff,
+            review_packet=review_packet,
+            expected_test_files=(expected_test_files if not is_plan_review else ()),
+            execution_error=WorkflowExecutionError,
+            full_branch_evidence_kind=EvidenceKind.FULL_BRANCH,
+        )
+
     def _dispatch_native_review(
         self,
         state: WorkflowState,
@@ -2239,19 +2271,19 @@ class WorkflowEngine:
         request_findings: tuple[FindingRecord, ...],
     ) -> tuple[WorkflowState, WorkflowHistory]:
         request_history = replace(history, findings=request_findings)
-        native_request = workflow_requests.native_review_request(
+        build_request = partial(
+            self._build_native_review_request,
             state=state,
             context=context,
             history=request_history,
-            contract=contract,
             changes=changes,
             evidence_kind=evidence_kind,
             review_diff=review_diff,
             review_packet=review_packet,
-            expected_test_files=(expected_test_files if not is_plan_review else ()),
-            execution_error=WorkflowExecutionError,
-            full_branch_evidence_kind=EvidenceKind.FULL_BRANCH,
+            expected_test_files=expected_test_files,
+            is_plan_review=is_plan_review,
         )
+        native_request = build_request(contract=contract)
         invocation = ReviewerInvocation(
             work_unit_id=unit.work_unit_id,
             step=state.current_step,
@@ -2283,7 +2315,18 @@ class WorkflowEngine:
                 "native reviewer recovery returned an invalid result contract"
             )
         if native_output is None and native_request is not None:
+            # Exact-request record-ahead recovery must precede complete-ledger
+            # replay.  Only the still-unsent request is then rebuilt, retaining
+            # its compact offered subset while reserving every ledger id.
             history = self._bind_authoritative_native_findings(state, history)
+            authoritative_contract = replace(
+                contract,
+                existing_finding_ids=tuple(
+                    sorted(item.finding_id for item in history.findings)
+                ),
+            )
+            native_request = build_request(contract=authoritative_contract)
+            invocation = replace(invocation, native_request=native_request)
         output: NativeAgentReviewOutput | None = native_output
         if output is None:
             state, output = self._invoke_role(
@@ -2313,6 +2356,9 @@ class WorkflowEngine:
                     history.findings,
                     request_findings,
                     result.findings,
+                    review_type=(
+                        "final review" if is_final_review else "slice review"
+                    ),
                 ),
             )
         requested_ids = tuple(item.finding_id for item in request_findings)
@@ -2689,6 +2735,8 @@ class WorkflowEngine:
         authoritative: tuple[FindingRecord, ...],
         offered: tuple[FindingRecord, ...],
         returned: tuple[FindingRecord, ...],
+        *,
+        review_type: str,
     ) -> tuple[FindingRecord, ...]:
         """Merge one subset-bound reviewer result into the complete ledger."""
 
@@ -2697,22 +2745,34 @@ class WorkflowEngine:
         returned_by_id = {item.finding_id: item for item in returned}
         if not set(offered_by_id).issubset(returned_by_id):
             raise WorkflowExecutionError(
-                "native review result omits an offered final-review finding"
+                f"native review result omits an offered {review_type} finding"
             )
         if any(
             authoritative_by_id.get(finding_id) != finding
             for finding_id, finding in offered_by_id.items()
         ):
             raise WorkflowExecutionError(
-                "offered final-review finding subset differs from the complete ledger"
+                f"offered {review_type} finding subset differs from the complete ledger"
             )
         foreign_existing = (
             set(returned_by_id) - set(offered_by_id)
         ).intersection(authoritative_by_id)
-        if foreign_existing:
+        collisions = {
+            finding_id
+            for finding_id in foreign_existing
+            if returned_by_id[finding_id].origin
+            != authoritative_by_id[finding_id].origin
+        }
+        if collisions:
             raise WorkflowExecutionError(
-                "native review result mutates an unoffered final-review finding: "
-                + ", ".join(sorted(foreign_existing))
+                f"native {review_type} result has a finding-number collision: "
+                + ", ".join(sorted(collisions))
+            )
+        foreign_mutations = foreign_existing - collisions
+        if foreign_mutations:
+            raise WorkflowExecutionError(
+                f"native review result mutates an unoffered {review_type} finding: "
+                + ", ".join(sorted(foreign_mutations))
             )
         merged = dict(authoritative_by_id)
         merged.update(returned_by_id)

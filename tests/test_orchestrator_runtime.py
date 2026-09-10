@@ -1033,6 +1033,129 @@ def test_recomposed_request_opens_new_round_and_operation_but_binding_drift_stop
     assert second[0].payload.attempt_number == 1
 
 
+def test_stored_colliding_review_response_is_superseded_by_a_recorded_new_round(
+    tmp_path: Path,
+) -> None:
+    branch = "feature/recompose-colliding-review"
+    repository = _repository(tmp_path, branch)
+    task = repository / "task.md"
+    _write_task(task, branch, "src/runtime.py")
+    head = _git(repository, "rev-parse", "HEAD")
+    state = (
+        init_workflow_state(
+            run_id="recompose-colliding-review",
+            task_file=str(task),
+            branch=branch,
+            branch_base=head,
+            first_slice_start_commit=head,
+            slice_count=1,
+            task_digest=hashlib.sha256(task.read_bytes()).hexdigest(),
+            task_scope_patterns=("src/runtime.py",),
+            target_branch=branch,
+            protocol_binding=ProtocolBinding(
+                ProtocolMode.STRUCTURED_V2,
+                "2",
+                claude_review_transport="native-claude-review-v2",
+            ),
+        )
+        .complete_current_work_unit()
+        .start_work_unit(
+            slice_id=1,
+            kind=WorkUnitKind.SLICE,
+            step=WorkflowStep.CODEX_IMPLEMENTATION,
+        )
+        .bind_current_slice_git_boundary(
+            start_commit=head,
+            scope_paths=("src/runtime.py",),
+            start_fingerprint="b" * 64,
+        )
+        .with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW)
+    )
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={"claude": SimpleNamespace(model="sonnet", effort="high")},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    driver.bind_work_unit(state)
+
+    def measurement(request_text: str):
+        return measure_provider_input(
+            PreparedProviderInput(
+                command=("claude", "--print"),
+                stdin_text=request_text,
+                components=(ProviderInputComponent("stdin_prompt", request_text),),
+            ),
+            provider="claude",
+            role="claude",
+            operation=WorkflowStep.CLAUDE_SLICE_REVIEW.value,
+            binding_fingerprint="c" * 64,
+            policy=default_provider_input_budget_policy(),
+        )
+
+    stale = measurement('{"next_finding_id":"C-01"}')
+    stale_bootstrap = driver._persist_provider_bootstrap(stale)
+    response_path = (
+        repository
+        / ".orchestrator"
+        / "artifacts"
+        / state.run_id
+        / "native-review-responses"
+        / "work-unit-0002-claude_slice_review-round-0001.json"
+    )
+    started = driver._start_provider_attempt(
+        stale,
+        stale_bootstrap,
+        operation_instance="round:1",
+        durable_response_path=response_path,
+    )
+    stored_response_path = started[2]
+    stored_response_path.parent.mkdir(parents=True, exist_ok=True)
+    stored_response_path.write_text(
+        '{"new_findings":[{"finding_id":"C-01"}]}',
+        encoding="utf-8",
+    )
+    driver._finish_provider_attempt(started, 1.0, None, None)
+
+    corrected = measurement('{"next_finding_id":"C-66"}')
+    corrected_bootstrap = driver._persist_provider_bootstrap(corrected)
+    advanced, output = WorkflowEngine(driver)._invoke_role(
+        state,
+        WorkflowHistory(state.current_work_unit_id),
+        WorkflowContext("assignment", "plan", "slice"),
+        AgentRole.CLAUDE,
+        lambda: driver._start_provider_attempt(
+            corrected,
+            corrected_bootstrap,
+            operation_instance="round:1",
+            durable_response_path=response_path,
+        ),
+    )
+
+    assert output is None
+    assert advanced.current_work_unit.status is WorkUnitStatus.IN_PROGRESS
+    assert advanced.current_work_unit.round_number == 2
+    assert stored_response_path.read_text(encoding="utf-8") == (
+        '{"new_findings":[{"finding_id":"C-01"}]}'
+    )
+    chain = ArtifactStore(repository, state.run_id).load_chain()
+    policies = tuple(
+        record
+        for record in chain
+        if isinstance(record.payload, WorkflowPolicyPayload)
+        and record.idempotency_key.endswith("recomposed-round:2")
+    )
+    assert len(policies) == 1
+    work_units = tuple(
+        record
+        for record in chain
+        if isinstance(record.payload, WorkUnitPayload)
+        and record.logical_id == f"work-unit-{state.current_work_unit_id}"
+    )
+    assert work_units[-1].payload.round_number == 2
+
+
 def _review(role: AgentRole, marker: str) -> str:
     return "\n".join(
         (

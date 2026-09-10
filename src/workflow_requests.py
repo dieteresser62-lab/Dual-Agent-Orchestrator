@@ -259,6 +259,7 @@ def native_review_request(
         slice_id=contract.slice_id,
         round_number=contract.round_number,
         previous_findings=history.findings,
+        authoritative_finding_ids=contract.existing_finding_ids,
         validation_attestation=contract.validation_attestation,
         test_files=expected_test_files,
         test_changes_approved=contract.test_changes_approved,

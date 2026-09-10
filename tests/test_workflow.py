@@ -2705,6 +2705,160 @@ def test_final_review_with_few_findings_completes_in_one_round() -> None:
     assert driver.requested_ids == [("C-01", "C-02", "C-03")]
 
 
+@pytest.mark.parametrize("review_type", ("slice review", "final review"))
+@pytest.mark.parametrize(
+    "failure_case, expected",
+    (
+        ("omission", "omits an offered"),
+        ("offered-drift", "subset differs from the complete ledger"),
+        ("foreign-mutation", "mutates an unoffered"),
+    ),
+)
+def test_subset_merge_diagnostics_name_the_actual_review_type(
+    review_type: str,
+    failure_case: str,
+    expected: str,
+) -> None:
+    authoritative = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.OBSERVATION,
+        status=FindingStatus.OPEN,
+        summary="Existing finding",
+        acceptance_test="Keep its identity stable.",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
+    if failure_case == "omission":
+        offered = (authoritative,)
+        returned = ()
+    elif failure_case == "offered-drift":
+        offered = (replace(authoritative, summary="Stale mirror"),)
+        returned = offered
+    else:
+        offered = ()
+        returned = (
+            replace(
+                authoritative,
+                status=FindingStatus.CLOSED,
+                status_rationale="Unexpected update.",
+            ),
+        )
+
+    with pytest.raises(
+        WorkflowExecutionError,
+        match=rf"{expected} {review_type}|{review_type} finding {expected}",
+    ):
+        WorkflowEngine._merge_review_request_subset(
+            (authoritative,),
+            offered,
+            returned,
+            review_type=review_type,
+        )
+
+
+def test_subset_merge_names_a_reused_number_as_a_collision() -> None:
+    authoritative = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.OBSERVATION,
+        status=FindingStatus.OPEN,
+        summary="Earlier finding",
+        acceptance_test="The number remains reserved.",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
+    colliding = replace(
+        authoritative,
+        summary="New finding with an old number",
+        origin=FindingOrigin("33", 1, AgentRole.CLAUDE),
+    )
+
+    with pytest.raises(
+        WorkflowExecutionError,
+        match=r"slice review.*collision.*C-01",
+    ):
+        WorkflowEngine._merge_review_request_subset(
+            (authoritative,),
+            (),
+            (colliding,),
+            review_type="slice review",
+        )
+
+
+def test_slice_review_reserves_finding_numbers_from_authoritative_replay() -> None:
+    ledger = tuple(
+        FindingRecord(
+            finding_id=f"C-{number:02d}",
+            finding_class=FindingClass.OBSERVATION,
+            status=(FindingStatus.CLOSED if number == 23 else FindingStatus.OPEN),
+            summary=f"Finding {number}",
+            acceptance_test=f"Finding {number} remains reserved.",
+            origin=FindingOrigin("01", number, AgentRole.CLAUDE),
+            status_rationale=("Verified earlier." if number == 23 else None),
+        )
+        for number in range(1, 66)
+    )
+
+    @dataclass
+    class AuthoritativeReviewDriver(FakeDriver):
+        def authoritative_native_findings(
+            self,
+            state: WorkflowState,
+            mirror_findings: tuple[FindingRecord, ...],
+        ) -> tuple[FindingRecord, ...]:
+            self.authoritative_finding_calls.append(
+                (state.current_step.value, mirror_findings)
+            )
+            return ledger
+
+    changes = _changes("f", "src/early.py", TEST_FILE)
+    state = replace(
+        _slice_state(
+            scope_paths=("src/early.py", TEST_FILE)
+        ).with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW),
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V2,
+            "2",
+            claude_review_transport="native-claude-review-v2",
+            codex_result_transport="native-codex-v2",
+        ),
+    )
+    driver = AuthoritativeReviewDriver(
+        snapshots=[changes],
+        codex_outputs=[],
+        reviewer_outputs=[
+            "\n".join(
+                (
+                    "REVIEWER: claude",
+                    f"TEST_FILES_TOUCHED: {TEST_FILE}",
+                    "NEW_FINDING: C-66 | OBSERVATION | new issue | verify later",
+                    "REVIEW_EVIDENCE: chain numbering | stale subset | C-01 is reused",
+                    "PRE_MORTEM: a reduced request could reset the sequence",
+                    "SLICE_APPROVAL: 01 | YES",
+                    "STATUS: DONE",
+                )
+            )
+        ],
+    )
+
+    next_state, next_history = WorkflowEngine(driver)._run_review(
+        state,
+        _context(),
+        WorkflowHistory(state.current_work_unit_id),
+        AgentRole.CLAUDE,
+    )
+
+    assert next_state.current_step is WorkflowStep.SLICE_COMMIT
+    assert tuple(item.finding_id for item in next_history.findings) == tuple(
+        f"C-{number:02d}" for number in range(1, 67)
+    )
+    assert len(driver.reviewer_calls) == 1
+    invocation = driver.reviewer_calls[0]
+    assert invocation.previous_findings == ()
+    assert invocation.native_request is not None
+    assert (
+        invocation.native_request.document["review_contract"]["next_finding_id"]
+        == "C-66"
+    )
+
+
 def test_exhausted_final_review_rounds_halt_resumably_with_named_remainder() -> None:
     result, driver = _batched_final_review_case(
         5, batch_size=1, approve_complete=False
