@@ -43,6 +43,7 @@ from artifact_models import (
     ReviewAnchor,
     ReviewAnchorPayload,
     ReviewPacketPayload,
+    ReviewPayload,
     ReviewValidationBindingPayload,
     Role,
     SliceBoundaryPayload,
@@ -67,8 +68,10 @@ from contracts import (
     ValidationAttestation,
 )
 from finding_reducer import (
+    merge_review_request_result,
     project_finding_response_delta,
     project_reviewer_persistence_transitions,
+    reduce_findings,
 )
 from review_packets import ReviewPacket
 from task_contract import TaskMode
@@ -838,6 +841,62 @@ class WorkflowPersistence:
                 "native review persistence lacks its immutable Claude binding"
             )
         unit = state.current_work_unit
+        review_type = (
+            "final review"
+            if unit.kind is WorkUnitKind.FINAL_REVIEW
+            else "slice review"
+        )
+        logical = f"review-claude-{unit.work_unit_id}-{round_number}"
+        chain = bridge.store.current_chain()
+        prior_review = next(
+            (
+                record
+                for record in chain
+                if record.logical_id == logical
+                and isinstance(record.payload, ReviewPayload)
+            ),
+            None,
+        )
+        authority_chain = (
+            chain
+            if prior_review is None
+            else chain[: chain.index(prior_review)]
+        )
+        reduced = reduce_findings(
+            replay_artifacts(
+                authority_chain,
+                state.run_id,
+                allow_empty=True,
+                allow_incomplete_review_tail=True,
+            )
+        )
+        if unit.kind is WorkUnitKind.CORRECTION:
+            attribution = reduced.correction_for(unit.work_unit_id)
+            if attribution is None:
+                raise WorkflowExecutionError(
+                    "native review persistence lacks its correction finding scope"
+                )
+            authoritative_findings = reduced.request_subset(
+                finding_ids=attribution.finding_ids
+            ).findings
+        else:
+            authoritative_findings = reduced.ledger.findings
+        try:
+            merge_review_request_result(
+                authoritative_findings,
+                previous_findings,
+                output.result.findings,
+                review_type=review_type,
+            )
+        except ValueError as exc:
+            raise WorkflowExecutionError(
+                f"native review persistence rejected before publication: {exc}"
+            ) from exc
+        self._reject_reused_opening_transitions(
+            output.result,
+            previous_findings=previous_findings,
+            round_number=round_number,
+        )
         native_context = output.context
         if (
             native_context is None
@@ -876,7 +935,6 @@ class WorkflowPersistence:
                 "native review persistence has no unique earlier validation record"
             )
         attestation_record = attestation_records[0]
-        logical = f"review-claude-{unit.work_unit_id}-{round_number}"
         response_sha256 = hashlib.sha256(
             output.canonical_json.encode("utf-8")
         ).hexdigest()
@@ -957,6 +1015,69 @@ class WorkflowPersistence:
             domain_record=review_record,
         )
 
+    def _reject_reused_opening_transitions(
+        self,
+        result: ContractResult,
+        *,
+        previous_findings: tuple[FindingRecord, ...],
+        round_number: int,
+    ) -> None:
+        bridge = self._artifact_bridge
+        state = self.active_state
+        if bridge is None or state is None:
+            return
+        unit = state.current_work_unit
+        transitions = project_reviewer_persistence_transitions(
+            previous_findings,
+            result.findings,
+            work_unit_id=unit.work_unit_id,
+        )
+        opening_ids = {
+            transition.finding.finding_id
+            for transition in transitions
+            if transition.action == "opened"
+        }
+        if not opening_ids:
+            return
+        chain = bridge.store.current_chain()
+        assigned_ids = {
+            item.finding_id
+            for item in reduce_findings(
+                replay_artifacts(
+                    chain,
+                    state.run_id,
+                    allow_incomplete_review_tail=True,
+                )
+            ).ledger.findings
+        }
+        for transition in transitions:
+            finding_id = transition.finding.finding_id
+            if finding_id not in opening_ids or finding_id not in assigned_ids:
+                continue
+            expected_payload = finding_payload(
+                transition.finding,
+                action="opened",
+                rationale=transition.rationale,
+                work_unit_id=unit.work_unit_id,
+            )
+            expected_key = (
+                f"finding:{finding_id}:opened:work_unit:{unit.work_unit_id}:"
+                f"{round_number}:{result.reviewer.value}"
+            )
+            legacy_key = (
+                f"finding:{finding_id}:opened:{round_number}:"
+                f"{result.reviewer.value}"
+            )
+            if not any(
+                record.idempotency_key in {expected_key, legacy_key}
+                and record.payload == expected_payload
+                for record in chain
+            ):
+                raise WorkflowExecutionError(
+                    "native review persistence rejects opened transition for "
+                    f"already assigned finding id {finding_id}"
+                )
+
     def _persist_review_finding_transitions(
         self,
         result: ContractResult,
@@ -976,6 +1097,11 @@ class WorkflowPersistence:
                     "structured finding persistence lacks an active work unit"
                 )
             work_unit_id = str(self.active_state.current_work_unit_id)
+            self._reject_reused_opening_transitions(
+                result,
+                previous_findings=previous_findings,
+                round_number=round_number,
+            )
         transitions = project_reviewer_persistence_transitions(
             previous_findings,
             result.findings,

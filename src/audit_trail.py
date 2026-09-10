@@ -14,7 +14,7 @@ from artifact_projection import (
     finalize_projection_document,
 )
 from artifact_replay import ArtifactReplayResult
-from artifact_bridge import review_payload_matches_result
+from artifact_bridge import review_payload_matches_complete_result
 from artifact_models import ArtifactRecord, ReviewPayload
 
 from contracts import (
@@ -352,7 +352,7 @@ class AuditProjection:
                     != self.review_work_unit_id
                     or review_record.fingerprint.sha256
                     != review_result.validation.diff_fingerprint
-                    or not review_payload_matches_result(
+                    or not review_payload_matches_complete_result(
                         review_record.payload,
                         review_result,
                     )

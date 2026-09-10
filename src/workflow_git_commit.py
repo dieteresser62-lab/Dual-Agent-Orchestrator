@@ -16,7 +16,7 @@ from typing import Callable, Protocol, cast
 from artifact_bridge import (
     ArtifactBridge,
     attestation_payload,
-    review_payload_matches_result,
+    review_payload_matches_complete_result,
 )
 from artifact_models import ArtifactRecord, BindingPayload, ReviewPayload
 from artifact_replay import replay_artifacts
@@ -353,7 +353,7 @@ class WorkflowGitCommit:
                 raise WorkflowExecutionError(
                     "structured commit attestation differs from the commit request"
                 )
-            if current_review_record is None or not review_payload_matches_result(
+            if current_review_record is None or not review_payload_matches_complete_result(
                 current_review_record.payload,
                 review_result,
             ):

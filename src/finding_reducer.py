@@ -79,6 +79,28 @@ class FindingOpenSetProjection:
 
 
 @dataclass(frozen=True, slots=True)
+class FindingOpeningConflictDiagnostic:
+    """One historical duplicate opening retained as a replay diagnosis."""
+
+    finding_id: str
+    head_opening_record_id: str
+    head_opening_revision: int | None
+    head_work_unit_id: str
+    conflicting_opening_record_id: str
+    conflicting_opening_revision: int | None
+    conflicting_work_unit_id: str
+    code: str = "DUPLICATE-FINDING-OPENING"
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewFindingMerge:
+    """Keep a request-bound review distinct from its complete-ledger projection."""
+
+    request_bound: tuple[FindingRecord, ...]
+    complete_ledger: tuple[FindingRecord, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class CorrectionRoundAttributionProjection:
     round_number: int
     finding_ids: tuple[str, ...]
@@ -161,6 +183,7 @@ class FindingReduction:
     correction_attribution: tuple[CorrectionAttributionProjection, ...]
     import_snapshot: FindingImportSnapshotProjection | None
     status_transitions: FindingStatusTransitionsProjection
+    diagnostics: tuple[FindingOpeningConflictDiagnostic, ...]
     _events: tuple[FindingTransitionProjection, ...] = field(
         repr=False
     )
@@ -174,10 +197,17 @@ class FindingReduction:
     ) -> FindingRequestProjection:
         """Return the sixth projection without consulting any mirror or cache."""
         target = None if work_unit_id is None else str(work_unit_id)
+        head_opening_record_ids = frozenset(
+            item.opening_record_id for item in self.ledger.lineages
+        )
         selected_events = tuple(
             event
             for event in self._events
             if (target is None or event.imported or event.payload.work_unit_id == target)
+            and (
+                event.payload.action != "opened"
+                or event.source_record_id in head_opening_record_ids
+            )
         )
         selected = project_request_subset(
             _reduce_events(selected_events),
@@ -243,7 +273,8 @@ class FindingResponseDelta:
 def reduce_findings(replay: ArtifactReplayResult) -> FindingReduction:
     """Reduce one accepted append-only record prefix into six projections."""
     events = _transition_events(replay.records)
-    lineages = _reduce_lineages(events)
+    diagnostics: list[FindingOpeningConflictDiagnostic] = []
+    lineages = _reduce_lineages(events, diagnostics=diagnostics)
     ledger_findings = _current_lineage_findings(lineages)
     ledger = FindingLedgerProjection(ledger_findings, lineages, events)
     open_set = project_open_set(ledger_findings)
@@ -260,6 +291,7 @@ def reduce_findings(replay: ArtifactReplayResult) -> FindingReduction:
         correction_attribution=correction_attribution,
         import_snapshot=import_snapshot,
         status_transitions=status_transitions,
+        diagnostics=tuple(diagnostics),
         _events=events,
     )
 
@@ -460,6 +492,57 @@ def merge_request_result(
     return tuple(
         returned_by_id.get(item.finding_id, item)
         for item in authoritative_tuple
+    )
+
+
+def merge_review_request_result(
+    authoritative: Sequence[FindingRecord],
+    offered: Sequence[FindingRecord],
+    returned: Sequence[FindingRecord],
+    *,
+    review_type: str,
+) -> ReviewFindingMerge:
+    """Validate one reviewer response and project it onto the complete ledger."""
+    authoritative_tuple = _canonical_findings(authoritative)
+    offered_tuple = _canonical_findings(offered)
+    returned_tuple = _canonical_findings(returned)
+    authoritative_by_id = {item.finding_id: item for item in authoritative_tuple}
+    offered_by_id = {item.finding_id: item for item in offered_tuple}
+    returned_by_id = {item.finding_id: item for item in returned_tuple}
+    if not set(offered_by_id).issubset(returned_by_id):
+        raise ValueError(f"native review result omits an offered {review_type} finding")
+    if any(
+        authoritative_by_id.get(finding_id) != finding
+        for finding_id, finding in offered_by_id.items()
+    ):
+        raise ValueError(
+            f"offered {review_type} finding subset differs from the complete ledger"
+        )
+    foreign_existing = (
+        set(returned_by_id) - set(offered_by_id)
+    ).intersection(authoritative_by_id)
+    collisions = {
+        finding_id
+        for finding_id in foreign_existing
+        if returned_by_id[finding_id].origin
+        != authoritative_by_id[finding_id].origin
+    }
+    if collisions:
+        raise ValueError(
+            f"native {review_type} result has a finding-number collision: "
+            + ", ".join(sorted(collisions))
+        )
+    foreign_mutations = foreign_existing - collisions
+    if foreign_mutations:
+        raise ValueError(
+            f"native review result mutates an unoffered {review_type} finding: "
+            + ", ".join(sorted(foreign_mutations))
+        )
+    merged = dict(authoritative_by_id)
+    merged.update(returned_by_id)
+    return ReviewFindingMerge(
+        request_bound=returned_tuple,
+        complete_ledger=tuple(merged[key] for key in sorted(merged)),
     )
 
 
@@ -680,9 +763,12 @@ def _reduce_events(
 
 def _reduce_lineages(
     events: Sequence[FindingTransitionProjection],
+    *,
+    diagnostics: list[FindingOpeningConflictDiagnostic] | None = None,
 ) -> tuple[FindingLineageProjection, ...]:
     findings: dict[tuple[str, str], FindingRecord] = {}
     active_keys: dict[str, tuple[str, str]] = {}
+    head_openings: dict[str, FindingTransitionProjection] = {}
     opening_records: dict[tuple[str, str], str] = {}
     transition_records: dict[tuple[str, str], list[str]] = {}
     opening_order: list[tuple[str, str]] = []
@@ -693,14 +779,6 @@ def _reduce_lineages(
             continue
         if payload.action == "opened":
             lineage_key = (payload.work_unit_id, payload.finding_id)
-            if lineage_key in findings:
-                _fail(
-                    ReplayDiagnosticCode.RECORD_DUPLICATE,
-                    "finding "
-                    f"{payload.finding_id!r} is opened more than once in "
-                    f"work unit {payload.work_unit_id!r}",
-                    record,
-                )
             if (
                 payload.summary is None
                 or payload.acceptance_test is None
@@ -714,7 +792,7 @@ def _reduce_lineages(
                     record,
                 )
             try:
-                findings[lineage_key] = FindingRecord(
+                opening = FindingRecord(
                     finding_id=payload.finding_id,
                     finding_class=FindingClass(payload.severity.value),
                     status=FindingStatus.OPEN,
@@ -726,16 +804,37 @@ def _reduce_lineages(
                         AgentRole(payload.reporter.value),
                     ),
                 )
-                active_keys[payload.finding_id] = lineage_key
-                opening_records[lineage_key] = event.source_record_id
-                transition_records[lineage_key] = [event.source_record_id]
-                opening_order.append(lineage_key)
             except ValueError as exc:
                 _fail(
                     ReplayDiagnosticCode.RECORD_TYPE_MISMATCH,
                     f"structured finding opening is invalid: {exc}",
                     record,
                 )
+            if lineage_key in findings or payload.finding_id in active_keys:
+                head = head_openings[payload.finding_id]
+                if diagnostics is not None:
+                    diagnostics.append(
+                        FindingOpeningConflictDiagnostic(
+                            finding_id=payload.finding_id,
+                            head_opening_record_id=head.source_record_id,
+                            head_opening_revision=(
+                                None if head.imported else head._record.revision
+                            ),
+                            head_work_unit_id=head.payload.work_unit_id,
+                            conflicting_opening_record_id=event.source_record_id,
+                            conflicting_opening_revision=(
+                                None if event.imported else event._record.revision
+                            ),
+                            conflicting_work_unit_id=payload.work_unit_id,
+                        )
+                    )
+                continue
+            findings[lineage_key] = opening
+            active_keys[payload.finding_id] = lineage_key
+            head_openings[payload.finding_id] = event
+            opening_records[lineage_key] = event.source_record_id
+            transition_records[lineage_key] = [event.source_record_id]
+            opening_order.append(lineage_key)
             continue
         scoped_key = (payload.work_unit_id, payload.finding_id)
         lineage_key = (
@@ -810,8 +909,10 @@ def _reduce_lineages(
 def _current_lineage_findings(
     lineages: Sequence[FindingLineageProjection],
 ) -> tuple[FindingRecord, ...]:
-    latest = {item.finding.finding_id: item.finding for item in lineages}
-    return tuple(latest[key] for key in sorted(latest))
+    heads: dict[str, FindingRecord] = {}
+    for item in lineages:
+        heads.setdefault(item.finding.finding_id, item.finding)
+    return tuple(heads[key] for key in sorted(heads))
 
 
 def _project_import_snapshot(

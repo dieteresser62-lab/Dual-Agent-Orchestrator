@@ -808,6 +808,7 @@ def render_replay_sections(replay: ArtifactReplayResult) -> Mapping[str, str]:
 
 
 _FULL_HEX_PATTERN = re.compile(r"(?<![0-9A-Fa-f])([0-9a-f]{64}|[0-9a-f]{40})(?![0-9A-Fa-f])")
+_SHORT_HEX_PATTERN = re.compile(r"(?<![0-9A-Fa-f])([0-9a-f]{12})(?![0-9A-Fa-f])")
 _EVIDENCE_HEADING = "### Nachweis vollst\u00e4ndiger Bindungswerte"
 _EVIDENCE_PATTERN = re.compile(
     rf"(?:\r?\n){{2}}{re.escape(_EVIDENCE_HEADING)}\r?\n\r?\n"
@@ -881,6 +882,14 @@ def _shorten_bindings(text: str, registry: _BindingRegistry) -> str:
     )
 
 
+def _rehydrate_bindings(text: str, registry: _BindingRegistry) -> str:
+    """Restore registered short references with one document-wide scan."""
+    return _SHORT_HEX_PATTERN.sub(
+        lambda match: registry.short_to_full.get(match.group(1), match.group(1)),
+        text,
+    )
+
+
 def _binding_evidence(registry: _BindingRegistry) -> str:
     rows = [
         _EVIDENCE_HEADING,
@@ -939,13 +948,7 @@ def finalize_projection_document(markdown: str) -> str:
     # Record sections arrive already shortened. Rehydrate their exact technical
     # values so the combined State-v3/record document can establish one true
     # first-occurrence order before shortening the whole view again.
-    for value in prior.values:
-        short = value[:12]
-        cleaned = re.sub(
-            rf"(?<![0-9A-Fa-f]){re.escape(short)}(?![0-9A-Fa-f])",
-            value,
-            cleaned,
-        )
+    cleaned = _rehydrate_bindings(cleaned, prior)
     registry = _BindingRegistry()
     rendered = _shorten_bindings(cleaned, registry)
     for value, types in prior.values.items():

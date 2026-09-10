@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+import re
 
 import pytest
+
+import artifact_projection
 
 from audit_trail import (
     REQUIRED_SLICE_HEADINGS,
@@ -730,6 +733,43 @@ def test_structured_record_blocks_are_idempotent_and_cosmetic_for_fingerprint() 
     assert repeated == rendered
     assert semantic_audit_fingerprint(rendered) == before
     assert rendered.count("<!-- artifact-records:findings:begin -->") == 1
+
+
+def test_binding_rehydration_is_byte_identical_and_uses_one_document_scan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    full_values = tuple(
+        f"{index:012x}" + f"{index:052x}" for index in range(1, 257)
+    )
+    registry = artifact_projection._BindingRegistry()
+    for value in full_values:
+        registry.add(value, "Digest")
+    markdown = "\n".join(
+        f"record `{value[:12]}` and unchanged `not-a-digest-{index}`"
+        for index, value in enumerate(full_values)
+    )
+    legacy = markdown
+    for value in registry.values:
+        short = value[:12]
+        legacy = re.sub(
+            rf"(?<![0-9A-Fa-f]){re.escape(short)}(?![0-9A-Fa-f])",
+            value,
+            legacy,
+        )
+
+    original = artifact_projection._SHORT_HEX_PATTERN
+    calls = 0
+
+    class CountingPattern:
+        def sub(self, replacement: object, text: str) -> str:
+            nonlocal calls
+            calls += 1
+            return original.sub(replacement, text)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(artifact_projection, "_SHORT_HEX_PATTERN", CountingPattern())
+
+    assert artifact_projection._rehydrate_bindings(markdown, registry) == legacy
+    assert calls == 1
 
 
 def test_structured_record_blocks_diagnose_partial_manual_marker_edit() -> None:

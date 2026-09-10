@@ -104,15 +104,15 @@
     },
     {
       "commit": "ade231f",
-      "trigger": "scope finding authority to work unit",
-      "transition": "same canonical ID keeps distinct work-unit lineages and scoped requests",
+      "trigger": "diagnose a reused historical finding identifier",
+      "transition": "the first opening remains canonical and the conflicting opening stays visible",
       "events": [
         {"op": "open", "finding_id": "C-01", "work_unit": "2", "summary": "Historical lineage"},
         {"op": "open", "finding_id": "C-01", "work_unit": "3", "summary": "Active lineage"},
         {"op": "close", "finding_id": "C-01", "work_unit": "2"}
       ],
       "request": {"work_unit": "3"},
-      "expected": {"ledger": ["C-01:OPEN"], "lineages": ["2:C-01:CLOSED", "3:C-01:OPEN"], "open": ["C-01"], "correction": {}, "import_open": [], "request": ["C-01"], "request_by_work_unit": {"2": ["C-01:CLOSED"], "3": ["C-01:OPEN"]}, "status_actions": ["C-01:opened", "C-01:opened", "C-01:status_changed"]}
+      "expected": {"ledger": ["C-01:CLOSED"], "lineages": ["2:C-01:CLOSED"], "open": [], "correction": {}, "import_open": [], "request": [], "request_by_work_unit": {"2": ["C-01:CLOSED"], "3": []}, "status_actions": ["C-01:opened", "C-01:opened", "C-01:status_changed"], "diagnostics": ["C-01"]}
     },
     {
       "commit": "286f5b2",

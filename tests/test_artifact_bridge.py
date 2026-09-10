@@ -11,7 +11,8 @@ import artifact_store as artifact_store_module
 
 from artifact_bridge import (
     ArtifactBridge, ArtifactBridgeError, attestation_payload, command_payload,
-    finding_payload, review_payload, review_payload_matches_result,
+    finding_payload, review_payload, review_payload_matches_complete_result,
+    review_payload_matches_result,
     validation_request_payload,
     finding_handoff_export_payload, finding_handoff_import_payload,
 )
@@ -493,6 +494,61 @@ def test_legacy_review_comparison_keeps_ambiguous_evidence_opaque() -> None:
                 "changed",
             ),
         ),
+    )
+
+
+def test_request_bound_review_payload_matches_only_its_complete_ledger_projection() -> None:
+    carried = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.OBSERVATION,
+        status=FindingStatus.CLOSED,
+        summary="A prior finding remains in the complete ledger.",
+        acceptance_test="The compact review need not receive it again.",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+        status_rationale="Closed before this review.",
+    )
+    reviewed = FindingRecord(
+        finding_id="C-79",
+        finding_class=FindingClass.OBSERVATION,
+        status=FindingStatus.OPEN,
+        summary="The compact request includes this finding.",
+        acceptance_test="The request-bound payload names C-79.",
+        origin=FindingOrigin("35", 1, AgentRole.CLAUDE),
+    )
+    request_result = ContractResult(
+        reviewer=AgentRole.CLAUDE,
+        approval=True,
+        stopped=False,
+        stop_request=None,
+        validation=None,
+        test_files=(),
+        pre_mortem="A complete-ledger comparison could mistake carried findings for drift.",
+        evidence=ReviewEvidence(
+            "request-bound review and complete-ledger projection",
+            "a carried finding is compared as reviewer output",
+            "the commit rejects an otherwise bound compact review",
+        ),
+        findings=(reviewed,),
+        anchors=(),
+    )
+    payload = review_payload(
+        request_result,
+        work_unit_id=36,
+        transport_schema="native-claude-review-v2",
+        request_id=f"native-review-request-{'b' * 64}",
+        response_sha256="c" * 64,
+    )
+    complete_result = replace(request_result, findings=(carried, reviewed))
+
+    assert not review_payload_matches_result(payload, complete_result)
+    assert review_payload_matches_complete_result(payload, complete_result)
+    assert not review_payload_matches_complete_result(
+        payload,
+        replace(complete_result, findings=(carried,)),
+    )
+    assert not review_payload_matches_complete_result(
+        payload,
+        replace(complete_result, approval=False),
     )
 
 
