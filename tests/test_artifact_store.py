@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import replace
 import hashlib
 import json
@@ -18,6 +19,7 @@ from artifact_models import (
 from artifact_store import (
     ArtifactConflictError, ArtifactCorruptionError, ArtifactStore, ArtifactStoreError,
 )
+from conftest import requires_symlink
 
 
 DIGEST = "a" * 64
@@ -556,3 +558,77 @@ def test_scan_rejects_persisted_non_success_completion_with_binding(
 def test_store_rejects_run_id_path_escape(tmp_path: Path, run_id: str) -> None:
     with pytest.raises(ArtifactStoreError, match="safe artifact path"):
         ArtifactStore(tmp_path, run_id)
+
+
+def test_full_chain_load_uses_at_most_four_filesystem_operations_per_record(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    record_count = 64
+    writer = ArtifactStore(tmp_path, "operation-count")
+    predecessors: tuple[str, ...] = ()
+    for ordinal in range(record_count):
+        record = make_record(
+            f"record-{ordinal}",
+            run_id=writer.run_id,
+            predecessors=predecessors,
+        )
+        write_envelope(writer.records_dir / f"{record.record_id}.json", record)
+        predecessors = (record.record_id,)
+    assert len(writer.load_chain()) == record_count
+
+    reader = ArtifactStore(tmp_path, writer.run_id)
+    counts: Counter[str] = Counter()
+    path_methods = ("stat", "resolve", "lstat", "open", "is_file", "read_text")
+    for method_name in path_methods:
+        original = getattr(Path, method_name)
+
+        def counted_path_call(  # type: ignore[no-untyped-def]
+            path: Path,
+            *args,
+            _name: str = method_name,
+            _original=original,
+            **kwargs,
+        ):
+            counts[_name] += 1
+            return _original(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, method_name, counted_path_call)
+
+    assert len(reader.load_chain()) == record_count
+    operations = sum(counts.values())
+    operations_per_record = operations / record_count
+    assert counts["resolve"] == 0
+    assert operations_per_record <= 4, (
+        f"load_chain used {operations_per_record:.6f} filesystem operations per "
+        f"record ({operations} total for {record_count} records; {dict(counts)})"
+    )
+
+
+@requires_symlink
+@pytest.mark.parametrize("target_location", ("inside", "outside"))
+def test_scan_rejects_record_symlinks_without_following_target(
+    tmp_path: Path, target_location: str
+) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    store = ArtifactStore(repository, "linked-record")
+    record = make_record("linked", run_id=store.run_id)
+    target_parent = repository if target_location == "inside" else tmp_path
+    target = target_parent / f"{target_location}-record.json"
+    write_envelope(target, record)
+    store.records_dir.mkdir(parents=True)
+    link = store.records_dir / f"{record.record_id}.json"
+    link.symlink_to(target)
+
+    with pytest.raises(ArtifactCorruptionError):
+        store.load_chain()
+
+
+@pytest.mark.parametrize("record_id", ("../escape", "nested/record", ".."))
+def test_record_path_rejects_untrusted_path_components(
+    tmp_path: Path, record_id: str
+) -> None:
+    store = ArtifactStore(tmp_path, "unsafe-record-name")
+
+    with pytest.raises(ArtifactStoreError, match="safe artifact filename"):
+        store._record_path(record_id)

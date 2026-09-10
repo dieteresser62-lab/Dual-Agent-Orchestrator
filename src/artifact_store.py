@@ -28,7 +28,6 @@ from artifact_models import (
     WorkflowCompletionPayload,
     canonical_json,
 )
-from path_policy import PathPolicyError, resolve_path_within_roots
 from content_authority import ValidationCapture, validation_output_digest
 
 
@@ -301,7 +300,7 @@ class ArtifactStore:
         try:
             _atomic_write(target, envelope)
             published_before = self._artifact_file_stamp(target)
-            published = _read_record(target)
+            published, _ = _read_record(target)
             published_stamp = self._artifact_file_stamp(target)
             if published_before != published_stamp:
                 raise ArtifactCorruptionError(
@@ -383,7 +382,6 @@ class ArtifactStore:
                 self.run_id, (), self._records_directory_stamp()
             )
             return ()
-        self._confined(self.records_dir)
         initial_directory_stamp = self._records_directory_stamp()
         records: dict[str, ArtifactRecord] = {}
         record_file_stamps: dict[str, _ArtifactFileStamp] = {}
@@ -393,19 +391,12 @@ class ArtifactStore:
             if path.name.startswith(".") and path.name.endswith(".tmp"):
                 continue
             match = _RECORD_NAME_RE.fullmatch(path.name)
-            if match is None or not path.is_file() or path.is_symlink():
+            if match is None:
                 raise ArtifactCorruptionError(
                     f"unexpected entry in artifact records directory: {path.name!r}"
                 )
-            confined = self._confined(path)
-            before = self._artifact_file_stamp(confined)
-            record = _read_record(confined)
-            after = self._artifact_file_stamp(confined)
-            if before != after:
-                raise ArtifactCorruptionError(
-                    f"record changed during validation: {path.name!r}"
-                )
-            record_file_stamps[path.name] = after
+            record, opened_stamp = _read_record(path)
+            record_file_stamps[path.name] = opened_stamp
             if record.record_id != match.group(1):
                 raise ArtifactCorruptionError(
                     f"record filename does not match record_id: {path.name!r}"
@@ -514,35 +505,28 @@ class ArtifactStore:
             return False
 
     def _artifact_file_stamp(self, path: Path) -> _ArtifactFileStamp:
-        if path.is_symlink():
+        metadata = path.lstat()
+        if not stat.S_ISREG(metadata.st_mode):
             raise ArtifactStoreError(
                 f"artifact path is not a regular file: {path.name!r}"
             )
-        confined = self._confined(path)
-        metadata = confined.lstat()
-        if not stat.S_ISREG(metadata.st_mode):
-            raise ArtifactStoreError(
-                f"artifact path is not a regular file: {confined.name!r}"
-            )
-        return _ArtifactFileStamp(
-            metadata.st_dev,
-            metadata.st_ino,
-            metadata.st_mode,
-            metadata.st_size,
-            metadata.st_mtime_ns,
-            metadata.st_ctime_ns,
-        )
+        return _artifact_file_stamp_from_stat(metadata)
 
     def _records_directory_stamp(self) -> _RecordsDirectoryStamp:
         try:
-            stat = self._confined(self.records_dir).stat()
+            stat = self.records_dir.stat()
         except FileNotFoundError:
             return _RecordsDirectoryStamp(False, None, None)
         return _RecordsDirectoryStamp(True, stat.st_mtime_ns, stat.st_ctime_ns)
 
     def _read_head_cache(self) -> object:
         try:
-            return json.loads(self._confined(self.head_path).read_text(encoding="utf-8"))
+            metadata = self.head_path.lstat()
+            if not stat.S_ISREG(metadata.st_mode):
+                raise ArtifactStoreError(
+                    f"artifact path is not a regular file: {self.head_path.name!r}"
+                )
+            return json.loads(self.head_path.read_text(encoding="utf-8"))
         except FileNotFoundError:
             return None
         except (OSError, UnicodeError, json.JSONDecodeError):
@@ -608,12 +592,12 @@ class ArtifactStore:
     def _record_path(self, record_id: str) -> Path:
         if _RECORD_NAME_RE.fullmatch(f"{record_id}.json") is None:
             raise ArtifactStoreError("record_id is not a safe artifact filename")
-        return self._confined(self.records_dir / f"{record_id}.json")
+        return self.records_dir / f"{record_id}.json"
 
     def _blob_path(self, sha256: str) -> Path:
         if _BLOB_NAME_RE.fullmatch(f"{sha256}.blob") is None:
             raise ArtifactStoreError("blob digest is not a safe artifact filename")
-        return self._confined(self.blobs_dir / f"{sha256}.blob")
+        return self.blobs_dir / f"{sha256}.blob"
 
     def _validate_record_blobs(
         self, chain: tuple[ArtifactRecord, ...]
@@ -693,9 +677,14 @@ class ArtifactStore:
 
     def _confined(self, path: Path) -> Path:
         try:
-            return resolve_path_within_roots(path, (self.repository_root,))
-        except PathPolicyError as exc:
-            raise ArtifactStoreError(f"artifact path escapes repository root: {path}") from exc
+            resolved = Path(path).resolve()
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise ArtifactStoreError(
+                f"artifact path could not be resolved safely: {path}"
+            ) from exc
+        if not resolved.is_relative_to(self.repository_root):
+            raise ArtifactStoreError(f"artifact path escapes repository root: {path}")
+        return resolved
 
     def _refresh_cache_with_context(
         self,
@@ -713,7 +702,7 @@ class ArtifactStore:
         *,
         expected_cache_chain: tuple[ArtifactRecord, ...] | None = None,
     ) -> None:
-        head_path = self._confined(self.head_path)
+        head_path = self.head_path
         expected = _head_cache_document(chain)
         current = self._read_head_cache()
         if not chain and current is None:
@@ -792,10 +781,44 @@ def _build_append_index(
     )
 
 
-def _read_record(path: Path) -> ArtifactRecord:
+def _artifact_file_stamp_from_stat(metadata: os.stat_result) -> _ArtifactFileStamp:
+    return _ArtifactFileStamp(
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+def _read_regular_file_without_following_symlinks(
+    path: Path,
+) -> tuple[bytes, _ArtifactFileStamp]:
+    flags = os.O_RDONLY
+    flags |= getattr(os, "O_BINARY", 0)
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_NONBLOCK", 0)
+    descriptor = os.open(path, flags)
     try:
-        envelope = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise ArtifactStoreError(
+                f"artifact path is not a regular file: {path.name!r}"
+            )
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            content = stream.read()
+        return content, _artifact_file_stamp_from_stat(before)
+    finally:
+        os.close(descriptor)
+
+
+def _read_record(path: Path) -> tuple[ArtifactRecord, _ArtifactFileStamp]:
+    try:
+        content, opened_stamp = _read_regular_file_without_following_symlinks(path)
+        envelope = json.loads(content.decode("utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError, ArtifactStoreError) as exc:
         raise ArtifactCorruptionError(f"could not parse record {path.name!r}: {exc}") from exc
     if not isinstance(envelope, dict) or set(envelope) != {"content_sha256", "record"}:
         raise ArtifactCorruptionError(f"record envelope is invalid: {path.name!r}")
@@ -812,9 +835,10 @@ def _read_record(path: Path) -> ArtifactRecord:
     if not isinstance(document, dict):
         raise ArtifactCorruptionError(f"record payload is not an object: {path.name!r}")
     try:
-        return ArtifactRecord.from_dict(document)
+        record = ArtifactRecord.from_dict(document)
     except (ArtifactValidationError, KeyError, TypeError, ValueError) as exc:
         raise ArtifactCorruptionError(f"record validation failed for {path.name!r}: {exc}") from exc
+    return record, opened_stamp
 
 
 def _order_chain(records: dict[str, ArtifactRecord]) -> tuple[ArtifactRecord, ...]:
