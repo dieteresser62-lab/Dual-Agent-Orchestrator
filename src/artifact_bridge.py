@@ -9,7 +9,7 @@ non-canonical resume histories remain fail-closed.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import hashlib
 import logging
@@ -288,6 +288,21 @@ def review_payload_matches_result(
             )
         )
     )
+
+
+def review_payload_matches_complete_result(
+    payload: ReviewPayload,
+    result: ContractResult,
+) -> bool:
+    """Compare a request-bound ReviewPayload with a complete-ledger result."""
+    result_by_id = {item.finding_id: item for item in result.findings}
+    if any(finding_id not in result_by_id for finding_id in payload.finding_ids):
+        return False
+    request_bound = replace(
+        result,
+        findings=tuple(result_by_id[finding_id] for finding_id in payload.finding_ids),
+    )
+    return review_payload_matches_result(payload, request_bound)
 
 
 def finding_payload(
@@ -980,7 +995,8 @@ __all__ = [
     "ArtifactBridge", "ArtifactBridgeError", "agent_result_payload",
     "attestation_payload", "command_payload", "finding_payload",
     "finding_handoff_export_payload", "finding_handoff_import_payload", "plan_payload",
-    "review_payload", "review_payload_matches_result", "task_payload", "validation_request_payload",
+    "review_payload", "review_payload_matches_complete_result",
+    "review_payload_matches_result", "task_payload", "validation_request_payload",
     "provider_input_measurement_payload",
     "logical_provider_operation_id",
     "BindingPayload", "GatePayload", "ProviderUsagePayload",

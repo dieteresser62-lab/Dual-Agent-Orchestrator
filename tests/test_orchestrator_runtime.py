@@ -3743,6 +3743,49 @@ def _finding_review(finding: FindingRecord) -> ContractResult:
     )
 
 
+def test_invalid_review_subset_publishes_no_review_or_finding_fact(
+    tmp_path: Path,
+) -> None:
+    driver, _state, existing = _finding_transition_driver(
+        tmp_path, "invalid-review-subset"
+    )
+    driver._persist_review_finding_transitions(
+        _finding_review(existing),
+        fingerprint="d" * 64,
+        round_number=1,
+        previous_findings=(),
+        structured=True,
+    )
+    colliding = replace(
+        existing,
+        summary="A later review silently reused the assigned identifier.",
+        origin=FindingOrigin("33", 1, AgentRole.CLAUDE),
+    )
+    output = NativeAgentReviewOutput(
+        result=_finding_review(colliding),
+        canonical_json="{}",
+        request_id=f"native-review-request-{'a' * 64}",
+    )
+    bridge = driver._artifact_bridge
+    assert bridge is not None
+    before = bridge.store.load_chain()
+
+    with pytest.raises(WorkflowExecutionError, match=r"before publication.*C-01"):
+        driver.persist_native_review_contract(
+            output,
+            "d" * 64,
+            1,
+            (),
+        )
+
+    after = bridge.store.load_chain()
+    assert after == before
+    assert not any(isinstance(record.payload, ReviewPayload) for record in after)
+    assert sum(
+        isinstance(record.payload, FindingTransitionPayload) for record in after
+    ) == 1
+
+
 @pytest.mark.parametrize(
     ("transition_identity", "action"),
     (
@@ -3808,7 +3851,7 @@ def test_structured_finding_transition_reuses_semantically_identical_old_key(
     assert records == (old_record,)
 
 
-def test_structured_finding_transition_old_key_from_other_work_unit_is_not_reused(
+def test_structured_finding_transition_old_key_from_other_work_unit_is_rejected(
     tmp_path: Path,
 ) -> None:
     driver, state, finding = _finding_transition_driver(tmp_path, "old-key-other-unit")
@@ -3826,25 +3869,20 @@ def test_structured_finding_transition_old_key_from_other_work_unit_is_not_reuse
         fingerprint_sha256="d" * 64,
     )
 
-    driver._persist_review_finding_transitions(
-        _finding_review(finding),
-        fingerprint="d" * 64,
-        round_number=1,
-        previous_findings=(),
-        structured=True,
-    )
+    with pytest.raises(WorkflowExecutionError, match=r"already assigned.*C-01"):
+        driver._persist_review_finding_transitions(
+            _finding_review(finding),
+            fingerprint="d" * 64,
+            round_number=1,
+            previous_findings=(),
+            structured=True,
+        )
     records = tuple(
         item
         for item in bridge.store.load_chain()
         if isinstance(item.payload, FindingTransitionPayload)
     )
-    assert tuple(item.payload.work_unit_id for item in records) == (
-        "999",
-        str(state.current_work_unit_id),
-    )
-    assert records[1].idempotency_key == (
-        f"finding:C-01:opened:work_unit:{state.current_work_unit_id}:1:claude"
-    )
+    assert tuple(item.payload.work_unit_id for item in records) == ("999",)
 
 
 def test_structured_finding_transition_old_key_conflict_in_same_work_unit_fails_closed(
@@ -3864,7 +3902,7 @@ def test_structured_finding_transition_old_key_conflict_in_same_work_unit_fails_
         fingerprint_sha256="d" * 64,
     )
 
-    with pytest.raises(ArtifactBridgeError, match="differs semantically"):
+    with pytest.raises(WorkflowExecutionError, match=r"already assigned.*C-01"):
         driver._persist_review_finding_transitions(
             _finding_review(finding),
             fingerprint="d" * 64,
@@ -3941,18 +3979,11 @@ def test_unstructured_finding_transition_key_is_unchanged(tmp_path: Path) -> Non
     assert records[0].payload.work_unit_id is None
 
 
-def test_structured_finding_transition_keys_separate_work_units(
+def test_structured_finding_transition_rejects_reused_id_in_later_work_unit(
     tmp_path: Path,
 ) -> None:
     driver, state, finding = _finding_transition_driver(tmp_path, "separate-units")
     review = _finding_review(finding)
-    driver._persist_review_finding_transitions(
-        review,
-        fingerprint="d" * 64,
-        round_number=1,
-        previous_findings=(),
-        structured=True,
-    )
     driver._persist_review_finding_transitions(
         review,
         fingerprint="d" * 64,
@@ -3970,13 +4001,14 @@ def test_structured_finding_transition_keys_separate_work_units(
         start_fingerprint="c" * 64,
     )
     driver.bind_work_unit(next_state)
-    driver._persist_review_finding_transitions(
-        review,
-        fingerprint="d" * 64,
-        round_number=1,
-        previous_findings=(),
-        structured=True,
-    )
+    with pytest.raises(WorkflowExecutionError, match=r"already assigned.*C-01"):
+        driver._persist_review_finding_transitions(
+            review,
+            fingerprint="d" * 64,
+            round_number=1,
+            previous_findings=(),
+            structured=True,
+        )
 
     bridge = driver._artifact_bridge
     assert bridge is not None
@@ -3988,11 +4020,10 @@ def test_structured_finding_transition_keys_separate_work_units(
     )
     assert tuple(item.payload.work_unit_id for item in records) == (
         str(state.current_work_unit_id),
-        str(next_state.current_work_unit_id),
     )
-    assert len({item.idempotency_key for item in records}) == 2
+    assert len({item.idempotency_key for item in records}) == 1
     assert replay_findings(replay, state.current_work_unit_id) == (finding,)
-    assert replay_findings(replay, next_state.current_work_unit_id) == (finding,)
+    assert replay_findings(replay, next_state.current_work_unit_id) == ()
 
 
 def test_structured_reclassification_and_status_change_have_distinct_keys(

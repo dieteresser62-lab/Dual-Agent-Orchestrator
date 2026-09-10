@@ -25,6 +25,7 @@ from artifact_models import (
 )
 from artifact_replay import (
     ArtifactReplayError,
+    ReplayDiagnostic,
     ReplayDiagnosticCode,
     project_latest_review,
     project_review_contracts,
@@ -177,6 +178,65 @@ def test_review_contract_projects_every_r7_fact_without_state_or_aggregate(
     assert project_latest_review(replay, bridge.store.read_blob, "7") == contract.result
     assert project_latest_review(replay, bridge.store.read_blob, "8") is None
     assert all(record.record_type.value != "latest_claude_review" for record in chain)
+
+
+def test_review_contract_preserves_specific_finding_reducer_diagnostic(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    bridge = _bridge(tmp_path, "review-reducer-diagnostic")
+    bridge.append(
+        WorkUnitPayload("7", 1, ("src/review.py",)),
+        logical_id="work-unit-7",
+        idempotency_key="work-unit-7-round-1",
+        fingerprint_sha256=FINGERPRINT,
+    )
+    _attestation(bridge, "diagnostic")
+    append_provider_decision_authority(
+        bridge,
+        ReviewPayload(
+            reviewer=Role.CLAUDE,
+            work_unit_id="7",
+            verdict="approved",
+            finding_ids=(),
+            evidence=None,
+            transport_schema="native-claude-review-v2",
+            request_id="native-review-request-" + "f" * 64,
+            response_sha256="a" * 64,
+            review_evidence=ReviewEvidencePayload(
+                "finding transition semantics",
+                "a malformed transition could be reported as absent",
+                "the replay diagnostic loses its specific cause",
+            ),
+            pre_mortem="A broad ValueError catch could erase the reducer diagnosis.",
+        ),
+        logical_id="review-claude-7-1",
+        idempotency_key="review-claude-7-1",
+        fingerprint_sha256=FINGERPRINT,
+        operation="claude_slice_review",
+    )
+    chain = bridge.store.load_chain()
+    replay = replay_artifacts(chain, bridge.store.run_id)
+    specific = ArtifactReplayError(
+        ReplayDiagnostic(
+            ReplayDiagnosticCode.RECORD_TYPE_MISMATCH,
+            "structured finding transition is invalid: cannot respond to a closed finding",
+            chain[-4].record_id,
+        )
+    )
+
+    def reject_finding_reduction(_replay):  # type: ignore[no-untyped-def]
+        raise specific
+
+    monkeypatch.setattr(
+        "finding_reducer.reduce_findings", reject_finding_reduction
+    )
+    with pytest.raises(ArtifactReplayError) as raised:
+        project_review_contracts(replay, bridge.store.read_blob)
+
+    assert raised.value is specific
+    assert raised.value.code is ReplayDiagnosticCode.RECORD_TYPE_MISMATCH
+    assert "review finding transition set is incomplete" not in str(raised.value)
 
 
 def test_review_contract_stop_request_and_missing_component_are_fail_closed(

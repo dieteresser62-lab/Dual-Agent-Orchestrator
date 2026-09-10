@@ -1319,6 +1319,8 @@ def project_review_contracts(
             findings = reduce_findings(prefix_replay).request_subset(
                 finding_ids=payload.finding_ids
             ).findings
+        except ArtifactReplayError:
+            raise
         except ValueError:
             _fail(
                 ReplayDiagnosticCode.RECORD_MISSING,
@@ -1398,7 +1400,6 @@ def project_review_contracts(
         )
     return tuple(projected)
 
-
 def project_validation_attestations(
     replay: ArtifactReplayResult,
     read_blob: Callable[[BlobReference], bytes],
@@ -1412,7 +1413,6 @@ def project_validation_attestations(
         for record in replay.records
         if isinstance(record.payload, ValidationAttestationPayload)
     )
-
 
 def _review_prefix_end(
     chain: tuple[ArtifactRecord, ...],
@@ -1445,7 +1445,6 @@ def _review_prefix_end(
         break
     return prefix_end
 
-
 def _review_prefix_finding_ids(
     chain: tuple[ArtifactRecord, ...],
     positions: dict[str, int],
@@ -1465,10 +1464,11 @@ def _review_prefix_finding_ids(
                 reference_records=chain,
             )
         ).request_subset(finding_ids=payload.finding_ids).findings
+    except ArtifactReplayError:
+        raise
     except ValueError:
         return None
     return tuple(item.finding_id for item in findings)
-
 
 def project_latest_review(
     replay: ArtifactReplayResult,

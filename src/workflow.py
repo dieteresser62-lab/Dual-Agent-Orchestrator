@@ -31,6 +31,7 @@ from artifact_models import (
     InvocationFailurePayload,
 )
 from finding_reducer import (
+    merge_review_request_result,
     merge_request_result,
     project_open_set,
 )
@@ -2740,43 +2741,15 @@ class WorkflowEngine:
     ) -> tuple[FindingRecord, ...]:
         """Merge one subset-bound reviewer result into the complete ledger."""
 
-        authoritative_by_id = {item.finding_id: item for item in authoritative}
-        offered_by_id = {item.finding_id: item for item in offered}
-        returned_by_id = {item.finding_id: item for item in returned}
-        if not set(offered_by_id).issubset(returned_by_id):
-            raise WorkflowExecutionError(
-                f"native review result omits an offered {review_type} finding"
-            )
-        if any(
-            authoritative_by_id.get(finding_id) != finding
-            for finding_id, finding in offered_by_id.items()
-        ):
-            raise WorkflowExecutionError(
-                f"offered {review_type} finding subset differs from the complete ledger"
-            )
-        foreign_existing = (
-            set(returned_by_id) - set(offered_by_id)
-        ).intersection(authoritative_by_id)
-        collisions = {
-            finding_id
-            for finding_id in foreign_existing
-            if returned_by_id[finding_id].origin
-            != authoritative_by_id[finding_id].origin
-        }
-        if collisions:
-            raise WorkflowExecutionError(
-                f"native {review_type} result has a finding-number collision: "
-                + ", ".join(sorted(collisions))
-            )
-        foreign_mutations = foreign_existing - collisions
-        if foreign_mutations:
-            raise WorkflowExecutionError(
-                f"native review result mutates an unoffered {review_type} finding: "
-                + ", ".join(sorted(foreign_mutations))
-            )
-        merged = dict(authoritative_by_id)
-        merged.update(returned_by_id)
-        return tuple(merged[key] for key in sorted(merged))
+        try:
+            return merge_review_request_result(
+                authoritative,
+                offered,
+                returned,
+                review_type=review_type,
+            ).complete_ledger
+        except ValueError as exc:
+            raise WorkflowExecutionError(str(exc)) from exc
 
     @staticmethod
     def _halt_exhausted_final_review_rounds(

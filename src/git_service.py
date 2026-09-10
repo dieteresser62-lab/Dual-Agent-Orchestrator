@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Literal, Sequence
 
-from artifact_bridge import review_payload_matches_result
+from artifact_bridge import review_payload_matches_complete_result
 from artifact_models import ArtifactRecord, ReviewPayload
 from contracts import (
     AgentRole,
@@ -885,7 +885,7 @@ def _validate_authorization(
             or authorization.review_work_unit_id is None
             or review_record.payload.work_unit_id
             != authorization.review_work_unit_id
-            or not review_payload_matches_result(
+            or not review_payload_matches_complete_result(
                 review_record.payload,
                 review_result,
             )

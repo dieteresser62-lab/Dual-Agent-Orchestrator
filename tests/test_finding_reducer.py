@@ -334,6 +334,9 @@ def test_historical_finding_regression_corpus(case: dict[str, Any]) -> None:
         f"{item.payload.finding_id}:{item.payload.action}"
         for item in reduction.status_transitions.transitions
     ] == expected["status_actions"]
+    assert [item.finding_id for item in reduction.diagnostics] == expected.get(
+        "diagnostics", []
+    )
 
 
 def test_six_named_projections_are_independent_and_immutable() -> None:
@@ -474,30 +477,45 @@ def test_combined_multi_slice_correction_sequence_resumes_at_every_prefix() -> N
     ).finding_ids == ("C-01", "C-02", "C-03")
 
 
-def test_reopening_same_finding_id_preserves_both_scoped_lineages() -> None:
+def test_reopening_same_finding_id_replays_with_first_opening_and_diagnostic() -> None:
     records = _build_case(
         {
             "events": [
-                {"op": "open", "finding_id": "C-01", "work_unit": "2"},
-                {"op": "open", "finding_id": "C-01", "work_unit": "3"},
+                {
+                    "op": "open", "finding_id": "C-01", "work_unit": "2",
+                    "summary": "Original logical identity",
+                },
+                {
+                    "op": "open", "finding_id": "C-01", "work_unit": "3",
+                    "summary": "Conflicting later identity",
+                },
                 {"op": "close", "finding_id": "C-01", "work_unit": "2"},
             ]
         }
     )
     reduction = reduce_findings(replay_artifacts(records, RUN_ID))
-    assert [
-        f"{item.work_unit_id}:{item.finding.status.value}"
-        for item in reduction.ledger.lineages
-    ] == ["2:CLOSED", "3:OPEN"]
-    assert _finding_states(
-        reduction.request_subset(work_unit_id="2").findings
-    ) == ["C-01:CLOSED"]
-    assert _finding_states(
-        reduction.request_subset(work_unit_id="3").findings
-    ) == ["C-01:OPEN"]
+
+    assert len(reduction.ledger.lineages) == 1
+    assert reduction.ledger.findings[0].summary == "Original logical identity"
+    assert reduction.ledger.findings[0].status.value == "CLOSED"
+    assert len(reduction.diagnostics) == 1
+    diagnostic = reduction.diagnostics[0]
+    assert diagnostic.code == "DUPLICATE-FINDING-OPENING"
+    assert diagnostic.finding_id == "C-01"
+    assert diagnostic.head_opening_record_id == records[2].record_id
+    assert diagnostic.head_opening_revision == 1
+    assert diagnostic.head_work_unit_id == "2"
+    assert diagnostic.conflicting_opening_record_id == records[3].record_id
+    assert diagnostic.conflicting_opening_revision == 2
+    assert diagnostic.conflicting_work_unit_id == "3"
+    assert reduction.request_subset(work_unit_id="3").finding_ids == ()
+    assert (
+        reduce_findings(replay_artifacts(records, RUN_ID)).diagnostics
+        == reduction.diagnostics
+    )
 
 
-def test_reopening_same_finding_id_within_one_work_unit_fails_closed() -> None:
+def test_reopening_same_finding_id_within_one_work_unit_is_diagnosed() -> None:
     records = _build_case(
         {
             "events": [
@@ -506,8 +524,13 @@ def test_reopening_same_finding_id_within_one_work_unit_fails_closed() -> None:
             ]
         }
     )
-    with pytest.raises(ArtifactReplayError, match="RECORD-DUPLICATE"):
-        reduce_findings(replay_artifacts(records, RUN_ID))
+    reduction = reduce_findings(replay_artifacts(records, RUN_ID))
+
+    assert len(reduction.ledger.lineages) == 1
+    assert tuple(item.finding_id for item in reduction.ledger.findings) == ("C-01",)
+    assert len(reduction.diagnostics) == 1
+    assert reduction.diagnostics[0].head_opening_revision == 1
+    assert reduction.diagnostics[0].conflicting_opening_revision == 2
 
 
 def _call_names(tree: ast.AST) -> set[str]:

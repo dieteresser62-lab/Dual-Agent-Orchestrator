@@ -25,8 +25,8 @@ from content_authority_support import (
     append_validation_authority,
 )
 from contracts import (
-    AgentRole,
-    ContractResult,
+    AgentRole, ContractResult, FindingClass, FindingOrigin, FindingRecord,
+    FindingStatus,
     ReviewEvidence,
     ValidationAttestation,
     ValidationRecord,
@@ -402,7 +402,7 @@ def test_git_commit_intent_result_bracket_and_open_intent_reconciliation(
         records=(ValidationRecord(ValidationStatus.PASS, "pytest", 0, "pass:0"),),
         output_digest=stored_attestation.payload.output_digest,
     )
-    review = ContractResult(
+    request_bound_review = ContractResult(
         reviewer=AgentRole.CLAUDE,
         approval=True,
         stopped=False,
@@ -421,7 +421,7 @@ def test_git_commit_intent_result_bracket_and_open_intent_reconciliation(
     append_provider_decision_authority(
         bridge,
         review_payload(
-            review,
+            request_bound_review,
             work_unit_id=state.current_work_unit_id,
             transport_schema="native-claude-review-v2",
             request_id="native-review-request-" + "c" * 64,
@@ -432,12 +432,25 @@ def test_git_commit_intent_result_bracket_and_open_intent_reconciliation(
         fingerprint_sha256=changes.fingerprint,
         operation="claude_slice_review",
     )
+    carried_finding = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.OBSERVATION,
+        status=FindingStatus.CLOSED,
+        summary="A finding outside the compact request remains in the ledger.",
+        acceptance_test="The request-bound review still authorizes the commit.",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+        status_rationale="Closed before this compact review.",
+    )
+    complete_review = replace(
+        request_bound_review,
+        findings=(carried_finding,),
+    )
     request = WorkflowCommitRequest(
         slice_id=1,
         fingerprint=changes.fingerprint,
         attestation=attestation,
-        claude_review=review,
-        findings=(),
+        claude_review=complete_review,
+        findings=(carried_finding,),
     )
 
     with pytest.raises(RuntimeError, match="injected crash"):

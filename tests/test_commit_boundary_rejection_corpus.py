@@ -541,7 +541,11 @@ def _run_upper(
         patch.setattr(target, "replay_artifacts", lambda *_args: replay)
         patch.setattr(target, "commit_slice", fake_commit_slice)
         patch.setattr(target, "attestation_payload", lambda *_args: object() if config.get("structured") == "attestation-mismatch" else bridge.store.load_chain()[0].payload)
-        patch.setattr(target, "review_payload_matches_result", lambda *_args: config.get("structured") != "review-mismatch")
+        patch.setattr(
+            target,
+            "review_payload_matches_complete_result",
+            lambda *_args: config.get("structured") != "review-mismatch",
+        )
         if config.get("structured") == "broken-binding-helper":
             patch.setattr(
                 target.WorkflowGitCommit,

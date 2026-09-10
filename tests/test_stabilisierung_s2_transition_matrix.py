@@ -677,7 +677,7 @@ EXPECTED_STRICT_BODY_DIGESTS = {
     "src/workflow_audit.py:WorkflowAudit.finalize_audit": "60ecf8b15bc913fec75e34aa8006d0e65110218afea19ac34956d01e93c8b593",
     "src/workflow_git_commit.py:WorkflowGitCommit._prepare_commit_context": "4206352e640b15e4d4b11a03b8abf1834b6ed7e8338cc139829d2a760d27b16c",
     "src/workflow_git_commit.py:WorkflowGitCommit._prepare_git_operation": "b8623a4c7006d06638f9f703c489494c770ba9ec4f75ad76fc56672538b81bb5",
-    "src/workflow_git_commit.py:WorkflowGitCommit._resolve_structured_binding": "cdc942105ef5e136ec92d69b1cd22ce16a5c9c9abb8e249419fba5003c349bf2",
+    "src/workflow_git_commit.py:WorkflowGitCommit._resolve_structured_binding": "7c7ab0e20733005877e51a1a4f86e847456fc6fe5e230c0b57f601bbb036f833",
     "src/workflow_git_commit.py:WorkflowGitCommit.commit_slice": "c591b7e4901da89f1d2d0d5af987f4714060ea44b52cba6845020c794eebb3fb",
     "src/git_service.py:commit_managed_audit_report": "ec161c2eafd7369d9eb9ab30b1724ca01815f08ce669e94c4b322770556bc717",
 }
