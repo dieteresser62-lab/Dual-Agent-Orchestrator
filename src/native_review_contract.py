@@ -31,6 +31,7 @@ from contracts import (
     FindingRecord,
     FindingStatus,
     ReviewEvidence,
+    SOURCE_FINDING_ID_PATTERN,
     StopRequest,
     ValidationAttestation,
 )
@@ -195,6 +196,7 @@ class NativeReviewContext:
     slice_id: str
     round_number: int
     previous_findings: tuple[FindingRecord, ...] = ()
+    authoritative_finding_ids: tuple[str, ...] = ()
     validation_attestation: ValidationAttestation | None = None
     test_files: tuple[str, ...] = ()
     test_changes_approved: bool = False
@@ -246,6 +248,25 @@ class NativeReviewContext:
             raise NativeReviewContractError(
                 NativeReviewErrorCode.CONTEXT_INVALID,
                 "previous findings must be sorted and unique",
+            )
+        authoritative_ids = self.authoritative_finding_ids or previous_ids
+        if authoritative_ids != tuple(sorted(set(authoritative_ids))):
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.CONTEXT_INVALID,
+                "authoritative finding ids must be sorted and unique",
+            )
+        if any(
+            not SOURCE_FINDING_ID_PATTERN.fullmatch(finding_id)
+            for finding_id in authoritative_ids
+        ):
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.CONTEXT_INVALID,
+                "authoritative finding ids must use the C-01 namespace",
+            )
+        if not set(previous_ids).issubset(authoritative_ids):
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.CONTEXT_INVALID,
+                "offered findings must belong to the authoritative finding set",
             )
         normalized_tests = tuple(sorted(set(self.test_files)))
         if normalized_tests != self.test_files or any(
@@ -944,13 +965,16 @@ def parse_bound_native_contract_result(
 
 
 def next_native_finding_id(context: NativeReviewContext) -> str:
-    """Return the first reviewer-owned finding id available in this context."""
+    """Return the first reviewer-owned finding id not reserved by the ledger."""
     prefix = "C"
+    finding_ids = context.authoritative_finding_ids or tuple(
+        item.finding_id for item in context.previous_findings
+    )
     number = max(
         (
-            int(item.finding_id.split("-", 1)[1])
-            for item in context.previous_findings
-            if item.finding_id.startswith(prefix + "-")
+            int(finding_id.split("-", 1)[1])
+            for finding_id in finding_ids
+            if finding_id.startswith(prefix + "-")
         ),
         default=0,
     ) + 1
@@ -1308,6 +1332,10 @@ def native_review_context_binding(context: NativeReviewContext) -> dict[str, Any
         "slice_id": context.slice_id,
         "round_number": context.round_number,
         "previous_findings": [_finding_binding(item) for item in context.previous_findings],
+        "authoritative_finding_ids": list(
+            context.authoritative_finding_ids
+            or tuple(item.finding_id for item in context.previous_findings)
+        ),
         "validation_attestation": _attestation_binding(
             context.validation_attestation
         ),

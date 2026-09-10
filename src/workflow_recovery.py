@@ -919,6 +919,9 @@ class WorkflowRecovery:
             ),
             round_number=round_number,
             previous_findings=previous_findings,
+            authoritative_finding_ids=tuple(
+                sorted(item.finding_id for item in history.findings)
+            ),
             validation_attestation=attestation,
             test_files=tuple(sorted(set(expected_test_files))),
             test_changes_approved=context.test_changes_approved,

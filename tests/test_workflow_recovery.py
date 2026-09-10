@@ -365,3 +365,8 @@ def test_final_review_recovery_rebuilds_exact_record_bound_finding_subset(
     assert tuple(
         item.finding_id for item in native_context.previous_findings
     ) == ("C-02", "C-03")
+    assert native_context.authoritative_finding_ids == (
+        "C-01",
+        "C-02",
+        "C-03",
+    )

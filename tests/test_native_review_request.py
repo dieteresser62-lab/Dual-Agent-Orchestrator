@@ -765,6 +765,53 @@ def test_request_schema_loads_and_build_is_canonical_and_deterministic() -> None
     assert first.evidence_assets == ()
 
 
+@pytest.mark.parametrize(
+    "offered_numbers",
+    ((), (1, 17, 65)),
+    ids=("empty-subset", "arbitrary-subset"),
+)
+def test_next_finding_id_uses_complete_ledger_not_offered_subset(
+    offered_numbers: tuple[int, ...],
+) -> None:
+    findings = tuple(
+        replace(
+            _prior_finding(f"C-{number:02d}"),
+            status=(FindingStatus.CLOSED if number == 23 else FindingStatus.OPEN),
+            status_rationale=("Verified earlier." if number == 23 else None),
+        )
+        for number in range(1, 66)
+    )
+    offered = tuple(findings[number - 1] for number in offered_numbers)
+    context = replace(
+        _context(),
+        previous_findings=offered,
+        authoritative_finding_ids=tuple(
+            finding.finding_id for finding in findings
+        ),
+    )
+
+    bundle = build_native_review_request(replace(_spec(), context=context))
+
+    assert tuple(
+        item["finding_id"]
+        for item in bundle.document["review_contract"]["previous_findings"]
+    ) == tuple(f"C-{number:02d}" for number in offered_numbers)
+    assert bundle.document["review_contract"]["next_finding_id"] == "C-66"
+    assert "authoritative_finding_ids" not in bundle.canonical_json
+
+
+def test_next_finding_id_uses_numeric_maximum_beyond_two_digits() -> None:
+    context = replace(
+        _context(),
+        previous_findings=(),
+        authoritative_finding_ids=("C-100", "C-99"),
+    )
+
+    bundle = build_native_review_request(replace(_spec(), context=context))
+
+    assert bundle.document["review_contract"]["next_finding_id"] == "C-101"
+
+
 def test_only_plan_requests_carry_the_mandatory_artifact_path_decision() -> None:
     slice_bundle = build_native_review_request(_spec())
     assert "plan_artifact_path" not in slice_bundle.document["review_contract"]
