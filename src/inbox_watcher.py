@@ -254,14 +254,18 @@ class WatchTaskResult:
             result_status = status.value
         elif terminal_rejection:
             detail = result.rejection_detail
+            diagnostic_code = result.rejection_code
+            exception_type = result.rejection_exception_type
             assert detail is not None
+            assert diagnostic_code is not None
+            assert exception_type is not None
             disposition = WatchTaskDisposition.REJECTED
             exit_code = 5
             result_status = "rejected"
             classified_failure = ClassifiedFailure(
                 failure_class=FailureClass.TERMINAL_REJECTION,
-                diagnostic_code="FINAL-REVIEW-DENIED",
-                exception_type="FinalReviewVerdict",
+                diagnostic_code=diagnostic_code,
+                exception_type=exception_type,
                 detail=detail,
                 cause_depth=0,
                 explicitly_mapped=True,
@@ -1374,13 +1378,16 @@ def _process_watch_task(
 
 def _strengthen_rejected_result(task_result: WatchTaskResult) -> WatchTaskResult:
     # Re-check input-rejection lifecycle authority immediately before publishing.
-    # A final-review verdict, in contrast, is terminal because its records exist.
+    # A reviewer verdict, in contrast, is terminal because its records exist.
     assert task_result.classified_failure is not None
     failure = task_result.classified_failure
-    final_verdict_key = ("FINAL-REVIEW-DENIED", "FinalReviewVerdict", True)
+    reviewer_verdict_keys = {
+        ("FINAL-REVIEW-DENIED", "FinalReviewVerdict", True),
+        ("CORRECTION-REVIEW-DENIED", "CorrectionReviewVerdict", True),
+    }
     resolver = {
         # This verdict exists only after its review and failed-completion records.
-        final_verdict_key: lambda: task_result,
+        key: lambda: task_result for key in reviewer_verdict_keys
     }.get(
         (failure.diagnostic_code, failure.exception_type, failure.explicitly_mapped),
         lambda: WatchTaskResult.from_failure(

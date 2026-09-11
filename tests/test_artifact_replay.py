@@ -479,6 +479,7 @@ def test_reviewer_projection_matches_state_v3_before_and_after_denial() -> None:
         reviewer=Reviewer.CLAUDE,  # allowlist:provider -- reviewer projection fixture
         open_findings=("C-01",),
         return_step=WorkflowStep.CODEX_PLAN_REVISION,
+        progress_made=True,
     )
     _append(
         records,

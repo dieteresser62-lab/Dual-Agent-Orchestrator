@@ -28,12 +28,15 @@ from dry_run_scenarios import (
     ScriptedInitialState,
     ScriptedRunReport,
     ScriptedValidation,
+    build_progressive_correction_scenario,
     render_resilience_evidence,
     run_scripted_workflow,
     verify_scenario_expectations,
 )
 from inbox_watcher import (
+    WatchTaskDisposition,
     WatchTaskIdentity,
+    WatchTaskResult,
     save_watch_identity,
     success_marker_path,
     watch_identity_path,
@@ -41,14 +44,17 @@ from inbox_watcher import (
 from workflow import WorkflowHistory, WorkflowRunResult
 from workflow_state import (
     AgentFailureKind,
+    GateRecord,
     GateReason,
     GateStatus,
     InvocationFailureRecord,
     ProtocolBinding,
     ProtocolMode,
     Reviewer,
+    SliceStatus,
     WorkflowStep,
     WorkUnitKind,
+    WorkUnitStatus,
     init_workflow_state,
 )
 
@@ -548,6 +554,62 @@ def test_provider_free_happy_path_reaches_terminal_final_review(tmp_path: Path) 
     assert result.history.findings == ()
 
 
+def test_provider_free_correction_continues_beyond_four_returns(tmp_path: Path) -> None:
+    task = tmp_path / "progressive-correction.md"
+    task.write_text("provider-free progressive correction", encoding="utf-8")
+
+    report = run_scripted_workflow(
+        scenario=build_progressive_correction_scenario(), task_file=task
+    )
+
+    correction = next(
+        item for item in report.result.state.work_units
+        if item.kind is WorkUnitKind.CORRECTION
+    )
+    assert report.result.workflow_completed
+    assert report.remaining_agent_events == 0
+    assert correction.codex_return_count == 5
+    assert correction.max_codex_returns == 8
+    assert correction.gate.status is GateStatus.CLEAR
+    assert sum(call.startswith("commit:") for call in report.calls) == 2
+    assert all(
+        item.status is FindingStatus.CLOSED
+        for item in report.result.history.findings
+    )
+
+
+def test_provider_free_stalled_correction_is_a_named_terminal_verdict(
+    tmp_path: Path,
+) -> None:
+    task = tmp_path / "stalled-correction.md"
+    task.write_text("provider-free stalled correction", encoding="utf-8")
+
+    report = run_scripted_workflow(
+        scenario=build_progressive_correction_scenario(stalled=True),
+        task_file=task,
+    )
+
+    result = report.result
+    assert result.workflow_rejected
+    assert result.exit_code == 5
+    assert result.state.current_work_unit.kind is WorkUnitKind.CORRECTION
+    assert result.state.current_work_unit.status is WorkUnitStatus.COMPLETED
+    assert result.state.current_work_unit.gate.status is GateStatus.CLEAR
+    assert result.rejection_code == "CORRECTION-REVIEW-DENIED"
+    assert result.rejection_detail is not None
+    assert "no further closure, reclassification, or finding-opening progress" in (
+        result.rejection_detail
+    )
+    assert "remaining open findings: C-01" in result.rejection_detail
+    assert report.remaining_agent_events == 0
+    assert sum(call.startswith("commit:") for call in report.calls) == 1
+    watch_result = WatchTaskResult.from_workflow(result)
+    assert watch_result.disposition is WatchTaskDisposition.REJECTED
+    assert watch_result.status == "rejected"
+    assert watch_result.gate_reason == "CORRECTION-REVIEW-DENIED"
+    assert watch_result.resume_available is False
+
+
 def _run_correction_journey(
     tmp_path: Path,
     scenario_id: str,
@@ -984,17 +1046,33 @@ def test_scope_gate_expectation_requires_production_user_binding() -> None:
 
 def test_gate_kind_uses_iteration_limit_state_semantics_not_fingerprint() -> None:
     state = _active_slice_state()
-    current = replace(state.current_work_unit, max_codex_returns=1)
+    current = replace(
+        state.current_work_unit,
+        status=WorkUnitStatus.AWAITING_USER_DECISION,
+        current_step=WorkflowStep.CODEX_CORRECTION,
+        codex_return_count=1,
+        max_codex_returns=1,
+        gate=GateRecord(
+            status=GateStatus.AWAITING_USER_DECISION,
+            reason=GateReason.ITERATION_LIMIT,
+            detail="review denied by claude after 1 Codex returns",
+        ),
+        reviewer=Reviewer.CLAUDE,
+        open_findings=("C-01",),
+    )
     state = replace(
         state,
+        current_step=WorkflowStep.CODEX_CORRECTION,
         work_units=tuple(
             current if item.work_unit_id == current.work_unit_id else item
             for item in state.work_units
         ),
-    ).record_review_denial(
-        reviewer=Reviewer.CLAUDE,
-        open_findings=("C-01",),
-        return_step=WorkflowStep.CODEX_CORRECTION,
+        slices=tuple(
+            replace(item, status=SliceStatus.AWAITING_USER_DECISION)
+            if item.slice_id == state.current_slice_id
+            else item
+            for item in state.slices
+        ),
     )
     expected = ScenarioGateExpectation(
         GateStatus.AWAITING_USER_DECISION,

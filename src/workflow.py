@@ -91,6 +91,7 @@ from validation_matrix import (
 )
 from workflow_state import (
     AgentFailureKind,
+    IMPLEMENTER_RETURN_SAFETY_LIMIT,
     GateDecisionRecord,
     GateReason,
     GateStatus,
@@ -1082,7 +1083,13 @@ class WorkflowRunResult:
 
     @property
     def completed(self) -> bool:
-        return self.state.current_work_unit.status is WorkUnitStatus.COMPLETED
+        return (
+            self.state.current_work_unit.status is WorkUnitStatus.COMPLETED
+            and (
+                self.state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
+                or not self.workflow_rejected
+            )
+        )
 
     @property
     def workflow_completed(self) -> bool:
@@ -1100,16 +1107,28 @@ class WorkflowRunResult:
 
     @property
     def workflow_rejected(self) -> bool:
-        """Whether a completed final work unit carries the reviewer's denial."""
+        """Whether a completed review work unit carries the reviewer's denial."""
 
-        review = self.history.latest_claude_review  # allowlist:provider -- canonical history field
+        return bool(workflow_rejection_finding_ids(self.state, self.history))
+
+    @property
+    def rejection_code(self) -> str | None:
+        if not self.workflow_rejected:
+            return None
         return (
-            self.completed
-            and self.state.current_step is WorkflowStep.COMPLETED
-            and self.state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
-            and review is not None
-            and review.approval is False
-            and bool(project_open_set(self.history.findings).findings)
+            "FINAL-REVIEW-DENIED"
+            if self.state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
+            else "CORRECTION-REVIEW-DENIED"
+        )
+
+    @property
+    def rejection_exception_type(self) -> str | None:
+        if not self.workflow_rejected:
+            return None
+        return (
+            "FinalReviewVerdict"
+            if self.state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
+            else "CorrectionReviewVerdict"
         )
 
     @property
@@ -1117,14 +1136,30 @@ class WorkflowRunResult:
         if not self.workflow_rejected:
             return None
         remaining = project_open_set(self.history.findings).finding_ids
-        return (
+        final_review = self.state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
+        safety_limit_reached = (
+            self.state.current_work_unit.round_number
+            >= workflow_requests.FINAL_REVIEW_ROUND_SAFETY_LIMIT
+            if final_review
+            else self.state.current_work_unit.codex_return_count  # allowlist:provider -- persisted counter
+            >= IMPLEMENTER_RETURN_SAFETY_LIMIT
+        )
+        subject = "final-review" if final_review else "correction-review"
+        prefix = (
             "FINAL-REVIEW-DENIED | "
+            if final_review
+            else "CORRECTION-REVIEW-DENIED | "
+        )
+        return (
+            prefix
             + (
-                "the final-review safety limit was reached despite continued "
+                f"the {subject} safety limit was reached despite continued "
                 "disposition progress"
-                if self.state.current_work_unit.round_number
-                >= workflow_requests.FINAL_REVIEW_ROUND_SAFETY_LIMIT
-                else "the reviewer made no further closure or reclassification progress"
+                if safety_limit_reached
+                else (
+                    "the reviewer made no further closure, reclassification, "
+                    "or finding-opening progress"
+                )
             )
             + "; remaining open findings: "
             + ", ".join(remaining)
@@ -1147,6 +1182,46 @@ class WorkflowRunResult:
             if self.completed
             else 1
         )
+
+
+def workflow_rejection_finding_ids(
+    state: WorkflowState, history: WorkflowHistory
+) -> tuple[str, ...]:
+    """Return the open IDs carried by a terminal reviewer denial, if any."""
+
+    review = history.latest_claude_review  # allowlist:provider -- canonical history field
+    if (
+        state.current_work_unit.status is not WorkUnitStatus.COMPLETED
+        or state.current_step is not WorkflowStep.COMPLETED
+        or review is None
+        or review.approval is not False
+    ):
+        return ()
+    return project_open_set(history.findings).finding_ids
+
+
+def resolve_retired_iteration_limit(
+    state: WorkflowState, history: WorkflowHistory
+) -> WorkflowState:
+    """Convert one legacy counter gate using its persisted review progress."""
+
+    if state.current_work_unit.gate.reason is not GateReason.ITERATION_LIMIT:
+        return state
+    review_events = tuple(
+        item for item in history.events if isinstance(item, ReviewAuditEvent)
+    )
+    progress_made = True
+    if len(review_events) >= 2:
+        previous = review_events[-2].result.findings
+        current = review_events[-1].result.findings
+        previous_ids = frozenset(item.finding_id for item in previous)
+        newly_opened = bool(
+            set(project_open_set(current).finding_ids) - previous_ids
+        )
+        progress_made = bool(
+            newly_opened or project_finding_transition_ids(previous, current)
+        )
+    return state.continue_retired_iteration_limit(progress_made=progress_made)
 
 
 def _review_round_number(
@@ -1278,9 +1353,7 @@ class WorkflowEngine:
         )
 
     def run_current_work_unit(
-        self,
-        state: WorkflowState,
-        context: WorkflowContext,
+        self, state: WorkflowState, context: WorkflowContext,
         history: WorkflowHistory | None = None,
     ) -> WorkflowRunResult:
         require_workflow_driver(self.driver)
@@ -1331,13 +1404,14 @@ class WorkflowEngine:
             recovered_progress_ids: tuple[str, ...] = ()
             if is_final_review and pending_native.output.context is not None:
                 recovered_offered = pending_native.output.context.previous_findings
-                recovered_requested_ids = tuple(
+                recovered_offered_ids = tuple(
                     item.finding_id for item in recovered_offered
                 )
+                recovered_requested_ids = recovered_offered_ids
                 recovered_new_ids = tuple(
                     item.finding_id
                     for item in recovered_result.findings
-                    if item.finding_id not in frozenset(recovered_requested_ids)
+                    if item.finding_id not in frozenset(recovered_offered_ids)
                 )
                 recovered_progress_ids = project_finding_transition_ids(
                     recovered_offered,
@@ -2729,6 +2803,18 @@ class WorkflowEngine:
     ) -> tuple[WorkflowState, WorkflowHistory]:
         """Mirror one durable verdict and perform its deterministic transition."""
         unit = state.current_work_unit
+        correction_progress = False
+        if not is_final_review:
+            prior_ids = frozenset(item.finding_id for item in finding_ledger)
+            newly_opened = tuple(
+                finding_id
+                for finding_id in project_open_set(result.findings).finding_ids
+                if finding_id not in prior_ids
+            )
+            transitioned = project_finding_transition_ids(
+                finding_ledger, result.findings
+            )
+            correction_progress = bool(newly_opened or transitioned)
         history = self._record_review(
             history,
             unit.slice_id,
@@ -2858,6 +2944,7 @@ class WorkflowEngine:
                 reviewer=Reviewer.CLAUDE,
                 open_findings=own_ids,
                 return_step=return_step,
+                progress_made=correction_progress,
             )
         self.driver.checkpoint(state, history)
         return state, history
