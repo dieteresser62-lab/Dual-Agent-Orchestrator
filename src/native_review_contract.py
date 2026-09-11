@@ -41,6 +41,7 @@ from finding_reducer import (
     apply_reviewer_events,
     project_open_set,
 )
+from finding_order import sorted_finding_ids
 from validation_matrix import FINDING_COMMAND_PREFIX, matches_validation_family
 from native_provider_schema import defensive_provider_projection
 
@@ -244,13 +245,13 @@ class NativeReviewContext:
                 "validation attestation fingerprint does not match context",
             )
         previous_ids = tuple(item.finding_id for item in self.previous_findings)
-        if previous_ids != tuple(sorted(set(previous_ids))):
+        if previous_ids != sorted_finding_ids(previous_ids):
             raise NativeReviewContractError(
                 NativeReviewErrorCode.CONTEXT_INVALID,
                 "previous findings must be sorted and unique",
             )
         authoritative_ids = self.authoritative_finding_ids or previous_ids
-        if authoritative_ids != tuple(sorted(set(authoritative_ids))):
+        if authoritative_ids != sorted_finding_ids(authoritative_ids):
             raise NativeReviewContractError(
                 NativeReviewErrorCode.CONTEXT_INVALID,
                 "authoritative finding ids must be sorted and unique",

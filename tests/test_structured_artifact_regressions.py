@@ -80,6 +80,7 @@ from contracts import (
     ValidationRecord,
     ValidationStatus,
 )
+from finding_order import finding_id_sort_key
 from orchestrator import ProductionWorkflowDriver
 from native_review_contract import NativeReviewContractError, NativeReviewErrorCode
 from review_packets import build_review_packet
@@ -855,7 +856,9 @@ def _legacy_final_denial_recovery_case(
         fingerprint_sha256=correction.task_digest,
         fingerprint_kind=FingerprintKind.CONTRACT,
     )
-    for finding_id in sorted({*signature[4], *correction_finding_ids}):
+    for finding_id in sorted(
+        {*signature[4], *correction_finding_ids}, key=finding_id_sort_key
+    ):
         bridge.append(
             FindingTransitionPayload(
                 finding_id=finding_id,

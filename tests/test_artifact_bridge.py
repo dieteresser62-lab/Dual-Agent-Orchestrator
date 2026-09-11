@@ -552,6 +552,51 @@ def test_request_bound_review_payload_matches_only_its_complete_ledger_projectio
     )
 
 
+def test_legacy_lexical_review_payload_matches_natural_result_projection() -> None:
+    base = FindingRecord(
+        finding_id="C-62",
+        finding_class=FindingClass.OBSERVATION,
+        status=FindingStatus.OPEN,
+        summary="Historical finding.",
+        acceptance_test="The chain remains replayable.",
+        origin=FindingOrigin("42", 1, AgentRole.CLAUDE),
+    )
+    findings = tuple(
+        replace(base, finding_id=finding_id)
+        for finding_id in ("C-62", "C-71", "C-101", "C-105")
+    )
+    result = ContractResult(
+        reviewer=AgentRole.CLAUDE,
+        approval=False,
+        stopped=False,
+        stop_request=None,
+        validation=None,
+        test_files=(),
+        pre_mortem="Legacy lexical order could block replay.",
+        evidence=None,
+        findings=findings,
+        anchors=(),
+    )
+    payload = review_payload(
+        result,
+        work_unit_id=42,
+        transport_schema="native-claude-review-v2",
+        request_id=f"native-review-request-{'b' * 64}",
+        response_sha256="c" * 64,
+    )
+    legacy = replace(
+        payload,
+        finding_ids=("C-101", "C-105", "C-62", "C-71"),
+    )
+
+    assert review_payload_matches_result(legacy, result)
+    assert review_payload_matches_complete_result(legacy, result)
+    assert not review_payload_matches_result(
+        replace(legacy, finding_ids=("C-105", "C-101", "C-62", "C-71")),
+        result,
+    )
+
+
 def _measurement() -> ProviderInputMeasurementPayload:
     return ProviderInputMeasurementPayload(
         Role.CLAUDE, Role.CLAUDE, "claude_slice_review", "1", DIGEST,

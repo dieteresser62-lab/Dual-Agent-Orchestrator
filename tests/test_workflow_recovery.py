@@ -35,6 +35,7 @@ EXPECTED_INTERNAL_IMPORTS = {
     "artifact_replay",
     "contracts",
     "final_review_preflight",
+    "finding_order",
     "finding_reducer",
     "gates",
     "git_service",

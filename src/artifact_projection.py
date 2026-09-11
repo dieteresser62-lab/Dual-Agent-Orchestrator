@@ -32,6 +32,7 @@ from artifact_models import (
     WorkUnitPayload,
 )
 from artifact_replay import ArtifactReplayError, ArtifactReplayResult, replay_artifacts
+from finding_order import finding_id_sort_key
 from finding_reducer import project_record_finding_statuses
 
 
@@ -752,7 +753,7 @@ def _render_convergence_summary(rendering: _ReplayRendering) -> None:
             "|---|---|---|---|---|---|---|",
         )
     )
-    for finding_id in sorted(rendering.convergence):
+    for finding_id in sorted(rendering.convergence, key=finding_id_sort_key):
         row = rendering.convergence[finding_id]
         rendering.findings.append(
             f"| `{_safe(finding_id)}` | {_table_values(row['work_units'])} | "

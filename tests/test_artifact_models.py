@@ -817,11 +817,11 @@ def test_finding_handoff_payloads_roundtrip_ordered_source_lifecycle() -> None:
 
 def test_work_unit_finding_entry_binding_is_sorted_and_roundtrips() -> None:
     payload = WorkUnitPayload(
-        "1", 1, ("src/a.py",), ("C-01", "C-02"), "ar1-" + "8" * 64
+        "1", 1, ("src/a.py",), ("C-62", "C-101"), "ar1-" + "8" * 64
     )
     assert ArtifactRecord.from_dict(_record(payload).to_dict()).payload == payload
     with pytest.raises(ArtifactValidationError, match="must be sorted"):
-        replace(payload, open_finding_ids=("C-02", "C-01"))
+        replace(payload, open_finding_ids=("C-101", "C-62"))
 
 
 def test_approval_requires_fingerprint_and_positive_evidence() -> None:

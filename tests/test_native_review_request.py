@@ -804,7 +804,7 @@ def test_next_finding_id_uses_numeric_maximum_beyond_two_digits() -> None:
     context = replace(
         _context(),
         previous_findings=(),
-        authoritative_finding_ids=("C-100", "C-99"),
+        authoritative_finding_ids=("C-99", "C-100"),
     )
 
     bundle = build_native_review_request(replace(_spec(), context=context))

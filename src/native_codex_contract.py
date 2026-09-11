@@ -26,6 +26,7 @@ from finding_reducer import (
     apply_finding_responses,
     project_open_set,
 )
+from finding_order import sorted_finding_ids
 from gates import BUILTIN_STOP_RULES, STOP_RULE_ID_PATTERN
 from schema_validation import (
     SchemaDefinitionError,
@@ -134,7 +135,7 @@ class NativeCodexContext:
                 "frozenset of known stop rule ids",
             )
         finding_ids = tuple(item.finding_id for item in self.previous_findings)
-        if finding_ids != tuple(sorted(set(finding_ids))):
+        if finding_ids != sorted_finding_ids(finding_ids):
             raise NativeCodexContractError(
                 NativeCodexErrorCode.CONTEXT_INVALID,
                 "previous findings must be sorted and unique",
@@ -590,7 +591,7 @@ def _parse_dispositions(
         for item in items
     )
     ids = tuple(item.finding_id for item in dispositions)
-    if ids != tuple(sorted(set(ids))):
+    if ids != sorted_finding_ids(ids):
         raise NativeCodexContractError(
             NativeCodexErrorCode.FINDING_REFERENCE_INVALID,
             "finding dispositions must be sorted and unique",
@@ -610,7 +611,7 @@ def _apply_dispositions(
         if require_complete:
             open_ids = project_open_set(prior).finding_ids
             disposition_ids = tuple(item.finding_id for item in dispositions)
-            missing = sorted(set(open_ids) - set(disposition_ids))
+            missing = sorted_finding_ids(set(open_ids) - set(disposition_ids))
             if missing:
                 raise ValueError(f"missing disposition for {missing[0]}")
         return apply_finding_responses(

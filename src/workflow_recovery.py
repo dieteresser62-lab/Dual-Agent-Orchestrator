@@ -47,6 +47,7 @@ from contracts import (
     ValidationAttestation,
 )
 from final_review_preflight import FINAL_REVIEW_OPERATIONS
+from finding_order import sorted_finding_ids
 from finding_reducer import reduce_findings
 from gates import matches_path_patterns
 from git_service import inspect_commit_tree, inspect_repository
@@ -919,8 +920,8 @@ class WorkflowRecovery:
             ),
             round_number=round_number,
             previous_findings=previous_findings,
-            authoritative_finding_ids=tuple(
-                sorted(item.finding_id for item in history.findings)
+            authoritative_finding_ids=sorted_finding_ids(
+                item.finding_id for item in history.findings
             ),
             validation_attestation=attestation,
             test_files=tuple(sorted(set(expected_test_files))),

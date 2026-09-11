@@ -30,6 +30,7 @@ from final_review_preflight import FinalReviewPreflightDenied
 from artifact_models import (
     InvocationFailurePayload,
 )
+from finding_order import sorted_finding_ids
 from finding_reducer import (
     merge_review_request_result,
     merge_request_result,
@@ -2322,8 +2323,8 @@ class WorkflowEngine:
             history = self._bind_authoritative_native_findings(state, history)
             authoritative_contract = replace(
                 contract,
-                existing_finding_ids=tuple(
-                    sorted(item.finding_id for item in history.findings)
+                existing_finding_ids=sorted_finding_ids(
+                    item.finding_id for item in history.findings
                 ),
             )
             native_request = build_request(contract=authoritative_contract)
@@ -2494,8 +2495,8 @@ class WorkflowEngine:
             expected_test_files=(expected_test_files if not is_plan_review else ()),
             test_changes_approved=test_changes_approved,
             red_state_followup_slice=context.red_state_followup_slice,
-            existing_finding_ids=tuple(
-                sorted(finding.finding_id for finding in history.findings)
+            existing_finding_ids=sorted_finding_ids(
+                finding.finding_id for finding in history.findings
             ),
             allow_new_observations=unit.kind is not WorkUnitKind.CORRECTION,
         )

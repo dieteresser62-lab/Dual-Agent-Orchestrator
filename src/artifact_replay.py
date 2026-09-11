@@ -17,7 +17,7 @@ import json
 import re
 from typing import Callable, Sequence
 
-
+from finding_order import replay_compatible_finding_ids
 from artifact_models import (
     AgentResultPayload,
     ArtifactRecord,
@@ -1327,7 +1327,7 @@ def project_review_contracts(
                 "review finding transition set is incomplete",
                 review_record,
             )
-        if tuple(item.finding_id for item in findings) != payload.finding_ids:
+        if tuple(item.finding_id for item in findings) != replay_compatible_finding_ids(payload.finding_ids):
             _fail(
                 ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
                 "review finding snapshot differs from its transition prefix",
@@ -2208,7 +2208,7 @@ def _validate_required_review_authority(
                 anchor_record is not None
                 and validation_record is not None
                 and _review_prefix_finding_ids(chain, positions, review)
-                == review.payload.finding_ids
+                == replay_compatible_finding_ids(review.payload.finding_ids)
             )
             if finding_ids_complete:
                 continue

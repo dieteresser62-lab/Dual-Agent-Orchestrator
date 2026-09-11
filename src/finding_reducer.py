@@ -34,6 +34,7 @@ from contracts import (
     apply_finding_response,
     apply_reviewer_finding_update,
 )
+from finding_order import finding_id_sort_key, sorted_finding_ids
 
 
 @dataclass(frozen=True, slots=True)
@@ -332,16 +333,14 @@ def project_final_review_dispositions(
     boundary = boundary_positions[0]
     entry_findings = _reduce_events(_transition_events(replay.records[:boundary]))
     initial_ids = project_open_set(entry_findings).finding_ids
-    dispositioned = tuple(
-        sorted(
-            {
-                event.payload.finding_id
-                for event in _transition_events(replay.records[boundary + 1 :])
-                if event.payload.work_unit_id == target
-                and event.payload.finding_id in frozenset(initial_ids)
-                and event.payload.action in {"status_changed", "reclassified"}
-            }
-        )
+    dispositioned = sorted_finding_ids(
+        {
+            event.payload.finding_id
+            for event in _transition_events(replay.records[boundary + 1 :])
+            if event.payload.work_unit_id == target
+            and event.payload.finding_id in frozenset(initial_ids)
+            and event.payload.action in {"status_changed", "reclassified"}
+        }
     )
     pending_ids = tuple(
         finding_id
@@ -409,7 +408,7 @@ def project_latest_recorded_statuses(
             actor=event.payload.actor.value,
             imported=event.imported,
         )
-    return tuple(latest[key] for key in sorted(latest))
+    return tuple(latest[key] for key in sorted(latest, key=finding_id_sort_key))
 
 
 def project_legacy_mirror_statuses(
@@ -440,7 +439,9 @@ def project_legacy_mirror_statuses(
                 statuses[finding_id] = status.lower()
     for finding_id in attributed_open_ids:
         statuses.setdefault(finding_id, "open")
-    return tuple(sorted(statuses.items()))
+    return tuple(
+        sorted(statuses.items(), key=lambda item: finding_id_sort_key(item[0]))
+    )
 
 
 def project_request_subset(
@@ -457,7 +458,7 @@ def project_request_subset(
         missing = selected_ids - available
         if missing:
             raise ValueError(
-                f"finding request subset references unknown id {sorted(missing)[0]}"
+                f"finding request subset references unknown id {sorted_finding_ids(missing)[0]}"
             )
     selected = tuple(
         item
@@ -530,19 +531,21 @@ def merge_review_request_result(
     if collisions:
         raise ValueError(
             f"native {review_type} result has a finding-number collision: "
-            + ", ".join(sorted(collisions))
+            + ", ".join(sorted_finding_ids(collisions))
         )
     foreign_mutations = foreign_existing - collisions
     if foreign_mutations:
         raise ValueError(
             f"native review result mutates an unoffered {review_type} finding: "
-            + ", ".join(sorted(foreign_mutations))
+            + ", ".join(sorted_finding_ids(foreign_mutations))
         )
     merged = dict(authoritative_by_id)
     merged.update(returned_by_id)
     return ReviewFindingMerge(
         request_bound=returned_tuple,
-        complete_ledger=tuple(merged[key] for key in sorted(merged)),
+        complete_ledger=tuple(
+            merged[key] for key in sorted(merged, key=finding_id_sort_key)
+        ),
     )
 
 
@@ -554,9 +557,9 @@ def apply_finding_responses(
     canonical = _canonical_findings(prior)
     open_ids = set(project_open_set(canonical).finding_ids)
     response_ids = tuple(item.finding_id for item in responses)
-    if response_ids != tuple(sorted(set(response_ids))):
+    if response_ids != sorted_finding_ids(response_ids):
         raise ValueError("finding responses must be sorted and unique")
-    unexpected = sorted(set(response_ids) - open_ids)
+    unexpected = sorted_finding_ids(set(response_ids) - open_ids)
     if unexpected:
         raise ValueError(
             f"disposition references non-open finding {unexpected[0]}"
@@ -566,7 +569,7 @@ def apply_finding_responses(
         by_id[response.finding_id] = apply_finding_response(
             by_id[response.finding_id], response.decision, response.rationale
         )
-    return tuple(by_id[key] for key in sorted(by_id))
+    return tuple(by_id[key] for key in sorted(by_id, key=finding_id_sort_key))
 
 
 def apply_reviewer_events(
@@ -606,7 +609,7 @@ def apply_reviewer_events(
             rationale=update.rationale,
             finding_class=update.finding_class,
         )
-    return tuple(findings[key] for key in sorted(findings))
+    return tuple(findings[key] for key in sorted(findings, key=finding_id_sort_key))
 
 
 def project_reviewer_persistence_transitions(
@@ -720,7 +723,7 @@ def merge_history_snapshots(
                         f"finding class history regressed: {finding.finding_id}"
                     )
             latest[finding.finding_id] = finding
-    return tuple(latest[key] for key in sorted(latest))
+    return tuple(latest[key] for key in sorted(latest, key=finding_id_sort_key))
 
 
 def _transition_events(
@@ -912,7 +915,7 @@ def _current_lineage_findings(
     heads: dict[str, FindingRecord] = {}
     for item in lineages:
         heads.setdefault(item.finding.finding_id, item.finding)
-    return tuple(heads[key] for key in sorted(heads))
+    return tuple(heads[key] for key in sorted(heads, key=finding_id_sort_key))
 
 
 def _project_import_snapshot(
@@ -970,15 +973,13 @@ def _project_correction_attribution(
             for record in correction_records
             if isinstance(record.payload, CorrectionWorkUnitPayload)
         )
-        finding_ids = tuple(
-            sorted(
-                {
-                    finding_id
-                    for record in correction_records
-                    if isinstance(record.payload, CorrectionWorkUnitPayload)
-                    for finding_id in record.payload.finding_ids
-                }
-            )
+        finding_ids = sorted_finding_ids(
+            {
+                finding_id
+                for record in correction_records
+                if isinstance(record.payload, CorrectionWorkUnitPayload)
+                for finding_id in record.payload.finding_ids
+            }
         )
         findings = _reduce_events(
             tuple(
@@ -998,7 +999,7 @@ def _project_correction_attribution(
                 rounds=tuple(
                     CorrectionRoundAttributionProjection(
                         record.payload.round_number,
-                        tuple(sorted(record.payload.finding_ids)),
+                        sorted_finding_ids(record.payload.finding_ids),
                         record.record_id,
                     )
                     for record in correction_records
@@ -1012,9 +1013,11 @@ def _project_correction_attribution(
 def _canonical_findings(
     findings: Sequence[FindingRecord],
 ) -> tuple[FindingRecord, ...]:
-    canonical = tuple(sorted(findings, key=lambda item: item.finding_id))
+    canonical = tuple(
+        sorted(findings, key=lambda item: finding_id_sort_key(item.finding_id))
+    )
     ids = tuple(item.finding_id for item in canonical)
-    if ids != tuple(sorted(set(ids))):
+    if ids != sorted_finding_ids(ids):
         raise ValueError("finding ledger contains duplicate finding IDs")
     return canonical
 

@@ -62,6 +62,7 @@ from contracts import (
     ValidationAttestation,
     ValidationCommandSpec,
 )
+from finding_order import replay_compatible_finding_ids, sorted_finding_ids
 from task_contract import TaskContract
 from validation_matrix import ValidationRequest
 from provider_input_budget import ProviderInputMeasurement
@@ -272,7 +273,7 @@ def review_payload_matches_result(
         evidence_matches = payload.evidence == legacy_evidence
     return (
         payload.verdict == verdict
-        and payload.finding_ids == finding_ids
+        and replay_compatible_finding_ids(payload.finding_ids) == finding_ids
         and evidence_matches
         and payload.red_state_followup_slice == result.red_state_followup_slice
         and payload.test_files == result.test_files
@@ -300,7 +301,10 @@ def review_payload_matches_complete_result(
         return False
     request_bound = replace(
         result,
-        findings=tuple(result_by_id[finding_id] for finding_id in payload.finding_ids),
+        findings=tuple(
+            result_by_id[finding_id]
+            for finding_id in sorted_finding_ids(payload.finding_ids)
+        ),
     )
     return review_payload_matches_result(payload, request_bound)
 

@@ -47,6 +47,7 @@ from contracts import (
     FindingStatus,
     PlannedSlice,
 )
+from finding_order import finding_id_sort_key
 from gates import BUILTIN_STOP_RULES
 from orchestrator import ProductionWorkflowDriver
 from state_io import (
@@ -1689,7 +1690,9 @@ def _ledger_literal(findings: tuple[FindingRecord, ...]) -> tuple[str, ...]:
     # literals and never call this helper.
     return tuple(
         f"{item.finding_id}:{item.status.value.lower()}:{item.finding_class.value.lower()}"
-        for item in sorted(findings, key=lambda finding: finding.finding_id)
+        for item in sorted(
+            findings, key=lambda finding: finding_id_sort_key(finding.finding_id)
+        )
     )
 
 
