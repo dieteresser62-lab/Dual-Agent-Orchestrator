@@ -57,7 +57,11 @@ from native_codex_contract import (
     NativeCodexErrorCode,
     NativeCodexRequestKind,
 )
-from native_review_contract import NativeReviewContractError, NativeReviewErrorCode
+from native_review_contract import (
+    NativeReviewContractError,
+    NativeReviewDispositionLimit,
+    NativeReviewErrorCode,
+)
 from orchestrator_diagnostics import OrchestratorDiagnostic
 from inbox_watcher import WatchTaskDisposition, WatchTaskResult
 from orchestrator import run_v3_final_review, run_v3_work_unit
@@ -1152,6 +1156,35 @@ def _native_review_contract_failure(
     output_error = AgentOutputError(
         "native review result violates its bound contract",
         technical_text=f"{code.value}: {contract_error.detail}",
+    )
+    output_error.__cause__ = contract_error
+    failure = classify_agent_failure(
+        AgentRole.CLAUDE.value,
+        output_error,
+        invocation_id=invocation_id,
+        received_at=received_at,
+    )
+    failure.__cause__ = output_error
+    return failure
+
+
+def _native_review_limit_failure(
+    actual_items: int,
+    maximum_items: int,
+    invocation_id: str,
+    *,
+    received_at: datetime,
+) -> AgentInvocationError:
+    contract_error = NativeReviewContractError(
+        NativeReviewErrorCode.SCHEMA_INVALID,
+        "final-review disposition count exceeds bound maximum",
+    )
+    contract_error.disposition_limit = NativeReviewDispositionLimit(
+        actual_items, maximum_items
+    )
+    output_error = AgentOutputError(
+        "native review result violates its bound contract",
+        technical_text=str(contract_error),
     )
     output_error.__cause__ = contract_error
     failure = classify_agent_failure(
@@ -2796,8 +2829,19 @@ class BatchedFinalReviewDriver(FakeDriver):
         self.reviewer_calls.append(invocation)
         offered = tuple(item.finding_id for item in invocation.previous_findings)
         self.requested_ids.append(offered)
+        if self.reviewer_failures:
+            failure = self.reviewer_failures.pop(0)
+            if failure is not None:
+                raise failure
         selected = offered[: self.batch_size]
-        complete = len(selected) == len(offered) and self.approve_complete
+        assert invocation.native_request is not None
+        pending_count = invocation.native_request.document["review_contract"][
+            "disposition_budget"
+        ]["pending_finding_count"]
+        complete = (
+            len(selected) == len(offered) == pending_count
+            and self.approve_complete
+        )
         lines = [
             *(
                 f"FINDING_STATUS: {finding_id} | CLOSED | "
@@ -2839,6 +2883,8 @@ def _batched_final_review_case(
     *,
     batch_size: int,
     approve_complete: bool = True,
+    reviewer_failures: list[AgentInvocationError | None] | None = None,
+    context: WorkflowContext | None = None,
 ) -> tuple[WorkflowRunResult, BatchedFinalReviewDriver]:
     findings = tuple(
         FindingRecord(
@@ -2873,9 +2919,10 @@ def _batched_final_review_case(
         batch_size=batch_size,
         approve_complete=approve_complete,
         pending_ids=tuple(item.finding_id for item in findings),
+        reviewer_failures=[] if reviewer_failures is None else reviewer_failures,
     )
-    return WorkflowEngine(driver).run_current_work_unit(
-        state, _context(), history
+    return WorkflowEngine(driver, sleep_fn=lambda _seconds: None).run_current_work_unit(
+        state, _context() if context is None else context, history
     ), driver
 
 
@@ -2884,10 +2931,24 @@ def test_final_review_disposes_seventy_five_findings_over_bound_rounds() -> None
 
     assert result.workflow_completed
     assert len(driver.requested_ids) == 3
-    assert tuple(len(item) for item in driver.requested_ids) == (75, 50, 25)
+    assert tuple(len(item) for item in driver.requested_ids) == (32, 32, 25)
     assert [item.round_number for item in driver.reviewer_calls] == [1, 2, 3]
     assert driver.requested_ids[1] == tuple(
-        f"C-{number:02d}" for number in range(26, 76)
+        f"C-{number:02d}" for number in range(26, 58)
+    )
+    first_request = driver.reviewer_calls[0].native_request
+    assert first_request is not None
+    assert first_request.document["review_contract"]["disposition_budget"] == {
+        "maximum_items": 32,
+        "eligible_finding_ids": [
+            f"C-{number:02d}" for number in range(1, 33)
+        ],
+        "pending_finding_count": 75,
+    }
+    assert any(
+        "at most 32 total" in criterion
+        and "C-01, C-02" in criterion
+        for criterion in first_request.document["acceptance_criteria"]
     )
     assert project_open_set(result.history.findings).finding_ids == ()
 
@@ -2897,6 +2958,125 @@ def test_final_review_with_few_findings_completes_in_one_round() -> None:
 
     assert result.workflow_completed
     assert driver.requested_ids == [("C-01", "C-02", "C-03")]
+
+
+def test_final_review_continues_beyond_the_retired_four_round_limit() -> None:
+    result, driver = _batched_final_review_case(5, batch_size=1)
+
+    assert result.workflow_completed
+    assert [item.round_number for item in driver.reviewer_calls] == [1, 2, 3, 4, 5]
+    assert driver.requested_ids == [
+        tuple(f"C-{number:02d}" for number in range(start, 6))
+        for start in range(1, 6)
+    ]
+
+
+def test_over_budget_final_result_is_rejected_and_retried_with_smaller_offer() -> None:
+    now = [datetime(2026, 9, 11, 10, 0, tzinfo=timezone.utc)]
+    failure = _native_review_limit_failure(
+        33,
+        32,
+        "final-review-over-budget",
+        received_at=now[0],
+    )
+    result, driver = _batched_final_review_case(
+        32,
+        batch_size=16,
+        reviewer_failures=[failure, None],
+    )
+
+    assert result.workflow_completed
+    assert tuple(len(item) for item in driver.requested_ids) == (32, 16, 16)
+    assert [item.round_number for item in driver.reviewer_calls] == [1, 2, 3]
+    assert len(driver.failure_payloads) == 1
+    rejected = driver.failure_payloads[0]
+    assert rejected.diagnostic_code == "NATIVE-REVIEW-FORM"
+    assert rejected.automatic_resume is True
+    assert rejected.retry_delay_seconds > 0
+    assert rejected.idempotency_key.endswith(":disposition-limit")
+    assert result.state.current_work_unit.gate.status is GateStatus.CLEAR
+
+
+def test_disposition_limit_retry_does_not_depend_on_transient_retry_policy() -> None:
+    failure = _native_review_limit_failure(
+        33,
+        32,
+        "final-review-over-budget-policy-disabled",
+        received_at=datetime(2026, 9, 11, 10, 0, tzinfo=timezone.utc),
+    )
+    result, driver = _batched_final_review_case(
+        32,
+        batch_size=16,
+        reviewer_failures=[failure, None],
+        context=replace(
+            _context(),
+            transient_retry_policy=TransientRetryPolicy(automatic=False),
+        ),
+    )
+
+    assert result.workflow_completed
+    assert tuple(len(item) for item in driver.requested_ids) == (32, 16, 16)
+    assert driver.failure_payloads[0].automatic_resume is True
+    assert result.state.current_work_unit.gate.status is GateStatus.CLEAR
+
+
+def test_disposition_batches_preserve_previously_reclassified_blockers() -> None:
+    blocker_ids = ("C-85", "C-88", "C-102", "C-106")
+    findings = tuple(
+        FindingRecord(
+            finding_id=finding_id,
+            finding_class=FindingClass.BLOCKER,
+            status=FindingStatus.OPEN,
+            summary=f"Preserved final-review blocker {finding_id}.",
+            acceptance_test="The blocker remains in the correction handoff.",
+            origin=FindingOrigin("FINAL", 1, AgentRole.CLAUDE),
+        )
+        for finding_id in (*blocker_ids, "C-107")
+    )
+    state = replace(
+        _completed_single_slice_state().start_final_review_work_unit(),
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V2,
+            "2",
+            claude_review_transport="native-claude-review-v2",
+            codex_result_transport="native-codex-v2",
+        ),
+    ).with_current_step(WorkflowStep.CLAUDE_FINAL_REVIEW)
+    history = WorkflowHistory(
+        state.current_work_unit_id,
+        findings=findings,
+        codex_final_report='{"result_type":"final_report_result"}',
+    )
+    changes = _changes("f", "src/early.py", TEST_FILE)
+    driver = BatchedFinalReviewDriver(
+        snapshots=[changes],
+        codex_outputs=[],
+        reviewer_outputs=[],
+        batch_size=1,
+        pending_ids=("C-107",),
+        correction_boundaries=[
+            WorkflowCorrectionBoundary(
+                start_commit="b" * 40,
+                scope_paths=("src/early.py", TEST_FILE),
+                start_fingerprint="0" * 64,
+            )
+        ],
+    )
+
+    next_state, _ = WorkflowEngine(driver)._run_review(
+        state, _context(), history, AgentRole.CLAUDE
+    )
+
+    request = driver.reviewer_calls[0].native_request
+    assert request is not None
+    assert request.document["review_contract"]["disposition_budget"] == {
+        "maximum_items": 1,
+        "eligible_finding_ids": ["C-107"],
+        "pending_finding_count": 5,
+    }
+    assert next_state.current_work_unit.kind is WorkUnitKind.CORRECTION
+    assert next_state.current_step is WorkflowStep.CODEX_FINAL_CORRECTION
+    assert next_state.current_work_unit.open_findings == blocker_ids
 
 
 @pytest.mark.parametrize("review_type", ("slice review", "final review"))
@@ -3053,20 +3233,30 @@ def test_slice_review_reserves_finding_numbers_from_authoritative_replay() -> No
     )
 
 
-def test_exhausted_final_review_rounds_halt_resumably_with_named_remainder() -> None:
+def test_final_review_rounds_end_immediately_when_dispositions_make_no_progress() -> None:
     result, driver = _batched_final_review_case(
-        5, batch_size=1, approve_complete=False
+        5, batch_size=0, approve_complete=False
     )
 
-    assert len(driver.requested_ids) == 4
-    assert [item.round_number for item in driver.reviewer_calls] == [1, 2, 3, 4]
-    assert result.state.current_work_unit.status is WorkUnitStatus.AWAITING_USER_DECISION
-    assert result.state.current_work_unit.gate.reason is GateReason.STOP_REQUEST
-    assert result.state.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW
-    assert result.state.current_work_unit.gate.detail is not None
-    assert "FINAL-REVIEW-ROUNDS-EXHAUSTED" in result.state.current_work_unit.gate.detail
-    assert "missing dispositions: C-05" in result.state.current_work_unit.gate.detail
-    assert "C-01" not in result.state.current_work_unit.gate.detail
+    assert len(driver.requested_ids) == 1
+    assert [item.round_number for item in driver.reviewer_calls] == [1]
+    assert result.state.current_work_unit.status is WorkUnitStatus.COMPLETED
+    assert result.state.current_work_unit.gate.status is GateStatus.CLEAR
+    assert result.state.current_step is WorkflowStep.COMPLETED
+    assert result.workflow_rejected
+    assert result.exit_code == 5
+    assert result.rejection_detail is not None
+    assert "C-01, C-02, C-03, C-04, C-05" in result.rejection_detail
+    assert all(
+        item.finding_class is FindingClass.BLOCKER
+        for item in project_open_set(result.history.findings).findings
+    )
+    watch_result = WatchTaskResult.from_workflow(result)
+    assert watch_result.disposition is WatchTaskDisposition.REJECTED
+    assert watch_result.exit_code == 5
+    assert watch_result.status == "rejected"
+    assert watch_result.resume_available is False
+    assert watch_result.failure_detail == result.rejection_detail
 
 
 def test_combined_native_post_correction_final_transition_carries_complete_ledger(

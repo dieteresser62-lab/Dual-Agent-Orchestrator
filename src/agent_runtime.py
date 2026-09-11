@@ -48,6 +48,7 @@ from native_review_contract import (
     NativeReviewErrorCode,
     is_retryable_native_review_form_error,
     parse_bound_native_contract_result,
+    validate_native_review_disposition_budget,
     validate_native_review_document,
 )
 from native_review_request import (
@@ -1407,6 +1408,9 @@ def run_native_review_agent(
                 NativeReviewErrorCode.REVIEWER_MISMATCH,
                 "response reviewer does not match bound request",
             )
+        validate_native_review_disposition_budget(
+            document, bundle.bound_context.context
+        )
         validate_native_review_document(document)
         validate_native_review_provider_response(document, bundle)
         result = parse_bound_native_contract_result(document, bundle.bound_context)

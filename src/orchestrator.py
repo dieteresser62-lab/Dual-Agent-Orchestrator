@@ -2778,19 +2778,26 @@ def run_pipeline(
     if exit_code != 0:
         unit = result.state.current_work_unit
         gate = unit.gate
-        logger.warning(
-            "Workflow stopped: exit=%s status=%s step=%s reason=%s detail=%s paths=%s",
-            exit_code,
-            unit.status.value,
-            unit.current_step.value,
-            gate.reason.value,
-            gate.detail or "(none)",
-            ", ".join(gate.paths) or "(none)",
-        )
-        logger.info(
-            "Continue this persisted run with --resume and the unchanged --task-file; "
-            "use an explicit gate decision only when reason and fingerprint were reviewed."
-        )
+        if result.workflow_rejected:
+            logger.warning(
+                "Workflow completed with a final-review rejection: exit=%s detail=%s",
+                exit_code,
+                result.rejection_detail,
+            )
+        else:
+            logger.warning(
+                "Workflow stopped: exit=%s status=%s step=%s reason=%s detail=%s paths=%s",
+                exit_code,
+                unit.status.value,
+                unit.current_step.value,
+                gate.reason.value,
+                gate.detail or "(none)",
+                ", ".join(gate.paths) or "(none)",
+            )
+            logger.info(
+                "Continue this persisted run with --resume and the unchanged --task-file; "
+                "use an explicit gate decision only when reason and fingerprint were reviewed."
+            )
     return exit_code
 
 

@@ -24,7 +24,10 @@ from native_codex_request import (
     NativeCodexRequestSpec,
     build_native_codex_request,
 )
-from native_review_contract import NativeReviewContext
+from native_review_contract import (
+    MAX_NATIVE_REVIEW_DISPOSITIONS,
+    NativeReviewContext,
+)
 from native_review_request import (
     NativeReviewEvidenceInput,
     NativeReviewKind,
@@ -42,7 +45,8 @@ from review_packets import ReviewPacket
 from workflow_state import SliceStatus, WorkflowState, WorkUnitKind
 
 
-MAX_FINAL_REVIEW_DISPOSITION_ROUNDS = 4
+FINAL_REVIEW_DISPOSITION_BATCH_SIZE = MAX_NATIVE_REVIEW_DISPOSITIONS
+FINAL_REVIEW_ROUND_SAFETY_LIMIT = 256
 
 
 def native_codex_request(
@@ -238,6 +242,7 @@ def native_review_request(
     expected_test_files: tuple[str, ...],
     execution_error: type[RuntimeError],
     full_branch_evidence_kind: object,
+    final_review_pending_count: int | None = None,
 ) -> NativeReviewRequestBundle:
     """Build the native request only from typed local workflow values."""
     review_kind = {
@@ -271,6 +276,11 @@ def native_review_request(
         ),
         red_state_followup_slice=contract.red_state_followup_slice,
         plan_artifact_path=plan_artifact_path,
+        final_review_pending_count=(
+            final_review_pending_count
+            if review_kind is NativeReviewKind.FINAL
+            else None
+        ),
     )
     evidence: list[NativeReviewEvidenceInput] = [
         NativeReviewEvidenceInput("assignment", "assignment", context.assignment),
@@ -325,15 +335,18 @@ def native_review_request(
                 artifact_criterion,
                 (
                     "This is final-review disposition delivery round "
-                    f"{contract.round_number} of "
-                    f"{MAX_FINAL_REVIEW_DISPOSITION_ROUNDS}. "
-                    "review_contract.previous_findings contains exactly the "
-                    "still-undispositioned finding identifiers. Approval requires "
-                    "one status change or reclassification for every listed "
-                    "identifier; an incomplete approved response is rejected with "
-                    "all missing identifiers named. If the round delivers only a "
-                    "non-empty subset, deny it as an intermediate delivery; that "
-                    "subset is never an approval."
+                    f"{contract.round_number}. The bound disposition_budget permits "
+                    f"at most {len(history.findings)} total status changes or "
+                    "reclassifications and permits only these identifiers: "
+                    + (", ".join(item.finding_id for item in history.findings) or "(none)")
+                    + ". review_contract.previous_findings contains exactly that "
+                    "eligible subset. A non-empty partial disposition is a valid "
+                    "denied intermediate delivery and the remaining identifiers are "
+                    "offered in a later round. Return approved only when the request "
+                    "states that no undispositioned findings remain outside this "
+                    "offer and every offered identifier is dispositioned. A denied "
+                    "round with no status change and no reclassification ends the "
+                    "delivery sequence with the still-open findings as the verdict."
                     if review_kind is NativeReviewKind.FINAL
                     else None
                 ),

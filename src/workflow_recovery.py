@@ -48,7 +48,7 @@ from contracts import (
 )
 from final_review_preflight import FINAL_REVIEW_OPERATIONS
 from finding_order import sorted_finding_ids
-from finding_reducer import reduce_findings
+from finding_reducer import project_open_set, reduce_findings
 from gates import matches_path_patterns
 from git_service import inspect_commit_tree, inspect_repository
 from native_codex_contract import (
@@ -931,6 +931,9 @@ class WorkflowRecovery:
                 context.validation_matrix.finding_command_prefixes
             ),
             red_state_followup_slice=context.red_state_followup_slice,
+            final_review_pending_count={
+                ApprovalMarker.FINAL: len(project_open_set(history.findings).findings)
+            }.get(approval_marker),
         )
 
     def _parse_pending_native_reviewer_response(

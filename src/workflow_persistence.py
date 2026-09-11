@@ -543,6 +543,10 @@ class WorkflowPersistence:
             )
         ):
             chain = bridge.store.current_chain()
+            rejected = (
+                state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
+                and bool(state.current_work_unit.open_findings)
+            )
             final_binding = next(
                 (
                     item
@@ -552,17 +556,33 @@ class WorkflowPersistence:
                 ),
                 None,
             )
-            if final_binding is None:
+            if final_binding is None and not rejected:
                 raise WorkflowExecutionError(
                     "structured completion requires a reviewed commit binding"
                 )
             bridge.append(
                 WorkflowCompletionPayload(
-                    outcome="completed", final_binding_id=final_binding.record_id
+                    outcome="failed" if rejected else "completed",
+                    final_binding_id=(
+                        None if rejected else final_binding.record_id
+                    ),
                 ),
                 logical_id="workflow-completion",
-                idempotency_key="workflow-completion:completed",
-                fingerprint_sha256=final_binding.fingerprint.sha256,
+                idempotency_key=(
+                    "workflow-completion:failed"
+                    if rejected
+                    else "workflow-completion:completed"
+                ),
+                fingerprint_sha256=(
+                    contract_fingerprint
+                    if rejected
+                    else final_binding.fingerprint.sha256
+                ),
+                fingerprint_kind=(
+                    FingerprintKind.CONTRACT
+                    if rejected
+                    else FingerprintKind.IMPLEMENTATION
+                ),
             )
 
     def _persist_native_agent_request_bundle(self, invocation: object) -> None:

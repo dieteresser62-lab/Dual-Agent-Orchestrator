@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from agent_runtime import AgentProcessError
 from conftest import assert_isolated_run_root
-from error_classification import classify_exception
+from error_classification import ClassifiedFailure, FailureClass, classify_exception
 from inbox_watcher import (
     QueueFinalizationDisposition,
     WatchTaskDisposition,
@@ -1003,6 +1003,63 @@ def test_terminal_input_rejection_is_archived_once_and_queue_continues(
     run_roots = tuple((isolated_run_root / ".orchestrator/artifacts").iterdir())
     assert len(run_roots) == 1
     assert_isolated_run_root(run_roots[0], isolated_run_root)
+
+
+def test_recorded_final_review_rejection_is_archived_without_resume(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    inbox = tmp_path / "inbox"
+    outbox = tmp_path / "outbox"
+    inbox.mkdir()
+    task = inbox / "final-denied.md"
+    task.write_text("final review", encoding="utf-8")
+
+    def process(_task: Path, args: Namespace, _force_new: bool) -> WatchTaskResult:
+        records = (
+            tmp_path
+            / ".orchestrator"
+            / "artifacts"
+            / args.watch_run_id
+            / "records"
+        )
+        records.mkdir(parents=True)
+        (records / "0001.json").write_text("{}\n", encoding="utf-8")
+        detail = "FINAL-REVIEW-DENIED | remaining open findings: C-85"
+        return WatchTaskResult(
+            exit_code=5,
+            run_id=args.watch_run_id,
+            disposition=WatchTaskDisposition.REJECTED,
+            status="rejected",
+            step=WorkflowStep.COMPLETED.value,
+            work_unit_id=44,
+            gate_reason="FINAL-REVIEW-DENIED",
+            failure_detail=detail,
+            resume_available=False,
+            protocol_mode="structured-v2",
+            classified_failure=ClassifiedFailure(
+                failure_class=FailureClass.TERMINAL_REJECTION,
+                diagnostic_code="FINAL-REVIEW-DENIED",
+                exception_type="FinalReviewVerdict",
+                detail=detail,
+                cause_depth=0,
+                explicitly_mapped=True,
+            ),
+        )
+
+    result = watch_inbox(
+        inbox_dir=inbox,
+        outbox_dir=outbox,
+        poll_interval=0.01,
+        args=_args(),
+        process_task=process,
+        sleep_fn=_InterruptingSleep(interrupt_after=1),
+        time_fn=lambda: 10_000_000_000.0,
+    )
+
+    assert result == 0
+    assert not task.exists()
+    assert len(list((outbox / "failed").glob("*.rejected"))) == 1
 
 
 def test_terminal_rejection_move_retry_does_not_execute_task_twice(

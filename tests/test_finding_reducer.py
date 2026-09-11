@@ -618,6 +618,7 @@ def test_no_production_module_reimplements_finding_reduction() -> None:
         "merge_history_snapshots",
         "merge_request_result",
         "project_finding_response_delta",
+        "project_finding_transition_ids",
         "project_latest_recorded_statuses",
         "project_open_set",
         "project_record_finding_statuses",
