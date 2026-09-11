@@ -4648,6 +4648,7 @@ def test_combined_native_finding_authority_ignores_projection_drift(
         reviewer=Reviewer.CLAUDE,
         open_findings=("C-01", "C-03"),
         return_step=WorkflowStep.CODEX_FINAL_CORRECTION,
+        progress_made=True,
     )
     driver.bind_work_unit(round_two)
     assert driver.authoritative_native_findings(
@@ -5014,6 +5015,7 @@ def test_structured_bind_survives_round_number_increase_within_same_work_unit(
         reviewer=Reviewer.CLAUDE,
         open_findings=("C-04",),
         return_step=WorkflowStep.CODEX_IMPLEMENTATION,
+        progress_made=True,
     )
     driver.bind_work_unit(round_two)
     driver.bind_work_unit(round_two)

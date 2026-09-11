@@ -84,11 +84,14 @@ from workflow import (
     WorkflowRunResult,
     ValidationExecutionError,
     _review_round_number,
+    resolve_retired_iteration_limit,
 )
 from workflow_state import (
     AgentFailureKind,
+    GateRecord,
     GateReason,
     GateStatus,
+    SliceStatus,
     WorkflowStep,
     WorkflowState,
     WorkUnitKind,
@@ -946,6 +949,7 @@ def _denied_slice_round(
         reviewer=Reviewer.CLAUDE,
         open_findings=(finding.finding_id,),
         return_step=WorkflowStep.CODEX_CORRECTION,
+        progress_made=True,
     )
     denial = ContractResult(
         reviewer=AgentRole.CLAUDE,
@@ -965,6 +969,142 @@ def _denied_slice_round(
         last_claude_fingerprint="d" * 64,
         latest_claude_review=denial,
     )
+
+
+def _legacy_iteration_gate_state(
+    open_findings: tuple[str, ...],
+) -> WorkflowState:
+    state = _combined_native_slice_state()
+    current = replace(
+        state.current_work_unit,
+        status=WorkUnitStatus.AWAITING_USER_DECISION,
+        current_step=WorkflowStep.CODEX_CORRECTION,
+        round_number=4,
+        codex_return_count=4,
+        max_codex_returns=4,
+        gate=GateRecord(
+            status=GateStatus.AWAITING_USER_DECISION,
+            reason=GateReason.ITERATION_LIMIT,
+            detail="review denied by claude after 4 Codex returns",
+        ),
+        reviewer=Reviewer.CLAUDE,
+        open_findings=open_findings,
+    )
+    return replace(
+        state,
+        current_step=WorkflowStep.CODEX_CORRECTION,
+        work_units=tuple(
+            current if item.work_unit_id == current.work_unit_id else item
+            for item in state.work_units
+        ),
+        slices=tuple(
+            replace(item, status=SliceStatus.AWAITING_USER_DECISION)
+            if item.slice_id == state.current_slice_id
+            else item
+            for item in state.slices
+        ),
+    )
+
+
+def _denied_review_result(
+    findings: tuple[FindingRecord, ...],
+) -> ContractResult:
+    return ContractResult(
+        reviewer=AgentRole.CLAUDE,
+        approval=False,
+        stopped=False,
+        stop_request=None,
+        validation=None,
+        test_files=(TEST_FILE,),
+        pre_mortem=None,
+        evidence=None,
+        findings=findings,
+        anchors=(),
+    )
+
+
+def test_retired_iteration_gate_terminates_from_persisted_no_progress() -> None:
+    findings = tuple(
+        FindingRecord(
+            finding_id=f"C-{number:02d}",
+            finding_class=FindingClass.BLOCKER,
+            status=FindingStatus.OPEN,
+            summary=f"Remaining blocker {number}",
+            acceptance_test=f"Close blocker {number}.",
+            origin=FindingOrigin("01", number, AgentRole.CLAUDE),
+        )
+        for number in (1, 2)
+    )
+    previous = _denied_review_result(findings)
+    current = _denied_review_result(
+        tuple(
+            replace(item, status_rationale="Still open after another review.")
+            for item in findings
+        )
+    )
+    state = _legacy_iteration_gate_state(tuple(item.finding_id for item in findings))
+    history = WorkflowHistory(
+        state.current_work_unit_id,
+        findings=current.findings,
+        events=(
+            ReviewAuditEvent(1, state.current_slice_id, 3, previous),
+            ReviewAuditEvent(2, state.current_slice_id, 4, current),
+        ),
+        latest_claude_review=current,
+    )
+
+    resolved = resolve_retired_iteration_limit(state, history)
+    result = WorkflowRunResult(resolved, history)
+
+    assert resolved.current_work_unit.status is WorkUnitStatus.COMPLETED
+    assert resolved.current_work_unit.gate.status is GateStatus.CLEAR
+    assert result.workflow_rejected
+    assert result.rejection_code == "CORRECTION-REVIEW-DENIED"
+    assert result.rejection_detail is not None
+    assert "C-01, C-02" in result.rejection_detail
+
+
+def test_retired_iteration_gate_continues_from_persisted_progress() -> None:
+    prior = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="Prior blocker",
+        acceptance_test="Close the prior blocker.",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
+    replacement = FindingRecord(
+        finding_id="C-02",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="Newly exposed blocker",
+        acceptance_test="Close the newly exposed blocker.",
+        origin=FindingOrigin("01", 4, AgentRole.CLAUDE),
+    )
+    previous = _denied_review_result((prior,))
+    current = _denied_review_result(
+        (
+            replace(prior, status=FindingStatus.CLOSED, status_rationale="Verified."),
+            replacement,
+        )
+    )
+    state = _legacy_iteration_gate_state((replacement.finding_id,))
+    history = WorkflowHistory(
+        state.current_work_unit_id,
+        findings=current.findings,
+        events=(
+            ReviewAuditEvent(1, state.current_slice_id, 3, previous),
+            ReviewAuditEvent(2, state.current_slice_id, 4, current),
+        ),
+        latest_claude_review=current,
+    )
+
+    resolved = resolve_retired_iteration_limit(state, history)
+
+    assert resolved.current_work_unit.status is WorkUnitStatus.IN_PROGRESS
+    assert resolved.current_work_unit.gate.status is GateStatus.CLEAR
+    assert resolved.current_work_unit.max_codex_returns == 8
+    assert resolved.current_work_unit.codex_return_count == 4
 
 
 def test_review_denial_round_builds_correction_packet_with_affected_findings() -> None:

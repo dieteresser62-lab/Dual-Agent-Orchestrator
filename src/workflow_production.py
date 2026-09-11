@@ -34,6 +34,8 @@ from workflow import (
     WorkflowRunResult,
     require_driver_capabilities,
     require_workflow_driver,
+    resolve_retired_iteration_limit,
+    workflow_rejection_finding_ids,
 )
 from workflow_state import (
     AgentProfileBinding,
@@ -554,8 +556,40 @@ def run_production_workflow(
     require_production_workflow_loop_driver(driver)
     engine = WorkflowEngine(driver)
     history = dependencies.history(state, root)
+    state = resolve_retired_iteration_limit(state, history)
     driver.checkpoint(state, history)
 
+    return _run_or_return_retired_iteration_verdict(
+        root=root,
+        task_file=task_file,
+        assignment=assignment,
+        args=args,
+        dependencies=dependencies,
+        state=state,
+        history=history,
+        effective_resume=effective_resume,
+        driver=driver,
+        engine=engine,
+    )
+
+
+def _run_or_return_retired_iteration_verdict(
+    *,
+    root: Path,
+    task_file: Path,
+    assignment: str,
+    args: argparse.Namespace,
+    dependencies: ProductionWorkflowDependencies,
+    state: WorkflowState,
+    history: WorkflowHistory,
+    effective_resume: bool,
+    driver: ProductionWorkflowLoopDriver,
+    engine: WorkflowEngine,
+) -> WorkflowRunResult:
+    """Return a retired gate verdict before entering the preserved core loop."""
+
+    if workflow_rejection_finding_ids(state, history):
+        return WorkflowRunResult(state, history)
     return _run_production_transition_loop(
         root=root,
         task_file=task_file,

@@ -2207,6 +2207,203 @@ def build_s5_long_run_scenario() -> DryRunScenario:
     )
 
 
+def build_progressive_correction_scenario(
+    *, stalled: bool = False
+) -> DryRunScenario:
+    """Exercise correction convergence beyond four returns or at a fixed point."""
+
+    base, slice_commit, correction_commit = "a" * 40, "b" * 40, "c" * 40
+    scope = ("src/runtime.py",)
+    implementer_role = AgentRole.CODEX  # allowlist:provider -- scripted role boundary
+    reviewer_role = AgentRole.CLAUDE  # allowlist:provider -- scripted role boundary
+    implementation_step = WorkflowStep.CODEX_IMPLEMENTATION  # allowlist:provider -- scripted step boundary
+    slice_review_step = WorkflowStep.CLAUDE_SLICE_REVIEW  # allowlist:provider -- scripted step boundary
+    report_step = WorkflowStep.CODEX_FINAL_REVIEW  # allowlist:provider -- scripted step boundary
+    correction_step = WorkflowStep.CODEX_FINAL_CORRECTION  # allowlist:provider -- scripted step boundary
+    final_review_step = WorkflowStep.CLAUDE_FINAL_REVIEW  # allowlist:provider -- scripted step boundary
+
+    def implementer_result(
+        result_type: str, findings: tuple[str, ...] = ()
+    ) -> dict[str, object]:
+        return {
+            "schema_version": "native-agent-codex-result-v2",  # allowlist:provider
+            "request_id": "$BOUND_REQUEST_ID",
+            "result_type": result_type,
+            "ready": True,
+            "finding_dispositions": [
+                {
+                    "finding_id": finding_id,
+                    "decision": "accepted",
+                    "rationale": f"The scripted correction addresses {finding_id}.",
+                }
+                for finding_id in findings
+            ],
+            **(
+                {"self_check": "The scripted final review is internally consistent."}
+                if result_type == "final_report_result"
+                else {"test_files": []}
+            ),
+        }
+
+    def review(
+        *,
+        approved: bool,
+        opened: tuple[str, ...] = (),
+        closed: tuple[str, ...] = (),
+    ) -> dict[str, object]:
+        return {
+            "schema_version": "native-agent-review-result-v2",
+            "result_type": "review_result",
+            "request_id": "$BOUND_REQUEST_ID",
+            "reviewer": "claude",  # allowlist:provider
+            "decision": "approved" if approved else "denied",
+            "new_findings": [
+                {
+                    "finding_id": finding_id,
+                    "finding_class": "BLOCKER",
+                    "summary": f"Scripted correction finding {finding_id}.",
+                    "acceptance_test": {
+                        "kind": "prose",
+                        "text": f"The scripted correction closes {finding_id}.",
+                    },
+                }
+                for finding_id in opened
+            ],
+            "status_changes": [
+                {
+                    "finding_id": finding_id,
+                    "status": "CLOSED",
+                    "rationale": f"The scripted correction closes {finding_id}.",
+                }
+                for finding_id in closed
+            ],
+            "reclassifications": [],
+            "anchors": [],
+            "review_evidence": {
+                "dimensions": "progress, terminal verdict, persistence, resume",
+                "largest_residual_risk": "the return policy stops before convergence",
+                "break_condition": "a progressing fifth return creates a user gate",
+            },
+            "pre_mortem": "A counter could replace the record-derived progress test.",
+        }
+
+    events: list[ScriptedAgentEvent] = [
+        ScriptedAgentEvent(
+            implementer_role, 2, 1, implementation_step,
+            implementer_result("implementation_result"),
+        ),
+        ScriptedAgentEvent(
+            reviewer_role, 2, 1, slice_review_step,
+            review(approved=True),
+        ),
+        ScriptedAgentEvent(
+            implementer_role, 3, 1, report_step,
+            implementer_result("final_report_result"),
+        ),
+        ScriptedAgentEvent(
+            reviewer_role, 3, 1, final_review_step,
+            review(approved=False, opened=("C-01",)),
+        ),
+        ScriptedAgentEvent(
+            implementer_role, 4, 1, correction_step,
+            implementer_result("correction_result", ("C-01",)),
+        ),
+    ]
+    correction_rounds = 1 if stalled else 6
+    for round_number in range(1, correction_rounds + 1):
+        if stalled:
+            events.append(
+                ScriptedAgentEvent(
+                    reviewer_role, 4, round_number,
+                    slice_review_step,
+                    review(approved=False),
+                )
+            )
+            continue
+        current_id = f"C-{round_number:02d}"
+        if round_number < correction_rounds:
+            next_id = f"C-{round_number + 1:02d}"
+            events.extend(
+                (
+                    ScriptedAgentEvent(
+                        reviewer_role, 4, round_number,
+                        slice_review_step,
+                        review(
+                            approved=False,
+                            opened=(next_id,),
+                            closed=(current_id,),
+                        ),
+                    ),
+                    ScriptedAgentEvent(
+                        implementer_role, 4, round_number + 1,
+                        correction_step,
+                        implementer_result("correction_result", (next_id,)),
+                    ),
+                )
+            )
+        else:
+            events.append(
+                ScriptedAgentEvent(
+                    reviewer_role, 4, round_number,
+                    slice_review_step,
+                    review(approved=True, closed=(current_id,)),
+                )
+            )
+    if not stalled:
+        events.extend(
+            (
+                ScriptedAgentEvent(
+                    implementer_role, 5, 1, report_step,
+                    implementer_result("final_report_result"),
+                ),
+                ScriptedAgentEvent(
+                    reviewer_role, 5, 1, final_review_step,
+                    review(approved=True),
+                ),
+            )
+        )
+
+    changes = [
+        _scripted_change(2, 1, base, "1" * 64, scope, "implementation"),
+        _scripted_change(3, 1, base, "2" * 64, scope, "initial final review"),
+    ]
+    for round_number in range(1, correction_rounds + 1):
+        fingerprint = str(round_number + 2) * 64
+        changes.append(
+            _scripted_change(
+                4,
+                round_number,
+                slice_commit,
+                fingerprint,
+                scope,
+                f"correction round {round_number}",
+            )
+        )
+    if not stalled:
+        changes.append(
+            _scripted_change(5, 1, base, "9" * 64, scope, "repeated final review")
+        )
+    validation_fingerprints = tuple(item.fingerprint for item in changes)
+    return DryRunScenario(
+        name=("stalled-correction" if stalled else "progressive-correction"),
+        initial=ScriptedInitialState(
+            kind=WorkUnitKind.SLICE,
+            slice_count=1,
+            scope_paths=scope,
+        ),
+        agent_events=tuple(events),
+        changes=tuple(changes),
+        validations=tuple(
+            ScriptedValidation(fingerprint)
+            for fingerprint in validation_fingerprints
+        ),
+        commits=(
+            ScriptedCommit(1, "1" * 64, slice_commit),
+            *((ScriptedCommit(2, "8" * 64, correction_commit),) if not stalled else ()),
+        ),
+    )
+
+
 def run_scripted_work_unit(
     *,
     scenario: DryRunScenario,

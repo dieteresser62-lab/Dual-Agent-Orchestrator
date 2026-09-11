@@ -2792,7 +2792,7 @@ def run_pipeline(
         gate = unit.gate
         if result.workflow_rejected:
             logger.warning(
-                "Workflow completed with a final-review rejection: exit=%s detail=%s",
+                "Workflow completed with a reviewer rejection: exit=%s detail=%s",
                 exit_code,
                 result.rejection_detail,
             )

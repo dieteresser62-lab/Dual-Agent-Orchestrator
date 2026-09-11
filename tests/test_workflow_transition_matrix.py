@@ -526,15 +526,6 @@ GATE_SOURCE_MAP = (
         r"test changes require explicit approval before review",
     ),
     GateSourceRow(
-        "PREFIXLESS:REVIEW-DENIAL",
-        "iteration_limit",
-        "user",
-        "workflow_state.record_review_denial",
-        ("workflow_state.record_review_denial",),
-        ("review-denial-limit",),
-        r"review denied by (?:claude) after [1-9][0-9]* Codex returns",
-    ),
-    GateSourceRow(
         "PREFIXLESS:INVOCATION-FAILURE",
         "instance_failure_or_quota",
         "resume",
@@ -660,7 +651,6 @@ GATE_CASE_ORACLE = (
     ("anchor-change", "anchor_change", "PREFIXLESS:ANCHOR-CHANGE", "user"),
     ("manual-slice", "manual_slice", "PREFIXLESS:MANUAL-SLICE", "user"),
     ("test-change", "test_change", "PREFIXLESS:TEST-CHANGE", "user"),
-    ("review-denial-limit", "iteration_limit", "PREFIXLESS:REVIEW-DENIAL", "user"),
     (
         "invocation-failure",
         "instance_failure_or_quota",
@@ -692,6 +682,7 @@ REGISTERED_GATE_PREFIXES = frozenset(
 # into gates without updating the source map and matrix.
 GATE_FOREIGN_PREFIXES = {
     "AGENT-PROFILE-DIFF": "resume profile validation raises before workflow execution",
+    "CORRECTION-REVIEW-DENIED": "terminal correction verdict is not a resumable gate",
     "FINAL-REVIEW-DENIED": "terminal reviewer verdict is not a resumable gate",
     "TASK-SCOPE": "invalid Codex slice plans raise a workflow contract error",
 }
@@ -700,7 +691,6 @@ GATE_FOREIGN_PREFIXES = {
 GATE_CALLS = {
     "await_user_gate",
     "await_policy_gate",
-    "record_review_denial",
     "record_invocation_failure",
     "await_bootstrap_resume",
     "reopen_legacy_quota_resume_diff_gate",
@@ -727,7 +717,6 @@ EXPECTED_GATE_CALL_SITES = Counter(
         ("workflow.py", "_run_review", "await_policy_gate"): 2,
         ("workflow.py", "_run_review", "await_user_gate"): 1,
         ("workflow.py", "_apply_review_result", "await_user_gate"): 1,
-        ("workflow.py", "_apply_review_result", "record_review_denial"): 1,
         ("workflow.py", "_invoke_role", "await_user_gate"): 1,
         ("workflow.py", "_invoke_role", "await_bootstrap_resume"): 1,
         (
@@ -754,7 +743,8 @@ EXPECTED_DIRECT_GATE_CONSTRUCTORS = Counter(
         ("workflow_state.py", "await_policy_gate", "GateRecord"): 1,
         ("workflow_state.py", "record_user_gate_decision", "GateRecord"): 1,
         ("workflow_state.py", "reopen_legacy_quota_resume_diff_gate", "GateRecord"): 1,
-        ("workflow_state.py", "record_review_denial", "GateRecord"): 3,
+        ("workflow_state.py", "record_review_denial", "GateRecord"): 1,
+        ("workflow_state.py", "continue_retired_iteration_limit", "GateRecord"): 2,
         ("workflow_state.py", "record_invocation_failure", "GateRecord"): 1,
         ("workflow_state.py", "await_bootstrap_resume", "GateRecord"): 1,
         ("workflow_state.py", "resume_after_invocation_halt", "GateRecord"): 1,
@@ -770,7 +760,8 @@ EXPECTED_GATE_REPLACEMENTS = Counter(
         ("workflow_state.py", "await_policy_gate"): 1,
         ("workflow_state.py", "record_user_gate_decision"): 1,
         ("workflow_state.py", "reopen_legacy_quota_resume_diff_gate"): 1,
-        ("workflow_state.py", "record_review_denial"): 2,
+        ("workflow_state.py", "record_review_denial"): 1,
+        ("workflow_state.py", "continue_retired_iteration_limit"): 2,
         ("workflow_state.py", "record_invocation_failure"): 1,
         ("workflow_state.py", "await_bootstrap_resume"): 1,
         ("workflow_state.py", "resume_after_invocation_halt"): 1,
@@ -1453,14 +1444,7 @@ def _execute_gate_case(
 ) -> tuple[str, str, str]:
     case_id, reason, rule_id, kind = case
     state = _slice_state()
-    if rule_id == "PREFIXLESS:REVIEW-DENIAL":
-        while state.current_work_unit.gate.status is GateStatus.CLEAR:
-            state = state.record_review_denial(
-                reviewer=Reviewer.CLAUDE,
-                open_findings=("C-01",),
-                return_step=WorkflowStep.CODEX_CORRECTION,
-            )
-    elif rule_id == "PREFIXLESS:INVOCATION-FAILURE":
+    if rule_id == "PREFIXLESS:INVOCATION-FAILURE":
         state = state.record_invocation_failure(
             _invocation_failure(state), wait_automatically=False
         )
@@ -1772,6 +1756,7 @@ def _exercise_transition_oracle(tmp_path: Path) -> None:
         reviewer=Reviewer.CLAUDE,
         open_findings=("C-01",),
         return_step=WorkflowStep.CODEX_PLAN_REVISION,
+        progress_made=True,
         updated_at="2026-08-27T10:00:01+00:00",
     )
     assert_case(
@@ -1797,6 +1782,7 @@ def _exercise_transition_oracle(tmp_path: Path) -> None:
         reviewer=Reviewer.CLAUDE,
         open_findings=("C-01",),
         return_step=WorkflowStep.CODEX_CORRECTION,
+        progress_made=True,
         updated_at="2026-08-27T10:00:05+00:00",
     )
     assert_case(
@@ -1850,6 +1836,7 @@ def _exercise_transition_oracle(tmp_path: Path) -> None:
         reviewer=Reviewer.CLAUDE,
         open_findings=("C-01", "C-03"),
         return_step=WorkflowStep.CODEX_FINAL_CORRECTION,
+        progress_made=True,
         updated_at="2026-08-27T10:00:10+00:00",
     )
     assert_case(
@@ -2792,6 +2779,7 @@ def _ledger_case(
         reviewer=Reviewer.CLAUDE,
         open_findings=("C-01", "C-03"),
         return_step=WorkflowStep.CODEX_FINAL_CORRECTION,
+        progress_made=True,
     )
     round_two = _bind_record_authoritative_fixture(driver, round_two)
     correction_mirror = (c01, c02_closed, c03)

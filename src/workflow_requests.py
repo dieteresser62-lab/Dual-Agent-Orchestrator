@@ -46,7 +46,12 @@ from review_packets import (
     ReviewPacketError,
     derive_correction_requirements,
 )
-from workflow_state import SliceStatus, WorkflowState, WorkUnitKind
+from workflow_state import (
+    SliceStatus,
+    WorkflowState,
+    WorkUnitKind,
+    project_implementer_return_policy,
+)
 
 
 FINAL_REVIEW_DISPOSITION_BATCH_SIZE = MAX_NATIVE_REVIEW_DISPOSITIONS
@@ -394,6 +399,21 @@ def native_review_request(
                     "round with no status change and no reclassification ends the "
                     "delivery sequence with the still-open findings as the verdict."
                     if review_kind is NativeReviewKind.FINAL
+                    else None
+                ),
+                (
+                    "This review is part of an implementer correction sequence. "
+                    "A denied round continues only when it closes a finding, "
+                    "reclassifies one, or opens a new finding. A denied round with "
+                    "none of those record-derived transitions is the terminal "
+                    "review verdict for every still-open finding."
+                    if (
+                        state.current_work_unit.kind is WorkUnitKind.CORRECTION
+                        or project_implementer_return_policy(
+                            state.current_work_unit
+                        )[0]
+                        > 0
+                    )
                     else None
                 ),
                 "The decision must satisfy the bound review contract and the "

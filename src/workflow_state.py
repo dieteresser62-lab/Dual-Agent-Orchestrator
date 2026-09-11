@@ -12,6 +12,7 @@ from contracts import PlannedSlice
 
 STATE_VERSION = 3
 DEFAULT_MAX_CODEX_RETURNS = 4
+IMPLEMENTER_RETURN_SAFETY_LIMIT = 256
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 TECHNICAL_TEXT_MARKER_PATTERN = re.compile(
     r"^\[technical text redacted; sha256=[0-9a-f]{64}; "
@@ -2052,64 +2053,93 @@ class WorkflowState:
         reviewer: Reviewer,
         open_findings: tuple[str, ...],
         return_step: WorkflowStep,
+        progress_made: bool,
         updated_at: str | None = None,
     ) -> WorkflowState:
         _require_unique_non_empty(open_findings, "open_findings")
         if not open_findings:
             raise WorkflowStateValidationError("a review denial requires open findings")
+        if not isinstance(progress_made, bool):
+            raise WorkflowStateValidationError("review progress must be boolean")
         current = self.current_work_unit
-        next_count = current.codex_return_count + 1
-        if next_count > current.max_codex_returns:
-            # State files produced before iteration-limit continuation extended the
-            # budget could have a cleared gate while still carrying an exhausted
-            # counter.  The user already acknowledged that limit by resuming, so
-            # recover into the next bounded block without replaying a round number
-            # or counting the same Codex return twice.
-            extended_unit = replace(
-                current,
-                status=WorkUnitStatus.IN_PROGRESS,
-                current_step=return_step,
-                round_number=current.round_number + 1,
-                max_codex_returns=(
-                    current.max_codex_returns + DEFAULT_MAX_CODEX_RETURNS
-                ),
-                gate=GateRecord(),
-                reviewer=reviewer,
-                open_findings=open_findings,
+        next_count = current.codex_return_count + 1  # allowlist:provider -- persisted counter
+        if next_count > IMPLEMENTER_RETURN_SAFETY_LIMIT:
+            raise WorkflowStateValidationError(
+                "review denial exceeds the implementer return safety limit"
             )
-            return self._replace_current_unit(
-                extended_unit,
-                slices=self._slices_with_current_status(SliceStatus.IN_PROGRESS),
-                updated_at=updated_at,
+        safety_limit_reached = next_count == IMPLEMENTER_RETURN_SAFETY_LIMIT
+        continue_rounds = progress_made and not safety_limit_reached
+        next_max = current.max_codex_returns
+        if continue_rounds and next_count >= next_max:
+            next_max = min(
+                IMPLEMENTER_RETURN_SAFETY_LIMIT,
+                max(next_count + 1, next_max + DEFAULT_MAX_CODEX_RETURNS),
             )
-        limit_reached = next_count == current.max_codex_returns
-        gate = (
-            GateRecord(
-                status=GateStatus.AWAITING_USER_DECISION,
-                reason=GateReason.ITERATION_LIMIT,
-                detail=f"review denied by {reviewer.value} after {next_count} Codex returns",
+        elif next_count > next_max:
+            # A legacy iteration gate can be cleared automatically before this
+            # method observes its next denial. Preserve the exact return count by
+            # extending the old policy block rather than saturating the counter.
+            next_max = min(
+                IMPLEMENTER_RETURN_SAFETY_LIMIT,
+                max(next_count, next_max + DEFAULT_MAX_CODEX_RETURNS),
             )
-            if limit_reached
-            else GateRecord()
-        )
         updated_unit = replace(
             current,
-            status=(
-                WorkUnitStatus.AWAITING_USER_DECISION
-                if limit_reached
-                else WorkUnitStatus.IN_PROGRESS
-            ),
-            current_step=return_step,
-            round_number=(current.round_number if limit_reached else current.round_number + 1),
+            status=(WorkUnitStatus.IN_PROGRESS if continue_rounds else WorkUnitStatus.COMPLETED),
+            current_step=(return_step if continue_rounds else WorkflowStep.COMPLETED),
+            round_number=(current.round_number + 1 if continue_rounds else current.round_number),
             codex_return_count=next_count,
-            gate=gate,
+            max_codex_returns=next_max,
+            gate=GateRecord(),
             reviewer=reviewer,
             open_findings=open_findings,
         )
-        slices = self.slices
-        if limit_reached:
-            slices = self._slices_with_current_status(SliceStatus.AWAITING_USER_DECISION)
-        return self._replace_current_unit(updated_unit, slices=slices, updated_at=updated_at)
+        return self._replace_current_unit(
+            updated_unit,
+            slices=self._slices_with_current_status(SliceStatus.IN_PROGRESS),
+            updated_at=updated_at,
+        )
+
+    def continue_retired_iteration_limit(
+        self, *, progress_made: bool, updated_at: str | None = None
+    ) -> WorkflowState:
+        """Resolve a persisted pre-B112 counter gate without a user decision."""
+
+        current = self.current_work_unit
+        if (
+            current.status is not WorkUnitStatus.AWAITING_USER_DECISION
+            or current.gate.reason is not GateReason.ITERATION_LIMIT
+        ):
+            return self
+        if not isinstance(progress_made, bool):
+            raise WorkflowStateValidationError("review progress must be boolean")
+        if (
+            not progress_made
+            or current.max_codex_returns >= IMPLEMENTER_RETURN_SAFETY_LIMIT
+        ):
+            return self._replace_current_unit(
+                replace(
+                    current,
+                    status=WorkUnitStatus.COMPLETED,
+                    current_step=WorkflowStep.COMPLETED,
+                    gate=GateRecord(),
+                ),
+                slices=self._slices_with_current_status(SliceStatus.IN_PROGRESS),
+                updated_at=updated_at,
+            )
+        return self._replace_current_unit(
+            replace(
+                current,
+                status=WorkUnitStatus.IN_PROGRESS,
+                max_codex_returns=min(
+                    IMPLEMENTER_RETURN_SAFETY_LIMIT,
+                    current.max_codex_returns + DEFAULT_MAX_CODEX_RETURNS,
+                ),
+                gate=GateRecord(),
+            ),
+            slices=self._slices_with_current_status(SliceStatus.IN_PROGRESS),
+            updated_at=updated_at,
+        )
 
     def record_invocation_failure(
         self,
@@ -2303,7 +2333,10 @@ class WorkflowState:
             raise WorkflowStateValidationError(
                 "fingerprint-bound gate requires an explicit recorded user decision"
             )
-        continuing_iteration_limit = current.gate.reason is GateReason.ITERATION_LIMIT
+        if current.gate.reason is GateReason.ITERATION_LIMIT:
+            raise WorkflowStateValidationError(
+                "retired iteration-limit gates require record-derived automatic resolution"
+            )
         continuing_stop_request = current.gate.reason is GateReason.STOP_REQUEST
         completed_side_effects = current.completed_side_effects
         if (
@@ -2327,13 +2360,8 @@ class WorkflowState:
             status=WorkUnitStatus.IN_PROGRESS,
             round_number=(
                 current.round_number + 1
-                if continuing_iteration_limit or continuing_stop_request
+                if continuing_stop_request
                 else current.round_number
-            ),
-            max_codex_returns=(
-                current.max_codex_returns + DEFAULT_MAX_CODEX_RETURNS
-                if continuing_iteration_limit
-                else current.max_codex_returns
             ),
             completed_side_effects=completed_side_effects,
             gate=GateRecord(),
