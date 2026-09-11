@@ -401,6 +401,11 @@ def test_resume_compares_only_latest_review_packet_per_work_unit(
     assert len(packet_records) == 2
     assert history.active_review_packet is packets[-1]
     assert packet_records[-1].payload.fingerprint == packets[-1].fingerprint
+    resumed_history = orchestrator._history(resolution.state, repository)
+    assert resumed_history.active_review_packet == packets[-1]
+    assert tuple(
+        item.attestation_id for item in resumed_history.attestations
+    ) == tuple(item.attestation_id for item in attestations)
 
 
 def test_external_side_effect_guard_reprojects_mirror_ahead_from_records(

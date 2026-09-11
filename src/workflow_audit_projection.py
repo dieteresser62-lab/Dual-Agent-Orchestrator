@@ -18,7 +18,10 @@ from typing import Callable
 
 from artifact_bridge import review_payload_matches_result
 from artifact_models import (
+    AgentResultPayload,
     CorrectionWorkUnitPayload,
+    ProviderContentPayload,
+    ReviewPacketPayload,
     ReviewPayload,
     WorkflowTransitionPayload,
 )
@@ -46,6 +49,7 @@ from gates import matches_path_patterns
 from git_service import inspect_repository
 from inbox_watcher import move_to_outbox
 from repo_changes import collect_repository_changes
+from review_packets import ReviewPacket
 from workflow import WorkflowExecutionError, WorkflowHistory
 from workflow_state import (
     GateReason,
@@ -346,6 +350,84 @@ def _attach_record_events(
             ),
         )
     return projected
+
+
+def _hydrate_record_history(
+    history: WorkflowHistory,
+    replay: ArtifactReplayResult,
+    read_blob: Callable[[object], bytes],
+) -> WorkflowHistory:
+    """Project every durable history fact for one request-building work unit.
+
+    Optional facts remain absent only when the validated record prefix contains
+    no bound authority for them; a cache miss can therefore never masquerade as
+    authoritative absence after this boundary.
+    """
+    projected = _attach_record_events(
+        {history.work_unit_id: history}, replay, read_blob
+    )[history.work_unit_id]
+    reduced = reduce_findings(replay)
+    correction = reduced.correction_for(history.work_unit_id)
+    findings = (
+        reduced.ledger.findings
+        if correction is None
+        else reduced.request_subset(finding_ids=correction.finding_ids).findings
+    )
+
+    positions = {
+        record.record_id: index for index, record in enumerate(replay.records)
+    }
+    final_report_records = tuple(
+        record
+        for record in replay.records
+        if isinstance(record.payload, ProviderContentPayload)
+        and record.payload.work_unit_id == str(history.work_unit_id)
+        and record.payload.content_kind == "final_report"
+        and any(
+            isinstance(decision.payload, AgentResultPayload)
+            and positions[record.record_id] < positions[decision.record_id]
+            and decision.payload.work_unit_id == record.payload.work_unit_id
+            and decision.payload.outcome == "ready"
+            and decision.payload.request_id == record.payload.request_id
+            and decision.payload.response_sha256 == record.payload.response_sha256
+            and decision.fingerprint == record.fingerprint
+            for decision in replay.records
+        )
+    )
+    final_report = None
+    if final_report_records:
+        final_report = read_blob(
+            final_report_records[-1].payload.blob
+        ).decode("utf-8")
+
+    packet_records = tuple(
+        record
+        for record in replay.records
+        if isinstance(record.payload, ReviewPacketPayload)
+        and record.payload.work_unit_id == str(history.work_unit_id)
+    )
+    active_review_packet = None
+    if packet_records:
+        payload = packet_records[-1].payload
+        packet_bytes = read_blob(payload.blob)
+        active_review_packet = ReviewPacket.restore(packet_bytes, payload.blob.sha256)
+        if (
+            active_review_packet.purpose != payload.purpose
+            or active_review_packet.fingerprint != payload.fingerprint
+            or active_review_packet.manifest.paths != payload.manifest
+            or active_review_packet.manifest.diff_coverage_digest
+            != payload.diff_coverage_sha256
+        ):
+            raise WorkflowExecutionError(
+                "record-backed review packet differs from its authoritative metadata"
+            )
+
+    return replace(
+        projected,
+        findings=findings,
+        codex_final_report=final_report,  # allowlist:provider -- canonical history field
+        active_review_packet=active_review_packet,
+    )
 
 
 def _recover_final_review_attestation(

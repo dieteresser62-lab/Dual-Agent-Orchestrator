@@ -4871,6 +4871,69 @@ def test_native_codex_plan_and_final_recovery_are_raw_and_record_ahead_safe(
     )
     assert len(results) == 1
     assert results[0].payload.request_id == bundle.bound_context.request_id
+    if request_kind is NativeCodexRequestKind.FINAL_REPORT:
+        resumed_state = state.with_current_step(WorkflowStep.CLAUDE_FINAL_REVIEW)
+        driver.checkpoint(
+            resumed_state, WorkflowHistory(resumed_state.current_work_unit_id)
+        )
+        resumed_state = driver.active_state or resumed_state
+        resumed_history = orchestrator._history(resumed_state, repository)
+        assert resumed_history.codex_final_report == output.canonical_json
+        assert resumed_history.attestations
+
+        review_changes = WorkflowChanges(
+            start_commit=head,
+            fingerprint=current_fingerprint,
+            paths=("src/runtime.py",),
+            full_diff="final review evidence",
+        )
+        review_attestation = ValidationAttestation(
+            attestation_id="validation-resumed-final-review",
+            diff_fingerprint=current_fingerprint,
+            expected_commands=("python3 -m pytest tests/ -v",),
+            records=(
+                ValidationRecord(
+                    ValidationStatus.PASS,
+                    "python3 -m pytest tests/ -v",
+                    0,
+                ),
+            ),
+            output_digest="9" * 64,
+            summary="Provider-free resumed final-review request passed.",
+        )
+        review_contract = StepContract(
+            "resumed-final-review",
+            AgentRole.CLAUDE,
+            ApprovalMarker.FINAL,
+            "FINAL",
+            1,
+            current_fingerprint,
+            review_attestation,
+        )
+        review_bundle = workflow_requests.native_review_request(
+            state=resumed_state,
+            context=WorkflowContext(
+                "Review the resumed branch.",
+                "Use only record-backed evidence.",
+                "Complete the final review.",
+                current_branch=branch,
+                test_changes_approved=True,
+            ),
+            history=resumed_history,
+            contract=review_contract,
+            changes=review_changes,
+            evidence_kind=EvidenceKind.FULL_BRANCH,
+            review_diff=review_changes.full_diff,
+            review_packet=None,
+            expected_test_files=(),
+            execution_error=WorkflowExecutionError,
+            full_branch_evidence_kind=EvidenceKind.FULL_BRANCH,
+            final_review_pending_count=0,
+        )
+        assert any(
+            item["evidence_id"] == "codex-final-report"
+            for item in review_bundle.document["evidence_manifest"]
+        )
 
 
 def test_structured_bind_survives_round_number_increase_within_same_work_unit(
