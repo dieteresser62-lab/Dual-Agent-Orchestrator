@@ -5,7 +5,7 @@ import html
 import re
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Mapping, TypeAlias
+from typing import Mapping, Sequence, TypeAlias
 
 from artifact_projection import (
     ArtifactAuditProjection,
@@ -169,6 +169,7 @@ class ReviewAuditEvent:
     round_number: int
     result: ContractResult
     allowed_finding_origins: tuple[str, ...] = ()
+    is_final_review: bool = False
 
     def __post_init__(self) -> None:
         _require_event_identity(self.event_id, self.slice_id)
@@ -214,8 +215,34 @@ class ReviewAuditEvent:
                     "an approving review requires its validation attestation to pass "
                     "or use a named complete red-state exception"
                 )
-        if self.result.approval is False and not self.result.own_open_blockers:
+        if (
+            self.result.approval is False
+            and not self.result.own_open_blockers
+            and not self.is_final_review
+        ):
             raise AuditTrailError("a denied review requires a reviewer-owned open blocker")
+
+
+def allowed_review_finding_origins(
+    finding_ledger: Sequence[FindingRecord],
+    *,
+    current_slice_id: int,
+    is_final_review: bool,
+) -> tuple[str, ...]:
+    """Derive audit origins only from the complete pre-review Finding ledger."""
+
+    _require_positive_int(current_slice_id, "current_slice_id")
+    current_origin = f"{current_slice_id:02d}"
+    return tuple(
+        sorted(
+            {
+                finding.origin.slice_id
+                for finding in finding_ledger
+                if finding.origin.slice_id != current_origin
+            }
+            | ({"FINAL"} if is_final_review else set())
+        )
+    )
 
 
 AuditEvent: TypeAlias = ValidationAuditEvent | ReviewAuditEvent

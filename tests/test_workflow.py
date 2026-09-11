@@ -2910,7 +2910,7 @@ def _batched_final_review_case(
             status=FindingStatus.OPEN,
             summary=f"Final review finding {number}.",
             acceptance_test=f"Disposition {number} is recorded.",
-            origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+            origin=FindingOrigin(f"{((number - 1) % 42) + 1:02d}", 1, AgentRole.CLAUDE),
         )
         for number in range(1, finding_count + 1)
     )

@@ -36,6 +36,7 @@ from audit_trail import (
     OverallAuditEntry,
     ReviewAuditEvent,
     ValidationAuditEvent,
+    allowed_review_finding_origins,
     managed_slice_document_path,
 )
 from contracts import (
@@ -218,13 +219,6 @@ def _attach_record_events(
     event_lists: dict[int, list[ReviewAuditEvent | ValidationAuditEvent]] = {}
     attestation_lists: dict[int, list[ValidationAttestation]] = {}
     latest_reviews: dict[int, tuple[str, ContractResult]] = {}
-    prior_review_findings: dict[int, tuple[FindingRecord, ...]] = {}
-    correction_finding_ids = {
-        int(record.logical_id.removeprefix("work-unit-")): record.payload.finding_ids
-        for record in replay.records
-        if isinstance(record.payload, CorrectionWorkUnitPayload)
-        and record.logical_id.removeprefix("work-unit-").isdigit()
-    }
     for event in replay.workflow_events:
         if event.event_kind == "transition" or event.work_unit_id is None:
             continue
@@ -262,37 +256,25 @@ def _attach_record_events(
             )
         review_record = records[referenced_id]
         review_position = positions[referenced_id]
-        prior_findings = prior_review_findings.get(work_unit_id)
-        if prior_findings is None:
-            reduced_prefix = reduce_findings(
-                replay.subset(replay.records[:review_position])
-            )
-            correction_ids = correction_finding_ids.get(work_unit_id)
-            prior_findings = (
-                reduced_prefix.ledger.findings
-                if correction_ids is None
-                else reduced_prefix.request_subset(
-                    finding_ids=correction_ids
-                ).findings
-            )
+        finding_ledger = reduce_findings(
+            replay.subset(replay.records[:review_position])
+        ).ledger.findings
         prior_steps = tuple(
             record.payload.step
             for record in replay.records[: review_position + 1]
             if isinstance(record.payload, WorkflowTransitionPayload)
             and record.payload.work_unit_id == event.work_unit_id
         )
-        allowed_origin_set = {
-            finding.origin.slice_id
-            for finding in prior_findings
-            if finding.origin.slice_id != f"{int(event.slice_id):02d}"
-        }
-        if (
+        is_final_review = (
             prior_steps
             and prior_steps[-1]
             == WorkflowStep.CLAUDE_FINAL_REVIEW.value  # allowlist:provider -- canonical state-v3 step
-        ):
-            allowed_origin_set.add("FINAL")
-        allowed_origins = tuple(sorted(allowed_origin_set))
+        )
+        allowed_origins = allowed_review_finding_origins(
+            finding_ledger,
+            current_slice_id=int(event.slice_id),
+            is_final_review=bool(is_final_review),
+        )
         review_validation = review.result.validation
         work_unit_attestations = attestation_lists.setdefault(work_unit_id, [])
         if (
@@ -321,16 +303,13 @@ def _attach_record_events(
                 event.round_number,
                 review.result,
                 allowed_origins,
+                is_final_review=bool(is_final_review),
             )
         )
         latest_reviews[work_unit_id] = (
             review_record.fingerprint.sha256,
             review.result,
         )
-        # _record_review() replaces, rather than merges, history.findings.
-        # A later round must therefore inherit exactly the prior review's
-        # snapshot and may not self-authorize origins from the run-wide ledger.
-        prior_review_findings[work_unit_id] = review.result.findings
     for work_unit_id in {*projected, *event_lists}:
         history = projected.get(work_unit_id, WorkflowHistory(work_unit_id))
         latest = latest_reviews.get(work_unit_id)

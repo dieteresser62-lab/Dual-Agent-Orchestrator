@@ -43,6 +43,7 @@ from audit_trail import (
     AuditEvent,
     ReviewAuditEvent,
     ValidationAuditEvent,
+    allowed_review_finding_origins,
     managed_slice_document_path,
 )
 from contracts import (
@@ -1031,6 +1032,7 @@ def _event_to_dict(item: AuditEvent) -> dict[str, object]:
         "kind": "review", "event_id": item.event_id, "slice_id": item.slice_id,
         "round_number": item.round_number, "result": _review_to_dict(item.result),
         "allowed_finding_origins": list(item.allowed_finding_origins),
+        "is_final_review": item.is_final_review,
     }
 
 
@@ -1050,6 +1052,7 @@ def _event_from_dict(raw: object) -> AuditEvent:
             int(raw["event_id"]), int(raw["slice_id"]), int(raw["round_number"]),
             result,
             tuple(str(item) for item in _json_list(raw["allowed_finding_origins"])),
+            bool(raw.get("is_final_review", False)),
         )
     raise ValueError("unknown persisted audit event kind")
 
@@ -1271,6 +1274,9 @@ class WorkflowEngine:
             is_plan_review = recovered_step is WorkflowStep.CLAUDE_PLAN_REVIEW
             is_final_review = recovered_step is WorkflowStep.CLAUDE_FINAL_REVIEW
             recovered_result = pending_native.output.result
+            finding_ledger = self._authoritative_finding_ledger(
+                state, active_history.findings
+            )
             recovered_requested_ids: tuple[str, ...] | None = None
             recovered_new_ids: tuple[str, ...] = ()
             recovered_progress_ids: tuple[str, ...] = ()
@@ -1288,11 +1294,11 @@ class WorkflowEngine:
                     recovered_offered,
                     recovered_result.findings,
                 )
-                if recovered_offered != history.findings:
+                if recovered_offered != finding_ledger:
                     recovered_result = replace(
                         recovered_result,
                         findings=self._merge_review_request_subset(
-                            history.findings,
+                            finding_ledger,
                             recovered_offered,
                             recovered_result.findings,
                             review_type=(
@@ -1310,6 +1316,7 @@ class WorkflowEngine:
                 round_number=pending_native.round_number,
                 is_plan_review=is_plan_review,
                 is_final_review=is_final_review,
+                finding_ledger=finding_ledger,
                 final_review_requested_ids=recovered_requested_ids,
                 final_review_new_finding_ids=recovered_new_ids,
                 final_review_progress_ids=recovered_progress_ids,
@@ -1631,7 +1638,7 @@ class WorkflowEngine:
             else None
         )
         if recovered is None and native_request is not None:
-            authoritative_history = self._bind_authoritative_native_findings(
+            authoritative_history = self._bind_authoritative_request_findings(
                 state, history
             )
             if authoritative_history.findings != history.findings:
@@ -2106,7 +2113,7 @@ class WorkflowEngine:
             else None
         )
         if recovered is None and native_request is not None:
-            history = self._bind_authoritative_native_findings(state, history)
+            history = self._bind_authoritative_request_findings(state, history)
         state, output = self._invoke_role(
             state,
             history,
@@ -2321,6 +2328,7 @@ class WorkflowEngine:
         is_final_review: bool,
         review_round: int,
         request_findings: tuple[FindingRecord, ...],
+        finding_ledger: tuple[FindingRecord, ...],
         final_review_pending_count: int | None = None,
     ) -> tuple[WorkflowState, WorkflowHistory]:
         request_history = replace(history, findings=request_findings)
@@ -2368,15 +2376,23 @@ class WorkflowEngine:
             raise WorkflowExecutionError(
                 "native reviewer recovery returned an invalid result contract"
             )
+        finding_ledger = self._authoritative_finding_ledger(
+            state, history.findings
+        )
         if native_output is None and native_request is not None:
             # Exact-request record-ahead recovery must precede complete-ledger
             # replay.  Only the still-unsent request is then rebuilt, retaining
             # its compact offered subset while reserving every ledger id.
-            history = self._bind_authoritative_native_findings(state, history)
+            history = self._bind_authoritative_request_findings(state, history)
+            finding_ledger = (
+                finding_ledger
+                if unit.kind is WorkUnitKind.CORRECTION
+                else history.findings
+            )
             authoritative_contract = replace(
                 contract,
                 existing_finding_ids=sorted_finding_ids(
-                    item.finding_id for item in history.findings
+                    item.finding_id for item in finding_ledger
                 ),
             )
             native_request = build_request(contract=authoritative_contract)
@@ -2436,6 +2452,7 @@ class WorkflowEngine:
             round_number=review_round,
             is_plan_review=is_plan_review,
             is_final_review=is_final_review,
+            finding_ledger=finding_ledger,
             user_gate_paths=changes.user_gate_paths,
             final_review_requested_ids=(requested_ids if is_final_review else None),
             final_review_new_finding_ids=new_ids,
@@ -2523,6 +2540,7 @@ class WorkflowEngine:
             )
         review_round = _review_round_number(unit, history, reviewer)
         request_findings = history.findings
+        finding_ledger = history.findings  # Provisional until unsent dispatch.
         final_review_pending_count: int | None = None
         if is_final_review:
             pending_findings = self.driver.authoritative_final_review_findings(
@@ -2637,6 +2655,7 @@ class WorkflowEngine:
             is_final_review,
             review_round,
             request_findings,
+            finding_ledger,
             final_review_pending_count,
         )
 
@@ -2652,6 +2671,7 @@ class WorkflowEngine:
         round_number: int,
         is_plan_review: bool,
         is_final_review: bool,
+        finding_ledger: tuple[FindingRecord, ...],
         user_gate_paths: tuple[str, ...] = (),
         final_review_requested_ids: tuple[str, ...] | None = None,
         final_review_new_finding_ids: tuple[str, ...] = (),
@@ -2668,15 +2688,11 @@ class WorkflowEngine:
             track_slice_approval=(
                 not is_plan_review or unit.kind is WorkUnitKind.PLAN
             ),
-            allowed_finding_origins=tuple(
-                sorted(
-                    {
-                        finding.origin.slice_id
-                        for finding in history.findings
-                        if finding.origin.slice_id != f"{unit.slice_id:02d}"
-                    }
-                    | ({"FINAL"} if is_final_review else set())
-                )
+            is_final_review=is_final_review,
+            allowed_finding_origins=allowed_review_finding_origins(
+                finding_ledger,
+                current_slice_id=unit.slice_id,
+                is_final_review=is_final_review,
             ),
         )
         if result.stopped:
@@ -3120,6 +3136,7 @@ class WorkflowEngine:
         *,
         track_slice_approval: bool = True,
         allowed_finding_origins: tuple[str, ...] = (),
+        is_final_review: bool = False,
     ) -> WorkflowHistory:
         event = ReviewAuditEvent(
             event_id=len(history.events) + 1,
@@ -3127,6 +3144,7 @@ class WorkflowEngine:
             round_number=round_number,
             result=result,
             allowed_finding_origins=allowed_finding_origins,
+            is_final_review=is_final_review,
         )
         updates: dict[str, object] = {
             "findings": result.findings,
@@ -3504,10 +3522,10 @@ class WorkflowEngine:
     def _bind_driver_work_unit(self, state: WorkflowState) -> None:
         self.driver.bind_work_unit(state)
 
-    def _bind_authoritative_native_findings(
+    def _bind_authoritative_request_findings(
         self, state: WorkflowState, history: WorkflowHistory
     ) -> WorkflowHistory:
-        """Bind combined native requests to the replayed finding projection."""
+        """Bind a native request to its replayed, request-specific projection."""
         binding = state.protocol_binding
         if (
             binding is None
@@ -3552,12 +3570,12 @@ class WorkflowEngine:
         )
         return replace(state, work_units=work_units)
 
-    def _carry_forward_native_findings(
+    def _authoritative_finding_ledger(
         self,
         state: WorkflowState,
         current_findings: tuple[FindingRecord, ...],
     ) -> tuple[FindingRecord, ...]:
-        """Carry the complete native ledger into a newly started work unit."""
+        """Return the complete ledger without confusing it with a request subset."""
         binding = state.protocol_binding
         if (
             binding is None
@@ -3582,7 +3600,7 @@ class WorkflowEngine:
         history: WorkflowHistory,
     ) -> tuple[WorkflowState, WorkflowHistory]:
         """Start final review with the complete cross-work-unit finding ledger."""
-        carried_findings = self._carry_forward_native_findings(
+        carried_findings = self._authoritative_finding_ledger(
             state,
             history.findings,
         )

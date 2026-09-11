@@ -1805,7 +1805,14 @@ def test_final_review_audit_reuses_carried_attestation(tmp_path: Path) -> None:
     assert all("Work Unit" not in item.label for item in entries)
     assert final_entry.projection.events == (
         ValidationAuditEvent(1, 3, attestation),
-        ReviewAuditEvent(2, 3, 1, review_contract.result, ("FINAL",)),
+        ReviewAuditEvent(
+            2,
+            3,
+            1,
+            review_contract.result,
+            ("FINAL",),
+            is_final_review=True,
+        ),
     )
 
 
@@ -1865,7 +1872,7 @@ def test_duplicate_workflow_event_reference_is_rejected_fail_closed(
         replay_artifacts(bridge.store.load_chain(), RUN_ID)
 
 
-def test_review_cannot_authorize_its_own_foreign_finding_origin(
+def test_review_accepts_foreign_finding_origin_already_in_complete_ledger(
     tmp_path: Path,
 ) -> None:
     bridge = ArtifactBridge(ArtifactStore(tmp_path, RUN_ID))
@@ -1878,10 +1885,10 @@ def test_review_cannot_authorize_its_own_foreign_finding_origin(
             "opened",
             FindingSeverity.BLOCKER,
             "open",
-            "a run-wide finding omitted by the prior work-unit review",
+            "a run-wide finding omitted by the prior request subset",
             "3",
             "foreign origin",
-            "reject origin 02 in the later correction review",
+            "accept origin 02 from the complete ledger",
             "02",
             1,
         ),
@@ -1934,8 +1941,11 @@ def test_review_cannot_authorize_its_own_foreign_finding_origin(
     )
     replay = replay_artifacts(bridge.store.load_chain(), RUN_ID)
 
-    with pytest.raises(AuditTrailError, match="belongs to slice 02"):
-        _attach_record_events({}, replay, bridge.store.read_blob)
+    histories = _attach_record_events({}, replay, bridge.store.read_blob)
+
+    event = histories[4].events[-1]
+    assert isinstance(event, ReviewAuditEvent)
+    assert event.allowed_finding_origins == ("02",)
 
 
 def test_chain_without_workflow_events_is_rejected_fail_closed(tmp_path: Path) -> None:
