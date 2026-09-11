@@ -2528,9 +2528,10 @@ class WorkflowEngine:
             pending_findings = self.driver.authoritative_final_review_findings(
                 state, history.findings
             )
-            final_review_pending_count = len(
-                project_open_set(history.findings).findings
-            )
+            # The reviewer-facing total and the offered batch are two views of
+            # the same record-native disposition projection.  Runtime history
+            # may be event-only after resume and is not a count authority here.
+            final_review_pending_count = len(pending_findings)
             limit_failures = sum(
                 item.failure_kind is AgentFailureKind.OUTPUT
                 and item.idempotency_key.endswith(":disposition-limit")
