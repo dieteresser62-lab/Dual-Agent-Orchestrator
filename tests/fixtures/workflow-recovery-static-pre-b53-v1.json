@@ -181,7 +181,7 @@
         },
         {
           "ordinal": 2,
-          "expression": "None",
+          "expression": "self._recover_raw_native_implementer_response(chain=chain, invocation=invocation, bundle=bundle)",
           "condition_path": ["persisted_content is None", "candidate is None"]
         },
         {

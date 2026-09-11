@@ -12,6 +12,7 @@ import pytest
 from agent_runtime import ProviderRequestRoundRequired
 from artifact_bridge import ArtifactBridge
 from artifact_models import (
+    _IDENTIFIER_RE,
     FingerprintKind,
     ProviderContentPayload,
     Role,
@@ -22,6 +23,7 @@ from workflow import WorkflowExecutionError
 from workflow_persistence import (
     WorkflowPersistence,
     WorkflowPersistenceDependencies,
+    provider_content_idempotency_key,
 )
 from workflow_state import WorkflowStep, WorkUnitKind
 
@@ -373,3 +375,72 @@ def test_provider_content_sink_directly_externalizes_canonical_bytes(
     assert payload.work_unit_id == "2"
     assert payload.round_number == 3
     assert bridge.store.read_blob(payload.blob) == canonical.encode("utf-8")
+
+
+def test_final_correction_provider_content_key_is_canonical_and_idempotent(
+    tmp_path: Path,
+) -> None:
+    fields = {
+        "role": Role.CODEX,
+        "work_unit_id": 45,
+        "round_number": 1,
+        "operation": "codex_final_correction",
+        "request_id": (
+            "native-codex-request-"
+            "a18a0c6b0b7822fd97d5cf80b8e0fd57b18b84744ba8c2b4b656a45c3e8bd960"
+        ),
+        "response_sha256": (
+            "24c7e12e84dc08bbcadc6096383a4068644e362545680cdce0713ddc12704464"
+        ),
+    }
+
+    first = provider_content_idempotency_key(**fields)
+    second = provider_content_idempotency_key(**fields)
+    distinct_inputs = (
+        fields,
+        {**fields, "role": Role.CLAUDE},
+        {**fields, "work_unit_id": 46},
+        {**fields, "round_number": 2},
+        {**fields, "operation": "claude_slice_review"},
+        {**fields, "request_id": "native-review-request-" + "b" * 64},
+        {**fields, "response_sha256": "c" * 64},
+    )
+    distinct_keys = {
+        provider_content_idempotency_key(**item) for item in distinct_inputs
+    }
+    incident_key = (
+        "provider-content:codex:45:1:codex_final_correction:"
+        f"{fields['request_id']}:{fields['response_sha256']}"
+    )
+
+    assert first == second
+    assert _IDENTIFIER_RE.fullmatch(first)
+    assert len(first) < 200
+    assert len(distinct_keys) == len(distinct_inputs)
+    assert all(_IDENTIFIER_RE.fullmatch(key) for key in distinct_keys)
+    assert len(incident_key) == 201
+    assert _IDENTIFIER_RE.fullmatch(incident_key) is None
+
+    bridge = ArtifactBridge(ArtifactStore(tmp_path, "final-correction-content-key"))
+    persistence = WorkflowPersistence(_dependencies(bridge=bridge))
+    sink_fields = {
+        key: fields[key]
+        for key in ("role", "work_unit_id", "round_number", "operation", "request_id")
+    }
+    persisted = persistence._persist_provider_content(
+        **sink_fields,
+        canonical='{"result":"ok"}',
+        content_kind="agent_result",
+        fingerprint="d" * 64,
+    )
+    repeated = persistence._persist_provider_content(
+        **sink_fields,
+        canonical='{"result":"ok"}',
+        content_kind="agent_result",
+        fingerprint="d" * 64,
+    )
+
+    assert repeated.record_id == persisted.record_id
+    assert repeated.idempotency_key == persisted.idempotency_key
+    assert _IDENTIFIER_RE.fullmatch(persisted.idempotency_key)
+    assert len(bridge.store.load_chain()) == 1

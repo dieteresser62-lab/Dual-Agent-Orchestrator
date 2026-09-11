@@ -308,6 +308,11 @@ def _correction_scenario(kind: str) -> DryRunScenario:
         commits = (ScriptedCommit(1, fingerprints[2], first_commit),)
     else:
         second_round = kind == "second-correction-new-blocker"
+        final_blockers = (
+            ("C-01", "C-02", "C-03", "C-04")
+            if kind == "final-correction"
+            else ("C-01",)
+        )
         events = [
             implementation,
             ScriptedAgentEvent(
@@ -320,11 +325,13 @@ def _correction_scenario(kind: str) -> DryRunScenario:
             ),
             ScriptedAgentEvent(
                 AgentRole.CLAUDE, 3, 1, WorkflowStep.CLAUDE_FINAL_REVIEW,
-                _review_result(approved=False, new_findings=("C-01",)),
+                _review_result(approved=False, new_findings=final_blockers),
             ),
             ScriptedAgentEvent(
                 AgentRole.CODEX, 4, 1, WorkflowStep.CODEX_FINAL_CORRECTION,
-                _codex_result("correction_result", findings=("C-01",), test_files=[]),
+                _codex_result(
+                    "correction_result", findings=final_blockers, test_files=[]
+                ),
             ),
         ]
         if second_round:
@@ -353,7 +360,9 @@ def _correction_scenario(kind: str) -> DryRunScenario:
             events.append(
                 ScriptedAgentEvent(
                     AgentRole.CLAUDE, 4, 1, WorkflowStep.CLAUDE_SLICE_REVIEW,
-                    _review_result(approved=True, closed_findings=("C-01",)),
+                    _review_result(
+                        approved=True, closed_findings=final_blockers
+                    ),
                 )
             )
             correction_fp, final_fp = fingerprints[3], fingerprints[4]
@@ -473,7 +482,11 @@ def _run_correction_journey(tmp_path: Path, scenario_id: str) -> None:
     assert sum(call.startswith("commit:") for call in report.calls) == (
         1 if scenario_id == "slice-correction" else 2
     )
-    expected_ledger = ("C-01",) if scenario_id != "second-correction-new-blocker" else ("C-01", "C-02")
+    expected_ledger = {
+        "slice-correction": ("C-01",),
+        "final-correction": ("C-01", "C-02", "C-03", "C-04"),
+        "second-correction-new-blocker": ("C-01", "C-02"),
+    }[scenario_id]
     assert tuple(item.finding_id for item in report.result.history.findings) == expected_ledger
     assert all(item.status is FindingStatus.CLOSED for item in report.result.history.findings)
 
