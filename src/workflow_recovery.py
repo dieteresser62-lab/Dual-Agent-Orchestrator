@@ -106,6 +106,7 @@ from workflow_state import (
 
 
 logger = logging.getLogger(__name__)
+_IMPLEMENTER_ARTIFACT_ROLE = Role.CODEX
 
 
 def _require_provider_start_binding(
@@ -685,13 +686,203 @@ class WorkflowRecovery:
             validate_native_implementer_response(document, recovery_bundle or bundle)
         return parse_bound_native_implementer_result(document, recovery_bound)
 
+    def _recover_raw_native_implementer_response(
+        self,
+        *,
+        chain: tuple[ArtifactRecord, ...],
+        invocation: ImplementerInvocation,
+        bundle: NativeImplementerRequestBundle,
+    ) -> NativeAgentImplementerOutput | None:
+        """Promote one ledger-bound raw response without another provider call."""
+        state = self._dependencies.active_state()
+        bridge = self._dependencies.artifact_bridge()
+        if state is None or bridge is None:
+            return None
+        try:
+            replay = replay_artifacts(chain, state.run_id)
+        except ArtifactReplayError as exc:
+            raise WorkflowExecutionError(
+                f"native agent raw-response recovery cannot replay records: {exc}"
+            ) from exc
+        instance = f"round:{invocation.round_number}"
+        related_effects = tuple(
+            item
+            for item in replay.side_effects
+            if item.effect_class == "provider_start"
+            and item.work_unit_id == str(invocation.work_unit_id)
+            and len(item.operation) == 7
+            and item.operation[0] == _IMPLEMENTER_ARTIFACT_ROLE.value
+            and item.operation[1] == invocation.step.value
+            and item.operation[4] == instance
+        )
+        if not related_effects:
+            return None
+        recovery_bundle = self._dependencies.load_agent_request_bundle(
+            invocation, bundle
+        )
+        if recovery_bundle is None:
+            raise WorkflowExecutionError(
+                "native agent raw response has no persisted request bundle"
+            )
+        if any(
+            item.operation[3]
+            != recovery_bundle.bound_context.context.current_fingerprint
+            for item in related_effects
+        ):
+            raise WorkflowExecutionError(
+                "native agent raw-response binding does not match its persisted request"
+            )
+        provider_effects = tuple(
+            item
+            for item in related_effects
+            if item.result is not None
+            and re.fullmatch(r"[0-9a-f]{64}", item.result) is not None
+        )
+        if any(
+            item.result is not None and item not in provider_effects
+            for item in related_effects
+        ):
+            raise WorkflowExecutionError(
+                "native agent raw-response ledger has an invalid content digest"
+            )
+        if not provider_effects:
+            return None
+        if len(provider_effects) != 1:
+            raise WorkflowExecutionError(
+                "native agent raw-response recovery has multiple completed responses"
+            )
+
+        effect = provider_effects[0]
+        response_target = effect.operation[6]
+        if response_target.startswith("external:"):
+            raise WorkflowExecutionError(
+                "native agent response ledger points outside the repository"
+            )
+        response_path = self._dependencies.root.joinpath(
+            *PurePosixPath(response_target).parts
+        )
+        try:
+            response_path.resolve().relative_to(self._dependencies.root)
+        except ValueError as exc:
+            raise WorkflowExecutionError(
+                "native agent response ledger escapes the repository"
+            ) from exc
+        file_effects = tuple(
+            item
+            for item in replay.side_effects
+            if item.effect_class == "file_write"
+            and item.work_unit_id == str(invocation.work_unit_id)
+            and item.operation == (response_target, effect.result)
+            and item.result == effect.result
+        )
+        if len(file_effects) != 1:
+            raise WorkflowExecutionError(
+                "native agent raw response lacks one exact file-write ledger result"
+            )
+        try:
+            if file_state_digest(response_path) != effect.result:
+                raise WorkflowExecutionError(
+                    "native agent raw response does not match its provider ledger result"
+                )
+            raw = response_path.read_bytes()
+            if hashlib.sha256(raw).hexdigest() != effect.result:
+                raise WorkflowExecutionError(
+                    "native agent raw response changed while being recovered"
+                )
+            canonical = raw.decode("utf-8")
+        except (OSError, UnicodeDecodeError, SideEffectReconciliationError) as exc:
+            raise WorkflowExecutionError(
+                f"native agent raw response is not a stable UTF-8 file: {exc}"
+            ) from exc
+        if not effect.operation[5].isdigit():
+            raise WorkflowExecutionError(
+                "native agent raw response has an invalid provider attempt number"
+            )
+        attempt_number = int(effect.operation[5])
+        logical_operation_id = logical_provider_operation_id(
+            run_id=state.run_id,
+            work_unit_id=str(invocation.work_unit_id),
+            provider=_IMPLEMENTER_ARTIFACT_ROLE,
+            operation=invocation.step.value,
+            binding_fingerprint=effect.operation[3],
+            operation_instance=instance,
+        )
+        attempts = tuple(
+            record
+            for record in chain
+            if isinstance(record.payload, ProviderAttemptPayload)
+            and record.payload.provider is _IMPLEMENTER_ARTIFACT_ROLE
+            and record.payload.role is _IMPLEMENTER_ARTIFACT_ROLE
+            and record.payload.work_unit_id == str(invocation.work_unit_id)
+            and record.payload.operation == invocation.step.value
+            and record.payload.logical_operation_id == logical_operation_id
+            and record.payload.input_digest == effect.operation[2]
+            and record.payload.binding_fingerprint == effect.operation[3]
+            and record.payload.attempt_number == attempt_number
+            and record.payload.phase == "started"
+        )
+        if len(attempts) != 1:
+            raise WorkflowExecutionError(
+                "native agent raw response has no unique started-attempt binding"
+            )
+        original_attempt_record = attempts[0]
+        fingerprint = effect.operation[3]
+        try:
+            request_replay = replay_artifacts(
+                chain[: chain.index(original_attempt_record)], state.run_id
+            )
+        except ArtifactReplayError as exc:
+            raise WorkflowExecutionError(
+                f"native agent request-time finding replay failed: {exc}"
+            ) from exc
+        request_findings_by_id = {
+            item.finding_id: item
+            for item in reduce_findings(request_replay).ledger.findings
+        }
+        recovery_bound = self._bind_native_implementer_request_findings(
+            recovery_bundle.bound_context,
+            request_findings_by_id,
+            state,
+        )
+        try:
+            document = json.loads(canonical)
+            if not isinstance(document, dict):
+                raise ValueError("native implementer raw response is not an object")
+            if canonical_native_implementer_json(document) != canonical:
+                raise ValueError("native implementer raw response is not canonical JSON")
+            validate_native_implementer_response(document, recovery_bundle)
+            result = parse_bound_native_implementer_result(document, recovery_bound)
+        except (ValueError, TypeError) as exc:
+            raise WorkflowExecutionError(
+                f"native implementer raw response no longer validates: {exc}"
+            ) from exc
+        output = NativeAgentImplementerOutput(
+            result=result,
+            canonical_json=canonical,
+            request_id=recovery_bound.request_id,
+            response_sha256=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+        )
+        self._dependencies.persist_implementer_contract(
+            output,
+            recovery_bound.context.previous_findings,
+            recovery_fingerprint=fingerprint,
+        )
+        logger.warning(
+            "Recovered native implementer result from ledger-bound raw response: "
+            "work-unit=%s operation=%s",
+            invocation.work_unit_id,
+            invocation.step.value,
+        )
+        self._dependencies.store_implementer_output(canonical)
+        return output
+
     def recover_pending_native_implementer(
         self,
         invocation: ImplementerInvocation,
         contract: ImplementerStepContract,
         history: WorkflowHistory,
     ) -> NativeAgentImplementerOutput | None:
-        """Replay one record-ahead Codex result without another provider start."""
+        """Replay one record-ahead implementer result without another provider start."""
         _ = contract
         state = self._dependencies.active_state()
         bridge = self._dependencies.artifact_bridge()
@@ -735,7 +926,11 @@ class WorkflowRecovery:
         )
         if persisted_content is None:
             if candidate is None:
-                return None
+                return self._recover_raw_native_implementer_response(
+                    chain=chain,
+                    invocation=invocation,
+                    bundle=bundle,
+                )
             raise WorkflowExecutionError(
                 "native agent recovery record has no authoritative provider content"
             )

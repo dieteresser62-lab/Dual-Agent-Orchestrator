@@ -125,6 +125,32 @@ class PersistedRequestPath(Protocol):
     def __call__(self, invocation: object) -> Path: ...
 
 
+def provider_content_idempotency_key(
+    *,
+    role: Role,
+    work_unit_id: int,
+    round_number: int,
+    operation: str,
+    request_id: str,
+    response_sha256: str,
+) -> str:
+    """Bind provider content to every semantic identity field compactly."""
+    identity = json.dumps(
+        (
+            role.value,
+            work_unit_id,
+            round_number,
+            operation,
+            request_id,
+            response_sha256,
+        ),
+        ensure_ascii=True,
+        separators=(",", ":"),
+    )
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+    return f"provider-content:{role.value}:{digest}"
+
+
 @dataclass(frozen=True)
 class WorkflowPersistenceDependencies:
     """Driver-owned resources and composition edges required by the sinks."""
@@ -714,9 +740,13 @@ class WorkflowPersistence:
                 f"provider-content-{role.value}-{work_unit_id}-"
                 f"{request_id.rsplit('-', 1)[-1][:12]}"
             ),
-            idempotency_key=(
-                f"provider-content:{role.value}:{work_unit_id}:"
-                f"{round_number}:{operation}:{request_id}:{blob.sha256}"
+            idempotency_key=provider_content_idempotency_key(
+                role=role,
+                work_unit_id=work_unit_id,
+                round_number=round_number,
+                operation=operation,
+                request_id=request_id,
+                response_sha256=blob.sha256,
             ),
             fingerprint_sha256=fingerprint,
             fingerprint_kind=fingerprint_kind,

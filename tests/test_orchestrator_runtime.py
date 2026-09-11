@@ -34,6 +34,7 @@ from agent_runtime import (
 )
 from audit_trail import AuditProjection, ValidationAuditEvent, _render_test_approval
 from artifact_models import (
+    _IDENTIFIER_RE,
     AgentResultPayload,
     BindingPayload,
     CommandSpec,
@@ -3392,7 +3393,9 @@ def test_native_codex_record_ahead_recovery_reuses_raw_json_without_provider(
     driver = ProductionWorkflowDriver(
         repository_root=repository,
         state_file=repository / ".orchestrator" / "state.json",
-        agents={},
+        agents={
+            "codex": SimpleNamespace(model="test-model", effort="high")
+        },  # type: ignore[dict-item]
         config=orchestrator.OrchestratorConfig(repo_root=repository),
         allowed_roots=(repository,),
     )
@@ -3457,7 +3460,29 @@ def test_native_codex_record_ahead_recovery_reuses_raw_json_without_provider(
     )
     driver._persist_native_agent_request_bundle(invocation)
     raw_path = driver._native_codex_response_path(invocation)
-    driver._write_native_codex_raw_response(raw_path, canonical)
+    measurement = measure_provider_input(
+        PreparedProviderInput(
+            command=("codex", "exec"),
+            stdin_text=bundle.canonical_json,
+            components=(
+                ProviderInputComponent("stdin_prompt", bundle.canonical_json),
+            ),
+        ),
+        provider="codex",
+        role="codex",
+        operation=WorkflowStep.CODEX_IMPLEMENTATION.value,
+        binding_fingerprint="c" * 64,
+        policy=default_provider_input_budget_policy(),
+    )
+    bootstrap = driver._persist_provider_bootstrap(measurement)
+    attempt = driver._start_provider_attempt(
+        measurement,
+        bootstrap,
+        operation_instance="round:1",
+        durable_response_path=raw_path,
+    )
+    driver._write_native_codex_raw_response(attempt[2], canonical)
+    driver._finish_provider_attempt(attempt, 1.0, "runtime", None)
     rebuilt_bundle = build_native_codex_request(
         NativeCodexRequestSpec(
             context=replace(native_context, current_fingerprint="d" * 64),
@@ -3484,38 +3509,34 @@ def test_native_codex_record_ahead_recovery_reuses_raw_json_without_provider(
         driver._persist_native_agent_request_bundle(rebuilt_invocation)
     bridge = driver._artifact_bridge
     assert bridge is not None
-    bridge.append(
-        ProviderAttemptPayload(
-            provider=Role.CODEX,
-            role=Role.CODEX,
-            operation=WorkflowStep.CODEX_IMPLEMENTATION.value,
-            work_unit_id=str(state.current_work_unit_id),
-            logical_operation_id="provider-operation-" + "1" * 64,
-            binding_fingerprint="c" * 64,
-            measurement_record_id="ar1-" + "2" * 64,
-            input_digest="3" * 64,
-            attempt_number=1,
-            phase="started",
-            started_at="2026-08-28T12:00:00+00:00",
-            ended_at=None,
-            duration_seconds=None,
-            failure_kind=None,
-            usage=None,
-        ),
-        logical_id="provider-operation-legacy-recovery-1",
-        idempotency_key="provider-attempt:legacy-recovery:started",
-        fingerprint_sha256="c" * 64,
+    assert not any(
+        isinstance(item.payload, ProviderContentPayload)
+        for item in bridge.store.load_chain()
     )
-    driver._persist_provider_content(
-        role=Role.CODEX,
-        work_unit_id=state.current_work_unit_id,
-        round_number=state.current_work_unit.round_number,
-        operation=WorkflowStep.CODEX_IMPLEMENTATION.value,
-        request_id=output.request_id,
-        canonical=output.canonical_json,
-        content_kind="agent_result",
-        fingerprint="c" * 64,
-    )
+    request_path = driver._native_agent_request_path(invocation)
+    persisted_request = request_path.read_text(encoding="utf-8")
+    request_path.unlink()
+    with pytest.raises(
+        WorkflowExecutionError,
+        match="raw response has no persisted request bundle",
+    ):
+        driver.recover_pending_native_codex(
+            rebuilt_invocation,
+            contract,
+            WorkflowHistory(state.current_work_unit_id),
+        )
+    request_path.write_text(persisted_request, encoding="utf-8")
+    attempt[2].write_text("{}", encoding="utf-8")
+    with pytest.raises(
+        WorkflowExecutionError,
+        match="raw response does not match its provider ledger result",
+    ):
+        driver.recover_pending_native_codex(
+            rebuilt_invocation,
+            contract,
+            WorkflowHistory(state.current_work_unit_id),
+        )
+    attempt[2].write_text(canonical, encoding="utf-8")
 
     raw_ahead_recovered = driver.recover_pending_native_codex(
         rebuilt_invocation,
@@ -3538,9 +3559,26 @@ def test_native_codex_record_ahead_recovery_reuses_raw_json_without_provider(
     )
     assert len(results) == 1
     assert results[0].payload.request_id == bundle.bound_context.request_id
+    recovered_chain = ArtifactStore(repository, state.run_id).load_chain()
+    assert all(
+        _IDENTIFIER_RE.fullmatch(item.idempotency_key)
+        for item in recovered_chain
+    )
+    provider_contents = tuple(
+        item
+        for item in recovered_chain
+        if isinstance(item.payload, ProviderContentPayload)
+    )
+    assert len(provider_contents) == 1
+    assert provider_contents[0].payload.response_sha256 == output.response_sha256
+    provider_attempts = tuple(
+        item
+        for item in recovered_chain
+        if isinstance(item.payload, ProviderAttemptPayload)
+    )
+    assert len(provider_attempts) == 2
+    assert {item.payload.phase for item in provider_attempts} == {"started", "failed"}
 
-    request_path = driver._native_agent_request_path(invocation)
-    persisted_request = request_path.read_text(encoding="utf-8")
     tampered_request = json.loads(persisted_request)
     assert tampered_request["evidence_assets"]
     tampered_request["evidence_assets"][0]["content"] += "tampered"
