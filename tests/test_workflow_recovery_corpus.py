@@ -1193,7 +1193,10 @@ def _run_reviewer_scenario(
     pending_record_id: str | None = record.record_id
 
     def replay(*_args: object, **_kwargs: object) -> object:
-        return SimpleNamespace(pending_review_record_id=pending_record_id)
+        return SimpleNamespace(
+            pending_review_record_id=pending_record_id,
+            subset=lambda _records: SimpleNamespace(),
+        )
 
     patch_replay: Callable[..., object] = replay
     if spec.scenario_id == "reviewer-replay-failure":
@@ -1260,6 +1263,13 @@ def _run_reviewer_scenario(
     before = provider_counter["count"]
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(module, "replay_artifacts", patch_replay)
+        patch.setattr(
+            module,
+            "reduce_findings",
+            lambda _replay: SimpleNamespace(
+                ledger=SimpleNamespace(findings=())
+            ),
+        )
         try:
             output = recovery.recover_pending_native_reviewer_before_policy(
                 base["state"],

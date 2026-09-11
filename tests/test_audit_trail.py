@@ -17,6 +17,7 @@ from audit_trail import (
     REQUIRED_WORK_PLAN_HEADINGS,
     AuthorizedTestChanges,
     ValidationAuditEvent,
+    allowed_review_finding_origins,
     project_slice_audit,
     project_overall_audit,
     project_structured_slice_audit,
@@ -876,6 +877,57 @@ def test_projection_rejects_non_contiguous_events_and_cross_slice_findings() -> 
     foreign = replace(_finding(), origin=FindingOrigin("07", 1, AgentRole.CLAUDE))
     with pytest.raises(AuditTrailError, match="belongs to slice"):
         ReviewAuditEvent(1, 8, 1, _review(approval=False, findings=(foreign,)))
+
+
+def test_review_origins_are_derived_from_complete_ledger_not_request_subset() -> None:
+    ledger_finding = replace(
+        _finding(), origin=FindingOrigin("23", 1, AgentRole.CLAUDE)
+    )
+    allowed = allowed_review_finding_origins(
+        (ledger_finding,), current_slice_id=42, is_final_review=True
+    )
+
+    event = ReviewAuditEvent(
+        1,
+        42,
+        5,
+        _review(approval=False, findings=(ledger_finding,)),
+        allowed_finding_origins=allowed,
+    )
+    assert event.allowed_finding_origins == ("23", "FINAL")
+
+    unknown = replace(
+        ledger_finding, origin=FindingOrigin("24", 1, AgentRole.CLAUDE)
+    )
+    with pytest.raises(AuditTrailError, match="belongs to slice 24"):
+        ReviewAuditEvent(
+            1,
+            42,
+            1,
+            _review(approval=False, findings=(unknown,)),
+            allowed_finding_origins=allowed_review_finding_origins(
+                (ledger_finding,), current_slice_id=42, is_final_review=False
+            ),
+        )
+
+
+def test_final_review_intermediate_denial_may_close_its_complete_offer() -> None:
+    closed = replace(
+        _finding(),
+        status=FindingStatus.CLOSED,
+        status_rationale="This offered finding was dispositioned.",
+    )
+
+    event = ReviewAuditEvent(
+        1,
+        42,
+        5,
+        _review(approval=False, findings=(closed,)),
+        allowed_finding_origins=("08", "FINAL"),
+        is_final_review=True,
+    )
+
+    assert event.result.own_open_blockers == ()
 
 
 def test_review_event_accepts_explicit_final_finding_origin_for_correction() -> None:

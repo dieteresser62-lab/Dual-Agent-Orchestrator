@@ -896,14 +896,14 @@ class WorkflowPersistence:
                 raise WorkflowExecutionError(
                     "native review persistence lacks its correction finding scope"
                 )
-            authoritative_findings = reduced.request_subset(
+            request_scope_findings = reduced.request_subset(
                 finding_ids=attribution.finding_ids
             ).findings
         else:
-            authoritative_findings = reduced.ledger.findings
+            request_scope_findings = reduced.ledger.findings
         try:
             merge_review_request_result(
-                authoritative_findings,
+                request_scope_findings,
                 previous_findings,
                 output.result.findings,
                 review_type=review_type,

@@ -48,7 +48,11 @@ from contracts import (
 )
 from final_review_preflight import FINAL_REVIEW_OPERATIONS
 from finding_order import sorted_finding_ids
-from finding_reducer import project_open_set, reduce_findings
+from finding_reducer import (
+    project_final_review_dispositions,
+    project_open_set,
+    reduce_findings,
+)
 from gates import matches_path_patterns
 from git_service import inspect_commit_tree, inspect_repository
 from native_codex_contract import (
@@ -874,6 +878,7 @@ class WorkflowRecovery:
         record: ArtifactRecord,
         round_number: int,
         attestation: ValidationAttestation,
+        request_replay: ArtifactReplayResult | None = None,
     ) -> NativeReviewContext:
         expected_test_files = (
             tuple(
@@ -897,15 +902,28 @@ class WorkflowRecovery:
         )
         payload = record.payload
         assert isinstance(payload, ReviewPayload)
+        finding_ledger = (
+            history.findings
+            if request_replay is None
+            else reduce_findings(request_replay).ledger.findings
+        )
         offered_ids = dict.fromkeys(payload.finding_ids, True)
-        final_previous_findings = tuple(
+        previous_findings = tuple(
             item
-            for item in history.findings
+            for item in finding_ledger
             if offered_ids.get(item.finding_id, False)
         )
-        previous_findings = {
-            ApprovalMarker.FINAL: final_previous_findings,
-        }.get(approval_marker, history.findings)
+        final_review_pending_count = (
+            len(
+                project_final_review_dispositions(
+                    request_replay, unit.work_unit_id
+                ).pending.findings
+            )
+            if approval_marker is ApprovalMarker.FINAL and request_replay is not None
+            else len(project_open_set(finding_ledger).findings)
+            if approval_marker is ApprovalMarker.FINAL
+            else None
+        )
         return NativeReviewContext(
             run_id=state.run_id,
             work_unit_id=str(unit.work_unit_id),
@@ -921,7 +939,7 @@ class WorkflowRecovery:
             round_number=round_number,
             previous_findings=previous_findings,
             authoritative_finding_ids=sorted_finding_ids(
-                item.finding_id for item in history.findings
+                item.finding_id for item in finding_ledger
             ),
             validation_attestation=attestation,
             test_files=tuple(sorted(set(expected_test_files))),
@@ -931,9 +949,7 @@ class WorkflowRecovery:
                 context.validation_matrix.finding_command_prefixes
             ),
             red_state_followup_slice=context.red_state_followup_slice,
-            final_review_pending_count={
-                ApprovalMarker.FINAL: len(project_open_set(history.findings).findings)
-            }.get(approval_marker),
+            final_review_pending_count=final_review_pending_count,
         )
 
     def _parse_pending_native_reviewer_response(
@@ -1080,6 +1096,7 @@ class WorkflowRecovery:
                 "provider content"
             )
         canonical, _content_payload = persisted_content
+        request_replay = replay.subset(chain[: chain.index(record)])
         native_context = self._build_pending_native_reviewer_context(
             state,
             context,
@@ -1088,6 +1105,7 @@ class WorkflowRecovery:
             record,
             round_number,
             attestation,
+            request_replay,
         )
         request_digest = payload.request_id.removeprefix("native-review-request-")
         try:

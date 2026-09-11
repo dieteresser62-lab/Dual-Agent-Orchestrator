@@ -482,7 +482,7 @@
         },
         {
           "ordinal": 7,
-          "expression": "self._apply_review_result(state=state, context=context, history=history, reviewer=reviewer, result=result, fingerprint=changes.fingerprint, round_number=review_round, is_plan_review=is_plan_review, is_final_review=is_final_review, user_gate_paths=changes.user_gate_paths, final_review_requested_ids=requested_ids if is_final_review else None, final_review_new_finding_ids=new_ids, final_review_progress_ids=progress_ids)"
+          "expression": "self._apply_review_result(state=state, context=context, history=history, reviewer=reviewer, result=result, fingerprint=changes.fingerprint, round_number=review_round, is_plan_review=is_plan_review, is_final_review=is_final_review, finding_ledger=finding_ledger, user_gate_paths=changes.user_gate_paths, final_review_requested_ids=requested_ids if is_final_review else None, final_review_new_finding_ids=new_ids, final_review_progress_ids=progress_ids)"
         }
       ],
       "catchers": [
@@ -548,7 +548,7 @@
           "ordinal": 6,
           "state_expression": "state",
           "history_expression": "history",
-          "statement_path": "body[18].body[5].body[1]",
+          "statement_path": "body[19].body[5].body[1]",
           "after_condition_count": 6,
           "enclosing_condition_ordinals": [
             5,
@@ -559,7 +559,7 @@
           "ordinal": 7,
           "state_expression": "state",
           "history_expression": "history",
-          "statement_path": "body[22].body[6]",
+          "statement_path": "body[23].body[6]",
           "after_condition_count": 12,
           "enclosing_condition_ordinals": [
             11
