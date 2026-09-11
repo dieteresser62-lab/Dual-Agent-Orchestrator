@@ -2811,7 +2811,19 @@ class BatchedFinalReviewDriver(FakeDriver):
     batch_size: int = 25
     approve_complete: bool = True
     pending_ids: tuple[str, ...] = ()
+    authoritative_findings: tuple[FindingRecord, ...] | None = None
     requested_ids: list[tuple[str, ...]] = field(default_factory=list)
+
+    def authoritative_native_findings(
+        self,
+        _state: WorkflowState,
+        mirror_findings: tuple[FindingRecord, ...],
+    ) -> tuple[FindingRecord, ...]:
+        return (
+            mirror_findings
+            if self.authoritative_findings is None
+            else self.authoritative_findings
+        )
 
     def authoritative_final_review_findings(
         self,
@@ -2819,8 +2831,13 @@ class BatchedFinalReviewDriver(FakeDriver):
         mirror_findings: tuple[FindingRecord, ...],
     ) -> tuple[FindingRecord, ...]:
         pending = frozenset(self.pending_ids)
+        source = (
+            mirror_findings
+            if self.authoritative_findings is None
+            else self.authoritative_findings
+        )
         return tuple(
-            item for item in mirror_findings if item.finding_id in pending
+            item for item in source if item.finding_id in pending
         )
 
     def invoke_reviewer(
@@ -2971,6 +2988,22 @@ def test_final_review_continues_beyond_the_retired_four_round_limit() -> None:
     ]
 
 
+def test_final_review_round_four_follows_three_disposition_rounds() -> None:
+    result, driver = _batched_final_review_case(70, batch_size=10)
+
+    assert result.workflow_completed
+    assert [item.round_number for item in driver.reviewer_calls[:4]] == [1, 2, 3, 4]
+    fourth_request = driver.reviewer_calls[3].native_request
+    assert fourth_request is not None
+    assert fourth_request.document["review_contract"]["disposition_budget"] == {
+        "maximum_items": 32,
+        "eligible_finding_ids": [
+            f"C-{number:02d}" for number in range(31, 63)
+        ],
+        "pending_finding_count": 40,
+    }
+
+
 def test_over_budget_final_result_is_rejected_and_retried_with_smaller_offer() -> None:
     now = [datetime(2026, 9, 11, 10, 0, tzinfo=timezone.utc)]
     failure = _native_review_limit_failure(
@@ -3053,6 +3086,7 @@ def test_disposition_batches_preserve_previously_reclassified_blockers() -> None
         codex_outputs=[],
         reviewer_outputs=[],
         batch_size=1,
+        approve_complete=False,
         pending_ids=("C-107",),
         correction_boundaries=[
             WorkflowCorrectionBoundary(
@@ -3072,11 +3106,84 @@ def test_disposition_batches_preserve_previously_reclassified_blockers() -> None
     assert request.document["review_contract"]["disposition_budget"] == {
         "maximum_items": 1,
         "eligible_finding_ids": ["C-107"],
-        "pending_finding_count": 5,
+        "pending_finding_count": 1,
     }
     assert next_state.current_work_unit.kind is WorkUnitKind.CORRECTION
     assert next_state.current_step is WorkflowStep.CODEX_FINAL_CORRECTION
     assert next_state.current_work_unit.open_findings == blocker_ids
+
+
+def test_round_four_uses_authoritative_pending_total_after_prior_dispositions() -> None:
+    dispositioned_ids = frozenset(("C-85", "C-88", "C-102", "C-106"))
+    closed_before_final_review = frozenset((2, 4, 9, 14, 16, 18, 23, 30, 50))
+    findings = tuple(
+        FindingRecord(
+            finding_id=f"C-{number:02d}",
+            finding_class=(
+                FindingClass.BLOCKER
+                if f"C-{number:02d}" in dispositioned_ids
+                else FindingClass.OBSERVATION
+            ),
+            status=FindingStatus.OPEN,
+            summary=f"Final-review finding {number}.",
+            acceptance_test=f"Disposition {number} is recorded.",
+            origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+        )
+        for number in range(1, 109)
+        if number not in closed_before_final_review
+    )
+    pending_ids = tuple(
+        item.finding_id
+        for item in findings
+        if item.finding_id not in dispositioned_ids
+    )
+    state = replace(
+        _completed_single_slice_state().start_final_review_work_unit(),
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V2,
+            "2",
+            claude_review_transport="native-claude-review-v2",
+            codex_result_transport="native-codex-v2",
+        ),
+    ).with_current_step(WorkflowStep.CLAUDE_FINAL_REVIEW)
+    state = replace(
+        state,
+        work_units=tuple(
+            replace(item, round_number=4)
+            if item.work_unit_id == state.current_work_unit_id
+            else item
+            for item in state.work_units
+        ),
+    )
+    history = WorkflowHistory(
+        state.current_work_unit_id,
+        codex_final_report='{"result_type":"final_report_result"}',
+    )
+    driver = BatchedFinalReviewDriver(
+        snapshots=[_changes("f", "src/early.py", TEST_FILE)],
+        codex_outputs=[],
+        reviewer_outputs=[],
+        batch_size=0,
+        approve_complete=False,
+        pending_ids=pending_ids,
+        authoritative_findings=findings,
+    )
+
+    next_state, next_history = WorkflowEngine(driver)._run_review(
+        state, _context(), history, AgentRole.CLAUDE
+    )
+
+    assert [item.round_number for item in driver.reviewer_calls] == [4]
+    request = driver.reviewer_calls[0].native_request
+    assert request is not None
+    budget = request.document["review_contract"]["disposition_budget"]
+    assert budget["maximum_items"] == 32
+    assert len(budget["eligible_finding_ids"]) == 32
+    assert budget["pending_finding_count"] == 95
+    assert next_state.current_step is WorkflowStep.COMPLETED
+    assert dispositioned_ids.issubset(
+        project_open_set(next_history.findings).finding_ids
+    )
 
 
 @pytest.mark.parametrize("review_type", ("slice review", "final review"))
