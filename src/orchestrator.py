@@ -138,9 +138,9 @@ from workflow_audit import WorkflowAudit, WorkflowAuditDependencies
 from workflow_audit_projection import (
     _archive_stale_untracked_audit_reports,
     _attach_managed_audit_paths,
-    _attach_record_events,
     _audit_projection,
     _authorized_test_approval,
+    _hydrate_record_history,
     _is_managed_audit_path,
     _managed_audit_path,
     _managed_slice_scope_pattern,
@@ -2429,20 +2429,26 @@ def _history(
     state: WorkflowState,
     repository_root: Path | None = None,
 ) -> WorkflowHistory:
+    history = WorkflowHistory(state.current_work_unit_id)
     if state.runtime_history is None:
-        return WorkflowHistory(state.current_work_unit_id)
+        return history
     try:
         raw = dict(state.runtime_history)
-        if raw and all(
-            isinstance(key, str)
-            and key.isdigit()
-            and isinstance(value, dict)
-            and "workflow_event_record_refs" in value
-            for key, value in raw.items()
+        if not (
+            raw
+            and all(
+                isinstance(key, str)
+                and key.isdigit()
+                and isinstance(value, dict)
+                and "workflow_event_record_refs" in value
+                for key, value in raw.items()
+            )
         ):
-            history = WorkflowHistory(state.current_work_unit_id)
-        else:
-            current = raw.get("current") if set(raw) == {"current", "archive"} else raw
+            current = (
+                raw.get("current")
+                if set(raw) == {"current", "archive"}
+                else raw
+            )
             history = WorkflowHistory.from_dict(current)
     except (KeyError, TypeError, ValueError) as exc:
         raise WorkflowExecutionError(
@@ -2464,12 +2470,18 @@ def _history(
                 allow_incomplete_review_tail=True,
                 allow_finding_import_bootstrap=True,
             )
-            history = _attach_record_events(
-                {history.work_unit_id: history}, replay, store.read_blob
-            ).get(history.work_unit_id, history)
-        except (ArtifactReplayError, ArtifactStoreError, ValueError) as exc:
+            history = _hydrate_record_history(history, replay, store.read_blob)
+            history = _recover_final_review_attestation(
+                state, history, replay, store.read_blob
+            )
+        except (
+            ArtifactReplayError,
+            ArtifactStoreError,
+            UnicodeError,
+            ValueError,
+        ) as exc:
             raise WorkflowExecutionError(
-                f"persisted workflow event projection is invalid: {exc}"
+                f"record-backed workflow history projection is invalid: {exc}"
             ) from exc
     return history
 

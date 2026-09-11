@@ -2528,9 +2528,10 @@ class WorkflowEngine:
             pending_findings = self.driver.authoritative_final_review_findings(
                 state, history.findings
             )
-            # The reviewer-facing total and the offered batch are two views of
-            # the same record-native disposition projection.  Runtime history
-            # may be event-only after resume and is not a count authority here.
+            # The reviewer-facing total and the offered batch remain two views
+            # of the same record-native disposition projection.  Keep this
+            # request-local replay as a defense for record-ahead recovery and
+            # direct engine invocations outside production resume hydration.
             final_review_pending_count = len(pending_findings)
             limit_failures = sum(
                 item.failure_kind is AgentFailureKind.OUTPUT
@@ -3535,10 +3536,9 @@ class WorkflowEngine:
             or unit.kind in {WorkUnitKind.PLAN, WorkUnitKind.CORRECTION}
         ):
             return state
-        # Structured resume rehydrates audit events before the complete finding
-        # ledger is replayed for the exact provider request. Until that replay,
-        # a non-empty record-projected work-unit mirror is more authoritative
-        # than an empty event-only WorkflowHistory.
+        # Production resume now hydrates the complete record-backed history
+        # before engine entry. Keep this guard as a defense for record-ahead
+        # recovery and direct engine invocations with an event-only history.
         if not history.findings and unit.open_findings:
             return state
         open_ids = project_open_set(history.findings).finding_ids

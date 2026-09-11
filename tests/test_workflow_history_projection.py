@@ -81,7 +81,11 @@ from workflow_state import (
     WorkflowStateValidationError,
     init_workflow_state,
 )
-from workflow_audit_projection import _attach_record_events, _overall_audit_entries
+from workflow_audit_projection import (
+    _attach_record_events,
+    _hydrate_record_history,
+    _overall_audit_entries,
+)
 
 
 RUN_ID = "r9-prefix-projection"
@@ -1667,6 +1671,46 @@ def test_record_events_reconstruct_the_retired_audit_mirror_exactly(
     )
     assert mirror.runtime_history != projected.state.runtime_history
     assert project_workflow_state(replay).canonical_document == projected.canonical_document
+
+    hydrated = _hydrate_record_history(
+        WorkflowHistory(4), replay, bridge.store.read_blob
+    )
+    correction = reduce_findings(replay).correction_for(4)
+    assert correction is not None
+    assert hydrated.findings == reduce_findings(replay).request_subset(
+        finding_ids=correction.finding_ids
+    ).findings
+    assert hydrated.events == expected.events
+    assert hydrated.attestations == expected.attestations
+    assert hydrated.last_claude_fingerprint == expected.last_claude_fingerprint
+    assert hydrated.latest_claude_review == expected.latest_claude_review
+    assert hydrated.codex_final_report is None
+    assert hydrated.active_review_packet is None
+
+    unbound_report = b'{"result_type":"final_report_result","ready":true}'
+    unbound_blob = bridge.store.put_blob(unbound_report)
+    bridge.append(
+        ProviderContentPayload(
+            Role.CODEX,
+            "4",
+            2,
+            "codex_final_review",
+            "native-codex-request-" + "9" * 64,
+            unbound_blob.sha256,
+            "final_report",
+            unbound_blob.bytes,
+            unbound_blob,
+        ),
+        logical_id="provider-content-unbound-final-report",
+        idempotency_key="provider-content:unbound-final-report",
+        fingerprint_sha256=FINGERPRINT,
+    )
+    unbound_replay = replay_artifacts(
+        bridge.store.load_chain(), RUN_ID, require_content_authority=True
+    )
+    assert _hydrate_record_history(
+        WorkflowHistory(4), unbound_replay, bridge.store.read_blob
+    ).codex_final_report is None
 
     missing_attestation = replace(expected, attestations=())
     damaged = replace(

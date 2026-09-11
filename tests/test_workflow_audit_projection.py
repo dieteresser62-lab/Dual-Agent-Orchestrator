@@ -20,6 +20,7 @@ EXPECTED_INTERNAL_IMPORTS = {
     "git_service",
     "inbox_watcher",
     "repo_changes",
+    "review_packets",
     "workflow",
     "workflow_state",
 }
@@ -27,6 +28,7 @@ EXPECTED_PROJECTION_FUNCTIONS = {
     "_archive_stale_untracked_audit_reports",
     "_attach_managed_audit_paths",
     "_attach_record_events",
+    "_hydrate_record_history",
     "_audit_projection",
     "_authorized_test_approval",
     "_is_managed_audit_path",
@@ -41,6 +43,7 @@ EXPECTED_PROJECTION_EDGES = Counter(
     {
         ("_audit_projection", "_authorized_test_approval"): 1,
         ("_persisted_histories", "_attach_record_events"): 2,
+        ("_hydrate_record_history", "_attach_record_events"): 1,
         ("_recover_final_review_attestation", "_persisted_histories"): 1,
         ("_overall_audit_entries", "_persisted_histories"): 1,
         ("_overall_audit_entries", "_audit_projection"): 1,
