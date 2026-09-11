@@ -6,6 +6,8 @@ import hashlib
 import json
 from pathlib import Path
 
+import pytest
+
 from contracts import (
     AgentRole,
     ApprovalMarker,
@@ -88,7 +90,9 @@ def _codex_bundle(
     )
 
 
-def _review_bundle() -> workflow_requests.NativeReviewRequestBundle:
+def _review_bundle(
+    *, context: WorkflowContext | None = None
+) -> workflow_requests.NativeReviewRequestBundle:
     state = init_workflow_state(
         run_id="b31-request-review",
         task_file="/repo/inbox/backlog/00-b31.md",
@@ -125,7 +129,7 @@ def _review_bundle() -> workflow_requests.NativeReviewRequestBundle:
     )
     return workflow_requests.native_review_request(
         state=state,
-        context=_context(),
+        context=_context() if context is None else context,
         history=WorkflowHistory(state.current_work_unit_id),
         contract=contract,
         changes=changes,
@@ -153,7 +157,6 @@ def test_request_builders_are_free_functions_with_one_way_imports() -> None:
         and any(alias.name == "workflow" for alias in node.names)
         for node in ast.walk(tree)
     )
-
     importers = []
     for path in sorted(SRC.glob("*.py")):
         candidate = ast.parse(path.read_text(encoding="utf-8"))
@@ -196,6 +199,21 @@ def test_request_builders_are_free_functions_with_one_way_imports() -> None:
         and keyword.value.attr == "FULL_BRANCH"
         for keyword in review_calls[0].keywords
     )
+
+
+def test_non_correction_requests_still_reject_a_missing_slice_summary() -> None:
+    context = replace(_context(), slice_summary="")
+
+    with pytest.raises(
+        WorkflowExecutionError,
+        match="non-correction implementer request requires a current-slice summary",
+    ):
+        _codex_bundle(context=context)
+    with pytest.raises(
+        WorkflowExecutionError,
+        match="non-correction review requires a current-slice summary",
+    ):
+        _review_bundle(context=context)
 
 
 def test_canonical_requests_match_the_pre_cut_bytes() -> None:

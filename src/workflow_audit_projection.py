@@ -492,14 +492,24 @@ def _overall_audit_entries(
             label = "Arbeitseinheit %02d – Gesamtreview" % unit.work_unit_id
             summary = "Branchweite Gesamtabnahme durch Codex und Claude"
             scope = tuple(
-                sorted({path for item in state.planned_slices for path in item.scope_paths})
+                sorted({path for item in state.slices for path in item.scope_paths})
             )
+        elif unit.kind is WorkUnitKind.CORRECTION:
+            label = "Arbeitseinheit %02d – Abschlusskorrektur" % unit.work_unit_id
+            summary = "Abschlusskorrektur für " + ", ".join(unit.open_findings)
+            scope = next(
+                item for item in state.slices if item.slice_id == unit.slice_id
+            ).scope_paths
         else:
             label = "Arbeitseinheit %02d – Slice %02d" % (
                 unit.work_unit_id,
                 unit.slice_id,
             )
-            summary = planned.summary if planned is not None else "Abschlusskorrektur"
+            summary = (
+                planned.summary
+                if planned is not None
+                else "Direkte Implementierungseinheit"
+            )
             scope = (
                 planned.scope_paths
                 if planned is not None
