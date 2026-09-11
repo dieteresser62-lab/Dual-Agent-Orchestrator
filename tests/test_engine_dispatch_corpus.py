@@ -660,7 +660,11 @@ def _run_review_scenario(
         driver.invalid_attestation = "incomplete"
     elif scenario_id == "review-correction-missing-start-fingerprint":
         state = _plan_state().with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW)
-        unit = replace(state.current_work_unit, round_number=2)
+        unit = replace(
+            state.current_work_unit,
+            round_number=2,
+            codex_return_count=1,
+        )
         state = replace(state, work_units=(*state.work_units[:-1], unit))
         context = replace(
             context,

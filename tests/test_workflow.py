@@ -19,6 +19,7 @@ from agent_runtime import (
     AgentProcessError,
     NativeAgentCodexOutput,
     NativeAgentReviewOutput,
+    ProviderRequestRoundRequired,
     QuotaReset,
     QuotaWaitPolicy,
     TransientRetryPolicy,
@@ -90,6 +91,7 @@ from workflow_state import (
     WorkUnitStatus,
     ProtocolBinding,
     ProtocolMode,
+    Reviewer,
     init_workflow_state,
 )
 
@@ -844,6 +846,198 @@ def test_native_work_unit_mirrors_carried_open_ledger_before_provider_resume() -
     assert result.state.current_work_unit.open_findings == ("C-01",)
     assert result.history.findings == (open_finding, closed_finding)
     assert driver.checkpoints[-1].current_work_unit.open_findings == ("C-01",)
+
+
+def _packet_plan() -> str:
+    return """# Approved plan
+
+### Slice 1 - Round cause
+
+**Ziel**
+
+Keep request recomposition distinct from review correction.
+
+**\u0041kzeptanzkriterien**
+
+- The review packet follows the persisted cause of the round.
+"""
+
+
+def _combined_native_slice_state() -> WorkflowState:
+    return replace(
+        _slice_state(),
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V2,
+            "2",
+            claude_review_transport="native-claude-review-v2",
+            codex_result_transport="native-codex-v2",
+        ),
+    )
+
+
+def test_recomposed_request_round_builds_slice_packet_and_keeps_open_findings() -> None:
+    finding = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.OBSERVATION,
+        status=FindingStatus.OPEN,
+        summary="A carried observation remains visible.",
+        acceptance_test="The next Slice review receives the carried ledger.",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
+
+    @dataclass
+    class AuthoritativeRecompositionDriver(FakeDriver):
+        def authoritative_native_findings(
+            self,
+            state: WorkflowState,
+            mirror_findings: tuple[FindingRecord, ...],
+        ) -> tuple[FindingRecord, ...]:
+            self.authoritative_finding_calls.append(
+                (state.current_step.value, mirror_findings)
+            )
+            return (finding,)
+
+    changes = _changes("b", "src/early.py", TEST_FILE)
+    driver = AuthoritativeRecompositionDriver(
+        snapshots=[changes, changes],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[_review_approval(AgentRole.CLAUDE)],
+        codex_failures=[
+            ProviderRequestRoundRequired(
+                binding_fingerprint="a" * 64,
+                previous_input_digest="b" * 64,
+                current_input_digest="c" * 64,
+            ),
+            None,
+        ],
+    )
+    state = _with_open_findings(
+        _combined_native_slice_state(),
+        (finding.finding_id,),
+    )
+
+    result = WorkflowEngine(driver).run_current_work_unit(
+        state,
+        replace(_context(), approved_plan_text=_packet_plan()),
+        WorkflowHistory(state.current_work_unit_id),
+    )
+
+    assert result.completed
+    assert [call.round_number for call in driver.codex_calls] == [1, 2]
+    assert result.state.current_work_unit.open_findings == (finding.finding_id,)
+    review = driver.reviewer_calls[0]
+    assert review.evidence_kind is EvidenceKind.FULL_SLICE
+    assert review.review_packet is not None
+    assert review.review_packet.purpose == "slice"
+    packet = json.loads(review.review_packet.canonical_bytes)
+    assert [item["id"] for item in packet["open_findings"]] == [finding.finding_id]
+
+
+def _denied_slice_round(
+    finding: FindingRecord,
+) -> tuple[WorkflowState, WorkflowHistory]:
+    state = _combined_native_slice_state().with_current_step(
+        WorkflowStep.CLAUDE_SLICE_REVIEW
+    ).record_review_denial(
+        reviewer=Reviewer.CLAUDE,
+        open_findings=(finding.finding_id,),
+        return_step=WorkflowStep.CODEX_CORRECTION,
+    )
+    denial = ContractResult(
+        reviewer=AgentRole.CLAUDE,
+        approval=False,
+        stopped=False,
+        stop_request=None,
+        validation=None,
+        test_files=(TEST_FILE,),
+        pre_mortem=None,
+        evidence=None,
+        findings=(finding,),
+        anchors=(),
+    )
+    return state, WorkflowHistory(
+        state.current_work_unit_id,
+        findings=(finding,),
+        last_claude_fingerprint="d" * 64,
+        latest_claude_review=denial,
+    )
+
+
+def test_review_denial_round_builds_correction_packet_with_affected_findings() -> None:
+    finding = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="The rejected Slice needs a correction.",
+        acceptance_test="The correction packet names this blocker.",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
+    state, history = _denied_slice_round(finding)
+    state = state.with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW)
+    changes = _changes("b", "src/early.py", TEST_FILE)
+    driver = FakeDriver(
+        snapshots=[changes],
+        codex_outputs=[],
+        reviewer_outputs=[_review_closes(AgentRole.CLAUDE, finding.finding_id)],
+        deltas={("0" * 64, changes.fingerprint): changes.full_diff},
+    )
+
+    advanced, _ = WorkflowEngine(driver)._run_review(
+        state,
+        replace(_context(), approved_plan_text=_packet_plan()),
+        history,
+        AgentRole.CLAUDE,
+    )
+
+    assert advanced.current_step is WorkflowStep.SLICE_COMMIT
+    review = driver.reviewer_calls[0]
+    assert review.evidence_kind is EvidenceKind.CORRECTION_DELTA
+    assert review.review_packet is not None
+    assert review.review_packet.purpose == "correction"
+    packet = json.loads(review.review_packet.canonical_bytes)
+    assert [item["id"] for item in packet["open_findings"]] == [finding.finding_id]
+
+
+def test_recomposition_after_review_denial_keeps_correction_semantics() -> None:
+    finding = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="The rejected Slice needs a correction.",
+        acceptance_test="A version change cannot erase correction semantics.",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
+    state, history = _denied_slice_round(finding)
+    changes = _changes("b", "src/early.py", TEST_FILE)
+    driver = FakeDriver(
+        snapshots=[changes, changes],
+        codex_outputs=[_codex_ready(finding.finding_id)],
+        reviewer_outputs=[_review_closes(AgentRole.CLAUDE, finding.finding_id)],
+        codex_failures=[
+            ProviderRequestRoundRequired(
+                binding_fingerprint="a" * 64,
+                previous_input_digest="b" * 64,
+                current_input_digest="c" * 64,
+            ),
+            None,
+        ],
+        deltas={("0" * 64, changes.fingerprint): changes.full_diff},
+    )
+
+    result = WorkflowEngine(driver).run_current_work_unit(
+        state,
+        replace(_context(), approved_plan_text=_packet_plan()),
+        history,
+    )
+
+    assert result.completed
+    assert [call.round_number for call in driver.codex_calls] == [2, 3]
+    review = driver.reviewer_calls[0]
+    assert review.evidence_kind is EvidenceKind.CORRECTION_DELTA
+    assert review.review_packet is not None
+    assert review.review_packet.purpose == "correction"
+    packet = json.loads(review.review_packet.canonical_bytes)
+    assert [item["id"] for item in packet["open_findings"]] == [finding.finding_id]
 
 
 def test_native_implementation_package_matches_request_open_findings(

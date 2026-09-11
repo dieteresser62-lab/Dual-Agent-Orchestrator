@@ -329,10 +329,11 @@
         },
         {
           "ordinal": 8,
-          "expression": "context.approved_plan_text is not None and (unit.kind is WorkUnitKind.CORRECTION or unit.round_number > 1)",
+          "expression": "context.approved_plan_text is not None and (unit.kind is WorkUnitKind.CORRECTION or project_implementer_return_policy(unit)[0] > 0)",
           "read_names": [
             "WorkUnitKind",
             "context",
+            "project_implementer_return_policy",
             "unit"
           ]
         },

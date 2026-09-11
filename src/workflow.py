@@ -102,6 +102,7 @@ from workflow_state import (
     WorkUnitStatus,
     NATIVE_CLAUDE_REVIEW_TRANSPORT,
     NATIVE_CODEX_RESULT_TRANSPORT,
+    project_implementer_return_policy,
     quota_resume_diff_acknowledgement,
 )
 
@@ -2161,8 +2162,12 @@ class WorkflowEngine:
         if is_final_review:
             evidence_kind = EvidenceKind.FULL_BRANCH
             review_diff = changes.full_diff
+        # A dedicated correction unit follows a denied final review; the return
+        # counter is advanced only by record_review_denial(). Request
+        # recomposition advances the round number but preserves both facts.
         elif context.approved_plan_text is not None and (
-            unit.kind is WorkUnitKind.CORRECTION or unit.round_number > 1
+            unit.kind is WorkUnitKind.CORRECTION
+            or project_implementer_return_policy(unit)[0] > 0
         ):
             evidence_kind = EvidenceKind.CORRECTION_DELTA
             correction_start = state.current_slice.start_fingerprint
@@ -3440,6 +3445,12 @@ class WorkflowEngine:
             or binding.mode is not ProtocolMode.STRUCTURED_V2
             or unit.kind in {WorkUnitKind.PLAN, WorkUnitKind.CORRECTION}
         ):
+            return state
+        # Structured resume rehydrates audit events before the complete finding
+        # ledger is replayed for the exact provider request. Until that replay,
+        # a non-empty record-projected work-unit mirror is more authoritative
+        # than an empty event-only WorkflowHistory.
+        if not history.findings and unit.open_findings:
             return state
         open_ids = project_open_set(history.findings).finding_ids
         if unit.open_findings == open_ids:
