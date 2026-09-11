@@ -4,19 +4,26 @@ import ast
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
 
 from agent_runtime import ProviderRequestRoundRequired
 from artifact_bridge import ArtifactBridge
-from artifact_models import ProviderContentPayload, Role
+from artifact_models import (
+    FingerprintKind,
+    ProviderContentPayload,
+    Role,
+    WorkflowCompletionPayload,
+)
 from artifact_store import ArtifactStore
 from workflow import WorkflowExecutionError
 from workflow_persistence import (
     WorkflowPersistence,
     WorkflowPersistenceDependencies,
 )
+from workflow_state import WorkflowStep, WorkUnitKind
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -116,6 +123,39 @@ def test_changed_request_with_same_binding_requests_a_new_round() -> None:
     assert raised.value.current_input_digest == hashlib.sha256(
         current.encode("utf-8")
     ).hexdigest()
+
+
+def test_terminal_final_denial_persists_failed_completion_without_binding() -> None:
+    appended: list[tuple[object, dict[str, object]]] = []
+    bridge = SimpleNamespace(
+        store=SimpleNamespace(current_chain=lambda: ()),
+        append=lambda payload, **kwargs: appended.append((payload, kwargs)),
+    )
+    state = SimpleNamespace(
+        task_digest="a" * 64,
+        work_units=(),
+        work_plan_path=None,
+        planned_slices=(),
+        approved_plan_commit=None,
+        current_step=WorkflowStep.COMPLETED,
+        slices=(SimpleNamespace(commit_ref="b" * 40),),
+        current_work_unit=SimpleNamespace(
+            kind=WorkUnitKind.FINAL_REVIEW,
+            open_findings=("C-85", "C-88", "C-102", "C-106"),
+        ),
+        execution_mode="IMPLEMENT",
+    )
+
+    WorkflowPersistence(_dependencies(bridge=cast(ArtifactBridge, bridge)))._persist_structured_tail(
+        cast(Any, state)
+    )
+
+    assert len(appended) == 1
+    payload, metadata = appended[0]
+    assert payload == WorkflowCompletionPayload("failed", None)
+    assert metadata["idempotency_key"] == "workflow-completion:failed"
+    assert metadata["fingerprint_sha256"] == state.task_digest
+    assert metadata["fingerprint_kind"] is FingerprintKind.CONTRACT
 
 
 def _tree(path: Path = PERSISTENCE_PATH, source: str | None = None) -> ast.Module:

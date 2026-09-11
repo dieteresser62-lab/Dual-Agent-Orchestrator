@@ -307,6 +307,27 @@ def project_open_set(
     )
 
 
+def project_finding_transition_ids(
+    previous: Sequence[FindingRecord],
+    current: Sequence[FindingRecord],
+) -> tuple[str, ...]:
+    """Name Findings whose reviewer-owned state changed between two views."""
+
+    previous_tuple = _canonical_findings(previous)
+    current_by_id = {
+        item.finding_id: item for item in _canonical_findings(current)
+    }
+    return tuple(
+        item.finding_id
+        for item in previous_tuple
+        if item.finding_id in current_by_id
+        and (
+            current_by_id[item.finding_id].status is not item.status
+            or current_by_id[item.finding_id].finding_class is not item.finding_class
+        )
+    )
+
+
 def project_final_review_dispositions(
     replay: ArtifactReplayResult,
     work_unit_id: int | str,

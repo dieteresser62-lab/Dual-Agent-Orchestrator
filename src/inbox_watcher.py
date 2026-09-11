@@ -246,36 +246,52 @@ class WatchTaskResult:
             status is WorkUnitStatus.AWAITING_RESUME
             and state.current_work_unit.gate.reason is GateReason.BOOTSTRAP_CHECK
         )
+        terminal_rejection = result.workflow_rejected
+        classified_failure: ClassifiedFailure | None = None
         if result.workflow_completed:
             disposition = WatchTaskDisposition.COMPLETED
             exit_code = 0
+            result_status = status.value
+        elif terminal_rejection:
+            detail = result.rejection_detail
+            assert detail is not None
+            disposition = WatchTaskDisposition.REJECTED
+            exit_code = 5
+            result_status = "rejected"
+            classified_failure = ClassifiedFailure(
+                failure_class=FailureClass.TERMINAL_REJECTION,
+                diagnostic_code="FINAL-REVIEW-DENIED",
+                exception_type="FinalReviewVerdict",
+                detail=detail,
+                cause_depth=0,
+                explicitly_mapped=True,
+            )
         elif bootstrap_halt:
             # This local denial happens before a provider process.  Exit 4 keeps it
             # distinct from quota/agent failures while preserving the watch identity
             # for an operator to repair the cause and resume the exact same step.
             disposition = WatchTaskDisposition.RESUMABLE_HALT
             exit_code = 4
+            result_status = status.value
         elif resumable and result.exit_code in {2, 3, 4}:
             disposition = WatchTaskDisposition.RESUMABLE_HALT
             exit_code = result.exit_code
+            result_status = status.value
         else:
             # A non-terminal workflow result without an acknowledged halt has no
             # retry authorization.  Treat the missing classification as a
             # fail-closed operator halt instead of manufacturing a transient.
             disposition = WatchTaskDisposition.RESUMABLE_HALT
             exit_code = 4
-        classified_failure = (
-            classify_exception(
+            result_status = status.value
+            classified_failure = classify_exception(
                 RuntimeError("workflow returned a non-resumable, non-terminal result")
             )
-            if not result.workflow_completed and not resumable and not bootstrap_halt
-            else None
-        )
         return cls(
             exit_code=exit_code,
             run_id=state.run_id,
             disposition=disposition,
-            status=status.value,
+            status=result_status,
             step=state.current_step.value,
             work_unit_id=state.current_work_unit_id,
             gate_reason=(
@@ -292,6 +308,9 @@ class WatchTaskResult:
             ),
             protocol_mode=state.effective_protocol_mode.value,
             classified_failure=classified_failure,
+            resume_available=(
+                disposition is WatchTaskDisposition.RESUMABLE_HALT
+            ),
         )
 
     @classmethod
@@ -1354,16 +1373,24 @@ def _process_watch_task(
 
 
 def _strengthen_rejected_result(task_result: WatchTaskResult) -> WatchTaskResult:
-    # Re-check the lifecycle boundary immediately before publishing a terminal
-    # rejection. A concurrently visible record can only strengthen the result
-    # into an operator halt.
+    # Re-check input-rejection lifecycle authority immediately before publishing.
+    # A final-review verdict, in contrast, is terminal because its records exist.
     assert task_result.classified_failure is not None
-    return WatchTaskResult.from_failure(
-        task_result.classified_failure,
-        run_id=task_result.run_id,
-        records_written=watch_run_has_records(Path.cwd(), task_result.run_id),
-        protocol_mode=task_result.protocol_mode,
+    failure = task_result.classified_failure
+    final_verdict_key = ("FINAL-REVIEW-DENIED", "FinalReviewVerdict", True)
+    resolver = {
+        # This verdict exists only after its review and failed-completion records.
+        final_verdict_key: lambda: task_result,
+    }.get(
+        (failure.diagnostic_code, failure.exception_type, failure.explicitly_mapped),
+        lambda: WatchTaskResult.from_failure(
+            failure,
+            run_id=task_result.run_id,
+            records_written=watch_run_has_records(Path.cwd(), task_result.run_id),
+            protocol_mode=task_result.protocol_mode,
+        ),
     )
+    return resolver()
 
 
 def _begin_rejected_archive(

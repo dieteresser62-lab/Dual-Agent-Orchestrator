@@ -155,6 +155,9 @@ def _context_variants() -> dict[str, NativeReviewContext]:
             round_number=round_number,
             allow_new_observations=allow,
             previous_findings=ledger,
+            final_review_pending_count=(
+                len(ledger) if marker == "final" else base.final_review_pending_count
+            ),
         )
         for marker, base in bases.items()
         for round_number in (1, 2)

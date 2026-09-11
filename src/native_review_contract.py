@@ -47,6 +47,7 @@ from native_provider_schema import defensive_provider_projection
 
 
 SCHEMA_VERSION = "native-agent-review-result-v2"
+MAX_NATIVE_REVIEW_DISPOSITIONS = 32
 NONBLANK_TEXT_PATTERN = "^[^\\u0000]*[^\\u0000\\s][^\\u0000]*$"
 NONBLANK_LINE_PATTERN = (
     "^[^\\u0000\\r\\n]*[^\\u0000\\r\\n\\s][^\\u0000\\r\\n]*$"
@@ -116,6 +117,61 @@ class NativeReviewContractError(ValueError):
         self.code = code
         self.detail = detail
         super().__init__(f"{code.value}: {detail}")
+
+
+@dataclass(frozen=True, slots=True)
+class NativeReviewDispositionLimit:
+    """Typed detail carried by an existing review-contract failure."""
+
+    actual_items: int
+    maximum_items: int
+
+
+def find_native_review_disposition_limit_error(
+    error: BaseException,
+) -> NativeReviewDispositionLimit | None:
+    """Find the typed limit failure through explicit exception boundaries."""
+
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        detail = getattr(current, "disposition_limit", None)
+        if isinstance(detail, NativeReviewDispositionLimit):
+            return detail
+        seen.add(id(current))
+        current = current.__cause__
+    return None
+
+
+def validate_native_review_disposition_budget(
+    document: Mapping[str, Any], context: NativeReviewContext
+) -> None:
+    """Reject an over-budget final result before generic schema diagnostics."""
+
+    if context.approval_marker is not ApprovalMarker.FINAL:
+        return
+    status_changes = document.get("status_changes")
+    reclassifications = document.get("reclassifications")
+    if not isinstance(status_changes, list) or not isinstance(reclassifications, list):
+        return
+    actual_items = len(status_changes) + len(reclassifications)
+    maximum_items = min(
+        MAX_NATIVE_REVIEW_DISPOSITIONS,
+        sum(
+            item.origin.reporter is context.reviewer
+            for item in project_open_set(context.previous_findings).findings
+        ),
+    )
+    if actual_items > maximum_items:
+        error = NativeReviewContractError(
+            NativeReviewErrorCode.SCHEMA_INVALID,
+            "final-review disposition count "
+            f"{actual_items} exceeds bound maximum {maximum_items}",
+        )
+        error.disposition_limit = NativeReviewDispositionLimit(
+            actual_items, maximum_items
+        )
+        raise error
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,6 +262,7 @@ class NativeReviewContext:
     validation_command_prefixes: tuple[tuple[str, ...], ...] = ()
     red_state_followup_slice: str | None = None
     plan_artifact_path: str | None = None
+    final_review_pending_count: int | None = None
 
     def __post_init__(self) -> None:
         for label, value in (
@@ -310,6 +367,28 @@ class NativeReviewContext:
                     NativeReviewErrorCode.CONTEXT_INVALID,
                     "plan_artifact_path is valid only for a plan review",
                 )
+        if self.approval_marker is ApprovalMarker.FINAL:
+            offered_count = len(project_open_set(self.previous_findings).findings)
+            pending_count = (
+                offered_count
+                if self.final_review_pending_count is None
+                else self.final_review_pending_count
+            )
+            if (
+                isinstance(pending_count, bool)
+                or not isinstance(pending_count, int)
+                or pending_count < offered_count
+            ):
+                raise NativeReviewContractError(
+                    NativeReviewErrorCode.CONTEXT_INVALID,
+                    "final_review_pending_count must cover every offered open finding",
+                )
+            object.__setattr__(self, "final_review_pending_count", pending_count)
+        elif self.final_review_pending_count is not None:
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.CONTEXT_INVALID,
+                "final_review_pending_count is valid only for a final review",
+            )
         normalized_prefixes = tuple(dict.fromkeys(self.validation_command_prefixes))
         if normalized_prefixes != self.validation_command_prefixes or any(
             not prefix
@@ -458,6 +537,7 @@ def native_review_provider_response_schema(
     )
     own_open = project_open_set(own_findings).findings
     own_open_ids = tuple(item.finding_id for item in own_open)
+    disposition_max = min(MAX_NATIVE_REVIEW_DISPOSITIONS, len(own_open_ids))
     own_open_blockers = tuple(
         item
         for item in own_open
@@ -550,7 +630,7 @@ def native_review_provider_response_schema(
     )
     approved["properties"]["status_changes"].update(
         minItems=0,
-        maxItems=len(own_open_ids),
+        maxItems=disposition_max,
         items={"$ref": "#/$defs/bound_status_change"},
     )
     if own_open_ids:
@@ -588,11 +668,11 @@ def native_review_provider_response_schema(
         )
         approved["properties"]["status_changes"].update(
             minItems=0,
-            maxItems=len(own_open_ids),
+            maxItems=disposition_max,
         )
         approved["properties"]["reclassifications"].update(
             minItems=0,
-            maxItems=len(own_open_ids),
+            maxItems=disposition_max,
             items={"$ref": "#/$defs/bound_approved_reclassification"},
         )
     approved["properties"]["review_evidence"] = {
@@ -624,11 +704,11 @@ def native_review_provider_response_schema(
         items={"$ref": "#/$defs/bound_denied_finding"},
     )
     denied["properties"]["status_changes"].update(
-        maxItems=len(own_open_ids),
+        maxItems=disposition_max,
         items={"$ref": "#/$defs/bound_status_change"},
     )
     denied["properties"]["reclassifications"].update(
-        maxItems=len(own_open_ids),
+        maxItems=disposition_max,
         items={"$ref": "#/$defs/bound_reclassification"},
     )
     denied["properties"]["pre_mortem"] = {
@@ -662,6 +742,11 @@ def native_review_provider_response_schema(
             or context.red_state_followup_slice is not None
         )
         and (not context.test_files or context.test_changes_approved)
+        and not (
+            context.approval_marker is ApprovalMarker.FINAL
+            and context.final_review_pending_count is not None
+            and context.final_review_pending_count > len(own_open_ids)
+        )
     )
     result_refs: list[dict[str, str]] = []
     if approval_possible:
@@ -1253,25 +1338,24 @@ def _validate_decision(
     )
     if not response.approved:
         if not own_open_blockers:
-            touched = {
-                *(item.finding_id for item in response.status_changes),
-                *(item.finding_id for item in response.reclassifications),
-            }
+            unoffered_open_remain = (
+                context.approval_marker is ApprovalMarker.FINAL
+                and context.final_review_pending_count is not None
+                and context.final_review_pending_count > len(context.previous_findings)
+            )
             remaining_own = tuple(
                 item
                 for item in open_findings
                 if item.origin.reporter is context.reviewer
-                and item.finding_id not in touched
             )
             if not (
                 context.approval_marker is ApprovalMarker.FINAL
-                and touched
-                and remaining_own
+                and (remaining_own or unoffered_open_remain)
             ):
                 raise NativeReviewContractError(
                     NativeReviewErrorCode.APPROVAL_INVALID,
-                    "denied review requires an open own BLOCKER or a partial "
-                    "final-review disposition round",
+                    "denied review requires an open own BLOCKER or remaining "
+                    "own findings in final review",
                 )
         return
     validation = context.validation_attestation
@@ -1351,6 +1435,8 @@ def native_review_context_binding(context: NativeReviewContext) -> dict[str, Any
     }
     if context.approval_marker is ApprovalMarker.PLAN:
         binding["plan_artifact_path"] = context.plan_artifact_path
+    if context.approval_marker is ApprovalMarker.FINAL:
+        binding["final_review_pending_count"] = context.final_review_pending_count
     return binding
 
 

@@ -31,9 +31,11 @@ from artifact_models import (
     InvocationFailurePayload,
 )
 from finding_order import sorted_finding_ids
+from native_review_contract import find_native_review_disposition_limit_error
 from finding_reducer import (
     merge_review_request_result,
     merge_request_result,
+    project_finding_transition_ids,
     project_open_set,
 )
 
@@ -1073,10 +1075,45 @@ class WorkflowRunResult:
                 self.state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
                 or self.state.execution_mode == "PLAN_ONLY"
             )
+            and not self.workflow_rejected
+        )
+
+    @property
+    def workflow_rejected(self) -> bool:
+        """Whether a completed final work unit carries the reviewer's denial."""
+
+        review = self.history.latest_claude_review  # allowlist:provider -- canonical history field
+        return (
+            self.completed
+            and self.state.current_step is WorkflowStep.COMPLETED
+            and self.state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
+            and review is not None
+            and review.approval is False
+            and bool(project_open_set(self.history.findings).findings)
+        )
+
+    @property
+    def rejection_detail(self) -> str | None:
+        if not self.workflow_rejected:
+            return None
+        remaining = project_open_set(self.history.findings).finding_ids
+        return (
+            "FINAL-REVIEW-DENIED | "
+            + (
+                "the final-review safety limit was reached despite continued "
+                "disposition progress"
+                if self.state.current_work_unit.round_number
+                >= workflow_requests.FINAL_REVIEW_ROUND_SAFETY_LIMIT
+                else "the reviewer made no further closure or reclassification progress"
+            )
+            + "; remaining open findings: "
+            + ", ".join(remaining)
         )
 
     @property
     def exit_code(self) -> int:
+        if self.workflow_rejected:
+            return 5
         gate = self.state.current_work_unit.gate
         if gate.reason is GateReason.QUOTA:
             return 2
@@ -1236,6 +1273,7 @@ class WorkflowEngine:
             recovered_result = pending_native.output.result
             recovered_requested_ids: tuple[str, ...] | None = None
             recovered_new_ids: tuple[str, ...] = ()
+            recovered_progress_ids: tuple[str, ...] = ()
             if is_final_review and pending_native.output.context is not None:
                 recovered_offered = pending_native.output.context.previous_findings
                 recovered_requested_ids = tuple(
@@ -1245,6 +1283,10 @@ class WorkflowEngine:
                     item.finding_id
                     for item in recovered_result.findings
                     if item.finding_id not in frozenset(recovered_requested_ids)
+                )
+                recovered_progress_ids = project_finding_transition_ids(
+                    recovered_offered,
+                    recovered_result.findings,
                 )
                 if recovered_offered != history.findings:
                     recovered_result = replace(
@@ -1270,6 +1312,7 @@ class WorkflowEngine:
                 is_final_review=is_final_review,
                 final_review_requested_ids=recovered_requested_ids,
                 final_review_new_finding_ids=recovered_new_ids,
+                final_review_progress_ids=recovered_progress_ids,
             )
             if state.current_work_unit.status is not WorkUnitStatus.IN_PROGRESS:
                 return WorkflowRunResult(state, active_history)
@@ -1310,7 +1353,7 @@ class WorkflowEngine:
         if anchor_halted:
             return WorkflowRunResult(state, active_history)
 
-        for _ in range(100):
+        for _ in range(1024):
             step = state.current_step
             if step in (
                 WorkflowStep.CODEX_PLAN,
@@ -2244,6 +2287,7 @@ class WorkflowEngine:
         review_packet: ReviewPacket | None,
         expected_test_files: tuple[str, ...],
         is_plan_review: bool,
+        final_review_pending_count: int | None = None,
     ) -> workflow_requests.NativeReviewRequestBundle:
         return workflow_requests.native_review_request(
             state=state,
@@ -2257,6 +2301,7 @@ class WorkflowEngine:
             expected_test_files=(expected_test_files if not is_plan_review else ()),
             execution_error=WorkflowExecutionError,
             full_branch_evidence_kind=EvidenceKind.FULL_BRANCH,
+            final_review_pending_count=final_review_pending_count,
         )
 
     def _dispatch_native_review(
@@ -2276,6 +2321,7 @@ class WorkflowEngine:
         is_final_review: bool,
         review_round: int,
         request_findings: tuple[FindingRecord, ...],
+        final_review_pending_count: int | None = None,
     ) -> tuple[WorkflowState, WorkflowHistory]:
         request_history = replace(history, findings=request_findings)
         build_request = partial(
@@ -2289,6 +2335,7 @@ class WorkflowEngine:
             review_packet=review_packet,
             expected_test_files=expected_test_files,
             is_plan_review=is_plan_review,
+            final_review_pending_count=final_review_pending_count,
         )
         native_request = build_request(contract=contract)
         invocation = ReviewerInvocation(
@@ -2374,6 +2421,11 @@ class WorkflowEngine:
             for item in request_result.findings
             if item.finding_id not in frozenset(requested_ids)
         )
+        progress_ids = (
+            project_finding_transition_ids(request_findings, request_result.findings)
+            if is_final_review
+            else ()
+        )
         return self._apply_review_result(
             state=state,
             context=context,
@@ -2387,6 +2439,7 @@ class WorkflowEngine:
             user_gate_paths=changes.user_gate_paths,
             final_review_requested_ids=(requested_ids if is_final_review else None),
             final_review_new_finding_ids=new_ids,
+            final_review_progress_ids=progress_ids,
         )
 
     def _run_review(
@@ -2470,17 +2523,34 @@ class WorkflowEngine:
             )
         review_round = _review_round_number(unit, history, reviewer)
         request_findings = history.findings
+        final_review_pending_count: int | None = None
         if is_final_review:
-            request_findings = self.driver.authoritative_final_review_findings(
+            pending_findings = self.driver.authoritative_final_review_findings(
                 state, history.findings
             )
+            final_review_pending_count = len(
+                project_open_set(history.findings).findings
+            )
+            limit_failures = sum(
+                item.failure_kind is AgentFailureKind.OUTPUT
+                and item.idempotency_key.endswith(":disposition-limit")
+                for item in state.current_work_unit.invocation_failures
+            )
+            disposition_batch_size = max(
+                1,
+                workflow_requests.FINAL_REVIEW_DISPOSITION_BATCH_SIZE
+                // (2 ** limit_failures),
+            )
+            request_findings = pending_findings[
+                : disposition_batch_size
+            ]
             if (
-                review_round > workflow_requests.MAX_FINAL_REVIEW_DISPOSITION_ROUNDS
-                and request_findings
+                review_round > workflow_requests.FINAL_REVIEW_ROUND_SAFETY_LIMIT
+                and pending_findings
             ):
-                state = self._halt_exhausted_final_review_rounds(
-                    state, request_findings
-                )
+                state = self._record_final_review_delivery_round(
+                    state, history, advance=False
+                ).complete_current_work_unit()
                 self.driver.checkpoint(state, history)
                 return state, history
         contract = StepContract(
@@ -2565,6 +2635,7 @@ class WorkflowEngine:
             is_final_review,
             review_round,
             request_findings,
+            final_review_pending_count,
         )
 
     def _apply_review_result(
@@ -2582,6 +2653,7 @@ class WorkflowEngine:
         user_gate_paths: tuple[str, ...] = (),
         final_review_requested_ids: tuple[str, ...] | None = None,
         final_review_new_finding_ids: tuple[str, ...] = (),
+        final_review_progress_ids: tuple[str, ...] = (),
     ) -> tuple[WorkflowState, WorkflowHistory]:
         """Mirror one durable verdict and perform its deterministic transition."""
         unit = state.current_work_unit
@@ -2651,23 +2723,32 @@ class WorkflowEngine:
                         "final review cannot complete with open findings: "
                         + ", ".join(finding.finding_id for finding in open_findings)
                     )
-                state = state.complete_current_work_unit()
+                state = self._record_final_review_delivery_round(
+                    state, history, advance=False
+                ).complete_current_work_unit()
             else:
                 state = state.with_current_step(WorkflowStep.SLICE_COMMIT)
         else:
             own_ids = tuple(item.finding_id for item in result.own_open_blockers)
             if is_final_review:
-                if (
-                    final_review_requested_ids is not None
-                    and not final_review_new_finding_ids
-                ):
+                if final_review_requested_ids is not None:
                     remaining = self.driver.authoritative_final_review_findings(
                         state, history.findings
                     )
-                    if remaining:
-                        exhausted = (
-                            round_number
-                            >= workflow_requests.MAX_FINAL_REVIEW_DISPOSITION_ROUNDS
+                    open_findings = project_open_set(history.findings).findings
+                    if (
+                        not final_review_progress_ids
+                        and not final_review_new_finding_ids
+                        and open_findings
+                    ):
+                        state = self._record_final_review_delivery_round(
+                            state, history, advance=False
+                        ).complete_current_work_unit()
+                        self.driver.checkpoint(state, history)
+                        return state, history
+                    if remaining and not final_review_new_finding_ids:
+                        exhausted = round_number >= (
+                            workflow_requests.FINAL_REVIEW_ROUND_SAFETY_LIMIT
                         )
                         state = self._record_final_review_delivery_round(
                             state,
@@ -2675,9 +2756,7 @@ class WorkflowEngine:
                             advance=not exhausted,
                         )
                         if exhausted:
-                            state = self._halt_exhausted_final_review_rounds(
-                                state, remaining
-                            )
+                            state = state.complete_current_work_unit()
                         self.driver.checkpoint(state, history)
                         return state, history
                 # Persist the denying final-review event while the final-review
@@ -2756,23 +2835,6 @@ class WorkflowEngine:
             ).complete_ledger
         except ValueError as exc:
             raise WorkflowExecutionError(str(exc)) from exc
-
-    @staticmethod
-    def _halt_exhausted_final_review_rounds(
-        state: WorkflowState,
-        pending: tuple[FindingRecord, ...],
-    ) -> WorkflowState:
-        missing = tuple(item.finding_id for item in pending)
-        return state.await_policy_gate(
-            reason=GateReason.STOP_REQUEST,
-            detail=(
-                "FINAL-REVIEW-ROUNDS-EXHAUSTED | "
-                "The bound "
-                f"{workflow_requests.MAX_FINAL_REVIEW_DISPOSITION_ROUNDS} final-review "
-                "delivery rounds are exhausted; missing dispositions: "
-                + ", ".join(missing)
-            ),
-        )
 
     def _invoke_role(
         self,
@@ -2877,8 +2939,16 @@ class WorkflowEngine:
                 self.driver.checkpoint(state, history)
                 return state, None
             except AgentInvocationError as error:
+                disposition_limit_failure = (
+                    find_native_review_disposition_limit_error(error)
+                )
                 state, failure = self._persist_invocation_failure(
-                    state, history, context, role, error
+                    state,
+                    history,
+                    context,
+                    role,
+                    error,
+                    disposition_limit_failure is not None,
                 )
                 if not failure.automatic_resume:
                     return state, None
@@ -2920,6 +2990,18 @@ class WorkflowEngine:
                 self.driver.checkpoint(state, history)
                 if halted:
                     return state, None
+                if disposition_limit_failure is not None:
+                    logger.warning(
+                        "Rejected over-budget final-review result; recomposing a "
+                        "smaller request: work_unit=%s round=%s actual=%s maximum=%s",
+                        state.current_work_unit_id,
+                        state.current_work_unit.round_number,
+                        disposition_limit_failure.actual_items,
+                        disposition_limit_failure.maximum_items,
+                    )
+                    state = state.start_recomposed_request_round()
+                    self.driver.checkpoint(state, history)
+                    return state, None
 
     def _persist_invocation_failure(
         self,
@@ -2928,9 +3010,15 @@ class WorkflowEngine:
         context: WorkflowContext,
         role: AgentRole,
         error: AgentInvocationError,
+        disposition_limit_failure: bool = False,
     ) -> tuple[WorkflowState, InvocationFailureRecord]:
         return self._failure_recording.persist_invocation_failure(
-            state, history, context, role, error
+            state,
+            history,
+            context,
+            role,
+            error,
+            disposition_limit_failure,
         )
 
     def _current_invocation_fingerprint(

@@ -88,6 +88,18 @@ def _log_invocation_failure(
     )
 
 
+def _invocation_failure_key(
+    state: WorkflowState,
+    role: AgentRole,
+    disposition_limit_failure: bool,
+) -> str:
+    key = (
+        f"{state.run_id}:{state.current_work_unit_id}:{state.current_step.value}:"
+        f"{role.value}"
+    )
+    return key + ":disposition-limit" if disposition_limit_failure else key
+
+
 class WorkflowFailureRecording:
     """Build and append failure evidence before changing retry state."""
 
@@ -101,21 +113,18 @@ class WorkflowFailureRecording:
         context: Any,
         role: AgentRole,
         error: AgentInvocationError,
+        disposition_limit_failure: bool = False,
     ) -> tuple[WorkflowState, InvocationFailureRecord]:
         unit = state.current_work_unit
         if error.agent_key != role.value:
             raise self._dependencies.execution_error(
                 "agent failure role differs from the required workflow role"
             )
-        # S1 is the sole authority for the operational class. Keep this import
-        # local because that inventory imports workflow's typed exceptions.
+        # S1 owns this class; its inventory imports workflow's typed exceptions.
         from error_classification import FailureClass, classify_exception
         classified = classify_exception(error)
         fingerprint = self._dependencies.current_invocation_fingerprint(state)
-        key = (
-            f"{state.run_id}:{unit.work_unit_id}:{state.current_step.value}:"
-            f"{role.value}"
-        )
+        key = _invocation_failure_key(state, role, disposition_limit_failure)
         matching_failures = tuple(
             item
             for item in unit.invocation_failures
@@ -169,6 +178,9 @@ class WorkflowFailureRecording:
             AgentFailureKind.NETWORK, AgentFailureKind.TIMEOUT
         } or automatic_review_form or automatic_structured_output
         automatic_transient = (
+            disposition_limit_failure
+            and fingerprint is not None
+        ) or (
             retryable_transient
             and transient_policy.automatic
             and (unit.kind is WorkUnitKind.PLAN or fingerprint is not None)

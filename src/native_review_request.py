@@ -13,6 +13,7 @@ from typing import Any, Mapping
 from contracts import AgentRole
 from native_review_contract import (
     BoundNativeReviewContext,
+    MAX_NATIVE_REVIEW_DISPOSITIONS,
     NativeReviewContext,
     native_review_provider_response_schema,
     next_native_finding_id,
@@ -364,6 +365,39 @@ def validate_native_review_request_document(document: Mapping[str, Any]) -> None
             NativeReviewRequestErrorCode.SCHEMA_INVALID,
             "plan reviews alone must bind review_contract.plan_artifact_path",
         )
+    has_disposition_budget = (
+        isinstance(review_contract, Mapping)
+        and "disposition_budget" in review_contract
+    )
+    if (document.get("review_kind") == NativeReviewKind.FINAL.value) != (
+        has_disposition_budget
+    ):
+        raise NativeReviewRequestError(
+            NativeReviewRequestErrorCode.SCHEMA_INVALID,
+            "final reviews alone must bind review_contract.disposition_budget",
+        )
+    if has_disposition_budget:
+        assert isinstance(review_contract, Mapping)
+        budget = review_contract["disposition_budget"]
+        if not isinstance(budget, Mapping):  # pragma: no cover - schema guarded
+            raise NativeReviewRequestError(
+                NativeReviewRequestErrorCode.SCHEMA_INVALID,
+                "final review disposition budget must be an object",
+            )
+        maximum_items = budget["maximum_items"]
+        eligible_ids = budget["eligible_finding_ids"]
+        previous_findings = review_contract["previous_findings"]
+        previous_ids = [item["finding_id"] for item in previous_findings]
+        if (
+            maximum_items > MAX_NATIVE_REVIEW_DISPOSITIONS
+            or maximum_items != len(eligible_ids)
+            or eligible_ids != previous_ids
+            or budget["pending_finding_count"] < maximum_items
+        ):
+            raise NativeReviewRequestError(
+                NativeReviewRequestErrorCode.SCHEMA_INVALID,
+                "final review disposition budget differs from its eligible finding subset",
+            )
 
 
 def validate_native_review_provider_response(
@@ -518,6 +552,16 @@ def _review_context_request_projection(
         review_contract["plan_artifact_path"] = context_binding[
             "plan_artifact_path"
         ]
+    if review_kind == NativeReviewKind.FINAL.value:
+        eligible_ids = tuple(
+            item.finding_id
+            for item in context.previous_findings
+        )
+        review_contract["disposition_budget"] = {
+            "maximum_items": len(eligible_ids),
+            "eligible_finding_ids": list(eligible_ids),
+            "pending_finding_count": context.final_review_pending_count,
+        }
     return {
         "reviewer": "claude",
         "run_id": context.run_id,

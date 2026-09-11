@@ -588,6 +588,31 @@ def test_plan_slice_convergence_and_final_requests_bind_distinct_writer_digests(
     assert len(request_ids) == 4
 
 
+def test_final_request_with_unoffered_remainder_forbids_approval_branch() -> None:
+    offered = (_prior_finding("C-01"), _prior_finding("C-02"))
+    context = replace(
+        _context(),
+        operation="claude_final_review",
+        approval_marker=ApprovalMarker.FINAL,
+        previous_findings=offered,
+        final_review_pending_count=3,
+    )
+    bundle = build_native_review_request(
+        replace(_spec(), review_kind=NativeReviewKind.FINAL, context=context)
+    )
+    result_refs = bundle.provider_response_schema["properties"]["result"]["oneOf"]
+
+    assert result_refs == [
+        {"$ref": "#/$defs/bound_final_denied"},
+        {"$ref": "#/$defs/bound_final_stop"},
+    ]
+    assert bundle.document["review_contract"]["disposition_budget"] == {
+        "maximum_items": 2,
+        "eligible_finding_ids": ["C-01", "C-02"],
+        "pending_finding_count": 3,
+    }
+
+
 def test_request_bundle_binds_exact_immutable_writer_schema_bytes() -> None:
     bundle = build_native_review_request(_spec())
     detached = bundle.provider_response_schema

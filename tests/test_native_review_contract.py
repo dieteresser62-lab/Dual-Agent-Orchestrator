@@ -19,7 +19,7 @@ from contracts import (
     ValidationRecord,
     ValidationStatus,
 )
-from finding_reducer import project_reviewer_persistence_transitions
+from finding_reducer import project_open_set, project_reviewer_persistence_transitions
 from gates import detect_anchor_changes
 from native_review_contract import (
     NATIVE_REVIEW_RETRYABLE_FORM_CODES,
@@ -28,6 +28,7 @@ from native_review_contract import (
     NativeReclassification,
     NativeReviewContext,
     NativeReviewContractError,
+    NativeReviewDispositionLimit,
     NativeReviewErrorCode,
     NativeReviewResult,
     NativeStatusChange,
@@ -35,6 +36,7 @@ from native_review_contract import (
     native_response_to_contract_result,
     native_review_provider_response_schema,
     parse_native_contract_result,
+    validate_native_review_disposition_budget,
     parse_native_review_response,
 )
 from schema_validation import SchemaMismatch, validate_schema_document
@@ -472,6 +474,36 @@ def test_large_final_denial_accepts_thirty_closures_and_three_escalations() -> N
     )
 
 
+def test_final_disposition_budget_rejects_combined_event_overflow() -> None:
+    previous = tuple(
+        _finding(f"C-{number:02d}", AgentRole.CLAUDE)
+        for number in range(1, 34)
+    )
+    context = _context(approval=ApprovalMarker.FINAL, previous=previous)
+    document = _review(context, approved=False)
+    document["status_changes"] = [
+        {
+            "finding_id": f"C-{number:02d}",
+            "status": "CLOSED",
+            "rationale": "Verified in the branch-wide evidence.",
+        }
+        for number in range(1, 31)
+    ]
+    document["reclassifications"] = [
+        {
+            "finding_id": f"C-{number:02d}",
+            "finding_class": "BLOCKER",
+            "rationale": "The unresolved defect remains blocking.",
+        }
+        for number in range(31, 34)
+    ]
+
+    with pytest.raises(NativeReviewContractError) as raised:
+        validate_native_review_disposition_budget(document, context)
+
+    assert raised.value.disposition_limit == NativeReviewDispositionLimit(33, 32)
+
+
 def test_final_denial_accepts_nonempty_partial_observation_delivery() -> None:
     previous = tuple(
         _finding(
@@ -503,6 +535,52 @@ def test_final_denial_accepts_nonempty_partial_observation_delivery() -> None:
         for item in result.findings
         if item.status is FindingStatus.OPEN
     ) == ("C-02", "C-03")
+
+
+def test_final_denial_accepts_zero_progress_with_open_observations() -> None:
+    previous = tuple(
+        _finding(
+            f"C-{number:02d}",
+            AgentRole.CLAUDE,
+            finding_class=FindingClass.OBSERVATION,
+        )
+        for number in range(1, 4)
+    )
+    context = _context(approval=ApprovalMarker.FINAL, previous=previous)
+    document = _review(context, approved=False)
+
+    validate_schema_document(
+        {"result": document}, native_review_provider_response_schema(context)
+    )
+    result = parse_native_contract_result(document, context)
+
+    assert result.approval is False
+    assert project_open_set(result.findings).finding_ids == (
+        "C-01",
+        "C-02",
+        "C-03",
+    )
+
+
+def test_final_denial_accepts_closed_offer_when_unoffered_findings_remain() -> None:
+    offered = (_finding("C-107", AgentRole.CLAUDE),)
+    context = replace(
+        _context(approval=ApprovalMarker.FINAL, previous=offered),
+        final_review_pending_count=5,
+    )
+    document = _review(context, approved=False)
+    document["status_changes"] = [
+        {
+            "finding_id": "C-107",
+            "status": "CLOSED",
+            "rationale": "The offered finding is resolved.",
+        }
+    ]
+
+    result = parse_native_contract_result(document, context)
+
+    assert result.approval is False
+    assert result.findings[0].status is FindingStatus.CLOSED
 
 
 @pytest.mark.parametrize(

@@ -462,14 +462,6 @@ GATE_SOURCE_MAP = (
         ("no-implementation-changes",),
     ),
     GateSourceRow(
-        "FINAL-REVIEW-ROUNDS-EXHAUSTED",
-        "stop_request",
-        "policy",
-        "workflow._halt_exhausted_final_review_rounds",
-        ("workflow._halt_exhausted_final_review_rounds",),
-        ("final-review-rounds-exhausted",),
-    ),
-    GateSourceRow(
         "PLAN-CONTRACT-INVALID",
         "stop_request",
         "policy",
@@ -661,12 +653,6 @@ GATE_CASE_ORACLE = (
         "policy",
     ),
     ("no-implementation-changes", "stop_request", "NO-IMPLEMENTATION-CHANGES", "policy"),
-    (
-        "final-review-rounds-exhausted",
-        "stop_request",
-        "FINAL-REVIEW-ROUNDS-EXHAUSTED",
-        "policy",
-    ),
     ("plan-contract-invalid", "stop_request", "PLAN-CONTRACT-INVALID", "policy"),
     ("quota-resume-diff", "quota_resume_diff", "QUOTA-RESUME-DIFF", "user"),
     ("quota-resume-diff-policy", "stop_request", "QUOTA-RESUME-DIFF", "policy"),
@@ -706,6 +692,7 @@ REGISTERED_GATE_PREFIXES = frozenset(
 # into gates without updating the source map and matrix.
 GATE_FOREIGN_PREFIXES = {
     "AGENT-PROFILE-DIFF": "resume profile validation raises before workflow execution",
+    "FINAL-REVIEW-DENIED": "terminal reviewer verdict is not a resumable gate",
     "TASK-SCOPE": "invalid Codex slice plans raise a workflow contract error",
 }
 
@@ -754,11 +741,6 @@ EXPECTED_GATE_CALL_SITES = Counter(
         ("workflow.py", "_apply_anchor_gate", "await_user_gate"): 1,
         ("workflow.py", "_apply_pre_agent_policy_gates", "await_policy_gate"): 1,
         ("workflow.py", "_halt_for_stop_request", "await_policy_gate"): 1,
-        (
-            "workflow.py",
-            "_halt_exhausted_final_review_rounds",
-            "await_policy_gate",
-        ): 1,
         ("workflow.py", "_apply_test_change_gate", "await_user_gate"): 1,
     }
 )
