@@ -410,6 +410,51 @@ def test_writer_schema_leaves_only_registered_disposition_order_exception() -> N
     assert duplicate == provider_output
 
 
+def test_finding_dispositions_use_natural_order_beyond_one_hundred() -> None:
+    finding_ids = (
+        "C-62",
+        "C-71",
+        "C-101",
+        "C-102",
+        "C-103",
+        "C-104",
+        "C-105",
+    )
+    findings = tuple(replace(_finding(), finding_id=finding_id) for finding_id in finding_ids)
+    bound = _bound(
+        NativeCodexRequestKind.IMPLEMENTATION,
+        findings=findings,
+        test_changes_approved=True,
+    )
+    base = {
+        **_base(bound, "implementation_result"),
+        "ready": True,
+        "test_files": [],
+    }
+
+    def dispositions(ids: tuple[str, ...]) -> list[dict[str, str]]:
+        return [
+            {
+                "finding_id": finding_id,
+                "decision": "accepted",
+                "rationale": "The finding is addressed.",
+            }
+            for finding_id in ids
+        ]
+
+    accepted = {**base, "finding_dispositions": dispositions(finding_ids)}
+    assert parse_bound_native_codex_contract_result(accepted, bound).ready is True
+
+    unsorted = (*finding_ids[:2], "C-105", *finding_ids[2:6])
+    for invalid in (unsorted, (*finding_ids, "C-105")):
+        with pytest.raises(NativeCodexContractError) as raised:
+            parse_bound_native_codex_contract_result(
+                {**base, "finding_dispositions": dispositions(invalid)}, bound
+            )
+        assert raised.value.code is NativeCodexErrorCode.FINDING_REFERENCE_INVALID
+        assert raised.value.detail == "finding dispositions must be sorted and unique"
+
+
 def test_writer_schema_keeps_safe_path_validation_fail_closed_locally() -> None:
     bound = _bound(
         NativeCodexRequestKind.IMPLEMENTATION,

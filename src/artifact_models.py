@@ -28,6 +28,7 @@ from schema_validation import (
     check_schema,
     validate_schema_document,
 )
+from finding_order import sorted_finding_ids
 from orchestrator_diagnostics import (
     ORCHESTRATOR_DIAGNOSTIC_TEXTS,
     STRUCTURED_OUTPUT_DIAGNOSTIC_CODE,
@@ -452,7 +453,7 @@ class WorkUnitPayload:
         _require_unique_finding_ids(
             self.open_finding_ids, "open_finding_ids", allow_empty=True
         )
-        if tuple(sorted(self.open_finding_ids)) != self.open_finding_ids:
+        if sorted_finding_ids(self.open_finding_ids) != self.open_finding_ids:
             raise ArtifactValidationError("open_finding_ids must be sorted")
         if self.finding_import_record_id is not None:
             _require_identifier(

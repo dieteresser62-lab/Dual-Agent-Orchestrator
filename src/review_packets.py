@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 
 from contracts import FindingRecord, ValidationAttestation
+from finding_order import finding_id_sort_key, sorted_finding_ids
 from finding_reducer import project_open_set
 from plan_handoff import (
     PlanHandoffError,
@@ -163,7 +164,7 @@ def build_review_packet(
     finding_by_id = {item.finding_id: item for item in findings}
     if len(finding_by_id) != len(findings):
         raise ReviewPacketError("review packet findings must be unique")
-    affected = tuple(sorted(set(affected_finding_ids)))
+    affected = sorted_finding_ids(affected_finding_ids)
     if purpose == "correction" and not affected:
         raise ReviewPacketError("correction packet requires affected findings")
     if affected and any(item not in finding_by_id for item in affected):
@@ -198,7 +199,9 @@ def build_review_packet(
     ]
     closures = []
     open_ids = frozenset(open_projection.finding_ids)
-    for item in sorted(selected, key=lambda value: value.finding_id):
+    for item in sorted(
+        selected, key=lambda value: finding_id_sort_key(value.finding_id)
+    ):
         if item.finding_id in open_ids:
             continue
         fact = f"{item.finding_id}|CLOSED|{item.status_rationale or ''}"

@@ -16,6 +16,7 @@ from artifact_bridge import (
     plan_payload,
     provider_input_measurement_payload,
 )
+from finding_order import sorted_finding_ids
 from artifact_resume import (
     ArtifactResumeError,
     require_gate_prefix,
@@ -326,7 +327,7 @@ def _append_baseline_contract_expectations(
                 round_number=current.round_number,
                 paths=state.current_slice.scope_paths,
                 open_finding_ids=(
-                    tuple(sorted(current.open_findings))
+                    sorted_finding_ids(current.open_findings)
                     if bound_import is not None
                     else ()
                 ),
@@ -677,7 +678,7 @@ class WorkflowBaseline:
                     round_number=unit.round_number,
                     paths=state.current_slice.scope_paths,
                     open_finding_ids=(
-                        tuple(sorted(unit.open_findings))
+                        sorted_finding_ids(unit.open_findings)
                         if bound_import is not None
                         else ()
                     ),

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -139,6 +140,36 @@ def test_correction_packet_selects_only_affected_findings_and_binds_fingerprint(
     assert payload["start_fingerprint"] == "c" * 64
     assert [item["id"] for item in payload["open_findings"]] == ["C-01"]
     assert payload["closure_references"] == []
+
+
+def test_correction_packet_orders_affected_findings_naturally() -> None:
+    base = _findings()[0]
+    findings = tuple(
+        replace(base, finding_id=finding_id)
+        for finding_id in ("C-62", "C-101", "C-1000")
+    )
+    packet = build_review_packet(
+        purpose="correction",
+        fingerprint="a" * 64,
+        start_fingerprint="c" * 64,
+        paths=("src/core.py",),
+        review_diff=_diff(content="+corrected"),
+        plan_text=PLAN,
+        slice_id=3,
+        attestation=_attestation(),
+        findings=findings,
+        affected_finding_ids=("C-1000", "C-62", "C-101"),
+    )
+
+    payload = json.loads(packet.canonical_bytes)
+    assert payload["slice"]["goal"] == (
+        "Resolve reviewer findings C-62, C-101, C-1000"
+    )
+    assert [item["id"] for item in payload["open_findings"]] == [
+        "C-62",
+        "C-101",
+        "C-1000",
+    ]
 
 
 def test_correction_packet_derives_requirements_when_slice_is_not_in_approved_plan() -> None:

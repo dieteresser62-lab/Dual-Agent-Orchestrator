@@ -15,6 +15,7 @@ from contracts import (
     CodexStepContract as ImplementerStepContract,
     StepContract,
 )
+from finding_order import sorted_finding_ids
 from finding_reducer import project_open_set, project_request_subset
 from native_codex_contract import NativeCodexContext, NativeCodexRequestKind
 from native_codex_request import (
@@ -111,7 +112,7 @@ def native_codex_request(
         )
     native_findings = history.findings
     if request_kind is NativeCodexRequestKind.CORRECTION:
-        affected_ids = tuple(sorted(state.current_work_unit.open_findings))
+        affected_ids = sorted_finding_ids(state.current_work_unit.open_findings)
         try:
             request_projection = project_request_subset(
                 history.findings,

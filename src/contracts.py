@@ -12,6 +12,7 @@ from content_authority import (
     ValidationCapture,
     validation_output_digest,
 )
+from finding_order import sorted_finding_ids
 from orchestrator_diagnostics import OrchestratorDiagnostic
 
 
@@ -383,7 +384,7 @@ class StepContract:
             raise ValueError("red-state exception requires a named follow-up slice")
         if self.anchor_origin is not None and not self.anchor_origin.strip():
             raise ValueError("anchor origin must be a stable non-empty identity")
-        normalized_finding_ids = tuple(sorted(set(self.existing_finding_ids)))
+        normalized_finding_ids = sorted_finding_ids(self.existing_finding_ids)
         if normalized_finding_ids != self.existing_finding_ids:
             raise ValueError("existing finding ids must be sorted and unique")
         for finding_id in self.existing_finding_ids:

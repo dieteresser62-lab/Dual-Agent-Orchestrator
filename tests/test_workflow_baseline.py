@@ -46,6 +46,7 @@ EXPECTED_INTERNAL_IMPORTS = {
     "artifact_models",
     "artifact_replay",
     "final_review_preflight",
+    "finding_order",
     "orchestrator_version",
     "provider_input_budget",
     "side_effects",

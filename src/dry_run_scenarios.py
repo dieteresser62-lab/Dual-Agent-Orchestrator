@@ -30,6 +30,7 @@ from contracts import (
     ValidationStatus,
 )
 from content_authority import ValidationCapture, validation_output_digest
+from finding_order import finding_id_sort_key
 from finding_reducer import project_open_set
 from gates import TestChangeEvidence
 from review_packets import ReviewPacket
@@ -962,7 +963,9 @@ class ScriptedWorkflowDriver:
         """Emulate record replay by retaining lines absent from a narrowed request."""
         ledger = {item.finding_id: item for item in self.durable_findings or previous_findings}
         ledger.update({item.finding_id: item for item in output.result.findings})
-        self.durable_findings = tuple(ledger[key] for key in sorted(ledger))
+        self.durable_findings = tuple(
+            ledger[key] for key in sorted(ledger, key=finding_id_sort_key)
+        )
         self.structured_events.append(
             ("native-codex", (output, previous_findings))  # allowlist:provider
         )
@@ -992,7 +995,9 @@ class ScriptedWorkflowDriver:
                 and item != previous_by_id[item.finding_id]
             )
         ledger.update({item.finding_id: item for item in output.result.findings})
-        self.durable_findings = tuple(ledger[key] for key in sorted(ledger))
+        self.durable_findings = tuple(
+            ledger[key] for key in sorted(ledger, key=finding_id_sort_key)
+        )
         self.structured_events.append(
             (
                 "native-review",

@@ -357,6 +357,37 @@ def test_six_named_projections_are_independent_and_immutable() -> None:
         reduction.open_set.findings += ()  # type: ignore[misc]
 
 
+def test_ledger_correction_subset_and_errors_share_natural_finding_order() -> None:
+    records = _build_case(
+        {
+            "events": [
+                {"op": "open", "finding_id": "C-1000", "work_unit": "2"},
+                {"op": "open", "finding_id": "C-101", "work_unit": "2"},
+                {"op": "open", "finding_id": "C-62", "work_unit": "2"},
+                {
+                    "op": "correction",
+                    "work_unit": "3",
+                    "finding_ids": ["C-1000", "C-101", "C-62"],
+                },
+            ]
+        }
+    )
+
+    reduction = reduce_findings(replay_artifacts(records, RUN_ID))
+    expected = ("C-62", "C-101", "C-1000")
+
+    assert tuple(item.finding_id for item in reduction.ledger.findings) == expected
+    assert reduction.open_set.finding_ids == expected
+    assert reduction.correction_attribution[0].finding_ids == expected
+    assert reduction.request_subset(
+        finding_ids=("C-1000", "C-62", "C-101")
+    ).finding_ids == expected
+
+    with pytest.raises(ValueError) as raised:
+        reduction.request_subset(finding_ids=("C-1001", "C-102"))
+    assert str(raised.value).endswith("unknown id C-102")
+
+
 def test_final_review_pending_dispositions_are_derived_from_chain_boundary() -> None:
     records = _build_case(
         {

@@ -665,7 +665,7 @@ EXPECTED_COMPARISON_COUNTS = {
 }
 
 EXPECTED_STRICT_BODY_DIGESTS = {
-    "src/artifact_bridge.py:review_payload_matches_result": "b3233be38c3e4729058eba7ffd325fc94d29d4f08bd5ccfd08de0e3557eaf612",
+    "src/artifact_bridge.py:review_payload_matches_result": "4ad048b9ff2fdd56f813abe6f8b8b72114f3fc0a3d59426185d74031e7b65506",
     "src/artifact_resume.py:require_workflow_status_prefix": "964d356480288034c6dc52de377c2326c06d2db50d6aae52fd2b3d5dbcc5bdec",
     "src/artifact_resume.py:require_workflow_event_prefix": "baf1ce7cd7ef465131f9779714b33b34d5e929f10c19c48b7a92b68089543d5a",
     "src/artifact_resume.py:require_gate_prefix": "67196c4e07c9c428033a8bf93726a93adc22a66929cbf975019913bf60979b82",
