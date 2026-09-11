@@ -354,8 +354,8 @@ class WorkflowContext:
             raise ValueError("workflow context requires an assignment")
         if not self.distilled_plan.strip():
             raise ValueError("workflow context requires a distilled plan")
-        if not self.slice_summary.strip():
-            raise ValueError("workflow context requires a current-slice summary")
+        if not isinstance(self.slice_summary, str):
+            raise ValueError("workflow context slice_summary must be a string")
         normalized = tuple(sorted(set(self.expected_test_files)))
         if normalized != self.expected_test_files:
             raise ValueError("expected test files must be sorted and unique")
@@ -413,20 +413,37 @@ class WorkflowContext:
 
     @property
     def distilled_context(self) -> str:
+        return self.render_distilled_context()
+
+    def render_distilled_context(
+        self,
+        *,
+        unit_heading: str = "CURRENT SLICE",
+        unit_summary: str | None = None,
+        current_scope_paths: tuple[str, ...] | None = None,
+    ) -> str:
+        """Render one request-local unit without inventing persisted Slice facts."""
         approved = self._render_anchors(self.approved_anchors)
         current = self._render_anchors(self.current_anchors)
+        summary = self.slice_summary if unit_summary is None else unit_summary
+        scope = (
+            self.current_scope_paths
+            if current_scope_paths is None
+            else current_scope_paths
+        )
         return (
             f"PLAN\n{self.distilled_plan}\n\n"
-            f"CURRENT SLICE\n{self.slice_summary}\n\n"
-            "EXACT CURRENT SLICE ALLOWLIST\n"
-            f"{self._render_current_scope()}\n\n"
+            f"{unit_heading}\n{summary}\n\n"
+            f"EXACT {unit_heading} ALLOWLIST\n"
+            f"{self._render_scope(scope)}\n\n"
             f"APPROVED PLAN ANCHORS\n{approved}\n\n"
             f"CURRENT ANCHORS\n{current}\n\n"
             f"MACHINE STOP RULES (complete, untruncated)\n{self._render_stop_rules()}"
         )
 
-    def _render_current_scope(self) -> str:
-        return "\n".join(self.current_scope_paths) or "PLAN STEP: not bound yet"
+    @staticmethod
+    def _render_scope(paths: tuple[str, ...]) -> str:
+        return "\n".join(paths) or "PLAN STEP: not bound yet"
 
     def _render_stop_rules(self) -> str:
         return "\n".join(
@@ -1229,6 +1246,37 @@ class WorkflowEngine:
                 f"structured dual-write failed before workflow decision: {exc}"
             ) from exc
 
+    @staticmethod
+    def _bind_context_to_current_unit(
+        state: WorkflowState, context: WorkflowContext
+    ) -> WorkflowContext:
+        """Keep transient request prose aligned with the persisted unit boundary."""
+        planned = next(
+            (
+                item
+                for item in state.planned_slices
+                if item.slice_id == state.current_slice_id
+            ),
+            None,
+        )
+        slice_summary = context.slice_summary
+        if state.current_work_unit.kind is WorkUnitKind.CORRECTION:
+            # A final-review correction has a technical SliceBoundary id for the
+            # unchanged state-v3 schema, but deliberately has no plan-Slice prose.
+            slice_summary = ""
+        elif state.current_work_unit.kind is WorkUnitKind.SLICE and planned is not None:
+            slice_summary = planned.summary
+        if (
+            slice_summary == context.slice_summary
+            and context.current_scope_paths == state.current_slice.scope_paths
+        ):
+            return context
+        return replace(
+            context,
+            slice_summary=slice_summary,
+            current_scope_paths=state.current_slice.scope_paths,
+        )
+
     def run_current_work_unit(
         self,
         state: WorkflowState,
@@ -1236,6 +1284,7 @@ class WorkflowEngine:
         history: WorkflowHistory | None = None,
     ) -> WorkflowRunResult:
         require_workflow_driver(self.driver)
+        context = self._bind_context_to_current_unit(state, context)
         current = state.current_work_unit
         active_history = history or WorkflowHistory(current.work_unit_id)
         if active_history.work_unit_id != current.work_unit_id:
@@ -1361,6 +1410,7 @@ class WorkflowEngine:
             return WorkflowRunResult(state, active_history)
 
         for _ in range(1024):
+            context = self._bind_context_to_current_unit(state, context)
             step = state.current_step
             if step in (
                 WorkflowStep.CODEX_PLAN,

@@ -907,6 +907,7 @@ class ScriptedWorkflowDriver:
     commit_requests: list[WorkflowCommitRequest] = field(default_factory=list)
     codex_invocations: list[CodexInvocation] = field(default_factory=list)
     reviewer_invocations: list[ReviewerInvocation] = field(default_factory=list)
+    agent_invocations: list[object] = field(default_factory=list)
     durable_findings: tuple[FindingRecord, ...] = ()
     active_state: WorkflowState | None = None
     structured_events: list[tuple[str, object]] = field(default_factory=list)
@@ -1041,6 +1042,7 @@ class ScriptedWorkflowDriver:
 
     def invoke_codex(self, invocation: CodexInvocation) -> NativeAgentCodexOutput:
         self.codex_invocations.append(invocation)
+        self.agent_invocations.append(invocation)
         document = self._consume_agent(
             role=AgentRole.CODEX,
             work_unit_id=invocation.work_unit_id,
@@ -1076,6 +1078,7 @@ class ScriptedWorkflowDriver:
 
     def invoke_reviewer(self, invocation: ReviewerInvocation) -> NativeAgentReviewOutput:
         self.reviewer_invocations.append(invocation)
+        self.agent_invocations.append(invocation)
         document = self._consume_agent(
             role=invocation.reviewer,
             work_unit_id=invocation.work_unit_id,
@@ -1147,7 +1150,34 @@ class ScriptedWorkflowDriver:
         self, previous_fingerprint: str, current_fingerprint: str
     ) -> str:
         self.calls.append(f"delta:{previous_fingerprint[:8]}:{current_fingerprint[:8]}")
-        return f"scripted correction {previous_fingerprint} -> {current_fingerprint}"
+        if self._active_identity is None:
+            raise DryRunScenarioError(
+                "scripted correction delta has no active work unit"
+            )
+        match = next(
+            (
+                item
+                for item in self.scenario.changes
+                if (item.work_unit_id, item.round_number) == self._active_identity
+                and item.fingerprint == current_fingerprint
+            ),
+            None,
+        )
+        if match is None:
+            raise DryRunScenarioError(
+                "scripted correction delta lacks its fingerprint-bound change"
+            )
+        if (
+            self.active_state is not None
+            and self.active_state.current_work_unit.kind is WorkUnitKind.CORRECTION
+            and self.active_state.current_work_unit.round_number == 1
+            and self.active_state.current_slice.start_fingerprint
+            != previous_fingerprint
+        ):
+            raise DryRunScenarioError(
+                "scripted correction delta differs from its persisted start fingerprint"
+            )
+        return match.full_diff
 
     def detect_test_changes(
         self, changes: WorkflowChanges, patterns: tuple[str, ...]
@@ -1291,10 +1321,23 @@ class ScriptedWorkflowDriver:
                 f"missing scripted correction boundary for work unit {correction_id}"
             )
         self.calls.append(f"prepare-correction:{correction_id}")
+        source = next(
+            (
+                item
+                for item in reversed(self.scenario.changes)
+                if (item.work_unit_id, item.round_number) == self._active_identity
+            ),
+            None,
+        )
+        if source is None:
+            raise DryRunScenarioError(
+                "scripted correction boundary lacks its denied final-review fingerprint"
+            )
         return WorkflowCorrectionBoundary(
             start_commit=match.start_commit,
             scope_paths=match.paths,
-            start_fingerprint="0" * 64,
+            start_fingerprint=source.fingerprint,
+            scope_change_groups=tuple((path,) for path in match.paths),
         )
 
     def commit_slice(self, request: WorkflowCommitRequest) -> str:
@@ -1403,6 +1446,10 @@ class ScriptedRunReport:
     heartbeats: tuple[str, ...]
     sleeps: tuple[float, ...]
     remaining_agent_events: int
+    checkpoints: tuple[WorkflowState, ...] = ()
+    checkpoint_histories: tuple[WorkflowHistory, ...] = ()
+    agent_invocations: tuple[object, ...] = ()
+    reviewer_invocations: tuple[ReviewerInvocation, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1506,6 +1553,10 @@ class ScriptedWorkflowSession:
             heartbeats=tuple(self.clock.heartbeats),
             sleeps=tuple(self.clock.sleeps),
             remaining_agent_events=self.driver.remaining_agent_events,
+            checkpoints=tuple(self.driver.checkpoints),
+            checkpoint_histories=tuple(self.driver.checkpoint_histories),
+            agent_invocations=tuple(self.driver.agent_invocations),
+            reviewer_invocations=tuple(self.driver.reviewer_invocations),
         )
 
     def report(self, result: WorkflowRunResult) -> ScriptedRunReport:
@@ -1518,6 +1569,10 @@ class ScriptedWorkflowSession:
             heartbeats=tuple(self.clock.heartbeats),
             sleeps=tuple(self.clock.sleeps),
             remaining_agent_events=self.driver.remaining_agent_events,
+            checkpoints=tuple(self.driver.checkpoints),
+            checkpoint_histories=tuple(self.driver.checkpoint_histories),
+            agent_invocations=tuple(self.driver.agent_invocations),
+            reviewer_invocations=tuple(self.driver.reviewer_invocations),
         )
 
 
@@ -1565,9 +1620,18 @@ def build_scenario_state(
         raise DryRunScenarioError(
             f"first scripted work unit must be {state.current_work_unit_id} for slice mode"
         )
+    planned_first = next(
+        (item for item in scenario.initial.planned_slices if item.slice_id == 1),
+        None,
+    )
+    slice_scope = (
+        planned_first.scope_paths
+        if planned_first is not None
+        else scenario.initial.scope_paths or first.paths
+    )
     state = state.bind_current_slice_git_boundary(
         start_commit=first.start_commit,
-        scope_paths=scenario.initial.scope_paths or first.paths,
+        scope_paths=slice_scope,
         start_fingerprint="0" * 64,
         updated_at=scenario.clock_start.isoformat(),
     )
@@ -1588,10 +1652,35 @@ def build_scenario_state(
 
 def build_scenario_context(scenario: DryRunScenario) -> WorkflowContext:
     configured = scenario.context
+    planned = scenario.initial.planned_slices
+    approved_plan_text = None
+    slice_summary = "Exercise configured positive and negative workflow gates."
+    if planned:
+        slice_summary = planned[0].summary
+        sections = ["# Provider-free approved implementation plan"]
+        for item in planned:
+            sections.extend(
+                (
+                    f"### Slice {item.slice_id} - {item.summary}",
+                    "",
+                    "**Ziel**",
+                    "",
+                    item.summary,
+                    "",
+                    "**\u0041kzeptanzkriterien**",
+                    "",
+                    f"- The provider-free workflow verifies {item.summary}.",
+                    "",
+                    "**Exakter Änderungspfad**",
+                    "",
+                    *(f"- `{path}`" for path in item.scope_paths),
+                )
+            )
+        approved_plan_text = "\n".join(sections) + "\n"
     return WorkflowContext(
         assignment=f"Scripted dry-run scenario: {scenario.name}",
         distilled_plan="Use the real v3 state machine with scripted backends only.",
-        slice_summary="Exercise configured positive and negative workflow gates.",
+        slice_summary=slice_summary,
         expected_test_files=configured.expected_test_files,
         test_changes_approved=configured.test_changes_approved,
         manual_slice_gate=configured.manual_slice_gate,
@@ -1603,6 +1692,7 @@ def build_scenario_context(scenario: DryRunScenario) -> WorkflowContext:
         require_slice_plan=scenario.initial.kind is WorkUnitKind.PLAN,
         plan_only=scenario.initial.execution_mode == "PLAN_ONLY",
         work_plan_path=scenario.initial.work_plan_path,
+        approved_plan_text=approved_plan_text,
     )
 
 
@@ -1817,6 +1907,38 @@ def _run_scripted_workflow(
     return session.report(final_result)
 
 
+def _scripted_unified_diff(paths: tuple[str, ...], change: str) -> str:
+    """Render deterministic text changes in the Git diff form review packets require."""
+    return "".join(
+        f"diff --git a/{path} b/{path}\n"
+        "index 1111111..2222222 100644\n"
+        f"--- a/{path}\n"
+        f"+++ b/{path}\n"
+        "@@ -1 +1 @@\n"
+        f"-before {change} in {path}\n"
+        f"+after {change} in {path}\n"
+        for path in paths
+    )
+
+
+def _scripted_change(
+    work_unit_id: int,
+    round_number: int,
+    start_commit: str,
+    fingerprint: str,
+    paths: tuple[str, ...],
+    change: str,
+) -> ScriptedChange:
+    return ScriptedChange(
+        work_unit_id,
+        round_number,
+        start_commit,
+        fingerprint,
+        paths,
+        _scripted_unified_diff(paths, change),
+    )
+
+
 def build_s5_plan_only_scenario() -> DryRunScenario:
     """Return S5's reviewed, commit-bound PLAN_ONLY half of the journey."""
 
@@ -1877,11 +1999,8 @@ def build_s5_plan_only_scenario() -> DryRunScenario:
             ),
         ),
         changes=(
-            ScriptedChange(
-                1,
-                1,
-                base,
-                plan_fp,
+            _scripted_change(
+                1, 1, base, plan_fp,
                 ("docs/internal/s5-work-plan.md",),
                 "S5 work-plan artifact",
             ),
@@ -2034,14 +2153,26 @@ def build_s5_long_run_scenario() -> DryRunScenario:
             ),
         ),
         changes=(
-            ScriptedChange(2, 1, base, slice_one_fp, ("src/first.py",), "slice one"),
-            ScriptedChange(3, 1, commit_one, slice_two_fp, ("src/second.py",), "slice two"),
+            _scripted_change(
+                2, 1, base, slice_one_fp, ("src/first.py",), "slice one"
+            ),
+            _scripted_change(
+                3, 1, commit_one, slice_two_fp, ("src/second.py",), "slice two"
+            ),
             # The resumed implementation is collected once for its Codex return
             # and once for review before the correction delta becomes visible.
-            ScriptedChange(3, 2, commit_one, slice_two_fp, ("src/second.py",), "slice two"),
-            ScriptedChange(3, 2, commit_one, slice_two_fp, ("src/second.py",), "slice two"),
-            ScriptedChange(3, 3, commit_one, correction_fp, ("src/second.py",), "correction"),
-            ScriptedChange(4, 1, base, final_fp, ("src/first.py", "src/second.py"), "final"),
+            _scripted_change(
+                3, 2, commit_one, slice_two_fp, ("src/second.py",), "slice two"
+            ),
+            _scripted_change(
+                3, 2, commit_one, slice_two_fp, ("src/second.py",), "slice two"
+            ),
+            _scripted_change(
+                3, 3, commit_one, correction_fp, ("src/second.py",), "correction"
+            ),
+            _scripted_change(
+                4, 1, base, final_fp, ("src/first.py", "src/second.py"), "final"
+            ),
         ),
         validations=tuple(
             ScriptedValidation(fingerprint)

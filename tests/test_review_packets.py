@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,7 +11,13 @@ from contracts import (
     FindingResponseDecision, FindingStatus, ValidationAttestation,
     ValidationRecord, ValidationStatus,
 )
+from dry_run_scenarios import (
+    ScriptedWorkflowDriver,
+    build_s5_long_run_scenario,
+    build_s5_plan_only_scenario,
+)
 from review_packets import ReviewPacket, ReviewPacketError, build_review_packet, extract_slice_requirements
+from workflow_state import WorkUnitKind
 
 
 PLAN = """# Plan
@@ -140,6 +147,55 @@ def test_correction_packet_selects_only_affected_findings_and_binds_fingerprint(
     assert payload["start_fingerprint"] == "c" * 64
     assert [item["id"] for item in payload["open_findings"]] == ["C-01"]
     assert payload["closure_references"] == []
+
+
+def test_s5_correction_diff_starts_with_marker_and_builds_review_packet() -> None:
+    scenario = build_s5_long_run_scenario()
+    generated_changes = (
+        *build_s5_plan_only_scenario().changes,
+        *scenario.changes,
+    )
+    for change in generated_changes:
+        normalized = change.full_diff.replace("\r\n", "\n").replace("\r", "\n")
+        lines = normalized.splitlines(keepends=True)
+        starts = [
+            index
+            for index, line in enumerate(lines)
+            if line.rstrip("\n").startswith("diff --git ")
+        ]
+        assert starts and starts[0] == 0
+
+    correction = next(
+        item
+        for item in scenario.changes
+        if (item.work_unit_id, item.round_number) == (3, 3)
+    )
+    driver = ScriptedWorkflowDriver(scenario)
+    driver.bind_work_unit(
+        SimpleNamespace(
+            current_work_unit_id=3,
+            current_work_unit=SimpleNamespace(
+                round_number=3,
+                kind=WorkUnitKind.SLICE,
+            ),
+        )
+    )
+    review_diff = driver.collect_correction_delta("3" * 64, correction.fingerprint)
+
+    packet = build_review_packet(
+        purpose="correction",
+        fingerprint=correction.fingerprint,
+        start_fingerprint="3" * 64,
+        paths=correction.paths,
+        review_diff=review_diff,
+        plan_text=PLAN,
+        slice_id=2,
+        attestation=_attestation(correction.fingerprint),
+        findings=_findings(),
+        affected_finding_ids=("C-01",),
+    )
+
+    assert json.loads(packet.canonical_bytes)["diff"] == review_diff
 
 
 def test_correction_packet_orders_affected_findings_naturally() -> None:

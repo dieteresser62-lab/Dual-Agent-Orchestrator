@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from contracts import FindingRecord, ValidationAttestation
 from finding_order import finding_id_sort_key, sorted_finding_ids
-from finding_reducer import project_open_set
+from finding_reducer import project_open_set, project_request_subset
 from plan_handoff import (
     PlanHandoffError,
     extract_slice_requirements as extract_plan_slice_requirements,
@@ -130,6 +130,36 @@ def extract_slice_requirements(plan_text: str, slice_id: int) -> tuple[str, tupl
         raise ReviewPacketError(str(exc)) from exc
 
 
+def derive_correction_requirements(
+    findings: tuple[FindingRecord, ...],
+    finding_ids: tuple[str, ...],
+) -> tuple[str, tuple[str, ...], tuple[FindingRecord, ...]]:
+    """Derive the exact local contract for a correction absent from the plan."""
+    affected = sorted_finding_ids(finding_ids)
+    if not affected:
+        raise ReviewPacketError(
+            "correction requirements need at least one affected finding"
+        )
+    try:
+        projection = project_request_subset(
+            findings,
+            finding_ids=affected,
+            open_only=True,
+        )
+    except ValueError as exc:
+        raise ReviewPacketError(str(exc)) from exc
+    if projection.finding_ids != affected:
+        raise ReviewPacketError(
+            "correction requirements differ from the exact affected open finding set"
+        )
+    goal = "Resolve reviewer findings " + ", ".join(affected)
+    criteria = tuple(
+        f"{item.finding_id}: {item.acceptance_test}"
+        for item in projection.findings
+    )
+    return goal, criteria, projection.findings
+
+
 def build_review_packet(
     *,
     purpose: str,
@@ -175,13 +205,11 @@ def build_review_packet(
         else tuple(findings)
     )
     if purpose == "correction":
-        # Correction Slices are created by the workflow after a final-review
-        # denial and therefore need not exist in the originally approved plan.
-        # Their fingerprint-bound finding set is the authoritative correction
-        # contract: it supplies both the goal and the exact acceptance tests.
-        goal = "Resolve reviewer findings " + ", ".join(affected)
-        criteria = tuple(
-            f"{item.finding_id}: {item.acceptance_test}" for item in selected
+        # Final-review corrections are not Slices from the approved plan. Their
+        # exact open finding set is the authoritative local work contract.
+        goal, criteria, selected = derive_correction_requirements(
+            findings,
+            affected,
         )
     else:
         goal, criteria = extract_slice_requirements(plan_text, slice_id)

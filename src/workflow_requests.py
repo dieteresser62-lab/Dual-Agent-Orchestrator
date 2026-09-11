@@ -16,7 +16,7 @@ from contracts import (
     StepContract,
 )
 from finding_order import sorted_finding_ids
-from finding_reducer import project_open_set, project_request_subset
+from finding_reducer import project_open_set
 from native_codex_contract import NativeCodexContext, NativeCodexRequestKind
 from native_codex_request import (
     NativeCodexEvidenceInput,
@@ -41,7 +41,11 @@ from provider_input_efficiency import (
     build_correction_execution_package,
     build_slice_execution_package,
 )
-from review_packets import ReviewPacket
+from review_packets import (
+    ReviewPacket,
+    ReviewPacketError,
+    derive_correction_requirements,
+)
 from workflow_state import SliceStatus, WorkflowState, WorkUnitKind
 
 
@@ -96,15 +100,42 @@ def native_codex_request(
         raise execution_error(
             "native Codex request lacks an authorized path boundary"
         )
+    if (
+        state.current_work_unit.kind in {WorkUnitKind.PLAN, WorkUnitKind.SLICE}
+        and not context.slice_summary.strip()
+    ):
+        raise execution_error(
+            "native non-correction implementer request requires a current-slice summary"
+        )
     authorized_paths = tuple(
         sorted({*authorized_paths, *additional_authorized_paths})
     )
+    native_findings = history.findings
+    correction_goal: str | None = None
+    if request_kind is NativeCodexRequestKind.CORRECTION:
+        affected_ids = sorted_finding_ids(state.current_work_unit.open_findings)
+        try:
+            correction_goal, _, native_findings = derive_correction_requirements(
+                history.findings,
+                affected_ids,
+            )
+        except ReviewPacketError as exc:
+            raise execution_error(
+                "native correction request lacks its exact affected open finding set"
+            ) from exc
     # The policy is a separately digested evidence item. Repeating it in the
     # work context would make one logical input appear twice in the same
     # provider request and would weaken component-level accounting.
-    effective_work_context = (
-        context.distilled_context if work_context is None else work_context
-    )
+    if work_context is not None:
+        effective_work_context = work_context
+    elif correction_goal is not None:
+        effective_work_context = context.render_distilled_context(
+            unit_heading="CURRENT CORRECTION",
+            unit_summary=correction_goal,
+            current_scope_paths=state.current_slice.scope_paths,
+        )
+    else:
+        effective_work_context = context.distilled_context
     if additional_authorized_paths:
         effective_work_context += (
             "\n\nFINGERPRINT-BOUND ORCHESTRATOR PATH AUTHORIZATION\n"
@@ -114,24 +145,6 @@ def native_codex_request(
             "allowlist even when absent from the original plan. Their presence is "
             "not an UNEXPECTED-PATH condition."
         )
-    native_findings = history.findings
-    if request_kind is NativeCodexRequestKind.CORRECTION:
-        affected_ids = sorted_finding_ids(state.current_work_unit.open_findings)
-        try:
-            request_projection = project_request_subset(
-                history.findings,
-                finding_ids=affected_ids,
-                open_only=True,
-            )
-        except ValueError as exc:
-            raise execution_error(
-                "native correction request lacks its exact affected open finding set"
-            ) from exc
-        native_findings = request_projection.findings
-        if request_projection.finding_ids != affected_ids:
-            raise execution_error(
-                "native Codex correction lacks its exact affected open finding set"
-            )
     native_context = NativeCodexContext(
         run_id=state.run_id,
         work_unit_id=str(state.current_work_unit_id),
@@ -255,6 +268,22 @@ def native_review_request(
         if review_kind is NativeReviewKind.PLAN and context.plan_only
         else None
     )
+    correction_goal: str | None = None
+    correction_criteria: tuple[str, ...] = ()
+    if state.current_work_unit.kind is WorkUnitKind.CORRECTION:
+        try:
+            correction_goal, correction_criteria, _ = derive_correction_requirements(
+                history.findings,
+                state.current_work_unit.open_findings,
+            )
+        except ReviewPacketError as exc:
+            raise execution_error(
+                "native correction review lacks its exact affected open finding set"
+            ) from exc
+    elif review_kind is not NativeReviewKind.FINAL and not context.slice_summary.strip():
+        raise execution_error(
+            "native non-correction review requires a current-slice summary"
+        )
     native_context = NativeReviewContext(
         run_id=state.run_id,
         work_unit_id=str(state.current_work_unit_id),
@@ -282,10 +311,19 @@ def native_review_request(
             else None
         ),
     )
+    workflow_context = (
+        context.render_distilled_context(
+            unit_heading="CURRENT CORRECTION",
+            unit_summary=correction_goal,
+            current_scope_paths=state.current_slice.scope_paths,
+        )
+        if correction_goal is not None
+        else context.distilled_context
+    )
     evidence: list[NativeReviewEvidenceInput] = [
         NativeReviewEvidenceInput("assignment", "assignment", context.assignment),
         NativeReviewEvidenceInput(
-            "distilled-context", "workflow_context", context.distilled_context
+            "distilled-context", "workflow_context", workflow_context
         ),
     ]
     if review_packet is not None:
@@ -327,11 +365,19 @@ def native_review_request(
             else None
         )
     )
+    unit_criteria = (
+        correction_criteria
+        if correction_goal is not None
+        else (
+            (context.slice_summary.strip(),)
+            if context.slice_summary.strip()
+            else ()
+        )
+    )
     acceptance_criteria = tuple(
         dict.fromkeys(
             criterion
-            for criterion in (
-                context.slice_summary.strip(),
+            for criterion in (*unit_criteria,
                 artifact_criterion,
                 (
                     "This is final-review disposition delivery round "

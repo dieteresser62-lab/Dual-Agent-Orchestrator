@@ -137,11 +137,17 @@ def _context(
         )
     effective_assignment += _plan_only_step_boundary(state)
     planned_scope = set(planned.scope_paths) if planned is not None else set()
-    active_remediation_paths = tuple(
-        sorted(set(state.current_slice.scope_paths).difference(planned_scope))
+    active_remediation_paths = (
+        tuple(sorted(set(state.current_slice.scope_paths).difference(planned_scope)))
+        if state.current_work_unit.kind is WorkUnitKind.SLICE
+        else ()
     )
     if planned is not None:
         slice_summary = planned.summary
+    elif state.current_work_unit.kind is WorkUnitKind.CORRECTION:
+        # The technical SliceBoundary is not a Slice from the approved plan.
+        # Its request-local goal and criteria come from the bound findings.
+        slice_summary = ""
     elif (
         state.execution_mode == TaskMode.PLAN_ONLY.value
         and state.current_work_unit.kind is WorkUnitKind.PLAN

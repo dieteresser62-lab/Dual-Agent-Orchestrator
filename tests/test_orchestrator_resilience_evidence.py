@@ -11,10 +11,11 @@ import pytest
 
 import orchestrator
 import agent_runtime
+import workflow_audit_projection
 from agent_runtime import classify_agent_failure
 from artifact_models import technical_text_evidence
 from cli import parse_args
-from contracts import AgentRole, FindingStatus
+from contracts import AgentRole, FindingStatus, PlannedSlice
 from dry_run_scenarios import (
     DryRunScenarioError,
     DryRunScenario,
@@ -73,6 +74,12 @@ EXPECTED_SCENARIOS = {
 SYNTHETIC_TECHNICAL_TEXT = technical_text_evidence(
     "synthetic invocation failure"
 )[0]
+FINAL_CORRECTION_OBSERVATIONS = tuple(f"C-{index:02d}" for index in range(1, 26))
+FINAL_CORRECTION_BLOCKERS = ("C-26", "C-27", "C-28", "C-29")
+FINAL_CORRECTION_FINDINGS = (
+    *FINAL_CORRECTION_OBSERVATIONS,
+    *FINAL_CORRECTION_BLOCKERS,
+)
 
 
 def _evidence_node(scenario_id: str) -> str:
@@ -221,6 +228,7 @@ def _review_result(
     *,
     approved: bool,
     new_findings: tuple[str, ...] = (),
+    new_observations: tuple[str, ...] = (),
     closed_findings: tuple[str, ...] = (),
 ) -> dict[str, object]:
     return {
@@ -232,14 +240,18 @@ def _review_result(
         "new_findings": [
             {
                 "finding_id": finding_id,
-                "finding_class": "BLOCKER",
+                "finding_class": (
+                    "OBSERVATION"
+                    if finding_id in new_observations
+                    else "BLOCKER"
+                ),
                 "summary": f"Bound defect {finding_id} remains actionable.",
                 "acceptance_test": {
                     "kind": "prose",
                     "text": f"The provider-free regression for {finding_id} passes.",
                 },
             }
-            for finding_id in new_findings
+            for finding_id in (*new_findings, *new_observations)
         ],
         "status_changes": [
             {
@@ -263,10 +275,36 @@ def _review_result(
 def _correction_scenario(kind: str) -> DryRunScenario:
     base, first_commit, correction_commit = "a" * 40, "b" * 40, "c" * 40
     fingerprints = {index: str(index) * 64 for index in range(1, 6)}
+    final_correction_scope = (
+        "src/final_review.py",
+        "src/persistence.py",
+        "src/runtime.py",
+    )
     initial = ScriptedInitialState(
         kind=WorkUnitKind.SLICE,
         slice_count=1,
-        scope_paths=("src/runtime.py",),
+        scope_paths=(
+            final_correction_scope
+            if kind == "final-correction"
+            else ("src/runtime.py",)
+        ),
+        work_plan_path=(
+            "docs/internal/provider-free-final-correction-plan.md"
+            if kind == "final-correction"
+            else None
+        ),
+        approved_plan_commit=base if kind == "final-correction" else None,
+        planned_slices=(
+            (
+                PlannedSlice(
+                    1,
+                    "Implement the planned runtime Slice before final review",
+                    ("src/runtime.py",),
+                ),
+            )
+            if kind == "final-correction"
+            else ()
+        ),
     )
     implementation = ScriptedAgentEvent(
         AgentRole.CODEX,
@@ -300,7 +338,10 @@ def _correction_scenario(kind: str) -> DryRunScenario:
             ),
         )
         changes = (
-            ScriptedChange(2, 1, base, fingerprints[1], ("src/runtime.py",), "initial diff"),
+            ScriptedChange(
+                2, 1, base, fingerprints[1], ("src/runtime.py",),
+                _runtime_diff("planned implementation"),
+            ),
             ScriptedChange(2, 2, base, fingerprints[2], ("src/runtime.py",), "corrected diff"),
             ScriptedChange(3, 1, base, fingerprints[3], ("src/runtime.py",), "branch diff"),
         )
@@ -309,7 +350,7 @@ def _correction_scenario(kind: str) -> DryRunScenario:
     else:
         second_round = kind == "second-correction-new-blocker"
         final_blockers = (
-            ("C-01", "C-02", "C-03", "C-04")
+            FINAL_CORRECTION_BLOCKERS
             if kind == "final-correction"
             else ("C-01",)
         )
@@ -317,11 +358,26 @@ def _correction_scenario(kind: str) -> DryRunScenario:
             implementation,
             ScriptedAgentEvent(
                 AgentRole.CLAUDE, 2, 1, WorkflowStep.CLAUDE_SLICE_REVIEW,
-                _review_result(approved=True),
+                _review_result(
+                    approved=True,
+                    new_observations=(
+                        FINAL_CORRECTION_OBSERVATIONS
+                        if kind == "final-correction"
+                        else ()
+                    ),
+                ),
             ),
             ScriptedAgentEvent(
                 AgentRole.CODEX, 3, 1, WorkflowStep.CODEX_FINAL_REVIEW,
-                _codex_result("final_report_result", self_check="Initial final self-check passed."),
+                _codex_result(
+                    "final_report_result",
+                    findings=(
+                        FINAL_CORRECTION_OBSERVATIONS
+                        if kind == "final-correction"
+                        else ()
+                    ),
+                    self_check="Initial final self-check passed.",
+                ),
             ),
             ScriptedAgentEvent(
                 AgentRole.CLAUDE, 3, 1, WorkflowStep.CLAUDE_FINAL_REVIEW,
@@ -370,25 +426,67 @@ def _correction_scenario(kind: str) -> DryRunScenario:
             (
                 ScriptedAgentEvent(
                     AgentRole.CODEX, 5, 1, WorkflowStep.CODEX_FINAL_REVIEW,
-                    _codex_result("final_report_result", self_check="Repeated final self-check passed."),
+                    _codex_result(
+                        "final_report_result",
+                        findings=(
+                            FINAL_CORRECTION_OBSERVATIONS
+                            if kind == "final-correction"
+                            else ()
+                        ),
+                        self_check="Repeated final self-check passed.",
+                    ),
                 ),
                 ScriptedAgentEvent(
                     AgentRole.CLAUDE, 5, 1, WorkflowStep.CLAUDE_FINAL_REVIEW,
-                    _review_result(approved=True),
+                    _review_result(
+                        approved=True,
+                        closed_findings=(
+                            FINAL_CORRECTION_OBSERVATIONS
+                            if kind == "final-correction"
+                            else ()
+                        ),
+                    ),
                 ),
             )
         )
         changes_list = [
-            ScriptedChange(2, 1, base, fingerprints[1], ("src/runtime.py",), "initial diff"),
-            ScriptedChange(3, 1, base, fingerprints[2], ("src/runtime.py",), "branch diff"),
-            ScriptedChange(4, 1, first_commit, fingerprints[3], ("src/runtime.py",), "correction diff one"),
+            ScriptedChange(
+                2, 1, base, fingerprints[1], ("src/runtime.py",),
+                _runtime_diff("planned implementation"),
+            ),
+            ScriptedChange(
+                3, 1, base, fingerprints[2], ("src/runtime.py",),
+                _runtime_diff("denied final branch"),
+            ),
+            ScriptedChange(
+                4, 1, first_commit, fingerprints[3],
+                final_correction_scope if kind == "final-correction" else ("src/runtime.py",),
+                _runtime_diff(
+                    "first final-review correction",
+                    final_correction_scope
+                    if kind == "final-correction"
+                    else ("src/runtime.py",),
+                ),
+            ),
         ]
         if second_round:
             changes_list.append(
-                ScriptedChange(4, 2, first_commit, fingerprints[4], ("src/runtime.py",), "correction diff two")
+                ScriptedChange(
+                    4, 2, first_commit, fingerprints[4], ("src/runtime.py",),
+                    _runtime_diff("second final-review correction"),
+                )
             )
         changes_list.append(
-            ScriptedChange(5, 1, base, final_fp, ("src/runtime.py",), "repeated branch diff")
+            ScriptedChange(
+                5, 1, base, final_fp,
+                final_correction_scope if kind == "final-correction" else ("src/runtime.py",),
+                _runtime_diff(
+                    "repeated final branch",
+                    final_correction_scope
+                    if kind == "final-correction"
+                    else ("src/runtime.py",),
+                ),
+            )
         )
         changes = tuple(changes_list)
         validations = tuple(
@@ -408,6 +506,21 @@ def _correction_scenario(kind: str) -> DryRunScenario:
         changes=changes,
         validations=validations,
         commits=commits,
+    )
+
+
+def _runtime_diff(
+    value: str, paths: tuple[str, ...] = ("src/runtime.py",)
+) -> str:
+    return "".join(
+        f"diff --git a/{path} b/{path}\n"
+        "index 1111111..2222222 100644\n"
+        f"--- a/{path}\n"
+        f"+++ b/{path}\n"
+        "@@ -1 +1 @@\n"
+        "-old value\n"
+        f"+{value} in {path}\n"
+        for path in paths
     )
 
 
@@ -435,7 +548,11 @@ def test_provider_free_happy_path_reaches_terminal_final_review(tmp_path: Path) 
     assert result.history.findings == ()
 
 
-def _run_correction_journey(tmp_path: Path, scenario_id: str) -> None:
+def _run_correction_journey(
+    tmp_path: Path,
+    scenario_id: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     task = tmp_path / f"{scenario_id}.md"
     task.write_text(scenario_id, encoding="utf-8")
     report = run_scripted_workflow(
@@ -484,11 +601,142 @@ def _run_correction_journey(tmp_path: Path, scenario_id: str) -> None:
     )
     expected_ledger = {
         "slice-correction": ("C-01",),
-        "final-correction": ("C-01", "C-02", "C-03", "C-04"),
+        "final-correction": FINAL_CORRECTION_FINDINGS,
         "second-correction-new-blocker": ("C-01", "C-02"),
     }[scenario_id]
     assert tuple(item.finding_id for item in report.result.history.findings) == expected_ledger
     assert all(item.status is FindingStatus.CLOSED for item in report.result.history.findings)
+    if scenario_id == "final-correction":
+        state = report.result.state
+        correction = next(
+            unit for unit in state.work_units if unit.kind is WorkUnitKind.CORRECTION
+        )
+        assert tuple(item.slice_id for item in state.planned_slices) == (1,)
+        assert tuple(item.slice_id for item in state.slices) == (1, 2)
+        assert correction.slice_id == 2
+        assert correction.open_findings == expected_ledger
+
+        correction_states = tuple(
+            item
+            for item in report.checkpoints
+            if item.current_work_unit.kind is WorkUnitKind.CORRECTION
+        )
+        assert correction_states
+        correction_histories = tuple(
+            history
+            for checkpoint, history in zip(
+                report.checkpoints, report.checkpoint_histories, strict=True
+            )
+            if checkpoint.current_work_unit.kind is WorkUnitKind.CORRECTION
+        )
+        assert any(
+            tuple(item.finding_id for item in history.findings) == expected_ledger
+            and all(
+                item.status is FindingStatus.OPEN
+                for item in history.findings
+                if item.finding_id in FINAL_CORRECTION_BLOCKERS
+            )
+            for history in correction_histories
+        )
+        assert any(
+            tuple(item.finding_id for item in history.findings) == expected_ledger
+            and all(
+                item.status is FindingStatus.CLOSED
+                for item in history.findings
+                if item.finding_id in FINAL_CORRECTION_BLOCKERS
+            )
+            and all(
+                item.status is FindingStatus.OPEN
+                for item in history.findings
+                if item.finding_id in FINAL_CORRECTION_OBSERVATIONS
+            )
+            for history in correction_histories
+        )
+        boundary = correction_states[0].current_slice
+        assert boundary.start_fingerprint == "2" * 64
+        assert boundary.scope_paths == (
+            "src/final_review.py",
+            "src/persistence.py",
+            "src/runtime.py",
+        )
+        assert boundary.scope_change_groups == tuple(
+            (path,) for path in boundary.scope_paths
+        )
+        monkeypatch.setattr(
+            workflow_audit_projection,
+            "_audit_projection",
+            lambda *_args, **_kwargs: object(),
+        )
+        audit_entries = workflow_audit_projection._overall_audit_entries(state)
+        correction_audit = next(
+            item for item in audit_entries if "Abschlusskorrektur" in item.label
+        )
+        final_audit = next(
+            item for item in audit_entries if "Gesamtreview" in item.label
+        )
+        assert correction_audit.scope_paths == boundary.scope_paths
+        assert correction_audit.summary == (
+            "Abschlusskorrektur für " + ", ".join(expected_ledger)
+        )
+        assert set(final_audit.scope_paths) == set(boundary.scope_paths)
+
+        codex = next(
+            item
+            for item in report.agent_invocations
+            if item.step is WorkflowStep.CODEX_FINAL_CORRECTION
+        )
+        assert codex.native_request is not None
+        codex_request = json.loads(codex.native_request.canonical_json)
+        correction_context = codex_request["work_context"]
+        assert "CURRENT CORRECTION" in correction_context
+        assert (
+            "Resolve reviewer findings " + ", ".join(expected_ledger)
+            in correction_context
+        )
+        assert "Implement the planned runtime Slice before final review" not in correction_context
+        correction_package = next(
+            item
+            for item in codex_request["evidence_manifest"]
+            if item["kind"] == "correction_execution_package"
+        )
+        package = json.loads(correction_package["content"])
+        assert tuple(
+            item["finding_id"] for item in package["affected_findings"]
+        ) == expected_ledger
+        origins = {
+            item.finding_id: item.origin.slice_id for item in codex.previous_findings
+        }
+        assert all(
+            origins[finding_id] == "FINAL"
+            for finding_id in FINAL_CORRECTION_BLOCKERS
+        )
+        assert all(
+            origins[finding_id] == "01"
+            for finding_id in FINAL_CORRECTION_OBSERVATIONS
+        )
+
+        review = next(
+            item
+            for item in report.reviewer_invocations
+            if item.work_unit_id == correction.work_unit_id
+        )
+        assert review.native_request is not None
+        review_request = json.loads(review.native_request.canonical_json)
+        finding_criteria = tuple(
+            f"{finding_id}: The provider-free regression for {finding_id} passes."
+            for finding_id in expected_ledger
+        )
+        assert all(item in review_request["acceptance_criteria"] for item in finding_criteria)
+        assert all(item.strip() for item in review_request["acceptance_criteria"])
+        assert review.review_packet is not None
+        packet = json.loads(review.review_packet.canonical_bytes)
+        assert packet["purpose"] == "correction"
+        assert packet["slice"] == {
+            "id": 2,
+            "goal": "Resolve reviewer findings " + ", ".join(expected_ledger),
+            "acceptance_criteria": list(finding_criteria),
+        }
+        assert "### Slice 2" not in codex_request["work_context"]
 
 
 def _run_structured_output_probe(scenario_id: str) -> None:
@@ -618,7 +866,7 @@ def test_provider_free_resilience_scenario(
     if scenario_id == "happy-path":
         test_provider_free_happy_path_reaches_terminal_final_review(tmp_path)
     elif scenario_id in {"slice-correction", "final-correction", "second-correction-new-blocker"}:
-        _run_correction_journey(tmp_path, scenario_id)
+        _run_correction_journey(tmp_path, scenario_id, monkeypatch)
     elif scenario_id in {"exact-structured-output-retry", "structured-output-near-miss"}:
         _run_structured_output_probe(scenario_id)
     elif scenario_id == "record-ahead-resume":
