@@ -9,7 +9,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Mapping
+from typing import Callable, Mapping
 
 from path_policy import PathPolicyError, resolve_path_within_roots
 from artifact_resume import ArtifactResumeError, ResumeResolution, resolve_resume_state
@@ -346,6 +346,7 @@ def load_resumable_workflow_state(
     expected_run_id: str | None = None,
     expected_task_file: Path | None = None,
     expected_task_digest: str | None = None,
+    resolution_observer: Callable[[ResumeResolution], None] | None = None,
 ) -> WorkflowState | CompletedV2State | None:
     """Project resume state from records and refresh the disposable cache.
 
@@ -399,6 +400,8 @@ def load_resumable_workflow_state(
         raise StateSchemaError(
             "record-projected task digest differs from the requested resume task"
         )
+    if resolution_observer is not None:
+        resolution_observer(resolution)
     write_workflow_state_projection(
         path,
         resolution,

@@ -1451,19 +1451,15 @@ def _review_prefix_finding_ids(
     review_record: ArtifactRecord,
 ) -> tuple[str, ...] | None:
     """Project finding ids only when this review's contiguous prefix is complete."""
-    from finding_reducer import reduce_findings
+    from finding_reducer import reduce_finding_records
 
     payload = review_record.payload
     assert isinstance(payload, ReviewPayload)
     prefix_end = _review_prefix_end(chain, positions, review_record)
     try:
-        findings = reduce_findings(
-            _result(
-                review_record.run_id,
-                chain[:prefix_end],
-                reference_records=chain,
-            )
-        ).request_subset(finding_ids=payload.finding_ids).findings
+        findings = reduce_finding_records(chain[:prefix_end]).request_subset(
+            finding_ids=payload.finding_ids
+        ).findings
     except ArtifactReplayError:
         raise
     except ValueError:
@@ -1558,6 +1554,10 @@ def _validate_workflow_transitions_and_events(
     records_by_id: dict[str, ArtifactRecord],
     positions: dict[str, int],
 ) -> dict[str, ArtifactRecord]:
+    # Keep rejection-site line anchors stable: the corpus deliberately binds
+    # each reachable fail-closed branch to its exact source location.  The
+    # review-prefix optimization above changes computation, not this audited
+    # rejection surface or the locations that identify it.
     transition_units: dict[str, ArtifactRecord] = {}
     transition_slices: set[str] = set()
     slice_boundaries: dict[str, SliceBoundaryPayload] = {}

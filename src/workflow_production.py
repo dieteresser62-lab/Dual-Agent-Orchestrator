@@ -9,7 +9,7 @@ from typing import Any, Callable, Protocol
 from agent_adapters import build_agent_registry
 from agent_runtime import OrchestratorConfig
 from artifact_bridge import ArtifactBridgeError
-from artifact_resume import ArtifactResumeError, resolve_resume_state
+from artifact_resume import ArtifactResumeError, ResumeResolution, resolve_resume_state
 from artifact_replay import ArtifactReplayError
 from artifact_store import ArtifactStore
 from audit_trail import ValidationAuditEvent
@@ -52,6 +52,22 @@ from workflow_state import (
 
 
 logger = logging.getLogger(__name__)
+
+
+def _validated_store(resolution: ResumeResolution | None) -> ArtifactStore | None:
+    return None if resolution is None else resolution.validated_store
+
+
+def _history_from_startup_resolution(
+    history: Callable[..., WorkflowHistory],
+    state: WorkflowState,
+    root: Path,
+    resolution: ResumeResolution | None,
+) -> WorkflowHistory:
+    store = _validated_store(resolution)
+    if store is None:
+        return history(state, root)
+    return history(state, root, validated_store=store)
 
 
 class ProductionWorkflowLoopDriver(WorkflowDriver, Protocol):
@@ -520,6 +536,12 @@ def run_production_workflow(
     )
 
     loaded: WorkflowState | CompletedV2State | None = None
+    startup_resolution: ResumeResolution | None = None
+
+    def capture_startup_resolution(resolution: ResumeResolution) -> None:
+        nonlocal startup_resolution
+        startup_resolution = resolution
+
     replacement_run_id: str | None = None
     replacement_requested = force_new or (
         bool(args.force_overwrite_state) and not bool(args.resume)
@@ -542,6 +564,7 @@ def run_production_workflow(
                 expected_run_id=(requested_run_id or None),
                 expected_task_file=task_file,
                 expected_task_digest=task_contract.digest,
+                resolution_observer=capture_startup_resolution,
             )
         except ActiveV2StateError:
             if args.force_overwrite_state:
@@ -593,10 +616,13 @@ def run_production_workflow(
         config=config,
         allowed_roots=allowed_roots,
         replace_existing_run_id=replacement_run_id,
+        validated_store=_validated_store(startup_resolution),
     )
     require_production_workflow_loop_driver(driver)
     engine = WorkflowEngine(driver)
-    history = dependencies.history(state, root)
+    history = _history_from_startup_resolution(
+        dependencies.history, state, root, startup_resolution
+    )
     state = resolve_retired_iteration_limit(state, history)
     driver.checkpoint(state, history)
 
