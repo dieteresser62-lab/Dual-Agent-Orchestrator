@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+import validation_matrix
 
 from contracts import (
     AgentRole,
@@ -20,7 +22,9 @@ from validation_matrix import (
     ValidationMatrix,
     ValidationMatrixError,
     ValidationMatrixRunner,
+    ValidationRequest,
     ValidationRule,
+    _flake_probe_run_count,
     select_validation_request,
 )
 
@@ -412,7 +416,7 @@ def test_runner_captures_pass_failure_compact_output_and_digest(tmp_path: Path) 
     ]
     assert "characters omitted" in attestation.records[0].output
     assert attestation.records[1].exit_code == 3
-    assert attestation.records[2].output == "shell-ok"
+    assert "shell-ok" in attestation.content_captures[2].stdout
     assert attestation.command_specs[0].argv == commands[0].argv
     assert attestation.command_specs[1].argv == commands[1].argv
     assert attestation.command_specs[2].legacy_shell == commands[2].display
@@ -447,3 +451,177 @@ def test_missing_binary_is_incomplete_and_timeout_is_complete_failure(tmp_path: 
     assert timed_out.complete is True
     assert timed_out.status is ValidationAttestationStatus.FAIL
     assert timed_out.records[0].exit_code == 124
+
+
+def _measured_clock(first_run_seconds: float, run_count: int):
+    ticks = iter(
+        (
+            0.0,
+            first_run_seconds,
+            *(first_run_seconds for _ in range((run_count - 1) * 2)),
+        )
+    )
+    return lambda: next(ticks)
+
+
+def test_green_first_run_keeps_original_single_run_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def fake_run(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return subprocess.CompletedProcess(args[0], 0, "green\n", "")
+
+    monkeypatch.setattr(validation_matrix.subprocess, "run", fake_run)
+    request = ValidationRequest(
+        FINGERPRINT,
+        (ValidationCommand(argv=("product-tests",)),),
+    )
+
+    attestation = ValidationMatrixRunner(
+        tmp_path,
+        monotonic=_measured_clock(5.0, 1),
+    ).run(request)
+
+    assert calls == 1
+    assert attestation.passed
+    assert attestation.summary == "1 passed; 0 failed; 0 unavailable; 1 required"
+    assert attestation.records[0].output == "green"
+    assert "validation run" not in attestation.content_captures[0].stdout
+
+
+def test_failed_runs_use_runtime_bound_count_and_name_every_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    outputs = iter(("red-one\n", "red-two\n", "red-three\n"))
+    calls = 0
+
+    def fake_run(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return subprocess.CompletedProcess(args[0], 7, next(outputs), "failure\n")
+
+    monkeypatch.setattr(validation_matrix.subprocess, "run", fake_run)
+    request = ValidationRequest(
+        FINGERPRINT,
+        (ValidationCommand(argv=("product-tests",)),),
+    )
+
+    attestation = ValidationMatrixRunner(
+        tmp_path,
+        monotonic=_measured_clock(8.0, 3),
+    ).run(request)
+
+    assert calls == 3
+    assert attestation.status is ValidationAttestationStatus.FAIL
+    assert "3 of 3 validation runs failed" in attestation.summary
+    assert all(
+        f"validation run {index}/3" in attestation.records[0].output
+        for index in range(1, 4)
+    )
+    raw = attestation.content_captures[0]
+    assert all(value in raw.stdout for value in ("red-one", "red-two", "red-three"))
+    assert raw.stderr.count("failure") == 3
+
+
+def test_mixed_probe_stays_failed_and_reports_failure_ratio(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    return_codes = iter((1, 0, 0, 0, 0))
+    calls = 0
+
+    def fake_run(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return_code = next(return_codes)
+        return subprocess.CompletedProcess(
+            args[0],
+            return_code,
+            f"run-{calls}\n",
+            "boom\n" if return_code else "",
+        )
+
+    monkeypatch.setattr(validation_matrix.subprocess, "run", fake_run)
+    request = ValidationRequest(
+        FINGERPRINT,
+        (ValidationCommand(argv=("product-tests",)),),
+    )
+
+    attestation = ValidationMatrixRunner(
+        tmp_path,
+        monotonic=_measured_clock(5.0, 5),
+    ).run(request)
+
+    assert calls == 5
+    assert attestation.status is ValidationAttestationStatus.FAIL
+    assert "1 of 5 validation runs failed" in attestation.summary
+    assert "4 passed" in attestation.summary
+    assert attestation.records[0].status is ValidationStatus.FAIL
+    assert all(
+        f"validation run {index}/5" in attestation.records[0].output
+        for index in range(1, 6)
+    )
+    assert all(
+        f"run-{index}" in attestation.content_captures[0].stdout
+        for index in range(1, 6)
+    )
+
+
+def test_probe_unavailability_cannot_displace_an_observed_matrix_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    outcomes = iter(
+        (
+            subprocess.CompletedProcess(("first",), 1, "", "first failed"),
+            subprocess.CompletedProcess(("second",), 0, "ok", ""),
+            subprocess.CompletedProcess(("first",), 0, "ok", ""),
+            FileNotFoundError("second disappeared"),
+        )
+    )
+
+    def fake_run(*args, **kwargs):
+        outcome = next(outcomes)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(validation_matrix.subprocess, "run", fake_run)
+    request = ValidationRequest(
+        FINGERPRINT,
+        (
+            ValidationCommand(argv=("first",)),
+            ValidationCommand(argv=("second",)),
+        ),
+    )
+
+    attestation = ValidationMatrixRunner(
+        tmp_path,
+        monotonic=_measured_clock(420.0, 2),
+    ).run(request)
+
+    assert attestation.complete
+    assert attestation.status is ValidationAttestationStatus.FAIL
+    assert [record.status for record in attestation.records] == [
+        ValidationStatus.FAIL,
+        ValidationStatus.FAIL,
+    ]
+    assert "1 of 2 validation runs failed" in attestation.summary
+    assert "1 incomplete" in attestation.summary
+    assert "MISSING" in attestation.records[1].output
+
+
+@pytest.mark.parametrize(
+    ("first_run_seconds", "expected_runs"),
+    ((5.0, 5), (8.0, 3), (420.0, 2)),
+)
+def test_flake_probe_size_is_derived_from_measured_matrix_runtime(
+    first_run_seconds: float,
+    expected_runs: int,
+) -> None:
+    assert _flake_probe_run_count(first_run_seconds) == expected_runs

@@ -5,9 +5,10 @@ import logging
 import re
 import shlex
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 
 from contracts import (
     FindingClass,
@@ -25,6 +26,11 @@ from gates import matches_path_patterns, normalize_path_patterns
 
 DEFAULT_VALIDATION_TIMEOUT_SECONDS = 300
 VALIDATION_OUTPUT_LIMIT = 2_000
+# A failed first run starts a bounded flake probe.  The run count is derived
+# from measured matrix time, while this budget caps the ordinary extra cost and
+# the sample cap prevents near-zero-duration commands from running unboundedly.
+FLAKE_PROBE_BUDGET_SECONDS = 30.0
+FLAKE_PROBE_MAX_RUNS = 5
 FINDING_COMMAND_PREFIX = "VALIDATE:"
 LOGGER = logging.getLogger(__name__)
 SHELL_META_CHARACTERS = frozenset(";&|<>`$(){}[]*?!#~")
@@ -320,19 +326,42 @@ def _finding_validation_commands(
 class ValidationMatrixRunner:
     """Execute one selected matrix without a shell unless explicitly configured."""
 
-    def __init__(self, repository_root: Path, *, output_limit: int = VALIDATION_OUTPUT_LIMIT):
+    def __init__(
+        self,
+        repository_root: Path,
+        *,
+        output_limit: int = VALIDATION_OUTPUT_LIMIT,
+        monotonic: Callable[[], float] = time.monotonic,
+    ):
         self.repository_root = repository_root.resolve()
         if not self.repository_root.is_dir():
             raise ValidationMatrixError("validation repository root must be a directory")
         if isinstance(output_limit, bool) or not isinstance(output_limit, int) or output_limit < 1:
             raise ValidationMatrixError("validation output_limit must be positive")
+        if not callable(monotonic):
+            raise ValidationMatrixError("validation monotonic clock must be callable")
         self.output_limit = output_limit
+        self._monotonic = monotonic
 
     def run(self, request: ValidationRequest) -> ValidationAttestation:
+        runs = [self._run_once(request.commands)]
+        if runs[0].failed:
+            total_runs = _flake_probe_run_count(runs[0].elapsed_seconds)
+            runs.extend(
+                self._run_once(request.commands)
+                for _ in range(1, total_runs)
+            )
+        return self._attestation(request, tuple(runs))
+
+    def _run_once(
+        self,
+        commands: tuple[ValidationCommand, ...],
+    ) -> "_ValidationRun":
+        started = self._monotonic()
         records: list[ValidationRecord] = []
         captures: list[ValidationCapture] = []
         unavailable = 0
-        for command in request.commands:
+        for command in commands:
             try:
                 result = subprocess.run(
                     command.shell_command if command.shell_command is not None else command.argv,
@@ -414,11 +443,104 @@ class ValidationMatrixRunner:
                     compact,
                 )
             )
-        failed = sum(record.status is ValidationStatus.FAIL for record in records)
-        passed = sum(record.status is ValidationStatus.PASS for record in records)
+        return _ValidationRun(
+            records=tuple(records),
+            captures=tuple(captures),
+            unavailable=unavailable,
+            elapsed_seconds=max(0.0, self._monotonic() - started),
+        )
+
+    def _attestation(
+        self,
+        request: ValidationRequest,
+        runs: tuple["_ValidationRun", ...],
+    ) -> ValidationAttestation:
+        if len(runs) == 1:
+            run = runs[0]
+            failed = sum(
+                record.status is ValidationStatus.FAIL for record in run.records
+            )
+            passed = sum(
+                record.status is ValidationStatus.PASS for record in run.records
+            )
+            summary = (
+                f"{passed} passed; {failed} failed; {run.unavailable} unavailable; "
+                f"{len(request.commands)} required"
+            )
+            return ValidationAttestation(
+                attestation_id=validation_attestation_id(request),
+                diff_fingerprint=request.diff_fingerprint,
+                expected_commands=request.expected_commands,
+                records=run.records,
+                output_digest=validation_output_digest(run.captures),
+                summary=summary,
+                command_specs=tuple(
+                    command.command_spec for command in request.commands
+                ),
+                content_captures=run.captures,
+            )
+
+        records: list[ValidationRecord] = []
+        captures: list[ValidationCapture] = []
+        for command_index, command in enumerate(request.commands):
+            attempts = tuple(run.captures[command_index] for run in runs)
+            aggregate = _aggregate_capture(
+                command.display,
+                attempts,
+                output_limit=self.output_limit,
+            )
+            captures.append(aggregate)
+            failed_attempt = next(
+                (
+                    attempt
+                    for attempt in attempts
+                    if attempt.outcome in {"fail", "timeout"}
+                ),
+                None,
+            )
+            unavailable_attempt = next(
+                (
+                    attempt
+                    for attempt in attempts
+                    if attempt.outcome in {"missing", "unavailable"}
+                ),
+                None,
+            )
+            if failed_attempt is not None:
+                records.append(
+                    ValidationRecord(
+                        ValidationStatus.FAIL,
+                        command.display,
+                        failed_attempt.exit_code,
+                        aggregate.compact_output,
+                    )
+                )
+            elif unavailable_attempt is not None:
+                records.append(
+                    ValidationRecord(
+                        ValidationStatus.FAIL,
+                        command.display,
+                        unavailable_attempt.exit_code,
+                        aggregate.compact_output,
+                    )
+                )
+            else:
+                records.append(
+                    ValidationRecord(
+                        ValidationStatus.PASS,
+                        command.display,
+                        0,
+                        aggregate.compact_output,
+                    )
+                )
+
+        failed_runs = sum(run.failed for run in runs)
+        passed_runs = sum(run.passed for run in runs)
+        incomplete_runs = len(runs) - failed_runs - passed_runs
         summary = (
-            f"{passed} passed; {failed} failed; {unavailable} unavailable; "
-            f"{len(request.commands)} required"
+            f"{failed_runs} of {len(runs)} validation runs failed; "
+            f"{passed_runs} passed; {incomplete_runs} incomplete; "
+            f"{len(request.commands)} required commands"
         )
         return ValidationAttestation(
             attestation_id=validation_attestation_id(request),
@@ -430,6 +552,119 @@ class ValidationMatrixRunner:
             command_specs=tuple(command.command_spec for command in request.commands),
             content_captures=tuple(captures),
         )
+
+
+@dataclass(frozen=True)
+class _ValidationRun:
+    records: tuple[ValidationRecord, ...]
+    captures: tuple[ValidationCapture, ...]
+    unavailable: int
+    elapsed_seconds: float
+
+    @property
+    def failed(self) -> bool:
+        return any(
+            capture.outcome in {"fail", "timeout"} for capture in self.captures
+        )
+
+    @property
+    def passed(self) -> bool:
+        return not self.failed and self.unavailable == 0
+
+
+def _flake_probe_run_count(first_run_seconds: float) -> int:
+    """Choose a fixed flake-probe size from the measured failed first run."""
+    if first_run_seconds <= 0:
+        return FLAKE_PROBE_MAX_RUNS
+    affordable_runs = int(FLAKE_PROBE_BUDGET_SECONDS // first_run_seconds)
+    return max(2, min(FLAKE_PROBE_MAX_RUNS, affordable_runs))
+
+
+def _aggregate_capture(
+    command: str,
+    attempts: tuple[ValidationCapture, ...],
+    *,
+    output_limit: int,
+) -> ValidationCapture:
+    """Aggregate a bounded probe without losing any run's raw streams."""
+    failed = tuple(
+        attempt for attempt in attempts if attempt.outcome in {"fail", "timeout"}
+    )
+    unavailable = tuple(
+        attempt
+        for attempt in attempts
+        if attempt.outcome in {"missing", "unavailable"}
+    )
+    if failed:
+        outcome = "fail" if any(item.outcome == "fail" for item in failed) else "timeout"
+        exit_code = failed[0].exit_code
+    elif unavailable:
+        # Once a failed first matrix run has opened a probe, later
+        # unavailability must not project the already-proven failure as an
+        # incomplete attestation.  The numbered raw headers retain the exact
+        # missing/unavailable outcomes.
+        outcome = "fail"
+        exit_code = unavailable[0].exit_code
+    else:
+        outcome = "pass"
+        exit_code = 0
+    return ValidationCapture(
+        command=command,
+        outcome=outcome,
+        exit_code=exit_code,
+        stdout=_numbered_run_stream(attempts, stream="stdout"),
+        stderr=_numbered_run_stream(attempts, stream="stderr"),
+        compact_output=_numbered_compact_output(attempts, output_limit),
+    )
+
+
+def _run_header(
+    index: int,
+    total: int,
+    attempt: ValidationCapture,
+) -> str:
+    return (
+        f"=== validation run {index}/{total}: {attempt.outcome.upper()} "
+        f"(exit={attempt.exit_code}) ==="
+    )
+
+
+def _numbered_run_stream(
+    attempts: tuple[ValidationCapture, ...],
+    *,
+    stream: str,
+) -> str:
+    parts: list[str] = []
+    for index, attempt in enumerate(attempts, start=1):
+        value = getattr(attempt, stream)
+        parts.append(
+            _run_header(index, len(attempts), attempt)
+            + "\n"
+            + (value if value else f"(no {stream})")
+        )
+    return "\n".join(parts)
+
+
+def _numbered_compact_output(
+    attempts: tuple[ValidationCapture, ...],
+    output_limit: int,
+) -> str:
+    headers = tuple(
+        _run_header(index, len(attempts), attempt)
+        for index, attempt in enumerate(attempts, start=1)
+    )
+    fixed_size = sum(len(header) for header in headers) + (2 * len(headers) - 1)
+    if fixed_size >= output_limit:
+        return _compact_output("\n".join(headers), "", output_limit)
+    payload_budget = output_limit - fixed_size
+    base, remainder = divmod(payload_budget, len(attempts))
+    parts = []
+    for index, (header, attempt) in enumerate(zip(headers, attempts, strict=True)):
+        budget = base + (1 if index < remainder else 0)
+        parts.append(
+            header + "\n" + _compact_output(attempt.stdout, attempt.stderr, budget)
+        )
+    return "\n".join(parts)
 
 
 def validation_attestation_id(request: ValidationRequest) -> str:
