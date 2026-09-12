@@ -33,6 +33,7 @@ from content_authority import ValidationCapture, validation_output_digest
 
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
 _RECORD_NAME_RE = re.compile(r"^(ar1-[0-9a-f]{64})\.json$")
+_RECORD_BATCH_NAME_RE = re.compile(r"^(arb1-[0-9a-f]{64})\.json$")
 _BLOB_NAME_RE = re.compile(r"^([0-9a-f]{64})\.blob$")
 logger = logging.getLogger(__name__)
 _INVALID_CACHE = object()
@@ -358,6 +359,145 @@ class ArtifactStore:
             self._append_index = None
             raise
 
+    def put_batch(
+        self, records: tuple[ArtifactRecord, ...]
+    ) -> tuple[ArtifactRecord, ...]:
+        """Atomically publish one linear group of authoritative records.
+
+        The group is stored in one immutable envelope and becomes visible with
+        one ``os.replace``.  Readers therefore observe either the complete
+        group or none of it.  This is reserved for domain facts whose replay
+        invariant cannot tolerate a prefix ending between the records.
+        """
+
+        if len(records) < 2:
+            raise ArtifactStoreError("artifact record batch requires at least two records")
+        index = self._ensure_append_index()
+        existing: list[ArtifactRecord] = []
+        for record in records:
+            prior = index.by_idempotency_key.get(record.idempotency_key)
+            if prior is None:
+                continue
+            if prior[0] != _semantic_digest(record):
+                raise ArtifactConflictError(
+                    f"idempotency key {record.idempotency_key!r} has conflicting content"
+                )
+            existing.append(prior[1])
+        if existing:
+            if len(existing) != len(records):
+                raise ArtifactConflictError(
+                    "artifact record batch is only partially present"
+                )
+            return tuple(existing)
+
+        expected_head = index.head_record_id
+        batch_ids: set[str] = set()
+        batch_revisions: set[tuple[RecordType, str, int]] = set()
+        predecessor = expected_head
+        for record in records:
+            if record.run_id != self.run_id:
+                raise ArtifactConflictError(
+                    f"record run_id {record.run_id!r} does not match store {self.run_id!r}"
+                )
+            if record.record_id in index.record_ids or record.record_id in batch_ids:
+                raise ArtifactConflictError(
+                    f"record_id {record.record_id!r} is already present"
+                )
+            revision_key = (record.record_type, record.logical_id, record.revision)
+            if revision_key in index.revision_keys or revision_key in batch_revisions:
+                raise ArtifactConflictError(
+                    "duplicate revision for record_type/logical_id"
+                )
+            expected_predecessors = () if predecessor is None else (predecessor,)
+            if record.predecessor_ids != expected_predecessors:
+                raise ArtifactConflictError(
+                    "record batch does not extend the current head linearly"
+                )
+            _validate_store_invariants(record)
+            batch_ids.add(record.record_id)
+            batch_revisions.add(revision_key)
+            predecessor = record.record_id
+
+        documents = [record.to_dict() for record in records]
+        document_bytes = canonical_json(documents)
+        envelope = canonical_json(
+            {
+                "content_sha256": hashlib.sha256(document_bytes).hexdigest(),
+                "records": documents,
+            }
+        ) + b"\n"
+        batch_digest = hashlib.sha256(
+            canonical_json([record.record_id for record in records])
+        ).hexdigest()
+        self.records_dir.mkdir(parents=True, exist_ok=True)
+        target = self.records_dir / f"arb1-{batch_digest}.json"
+        if target.exists():
+            self._append_index = None
+            recovered = self.load_chain()
+            by_key = {record.idempotency_key: record for record in recovered}
+            result = tuple(by_key.get(record.idempotency_key) for record in records)
+            if all(item is not None for item in result):
+                persisted = tuple(item for item in result if item is not None)
+                if all(
+                    _semantic_digest(actual) == _semantic_digest(expected)
+                    for actual, expected in zip(persisted, records, strict=True)
+                ):
+                    return persisted
+            raise ArtifactConflictError(
+                f"record batch target already exists: {target.name}"
+            )
+
+        try:
+            _atomic_write(target, envelope)
+            published_before = self._artifact_file_stamp(target)
+            published, published_stamp = _read_record_batch(target)
+            if published_before != published_stamp or published != records:
+                raise ArtifactCorruptionError(
+                    "published record batch differs from the append candidates"
+                )
+            self._validate_record_blobs(published)
+            if not self._head_cache_matches(index):
+                self._append_index = None
+                recovered = self.load_chain()
+                recovered_ids = {item.record_id for item in recovered}
+                if not batch_ids.issubset(recovered_ids):
+                    raise ArtifactCorruptionError(
+                        "published record batch was not recovered by store scan"
+                    )
+                return tuple(
+                    next(item for item in recovered if item.record_id == record.record_id)
+                    for record in records
+                )
+
+            prior_document = index.head_document()
+            for record in published:
+                semantic = _semantic_digest(record)
+                revision_key = (
+                    record.record_type,
+                    record.logical_id,
+                    record.revision,
+                )
+                index.by_idempotency_key[record.idempotency_key] = (semantic, record)
+                index.record_ids.add(record.record_id)
+                index.revision_keys.add(revision_key)
+                identity = (record.record_type, record.logical_id)
+                index.max_revisions[identity] = max(
+                    record.revision,
+                    index.max_revisions.get(identity, 0),
+                )
+                index.head_record_id = record.record_id
+                index.record_count += 1
+                index.chain_sha256 = _extend_chain_sha256(
+                    index.chain_sha256, record.record_id
+                )
+            index.chain = (*index.chain, *published)
+            index.records_dir_stamp = self._records_directory_stamp()
+            self._refresh_append_head_cache(index, prior_document)
+            return published
+        except Exception:
+            self._append_index = None
+            raise
+
     def load_chain(self) -> tuple[ArtifactRecord, ...]:
         """Explicitly reload and fully validate the authoritative chain."""
         with self.progress_phase("full-chain-validation"):
@@ -391,41 +531,57 @@ class ArtifactStore:
             if path.name.startswith(".") and path.name.endswith(".tmp"):
                 continue
             match = _RECORD_NAME_RE.fullmatch(path.name)
-            if match is None:
+            batch_match = _RECORD_BATCH_NAME_RE.fullmatch(path.name)
+            if match is None and batch_match is None:
                 raise ArtifactCorruptionError(
                     f"unexpected entry in artifact records directory: {path.name!r}"
                 )
-            record, opened_stamp = _read_record(path)
+            if match is not None:
+                record, opened_stamp = _read_record(path)
+                loaded = (record,)
+            else:
+                loaded, opened_stamp = _read_record_batch(path)
+                assert batch_match is not None
+                expected_batch_name = "arb1-" + hashlib.sha256(
+                    canonical_json([record.record_id for record in loaded])
+                ).hexdigest()
+                if batch_match.group(1) != expected_batch_name:
+                    raise ArtifactCorruptionError(
+                        f"record batch filename does not match content: {path.name!r}"
+                    )
             record_file_stamps[path.name] = opened_stamp
-            if record.record_id != match.group(1):
-                raise ArtifactCorruptionError(
-                    f"record filename does not match record_id: {path.name!r}"
-                )
-            if record.run_id != self.run_id:
-                raise ArtifactCorruptionError(
-                    f"record {record.record_id!r} belongs to run {record.run_id!r}"
-                )
-            if record.record_id in records:
-                raise ArtifactCorruptionError(f"duplicate record_id {record.record_id!r}")
-            revision_key = (record.record_type, record.logical_id, record.revision)
-            if revision_key in revisions:
-                raise ArtifactCorruptionError(
-                    "duplicate revision for record_type/logical_id"
-                )
-            revisions.add(revision_key)
-            semantic = _semantic_digest(record)
-            prior_semantic = semantics_by_key.get(record.idempotency_key)
-            if prior_semantic is not None and prior_semantic != semantic:
-                raise ArtifactCorruptionError(
-                    f"idempotency key {record.idempotency_key!r} has conflicting content"
-                )
-            if prior_semantic is not None:
-                raise ArtifactCorruptionError(
-                    f"idempotency key {record.idempotency_key!r} is duplicated"
-                )
-            semantics_by_key[record.idempotency_key] = semantic
-            _validate_store_invariants(record, persisted=True)
-            records[record.record_id] = record
+            for record in loaded:
+                if match is not None and record.record_id != match.group(1):
+                    raise ArtifactCorruptionError(
+                        f"record filename does not match record_id: {path.name!r}"
+                    )
+                if record.run_id != self.run_id:
+                    raise ArtifactCorruptionError(
+                        f"record {record.record_id!r} belongs to run {record.run_id!r}"
+                    )
+                if record.record_id in records:
+                    raise ArtifactCorruptionError(
+                        f"duplicate record_id {record.record_id!r}"
+                    )
+                revision_key = (record.record_type, record.logical_id, record.revision)
+                if revision_key in revisions:
+                    raise ArtifactCorruptionError(
+                        "duplicate revision for record_type/logical_id"
+                    )
+                revisions.add(revision_key)
+                semantic = _semantic_digest(record)
+                prior_semantic = semantics_by_key.get(record.idempotency_key)
+                if prior_semantic is not None and prior_semantic != semantic:
+                    raise ArtifactCorruptionError(
+                        f"idempotency key {record.idempotency_key!r} has conflicting content"
+                    )
+                if prior_semantic is not None:
+                    raise ArtifactCorruptionError(
+                        f"idempotency key {record.idempotency_key!r} is duplicated"
+                    )
+                semantics_by_key[record.idempotency_key] = semantic
+                _validate_store_invariants(record, persisted=True)
+                records[record.record_id] = record
 
         ordered = _order_chain(records)
         blob_file_stamps = self._validate_record_blobs(ordered)
@@ -839,6 +995,56 @@ def _read_record(path: Path) -> tuple[ArtifactRecord, _ArtifactFileStamp]:
     except (ArtifactValidationError, KeyError, TypeError, ValueError) as exc:
         raise ArtifactCorruptionError(f"record validation failed for {path.name!r}: {exc}") from exc
     return record, opened_stamp
+
+
+def _read_record_batch(
+    path: Path,
+) -> tuple[tuple[ArtifactRecord, ...], _ArtifactFileStamp]:
+    try:
+        content, opened_stamp = _read_regular_file_without_following_symlinks(path)
+        envelope = json.loads(content.decode("utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError, ArtifactStoreError) as exc:
+        raise ArtifactCorruptionError(
+            f"could not parse record batch {path.name!r}: {exc}"
+        ) from exc
+    if not isinstance(envelope, dict) or set(envelope) != {
+        "content_sha256",
+        "records",
+    }:
+        raise ArtifactCorruptionError(
+            f"record batch envelope is invalid: {path.name!r}"
+        )
+    digest = envelope["content_sha256"]
+    documents = envelope["records"]
+    if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        raise ArtifactCorruptionError(
+            f"record batch digest is invalid: {path.name!r}"
+        )
+    if not isinstance(documents, list) or len(documents) < 2:
+        raise ArtifactCorruptionError(
+            f"record batch payload is invalid: {path.name!r}"
+        )
+    try:
+        actual = hashlib.sha256(canonical_json(documents)).hexdigest()
+    except (TypeError, ValueError) as exc:
+        raise ArtifactCorruptionError(
+            f"record batch JSON is not canonicalizable: {path.name!r}"
+        ) from exc
+    if actual != digest:
+        raise ArtifactCorruptionError(
+            f"record batch digest mismatch: {path.name!r}"
+        )
+    records: list[ArtifactRecord] = []
+    try:
+        for document in documents:
+            if not isinstance(document, dict):
+                raise TypeError("record document is not an object")
+            records.append(ArtifactRecord.from_dict(document))
+    except (ArtifactValidationError, KeyError, TypeError, ValueError) as exc:
+        raise ArtifactCorruptionError(
+            f"record batch validation failed for {path.name!r}: {exc}"
+        ) from exc
+    return tuple(records), opened_stamp
 
 
 def _order_chain(records: dict[str, ArtifactRecord]) -> tuple[ArtifactRecord, ...]:

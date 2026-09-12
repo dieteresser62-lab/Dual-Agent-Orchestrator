@@ -795,10 +795,12 @@ Tabelle inventarisiert daher 30 Stämme, während der AST-Zähler 32 direkte
 | `finding handoff source is no longer valid` | A02 |
 | `finding import differs from its revalidated source` | A02/B03 |
 
-### 24 `ArtifactBridgeError`-Stellen
+### 26 `ArtifactBridgeError`-Stellen
 
 | Meldungsstamm | Kante |
 |---|---|
+| `artifact batch requires at least two entries` | R5; atomare Statusgruppe darf nicht zu einem Einzelrecord degenerieren |
+| `atomic artifact batch is only partially present` | R5; idempotente Wiederaufnahme lehnt ein unvollständiges Gate-/Work-unit-Paar fail-closed ab |
 | `referenced source record is not a finding export` | A02/B03 |
 | `source export plan commit differs from state-v3` | A02 |
 | `finding export requires a non-empty accepted replay` | B02 |
@@ -848,6 +850,7 @@ Tabelle inventarisiert daher 30 Stämme, während der AST-Zähler 32 direkte
 | `file side-effect target differs before result completion` | B05/B08/B09; Zieltyp/-digest unmittelbar vor Datei-Resultat, **bleibt bewusst** |
 | `structured audit dual-write mismatch` | B09 |
 | `workflow history review packet cache differs from canonical bytes` | B06/B09 |
+| `cleanup scope finding authority differs from the active work unit` | R3; persistierte Correction-Work-unit-Grenze ↔ aktive offene Findings, **bleibt bewusst** |
 | `differs from the immutable persisted profile` | A01/B04; Runtimeprofil ↔ persistierte ProtocolBinding, **bleibt bewusst** |
 | `persisted task identity differs from --resume task` | A03; State/Recordbindung ↔ Taskdatei, **wird generisch** |
 | `persisted task contract differs from --resume task` | A03; State/Recordvertrag ↔ Taskdatei, **wird generisch** |

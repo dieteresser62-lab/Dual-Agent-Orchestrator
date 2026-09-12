@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 from pathlib import PurePosixPath
 import re
 import unicodedata
@@ -52,6 +53,47 @@ def mentioned_repository_paths(*texts: str) -> tuple[str, ...]:
             ):
                 continue
             paths.add(path.as_posix())
+    return tuple(sorted(paths))
+
+
+def authorized_repository_paths(
+    repository_root: Path, *texts: str
+) -> tuple[str, ...]:
+    """Return only normalized, existing paths confined to one worktree.
+
+    Finding signatures intentionally keep using ``mentioned_repository_paths``
+    unchanged.  Cleanup authorization is stricter: trailing prose punctuation
+    is repaired only when it resolves to a real repository entry, and lexical
+    slash tokens which do not exist in the worktree are discarded locally.
+    No provider participates in this check.
+    """
+
+    root = Path(repository_root).resolve()
+    if not root.is_dir():
+        raise ValueError("repository_root must be an existing directory")
+    paths: set[str] = set()
+    for mentioned in mentioned_repository_paths(*texts):
+        variants = (mentioned, mentioned.rstrip(")]}"))
+        for raw in dict.fromkeys(variants):
+            if not raw:
+                continue
+            path = PurePosixPath(raw)
+            if (
+                path.is_absolute()
+                or len(path.parts) < 2
+                or ".." in path.parts
+                or any(part in {"", ".", ".."} for part in path.parts)
+            ):
+                continue
+            candidate = root.joinpath(*path.parts)
+            try:
+                exists = candidate.exists()
+                confined = candidate.resolve().is_relative_to(root)
+            except (OSError, RuntimeError):
+                continue
+            if exists and confined:
+                paths.add(path.as_posix())
+                break
     return tuple(sorted(paths))
 
 
@@ -146,6 +188,7 @@ def finding_record_signature(finding: FindingRecord) -> str:
 
 
 __all__ = [
+    "authorized_repository_paths",
     "finding_record_signature",
     "finding_signature",
     "mentioned_repository_paths",

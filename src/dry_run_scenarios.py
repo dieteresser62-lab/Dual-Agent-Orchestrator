@@ -922,6 +922,7 @@ class ScriptedWorkflowDriver:
     _change_positions: dict[tuple[int, int], int] = field(default_factory=dict)
     _final_review_entry_ids: dict[int, tuple[str, ...]] = field(default_factory=dict)
     _final_review_dispositioned_ids: dict[int, set[str]] = field(default_factory=dict)
+    _cleanup_scope_by_unit: dict[int, tuple[str, ...]] = field(default_factory=dict)
 
     def bind_work_unit(self, state: WorkflowState) -> None:
         self.active_state = state
@@ -957,6 +958,29 @@ class ScriptedWorkflowDriver:
         )
         pending = frozenset(initial_ids) - dispositioned
         return tuple(item for item in ledger if item.finding_id in pending)
+
+    def authoritative_cleanup_scope_paths(
+        self, state: WorkflowState
+    ) -> tuple[str, ...]:
+        """Use the scenario's immutable cleanup change boundary as authority."""
+
+        if not is_finding_cleanup_work_unit(state):
+            raise DryRunScenarioError("cleanup scope requested for a regular work unit")
+        authorized = self._cleanup_scope_by_unit.get(state.current_work_unit_id)
+        if authorized is not None:
+            return authorized
+        match = next(
+            (
+                item
+                for item in self.scenario.changes
+                if item.work_unit_id == state.current_work_unit_id
+                and item.round_number == state.current_work_unit.round_number
+            ),
+            None,
+        )
+        if match is None:
+            raise DryRunScenarioError("scripted cleanup has no authorized change boundary")
+        return match.paths
 
     def carry_forward_native_findings(
         self, state: WorkflowState, findings: tuple[FindingRecord, ...]
@@ -1889,13 +1913,18 @@ def _run_scripted_workflow(
             for finding_id in unit.open_findings
         )
         cleanup = plan_finding_cleanup(
-            findings, previously_addressed_ids=addressed_ids
+            findings,
+            repository_root=task_file.parent,
+            previously_addressed_ids=addressed_ids,
         )
         if cleanup is None:
             return report
         cleanup_state = current.start_finding_cleanup_work_unit(
             finding_ids=cleanup.finding_ids
         )
+        session.driver._cleanup_scope_by_unit[
+            cleanup_state.current_work_unit_id
+        ] = cleanup.scope_paths
         carried_attestations = report.result.history.attestations[-1:]
         cleanup_history = WorkflowHistory(
             cleanup_state.current_work_unit_id,

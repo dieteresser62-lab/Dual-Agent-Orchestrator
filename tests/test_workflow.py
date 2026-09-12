@@ -14,6 +14,7 @@ import workflow_requests
 from agent_adapters import AgentOutputError
 from audit_trail import ReviewAuditEvent
 from artifact_models import InvocationFailurePayload, provider_text_evidence
+from finding_cleanup import is_finding_cleanup_work_unit
 from agent_runtime import (
     AgentInvocationError,
     AgentProcessError,
@@ -481,6 +482,15 @@ class FakeDriver:
         mirror_findings: tuple[FindingRecord, ...],
     ) -> tuple[FindingRecord, ...]:
         return project_open_set(mirror_findings).findings
+
+    def authoritative_cleanup_scope_paths(
+        self, state: WorkflowState
+    ) -> tuple[str, ...]:
+        if not is_finding_cleanup_work_unit(state):
+            raise WorkflowExecutionError("cleanup scope requested for a regular unit")
+        if self.snapshots:
+            return self.snapshots[min(self.snapshot_index + 1, len(self.snapshots) - 1)].paths
+        return state.current_slice.scope_paths
 
     def carry_forward_native_findings(
         self,
@@ -4667,14 +4677,18 @@ def test_changed_fingerprint_during_quota_wait_halts_before_retry() -> None:
         rationale="reviewed exact changed fingerprint and paths",
     )
     failure = acknowledged.current_work_unit.invocation_failures[-1]
-    revalidated, halted = engine._revalidate_waiting_diff(acknowledged, failure)
+    revalidated, halted = engine._revalidate_waiting_diff(
+        acknowledged, failure, _context()
+    )
 
     assert halted is False
     assert revalidated.current_work_unit.status is WorkUnitStatus.IN_PROGRESS
 
     changed_again = _changes("3", "src/early.py", TEST_FILE)
     driver.snapshots[0] = changed_again
-    halted_again, halted = engine._revalidate_waiting_diff(acknowledged, failure)
+    halted_again, halted = engine._revalidate_waiting_diff(
+        acknowledged, failure, _context()
+    )
 
     assert halted is True
     assert (

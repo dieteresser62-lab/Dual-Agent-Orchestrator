@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterable, Sequence
 
 from artifact_models import ArtifactRecord, FindingTransitionPayload
@@ -13,7 +14,7 @@ from finding_reducer import (
     project_open_set,
     project_request_subset,
 )
-from finding_signature import mentioned_repository_paths
+from finding_signature import authorized_repository_paths
 from workflow_state import WorkflowState, WorkUnitKind, WorkUnitRecord
 
 
@@ -108,9 +109,12 @@ def positive_balance_streak(balances: Sequence[SliceFindingBalance]) -> int:
 
 
 def finding_cleanup_scope_paths(
-    findings: tuple[FindingRecord, ...], finding_ids: tuple[str, ...]
+    findings: tuple[FindingRecord, ...],
+    finding_ids: tuple[str, ...],
+    *,
+    repository_root: Path,
 ) -> tuple[str, ...]:
-    """Return exactly the union of repository paths named by the findings."""
+    """Return the existing worktree paths named by the selected findings."""
 
     selected = project_request_subset(
         findings,
@@ -122,7 +126,8 @@ def finding_cleanup_scope_paths(
             {
                 path
                 for finding in selected
-                for path in mentioned_repository_paths(
+                for path in authorized_repository_paths(
+                    repository_root,
                     finding.summary, finding.acceptance_test
                 )
             }
@@ -133,6 +138,7 @@ def finding_cleanup_scope_paths(
 def plan_finding_cleanup(
     findings: tuple[FindingRecord, ...],
     *,
+    repository_root: Path,
     previously_addressed_ids: Iterable[str] = (),
 ) -> FindingCleanupPlan | None:
     """Select one bounded cleanup batch, or return ``None`` below threshold.
@@ -153,7 +159,11 @@ def plan_finding_cleanup(
     selected_ids = sorted_finding_ids(
         item.finding_id for item in eligible[:FINDING_CLEANUP_BATCH_LIMIT]
     )
-    scope_paths = finding_cleanup_scope_paths(findings, selected_ids)
+    scope_paths = finding_cleanup_scope_paths(
+        findings,
+        selected_ids,
+        repository_root=repository_root,
+    )
     if not scope_paths:
         return None
     return FindingCleanupPlan(selected_ids, scope_paths)

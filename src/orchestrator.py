@@ -1134,6 +1134,43 @@ class ProductionWorkflowDriver:
             ) from exc
         return projected
 
+    def authoritative_cleanup_scope_paths(
+        self, state: WorkflowState
+    ) -> tuple[str, ...]:
+        """Replay the once-authorized cleanup boundary without re-deriving it."""
+
+        bridge = self._artifact_bridge
+        active = self.active_state
+        if (
+            bridge is None
+            or active is None
+            or active.run_id != state.run_id
+            or active.current_work_unit_id != state.current_work_unit_id
+            or not is_finding_cleanup_work_unit(state)
+        ):
+            raise WorkflowExecutionError(
+                "cleanup scope replay lacks its immutable work-unit binding"
+            )
+        logical_id = f"work-unit-{state.current_work_unit_id}"
+        boundary = next(
+            (
+                record.payload
+                for record in reversed(bridge.store.current_chain())
+                if record.logical_id == logical_id
+                and isinstance(record.payload, CorrectionWorkUnitPayload)
+            ),
+            None,
+        )
+        if boundary is None or not boundary.paths:
+            raise WorkflowExecutionError(
+                "cleanup scope replay requires a bound correction work-unit record"
+            )
+        if boundary.finding_ids != state.current_work_unit.open_findings:
+            raise WorkflowExecutionError(
+                "cleanup scope finding authority differs from the active work unit"
+            )
+        return boundary.paths
+
     def authoritative_final_review_findings(
         self,
         state: WorkflowState,
@@ -2382,7 +2419,9 @@ class ProductionWorkflowDriver:
             for finding_id in payload.finding_ids
         }
         plan = plan_finding_cleanup(
-            findings, previously_addressed_ids=addressed_ids
+            findings,
+            repository_root=self.root,
+            previously_addressed_ids=addressed_ids,
         )
         balances = derive_slice_finding_balances(chain, state)
         if balances:

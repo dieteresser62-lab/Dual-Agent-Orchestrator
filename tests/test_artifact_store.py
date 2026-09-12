@@ -68,6 +68,52 @@ def test_put_is_append_only_idempotent_and_chain_ordered(tmp_path: Path) -> None
     assert store.head == second
 
 
+def test_put_batch_publishes_one_atomic_linear_record_group(tmp_path: Path) -> None:
+    store = ArtifactStore(tmp_path, "run-1")
+    first = make_record("one")
+    second = make_record("two", predecessors=(first.record_id,))
+
+    assert store.put_batch((first, second)) == (first, second)
+    assert store.load_chain() == (first, second)
+    assert tuple(store.records_dir.glob("ar1-*.json")) == ()
+    assert len(tuple(store.records_dir.glob("arb1-*.json"))) == 1
+
+
+def test_put_batch_interruption_cannot_publish_only_one_member(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    store = ArtifactStore(tmp_path, "run-1")
+    first = make_record("one")
+    second = make_record("two", predecessors=(first.record_id,))
+
+    def fail_publish(source: Path, target: Path) -> None:
+        raise OSError("simulated batch publication failure")
+
+    monkeypatch.setattr("artifact_store.os.replace", fail_publish)
+    with pytest.raises(OSError, match="batch publication failure"):
+        store.put_batch((first, second))
+
+    assert tuple(store.records_dir.iterdir()) == ()
+    assert ArtifactStore(tmp_path, "run-1").load_chain() == ()
+
+
+def test_put_batch_post_publication_failure_recovers_the_complete_group(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    store = ArtifactStore(tmp_path, "run-1")
+    first = make_record("one")
+    second = make_record("two", predecessors=(first.record_id,))
+
+    def fail_cache(index, prior_document) -> None:  # type: ignore[no-untyped-def]
+        raise OSError("simulated batch cache failure")
+
+    monkeypatch.setattr(store, "_refresh_append_head_cache", fail_cache)
+    with pytest.raises(OSError, match="batch cache failure"):
+        store.put_batch((first, second))
+
+    assert ArtifactStore(tmp_path, "run-1").load_chain() == (first, second)
+
+
 def test_idempotency_conflict_and_wrong_head_fail_closed(tmp_path: Path) -> None:
     store = ArtifactStore(tmp_path, "run-1")
     first = store.put(make_record("one", idempotency_key="effect"))

@@ -52,6 +52,7 @@ from artifact_models import (
     ValidationContentPayload,
     ValidationOutputContent,
     WorkflowCompletionPayload,
+    WorkflowEventPayload,
     WorkflowPolicyPayload,
     WorkflowTransitionPayload,
     stable_record_id,
@@ -202,6 +203,97 @@ class WorkflowPersistence:
     def active_state(self) -> WorkflowState | None:
         return self._dependencies.active_state()
 
+    def _persist_coupled_status_change(self, state: WorkflowState) -> None:
+        """Publish matching work-unit/gate status changes as one store batch."""
+
+        bridge = self._artifact_bridge
+        if bridge is None or state.task_digest is None:
+            return
+        replay = replay_artifacts(bridge.store.current_chain(), state.run_id)
+        unit = state.current_work_unit
+        unit_id = str(unit.work_unit_id)
+        recorded_unit = next(
+            (item for item in replay.work_unit_states if item.work_unit_id == unit_id),
+            None,
+        )
+        recorded_gate = next(
+            (item for item in replay.gate_transitions if item.work_unit_id == unit_id),
+            None,
+        )
+        gate_payload = self._dependencies.gate_transition_payload(unit)
+        if (
+            recorded_unit is None
+            or recorded_gate is None
+            or recorded_unit.status == unit.status.value
+            or recorded_gate.gate_status == gate_payload.gate_status
+        ):
+            return
+
+        transition_payload = WorkflowTransitionPayload(
+            str(state.current_slice_id),
+            state.current_slice.status.value,
+            unit_id,
+            state.current_step.value,
+            unit.status.value,
+        )
+        chain = bridge.store.current_chain()
+        transition_revision = 1 + max(
+            (
+                record.revision
+                for record in chain
+                if record.record_type is RecordType.WORKFLOW_TRANSITION
+                and record.logical_id == "workflow-transition"
+            ),
+            default=0,
+        )
+        transition_id = stable_record_id(
+            state.run_id,
+            RecordType.WORKFLOW_TRANSITION,
+            "workflow-transition",
+            transition_revision,
+        )
+        gate_logical_id = f"gate-transition-{unit_id}"
+        gate_revision = 1 + max(
+            (
+                record.revision
+                for record in chain
+                if record.record_type is RecordType.GATE_TRANSITION
+                and record.logical_id == gate_logical_id
+            ),
+            default=0,
+        )
+        bridge.append_batch(
+            (
+                (
+                    transition_payload,
+                    "workflow-transition",
+                    f"workflow-transition:{transition_revision}",
+                    state.task_digest,
+                    FingerprintKind.CONTRACT,
+                ),
+                (
+                    WorkflowEventPayload(
+                        "transition",
+                        unit_id,
+                        str(state.current_slice_id),
+                        None,
+                        (transition_id,),
+                    ),
+                    f"workflow-event-{transition_id}",
+                    f"workflow-event:{transition_id}",
+                    state.task_digest,
+                    FingerprintKind.CONTRACT,
+                ),
+                (
+                    gate_payload,
+                    gate_logical_id,
+                    f"gate-transition:{unit_id}:{gate_revision}",
+                    state.task_digest,
+                    FingerprintKind.CONTRACT,
+                ),
+            )
+        )
+
     def _append_workflow_event(
         self,
         *,
@@ -229,6 +321,7 @@ class WorkflowPersistence:
         bridge = self._artifact_bridge
         if bridge is None or state.task_digest is None:
             return
+        self._persist_coupled_status_change(state)
         replay = replay_artifacts(bridge.store.current_chain(), state.run_id)
         recorded_slices = dict(replay.slice_statuses)
         recorded_units = {
@@ -449,6 +542,7 @@ class WorkflowPersistence:
         bridge = self._artifact_bridge
         if bridge is None or state.task_digest is None:
             return
+        self._persist_coupled_status_change(state)
         chain = bridge.store.current_chain()
         replay = replay_artifacts(chain, state.run_id)
         recorded = {

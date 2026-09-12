@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from datetime import datetime, timezone
+from dataclasses import replace
 
 from artifact_models import (
     ArtifactRecord,
@@ -25,7 +27,11 @@ from dry_run_scenarios import (
     ScriptedChange,
     ScriptedCommit,
     ScriptedInitialState,
+    ScriptedFailure,
     ScriptedValidation,
+    ScriptedWorkflowSession,
+    build_scenario_context,
+    build_scenario_state,
     run_scripted_workflow,
 )
 from finding_cleanup import (
@@ -36,9 +42,11 @@ from finding_cleanup import (
     plan_finding_cleanup,
     positive_balance_streak,
 )
+from finding_signature import finding_record_signature, mentioned_repository_paths
 from workflow import WorkflowHistory
 from workflow_audit_projection import _audit_projection
 from workflow_state import (
+    AgentFailureKind,
     GateStatus,
     SliceStatus,
     WorkUnitKind,
@@ -125,34 +133,58 @@ def test_slice_finding_balance_is_derived_from_slice_work_units_only() -> None:
     assert positive_balance_streak(balances) == 2
 
 
-def test_cleanup_threshold_triggers_only_at_the_record_derived_limit() -> None:
+def _materialize_paths(root: Path, paths: tuple[str, ...]) -> None:
+    for path in paths:
+        target = root / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("fixture\n", encoding="utf-8")
+
+
+def test_cleanup_threshold_triggers_only_at_the_record_derived_limit(
+    tmp_path: Path,
+) -> None:
     assert FINDING_CLEANUP_THRESHOLD == 18
     below = tuple(_finding(index) for index in range(1, FINDING_CLEANUP_THRESHOLD))
     at_limit = (*below, _finding(FINDING_CLEANUP_THRESHOLD))
+    _materialize_paths(
+        tmp_path,
+        tuple(f"src/finding-{index:02d}.py" for index in range(1, 19)),
+    )
 
-    assert plan_finding_cleanup(below) is None
-    plan = plan_finding_cleanup(at_limit)
+    assert plan_finding_cleanup(below, repository_root=tmp_path) is None
+    plan = plan_finding_cleanup(at_limit, repository_root=tmp_path)
     assert plan is not None
     assert len(plan.finding_ids) == FINDING_CLEANUP_THRESHOLD
     assert plan_finding_cleanup(
-        at_limit, previously_addressed_ids=plan.finding_ids
+        at_limit,
+        repository_root=tmp_path,
+        previously_addressed_ids=plan.finding_ids,
     ) is None
 
 
-def test_cleanup_scope_is_exact_union_of_paths_named_by_selected_findings() -> None:
+def test_cleanup_scope_is_exact_union_of_paths_named_by_selected_findings(
+    tmp_path: Path,
+) -> None:
     findings = (
         _finding(1, path="src/shared.py"),
         _finding(2, path="tests/test_shared.py"),
         _finding(3, path="src/outside.py"),
     )
 
-    assert finding_cleanup_scope_paths(findings, ("C-01", "C-02")) == (
+    _materialize_paths(tmp_path, ("src/shared.py", "tests/test_shared.py"))
+    assert finding_cleanup_scope_paths(
+        findings,
+        ("C-01", "C-02"),
+        repository_root=tmp_path,
+    ) == (
         "src/shared.py",
         "tests/test_shared.py",
     )
 
 
-def test_cleanup_scope_retains_paths_after_an_offered_finding_closes() -> None:
+def test_cleanup_scope_retains_paths_after_an_offered_finding_closes(
+    tmp_path: Path,
+) -> None:
     offered = (_finding(1, path="src/closed.py"), _finding(2, path="src/open.py"))
     after_review = (
         FindingRecord(
@@ -167,7 +199,12 @@ def test_cleanup_scope_retains_paths_after_an_offered_finding_closes() -> None:
         offered[1],
     )
 
-    assert finding_cleanup_scope_paths(after_review, ("C-01", "C-02")) == (
+    _materialize_paths(tmp_path, ("src/closed.py", "src/open.py"))
+    assert finding_cleanup_scope_paths(
+        after_review,
+        ("C-01", "C-02"),
+        repository_root=tmp_path,
+    ) == (
         "src/closed.py",
         "src/open.py",
     )
@@ -341,9 +378,65 @@ def _real_cleanup_scenario() -> DryRunScenario:
 
 
 def _cleanup_task(tmp_path: Path) -> Path:
+    _materialize_paths(tmp_path, _cleanup_scope_paths())
     task = tmp_path / "task.md"
     task.write_text("exercise the real cleanup work unit", encoding="utf-8")
     return task
+
+
+def test_cleanup_scope_filters_slash_prose_and_repairs_real_trailing_parenthesis(
+    tmp_path: Path,
+) -> None:
+    _materialize_paths(tmp_path, ("app/src/core/models.ts",))
+    (tmp_path / "src").mkdir()
+    (tmp_path / "tests").mkdir()
+    finding = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.OBSERVATION,
+        status=FindingStatus.OPEN,
+        summary=(
+            "Ratios `1/2`, API names `assign/replace/move`, and variables "
+            "`--a/--b` are prose. Top-level `src/)` and `tests/)` references "
+            "must not authorize whole trees. The model lives at "
+            "`app/src/core/models.ts)`."
+        ),
+        acceptance_test="Verify (`app/src/core/models.ts`) without slash prose.",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
+
+    assert finding_cleanup_scope_paths(
+        (finding,),
+        ("C-01",),
+        repository_root=tmp_path,
+    ) == ("app/src/core/models.ts",)
+
+
+def test_cleanup_authorization_filter_does_not_change_b113_signature(
+    tmp_path: Path,
+) -> None:
+    finding = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.OBSERVATION,
+        status=FindingStatus.OPEN,
+        summary="Check `app/src/core/models.ts` and the ratio `1/2`.",
+        acceptance_test="Keep `assign/replace/move` distinct.",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
+    before_paths = mentioned_repository_paths(
+        finding.summary, finding.acceptance_test
+    )
+    before_signature = finding_record_signature(finding)
+    _materialize_paths(tmp_path, ("app/src/core/models.ts",))
+
+    assert finding_cleanup_scope_paths(
+        (finding,),
+        ("C-01",),
+        repository_root=tmp_path,
+    ) == ("app/src/core/models.ts",)
+    assert mentioned_repository_paths(
+        finding.summary, finding.acceptance_test
+    ) == before_paths
+    assert finding_record_signature(finding) == before_signature
 
 
 def test_real_sliceless_cleanup_no_progress_continues_with_next_slice(
@@ -377,6 +470,87 @@ def test_real_sliceless_cleanup_no_progress_continues_with_next_slice(
     assert not any(
         checkpoint.current_work_unit.gate.status is not GateStatus.CLEAR
         for checkpoint in report.checkpoints
+    )
+
+
+def test_cleanup_output_failure_retries_with_the_same_authorized_scope(
+    tmp_path: Path,
+) -> None:
+    scenario = _real_cleanup_scenario()
+    events = list(scenario.agent_events)
+    cleanup_review = next(
+        index
+        for index, event in enumerate(events)
+        if event.work_unit_id == 3
+        and event.step is WorkflowStep.CLAUDE_FINAL_REVIEW
+    )
+    events.insert(
+        cleanup_review,
+        ScriptedAgentEvent(
+            AgentRole.CLAUDE,
+            3,
+            1,
+            WorkflowStep.CLAUDE_FINAL_REVIEW,
+            failure=ScriptedFailure(
+                failure_kind=AgentFailureKind.OUTPUT,
+                provider_text="native Claude error",
+                received_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                provider_data={
+                    "type": "result",
+                    "subtype": "error_max_structured_output_retries",
+                },
+                process_exit_code=1,
+            ),
+        ),
+    )
+    scenario = replace(
+        scenario,
+        name="cleanup-output-retry-scope",
+        agent_events=tuple(events),
+    )
+
+    task = _cleanup_task(tmp_path)
+    session = ScriptedWorkflowSession(scenario)
+    context = build_scenario_context(scenario)
+    first = session.run(
+        build_scenario_state(scenario, task_file=task),
+        context,
+    )
+    findings = session.driver.carry_forward_native_findings(
+        first.result.state, first.result.history.findings
+    )
+    cleanup_plan = plan_finding_cleanup(
+        findings,
+        repository_root=tmp_path,
+    )
+    assert cleanup_plan is not None
+    cleanup_state = first.result.state.start_finding_cleanup_work_unit(
+        finding_ids=cleanup_plan.finding_ids
+    )
+    session.driver._cleanup_scope_by_unit[
+        cleanup_state.current_work_unit_id
+    ] = cleanup_plan.scope_paths
+    cleanup_history = WorkflowHistory(
+        cleanup_state.current_work_unit_id,
+        findings=findings,
+        attestations=first.result.history.attestations[-1:],
+    )
+    session.driver.bind_work_unit(cleanup_state)
+    session.driver.checkpoint(cleanup_state, cleanup_history)
+    report = session.run(cleanup_state, context, cleanup_history)
+
+    assert report.result.completed
+    cleanup_calls = tuple(
+        item for item in report.reviewer_invocations if item.work_unit_id == 3
+    )
+    assert len(cleanup_calls) == 2
+    assert cleanup_calls[0].paths == cleanup_calls[1].paths == _cleanup_scope_paths()
+    assert cleanup_calls[0].native_request is not None
+    assert cleanup_calls[1].native_request is not None
+    assert (
+        cleanup_calls[0].native_request.document["authorized_paths"]
+        == cleanup_calls[1].native_request.document["authorized_paths"]
+        == list(_cleanup_scope_paths())
     )
 
 

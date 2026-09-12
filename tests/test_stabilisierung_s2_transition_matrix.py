@@ -91,6 +91,8 @@ RUN_BINDING_REPLAY_MARKER = (
 )
 
 BRIDGE_ERROR_MARKERS = (
+    "artifact batch requires at least two entries",
+    "atomic artifact batch is only partially present",
     "referenced source record is not a finding export",
     "finding export requires a non-empty accepted replay",
     "finding export requires its approved reviewer record",
@@ -144,6 +146,7 @@ DRIVER_DIVERGENCE_MESSAGES = Counter(
         "invocation failure work unit differs from the active workflow": 1,
         "structured audit dual-write mismatch: ": 2,
         "workflow projection checkpoint path differs from its cursor": 2,
+        "cleanup scope finding authority differs from the active work unit": 1,
     }
 )
 
@@ -950,7 +953,7 @@ def test_bridge_error_inventory_is_source_bound() -> None:
     )
     combined_source = "\n".join(_string_constants(path) for path in paths)
     document = MATRIX_PATH.read_text(encoding="utf-8")
-    assert sum(_raise_count(path, "ArtifactBridgeError") for path in paths) == 24
+    assert sum(_raise_count(path, "ArtifactBridgeError") for path in paths) == 26
     for marker in BRIDGE_ERROR_MARKERS:
         assert marker in combined_source
         assert marker in document

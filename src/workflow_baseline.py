@@ -676,7 +676,9 @@ class WorkflowBaseline:
                         )
                     ).ledger.findings
                     work_unit_paths = finding_cleanup_scope_paths(
-                        cleanup_findings, unit.open_findings
+                        cleanup_findings,
+                        unit.open_findings,
+                        repository_root=bridge.store.repository_root,
                     )
                 if not work_unit_paths:
                     raise WorkflowExecutionError(

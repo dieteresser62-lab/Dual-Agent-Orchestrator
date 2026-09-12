@@ -5042,6 +5042,11 @@ def test_real_cleanup_round_two_keeps_first_record_scope_and_replays(
     tmp_path: Path,
 ) -> None:
     repository = _repository(tmp_path, "feature/cleanup-round-transition")
+    (repository / "src").mkdir(exist_ok=True)
+    (repository / "src" / "closed.py").write_text("closed\n", encoding="utf-8")
+    (repository / "src" / "open.py").write_text("open\n", encoding="utf-8")
+    _git(repository, "add", "src/closed.py", "src/open.py")
+    _git(repository, "commit", "-m", "add cleanup scope fixtures")
     task = repository / "task.md"
     _write_task(
         task,

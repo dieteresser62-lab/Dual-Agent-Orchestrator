@@ -591,6 +591,75 @@ class ArtifactBridge:
         self._assert_equal(persisted, payload, logical_id, fingerprint)
         return persisted
 
+    def append_batch(
+        self,
+        entries: tuple[
+            tuple[ArtifactPayload, str, str, str, FingerprintKind], ...
+        ],
+    ) -> tuple[ArtifactRecord, ...]:
+        """Atomically append domain records which form one replay invariant."""
+
+        if len(entries) < 2:
+            raise ArtifactBridgeError("artifact batch requires at least two entries")
+        contexts = tuple(
+            self.store.append_context(
+                record_type=payload.record_type,
+                logical_id=logical_id,
+                idempotency_key=idempotency_key,
+            )
+            for payload, logical_id, idempotency_key, _, _ in entries
+        )
+        existing = tuple(context.existing for context in contexts)
+        if any(item is not None for item in existing):
+            if not all(item is not None for item in existing):
+                raise ArtifactBridgeError(
+                    "atomic artifact batch is only partially present"
+                )
+            persisted = tuple(item for item in existing if item is not None)
+            for record, entry in zip(persisted, entries, strict=True):
+                payload, logical_id, _, fingerprint_sha256, fingerprint_kind = entry
+                self._assert_equal(
+                    record,
+                    payload,
+                    logical_id,
+                    Fingerprint(fingerprint_kind, fingerprint_sha256),
+                )
+            return persisted
+
+        chain = self.store.current_chain()
+        revisions = {
+            (record.record_type, record.logical_id): record.revision
+            for record in chain
+        }
+        predecessor_ids = () if not chain else (chain[-1].record_id,)
+        candidates: list[ArtifactRecord] = []
+        for payload, logical_id, idempotency_key, fingerprint_sha256, fingerprint_kind in entries:
+            identity = (payload.record_type, logical_id)
+            revision = revisions.get(identity, 0) + 1
+            record = ArtifactRecord.create(
+                run_id=self.store.run_id,
+                logical_id=logical_id,
+                revision=revision,
+                fingerprint=Fingerprint(fingerprint_kind, fingerprint_sha256),
+                predecessor_ids=predecessor_ids,
+                created_at=self.now(),
+                idempotency_key=idempotency_key,
+                payload=payload,
+            )
+            candidates.append(record)
+            revisions[identity] = revision
+            predecessor_ids = (record.record_id,)
+        persisted = self.store.put_batch(tuple(candidates))
+        for record, entry in zip(persisted, entries, strict=True):
+            payload, logical_id, _, fingerprint_sha256, fingerprint_kind = entry
+            self._assert_equal(
+                record,
+                payload,
+                logical_id,
+                Fingerprint(fingerprint_kind, fingerprint_sha256),
+            )
+        return persisted
+
     @staticmethod
     def _side_effect_logical_id(effect_key: str) -> str:
         return f"side-effect-{hashlib.sha256(effect_key.encode('utf-8')).hexdigest()[:32]}"

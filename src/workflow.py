@@ -32,7 +32,6 @@ from artifact_models import (
 )
 from finding_order import sorted_finding_ids
 from finding_cleanup import (
-    finding_cleanup_scope_paths,
     is_finding_cleanup_work_unit,
 )
 from native_review_contract import find_native_review_disposition_limit_error
@@ -556,6 +555,10 @@ class WorkflowDriver(Protocol):
         _projected_findings: tuple[FindingRecord, ...],
     ) -> tuple[FindingRecord, ...]: ...
 
+    def authoritative_cleanup_scope_paths(
+        self, state: WorkflowState
+    ) -> tuple[str, ...]: ...
+
     def carry_forward_native_findings(
         self,
         state: WorkflowState,
@@ -665,6 +668,7 @@ class WorkflowDriver(Protocol):
 MANDATORY_WORKFLOW_DRIVER_METHODS = frozenset(
     {
         "authoritative_final_review_findings",
+        "authoritative_cleanup_scope_paths",
         "authoritative_native_findings",
         "bind_work_unit",
         "carry_forward_native_findings",
@@ -1390,8 +1394,8 @@ class WorkflowEngine:
                 f"structured dual-write failed before workflow decision: {exc}"
             ) from exc
 
-    @staticmethod
     def _bind_context_to_current_unit(
+        self,
         state: WorkflowState,
         context: WorkflowContext,
         history: WorkflowHistory,
@@ -1412,9 +1416,7 @@ class WorkflowEngine:
             # unchanged state-v3 schema, but deliberately has no plan-Slice prose.
             slice_summary = ""
             if is_finding_cleanup_work_unit(state):
-                scope_paths = finding_cleanup_scope_paths(
-                    history.findings, state.current_work_unit.open_findings
-                )
+                scope_paths = self.driver.authoritative_cleanup_scope_paths(state)
         elif state.current_work_unit.kind is WorkUnitKind.SLICE and planned is not None:
             slice_summary = planned.summary
         if (
@@ -1437,8 +1439,8 @@ class WorkflowEngine:
         active_history = history or WorkflowHistory(current.work_unit_id)
         if active_history.work_unit_id != current.work_unit_id:
             raise WorkflowExecutionError("workflow history belongs to a different work unit")
-        context = self._bind_context_to_current_unit(state, context, active_history)
         self._bind_driver_work_unit(state)
+        context = self._bind_context_to_current_unit(state, context, active_history)
         bound_state = self._bind_current_open_findings(state, active_history)
         if bound_state is not state:
             state = bound_state
@@ -1540,7 +1542,7 @@ class WorkflowEngine:
         ):
             resume_step = state.current_step
             state, resume_halted = self._revalidate_waiting_diff(
-                state, latest_failure
+                state, latest_failure, context
             )
             if resume_halted:
                 self.driver.checkpoint(state, active_history)
@@ -2669,14 +2671,10 @@ class WorkflowEngine:
 
     @staticmethod
     def _scope_cleanup_review_changes(
-        history: WorkflowHistory,
-        unit: WorkUnitRecord,
         changes: WorkflowChanges,
         branch_base: str,
+        scope_paths: tuple[str, ...],
     ) -> WorkflowChanges:
-        scope_paths = finding_cleanup_scope_paths(
-            history.findings, unit.open_findings
-        )
         excluded = tuple(path for path in changes.paths if path not in scope_paths)
         scoped_diff = (
             exclude_review_diff_paths(changes.full_diff, excluded)
@@ -2785,7 +2783,9 @@ class WorkflowEngine:
             return state, history
         if is_cleanup_review:
             changes = self._scope_cleanup_review_changes(
-                history, unit, changes, state.branch_base
+                changes,
+                state.branch_base,
+                context.current_scope_paths,
             )
         state, halted = self._apply_review_change_boundary(
             state, context, history, changes,
@@ -3351,7 +3351,7 @@ class WorkflowEngine:
                 state, halted = self._apply_pre_agent_policy_gates(state, context)
                 if not halted:
                     state, halted = self._revalidate_waiting_diff(
-                        state, failure
+                        state, failure, context
                     )
                 self.driver.checkpoint(state, history)
                 if halted:
@@ -3404,6 +3404,7 @@ class WorkflowEngine:
         self,
         state: WorkflowState,
         failure: InvocationFailureRecord,
+        context: WorkflowContext,
     ) -> tuple[WorkflowState, bool]:
         if failure.diff_fingerprint is None:
             if state.current_work_unit.kind is WorkUnitKind.PLAN:
@@ -3432,8 +3433,17 @@ class WorkflowEngine:
                 ),
             )
             return halted, True
+        if is_finding_cleanup_work_unit(state):
+            changes = self._scope_cleanup_review_changes(
+                changes,
+                state.branch_base,
+                context.current_scope_paths,
+            )
         unexpected = self._validate_change_boundary(
-            state, changes, state.current_work_unit.kind
+            state,
+            changes,
+            state.current_work_unit.kind,
+            context=context,
         )
         acknowledged = quota_resume_diff_acknowledgement(
             failure.invocation_id, changes.fingerprint
