@@ -34,6 +34,7 @@ EXPECTED_PROJECTION_FUNCTIONS = {
     "_authorized_test_approval",
     "_is_managed_audit_path",
     "_is_planned_slice_document",
+    "_latest_review_approved",
     "_managed_audit_path",
     "_managed_slice_scope_pattern",
     "_overall_audit_entries",
@@ -43,6 +44,7 @@ EXPECTED_PROJECTION_FUNCTIONS = {
 EXPECTED_PROJECTION_EDGES = Counter(
     {
         ("_audit_projection", "_authorized_test_approval"): 1,
+        ("_audit_projection", "_latest_review_approved"): 1,
         ("_persisted_histories", "_attach_record_events"): 2,
         ("_hydrate_record_history", "_attach_record_events"): 1,
         ("_recover_final_review_attestation", "_persisted_histories"): 1,

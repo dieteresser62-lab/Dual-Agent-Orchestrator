@@ -60,6 +60,7 @@ from workflow_state import (
     WorkflowStep,
     WorkUnitKind,
     WorkUnitRecord,
+    WorkUnitStatus,
 )
 
 
@@ -96,6 +97,20 @@ def _authorized_test_approval(
     )
 
 
+def _latest_review_approved(history: WorkflowHistory) -> bool:
+    """Report whether this work unit's own latest review approved its work."""
+
+    latest = next(
+        (
+            event
+            for event in reversed(history.events)
+            if isinstance(event, ReviewAuditEvent)
+        ),
+        None,
+    )
+    return latest is not None and latest.result.approval is True
+
+
 def _audit_projection(
     state: WorkflowState,
     unit: WorkUnitRecord,
@@ -113,11 +128,25 @@ def _audit_projection(
             WorkflowStep.CODEX_FINAL_CORRECTION,
         }
     )
+    # A regular Slice or final-review correction owns its Slice record, so the
+    # completed Slice proves that this unit passed its own commit.  A finding
+    # cleanup deliberately reuses an already completed Slice id, so that proof
+    # belongs to the earlier unit; it must authorize only its own commit.
+    cleanup_unit = is_finding_cleanup_work_unit(state, unit)
     commit_authorized = (
         unit.kind in {WorkUnitKind.SLICE, WorkUnitKind.CORRECTION}
         and (
             unit.current_step is WorkflowStep.SLICE_COMMIT
-            or slice_record.status is SliceStatus.COMPLETED
+            or (
+                slice_record.status is SliceStatus.COMPLETED
+                and (
+                    not cleanup_unit
+                    or (
+                        unit.status is WorkUnitStatus.COMPLETED
+                        and _latest_review_approved(history)
+                    )
+                )
+            )
         )
     )
     latest_review = next(

@@ -36,7 +36,15 @@ from finding_cleanup import (
     plan_finding_cleanup,
     positive_balance_streak,
 )
-from workflow_state import GateStatus, WorkUnitKind, WorkUnitStatus, WorkflowStep
+from workflow import WorkflowHistory
+from workflow_audit_projection import _audit_projection
+from workflow_state import (
+    GateStatus,
+    SliceStatus,
+    WorkUnitKind,
+    WorkUnitStatus,
+    WorkflowStep,
+)
 
 
 def _finding(index: int, *, path: str | None = None) -> FindingRecord:
@@ -222,9 +230,26 @@ def _diff(paths: tuple[str, ...], label: str) -> str:
     )
 
 
-def test_real_sliceless_cleanup_no_progress_continues_with_next_slice(
-    tmp_path: Path,
-) -> None:
+def _cleanup_findings() -> tuple[FindingRecord, ...]:
+    """Return exactly enough open observations to reach the threshold."""
+
+    return tuple(_finding(index) for index in range(1, FINDING_CLEANUP_THRESHOLD + 1))
+
+
+def _cleanup_finding_ids() -> tuple[str, ...]:
+    return tuple(item.finding_id for item in _cleanup_findings())
+
+
+def _cleanup_scope_paths() -> tuple[str, ...]:
+    return tuple(
+        f"src/finding-{index:02d}.py"
+        for index in range(1, FINDING_CLEANUP_THRESHOLD + 1)
+    )
+
+
+def _real_cleanup_scenario() -> DryRunScenario:
+    """Build the scenario whose backlog forces one real sliceless cleanup."""
+
     findings = tuple(
         _finding(index) for index in range(1, FINDING_CLEANUP_THRESHOLD + 1)
     )
@@ -291,11 +316,24 @@ def test_real_sliceless_cleanup_no_progress_continues_with_next_slice(
             ScriptedCommit(2, fingerprints[2], second_commit),
         ),
     )
+    return scenario
+
+
+def _cleanup_task(tmp_path: Path) -> Path:
     task = tmp_path / "task.md"
     task.write_text("exercise the real cleanup work unit", encoding="utf-8")
+    return task
 
-    report = run_scripted_workflow(scenario=scenario, task_file=task)
 
+def test_real_sliceless_cleanup_no_progress_continues_with_next_slice(
+    tmp_path: Path,
+) -> None:
+    report = run_scripted_workflow(
+        scenario=_real_cleanup_scenario(), task_file=_cleanup_task(tmp_path)
+    )
+
+    finding_ids = _cleanup_finding_ids()
+    cleanup_scope = _cleanup_scope_paths()
     state = report.result.state
     cleanup = state.work_units[2]
     assert report.result.workflow_completed
@@ -318,6 +356,57 @@ def test_real_sliceless_cleanup_no_progress_continues_with_next_slice(
     assert not any(
         checkpoint.current_work_unit.gate.status is not GateStatus.CLEAR
         for checkpoint in report.checkpoints
+    )
+
+
+def test_cleanup_over_a_completed_slice_never_claims_commit_authorization(
+    tmp_path: Path,
+) -> None:
+    """A cleanup reuses a finished Slice id and must not inherit its commit proof.
+
+    The Slice record proves a commit for the unit that owns it.  Because the
+    cleanup deliberately reuses that id, the audit projection would otherwise
+    authorize a commit before the cleanup has any review of its own, and the
+    audit guard would halt the run.
+    """
+
+    report = run_scripted_workflow(
+        scenario=_real_cleanup_scenario(), task_file=_cleanup_task(tmp_path)
+    )
+    state = report.result.state
+    cleanup = state.work_units[2]
+    assert is_finding_cleanup_work_unit(state, cleanup)
+    assert next(
+        item for item in state.slices if item.slice_id == cleanup.slice_id
+    ).status is SliceStatus.COMPLETED
+
+    fresh = _audit_projection(state, cleanup, WorkflowHistory(cleanup.work_unit_id))
+    assert fresh.commit_authorized is False
+
+    # Every checkpoint the driver writes projects its own work unit, so the
+    # cleanup checkpoints are exactly the ones that halted the Cookbook run.
+    projected = [
+        (
+            checkpoint.current_work_unit,
+            _audit_projection(checkpoint, checkpoint.current_work_unit, history),
+        )
+        for checkpoint, history in zip(
+            report.checkpoints, report.checkpoint_histories, strict=True
+        )
+    ]
+    assert any(
+        is_finding_cleanup_work_unit(state, unit) for unit, _ in projected
+    )
+    assert not any(
+        projection.commit_authorized
+        for unit, projection in projected
+        if is_finding_cleanup_work_unit(state, unit)
+    )
+    # The unit that owns the Slice record keeps its unchanged commit proof.
+    assert any(
+        projection.commit_authorized
+        for unit, projection in projected
+        if unit.kind is WorkUnitKind.SLICE and unit.slice_id == cleanup.slice_id
     )
 
 
