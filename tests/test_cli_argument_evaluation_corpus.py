@@ -854,7 +854,12 @@ def test_b65_anchor_helpers_and_b21_b23_b32_contract_are_bound() -> None:
 
     for path, blob in anchor["b64_artifacts"].items():
         assert _git("rev-parse", f"{commit}:{path}") == blob, path
-        if path != "tests/test_cli_argument_evaluation_corpus.py":
+        # B117 intentionally revises the runtime corpus when the public quota
+        # default changes; the pre-B65 anchor remains immutable historical proof.
+        if path not in {
+            "tests/test_cli_argument_evaluation_corpus.py",
+            "tests/fixtures/cli-argument-evaluation-corpus-v1.json",
+        }:
             assert _git("hash-object", str(ROOT / path)) == blob, path
             assert _git("diff", "--", path) == "", path
 
@@ -873,7 +878,18 @@ def test_b65_anchor_helpers_and_b21_b23_b32_contract_are_bound() -> None:
     assert _git("diff", "--", sequence_path) == ""
 
     pre_cut_tree = ast.parse(_git("show", f"{commit}:{source_path}"))
-    active_tree = ast.parse(SOURCE_PATH.read_text(encoding="utf-8"))
+    active_source = SOURCE_PATH.read_text(encoding="utf-8")
+    # B117 changes only the two public quota-help descriptions owned by the
+    # new progress policy. Normalize those prose literals back before checking
+    # that the remainder of the historically anchored parser is unchanged.
+    active_source = active_source.replace(
+        "Automatically resume a quota-blocked role step while reset or provider progress is proven.",
+        "Automatically resume one quota-blocked role step when its reset is unambiguous.",
+    ).replace(
+        "Absolute quota-loop safety backstop per blocked role step (default: 32).",
+        "Maximum automatic continuations per blocked role step (default: 1).",
+    )
+    active_tree = ast.parse(active_source)
     assert ast.dump(
         _top_level_function(active_tree, "build_parser"), include_attributes=False
     ) == ast.dump(

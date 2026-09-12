@@ -34,6 +34,7 @@ RESPONSE_SCHEMA_VERSION = "native-agent-review-result-v2"
 CLAUDE_REVIEW_TRANSPORT = "native-claude-review-v2"
 PERSISTENCE_PROTOCOL = "structured-v2"
 DEFAULT_INLINE_EVIDENCE_CHARS = 24_000
+PROVIDER_INPUT_BOUNDARY_EVIDENCE_KIND = "provider_input_boundary_notice"
 REQUEST_SCHEMA_PATH = (
     Path(__file__).resolve().parents[1]
     / "schemas"

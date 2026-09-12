@@ -239,7 +239,7 @@ class QuotaWaitPolicy:
     automatic: bool = True
     safety_margin_seconds: int = 60
     maximum_wait_seconds: int = 604_800
-    maximum_auto_resumes: int = 1
+    maximum_auto_resumes: int = 32
     heartbeat_interval_seconds: int = 3_600
 
     def __post_init__(self) -> None:

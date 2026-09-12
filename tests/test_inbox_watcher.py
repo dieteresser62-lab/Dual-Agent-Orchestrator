@@ -866,7 +866,7 @@ def test_workflow_result_requires_commits_and_completed_final_review() -> None:
     assert halted.failure_detail == "S-001 | operator decision required"
 
 
-def test_bootstrap_denial_maps_to_resumable_watch_halt_before_provider_retry() -> None:
+def test_legacy_bootstrap_denial_maps_to_resumable_watch_halt() -> None:
     state = init_workflow_state(
         run_id="watch-bootstrap",
         task_file="/repo/task.md",

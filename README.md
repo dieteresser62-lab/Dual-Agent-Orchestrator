@@ -340,10 +340,10 @@ Für deterministische Negativ- und Fortsetzungsszenarien kann ein State-v3-JSON-
 | `--dry-run` | aus | Das integrierte State-v3-Erfolgsszenario ohne API-Aufrufe oder Schreibzugriffe ausführen. |
 | `--dry-run-scenario <path>` | nicht gesetzt | Ein deterministisches JSON-Szenario ausführen. |
 | `--dry-run-report <path>` | nicht gesetzt | Den Auditbericht des skriptgesteuerten Szenarios schreiben. |
-| `--quota-auto-resume` / `--no-quota-auto-resume` | an | Eine automatische Fortsetzung bei eindeutigem Reset aktivieren. |
+| `--quota-auto-resume` / `--no-quota-auto-resume` | an | Automatische Fortsetzung bei eindeutigem Reset aktivieren, solange ein späteres Resetfenster oder zwischenzeitliche Providernutzung Fortschritt belegt. |
 | `--quota-safety-margin <seconds>` | `60` | Nach einem erkannten Reset zusätzlich zu wartende Zeit. Das Reset-Ereignis wird sofort geloggt; eine große Marge wartet danach erwartungsgemäß als ein einzelner Abschnitt ohne periodischen Heartbeat und vergrößert entsprechend die heartbeatlose Dauer. |
-| `--quota-max-wait <seconds>` | `604800` | Maximale automatische Provider-Resetspanne; die Sicherheitsmarge wird erst danach addiert. |
-| `--quota-max-auto-resumes <count>` | `1` | Automatische Fortsetzungen je blockiertem Rollenschritt. |
+| `--quota-max-wait <seconds>` | `604800` | Maximale automatische Provider-Resetspanne; sieben Tage bleiben für lange unbeaufsichtigte Läufe vertretbar, weil bis zum Reset stündliche Lebenszeichen ausgegeben werden. Die Sicherheitsmarge wird erst danach addiert. |
+| `--quota-max-auto-resumes <count>` | `32` | Absolute Sicherheitsgrenze je blockiertem Rollenschritt; regulär beendet fehlender Fortschritt die Automatik früher. |
 | `--quota-heartbeat-interval <seconds>` | `3600` | Heartbeat-Intervall bis zum Provider-Reset; die Sicherheitsmarge erzeugt keine periodischen Heartbeats. |
 | `--transient-retry-auto` / `--no-transient-retry-auto` | an | Eindeutig technische Netzwerkfehler desselben Rollenschritts automatisch wiederholen. |
 | `--transient-retry-initial-delay <seconds>` | `5` | Wartezeit vor dem ersten transienten Netzwerk-Neuversuch. |
@@ -354,7 +354,13 @@ Die Quota-Wartepolitik kann entsprechend über
 `RUN_TASK_QUOTA_AUTO_RESUME`, `RUN_TASK_QUOTA_SAFETY_MARGIN`,
 `RUN_TASK_QUOTA_MAX_WAIT`, `RUN_TASK_QUOTA_MAX_AUTO_RESUMES` und
 `RUN_TASK_QUOTA_HEARTBEAT_INTERVAL` gesetzt werden. Explizite CLI-Werte haben
-Vorrang vor diesen Umgebungsvariablen; danach gelten die Tabellenstandards.
+Vorrang vor diesen Umgebungsvariablen; danach gelten die Tabellenstandards. Eine
+Quotenmeldung ohne erkannten Freigabezeitpunkt oder eine sofort wiederkehrende
+Meldung ohne spätere Resetzeit und ohne positive normalisierte Providernutzung
+endet als sichtbares Urteil statt als Wartezustand. Dasselbe gilt für die
+absolute Sicherheitsgrenze oder eine bewusst deaktivierte Automatik. Ein
+fehlender Repositoryfingerprint bleibt dagegen als Sicherheits- und
+Datenproblem resumierbar und wird nicht als Quotenerschöpfung umgedeutet.
 
 ### Agentenausgabe und Rollenkonfiguration
 
@@ -473,7 +479,7 @@ keine technische Fehlerklasse auslösen. Automatische transiente Neuversuche gel
 für belegte Netzwerkdiagnosen; Auth-, Runtime-, Output- und Prozessfehler halten weiterhin
 fortsetzbar an.
 
-Vor jedem branchweiten Provideraufruf prüft ein lokales, agentenfreies Preflight außerdem Recordkette, State-v3-Spiegel, Findingzustände, aktuelle Validierungsattestierung, autorisierte Pfade und die unmittelbar zuvor persistierte Eingabemessung. Ein Budget- oder Preflightdenial ist kein Providerfehler: Der unveränderte Rollenstep bleibt mit `bootstrap_check` und Exitcode 4 resumierbar. Im Watchbetrieb steigen weder Attempt-Zähler noch entstehen `.poison`-Dateien oder automatische Providerretries. Nach Korrektur von Konfiguration, Record-/State-Spiegel oder Repositoryzustand wird derselbe Auftrag mit `run_task --watch` beziehungsweise `run_task --resume --task-file ...` erneut geprüft; dafür ist keine `--approve-gate`-Entscheidung zulässig oder nötig.
+Vor jedem branchweiten Provideraufruf prüft ein lokales, agentenfreies Preflight außerdem Recordkette, State-v3-Spiegel, Findingzustände, aktuelle Validierungsattestierung, autorisierte Pfade und die unmittelbar zuvor persistierte Eingabemessung. Überschreitet das vollständige branchweite Diff eine Million Zeichen, ersetzt die Final-Review-Anfrage nur diese redundante Komponente durch einen digestgebundenen Grenzhinweis mit Originalgröße, UTF-8-Größe, SHA-256 und `evidence_complete=false`. Der Reviewer erhält weiterhin die vollständige aktuelle Read-only-Repositoryaufnahme, muss die benötigten Dateien lesen und darf den Grenzhinweis niemals als vollständige Diff-Evidenz behandeln; fehlt für ein sicheres Urteil Baselineinhalt, muss er mit einem `BLOCKER` ablehnen. Bleibt die sicher verkleinerte Anfrage über dem Providerbudget, endet der Orchestrator ohne Providerstart mit dem sichtbaren terminalen Urteil `PROVIDER-INPUT-BUDGET` und Exitcode 5 statt in einer unbeaufsichtigten Resume-Schleife. Andere Final-Review-Preflightdenials bleiben als echte Daten-, Zustands- oder Sicherheitsprobleme am unveränderten Rollenstep mit `bootstrap_check` resumierbar. Im Watchbetrieb steigen dafür weder Attempt-Zähler noch entstehen `.poison`-Dateien oder automatische Providerretries.
 
 ## Agentenanweisungen und nativer Ausgabevertrag
 
@@ -503,11 +509,12 @@ erfinden noch ersetzen.
 |---:|---|
 | `0` | Der vollständige Workflow einschließlich aller Slice-Commits und des branchweiten Abschlussreviews wurde erfolgreich abgeschlossen. |
 | `1` | Technischer, Konfigurations-, Zustandsschema-, Repository- oder interner Workflowfehler. |
-| `2` | Die Quota kann nicht automatisch fortgesetzt werden oder die konfigurierte Wartepolitik ist ausgeschöpft. |
+| `2` | Eine Quotenfortsetzung kann wegen fehlender sicherer Repositorybindung nicht beurteilt werden und bleibt resumierbar. |
 | `3` | Eine erforderliche Agenteninstanz ist fehlgeschlagen, hat ihr Timeout erreicht oder ist nicht verfügbar. |
 | `4` | Eine Benutzerentscheidung oder ein Richtlinien-Gate ist erforderlich. |
+| `5` | Terminales Orchestratorurteil: Reviewerablehnung, Providerinputgrenze oder beendete Quotenautomatik. |
 
-Die Codes 2, 3 und 4 erhalten einen fortsetzbaren Zustand. Prüfe den protokollierten Gate-Grund, behebe oder entscheide ihn und setze denselben Lauf mit `--resume` fort.
+Die Codes 2, 3 und 4 erhalten einen fortsetzbaren Zustand. Prüfe den protokollierten Gate-Grund, behebe oder entscheide ihn und setze denselben Lauf mit `--resume` fort. Code 5 ist bewusst terminal und überlässt dem Nutzer anhand des protokollierten Urteils die nächste Maßnahme.
 
 ## Optionaler globaler Befehl
 

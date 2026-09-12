@@ -18,7 +18,10 @@ from native_review_contract import (
     NativeReviewContractError,
     canonical_native_review_json,
 )
-from native_review_request import NativeReviewRequestBundle
+from native_review_request import (
+    NativeReviewRequestBundle,
+    PROVIDER_INPUT_BOUNDARY_EVIDENCE_KIND,
+)
 from native_codex_contract import (
     NativeCodexContractError,
     canonical_native_codex_json,
@@ -691,11 +694,24 @@ class NativeClaudeReviewAdapter(_BaseAdapter):
         read_call_budget = 1 + len(manifest_entries)
         response_schema_json = bundle.provider_response_schema_json
         policy = NATIVE_CLAUDE_SYSTEM_POLICY
-        directive = (
-            f"Read {self._review_manifest_file} exactly once, then every listed file "
-            f"exactly once in order ({read_call_budget} Read calls total). Review the "
-            "reconstructed native request and return only the schema-bound JSON result."
+        boundary_evidence_withheld = any(
+            item.get("kind") == PROVIDER_INPUT_BOUNDARY_EVIDENCE_KIND
+            for item in bundle.document["evidence_manifest"]
         )
+        if boundary_evidence_withheld:
+            directive = (
+                f"Read {self._review_manifest_file} exactly once, then every listed file "
+                "exactly once in order before using additional Read calls for repository "
+                "paths required by the provider-input boundary notice. Review the "
+                "reconstructed native request and current read-only repository snapshot; "
+                "return only the schema-bound JSON result."
+            )
+        else:
+            directive = (
+                f"Read {self._review_manifest_file} exactly once, then every listed file "
+                f"exactly once in order ({read_call_budget} Read calls total). Review the "
+                "reconstructed native request and return only the schema-bound JSON result."
+            )
         command = [
             self.cli_binary,
             "-p",

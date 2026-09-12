@@ -15,6 +15,7 @@ from typing import Any, Callable
 from agent_runtime import (
     AgentInvocationError,
     is_structured_output_retry_exhaustion,
+    normalize_provider_usage,
 )
 from artifact_models import (
     InvocationFailurePayload,
@@ -100,6 +101,85 @@ def _invocation_failure_key(
     return key + ":disposition-limit" if disposition_limit_failure else key
 
 
+def _quota_attempt_did_work(error: AgentInvocationError) -> bool:
+    """Use only the provider's normalized per-attempt usage as work evidence."""
+
+    usage = normalize_provider_usage(error.provider_data)
+    if usage is None:
+        return False
+    return any(
+        value is not None and value > 0
+        for value in (
+            usage.input_tokens,
+            usage.tool_input_tokens,
+            usage.cache_read_input_tokens,
+            usage.cache_creation_input_tokens,
+            usage.thinking_tokens,
+            usage.output_tokens,
+            usage.total_tokens,
+            usage.turns,
+            usage.cost_usd,
+        )
+    )
+
+
+def _quota_resume_decision(
+    *,
+    error: AgentInvocationError,
+    unit_kind: WorkUnitKind,
+    fingerprint: str | None,
+    matching_failures: tuple[InvocationFailureRecord, ...],
+    prior_auto_resumes: int,
+    quota_policy: Any,
+    now_utc: datetime,
+) -> tuple[datetime | None, datetime | None, bool]:
+    """Return reset, resume time, and whether progress authorizes continuation."""
+
+    reset_at = error.quota_reset.reset_at_utc if error.quota_reset else None
+    quota_resume_at = (
+        reset_at + timedelta(seconds=quota_policy.safety_margin_seconds)
+        if reset_at is not None
+        else None
+    )
+    prior_automatic = tuple(
+        item
+        for item in matching_failures
+        if item.failure_kind is AgentFailureKind.QUOTA and item.automatic_resume
+    )
+    previous_reset = (
+        datetime.fromisoformat(
+            prior_automatic[-1].reset_at_utc.replace("Z", "+00:00")
+        )
+        if prior_automatic and prior_automatic[-1].reset_at_utc is not None
+        else None
+    )
+    progress = (
+        not prior_automatic
+        or _quota_attempt_did_work(error)
+        or (
+            reset_at is not None
+            and previous_reset is not None
+            and reset_at > previous_reset
+        )
+    )
+    reset_delay = (
+        max(0.0, (reset_at - now_utc).total_seconds())
+        if reset_at is not None
+        else None
+    )
+    automatic = (
+        error.kind is AgentFailureKind.QUOTA
+        and quota_policy.automatic
+        and reset_at is not None
+        and (unit_kind is WorkUnitKind.PLAN or fingerprint is not None)
+        and reset_delay is not None
+        and reset_delay <= quota_policy.maximum_wait_seconds
+        and progress
+        and prior_auto_resumes < quota_policy.maximum_auto_resumes
+    )
+    return reset_at, quota_resume_at, automatic
+
+
 class WorkflowFailureRecording:
     """Build and append failure evidence before changing retry state."""
 
@@ -132,36 +212,23 @@ class WorkflowFailureRecording:
             and item.diff_fingerprint == fingerprint
         )
         prior_auto_resumes = sum(
-            item.failure_kind is error.kind and item.automatic_resume
-            for item in matching_failures
+            item.failure_kind is error.kind and item.automatic_resume for item in matching_failures
         )
-        quota_policy = context.quota_wait_policy
-        transient_policy = context.transient_retry_policy
-        reset_at = error.quota_reset.reset_at_utc if error.quota_reset else None
+        quota_policy, transient_policy = context.quota_wait_policy, context.transient_retry_policy
         now_value = self._dependencies.now()
         if now_value.tzinfo is None or now_value.utcoffset() is None:
             raise self._dependencies.execution_error(
                 "quota clock must return a timezone-aware datetime"
             )
         now_utc = now_value.astimezone(timezone.utc)
-        quota_resume_at = (
-            reset_at + timedelta(seconds=quota_policy.safety_margin_seconds)
-            if reset_at is not None
-            else None
-        )
-        reset_delay_seconds = (
-            max(0.0, (reset_at - now_utc).total_seconds())
-            if reset_at is not None
-            else None
-        )
-        automatic_quota = (
-            error.kind is AgentFailureKind.QUOTA
-            and quota_policy.automatic
-            and reset_at is not None
-            and (unit.kind is WorkUnitKind.PLAN or fingerprint is not None)
-            and reset_delay_seconds is not None
-            and reset_delay_seconds <= quota_policy.maximum_wait_seconds
-            and prior_auto_resumes < quota_policy.maximum_auto_resumes
+        reset_at, quota_resume_at, automatic_quota = _quota_resume_decision(
+            error=error,
+            unit_kind=unit.kind,
+            fingerprint=fingerprint,
+            matching_failures=matching_failures,
+            prior_auto_resumes=prior_auto_resumes,
+            quota_policy=quota_policy,
+            now_utc=now_utc,
         )
         native_review_retry = is_native_review_output_retry(
             error.kind, role.value, state.current_step
@@ -247,8 +314,17 @@ class WorkflowFailureRecording:
             automatic_resume=automatic,
             diff_fingerprint=fingerprint,
         )
-        effective_failure_class = FailureClass.TRANSIENT if automatic else (
-            FailureClass.RESUMABLE_HALT
+        quota_terminal_verdict = (
+            error.kind is AgentFailureKind.QUOTA
+            and not automatic_quota
+            and (unit.kind is WorkUnitKind.PLAN or fingerprint is not None)
+        )
+        effective_failure_class = (
+            FailureClass.TRANSIENT
+            if automatic
+            else FailureClass.TERMINAL_REJECTION
+            if quota_terminal_verdict
+            else FailureClass.RESUMABLE_HALT
             if classified.failure_class is FailureClass.TRANSIENT
             else classified.failure_class
         )
@@ -298,7 +374,11 @@ class WorkflowFailureRecording:
             retryable_transient=retryable_transient,
             transient_automatic=transient_policy.automatic,
             prior_auto_resumes=prior_auto_resumes,
-            maximum_auto_resumes=transient_policy.maximum_auto_resumes,
+            maximum_auto_resumes=(
+                quota_policy.maximum_auto_resumes
+                if error.kind is AgentFailureKind.QUOTA
+                else transient_policy.maximum_auto_resumes
+            ),
             diagnostic_code=classified.diagnostic_code,
             provider_subtype=provider_subtype,
             orchestrator_diagnostic=payload.orchestrator_diagnostic,

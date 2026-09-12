@@ -142,6 +142,59 @@ def _review_bundle(
     )
 
 
+def _final_review_bundle(review_diff: str) -> workflow_requests.NativeReviewRequestBundle:
+    state = init_workflow_state(
+        run_id="b117-final-review-boundary",
+        task_file="/repo/inbox/backlog/00-b117.md",
+        branch="feature/grenzen-unter-wachstum",
+        branch_base="a" * 40,
+        first_slice_start_commit="a" * 40,
+        slice_count=1,
+        timestamp="2026-09-12T10:00:00+00:00",
+    ).with_current_step(WorkflowStep.CLAUDE_FINAL_REVIEW)
+    changes = WorkflowChanges(
+        start_commit="a" * 40,
+        fingerprint="c" * 64,
+        paths=("src/workflow_requests.py", "tests/test_workflow_requests.py"),
+        full_diff=review_diff,
+    )
+    command = "python3 -m pytest tests/ -v -m not crash_harness"
+    attestation = ValidationAttestation(
+        attestation_id="validation-b117-final-review",
+        diff_fingerprint=changes.fingerprint,
+        expected_commands=(command,),
+        records=(ValidationRecord(ValidationStatus.PASS, command, 0),),
+        output_digest="d" * 64,
+        summary="B117 provider-free tests passed.",
+    )
+    contract = StepContract(
+        name="b117-final-review",
+        reviewer=AgentRole.CLAUDE,
+        approval_marker=ApprovalMarker.FINAL,
+        slice_id="FINAL",
+        round_number=1,
+        review_fingerprint=changes.fingerprint,
+        validation_attestation=attestation,
+        test_changes_approved=True,
+    )
+    return workflow_requests.native_review_request(
+        state=state,
+        context=_context(),
+        history=replace(
+            WorkflowHistory(state.current_work_unit_id),
+            codex_final_report='{"result_type":"final_report_result"}',
+        ),
+        contract=contract,
+        changes=changes,
+        evidence_kind=EvidenceKind.FULL_BRANCH,
+        review_diff=review_diff,
+        review_packet=None,
+        expected_test_files=("tests/test_workflow_requests.py",),
+        execution_error=WorkflowExecutionError,
+        full_branch_evidence_kind=EvidenceKind.FULL_BRANCH,
+    )
+
+
 def test_request_builders_are_free_functions_with_one_way_imports() -> None:
     tree = ast.parse((SRC / "workflow_requests.py").read_text(encoding="utf-8"))
     declarations = {
@@ -226,6 +279,43 @@ def test_canonical_requests_match_the_pre_cut_bytes() -> None:
     )
     assert _canonical_digest(_review_bundle().canonical_json) == (
         PRE_CUT_REVIEW_REQUEST_SHA256
+    )
+
+
+def test_oversized_final_diff_is_replaced_by_an_explicit_digest_bound_notice() -> None:
+    sentinel = "complete-diff-sentinel-"
+    review_diff = sentinel + ("ä" * workflow_requests.FULL_BRANCH_DIFF_EVIDENCE_CEILING_CHARS)
+
+    bundle = _final_review_bundle(review_diff)
+    item = next(
+        item
+        for item in bundle.document["evidence_manifest"]
+        if item["evidence_id"] == "review-diff"
+    )
+    notice = json.loads(item["content"])
+
+    assert item["kind"] == "provider_input_boundary_notice"
+    assert notice == {
+        "available_evidence": "The complete current repository snapshot is mounted read-only.",
+        "boundary": "provider_input",
+        "changed_paths": "See the request-level authorized_paths array.",
+        "evidence_complete": False,
+        "omitted_chars": len(review_diff),
+        "omitted_evidence": "full_branch_diff",
+        "omitted_sha256": hashlib.sha256(review_diff.encode("utf-8")).hexdigest(),
+        "omitted_utf8_bytes": len(review_diff.encode("utf-8")),
+        "repository_fingerprint": "c" * 64,
+        "required_reviewer_action": (
+            "Inspect the current files needed for every review dimension with Read. "
+            "Do not infer that the omitted full diff was supplied. Deny with a "
+            "BLOCKER if a safe verdict requires unavailable baseline content."
+        ),
+    }
+    assert sentinel not in bundle.canonical_json
+    assert len(bundle.canonical_json) < 100_000
+    assert any(
+        "Never treat the request as complete diff evidence" in criterion
+        for criterion in bundle.document["acceptance_criteria"]
     )
 
 
