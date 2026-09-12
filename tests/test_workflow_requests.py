@@ -38,7 +38,7 @@ PRE_CUT_CODEX_REQUEST_SHA256 = (
     "0e3a7ca33838f8cd393782864d99259863cd80d182c69cd63b47a4eea0b6dc9d"
 )
 PRE_CUT_REVIEW_REQUEST_SHA256 = (
-    "20b26dedb26a8d3affe2657458876531dfc46c3b95aa821ef356958c1ecbee0d"
+    "d5c38e8d992c23ede9bd780e7ee1c0985b6d4485d0babdb344c9c2e125ddf8d7"
 )
 
 
@@ -149,7 +149,11 @@ def test_request_builders_are_free_functions_with_one_way_imports() -> None:
         for node in tree.body
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
-    assert declarations == {"native_codex_request", "native_review_request"}
+    assert declarations == {
+        "_native_review_acceptance_criteria",
+        "native_codex_request",
+        "native_review_request",
+    }
     assert not any(isinstance(node, ast.ClassDef) for node in tree.body)
     assert not any(
         isinstance(node, ast.ImportFrom) and node.module == "workflow"

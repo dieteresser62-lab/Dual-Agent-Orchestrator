@@ -1133,6 +1133,9 @@ class WorkflowRecovery:
             ),
             round_number=round_number,
             previous_findings=previous_findings,
+            known_open_findings=(
+                project_open_set(finding_ledger).findings or None
+            ),
             authoritative_finding_ids=sorted_finding_ids(
                 item.finding_id for item in finding_ledger
             ),

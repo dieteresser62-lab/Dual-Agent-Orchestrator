@@ -2419,6 +2419,7 @@ class WorkflowEngine:
         expected_test_files: tuple[str, ...],
         is_plan_review: bool,
         final_review_pending_count: int | None = None,
+        known_open_findings: tuple[FindingRecord, ...] | None = None,
     ) -> workflow_requests.NativeReviewRequestBundle:
         return workflow_requests.native_review_request(
             state=state,
@@ -2433,6 +2434,7 @@ class WorkflowEngine:
             execution_error=WorkflowExecutionError,
             full_branch_evidence_kind=EvidenceKind.FULL_BRANCH,
             final_review_pending_count=final_review_pending_count,
+            known_open_findings=known_open_findings,
         )
 
     def _dispatch_native_review(
@@ -2468,6 +2470,7 @@ class WorkflowEngine:
             expected_test_files=expected_test_files,
             is_plan_review=is_plan_review,
             final_review_pending_count=final_review_pending_count,
+            known_open_findings=project_open_set(finding_ledger).findings,
         )
         native_request = build_request(contract=contract)
         invocation = ReviewerInvocation(

@@ -124,6 +124,23 @@
       ],
       "additionalProperties": false
     },
+    "known_finding_signature": {
+      "type": "object",
+      "properties": {
+        "finding_id": {
+          "type": "string",
+          "pattern": "^C-(0[1-9]|[1-9][0-9]*)$"
+        },
+        "signature": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "required": [
+        "finding_id",
+        "signature"
+      ],
+      "additionalProperties": false
+    },
     "validation_record": {
       "type": "object",
       "properties": {
@@ -267,6 +284,13 @@
             "$ref": "#/$defs/finding"
           }
         },
+        "known_open_finding_signatures": {
+          "type": "array",
+          "maxItems": 10000,
+          "items": {
+            "$ref": "#/$defs/known_finding_signature"
+          }
+        },
         "validation_attestation": {
           "$ref": "#/$defs/attestation"
         },
@@ -344,6 +368,7 @@
         "round_number",
         "next_finding_id",
         "previous_findings",
+        "known_open_finding_signatures",
         "validation_attestation",
         "test_files",
         "test_changes_approved",

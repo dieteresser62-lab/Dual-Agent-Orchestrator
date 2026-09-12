@@ -13,6 +13,7 @@ from typing import Any
 from contracts import (
     ApprovalMarker,
     CodexStepContract as ImplementerStepContract,
+    FindingRecord,
     StepContract,
 )
 from finding_order import sorted_finding_ids
@@ -56,6 +57,17 @@ from workflow_state import (
 
 FINAL_REVIEW_DISPOSITION_BATCH_SIZE = MAX_NATIVE_REVIEW_DISPOSITIONS
 FINAL_REVIEW_ROUND_SAFETY_LIMIT = 256
+FINDING_SIGNATURE_REVIEW_CRITERION = (
+    "review_contract.known_open_finding_signatures binds every known open "
+    "finding identifier to SHA-256 over canonical JSON containing its "
+    "NFKC-normalized, casefolded acceptance test and its sorted mentioned "
+    "repository paths; the measured executable-mode and missing-documentation "
+    "patterns use narrow family markers so new paths remain occurrences of the "
+    "same issue. Do not open a finding whose signature already exists. Report "
+    "another occurrence through status_changes for the existing identifier, "
+    "keep status OPEN, and name the additional location in a new rationale so "
+    "the existing status_changed transition preserves it visibly."
+)
 
 
 def native_codex_request(
@@ -247,6 +259,82 @@ def native_codex_request(
     )
 
 
+def _native_review_acceptance_criteria(
+    *,
+    state: WorkflowState,
+    context: Any,
+    history: Any,
+    contract: StepContract,
+    review_kind: NativeReviewKind,
+    plan_artifact_path: str | None,
+    correction_goal: str | None,
+    correction_criteria: tuple[str, ...],
+) -> tuple[str, ...]:
+    artifact_criterion = (
+        f"The PLAN_ONLY artifact contract is active for exact path "
+        f"{plan_artifact_path}; require that repository plan artifact and its "
+        "mandated Slice structure."
+        if plan_artifact_path is not None
+        else (
+            "No repository plan artifact is bound to this planning review. "
+            "Review the request-bound SLICE_PLAN; the reviewer must not require "
+            "PLAN_ONLY artifact structure."
+            if review_kind is NativeReviewKind.PLAN
+            else None
+        )
+    )
+    unit_criteria = (
+        correction_criteria
+        if correction_goal is not None
+        else ((context.slice_summary.strip(),) if context.slice_summary.strip() else ())
+    )
+    final_criterion = (
+        "This is final-review disposition delivery round "
+        f"{contract.round_number}. The bound disposition_budget permits "
+        f"at most {len(history.findings)} total status changes or "
+        "reclassifications and permits only these identifiers: "
+        + (", ".join(item.finding_id for item in history.findings) or "(none)")
+        + ". review_contract.previous_findings contains exactly that eligible "
+        "subset. A non-empty partial disposition is a valid denied intermediate "
+        "delivery and the remaining identifiers are offered in a later round. "
+        "Return approved only when the request states that no undispositioned "
+        "findings remain outside this offer and every offered identifier is "
+        "dispositioned. A denied round with no status change and no "
+        "reclassification ends the delivery sequence with the still-open "
+        "findings as the verdict."
+        if review_kind is NativeReviewKind.FINAL
+        else None
+    )
+    correction_criterion = (
+        "This review is part of an implementer correction sequence. A denied "
+        "round continues only when it closes a finding, reclassifies one, or "
+        "opens a new finding. A denied round with none of those record-derived "
+        "transitions is the terminal review verdict for every still-open finding."
+        if (
+            state.current_work_unit.kind is WorkUnitKind.CORRECTION
+            or project_implementer_return_policy(state.current_work_unit)[0] > 0
+        )
+        else None
+    )
+    return tuple(
+        dict.fromkeys(
+            criterion
+            for criterion in (
+                *unit_criteria,
+                artifact_criterion,
+                final_criterion,
+                correction_criterion,
+                FINDING_SIGNATURE_REVIEW_CRITERION,
+                "The decision must satisfy the bound review contract and the "
+                "fingerprint-matching deterministic validation attestation.",
+                "The reviewed changes must remain within the exact authorized "
+                "path boundary and preserve resume/idempotency invariants.",
+            )
+            if criterion is not None
+        )
+    )
+
+
 def native_review_request(
     *,
     state: WorkflowState,
@@ -261,6 +349,7 @@ def native_review_request(
     execution_error: type[RuntimeError],
     full_branch_evidence_kind: object,
     final_review_pending_count: int | None = None,
+    known_open_findings: tuple[FindingRecord, ...] | None = None,
 ) -> NativeReviewRequestBundle:
     """Build the native request only from typed local workflow values."""
     review_kind = {
@@ -289,6 +378,18 @@ def native_review_request(
         raise execution_error(
             "native non-correction review requires a current-slice summary"
         )
+    offered_open_findings = project_open_set(history.findings).findings
+    known_open_by_id = {
+        item.finding_id: item
+        for item in (
+            *(() if known_open_findings is None else known_open_findings),
+            *offered_open_findings,
+        )
+    }
+    effective_known_open_findings = tuple(
+        known_open_by_id[finding_id]
+        for finding_id in sorted_finding_ids(known_open_by_id)
+    )
     native_context = NativeReviewContext(
         run_id=state.run_id,
         work_unit_id=str(state.current_work_unit_id),
@@ -299,6 +400,7 @@ def native_review_request(
         slice_id=contract.slice_id,
         round_number=contract.round_number,
         previous_findings=history.findings,
+        known_open_findings=effective_known_open_findings or None,
         authoritative_finding_ids=contract.existing_finding_ids,
         validation_attestation=contract.validation_attestation,
         test_files=expected_test_files,
@@ -357,72 +459,15 @@ def native_review_request(
                 history.codex_final_report,
             )
         )
-    artifact_criterion = (
-        f"The PLAN_ONLY artifact contract is active for exact path "
-        f"{plan_artifact_path}; require that repository plan artifact and its "
-        "mandated Slice structure."
-        if plan_artifact_path is not None
-        else (
-            "No repository plan artifact is bound to this planning review. "
-            "Review the request-bound SLICE_PLAN; the reviewer must not require "
-            "PLAN_ONLY artifact structure."
-            if review_kind is NativeReviewKind.PLAN
-            else None
-        )
-    )
-    unit_criteria = (
-        correction_criteria
-        if correction_goal is not None
-        else (
-            (context.slice_summary.strip(),)
-            if context.slice_summary.strip()
-            else ()
-        )
-    )
-    acceptance_criteria = tuple(
-        dict.fromkeys(
-            criterion
-            for criterion in (*unit_criteria,
-                artifact_criterion,
-                (
-                    "This is final-review disposition delivery round "
-                    f"{contract.round_number}. The bound disposition_budget permits "
-                    f"at most {len(history.findings)} total status changes or "
-                    "reclassifications and permits only these identifiers: "
-                    + (", ".join(item.finding_id for item in history.findings) or "(none)")
-                    + ". review_contract.previous_findings contains exactly that "
-                    "eligible subset. A non-empty partial disposition is a valid "
-                    "denied intermediate delivery and the remaining identifiers are "
-                    "offered in a later round. Return approved only when the request "
-                    "states that no undispositioned findings remain outside this "
-                    "offer and every offered identifier is dispositioned. A denied "
-                    "round with no status change and no reclassification ends the "
-                    "delivery sequence with the still-open findings as the verdict."
-                    if review_kind is NativeReviewKind.FINAL
-                    else None
-                ),
-                (
-                    "This review is part of an implementer correction sequence. "
-                    "A denied round continues only when it closes a finding, "
-                    "reclassifies one, or opens a new finding. A denied round with "
-                    "none of those record-derived transitions is the terminal "
-                    "review verdict for every still-open finding."
-                    if (
-                        state.current_work_unit.kind is WorkUnitKind.CORRECTION
-                        or project_implementer_return_policy(
-                            state.current_work_unit
-                        )[0]
-                        > 0
-                    )
-                    else None
-                ),
-                "The decision must satisfy the bound review contract and the "
-                "fingerprint-matching deterministic validation attestation.",
-                "The reviewed changes must remain within the exact authorized "
-                "path boundary and preserve resume/idempotency invariants.",
-            )
-            if criterion is not None
-        )
+    acceptance_criteria = _native_review_acceptance_criteria(
+        state=state,
+        context=context,
+        history=history,
+        contract=contract,
+        review_kind=review_kind,
+        plan_artifact_path=plan_artifact_path,
+        correction_goal=correction_goal,
+        correction_criteria=correction_criteria,
     )
     return build_native_review_request(
         NativeReviewRequestSpec(

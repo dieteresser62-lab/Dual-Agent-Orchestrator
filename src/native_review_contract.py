@@ -42,6 +42,11 @@ from finding_reducer import (
     project_open_set,
 )
 from finding_order import sorted_finding_ids
+from finding_signature import (
+    finding_record_signature,
+    finding_signature,
+    mentioned_repository_paths,
+)
 from validation_matrix import FINDING_COMMAND_PREFIX, matches_validation_family
 from native_provider_schema import defensive_provider_projection
 
@@ -70,6 +75,7 @@ class NativeReviewErrorCode(StrEnum):
     FINDING_EVENT_CONFLICT = "finding-event-conflict"
     FINDING_UPDATE_MISSING = "missing-own-finding-update"
     FINDING_CONTENT_INVALID = "finding-content-invalid"
+    FINDING_SIGNATURE_DUPLICATE = "finding-signature-duplicate"
     ACCEPTANCE_INVALID = "acceptance-invalid"
     ANCHOR_INVALID = "anchor-invalid"
     REVIEW_CONTENT_MISSING = "review-content-missing"
@@ -86,6 +92,7 @@ NATIVE_REVIEW_RETRYABLE_FORM_CODES: frozenset[NativeReviewErrorCode] = frozenset
         NativeReviewErrorCode.FINDING_EVENT_CONFLICT,  # Provider output can emit one non-conflicting event per finding.
         NativeReviewErrorCode.FINDING_UPDATE_MISSING,  # Provider output can supply every required own-finding disposition.
         NativeReviewErrorCode.FINDING_CONTENT_INVALID,  # Provider output can replace malformed finding content.
+        NativeReviewErrorCode.FINDING_SIGNATURE_DUPLICATE,  # Provider output can cite the existing open finding instead.
         NativeReviewErrorCode.ACCEPTANCE_INVALID,  # Provider output can use the allowed typed acceptance form.
         NativeReviewErrorCode.ANCHOR_INVALID,  # Provider output can supply anchors consistent with the bound review.
         NativeReviewErrorCode.REVIEW_CONTENT_MISSING,  # Provider output can supply the required review evidence.
@@ -253,6 +260,7 @@ class NativeReviewContext:
     slice_id: str
     round_number: int
     previous_findings: tuple[FindingRecord, ...] = ()
+    known_open_findings: tuple[FindingRecord, ...] | None = None
     authoritative_finding_ids: tuple[str, ...] = ()
     validation_attestation: ValidationAttestation | None = None
     test_files: tuple[str, ...] = ()
@@ -326,6 +334,35 @@ class NativeReviewContext:
                 NativeReviewErrorCode.CONTEXT_INVALID,
                 "offered findings must belong to the authoritative finding set",
             )
+        offered_open = project_open_set(self.previous_findings).findings
+        known_open = (
+            offered_open
+            if self.known_open_findings is None
+            else self.known_open_findings
+        )
+        known_ids = tuple(item.finding_id for item in known_open)
+        if known_ids != sorted_finding_ids(known_ids):
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.CONTEXT_INVALID,
+                "known open findings must be sorted and unique",
+            )
+        if project_open_set(known_open).findings != known_open:
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.CONTEXT_INVALID,
+                "known open findings must all be open",
+            )
+        if not set(known_ids).issubset(authoritative_ids):
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.CONTEXT_INVALID,
+                "known open findings must belong to the authoritative finding set",
+            )
+        known_by_id = {item.finding_id: item for item in known_open}
+        for finding in offered_open:
+            if known_by_id.get(finding.finding_id) != finding:
+                raise NativeReviewContractError(
+                    NativeReviewErrorCode.CONTEXT_INVALID,
+                    "offered open findings must match the known open finding set",
+                )
         normalized_tests = tuple(sorted(set(self.test_files)))
         if normalized_tests != self.test_files or any(
             not item.strip() for item in self.test_files
@@ -334,6 +371,7 @@ class NativeReviewContext:
                 NativeReviewErrorCode.CONTEXT_INVALID,
                 "test files must be sorted, unique, and non-empty",
             )
+
         if self.anchor_origin is not None and not self.anchor_origin.strip():
             raise NativeReviewContractError(
                 NativeReviewErrorCode.CONTEXT_INVALID,
@@ -404,6 +442,12 @@ class NativeReviewContext:
                 NativeReviewErrorCode.CONTEXT_INVALID,
                 "validation command prefixes must be unique safe argv prefixes",
             )
+
+    @property
+    def effective_known_open_findings(self) -> tuple[FindingRecord, ...]:
+        if self.known_open_findings is not None:
+            return self.known_open_findings
+        return project_open_set(self.previous_findings).findings
 
     @property
     def request_id(self) -> str:
@@ -1164,6 +1208,12 @@ def _validate_response_events(
                 NativeReviewErrorCode.FINDING_REFERENCE_NOT_OPEN,
                 f"finding update references non-open id {finding_id}",
             )
+    for update in response.status_changes:
+        if update.rationale == previous[update.finding_id].status_rationale:
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.FINDING_EVENT_CONFLICT,
+                f"finding {update.finding_id} status update must add a new rationale",
+            )
     expected_prefix = "C-"
     first_id = next_native_finding_id(context)
     first_number = int(first_id.split("-", 1)[1])
@@ -1199,6 +1249,26 @@ def _validate_response_events(
                     NativeReviewErrorCode.ACCEPTANCE_INVALID,
                     "validation command is outside configured families",
                 )
+    known_signatures: dict[str, list[str]] = {}
+    for finding in context.effective_known_open_findings:
+        known_signatures.setdefault(
+            finding_record_signature(finding), []
+        ).append(finding.finding_id)
+    for finding in response.new_findings:
+        acceptance = _native_finding_acceptance_text(finding)
+        signature = finding_signature(
+            acceptance,
+            mentioned_repository_paths(finding.summary, acceptance),
+        )
+        existing_ids = known_signatures.get(signature)
+        if existing_ids:
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.FINDING_SIGNATURE_DUPLICATE,
+                f"new finding {finding.finding_id} duplicates known open finding "
+                + ", ".join(sorted_finding_ids(existing_ids))
+                + f" (signature {signature})",
+            )
+        known_signatures[signature] = [finding.finding_id]
     touched = set(status_ids) | set(class_ids)
     missing_dispositions = tuple(
         finding.finding_id
@@ -1227,17 +1297,7 @@ def _merge_findings(
 ) -> tuple[FindingRecord, ...]:
     opened: list[FindingRecord] = []
     for native in response.new_findings:
-        acceptance = (
-            native.acceptance_test.text
-            if isinstance(native.acceptance_test, NativeProseAcceptance)
-            else FINDING_COMMAND_PREFIX
-            + " "
-            + json.dumps(
-                list(native.acceptance_test.argv),
-                ensure_ascii=False,
-                separators=(",", ":"),
-            )
-        )
+        acceptance = _native_finding_acceptance_text(native)
         try:
             opened.append(
                 FindingRecord(
@@ -1417,6 +1477,13 @@ def native_review_context_binding(context: NativeReviewContext) -> dict[str, Any
         "slice_id": context.slice_id,
         "round_number": context.round_number,
         "previous_findings": [_finding_binding(item) for item in context.previous_findings],
+        "known_open_finding_signatures": [
+            {
+                "finding_id": item.finding_id,
+                "signature": finding_record_signature(item),
+            }
+            for item in context.effective_known_open_findings
+        ],
         "authoritative_finding_ids": list(
             context.authoritative_finding_ids
             or tuple(item.finding_id for item in context.previous_findings)
@@ -1438,6 +1505,16 @@ def native_review_context_binding(context: NativeReviewContext) -> dict[str, Any
     if context.approval_marker is ApprovalMarker.FINAL:
         binding["final_review_pending_count"] = context.final_review_pending_count
     return binding
+
+
+def _native_finding_acceptance_text(finding: NativeFinding) -> str:
+    if isinstance(finding.acceptance_test, NativeProseAcceptance):
+        return finding.acceptance_test.text
+    return FINDING_COMMAND_PREFIX + " " + json.dumps(
+        list(finding.acceptance_test.argv),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
 
 
 # Private compatibility alias for the original provider-independent request-id

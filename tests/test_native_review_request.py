@@ -27,6 +27,7 @@ from native_review_contract import (
     NativeReviewContractError,
     NativeReviewErrorCode,
     load_native_review_schema,
+    native_review_context_binding,
     parse_bound_native_contract_result,
     parse_native_contract_result,
     validate_native_review_document,
@@ -624,7 +625,7 @@ def test_request_bundle_binds_exact_immutable_writer_schema_bytes() -> None:
     ).hexdigest() == bundle.document["response_contract"]["schema_sha256"]
 
 
-def test_registered_claude_exceptions_cover_writer_valid_local_rejections() -> None:
+def test_registered_review_exceptions_cover_writer_valid_local_rejections() -> None:
     observation_one = _prior_finding(
         "C-01", finding_class=FindingClass.OBSERVATION
     )
@@ -678,6 +679,20 @@ def test_registered_claude_exceptions_cover_writer_valid_local_rejections() -> N
         {"finding_id": "C-01", "status": "CLOSED", "rationale": "fixed"},
     ]
     contexts_and_responses.append((duplicate_context, duplicate_events))
+
+    duplicate_signature = _writer_response(decision="denied")
+    duplicate_signature["new_findings"] = [
+        {
+            "finding_id": "C-02",
+            "finding_class": "BLOCKER",
+            "summary": blocker.summary,
+            "acceptance_test": {
+                "kind": "prose",
+                "text": blocker.acceptance_test,
+            },
+        }
+    ]
+    contexts_and_responses.append((blocker_context, duplicate_signature))
 
     noncontiguous = _writer_response(decision="denied")
     noncontiguous["new_findings"] = [
@@ -931,6 +946,31 @@ def test_request_binds_persisted_codex_disposition_and_attestation() -> None:
         "attestation_id"
     ] == "validation-native-request"
     assert bound.bound_context.request_id != build_native_review_request(spec).bound_context.request_id
+
+
+def test_request_names_signatures_for_known_open_findings_outside_offer() -> None:
+    first = _prior_finding("C-01")
+    offered = replace(
+        _prior_finding("C-02", finding_class=FindingClass.OBSERVATION),
+        summary="A different issue affects src/other.py.",
+        acceptance_test="Preserve valid data in src/other.py.",
+    )
+    context = replace(
+        _context(),
+        previous_findings=(offered,),
+        known_open_findings=(first, offered),
+        authoritative_finding_ids=("C-01", "C-02"),
+    )
+
+    bundle = build_native_review_request(replace(_spec(), context=context))
+    signatures = bundle.document["review_contract"][
+        "known_open_finding_signatures"
+    ]
+
+    assert signatures == native_review_context_binding(context)[
+        "known_open_finding_signatures"
+    ]
+    assert [item["finding_id"] for item in signatures] == ["C-01", "C-02"]
 
 
 def test_large_evidence_is_content_addressed_and_bound() -> None:

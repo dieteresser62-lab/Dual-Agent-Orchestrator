@@ -322,6 +322,109 @@ def test_slice_review_preserves_omitted_open_finding_when_decision_allows_it() -
     )
 
 
+def test_repeated_finding_is_rejected_with_the_existing_identifier() -> None:
+    existing = replace(
+        _finding("C-01", AgentRole.CLAUDE),
+        summary="src/cache.py can retain stale entries.",
+        acceptance_test="Reject stale entries in src/cache.py.",
+    )
+    context = _context(previous=(existing,))
+    document = _review(context, approved=False)
+    document["new_findings"] = [
+        {
+            "finding_id": "C-02",
+            "finding_class": "BLOCKER",
+            "summary": "src/cache.py can retain stale entries.",
+            "acceptance_test": {
+                "kind": "prose",
+                "text": "Reject stale entries in src/cache.py.",
+            },
+        }
+    ]
+
+    with pytest.raises(NativeReviewContractError) as raised:
+        parse_native_contract_result(document, context)
+
+    assert raised.value.code is NativeReviewErrorCode.FINDING_SIGNATURE_DUPLICATE
+    assert "C-01" in raised.value.detail
+
+
+def test_genuine_new_problem_on_the_same_path_is_opened() -> None:
+    existing = replace(
+        _finding("C-01", AgentRole.CLAUDE),
+        summary="src/cache.py can retain stale entries.",
+        acceptance_test="Reject stale entries in src/cache.py.",
+    )
+    context = _context(previous=(existing,))
+    document = _review(context, approved=False)
+    document["new_findings"] = [
+        {
+            "finding_id": "C-02",
+            "finding_class": "BLOCKER",
+            "summary": "src/cache.py can discard valid entries.",
+            "acceptance_test": {
+                "kind": "prose",
+                "text": "Preserve valid entries in src/cache.py.",
+            },
+        }
+    ]
+
+    result = parse_native_contract_result(document, context)
+
+    assert [item.finding_id for item in result.findings] == ["C-01", "C-02"]
+
+
+def test_existing_id_records_a_visible_open_to_open_occurrence() -> None:
+    existing = replace(
+        _finding("C-01", AgentRole.CLAUDE),
+        finding_class=FindingClass.OBSERVATION,
+    )
+    context = _context(previous=(existing,))
+    document = _review(context, approved=True)
+    document["status_changes"] = [
+        {
+            "finding_id": "C-01",
+            "status": "OPEN",
+            "rationale": "Also occurs at src/second_site.py.",
+        }
+    ]
+
+    result = parse_native_contract_result(document, context)
+    transitions = project_reviewer_persistence_transitions(
+        context.previous_findings,
+        result.findings,
+        work_unit_id="work-unit-1",
+    )
+
+    assert result.findings[0].status is FindingStatus.OPEN
+    assert result.findings[0].status_rationale == "Also occurs at src/second_site.py."
+    assert len(transitions) == 1
+    assert transitions[0].action == "status_changed"
+    assert transitions[0].rationale == "Also occurs at src/second_site.py."
+
+
+def test_existing_id_rejects_an_invisible_open_to_open_noop() -> None:
+    existing = replace(
+        _finding("C-01", AgentRole.CLAUDE),
+        finding_class=FindingClass.OBSERVATION,
+        status_rationale="Already recorded at src/first_site.py.",
+    )
+    context = _context(previous=(existing,))
+    document = _review(context, approved=True)
+    document["status_changes"] = [
+        {
+            "finding_id": "C-01",
+            "status": "OPEN",
+            "rationale": "Already recorded at src/first_site.py.",
+        }
+    ]
+
+    with pytest.raises(NativeReviewContractError) as raised:
+        parse_native_contract_result(document, context)
+
+    assert raised.value.code is NativeReviewErrorCode.FINDING_EVENT_CONFLICT
+
+
 def test_slice_writer_accepts_one_new_finding_without_ten_open_dispositions() -> None:
     previous = tuple(
         _finding(
