@@ -273,7 +273,13 @@ class FindingResponseDelta:
 
 def reduce_findings(replay: ArtifactReplayResult) -> FindingReduction:
     """Reduce one accepted append-only record prefix into six projections."""
-    events = _transition_events(replay.records)
+    return reduce_finding_records(replay.records)
+
+
+def reduce_finding_records(records: Sequence[ArtifactRecord]) -> FindingReduction:
+    """Reduce already validated records without rebuilding replay metadata."""
+
+    events = _transition_events(records)
     diagnostics: list[FindingOpeningConflictDiagnostic] = []
     lineages = _reduce_lineages(events, diagnostics=diagnostics)
     ledger_findings = _current_lineage_findings(lineages)
@@ -282,9 +288,9 @@ def reduce_findings(replay: ArtifactReplayResult) -> FindingReduction:
     status_transitions = FindingStatusTransitionsProjection(
         tuple(event for event in events if event.payload.action != "responded")
     )
-    import_snapshot = _project_import_snapshot(replay.records, events)
+    import_snapshot = _project_import_snapshot(records, events)
     correction_attribution = _project_correction_attribution(
-        replay.records, events
+        records, events
     )
     return FindingReduction(
         ledger=ledger,

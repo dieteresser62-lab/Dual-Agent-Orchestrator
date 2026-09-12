@@ -10,6 +10,7 @@ import pytest
 
 import artifact_resume
 import artifact_store as artifact_store_module
+import orchestrator as orchestrator_module
 from artifact_bridge import ArtifactBridge
 from artifact_resume import ArtifactResumeError, resolve_resume_state
 from artifact_models import FingerprintKind, canonical_json
@@ -163,6 +164,86 @@ def test_process_local_resolution_is_warm_but_explicit_resume_fully_reloads(
     resumed = resolve_resume_state(tmp_path, locator.run_id)
     assert resumed.state == projected
     assert reads == len(store.current_chain())
+
+
+def test_resume_start_reuses_one_validated_store_across_independent_consumers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    locator, projected, _driver = _record_run(tmp_path)
+    original_progress_phase = ArtifactStore.progress_phase
+    phases: list[str] = []
+
+    def counted_progress_phase(  # type: ignore[no-untyped-def]
+        store: ArtifactStore, phase: str
+    ):
+        phases.append(phase)
+        return original_progress_phase(store, phase)
+
+    monkeypatch.setattr(ArtifactStore, "progress_phase", counted_progress_phase)
+
+    resolutions: list[artifact_resume.ResumeResolution] = []
+    loaded = load_resumable_workflow_state(
+        tmp_path / ".orchestrator" / "state.json",
+        repository_root=tmp_path,
+        allowed_roots=(tmp_path,),
+        expected_run_id=locator.run_id,
+        resolution_observer=resolutions.append,
+    )
+    assert isinstance(loaded, WorkflowState)
+    [resolution] = resolutions
+    store = resolution.validated_store
+    assert store is not None
+    history = orchestrator_module._history(
+        resolution.state,
+        tmp_path,
+        validated_store=store,
+    )
+    resumed = ProductionWorkflowDriver(
+        repository_root=tmp_path,
+        state_file=tmp_path / ".orchestrator" / "state.json",
+        agents={},
+        config=OrchestratorConfig(repo_root=tmp_path),
+        allowed_roots=(tmp_path,),
+        validated_store=store,
+    )
+    resumed.bind_work_unit(resolution.state)
+
+    assert history.work_unit_id == projected.current_work_unit_id
+    assert resumed._artifact_bridge is not None
+    assert resumed._artifact_bridge.store is store
+    assert phases.count("full-chain-validation") == 1
+
+
+def test_resume_start_revalidates_when_chain_changes_between_consumers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    locator, _projected, _driver = _record_run(tmp_path)
+    original_load_chain = ArtifactStore.load_chain
+    full_validations = 0
+
+    def counted_load_chain(store: ArtifactStore):  # type: ignore[no-untyped-def]
+        nonlocal full_validations
+        full_validations += 1
+        return original_load_chain(store)
+
+    monkeypatch.setattr(ArtifactStore, "load_chain", counted_load_chain)
+    resolution = resolve_resume_state(tmp_path, locator.run_id)
+    store = resolution.validated_store
+    assert store is not None
+    first_record = next(store.records_dir.glob("*.json"))
+    first_record.rename(first_record.with_suffix(".moved"))
+
+    with pytest.raises(
+        orchestrator_module.WorkflowExecutionError,
+        match="record-backed workflow history projection is invalid",
+    ):
+        orchestrator_module._history(
+            resolution.state,
+            tmp_path,
+            validated_store=store,
+        )
+
+    assert full_validations == 2
 
 
 def test_driver_configures_artifact_phase_progress_threshold(tmp_path: Path) -> None:

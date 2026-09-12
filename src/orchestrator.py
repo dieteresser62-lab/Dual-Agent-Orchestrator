@@ -33,6 +33,7 @@ from artifact_bridge import (
 )
 from artifact_resume import (
     ArtifactResumeError,
+    ResumeResolution,
     resolve_resume_state,
 )
 from artifact_models import (
@@ -197,6 +198,7 @@ from orchestrator_diagnostics import (
 )
 from inbox_watcher import (
     QueueFinalizationDisposition,
+    QueueSuccessEvidence,
     WatchTaskDisposition,
     WatchTaskResult,
     finalize_queue_success,
@@ -290,6 +292,7 @@ class ProductionWorkflowDriver:
         allowed_roots: tuple[Path, ...],
         replace_existing_run_id: str | None = None,
         side_effect_boundary_observer: SideEffectBoundaryObserver | None = None,
+        validated_store: ArtifactStore | None = None,
     ) -> None:
         self.root = repository_root.resolve()
         self.state_file = state_file.resolve()
@@ -306,6 +309,7 @@ class ProductionWorkflowDriver:
         self._final_review_evidence_collections = 0
         self._final_review_evidence_reuses = 0
         self._artifact_bridge: ArtifactBridge | None = None
+        self._validated_startup_store = validated_store
         self._replace_existing_run_id = replace_existing_run_id
         self._side_effect_boundary_observer = side_effect_boundary_observer
         self._reported_code_version_changes: set[tuple[str, str]] = set()
@@ -593,8 +597,17 @@ class ProductionWorkflowDriver:
                 self._artifact_bridge is None
                 or self._artifact_bridge.store.run_id != state.run_id
             ):
+                startup_store = self._validated_startup_store
+                if startup_store is not None and (
+                    startup_store.repository_root != self.root
+                    or startup_store.run_id != state.run_id
+                ):
+                    raise WorkflowExecutionError(
+                        "validated startup artifact store belongs to another chain"
+                    )
                 self._artifact_bridge = ArtifactBridge(
-                    ArtifactStore(
+                    startup_store
+                    or ArtifactStore(
                         self.root,
                         state.run_id,
                         progress_threshold_seconds=(
@@ -602,6 +615,7 @@ class ProductionWorkflowDriver:
                         ),
                     )
                 )
+                self._validated_startup_store = None
         else:
             self._artifact_bridge = None
 
@@ -2513,6 +2527,8 @@ class ProductionWorkflowDriver:
 def _history(
     state: WorkflowState,
     repository_root: Path | None = None,
+    *,
+    validated_store: ArtifactStore | None = None,
 ) -> WorkflowHistory:
     history = WorkflowHistory(state.current_work_unit_id)
     if state.runtime_history is None:
@@ -2546,9 +2562,18 @@ def _history(
         and state.effective_protocol_mode is ProtocolMode.STRUCTURED_V2
     ):
         try:
-            store = ArtifactStore(repository_root, state.run_id)
+            root = Path(repository_root).resolve()
+            store = validated_store or ArtifactStore(root, state.run_id)
+            if store.repository_root != root or store.run_id != state.run_id:
+                raise ArtifactStoreError(
+                    "validated startup artifact store belongs to another chain"
+                )
             replay = replay_artifacts(
-                store.load_chain(),
+                (
+                    store.current_chain()
+                    if validated_store is not None
+                    else store.load_chain()
+                ),
                 state.run_id,
                 require_content_authority=True,
                 require_review_authority=True,
@@ -2706,6 +2731,46 @@ def run_default_dry_run(task_file: Path, *, run_id: str | None = None):
     return workflow_dry_run.run_default_dry_run(task_file, run_id=run_id)
 
 
+def _load_bound_queue_terminal(
+    task_file: Path,
+    evidence: QueueSuccessEvidence,
+) -> Path:
+    repository_root = Path.cwd().resolve()
+    startup_resolutions: list[ResumeResolution] = []
+
+    resumed = load_resumable_workflow_state(
+        repository_root / ".orchestrator" / "state.json",
+        repository_root=repository_root,
+        allowed_roots=tuple(
+            dict.fromkeys((repository_root, task_file.parent.resolve()))
+        ),
+        expected_run_id=evidence.run_id,
+        expected_task_file=task_file,
+        expected_task_digest=evidence.task_digest,
+        resolution_observer=startup_resolutions.append,
+    )
+    if not isinstance(resumed, WorkflowState):
+        raise ValueError("bound queue recovery requires version-3 state")
+    [startup_resolution] = startup_resolutions
+    terminal = WorkflowRunResult(
+        resumed,
+        _history(
+            resumed,
+            repository_root,
+            validated_store=startup_resolution.validated_store,
+        ),
+    )
+    if (
+        not terminal.workflow_completed
+        or resumed.run_id != evidence.run_id
+        or Path(resumed.task_file).resolve() != task_file.resolve()
+        or resumed.task_digest != evidence.task_digest
+        or resumed.effective_protocol_mode.value != evidence.protocol_mode
+    ):
+        raise ValueError("bound success evidence differs from terminal workflow state")
+    return repository_root
+
+
 def run_pipeline(
     task_file: Path,
     args: argparse.Namespace,
@@ -2730,30 +2795,7 @@ def run_pipeline(
                 evidence = load_queue_success_evidence(
                     task_file, inbox_dir=inbox_dir, outbox_dir=outbox_dir
                 )
-                repository_root = Path.cwd().resolve()
-                resumed = load_resumable_workflow_state(
-                    repository_root / ".orchestrator" / "state.json",
-                    repository_root=repository_root,
-                    allowed_roots=tuple(
-                        dict.fromkeys((repository_root, task_file.parent.resolve()))
-                    ),
-                    expected_run_id=evidence.run_id,
-                    expected_task_file=task_file,
-                    expected_task_digest=evidence.task_digest,
-                )
-                if not isinstance(resumed, WorkflowState):
-                    raise ValueError("bound queue recovery requires version-3 state")
-                terminal = WorkflowRunResult(
-                    resumed, _history(resumed, repository_root)
-                )
-                if (
-                    not terminal.workflow_completed
-                    or resumed.run_id != evidence.run_id
-                    or Path(resumed.task_file).resolve() != task_file.resolve()
-                    or resumed.task_digest != evidence.task_digest
-                    or resumed.effective_protocol_mode.value != evidence.protocol_mode
-                ):
-                    raise ValueError("bound success evidence differs from terminal workflow state")
+                repository_root = _load_bound_queue_terminal(task_file, evidence)
             except (ArtifactResumeError, StateSchemaError, ValueError) as exc:
                 logger.error("Direct queue recovery rejected: %s", exc)
                 return 1

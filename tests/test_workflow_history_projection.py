@@ -1168,6 +1168,7 @@ def test_state_projection_baseline_matches_pre_cut_bytes(tmp_path: Path) -> None
 
 def test_multi_slice_open_findings_match_authoritative_reduction_in_state_cache(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     bridge = _state_projection_bridge(tmp_path, "multi-slice-open-findings")
     _journey(bridge)
@@ -1355,7 +1356,27 @@ def test_multi_slice_open_findings_match_authoritative_reduction_in_state_cache(
         operation="claude_slice_review",
     )
 
-    replay = replay_artifacts(bridge.store.load_chain(), RUN_ID)
+    original_result = artifact_replay_module._result
+    result_sizes: list[int] = []
+
+    def counted_result(*args, **kwargs):  # type: ignore[no-untyped-def]
+        result_sizes.append(len(args[1]))
+        return original_result(*args, **kwargs)
+
+    monkeypatch.setattr(artifact_replay_module, "_result", counted_result)
+    chain = bridge.store.load_chain()
+    positions = {record.record_id: index for index, record in enumerate(chain)}
+    reviews = tuple(
+        record for record in chain if isinstance(record.payload, ReviewPayload)
+    )
+    assert len(reviews) >= 2
+    for review_record in reviews:
+        assert artifact_replay_module._review_prefix_finding_ids(
+            chain, positions, review_record
+        ) is not None
+    assert result_sizes == []
+
+    replay = replay_artifacts(chain, RUN_ID)
     reduction = reduce_findings(replay)
     projected = project_workflow_state(replay)
     assert reduction.open_set.finding_ids == ("C-03",)

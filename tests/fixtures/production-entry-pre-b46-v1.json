@@ -125,7 +125,7 @@
       "ordinal": 2,
       "pre_cut_line": 225,
       "exception": "ActiveV2StateError",
-      "protected_body_sha256": "072157b0f7b0f2764f44027d4b15df1978268a8e33a3b2685f2741ed2ad05d48",
+      "protected_body_sha256": "582c7c6b6af99a84158f73de9d719d9ed45f367685d7bb75aa38f503e1732e8e",
       "handler_body_sha256": "c687ee3dd23e746430254ab5319b7b66e5ced3d1ae866f87f00baed654740ff8"
     },
     {

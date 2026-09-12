@@ -55,6 +55,7 @@ class ResumeResolution:
     mode: ProtocolMode
     record_head_id: str | None
     replay_result: ArtifactReplayResult | None
+    validated_store: ArtifactStore | None = None
 
 
 def require_workflow_status_prefix(
@@ -252,7 +253,13 @@ def resolve_resume_state(
     _validate_finding_handoff(repository_root, replay, projected)
     head = replay.head_record_id
     assert head is not None
-    return ResumeResolution(projected, ProtocolMode.STRUCTURED_V2, head, replay)
+    return ResumeResolution(
+        projected,
+        ProtocolMode.STRUCTURED_V2,
+        head,
+        replay,
+        validated_store=store,
+    )
 
 
 def _validate_finding_handoff(
