@@ -606,7 +606,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--quota-auto-resume",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="Automatically resume one quota-blocked role step when its reset is unambiguous.",
+        help="Automatically resume a quota-blocked role step while reset or provider progress is proven.",
     )
     parser.add_argument(
         "--quota-safety-margin",
@@ -624,7 +624,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--quota-max-auto-resumes",
         type=int,
         default=None,
-        help="Maximum automatic continuations per blocked role step (default: 1).",
+        help="Absolute quota-loop safety backstop per blocked role step (default: 32).",
     )
     parser.add_argument(
         "--quota-heartbeat-interval",

@@ -14,6 +14,7 @@ from workflow import (
     WorkflowEngine,
     WorkflowExecutionError,
     WorkflowHistory,
+    WorkflowRunResult,
 )
 
 from workflow_state import (
@@ -107,6 +108,44 @@ def test_bootstrap_facts_roundtrip_idempotently_and_use_a_resume_gate() -> None:
     assert halted.current_work_unit.gate.reason is GateReason.BOOTSTRAP_CHECK
     assert halted.current_work_unit.gate.paths == ("src/external.py",)
     assert halted.resume_after_invocation_halt().current_step is WorkflowStep.CODEX_PLAN
+
+
+def test_denied_provider_input_measurement_becomes_a_terminal_visible_verdict() -> None:
+    fact = BootstrapCheckFact(
+        "provider_input_measurement",
+        "a" * 64,
+        "codex",
+        "codex",
+        "codex_plan",
+        1,
+        "b" * 64,
+        "denied",
+        "PROVIDER-INPUT-BUDGET",
+    )
+    state = make_state().with_bootstrap_check(fact)
+
+    terminal = state.complete_provider_input_boundary_verdict()
+    result = WorkflowRunResult(terminal, WorkflowHistory(1))
+
+    assert terminal.current_work_unit.status is WorkUnitStatus.COMPLETED
+    assert terminal.current_step is WorkflowStep.CODEX_PLAN
+    assert terminal.current_work_unit.gate.status is GateStatus.CLEAR
+    assert terminal.current_slice.status is SliceStatus.IN_PROGRESS
+    assert result.workflow_rejected
+    assert result.rejection_code == "PROVIDER-INPUT-BUDGET"
+    assert result.rejection_exception_type == "ProviderInputBoundaryVerdict"
+    assert result.rejection_detail is not None
+    assert "no provider was started" in result.rejection_detail
+    assert result.exit_code == 5
+    assert WorkflowState.from_dict(terminal.to_dict()) == terminal
+
+
+def test_provider_input_verdict_requires_the_matching_denied_measurement() -> None:
+    with pytest.raises(
+        WorkflowStateValidationError,
+        match="requires its denied measurement fact",
+    ):
+        make_state().complete_provider_input_boundary_verdict()
 
 
 def test_stop_request_resume_starts_a_new_semantic_round() -> None:
@@ -634,6 +673,39 @@ def test_quota_failure_roundtrips_and_resumes_exact_failed_step() -> None:
     assert resumed.current_step is WorkflowStep.CODEX_PLAN
     assert resumed.current_work_unit.status is WorkUnitStatus.IN_PROGRESS
     assert resumed.current_work_unit.invocation_failures == (failure,)
+
+
+def test_nonautomatic_quota_failure_completes_as_terminal_verdict() -> None:
+    failure = InvocationFailureRecord(
+        invocation_id="inv-quota-terminal",
+        idempotency_key="run-1:1:codex_plan:codex",
+        role="codex",
+        failure_kind=AgentFailureKind.QUOTA,
+        provider_text="usage cap reached without reset",
+        received_at="2026-08-12T10:00:00+00:00",
+        step=WorkflowStep.CODEX_PLAN,
+        slice_id=1,
+        work_unit_id=1,
+        diagnostic_exit_code=2,
+        process_exit_code=None,
+        technical_text=SYNTHETIC_TECHNICAL_TEXT,
+        automatic_resume=False,
+    )
+    halted = make_state().record_invocation_failure(
+        failure, wait_automatically=False
+    )
+
+    terminal = halted.complete_quota_automation_verdict()
+    result = WorkflowRunResult(terminal, WorkflowHistory(1))
+
+    assert terminal.current_work_unit.status is WorkUnitStatus.COMPLETED
+    assert terminal.current_step is WorkflowStep.CODEX_PLAN
+    assert terminal.current_work_unit.gate.status is GateStatus.CLEAR
+    assert terminal.current_slice.status is SliceStatus.IN_PROGRESS
+    assert result.rejection_code == "QUOTA-AUTOMATION-STOPPED"
+    assert result.rejection_exception_type == "QuotaAutomationVerdict"
+    assert result.exit_code == 5
+    assert WorkflowState.from_dict(terminal.to_dict()) == terminal
 
 
 def test_legacy_quota_resume_diff_gate_reopens_for_fingerprint_revalidation() -> None:

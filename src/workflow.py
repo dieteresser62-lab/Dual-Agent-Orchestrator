@@ -1111,16 +1111,51 @@ class WorkflowRunResult:
 
     @property
     def workflow_rejected(self) -> bool:
-        """Whether a completed review work unit carries the reviewer's denial."""
+        """Whether the workflow ended with a reviewer or input-boundary denial."""
 
+        if self._provider_input_boundary_verdict or self._quota_automation_verdict:
+            return True
         if is_finding_cleanup_work_unit(self.state):
             return False
         return bool(workflow_rejection_finding_ids(self.state, self.history))
 
     @property
+    def _provider_input_boundary_verdict(self) -> bool:
+        unit = self.state.current_work_unit
+        if (
+            unit.status is not WorkUnitStatus.COMPLETED
+            or unit.current_step is WorkflowStep.COMPLETED
+        ):
+            return False
+        return any(
+            fact.check_kind == "provider_input_measurement"
+            and fact.work_unit_id == unit.work_unit_id
+            and fact.operation == unit.current_step.value
+            and fact.decision == "denied"
+            and fact.error_code == "PROVIDER-INPUT-BUDGET"
+            for fact in self.state.bootstrap_checks
+        )
+
+    @property
+    def _quota_automation_verdict(self) -> bool:
+        unit = self.state.current_work_unit
+        return (
+            unit.status is WorkUnitStatus.COMPLETED
+            and unit.current_step is not WorkflowStep.COMPLETED
+            and bool(unit.invocation_failures)
+            and unit.invocation_failures[-1].failure_kind is AgentFailureKind.QUOTA
+            and not unit.invocation_failures[-1].automatic_resume
+            and unit.invocation_failures[-1].step is unit.current_step
+        )
+
+    @property
     def rejection_code(self) -> str | None:
         if not self.workflow_rejected:
             return None
+        if self._provider_input_boundary_verdict:
+            return "PROVIDER-INPUT-BUDGET"
+        if self._quota_automation_verdict:
+            return "QUOTA-AUTOMATION-STOPPED"
         return (
             "FINAL-REVIEW-DENIED"
             if self.state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
@@ -1131,6 +1166,10 @@ class WorkflowRunResult:
     def rejection_exception_type(self) -> str | None:
         if not self.workflow_rejected:
             return None
+        if self._provider_input_boundary_verdict:
+            return "ProviderInputBoundaryVerdict"
+        if self._quota_automation_verdict:
+            return "QuotaAutomationVerdict"
         return (
             "FinalReviewVerdict"
             if self.state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
@@ -1141,6 +1180,30 @@ class WorkflowRunResult:
     def rejection_detail(self) -> str | None:
         if not self.workflow_rejected:
             return None
+        if self._provider_input_boundary_verdict:
+            fact = next(
+                fact
+                for fact in reversed(self.state.bootstrap_checks)
+                if fact.check_kind == "provider_input_measurement"
+                and fact.work_unit_id == self.state.current_work_unit_id
+                and fact.operation == self.state.current_step.value
+                and fact.decision == "denied"
+                and fact.error_code == "PROVIDER-INPUT-BUDGET"
+            )
+            return (
+                "PROVIDER-INPUT-BUDGET | the request still exceeds its bound after "
+                "safe evidence compaction; no provider was started; measurement="
+                f"{fact.transition_fingerprint}"
+            )
+        if self._quota_automation_verdict:
+            failure = self.state.current_work_unit.invocation_failures[-1]
+            reset = failure.reset_at_utc or "unknown"
+            return (
+                "QUOTA-AUTOMATION-STOPPED | automatic continuation requires a "
+                "recognized release time plus progress since the prior quota; the "
+                "absolute continuation backstop also remains authoritative; "
+                f"reset={reset} continuations={failure.auto_resume_count}"
+            )
         remaining = project_open_set(self.history.findings).finding_ids
         final_review = self.state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
         safety_limit_reached = (
@@ -3149,70 +3212,69 @@ class WorkflowEngine:
                 if isinstance(driver_state, WorkflowState) and driver_state.run_id == state.run_id:
                     state = replace(state, bootstrap_checks=driver_state.bootstrap_checks)
                 return state, output
-            except (ProviderInputBudgetExceeded, FinalReviewPreflightDenied) as error:
-                if isinstance(error, FinalReviewPreflightDenied):
-                    fingerprint = error.fingerprint or hashlib.sha256(
-                        str(error).encode("utf-8")
-                    ).hexdigest()
-                    code = error.result.error_code or "FINAL-REVIEW-PREFLIGHT"
-                    detail = str(error)
-                    affected_paths = error.result.affected_paths
-                    rewind_step = {
-                        (
-                            WorkflowStep.CLAUDE_FINAL_REVIEW,
-                            "CODEX-FINAL-RESULT-MISSING",
-                        ): WorkflowStep.CODEX_FINAL_REVIEW,
-                    }.get((state.current_step, code))
+            except FinalReviewPreflightDenied as error:
+                fingerprint = error.fingerprint or hashlib.sha256(
+                    str(error).encode("utf-8")
+                ).hexdigest()
+                code = error.result.error_code or "FINAL-REVIEW-PREFLIGHT"
+                detail = str(error)
+                affected_paths = error.result.affected_paths
+                rewind_step = {
+                    (
+                        WorkflowStep.CLAUDE_FINAL_REVIEW,
+                        "CODEX-FINAL-RESULT-MISSING",
+                    ): WorkflowStep.CODEX_FINAL_REVIEW,
+                }.get((state.current_step, code))
+                if (
+                    rewind_step is not None
+                    and state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
+                ):
+                    logger.warning(
+                        "Final-review prerequisite %s is missing for the current "
+                        "fingerprint; rewinding automatically from %s to %s.",
+                        code,
+                        state.current_step.value,
+                        rewind_step.value,
+                    )
+                    state = state.with_current_step(rewind_step)
+                    self.driver.checkpoint(state, history)
+                    return state, None
+                if (
+                    code == "UNAUTHORIZED-PATH"
+                    and error.fingerprint is not None
+                    and affected_paths
+                ):
+                    driver_state = self.driver.active_state
                     if (
-                        rewind_step is not None
-                        and state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
+                        isinstance(driver_state, WorkflowState)
+                        and driver_state.run_id == state.run_id
                     ):
-                        logger.warning(
-                            "Final-review prerequisite %s is missing for the current "
-                            "fingerprint; rewinding automatically from %s to %s.",
-                            code,
-                            state.current_step.value,
-                            rewind_step.value,
+                        state = replace(
+                            state,
+                            bootstrap_checks=driver_state.bootstrap_checks,
                         )
-                        state = state.with_current_step(rewind_step)
-                        self.driver.checkpoint(state, history)
-                        return state, None
-                    if (
-                        code == "UNAUTHORIZED-PATH"
-                        and error.fingerprint is not None
-                        and affected_paths
-                    ):
-                        driver_state = self.driver.active_state
-                        if (
-                            isinstance(driver_state, WorkflowState)
-                            and driver_state.run_id == state.run_id
-                        ):
-                            state = replace(
-                                state,
-                                bootstrap_checks=driver_state.bootstrap_checks,
-                            )
-                        state = state.await_user_gate(
-                            reason=GateReason.UNEXPECTED_FILE,
-                            detail=f"UNEXPECTED-PATH | {detail}",
-                            fingerprint=error.fingerprint,
-                            paths=affected_paths,
-                            resume_step=state.current_step,
-                        )
-                        self.driver.checkpoint(state, history)
-                        return state, None
-                else:
-                    fingerprint = error.measurement.input_digest
-                    code = "PROVIDER-INPUT-BUDGET"
-                    detail = str(error)
-                    affected_paths = ()
-                driver_state = self.driver.active_state
-                if isinstance(driver_state, WorkflowState) and driver_state.run_id == state.run_id:
-                    state = replace(state, bootstrap_checks=driver_state.bootstrap_checks)
+                    state = state.await_user_gate(
+                        reason=GateReason.UNEXPECTED_FILE,
+                        detail=f"UNEXPECTED-PATH | {detail}",
+                        fingerprint=error.fingerprint,
+                        paths=affected_paths,
+                        resume_step=state.current_step,
+                    )
+                    self.driver.checkpoint(state, history)
+                    return state, None
                 state = state.await_bootstrap_resume(
                     detail=f"{code} | {detail}",
                     fingerprint=fingerprint,
                     paths=affected_paths,
                 )
+                self.driver.checkpoint(state, history)
+                return state, None
+            except ProviderInputBudgetExceeded as error:
+                driver_state = self.driver.active_state
+                if isinstance(driver_state, WorkflowState) and driver_state.run_id == state.run_id:
+                    state = replace(state, bootstrap_checks=driver_state.bootstrap_checks)
+                state = state.complete_provider_input_boundary_verdict()
+                self._persist_structured(self.driver.persist_gate_transition, state)
                 self.driver.checkpoint(state, history)
                 return state, None
             except ProviderRequestRoundRequired as changed:
@@ -3243,6 +3305,18 @@ class WorkflowEngine:
                     disposition_limit_failure is not None,
                 )
                 if not failure.automatic_resume:
+                    if (
+                        failure.failure_kind is AgentFailureKind.QUOTA
+                        and (
+                            state.current_work_unit.kind is WorkUnitKind.PLAN
+                            or failure.diff_fingerprint is not None
+                        )
+                    ):
+                        state = state.complete_quota_automation_verdict()
+                        self._persist_structured(
+                            self.driver.persist_gate_transition, state
+                        )
+                        self.driver.checkpoint(state, history)
                     return state, None
                 assert failure.resume_at_utc is not None
                 resume_at = datetime.fromisoformat(

@@ -26,7 +26,7 @@ from contracts import (
 from native_codex_contract import NativeCodexContext, NativeCodexRequestKind
 from native_codex_request import NativeCodexEvidenceInput, NativeCodexRequestSpec, build_native_codex_request
 from native_review_contract import NativeReviewContext
-from native_review_request import NativeReviewEvidenceInput, NativeReviewKind, NativeReviewRequestSpec, build_native_review_request
+from native_review_request import NativeReviewEvidenceInput, NativeReviewKind, NativeReviewRequestSpec, PROVIDER_INPUT_BOUNDARY_EVIDENCE_KIND, build_native_review_request
 
 
 def _settings(role: str) -> AgentSettings:
@@ -255,4 +255,37 @@ def test_native_claude_prepares_request_components_and_bound_output() -> None:
     }
     envelope = {"is_error": False, "permission_denials": [], "structured_output": {"result": result}}
     assert json.loads(adapter.extract_output(json.dumps(envelope), "", {}))["decision"] == "approved"
+    adapter.cleanup()
+
+
+def test_native_claude_boundary_notice_allows_reading_repository_paths() -> None:
+    original = _review_bundle()
+    context = original.bound_context.context
+    bundle = build_native_review_request(
+        NativeReviewRequestSpec(
+            context=context,
+            review_kind=NativeReviewKind.SLICE,
+            target_branch="feature/native",
+            base_commit="b" * 40,
+            authorized_paths=("src/workflow.py",),
+            acceptance_criteria=("Inspect current files.",),
+            evidence=(
+                NativeReviewEvidenceInput(
+                    "diff",
+                    PROVIDER_INPUT_BOUNDARY_EVIDENCE_KIND,
+                    '{"evidence_complete":false}',
+                ),
+            ),
+        )
+    )
+    adapter = NativeClaudeReviewAdapter(_settings("claude"))
+
+    prepared = adapter.prepare_native_provider_input(bundle)
+    directive = next(
+        item.content for item in prepared.components if item.name == "start_directive"
+    )
+
+    assert "additional Read calls for repository paths" in directive
+    assert "current read-only repository snapshot" in directive
+    assert "Read calls total" not in directive
     adapter.cleanup()

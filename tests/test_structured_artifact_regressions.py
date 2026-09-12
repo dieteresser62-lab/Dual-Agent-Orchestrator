@@ -102,12 +102,14 @@ from workflow import (
     WorkflowEngine,
     WorkflowExecutionError,
     WorkflowHistory,
+    WorkflowRunResult,
     WorkflowChanges,
 )
 from workflow_state import (
     AgentProfileBinding,
     AgentFailureKind,
     GateReason,
+    GateStatus,
     InvocationFailureRecord,
     ProtocolBinding,
     ProtocolMode,
@@ -1140,7 +1142,7 @@ def _pending_reviewer_recovery_case(
     return driver, state, output
 
 
-def test_budget_denial_persists_gate_checkpoint_and_resumes_idempotently(
+def test_budget_denial_persists_terminal_checkpoint_without_provider_start(
     tmp_path: Path,
 ) -> None:
     repository = _repository(tmp_path, "feature/structured-regression")
@@ -1207,14 +1209,17 @@ def test_budget_denial_persists_gate_checkpoint_and_resumes_idempotently(
     )
 
     assert output is None
-    assert halted.current_work_unit.gate.reason.value == "bootstrap_check"
-    assert halted.current_work_unit.gate.resume_step is WorkflowStep.CODEX_IMPLEMENTATION
+    assert halted.current_work_unit.status is WorkUnitStatus.COMPLETED
+    assert halted.current_work_unit.gate.status is GateStatus.CLEAR
+    assert halted.current_step is WorkflowStep.CODEX_IMPLEMENTATION
+    assert WorkflowRunResult(halted, history).rejection_code == "PROVIDER-INPUT-BUDGET"
     assert driver.state_file.exists()
     checkpoint_path = next((driver.checkpoint_dir / halted.run_id).iterdir())
     checkpoint_state = WorkflowState.from_dict(
         json.loads(checkpoint_path.read_text(encoding="utf-8"))["state"]
     )
-    assert checkpoint_state.current_work_unit.gate.reason.value == "bootstrap_check"
+    assert checkpoint_state.current_work_unit.status is WorkUnitStatus.COMPLETED
+    assert checkpoint_state.current_work_unit.gate.status is GateStatus.CLEAR
     measurement_records = tuple(
         record
         for record in ArtifactStore(repository, halted.run_id).load_chain()
@@ -1235,16 +1240,6 @@ def test_budget_denial_persists_gate_checkpoint_and_resumes_idempotently(
     assert "Komponenten `stdin_prompt=9/9`" in audit
     assert "oversized" not in audit
 
-    resumed = halted.resume_after_invocation_halt()
-    driver.checkpoint(resumed, history)
-    resumed = driver.active_state or resumed
-    halted_again, output = engine._invoke_role(
-        resumed, history, context, AgentRole.CODEX, denied_provider_start
-    )
-
-    assert output is None
-    assert halted_again.current_step is WorkflowStep.CODEX_IMPLEMENTATION
-    assert halted_again.current_work_unit.gate == halted.current_work_unit.gate
     measurements = tuple(
         record
         for record in ArtifactStore(repository, halted.run_id).load_chain()

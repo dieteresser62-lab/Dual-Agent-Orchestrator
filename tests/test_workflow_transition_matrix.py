@@ -370,14 +370,6 @@ GATE_SOURCE_MAP = (
         ("scope-user-gate",),
     ),
     GateSourceRow(
-        "PROVIDER-INPUT-BUDGET",
-        "bootstrap_check",
-        "resume",
-        "workflow._invoke_role",
-        ("workflow._invoke_role", "workflow_baseline.bootstrap_fact"),
-        ("provider-input-budget-resume",),
-    ),
-    GateSourceRow(
         "FINAL-REVIEW-PREFLIGHT",
         "bootstrap_check",
         "resume",
@@ -557,7 +549,6 @@ GATE_CASE_ORACLE = (
     ("head-drift-user-gate", "unexpected_file", "HEAD-DRIFT", "user"),
     ("slice-boundary-policy-gate", "unexpected_file", "SLICE-HEAD-DRIFT", "policy"),
     ("scope-user-gate", "unexpected_file", "UNEXPECTED-PATH", "user"),
-    ("provider-input-budget-resume", "bootstrap_check", "PROVIDER-INPUT-BUDGET", "resume"),
     (
         "final-review-preflight-fallback-resume",
         "bootstrap_check",
@@ -684,6 +675,8 @@ GATE_FOREIGN_PREFIXES = {
     "AGENT-PROFILE-DIFF": "resume profile validation raises before workflow execution",
     "CORRECTION-REVIEW-DENIED": "terminal correction verdict is not a resumable gate",
     "FINAL-REVIEW-DENIED": "terminal reviewer verdict is not a resumable gate",
+    "PROVIDER-INPUT-BUDGET": "terminal provider-input verdict is not a resumable gate",
+    "QUOTA-AUTOMATION-STOPPED": "terminal quota verdict is not a resumable gate",
     "TASK-SCOPE": "invalid Codex slice plans raise a workflow contract error",
 }
 
@@ -747,6 +740,7 @@ EXPECTED_DIRECT_GATE_CONSTRUCTORS = Counter(
         ("workflow_state.py", "continue_retired_iteration_limit", "GateRecord"): 2,
         ("workflow_state.py", "record_invocation_failure", "GateRecord"): 1,
         ("workflow_state.py", "await_bootstrap_resume", "GateRecord"): 1,
+        ("workflow_state.py", "complete_quota_automation_verdict", "GateRecord"): 1,
         ("workflow_state.py", "resume_after_invocation_halt", "GateRecord"): 1,
         ("workflow_state.py", "resume_after_user_decision", "GateRecord"): 1,
     }
@@ -763,6 +757,7 @@ EXPECTED_GATE_REPLACEMENTS = Counter(
         ("workflow_state.py", "record_review_denial"): 1,
         ("workflow_state.py", "continue_retired_iteration_limit"): 2,
         ("workflow_state.py", "record_invocation_failure"): 1,
+        ("workflow_state.py", "complete_quota_automation_verdict"): 1,
         ("workflow_state.py", "await_bootstrap_resume"): 1,
         ("workflow_state.py", "resume_after_invocation_halt"): 1,
         ("workflow_state.py", "resume_after_user_decision"): 1,
@@ -1955,8 +1950,6 @@ def test_gate_source_map_and_structural_inventory_are_bidirectionally_closed() -
     assert constructors == EXPECTED_DIRECT_GATE_CONSTRUCTORS
     assert replacements == EXPECTED_GATE_REPLACEMENTS
     assert _unknown_gate_prefixes(trees) == set()
-    assert _assigned_prefixes_reaching_gate(trees) >= {"PROVIDER-INPUT-BUDGET"}
-
     case_results = {
         case[0]: _execute_gate_case(case) for case in GATE_CASE_ORACLE
     }
@@ -1976,7 +1969,7 @@ def test_gate_source_map_and_structural_inventory_are_bidirectionally_closed() -
             assert row.prefixless_grammar is None
 
     # Every explicitly mapped concrete identity exists in the source/registry
-    # inventory. Conversely the three high-risk identities have executable cases.
+    # inventory. Conversely the high-risk gate identities have executable cases.
     concrete = {row.rule_id for row in GATE_SOURCE_MAP if not row.rule_id.startswith("PREFIXLESS:")}
     discovered = (
         _literal_prefix_inventory(trees)
@@ -1989,7 +1982,6 @@ def test_gate_source_map_and_structural_inventory_are_bidirectionally_closed() -
         "HEAD-DRIFT",
         "SLICE-HEAD-DRIFT",
         "UNEXPECTED-PATH",
-        "PROVIDER-INPUT-BUDGET",
     } <= concrete
     assert set(GATE_FOREIGN_PREFIXES) <= _literal_prefix_inventory(trees)
     assert _source_map_errors(GATE_SOURCE_MAP, trees, case_results) == set()
@@ -2050,8 +2042,8 @@ def test_gate_source_map_rejects_orphans_and_per_emission_prefix_moves() -> None
     moved = dict(trees)
     moved["workflow.py"] = ast.parse(
         workflow_source.replace(
-            'code = "PROVIDER-INPUT-BUDGET"',
-            'code = "HEAD-DRIFT"',
+            'code = error.result.error_code or "FINAL-REVIEW-PREFLIGHT"',
+            'code = error.result.error_code or "HEAD-DRIFT"',
             1,
         )
     )
@@ -2063,8 +2055,8 @@ def test_gate_source_map_rejects_orphans_and_per_emission_prefix_moves() -> None
     dynamic = dict(trees)
     dynamic["workflow.py"] = ast.parse(
         workflow_source.replace(
-            'code = "PROVIDER-INPUT-BUDGET"',
-            'code = "ZZZ-DYNAMIC"',
+            'code = error.result.error_code or "FINAL-REVIEW-PREFLIGHT"',
+            'code = error.result.error_code or "ZZZ-DYNAMIC"',
             1,
         )
     )

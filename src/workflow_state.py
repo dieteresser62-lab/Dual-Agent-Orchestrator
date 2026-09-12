@@ -1420,6 +1420,38 @@ class WorkflowState:
             updated_at=updated_at,
         )
 
+    def complete_provider_input_boundary_verdict(
+        self, *, updated_at: str | None = None
+    ) -> WorkflowState:
+        """Finish with a visible denial when a provider request cannot fit safely."""
+
+        current = self.current_work_unit
+        if current.status is not WorkUnitStatus.IN_PROGRESS:
+            raise WorkflowStateValidationError(
+                "only an in-progress work unit can record a provider-input verdict"
+            )
+        matching_fact = next(
+            (
+                fact
+                for fact in reversed(self.bootstrap_checks)
+                if fact.check_kind == "provider_input_measurement"
+                and fact.work_unit_id == current.work_unit_id
+                and fact.operation == current.current_step.value
+                and fact.decision == "denied"
+                and fact.error_code == "PROVIDER-INPUT-BUDGET"
+            ),
+            None,
+        )
+        if matching_fact is None:
+            raise WorkflowStateValidationError(
+                "provider-input verdict requires its denied measurement fact"
+            )
+        return self._replace_current_unit(
+            replace(current, status=WorkUnitStatus.COMPLETED),
+            slices=self._slices_with_current_status(SliceStatus.IN_PROGRESS),
+            updated_at=updated_at,
+        )
+
     def start_work_unit(
         self,
         *,
@@ -2325,6 +2357,43 @@ class WorkflowState:
             ),
         )
         return self._replace_current_unit(updated, slices=self._slices_with_current_status(SliceStatus.AWAITING_RESUME), updated_at=updated_at)
+
+    def complete_quota_automation_verdict(
+        self, *, updated_at: str | None = None
+    ) -> WorkflowState:
+        """Turn a safely classified quota stop into a terminal operator-visible result."""
+
+        current = self.current_work_unit
+        if (
+            current.status is not WorkUnitStatus.AWAITING_RESUME
+            or current.gate.reason is not GateReason.QUOTA
+            or not current.invocation_failures
+        ):
+            raise WorkflowStateValidationError(
+                "quota verdict requires a non-automatic quota failure"
+            )
+        failure = current.invocation_failures[-1]
+        if (
+            failure.failure_kind is not AgentFailureKind.QUOTA
+            or failure.automatic_resume
+            or failure.step is not current.current_step
+            or (
+                current.kind is not WorkUnitKind.PLAN
+                and failure.diff_fingerprint is None
+            )
+        ):
+            raise WorkflowStateValidationError(
+                "quota verdict requires safely bound terminal failure evidence"
+            )
+        return self._replace_current_unit(
+            replace(
+                current,
+                status=WorkUnitStatus.COMPLETED,
+                gate=GateRecord(),
+            ),
+            slices=self._slices_with_current_status(SliceStatus.IN_PROGRESS),
+            updated_at=updated_at,
+        )
 
     def resume_after_invocation_halt(
         self, *, updated_at: str | None = None

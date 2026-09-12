@@ -7,6 +7,7 @@ no reverse import or mutable engine dependency.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any
 
@@ -34,6 +35,7 @@ from native_review_request import (
     NativeReviewKind,
     NativeReviewRequestBundle,
     NativeReviewRequestSpec,
+    PROVIDER_INPUT_BOUNDARY_EVIDENCE_KIND,
     build_native_review_request,
 )
 from prompts import NATIVE_CODEX_SYSTEM_POLICY
@@ -57,6 +59,7 @@ from workflow_state import (
 
 FINAL_REVIEW_DISPOSITION_BATCH_SIZE = MAX_NATIVE_REVIEW_DISPOSITIONS
 FINAL_REVIEW_ROUND_SAFETY_LIMIT = 256
+FULL_BRANCH_DIFF_EVIDENCE_CEILING_CHARS = 1_000_000
 FINDING_SIGNATURE_REVIEW_CRITERION = (
     "review_contract.known_open_finding_signatures binds every known open "
     "finding identifier to SHA-256 over canonical JSON containing its "
@@ -429,6 +432,44 @@ def native_review_request(
         if correction_goal is not None
         else context.distilled_context
     )
+    oversized_full_branch_diff = (
+        evidence_kind is full_branch_evidence_kind
+        and review_packet is None
+        and len(review_diff) > FULL_BRANCH_DIFF_EVIDENCE_CEILING_CHARS
+    )
+    review_evidence_kind = (
+        PROVIDER_INPUT_BOUNDARY_EVIDENCE_KIND
+        if oversized_full_branch_diff
+        else evidence_kind.value
+    )
+    if oversized_full_branch_diff:
+        encoded_review_diff = review_diff.encode("utf-8")
+        review_evidence_content = json.dumps(
+            {
+                "boundary": "provider_input",
+                "evidence_complete": False,
+                "omitted_evidence": "full_branch_diff",
+                "omitted_chars": len(review_diff),
+                "omitted_utf8_bytes": len(encoded_review_diff),
+                "omitted_sha256": hashlib.sha256(encoded_review_diff).hexdigest(),
+                "repository_fingerprint": changes.fingerprint,
+                "changed_paths": "See the request-level authorized_paths array.",
+                "available_evidence": (
+                    "The complete current repository snapshot is mounted read-only."
+                ),
+                "required_reviewer_action": (
+                    "Inspect the current files needed for every review dimension with "
+                    "Read. Do not infer that the omitted full diff was supplied. Deny "
+                    "with a BLOCKER if a safe verdict requires unavailable baseline "
+                    "content."
+                ),
+            },
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    else:
+        review_evidence_content = review_diff
     evidence: list[NativeReviewEvidenceInput] = [
         NativeReviewEvidenceInput("assignment", "assignment", context.assignment),
         NativeReviewEvidenceInput(
@@ -446,7 +487,9 @@ def native_review_request(
         )
     else:
         evidence.append(
-            NativeReviewEvidenceInput("review-diff", evidence_kind.value, review_diff)
+            NativeReviewEvidenceInput(
+                "review-diff", review_evidence_kind, review_evidence_content
+            )
         )
     if evidence_kind is full_branch_evidence_kind:
         if history.codex_final_report is None:
@@ -471,6 +514,15 @@ def native_review_request(
         correction_goal=correction_goal,
         correction_criteria=correction_criteria,
     )
+    if oversized_full_branch_diff:
+        acceptance_criteria = (
+            *acceptance_criteria,
+            "The evidence manifest explicitly marks the oversized full branch diff "
+            "as withheld at the provider-input boundary. Inspect the required current "
+            "files in the complete read-only repository snapshot. Never treat the "
+            "request as complete diff evidence; deny with a BLOCKER when unavailable "
+            "baseline content is required for a safe verdict.",
+        )
     return build_native_review_request(
         NativeReviewRequestSpec(
             context=native_context,

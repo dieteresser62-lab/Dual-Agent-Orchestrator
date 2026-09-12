@@ -1263,6 +1263,7 @@ def _invocation_failure(
     *,
     received_at: datetime,
     reset_after_seconds: int | None = None,
+    provider_data: dict[str, object] | None = None,
 ) -> AgentInvocationError:
     reset = (
         QuotaReset(
@@ -1283,6 +1284,7 @@ def _invocation_failure(
         received_at=received_at,
         exit_code=None if kind is AgentFailureKind.QUOTA else 7,
         quota_reset=reset,
+        provider_data=provider_data,
     )
 
 
@@ -4291,7 +4293,7 @@ def test_plan_contract_validation_does_not_recover_matrix_content() -> None:
     assert driver.validation_recovery_calls == []
 
 
-def test_second_quota_on_same_step_stops_with_exit_two_without_reviewer() -> None:
+def test_absolute_quota_backstop_stops_with_terminal_verdict_without_reviewer() -> None:
     now = [datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)]
     changes = _changes("1", "src/early.py", TEST_FILE)
     driver = FakeDriver(
@@ -4333,13 +4335,181 @@ def test_second_quota_on_same_step_stops_with_exit_two_without_reviewer() -> Non
         ),
     )
 
-    assert result.exit_code == 2
-    assert result.state.current_work_unit.status is WorkUnitStatus.AWAITING_RESUME
-    assert result.state.current_work_unit.gate.reason is GateReason.QUOTA
+    assert result.exit_code == 5
+    assert result.workflow_rejected
+    assert result.rejection_code == "QUOTA-AUTOMATION-STOPPED"
+    assert result.state.current_work_unit.status is WorkUnitStatus.COMPLETED
+    assert result.state.current_work_unit.gate.status is GateStatus.CLEAR
     assert len(result.state.current_work_unit.invocation_failures) == 2
     assert result.state.current_work_unit.invocation_failures[-1].automatic_resume is False
     assert len(driver.codex_calls) == 2
     assert driver.reviewer_calls == []
+
+
+def test_multiple_progressing_quota_windows_resume_automatically() -> None:
+    now = [datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)]
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    driver = FakeDriver(
+        snapshots=[changes, changes, changes],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[_review_approval(AgentRole.CLAUDE)],
+        codex_failures=[
+            _invocation_failure(
+                AgentRole.CODEX,
+                AgentFailureKind.QUOTA,
+                "quota-window-1",
+                received_at=now[0],
+                reset_after_seconds=1,
+            ),
+            _invocation_failure(
+                AgentRole.CODEX,
+                AgentFailureKind.QUOTA,
+                "quota-window-2",
+                received_at=now[0] + timedelta(seconds=1),
+                reset_after_seconds=2,
+            ),
+            None,
+        ],
+    )
+
+    def sleep(seconds: float) -> None:
+        now[0] += timedelta(seconds=seconds)
+
+    result = WorkflowEngine(
+        driver, now_fn=lambda: now[0], sleep_fn=sleep
+    ).run_current_work_unit(
+        _slice_state(),
+        replace(
+            _context(),
+            quota_wait_policy=QuotaWaitPolicy(
+                safety_margin_seconds=0,
+                maximum_wait_seconds=60,
+                heartbeat_interval_seconds=1,
+            ),
+        ),
+    )
+
+    assert result.completed
+    assert len(driver.codex_calls) == 3
+    failures = result.state.current_work_unit.invocation_failures
+    assert [failure.automatic_resume for failure in failures] == [True, True]
+    assert [failure.auto_resume_count for failure in failures] == [1, 2]
+
+
+def test_immediate_repeated_quota_without_provider_work_is_terminal() -> None:
+    now = [datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)]
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    driver = FakeDriver(
+        snapshots=[changes, changes],
+        codex_outputs=[],
+        reviewer_outputs=[],
+        codex_failures=[
+            _invocation_failure(
+                AgentRole.CODEX,
+                AgentFailureKind.QUOTA,
+                "quota-first",
+                received_at=now[0],
+                reset_after_seconds=1,
+            ),
+            _invocation_failure(
+                AgentRole.CODEX,
+                AgentFailureKind.QUOTA,
+                "quota-immediate-repeat",
+                received_at=now[0] + timedelta(seconds=1),
+                reset_after_seconds=0,
+            ),
+        ],
+    )
+
+    def sleep(seconds: float) -> None:
+        now[0] += timedelta(seconds=seconds)
+
+    result = WorkflowEngine(
+        driver, now_fn=lambda: now[0], sleep_fn=sleep
+    ).run_current_work_unit(
+        _slice_state(),
+        replace(
+            _context(),
+            quota_wait_policy=QuotaWaitPolicy(
+                safety_margin_seconds=0,
+                maximum_wait_seconds=60,
+                heartbeat_interval_seconds=1,
+            ),
+        ),
+    )
+
+    assert result.exit_code == 5
+    assert result.rejection_code == "QUOTA-AUTOMATION-STOPPED"
+    assert result.state.current_work_unit.status is WorkUnitStatus.COMPLETED
+    assert [
+        failure.automatic_resume
+        for failure in result.state.current_work_unit.invocation_failures
+    ] == [True, False]
+    assert driver.failure_payloads[-1].failure_class == "terminal_rejection"
+    watch_result = WatchTaskResult.from_workflow(
+        WorkflowRunResult(
+            replace(
+                result.state,
+                protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+            ),
+            result.history,
+        )
+    )
+    assert watch_result.disposition is (
+        WatchTaskDisposition.REJECTED
+    )
+    assert driver.reviewer_calls == []
+
+
+def test_provider_usage_allows_same_reset_time_to_count_as_progress() -> None:
+    now = [datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)]
+    changes = _changes("1", "src/early.py", TEST_FILE)
+    driver = FakeDriver(
+        snapshots=[changes, changes, changes, changes],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[_review_approval(AgentRole.CLAUDE)],
+        codex_failures=[
+            _invocation_failure(
+                AgentRole.CODEX,
+                AgentFailureKind.QUOTA,
+                "quota-before-work",
+                received_at=now[0],
+                reset_after_seconds=1,
+            ),
+            _invocation_failure(
+                AgentRole.CODEX,
+                AgentFailureKind.QUOTA,
+                "quota-after-work",
+                received_at=now[0] + timedelta(seconds=1),
+                reset_after_seconds=0,
+                provider_data={"usage": {"output_tokens": 1}},
+            ),
+            None,
+        ],
+    )
+
+    def sleep(seconds: float) -> None:
+        now[0] += timedelta(seconds=seconds)
+
+    result = WorkflowEngine(
+        driver, now_fn=lambda: now[0], sleep_fn=sleep
+    ).run_current_work_unit(
+        _slice_state(),
+        replace(
+            _context(),
+            quota_wait_policy=QuotaWaitPolicy(
+                safety_margin_seconds=0,
+                maximum_wait_seconds=60,
+                heartbeat_interval_seconds=1,
+            ),
+        ),
+    )
+
+    assert result.completed
+    assert [
+        failure.automatic_resume
+        for failure in result.state.current_work_unit.invocation_failures
+    ] == [True, True]
 
 
 @pytest.mark.parametrize(
@@ -4350,7 +4520,7 @@ def test_second_quota_on_same_step_stops_with_exit_two_without_reviewer() -> Non
         (QuotaWaitPolicy(), None),
     ),
 )
-def test_non_terminable_quota_is_manual_exit_two(
+def test_non_automatic_quota_is_a_terminal_operator_verdict(
     policy: QuotaWaitPolicy, reset_after_seconds: int | None
 ) -> None:
     received = datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)
@@ -4373,10 +4543,14 @@ def test_non_terminable_quota_is_manual_exit_two(
         _slice_state(), replace(_context(), quota_wait_policy=policy)
     )
 
-    assert result.exit_code == 2
-    assert result.state.current_work_unit.status is WorkUnitStatus.AWAITING_RESUME
+    assert result.exit_code == 5
+    assert result.workflow_rejected
+    assert result.rejection_code == "QUOTA-AUTOMATION-STOPPED"
+    assert result.state.current_work_unit.status is WorkUnitStatus.COMPLETED
+    assert result.state.current_work_unit.gate.status is GateStatus.CLEAR
     failure = result.state.current_work_unit.invocation_failures[-1]
     assert failure.automatic_resume is False
+    assert driver.failure_payloads[-1].failure_class == "terminal_rejection"
     marker, _, _ = provider_text_evidence("usage cap reached")
     assert failure.provider_text == marker
     assert "usage cap reached" not in failure.provider_text
