@@ -252,13 +252,20 @@
         },
         {
           "ordinal": 18,
+          "expression": "cleanup_boundary is not None",
+          "read_names": [
+            "cleanup_boundary"
+          ]
+        },
+        {
+          "ordinal": 19,
           "expression": "not work_unit_paths",
           "read_names": [
             "work_unit_paths"
           ]
         },
         {
-          "ordinal": 19,
+          "ordinal": 20,
           "expression": "prior is None or prior.payload != work_unit_payload",
           "read_names": [
             "prior",

@@ -429,6 +429,33 @@ def test_final_review_pending_dispositions_are_derived_from_chain_boundary() -> 
     assert projection.pending.finding_ids == ("C-03", "C-04", "C-05")
 
 
+def test_correction_dispositions_are_limited_to_the_boundary_offer() -> None:
+    records = _build_case(
+        {
+            "events": [
+                {"op": "work", "work_unit": "2", "open_ids": []},
+                {"op": "open", "finding_id": "C-01", "work_unit": "2"},
+                {"op": "open", "finding_id": "C-02", "work_unit": "2"},
+                {"op": "open", "finding_id": "C-03", "work_unit": "2"},
+                {
+                    "op": "correction",
+                    "work_unit": "3",
+                    "finding_ids": ["C-01", "C-02"],
+                },
+                {"op": "close", "finding_id": "C-01", "work_unit": "3"},
+            ]
+        }
+    )
+
+    projection = project_final_review_dispositions(
+        replay_artifacts(records, RUN_ID), "3"
+    )
+
+    assert projection.initial_finding_ids == ("C-01", "C-02")
+    assert projection.dispositioned_finding_ids == ("C-01",)
+    assert projection.pending.finding_ids == ("C-02",)
+
+
 def test_reducer_is_pure_deterministic_and_does_not_mutate_records() -> None:
     records = _build_case(_corpus()[6])
     replay = replay_artifacts(records, RUN_ID)

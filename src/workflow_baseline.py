@@ -652,19 +652,32 @@ class WorkflowBaseline:
         unit = state.current_work_unit
         if unit.kind is not WorkUnitKind.PLAN and state.current_slice.scope_paths:
             chain = bridge.store.current_chain()
+            logical_id = f"work-unit-{unit.work_unit_id}"
             work_unit_paths = state.current_slice.scope_paths
             if is_finding_cleanup_work_unit(state, unit):
-                cleanup_findings = reduce_findings(
-                    replay_artifacts(
-                        chain,
-                        state.run_id,
-                        allow_empty=True,
-                        allow_incomplete_review_tail=True,
-                    )
-                ).ledger.findings
-                work_unit_paths = finding_cleanup_scope_paths(
-                    cleanup_findings, unit.open_findings
+                cleanup_boundary = next(
+                    (
+                        record.payload
+                        for record in chain
+                        if isinstance(record.payload, CorrectionWorkUnitPayload)
+                        and record.logical_id == logical_id
+                    ),
+                    None,
                 )
+                if cleanup_boundary is not None:
+                    work_unit_paths = cleanup_boundary.paths
+                else:
+                    cleanup_findings = reduce_findings(
+                        replay_artifacts(
+                            chain,
+                            state.run_id,
+                            allow_empty=True,
+                            allow_incomplete_review_tail=True,
+                        )
+                    ).ledger.findings
+                    work_unit_paths = finding_cleanup_scope_paths(
+                        cleanup_findings, unit.open_findings
+                    )
                 if not work_unit_paths:
                     raise WorkflowExecutionError(
                         "finding cleanup has no finding-derived repository scope"
@@ -709,7 +722,6 @@ class WorkflowBaseline:
                     ),
                 )
             )
-            logical_id = f"work-unit-{unit.work_unit_id}"
             base_idempotency_key = (
                 f"{'correction-' if unit.kind is WorkUnitKind.CORRECTION else ''}"
                 f"work-unit:{unit.work_unit_id}:round:{unit.round_number}"

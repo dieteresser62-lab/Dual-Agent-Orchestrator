@@ -228,6 +228,7 @@ def _append_test_commit_authority(
     state: WorkflowState,
     *,
     commit_ref: str,
+    findings: tuple[FindingRecord, ...] = (),
 ) -> WorkflowState:
     """Persist the review/attestation facts required by a synthetic commit.
 
@@ -261,13 +262,20 @@ def _append_test_commit_authority(
         idempotency_key=f"test-commit-validation:{slice_id}",
         fingerprint_sha256=fingerprint,
     )
+    for finding in findings:
+        bridge.append(
+            finding_payload(finding, work_unit_id=work_unit_id),
+            logical_id=f"finding-{finding.finding_id}",
+            idempotency_key=f"test-finding-opened:{finding.finding_id}",
+            fingerprint_sha256=fingerprint,
+        )
     review = append_provider_decision_authority(
         bridge,
         ReviewPayload(
             Role.CLAUDE,
             work_unit_id,
             "approved",
-            (),
+            tuple(finding.finding_id for finding in findings),
             None,
             "native-claude-review-v2",
             "native-review-request-" + hashlib.sha256(
@@ -5028,6 +5036,124 @@ def test_structured_bind_survives_round_number_increase_within_same_work_unit(
     assert tuple(item.revision for item in work_units) == (1, 2)
     assert tuple(item.payload.round_number for item in work_units) == (1, 2)
     assert len({item.idempotency_key for item in work_units}) == 2
+
+
+def test_real_cleanup_round_two_keeps_first_record_scope_and_replays(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path, "feature/cleanup-round-transition")
+    task = repository / "task.md"
+    _write_task(
+        task,
+        "feature/cleanup-round-transition",
+        "src/closed.py",
+        "src/open.py",
+    )
+    head = _git(repository, "rev-parse", "HEAD")
+    state = init_workflow_state(
+        run_id="cleanup-round-transition",
+        task_file=str(task),
+        branch="feature/cleanup-round-transition",
+        branch_base=head,
+        first_slice_start_commit=head,
+        slice_count=1,
+        task_digest="a" * 64,
+        task_scope_patterns=("src/closed.py", "src/open.py"),
+        target_branch="feature/cleanup-round-transition",
+        protocol_binding=ProtocolBinding(ProtocolMode.STRUCTURED_V2, "2"),
+    ).complete_current_work_unit().start_work_unit(
+        slice_id=1,
+        kind=WorkUnitKind.SLICE,
+        step=WorkflowStep.CODEX_IMPLEMENTATION,
+    ).bind_current_slice_git_boundary(
+        start_commit=head,
+        scope_paths=("src/closed.py", "src/open.py"),
+        start_fingerprint="b" * 64,
+    )
+    driver = ProductionWorkflowDriver(
+        repository_root=repository,
+        state_file=repository / ".orchestrator" / "state.json",
+        agents={},
+        config=orchestrator.OrchestratorConfig(repo_root=repository),
+        allowed_roots=(repository,),
+    )
+    findings = (
+        FindingRecord(
+            "C-01",
+            FindingClass.BLOCKER,
+            FindingStatus.OPEN,
+            "Cleanup must retain `src/closed.py` after disposition.",
+            "Replay round two with `src/closed.py` still authorized.",
+            FindingOrigin("1", 1, AgentRole.CLAUDE),
+        ),
+        FindingRecord(
+            "C-02",
+            FindingClass.BLOCKER,
+            FindingStatus.OPEN,
+            "Cleanup must continue to inspect `src/open.py`.",
+            "Replay round two with `src/open.py` authorized.",
+            FindingOrigin("1", 1, AgentRole.CLAUDE),
+        ),
+    )
+    reviewed = _append_test_commit_authority(
+        driver, state, commit_ref=head, findings=findings
+    )
+    cleanup = reviewed.complete_current_slice(
+        commit_ref=head
+    ).start_finding_cleanup_work_unit(finding_ids=("C-01", "C-02"))
+    driver.bind_work_unit(cleanup)
+    bridge = driver._artifact_bridge
+    assert bridge is not None
+    closed = replace(
+        findings[0],
+        status=FindingStatus.CLOSED,
+        status_rationale="The first cleanup review closed this finding.",
+    )
+    bridge.append(
+        finding_payload(
+            closed,
+            actor=AgentRole.CLAUDE,
+            action="status_changed",
+            work_unit_id=cleanup.current_work_unit_id,
+        ),
+        logical_id="finding-C-01",
+        idempotency_key="test-cleanup:C-01:closed",
+        fingerprint_sha256="c" * 64,
+    )
+    cleanup_history = WorkflowHistory(
+        cleanup.current_work_unit_id,
+        findings=(closed, findings[1]),
+    )
+    round_two = WorkflowEngine._record_final_review_delivery_round(
+        cleanup,
+        cleanup_history,
+        advance=True,
+    )
+
+    driver.bind_work_unit(round_two)
+    request_context = WorkflowEngine(driver)._bind_context_to_current_unit(
+        round_two,
+        WorkflowContext("assignment", "plan", "cleanup"),
+        cleanup_history,
+    )
+
+    chain = ArtifactStore(repository, state.run_id).load_chain()
+    replay_artifacts(chain, state.run_id)
+    cleanup_records = tuple(
+        record
+        for record in chain
+        if isinstance(record.payload, CorrectionWorkUnitPayload)
+        and record.logical_id == f"work-unit-{cleanup.current_work_unit_id}"
+    )
+    assert tuple(record.payload.round_number for record in cleanup_records) == (1, 2)
+    assert tuple(record.payload.paths for record in cleanup_records) == (
+        ("src/closed.py", "src/open.py"),
+        ("src/closed.py", "src/open.py"),
+    )
+    assert request_context.current_scope_paths == (
+        "src/closed.py",
+        "src/open.py",
+    )
 
 
 def test_multi_slice_plan_binding_pins_original_approved_commit_not_slice_start(

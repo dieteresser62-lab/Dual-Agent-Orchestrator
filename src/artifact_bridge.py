@@ -21,6 +21,7 @@ from artifact_models import (
     ArtifactRecord,
     BindingPayload,
     CommandSpec,
+    CorrectionWorkUnitPayload,
     DiagnosticPayload,
     Fingerprint,
     FingerprintKind,
@@ -66,7 +67,11 @@ from finding_order import replay_compatible_finding_ids, sorted_finding_ids
 from task_contract import TaskContract
 from validation_matrix import ValidationRequest
 from provider_input_budget import ProviderInputMeasurement
-from artifact_replay import ArtifactReplayResult, replay_artifacts
+from artifact_replay import (
+    ArtifactReplayResult,
+    _validate_work_unit_revision,
+    replay_artifacts,
+)
 
 
 class ArtifactBridgeError(RuntimeError):
@@ -555,6 +560,18 @@ class ArtifactBridge:
             idempotency_key=idempotency_key,
             payload=payload,
         )
+        if isinstance(
+            payload, (WorkUnitPayload, CorrectionWorkUnitPayload)
+        ) and logical_id.startswith("work-unit-"):
+            prior = {
+                item.logical_id: item
+                for item in self.store.current_chain()
+                if isinstance(
+                    item.payload, (WorkUnitPayload, CorrectionWorkUnitPayload)
+                )
+            }.get(logical_id)
+            if prior:
+                _validate_work_unit_revision(prior, record)
         try:
             persisted = self.store.put(record)
         except Exception:

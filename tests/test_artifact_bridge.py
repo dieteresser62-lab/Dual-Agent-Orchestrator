@@ -17,14 +17,15 @@ from artifact_bridge import (
     finding_handoff_export_payload, finding_handoff_import_payload,
 )
 from artifact_models import (
-    ArtifactRecord, ArtifactValidationError, FindingSeverity, FindingTransitionPayload,
+    ArtifactRecord, ArtifactValidationError, CorrectionWorkUnitPayload,
+    FindingSeverity, FindingTransitionPayload,
     Fingerprint, FingerprintKind, PlanPayload, ReviewPayload, SliceSpec,
     ProviderAttemptPayload, ProviderInputComponentPayload,
     ProviderInputMeasurementPayload, ProviderUsagePayload, Role, RoleProfilePayload,
     RunIdentityPayload, RunProfilePayload, WorkUnitPayload,
 )
 from artifact_store import ArtifactStore
-from artifact_replay import replay_artifacts
+from artifact_replay import ArtifactReplayError, replay_artifacts
 from contracts import (
     AgentRole, ContractResult, FindingClass, FindingOrigin, FindingRecord,
     FindingStatus, ReviewEvidence, ValidationAttestation, ValidationCommandSpec,
@@ -306,6 +307,82 @@ def test_bridge_rejects_idempotency_key_with_different_meaning(tmp_path: Path) -
             replace(original, paths=("src/b.py",)), logical_id="work-3",
             idempotency_key="work:3", fingerprint_sha256=DIGEST,
         )
+
+
+def test_bridge_rejects_scope_narrowing_before_record_publication(
+    tmp_path: Path,
+) -> None:
+    bridge = _bound_bridge(tmp_path, "run-scope-narrowing")
+    first = bridge.append(
+        WorkUnitPayload("3", 1, ("src/a.py", "tests/a.py")),
+        logical_id="work-unit-3",
+        idempotency_key="work-unit:3:round:1",
+        fingerprint_sha256=DIGEST,
+    )
+    before = bridge.store.load_chain()
+    record_names = tuple(path.name for path in bridge.store.records_dir.glob("*.json"))
+
+    with pytest.raises(ArtifactReplayError, match="does not extend scope"):
+        bridge.append(
+            WorkUnitPayload("3", 1, ("src/a.py",)),
+            logical_id="work-unit-3",
+            idempotency_key="work-unit:3:round:1:revision:2",
+            fingerprint_sha256=DIGEST,
+        )
+
+    assert tuple(path.name for path in bridge.store.records_dir.glob("*.json")) == record_names
+    assert bridge.store.load_chain() == before
+    assert replay_artifacts(before, bridge.store.run_id).head_record_id == first.record_id
+
+
+def test_bridge_accepts_scope_extension_within_the_same_round(tmp_path: Path) -> None:
+    bridge = _bound_bridge(tmp_path, "run-scope-extension")
+    bridge.append(
+        WorkUnitPayload("3", 1, ("src/a.py",)),
+        logical_id="work-unit-3",
+        idempotency_key="work-unit:3:round:1",
+        fingerprint_sha256=DIGEST,
+    )
+
+    extended = bridge.append(
+        WorkUnitPayload("3", 1, ("src/a.py", "tests/a.py")),
+        logical_id="work-unit-3",
+        idempotency_key="work-unit:3:round:1:revision:2",
+        fingerprint_sha256=DIGEST,
+    )
+
+    assert extended.revision == 2
+    assert replay_artifacts(
+        bridge.store.load_chain(), bridge.store.run_id
+    ).head_record_id == extended.record_id
+
+
+def test_bridge_rejects_scope_change_in_a_new_round_before_publication(
+    tmp_path: Path,
+) -> None:
+    bridge = _bound_bridge(tmp_path, "run-cross-round-scope-change")
+    bridge.append(
+        CorrectionWorkUnitPayload("3", 1, ("src/a.py",), ("C-01",)),
+        logical_id="work-unit-3",
+        idempotency_key="correction-work-unit:3:round:1",
+        fingerprint_sha256=DIGEST,
+    )
+    before = bridge.store.load_chain()
+    record_names = tuple(path.name for path in bridge.store.records_dir.glob("*.json"))
+
+    with pytest.raises(ArtifactReplayError, match="within the same round"):
+        bridge.append(
+            CorrectionWorkUnitPayload(
+                "3", 2, ("src/a.py", "tests/a.py"), ("C-01",)
+            ),
+            logical_id="work-unit-3",
+            idempotency_key="correction-work-unit:3:round:2",
+            fingerprint_sha256=DIGEST,
+        )
+
+    assert tuple(path.name for path in bridge.store.records_dir.glob("*.json")) == record_names
+    assert bridge.store.load_chain() == before
+    replay_artifacts(before, bridge.store.run_id)
 
 
 def test_command_mapping_preserves_argv_boundaries_and_legacy_shell_verbatim() -> None:

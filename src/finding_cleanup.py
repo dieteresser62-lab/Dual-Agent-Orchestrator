@@ -115,7 +115,7 @@ def finding_cleanup_scope_paths(
     selected = project_request_subset(
         findings,
         finding_ids=sorted_finding_ids(finding_ids),
-        open_only=True,
+        open_only=False,
     ).findings
     return tuple(
         sorted(

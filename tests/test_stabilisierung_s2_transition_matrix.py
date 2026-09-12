@@ -460,6 +460,11 @@ COMPARISON_TARGETS = (
 )
 COMPARISON_HELPERS = {
     (
+        "src/artifact_replay.py",
+        None,
+        "_validate_work_unit_revisions",
+    ): ("_validate_work_unit_revision",),
+    (
         "src/inbox_watcher.py",
         None,
         "watch_inbox",
@@ -598,7 +603,7 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/workflow_production.py:run_production_workflow": 4,
     "src/workflow_production.py:_run_production_transition_loop": 23,
     "src/workflow_baseline.py:matches_baseline_initialization_prefix": 24,
-    "src/workflow_baseline.py:WorkflowBaseline._persist_structured_baseline": 26,
+    "src/workflow_baseline.py:WorkflowBaseline._persist_structured_baseline": 28,
     "src/orchestrator.py:ProductionWorkflowDriver.assert_structured_decision_context": 5,
     "src/workflow_recovery.py:WorkflowRecovery._start_provider_attempt": 19,
     "src/orchestrator.py:ProductionWorkflowDriver._reconcile_provider_effect": 13,

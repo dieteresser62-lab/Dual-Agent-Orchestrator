@@ -152,6 +152,27 @@ def test_cleanup_scope_is_exact_union_of_paths_named_by_selected_findings() -> N
     )
 
 
+def test_cleanup_scope_retains_paths_after_an_offered_finding_closes() -> None:
+    offered = (_finding(1, path="src/closed.py"), _finding(2, path="src/open.py"))
+    after_review = (
+        FindingRecord(
+            finding_id=offered[0].finding_id,
+            finding_class=offered[0].finding_class,
+            status=FindingStatus.CLOSED,
+            summary=offered[0].summary,
+            acceptance_test=offered[0].acceptance_test,
+            origin=offered[0].origin,
+            status_rationale="The cleanup review closed this offered finding.",
+        ),
+        offered[1],
+    )
+
+    assert finding_cleanup_scope_paths(after_review, ("C-01", "C-02")) == (
+        "src/closed.py",
+        "src/open.py",
+    )
+
+
 def _codex_result(result_type: str, *, finding_ids: tuple[str, ...] = ()) -> dict[str, object]:
     result: dict[str, object] = {
         "schema_version": "native-agent-codex-result-v2",

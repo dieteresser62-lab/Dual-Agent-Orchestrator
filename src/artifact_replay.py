@@ -2292,27 +2292,7 @@ def _validate_work_unit_revisions(
             work_unit_id = record.logical_id.removeprefix("work-unit-")
             prior = latest_work_units.get(work_unit_id)
             if prior is not None:
-                prior_payload = prior.payload
-                payload = record.payload
-                assert isinstance(
-                    prior_payload, (WorkUnitPayload, CorrectionWorkUnitPayload)
-                )
-                if (
-                    type(payload) is not type(prior_payload)
-                    or payload.slice_id != prior_payload.slice_id
-                    or payload.round_number < prior_payload.round_number
-                    or not set(prior_payload.paths).issubset(payload.paths)
-                    or (
-                        payload.paths != prior_payload.paths
-                        and payload.round_number != prior_payload.round_number
-                    )
-                ):
-                    _fail(
-                        ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
-                        "work-unit revision changes its type or slice, rewinds its round, "
-                        "or does not extend scope within the same round",
-                        record,
-                    )
+                _validate_work_unit_revision(prior, record)
             latest_work_units[work_unit_id] = record
             # The first revision establishes authority for this logical work
             # unit.  Later revisions must not move the global implementation
@@ -2320,6 +2300,34 @@ def _validate_work_unit_revisions(
             # forward reference.
             work_units.setdefault(work_unit_id, record)
     return work_units
+
+
+def _validate_work_unit_revision(
+    prior: ArtifactRecord,
+    current: ArtifactRecord,
+) -> None:
+    """Enforce the single read/write invariant for one work-unit revision."""
+
+    prior_payload = prior.payload
+    payload = current.payload
+    assert isinstance(prior_payload, (WorkUnitPayload, CorrectionWorkUnitPayload))
+    assert isinstance(payload, (WorkUnitPayload, CorrectionWorkUnitPayload))
+    if (
+        type(payload) is not type(prior_payload)
+        or payload.slice_id != prior_payload.slice_id
+        or payload.round_number < prior_payload.round_number
+        or not set(prior_payload.paths).issubset(payload.paths)
+        or (
+            payload.paths != prior_payload.paths
+            and payload.round_number != prior_payload.round_number
+        )
+    ):
+        _fail(
+            ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+            "work-unit revision changes its type or slice, rewinds its round, "
+            "or does not extend scope within the same round",
+            current,
+        )
 
 
 def _validate_single_finding_import(

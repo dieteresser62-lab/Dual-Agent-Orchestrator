@@ -340,17 +340,17 @@ def project_final_review_dispositions(
 ) -> FinalReviewDispositionProjection:
     """Derive the exact undispositioned final-review set from the record chain.
 
-    The first WorkUnit record is the immutable entry boundary. Findings open at
-    that boundary require one reviewer-owned status change or reclassification
-    in this work unit. Runtime history and the state mirror are deliberately not
-    inputs to this projection.
+    The first work-unit record is the immutable entry boundary. A regular final
+    review owes dispositions for every Finding open at that boundary. A bounded
+    correction owes them only for the Finding IDs offered by its correction
+    boundary. Runtime history and the state mirror are deliberately not inputs.
     """
 
     target = str(work_unit_id)
     boundary_positions = tuple(
         index
         for index, record in enumerate(replay.records)
-        if isinstance(record.payload, WorkUnitPayload)
+        if isinstance(record.payload, (WorkUnitPayload, CorrectionWorkUnitPayload))
         and record.logical_id == f"work-unit-{target}"
     )
     if not boundary_positions:
@@ -358,8 +358,12 @@ def project_final_review_dispositions(
             f"final review work unit {target} has no record-chain boundary"
         )
     boundary = boundary_positions[0]
-    entry_findings = _reduce_events(_transition_events(replay.records[:boundary]))
-    initial_ids = project_open_set(entry_findings).finding_ids
+    boundary_payload = replay.records[boundary].payload
+    if isinstance(boundary_payload, CorrectionWorkUnitPayload):
+        initial_ids = sorted_finding_ids(boundary_payload.finding_ids)
+    else:
+        entry_findings = _reduce_events(_transition_events(replay.records[:boundary]))
+        initial_ids = project_open_set(entry_findings).finding_ids
     dispositioned = sorted_finding_ids(
         {
             event.payload.finding_id
