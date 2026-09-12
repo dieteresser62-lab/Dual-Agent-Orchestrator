@@ -9,7 +9,7 @@
       "local_invariant": "A BLOCKER validation command belongs to one of the request-bound configured argv families.",
       "missing_schema_feature": "positional_tuple_and_argv_prefix_relation",
       "provider_evidence": "Claude Code 2.1.241 rejects prefixItems, so a generated argv array cannot be constrained to one of the request-bound multi-token prefixes.",
-      "regression_test": "tests/test_native_review_request.py::test_registered_claude_exceptions_cover_writer_valid_local_rejections"
+      "regression_test": "tests/test_native_review_request.py::test_registered_review_exceptions_cover_writer_valid_local_rejections"
     },
     {
       "exception_id": "claude-anchor-id-uniqueness",
@@ -19,7 +19,7 @@
       "local_invariant": "Anchor identifiers are unique within one review result.",
       "missing_schema_feature": "cross_item_property_uniqueness",
       "provider_evidence": "JSON Schema array uniqueness compares complete objects and cannot express uniqueness of one property across otherwise distinct anchor objects.",
-      "regression_test": "tests/test_native_review_request.py::test_registered_claude_exceptions_cover_writer_valid_local_rejections"
+      "regression_test": "tests/test_native_review_request.py::test_registered_review_exceptions_cover_writer_valid_local_rejections"
     },
     {
       "exception_id": "claude-finding-event-uniqueness",
@@ -29,7 +29,7 @@
       "local_invariant": "A finding identifier occurs in exactly one status, reclassification, or new-finding event.",
       "missing_schema_feature": "cross_array_and_cross_item_uniqueness",
       "provider_evidence": "The supported writer subset has no cross-array relation and cannot compare finding_id properties across generated array items.",
-      "regression_test": "tests/test_native_review_request.py::test_registered_claude_exceptions_cover_writer_valid_local_rejections"
+      "regression_test": "tests/test_native_review_request.py::test_registered_review_exceptions_cover_writer_valid_local_rejections"
     },
     {
       "exception_id": "claude-new-finding-order",
@@ -39,7 +39,7 @@
       "local_invariant": "New finding identifiers start at next_finding_id and remain contiguous in canonical order.",
       "missing_schema_feature": "positional_tuple",
       "provider_evidence": "Claude Code 2.1.241 rejects prefixItems, so the schema closes the finite ID window but local validation retains ordering and contiguity.",
-      "regression_test": "tests/test_native_review_request.py::test_registered_claude_exceptions_cover_writer_valid_local_rejections"
+      "regression_test": "tests/test_native_review_request.py::test_registered_review_exceptions_cover_writer_valid_local_rejections"
     },
     {
       "exception_id": "claude-request-id-binding",
@@ -49,7 +49,7 @@
       "local_invariant": "The response request_id equals the request identifier whose digest includes the response-schema digest.",
       "missing_schema_feature": "cyclic_request_id_const",
       "provider_evidence": "Embedding the final request_id as a schema const would change the response-schema digest in the request_id preimage; exact equality therefore remains local.",
-      "regression_test": "tests/test_native_review_request.py::test_registered_claude_exceptions_cover_writer_valid_local_rejections"
+      "regression_test": "tests/test_native_review_request.py::test_registered_review_exceptions_cover_writer_valid_local_rejections"
     },
     {
       "exception_id": "claude-resulting-blocker-state",
@@ -59,7 +59,7 @@
       "local_invariant": "A denial leaves an own BLOCKER open and an approval leaves no own BLOCKER open after every finding transition is applied.",
       "missing_schema_feature": "cross_array_state_transition_fold",
       "provider_evidence": "The writer schema constrains each event and cardinality but cannot fold prior finding state together with generated status and reclassification arrays.",
-      "regression_test": "tests/test_native_review_request.py::test_registered_claude_exceptions_cover_writer_valid_local_rejections"
+      "regression_test": "tests/test_native_review_request.py::test_registered_review_exceptions_cover_writer_valid_local_rejections"
     },
     {
       "exception_id": "codex-disposition-order-and-uniqueness",
@@ -130,6 +130,16 @@
       "missing_schema_feature": "array_lexicographic_order",
       "provider_evidence": "Codex 0.147.0 rejects prefixItems and array-valued const, so JSON Schema can close membership and cardinality but cannot compare adjacent generated path values lexicographically.",
       "regression_test": "tests/test_native_codex_contract.py::test_writer_schema_keeps_test_file_order_fail_closed_locally"
+    },
+    {
+      "exception_id": "review-finding-signature-uniqueness",
+      "provider": "claude",
+      "operations": ["final", "plan", "slice"],
+      "error_code": "finding-signature-duplicate",
+      "local_invariant": "A new finding signature differs from every known open finding signature and every earlier new finding in the same result.",
+      "missing_schema_feature": "cross_array_derived_hash_uniqueness",
+      "provider_evidence": "The supported JSON Schema subset cannot derive NFKC/casefolded SHA-256 values from generated acceptance prose and repository-path mentions or compare them with request-bound signatures.",
+      "regression_test": "tests/test_native_review_request.py::test_registered_review_exceptions_cover_writer_valid_local_rejections"
     }
   ]
 }
