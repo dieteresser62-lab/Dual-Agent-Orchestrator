@@ -31,6 +31,10 @@ from contracts import (
 )
 from content_authority import ValidationCapture, validation_output_digest
 from finding_order import finding_id_sort_key
+from finding_cleanup import (
+    is_finding_cleanup_work_unit,
+    plan_finding_cleanup,
+)
 from finding_reducer import project_open_set
 from gates import TestChangeEvidence
 from review_packets import ReviewPacket
@@ -941,7 +945,12 @@ class ScriptedWorkflowDriver:
         unit_id = state.current_work_unit_id
         ledger = self.durable_findings or findings
         initial_ids = self._final_review_entry_ids.setdefault(
-            unit_id, project_open_set(ledger).finding_ids
+            unit_id,
+            (
+                state.current_work_unit.open_findings
+                if is_finding_cleanup_work_unit(state)
+                else project_open_set(ledger).finding_ids
+            ),
         )
         dispositioned = self._final_review_dispositioned_ids.setdefault(
             unit_id, set()
@@ -984,7 +993,10 @@ class ScriptedWorkflowDriver:
         previous_by_id = {item.finding_id: item for item in previous_findings}
         if (
             self.active_state is not None
-            and self.active_state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
+            and (
+                self.active_state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
+                or is_finding_cleanup_work_unit(self.active_state)
+            )
         ):
             dispositioned = self._final_review_dispositioned_ids.setdefault(
                 self.active_state.current_work_unit_id, set()
@@ -1863,6 +1875,37 @@ def _run_scripted_workflow(
             session.driver.checkpoint(current, history)
             current = session.driver.active_state or current
 
+    def run_cleanup_after_slice(report: ScriptedRunReport) -> ScriptedRunReport:
+        current = report.result.state
+        if current.current_work_unit.kind is not WorkUnitKind.SLICE:
+            return report
+        findings = session.driver.carry_forward_native_findings(
+            current, report.result.history.findings
+        )
+        addressed_ids = tuple(
+            finding_id
+            for unit in current.work_units
+            if is_finding_cleanup_work_unit(current, unit)
+            for finding_id in unit.open_findings
+        )
+        cleanup = plan_finding_cleanup(
+            findings, previously_addressed_ids=addressed_ids
+        )
+        if cleanup is None:
+            return report
+        cleanup_state = current.start_finding_cleanup_work_unit(
+            finding_ids=cleanup.finding_ids
+        )
+        carried_attestations = report.result.history.attestations[-1:]
+        cleanup_history = WorkflowHistory(
+            cleanup_state.current_work_unit_id,
+            findings=findings,
+            attestations=carried_attestations,
+        )
+        session.driver.bind_work_unit(cleanup_state)
+        session.driver.checkpoint(cleanup_state, cleanup_history)
+        return run_unit(cleanup_state, cleanup_history)
+
     first = run_unit(state)
     if not first.result.completed:
         return first
@@ -1870,9 +1913,12 @@ def _run_scripted_workflow(
     if state.execution_mode == "PLAN_ONLY":
         return first
     planned_slices = state.planned_slices
-    completed_slice = (
-        first if state.current_work_unit.kind is WorkUnitKind.SLICE else None
-    )
+    completed_slice = first if state.current_work_unit.kind is WorkUnitKind.SLICE else None
+    if completed_slice is not None:
+        completed_slice = run_cleanup_after_slice(completed_slice)
+        if not completed_slice.result.completed:
+            return completed_slice
+        state = completed_slice.result.state
     completed_ids = {
         item.slice_id for item in state.slices if item.commit_ref is not None
     }
@@ -1896,6 +1942,9 @@ def _run_scripted_workflow(
             start_fingerprint="0" * 64,
         )
         completed_slice = run_unit(state)
+        if not completed_slice.result.completed:
+            return completed_slice
+        completed_slice = run_cleanup_after_slice(completed_slice)
         if not completed_slice.result.completed:
             return completed_slice
         state = completed_slice.result.state

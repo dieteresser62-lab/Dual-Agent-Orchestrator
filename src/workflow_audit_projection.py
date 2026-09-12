@@ -45,6 +45,7 @@ from contracts import (
     PlannedSlice,
     ValidationAttestation,
 )
+from finding_cleanup import is_finding_cleanup_work_unit
 from finding_reducer import reduce_findings
 from gates import matches_path_patterns
 from git_service import inspect_repository
@@ -421,7 +422,10 @@ def _recover_final_review_attestation(
     latest prior fact lets ``_attestation`` reuse it when the branch is unchanged;
     a changed branch still selects and persists a new validation normally.
     """
-    if state.current_work_unit.kind is not WorkUnitKind.FINAL_REVIEW:
+    if (
+        state.current_work_unit.kind is not WorkUnitKind.FINAL_REVIEW
+        and not is_finding_cleanup_work_unit(state)
+    ):
         return current_history
     carried = current_history.attestations[-1:]
     if not carried:

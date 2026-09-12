@@ -432,6 +432,17 @@ def project_latest_recorded_statuses(
     return tuple(latest[key] for key in sorted(latest, key=finding_id_sort_key))
 
 
+def is_closed_finding_transition(record: ArtifactRecord) -> bool:
+    """Keep the reviewer-owned closed-status predicate inside the reducer."""
+
+    payload = record.payload
+    return (
+        isinstance(payload, FindingTransitionPayload)
+        and payload.action == "status_changed"
+        and payload.finding_status == "closed"
+    )
+
+
 def project_legacy_mirror_statuses(
     history_documents: Sequence[object],
     *,

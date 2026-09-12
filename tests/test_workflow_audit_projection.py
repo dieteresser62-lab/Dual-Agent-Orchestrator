@@ -15,6 +15,7 @@ EXPECTED_INTERNAL_IMPORTS = {
     "artifact_replay",
     "audit_trail",
     "contracts",
+    "finding_cleanup",
     "finding_reducer",
     "gates",
     "git_service",

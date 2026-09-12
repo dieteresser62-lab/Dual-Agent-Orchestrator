@@ -893,7 +893,7 @@ class WorkflowPersistence:
         unit = state.current_work_unit
         review_type = (
             "final review"
-            if unit.kind is WorkUnitKind.FINAL_REVIEW
+            if state.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW  # allowlist:provider -- canonical state-v3 step
             else "slice review"
         )
         logical = f"review-claude-{unit.work_unit_id}-{round_number}"

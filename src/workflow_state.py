@@ -1498,6 +1498,51 @@ class WorkflowState:
             updated_at=updated_at or _now_iso(),
         )
 
+    def start_finding_cleanup_work_unit(
+        self,
+        *,
+        finding_ids: tuple[str, ...],
+        updated_at: str | None = None,
+    ) -> WorkflowState:
+        """Start a reviewer-only correction unit without creating a plan Slice.
+
+        The unit deliberately reuses the just-completed Slice identifier.  Its
+        exact independent path boundary is carried by the existing
+        ``CorrectionWorkUnitPayload`` derived from ``finding_ids``.
+        """
+
+        _require_unique_non_empty(finding_ids, "finding cleanup finding_ids")
+        if not finding_ids:
+            raise WorkflowStateValidationError(
+                "a finding cleanup work unit requires open findings"
+            )
+        if (
+            self.current_work_unit.kind is not WorkUnitKind.SLICE
+            or self.current_work_unit.status is not WorkUnitStatus.COMPLETED
+            or self.current_slice.status is not SliceStatus.COMPLETED
+        ):
+            raise WorkflowStateValidationError(
+                "a finding cleanup work unit requires a completed planned Slice"
+            )
+        cleanup_unit = WorkUnitRecord(
+            work_unit_id=len(self.work_units) + 1,
+            slice_id=self.current_slice_id,
+            kind=WorkUnitKind.CORRECTION,
+            status=WorkUnitStatus.IN_PROGRESS,
+            # The final-review contract already supports bounded disposition
+            # delivery and a denied no-progress terminal round.  Starting at
+            # The reviewer keeps cleanup read-only and reviewer-owned.
+            current_step=WorkflowStep.CLAUDE_FINAL_REVIEW,  # allowlist:provider -- canonical state-v3 step
+            open_findings=finding_ids,
+        )
+        return replace(
+            self,
+            current_work_unit_id=cleanup_unit.work_unit_id,
+            current_step=cleanup_unit.current_step,
+            work_units=(*self.work_units, cleanup_unit),
+            updated_at=updated_at or _now_iso(),
+        )
+
     def start_correction_work_unit(
         self,
         *,

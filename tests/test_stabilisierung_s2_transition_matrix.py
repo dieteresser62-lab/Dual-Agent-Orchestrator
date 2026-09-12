@@ -594,7 +594,7 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/workflow_production.py:_create_production_state": 0,
     "src/workflow_production.py:_recover_final_review_history": 2,
     "src/workflow_production.py:run_production_workflow": 4,
-    "src/workflow_production.py:_run_production_transition_loop": 21,
+    "src/workflow_production.py:_run_production_transition_loop": 23,
     "src/workflow_baseline.py:matches_baseline_initialization_prefix": 24,
     "src/workflow_baseline.py:WorkflowBaseline._persist_structured_baseline": 26,
     "src/orchestrator.py:ProductionWorkflowDriver.assert_structured_decision_context": 5,
