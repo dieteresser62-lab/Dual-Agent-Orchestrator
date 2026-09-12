@@ -422,7 +422,9 @@ def native_review_request(
         context.render_distilled_context(
             unit_heading="CURRENT CORRECTION",
             unit_summary=correction_goal,
-            current_scope_paths=state.current_slice.scope_paths,
+            current_scope_paths=(
+                context.current_scope_paths or state.current_slice.scope_paths
+            ),
         )
         if correction_goal is not None
         else context.distilled_context

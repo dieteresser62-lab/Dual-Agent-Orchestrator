@@ -172,7 +172,7 @@
       },
       "checkpoints": [
         {
-          "checkpoint_site": "_run_review#5",
+          "checkpoint_site": "_run_review#4",
           "step": "claude_slice_review",
           "work_unit_status": "in_progress",
           "work_unit_kind": "slice"
@@ -198,7 +198,7 @@
       },
       "checkpoints": [
         {
-          "checkpoint_site": "_run_review#5",
+          "checkpoint_site": "_run_review#4",
           "step": "claude_slice_review",
           "work_unit_status": "in_progress",
           "work_unit_kind": "plan"
@@ -224,7 +224,7 @@
       },
       "checkpoints": [
         {
-          "checkpoint_site": "_run_review#5",
+          "checkpoint_site": "_run_review#4",
           "step": "claude_slice_review",
           "work_unit_status": "in_progress",
           "work_unit_kind": "plan"
@@ -250,7 +250,7 @@
       },
       "checkpoints": [
         {
-          "checkpoint_site": "_run_review#5",
+          "checkpoint_site": "_run_review#4",
           "step": "claude_slice_review",
           "work_unit_status": "in_progress",
           "work_unit_kind": "slice"
@@ -276,7 +276,7 @@
       },
       "checkpoints": [
         {
-          "checkpoint_site": "_run_review#5",
+          "checkpoint_site": "_run_review#4",
           "step": "claude_slice_review",
           "work_unit_status": "in_progress",
           "work_unit_kind": "slice"
@@ -306,7 +306,7 @@
       },
       "checkpoints": [
         {
-          "checkpoint_site": "_run_review#5",
+          "checkpoint_site": "_run_review#4",
           "step": "claude_slice_review",
           "work_unit_status": "in_progress",
           "work_unit_kind": "slice"

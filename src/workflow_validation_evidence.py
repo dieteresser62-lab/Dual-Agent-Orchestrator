@@ -12,6 +12,7 @@ from typing import Any, Callable
 
 from audit_trail import ValidationAuditEvent
 from contracts import ValidationAttestation
+from finding_cleanup import is_finding_cleanup_work_unit
 from gates import matches_path_patterns
 from validation_matrix import (
     ValidationMatrixError,
@@ -40,6 +41,17 @@ def validate_change_boundary(
                 "branch final review must use the persisted branch base"
             )
         return ()
+    if is_finding_cleanup_work_unit(state):
+        if changes.start_commit != state.branch_base:
+            raise execution_error(
+                "finding cleanup review must use the persisted branch base"
+            )
+        scope = () if context is None else context.current_scope_paths
+        if not scope:
+            raise execution_error(
+                "finding cleanup review requires a finding-derived path boundary"
+            )
+        return tuple(path for path in changes.paths if path not in scope)
     if changes.start_commit != expected_start:
         raise execution_error("change evidence uses a foreign slice start commit")
     if kind is WorkUnitKind.PLAN:

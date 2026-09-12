@@ -37,6 +37,7 @@ from artifact_resume import (
 )
 from artifact_models import (
     ArtifactRecord, BindingPayload, DiagnosticPayload,
+    CorrectionWorkUnitPayload,
     FingerprintKind, GateDecisionPayload, GateTransitionPayload,
     AgentResultPayload, InvocationFailurePayload, ReviewPayload,
     Role,
@@ -57,6 +58,13 @@ from artifact_replay import (
     replay_artifacts,
 )
 from finding_reducer import project_final_review_dispositions, reduce_findings
+from finding_cleanup import (
+    FindingCleanupPlan,
+    derive_slice_finding_balances,
+    is_finding_cleanup_work_unit,
+    plan_finding_cleanup,
+    positive_balance_streak,
+)
 from provider_input_budget import ProviderInputMeasurement
 from review_packets import ReviewPacket
 from cli import DEFAULT_AGENTS_FILE, DEFAULT_TASK_FILE
@@ -1126,7 +1134,10 @@ class ProductionWorkflowDriver:
             or bridge is None
             or active.run_id != state.run_id
             or active.current_work_unit_id != state.current_work_unit_id
-            or state.current_work_unit.kind is not WorkUnitKind.FINAL_REVIEW
+            or (
+                state.current_work_unit.kind is not WorkUnitKind.FINAL_REVIEW
+                and not is_finding_cleanup_work_unit(state)
+            )
             or state.protocol_binding is None
             or state.protocol_binding.claude_review_transport  # allowlist:provider -- protocol binding
             != NATIVE_CLAUDE_REVIEW_TRANSPORT  # allowlist:provider -- protocol binding
@@ -1138,9 +1149,34 @@ class ProductionWorkflowDriver:
             replay = replay_artifacts(
                 bridge.store.current_chain(), state.run_id, allow_empty=True
             )
-            projected = project_final_review_dispositions(
-                replay, state.current_work_unit_id
-            ).pending.findings
+            if is_finding_cleanup_work_unit(state):
+                reduced = reduce_findings(replay)
+                attribution = reduced.correction_for(state.current_work_unit_id)
+                if attribution is None:
+                    raise WorkflowExecutionError(
+                        "finding cleanup lacks its correction work-unit scope"
+                    )
+                dispositioned = {
+                    record.payload.finding_id
+                    for record in replay.records
+                    if isinstance(record.payload, FindingTransitionPayload)
+                    and record.payload.work_unit_id
+                    == str(state.current_work_unit_id)
+                    and record.payload.action
+                    in {"status_changed", "reclassified"}
+                }
+                pending_ids = tuple(
+                    finding_id
+                    for finding_id in attribution.finding_ids
+                    if finding_id not in dispositioned
+                )
+                projected = reduced.request_subset(
+                    finding_ids=pending_ids
+                ).findings
+            else:
+                projected = project_final_review_dispositions(
+                    replay, state.current_work_unit_id
+                ).pending.findings
         except (ArtifactReplayError, ValueError) as exc:
             raise WorkflowExecutionError(
                 f"authoritative final-review finding replay failed: {exc}"
@@ -1613,7 +1649,10 @@ class ProductionWorkflowDriver:
             return state.task_digest
         start_commit = (
             state.branch_base
-            if state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
+            if (
+                state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
+                or is_finding_cleanup_work_unit(state)
+            )
             else state.current_slice.start_commit or state.branch_base
         )
         try:
@@ -2299,6 +2338,52 @@ class ProductionWorkflowDriver:
             excluded_paths=_bound_task_control_paths(self.root, self.active_state),
         )
         return WorkflowCorrectionBoundary(identity.head, scope, start.fingerprint)
+
+    def prepare_finding_cleanup(
+        self, findings: tuple[FindingRecord, ...]
+    ) -> FindingCleanupPlan | None:
+        """Derive one cleanup offer entirely from the authoritative record chain."""
+
+        state = self.active_state
+        bridge = self._artifact_bridge
+        if state is None or bridge is None:
+            raise WorkflowExecutionError(
+                "finding cleanup preparation has no active artifact state"
+            )
+        chain = bridge.store.current_chain()
+        cleanup_work_unit_ids = {
+            unit.work_unit_id
+            for unit in state.work_units
+            if is_finding_cleanup_work_unit(state, unit)
+        }
+        addressed_ids = {
+            finding_id
+            for record in chain
+            for payload in (record.payload,)
+            if isinstance(payload, CorrectionWorkUnitPayload)
+            and record.logical_id.startswith("work-unit-")
+            and record.logical_id.removeprefix("work-unit-").isdigit()
+            and int(record.logical_id.removeprefix("work-unit-"))
+            in cleanup_work_unit_ids
+            for finding_id in payload.finding_ids
+        }
+        plan = plan_finding_cleanup(
+            findings, previously_addressed_ids=addressed_ids
+        )
+        balances = derive_slice_finding_balances(chain, state)
+        if balances:
+            latest = balances[-1]
+            logger.info(
+                "Finding balance through Slice %02d: opened=%s closed=%s net=%+d; "
+                "positive-streak=%s; cleanup=%s",
+                latest.slice_id,
+                latest.opened,
+                latest.closed,
+                latest.net,
+                positive_balance_streak(balances),
+                "scheduled" if plan is not None else "not-scheduled",
+            )
+        return plan
 
     def commit_slice(self, request: WorkflowCommitRequest) -> str:
         return self._git_commit_boundary().commit_slice(request)

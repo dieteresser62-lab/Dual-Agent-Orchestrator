@@ -59,6 +59,11 @@ from final_review_preflight import (
     run_final_review_preflight,
     transition_fingerprint,
 )
+from finding_cleanup import (
+    finding_cleanup_scope_paths,
+    is_finding_cleanup_work_unit,
+)
+from finding_reducer import reduce_findings
 from orchestrator_version import orchestrator_code_version
 from provider_input_budget import ProviderInputMeasurement
 from side_effects import (
@@ -647,6 +652,23 @@ class WorkflowBaseline:
         unit = state.current_work_unit
         if unit.kind is not WorkUnitKind.PLAN and state.current_slice.scope_paths:
             chain = bridge.store.current_chain()
+            work_unit_paths = state.current_slice.scope_paths
+            if is_finding_cleanup_work_unit(state, unit):
+                cleanup_findings = reduce_findings(
+                    replay_artifacts(
+                        chain,
+                        state.run_id,
+                        allow_empty=True,
+                        allow_incomplete_review_tail=True,
+                    )
+                ).ledger.findings
+                work_unit_paths = finding_cleanup_scope_paths(
+                    cleanup_findings, unit.open_findings
+                )
+                if not work_unit_paths:
+                    raise WorkflowExecutionError(
+                        "finding cleanup has no finding-derived repository scope"
+                    )
             finding_import = next(
                 (
                     record
@@ -669,14 +691,14 @@ class WorkflowBaseline:
                 CorrectionWorkUnitPayload(
                     slice_id=str(unit.slice_id),
                     round_number=unit.round_number,
-                    paths=state.current_slice.scope_paths,
+                    paths=work_unit_paths,
                     finding_ids=unit.open_findings,
                 )
                 if unit.kind is WorkUnitKind.CORRECTION
                 else WorkUnitPayload(
                     slice_id=str(unit.slice_id),
                     round_number=unit.round_number,
-                    paths=state.current_slice.scope_paths,
+                    paths=work_unit_paths,
                     open_finding_ids=(
                         sorted_finding_ids(unit.open_findings)
                         if bound_import is not None
@@ -839,6 +861,7 @@ class WorkflowBaseline:
             measurement.operation not in FINAL_REVIEW_OPERATIONS
             or not measurement.allowed
             or bridge is None
+            or is_finding_cleanup_work_unit(state)
         ):
             return measurement_record
         assert measurement_record is not None

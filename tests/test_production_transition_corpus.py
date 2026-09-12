@@ -599,6 +599,9 @@ class _CorpusDriver:
             raise ArtifactBridgeError("provider-free handoff failure")
         return None
 
+    def prepare_finding_cleanup(self, _findings):
+        return None
+
     def persist_implementation_handoff(self, *_args) -> None:
         pass
 
@@ -820,9 +823,9 @@ def test_pre_b48_transition_anchor_is_bound_to_git_and_logical_loop() -> None:
     assert anchored_blob == baseline["source_blob"]
     facts = _static_facts(SOURCE_TREE)
     assert _canonical_sha256(facts) == baseline["facts_sha256"]
-    assert len(facts["decisions"]) == 24
+    assert len(facts["decisions"]) == 26
     assert len(facts["catchers"]) == 2
-    assert len(facts["checkpoints"]) == 11
+    assert len(facts["checkpoints"]) == 12
 
 
 def test_provider_free_transition_corpus_matches_pre_cut_baseline(

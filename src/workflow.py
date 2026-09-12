@@ -31,6 +31,10 @@ from artifact_models import (
     InvocationFailurePayload,
 )
 from finding_order import sorted_finding_ids
+from finding_cleanup import (
+    finding_cleanup_scope_paths,
+    is_finding_cleanup_work_unit,
+)
 from native_review_contract import find_native_review_disposition_limit_error
 from finding_reducer import (
     merge_review_request_result,
@@ -1109,6 +1113,8 @@ class WorkflowRunResult:
     def workflow_rejected(self) -> bool:
         """Whether a completed review work unit carries the reviewer's denial."""
 
+        if is_finding_cleanup_work_unit(self.state):
+            return False
         return bool(workflow_rejection_finding_ids(self.state, self.history))
 
     @property
@@ -1323,7 +1329,9 @@ class WorkflowEngine:
 
     @staticmethod
     def _bind_context_to_current_unit(
-        state: WorkflowState, context: WorkflowContext
+        state: WorkflowState,
+        context: WorkflowContext,
+        history: WorkflowHistory,
     ) -> WorkflowContext:
         """Keep transient request prose aligned with the persisted unit boundary."""
         planned = next(
@@ -1335,21 +1343,26 @@ class WorkflowEngine:
             None,
         )
         slice_summary = context.slice_summary
+        scope_paths = state.current_slice.scope_paths
         if state.current_work_unit.kind is WorkUnitKind.CORRECTION:
             # A final-review correction has a technical SliceBoundary id for the
             # unchanged state-v3 schema, but deliberately has no plan-Slice prose.
             slice_summary = ""
+            if is_finding_cleanup_work_unit(state):
+                scope_paths = finding_cleanup_scope_paths(
+                    history.findings, state.current_work_unit.open_findings
+                )
         elif state.current_work_unit.kind is WorkUnitKind.SLICE and planned is not None:
             slice_summary = planned.summary
         if (
             slice_summary == context.slice_summary
-            and context.current_scope_paths == state.current_slice.scope_paths
+            and context.current_scope_paths == scope_paths
         ):
             return context
         return replace(
             context,
             slice_summary=slice_summary,
-            current_scope_paths=state.current_slice.scope_paths,
+            current_scope_paths=scope_paths,
         )
 
     def run_current_work_unit(
@@ -1357,11 +1370,11 @@ class WorkflowEngine:
         history: WorkflowHistory | None = None,
     ) -> WorkflowRunResult:
         require_workflow_driver(self.driver)
-        context = self._bind_context_to_current_unit(state, context)
         current = state.current_work_unit
         active_history = history or WorkflowHistory(current.work_unit_id)
         if active_history.work_unit_id != current.work_unit_id:
             raise WorkflowExecutionError("workflow history belongs to a different work unit")
+        context = self._bind_context_to_current_unit(state, context, active_history)
         self._bind_driver_work_unit(state)
         bound_state = self._bind_current_open_findings(state, active_history)
         if bound_state is not state:
@@ -1484,7 +1497,7 @@ class WorkflowEngine:
             return WorkflowRunResult(state, active_history)
 
         for _ in range(1024):
-            context = self._bind_context_to_current_unit(state, context)
+            context = self._bind_context_to_current_unit(state, context, active_history)
             step = state.current_step
             if step in (
                 WorkflowStep.CODEX_PLAN,
@@ -2333,7 +2346,12 @@ class WorkflowEngine:
         is_plan_review: bool,
         is_final_review: bool,
     ) -> tuple[EvidenceKind, str]:
-        if is_final_review:
+        if is_final_review and is_finding_cleanup_work_unit(state, unit):
+            # Cleanup is a final-style disposition request over an exact
+            # finding-derived scope, not a branch-wide final review.
+            evidence_kind = EvidenceKind.CORRECTION_DELTA
+            review_diff = changes.full_diff
+        elif is_final_review:
             evidence_kind = EvidenceKind.FULL_BRANCH
             review_diff = changes.full_diff
         # A dedicated correction unit follows a denied final review; the return
@@ -2586,6 +2604,93 @@ class WorkflowEngine:
             final_review_progress_ids=progress_ids,
         )
 
+    @staticmethod
+    def _scope_cleanup_review_changes(
+        history: WorkflowHistory,
+        unit: WorkUnitRecord,
+        changes: WorkflowChanges,
+        branch_base: str,
+    ) -> WorkflowChanges:
+        scope_paths = finding_cleanup_scope_paths(
+            history.findings, unit.open_findings
+        )
+        excluded = tuple(path for path in changes.paths if path not in scope_paths)
+        scoped_diff = (
+            exclude_review_diff_paths(changes.full_diff, excluded)
+            if changes.full_diff.startswith("diff --git ")
+            else ""
+        )
+        return WorkflowChanges(
+            start_commit=branch_base,
+            fingerprint=changes.fingerprint,
+            paths=scope_paths,
+            full_diff=(
+                scoped_diff
+                if scoped_diff.strip()
+                else "Finding cleanup uses the exact read-only workspace scope; "
+                "no matching branch diff is required for a disposition-only review."
+            ),
+        )
+
+    def _review_test_context(
+        self,
+        context: WorkflowContext,
+        changes: WorkflowChanges,
+        *,
+        is_cleanup_review: bool,
+    ) -> tuple[TestChangeEvidence | None, tuple[str, ...]]:
+        if is_cleanup_review:
+            return None, ()
+        detected = (
+            self.driver.detect_test_changes(changes, context.test_path_patterns)
+            if context.dynamic_test_scope
+            else None
+        )
+        expected = (
+            detected.paths
+            if detected is not None
+            else ()
+            if context.dynamic_test_scope
+            else context.expected_test_files
+        )
+        return detected, expected
+
+    def _complete_cleanup_review(
+        self, state: WorkflowState, history: WorkflowHistory
+    ) -> tuple[WorkflowState, WorkflowHistory]:
+        state = state.complete_current_work_unit()
+        self.driver.checkpoint(state, history)
+        return state, history
+
+    def _apply_review_change_boundary(
+        self,
+        state: WorkflowState,
+        context: WorkflowContext,
+        history: WorkflowHistory,
+        changes: WorkflowChanges,
+        *,
+        is_cleanup_review: bool,
+    ) -> tuple[WorkflowState, bool]:
+        unexpected = self._validate_change_boundary(
+            state, changes, state.current_work_unit.kind, context=context
+        )
+        if not unexpected:
+            return state, False
+        if is_cleanup_review:
+            completed, _ = self._complete_cleanup_review(state, history)
+            return completed, True
+        state = state.await_user_gate(
+            reason=GateReason.UNEXPECTED_FILE,
+            detail=(
+                f"{UNEXPECTED_PATH_RULE_ID} | canonical changes contain paths "
+                f"outside the persisted Slice scope: {', '.join(unexpected)}"
+            ),
+            fingerprint=changes.fingerprint,
+            paths=unexpected,
+        )
+        self.driver.checkpoint(state, history)
+        return state, True
+
     def _run_review(
         self,
         state: WorkflowState,
@@ -2598,50 +2703,44 @@ class WorkflowEngine:
             raise WorkflowExecutionError("only Claude may execute review steps")
         is_plan_review = state.current_step is WorkflowStep.CLAUDE_PLAN_REVIEW
         is_final_review = state.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW
+        is_cleanup_review = is_final_review and is_finding_cleanup_work_unit(
+            state, unit
+        )
         start_commit = state.branch_base if is_final_review else (
             state.current_slice.start_commit or state.branch_base
         )
         try:
             changes = self._collect_review_dispatch_changes(start_commit)
         except NoWorkflowChangesError as exc:
+            if is_cleanup_review:
+                return self._complete_cleanup_review(state, history)
             state = state.await_policy_gate(
                 reason=GateReason.STOP_REQUEST,
                 detail=f"NO-IMPLEMENTATION-CHANGES | {exc}",
             )
             self.driver.checkpoint(state, history)
             return state, history
-        unexpected = self._validate_change_boundary(
-            state, changes, unit.kind, context=context
-        )
-        if unexpected:
-            state = state.await_user_gate(
-                reason=GateReason.UNEXPECTED_FILE,
-                detail=(
-                    f"{UNEXPECTED_PATH_RULE_ID} | canonical changes contain paths "
-                    f"outside the persisted Slice scope: {', '.join(unexpected)}"
-                ),
-                fingerprint=changes.fingerprint,
-                paths=unexpected,
+        if is_cleanup_review:
+            changes = self._scope_cleanup_review_changes(
+                history, unit, changes, state.branch_base
             )
-            self.driver.checkpoint(state, history)
-            return state, history
-        state, test_changes_approved, halted = self._apply_test_change_gate(
-            state, context, changes
+        state, halted = self._apply_review_change_boundary(
+            state, context, history, changes,
+            is_cleanup_review=is_cleanup_review,
         )
+        if halted:
+            return state, history
+        if is_cleanup_review:
+            test_changes_approved, halted = False, False
+        else:
+            state, test_changes_approved, halted = self._apply_test_change_gate(
+                state, context, changes
+            )
         if halted:
             self.driver.checkpoint(state, history)
             return state, history
-        detected_test_changes = (
-            self.driver.detect_test_changes(changes, context.test_path_patterns)
-            if context.dynamic_test_scope
-            else None
-        )
-        expected_test_files = (
-            detected_test_changes.paths
-            if detected_test_changes is not None
-            else ()
-            if context.dynamic_test_scope
-            else context.expected_test_files
+        detected_test_changes, expected_test_files = self._review_test_context(
+            context, changes, is_cleanup_review=is_cleanup_review
         )
         try:
             attestation, history = self._collect_review_dispatch_attestation(
@@ -2652,6 +2751,8 @@ class WorkflowEngine:
                 is_plan_review,
             )
         except ValidationExecutionError as exc:
+            if is_cleanup_review:
+                return self._complete_cleanup_review(state, history)
             state = state.await_policy_gate(
                 reason=GateReason.STOP_REQUEST,
                 detail=f"{VALIDATION_UNAVAILABLE_RULE_ID} | {exc}",
@@ -2661,6 +2762,8 @@ class WorkflowEngine:
         # Project the newly appended attestation before
         # invoking Claude. The idempotent checkpoint protects record-ahead recovery.
         self.driver.checkpoint(state, history)
+        if not attestation.complete and is_cleanup_review:
+            return self._complete_cleanup_review(state, history)
         if not attestation.complete:
             raise WorkflowExecutionError(
                 "validation attestation is incomplete and cannot be overridden"
@@ -2806,6 +2909,9 @@ class WorkflowEngine:
     ) -> tuple[WorkflowState, WorkflowHistory]:
         """Mirror one durable verdict and perform its deterministic transition."""
         unit = state.current_work_unit
+        is_cleanup_review = (
+            is_final_review and is_finding_cleanup_work_unit(state, unit)
+        )
         correction_progress = False
         if not is_final_review:
             prior_ids = frozenset(item.finding_id for item in finding_ledger)
@@ -2835,6 +2941,10 @@ class WorkflowEngine:
             ),
         )
         if result.stopped:
+            if is_cleanup_review:
+                state = state.complete_current_work_unit()
+                self.driver.checkpoint(state, history)
+                return state, history
             if result.stop_request is None:
                 raise WorkflowExecutionError(
                     f"{reviewer.value} stop has no structured stop request"
@@ -2874,6 +2984,10 @@ class WorkflowEngine:
                 state = state.mark_side_effect_completed(key)
                 state = state.with_current_step(decision.resume_step)
             elif is_final_review:
+                if is_cleanup_review:
+                    state = state.complete_current_work_unit()
+                    self.driver.checkpoint(state, history)
+                    return state, history
                 open_findings = project_open_set(history.findings).findings
                 if open_findings:
                     raise WorkflowExecutionError(
@@ -2893,6 +3007,15 @@ class WorkflowEngine:
                         state, history.findings
                     )
                     open_findings = project_open_set(history.findings).findings
+                    if is_cleanup_review and final_review_new_finding_ids:
+                        # Preserve the reviewer-owned blocker in the ledger,
+                        # but never turn a read-only cleanup into a fixing
+                        # correction or a waiting state.
+                        state = self._record_final_review_delivery_round(
+                            state, history, advance=False
+                        ).complete_current_work_unit()
+                        self.driver.checkpoint(state, history)
+                        return state, history
                     if (
                         not final_review_progress_ids
                         and not final_review_new_finding_ids
@@ -2914,6 +3037,12 @@ class WorkflowEngine:
                         )
                         if exhausted:
                             state = state.complete_current_work_unit()
+                        self.driver.checkpoint(state, history)
+                        return state, history
+                    if is_cleanup_review and not remaining:
+                        state = self._record_final_review_delivery_round(
+                            state, history, advance=False
+                        ).complete_current_work_unit()
                         self.driver.checkpoint(state, history)
                         return state, history
                 # Persist the denying final-review event while the final-review
@@ -2960,11 +3089,16 @@ class WorkflowEngine:
         advance: bool,
     ) -> WorkflowState:
         current = state.current_work_unit
+        open_findings = (
+            current.open_findings
+            if is_finding_cleanup_work_unit(state, current)
+            else project_open_set(history.findings).finding_ids
+        )
         updated = replace(
             current,
             round_number=current.round_number + (1 if advance else 0),
             reviewer=Reviewer.CLAUDE,  # allowlist:provider -- persisted reviewer role
-            open_findings=project_open_set(history.findings).finding_ids,
+            open_findings=open_findings,
         )
         return replace(
             state,
@@ -3655,7 +3789,10 @@ class WorkflowEngine:
 
     @staticmethod
     def _change_start_commit(state: WorkflowState) -> str | None:
-        if state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW:
+        if (
+            state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
+            or is_finding_cleanup_work_unit(state)
+        ):
             return state.branch_base
         return state.current_slice.start_commit
 

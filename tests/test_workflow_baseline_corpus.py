@@ -1004,8 +1004,8 @@ def test_static_inventory_is_complete_cleartext_and_source_ordered() -> None:
     predicate, persistence = actual["functions"]
     assert (len(predicate["conditions"]), len(predicate["returns"])) == (10, 5)
     assert (len(predicate["aborts"]), len(predicate["catchers"])) == (0, 0)
-    assert (len(persistence["conditions"]), len(persistence["returns"])) == (17, 2)
-    assert len(persistence["aborts"]) == 3
+    assert (len(persistence["conditions"]), len(persistence["returns"])) == (19, 2)
+    assert len(persistence["aborts"]) == 4
     assert [item["exception_type"] for item in persistence["catchers"]] == [
         "ArtifactReplayError",
         "ArtifactResumeError",

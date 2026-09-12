@@ -14,6 +14,7 @@ WORKFLOW_PATH = SRC / "workflow.py"
 EXPECTED_INTERNAL_IMPORTS = {
     "audit_trail",
     "contracts",
+    "finding_cleanup",
     "gates",
     "validation_matrix",
     "workflow_state",

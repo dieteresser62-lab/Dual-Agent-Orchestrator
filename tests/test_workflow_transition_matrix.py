@@ -715,7 +715,7 @@ EXPECTED_GATE_CALL_SITES = Counter(
         ("workflow.py", "_validate_plan_before_review", "await_policy_gate"): 1,
         ("workflow.py", "_run_final_codex_report", "await_policy_gate"): 2,
         ("workflow.py", "_run_review", "await_policy_gate"): 2,
-        ("workflow.py", "_run_review", "await_user_gate"): 1,
+        ("workflow.py", "_apply_review_change_boundary", "await_user_gate"): 1,
         ("workflow.py", "_apply_review_result", "await_user_gate"): 1,
         ("workflow.py", "_invoke_role", "await_user_gate"): 1,
         ("workflow.py", "_invoke_role", "await_bootstrap_resume"): 1,
