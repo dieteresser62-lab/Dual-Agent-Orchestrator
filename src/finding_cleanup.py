@@ -18,11 +18,12 @@ from finding_signature import authorized_repository_paths
 from workflow_state import WorkflowState, WorkUnitKind, WorkUnitRecord
 
 
-# The frozen Cookbook backtest schedules two rounds at 18 (Slices 28 and 41),
-# leaves only two late findings, and keeps the largest offer (20) below the
-# native result limit of 32.  Nineteen has the same cost/residual but reacts
-# two Slices later; lower thresholds need at least one additional round.
-FINDING_CLEANUP_THRESHOLD = 18
+# Cleanup scheduling is dormant.  ``None`` is the explicit threshold switch:
+# balance derivation and the bounded planner remain available for measurement
+# and controlled backtests, but production never starts the parallel cleanup
+# review path.  The former measured threshold was 18.
+FINDING_CLEANUP_THRESHOLD: int | None = None
+FINDING_CLEANUP_BACKTEST_THRESHOLD = 18
 FINDING_CLEANUP_BATCH_LIMIT = 32
 
 
@@ -140,21 +141,26 @@ def plan_finding_cleanup(
     *,
     repository_root: Path,
     previously_addressed_ids: Iterable[str] = (),
+    threshold: int | None = FINDING_CLEANUP_THRESHOLD,
 ) -> FindingCleanupPlan | None:
-    """Select one bounded cleanup batch, or return ``None`` below threshold.
+    """Select one bounded cleanup batch, or return ``None`` when dormant/below threshold.
 
     Findings already offered by an earlier cleanup are excluded even when the
     reviewer left them open.  This makes a no-progress round self-terminating:
     another round is considered only after enough new open findings accumulate.
     """
 
+    if threshold is None:
+        return None
+    if threshold < 1:
+        raise ValueError("finding cleanup threshold must be positive or None")
     addressed = frozenset(previously_addressed_ids)
     eligible = tuple(
         finding
         for finding in project_open_set(findings).findings
         if finding.finding_id not in addressed
     )
-    if len(eligible) < FINDING_CLEANUP_THRESHOLD:
+    if len(eligible) < threshold:
         return None
     selected_ids = sorted_finding_ids(
         item.finding_id for item in eligible[:FINDING_CLEANUP_BATCH_LIMIT]
@@ -171,6 +177,7 @@ def plan_finding_cleanup(
 
 __all__ = [
     "FINDING_CLEANUP_BATCH_LIMIT",
+    "FINDING_CLEANUP_BACKTEST_THRESHOLD",
     "FINDING_CLEANUP_THRESHOLD",
     "FindingCleanupPlan",
     "SliceFindingBalance",

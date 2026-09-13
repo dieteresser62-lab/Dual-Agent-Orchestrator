@@ -18,6 +18,7 @@ from agent_runtime import (
     NativeAgentReviewOutput,
     ProviderRequestRoundRequired,
     QuotaWaitPolicy,
+    RecoveredFindingComparison,
     TransientRetryPolicy,
     wait_until_quota_resume,
     wait_until_transient_retry,
@@ -487,12 +488,31 @@ def _merge_request_finding_subset(
     authoritative: tuple[FindingRecord, ...],
     offered: tuple[FindingRecord, ...],
     returned: tuple[FindingRecord, ...],
+    *,
+    recovered_comparison: RecoveredFindingComparison | None = None,
 ) -> tuple[FindingRecord, ...]:
-    """Compatibility boundary around the canonical reducer merge."""
+    """Validate one response at request time, then confirm record-ahead state."""
     try:
+        if recovered_comparison is not None:
+            merge_request_result(
+                recovered_comparison.request_findings,
+                recovered_comparison.offered_findings,
+                returned,
+            )
+            return merge_request_result(authoritative, returned, returned)
         return merge_request_result(authoritative, offered, returned)
     except ValueError as exc:
-        raise WorkflowExecutionError(str(exc)) from exc
+        diagnostic = (
+            ""
+            if recovered_comparison is None
+            else (
+                "; request-time offered/returned measured-at: "
+                f"{recovered_comparison.request_position}; recovery-time "
+                "authoritative compared-at: "
+                f"{recovered_comparison.recovery_position}"
+            )
+        )
+        raise WorkflowExecutionError(f"{exc}{diagnostic}") from exc
 
 
 @dataclass(frozen=True)
@@ -1506,61 +1526,8 @@ class WorkflowEngine:
             state, context, active_history
         )
         if pending_native is not None:
-            if not isinstance(pending_native, PersistedNativeReviewerReplay):
-                raise WorkflowExecutionError(
-                    "pre-policy native reviewer recovery returned an invalid contract"
-                )
-            recovered_step = state.current_step
-            is_plan_review = recovered_step is WorkflowStep.CLAUDE_PLAN_REVIEW
-            is_final_review = recovered_step is WorkflowStep.CLAUDE_FINAL_REVIEW
-            recovered_result = pending_native.output.result
-            finding_ledger = self._authoritative_finding_ledger(
-                state, active_history.findings
-            )
-            recovered_requested_ids: tuple[str, ...] | None = None
-            recovered_new_ids: tuple[str, ...] = ()
-            recovered_progress_ids: tuple[str, ...] = ()
-            if is_final_review and pending_native.output.context is not None:
-                recovered_offered = pending_native.output.context.previous_findings
-                recovered_offered_ids = tuple(
-                    item.finding_id for item in recovered_offered
-                )
-                recovered_requested_ids = recovered_offered_ids
-                recovered_new_ids = tuple(
-                    item.finding_id
-                    for item in recovered_result.findings
-                    if item.finding_id not in frozenset(recovered_offered_ids)
-                )
-                recovered_progress_ids = project_finding_transition_ids(
-                    recovered_offered,
-                    recovered_result.findings,
-                )
-                if recovered_offered != finding_ledger:
-                    recovered_result = replace(
-                        recovered_result,
-                        findings=self._merge_review_request_subset(
-                            finding_ledger,
-                            recovered_offered,
-                            recovered_result.findings,
-                            review_type=(
-                                "final review" if is_final_review else "slice review"
-                            ),
-                        ),
-                    )
-            state, active_history = self._apply_review_result(
-                state=state,
-                context=context,
-                history=active_history,
-                reviewer=AgentRole.CLAUDE,
-                result=recovered_result,
-                fingerprint=pending_native.fingerprint,
-                round_number=pending_native.round_number,
-                is_plan_review=is_plan_review,
-                is_final_review=is_final_review,
-                finding_ledger=finding_ledger,
-                final_review_requested_ids=recovered_requested_ids,
-                final_review_new_finding_ids=recovered_new_ids,
-                final_review_progress_ids=recovered_progress_ids,
+            state, active_history = self._apply_pre_policy_recovered_review(
+                state, context, active_history, pending_native
             )
             if state.current_work_unit.status is not WorkUnitStatus.IN_PROGRESS:
                 return WorkflowRunResult(state, active_history)
@@ -1668,6 +1635,82 @@ class WorkflowEngine:
                 f"step {step.value} is outside the state-v3 development engine"
             )
         raise WorkflowExecutionError("workflow exceeded its deterministic transition bound")
+
+    def _apply_pre_policy_recovered_review(
+        self,
+        state: WorkflowState,
+        context: WorkflowContext,
+        history: WorkflowHistory,
+        pending: PersistedNativeReviewerReplay,
+    ) -> tuple[WorkflowState, WorkflowHistory]:
+        """Apply one durable reviewer decision using its request-time ledger cut."""
+
+        if not isinstance(pending, PersistedNativeReviewerReplay):
+            raise WorkflowExecutionError(
+                "pre-policy native reviewer recovery returned an invalid contract"
+            )
+        is_plan_review = state.current_step is WorkflowStep.CLAUDE_PLAN_REVIEW
+        is_final_review = state.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW
+        request_result = pending.output.result
+        result = request_result
+        finding_ledger = self._authoritative_finding_ledger(
+            state, history.findings
+        )
+        requested_ids: tuple[str, ...] | None = None
+        new_ids: tuple[str, ...] = ()
+        progress_ids: tuple[str, ...] = ()
+        recovered = pending.output.recovered_finding_comparison
+        if pending.output.context is not None:
+            offered = pending.output.context.previous_findings
+            if recovered is not None:
+                result = replace(
+                    result,
+                    findings=self._merge_review_request_subset(
+                        finding_ledger,
+                        offered,
+                        result.findings,
+                        review_type=(
+                            "final review" if is_final_review else "slice review"
+                        ),
+                        recovered_comparison=recovered,
+                    ),
+                )
+            elif is_final_review and offered != finding_ledger:
+                result = replace(
+                    result,
+                    findings=self._merge_review_request_subset(
+                        finding_ledger,
+                        offered,
+                        result.findings,
+                        review_type="final review",
+                    ),
+                )
+            if is_final_review:
+                requested_ids = tuple(item.finding_id for item in offered)
+                offered_id_set = frozenset(requested_ids)
+                new_ids = tuple(
+                    item.finding_id
+                    for item in request_result.findings
+                    if item.finding_id not in offered_id_set
+                )
+                progress_ids = project_finding_transition_ids(
+                    offered, request_result.findings
+                )
+        return self._apply_review_result(
+            state=state,
+            context=context,
+            history=history,
+            reviewer=AgentRole.CLAUDE,
+            result=result,
+            fingerprint=pending.fingerprint,
+            round_number=pending.round_number,
+            is_plan_review=is_plan_review,
+            is_final_review=is_final_review,
+            finding_ledger=finding_ledger,
+            final_review_requested_ids=requested_ids,
+            final_review_new_finding_ids=new_ids,
+            final_review_progress_ids=progress_ids,
+        )
 
     def run_final_review(
         self,
@@ -1960,13 +2003,8 @@ class WorkflowEngine:
             history.findings,
         )
         assert invocation.native_request is not None
-        history = replace(
-            history,
-            findings=_merge_request_finding_subset(
-                history.findings,
-                invocation.native_request.bound_context.context.previous_findings,
-                result.findings,
-            ),
+        history = self._merge_implementer_output_findings(
+            state, history, invocation, output
         )
         if result.stopped:
             if result.stop_request is None:
@@ -2129,6 +2167,34 @@ class WorkflowEngine:
         state = state.with_current_step(next_step)
         self.driver.checkpoint(state, history)
         return state, history
+
+    def _merge_implementer_output_findings(
+        self,
+        state: WorkflowState,
+        history: WorkflowHistory,
+        invocation: CodexInvocation,  # allowlist:provider -- typed boundary
+        output: NativeAgentCodexOutput,  # allowlist:provider -- typed boundary
+    ) -> WorkflowHistory:
+        """Merge fresh or recovered output without mixing its ledger cuts."""
+
+        recovered = output.recovered_finding_comparison
+        if recovered is not None:
+            history = replace(
+                history,
+                findings=self._authoritative_finding_ledger(
+                    state, history.findings
+                ),
+            )
+        assert invocation.native_request is not None
+        return replace(
+            history,
+            findings=_merge_request_finding_subset(
+                history.findings,
+                invocation.native_request.bound_context.context.previous_findings,
+                output.result.findings,
+                recovered_comparison=recovered,
+            ),
+        )
 
     def _validate_plan_before_review(
         self,
@@ -2679,9 +2745,22 @@ class WorkflowEngine:
             output,
             changes.fingerprint,
             review_round,
-            request_findings,
+            (
+                output.recovered_finding_comparison.offered_findings
+                if output.recovered_finding_comparison is not None
+                else request_findings
+            ),
         )
         request_result = result
+        requested_findings = request_findings
+        request_findings, history, result = self._prepare_recovered_review_merge(
+            output,
+            result,
+            request_findings,
+            history,
+            finding_ledger,
+            is_final_review=is_final_review,
+        )
         if request_findings != history.findings:
             result = replace(
                 result,
@@ -2694,14 +2773,16 @@ class WorkflowEngine:
                     ),
                 ),
             )
-        requested_ids = tuple(item.finding_id for item in request_findings)
+        requested_ids = tuple(item.finding_id for item in requested_findings)
         new_ids = tuple(
             item.finding_id
             for item in request_result.findings
             if item.finding_id not in frozenset(requested_ids)
         )
         progress_ids = (
-            project_finding_transition_ids(request_findings, request_result.findings)
+            project_finding_transition_ids(
+                requested_findings, request_result.findings
+            )
             if is_final_review
             else ()
         )
@@ -2721,6 +2802,44 @@ class WorkflowEngine:
             final_review_new_finding_ids=new_ids,
             final_review_progress_ids=progress_ids,
         )
+
+    def _prepare_recovered_review_merge(
+        self,
+        output: NativeAgentReviewOutput,
+        result: ContractResult,
+        request_findings: tuple[FindingRecord, ...],
+        history: WorkflowHistory,
+        finding_ledger: tuple[FindingRecord, ...],
+        *,
+        is_final_review: bool,
+    ) -> tuple[
+        tuple[FindingRecord, ...],
+        WorkflowHistory,
+        ContractResult,
+    ]:
+        """Consume recovery-only timing authority outside dispatch inventory."""
+
+        recovered = output.recovered_finding_comparison
+        if recovered is None:
+            return request_findings, history, result
+        offered = (
+            output.context.previous_findings
+            if output.context is not None
+            else recovered.offered_findings
+        )
+        result = replace(
+            result,
+            findings=self._merge_review_request_subset(
+                finding_ledger,
+                offered,
+                result.findings,
+                review_type=(
+                    "final review" if is_final_review else "slice review"
+                ),
+                recovered_comparison=recovered,
+            ),
+        )
+        return finding_ledger, replace(history, findings=finding_ledger), result
 
     @staticmethod
     def _scope_cleanup_review_changes(
@@ -3236,10 +3355,24 @@ class WorkflowEngine:
         returned: tuple[FindingRecord, ...],
         *,
         review_type: str,
+        recovered_comparison: RecoveredFindingComparison | None = None,
     ) -> tuple[FindingRecord, ...]:
-        """Merge one subset-bound reviewer result into the complete ledger."""
+        """Validate one review at request time, then confirm record-ahead state."""
 
         try:
+            if recovered_comparison is not None:
+                request_merge = merge_review_request_result(
+                    recovered_comparison.request_findings,
+                    recovered_comparison.offered_findings,
+                    returned,
+                    review_type=review_type,
+                )
+                return merge_review_request_result(
+                    authoritative,
+                    request_merge.request_bound,
+                    request_merge.request_bound,
+                    review_type=review_type,
+                ).complete_ledger
             return merge_review_request_result(
                 authoritative,
                 offered,
@@ -3247,7 +3380,17 @@ class WorkflowEngine:
                 review_type=review_type,
             ).complete_ledger
         except ValueError as exc:
-            raise WorkflowExecutionError(str(exc)) from exc
+            diagnostic = (
+                ""
+                if recovered_comparison is None
+                else (
+                    "; request-time offered/returned measured-at: "
+                    f"{recovered_comparison.request_position}; recovery-time "
+                    "authoritative compared-at: "
+                    f"{recovered_comparison.recovery_position}"
+                )
+            )
+            raise WorkflowExecutionError(f"{exc}{diagnostic}") from exc
 
     def _invoke_role(
         self,

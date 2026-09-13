@@ -32,6 +32,7 @@ from contracts import (
 from content_authority import ValidationCapture, validation_output_digest
 from finding_order import finding_id_sort_key
 from finding_cleanup import (
+    FINDING_CLEANUP_BACKTEST_THRESHOLD,
     is_finding_cleanup_work_unit,
     plan_finding_cleanup,
 )
@@ -1914,6 +1915,7 @@ def _run_scripted_workflow(
             findings,
             repository_root=task_file.parent,
             previously_addressed_ids=addressed_ids,
+            threshold=FINDING_CLEANUP_BACKTEST_THRESHOLD,
         )
         if cleanup is None:
             return report

@@ -35,6 +35,7 @@ from dry_run_scenarios import (
     run_scripted_workflow,
 )
 from finding_cleanup import (
+    FINDING_CLEANUP_BACKTEST_THRESHOLD,
     FINDING_CLEANUP_THRESHOLD,
     derive_slice_finding_balances,
     finding_cleanup_scope_paths,
@@ -143,22 +144,36 @@ def _materialize_paths(root: Path, paths: tuple[str, ...]) -> None:
 def test_cleanup_threshold_triggers_only_at_the_record_derived_limit(
     tmp_path: Path,
 ) -> None:
-    assert FINDING_CLEANUP_THRESHOLD == 18
-    below = tuple(_finding(index) for index in range(1, FINDING_CLEANUP_THRESHOLD))
-    at_limit = (*below, _finding(FINDING_CLEANUP_THRESHOLD))
+    assert FINDING_CLEANUP_THRESHOLD is None
+    assert FINDING_CLEANUP_BACKTEST_THRESHOLD == 18
+    below = tuple(
+        _finding(index) for index in range(1, FINDING_CLEANUP_BACKTEST_THRESHOLD)
+    )
+    at_limit = (*below, _finding(FINDING_CLEANUP_BACKTEST_THRESHOLD))
     _materialize_paths(
         tmp_path,
         tuple(f"src/finding-{index:02d}.py" for index in range(1, 19)),
     )
 
-    assert plan_finding_cleanup(below, repository_root=tmp_path) is None
-    plan = plan_finding_cleanup(at_limit, repository_root=tmp_path)
+    assert plan_finding_cleanup(
+        below,
+        repository_root=tmp_path,
+        threshold=FINDING_CLEANUP_BACKTEST_THRESHOLD,
+    ) is None
+    oversized_backlog = tuple(_finding(index) for index in range(1, 1_001))
+    assert plan_finding_cleanup(oversized_backlog, repository_root=tmp_path) is None
+    plan = plan_finding_cleanup(
+        at_limit,
+        repository_root=tmp_path,
+        threshold=FINDING_CLEANUP_BACKTEST_THRESHOLD,
+    )
     assert plan is not None
-    assert len(plan.finding_ids) == FINDING_CLEANUP_THRESHOLD
+    assert len(plan.finding_ids) == FINDING_CLEANUP_BACKTEST_THRESHOLD
     assert plan_finding_cleanup(
         at_limit,
         repository_root=tmp_path,
         previously_addressed_ids=plan.finding_ids,
+        threshold=FINDING_CLEANUP_BACKTEST_THRESHOLD,
     ) is None
 
 
@@ -291,7 +306,10 @@ def _diff(paths: tuple[str, ...], label: str) -> str:
 def _cleanup_findings() -> tuple[FindingRecord, ...]:
     """Return exactly enough open observations to reach the threshold."""
 
-    return tuple(_finding(index) for index in range(1, FINDING_CLEANUP_THRESHOLD + 1))
+    return tuple(
+        _finding(index)
+        for index in range(1, FINDING_CLEANUP_BACKTEST_THRESHOLD + 1)
+    )
 
 
 def _cleanup_finding_ids() -> tuple[str, ...]:
@@ -301,7 +319,7 @@ def _cleanup_finding_ids() -> tuple[str, ...]:
 def _cleanup_scope_paths() -> tuple[str, ...]:
     return tuple(
         f"src/finding-{index:02d}.py"
-        for index in range(1, FINDING_CLEANUP_THRESHOLD + 1)
+        for index in range(1, FINDING_CLEANUP_BACKTEST_THRESHOLD + 1)
     )
 
 
@@ -309,12 +327,13 @@ def _real_cleanup_scenario() -> DryRunScenario:
     """Build the scenario whose backlog forces one real sliceless cleanup."""
 
     findings = tuple(
-        _finding(index) for index in range(1, FINDING_CLEANUP_THRESHOLD + 1)
+        _finding(index)
+        for index in range(1, FINDING_CLEANUP_BACKTEST_THRESHOLD + 1)
     )
     finding_ids = tuple(item.finding_id for item in findings)
     cleanup_scope = tuple(
         f"src/finding-{index:02d}.py"
-        for index in range(1, FINDING_CLEANUP_THRESHOLD + 1)
+        for index in range(1, FINDING_CLEANUP_BACKTEST_THRESHOLD + 1)
     )
     slice_one_scope = tuple(sorted((*cleanup_scope, "src/slice-one.py")))
     base, first_commit, second_commit = "a" * 40, "b" * 40, "c" * 40
@@ -522,6 +541,7 @@ def test_cleanup_output_failure_retries_with_the_same_authorized_scope(
     cleanup_plan = plan_finding_cleanup(
         findings,
         repository_root=tmp_path,
+        threshold=FINDING_CLEANUP_BACKTEST_THRESHOLD,
     )
     assert cleanup_plan is not None
     cleanup_state = first.result.state.start_finding_cleanup_work_unit(

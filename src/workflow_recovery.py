@@ -19,6 +19,7 @@ from agent_runtime import (
     NativeAgentCodexOutput as NativeAgentImplementerOutput,
     NativeAgentReviewOutput,
     ProviderRequestRoundRequired,
+    RecoveredFindingComparison,
 )
 from artifact_bridge import (
     ArtifactBridge,
@@ -444,6 +445,21 @@ class WorkflowRecovery:
         )
         raise ValueError(f"{exc}; measured-at: {position}") from exc
 
+    @staticmethod
+    def _finding_comparison_at_recovery(
+        request_ledger: _RequestLedgerSnapshot,
+        offered_findings: tuple[FindingRecord, ...],
+        chain: tuple[ArtifactRecord, ...],
+    ) -> RecoveredFindingComparison:
+        """Carry both ledger cuts to the later workflow-level subset merge."""
+
+        return RecoveredFindingComparison(
+            request_findings=tuple(request_ledger.findings_by_id.values()),
+            offered_findings=offered_findings,
+            request_position=request_ledger.diagnostic,
+            recovery_position=f"recovery-ledger head={chain[-1].record_id}",
+        )
+
     def _parse_request_bound_implementer_result(
         self,
         document: dict[str, Any],
@@ -649,20 +665,29 @@ class WorkflowRecovery:
                 ),
             )
         except (json.JSONDecodeError, ValueError, NativeReviewContractError) as exc:
-            ledger_position = (
-                f"request-id={request_id} (no provider-attempt ledger)"
-                if request_ledger is None
-                else request_ledger.diagnostic
-            )
             raise WorkflowExecutionError(
                 "native reviewer recovery response no longer validates: "
-                f"{exc}; measured-at: {ledger_position}"
+                f"{exc}; measured-at: "
+                + (
+                    f"request-id={request_id} (no provider-attempt ledger)"
+                    if request_ledger is None
+                    else request_ledger.diagnostic
+                )
             ) from exc
         return NativeAgentReviewOutput(
             result=result,
             canonical_json=canonical,
             request_id=request_id,
             context=native_context,
+            recovered_finding_comparison=(
+                None
+                if request_ledger is None
+                else self._finding_comparison_at_recovery(
+                    request_ledger,
+                    native_context.previous_findings,
+                    chain,
+                )
+            ),
         )
 
     def _reconcile_pending_side_effects(
@@ -1358,6 +1383,11 @@ class WorkflowRecovery:
             canonical_json=canonical,
             request_id=recovery_bound.request_id,
             response_sha256=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+            recovered_finding_comparison=self._finding_comparison_at_recovery(
+                request_ledger,
+                recovery_bound.context.previous_findings,
+                chain,
+            ),
         )
         self._dependencies.persist_implementer_contract(
             output,
@@ -1504,6 +1534,14 @@ class WorkflowRecovery:
             canonical_json=canonical,
             request_id=recovery_bound.request_id,
             response_sha256=response_sha256,
+            recovered_finding_comparison=(
+                request_ledger
+                and self._finding_comparison_at_recovery(
+                    request_ledger,
+                    recovery_bound.context.previous_findings,
+                    chain,
+                )
+            ),
         )
         if candidate is None:
             self._dependencies.persist_implementer_contract(
@@ -1837,6 +1875,11 @@ class WorkflowRecovery:
             canonical_json=canonical,
             request_id=payload.request_id,
             context=native_context,
+            recovered_finding_comparison=self._finding_comparison_at_recovery(
+                request_ledger,
+                native_context.previous_findings,
+                chain,
+            ),
         )
         self._dependencies.persist_review_contract(
             output,

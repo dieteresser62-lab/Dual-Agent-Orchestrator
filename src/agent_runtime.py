@@ -30,7 +30,12 @@ from agent_adapters import (
 )
 from path_policy import PathPolicyError, resolve_repository_path
 from repo_changes import RepositoryChanges
-from contracts import CodexContractResult, ContractResult, ValidationAttestation
+from contracts import (
+    CodexContractResult,
+    ContractResult,
+    FindingRecord,
+    ValidationAttestation,
+)
 from native_codex_contract import (
     NativeCodexContractError,
     NativeCodexErrorCode,
@@ -1344,6 +1349,16 @@ def run_agent(
 
 
 @dataclass(frozen=True, slots=True)
+class RecoveredFindingComparison:
+    """Request-time authority needed after record-ahead result persistence."""
+
+    request_findings: tuple[FindingRecord, ...]
+    offered_findings: tuple[FindingRecord, ...]
+    request_position: str
+    recovery_position: str
+
+
+@dataclass(frozen=True, slots=True)
 class NativeAgentReviewOutput:
     """One schema- and request-bound native reviewer result."""
 
@@ -1351,6 +1366,10 @@ class NativeAgentReviewOutput:
     canonical_json: str
     request_id: str
     context: NativeReviewContext | None = None
+    recovered_finding_comparison: RecoveredFindingComparison | None = field(
+        default=None,
+        compare=False,
+    )
 
 
 def run_native_review_agent(
@@ -1563,6 +1582,10 @@ class NativeAgentCodexOutput:
     canonical_json: str
     request_id: str
     response_sha256: str
+    recovered_finding_comparison: RecoveredFindingComparison | None = field(
+        default=None,
+        compare=False,
+    )
 
 
 def run_native_codex_agent(

@@ -23,6 +23,7 @@ from agent_runtime import (
     ProviderRequestRoundRequired,
     QuotaReset,
     QuotaWaitPolicy,
+    RecoveredFindingComparison,
     TransientRetryPolicy,
     classify_agent_failure,
 )
@@ -59,6 +60,7 @@ from native_codex_contract import (
     NativeCodexRequestKind,
 )
 from native_review_contract import (
+    NativeReviewContext,
     NativeReviewContractError,
     NativeReviewDispositionLimit,
     NativeReviewErrorCode,
@@ -84,6 +86,7 @@ from workflow import (
     WorkflowHistory,
     WorkflowRunResult,
     ValidationExecutionError,
+    _merge_request_finding_subset,
     _review_round_number,
     resolve_retired_iteration_limit,
 )
@@ -3413,6 +3416,108 @@ def test_subset_merge_names_a_reused_number_as_a_collision() -> None:
         )
 
 
+def test_recovered_implementer_subset_is_validated_at_request_time_then_confirmed_now() -> None:
+    offered = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="The request offered this finding before record-ahead persistence.",
+        acceptance_test="Resume accepts the already persisted disposition.",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
+    returned = apply_finding_response(
+        offered,
+        FindingResponseDecision.ACCEPTED,
+        "The request-time acceptance test is satisfied.",
+    )
+    comparison = RecoveredFindingComparison(
+        request_findings=(offered,),
+        offered_findings=(offered,),
+        request_position="request-ledger measurement=ar1-request",
+        recovery_position="recovery-ledger head=ar1-current",
+    )
+
+    assert _merge_request_finding_subset(
+        (returned,),
+        (returned,),  # freshly rebuilt request; intentionally not the comparison basis
+        (returned,),
+        recovered_comparison=comparison,
+    ) == (returned,)
+
+
+def test_recovered_final_review_subset_uses_the_historical_disposition_batch() -> None:
+    first = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="First final-review disposition.",
+        acceptance_test="Close the first historical item.",
+        origin=FindingOrigin("FINAL", 1, AgentRole.CLAUDE),
+    )
+    second = replace(first, finding_id="C-02", summary="Second disposition.")
+    closed_first = replace(
+        first,
+        status=FindingStatus.CLOSED,
+        status_rationale="The final reviewer verified the correction.",
+    )
+    returned = (closed_first, second)
+    comparison = RecoveredFindingComparison(
+        request_findings=(first, second),
+        offered_findings=(first, second),
+        request_position="request-ledger measurement=ar1-review-request",
+        recovery_position="recovery-ledger head=ar1-review-current",
+    )
+
+    assert WorkflowEngine._merge_review_request_subset(
+        returned,
+        (second,),  # today's pending batch has already lost the closed item
+        returned,
+        review_type="final review",
+        recovered_comparison=comparison,
+    ) == returned
+
+
+@pytest.mark.parametrize("reviewer", (False, True), ids=("implementer", "reviewer"))
+def test_invalid_recovered_subset_diagnostic_names_request_and_recovery_time(
+    reviewer: bool,
+) -> None:
+    offered = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="The original request offered this finding.",
+        acceptance_test="Reject a response that omitted it at request time.",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
+    comparison = RecoveredFindingComparison(
+        request_findings=(offered,),
+        offered_findings=(offered,),
+        request_position="request-ledger measurement=ar1-request",
+        recovery_position="recovery-ledger head=ar1-recovery",
+    )
+
+    with pytest.raises(WorkflowExecutionError) as caught:
+        if reviewer:
+            WorkflowEngine._merge_review_request_subset(
+                (offered,),
+                (),
+                (),
+                review_type="final review",
+                recovered_comparison=comparison,
+            )
+        else:
+            _merge_request_finding_subset(
+                (offered,),
+                (),
+                (),
+                recovered_comparison=comparison,
+            )
+
+    diagnostic = str(caught.value)
+    assert "request-time offered/returned measured-at: request-ledger" in diagnostic
+    assert "recovery-time authoritative compared-at: recovery-ledger" in diagnostic
+
+
 def test_slice_review_reserves_finding_numbers_from_authoritative_replay() -> None:
     ledger = tuple(
         FindingRecord(
@@ -3621,11 +3726,34 @@ def test_native_codex_correction_binds_record_authority_before_recovery() -> Non
         canonical_json='{"result_type":"correction_result"}',
         request_id="native-codex-request-" + "a" * 64,
         response_sha256="b" * 64,
+        recovered_finding_comparison=RecoveredFindingComparison(
+            request_findings=(finding,),
+            offered_findings=(finding,),
+            request_position="request-ledger measurement=ar1-request",
+            recovery_position="recovery-ledger head=ar1-current",
+        ),
     )
 
     @dataclass
     class RecoveryDriver(FakeDriver):
         persisted: list[NativeAgentCodexOutput] = field(default_factory=list)
+
+        def authoritative_native_findings(
+            self,
+            state: WorkflowState,
+            mirror_findings: tuple[FindingRecord, ...],
+        ) -> tuple[FindingRecord, ...]:
+            self.authoritative_finding_calls.append(
+                (state.current_step.value, mirror_findings)
+            )
+            return (answered,)
+
+        def carry_forward_native_findings(
+            self,
+            _state: WorkflowState,
+            _current_findings: tuple[FindingRecord, ...],
+        ) -> tuple[FindingRecord, ...]:
+            return (answered,)
 
         def recover_pending_native_codex(self, *_args):  # type: ignore[no-untyped-def]
             return recovered_output
@@ -3638,7 +3766,7 @@ def test_native_codex_correction_binds_record_authority_before_recovery() -> Non
             output: NativeAgentCodexOutput,
             previous_findings: tuple[FindingRecord, ...],
         ) -> None:
-            assert previous_findings == (finding,)
+            assert previous_findings == (answered,)
             self.persisted.append(output)
 
     state = replace(
@@ -3984,6 +4112,19 @@ def test_native_request_reuses_restored_legacy_review_packet_without_semantic_di
 
 def test_native_record_ahead_recovery_receives_full_history_and_skips_provider() -> None:
     changes = _changes("d", "src/early.py", TEST_FILE)
+    offered = FindingRecord(
+        finding_id="C-01",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="The recovered review received the request-time state.",
+        acceptance_test="The recovered persistence call keeps that same state.",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
+    persisted = replace(
+        offered,
+        status=FindingStatus.CLOSED,
+        status_rationale="The record-ahead review already closed the finding.",
+    )
 
     @dataclass
     class RecoveringNativeDriver(FakeDriver):
@@ -4003,6 +4144,11 @@ def test_native_record_ahead_recovery_receives_full_history_and_skips_provider()
             bound = invocation.native_request.bound_context
             attestation = bound.context.validation_attestation
             assert attestation == contract.validation_attestation
+            request_context = replace(
+                bound.context,
+                previous_findings=(offered,),
+                known_open_findings=(offered,),
+            )
             return NativeAgentReviewOutput(
                 result=ContractResult(
                     reviewer=AgentRole.CLAUDE,
@@ -4017,13 +4163,20 @@ def test_native_record_ahead_recovery_receives_full_history_and_skips_provider()
                         "call-site type drift",
                         "the provider is invoked again",
                     ),
-                    findings=history.findings,
+                    findings=(persisted,),
                     anchors=(),
                 ),
                 canonical_json=(
                     '{"request_id":"' + bound.request_id + '","result":"approved"}'
                 ),
                 request_id=bound.request_id,
+                context=request_context,
+                recovered_finding_comparison=RecoveredFindingComparison(
+                    request_findings=(offered,),
+                    offered_findings=(offered,),
+                    request_position="request-ledger measurement=ar1-request",
+                    recovery_position="recovery-ledger head=ar1-current",
+                ),
             )
 
         def invoke_reviewer(self, invocation: ReviewerInvocation):  # type: ignore[no-untyped-def]
@@ -4038,7 +4191,7 @@ def test_native_record_ahead_recovery_receives_full_history_and_skips_provider()
         ) -> None:
             assert fingerprint == changes.fingerprint
             assert round_number == 1
-            assert previous_findings == ()
+            assert previous_findings == (offered,)
             self.persisted_native.append(output)
 
     state = replace(
@@ -4047,14 +4200,14 @@ def test_native_record_ahead_recovery_receives_full_history_and_skips_provider()
             ProtocolMode.STRUCTURED_V2,
             "2",
             "native-claude-review-v2",
+            codex_result_transport="native-codex-v2",
         ),
     )
-    history = WorkflowHistory(state.current_work_unit_id)
+    history = WorkflowHistory(state.current_work_unit_id, findings=(persisted,))
     driver = RecoveringNativeDriver(
         snapshots=[changes],
         codex_outputs=[],
         reviewer_outputs=[],
-        authoritative_finding_error="record-ahead mirror is expected to differ",
     )
 
     advanced, recovered = WorkflowEngine(driver)._run_review(
@@ -4070,6 +4223,7 @@ def test_native_record_ahead_recovery_receives_full_history_and_skips_provider()
     assert driver.authoritative_finding_calls == []
     assert advanced.current_step is WorkflowStep.SLICE_COMMIT
     assert recovered.latest_claude_review is not None
+    assert recovered.findings == (persisted,)
 
 
 def test_managed_audit_paths_are_added_after_codex_plan_only() -> None:
@@ -6195,3 +6349,127 @@ def test_native_record_ahead_review_is_mirrored_before_next_policy_or_provider()
     )
     assert len(reviews) == 1
     assert reviews[0].round_number == 1
+
+
+def test_recovered_final_review_uses_request_time_batch_after_dispositions_persist() -> None:
+    fingerprint = "f" * 64
+    state = replace(
+        _completed_single_slice_state()
+        .start_final_review_work_unit()
+        .with_current_step(WorkflowStep.CLAUDE_FINAL_REVIEW),
+        protocol_binding=ProtocolBinding(
+            ProtocolMode.STRUCTURED_V2,
+            "2",
+            claude_review_transport="native-claude-review-v2",
+            codex_result_transport="native-codex-v2",
+        ),
+    )
+    first = FindingRecord(
+        "C-01",
+        FindingClass.BLOCKER,
+        FindingStatus.OPEN,
+        "First historical final-review item.",
+        "Close the first item.",
+        FindingOrigin("FINAL", 1, AgentRole.CLAUDE),
+    )
+    second = replace(first, finding_id="C-02", summary="Second historical item.")
+    offered = (first, second)
+    returned = tuple(
+        replace(
+            finding,
+            status=FindingStatus.CLOSED,
+            status_rationale="The final review verified the correction.",
+        )
+        for finding in offered
+    )
+    state = _with_open_findings(state, ("C-01", "C-02"))
+    attestation = _attestation(_changes("f", "src/early.py", TEST_FILE))
+    native_context = NativeReviewContext(
+        run_id=state.run_id,
+        work_unit_id=str(state.current_work_unit_id),
+        operation=WorkflowStep.CLAUDE_FINAL_REVIEW.value,
+        diff_fingerprint=fingerprint,
+        reviewer=AgentRole.CLAUDE,
+        approval_marker=ApprovalMarker.FINAL,
+        slice_id="FINAL",
+        round_number=1,
+        previous_findings=offered,
+        known_open_findings=offered,
+        authoritative_finding_ids=("C-01", "C-02"),
+        validation_attestation=attestation,
+        test_files=(TEST_FILE,),
+        test_changes_approved=True,
+        validation_command_prefixes=(("python3", "-m", "pytest"),),
+        final_review_pending_count=2,
+    )
+    result = ContractResult(
+        reviewer=AgentRole.CLAUDE,
+        approval=True,
+        stopped=False,
+        stop_request=None,
+        validation=attestation,
+        test_files=(TEST_FILE,),
+        pre_mortem="A persisted disposition could be compared with a later batch.",
+        evidence=ReviewEvidence(
+            "request-time final-review batch",
+            "a recovery merge uses today's pending set",
+            "the provider is invoked again",
+        ),
+        findings=returned,
+        anchors=(),
+    )
+    replay = PersistedNativeReviewerReplay(
+        output=NativeAgentReviewOutput(
+            result=result,
+            canonical_json='{"decision":"approved"}',
+            request_id="native-review-request-" + "b" * 64,
+            context=native_context,
+            recovered_finding_comparison=RecoveredFindingComparison(
+                request_findings=offered,
+                offered_findings=offered,
+                request_position="request-ledger measurement=ar1-request",
+                recovery_position="recovery-ledger head=ar1-current",
+            ),
+        ),
+        fingerprint=fingerprint,
+        round_number=1,
+    )
+
+    @dataclass
+    class RecoveringFinalDriver(FakeDriver):
+        def carry_forward_native_findings(
+            self,
+            _state: WorkflowState,
+            _current_findings: tuple[FindingRecord, ...],
+        ) -> tuple[FindingRecord, ...]:
+            return returned
+
+        def recover_pending_native_reviewer_before_policy(
+            self,
+            _state: WorkflowState,
+            _context: WorkflowContext,
+            _history: WorkflowHistory,
+        ) -> PersistedNativeReviewerReplay:
+            return replay
+
+        def invoke_reviewer(self, _invocation: ReviewerInvocation):  # type: ignore[no-untyped-def]
+            raise AssertionError("record-ahead final review must suppress the provider")
+
+    driver = RecoveringFinalDriver(
+        snapshots=[],
+        codex_outputs=[],
+        reviewer_outputs=[],
+    )
+    outcome = WorkflowEngine(driver).run_current_work_unit(
+        state,
+        _context(),
+        WorkflowHistory(
+            state.current_work_unit_id,
+            findings=returned,
+            attestations=(attestation,),
+        ),
+    )
+
+    assert outcome.completed
+    assert outcome.history.findings == returned
+    assert not driver.reviewer_calls

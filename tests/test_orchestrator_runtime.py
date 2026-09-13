@@ -5319,8 +5319,9 @@ def test_real_cleanup_round_two_keeps_first_record_scope_and_replays(
     )
 
 
-def test_cleanup_selection_uses_record_ledger_when_runtime_history_is_empty(
+def test_cleanup_is_dormant_but_logs_record_balance_when_runtime_history_is_empty(
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     repository = _repository(tmp_path, "feature/record-backed-cleanup-selection")
     finding_paths = tuple(f"src/finding-{index:02d}.py" for index in range(1, 19))
@@ -5383,11 +5384,14 @@ def test_cleanup_selection_uses_record_ledger_when_runtime_history_is_empty(
     )
     driver.bind_work_unit(reviewed.complete_current_slice(commit_ref=head))
 
-    plan = driver.prepare_finding_cleanup()
+    with caplog.at_level("INFO", logger="orchestrator"):
+        plan = driver.prepare_finding_cleanup()
 
-    assert plan is not None
-    assert plan.finding_ids == tuple(f"C-{index:02d}" for index in range(1, 19))
-    assert plan.scope_paths == finding_paths
+    assert plan is None
+    assert (
+        "Finding balance through Slice 01: opened=18 closed=0 net=+18; "
+        "positive-streak=1; cleanup=not-scheduled"
+    ) in caplog.text
 
 
 def test_cleanup_review_builds_exact_record_backed_followup_correction(
