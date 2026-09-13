@@ -1513,6 +1513,23 @@ _OPERATIONAL_FAILURE_CLASSES = {
     "resumable_halt",
     "terminal_rejection",
 }
+_NATIVE_REVIEW_RESPONSE_REJECTION_CODES = {
+    "schema-invalid",
+    "request-mismatch",
+    "reviewer-mismatch",
+    "finding-id-invalid",
+    "finding-reference-unknown",
+    "finding-reference-not-open",
+    "finding-event-conflict",
+    "missing-own-finding-update",
+    "finding-content-invalid",
+    "finding-signature-duplicate",
+    "acceptance-invalid",
+    "anchor-invalid",
+    "review-content-missing",
+    "stop-content-invalid",
+    "approval-invalid",
+}
 _PROVIDER_TEXT_MARKER_RE = re.compile(
     r"^\[provider text redacted; sha256=([0-9a-f]{64}); utf8_bytes=([1-9][0-9]*)\]$"
 )
@@ -1587,8 +1604,19 @@ class InvocationFailurePayload:
     automatic_resume: bool
     diff_fingerprint: str | None
     orchestrator_diagnostic: str | None = None
+    native_review_rejection: str | None = None
+    native_review_retry_round: int | None = None
     status: ClassVar[str] = "classified"
     record_type: ClassVar[RecordType] = RecordType.INVOCATION_FAILURE
+
+    @property
+    def native_review_feedback_document(self) -> dict[str, object]:
+        if self.native_review_rejection is None:
+            return {}
+        return {
+            "native_review_rejection": self.native_review_rejection,
+            "native_review_retry_round": self.native_review_retry_round,
+        }
 
     def __post_init__(self) -> None:
         _require_identifier(self.invocation_id, "invocation failure invocation_id")
@@ -1648,6 +1676,7 @@ class InvocationFailurePayload:
             raise ArtifactValidationError(
                 "invocation failure orchestrator diagnostic is not allowlisted"
             )
+        _validate_native_review_failure_feedback(self)
         for value, label in (
             (self.received_at, "invocation failure received_at"),
             (self.decision_at_utc, "invocation failure decision_at_utc"),
@@ -1773,6 +1802,37 @@ class InvocationFailurePayload:
                 )
 
 
+def _validate_native_review_failure_feedback(
+    payload: InvocationFailurePayload,
+) -> None:
+    if payload.native_review_rejection is not None:
+        if payload.native_review_rejection not in _NATIVE_REVIEW_RESPONSE_REJECTION_CODES:
+            raise ArtifactValidationError(
+                "invocation failure native review rejection is invalid"
+            )
+        if not (
+            payload.role not in {Role.ORCHESTRATOR, Role.USER}
+            and payload.failure_kind == "output"
+            and payload.diagnostic_code == "NATIVE-REVIEW-FORM"
+            and payload.step.startswith(f"{payload.role.value}_")
+            and payload.step.endswith("_review")
+        ):
+            raise ArtifactValidationError(
+                "native review rejection requires a reviewer output failure"
+            )
+    if (payload.native_review_rejection is None) != (
+        payload.native_review_retry_round is None
+    ):
+        raise ArtifactValidationError(
+            "native review rejection and retry round must be bound together"
+        )
+    if payload.native_review_retry_round is not None:
+        _require_positive(
+            payload.native_review_retry_round,
+            "invocation failure native review retry round",
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class QuotaPausePayload:
     role: Role
@@ -1867,6 +1927,12 @@ def artifact_payload_document(payload: ArtifactPayload) -> dict[str, Any]:
         and payload.orchestrator_diagnostic is None
     ):
         raw.pop("orchestrator_diagnostic", None)
+    if (
+        isinstance(payload, InvocationFailurePayload)
+        and payload.native_review_rejection is None
+    ):
+        raw.pop("native_review_rejection", None)
+        raw.pop("native_review_retry_round", None)
     if isinstance(payload, GateDecisionPayload) and payload.invocation_id is None:
         raw.pop("invocation_id", None)
     return _json_value(raw)
@@ -2273,6 +2339,8 @@ _PAYLOAD_READERS: dict[
             data["retry_delay_seconds"], data["auto_resume_count"],
             data["automatic_resume"], data["diff_fingerprint"],
             data.get("orchestrator_diagnostic"),
+            data.get("native_review_rejection"),
+            data.get("native_review_retry_round"),
         ),
     RecordType.QUOTA_PAUSE: lambda data: QuotaPausePayload(
         Role(data["role"]), data["repository_fingerprint"], data["retry_at"],

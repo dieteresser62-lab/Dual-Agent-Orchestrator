@@ -143,6 +143,9 @@ def _normalized_payload_fields(payload: object) -> object:
     if isinstance(payload, artifact_models.InvocationFailurePayload):
         if payload.orchestrator_diagnostic is None:
             raw.pop("orchestrator_diagnostic", None)
+        if payload.native_review_rejection is None:
+            raw.pop("native_review_rejection", None)
+            raw.pop("native_review_retry_round", None)
     if isinstance(payload, artifact_models.GateDecisionPayload):
         if payload.invocation_id is None:
             raw.pop("invocation_id", None)

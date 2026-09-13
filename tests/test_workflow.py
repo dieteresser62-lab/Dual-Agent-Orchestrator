@@ -1303,8 +1303,12 @@ def _native_review_contract_failure(
     invocation_id: str,
     *,
     received_at: datetime,
+    detail: str = "provider-authored review rejected",
+    operator_detail: str | None = None,
 ) -> AgentInvocationError:
-    contract_error = NativeReviewContractError(code, "provider-authored review rejected")
+    contract_error = NativeReviewContractError(
+        code, detail, operator_detail=operator_detail
+    )
     output_error = AgentOutputError(
         "native review result violates its bound contract",
         technical_text=f"{code.value}: {contract_error.detail}",
@@ -4936,6 +4940,9 @@ def test_claude_network_retry_keeps_configured_two_resume_ceiling() -> None:
         item.failure_kind is AgentFailureKind.NETWORK
         for item in result.state.current_work_unit.invocation_failures
     )
+    assert len(
+        {call.native_request.canonical_json for call in driver.reviewer_calls}
+    ) == 1
 
 
 def test_claude_structured_output_failure_keeps_bounded_retry_and_safe_diagnostic(
@@ -5071,7 +5078,7 @@ def test_codex_timeout_retry_limit_reports_exhausted_attempts(caplog) -> None:
     assert "attempts_exhausted=3" in caplog.text
 
 
-def test_schema_invalid_review_retries_and_records_failure_before_continuation() -> None:
+def test_schema_invalid_review_retries_with_bound_corrective_feedback(caplog) -> None:
     now = [datetime(2026, 9, 7, 20, 24, tzinfo=timezone.utc)]
     changes = _changes("1", "src/early.py", TEST_FILE)
     driver = FakeDriver(
@@ -5091,6 +5098,7 @@ def test_schema_invalid_review_retries_and_records_failure_before_continuation()
     def sleep(seconds: float) -> None:
         now[0] += timedelta(seconds=seconds)
 
+    caplog.set_level("INFO", logger="workflow")
     result = WorkflowEngine(
         driver, now_fn=lambda: now[0], sleep_fn=sleep
     ).run_current_work_unit(_slice_state(), _context())
@@ -5105,7 +5113,56 @@ def test_schema_invalid_review_retries_and_records_failure_before_continuation()
     assert failure.diagnostic_code == "NATIVE-REVIEW-FORM"
     assert failure.failure_kind == "output"
     assert failure.automatic_resume is True
-    assert result.state.current_work_unit.invocation_failures[0].auto_resume_count == 1
+    assert failure.retry_delay_seconds > 0
+    assert failure.native_review_rejection == "schema-invalid"
+    first = driver.reviewer_calls[0].native_request
+    second = driver.reviewer_calls[1].native_request
+    assert first is not None and second is not None
+    assert "retry_feedback" not in first.document
+    assert second.document["retry_feedback"] == {
+        "prior_invocation_id": "review-schema-invalid-1",
+        "rejection_code": "schema-invalid",
+        "correction_instruction": (
+            "Return one JSON result that conforms exactly to the bound writer schema."
+        ),
+    }
+    assert first.bound_context.request_id != second.bound_context.request_id
+    assert "native_review_rejection=schema-invalid: provider-authored review rejected" in caplog.text
+
+
+def test_duplicate_review_rejection_logs_the_safe_exact_mapping(caplog) -> None:
+    now = datetime(2026, 9, 13, 16, 21, tzinfo=timezone.utc)
+    detail = (
+        "new finding C-17 has no unique offered open finding occurrence target; "
+        "known matches: C-03 (signature " + ("a" * 64) + ")"
+    )
+    driver = FakeDriver(
+        snapshots=[_changes("1", "src/early.py", TEST_FILE)],
+        codex_outputs=[_codex_ready()],
+        reviewer_outputs=[_review_approval(AgentRole.CLAUDE)],
+        reviewer_failures=[
+            _native_review_contract_failure(
+                NativeReviewErrorCode.FINDING_SIGNATURE_DUPLICATE,
+                "review-duplicate-mapping",
+                received_at=now,
+                detail=detail,
+                operator_detail=detail,
+            ),
+            None,
+        ],
+    )
+
+    caplog.set_level("INFO", logger="workflow")
+    result = WorkflowEngine(driver, now_fn=lambda: now).run_current_work_unit(
+        _slice_state(), _context()
+    )
+
+    assert result.completed
+    assert len(driver.reviewer_calls) == 2
+    assert (
+        f"native_review_rejection=finding-signature-duplicate: {detail}"
+        in caplog.text
+    )
 
 
 def test_other_review_output_failure_halts_without_automatic_retry() -> None:
@@ -5138,19 +5195,20 @@ def test_other_review_output_failure_halts_without_automatic_retry() -> None:
     assert failure.automatic_resume is False
 
 
-def test_foreign_review_request_id_halts_without_retry() -> None:
+def test_foreign_review_request_id_retries_with_request_binding_feedback() -> None:
     now = datetime(2026, 9, 7, 20, 24, tzinfo=timezone.utc)
     changes = _changes("1", "src/early.py", TEST_FILE)
     driver = FakeDriver(
         snapshots=[changes],
         codex_outputs=[_codex_ready()],
-        reviewer_outputs=[],
+        reviewer_outputs=[_review_approval(AgentRole.CLAUDE)],
         reviewer_failures=[
             _native_review_contract_failure(
                 NativeReviewErrorCode.REQUEST_MISMATCH,
                 "review-request-mismatch",
                 received_at=now,
-            )
+            ),
+            None,
         ],
     )
 
@@ -5158,22 +5216,24 @@ def test_foreign_review_request_id_halts_without_retry() -> None:
         _slice_state(), _context()
     )
 
-    assert not result.completed
-    assert len(driver.reviewer_calls) == 1
-    assert result.state.current_work_unit.status is WorkUnitStatus.AWAITING_RESUME
+    assert result.completed
+    assert len(driver.reviewer_calls) == 2
     failure = driver.failure_payloads[0]
-    assert failure.failure_class == "resumable_halt"
-    assert failure.diagnostic_code == "NATIVE-REVIEW-CONTRACT"
-    assert failure.automatic_resume is False
+    assert failure.failure_class == "transient"
+    assert failure.diagnostic_code == "NATIVE-REVIEW-FORM"
+    assert failure.automatic_resume is True
+    retry = driver.reviewer_calls[1].native_request
+    assert retry is not None
+    assert retry.document["retry_feedback"]["rejection_code"] == "request-mismatch"
 
 
-def test_schema_invalid_review_retry_limit_halts_resumably() -> None:
+def test_response_dependent_review_rejection_uses_bounded_retry_limit() -> None:
     now = [datetime(2026, 9, 7, 20, 24, tzinfo=timezone.utc)]
     changes = _changes("1", "src/early.py", TEST_FILE)
     failures = [
         _native_review_contract_failure(
-            NativeReviewErrorCode.SCHEMA_INVALID,
-            f"review-schema-invalid-{attempt}",
+            NativeReviewErrorCode.APPROVAL_INVALID,
+            f"review-content-invalid-{attempt}",
             received_at=now[0],
         )
         for attempt in range(1, 4)
@@ -5208,11 +5268,13 @@ def test_schema_invalid_review_retry_limit_halts_resumably() -> None:
         "output",
         "output",
     ]
+    assert [item.failure_class for item in driver.failure_payloads] == [
+        "transient",
+        "transient",
+        "resumable_halt",
+    ]
     assert result.state.current_work_unit.status is WorkUnitStatus.AWAITING_RESUME
     assert result.state.current_work_unit.gate.resume_step is WorkflowStep.CLAUDE_SLICE_REVIEW
-    resumed = result.state.resume_after_invocation_halt()
-    assert resumed.current_work_unit.status is WorkUnitStatus.IN_PROGRESS
-    assert resumed.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
 
 
 def test_collect_changes_exception_during_resume_becomes_policy_halt() -> None:

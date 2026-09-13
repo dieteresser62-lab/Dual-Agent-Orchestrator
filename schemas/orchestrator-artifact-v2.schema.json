@@ -367,6 +367,8 @@
         "technical_text_sha256": {"$ref": "#/$defs/sha256"},
         "technical_text_bytes": {"type": "integer", "minimum": 1},
         "orchestrator_diagnostic": {"enum": [null, "slice-plan-invalid: planned slice paths must be sorted, unique, and non-empty"]},
+        "native_review_rejection": {"enum": ["schema-invalid", "request-mismatch", "reviewer-mismatch", "finding-id-invalid", "finding-reference-unknown", "finding-reference-not-open", "finding-event-conflict", "missing-own-finding-update", "finding-content-invalid", "finding-signature-duplicate", "acceptance-invalid", "anchor-invalid", "review-content-missing", "stop-content-invalid", "approval-invalid"]},
+        "native_review_retry_round": {"type": "integer", "minimum": 1},
         "received_at": {"type": "string", "format": "date-time"},
         "decision_at_utc": {"type": "string", "format": "date-time"},
         "step": {"$ref": "#/$defs/identifier"},

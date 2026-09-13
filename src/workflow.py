@@ -3569,6 +3569,19 @@ class WorkflowEngine:
                     state = state.start_recomposed_request_round()
                     self.driver.checkpoint(state, history)
                     return state, None
+                if failure.native_review_rejection is not None:
+                    logger.warning(
+                        "Rejected native review response; recomposing the retry "
+                        "request with corrective feedback: work_unit=%s "
+                        "round=%s->%s rejection=%s",
+                        state.current_work_unit_id,
+                        state.current_work_unit.round_number,
+                        state.current_work_unit.round_number + 1,
+                        failure.native_review_rejection,
+                    )
+                    state = state.start_recomposed_request_round()
+                    self.driver.checkpoint(state, history)
+                    return state, None
 
     def _persist_invocation_failure(
         self,

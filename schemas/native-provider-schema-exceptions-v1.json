@@ -136,9 +136,9 @@
       "provider": "claude",
       "operations": ["final", "plan", "slice"],
       "error_code": "finding-signature-duplicate",
-      "local_invariant": "A new finding signature differs from every known open finding signature and every earlier new finding in the same result.",
+      "local_invariant": "A new finding signature differs from every earlier new finding in the same result; a unique match to an offered open finding is coalesced into that finding as an occurrence, while ambiguous or contradictory matches are rejected.",
       "missing_schema_feature": "cross_array_derived_hash_uniqueness",
-      "provider_evidence": "The supported JSON Schema subset cannot derive NFKC/casefolded SHA-256 values from generated acceptance prose and repository-path mentions or compare them with request-bound signatures.",
+      "provider_evidence": "The supported JSON Schema subset cannot derive NFKC/casefolded SHA-256 values from generated acceptance prose and repository-path mentions, compare candidates with one another, or prove that a known-signature match has one lossless offered occurrence target.",
       "regression_test": "tests/test_native_review_request.py::test_registered_review_exceptions_cover_writer_valid_local_rejections"
     }
   ]

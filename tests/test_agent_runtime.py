@@ -1042,6 +1042,32 @@ def test_native_review_contract_failure_kind_is_output_for_all_codes(
     assert failure.kind is expected_kind
 
 
+def test_native_review_content_rejection_cannot_masquerade_as_provider_failure() -> None:
+    detail = (
+        "new finding C-17 duplicates known open finding C-03 "
+        "(signature " + ("a" * 64) + ") despite network timeout quota wording"
+    )
+    contract_error = NativeReviewContractError(
+        NativeReviewErrorCode.FINDING_SIGNATURE_DUPLICATE,
+        detail,
+        operator_detail=detail,
+    )
+    output_error = AgentOutputError(
+        "native review result violates its bound contract",
+        technical_text=detail,
+    )
+    output_error.__cause__ = contract_error
+
+    failure = classify_agent_failure(
+        "claude", output_error, invocation_id="review-content-not-transport"
+    )
+
+    assert failure.kind is AgentFailureKind.OUTPUT
+    assert failure.readable_native_review_rejection == (
+        f"finding-signature-duplicate: {detail}"
+    )
+
+
 def test_adapter_structured_output_retry_exhaustion_is_classified_as_output() -> None:
     failure = classify_agent_failure(
         "claude",

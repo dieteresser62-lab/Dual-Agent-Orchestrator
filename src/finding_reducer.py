@@ -37,6 +37,12 @@ from contracts import (
 from finding_order import finding_id_sort_key, sorted_finding_ids
 
 
+def is_closed_finding_status(status: FindingStatus) -> bool:
+    """Keep finding-state decisions inside the canonical reduction boundary."""
+
+    return status is FindingStatus.CLOSED
+
+
 def first_correction_work_unit_payload(
     records: Sequence[ArtifactRecord], work_unit_id: int | str
 ) -> CorrectionWorkUnitPayload | None:

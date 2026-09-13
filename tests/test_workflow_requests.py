@@ -204,6 +204,7 @@ def test_request_builders_are_free_functions_with_one_way_imports() -> None:
     }
     assert declarations == {
         "_native_review_acceptance_criteria",
+        "_native_review_retry_feedback",
         "_review_request_finding_inputs",
         "native_codex_request",
         "native_review_request",

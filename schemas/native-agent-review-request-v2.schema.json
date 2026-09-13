@@ -496,6 +496,35 @@
       ],
       "additionalProperties": false
     },
+    "retry_feedback": {
+      "type": ["object", "null"],
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "prior_invocation_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,199}$"
+            },
+            "rejection_code": {
+              "enum": ["schema-invalid", "request-mismatch", "reviewer-mismatch", "finding-id-invalid", "finding-reference-unknown", "finding-reference-not-open", "finding-event-conflict", "missing-own-finding-update", "finding-content-invalid", "finding-signature-duplicate", "acceptance-invalid", "anchor-invalid", "review-content-missing", "stop-content-invalid", "approval-invalid"]
+            },
+            "correction_instruction": {
+              "$ref": "#/$defs/safe_text"
+            }
+          },
+          "required": [
+            "prior_invocation_id",
+            "rejection_code",
+            "correction_instruction"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "review_request": {
       "type": "object",
       "properties": {
@@ -565,6 +594,9 @@
           "items": {
             "$ref": "#/$defs/safe_text"
           }
+        },
+        "retry_feedback": {
+          "$ref": "#/$defs/retry_feedback"
         },
         "review_contract": {
           "$ref": "#/$defs/review_contract"

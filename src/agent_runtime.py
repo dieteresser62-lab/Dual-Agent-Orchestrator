@@ -51,7 +51,8 @@ from native_review_contract import (
     NativeReviewContext,
     NativeReviewContractError,
     NativeReviewErrorCode,
-    is_retryable_native_review_form_error,
+    find_native_review_contract_error,
+    is_retryable_native_review_response_error,
     parse_bound_native_contract_result,
     validate_native_review_disposition_budget,
     validate_native_review_document,
@@ -145,11 +146,36 @@ class AgentInvocationError(RuntimeError):
         provider_data: Mapping[str, object] | None = None,
         technical_text: str | None = None,
         orchestrator_diagnostic: OrchestratorDiagnostic | None = None,
+        native_review_rejection: NativeReviewErrorCode | None = None,
+        native_review_rejection_detail: str | None = None,
+        native_review_response_retryable: bool = False,
     ) -> None:
         if orchestrator_diagnostic is not None and not isinstance(
             orchestrator_diagnostic, OrchestratorDiagnostic
         ):
             raise TypeError("orchestrator diagnostic must be a closed enum member")
+        if native_review_rejection is not None and not isinstance(
+            native_review_rejection, NativeReviewErrorCode
+        ):
+            raise TypeError("native review rejection must be a closed enum member")
+        if native_review_rejection_detail is not None and (
+            native_review_rejection is None
+            or not native_review_rejection_detail.strip()
+            or len(native_review_rejection_detail) > 1200
+            or any(
+                character in native_review_rejection_detail
+                for character in ("\x00", "\r", "\n")
+            )
+        ):
+            raise TypeError(
+                "native review rejection detail must be a bounded typed diagnostic"
+            )
+        if not isinstance(native_review_response_retryable, bool) or (
+            native_review_response_retryable and native_review_rejection is None
+        ):
+            raise TypeError(
+                "native review response retryability requires a typed rejection"
+            )
         self.agent_key = agent_key
         self.kind = kind
         self.invocation_id = invocation_id
@@ -160,6 +186,9 @@ class AgentInvocationError(RuntimeError):
         self.provider_data = dict(provider_data) if provider_data is not None else None
         self.technical_text = technical_text or provider_text
         self.orchestrator_diagnostic = orchestrator_diagnostic
+        self.native_review_rejection = native_review_rejection
+        self.native_review_rejection_detail = native_review_rejection_detail
+        self.native_review_response_retryable = native_review_response_retryable
         label = "quota/rate limit reached" if kind is AgentFailureKind.QUOTA else f"{kind.value} failure"
         super().__init__(
             f"{agent_key} {label} [invocation {invocation_id}]: {provider_text}"
@@ -169,6 +198,18 @@ class AgentInvocationError(RuntimeError):
     def readable_orchestrator_diagnostic(self) -> str | None:
         diagnostic = self.orchestrator_diagnostic
         return diagnostic.text if isinstance(diagnostic, OrchestratorDiagnostic) else None
+
+    @property
+    def readable_native_review_rejection(self) -> str | None:
+        rejection = self.native_review_rejection
+        if not isinstance(rejection, NativeReviewErrorCode):
+            return None
+        detail = self.native_review_rejection_detail
+        return (
+            f"{rejection.value}: {detail}"
+            if isinstance(detail, str)
+            else rejection.value
+        )
 
 
 class ProviderRequestRoundRequired(RuntimeError):
@@ -2131,17 +2172,6 @@ def is_structured_output_retry_exhaustion(
     )
 
 
-def _exception_chain(error: BaseException) -> tuple[BaseException, ...]:
-    chain: list[BaseException] = []
-    seen: set[int] = set()
-    current: BaseException | None = error
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
-        chain.append(current)
-        current = current.__cause__
-    return tuple(chain)
-
-
 def classify_agent_failure(
     agent_key: str,
     exc: BaseException,
@@ -2201,15 +2231,13 @@ def classify_agent_failure(
         )
         and _CLAUDE_SESSION_LIMIT_PATTERN.search(technical_text) is not None
     )
-    native_review_form_failure = next(
-        (
-            candidate
-            for candidate in _exception_chain(exc)
-            if is_retryable_native_review_form_error(candidate)
-        ),
-        None,
-    )
-    if (
+    native_review_form_failure = find_native_review_contract_error(exc)
+    if native_review_form_failure is not None:
+        # A validated provider response was rejected by deterministic local
+        # semantics.  Provider-like words inside its prose cannot turn that
+        # response-content fact into a transient quota or transport failure.
+        kind = AgentFailureKind.OUTPUT
+    elif (
         is_quota_or_rate_limit_error(technical_text)
         or is_quota_or_rate_limit_error(structured_text)
         or claude_technical_session_limit
@@ -2231,10 +2259,6 @@ def classify_agent_failure(
             technical_text=technical_text,
             orchestrator_diagnostic=orchestrator_diagnostic,
         )
-    if native_review_form_failure is not None:
-        # Keep the recorded cause honest. The workflow layer separately grants
-        # this exact provider-authored review form/content path a bounded retry.
-        kind = AgentFailureKind.OUTPUT
     elif structured_output_retry_exhaustion:
         # The provider completed, but its internal retries did not produce a
         # schema-conforming result. Keep that cause distinct from transport.
@@ -2272,7 +2296,34 @@ def classify_agent_failure(
         provider_data=provider_data,
         technical_text=technical_text,
         orchestrator_diagnostic=orchestrator_diagnostic,
+        native_review_rejection=(
+            native_review_form_failure.code
+            if native_review_form_failure is not None
+            else None
+        ),
+        native_review_rejection_detail=(
+            _bounded_native_review_rejection_detail(native_review_form_failure)
+            if native_review_form_failure is not None
+            else None
+        ),
+        native_review_response_retryable=(
+            native_review_form_failure is not None
+            and is_retryable_native_review_response_error(
+                native_review_form_failure
+            )
+        ),
     )
+
+
+def _bounded_native_review_rejection_detail(
+    error: NativeReviewContractError,
+) -> str:
+    """Keep local validator feedback single-line and safe for logs/requests."""
+
+    detail = " ".join(error.detail.replace("\x00", " ").split())
+    if not detail:
+        detail = error.operator_detail or error.code.value
+    return detail[:1200]
 
 
 def compute_retry_backoff_seconds(error_text: str, attempt: int) -> int:

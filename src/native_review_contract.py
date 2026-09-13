@@ -7,7 +7,7 @@ converts it to the existing :class:`contracts.ContractResult` domain model.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 import hashlib
 import json
@@ -39,6 +39,7 @@ from finding_reducer import (
     ReviewerReclassification,
     ReviewerStatusChange,
     apply_reviewer_events,
+    is_closed_finding_status,
     project_open_set,
 )
 from finding_order import sorted_finding_ids
@@ -83,47 +84,135 @@ class NativeReviewErrorCode(StrEnum):
     APPROVAL_INVALID = "approval-invalid"
 
 
-NATIVE_REVIEW_RETRYABLE_FORM_CODES: frozenset[NativeReviewErrorCode] = frozenset(
-    {
-        NativeReviewErrorCode.SCHEMA_INVALID,  # Provider output can satisfy the closed shape on another attempt.
-        NativeReviewErrorCode.FINDING_ID_INVALID,  # Provider output can select the next allowed finding id.
-        NativeReviewErrorCode.FINDING_REFERENCE_UNKNOWN,  # Provider output can reference a finding present in the bound request.
-        NativeReviewErrorCode.FINDING_REFERENCE_NOT_OPEN,  # Provider output can omit updates for findings that are no longer open.
-        NativeReviewErrorCode.FINDING_EVENT_CONFLICT,  # Provider output can emit one non-conflicting event per finding.
-        NativeReviewErrorCode.FINDING_UPDATE_MISSING,  # Provider output can supply every required own-finding disposition.
-        NativeReviewErrorCode.FINDING_CONTENT_INVALID,  # Provider output can replace malformed finding content.
-        NativeReviewErrorCode.FINDING_SIGNATURE_DUPLICATE,  # Provider output can cite the existing open finding instead.
-        NativeReviewErrorCode.ACCEPTANCE_INVALID,  # Provider output can use the allowed typed acceptance form.
-        NativeReviewErrorCode.ANCHOR_INVALID,  # Provider output can supply anchors consistent with the bound review.
-        NativeReviewErrorCode.REVIEW_CONTENT_MISSING,  # Provider output can supply the required review evidence.
-        NativeReviewErrorCode.STOP_CONTENT_INVALID,  # Provider output can supply a complete typed stop request.
-        NativeReviewErrorCode.APPROVAL_INVALID,  # Provider output can make its decision consistent with its finding events.
-    }
+class NativeReviewRejectionSource(StrEnum):
+    REQUEST_LEDGER = "request-ledger"
+    MODEL_RESPONSE = "model-response"
+
+
+NATIVE_REVIEW_RESPONSE_RETRY_CODES: frozenset[NativeReviewErrorCode] = frozenset(
+    code for code in NativeReviewErrorCode
+    if code is not NativeReviewErrorCode.CONTEXT_INVALID
 )
 
-# Local context construction cannot be repaired by asking the provider again.
-assert NativeReviewErrorCode.CONTEXT_INVALID not in NATIVE_REVIEW_RETRYABLE_FORM_CODES
-# A foreign request id is a binding violation, not a response-form failure.
-assert NativeReviewErrorCode.REQUEST_MISMATCH not in NATIVE_REVIEW_RETRYABLE_FORM_CODES
-# A foreign reviewer is an identity violation, not a response-form failure.
-assert NativeReviewErrorCode.REVIEWER_MISMATCH not in NATIVE_REVIEW_RETRYABLE_FORM_CODES
+
+_NATIVE_REVIEW_RETRY_GUIDANCE: dict[NativeReviewErrorCode, str] = {
+    NativeReviewErrorCode.SCHEMA_INVALID: (
+        "Return one JSON result that conforms exactly to the bound writer schema."
+    ),
+    NativeReviewErrorCode.REQUEST_MISMATCH: (
+        "Copy the request_id from this request into the response unchanged."
+    ),
+    NativeReviewErrorCode.REVIEWER_MISMATCH: (
+        "Copy the reviewer field from this request into the response unchanged."
+    ),
+    NativeReviewErrorCode.FINDING_ID_INVALID: (
+        "Use review_contract.next_finding_id and contiguous following C- identifiers."
+    ),
+    NativeReviewErrorCode.FINDING_REFERENCE_UNKNOWN: (
+        "Reference only reviewer-owned findings offered in review_contract.previous_findings."
+    ),
+    NativeReviewErrorCode.FINDING_REFERENCE_NOT_OPEN: (
+        "Update only findings that are OPEN in review_contract.previous_findings."
+    ),
+    NativeReviewErrorCode.FINDING_EVENT_CONFLICT: (
+        "Emit at most one compatible event for each finding and do not reuse an existing id as new."
+    ),
+    NativeReviewErrorCode.FINDING_UPDATE_MISSING: (
+        "Supply every disposition required by the bound review kind and offered findings."
+    ),
+    NativeReviewErrorCode.FINDING_CONTENT_INVALID: (
+        "Replace empty, unsafe, or overlong finding prose with bounded non-empty text."
+    ),
+    NativeReviewErrorCode.FINDING_SIGNATURE_DUPLICATE: (
+        "Do not create a duplicate finding; update its unique offered open finding when possible."
+    ),
+    NativeReviewErrorCode.ACCEPTANCE_INVALID: (
+        "Use the acceptance-test kind and command family permitted by the bound contract."
+    ),
+    NativeReviewErrorCode.ANCHOR_INVALID: (
+        "Return only unique anchors permitted by the bound anchor origin, or no anchors."
+    ),
+    NativeReviewErrorCode.REVIEW_CONTENT_MISSING: (
+        "Supply the required review evidence or at least one valid finding event."
+    ),
+    NativeReviewErrorCode.STOP_CONTENT_INVALID: (
+        "Return a complete bounded stop request using a valid rule id and rationale."
+    ),
+    NativeReviewErrorCode.APPROVAL_INVALID: (
+        "Make the decision consistent with findings, evidence, attestation, and pre-mortem requirements."
+    ),
+}
+
+assert set(_NATIVE_REVIEW_RETRY_GUIDANCE) == set(NATIVE_REVIEW_RESPONSE_RETRY_CODES)
 
 
-def is_retryable_native_review_form_error(error: BaseException) -> bool:
-    """Return whether a provider can repair this review response on retry."""
+def is_retryable_native_review_response_error(error: BaseException) -> bool:
+    """Return whether another model response can satisfy the same review task."""
+
     return (
         isinstance(error, NativeReviewContractError)
-        and error.code in NATIVE_REVIEW_RETRYABLE_FORM_CODES
+        and error.code in NATIVE_REVIEW_RESPONSE_RETRY_CODES
+        and error.source is NativeReviewRejectionSource.MODEL_RESPONSE
     )
+
+
+def native_review_retry_guidance(code: NativeReviewErrorCode) -> str:
+    """Return bounded corrective guidance for one response-dependent rejection."""
+
+    try:
+        return _NATIVE_REVIEW_RETRY_GUIDANCE[code]
+    except KeyError as exc:
+        raise ValueError(f"native review rejection {code.value} is not retryable") from exc
 
 
 class NativeReviewContractError(ValueError):
     """A stable, machine-readable native review contract failure."""
 
-    def __init__(self, code: NativeReviewErrorCode, detail: str) -> None:
+    def __init__(
+        self,
+        code: NativeReviewErrorCode,
+        detail: str,
+        *,
+        operator_detail: str | None = None,
+        source: NativeReviewRejectionSource | None = None,
+    ) -> None:
+        if operator_detail is not None and (
+            not operator_detail.strip()
+            or len(operator_detail) > 1200
+            or any(
+                character in operator_detail
+                for character in ("\x00", "\r", "\n")
+            )
+        ):
+            raise ValueError(
+                "operator_detail must be a bounded single-line diagnostic"
+            )
         self.code = code
         self.detail = detail
+        self.operator_detail = operator_detail
+        self.source = source or (
+            NativeReviewRejectionSource.REQUEST_LEDGER
+            if code is NativeReviewErrorCode.CONTEXT_INVALID
+            else NativeReviewRejectionSource.MODEL_RESPONSE
+        )
+        if not isinstance(self.source, NativeReviewRejectionSource):
+            raise TypeError("native review rejection source must be a closed enum member")
         super().__init__(f"{code.value}: {detail}")
+
+
+def find_native_review_contract_error(
+    error: BaseException,
+) -> NativeReviewContractError | None:
+    """Find a native review rejection through explicit cause edges."""
+
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        if isinstance(current, NativeReviewContractError):
+            return current
+        seen.add(id(current))
+        current = current.__cause__
+    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -502,12 +591,15 @@ def load_native_review_schema() -> dict[str, Any]:
         raise NativeReviewContractError(
             NativeReviewErrorCode.SCHEMA_INVALID,
             "bundled native review schema must be an object",
+            source=NativeReviewRejectionSource.REQUEST_LEDGER,
         )
     try:
         check_schema(schema, location="<native-review-schema>")
     except SchemaDefinitionError as exc:
         raise NativeReviewContractError(
-            NativeReviewErrorCode.SCHEMA_INVALID, str(exc)
+            NativeReviewErrorCode.SCHEMA_INVALID,
+            str(exc),
+            source=NativeReviewRejectionSource.REQUEST_LEDGER,
         ) from exc
     return schema
 
@@ -976,6 +1068,7 @@ def _parse_native_review_response(
         evidence=evidence,
         pre_mortem=document["pre_mortem"],
     )
+    response = _coalesce_known_finding_occurrences(response, context)
     _validate_response_events(response, context)
     return response
 
@@ -1044,6 +1137,7 @@ def _native_response_to_contract_result(
             red_state_followup_slice=None,
         )
 
+    response = _coalesce_known_finding_occurrences(response, context)
     _validate_response_events(response, context)
     findings = _merge_findings(response, context)
     anchors = _convert_anchors(response, context)
@@ -1262,11 +1356,15 @@ def _validate_response_events(
         )
         existing_ids = known_signatures.get(signature)
         if existing_ids:
-            raise NativeReviewContractError(
-                NativeReviewErrorCode.FINDING_SIGNATURE_DUPLICATE,
+            detail = (
                 f"new finding {finding.finding_id} duplicates known open finding "
                 + ", ".join(sorted_finding_ids(existing_ids))
-                + f" (signature {signature})",
+                + f" (signature {signature})"
+            )
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.FINDING_SIGNATURE_DUPLICATE,
+                detail,
+                operator_detail=detail,
             )
         known_signatures[signature] = [finding.finding_id]
     touched = set(status_ids) | set(class_ids)
@@ -1290,6 +1388,146 @@ def _validate_response_events(
             NativeReviewErrorCode.ANCHOR_INVALID,
             "native anchors require a bound anchor_origin",
         )
+
+
+def _coalesce_known_finding_occurrences(
+    response: NativeReviewResult, context: NativeReviewContext
+) -> NativeReviewResult:
+    """Turn a repeated finding family into a visible transition on its owner.
+
+    A candidate finding id has no authoritative identity until the response is
+    accepted.  When its signature names one offered open finding, its complete
+    prose is therefore retained in that finding's next rationale instead of
+    opening a second lineage.  Ambiguous or contradictory candidates still
+    fail closed.
+    """
+
+    if not response.new_findings:
+        return response
+    first_number = int(next_native_finding_id(context).split("-", 1)[1])
+    raw_ids = tuple(item.finding_id for item in response.new_findings)
+    expected_raw_ids = tuple(
+        f"C-{first_number + index:02d}"
+        for index in range(len(response.new_findings))
+    )
+    if raw_ids != expected_raw_ids:
+        return response
+
+    previous = {item.finding_id: item for item in context.previous_findings}
+    known_by_signature: dict[str, list[FindingRecord]] = {}
+    for finding in context.effective_known_open_findings:
+        known_by_signature.setdefault(finding_record_signature(finding), []).append(
+            finding
+        )
+
+    retained: list[NativeFinding] = []
+    occurrence_notes: dict[str, list[str]] = {}
+    retained_signatures: dict[str, str] = {}
+    for candidate in response.new_findings:
+        acceptance = _native_finding_acceptance_text(candidate)
+        signature = finding_signature(
+            acceptance,
+            mentioned_repository_paths(candidate.summary, acceptance),
+        )
+        known = known_by_signature.get(signature, [])
+        if not known:
+            earlier_id = retained_signatures.get(signature)
+            if earlier_id is not None:
+                detail = (
+                    f"new finding {candidate.finding_id} duplicates new finding "
+                    f"{earlier_id} (signature {signature})"
+                )
+                raise NativeReviewContractError(
+                    NativeReviewErrorCode.FINDING_SIGNATURE_DUPLICATE,
+                    detail,
+                    operator_detail=detail,
+                )
+            retained_signatures[signature] = candidate.finding_id
+            retained.append(candidate)
+            continue
+        if len(known) != 1 or known[0].finding_id not in previous:
+            known_ids = sorted_finding_ids(item.finding_id for item in known)
+            detail = (
+                f"new finding {candidate.finding_id} has no unique offered open "
+                "finding occurrence target; known matches: "
+                + (", ".join(known_ids) or "none")
+                + f" (signature {signature})"
+            )
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.FINDING_SIGNATURE_DUPLICATE,
+                detail,
+                operator_detail=detail,
+            )
+        target = known[0]
+        if candidate.finding_class is not target.finding_class:
+            detail = (
+                f"new finding {candidate.finding_id} duplicates known open finding "
+                f"{target.finding_id} but changes its class from "
+                f"{target.finding_class.value} to {candidate.finding_class.value}"
+            )
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.FINDING_SIGNATURE_DUPLICATE,
+                detail,
+                operator_detail=detail,
+            )
+        occurrence_notes.setdefault(target.finding_id, []).append(
+            f"Additional occurrence reported as {candidate.finding_id} and merged "
+            f"into {target.finding_id}. Summary: {candidate.summary} "
+            f"Acceptance test: {acceptance}"
+        )
+
+    if not occurrence_notes:
+        return response
+
+    status_by_id = {item.finding_id: item for item in response.status_changes}
+    class_by_id = {item.finding_id: item for item in response.reclassifications}
+    for target_id, notes in occurrence_notes.items():
+        status_change = status_by_id.get(target_id)
+        reclassification = class_by_id.get(target_id)
+        if status_change is not None and is_closed_finding_status(
+            status_change.status
+        ):
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.FINDING_EVENT_CONFLICT,
+                f"finding {target_id} cannot be closed while the same response "
+                "reports an additional occurrence",
+            )
+        if status_change is not None and reclassification is not None:
+            return response
+        occurrence_rationale = "\n\n".join(notes)
+        if status_change is not None:
+            status_by_id[target_id] = NativeStatusChange(
+                target_id,
+                FindingStatus.OPEN,
+                status_change.rationale + "\n\n" + occurrence_rationale,
+            )
+        elif reclassification is not None:
+            class_by_id[target_id] = NativeReclassification(
+                target_id,
+                reclassification.finding_class,
+                reclassification.rationale + "\n\n" + occurrence_rationale,
+            )
+        else:
+            status_by_id[target_id] = NativeStatusChange(
+                target_id, FindingStatus.OPEN, occurrence_rationale
+            )
+
+    renumbered = tuple(
+        replace(finding, finding_id=f"C-{first_number + index:02d}")
+        for index, finding in enumerate(retained)
+    )
+    return replace(
+        response,
+        new_findings=renumbered,
+        status_changes=tuple(
+            status_by_id[finding_id]
+            for finding_id in sorted_finding_ids(status_by_id)
+        ),
+        reclassifications=tuple(
+            class_by_id[finding_id]
+            for finding_id in sorted_finding_ids(class_by_id)
+        ),
+    )
 
 
 def _merge_findings(

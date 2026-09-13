@@ -15,6 +15,8 @@ from native_review_contract import (
     BoundNativeReviewContext,
     MAX_NATIVE_REVIEW_DISPOSITIONS,
     NativeReviewContext,
+    NativeReviewErrorCode,
+    NATIVE_REVIEW_RESPONSE_RETRY_CODES,
     native_review_provider_response_schema,
     next_native_finding_id,
     native_review_context_binding,
@@ -43,6 +45,7 @@ REQUEST_SCHEMA_PATH = (
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 REQUEST_ID_PATTERN = re.compile(r"native-review-request-[0-9a-f]{64}")
 SAFE_ID_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,199}")
+INVOCATION_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,199}")
 
 
 class NativeReviewRequestErrorCode(StrEnum):
@@ -116,6 +119,33 @@ class NativeReviewEvidenceAsset:
 
 
 @dataclass(frozen=True, slots=True)
+class NativeReviewRetryFeedback:
+    prior_invocation_id: str
+    rejection_code: NativeReviewErrorCode
+    correction_instruction: str
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.prior_invocation_id, str)
+            or INVOCATION_ID_PATTERN.fullmatch(self.prior_invocation_id) is None
+        ):
+            raise NativeReviewRequestError(
+                NativeReviewRequestErrorCode.CONTEXT_INVALID,
+                "retry feedback prior_invocation_id is not a safe identifier",
+            )
+        if self.rejection_code not in NATIVE_REVIEW_RESPONSE_RETRY_CODES:
+            raise NativeReviewRequestError(
+                NativeReviewRequestErrorCode.CONTEXT_INVALID,
+                "retry feedback requires a response-dependent rejection code",
+            )
+        _require_text(
+            self.correction_instruction,
+            "retry feedback correction_instruction",
+            maximum=3000,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class NativeReviewRequestSpec:
     context: NativeReviewContext
     review_kind: NativeReviewKind
@@ -124,6 +154,7 @@ class NativeReviewRequestSpec:
     authorized_paths: tuple[str, ...]
     acceptance_criteria: tuple[str, ...]
     evidence: tuple[NativeReviewEvidenceInput, ...]
+    retry_feedback: NativeReviewRetryFeedback | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.context, NativeReviewContext):
@@ -161,6 +192,13 @@ class NativeReviewRequestSpec:
                 "evidence must be non-empty, sorted, and unique by evidence_id",
             )
         _require_distinct_evidence(self.evidence)
+        if self.retry_feedback is not None and not isinstance(
+            self.retry_feedback, NativeReviewRetryFeedback
+        ):
+            raise NativeReviewRequestError(
+                NativeReviewRequestErrorCode.CONTEXT_INVALID,
+                "retry_feedback must be a NativeReviewRetryFeedback",
+            )
         expected_operation = {
             NativeReviewKind.PLAN: "claude_plan_review",
             NativeReviewKind.SLICE: "claude_slice_review",
@@ -499,6 +537,12 @@ def build_native_review_request(
             "schema_sha256": response_schema_digest,
         },
     }
+    if spec.retry_feedback is not None:
+        binding["retry_feedback"] = {
+            "prior_invocation_id": spec.retry_feedback.prior_invocation_id,
+            "rejection_code": spec.retry_feedback.rejection_code.value,
+            "correction_instruction": spec.retry_feedback.correction_instruction,
+        }
     request_digest = hashlib.sha256(
         _canonical_json(binding).encode("utf-8")
     ).hexdigest()

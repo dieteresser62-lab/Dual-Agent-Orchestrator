@@ -1698,7 +1698,7 @@ def test_automatic_network_retry_uses_its_own_chain_record_idempotently(
     ) == 1
 
 
-def test_schema_invalid_review_records_failure_then_existing_transient_retry(
+def test_schema_invalid_review_records_retryable_failure_with_typed_feedback(
     tmp_path: Path,
 ) -> None:
     repository = _repository(tmp_path, "feature/structured-regression")
@@ -1758,17 +1758,15 @@ def test_schema_invalid_review_records_failure_then_existing_transient_retry(
         if isinstance(record.payload, InvocationFailurePayload)
         and record.payload.invocation_id == failure.invocation_id
     )
-    retry_record = next(
-        record for record in chain
-        if isinstance(record.payload, TransientRetryPayload)
-        and record.payload.attempt == 1
-    )
-    assert chain.index(failure_record) < chain.index(retry_record)
     assert failure_record.payload.failure_kind == "output"
     assert failure_record.payload.failure_class == "transient"
     assert failure_record.payload.diagnostic_code == "NATIVE-REVIEW-FORM"
-    assert retry_record.payload.role is Role.CLAUDE
-    assert retry_record.payload.repository_fingerprint == "c" * 64
+    assert failure_record.payload.automatic_resume is True
+    assert failure_record.payload.native_review_rejection == "schema-invalid"
+    assert failure_record.payload.native_review_retry_round == 2
+    assert any(
+        isinstance(record.payload, TransientRetryPayload) for record in chain
+    )
 
 
 def test_structured_resume_accepts_mirrored_stopped_review(tmp_path: Path) -> None:

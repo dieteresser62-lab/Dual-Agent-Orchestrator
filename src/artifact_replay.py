@@ -920,6 +920,7 @@ def _project_work_unit_document(
             "auto_resume_count": item.auto_resume_count,
             "automatic_resume": item.automatic_resume,
             "diff_fingerprint": item.diff_fingerprint,
+            **item.native_review_feedback_document,
         }
         for item in replay.invocation_failures
         if item.work_unit_id == unit.work_unit_id
@@ -1547,7 +1548,6 @@ def _project_validation_attestation(
         summary=content.summary,
         command_specs=tuple(specs),
     )
-
 
 def _validate_workflow_transitions_and_events(
     chain: tuple[ArtifactRecord, ...],
@@ -3223,6 +3223,12 @@ def _semantic_payload_document(payload: object) -> dict[str, object]:
         and payload.orchestrator_diagnostic is None
     ):
         raw.pop("orchestrator_diagnostic", None)
+    if (
+        isinstance(payload, InvocationFailurePayload)
+        and payload.native_review_rejection is None
+    ):
+        raw.pop("native_review_rejection", None)
+        raw.pop("native_review_retry_round", None)
     return raw
 
 

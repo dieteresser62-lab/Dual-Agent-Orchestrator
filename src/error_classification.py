@@ -45,7 +45,8 @@ from native_codex_request import (  # allowlist:provider -- typed module boundar
 from native_provider_schema import NativeProviderSchemaError
 from native_review_contract import (
     NativeReviewContractError,
-    is_retryable_native_review_form_error,
+    find_native_review_contract_error,
+    is_retryable_native_review_response_error,
 )
 from native_review_request import NativeReviewRequestError
 from orchestrator_diagnostics import STRUCTURED_OUTPUT_DIAGNOSTIC_CODE
@@ -209,17 +210,22 @@ def classify_exception(error: BaseException) -> ClassifiedFailure:
             explicitly_mapped=True,
         )
 
+    native_review_rejection = find_native_review_contract_error(error)
+    if (
+        native_review_rejection is not None
+        and is_retryable_native_review_response_error(native_review_rejection)
+    ):
+        return ClassifiedFailure(
+            failure_class=_TRANSIENT,
+            diagnostic_code="NATIVE-REVIEW-FORM",
+            exception_type=type(native_review_rejection).__name__,
+            detail=f"{type(error).__name__}: {error}",
+            cause_depth=chain.index(native_review_rejection),
+            explicitly_mapped=True,
+        )
+
     for depth in range(len(chain) - 1, -1, -1):
         candidate = chain[depth]
-        if is_retryable_native_review_form_error(candidate):
-            return ClassifiedFailure(
-                failure_class=_TRANSIENT,
-                diagnostic_code="NATIVE-REVIEW-FORM",
-                exception_type=type(candidate).__name__,
-                detail=f"{type(error).__name__}: {error}",
-                cause_depth=depth,
-                explicitly_mapped=True,
-            )
         assignment = ERROR_CLASSIFICATIONS.get(type(candidate))
         if assignment is None:
             continue

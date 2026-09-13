@@ -139,6 +139,27 @@ class Reviewer(str, Enum):
     CLAUDE = "claude"
 
 
+NATIVE_REVIEW_RESPONSE_REJECTION_CODES = frozenset(
+    {
+        "schema-invalid",
+        "request-mismatch",
+        "reviewer-mismatch",
+        "finding-id-invalid",
+        "finding-reference-unknown",
+        "finding-reference-not-open",
+        "finding-event-conflict",
+        "missing-own-finding-update",
+        "finding-content-invalid",
+        "finding-signature-duplicate",
+        "acceptance-invalid",
+        "anchor-invalid",
+        "review-content-missing",
+        "stop-content-invalid",
+        "approval-invalid",
+    }
+)
+
+
 def is_native_review_output_retry(
     failure_kind: AgentFailureKind, role: str, step: WorkflowStep
 ) -> bool:
@@ -319,6 +340,8 @@ class InvocationFailureRecord:
     auto_resume_count: int = 0
     automatic_resume: bool = False
     diff_fingerprint: str | None = None
+    native_review_rejection: str | None = None
+    native_review_retry_round: int | None = None
 
     def __post_init__(self) -> None:
         for value, label in (
@@ -413,9 +436,31 @@ class InvocationFailureRecord:
             raise WorkflowStateValidationError(
                 "invocation failure diff fingerprint must be a lowercase SHA-256 digest"
             )
+        if self.native_review_rejection is not None:
+            if self.native_review_rejection not in NATIVE_REVIEW_RESPONSE_REJECTION_CODES:
+                raise WorkflowStateValidationError(
+                    "invocation failure native review rejection is invalid"
+                )
+            if not is_native_review_output_retry(
+                self.failure_kind, self.role, self.step
+            ):
+                raise WorkflowStateValidationError(
+                    "native review rejection requires a reviewer output failure"
+                )
+        if (self.native_review_rejection is None) != (
+            self.native_review_retry_round is None
+        ):
+            raise WorkflowStateValidationError(
+                "native review rejection and retry round must be bound together"
+            )
+        if self.native_review_retry_round is not None:
+            _require_positive_int(
+                self.native_review_retry_round,
+                "invocation failure native review retry round",
+            )
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        document: dict[str, object] = {
             "invocation_id": self.invocation_id,
             "idempotency_key": self.idempotency_key,
             "role": self.role,
@@ -437,12 +482,14 @@ class InvocationFailureRecord:
             "automatic_resume": self.automatic_resume,
             "diff_fingerprint": self.diff_fingerprint,
         }
+        if self.native_review_rejection is not None:
+            document["native_review_rejection"] = self.native_review_rejection
+            document["native_review_retry_round"] = self.native_review_retry_round
+        return document
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> InvocationFailureRecord:
-        _require_exact_keys(
-            raw,
-            {
+        required_keys = {
                 "invocation_id", "idempotency_key", "role", "failure_kind",
                 "provider_text", "received_at", "step", "slice_id",
                 "work_unit_id", "diagnostic_exit_code", "process_exit_code",
@@ -450,9 +497,14 @@ class InvocationFailureRecord:
                 "source_timezone", "reset_at_utc", "resume_at_utc",
                 "safety_margin_seconds", "auto_resume_count", "automatic_resume",
                 "diff_fingerprint",
-            },
-            "invocation failure",
-        )
+        }
+        feedback_keys = {
+            *required_keys,
+            "native_review_rejection",
+            "native_review_retry_round",
+        }
+        if set(raw) not in {frozenset(required_keys), frozenset(feedback_keys)}:
+            _require_exact_keys(raw, required_keys, "invocation failure")
         if not isinstance(raw["automatic_resume"], bool):
             raise WorkflowStateValidationError(
                 "invocation failure automatic_resume must be a boolean"
@@ -478,6 +530,18 @@ class InvocationFailureRecord:
             auto_resume_count=_non_negative_int(raw["auto_resume_count"], "invocation failure auto-resume count"),
             automatic_resume=raw["automatic_resume"],
             diff_fingerprint=_optional_string(raw["diff_fingerprint"], "invocation failure diff fingerprint"),
+            native_review_rejection=_optional_string(
+                raw.get("native_review_rejection"),
+                "invocation failure native review rejection",
+            ),
+            native_review_retry_round=(
+                None
+                if raw.get("native_review_retry_round") is None
+                else _positive_int(
+                    raw["native_review_retry_round"],
+                    "invocation failure native review retry round",
+                )
+            ),
         )
 
 

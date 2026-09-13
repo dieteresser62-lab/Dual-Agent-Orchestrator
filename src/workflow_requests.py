@@ -29,12 +29,15 @@ from native_codex_request import (
 from native_review_contract import (
     MAX_NATIVE_REVIEW_DISPOSITIONS,
     NativeReviewContext,
+    NativeReviewErrorCode,
+    native_review_retry_guidance,
 )
 from native_review_request import (
     NativeReviewEvidenceInput,
     NativeReviewKind,
     NativeReviewRequestBundle,
     NativeReviewRequestSpec,
+    NativeReviewRetryFeedback,
     PROVIDER_INPUT_BOUNDARY_EVIDENCE_KIND,
     build_native_review_request,
 )
@@ -374,6 +377,29 @@ def _review_request_finding_inputs(
     return selected, goal, criteria
 
 
+def _native_review_retry_feedback(
+    state: WorkflowState, contract: StepContract
+) -> NativeReviewRetryFeedback | None:
+    failure = next(
+        (
+            item
+            for item in reversed(state.current_work_unit.invocation_failures)
+            if item.step is state.current_step
+            and item.native_review_rejection is not None
+            and item.native_review_retry_round == contract.round_number
+        ),
+        None,
+    )
+    if failure is None or failure.native_review_rejection is None:
+        return None
+    code = NativeReviewErrorCode(failure.native_review_rejection)
+    return NativeReviewRetryFeedback(
+        prior_invocation_id=failure.invocation_id,
+        rejection_code=code,
+        correction_instruction=native_review_retry_guidance(code),
+    )
+
+
 def native_review_request(
     *,
     state: WorkflowState,
@@ -560,6 +586,7 @@ def native_review_request(
             "request as complete diff evidence; deny with a BLOCKER when unavailable "
             "baseline content is required for a safe verdict.",
         )
+    retry_feedback = _native_review_retry_feedback(state, contract)
     return build_native_review_request(
         NativeReviewRequestSpec(
             context=native_context,
@@ -569,5 +596,6 @@ def native_review_request(
             authorized_paths=tuple(sorted(set(changes.paths))),
             acceptance_criteria=acceptance_criteria,
             evidence=tuple(sorted(evidence, key=lambda item: item.evidence_id)),
+            retry_feedback=retry_feedback,
         )
     )

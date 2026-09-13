@@ -225,6 +225,25 @@ def test_cleanup_scope_retains_paths_after_an_offered_finding_closes(
     )
 
 
+def test_cleanup_scope_includes_paths_from_later_occurrence_rationales(
+    tmp_path: Path,
+) -> None:
+    finding = replace(
+        _finding(1, path="src/original.py"),
+        status_rationale=(
+            "Additional occurrence merged into C-01 at "
+            "app/public/assets/data.json."
+        ),
+    )
+    _materialize_paths(
+        tmp_path, ("src/original.py", "app/public/assets/data.json")
+    )
+
+    assert finding_cleanup_scope_paths(
+        (finding,), ("C-01",), repository_root=tmp_path
+    ) == ("app/public/assets/data.json", "src/original.py")
+
+
 def _codex_result(result_type: str, *, finding_ids: tuple[str, ...] = ()) -> dict[str, object]:
     result: dict[str, object] = {
         "schema_version": "native-agent-codex-result-v2",

@@ -26,6 +26,7 @@ from native_review_contract import (
     NativeReviewContext,
     NativeReviewContractError,
     NativeReviewErrorCode,
+    NATIVE_REVIEW_RESPONSE_RETRY_CODES,
     load_native_review_schema,
     native_review_context_binding,
     parse_bound_native_contract_result,
@@ -38,6 +39,7 @@ from native_review_request import (
     NativeReviewRequestError,
     NativeReviewRequestBundle,
     NativeReviewRequestSpec,
+    NativeReviewRetryFeedback,
     build_native_review_request,
     canonical_native_review_request_json,
     load_native_review_request_schema,
@@ -683,14 +685,15 @@ def test_registered_review_exceptions_cover_writer_valid_local_rejections() -> N
     duplicate_signature = _writer_response(decision="denied")
     duplicate_signature["new_findings"] = [
         {
-            "finding_id": "C-02",
+            "finding_id": finding_id,
             "finding_class": "BLOCKER",
-            "summary": blocker.summary,
+            "summary": "A repeated new issue affects src/repeated.py.",
             "acceptance_test": {
                 "kind": "prose",
-                "text": blocker.acceptance_test,
+                "text": "Preserve valid data in src/repeated.py.",
             },
         }
+        for finding_id in ("C-02", "C-03")
     ]
     contexts_and_responses.append((blocker_context, duplicate_signature))
 
@@ -803,6 +806,34 @@ def test_request_schema_loads_and_build_is_canonical_and_deterministic() -> None
     assert first.bound_context.request_id != first.bound_context.context.request_id
     assert first.document["review_contract"]["next_finding_id"] == "C-01"
     assert first.evidence_assets == ()
+
+
+@pytest.mark.parametrize(
+    "rejection_code",
+    tuple(sorted(NATIVE_REVIEW_RESPONSE_RETRY_CODES, key=lambda item: item.value)),
+)
+def test_retry_feedback_is_typed_and_changes_the_request_identity(
+    rejection_code: NativeReviewErrorCode,
+) -> None:
+    initial = build_native_review_request(_spec())
+    feedback = NativeReviewRetryFeedback(
+        prior_invocation_id="0eview-attempt-1",
+        rejection_code=rejection_code,
+        correction_instruction=(
+            "Return one JSON result that conforms exactly to the bound writer schema."
+        ),
+    )
+    retried = build_native_review_request(replace(_spec(), retry_feedback=feedback))
+
+    assert "retry_feedback" not in initial.document
+    assert retried.document["retry_feedback"] == {
+        "prior_invocation_id": "0eview-attempt-1",
+        "rejection_code": rejection_code.value,
+        "correction_instruction": (
+            "Return one JSON result that conforms exactly to the bound writer schema."
+        ),
+    }
+    assert retried.bound_context.request_id != initial.bound_context.request_id
 
 
 @pytest.mark.parametrize(

@@ -10,7 +10,9 @@ from typing import Callable
 
 import pytest
 
+import artifact_models
 import repo_changes
+import workflow_state
 from agent_runtime import (
     AgentProcessError,
     ProviderRequestRoundRequired,
@@ -37,6 +39,12 @@ from error_classification import (
     enforce_record_start_boundary,
 )
 from final_review_preflight import FinalReviewPreflightDenied
+from native_review_contract import (
+    NATIVE_REVIEW_RESPONSE_RETRY_CODES,
+    NativeReviewContractError,
+    NativeReviewErrorCode,
+    NativeReviewRejectionSource,
+)
 from orchestrator import ProductionWorkflowDriver
 from provider_input_budget import ProviderInputBudgetExceeded
 from task_contract import TaskContractError, parse_task_contract
@@ -418,6 +426,40 @@ def test_unknown_error_fails_closed_without_message_inference() -> None:
     assert classified.failure_class is FailureClass.RESUMABLE_HALT
     assert classified.diagnostic_code == "UNCLASSIFIED-ERROR"
     assert classified.explicitly_mapped is False
+
+
+@pytest.mark.parametrize("code", tuple(NativeReviewErrorCode))
+def test_native_review_rejections_distinguish_context_from_model_response(
+    code: NativeReviewErrorCode,
+) -> None:
+    classified = classify_exception(NativeReviewContractError(code, "rejected"))
+
+    if code is NativeReviewErrorCode.CONTEXT_INVALID:
+        assert classified.failure_class is FailureClass.RESUMABLE_HALT
+        assert classified.diagnostic_code == "NATIVE-REVIEW-CONTRACT"
+    else:
+        assert classified.failure_class is FailureClass.TRANSIENT
+        assert classified.diagnostic_code == "NATIVE-REVIEW-FORM"
+
+
+def test_local_review_schema_failure_is_not_retried_as_model_output() -> None:
+    classified = classify_exception(
+        NativeReviewContractError(
+            NativeReviewErrorCode.SCHEMA_INVALID,
+            "bundled schema is invalid",
+            source=NativeReviewRejectionSource.REQUEST_LEDGER,
+        )
+    )
+
+    assert classified.failure_class is FailureClass.RESUMABLE_HALT
+    assert classified.diagnostic_code == "NATIVE-REVIEW-CONTRACT"
+
+
+def test_retry_rejection_code_wire_inventories_match_the_contract_enum() -> None:
+    expected = {code.value for code in NATIVE_REVIEW_RESPONSE_RETRY_CODES}
+
+    assert workflow_state.NATIVE_REVIEW_RESPONSE_REJECTION_CODES == expected
+    assert artifact_models._NATIVE_REVIEW_RESPONSE_REJECTION_CODES == expected
 
 
 def test_terminal_rejection_is_promoted_after_record_start() -> None:

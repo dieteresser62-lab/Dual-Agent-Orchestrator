@@ -22,7 +22,6 @@ from contracts import (
 from finding_reducer import project_open_set, project_reviewer_persistence_transitions
 from gates import detect_anchor_changes
 from native_review_contract import (
-    NATIVE_REVIEW_RETRYABLE_FORM_CODES,
     NativeFinding,
     NativeProseAcceptance,
     NativeReclassification,
@@ -322,7 +321,7 @@ def test_slice_review_preserves_omitted_open_finding_when_decision_allows_it() -
     )
 
 
-def test_repeated_finding_is_rejected_with_the_existing_identifier() -> None:
+def test_repeated_finding_becomes_an_occurrence_of_the_existing_identifier() -> None:
     existing = replace(
         _finding("C-01", AgentRole.CLAUDE),
         summary="src/cache.py can retain stale entries.",
@@ -342,11 +341,102 @@ def test_repeated_finding_is_rejected_with_the_existing_identifier() -> None:
         }
     ]
 
-    with pytest.raises(NativeReviewContractError) as raised:
-        parse_native_contract_result(document, context)
+    result = parse_native_contract_result(document, context)
 
-    assert raised.value.code is NativeReviewErrorCode.FINDING_SIGNATURE_DUPLICATE
-    assert "C-01" in raised.value.detail
+    assert len(result.findings) == 1
+    occurrence = result.findings[0]
+    assert occurrence.finding_id == "C-01"
+    assert occurrence.status is FindingStatus.OPEN
+    assert occurrence.status_rationale is not None
+    assert "Additional occurrence reported as C-02" in occurrence.status_rationale
+    assert "src/cache.py" in occurrence.status_rationale
+    transitions = project_reviewer_persistence_transitions(
+        (existing,), result.findings, work_unit_id="1"
+    )
+    assert [(item.finding.finding_id, item.action) for item in transitions] == [
+        ("C-01", "status_changed")
+    ]
+
+
+def test_repeated_finding_keeps_other_results_and_renumbers_new_ids() -> None:
+    existing = replace(
+        _finding(
+            "C-01",
+            AgentRole.CLAUDE,
+            finding_class=FindingClass.OBSERVATION,
+        ),
+        summary="src/old.py has executable file mode 100755.",
+        acceptance_test=(
+            "Normalize the file mode of non-script documents in src/old.py "
+            "to non-executable 100644."
+        ),
+    )
+    context = _context(previous=(existing,))
+    document = _review(context, approved=False)
+    document["status_changes"] = [
+        {
+            "finding_id": "C-01",
+            "status": "OPEN",
+            "rationale": "src/current.py is another TypeScript occurrence.",
+        }
+    ]
+    document["new_findings"] = [
+        {
+            "finding_id": "C-02",
+            "finding_class": "OBSERVATION",
+            "summary": "app/public/assets/data.json has executable mode 100755.",
+            "acceptance_test": {
+                "kind": "prose",
+                "text": (
+                    "Normalize the file mode of non-script documents in "
+                    "app/public/assets/data.json to non-executable 100644."
+                ),
+            },
+        },
+        {
+            "finding_id": "C-03",
+            "finding_class": "BLOCKER",
+            "summary": "src/cache.py discards valid entries.",
+            "acceptance_test": {
+                "kind": "prose",
+                "text": "Preserve valid entries in src/cache.py.",
+            },
+        },
+    ]
+
+    result = parse_native_contract_result(document, context)
+
+    assert [item.finding_id for item in result.findings] == ["C-01", "C-02"]
+    assert result.findings[1].summary == "src/cache.py discards valid entries."
+    rationale = result.findings[0].status_rationale or ""
+    assert "src/current.py" in rationale
+    assert "app/public/assets/data.json" in rationale
+
+
+def test_contradictory_repeated_finding_is_still_rejected() -> None:
+    existing = replace(
+        _finding("C-01", AgentRole.CLAUDE),
+        summary="src/cache.py can retain stale entries.",
+        acceptance_test="Reject stale entries in src/cache.py.",
+    )
+    context = _context(previous=(existing,))
+    document = _review(context, approved=False)
+    document["status_changes"] = [
+        {"finding_id": "C-01", "status": "CLOSED", "rationale": "Fixed."}
+    ]
+    document["new_findings"] = [
+        {
+            "finding_id": "C-02",
+            "finding_class": "BLOCKER",
+            "summary": "src/cache.py can retain stale entries.",
+            "acceptance_test": {
+                "kind": "prose",
+                "text": "Reject stale entries in src/cache.py.",
+            },
+        }
+    ]
+
+    _assert_error(document, context, NativeReviewErrorCode.FINDING_EVENT_CONFLICT)
 
 
 def test_genuine_new_problem_on_the_same_path_is_opened() -> None:
@@ -1278,11 +1368,3 @@ def test_stop_request_has_explicit_safe_contract_result_defaults() -> None:
     assert result.evidence is None
     assert result.pre_mortem is None
     assert result.validation is context.validation_attestation
-
-
-def test_retryable_form_code_inventory_excludes_only_local_and_identity_bindings() -> None:
-    assert set(NativeReviewErrorCode) - set(NATIVE_REVIEW_RETRYABLE_FORM_CODES) == {
-        NativeReviewErrorCode.CONTEXT_INVALID,
-        NativeReviewErrorCode.REQUEST_MISMATCH,
-        NativeReviewErrorCode.REVIEWER_MISMATCH,
-    }

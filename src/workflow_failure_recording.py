@@ -66,12 +66,13 @@ def _log_invocation_failure(
     diagnostic_code: str,
     provider_subtype: str,
     orchestrator_diagnostic: str | None,
+    native_review_rejection: str | None,
 ) -> None:
     logger.info(
         "provider invocation terminal role=%s operation=%s physical_attempt=%d "
         "status=failed failure_kind=%s process_exit_code=%s retry=%s "
         "attempts_exhausted=%s diagnostic_code=%s provider_subtype=%s "
-        "orchestrator_diagnostic=%s",
+        "orchestrator_diagnostic=%s native_review_rejection=%s",
         role.value,
         operation,
         physical_attempt,
@@ -86,6 +87,7 @@ def _log_invocation_failure(
         diagnostic_code,
         provider_subtype,
         orchestrator_diagnostic or "redacted",
+        native_review_rejection or "none",
     )
 
 
@@ -180,6 +182,52 @@ def _quota_resume_decision(
     return reset_at, quota_resume_at, automatic
 
 
+@dataclass(frozen=True)
+class _ReviewFailureDiagnostics:
+    orchestrator: str | None
+    readable_rejection: str | None
+    persisted_rejection: str | None
+    provider_subtype: str
+
+
+def _review_failure_diagnostics(
+    error: AgentInvocationError,
+    retry_with_feedback: bool,
+    diagnostic_code: str,
+) -> _ReviewFailureDiagnostics:
+    persisted_rejection = (
+        error.native_review_rejection.value
+        if retry_with_feedback and error.native_review_rejection is not None
+        else None
+    )
+    provider_subtype = (
+        STRUCTURED_OUTPUT_RETRY_EXHAUSTED_SUBTYPE
+        if diagnostic_code == STRUCTURED_OUTPUT_DIAGNOSTIC_CODE
+        else "none"
+    )
+    return _ReviewFailureDiagnostics(
+        orchestrator=error.readable_orchestrator_diagnostic,
+        readable_rejection=error.readable_native_review_rejection,
+        persisted_rejection=persisted_rejection,
+        provider_subtype=provider_subtype,
+    )
+
+
+def _review_retryability(
+    error: AgentInvocationError,
+    role: AgentRole,
+    step: Any,
+    diagnostic_code: str,
+) -> tuple[bool, bool]:
+    native_review = is_native_review_output_retry(error.kind, role.value, step)
+    return (
+        native_review and error.native_review_response_retryable,
+        native_review
+        and is_structured_output_retry_exhaustion(error.provider_data)
+        and diagnostic_code == STRUCTURED_OUTPUT_DIAGNOSTIC_CODE,
+    )
+
+
 class WorkflowFailureRecording:
     """Build and append failure evidence before changing retry state."""
 
@@ -230,20 +278,12 @@ class WorkflowFailureRecording:
             quota_policy=quota_policy,
             now_utc=now_utc,
         )
-        native_review_retry = is_native_review_output_retry(
-            error.kind, role.value, state.current_step
-        )
-        automatic_review_form = (
-            native_review_retry and classified.diagnostic_code == "NATIVE-REVIEW-FORM"
-        )
-        automatic_structured_output = (
-            native_review_retry
-            and is_structured_output_retry_exhaustion(error.provider_data)
-            and classified.diagnostic_code == STRUCTURED_OUTPUT_DIAGNOSTIC_CODE
+        automatic_review_feedback, automatic_structured_output = _review_retryability(
+            error, role, state.current_step, classified.diagnostic_code
         )
         retryable_transient = error.kind in {
             AgentFailureKind.NETWORK, AgentFailureKind.TIMEOUT
-        } or automatic_review_form or automatic_structured_output
+        } or automatic_review_feedback or automatic_structured_output
         automatic_transient = (
             disposition_limit_failure
             and fingerprint is not None
@@ -272,11 +312,12 @@ class WorkflowFailureRecording:
         technical_marker, technical_digest, technical_bytes = (
             technical_text_evidence(error.technical_text)
         )
-        orchestrator_diagnostic = error.readable_orchestrator_diagnostic
-        provider_subtype = (
-            STRUCTURED_OUTPUT_RETRY_EXHAUSTED_SUBTYPE
-            if classified.diagnostic_code == STRUCTURED_OUTPUT_DIAGNOSTIC_CODE
-            else "none"
+        review_diagnostics = _review_failure_diagnostics(
+            error, automatic_review_feedback, classified.diagnostic_code
+        )
+        native_review_retry_round = (
+            state.current_work_unit.round_number + 1
+            if review_diagnostics.persisted_rejection is not None else None
         )
         received_at = error.received_at.astimezone(timezone.utc).isoformat()
         decision_at = now_utc.isoformat()
@@ -313,6 +354,8 @@ class WorkflowFailureRecording:
             auto_resume_count=prior_continuations + (1 if automatic else 0),
             automatic_resume=automatic,
             diff_fingerprint=fingerprint,
+            native_review_rejection=review_diagnostics.persisted_rejection,
+            native_review_retry_round=native_review_retry_round,
         )
         quota_terminal_verdict = (
             error.kind is AgentFailureKind.QUOTA
@@ -357,7 +400,9 @@ class WorkflowFailureRecording:
             auto_resume_count=record.auto_resume_count,
             automatic_resume=record.automatic_resume,
             diff_fingerprint=record.diff_fingerprint,
-            orchestrator_diagnostic=orchestrator_diagnostic,
+            orchestrator_diagnostic=review_diagnostics.orchestrator,
+            native_review_rejection=review_diagnostics.persisted_rejection,
+            native_review_retry_round=native_review_retry_round,
         )
         # Decision-ahead authority boundary: the append must complete before
         # workflow status/counters, waits, or provider restarts can change.
@@ -380,8 +425,9 @@ class WorkflowFailureRecording:
                 else transient_policy.maximum_auto_resumes
             ),
             diagnostic_code=classified.diagnostic_code,
-            provider_subtype=provider_subtype,
+            provider_subtype=review_diagnostics.provider_subtype,
             orchestrator_diagnostic=payload.orchestrator_diagnostic,
+            native_review_rejection=review_diagnostics.readable_rejection,
         )
         self._dependencies.checkpoint(state, history)
         return state, record

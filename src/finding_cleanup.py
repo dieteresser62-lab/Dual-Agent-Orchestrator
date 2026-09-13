@@ -129,7 +129,9 @@ def finding_cleanup_scope_paths(
                 for finding in selected
                 for path in authorized_repository_paths(
                     repository_root,
-                    finding.summary, finding.acceptance_test
+                    finding.summary,
+                    finding.acceptance_test,
+                    finding.status_rationale or "",
                 )
             }
         )

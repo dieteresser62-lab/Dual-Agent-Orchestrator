@@ -236,6 +236,8 @@ WORKFLOW_STATE_FIELD_INVENTORY = {
         "auto_resume_count",
         "automatic_resume",
         "diff_fingerprint",
+        "native_review_rejection",
+        "native_review_retry_round",
     },
     "GateRecord": {"status", "reason", "detail", "fingerprint", "paths", "resume_step"},
     "GateDecisionRecord": {
