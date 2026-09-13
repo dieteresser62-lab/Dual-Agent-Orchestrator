@@ -644,6 +644,7 @@ def test_no_production_module_reimplements_finding_reduction() -> None:
         "apply_reviewer_events",
         "merge_history_snapshots",
         "merge_request_result",
+        "project_cleanup_review_targets",
         "project_finding_response_delta",
         "project_finding_transition_ids",
         "project_latest_recorded_statuses",

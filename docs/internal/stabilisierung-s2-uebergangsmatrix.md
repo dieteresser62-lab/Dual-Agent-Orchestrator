@@ -850,7 +850,6 @@ Tabelle inventarisiert daher 30 Stämme, während der AST-Zähler 32 direkte
 | `file side-effect target differs before result completion` | B05/B08/B09; Zieltyp/-digest unmittelbar vor Datei-Resultat, **bleibt bewusst** |
 | `structured audit dual-write mismatch` | B09 |
 | `workflow history review packet cache differs from canonical bytes` | B06/B09 |
-| `cleanup scope finding authority differs from the active work unit` | R3; persistierte Correction-Work-unit-Grenze ↔ aktive offene Findings, **bleibt bewusst** |
 | `differs from the immutable persisted profile` | A01/B04; Runtimeprofil ↔ persistierte ProtocolBinding, **bleibt bewusst** |
 | `persisted task identity differs from --resume task` | A03; State/Recordbindung ↔ Taskdatei, **wird generisch** |
 | `persisted task contract differs from --resume task` | A03; State/Recordvertrag ↔ Taskdatei, **wird generisch** |

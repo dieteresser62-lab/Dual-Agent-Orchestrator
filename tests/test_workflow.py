@@ -688,10 +688,7 @@ class FakeDriver:
         )
         return None
 
-    def prepare_correction(
-        self, findings
-    ) -> WorkflowCorrectionBoundary:
-        assert any(item.status.value == "OPEN" for item in findings)
+    def prepare_correction(self) -> WorkflowCorrectionBoundary:
         return self.correction_boundaries.pop(0)
 
     def commit_slice(self, request: WorkflowCommitRequest) -> str:
@@ -2250,6 +2247,7 @@ Implement TARGET-GOAL-SENTINEL only.
         request_kind=NativeCodexRequestKind.CORRECTION,
         correction_delta="CURRENT-DELTA-SENTINEL",
         correction_fingerprint="c" * 64,
+        correction_findings=(affected, unrelated),
     )
     correction_json = correction.canonical_json
 
@@ -3592,7 +3590,7 @@ def test_combined_native_post_correction_final_transition_carries_complete_ledge
     assert driver.checkpoint_histories[-1].findings == (historical, corrected)
 
 
-def test_combined_native_codex_record_ahead_recovery_precedes_mirror_guard() -> None:
+def test_native_codex_correction_binds_record_authority_before_recovery() -> None:
     finding = FindingRecord(
         finding_id="C-01",
         finding_class=FindingClass.BLOCKER,
@@ -3657,7 +3655,6 @@ def test_combined_native_codex_record_ahead_recovery_precedes_mirror_guard() -> 
         snapshots=[_changes("b", "src/early.py", TEST_FILE)],
         codex_outputs=[],
         reviewer_outputs=[],
-        authoritative_finding_error="record-ahead mirror is expected to differ",
     )
 
     advanced, history = WorkflowEngine(driver)._run_codex(
@@ -3668,7 +3665,9 @@ def test_combined_native_codex_record_ahead_recovery_precedes_mirror_guard() -> 
 
     assert advanced.current_step is WorkflowStep.CLAUDE_SLICE_REVIEW
     assert history.findings == (answered,)
-    assert driver.authoritative_finding_calls == []
+    assert driver.authoritative_finding_calls == [
+        (WorkflowStep.CODEX_CORRECTION.value, (finding,))
+    ]
     assert driver.persisted == [recovered_output]
 
 

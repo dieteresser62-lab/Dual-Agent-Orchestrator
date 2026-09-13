@@ -85,6 +85,7 @@ def native_codex_request(
     additional_authorized_paths: tuple[str, ...] = (),
     correction_delta: str | None = None,
     correction_fingerprint: str | None = None,
+    correction_findings: tuple[FindingRecord, ...] | None = None,
 ) -> NativeCodexRequestBundle:
     """Build one Codex request exclusively from orchestrator-owned values."""
     if request_kind is NativeCodexRequestKind.FINAL_REPORT:
@@ -133,10 +134,14 @@ def native_codex_request(
     native_findings = history.findings
     correction_goal: str | None = None
     if request_kind is NativeCodexRequestKind.CORRECTION:
+        if correction_findings is None:
+            raise execution_error(
+                "native correction request lacks record-backed findings"
+            )
         affected_ids = sorted_finding_ids(state.current_work_unit.open_findings)
         try:
             correction_goal, _, native_findings = derive_correction_requirements(
-                history.findings,
+                correction_findings,
                 affected_ids,
             )
         except ReviewPacketError as exc:
@@ -338,6 +343,37 @@ def _native_review_acceptance_criteria(
     )
 
 
+def _review_request_finding_inputs(
+    *,
+    state: WorkflowState,
+    history: Any,
+    correction_findings: tuple[FindingRecord, ...] | None,
+    execution_error: type[RuntimeError],
+) -> tuple[tuple[FindingRecord, ...], str | None, tuple[str, ...]]:
+    """Select review Findings from the caller's record-backed correction view."""
+
+    correction_sequence = (
+        state.current_work_unit.kind is WorkUnitKind.CORRECTION
+        or project_implementer_return_policy(state.current_work_unit)[0] > 0
+    )
+    if correction_findings is None:
+        if correction_sequence:
+            raise execution_error(
+                "native correction review lacks record-backed findings"
+            )
+        return history.findings, None, ()
+    try:
+        goal, criteria, selected = derive_correction_requirements(
+            correction_findings,
+            state.current_work_unit.open_findings,
+        )
+    except ReviewPacketError as exc:
+        raise execution_error(
+            "native correction review lacks its exact affected open finding set"
+        ) from exc
+    return selected, goal, criteria
+
+
 def native_review_request(
     *,
     state: WorkflowState,
@@ -353,6 +389,7 @@ def native_review_request(
     full_branch_evidence_kind: object,
     final_review_pending_count: int | None = None,
     known_open_findings: tuple[FindingRecord, ...] | None = None,
+    correction_findings: tuple[FindingRecord, ...] | None = None,
 ) -> NativeReviewRequestBundle:
     """Build the native request only from typed local workflow values."""
     review_kind = {
@@ -365,23 +402,23 @@ def native_review_request(
         if review_kind is NativeReviewKind.PLAN and context.plan_only
         else None
     )
-    correction_goal: str | None = None
-    correction_criteria: tuple[str, ...] = ()
-    if state.current_work_unit.kind is WorkUnitKind.CORRECTION:
-        try:
-            correction_goal, correction_criteria, _ = derive_correction_requirements(
-                history.findings,
-                state.current_work_unit.open_findings,
-            )
-        except ReviewPacketError as exc:
-            raise execution_error(
-                "native correction review lacks its exact affected open finding set"
-            ) from exc
-    elif review_kind is not NativeReviewKind.FINAL and not context.slice_summary.strip():
+    request_findings, correction_goal, correction_criteria = (
+        _review_request_finding_inputs(
+            state=state,
+            history=history,
+            correction_findings=correction_findings,
+            execution_error=execution_error,
+        )
+    )
+    if (
+        state.current_work_unit.kind is not WorkUnitKind.CORRECTION
+        and review_kind is not NativeReviewKind.FINAL
+        and not context.slice_summary.strip()
+    ):
         raise execution_error(
             "native non-correction review requires a current-slice summary"
         )
-    offered_open_findings = project_open_set(history.findings).findings
+    offered_open_findings = project_open_set(request_findings).findings
     known_open_by_id = {
         item.finding_id: item
         for item in (
@@ -402,7 +439,7 @@ def native_review_request(
         approval_marker=contract.approval_marker,
         slice_id=contract.slice_id,
         round_number=contract.round_number,
-        previous_findings=history.findings,
+        previous_findings=request_findings,
         known_open_findings=effective_known_open_findings or None,
         authoritative_finding_ids=contract.existing_finding_ids,
         validation_attestation=contract.validation_attestation,

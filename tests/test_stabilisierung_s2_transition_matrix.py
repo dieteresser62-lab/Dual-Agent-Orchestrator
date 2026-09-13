@@ -146,7 +146,6 @@ DRIVER_DIVERGENCE_MESSAGES = Counter(
         "invocation failure work unit differs from the active workflow": 1,
         "structured audit dual-write mismatch: ": 2,
         "workflow projection checkpoint path differs from its cursor": 2,
-        "cleanup scope finding authority differs from the active work unit": 1,
     }
 )
 
@@ -606,7 +605,7 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/workflow_production.py:run_production_workflow": 4,
     "src/workflow_production.py:_run_production_transition_loop": 23,
     "src/workflow_baseline.py:matches_baseline_initialization_prefix": 24,
-    "src/workflow_baseline.py:WorkflowBaseline._persist_structured_baseline": 28,
+    "src/workflow_baseline.py:WorkflowBaseline._persist_structured_baseline": 27,
     "src/orchestrator.py:ProductionWorkflowDriver.assert_structured_decision_context": 5,
     "src/workflow_recovery.py:WorkflowRecovery._start_provider_attempt": 19,
     "src/orchestrator.py:ProductionWorkflowDriver._reconcile_provider_effect": 13,

@@ -26,7 +26,7 @@ from artifact_bridge import (
     ArtifactBridge,
     attestation_payload,
     provider_input_measurement_payload,
-    review_payload_matches_result,
+    review_payload_matches_complete_result,
 )
 import artifact_resume
 from artifact_resume import ArtifactResumeError, resolve_resume_state
@@ -269,7 +269,7 @@ class RecordBackedScriptedWorkflowDriver(ScriptedWorkflowDriver):
                 request.attestation,
                 attestation_record.payload.content_record_id,
             )
-            or not review_payload_matches_result(
+            or not review_payload_matches_complete_result(
                 current_review.payload, request.claude_review  # allowlist:provider
             )
         ):

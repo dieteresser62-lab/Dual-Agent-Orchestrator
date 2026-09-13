@@ -599,7 +599,7 @@ class _CorpusDriver:
             raise ArtifactBridgeError("provider-free handoff failure")
         return None
 
-    def prepare_finding_cleanup(self, _findings):
+    def prepare_finding_cleanup(self):
         return None
 
     def persist_implementation_handoff(self, *_args) -> None:

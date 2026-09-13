@@ -40,6 +40,7 @@ from finding_reducer import (
     merge_request_result,
     project_finding_transition_ids,
     project_open_set,
+    project_request_subset,
 )
 
 from audit_trail import (
@@ -624,9 +625,7 @@ class WorkflowDriver(Protocol):
         history: WorkflowHistory,
     ) -> PersistedNativeReviewerReplay | None: ...
 
-    def prepare_correction(
-        self, findings: tuple[FindingRecord, ...]
-    ) -> WorkflowCorrectionBoundary: ...
+    def prepare_correction(self) -> WorkflowCorrectionBoundary: ...
 
     def commit_slice(self, request: WorkflowCommitRequest) -> str: ...
 
@@ -1297,6 +1296,47 @@ def resolve_retired_iteration_limit(
     return state.continue_retired_iteration_limit(progress_made=progress_made)
 
 
+def _uses_correction_finding_authority(state: WorkflowState) -> bool:
+    """Return whether this round must resolve Findings from records."""
+
+    return (
+        state.current_work_unit.kind is WorkUnitKind.CORRECTION
+        or state.current_step
+        in {
+            WorkflowStep.CODEX_CORRECTION,  # allowlist:provider -- workflow step
+            WorkflowStep.CODEX_FINAL_CORRECTION,  # allowlist:provider -- workflow step
+        }
+        or project_implementer_return_policy(state.current_work_unit)[0] > 0
+    )
+
+
+def _project_correction_request_findings(
+    state: WorkflowState,
+    findings: tuple[FindingRecord, ...],
+) -> tuple[FindingRecord, ...]:
+    """Select the exact active correction set from a record-backed ledger."""
+
+    if not _uses_correction_finding_authority(state):
+        return findings
+    try:
+        projection = project_request_subset(
+            findings,
+            finding_ids=state.current_work_unit.open_findings,
+            open_only=True,
+        )
+    except ValueError as exc:
+        raise WorkflowExecutionError(
+            f"authoritative correction finding replay failed: {exc}"
+        ) from exc
+    expected_ids = sorted_finding_ids(state.current_work_unit.open_findings)
+    if projection.finding_ids != expected_ids:
+        raise WorkflowExecutionError(
+            "authoritative correction finding replay differs from the "
+            "exact active open finding set"
+        )
+    return projection.findings
+
+
 def _review_round_number(
     unit: WorkUnitRecord,
     history: WorkflowHistory,
@@ -1793,12 +1833,16 @@ class WorkflowEngine:
             }
             else workflow_requests.NativeCodexRequestKind.IMPLEMENTATION
         )
+        is_correction_request = (
+            request_kind is workflow_requests.NativeCodexRequestKind.CORRECTION
+        )
+        history = self._bind_correction_request_history(state, history)
         additional_authorized_paths = self._fingerprint_bound_codex_scope_paths(
             state
         )
         correction_delta: str | None = None
         correction_fingerprint: str | None = None
-        if request_kind is workflow_requests.NativeCodexRequestKind.CORRECTION:
+        if is_correction_request:
             correction_start = state.current_slice.start_fingerprint
             if correction_start is None:
                 raise WorkflowExecutionError(
@@ -1823,6 +1867,7 @@ class WorkflowEngine:
             additional_authorized_paths=additional_authorized_paths,
             correction_delta=correction_delta,
             correction_fingerprint=correction_fingerprint,
+            correction_findings=history.findings if is_correction_request else None,
         )
         invocation = CodexInvocation(
             unit.work_unit_id,
@@ -1840,7 +1885,7 @@ class WorkflowEngine:
             else None
         )
         if recovered is None and native_request is not None:
-            authoritative_history = self._bind_authoritative_request_findings(
+            authoritative_history = self._rebind_unsent_request_history(
                 state, history
             )
             if authoritative_history.findings != history.findings:
@@ -1855,6 +1900,7 @@ class WorkflowEngine:
                     additional_authorized_paths=additional_authorized_paths,
                     correction_delta=correction_delta,
                     correction_fingerprint=correction_fingerprint,
+                    correction_findings=history.findings,
                 )
                 invocation = CodexInvocation(
                     unit.work_unit_id,
@@ -2503,6 +2549,7 @@ class WorkflowEngine:
         is_plan_review: bool,
         final_review_pending_count: int | None = None,
         known_open_findings: tuple[FindingRecord, ...] | None = None,
+        correction_findings: tuple[FindingRecord, ...] | None = None,
     ) -> workflow_requests.NativeReviewRequestBundle:
         return workflow_requests.native_review_request(
             state=state,
@@ -2518,6 +2565,7 @@ class WorkflowEngine:
             full_branch_evidence_kind=EvidenceKind.FULL_BRANCH,
             final_review_pending_count=final_review_pending_count,
             known_open_findings=known_open_findings,
+            correction_findings=correction_findings,
         )
 
     def _dispatch_native_review(
@@ -2554,6 +2602,11 @@ class WorkflowEngine:
             is_plan_review=is_plan_review,
             final_review_pending_count=final_review_pending_count,
             known_open_findings=project_open_set(finding_ledger).findings,
+            correction_findings=(
+                request_findings
+                if _uses_correction_finding_authority(state)
+                else None
+            ),
         )
         native_request = build_request(contract=contract)
         invocation = ReviewerInvocation(
@@ -2586,17 +2639,17 @@ class WorkflowEngine:
             raise WorkflowExecutionError(
                 "native reviewer recovery returned an invalid result contract"
             )
-        finding_ledger = self._authoritative_finding_ledger(
-            state, history.findings
+        finding_ledger = self._refresh_review_finding_ledger(
+            state, history, finding_ledger
         )
         if native_output is None and native_request is not None:
-            # Exact-request record-ahead recovery must precede complete-ledger
-            # replay.  Only the still-unsent request is then rebuilt, retaining
-            # its compact offered subset while reserving every ledger id.
-            history = self._bind_authoritative_request_findings(state, history)
+            # Correction requests were record-bound before their recovery probe.
+            # Other still-unsent requests now refresh the complete ledger while
+            # retaining their compact offered subset.
+            history = self._rebind_unsent_request_history(state, history)
             finding_ledger = (
                 finding_ledger
-                if unit.kind is WorkUnitKind.CORRECTION
+                if _uses_correction_finding_authority(state)
                 else history.findings
             )
             authoritative_contract = replace(
@@ -2764,9 +2817,8 @@ class WorkflowEngine:
             raise WorkflowExecutionError("only Claude may execute review steps")
         is_plan_review = state.current_step is WorkflowStep.CLAUDE_PLAN_REVIEW
         is_final_review = state.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW
-        is_cleanup_review = is_final_review and is_finding_cleanup_work_unit(
-            state, unit
-        )
+        is_cleanup_review = is_final_review and is_finding_cleanup_work_unit(state, unit)
+        history = self._bind_correction_request_history(state, history)
         start_commit = state.branch_base if is_final_review else (
             state.current_slice.start_commit or state.branch_base
         )
@@ -2832,8 +2884,10 @@ class WorkflowEngine:
                 "validation attestation is incomplete and cannot be overridden"
             )
         review_round = _review_round_number(unit, history, reviewer)
-        request_findings = history.findings
-        finding_ledger = history.findings  # Provisional until unsent dispatch.
+        request_findings = _project_correction_request_findings(
+            state, history.findings
+        )
+        finding_ledger = history.findings
         final_review_pending_count: int | None = None
         if is_final_review:
             pending_findings = self.driver.authoritative_final_review_findings(
@@ -2854,9 +2908,7 @@ class WorkflowEngine:
                 workflow_requests.FINAL_REVIEW_DISPOSITION_BATCH_SIZE
                 // (2 ** limit_failures),
             )
-            request_findings = pending_findings[
-                : disposition_batch_size
-            ]
+            request_findings = pending_findings[:disposition_batch_size]
             if (
                 review_round > workflow_requests.FINAL_REVIEW_ROUND_SAFETY_LIMIT
                 and pending_findings
@@ -2884,9 +2936,9 @@ class WorkflowEngine:
             test_changes_approved=test_changes_approved,
             red_state_followup_slice=context.red_state_followup_slice,
             existing_finding_ids=sorted_finding_ids(
-                finding.finding_id for finding in history.findings
+                finding.finding_id for finding in finding_ledger
             ),
-            allow_new_observations=unit.kind is not WorkUnitKind.CORRECTION,
+            allow_new_observations=not _uses_correction_finding_authority(state),
         )
         review_packet: ReviewPacket | None = None
         evidence_kind, review_diff = self._select_review_evidence(
@@ -3003,6 +3055,8 @@ class WorkflowEngine:
                 is_final_review=is_final_review,
             ),
         )
+        if is_final_review and result.approval is False:
+            history = self._bind_authoritative_request_findings(state, history)
         if result.stopped:
             if is_cleanup_review:
                 state = state.complete_current_work_unit()
@@ -3097,6 +3151,9 @@ class WorkflowEngine:
                             state,
                             history,
                             advance=not exhausted,
+                            open_findings=tuple(
+                                finding.finding_id for finding in remaining
+                            ),
                         )
                         if exhausted:
                             state = state.complete_current_work_unit()
@@ -3113,7 +3170,7 @@ class WorkflowEngine:
                 # would archive the driver's older projection and leave the already
                 # appended structured ReviewPayload ahead of state-v3.
                 self.driver.checkpoint(state, history)
-                boundary = self.driver.prepare_correction(history.findings)
+                boundary = self.driver.prepare_correction()
                 state = state.complete_current_work_unit().start_correction_work_unit(
                     start_commit=boundary.start_commit,
                     scope_paths=boundary.scope_paths,
@@ -3150,18 +3207,19 @@ class WorkflowEngine:
         history: WorkflowHistory,
         *,
         advance: bool,
+        open_findings: tuple[str, ...] | None = None,
     ) -> WorkflowState:
         current = state.current_work_unit
-        open_findings = (
-            current.open_findings
-            if is_finding_cleanup_work_unit(state, current)
-            else project_open_set(history.findings).finding_ids
+        next_open_findings = (
+            project_open_set(history.findings).finding_ids
+            if open_findings is None
+            else sorted_finding_ids(open_findings)
         )
         updated = replace(
             current,
             round_number=current.round_number + (1 if advance else 0),
             reviewer=Reviewer.CLAUDE,  # allowlist:provider -- persisted reviewer role
-            open_findings=open_findings,
+            open_findings=next_open_findings,
         )
         return replace(
             state,
@@ -3901,7 +3959,32 @@ class WorkflowEngine:
             raise WorkflowExecutionError(
                 "authoritative finding replay returned an invalid projection"
             )
+        _project_correction_request_findings(state, findings)
         return replace(history, findings=findings)
+
+    def _bind_correction_request_history(
+        self, state: WorkflowState, history: WorkflowHistory
+    ) -> WorkflowHistory:
+        if not _uses_correction_finding_authority(state):
+            return history
+        return self._bind_authoritative_request_findings(state, history)
+
+    def _rebind_unsent_request_history(
+        self, state: WorkflowState, history: WorkflowHistory
+    ) -> WorkflowHistory:
+        if _uses_correction_finding_authority(state):
+            return history
+        return self._bind_authoritative_request_findings(state, history)
+
+    def _refresh_review_finding_ledger(
+        self,
+        state: WorkflowState,
+        history: WorkflowHistory,
+        record_bound_ledger: tuple[FindingRecord, ...],
+    ) -> tuple[FindingRecord, ...]:
+        if _uses_correction_finding_authority(state):
+            return record_bound_ledger
+        return self._authoritative_finding_ledger(state, history.findings)
 
     def _bind_current_open_findings(
         self, state: WorkflowState, history: WorkflowHistory
@@ -3912,7 +3995,8 @@ class WorkflowEngine:
         if (
             binding is None
             or binding.mode is not ProtocolMode.STRUCTURED_V2
-            or unit.kind in {WorkUnitKind.PLAN, WorkUnitKind.CORRECTION}
+            or unit.kind is WorkUnitKind.PLAN
+            or _uses_correction_finding_authority(state)
         ):
             return state
         # Production resume now hydrates the complete record-backed history

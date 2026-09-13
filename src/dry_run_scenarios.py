@@ -1332,10 +1332,8 @@ class ScriptedWorkflowDriver:
         )
         return None
 
-    def prepare_correction(
-        self, findings
-    ) -> WorkflowCorrectionBoundary:
-        if not project_open_set(findings).findings:
+    def prepare_correction(self) -> WorkflowCorrectionBoundary:
+        if not project_open_set(self.durable_findings).findings:
             raise DryRunScenarioError(
                 "scripted final-review correction requires an open finding"
             )

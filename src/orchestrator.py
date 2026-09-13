@@ -58,7 +58,12 @@ from artifact_replay import (
     pending_workflow_event_payload,
     replay_artifacts,
 )
-from finding_reducer import project_final_review_dispositions, reduce_findings
+from finding_reducer import (
+    first_correction_work_unit_payload,
+    project_cleanup_review_targets,
+    project_final_review_dispositions,
+    reduce_findings,
+)
 from finding_cleanup import (
     FindingCleanupPlan,
     derive_slice_finding_balances,
@@ -1151,23 +1156,13 @@ class ProductionWorkflowDriver:
             raise WorkflowExecutionError(
                 "cleanup scope replay lacks its immutable work-unit binding"
             )
-        logical_id = f"work-unit-{state.current_work_unit_id}"
-        boundary = next(
-            (
-                record.payload
-                for record in reversed(bridge.store.current_chain())
-                if record.logical_id == logical_id
-                and isinstance(record.payload, CorrectionWorkUnitPayload)
-            ),
-            None,
+        chain = bridge.store.current_chain()
+        boundary = first_correction_work_unit_payload(
+            chain, state.current_work_unit_id
         )
         if boundary is None or not boundary.paths:
             raise WorkflowExecutionError(
                 "cleanup scope replay requires a bound correction work-unit record"
-            )
-        if boundary.finding_ids != state.current_work_unit.open_findings:
-            raise WorkflowExecutionError(
-                "cleanup scope finding authority differs from the active work unit"
             )
         return boundary.paths
 
@@ -1202,27 +1197,8 @@ class ProductionWorkflowDriver:
             )
             if is_finding_cleanup_work_unit(state):
                 reduced = reduce_findings(replay)
-                attribution = reduced.correction_for(state.current_work_unit_id)
-                if attribution is None:
-                    raise WorkflowExecutionError(
-                        "finding cleanup lacks its correction work-unit scope"
-                    )
-                dispositioned = {
-                    record.payload.finding_id
-                    for record in replay.records
-                    if isinstance(record.payload, FindingTransitionPayload)
-                    and record.payload.work_unit_id
-                    == str(state.current_work_unit_id)
-                    and record.payload.action
-                    in {"status_changed", "reclassified"}
-                }
-                pending_ids = tuple(
-                    finding_id
-                    for finding_id in attribution.finding_ids
-                    if finding_id not in dispositioned
-                )
-                projected = reduced.request_subset(
-                    finding_ids=pending_ids
+                projected = project_cleanup_review_targets(
+                    reduced, state.current_work_unit_id
                 ).findings
             else:
                 projected = project_final_review_dispositions(
@@ -2350,9 +2326,7 @@ class ProductionWorkflowDriver:
             plan_only=plan_only,
         )
 
-    def prepare_correction(
-        self, findings: tuple[FindingRecord, ...]
-    ) -> WorkflowCorrectionBoundary:
+    def prepare_correction(self) -> WorkflowCorrectionBoundary:
         if self.active_state is None:
             raise WorkflowExecutionError("correction preparation has no active state")
         identity = inspect_repository(self.root)
@@ -2390,9 +2364,7 @@ class ProductionWorkflowDriver:
         )
         return WorkflowCorrectionBoundary(identity.head, scope, start.fingerprint)
 
-    def prepare_finding_cleanup(
-        self, findings: tuple[FindingRecord, ...]
-    ) -> FindingCleanupPlan | None:
+    def prepare_finding_cleanup(self) -> FindingCleanupPlan | None:
         """Derive one cleanup offer entirely from the authoritative record chain."""
 
         state = self.active_state
@@ -2418,8 +2390,14 @@ class ProductionWorkflowDriver:
             in cleanup_work_unit_ids
             for finding_id in payload.finding_ids
         }
+        replay = replay_artifacts(
+            chain,
+            state.run_id,
+            allow_empty=True,
+            allow_incomplete_review_tail=True,
+        )
         plan = plan_finding_cleanup(
-            findings,
+            reduce_findings(replay).ledger.findings,
             repository_root=self.root,
             previously_addressed_ids=addressed_ids,
         )

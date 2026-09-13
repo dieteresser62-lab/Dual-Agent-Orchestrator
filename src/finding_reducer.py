@@ -37,6 +37,28 @@ from contracts import (
 from finding_order import finding_id_sort_key, sorted_finding_ids
 
 
+def first_correction_work_unit_payload(
+    records: Sequence[ArtifactRecord], work_unit_id: int | str
+) -> CorrectionWorkUnitPayload | None:
+    """Return the immutable first path authorization for one correction unit.
+
+    Later ``CorrectionWorkUnitPayload`` revisions advance round-local facts.  The
+    first record is the authorization boundary; validated replay separately
+    guarantees that later revisions cannot widen or otherwise drift its paths.
+    """
+
+    logical_id = f"work-unit-{work_unit_id}"
+    return next(
+        (
+            record.payload
+            for record in records
+            if record.logical_id == logical_id
+            and isinstance(record.payload, CorrectionWorkUnitPayload)
+        ),
+        None,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class FindingTransitionProjection:
     """One ordered local or imported transition in the canonical ledger."""
@@ -310,6 +332,43 @@ def project_open_set(
     canonical = _canonical_findings(findings)
     return FindingOpenSetProjection(
         tuple(item for item in canonical if item.status is FindingStatus.OPEN)
+    )
+
+
+def project_cleanup_review_targets(
+    reduction: FindingReduction,
+    work_unit_id: int | str,
+) -> FindingRequestProjection:
+    """Project an initial cleanup offer or its actionable blocker follow-up."""
+
+    target = str(work_unit_id)
+    attribution = reduction.correction_for(target)
+    if attribution is None:
+        raise ValueError(
+            f"finding cleanup work unit {target} has no correction attribution"
+        )
+    attributed = reduction.request_subset(
+        finding_ids=attribution.finding_ids,
+    ).findings
+    open_attributed = project_open_set(attributed).findings
+    has_disposition = any(
+        transition.payload.work_unit_id == target
+        and transition.payload.action in {"status_changed", "reclassified"}
+        for transition in reduction.status_transitions.transitions
+    )
+    selected = (
+        tuple(
+            finding
+            for finding in open_attributed
+            if finding.finding_class is FindingClass.BLOCKER
+        )
+        if has_disposition
+        else open_attributed
+    )
+    return FindingRequestProjection(
+        work_unit_id=target,
+        finding_ids=tuple(finding.finding_id for finding in selected),
+        findings=selected,
     )
 
 

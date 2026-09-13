@@ -90,9 +90,7 @@ class ProductionWorkflowLoopDriver(WorkflowDriver, Protocol):
         self, handoff_path: Path, approved_plan_commit: str
     ) -> None: ...
 
-    def prepare_finding_cleanup(
-        self, findings: tuple[Any, ...]
-    ) -> FindingCleanupPlan | None: ...
+    def prepare_finding_cleanup(self) -> FindingCleanupPlan | None: ...
 
     def _write_side_effect_file(
         self, path: Path, content: str, *, normalized_text: bool
@@ -839,7 +837,7 @@ def _run_production_transition_loop(
             continue
 
         if current.kind is WorkUnitKind.SLICE:
-            cleanup_plan = driver.prepare_finding_cleanup(history.findings)
+            cleanup_plan = driver.prepare_finding_cleanup()
             if cleanup_plan is not None:
                 state, history = _start_finding_cleanup(
                     state, history, cleanup_plan, driver

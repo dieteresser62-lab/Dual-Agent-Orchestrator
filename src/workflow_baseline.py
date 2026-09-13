@@ -63,7 +63,7 @@ from finding_cleanup import (
     finding_cleanup_scope_paths,
     is_finding_cleanup_work_unit,
 )
-from finding_reducer import reduce_findings
+from finding_reducer import first_correction_work_unit_payload, reduce_findings
 from orchestrator_version import orchestrator_code_version
 from provider_input_budget import ProviderInputMeasurement
 from side_effects import (
@@ -655,14 +655,8 @@ class WorkflowBaseline:
             logical_id = f"work-unit-{unit.work_unit_id}"
             work_unit_paths = state.current_slice.scope_paths
             if is_finding_cleanup_work_unit(state, unit):
-                cleanup_boundary = next(
-                    (
-                        record.payload
-                        for record in chain
-                        if isinstance(record.payload, CorrectionWorkUnitPayload)
-                        and record.logical_id == logical_id
-                    ),
-                    None,
+                cleanup_boundary = first_correction_work_unit_payload(
+                    chain, unit.work_unit_id
                 )
                 if cleanup_boundary is not None:
                     work_unit_paths = cleanup_boundary.paths
