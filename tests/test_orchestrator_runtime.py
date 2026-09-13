@@ -3524,6 +3524,88 @@ def test_native_codex_record_ahead_recovery_reuses_raw_json_without_provider(
     )
     request_path = driver._native_agent_request_path(invocation)
     persisted_request = request_path.read_text(encoding="utf-8")
+    later_invocation = replace(rebuilt_invocation, round_number=2)
+    recovered_request = driver._load_native_agent_request_bundle(
+        later_invocation,
+        rebuilt_bundle,
+        bundle.bound_context.request_id,
+    )
+    assert recovered_request is not None
+    assert recovered_request.canonical_json == bundle.canonical_json
+    assert recovered_request.bound_context.request_id == bundle.bound_context.request_id
+    historical_finding = FindingRecord(
+        finding_id="C-02",
+        finding_class=FindingClass.BLOCKER,
+        status=FindingStatus.OPEN,
+        summary="The earlier request offered this finding.",
+        acceptance_test="Cross-round recovery preserves the exact offered subset.",
+        origin=FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
+    historical_contract = replace(contract, round_number=3)
+    historical_bundle = build_native_codex_request(
+        NativeCodexRequestSpec(
+            context=replace(
+                native_context,
+                contract=historical_contract,
+                previous_findings=(historical_finding,),
+            ),
+            target_branch=state.branch,
+            base_commit=head,
+            authorized_paths=("src/runtime.py",),
+            assignment="Implement runtime.",
+            work_context="Use the bound native contract.",
+            evidence=(
+                NativeCodexEvidenceInput(
+                    "workflow-prompt", "orchestrator_instruction", large_evidence
+                ),
+            ),
+        )
+    )
+    historical_invocation = replace(
+        invocation,
+        round_number=3,
+        native_request=historical_bundle,
+    )
+    driver._native_agent_request_path(historical_invocation).write_text(
+        driver._native_agent_request_bundle_json(historical_bundle),
+        encoding="utf-8",
+    )
+    later_contract = replace(contract, round_number=4)
+    later_bundle = build_native_codex_request(
+        NativeCodexRequestSpec(
+            context=replace(
+                native_context,
+                current_fingerprint="d" * 64,
+                contract=later_contract,
+                previous_findings=(),
+            ),
+            target_branch=state.branch,
+            base_commit=head,
+            authorized_paths=("src/runtime.py",),
+            assignment="Implement runtime.",
+            work_context="Use the bound native contract.",
+            evidence=(
+                NativeCodexEvidenceInput(
+                    "workflow-prompt", "orchestrator_instruction", large_evidence
+                ),
+            ),
+        )
+    )
+    restored_historical = driver._load_native_agent_request_bundle(
+        replace(
+            invocation,
+            round_number=4,
+            native_request=later_bundle,
+        ),
+        later_bundle,
+        historical_bundle.bound_context.request_id,
+        (historical_finding,),
+    )
+    assert restored_historical is not None
+    assert restored_historical.bound_context.context.contract.round_number == 3
+    assert restored_historical.bound_context.context.previous_findings == (
+        historical_finding,
+    )
     request_path.unlink()
     with pytest.raises(
         WorkflowExecutionError,

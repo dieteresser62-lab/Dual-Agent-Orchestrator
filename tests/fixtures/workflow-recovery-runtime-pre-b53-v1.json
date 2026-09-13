@@ -189,7 +189,7 @@
       "source_aborts": [9],
       "outcome": "raised",
       "error_type": "WorkflowExecutionError",
-      "message": "pre-policy native reviewer response no longer validates: request-mismatch: response request_id does not match bound context",
+      "message": "pre-policy native reviewer response no longer validates: request-mismatch: response request_id does not match bound context; measured-at: request-ledger measurement=ar1-6666666666666666666666666666666666666666666666666666666666666666 relevant-head=9999999999999999999999999999999999999999999999999999999999999999 prefix-head=ar1-7777777777777777777777777777777777777777777777777777777777777777",
       "provider_start_count": 0
     },
     {

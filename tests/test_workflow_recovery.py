@@ -92,6 +92,7 @@ EXPECTED_RECOVERY_EDGES = {
 RECOVERY_EDGE_HELPERS = {
     "recover_pending_native_implementer": (
         "_bind_native_implementer_request",
+        "_load_original_implementer_request_bundle",
         "_replay_native_implementer_request_findings",
         "_bind_native_implementer_request_findings",
         "_parse_native_implementer_recovery",

@@ -1314,8 +1314,54 @@ class ProductionWorkflowDriver:
         self,
         invocation: object,
         rebuilt: object,
+        request_id: str | None = None,
+        request_findings: tuple[FindingRecord, ...] | None = None,
     ) -> object | None:
         path = self._native_agent_request_path(invocation)
+        if request_id is not None:
+            prefix = (
+                f"work-unit-{invocation.work_unit_id:04d}-"
+                f"{invocation.step.value}-round-"
+            )
+            matches: list[Path] = []
+            if path.parent.is_dir():
+                for candidate in sorted(path.parent.iterdir()):
+                    round_text = candidate.name.removeprefix(prefix).removesuffix(
+                        ".json"
+                    )
+                    if (
+                        not candidate.name.startswith(prefix)
+                        or not candidate.name.endswith(".json")
+                        or not round_text.isdigit()
+                        or not candidate.is_file()
+                    ):
+                        continue
+                    try:
+                        envelope = json.loads(candidate.read_text(encoding="utf-8"))
+                        canonical_request = envelope["canonical_request"]
+                        candidate_request = json.loads(canonical_request)
+                        candidate_request_id = candidate_request["request_id"]
+                    except (
+                        KeyError,
+                        OSError,
+                        TypeError,
+                        ValueError,
+                        json.JSONDecodeError,
+                    ) as exc:
+                        raise WorkflowExecutionError(
+                            "native agent request recovery artifact cannot be "
+                            f"identified: {candidate.name}: {exc}"
+                        ) from exc
+                    if candidate_request_id == request_id:
+                        matches.append(candidate)
+            if len(matches) > 1:
+                raise WorkflowExecutionError(
+                    "native agent request recovery has duplicate request-id "
+                    f"authority: {request_id}"
+                )
+            if not matches:
+                return None
+            path = matches[0]
         if not path.is_file():
             return None
         raw = path.read_text(encoding="utf-8")
@@ -1362,9 +1408,38 @@ class ProductionWorkflowDriver:
             )
             if len(assets) != len(document["evidence_assets"]):
                 raise ValueError("persisted native agent evidence assets are invalid")
+            context = rebuilt.bound_context.context
+            if request_findings is not None:
+                findings_by_id = {
+                    item.finding_id: item for item in request_findings
+                }
+                offered_ids = tuple(
+                    item["finding_id"] for item in request_document["open_findings"]
+                )
+                if any(
+                    finding_id not in findings_by_id
+                    for finding_id in offered_ids
+                ):
+                    raise ValueError(
+                        "persisted native agent request finding subset is not "
+                        "present at its measured ledger"
+                    )
+                context = replace(
+                    context,
+                    previous_findings=tuple(
+                        findings_by_id[finding_id]
+                        for finding_id in offered_ids
+                    ),
+                )
             context = replace(
-                rebuilt.bound_context.context,
+                context,
                 current_fingerprint=fingerprint,
+                contract=replace(
+                    context.contract,
+                    round_number=request_document["codex_contract"][  # allowlist:provider -- canonical field
+                        "round_number"
+                    ],
+                ),
             )
             return type(rebuilt)(
                 canonical_json=document["canonical_request"],
