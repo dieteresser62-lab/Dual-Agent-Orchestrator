@@ -6,9 +6,20 @@ from pathlib import Path
 
 import pytest
 import git_service
+import native_finding_decisions
 
 from artifact_bridge import review_payload
-from artifact_models import ArtifactRecord, Fingerprint, FingerprintKind
+from artifact_models import (
+    ArtifactRecord,
+    Fingerprint,
+    FingerprintKind,
+    FindingSeverity,
+    FindingTransitionPayload,
+    PlanPayload,
+    Role,
+    SliceSpec,
+    WorkUnitPayload,
+)
 from contracts import (
     AgentRole,
     ContractResult,
@@ -35,6 +46,7 @@ from git_service import (
     resume_slice,
 )
 from repo_changes import collect_repository_changes
+from slice_exit import SliceExitStatus, evaluate_slice_exit
 
 
 def _git(repository: Path, *arguments: str) -> str:
@@ -653,6 +665,84 @@ def test_commit_stages_only_exact_slice_paths_and_records_result(tmp_path: Path)
     assert result.commit_hash != head
     assert _git(repository, "status", "--short") == ""
     assert _git(repository, "show", "-s", "--format=%s", "HEAD") == result.message
+
+
+def test_disabled_cutover_leaves_commit_behavior_unchanged_for_exit_violation(
+    tmp_path: Path,
+) -> None:
+    repository, head = _new_repository(tmp_path)
+    boundary, _ = begin_slice(
+        repository_root=repository,
+        slice_id=9,
+        expected_branch="feature/transaction",
+        scope_paths=("base.txt",),
+    )
+    (repository / "base.txt").write_text(
+        "changed despite open finding\n", encoding="utf-8"
+    )
+    authorization = _authorization(repository, head)
+    plan_commit = "c" * 40
+    chain: list[ArtifactRecord] = []
+
+    def append(payload) -> None:  # type: ignore[no-untyped-def]
+        sequence = len(chain) + 1
+        chain.append(
+            ArtifactRecord.create(
+                run_id="dormant-commit-run",
+                logical_id=f"dormant-{sequence}",
+                revision=1,
+                fingerprint=Fingerprint(
+                    FingerprintKind.IMPLEMENTATION,
+                    authorization.diff_fingerprint,
+                ),
+                predecessor_ids=() if not chain else (chain[-1].record_id,),
+                created_at=f"2026-09-18T12:10:{sequence:02d}+00:00",
+                idempotency_key=f"dormant:{sequence}",
+                payload=payload,
+            )
+        )
+
+    append(
+        PlanPayload(
+            "docs/internal/plan.md",
+            plan_commit,
+            (SliceSpec("9", "Dormant commit", ("base.txt",)),),
+        )
+    )
+    append(WorkUnitPayload("9", 1, ("base.txt",)))
+    append(
+        FindingTransitionPayload(
+            finding_id="C-01",
+            reporter=Role.CLAUDE,
+            actor=Role.CLAUDE,
+            action="opened",
+            severity=FindingSeverity.BLOCKER,
+            finding_status="open",
+            rationale="The current Slice is still defective.",
+            work_unit_id="9",
+            summary="The current Slice is still defective.",
+            acceptance_test="base.txt must contain the correct value.",
+            origin_slice_id="9",
+            origin_round_number=1,
+        )
+    )
+    exit_result = evaluate_slice_exit(
+        chain,
+        run_id="dormant-commit-run",
+        slice_id="9",
+        approved_plan_commit=plan_commit,
+    )
+    assert exit_result.status is SliceExitStatus.VIOLATED
+    assert native_finding_decisions.JOINT_67_68_NATIVE_CONTRACT_CUTOVER is False
+
+    result = commit_slice(
+        repository_root=repository,
+        boundary=boundary,
+        authorization=authorization,
+        title="dormant exit check",
+    )
+
+    assert result.commit_hash == _git(repository, "rev-parse", "HEAD")
 
 
 def test_commit_handles_exact_rename_scope_without_including_predecessor_commit(

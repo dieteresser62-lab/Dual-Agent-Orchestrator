@@ -711,6 +711,11 @@ class FindingTransitionPayload:
     response_decision: str | None = None
     # Optional until the joint 67/68 cutover ratchets new openings to mandatory.
     responsibility: FindingResponsibility | None = None
+    # Dormant until the joint 67/68 cutover.  These fields preserve the
+    # reviewer's typed closure decision instead of collapsing it into prose.
+    closure_kind: str | None = None
+    rejection_reason: str | None = None
+    closure_evidence: str | None = None
     status: ClassVar[str] = "recorded"
     record_type: ClassVar[RecordType] = RecordType.FINDING_TRANSITION
 
@@ -790,6 +795,42 @@ class FindingTransitionPayload:
                 raise ArtifactValidationError(
                     "response_decision must describe a responded transition"
                 )
+        closure_fields = (
+            self.closure_kind,
+            self.rejection_reason,
+            self.closure_evidence,
+        )
+        if any(item is not None for item in closure_fields):
+            if self.action != "status_changed" or self.finding_status != "closed":
+                raise ArtifactValidationError(
+                    "finding closure fields require a closed status_changed transition"
+                )
+            if self.closure_kind not in {"fixed", "rejected"}:
+                raise ArtifactValidationError("finding closure_kind is invalid")
+            if self.closure_kind == "fixed":
+                if (
+                    self.rejection_reason is not None
+                    or self.closure_evidence is not None
+                ):
+                    raise ArtifactValidationError(
+                        "fixed finding closure forbids rejection fields"
+                    )
+            else:
+                if self.rejection_reason not in {
+                    "no_defect",
+                    "out_of_scope",
+                    "already_fixed",
+                }:
+                    raise ArtifactValidationError(
+                        "rejected finding closure requires a valid rejection_reason"
+                    )
+                if (
+                    not isinstance(self.closure_evidence, str)
+                    or not self.closure_evidence.strip()
+                ):
+                    raise ArtifactValidationError(
+                        "rejected finding closure requires named evidence"
+                    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1974,6 +2015,13 @@ def artifact_payload_document(payload: ArtifactPayload) -> dict[str, Any]:
             raw.pop("responsibility", None)
         else:
             raw["responsibility"] = responsibility_document(payload.responsibility)
+        if payload.closure_kind is None:
+            raw.pop("closure_kind", None)
+            raw.pop("rejection_reason", None)
+            raw.pop("closure_evidence", None)
+        elif payload.closure_kind == "fixed":
+            raw.pop("rejection_reason", None)
+            raw.pop("closure_evidence", None)
     if isinstance(payload, FindingHandoffImportPayload):
         raw["transitions"] = [
             {
@@ -2281,6 +2329,9 @@ _PAYLOAD_READERS: dict[
                 if "responsibility" not in data
                 else parse_responsibility(data["responsibility"])
             ),
+            closure_kind=data.get("closure_kind"),
+            rejection_reason=data.get("rejection_reason"),
+            closure_evidence=data.get("closure_evidence"),
         ),
     RecordType.FINDING_HANDOFF_EXPORT: lambda data: FindingHandoffExportPayload(
             data["source_run_id"], data["source_head_record_id"],

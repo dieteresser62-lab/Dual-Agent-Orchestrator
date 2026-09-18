@@ -143,6 +143,13 @@ def _normalized_payload_fields(payload: object) -> object:
         raw = asdict(payload)
         if payload.responsibility is None:
             raw.pop("responsibility", None)
+        if payload.closure_kind is None:
+            raw.pop("closure_kind", None)
+            raw.pop("rejection_reason", None)
+            raw.pop("closure_evidence", None)
+        elif payload.closure_kind == "fixed":
+            raw.pop("rejection_reason", None)
+            raw.pop("closure_evidence", None)
         return artifact_models._json_value(raw)  # type: ignore[arg-type]
     if isinstance(payload, artifact_models.FindingHandoffImportPayload):
         raw = asdict(payload)
@@ -150,6 +157,13 @@ def _normalized_payload_fields(payload: object) -> object:
             transition_payload = transition["payload"]
             if transition_payload["responsibility"] is None:
                 transition_payload.pop("responsibility")
+            if transition_payload["closure_kind"] is None:
+                transition_payload.pop("closure_kind")
+                transition_payload.pop("rejection_reason")
+                transition_payload.pop("closure_evidence")
+            elif transition_payload["closure_kind"] == "fixed":
+                transition_payload.pop("rejection_reason")
+                transition_payload.pop("closure_evidence")
         return artifact_models._json_value(raw)  # type: ignore[arg-type]
     raw = asdict(payload)  # type: ignore[arg-type]
     if isinstance(payload, artifact_models.InvocationFailurePayload):

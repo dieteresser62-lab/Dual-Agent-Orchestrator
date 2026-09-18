@@ -15,6 +15,7 @@ from artifact_models import (
     ArtifactRecord,
     CorrectionWorkUnitPayload,
     FindingHandoffImportPayload,
+    FindingSeverity,
     FindingTransitionPayload,
     PlanPayload,
     TaskPayload,
@@ -85,6 +86,10 @@ class FindingTransitionProjection:
     imported: bool
     payload: FindingTransitionPayload
     _record: ArtifactRecord = field(repr=False, compare=False)
+
+    @property
+    def record(self) -> ArtifactRecord:
+        return self._record
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,6 +226,59 @@ class FindingRecordedStatusProjection:
     @property
     def is_closed(self) -> bool:
         return self.status == "closed"
+
+
+@dataclass(frozen=True, slots=True)
+class SliceExitFindingHeadProjection:
+    """Record-derived Finding head facts needed by the dormant Exit policy."""
+
+    finding_id: str
+    severity: FindingSeverity
+    status: str
+    summary: str
+    acceptance_test: str
+    responsibility: FindingResponsibility | None
+    last_assignment: FindingTransitionProjection | None
+    last_status_change: FindingTransitionProjection | None
+    invalid_downgrade: FindingTransitionProjection | None
+
+    @property
+    def is_open(self) -> bool:
+        return self.status == "open"
+
+    @property
+    def is_closed(self) -> bool:
+        return self.status == "closed"
+
+    @property
+    def has_complete_closure_record(self) -> bool:
+        transition = self.last_status_change
+        return bool(
+            transition is not None
+            and transition.payload.finding_status == "closed"
+            and transition.payload.closure_kind in {"fixed", "rejected"}
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SliceExitFindingProjection:
+    """Lossless event history plus current heads for one record prefix."""
+
+    events: tuple[FindingTransitionProjection, ...]
+    heads: tuple[SliceExitFindingHeadProjection, ...]
+
+
+@dataclass(slots=True)
+class _MutableSliceExitFindingHead:
+    severity: FindingSeverity
+    status: str
+    summary: str
+    acceptance_test: str
+    responsibility: FindingResponsibility | None
+    last_assignment: FindingTransitionProjection | None
+    last_status_change: FindingTransitionProjection | None = None
+    has_record_evidence: bool = False
+    invalid_downgrade: FindingTransitionProjection | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -361,6 +419,78 @@ def reduce_finding_records(records: Sequence[ArtifactRecord]) -> FindingReductio
         responsibilities=responsibilities,
         diagnostics=tuple(diagnostics),
         _events=events,
+    )
+
+
+def project_slice_exit_findings(
+    records: Sequence[ArtifactRecord],
+) -> SliceExitFindingProjection:
+    """Fold only record facts required by E4 without validating route consumers.
+
+    Branch-planning consumers are intentionally introduced after this dormant
+    Slice.  The general reducer therefore still rejects such routes today,
+    while this policy projection must be able to evaluate their complete typed
+    payloads in provider-free cutover tests.
+    """
+
+    events = _transition_events(records)
+    mutable: dict[str, _MutableSliceExitFindingHead] = {}
+    for event in events:
+        payload = event.payload
+        if payload.action == "opened":
+            mutable.setdefault(
+                payload.finding_id,
+                _MutableSliceExitFindingHead(
+                    severity=payload.severity,
+                    status=payload.finding_status,
+                    summary=payload.summary or payload.rationale,
+                    acceptance_test=payload.acceptance_test or payload.rationale,
+                    responsibility=payload.responsibility,
+                    last_assignment=(
+                        event if payload.responsibility is not None else None
+                    ),
+                ),
+            )
+            continue
+        head = mutable.get(payload.finding_id)
+        if head is None:
+            continue
+        if payload.action == "responded":
+            head.has_record_evidence = True
+        elif payload.action == "status_changed":
+            head.status = payload.finding_status
+            head.last_status_change = event
+            if payload.finding_status == "closed":
+                head.responsibility = None
+        elif payload.action == "reclassified":
+            if (
+                head.severity is FindingSeverity.BLOCKER
+                and payload.severity is FindingSeverity.OBSERVATION
+                and not head.has_record_evidence
+            ):
+                head.invalid_downgrade = event
+            head.severity = payload.severity
+        elif payload.action == "routed":
+            head.responsibility = payload.responsibility
+            head.last_assignment = event
+    return SliceExitFindingProjection(
+        events,
+        tuple(
+            SliceExitFindingHeadProjection(
+                finding_id=finding_id,
+                severity=head.severity,
+                status=head.status,
+                summary=head.summary,
+                acceptance_test=head.acceptance_test,
+                responsibility=head.responsibility,
+                last_assignment=head.last_assignment,
+                last_status_change=head.last_status_change,
+                invalid_downgrade=head.invalid_downgrade,
+            )
+            for finding_id, head in sorted(
+                mutable.items(), key=lambda item: finding_id_sort_key(item[0])
+            )
+        ),
     )
 
 
@@ -1035,6 +1165,8 @@ def _reduce_lineages(
                     rationale=payload.rationale,
                     finding_class=FindingClass(payload.severity.value),
                 )
+                if is_closed_finding_status(finding.status):
+                    responsibilities[lineage_key] = None
             elif payload.action == "routed":
                 assert payload.responsibility is not None
                 if finding.status is not FindingStatus.OPEN:

@@ -298,6 +298,43 @@ def test_routing_changes_current_responsibility_without_changing_origin() -> Non
     }
 
 
+def test_closure_removes_current_responsibility_without_changing_origin() -> None:
+    records = _slice_review_prefix()
+    records.append(
+        _record(
+            len(records) + 1,
+            "finding-C-01",
+            _opening(SliceResponsibility(RUN_ID, PLAN_COMMIT, "1")),
+            records,
+        )
+    )
+    records.append(
+        _record(
+            len(records) + 1,
+            "finding-C-01",
+            FindingTransitionPayload(
+                finding_id="C-01",
+                reporter=Role.CLAUDE,
+                actor=Role.CLAUDE,
+                action="status_changed",
+                severity=FindingSeverity.OBSERVATION,
+                finding_status="closed",
+                rationale="The repair is verified.",
+                work_unit_id="2",
+                closure_kind="fixed",
+            ),
+            records,
+            revision=2,
+        )
+    )
+
+    reduction = reduce_finding_records(records)
+
+    assert reduction.ledger.lineages[0].finding.origin.slice_id == "1"
+    assert reduction.ledger.lineages[0].responsibility is None
+    assert reduction.responsibilities == ()
+
+
 def test_branch_planning_is_fail_closed_until_point_67_binds_run_family() -> None:
     records = _slice_review_prefix()
     records.append(
