@@ -212,7 +212,11 @@ def _incomplete_final_attestation() -> BaseException:
             history,
         )
     )
-    state = SimpleNamespace(branch_base="a" * 40, current_slice_id=1)
+    state = SimpleNamespace(
+        branch_base="a" * 40,
+        branch_review_base_commit="a" * 40,
+        current_slice_id=1,
+    )
     context = SimpleNamespace(
         dynamic_test_scope=False,
         expected_test_files=(),

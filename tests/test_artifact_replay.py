@@ -15,6 +15,7 @@ from artifact_models import (
     FindingSeverity,
     FindingTransitionPayload,
     FindingHandoffImportPayload,
+    FamilyBindingPayload,
     GateDecisionPayload,
     GatePayload,
     GateTransitionPayload,
@@ -231,6 +232,46 @@ def test_replay_projects_run_identity_and_profiles_without_external_state() -> N
     assert replay.run_profile == profile
     assert canonical_json(asdict(replay.run_identity)) == canonical_json(asdict(identity))
     assert canonical_json(asdict(replay.run_profile)) == canonical_json(asdict(profile))
+
+
+def test_second_family_binding_write_with_different_values_is_rejected() -> None:
+    records: list[ArtifactRecord] = []
+    _append(
+        records,
+        "run-identity",
+        RunIdentityPayload(
+            "inbox/backlog/replay.md",
+            "feature/replay",
+            "b" * 40,
+            "c" * 40,
+            "IMPLEMENT",
+            None,
+        ),
+    )
+    first = FamilyBindingPayload(
+        "family-1", "b" * 40, ("src/a.py",), None, None, 1, None, None
+    )
+    _append(
+        records,
+        "run-profile",
+        RunProfilePayload(
+            RoleProfilePayload("implementer-model", "medium"),
+            RoleProfilePayload("reviewer-model", "high"),
+            family_binding=first,
+        ),
+    )
+    _append(
+        records,
+        "run-profile",
+        RunProfilePayload(
+            RoleProfilePayload("implementer-model", "medium"),
+            RoleProfilePayload("reviewer-model", "high"),
+            family_binding=replace(first, cycle_number=2),
+        ),
+        revision=2,
+    )
+
+    _assert_code(tuple(records), ReplayDiagnosticCode.RECORD_DUPLICATE)
 
 
 @pytest.mark.parametrize("missing", ("identity", "profile"))

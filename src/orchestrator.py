@@ -1783,7 +1783,7 @@ class ProductionWorkflowDriver:
                 raise WorkflowExecutionError("plan artifact requires a task fingerprint")
             return state.task_digest
         start_commit = (
-            state.branch_base
+            state.branch_review_base_commit
             if (
                 state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
                 or is_finding_cleanup_work_unit(state)

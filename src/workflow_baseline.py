@@ -131,6 +131,7 @@ def _append_baseline_identity_expectations(
             binding.claude_profile.model, binding.claude_profile.effort  # allowlist:provider
         ),
         orchestrator_code_version=code_version or orchestrator_code_version(),
+        family_binding=state.family_binding,
     )
     identity_record_id = stable_record_id(
         state.run_id, RecordType.RUN_IDENTITY, "run-identity", 1
@@ -563,6 +564,7 @@ class WorkflowBaseline:
                     binding.claude_profile.model, binding.claude_profile.effort
                 ),
                 orchestrator_code_version=_resume_code_version(existing_replay),
+                family_binding=state.family_binding,
             ),
             logical_id="run-profile",
             idempotency_key="run-profile",
@@ -827,7 +829,7 @@ class WorkflowBaseline:
         chain = bridge.store.current_chain() if bridge is not None else ()
         record_head = relevant_record_head(chain)
         final_review_changes = (
-            self._dependencies.collect_changes(state.branch_base)
+            self._dependencies.collect_changes(state.branch_review_base_commit)
             if measurement.operation in FINAL_REVIEW_OPERATIONS
             else None
         )

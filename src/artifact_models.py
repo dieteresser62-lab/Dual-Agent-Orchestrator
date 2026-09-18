@@ -199,11 +199,78 @@ class RoleProfilePayload:
 
 
 @dataclass(frozen=True, slots=True)
+class FamilyBindingPayload:
+    """Immutable cross-run identity and authorization facts for one run family."""
+
+    family_id: str
+    family_base_commit: str
+    family_authorized_change_set: tuple[str, ...]
+    predecessor_run_id: str | None
+    predecessor_head_record_id: str | None
+    cycle_number: int
+    current_plan_commit: str | None
+    current_implementation_commit: str | None
+
+    def __post_init__(self) -> None:
+        _require_identifier(self.family_id, "family_id")
+        _require_git_sha(self.family_base_commit, "family_base_commit")
+        _require_paths(self.family_authorized_change_set)
+        if tuple(sorted(self.family_authorized_change_set)) != (
+            self.family_authorized_change_set
+        ):
+            raise ArtifactValidationError(
+                "family_authorized_change_set must be sorted"
+            )
+        predecessor_values = (
+            self.predecessor_run_id,
+            self.predecessor_head_record_id,
+        )
+        if any(value is None for value in predecessor_values) != all(
+            value is None for value in predecessor_values
+        ):
+            missing = (
+                "predecessor_run_id"
+                if self.predecessor_run_id is None
+                else "predecessor_head_record_id"
+            )
+            raise ArtifactValidationError(
+                f"family binding is missing required field {missing}"
+            )
+        if self.predecessor_run_id is not None:
+            _require_identifier(self.predecessor_run_id, "predecessor_run_id")
+            if re.fullmatch(
+                r"ar1-[0-9a-f]{64}", self.predecessor_head_record_id or ""
+            ) is None:
+                raise ArtifactValidationError(
+                    "predecessor_head_record_id must be an artifact record id"
+                )
+        _require_positive(self.cycle_number, "cycle_number")
+        for value, name in (
+            (self.current_plan_commit, "current_plan_commit"),
+            (
+                self.current_implementation_commit,
+                "current_implementation_commit",
+            ),
+        ):
+            if value is not None:
+                _require_git_sha(value, name)
+
+
+def family_binding_document(binding: FamilyBindingPayload) -> dict[str, Any]:
+    """Return the canonical JSON-compatible document for a family fact."""
+
+    if not isinstance(binding, FamilyBindingPayload):
+        raise ArtifactValidationError("family binding is invalid")
+    return _json_value(asdict(binding))
+
+
+@dataclass(frozen=True, slots=True)
 class RunProfilePayload:
     implementer: RoleProfilePayload
     reviewer: RoleProfilePayload
     orchestrator_code_version: str = "0" * 64
     reducer_version: str = STATE_PROJECTION_REDUCER_VERSION
+    family_binding: FamilyBindingPayload | None = None
     status: ClassVar[str] = "bound"
     record_type: ClassVar[RecordType] = RecordType.RUN_PROFILE
 
@@ -219,6 +286,10 @@ class RunProfilePayload:
             raise ArtifactValidationError(
                 "run profile reducer_version is unsupported"
             )
+        if self.family_binding is not None and not isinstance(
+            self.family_binding, FamilyBindingPayload
+        ):
+            raise ArtifactValidationError("run profile family_binding is invalid")
 
 
 _WORKFLOW_STEPS = {
@@ -413,6 +484,42 @@ class SliceBoundaryPayload:
                 "slice boundary scope_change_groups must partition unique paths"
             )
         _require_sha256(self.start_fingerprint, "slice boundary start_fingerprint")
+
+
+def build_family_authorized_change_set(
+    *,
+    inherited_change_set: Sequence[str] = (),
+    slice_boundaries: Sequence[SliceBoundaryPayload] = (),
+    work_plan_paths: Sequence[str] = (),
+    commit_authorized_control_artifacts: Sequence[str] = (),
+) -> tuple[str, ...]:
+    """Build the exact cumulative family allowlist from record-owned inputs."""
+
+    for paths in (
+        inherited_change_set,
+        work_plan_paths,
+        commit_authorized_control_artifacts,
+    ):
+        _require_paths(paths, allow_empty=True)
+    if any(not isinstance(item, SliceBoundaryPayload) for item in slice_boundaries):
+        raise ArtifactValidationError(
+            "slice_boundaries must contain only SliceBoundaryPayload values"
+        )
+    return tuple(
+        sorted(
+            {
+                *inherited_change_set,
+                *work_plan_paths,
+                *commit_authorized_control_artifacts,
+                *(
+                    path
+                    for boundary in slice_boundaries
+                    for group in boundary.scope_change_groups
+                    for path in group
+                ),
+            }
+        )
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -2015,6 +2122,10 @@ ArtifactPayload: TypeAlias = (
 def artifact_payload_document(payload: ArtifactPayload) -> dict[str, Any]:
     """Serialize one payload while preserving its optional-field wire shape."""
     raw = asdict(payload)
+    if isinstance(payload, RunProfilePayload) and payload.family_binding is None:
+        raw.pop("family_binding", None)
+    elif isinstance(payload, RunProfilePayload):
+        raw["family_binding"] = family_binding_document(payload.family_binding)
     if isinstance(payload, PlanPayload):
         raw["slices"] = [_slice_spec_document(item) for item in payload.slices]
     if isinstance(payload, AgentResultPayload):
@@ -2246,6 +2357,26 @@ _PAYLOAD_READERS: dict[
             RoleProfilePayload(**data["reviewer"]),
             data["orchestrator_code_version"],
             data["reducer_version"],
+            (
+                None
+                if data.get("family_binding") is None
+                else FamilyBindingPayload(
+                    family_id=data["family_binding"]["family_id"],
+                    family_base_commit=data["family_binding"]["family_base_commit"],
+                    family_authorized_change_set=tuple(
+                        data["family_binding"]["family_authorized_change_set"]
+                    ),
+                    predecessor_run_id=data["family_binding"]["predecessor_run_id"],
+                    predecessor_head_record_id=data["family_binding"][
+                        "predecessor_head_record_id"
+                    ],
+                    cycle_number=data["family_binding"]["cycle_number"],
+                    current_plan_commit=data["family_binding"]["current_plan_commit"],
+                    current_implementation_commit=data["family_binding"][
+                        "current_implementation_commit"
+                    ],
+                )
+            ),
         ),
     RecordType.WORKFLOW_TRANSITION: lambda data: WorkflowTransitionPayload(
             data["slice_id"], data["slice_status"], data["work_unit_id"],
@@ -2592,6 +2723,13 @@ def _require_sha256(value: str, name: str) -> None:
 def _require_positive(value: int, name: str) -> None:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise ArtifactValidationError(f"{name} must be a positive integer")
+
+
+def _require_git_sha(value: str, name: str) -> None:
+    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{40}", value) is None:
+        raise ArtifactValidationError(
+            f"{name} must be a lowercase 40-character Git SHA"
+        )
 
 
 def _require_timestamp(value: str, name: str) -> None:

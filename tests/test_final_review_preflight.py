@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
+import native_finding_decisions
 
 from artifact_bridge import ArtifactBridge
 from artifact_models import (
     AgentResultPayload,
+    ArtifactRecord,
     BindingPayload,
+    Fingerprint,
+    FingerprintKind,
     GatePayload,
     GateTransitionPayload,
     ProviderInputComponentPayload,
@@ -19,9 +25,14 @@ from artifact_models import (
     ValidationAttestationPayload,
     ValidationResult,
     CommandSpec,
+    FamilyBindingPayload,
+    RoleProfilePayload,
+    RunProfilePayload,
     WorkflowCompletionPayload,
     WorkflowPolicyPayload,
     WorkflowTransitionPayload,
+    canonical_json,
+    stable_record_id,
     technical_text_evidence,
 )
 from artifact_store import ArtifactStore
@@ -363,6 +374,89 @@ def test_preflight_denies_missing_attestation_unexpected_path_and_premature_comp
         state=state, records=bridge.store.load_chain(), measurement_record=measurement,
     )
     assert premature.error_code == "PREMATURE-COMPLETION"
+
+
+def test_family_preflight_authorizes_commit_containing_only_plan_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan_path = "docs/internal/plan.md"
+    binding = FamilyBindingPayload(
+        "family-1",
+        "a" * 40,
+        (plan_path, "src/one.py"),
+        "predecessor-run",
+        "ar1-" + "a" * 64,
+        2,
+        None,
+        SLICE_COMMIT,
+    )
+    state = replace(
+        _state(WorkflowStep.CODEX_FINAL_REVIEW),
+        work_plan_path=plan_path,
+        family_binding=binding,
+    )
+    monkeypatch.setattr(
+        native_finding_decisions,
+        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
+        True,
+    )
+    bridge = ArtifactBridge(ArtifactStore(tmp_path, state.run_id))
+    _attest(bridge)
+    measurement = _measurement(bridge, state, state.current_step.value)
+
+    result = run_final_review_preflight(
+        state=state,
+        records=bridge.store.load_chain(),
+        measurement_record=measurement,
+        repository_paths=(plan_path,),
+    )
+
+    assert result.passed
+
+
+def test_record_head_omits_absent_family_fact_from_legacy_run_profile() -> None:
+    profile = RunProfilePayload(
+        RoleProfilePayload("implementer", "medium"),
+        RoleProfilePayload("reviewer", "high"),
+    )
+    record = ArtifactRecord(
+        record_id=stable_record_id(
+            "legacy-profile-head", profile.record_type, "run-profile", 1
+        ),
+        record_type=profile.record_type,
+        run_id="legacy-profile-head",
+        logical_id="run-profile",
+        revision=1,
+        status=profile.status,
+        fingerprint=Fingerprint(FingerprintKind.CONTRACT, "2" * 64),
+        predecessor_ids=(),
+        created_at="2026-09-19T10:00:00+00:00",
+        idempotency_key="run-profile",
+        payload=profile,
+    )
+    expected_facts = [
+        {
+            "record_id": record.record_id,
+            "record_type": record.record_type.value,
+            "logical_id": record.logical_id,
+            "revision": record.revision,
+            "fingerprint": {
+                "kind": record.fingerprint.kind.value,
+                "sha256": record.fingerprint.sha256,
+            },
+            "payload": {
+                "implementer": {"model": "implementer", "effort": "medium"},
+                "reviewer": {"model": "reviewer", "effort": "high"},
+                "orchestrator_code_version": "0" * 64,
+                "reducer_version": "structured-v2-schema-2-state-v3-v1",
+            },
+        }
+    ]
+
+    assert relevant_record_head((record,)) == hashlib.sha256(
+        canonical_json(expected_facts)
+    ).hexdigest()
+    assert "family_binding" not in json.loads(record.canonical_json())["payload"]
 
 
 def test_preflight_accepts_user_approved_external_path_bound_to_completed_slice_commit(

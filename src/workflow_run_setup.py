@@ -14,7 +14,11 @@ from artifact_bridge import (
     ArtifactBridgeError,
     finding_handoff_import_payload,
 )
-from artifact_models import FindingHandoffExportPayload, FingerprintKind
+from artifact_models import (
+    FamilyBindingPayload,
+    FindingHandoffExportPayload,
+    FingerprintKind,
+)
 from artifact_replay import ArtifactReplayError, replay_artifacts
 from artifact_store import ArtifactStore
 from finding_reducer import reduce_findings
@@ -24,6 +28,7 @@ from inbox_watcher import (
     success_marker_path,
     watch_identity_path,
 )
+import native_finding_decisions
 from repo_changes import resolve_merge_base
 from state_io import StateSchemaError
 from task_contract import TaskContract, TaskMode
@@ -284,6 +289,7 @@ def _fresh_state(
     audit_report_path: str | None = None,
     codex_profile: AgentProfileBinding = AgentProfileBinding("gpt-5.6-sol", "medium"),
     claude_profile: AgentProfileBinding = AgentProfileBinding("sonnet", "high"),
+    family_binding: FamilyBindingPayload | None = None,
 ) -> WorkflowState:
     identity = inspect_repository(repository_root)
     if identity.branch != task_contract.target_branch:
@@ -296,7 +302,16 @@ def _fresh_state(
         raise StateSchemaError(
             "prepared watch-task branch HEAD changed before state initialization"
         )
-    if branch_base_override is not None:
+    if (
+        family_binding is not None
+        and not native_finding_decisions.native_finding_decisions_enabled()
+    ):
+        raise StateSchemaError(
+            "family binding requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER"
+        )
+    if family_binding is not None:
+        branch_base = family_binding.family_base_commit
+    elif branch_base_override is not None:
         branch_base = branch_base_override
     elif task_contract.approved_plan_commit is not None:
         branch_base = identity.head
@@ -326,6 +341,7 @@ def _fresh_state(
             codex_profile=codex_profile,
             claude_profile=claude_profile,
         ),
+        family_binding=family_binding,
     )
     if task_contract.approved_plan_commit is not None:
         assert task_contract.work_plan_path is not None

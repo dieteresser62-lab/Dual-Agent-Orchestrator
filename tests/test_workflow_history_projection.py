@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 import artifact_replay as artifact_replay_module
+import native_finding_decisions
 from acceptance_criteria import acceptance_criteria_from_texts
 from artifact_bridge import ArtifactBridge
 from artifact_resume import (
@@ -24,6 +25,7 @@ from artifact_models import (
     FingerprintKind,
     FindingSeverity,
     FindingTransitionPayload,
+    FamilyBindingPayload,
     GateDecisionPayload,
     GatePayload,
     GateTransitionPayload,
@@ -318,7 +320,12 @@ def _append_r9_validation(bridge: ArtifactBridge):
     )
 
 
-def _journey(bridge: ArtifactBridge, *, carried_validation: bool = False):
+def _journey(
+    bridge: ArtifactBridge,
+    *,
+    carried_validation: bool = False,
+    family_binding: FamilyBindingPayload | None = None,
+):
     identity = bridge.append(
         RunIdentityPayload(
             "inbox/backlog/r9.md",
@@ -345,6 +352,7 @@ def _journey(bridge: ArtifactBridge, *, carried_validation: bool = False):
         RunProfilePayload(
             RoleProfilePayload("gpt-5.6-sol", "medium"),
             RoleProfilePayload("opus", "max"),
+            family_binding=family_binding,
         ),
         logical_id="run-profile",
         idempotency_key="run-profile",
@@ -805,6 +813,52 @@ def test_first_slice_projection_uses_structural_start_even_when_equal_to_base(
     assert replay.run_identity.first_slice_start_commit == "b" * 40
     assert replay.run_identity.first_slice_start_commit == replay.run_identity.branch_base
     assert project_workflow_state(replay).state.current_slice.start_commit == "b" * 40
+
+
+def test_family_binding_is_projected_losslessly_from_run_profile(
+    tmp_path: Path,
+) -> None:
+    binding = FamilyBindingPayload(
+        "family-1",
+        "b" * 40,
+        ("src/one.py", "src/three.py", "src/two.py"),
+        "predecessor-run",
+        "ar1-" + "a" * 64,
+        2,
+        None,
+        "c" * 40,
+    )
+    bridge = _state_projection_bridge(tmp_path, "family-binding")
+    chain = _journey(bridge, family_binding=binding)
+
+    projected = project_workflow_state(replay_artifacts(chain, RUN_ID))
+
+    assert projected.state.family_binding == binding
+    assert canonical_json(
+        json.loads(projected.canonical_document)["family_binding"]
+    ) == canonical_json(asdict(binding))
+
+
+def test_projection_without_family_fact_is_byteidentical_across_cutover_switch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bridge = _state_projection_bridge(tmp_path, "family-dormancy")
+    replay = replay_artifacts(_journey(bridge), RUN_ID)
+    monkeypatch.setattr(
+        native_finding_decisions,
+        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
+        False,
+    )
+    before = project_workflow_state(replay).canonical_document
+    monkeypatch.setattr(
+        native_finding_decisions,
+        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
+        True,
+    )
+    after = project_workflow_state(replay).canonical_document
+
+    assert before == after
+    assert b'"family_binding"' not in after
 
 
 def _load_state_projection_baseline() -> dict[str, object]:
@@ -1629,7 +1683,8 @@ def test_multi_slice_correction_gate_halt_resume_projects_every_accepted_prefix(
         ) == first.to_document(), end
         assert isinstance(first.state, WorkflowState)
         assert set(first.to_document()) == (
-            set(WorkflowState.__dataclass_fields__) - {"finding_responsibilities"}
+            set(WorkflowState.__dataclass_fields__)
+            - {"finding_responsibilities", "family_binding"}
         )
         assert "finding_responsibilities" not in first.canonical_document.decode(
             "utf-8"

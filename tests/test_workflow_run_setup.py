@@ -6,10 +6,15 @@ from dataclasses import fields
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 import workflow_run_setup
+import native_finding_decisions
 from agent_runtime import QuotaWaitPolicy, TransientRetryPolicy
+from artifact_models import FamilyBindingPayload
+from contracts import PlannedSlice
 from gates import PathClasses
 from validation_matrix import ValidationCommand, ValidationMatrix
+from task_contract import TaskContract, TaskMode
 from workflow import WorkflowContext
 from workflow_state import ProtocolBinding, ProtocolMode, WorkUnitKind, init_workflow_state
 
@@ -26,6 +31,7 @@ EXPECTED_INTERNAL_IMPORTS = {
     "finding_reducer",
     "git_service",
     "inbox_watcher",
+    "native_finding_decisions",
     "repo_changes",
     "state_io",
     "task_contract",
@@ -337,3 +343,149 @@ def test_context_matches_every_workflow_context_field(
     assert managed_scope_calls == ["docs/internal/context-review-12345678.md"]
     for field in fields(WorkflowContext):
         assert getattr(actual, field.name) == getattr(expected, field.name), field.name
+
+
+def test_fresh_approved_plan_run_keeps_current_head_as_all_branch_bases_without_family(
+    tmp_path: Path, monkeypatch
+) -> None:
+    head = "a" * 40
+    contract = TaskContract(
+        digest="b" * 64,
+        mode=TaskMode.IMPLEMENT,
+        scope_patterns=("docs/internal/plan.md", "src/a.py"),
+        target_branch="feature/family-dormancy",
+        work_plan_path="docs/internal/plan.md",
+        approved_plan_commit=head,
+        approved_slices=(PlannedSlice(1, "Implement", ("src/a.py",)),),
+    )
+    monkeypatch.setattr(
+        workflow_run_setup,
+        "inspect_repository",
+        lambda _root: SimpleNamespace(
+            branch="feature/family-dormancy", head=head
+        ),
+    )
+    monkeypatch.setattr(
+        workflow_run_setup, "require_committed_file_at_head", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        native_finding_decisions,
+        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
+        False,
+    )
+
+    state = workflow_run_setup._fresh_state(
+        task_file=tmp_path / "task.md",
+        run_id="family-dormancy",
+        repository_root=tmp_path,
+        task_contract=contract,
+    )
+
+    assert state.family_binding is None
+    assert state.branch_base == head
+    assert state.branch_review_base_commit == head
+    assert state.current_slice.start_commit == head
+
+
+def test_fresh_state_rejects_family_binding_while_joint_cutover_is_off(
+    tmp_path: Path, monkeypatch
+) -> None:
+    head = "a" * 40
+    contract = TaskContract(
+        digest="b" * 64,
+        mode=TaskMode.IMPLEMENT,
+        scope_patterns=("src/a.py",),
+        target_branch="feature/family-dormant",
+    )
+    binding = FamilyBindingPayload(
+        "family-1",
+        "c" * 40,
+        ("src/a.py",),
+        None,
+        None,
+        1,
+        None,
+        None,
+    )
+    monkeypatch.setattr(
+        workflow_run_setup,
+        "inspect_repository",
+        lambda _root: SimpleNamespace(
+            branch="feature/family-dormant", head=head
+        ),
+    )
+    monkeypatch.setattr(
+        native_finding_decisions,
+        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
+        False,
+    )
+
+    with pytest.raises(
+        workflow_run_setup.StateSchemaError,
+        match="JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
+    ):
+        workflow_run_setup._fresh_state(
+            task_file=tmp_path / "task.md",
+            run_id="family-dormant",
+            repository_root=tmp_path,
+            task_contract=contract,
+            family_binding=binding,
+        )
+
+
+def test_fresh_family_run_uses_family_base_but_slice_keeps_current_head(
+    tmp_path: Path, monkeypatch
+) -> None:
+    head = "a" * 40
+    family_base = "c" * 40
+    plan_path = "docs/internal/plan.md"
+    contract = TaskContract(
+        digest="b" * 64,
+        mode=TaskMode.IMPLEMENT,
+        scope_patterns=(plan_path, "src/a.py"),
+        target_branch="feature/family-active",
+        work_plan_path=plan_path,
+        approved_plan_commit=head,
+        approved_slices=(PlannedSlice(1, "Implement", ("src/a.py",)),),
+    )
+    binding = FamilyBindingPayload(
+        "family-1",
+        family_base,
+        (plan_path, "src/a.py"),
+        "predecessor-run",
+        "ar1-" + "d" * 64,
+        2,
+        head,
+        "e" * 40,
+    )
+    monkeypatch.setattr(
+        workflow_run_setup,
+        "inspect_repository",
+        lambda _root: SimpleNamespace(
+            branch="feature/family-active", head=head
+        ),
+    )
+    monkeypatch.setattr(
+        workflow_run_setup, "require_committed_file_at_head", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        native_finding_decisions,
+        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
+        True,
+    )
+
+    state = workflow_run_setup._fresh_state(
+        task_file=tmp_path / "task.md",
+        run_id="family-active",
+        repository_root=tmp_path,
+        task_contract=contract,
+        family_binding=binding,
+    )
+
+    assert state.branch_base == family_base
+    assert state.branch_review_base_commit == family_base
+    assert state.current_slice.start_commit == head
+    assert state.branch_review_authorized_change_set == (
+        plan_path,
+        "src/a.py",
+    )

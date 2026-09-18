@@ -10,12 +10,15 @@ from acceptance_criteria import (
 from artifact_models import (
     ArtifactRecord,
     BindingPayload,
+    FamilyBindingPayload,
     Fingerprint,
     FingerprintKind,
     FindingSeverity,
     FindingTransitionPayload,
     PlanPayload,
     Role,
+    RoleProfilePayload,
+    RunProfilePayload,
     SliceSpec,
     WorkUnitPayload,
 )
@@ -190,6 +193,35 @@ def test_a_s_keeps_ever_routed_finding_after_slice_s_routes_it_onward() -> None:
     assert result.responsibility_finding_ids == ("C-01",)
     assert result.condition(5).status is SliceExitStatus.VIOLATED
     assert "run-bound family identity" in result.condition(5).reasons[0]
+
+
+def test_branch_route_satisfies_condition_5_with_matching_run_family() -> None:
+    binding = FamilyBindingPayload(
+        "family-1",
+        "a" * 40,
+        ("docs/internal/plan.md", "src/fix.py"),
+        None,
+        None,
+        1,
+        PLAN_COMMIT,
+        None,
+    )
+    records = _slice_with_opening(
+        responsibility=SliceResponsibility(RUN_ID, PLAN_COMMIT, "6"),
+        family_binding=binding,
+    )
+    records.append(
+        _record(
+            len(records) + 1,
+            _route("C-01", BranchPlanningResponsibility("family-1", 1), "6"),
+            records,
+        )
+    )
+
+    result = evaluate_slice_exit(records, run_id=RUN_ID, slice_id="6")
+
+    assert result.condition(5).status is SliceExitStatus.SATISFIED
+    assert result.commit_eligible
 
 
 def test_open_blocker_cannot_be_routed_out_of_its_slice() -> None:
@@ -445,9 +477,24 @@ def _finding() -> FindingRecord:
 
 
 def _base_records(
-    *, target_acceptance_texts: tuple[str, ...] = ()
+    *,
+    target_acceptance_texts: tuple[str, ...] = (),
+    family_binding: FamilyBindingPayload | None = None,
 ) -> list[ArtifactRecord]:
     records: list[ArtifactRecord] = []
+    if family_binding is not None:
+        records.append(
+            _record(
+                1,
+                RunProfilePayload(
+                    RoleProfilePayload("implementer", "medium"),
+                    RoleProfilePayload("reviewer", "high"),
+                    family_binding=family_binding,
+                ),
+                records,
+                logical_id="run-profile",
+            )
+        )
     records.append(
         _record(
             1,
@@ -478,8 +525,12 @@ def _slice_with_opening(
     severity: FindingSeverity = FindingSeverity.OBSERVATION,
     responsibility,
     target_acceptance_texts: tuple[str, ...] = (),
+    family_binding: FamilyBindingPayload | None = None,
 ) -> list[ArtifactRecord]:
-    records = _base_records(target_acceptance_texts=target_acceptance_texts)
+    records = _base_records(
+        target_acceptance_texts=target_acceptance_texts,
+        family_binding=family_binding,
+    )
     records.append(
         _record(
             len(records) + 1,

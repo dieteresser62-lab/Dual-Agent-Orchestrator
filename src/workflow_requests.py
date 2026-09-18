@@ -53,7 +53,6 @@ from review_packets import (
     derive_correction_requirements,
 )
 from workflow_state import (
-    SliceStatus,
     WorkflowState,
     WorkUnitKind,
     project_implementer_return_policy,
@@ -98,17 +97,8 @@ def native_codex_request(
     """Build one Codex request exclusively from orchestrator-owned values."""
     if request_kind is NativeCodexRequestKind.FINAL_REPORT:
         current_fingerprint = contract.review_fingerprint
-        base_commit = state.branch_base
-        authorized_paths = tuple(
-            sorted(
-                {
-                    path
-                    for completed_slice in state.slices
-                    if completed_slice.status is SliceStatus.COMPLETED
-                    for path in completed_slice.scope_paths
-                }
-            )
-        )
+        base_commit = state.branch_review_base_commit
+        authorized_paths = state.branch_review_authorized_change_set
     elif state.current_work_unit.kind is WorkUnitKind.PLAN:
         current_fingerprint = state.task_digest
         base_commit = state.branch_base

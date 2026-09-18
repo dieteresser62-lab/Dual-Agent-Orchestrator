@@ -21,7 +21,7 @@ from finding_order import replay_compatible_finding_ids
 from artifact_models import (
     AgentResultPayload,
     ArtifactRecord,
-    artifact_payload_document,
+    artifact_payload_document, family_binding_document,
     BindingPayload,
     DiagnosticPayload,
     FinalReviewPreflightPayload,
@@ -1012,6 +1012,7 @@ def _assemble_workflow_state_document(
     responsibilities = responsibility_projection_document(reduce_findings(replay))
     return {
         **({"finding_responsibilities": responsibilities} if responsibilities else {}),
+        **({"family_binding": family_binding_document(profile.family_binding)} if profile.family_binding is not None else {}),
         "version": 3,
         "run_id": replay.expected_run_id,
         "task_file": identity.task_file,
@@ -1548,7 +1549,6 @@ def _project_validation_attestation(
         summary=content.summary,
         command_specs=tuple(specs),
     )
-
 def _validate_workflow_transitions_and_events(
     chain: tuple[ArtifactRecord, ...],
     records_by_id: dict[str, ArtifactRecord],
@@ -3218,7 +3218,7 @@ def _fail(
 
 def _semantic_payload_document(payload: object) -> dict[str, object]:
     raw = asdict(payload)  # type: ignore[arg-type]
-    if isinstance(payload, (AgentResultPayload, PlanPayload, FindingTransitionPayload)):
+    if isinstance(payload, (AgentResultPayload, PlanPayload, FindingTransitionPayload, RunProfilePayload)):
         return artifact_payload_document(payload)
     if isinstance(payload, FindingHandoffImportPayload):
         raw["transitions"] = [

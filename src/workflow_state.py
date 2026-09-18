@@ -8,6 +8,11 @@ from pathlib import PurePosixPath
 from typing import Any, Mapping
 
 from acceptance_criteria import acceptance_criteria_from_documents
+from artifact_models import (
+    ArtifactValidationError,
+    FamilyBindingPayload,
+    family_binding_document,
+)
 from contracts import PlannedSlice
 from finding_order import finding_id_sort_key
 from finding_responsibility import (
@@ -15,6 +20,7 @@ from finding_responsibility import (
     parse_responsibility,
     responsibility_document,
 )
+import native_finding_decisions
 
 
 STATE_VERSION = 3
@@ -1243,6 +1249,103 @@ def _parse_bootstrap_checks(raw: Mapping[str, Any]) -> tuple[BootstrapCheckFact,
     )
 
 
+def _parse_family_binding(
+    raw: Mapping[str, Any],
+) -> FamilyBindingPayload | None:
+    value = raw.get("family_binding")
+    if value is None:
+        return None
+    document = _mapping(value, "family_binding")
+    required = {
+        "family_id",
+        "family_base_commit",
+        "family_authorized_change_set",
+        "predecessor_run_id",
+        "predecessor_head_record_id",
+        "cycle_number",
+        "current_plan_commit",
+        "current_implementation_commit",
+    }
+    if set(document) != required:
+        missing = sorted(required.difference(document))
+        foreign = sorted(set(document).difference(required))
+        detail = (
+            f"missing required field {missing[0]}"
+            if missing
+            else f"contains foreign field {foreign[0]}"
+        )
+        raise WorkflowStateValidationError(f"family_binding {detail}")
+    try:
+        return FamilyBindingPayload(
+            family_id=_string(document["family_id"], "family_binding.family_id"),
+            family_base_commit=_string(
+                document["family_base_commit"],
+                "family_binding.family_base_commit",
+            ),
+            family_authorized_change_set=_string_tuple(
+                document["family_authorized_change_set"],
+                "family_binding.family_authorized_change_set",
+            ),
+            predecessor_run_id=_optional_string(
+                document["predecessor_run_id"],
+                "family_binding.predecessor_run_id",
+            ),
+            predecessor_head_record_id=_optional_string(
+                document["predecessor_head_record_id"],
+                "family_binding.predecessor_head_record_id",
+            ),
+            cycle_number=_positive_int(
+                document["cycle_number"], "family_binding.cycle_number"
+            ),
+            current_plan_commit=_optional_string(
+                document["current_plan_commit"],
+                "family_binding.current_plan_commit",
+            ),
+            current_implementation_commit=_optional_string(
+                document["current_implementation_commit"],
+                "family_binding.current_implementation_commit",
+            ),
+        )
+    except ArtifactValidationError as exc:
+        raise WorkflowStateValidationError(str(exc)) from exc
+
+
+def _validate_family_binding(
+    *,
+    family_binding: FamilyBindingPayload | None,
+    branch_base: str,
+    slices: tuple[SliceRecord, ...],
+    planned_slices: tuple[PlannedSlice, ...],
+    work_plan_path: str | None,
+) -> None:
+    if family_binding is None:
+        return
+    if not isinstance(family_binding, FamilyBindingPayload):
+        raise WorkflowStateValidationError("family_binding is invalid")
+    if branch_base != family_binding.family_base_commit:
+        raise WorkflowStateValidationError(
+            "branch_base differs from family_base_commit"
+        )
+    required_family_paths = {
+        *(path for item in slices for path in item.scope_paths),
+        *(path for item in planned_slices for path in item.scope_paths),
+    }
+    if work_plan_path is not None:
+        required_family_paths.add(work_plan_path)
+    missing_family_paths = tuple(
+        sorted(
+            required_family_paths.difference(
+                family_binding.family_authorized_change_set
+            )
+        )
+    )
+    if missing_family_paths:
+        raise WorkflowStateValidationError(
+            "family_authorized_change_set is missing bound path "
+            f"{missing_family_paths[0]}"
+        )
+
+
 @dataclass(frozen=True)
 class WorkflowState:
     version: int
@@ -1271,6 +1374,7 @@ class WorkflowState:
     protocol_binding: ProtocolBinding | None = None
     bootstrap_checks: tuple[BootstrapCheckFact, ...] = ()
     finding_responsibilities: tuple[tuple[str, FindingResponsibility], ...] = ()
+    family_binding: FamilyBindingPayload | None = None
 
     def __post_init__(self) -> None:
         if self.version != STATE_VERSION:
@@ -1390,6 +1494,13 @@ class WorkflowState:
                 raise WorkflowStateValidationError(
                     "approved_plan_commit requires work_plan_path"
                 )
+        _validate_family_binding(
+            family_binding=self.family_binding,
+            branch_base=self.branch_base,
+            slices=self.slices,
+            planned_slices=self.planned_slices,
+            work_plan_path=self.work_plan_path,
+        )
         handoff_values = (
             self.finding_handoff_source_run_id,
             self.finding_handoff_export_record_id,
@@ -2700,7 +2811,40 @@ class WorkflowState:
                 finding_id: responsibility_document(responsibility)
                 for finding_id, responsibility in self.finding_responsibilities
             }
+        if self.family_binding is not None:
+            document["family_binding"] = family_binding_document(
+                self.family_binding
+            )
         return document
+
+    @property
+    def active_family_binding(self) -> FamilyBindingPayload | None:
+        """Expose family semantics only behind the shared 67/68 cutover."""
+
+        if not native_finding_decisions.native_finding_decisions_enabled():
+            return None
+        return self.family_binding
+
+    @property
+    def branch_review_base_commit(self) -> str:
+        binding = self.active_family_binding
+        return self.branch_base if binding is None else binding.family_base_commit
+
+    @property
+    def branch_review_authorized_change_set(self) -> tuple[str, ...]:
+        binding = self.active_family_binding
+        if binding is not None:
+            return binding.family_authorized_change_set
+        return tuple(
+            sorted(
+                {
+                    path
+                    for item in self.slices
+                    if item.status is SliceStatus.COMPLETED
+                    for path in item.scope_paths
+                }
+            )
+        )
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> WorkflowState:
@@ -2766,7 +2910,11 @@ class WorkflowState:
         else:
             # ``bootstrap_checks`` is an additive optional mirror field.  Remove it
             # for historical shape selection while validating its contents below.
-            raw_keys = frozenset(raw) - {"bootstrap_checks", "finding_responsibilities"}
+            raw_keys = frozenset(raw) - {
+                "bootstrap_checks",
+                "finding_responsibilities",
+                "family_binding",
+            }
             if raw_keys not in {
                 frozenset(previous_keys),
                 frozenset(current_keys),
@@ -2841,6 +2989,7 @@ class WorkflowState:
                 )
             )
             bootstrap_checks = _parse_bootstrap_checks(raw)
+        family_binding = _parse_family_binding(raw)
         if set(raw) == legacy_keys:
             bootstrap_checks = ()
         slices_raw = _list(raw["slices"], "slices")
@@ -2876,6 +3025,7 @@ class WorkflowState:
             protocol_binding=protocol_binding,
             bootstrap_checks=bootstrap_checks,
             finding_responsibilities=finding_responsibilities,
+            family_binding=family_binding,
         )
 
 
@@ -2933,6 +3083,7 @@ def init_workflow_state(
     audit_report_path: str | None = None,
     target_branch: str | None = None,
     protocol_binding: ProtocolBinding | None = None,
+    family_binding: FamilyBindingPayload | None = None,
     timestamp: str | None = None,
 ) -> WorkflowState:
     _require_positive_int(slice_count, "slice_count")
@@ -2976,6 +3127,7 @@ def init_workflow_state(
         audit_report_path=audit_report_path,
         target_branch=target_branch,
         protocol_binding=protocol_binding,
+        family_binding=family_binding,
     )
 
 

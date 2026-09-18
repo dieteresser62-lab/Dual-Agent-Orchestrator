@@ -10,6 +10,7 @@ from typing import Sequence
 from artifact_models import (
     AgentResultPayload,
     ArtifactRecord,
+    artifact_payload_document,
     BindingPayload,
     FinalReviewPreflightPayload,
     FindingSeverity,
@@ -19,6 +20,7 @@ from artifact_models import (
     RecordType,
     ReviewPayload,
     Role,
+    RunProfilePayload,
     ValidationAttestationPayload,
     WorkflowCompletionPayload,
     canonical_json,
@@ -97,7 +99,11 @@ def relevant_record_head(records: Sequence[ArtifactRecord]) -> str:
             "logical_id": item.logical_id,
             "revision": item.revision,
             "fingerprint": asdict(item.fingerprint),
-            "payload": asdict(item.payload),
+            "payload": (
+                artifact_payload_document(item.payload)
+                if isinstance(item.payload, RunProfilePayload)
+                else asdict(item.payload)
+            ),
         }
         for item in records
         if item.record_type not in _TRANSITION_FINGERPRINT_EXCLUDED_TYPES
@@ -178,11 +184,16 @@ def run_final_review_preflight(
             if any(records_by_id[ref].fingerprint != item.fingerprint for ref in references):
                 return _deny("technical", "FINGERPRINT-MISMATCH", (item.record_id, *references), (), "restore fingerprint-identical binding references")
 
-    allowed_patterns = tuple(
-        dict.fromkeys(
-            (
-                *state.task_scope_patterns,
-                *(path for item in state.slices for path in item.scope_paths),
+    family_binding = state.active_family_binding
+    allowed_patterns = (
+        family_binding.family_authorized_change_set
+        if family_binding is not None
+        else tuple(
+            dict.fromkeys(
+                (
+                    *state.task_scope_patterns,
+                    *(path for item in state.slices for path in item.scope_paths),
+                )
             )
         )
     )

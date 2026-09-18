@@ -13,6 +13,7 @@ from artifact_models import (
     FindingSeverity,
     FingerprintKind,
     PlanPayload,
+    RunProfilePayload,
     SliceSpec,
     WorkUnitPayload,
 )
@@ -197,10 +198,28 @@ def evaluate_slice_exit(
                     "recorded and implementation-fingerprint-bound"
                 )
             else:
-                condition_5_reasons.append(
-                    f"Branch routing for {finding_id} cannot be matched to a "
-                    "run-bound family identity before point 67"
+                profile = next(
+                    (
+                        record.payload
+                        for record in run_records
+                        if isinstance(record.payload, RunProfilePayload)
+                    ),
+                    None,
                 )
+                binding = None if profile is None else profile.family_binding
+                if binding is None:
+                    condition_5_reasons.append(
+                        f"Branch routing for {finding_id} cannot be matched to a "
+                        "run-bound family identity before point 67"
+                    )
+                elif (
+                    head.responsibility.family_id != binding.family_id
+                    or head.responsibility.cycle_number != binding.cycle_number
+                ):
+                    condition_5_reasons.append(
+                        f"Branch routing for {finding_id} differs from the "
+                        "run-bound family identity"
+                    )
 
         if head.is_closed:
             if not head.has_complete_closure_record:

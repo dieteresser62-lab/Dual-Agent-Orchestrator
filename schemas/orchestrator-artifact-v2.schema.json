@@ -121,8 +121,27 @@
         "implementer": {"$ref": "#/$defs/role_profile"},
         "reviewer": {"$ref": "#/$defs/role_profile"},
         "orchestrator_code_version": {"$ref": "#/$defs/sha256"},
-        "reducer_version": {"const": "structured-v2-schema-2-state-v3-v1"}
+        "reducer_version": {"const": "structured-v2-schema-2-state-v3-v1"},
+        "family_binding": {"$ref": "#/$defs/family_binding"}
       }
+    },
+    "family_binding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["family_id", "family_base_commit", "family_authorized_change_set", "predecessor_run_id", "predecessor_head_record_id", "cycle_number", "current_plan_commit", "current_implementation_commit"],
+      "properties": {
+        "family_id": {"$ref": "#/$defs/identifier"},
+        "family_base_commit": {"$ref": "#/$defs/git_sha"},
+        "family_authorized_change_set": {"$ref": "#/$defs/non_empty_paths"},
+        "predecessor_run_id": {"oneOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]},
+        "predecessor_head_record_id": {"oneOf": [{"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, {"type": "null"}]},
+        "cycle_number": {"type": "integer", "minimum": 1},
+        "current_plan_commit": {"oneOf": [{"$ref": "#/$defs/git_sha"}, {"type": "null"}]},
+        "current_implementation_commit": {"oneOf": [{"$ref": "#/$defs/git_sha"}, {"type": "null"}]}
+      },
+      "allOf": [
+        {"if": {"properties": {"predecessor_run_id": {"type": "null"}}}, "then": {"properties": {"predecessor_head_record_id": {"type": "null"}}}},
+        {"if": {"properties": {"predecessor_run_id": {"$ref": "#/$defs/identifier"}}}, "then": {"properties": {"predecessor_head_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}}}}
+      ]
     },
     "workflow_transition": {
       "type": "object", "additionalProperties": false,

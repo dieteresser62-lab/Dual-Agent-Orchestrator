@@ -8,6 +8,7 @@ from acceptance_criteria import acceptance_criterion_id
 from artifact_models import (
     ArtifactRecord,
     ArtifactValidationError,
+    FamilyBindingPayload,
     Fingerprint,
     FingerprintKind,
     FindingSeverity,
@@ -375,7 +376,61 @@ def test_branch_planning_is_fail_closed_until_point_67_binds_run_family() -> Non
         reduce_finding_records(records)
 
 
-def _slice_review_prefix() -> list[ArtifactRecord]:
+def test_branch_planning_identity_must_equal_run_family_binding() -> None:
+    binding = FamilyBindingPayload(
+        "family-1",
+        "e" * 40,
+        ("docs/internal/plan.md", "src/a.py"),
+        None,
+        None,
+        2,
+        PLAN_COMMIT,
+        None,
+    )
+    records = _slice_review_prefix(family_binding=binding)
+    records.append(
+        _record(
+            len(records) + 1,
+            "finding-C-01",
+            _opening(SliceResponsibility(RUN_ID, PLAN_COMMIT, "1")),
+            records,
+        )
+    )
+    records.append(
+        _record(
+            len(records) + 1,
+            "finding-C-01",
+            _routing(BranchPlanningResponsibility("family-1", 2)),
+            records,
+            revision=2,
+        )
+    )
+
+    reduction = reduce_finding_records(records)
+    assert reduction.responsibilities[0].responsibility == (
+        BranchPlanningResponsibility("family-1", 2)
+    )
+
+    mismatched = list(records[:-1])
+    mismatched.append(
+        _record(
+            len(mismatched) + 1,
+            "finding-C-01",
+            _routing(BranchPlanningResponsibility("family-1", 3)),
+            mismatched,
+            revision=2,
+        )
+    )
+    with pytest.raises(
+        ArtifactReplayError,
+        match="family_id or cycle_number differs from the run-bound family identity",
+    ):
+        reduce_finding_records(mismatched)
+
+
+def _slice_review_prefix(
+    *, family_binding: FamilyBindingPayload | None = None
+) -> list[ArtifactRecord]:
     records: list[ArtifactRecord] = []
     payloads = (
         ("run-identity", RunIdentityPayload(
@@ -385,6 +440,7 @@ def _slice_review_prefix() -> list[ArtifactRecord]:
         ("run-profile", RunProfilePayload(
             RoleProfilePayload("implementer", "medium"),
             RoleProfilePayload("reviewer", "high"),
+            family_binding=family_binding,
         )),
         ("task", TaskPayload(
             "feature/responsibility", ("src/a.py",), "f" * 64,

@@ -6,7 +6,7 @@ import pytest
 import workflow_requests
 
 from acceptance_criteria import acceptance_criteria_from_texts
-from artifact_models import technical_text_evidence
+from artifact_models import FamilyBindingPayload, technical_text_evidence
 from contracts import CodexStepContract, PlannedSlice, ReadinessMarker
 from native_codex_contract import NativeCodexRequestKind
 from workflow import (
@@ -997,6 +997,46 @@ def test_completed_plan_commit_binding_is_exact_and_idempotent() -> None:
     assert WorkflowState.from_dict(bound.to_dict()) == bound
     with pytest.raises(WorkflowStateValidationError, match="persisted Slice commit"):
         state.bind_completed_plan_commit(commit_ref="c" * 40)
+
+
+def test_family_profile_can_precede_the_plan_commit_created_by_plan_only() -> None:
+    plan_path = "docs/internal/work-plan.md"
+    commit = "b" * 40
+    binding = FamilyBindingPayload(
+        "family-1",
+        "a" * 40,
+        (plan_path,),
+        "predecessor-run",
+        "ar1-" + "c" * 64,
+        2,
+        None,
+        None,
+    )
+    state = init_workflow_state(
+        run_id="run-family-plan-only",
+        task_file="/repo/plan.md",
+        branch="feature/family-plan-only",
+        branch_base=binding.family_base_commit,
+        first_slice_start_commit="d" * 40,
+        slice_count=1,
+        execution_mode="PLAN_ONLY",
+        work_plan_path=plan_path,
+        family_binding=binding,
+        timestamp="2026-09-19T10:00:00+00:00",
+    ).bind_slice_plan(
+        (PlannedSlice(1, "plan artifact", (plan_path,)),),
+        first_start_commit="d" * 40,
+    ).bind_current_slice_git_boundary(
+        start_commit="d" * 40,
+        scope_paths=(plan_path,),
+        start_fingerprint="1" * 64,
+    ).complete_current_slice(commit_ref=commit)
+
+    bound = state.bind_completed_plan_commit(commit_ref=commit)
+
+    assert bound.approved_plan_commit == commit
+    assert bound.family_binding == binding
+    assert WorkflowState.from_dict(bound.to_dict()) == bound
 
 
 def test_planned_acceptance_criteria_roundtrip_and_legacy_omission() -> None:

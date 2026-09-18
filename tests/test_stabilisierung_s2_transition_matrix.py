@@ -320,6 +320,7 @@ WORKFLOW_STATE_FIELD_INVENTORY = {
         "protocol_binding",
         "bootstrap_checks",
         "finding_responsibilities",
+        "family_binding",
     },
 }
 
@@ -593,7 +594,7 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/artifact_bridge.py:ArtifactBridge.start_provider_attempt": 17,
     "src/artifact_bridge.py:ArtifactBridge.finish_provider_attempt": 10,
     "src/artifact_bridge.py:ArtifactBridge.side_effect_result": 7,
-    "src/final_review_preflight.py:run_final_review_preflight": 20,
+    "src/final_review_preflight.py:run_final_review_preflight": 21,
     "src/final_review_preflight.py:_approved_external_paths": 15,
     "src/workflow_audit_projection.py:_persisted_histories": 6,
     "src/workflow_audit_projection.py:_attach_record_events": 13,
@@ -682,7 +683,7 @@ EXPECTED_STRICT_BODY_DIGESTS = {
     "src/artifact_resume.py:require_workflow_event_prefix": "baf1ce7cd7ef465131f9779714b33b34d5e929f10c19c48b7a92b68089543d5a",
     "src/artifact_resume.py:require_gate_prefix": "67196c4e07c9c428033a8bf93726a93adc22a66929cbf975019913bf60979b82",
     "src/artifact_resume.py:require_side_effect_ledger_prefix": "7803832a9e825309cbbecf6b49d54d9dad15f2eeb0a973d803d90ae324acb7fd",
-    "src/final_review_preflight.py:run_final_review_preflight": "8ea919e177653eee0f5c6ecac64ee1598f58b33126dfa1df6ab1eb0a04caac61",
+    "src/final_review_preflight.py:run_final_review_preflight": "7aac993574977c42acaa89fef43f40d7bd4ce144354681b9da4ae67de19daa80",
     "src/final_review_preflight.py:_approved_external_paths": "24a9647addbf8df21fba7ecd0e25164e7237b00eb9c831bd7ee7b9ce1b8f5439",
     "src/workflow_audit_projection.py:_persisted_histories": "46d16ba2f5f168dbb9f86da548b7c370305003fa27f39d3979423f76f53b8d86",
     "src/workflow_audit_projection.py:_attach_record_events": "cf8f419efeb90e9231c017a7df0779fd0bad7ccf501f7c2df503f5d1598d74d0",

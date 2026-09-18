@@ -2343,7 +2343,7 @@ class WorkflowEngine:
         context: WorkflowContext,
         history: WorkflowHistory,
     ) -> tuple[WorkflowState, WorkflowHistory]:
-        changes = self.driver.collect_changes(state.branch_base)
+        changes = self.driver.collect_changes(state.branch_review_base_commit)
         unexpected = self._validate_change_boundary(
             state, changes, WorkUnitKind.FINAL_REVIEW
         )
@@ -2403,19 +2403,10 @@ class WorkflowEngine:
         branch_context = (
             f"{context.distilled_context}\n\n"
             "BRANCH-WIDE FINAL REVIEW\n"
-            f"BASE COMMIT\n{state.branch_base}\n\n"
+            f"BASE COMMIT\n{state.branch_review_base_commit}\n\n"
             f"BRANCH FINGERPRINT\n{changes.fingerprint}\n\n"
             "ORCHESTRATOR-AUTHORIZED COMPLETED SLICE PATHS\n"
-            + "\n".join(
-                sorted(
-                    {
-                        path
-                        for completed_slice in state.slices
-                        if completed_slice.status is SliceStatus.COMPLETED
-                        for path in completed_slice.scope_paths
-                    }
-                )
-            )
+            + "\n".join(state.branch_review_authorized_change_set)
             + "\n\nThese paths include managed correction documents and supersede the "
             "initial TASK_SCOPE for branch-wide evidence. Their presence is not an "
             "UNEXPECTED-PATH condition. Missing allowlisted paths are permitted because "
@@ -2958,7 +2949,7 @@ class WorkflowEngine:
         is_final_review = state.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW
         is_cleanup_review = is_final_review and is_finding_cleanup_work_unit(state, unit)
         history = self._bind_correction_request_history(state, history)
-        start_commit = state.branch_base if is_final_review else (
+        start_commit = state.branch_review_base_commit if is_final_review else (
             state.current_slice.start_commit or state.branch_base
         )
         try:
@@ -4153,7 +4144,7 @@ class WorkflowEngine:
             state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
             or is_finding_cleanup_work_unit(state)
         ):
-            return state.branch_base
+            return state.branch_review_base_commit
         return state.current_slice.start_commit
 
     def _bind_driver_work_unit(self, state: WorkflowState) -> None:

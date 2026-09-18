@@ -18,6 +18,7 @@ from artifact_models import (
     FindingSeverity,
     FindingTransitionPayload,
     PlanPayload,
+    RunProfilePayload,
     TaskPayload,
     WorkUnitPayload,
     WorkflowTransitionPayload,
@@ -1175,7 +1176,10 @@ def _reduce_lineages(
                         f"cannot route closed finding {payload.finding_id}",
                         record,
                     )
-                _validate_routed_responsibility(payload.responsibility, record)
+                if records is not None:
+                    _validate_routed_responsibility(
+                        payload.responsibility, record, records
+                    )
                 responsibilities[lineage_key] = payload.responsibility
         except ValueError as exc:
             _fail(
@@ -1220,7 +1224,7 @@ def _validate_opening_responsibility(
     assert responsibility is not None
     record = _event_record(event)
     if event.imported:
-        _validate_routed_responsibility(responsibility, record)
+        _validate_routed_responsibility(responsibility, record, records)
         return
     prior = records[: event.sequence - 1]
     review_step = next(
@@ -1319,10 +1323,8 @@ def _validate_opening_responsibility(
                 "Entdeckungsreview opening requires responsibility kind BRANCH_PLANNING",
                 record,
             )
-        _responsibility_fail(
-            "BRANCH_PLANNING has no run-bound family_id and cycle_number before point 67",
-            record,
-        )
+        _validate_routed_responsibility(responsibility, record, records)
+        return
     _responsibility_fail(
         f"responsibility-bearing opening has no supported review context; step={review_step!r}",
         record,
@@ -1332,12 +1334,33 @@ def _validate_opening_responsibility(
 def _validate_routed_responsibility(
     responsibility: FindingResponsibility,
     record: ArtifactRecord,
+    records: Sequence[ArtifactRecord],
 ) -> None:
     if isinstance(responsibility, BranchPlanningResponsibility):
-        _responsibility_fail(
-            "BRANCH_PLANNING has no run-bound family_id and cycle_number before point 67",
-            record,
+        profile = next(
+            (
+                item.payload
+                for item in records
+                if item.run_id == record.run_id
+                and isinstance(item.payload, RunProfilePayload)
+            ),
+            None,
         )
+        binding = None if profile is None else profile.family_binding
+        if binding is None:
+            _responsibility_fail(
+                "BRANCH_PLANNING has no run-bound family_id and cycle_number before point 67",
+                record,
+            )
+        if (
+            responsibility.family_id != binding.family_id
+            or responsibility.cycle_number != binding.cycle_number
+        ):
+            _responsibility_fail(
+                "BRANCH_PLANNING family_id or cycle_number differs from the "
+                "run-bound family identity",
+                record,
+            )
 
 
 def _responsibility_fail(message: str, record: ArtifactRecord) -> None:

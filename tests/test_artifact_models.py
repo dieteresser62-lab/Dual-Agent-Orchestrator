@@ -17,6 +17,7 @@ from artifact_models import (
     DiagnosticPayload,
     FindingSeverity,
     FindingTransitionPayload,
+    FamilyBindingPayload,
     FindingHandoffExportPayload,
     FindingHandoffImportPayload,
     ImportedFindingTransition,
@@ -47,6 +48,7 @@ from artifact_models import (
     WorkflowCompletionPayload,
     WorkflowPolicyPayload,
     WorkflowTransitionPayload,
+    build_family_authorized_change_set,
     ProviderInputComponentPayload,
     ProviderInputMeasurementPayload,
     ProviderAttemptPayload,
@@ -94,8 +96,70 @@ def test_run_profile_record_fields_are_role_keyed() -> None:
         "reviewer": {"model": "reviewer-model", "effort": "high"},
         "orchestrator_code_version": profile.orchestrator_code_version,
         "reducer_version": "structured-v2-schema-2-state-v3-v1",
+        "family_binding": None,
     }
     assert not {"codex", "claude"} & set(asdict(profile))
+    assert "family_binding" not in _record(profile).to_dict()["payload"]
+
+
+def test_family_binding_roundtrips_and_missing_required_field_is_named() -> None:
+    binding = FamilyBindingPayload(
+        family_id="family-1",
+        family_base_commit="1" * 40,
+        family_authorized_change_set=(
+            "docs/internal/plan.md",
+            "src/a.py",
+        ),
+        predecessor_run_id="run-previous",
+        predecessor_head_record_id="ar1-" + "2" * 64,
+        cycle_number=2,
+        current_plan_commit="3" * 40,
+        current_implementation_commit="4" * 40,
+    )
+    profile = RunProfilePayload(
+        RoleProfilePayload("implementer-model", "medium"),
+        RoleProfilePayload("reviewer-model", "high"),
+        family_binding=binding,
+    )
+    record = _record(profile)
+
+    assert ArtifactRecord.from_dict(record.to_dict()) == record
+    assert canonical_json(
+        record.to_dict()["payload"]["family_binding"]
+    ) == canonical_json(asdict(binding))
+
+    missing = record.to_dict()
+    del missing["payload"]["family_binding"]["family_base_commit"]
+    with pytest.raises(ArtifactValidationError, match="family_base_commit"):
+        ArtifactRecord.from_dict(missing)
+
+
+def test_family_authorized_change_set_includes_boundaries_plans_and_controls() -> None:
+    boundaries = (
+        SliceBoundaryPayload(
+            "1", "1" * 40, (("src/a.py",),), "a" * 64
+        ),
+        SliceBoundaryPayload(
+            "2",
+            "2" * 40,
+            (("src/b.py", "tests/test_b.py"),),
+            "b" * 64,
+        ),
+    )
+
+    assert build_family_authorized_change_set(
+        inherited_change_set=("src/inherited.py",),
+        slice_boundaries=boundaries,
+        work_plan_paths=("docs/internal/plan.md",),
+        commit_authorized_control_artifacts=("docs/internal/audit.md",),
+    ) == (
+        "docs/internal/audit.md",
+        "docs/internal/plan.md",
+        "src/a.py",
+        "src/b.py",
+        "src/inherited.py",
+        "tests/test_b.py",
+    )
 
 
 def test_plan_record_roundtrip_preserves_ordered_acceptance_criteria() -> None:
