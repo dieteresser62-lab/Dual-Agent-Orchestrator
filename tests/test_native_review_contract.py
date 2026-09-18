@@ -169,7 +169,7 @@ def active_finding_decisions(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.parametrize(
     "responsibility",
     (
-        SliceResponsibility("later-run", "b" * 40, "6"),
+        SliceResponsibility("later-run", "b" * 40, "6", "ac-" + "d" * 64),
         BranchPlanningResponsibility("family-1", 2),
         PlanRevisionResponsibility(
             "plan-run", "docs/internal/plan.md", "c" * 64, 3

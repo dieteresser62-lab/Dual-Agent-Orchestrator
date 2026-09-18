@@ -30,6 +30,7 @@ from contracts import (
     FindingOrigin,
     FindingRecord,
     FindingStatus,
+    PlannedSlice,
     ReviewEvidence,
     SOURCE_FINDING_ID_PATTERN,
     StopRequest,
@@ -399,6 +400,7 @@ class NativeReviewContext:
     plan_artifact_path: str | None = None
     final_review_pending_count: int | None = None
     implementer_responsibility_proposals: tuple[NativeResponsibilityProposal, ...] = ()
+    planned_slices: tuple[PlannedSlice, ...] = ()
 
     def __post_init__(self) -> None:
         for label, value in (
@@ -498,6 +500,17 @@ class NativeReviewContext:
             raise NativeReviewContractError(
                 NativeReviewErrorCode.CONTEXT_INVALID,
                 "test files must be sorted, unique, and non-empty",
+            )
+        if any(not isinstance(item, PlannedSlice) for item in self.planned_slices):
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.CONTEXT_INVALID,
+                "planned slices must contain only typed PlannedSlice values",
+            )
+        planned_ids = tuple(item.slice_id for item in self.planned_slices)
+        if planned_ids and planned_ids != tuple(range(1, len(planned_ids) + 1)):
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.CONTEXT_INVALID,
+                "planned slice ids must be contiguous and 1-based",
             )
 
         if self.anchor_origin is not None and not self.anchor_origin.strip():
@@ -2101,6 +2114,21 @@ def native_review_context_binding(context: NativeReviewContext) -> dict[str, Any
                 "rationale": item.rationale,
             }
             for item in context.implementer_responsibility_proposals
+        ]
+        binding["planned_slices"] = [
+            {
+                "slice_id": item.slice_id,
+                "summary": item.summary,
+                "scope_paths": list(item.scope_paths),
+                "acceptance_criteria": [
+                    {
+                        "criterion_id": criterion.criterion_id,
+                        "text": criterion.text,
+                    }
+                    for criterion in item.acceptance_criteria
+                ],
+            }
+            for item in context.planned_slices
         ]
     return binding
 

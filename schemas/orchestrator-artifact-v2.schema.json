@@ -88,7 +88,11 @@
     },
     "slice": {
       "type": "object", "additionalProperties": false, "required": ["slice_id", "summary", "paths"],
-      "properties": {"slice_id": {"$ref": "#/$defs/identifier"}, "summary": {"$ref": "#/$defs/non_empty"}, "paths": {"$ref": "#/$defs/non_empty_paths"}}
+      "properties": {"slice_id": {"$ref": "#/$defs/identifier"}, "summary": {"$ref": "#/$defs/non_empty"}, "paths": {"$ref": "#/$defs/non_empty_paths"}, "acceptance_criteria": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/acceptance_criterion"}}}
+    },
+    "acceptance_criterion": {
+      "type": "object", "additionalProperties": false, "required": ["criterion_id", "text"],
+      "properties": {"criterion_id": {"type": "string", "pattern": "^ac-[0-9a-f]{64}$"}, "text": {"$ref": "#/$defs/non_empty"}}
     },
     "run_identity": {
       "type": "object", "additionalProperties": false,
@@ -224,7 +228,7 @@
     },
     "finding_responsibility": {
       "oneOf": [
-        {"type": "object", "additionalProperties": false, "required": ["responsibility_kind", "target_run_id", "approved_plan_commit", "slice_id"], "properties": {"responsibility_kind": {"const": "SLICE"}, "target_run_id": {"$ref": "#/$defs/identifier"}, "approved_plan_commit": {"$ref": "#/$defs/git_sha"}, "slice_id": {"$ref": "#/$defs/identifier"}}},
+        {"type": "object", "additionalProperties": false, "required": ["responsibility_kind", "target_run_id", "approved_plan_commit", "slice_id"], "properties": {"responsibility_kind": {"const": "SLICE"}, "target_run_id": {"$ref": "#/$defs/identifier"}, "approved_plan_commit": {"$ref": "#/$defs/git_sha"}, "slice_id": {"$ref": "#/$defs/identifier"}, "acceptance_criterion_id": {"type": "string", "pattern": "^ac-[0-9a-f]{64}$"}}},
         {"type": "object", "additionalProperties": false, "required": ["responsibility_kind", "family_id", "cycle_number"], "properties": {"responsibility_kind": {"const": "BRANCH_PLANNING"}, "family_id": {"$ref": "#/$defs/identifier"}, "cycle_number": {"type": "integer", "minimum": 1}}},
         {"type": "object", "additionalProperties": false, "required": ["responsibility_kind", "run_id", "plan_path", "plan_digest", "revision"], "properties": {"responsibility_kind": {"const": "PLAN_REVISION"}, "run_id": {"$ref": "#/$defs/identifier"}, "plan_path": {"$ref": "#/$defs/path"}, "plan_digest": {"$ref": "#/$defs/sha256"}, "revision": {"type": "integer", "minimum": 1}}}
       ]

@@ -7,6 +7,8 @@ from enum import Enum
 from pathlib import PurePosixPath
 from typing import Iterable
 
+from acceptance_criteria import AcceptanceCriterion, validate_acceptance_criteria
+
 from content_authority import (
     VALIDATION_MATRIX_DIGEST_V1,
     ValidationCapture,
@@ -463,12 +465,14 @@ class PlannedSlice:
     slice_id: int
     summary: str
     scope_paths: tuple[str, ...]
+    acceptance_criteria: tuple[AcceptanceCriterion, ...] = ()
 
     def __post_init__(self) -> None:
         if self.slice_id < 1:
             raise ValueError("planned slice id must be 1-based")
         if not self.summary.strip():
             raise ValueError("planned slice summary must not be empty")
+        validate_acceptance_criteria(self.slice_id, self.acceptance_criteria)
         diagnostic = planned_slice_path_diagnostic(self.scope_paths)
         if diagnostic is not None:
             raise ValueError(diagnostic.detail)

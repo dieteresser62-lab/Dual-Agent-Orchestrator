@@ -1030,7 +1030,7 @@ def _assemble_workflow_state_document(
                     "slice_id": int(item.slice_id),
                     "summary": item.summary,
                     "scope_paths": item.paths,
-                }
+                } | _slice_acceptance_projection(item)
                 for item in planned_slices
             )
         ),
@@ -3218,7 +3218,7 @@ def _fail(
 
 def _semantic_payload_document(payload: object) -> dict[str, object]:
     raw = asdict(payload)  # type: ignore[arg-type]
-    if isinstance(payload, FindingTransitionPayload):
+    if isinstance(payload, (AgentResultPayload, PlanPayload, FindingTransitionPayload)):
         return artifact_payload_document(payload)
     if isinstance(payload, FindingHandoffImportPayload):
         raw["transitions"] = [
@@ -3240,6 +3240,17 @@ def _semantic_payload_document(payload: object) -> dict[str, object]:
         raw.pop("native_review_rejection", None)
         raw.pop("native_review_retry_round", None)
     return raw
+
+
+def _slice_acceptance_projection(spec: SliceSpec) -> dict[str, object]:
+    if not spec.acceptance_criteria:
+        return {}
+    return {
+        "acceptance_criteria": tuple(
+            {"criterion_id": item.criterion_id, "text": item.text}
+            for item in spec.acceptance_criteria
+        )
+    }
 
 
 __all__ = [

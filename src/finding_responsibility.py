@@ -19,6 +19,7 @@ import copy
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
 _GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_ACCEPTANCE_CRITERION_ID_RE = re.compile(r"^ac-[0-9a-f]{64}$")
 
 
 class ResponsibilityKind(StrEnum):
@@ -32,6 +33,7 @@ class SliceResponsibility:
     target_run_id: str
     approved_plan_commit: str
     slice_id: str
+    acceptance_criterion_id: str | None = None
     responsibility_kind: ClassVar[ResponsibilityKind] = ResponsibilityKind.SLICE
 
     def __post_init__(self) -> None:
@@ -43,6 +45,18 @@ class SliceResponsibility:
                 "SLICE.approved_plan_commit must be a lowercase 40-character Git SHA"
             )
         _require_identifier(self.slice_id, "SLICE.slice_id")
+        if (
+            self.acceptance_criterion_id is not None
+            and (
+                not isinstance(self.acceptance_criterion_id, str)
+                or _ACCEPTANCE_CRITERION_ID_RE.fullmatch(
+                    self.acceptance_criterion_id
+                ) is None
+            )
+        ):
+            raise ValueError(
+                "SLICE.acceptance_criterion_id must be ac- followed by a lowercase SHA-256 digest"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,12 +120,17 @@ def responsibility_document(
     """Return the deterministic discriminator-first wire representation."""
 
     if isinstance(responsibility, SliceResponsibility):
-        return {
+        document = {
             "responsibility_kind": ResponsibilityKind.SLICE.value,
             "target_run_id": responsibility.target_run_id,
             "approved_plan_commit": responsibility.approved_plan_commit,
             "slice_id": responsibility.slice_id,
         }
+        if responsibility.acceptance_criterion_id is not None:
+            document["acceptance_criterion_id"] = (
+                responsibility.acceptance_criterion_id
+            )
+        return document
     if isinstance(responsibility, BranchPlanningResponsibility):
         return {
             "responsibility_kind": ResponsibilityKind.BRANCH_PLANNING.value,
@@ -155,6 +174,10 @@ def responsibility_json_schema() -> dict[str, Any]:
                             "pattern": "^[0-9a-f]{40}$",
                         },
                         "slice_id": {"type": "string", "minLength": 1},
+                        "acceptance_criterion_id": {
+                            "type": "string",
+                            "pattern": "^ac-[0-9a-f]{64}$",
+                        },
                     },
                     "required": [
                         "responsibility_kind",
@@ -238,6 +261,7 @@ def parse_responsibility(raw: Mapping[str, Any]) -> FindingResponsibility:
             target_run_id=raw["target_run_id"],
             approved_plan_commit=raw["approved_plan_commit"],
             slice_id=raw["slice_id"],
+            acceptance_criterion_id=raw.get("acceptance_criterion_id"),
         )
     if kind is ResponsibilityKind.BRANCH_PLANNING:
         return BranchPlanningResponsibility(
@@ -260,7 +284,12 @@ def _require_exact_fields(raw: Mapping[str, Any], kind: ResponsibilityKind) -> N
         raise ValueError(
             f"{kind.value} responsibility is missing required field {missing[0]}"
         )
-    foreign = sorted(observed - expected)
+    allowed = (
+        expected | {"acceptance_criterion_id"}
+        if kind is ResponsibilityKind.SLICE
+        else expected
+    )
+    foreign = sorted(observed - allowed)
     if foreign:
         raise ValueError(
             f"{kind.value} responsibility contains foreign field {foreign[0]}"

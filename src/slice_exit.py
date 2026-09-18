@@ -32,8 +32,8 @@ from finding_signature import mentioned_repository_paths
 
 
 CONDITION_4_ACCEPTANCE_UNDECIDABLE = (
-    "SliceSpec contains no request-bound acceptance condition, so the finding's "
-    "technical adoption by the target Slice cannot be decided from the record chain"
+    "target Slice has no record-bound acceptance criteria, so its named condition "
+    "cannot be resolved from the record chain"
 )
 
 
@@ -173,7 +173,9 @@ def evaluate_slice_exit(
             )
             if route_errors:
                 condition_4_reasons.extend(route_errors)
-            else:
+            elif not _slice_route_has_record_criteria(
+                route.payload.responsibility, plan
+            ):
                 condition_4_unknown.append(
                     f"{finding_id}: {CONDITION_4_ACCEPTANCE_UNDECIDABLE}"
                 )
@@ -362,7 +364,34 @@ def _slice_route_errors(
             f"Slice routing for {finding_id} targets Slice {target}, whose approved "
             f"scope does not cover {', '.join(uncovered)}",
         )
+    if target_spec.acceptance_criteria:
+        criterion_id = responsibility.acceptance_criterion_id
+        if criterion_id is None:
+            return (
+                f"Slice routing for {finding_id} does not name an acceptance "
+                f"condition of target Slice {target}",
+            )
+        known_ids = {
+            criterion.criterion_id for criterion in target_spec.acceptance_criteria
+        }
+        if criterion_id not in known_ids:
+            return (
+                f"Slice routing for {finding_id} names unresolved acceptance "
+                f"condition {criterion_id} in target Slice {target}",
+            )
     return ()
+
+
+def _slice_route_has_record_criteria(
+    responsibility: SliceResponsibility, plan: PlanPayload | None
+) -> bool:
+    if plan is None:
+        return False
+    target = next(
+        (item for item in plan.slices if item.slice_id == responsibility.slice_id),
+        None,
+    )
+    return target is not None and bool(target.acceptance_criteria)
 
 
 def _scope_covers(spec: SliceSpec, path: str) -> bool:

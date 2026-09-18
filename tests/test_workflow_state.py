@@ -5,6 +5,7 @@ from dataclasses import replace
 import pytest
 import workflow_requests
 
+from acceptance_criteria import acceptance_criteria_from_texts
 from artifact_models import technical_text_evidence
 from contracts import CodexStepContract, PlannedSlice, ReadinessMarker
 from native_codex_contract import NativeCodexRequestKind
@@ -996,6 +997,37 @@ def test_completed_plan_commit_binding_is_exact_and_idempotent() -> None:
     assert WorkflowState.from_dict(bound.to_dict()) == bound
     with pytest.raises(WorkflowStateValidationError, match="persisted Slice commit"):
         state.bind_completed_plan_commit(commit_ref="c" * 40)
+
+
+def test_planned_acceptance_criteria_roundtrip_and_legacy_omission() -> None:
+    criteria = acceptance_criteria_from_texts(
+        1, ("First record-bound condition.", "Second record-bound condition.")
+    )
+    state = init_workflow_state(
+        run_id="run-plan-criteria",
+        task_file="/repo/plan.md",
+        branch="feature/plan-criteria",
+        branch_base="a" * 40,
+        first_slice_start_commit="a" * 40,
+        slice_count=1,
+        timestamp="2026-09-18T10:00:00+00:00",
+    ).bind_slice_plan(
+        (PlannedSlice(1, "implementation", ("src/one.py",), criteria),),
+        first_start_commit="a" * 40,
+    )
+
+    document = state.to_dict()
+
+    assert WorkflowState.from_dict(document) == state
+    assert document["planned_slices"][0]["acceptance_criteria"] == [
+        {"criterion_id": item.criterion_id, "text": item.text}
+        for item in criteria
+    ]
+    legacy = replace(
+        state,
+        planned_slices=(PlannedSlice(1, "implementation", ("src/one.py",)),),
+    )
+    assert "acceptance_criteria" not in legacy.to_dict()["planned_slices"][0]
 
 
 def test_final_review_references_committed_slice_and_appends_bounded_correction() -> None:

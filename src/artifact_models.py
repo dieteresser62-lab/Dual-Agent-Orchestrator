@@ -22,6 +22,11 @@ import re
 from functools import lru_cache
 from typing import Any, Callable, ClassVar, Mapping, Sequence, TypeAlias
 
+from acceptance_criteria import (
+    AcceptanceCriterion,
+    acceptance_criteria_from_documents,
+    validate_acceptance_criteria,
+)
 from schema_validation import (
     SchemaDefinitionError,
     SchemaMismatch,
@@ -143,11 +148,16 @@ class SliceSpec:
     slice_id: str
     summary: str
     paths: tuple[str, ...]
+    acceptance_criteria: tuple[AcceptanceCriterion, ...] = ()
 
     def __post_init__(self) -> None:
         _require_identifier(self.slice_id, "slice_id")
         _require_text(self.summary, "summary")
         _require_paths(self.paths)
+        try:
+            validate_acceptance_criteria(self.slice_id, self.acceptance_criteria)
+        except ValueError as exc:
+            raise ArtifactValidationError(str(exc)) from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -2005,6 +2015,12 @@ ArtifactPayload: TypeAlias = (
 def artifact_payload_document(payload: ArtifactPayload) -> dict[str, Any]:
     """Serialize one payload while preserving its optional-field wire shape."""
     raw = asdict(payload)
+    if isinstance(payload, PlanPayload):
+        raw["slices"] = [_slice_spec_document(item) for item in payload.slices]
+    if isinstance(payload, AgentResultPayload):
+        raw["slice_plan"] = [
+            _slice_spec_document(item) for item in payload.slice_plan
+        ]
     if isinstance(payload, ReviewPayload):
         if payload.review_evidence is None:
             raw.pop("review_evidence", None)
@@ -2044,6 +2060,20 @@ def artifact_payload_document(payload: ArtifactPayload) -> dict[str, Any]:
     if isinstance(payload, GateDecisionPayload) and payload.invocation_id is None:
         raw.pop("invocation_id", None)
     return _json_value(raw)
+
+
+def _slice_spec_document(spec: SliceSpec) -> dict[str, Any]:
+    document: dict[str, Any] = {
+        "slice_id": spec.slice_id,
+        "summary": spec.summary,
+        "paths": list(spec.paths),
+    }
+    if spec.acceptance_criteria:
+        document["acceptance_criteria"] = [
+            {"criterion_id": item.criterion_id, "text": item.text}
+            for item in spec.acceptance_criteria
+        ]
+    return document
 
 
 @dataclass(frozen=True, slots=True)
@@ -2191,6 +2221,18 @@ def validate_artifact_document(document: Mapping[str, Any]) -> None:
         ) from None
 
 
+def _slice_spec_from_dict(data: Mapping[str, Any]) -> SliceSpec:
+    try:
+        criteria = acceptance_criteria_from_documents(
+            data["slice_id"], data.get("acceptance_criteria", ())
+        )
+        return SliceSpec(
+            data["slice_id"], data["summary"], tuple(data["paths"]), criteria
+        )
+    except ValueError as exc:
+        raise ArtifactValidationError(str(exc)) from exc
+
+
 _PAYLOAD_READERS: dict[
     RecordType, Callable[[Mapping[str, Any]], ArtifactPayload]
 ] = {
@@ -2232,10 +2274,7 @@ _PAYLOAD_READERS: dict[
     RecordType.PLAN: lambda data: PlanPayload(
         data["work_plan_path"],
         data["approved_plan_commit"],
-        tuple(
-            SliceSpec(item["slice_id"], item["summary"], tuple(item["paths"]))
-            for item in data["slices"]
-        ),
+        tuple(_slice_spec_from_dict(item) for item in data["slices"]),
     ),
     RecordType.WORK_UNIT: lambda data: WorkUnitPayload(
             data["slice_id"], data["round_number"], tuple(data["paths"]),
@@ -2253,10 +2292,7 @@ _PAYLOAD_READERS: dict[
             data["transport_schema"],
             data["request_id"],
             data["response_sha256"],
-            tuple(
-                SliceSpec(item["slice_id"], item["summary"], tuple(item["paths"]))
-                for item in data["slice_plan"]
-            ),
+            tuple(_slice_spec_from_dict(item) for item in data["slice_plan"]),
         ),
     RecordType.DIAGNOSTIC: lambda data: DiagnosticPayload(
         Role(data["role"]), data["work_unit_id"], data["attempt"],

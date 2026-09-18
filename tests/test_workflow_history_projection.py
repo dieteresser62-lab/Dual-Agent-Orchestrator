@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 import artifact_replay as artifact_replay_module
+from acceptance_criteria import acceptance_criteria_from_texts
 from artifact_bridge import ArtifactBridge
 from artifact_resume import (
     ArtifactResumeError,
@@ -122,6 +123,7 @@ STATE_PROJECTION_HELPERS = (
     "_project_work_unit_open_findings",
     "_project_work_unit_document",
     "_project_work_unit_documents",
+    "_slice_acceptance_projection",
     "_assemble_workflow_state_document",
 )
 STATE_PROJECTION_SHARED_BOUNDARIES = (
@@ -1174,6 +1176,9 @@ def test_state_projection_carries_current_responsibility_separately_from_origin(
 ) -> None:
     bridge = _state_projection_bridge(tmp_path, "typed-responsibility")
     _journey(bridge)
+    criteria = acceptance_criteria_from_texts(
+        "3", ("The third Slice owns the routed record fact.",)
+    )
     bridge.append(
         PlanPayload(
             "docs/internal/plan.md",
@@ -1181,7 +1186,7 @@ def test_state_projection_carries_current_responsibility_separately_from_origin(
             (
                 SliceSpec("1", "First", ("src/one.py",)),
                 SliceSpec("2", "Second", ("src/two.py",)),
-                SliceSpec("3", "Third", ("src/three.py",)),
+                SliceSpec("3", "Third", ("src/three.py",), criteria),
             ),
         ),
         logical_id="approved-plan",
@@ -1199,7 +1204,9 @@ def test_state_projection_carries_current_responsibility_separately_from_origin(
             "open",
             "Claude routes the still-open finding to the bound follow-up Slice",
             "4",
-            responsibility=SliceResponsibility(RUN_ID, "9" * 40, "3"),
+            responsibility=SliceResponsibility(
+                RUN_ID, "9" * 40, "3", criteria[0].criterion_id
+            ),
         ),
         logical_id="finding-C-01",
         idempotency_key="finding:C-01:routed",
@@ -1218,8 +1225,12 @@ def test_state_projection_carries_current_responsibility_separately_from_origin(
             "target_run_id": RUN_ID,
             "approved_plan_commit": "9" * 40,
             "slice_id": "3",
+            "acceptance_criterion_id": criteria[0].criterion_id,
         }
     }
+    assert projected.to_document()["planned_slices"][2][
+        "acceptance_criteria"
+    ] == [{"criterion_id": criteria[0].criterion_id, "text": criteria[0].text}]
     assert WorkflowState.from_dict(projected.to_document()) == projected.state
 
 

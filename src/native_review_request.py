@@ -620,6 +620,7 @@ def _review_context_request_projection(
         review_contract["implementer_responsibility_proposals"] = context_binding[
             "implementer_responsibility_proposals"
         ]
+        review_contract["planned_slices"] = context_binding["planned_slices"]
     return {
         "reviewer": "claude",
         "run_id": context.run_id,
@@ -664,6 +665,43 @@ def _enable_native_review_request_finding_decision_schema(
     schema: dict[str, Any],
 ) -> None:
     definitions = schema["$defs"]
+    definitions["acceptance_criterion"] = {
+        "type": "object",
+        "properties": {
+            "criterion_id": {
+                "type": "string",
+                "pattern": "^ac-[0-9a-f]{64}$",
+            },
+            "text": {"$ref": "#/$defs/safe_text"},
+        },
+        "required": ["criterion_id", "text"],
+        "additionalProperties": False,
+    }
+    definitions["planned_slice"] = {
+        "type": "object",
+        "properties": {
+            "slice_id": {"type": "integer", "minimum": 1},
+            "summary": {"$ref": "#/$defs/safe_text"},
+            "scope_paths": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 1000,
+                "items": {"$ref": "#/$defs/safe_path"},
+            },
+            "acceptance_criteria": {
+                "type": "array",
+                "maxItems": 256,
+                "items": {"$ref": "#/$defs/acceptance_criterion"},
+            },
+        },
+        "required": [
+            "slice_id",
+            "summary",
+            "scope_paths",
+            "acceptance_criteria",
+        ],
+        "additionalProperties": False,
+    }
     definitions["finding_responsibility"] = responsibility_json_schema()
     definitions["responsibility_proposal"] = {
         "type": "object",
@@ -685,6 +723,12 @@ def _enable_native_review_request_finding_decision_schema(
         "items": {"$ref": "#/$defs/responsibility_proposal"},
     }
     contract["required"].append("implementer_responsibility_proposals")
+    contract["properties"]["planned_slices"] = {
+        "type": "array",
+        "maxItems": 64,
+        "items": {"$ref": "#/$defs/planned_slice"},
+    }
+    contract["required"].append("planned_slices")
 
 
 def _validate_manifest_semantic_binding(item: Mapping[str, Any], content: str) -> None:

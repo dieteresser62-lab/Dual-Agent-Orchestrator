@@ -9,6 +9,7 @@ import pytest
 import native_codex_contract
 import native_finding_decisions
 
+from acceptance_criteria import acceptance_criterion_id
 from contracts import (
     AgentRole,
     CodexStepContract,
@@ -959,6 +960,64 @@ def test_plan_revision_accepts_sparse_finding_dispositions() -> None:
     ]
     result = parse_bound_native_codex_contract_result(document, bound)
     assert result.findings[0].responses[-1].decision is FindingResponseDecision.ACCEPTED
+
+
+def test_enabled_plan_contract_carries_ordered_acceptance_criteria_losslessly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        native_finding_decisions,
+        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
+        True,
+    )
+    bound = _bound(NativeCodexRequestKind.PLAN)
+    texts = ["An unrelated reviewer-owned condition.", "Replay remains stable."]
+    document = {
+        **_base(bound, "plan_result"),
+        "ready": True,
+        "slice_plan": [
+            {
+                "slice_id": 1,
+                "summary": "Build the record fact.",
+                "scope_paths": ["src/record.py"],
+                "acceptance_criteria": texts,
+            }
+        ],
+        "finding_dispositions": [],
+    }
+
+    response = parse_native_codex_response(document, bound)
+
+    assert tuple(
+        criterion.text for criterion in response.slice_plan[0].acceptance_criteria
+    ) == tuple(texts)
+    assert tuple(
+        criterion.criterion_id
+        for criterion in response.slice_plan[0].acceptance_criteria
+    ) == tuple(acceptance_criterion_id(1, text) for text in texts)
+
+
+def test_dormant_plan_contract_rejects_acceptance_criteria_field() -> None:
+    bound = _bound(NativeCodexRequestKind.PLAN)
+    document = {
+        **_base(bound, "plan_result"),
+        "ready": True,
+        "slice_plan": [
+            {
+                "slice_id": 1,
+                "summary": "Dormant plan.",
+                "scope_paths": ["src/record.py"],
+                "acceptance_criteria": ["Must stay dormant."],
+            }
+        ],
+        "finding_dispositions": [],
+    }
+
+    with pytest.raises(NativeCodexContractError) as raised:
+        parse_native_codex_response(document, bound)
+
+    assert raised.value.code is NativeCodexErrorCode.DORMANT_FINDING_DECISION_FIELD
+    assert "acceptance_criteria" in raised.value.detail
 
 
 def test_implementation_result_applies_each_supplied_finding_disposition() -> None:

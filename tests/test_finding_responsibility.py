@@ -4,6 +4,7 @@ from dataclasses import FrozenInstanceError, fields
 
 import pytest
 
+from acceptance_criteria import acceptance_criterion_id
 from artifact_models import (
     ArtifactRecord,
     ArtifactValidationError,
@@ -185,6 +186,18 @@ def test_legacy_opening_wire_shape_omits_optional_responsibility() -> None:
     assert "responsibility" not in _record(1, "finding-C-01", payload).to_dict()[
         "payload"
     ]
+
+
+def test_slice_responsibility_roundtrip_preserves_one_criterion_binding() -> None:
+    criterion_id = acceptance_criterion_id("7", "Reviewer-owned condition")
+    responsibility = SliceResponsibility(
+        RUN_ID, PLAN_COMMIT, "7", criterion_id
+    )
+
+    document = responsibility_document(responsibility)
+
+    assert document["acceptance_criterion_id"] == criterion_id
+    assert parse_responsibility(document) == responsibility
 
 
 def test_responsibility_bearing_opening_requires_complete_context_metadata() -> None:

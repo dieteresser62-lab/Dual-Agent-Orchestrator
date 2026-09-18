@@ -139,6 +139,19 @@ def _current_mapping() -> dict[str, str]:
 
 
 def _normalized_payload_fields(payload: object) -> object:
+    if isinstance(
+        payload, (artifact_models.PlanPayload, artifact_models.AgentResultPayload)
+    ):
+        raw = asdict(payload)
+        slices = raw[
+            "slices"
+            if isinstance(payload, artifact_models.PlanPayload)
+            else "slice_plan"
+        ]
+        for planned_slice in slices:
+            if not planned_slice["acceptance_criteria"]:
+                planned_slice.pop("acceptance_criteria")
+        return artifact_models._json_value(raw)  # type: ignore[arg-type]
     if isinstance(payload, artifact_models.FindingTransitionPayload):
         raw = asdict(payload)
         if payload.responsibility is None:

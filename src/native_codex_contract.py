@@ -9,6 +9,7 @@ import json
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, TypeAlias
 
+from acceptance_criteria import acceptance_criteria_from_texts
 from contracts import (
     AgentRole,
     CodexContractResult,
@@ -445,6 +446,9 @@ def parse_native_codex_response(
                     slice_id=item["slice_id"],
                     summary=item["summary"],
                     scope_paths=tuple(item["scope_paths"]),
+                    acceptance_criteria=acceptance_criteria_from_texts(
+                        item["slice_id"], item.get("acceptance_criteria", ())
+                    ),
                 )
                 for item in document["slice_plan"]
             )
@@ -647,6 +651,19 @@ def _parse_responsibility_proposal(
 
 def _enable_native_finding_decision_schema(schema: dict[str, Any]) -> None:
     definitions = schema["$defs"]
+    planned_slice = definitions["planned_slice"]
+    planned_slice["properties"]["acceptance_criteria"] = {
+        "type": "array",
+        "description": (
+            "Ordered, non-empty acceptance conditions for this Slice; exact "
+            "duplicate texts are forbidden."
+        ),
+        "minItems": 1,
+        "maxItems": 256,
+        "uniqueItems": True,
+        "items": {"$ref": "#/$defs/safe_text"},
+    }
+    planned_slice["required"].append("acceptance_criteria")
     definitions["finding_responsibility"] = responsibility_json_schema()
     disposition = definitions["finding_disposition"]
     disposition["properties"]["responsibility_proposal"] = {
@@ -661,6 +678,15 @@ def _enable_native_finding_decision_schema(schema: dict[str, Any]) -> None:
 def _reject_dormant_native_fields(document: Mapping[str, Any]) -> None:
     if native_finding_decisions.native_finding_decisions_enabled():
         return
+    slice_plan = document.get("slice_plan")
+    if isinstance(slice_plan, list) and any(
+        isinstance(item, Mapping) and "acceptance_criteria" in item
+        for item in slice_plan
+    ):
+        raise NativeCodexContractError(  # allowlist:provider -- contract boundary
+            NativeCodexErrorCode.DORMANT_FINDING_DECISION_FIELD,  # allowlist:provider -- error vocabulary
+            "acceptance_criteria is disabled until the joint 67/68 cutover",
+        )
     dispositions = document.get("finding_dispositions")
     if not isinstance(dispositions, list):
         return

@@ -7,6 +7,7 @@ from enum import Enum
 from pathlib import PurePosixPath
 from typing import Any, Mapping
 
+from acceptance_criteria import acceptance_criteria_from_documents
 from contracts import PlannedSlice
 from finding_order import finding_id_sort_key
 from finding_responsibility import (
@@ -2663,6 +2664,19 @@ class WorkflowState:
                     "slice_id": item.slice_id,
                     "summary": item.summary,
                     "scope_paths": list(item.scope_paths),
+                    **(
+                        {
+                            "acceptance_criteria": [
+                                {
+                                    "criterion_id": criterion.criterion_id,
+                                    "text": criterion.text,
+                                }
+                                for criterion in item.acceptance_criteria
+                            ]
+                        }
+                        if item.acceptance_criteria
+                        else {}
+                    ),
                 }
                 for item in self.planned_slices
             ],
@@ -2768,33 +2782,7 @@ class WorkflowState:
                     frozenset(handoff_protocol_shape_keys),
                 }:
                     _require_exact_keys(raw, handoff_keys, "workflow state")
-            raw_plan = _list(raw["planned_slices"], "planned_slices")
-            planned: list[PlannedSlice] = []
-            for index, item in enumerate(raw_plan):
-                plan_item = _mapping(item, f"planned_slices[{index}]")
-                _require_exact_keys(
-                    plan_item,
-                    {"slice_id", "summary", "scope_paths"},
-                    f"planned_slices[{index}]",
-                )
-                try:
-                    planned.append(
-                        PlannedSlice(
-                            slice_id=_positive_int(
-                                plan_item["slice_id"], f"planned_slices[{index}].slice_id"
-                            ),
-                            summary=_string(
-                                plan_item["summary"], f"planned_slices[{index}].summary"
-                            ),
-                            scope_paths=_string_tuple(
-                                plan_item["scope_paths"],
-                                f"planned_slices[{index}].scope_paths",
-                            ),
-                        )
-                    )
-                except ValueError as exc:
-                    raise WorkflowStateValidationError(str(exc)) from exc
-            planned_slices = tuple(planned)
+            planned_slices = _parse_planned_slices(raw["planned_slices"])
             history_raw = raw["runtime_history"]
             runtime_history = (
                 None if history_raw is None else _mapping(history_raw, "runtime_history")
@@ -2889,6 +2877,42 @@ class WorkflowState:
             bootstrap_checks=bootstrap_checks,
             finding_responsibilities=finding_responsibilities,
         )
+
+
+def _parse_planned_slices(raw: object) -> tuple[PlannedSlice, ...]:
+    planned: list[PlannedSlice] = []
+    for index, item in enumerate(_list(raw, "planned_slices")):
+        label = f"planned_slices[{index}]"
+        plan_item = _mapping(item, label)
+        base_keys = {"slice_id", "summary", "scope_paths"}
+        if set(plan_item) not in {
+            frozenset(base_keys),
+            frozenset((*base_keys, "acceptance_criteria")),
+        }:
+            raise WorkflowStateValidationError(
+                f"{label} has unknown or missing fields"
+            )
+        try:
+            slice_id = _positive_int(plan_item["slice_id"], f"{label}.slice_id")
+            planned.append(
+                PlannedSlice(
+                    slice_id=slice_id,
+                    summary=_string(plan_item["summary"], f"{label}.summary"),
+                    scope_paths=_string_tuple(
+                        plan_item["scope_paths"], f"{label}.scope_paths"
+                    ),
+                    acceptance_criteria=acceptance_criteria_from_documents(
+                        slice_id,
+                        _list(
+                            plan_item.get("acceptance_criteria", []),
+                            f"{label}.acceptance_criteria",
+                        ),
+                    ),
+                )
+            )
+        except ValueError as exc:
+            raise WorkflowStateValidationError(str(exc)) from exc
+    return tuple(planned)
 
 
 def init_workflow_state(

@@ -3,6 +3,10 @@ from __future__ import annotations
 import pytest
 import native_finding_decisions
 
+from acceptance_criteria import (
+    acceptance_criteria_from_texts,
+    acceptance_criterion_id,
+)
 from artifact_models import (
     ArtifactRecord,
     BindingPayload,
@@ -276,14 +280,21 @@ def test_recorded_fixed_closure_clears_local_responsibility_and_satisfies_exit()
 
 
 def test_route_to_completed_later_plan_slice_violates_condition_4() -> None:
+    criterion_text = "Reviewer confirms the later Slice owns this work."
+    criterion_id = acceptance_criterion_id("7", criterion_text)
     records = _slice_with_opening(
-        responsibility=SliceResponsibility(RUN_ID, PLAN_COMMIT, "6")
+        responsibility=SliceResponsibility(RUN_ID, PLAN_COMMIT, "6"),
+        target_acceptance_texts=(criterion_text,),
     )
     records.extend(
         (
             _record(
                 len(records) + 1,
-                _route("C-01", SliceResponsibility(RUN_ID, PLAN_COMMIT, "7"), "6"),
+                _route(
+                    "C-01",
+                    SliceResponsibility(RUN_ID, PLAN_COMMIT, "7", criterion_id),
+                    "6",
+                ),
                 records,
             ),
             _record(
@@ -319,6 +330,75 @@ def test_scope_valid_later_slice_route_is_explicitly_indeterminate() -> None:
     assert CONDITION_4_ACCEPTANCE_UNDECIDABLE in result.condition(4).reasons[0]
     assert result.status is SliceExitStatus.INDETERMINATE
     assert not result.commit_eligible
+
+
+def test_unknown_target_acceptance_condition_violates_condition_4() -> None:
+    records = _slice_with_opening(
+        responsibility=SliceResponsibility(RUN_ID, PLAN_COMMIT, "6"),
+        target_acceptance_texts=("The recorded target condition exists.",),
+    )
+    unknown_id = acceptance_criterion_id("7", "A condition absent from the plan.")
+    records.append(
+        _record(
+            len(records) + 1,
+            _route(
+                "C-01",
+                SliceResponsibility(RUN_ID, PLAN_COMMIT, "7", unknown_id),
+                "6",
+            ),
+            records,
+        )
+    )
+
+    result = evaluate_slice_exit(records, run_id=RUN_ID, slice_id="6")
+
+    assert result.condition(4).status is SliceExitStatus.VIOLATED
+    assert "unresolved acceptance condition" in result.condition(4).reasons[0]
+
+
+def test_missing_binding_with_recorded_target_criteria_violates_condition_4() -> None:
+    records = _slice_with_opening(
+        responsibility=SliceResponsibility(RUN_ID, PLAN_COMMIT, "6"),
+        target_acceptance_texts=("The recorded target condition exists.",),
+    )
+    records.append(
+        _record(
+            len(records) + 1,
+            _route("C-01", SliceResponsibility(RUN_ID, PLAN_COMMIT, "7"), "6"),
+            records,
+        )
+    )
+
+    result = evaluate_slice_exit(records, run_id=RUN_ID, slice_id="6")
+
+    assert result.condition(4).status is SliceExitStatus.VIOLATED
+    assert "does not name an acceptance condition" in result.condition(4).reasons[0]
+
+
+def test_resolvable_condition_satisfies_condition_4_without_text_matching() -> None:
+    criterion_text = "Completely unrelated words chosen by the reviewer."
+    criterion_id = acceptance_criterion_id("7", criterion_text)
+    records = _slice_with_opening(
+        responsibility=SliceResponsibility(RUN_ID, PLAN_COMMIT, "6"),
+        target_acceptance_texts=(criterion_text,),
+    )
+    records.append(
+        _record(
+            len(records) + 1,
+            _route(
+                "C-01",
+                SliceResponsibility(RUN_ID, PLAN_COMMIT, "7", criterion_id),
+                "6",
+            ),
+            records,
+        )
+    )
+
+    result = evaluate_slice_exit(records, run_id=RUN_ID, slice_id="6")
+
+    assert result.condition(4).status is SliceExitStatus.SATISFIED
+    assert result.status is SliceExitStatus.SATISFIED
+    assert result.commit_eligible
 
 
 def test_projection_or_markdown_only_decision_cannot_satisfy_condition_6() -> None:
@@ -364,7 +444,9 @@ def _finding() -> FindingRecord:
     )
 
 
-def _base_records() -> list[ArtifactRecord]:
+def _base_records(
+    *, target_acceptance_texts: tuple[str, ...] = ()
+) -> list[ArtifactRecord]:
     records: list[ArtifactRecord] = []
     records.append(
         _record(
@@ -375,7 +457,14 @@ def _base_records() -> list[ArtifactRecord]:
                 (
                     SliceSpec("3", "Origin", ("src/origin.py",)),
                     SliceSpec("6", "Current", ("src/fix.py",)),
-                    SliceSpec("7", "Follow-up", ("src/fix.py",)),
+                    SliceSpec(
+                        "7",
+                        "Follow-up",
+                        ("src/fix.py",),
+                        acceptance_criteria_from_texts(
+                            "7", target_acceptance_texts
+                        ),
+                    ),
                 ),
             ),
             records,
@@ -388,8 +477,9 @@ def _slice_with_opening(
     *,
     severity: FindingSeverity = FindingSeverity.OBSERVATION,
     responsibility,
+    target_acceptance_texts: tuple[str, ...] = (),
 ) -> list[ArtifactRecord]:
-    records = _base_records()
+    records = _base_records(target_acceptance_texts=target_acceptance_texts)
     records.append(
         _record(
             len(records) + 1,

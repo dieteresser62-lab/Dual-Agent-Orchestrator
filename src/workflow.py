@@ -2165,6 +2165,7 @@ class WorkflowEngine:
                                 }
                             )
                         ),
+                        acceptance_criteria=planned.acceptance_criteria,
                     )
                     for planned in result.slice_plan
                 )

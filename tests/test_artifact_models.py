@@ -6,6 +6,7 @@ import json
 import artifact_models
 import pytest
 
+from acceptance_criteria import acceptance_criteria_from_texts
 from artifact_models import (
     AgentResultPayload,
     ArtifactRecord,
@@ -95,6 +96,41 @@ def test_run_profile_record_fields_are_role_keyed() -> None:
         "reducer_version": "structured-v2-schema-2-state-v3-v1",
     }
     assert not {"codex", "claude"} & set(asdict(profile))
+
+
+def test_plan_record_roundtrip_preserves_ordered_acceptance_criteria() -> None:
+    criteria = acceptance_criteria_from_texts(
+        "1", ("First exact condition.", "Second exact condition.")
+    )
+    record = _record(
+        PlanPayload(
+            "docs/internal/plan.md",
+            "b" * 40,
+            (SliceSpec("1", "models", ("src/a.py",), criteria),),
+        )
+    )
+
+    restored = ArtifactRecord.from_dict(record.to_dict())
+
+    assert restored == record
+    assert restored.payload.slices[0].acceptance_criteria == criteria  # type: ignore[attr-defined]
+    assert record.to_dict()["payload"]["slices"][0]["acceptance_criteria"] == [
+        {"criterion_id": item.criterion_id, "text": item.text}
+        for item in criteria
+    ]
+
+
+def test_legacy_plan_record_omits_empty_acceptance_criteria() -> None:
+    record = _record(
+        PlanPayload(
+            "docs/internal/plan.md",
+            "b" * 40,
+            (SliceSpec("1", "models", ("src/a.py",)),),
+        )
+    )
+
+    assert "acceptance_criteria" not in record.to_dict()["payload"]["slices"][0]
+    assert ArtifactRecord.from_dict(record.to_dict()) == record
 
 
 def test_run_profile_without_orchestrator_code_version_is_rejected() -> None:

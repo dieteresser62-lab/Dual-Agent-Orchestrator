@@ -698,6 +698,7 @@ def _attach_managed_audit_paths(state: WorkflowState) -> WorkflowState:
                     }
                 )
             ),
+            acceptance_criteria=item.acceptance_criteria,
         )
         for item in state.planned_slices
     )

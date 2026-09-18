@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 import native_finding_decisions
 
+from acceptance_criteria import acceptance_criteria_from_texts
 from contracts import (
     AgentRole,
     ApprovalMarker,
@@ -17,6 +18,7 @@ from contracts import (
     FindingResponse,
     FindingResponseDecision,
     FindingStatus,
+    PlannedSlice,
     ValidationAttestation,
     ValidationCommandSpec,
     ValidationRecord,
@@ -205,6 +207,37 @@ def test_enabled_review_request_exposes_codex_proposal_as_non_authority(
             "rationale": "Codex proposes that the later Slice owns this work.",
         }
     ]
+
+
+def test_enabled_review_request_binds_record_plan_criteria_structurally(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        native_finding_decisions,
+        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
+        True,
+    )
+    criteria = acceptance_criteria_from_texts(
+        2, ("Reviewer decides whether this condition adopts the finding.",)
+    )
+    context = replace(
+        _context(),
+        planned_slices=(
+            PlannedSlice(1, "Current", ("src/current.py",)),
+            PlannedSlice(2, "Later", ("src/later.py",), criteria),
+        ),
+    )
+
+    bundle = build_native_review_request(replace(_spec(), context=context))
+
+    assert bundle.document["review_contract"]["planned_slices"][1] == {
+        "slice_id": 2,
+        "summary": "Later",
+        "scope_paths": ["src/later.py"],
+        "acceptance_criteria": [
+            {"criterion_id": criteria[0].criterion_id, "text": criteria[0].text}
+        ],
+    }
 
 
 def test_plan_disposition_overflow_stops_before_request_construction(

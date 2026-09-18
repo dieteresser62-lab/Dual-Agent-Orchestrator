@@ -63,6 +63,11 @@ from workflow_state import (
 FINAL_REVIEW_DISPOSITION_BATCH_SIZE = MAX_NATIVE_REVIEW_DISPOSITIONS
 FINAL_REVIEW_ROUND_SAFETY_LIMIT = 256
 FULL_BRANCH_DIFF_EVIDENCE_CEILING_CHARS = 1_000_000
+_NATIVE_REVIEW_KIND_BY_APPROVAL_MARKER = {
+    ApprovalMarker.PLAN: NativeReviewKind.PLAN,
+    ApprovalMarker.SLICE: NativeReviewKind.SLICE,
+    ApprovalMarker.FINAL: NativeReviewKind.FINAL,
+}
 FINDING_SIGNATURE_REVIEW_CRITERION = (
     "review_contract.known_open_finding_signatures binds every known open "
     "finding identifier to SHA-256 over canonical JSON containing its "
@@ -418,11 +423,7 @@ def native_review_request(
     correction_findings: tuple[FindingRecord, ...] | None = None,
 ) -> NativeReviewRequestBundle:
     """Build the native request only from typed local workflow values."""
-    review_kind = {
-        ApprovalMarker.PLAN: NativeReviewKind.PLAN,
-        ApprovalMarker.SLICE: NativeReviewKind.SLICE,
-        ApprovalMarker.FINAL: NativeReviewKind.FINAL,
-    }[contract.approval_marker]
+    review_kind = _NATIVE_REVIEW_KIND_BY_APPROVAL_MARKER[contract.approval_marker]
     plan_artifact_path = (
         context.work_plan_path
         if review_kind is NativeReviewKind.PLAN and context.plan_only
@@ -483,6 +484,7 @@ def native_review_request(
             if review_kind is NativeReviewKind.FINAL
             else None
         ),
+        planned_slices=state.planned_slices,
     )
     workflow_context = (
         context.render_distilled_context(

@@ -170,7 +170,12 @@ def plan_payload(
         work_plan_path=work_plan_path,
         approved_plan_commit=approved_plan_commit,
         slices=tuple(
-            SliceSpec(str(item.slice_id), item.summary, item.scope_paths)
+            SliceSpec(
+                str(item.slice_id),
+                item.summary,
+                item.scope_paths,
+                item.acceptance_criteria,
+            )
             for item in slices
         ),
     )
@@ -195,7 +200,12 @@ def agent_result_payload(
         request_id=request_id,
         response_sha256=response_sha256,
         slice_plan=tuple(
-            SliceSpec(str(item.slice_id), item.summary, item.scope_paths)
+            SliceSpec(
+                str(item.slice_id),
+                item.summary,
+                item.scope_paths,
+                item.acceptance_criteria,
+            )
             for item in result.slice_plan
         ),
     )
