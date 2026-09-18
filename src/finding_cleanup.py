@@ -6,7 +6,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
 
-from artifact_models import ArtifactRecord, FindingTransitionPayload
+from artifact_models import (
+    ArtifactRecord,
+    FindingTransitionPayload,
+    PlanPayload,
+    WorkUnitPayload,
+    WorkflowTransitionPayload,
+)
 from contracts import FindingRecord
 from finding_order import sorted_finding_ids
 from finding_reducer import (
@@ -15,6 +21,10 @@ from finding_reducer import (
     project_request_subset,
 )
 from finding_signature import authorized_repository_paths
+from finding_responsibility import (
+    BranchPlanningResponsibility,
+    SliceResponsibility,
+)
 from workflow_state import WorkflowState, WorkUnitKind, WorkUnitRecord
 
 
@@ -32,6 +42,10 @@ class SliceFindingBalance:
     slice_id: int
     opened: int
     closed: int
+    locally_fixed: int = 0
+    rejected: int = 0
+    routed_to_later_slice: int = 0
+    routed_to_branch_planning: int = 0
 
     @property
     def net(self) -> int:
@@ -68,20 +82,17 @@ def is_finding_cleanup_work_unit(
 
 
 def derive_slice_finding_balances(
-    records: Iterable[ArtifactRecord], state: WorkflowState
+    records: Iterable[ArtifactRecord],
 ) -> tuple[SliceFindingBalance, ...]:
-    """Derive opened/closed counts for planned Slice work units from records."""
+    """Derive the B55/E6 balance solely from typed record-chain facts."""
 
-    slice_by_work_unit = {
-        str(unit.work_unit_id): unit.slice_id
-        for unit in state.work_units
-        if unit.kind is WorkUnitKind.SLICE
-        and unit.slice_id <= len(state.planned_slices or state.slices)
-    }
+    chain = tuple(records)
+    slice_by_work_unit = _slice_work_units(chain)
     counts: dict[int, list[int]] = {
-        slice_id: [0, 0] for slice_id in sorted(set(slice_by_work_unit.values()))
+        slice_id: [0, 0, 0, 0, 0, 0]
+        for slice_id in sorted(set(slice_by_work_unit.values()))
     }
-    for record in records:
+    for record in chain:
         payload = record.payload
         if not isinstance(payload, FindingTransitionPayload):
             continue
@@ -92,10 +103,66 @@ def derive_slice_finding_balances(
             counts[slice_id][0] += 1
         elif is_closed_finding_transition(record):
             counts[slice_id][1] += 1
+            if payload.closure_kind == "fixed":
+                counts[slice_id][2] += 1
+            elif payload.closure_kind == "rejected":
+                counts[slice_id][3] += 1
+        elif payload.action == "routed":
+            if isinstance(payload.responsibility, SliceResponsibility):
+                counts[slice_id][4] += 1
+            elif isinstance(
+                payload.responsibility, BranchPlanningResponsibility
+            ):
+                counts[slice_id][5] += 1
     return tuple(
-        SliceFindingBalance(slice_id, opened, closed)
-        for slice_id, (opened, closed) in sorted(counts.items())
+        SliceFindingBalance(slice_id, *values)
+        for slice_id, values in sorted(counts.items())
     )
+
+
+def _slice_work_units(records: Sequence[ArtifactRecord]) -> dict[str, int]:
+    """Map regular implementation Work Units to numeric planned Slice ids."""
+
+    plan_slice_ids = {
+        spec.slice_id
+        for record in records
+        if isinstance(record.payload, PlanPayload)
+        for spec in record.payload.slices
+    }
+    steps_by_unit: dict[str, set[str]] = {}
+    for record in records:
+        payload = record.payload
+        if (
+            isinstance(payload, WorkflowTransitionPayload)
+            and payload.work_unit_id is not None
+            and payload.step is not None
+        ):
+            steps_by_unit.setdefault(payload.work_unit_id, set()).add(payload.step)
+    excluded_steps = {
+        "codex_plan",  # allowlist:provider -- persisted workflow step
+        "claude_plan_review",  # allowlist:provider -- persisted workflow step
+        "codex_plan_revision",  # allowlist:provider -- persisted workflow step
+        "codex_final_review",  # allowlist:provider -- persisted workflow step
+        "codex_final_correction",  # allowlist:provider -- persisted workflow step
+        "claude_final_review",  # allowlist:provider -- persisted workflow step
+    }
+    result: dict[str, int] = {}
+    for record in records:
+        payload = record.payload
+        if (
+            not isinstance(payload, WorkUnitPayload)
+            or not record.logical_id.startswith("work-unit-")
+            or not payload.slice_id.isdigit()
+        ):
+            continue
+        unit_id = record.logical_id.removeprefix("work-unit-")
+        steps = steps_by_unit.get(unit_id, set())
+        if steps and not (steps - excluded_steps):
+            continue
+        if plan_slice_ids and payload.slice_id not in plan_slice_ids:
+            continue
+        result[unit_id] = int(payload.slice_id)
+    return result
 
 
 def positive_balance_streak(balances: Sequence[SliceFindingBalance]) -> int:

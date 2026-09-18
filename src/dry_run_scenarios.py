@@ -36,6 +36,7 @@ from finding_cleanup import (
     is_finding_cleanup_work_unit,
     plan_finding_cleanup,
 )
+from finding_convergence import SliceConvergenceEvaluation
 from finding_reducer import project_open_set
 from gates import TestChangeEvidence
 from review_packets import ReviewPacket
@@ -916,6 +917,9 @@ class ScriptedWorkflowDriver:
     durable_findings: tuple[FindingRecord, ...] = ()
     active_state: WorkflowState | None = None
     structured_events: list[tuple[str, object]] = field(default_factory=list)
+    convergence_evaluations: list[SliceConvergenceEvaluation] = field(
+        default_factory=list
+    )
     _agent_index: int = 0
     _validation_index: int = 0
     _commit_index: int = 0
@@ -982,6 +986,23 @@ class ScriptedWorkflowDriver:
         if match is None:
             raise DryRunScenarioError("scripted cleanup has no authorized change boundary")
         return match.paths
+
+    def evaluate_slice_finding_convergence(
+        self,
+        state: WorkflowState,
+        *,
+        round_number: int,
+    ) -> SliceConvergenceEvaluation:
+        """Consume an explicitly scripted dormant E5 decision."""
+
+        self.structured_events.append(
+            ("slice-convergence", (state.current_work_unit_id, round_number))
+        )
+        if not self.convergence_evaluations:
+            raise DryRunScenarioError(
+                "scripted Slice convergence has no record-derived evaluation"
+            )
+        return self.convergence_evaluations.pop(0)
 
     def carry_forward_native_findings(
         self, state: WorkflowState, findings: tuple[FindingRecord, ...]

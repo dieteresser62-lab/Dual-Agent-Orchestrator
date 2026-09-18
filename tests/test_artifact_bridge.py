@@ -280,8 +280,17 @@ def test_append_elapsed_cost_does_not_follow_quadratic_full_scan_curve(
     quadratic_control = measure("quadratic-control", control_full_scan=True)
     scale = math.log(lengths[-1] / lengths[0])
     optimized_exponent = math.log(optimized[-1] / optimized[0]) / scale
+    full_scan_cost = tuple(
+        controlled - baseline
+        for baseline, controlled in zip(optimized, quadratic_control, strict=True)
+    )
+    assert all(cost > 0 for cost in full_scan_cost), (
+        "timing control did not add measurable full-scan cost: "
+        f"optimized={dict(zip(lengths, optimized))}, "
+        f"control={dict(zip(lengths, quadratic_control))}"
+    )
     control_exponent = math.log(
-        quadratic_control[-1] / quadratic_control[0]
+        full_scan_cost[-1] / full_scan_cost[0]
     ) / scale
 
     assert optimized_exponent < 1.65, (
@@ -290,7 +299,8 @@ def test_append_elapsed_cost_does_not_follow_quadratic_full_scan_curve(
     )
     assert control_exponent > 1.65, (
         "timing control did not expose the deliberately restored full scan: "
-        f"{dict(zip(lengths, quadratic_control))}, "
+        f"control={dict(zip(lengths, quadratic_control))}, "
+        f"marginal={dict(zip(lengths, full_scan_cost))}, "
         f"exponent={control_exponent:.2f}"
     )
 

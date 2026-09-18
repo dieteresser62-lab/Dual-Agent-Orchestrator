@@ -71,6 +71,10 @@ from finding_cleanup import (
     plan_finding_cleanup,
     positive_balance_streak,
 )
+from finding_convergence import (
+    SliceConvergenceEvaluation,
+    evaluate_slice_convergence,
+)
 from provider_input_budget import ProviderInputMeasurement
 from review_packets import ReviewPacket
 from cli import DEFAULT_AGENTS_FILE, DEFAULT_TASK_FILE
@@ -1138,6 +1142,35 @@ class ProductionWorkflowDriver:
                 f"authoritative finding replay failed: {exc}"
             ) from exc
         return projected
+
+    def evaluate_slice_finding_convergence(
+        self,
+        state: WorkflowState,
+        *,
+        round_number: int,
+    ) -> SliceConvergenceEvaluation:
+        """Evaluate dormant E5 policy against the accepted record prefix."""
+
+        active = self.active_state
+        bridge = self._artifact_bridge
+        if (
+            active is None
+            or bridge is None
+            or active.run_id != state.run_id
+            or active.current_work_unit_id != state.current_work_unit_id
+            or state.current_work_unit.kind is not WorkUnitKind.SLICE
+        ):
+            raise WorkflowExecutionError(
+                "Slice convergence replay lacks its immutable work-unit binding"
+            )
+        return evaluate_slice_convergence(
+            bridge.store.current_chain(),
+            run_id=state.run_id,
+            slice_id=state.current_slice_id,
+            work_unit_id=state.current_work_unit_id,
+            round_number=round_number,
+            approved_plan_commit=state.approved_plan_commit,
+        )
 
     def authoritative_cleanup_scope_paths(
         self, state: WorkflowState
@@ -2476,18 +2509,23 @@ class ProductionWorkflowDriver:
             repository_root=self.root,
             previously_addressed_ids=addressed_ids,
         )
-        balances = derive_slice_finding_balances(chain, state)
+        balances = derive_slice_finding_balances(chain)
         if balances:
             latest = balances[-1]
             logger.info(
                 "Finding balance through Slice %02d: opened=%s closed=%s net=%+d; "
-                "positive-streak=%s; cleanup=%s",
+                "positive-streak=%s; cleanup=%s; locally-fixed=%s rejected=%s "
+                "later-slice=%s branch-planning=%s",
                 latest.slice_id,
                 latest.opened,
                 latest.closed,
                 latest.net,
                 positive_balance_streak(balances),
                 "scheduled" if plan is not None else "not-scheduled",
+                latest.locally_fixed,
+                latest.rejected,
+                latest.routed_to_later_slice,
+                latest.routed_to_branch_planning,
             )
         return plan
 

@@ -10,11 +10,13 @@ from types import SimpleNamespace
 import pytest
 import plan_handoff
 import workflow_requests
+import native_finding_decisions
 
 from agent_adapters import AgentOutputError
 from audit_trail import ReviewAuditEvent
 from artifact_models import InvocationFailurePayload, provider_text_evidence
 from finding_cleanup import is_finding_cleanup_work_unit
+from finding_convergence import SliceConvergenceEvaluation, SliceReviewPhase
 from agent_runtime import (
     AgentInvocationError,
     AgentProcessError,
@@ -464,6 +466,10 @@ class FakeDriver:
     )
     active_state: WorkflowState | None = None
     structured_events: list[tuple[str, object]] = field(default_factory=list)
+    convergence_evaluations: list[SliceConvergenceEvaluation] = field(
+        default_factory=list
+    )
+    convergence_calls: list[tuple[int, int]] = field(default_factory=list)
     snapshot_index: int = -1
 
     def bind_work_unit(self, state: WorkflowState) -> None:
@@ -494,6 +500,17 @@ class FakeDriver:
         if self.snapshots:
             return self.snapshots[min(self.snapshot_index + 1, len(self.snapshots) - 1)].paths
         return state.current_slice.scope_paths
+
+    def evaluate_slice_finding_convergence(
+        self,
+        state: WorkflowState,
+        *,
+        round_number: int,
+    ) -> SliceConvergenceEvaluation:
+        self.convergence_calls.append((state.current_work_unit_id, round_number))
+        if not self.convergence_evaluations:
+            raise AssertionError("unexpected Slice convergence evaluation")
+        return self.convergence_evaluations.pop(0)
 
     def carry_forward_native_findings(
         self,
@@ -1030,6 +1047,128 @@ def _denied_review_result(
         evidence=None,
         findings=findings,
         anchors=(),
+    )
+
+
+def test_cutover_off_keeps_b112_and_does_not_consult_convergence_measure() -> None:
+    assert native_finding_decisions.JOINT_67_68_NATIVE_CONTRACT_CUTOVER is False
+    existing = FindingRecord(
+        "C-01",
+        FindingClass.BLOCKER,
+        FindingStatus.OPEN,
+        "Existing local blocker",
+        "Close the existing blocker.",
+        FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
+    newly_opened = FindingRecord(
+        "C-02",
+        FindingClass.BLOCKER,
+        FindingStatus.OPEN,
+        "Newly discovered blocker",
+        "Close the newly discovered blocker.",
+        FindingOrigin("01", 2, AgentRole.CLAUDE),
+    )
+    state = _second_slice_review_state(existing.finding_id)
+    driver = FakeDriver(
+        snapshots=[],
+        codex_outputs=[],
+        reviewer_outputs=[],
+        convergence_evaluations=[_negative_convergence()],
+    )
+
+    next_state, _history = WorkflowEngine(driver)._apply_review_result(
+        state=state,
+        context=_context(),
+        history=WorkflowHistory(state.current_work_unit_id, findings=(existing,)),
+        reviewer=AgentRole.CLAUDE,
+        result=_denied_review_result((existing, newly_opened)),
+        fingerprint="d" * 64,
+        round_number=2,
+        is_plan_review=False,
+        is_final_review=False,
+        finding_ledger=(existing,),
+    )
+
+    assert driver.convergence_calls == []
+    assert next_state.current_work_unit.status is WorkUnitStatus.IN_PROGRESS
+    assert next_state.current_step is WorkflowStep.CODEX_CORRECTION
+
+
+def test_cutover_convergence_stall_ends_gate_free_without_slice_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        native_finding_decisions,
+        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
+        True,
+    )
+    finding = FindingRecord(
+        "C-01",
+        FindingClass.BLOCKER,
+        FindingStatus.OPEN,
+        "Still-open local blocker",
+        "Close the blocker.",
+        FindingOrigin("01", 1, AgentRole.CLAUDE),
+    )
+    state = _second_slice_review_state(finding.finding_id)
+    driver = FakeDriver(
+        snapshots=[],
+        codex_outputs=[],
+        reviewer_outputs=[],
+        convergence_evaluations=[_negative_convergence()],
+    )
+
+    next_state, history = WorkflowEngine(driver)._apply_review_result(
+        state=state,
+        context=_context(),
+        history=WorkflowHistory(state.current_work_unit_id, findings=(finding,)),
+        reviewer=AgentRole.CLAUDE,
+        result=_denied_review_result((finding,)),
+        fingerprint="d" * 64,
+        round_number=2,
+        is_plan_review=False,
+        is_final_review=False,
+        finding_ledger=(finding,),
+    )
+    run_result = WorkflowRunResult(next_state, history)
+
+    assert driver.convergence_calls == [(state.current_work_unit_id, 2)]
+    assert next_state.current_work_unit.status is WorkUnitStatus.COMPLETED
+    assert next_state.current_step is WorkflowStep.COMPLETED
+    assert next_state.current_work_unit.gate.status is GateStatus.CLEAR
+    assert driver.commit_calls == []
+    assert run_result.workflow_rejected
+    assert "no attested fingerprint-changing remediation" in (
+        run_result.rejection_detail or ""
+    )
+
+
+def _second_slice_review_state(finding_id: str) -> WorkflowState:
+    state = _combined_native_slice_state().with_current_step(
+        WorkflowStep.CLAUDE_SLICE_REVIEW
+    )
+    state = state.record_review_denial(
+        reviewer=Reviewer.CLAUDE,
+        open_findings=(finding_id,),
+        return_step=WorkflowStep.CODEX_CORRECTION,
+        progress_made=True,
+    )
+    return state.with_current_step(WorkflowStep.CLAUDE_SLICE_REVIEW)
+
+
+def _negative_convergence() -> SliceConvergenceEvaluation:
+    return SliceConvergenceEvaluation(
+        phase=SliceReviewPhase.CONVERGENCE,
+        cohort_finding_ids=("C-01",),
+        newly_opened_finding_ids=("C-02",),
+        closed_local_finding_ids=(),
+        forwarded_local_finding_ids=(),
+        attested_remediation_finding_ids=(),
+        progress_made=False,
+        reason=(
+            "the convergence round closed or forwarded no previously local "
+            "finding and recorded no attested fingerprint-changing remediation"
+        ),
     )
 
 

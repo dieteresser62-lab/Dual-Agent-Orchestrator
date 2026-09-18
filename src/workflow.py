@@ -26,6 +26,7 @@ from agent_runtime import (
 import workflow_requests
 import workflow_failure_recording
 import workflow_validation_evidence
+import native_finding_decisions
 from provider_input_budget import ProviderInputBudgetExceeded
 from final_review_preflight import FinalReviewPreflightDenied
 from artifact_models import (
@@ -35,6 +36,7 @@ from finding_order import sorted_finding_ids
 from finding_cleanup import (
     is_finding_cleanup_work_unit,
 )
+from finding_convergence import SliceConvergenceEvaluation
 from native_review_contract import find_native_review_disposition_limit_error
 from finding_reducer import (
     merge_review_request_result,
@@ -580,6 +582,13 @@ class WorkflowDriver(Protocol):
         self, state: WorkflowState
     ) -> tuple[str, ...]: ...
 
+    def evaluate_slice_finding_convergence(
+        self,
+        state: WorkflowState,
+        *,
+        round_number: int,
+    ) -> SliceConvergenceEvaluation: ...
+
     def carry_forward_native_findings(
         self,
         state: WorkflowState,
@@ -696,6 +705,7 @@ MANDATORY_WORKFLOW_DRIVER_METHODS = frozenset(
         "collect_correction_delta",
         "commit_slice",
         "detect_test_changes",
+        "evaluate_slice_finding_convergence",
         "invoke_codex",  # allowlist:provider -- canonical capability
         "invoke_reviewer",
         "persist_gate_decision",
@@ -1249,8 +1259,17 @@ class WorkflowRunResult:
                 "disposition progress"
                 if safety_limit_reached
                 else (
-                    "the reviewer made no further closure, reclassification, "
-                    "or finding-opening progress"
+                    (
+                        "the convergence round closed or forwarded no previously "
+                        "local finding and recorded no attested fingerprint-changing "
+                        "remediation"
+                    )
+                    if native_finding_decisions.native_finding_decisions_enabled()
+                    and self.state.current_work_unit.kind is WorkUnitKind.SLICE
+                    else (
+                        "the reviewer made no further closure, reclassification, "
+                        "or finding-opening progress"
+                    )
                 )
             )
             + "; remaining open findings: "
@@ -3146,18 +3165,13 @@ class WorkflowEngine:
         is_cleanup_review = (
             is_final_review and is_finding_cleanup_work_unit(state, unit)
         )
-        correction_progress = False
-        if not is_final_review:
-            prior_ids = frozenset(item.finding_id for item in finding_ledger)
-            newly_opened = tuple(
-                finding_id
-                for finding_id in project_open_set(result.findings).finding_ids
-                if finding_id not in prior_ids
-            )
-            transitioned = project_finding_transition_ids(
-                finding_ledger, result.findings
-            )
-            correction_progress = bool(newly_opened or transitioned)
+        correction_progress = self._slice_review_progress(
+            state,
+            result,
+            finding_ledger=finding_ledger,
+            round_number=round_number,
+            is_final_review=is_final_review,
+        )
         history = self._record_review(
             history,
             unit.slice_id,
@@ -3319,6 +3333,53 @@ class WorkflowEngine:
             )
         self.driver.checkpoint(state, history)
         return state, history
+
+    def _slice_review_progress(
+        self,
+        state: WorkflowState,
+        result: ContractResult,
+        *,
+        finding_ledger: tuple[FindingRecord, ...],
+        round_number: int,
+        is_final_review: bool,
+    ) -> bool:
+        """Select dormant E5 or the unchanged B112 activity rule."""
+
+        if is_final_review:
+            return False
+        if (
+            native_finding_decisions.native_finding_decisions_enabled()
+            and state.current_work_unit.kind is WorkUnitKind.SLICE
+        ):
+            evaluation = self.driver.evaluate_slice_finding_convergence(
+                state,
+                round_number=round_number,
+            )
+            log = logger.info if evaluation.progress_made else logger.warning
+            log(
+                "Slice %02d round %s %s: progress=%s; opened=%s closed=%s "
+                "forwarded=%s remediated=%s; reason=%s",
+                state.current_slice_id,
+                round_number,
+                evaluation.phase.value,
+                evaluation.progress_made,
+                ",".join(evaluation.newly_opened_finding_ids) or "none",
+                ",".join(evaluation.closed_local_finding_ids) or "none",
+                ",".join(evaluation.forwarded_local_finding_ids) or "none",
+                ",".join(evaluation.attested_remediation_finding_ids) or "none",
+                evaluation.reason,
+            )
+            return evaluation.progress_made
+        prior_ids = frozenset(item.finding_id for item in finding_ledger)
+        newly_opened = tuple(
+            finding_id
+            for finding_id in project_open_set(result.findings).finding_ids
+            if finding_id not in prior_ids
+        )
+        transitioned = project_finding_transition_ids(
+            finding_ledger, result.findings
+        )
+        return bool(newly_opened or transitioned)
 
     @staticmethod
     def _record_final_review_delivery_round(

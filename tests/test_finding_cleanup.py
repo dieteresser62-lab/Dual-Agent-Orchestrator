@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 from datetime import datetime, timezone
 from dataclasses import replace
 
@@ -12,6 +11,7 @@ from artifact_models import (
     FindingSeverity,
     FindingTransitionPayload,
     Role,
+    WorkUnitPayload,
 )
 from contracts import (
     AgentRole,
@@ -42,6 +42,10 @@ from finding_cleanup import (
     is_finding_cleanup_work_unit,
     plan_finding_cleanup,
     positive_balance_streak,
+)
+from finding_responsibility import (
+    BranchPlanningResponsibility,
+    SliceResponsibility,
 )
 from finding_signature import finding_record_signature, mentioned_repository_paths
 from workflow import WorkflowHistory
@@ -74,6 +78,10 @@ def _transition_record(
     work_unit_id: str,
     action: str,
     finding_status: str,
+    closure_kind: str | None = None,
+    rejection_reason: str | None = None,
+    closure_evidence: str | None = None,
+    responsibility=None,
 ) -> ArtifactRecord:
     payload = FindingTransitionPayload(
         finding_id=f"C-{index:02d}",
@@ -84,6 +92,10 @@ def _transition_record(
         finding_status=finding_status,
         rationale=f"transition {index}",
         work_unit_id=work_unit_id,
+        closure_kind=closure_kind,
+        rejection_reason=rejection_reason,
+        closure_evidence=closure_evidence,
+        responsibility=responsibility,
         **(
             {
                 "summary": f"Finding {index} affects `src/finding-{index:02d}.py`.",
@@ -107,17 +119,23 @@ def _transition_record(
     )
 
 
-def test_slice_finding_balance_is_derived_from_slice_work_units_only() -> None:
-    state = SimpleNamespace(
-        planned_slices=(object(), object()),
-        slices=(),
-        work_units=(
-            SimpleNamespace(work_unit_id=2, slice_id=1, kind=WorkUnitKind.SLICE),
-            SimpleNamespace(work_unit_id=3, slice_id=1, kind=WorkUnitKind.CORRECTION),
-            SimpleNamespace(work_unit_id=4, slice_id=2, kind=WorkUnitKind.SLICE),
-        ),
+def _work_unit_record(work_unit_id: str, slice_id: str) -> ArtifactRecord:
+    return ArtifactRecord.create(
+        run_id="finding-cleanup-balance",
+        logical_id=f"work-unit-{work_unit_id}",
+        revision=1,
+        fingerprint=Fingerprint(FingerprintKind.IMPLEMENTATION, "a" * 64),
+        predecessor_ids=(),
+        created_at="2026-09-12T10:00:00+00:00",
+        idempotency_key=f"work-unit:{work_unit_id}",
+        payload=WorkUnitPayload(slice_id, 1, ("src/finding.py",)),
     )
+
+
+def test_slice_finding_balance_is_derived_from_slice_work_units_only() -> None:
     records = (
+        _work_unit_record("2", "1"),
+        _work_unit_record("4", "2"),
         _transition_record(1, work_unit_id="2", action="opened", finding_status="open"),
         _transition_record(2, work_unit_id="2", action="opened", finding_status="open"),
         _transition_record(1, work_unit_id="2", action="status_changed", finding_status="closed"),
@@ -125,13 +143,59 @@ def test_slice_finding_balance_is_derived_from_slice_work_units_only() -> None:
         _transition_record(4, work_unit_id="4", action="opened", finding_status="open"),
     )
 
-    balances = derive_slice_finding_balances(records, state)  # type: ignore[arg-type]
+    balances = derive_slice_finding_balances(records)
 
     assert [(item.slice_id, item.opened, item.closed, item.net) for item in balances] == [
         (1, 2, 1, 1),
         (2, 1, 0, 1),
     ]
     assert positive_balance_streak(balances) == 2
+
+
+def test_slice_finding_balance_distinguishes_all_typed_e6_outcomes() -> None:
+    records = (
+        _work_unit_record("2", "1"),
+        _transition_record(
+            1,
+            work_unit_id="2",
+            action="status_changed",
+            finding_status="closed",
+            closure_kind="fixed",
+        ),
+        _transition_record(
+            2,
+            work_unit_id="2",
+            action="status_changed",
+            finding_status="closed",
+            closure_kind="rejected",
+            rejection_reason="no_defect",
+            closure_evidence="The named counterexample passes.",
+        ),
+        _transition_record(
+            3,
+            work_unit_id="2",
+            action="routed",
+            finding_status="open",
+            responsibility=SliceResponsibility(
+                "finding-cleanup-balance", "b" * 40, "2"
+            ),
+        ),
+        _transition_record(
+            4,
+            work_unit_id="2",
+            action="routed",
+            finding_status="open",
+            responsibility=BranchPlanningResponsibility("family-1", 1),
+        ),
+    )
+
+    balance = derive_slice_finding_balances(records)[0]
+
+    assert balance.closed == 2
+    assert balance.locally_fixed == 1
+    assert balance.rejected == 1
+    assert balance.routed_to_later_slice == 1
+    assert balance.routed_to_branch_planning == 1
 
 
 def _materialize_paths(root: Path, paths: tuple[str, ...]) -> None:
