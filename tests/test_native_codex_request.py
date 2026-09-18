@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 from dataclasses import replace
 
@@ -82,6 +83,19 @@ def test_native_codex_request_is_deterministic_and_digest_bound() -> None:
     )
     assert json.loads(first.provider_response_schema_json) == (
         first.provider_response_schema
+    )
+
+
+def test_dormant_codex_request_bytes_match_the_pre_contract_baseline() -> None:
+    bundle = build_native_codex_request(_spec())
+
+    assert hashlib.sha256(bundle.canonical_json.encode("utf-8")).hexdigest() == (
+        "8c6f0b9afb2d7b0ed3fb073ba6e4f574e04d94bb1acf23cf3113bbd00d8923d7"
+    )
+    assert hashlib.sha256(
+        bundle.provider_response_schema_json.encode("utf-8")
+    ).hexdigest() == (
+        "c1d331b06bbd3b048359ecb0426f7db9146c7c52fe1facafa983df2e11491a3e"
     )
 
 

@@ -27,7 +27,13 @@ from finding_reducer import (
     project_open_set,
 )
 from finding_order import sorted_finding_ids
+from finding_responsibility import (
+    parse_responsibility,
+    responsibility_json_schema,
+)
 from gates import BUILTIN_STOP_RULES, STOP_RULE_ID_PATTERN
+import native_finding_decisions
+from native_finding_decisions import NativeResponsibilityProposal
 from schema_validation import (
     SchemaDefinitionError,
     SchemaMismatch,
@@ -60,6 +66,7 @@ class NativeCodexErrorCode(StrEnum):
     TEST_FILES_INVALID = "test-files-invalid"
     SLICE_PLAN_INVALID = "slice-plan-invalid"
     STOP_CONTENT_INVALID = "stop-content-invalid"
+    DORMANT_FINDING_DECISION_FIELD = "dormant-finding-decision-field"
 
 
 class NativeCodexContractError(ValueError):
@@ -182,6 +189,7 @@ class NativeFindingDisposition:
     finding_id: str
     decision: FindingResponseDecision
     rationale: str
+    responsibility_proposal: NativeResponsibilityProposal | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,6 +240,8 @@ def load_native_codex_schema() -> dict[str, Any]:
             NativeCodexErrorCode.SCHEMA_INVALID,
             "bundled native Codex schema must be an object",
         )
+    if native_finding_decisions.native_finding_decisions_enabled():
+        _enable_native_finding_decision_schema(schema)
     try:
         check_schema(schema, location="<native-codex-result-schema>")
     except SchemaDefinitionError as exc:
@@ -369,6 +379,7 @@ def native_codex_provider_response_schema(
 
 
 def validate_native_codex_document(document: Mapping[str, Any]) -> None:
+    _reject_dormant_native_fields(document)
     try:
         validate_schema_document(document, load_native_codex_schema())
     except SchemaMismatch as exc:
@@ -587,6 +598,7 @@ def _parse_dispositions(
             finding_id=item["finding_id"],
             decision=FindingResponseDecision(item["decision"].upper()),
             rationale=item["rationale"],
+            responsibility_proposal=_parse_responsibility_proposal(item),
         )
         for item in items
     )
@@ -597,6 +609,69 @@ def _parse_dispositions(
             "finding dispositions must be sorted and unique",
         )
     return dispositions
+
+
+def native_responsibility_proposals(
+    response: NativeCodexResponse,  # allowlist:provider -- bound result type
+) -> tuple[NativeResponsibilityProposal, ...]:
+    """Expose implementer proposals solely as non-authoritative reviewer input."""
+
+    if isinstance(response, NativeCodexStopResult):  # allowlist:provider -- result variant
+        return ()
+    return tuple(
+        disposition.responsibility_proposal
+        for disposition in response.dispositions
+        if disposition.responsibility_proposal is not None
+    )
+
+
+def _parse_responsibility_proposal(
+    item: Mapping[str, Any],
+) -> NativeResponsibilityProposal | None:
+    raw = item.get("responsibility_proposal")
+    if raw is None:
+        return None
+    try:
+        responsibility = parse_responsibility(raw)
+    except ValueError as exc:
+        raise NativeCodexContractError(  # allowlist:provider -- contract boundary
+            NativeCodexErrorCode.RESULT_CONTENT_INVALID,  # allowlist:provider -- error vocabulary
+            f"responsibility proposal for {item['finding_id']} is invalid: {exc}",
+        ) from exc
+    return NativeResponsibilityProposal(
+        finding_id=item["finding_id"],
+        responsibility=responsibility,
+        rationale=item["rationale"],
+    )
+
+
+def _enable_native_finding_decision_schema(schema: dict[str, Any]) -> None:
+    definitions = schema["$defs"]
+    definitions["finding_responsibility"] = responsibility_json_schema()
+    disposition = definitions["finding_disposition"]
+    disposition["properties"]["responsibility_proposal"] = {
+        "oneOf": [
+            {"$ref": "#/$defs/finding_responsibility"},
+            {"type": "null"},
+        ]
+    }
+    disposition["required"].append("responsibility_proposal")
+
+
+def _reject_dormant_native_fields(document: Mapping[str, Any]) -> None:
+    if native_finding_decisions.native_finding_decisions_enabled():
+        return
+    dispositions = document.get("finding_dispositions")
+    if not isinstance(dispositions, list):
+        return
+    if any(
+        isinstance(item, Mapping) and "responsibility_proposal" in item
+        for item in dispositions
+    ):
+        raise NativeCodexContractError(  # allowlist:provider -- contract boundary
+            NativeCodexErrorCode.DORMANT_FINDING_DECISION_FIELD,  # allowlist:provider -- error vocabulary
+            "responsibility_proposal is disabled until the joint 67/68 cutover",
+        )
 
 
 def _apply_dispositions(

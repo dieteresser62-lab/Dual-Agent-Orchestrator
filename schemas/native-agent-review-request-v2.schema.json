@@ -507,7 +507,7 @@
               "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,199}$"
             },
             "rejection_code": {
-              "enum": ["schema-invalid", "request-mismatch", "reviewer-mismatch", "finding-id-invalid", "finding-reference-unknown", "finding-reference-not-open", "finding-event-conflict", "missing-own-finding-update", "finding-content-invalid", "finding-signature-duplicate", "acceptance-invalid", "anchor-invalid", "review-content-missing", "stop-content-invalid", "approval-invalid"]
+              "enum": ["schema-invalid", "request-mismatch", "reviewer-mismatch", "finding-id-invalid", "finding-reference-unknown", "finding-reference-not-open", "finding-event-conflict", "missing-own-finding-update", "finding-content-invalid", "finding-signature-duplicate", "acceptance-invalid", "anchor-invalid", "review-content-missing", "stop-content-invalid", "approval-invalid", "dormant-finding-decision-field"]
             },
             "correction_instruction": {
               "$ref": "#/$defs/safe_text"

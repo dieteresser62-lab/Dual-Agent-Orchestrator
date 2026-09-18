@@ -1575,6 +1575,7 @@ _NATIVE_REVIEW_RESPONSE_REJECTION_CODES = {
     "review-content-missing",
     "stop-content-invalid",
     "approval-invalid",
+    "dormant-finding-decision-field",
 }
 _PROVIDER_TEXT_MARKER_RE = re.compile(
     r"^\[provider text redacted; sha256=([0-9a-f]{64}); utf8_bytes=([1-9][0-9]*)\]$"

@@ -162,6 +162,7 @@ NATIVE_REVIEW_RESPONSE_REJECTION_CODES = frozenset(
         "review-content-missing",
         "stop-content-invalid",
         "approval-invalid",
+        "dormant-finding-decision-field",
     }
 )
 

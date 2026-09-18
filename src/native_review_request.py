@@ -11,12 +11,15 @@ import re
 from typing import Any, Mapping
 
 from contracts import AgentRole
+from finding_responsibility import responsibility_json_schema
+import native_finding_decisions
 from native_review_contract import (
     BoundNativeReviewContext,
     MAX_NATIVE_REVIEW_DISPOSITIONS,
     NativeReviewContext,
     NativeReviewErrorCode,
     NATIVE_REVIEW_RESPONSE_RETRY_CODES,
+    native_review_disposition_capacity,
     native_review_provider_response_schema,
     next_native_finding_id,
     native_review_context_binding,
@@ -374,6 +377,8 @@ def load_native_review_request_schema() -> dict[str, Any]:
             NativeReviewRequestErrorCode.SCHEMA_INVALID,
             "bundled native request schema must be an object",
         )
+    if native_finding_decisions.native_finding_decisions_enabled():
+        _enable_native_review_request_finding_decision_schema(schema)
     try:
         check_schema(schema, location="<native-review-request-schema>")
     except SchemaDefinitionError as exc:
@@ -479,6 +484,7 @@ def build_native_review_request(
     *,
     inline_evidence_chars: int = DEFAULT_INLINE_EVIDENCE_CHARS,
 ) -> NativeReviewRequestBundle:
+    _validate_plan_disposition_capacity(spec)
     if inline_evidence_chars < 1:
         raise NativeReviewRequestError(
             NativeReviewRequestErrorCode.EVIDENCE_INVALID,
@@ -610,6 +616,10 @@ def _review_context_request_projection(
             "eligible_finding_ids": list(eligible_ids),
             "pending_finding_count": context.final_review_pending_count,
         }
+    if native_finding_decisions.native_finding_decisions_enabled():
+        review_contract["implementer_responsibility_proposals"] = context_binding[
+            "implementer_responsibility_proposals"
+        ]
     return {
         "reviewer": "claude",
         "run_id": context.run_id,
@@ -632,6 +642,49 @@ def _canonical_json(value: object) -> str:
 
 def _sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _validate_plan_disposition_capacity(spec: NativeReviewRequestSpec) -> None:
+    if (
+        not native_finding_decisions.native_finding_decisions_enabled()
+        or spec.review_kind is not NativeReviewKind.PLAN
+    ):
+        return
+    disposition_count = native_review_disposition_capacity(spec.context)
+    if disposition_count > MAX_NATIVE_REVIEW_DISPOSITIONS:
+        raise NativeReviewRequestError(
+            NativeReviewRequestErrorCode.CONTEXT_INVALID,
+            "PLAN_DISPOSITION_LIMIT: plan review requires "
+            f"{disposition_count} status, reclassification, or routing decisions; "
+            f"the bound maximum is {MAX_NATIVE_REVIEW_DISPOSITIONS}",
+        )
+
+
+def _enable_native_review_request_finding_decision_schema(
+    schema: dict[str, Any],
+) -> None:
+    definitions = schema["$defs"]
+    definitions["finding_responsibility"] = responsibility_json_schema()
+    definitions["responsibility_proposal"] = {
+        "type": "object",
+        "properties": {
+            "finding_id": {
+                "type": "string",
+                "pattern": "^C-(0[1-9]|[1-9][0-9]*)$",
+            },
+            "responsibility": {"$ref": "#/$defs/finding_responsibility"},
+            "rationale": {"$ref": "#/$defs/safe_text"},
+        },
+        "required": ["finding_id", "responsibility", "rationale"],
+        "additionalProperties": False,
+    }
+    contract = definitions["review_contract"]
+    contract["properties"]["implementer_responsibility_proposals"] = {
+        "type": "array",
+        "maxItems": 128,
+        "items": {"$ref": "#/$defs/responsibility_proposal"},
+    }
+    contract["required"].append("implementer_responsibility_proposals")
 
 
 def _validate_manifest_semantic_binding(item: Mapping[str, Any], content: str) -> None:

@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
+import native_finding_decisions
 
 from contracts import (
     AgentRole,
@@ -33,6 +34,8 @@ from native_review_contract import (
     parse_native_contract_result,
     validate_native_review_document,
 )
+from finding_responsibility import SliceResponsibility
+from native_finding_decisions import NativeResponsibilityProposal
 from native_review_request import (
     NativeReviewEvidenceInput,
     NativeReviewKind,
@@ -151,6 +154,85 @@ def test_provider_schema_forbids_anchors_without_bound_origin() -> None:
         without_origin.bound_context.request_id
         != with_origin.bound_context.request_id
     )
+
+
+def test_dormant_review_request_bytes_match_the_pre_contract_baseline() -> None:
+    bundle = build_native_review_request(_spec())
+
+    assert hashlib.sha256(bundle.canonical_json.encode("utf-8")).hexdigest() == (
+        "8eefd769f80f52ca88183d64e7d17e877279a95f012ea1ef51024c641ffec502"
+    )
+    assert hashlib.sha256(
+        bundle.provider_response_schema_json.encode("utf-8")
+    ).hexdigest() == (
+        "70187e6ab499518eb8f29b8f11af6b4befff7c83043829eefb8a68c228e85e70"
+    )
+
+
+def test_enabled_review_request_exposes_codex_proposal_as_non_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        native_finding_decisions,
+        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
+        True,
+    )
+    finding = _prior_finding()
+    proposal = NativeResponsibilityProposal(
+        "C-01",
+        SliceResponsibility("later-run", "c" * 40, "6"),
+        "Codex proposes that the later Slice owns this work.",
+    )
+    context = replace(
+        _context(),
+        previous_findings=(finding,),
+        implementer_responsibility_proposals=(proposal,),
+    )
+
+    bundle = build_native_review_request(replace(_spec(), context=context))
+
+    assert bundle.document["review_contract"][
+        "implementer_responsibility_proposals"
+    ] == [
+        {
+            "finding_id": "C-01",
+            "responsibility": {
+                "responsibility_kind": "SLICE",
+                "target_run_id": "later-run",
+                "approved_plan_commit": "c" * 40,
+                "slice_id": "6",
+            },
+            "rationale": "Codex proposes that the later Slice owns this work.",
+        }
+    ]
+
+
+def test_plan_disposition_overflow_stops_before_request_construction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        native_finding_decisions,
+        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
+        True,
+    )
+    findings = tuple(
+        _prior_finding(f"C-{number:02d}") for number in range(1, 34)
+    )
+    context = replace(
+        _context(),
+        operation="claude_plan_review",
+        approval_marker=ApprovalMarker.PLAN,
+        previous_findings=findings,
+        plan_artifact_path="docs/internal/plan.md",
+    )
+    spec = replace(
+        _spec(),
+        context=context,
+        review_kind=NativeReviewKind.PLAN,
+    )
+
+    with pytest.raises(NativeReviewRequestError, match="PLAN_DISPOSITION_LIMIT"):
+        build_native_review_request(spec)
 
 
 def test_default_provider_schema_remains_anchor_capable() -> None:

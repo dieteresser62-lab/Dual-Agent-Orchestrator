@@ -139,14 +139,18 @@ def _current_mapping() -> dict[str, str]:
 
 
 def _normalized_payload_fields(payload: object) -> object:
-    if isinstance(
-        payload,
-        (
-            artifact_models.FindingTransitionPayload,
-            artifact_models.FindingHandoffImportPayload,
-        ),
-    ):
-        return artifact_models.artifact_payload_document(payload)
+    if isinstance(payload, artifact_models.FindingTransitionPayload):
+        raw = asdict(payload)
+        if payload.responsibility is None:
+            raw.pop("responsibility", None)
+        return artifact_models._json_value(raw)  # type: ignore[arg-type]
+    if isinstance(payload, artifact_models.FindingHandoffImportPayload):
+        raw = asdict(payload)
+        for transition in raw["transitions"]:
+            transition_payload = transition["payload"]
+            if transition_payload["responsibility"] is None:
+                transition_payload.pop("responsibility")
+        return artifact_models._json_value(raw)  # type: ignore[arg-type]
     raw = asdict(payload)  # type: ignore[arg-type]
     if isinstance(payload, artifact_models.InvocationFailurePayload):
         if payload.orchestrator_diagnostic is None:

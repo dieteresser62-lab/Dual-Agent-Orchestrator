@@ -5,6 +5,7 @@ from dataclasses import replace
 import hashlib
 
 import pytest
+import native_finding_decisions
 
 from contracts import (
     AgentRole,
@@ -20,6 +21,11 @@ from contracts import (
     ValidationStatus,
 )
 from finding_reducer import project_open_set, project_reviewer_persistence_transitions
+from finding_responsibility import (
+    BranchPlanningResponsibility,
+    PlanRevisionResponsibility,
+    SliceResponsibility,
+)
 from gates import detect_anchor_changes
 from native_review_contract import (
     NativeFinding,
@@ -38,6 +44,7 @@ from native_review_contract import (
     validate_native_review_disposition_budget,
     parse_native_review_response,
 )
+from native_finding_decisions import NativeResponsibilityRoute
 from schema_validation import SchemaMismatch, validate_schema_document
 from validation_matrix import (
     ValidationCommand,
@@ -148,6 +155,224 @@ def _finding(
         origin=FindingOrigin("1", 1, reporter),
         status_rationale="Closed earlier" if status is FindingStatus.CLOSED else None,
     )
+
+
+@pytest.fixture
+def active_finding_decisions(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        native_finding_decisions,
+        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
+        True,
+    )
+
+
+@pytest.mark.parametrize(
+    "responsibility",
+    (
+        SliceResponsibility("later-run", "b" * 40, "6"),
+        BranchPlanningResponsibility("family-1", 2),
+        PlanRevisionResponsibility(
+            "plan-run", "docs/internal/plan.md", "c" * 64, 3
+        ),
+    ),
+)
+def test_native_routes_roundtrip_through_shared_responsibility_types(
+    active_finding_decisions: None,
+    responsibility,
+) -> None:
+    context = _context(previous=(_finding("C-01", AgentRole.CLAUDE),))
+    document = _review(context, approved=False)
+    from finding_responsibility import responsibility_document
+
+    document["responsibility_routes"] = [
+        {
+            "finding_id": "C-01",
+            "responsibility": responsibility_document(responsibility),
+            "rationale": "Claude assigns the open finding to its next owner.",
+        }
+    ]
+
+    response = parse_native_review_response(document, context)
+    result = native_response_to_contract_result(response, context)
+
+    assert response.responsibility_routes == (
+        NativeResponsibilityRoute(
+            "C-01",
+            responsibility,
+            "Claude assigns the open finding to its next owner.",
+        ),
+    )
+    assert result.findings[0].status is FindingStatus.OPEN
+
+
+def test_native_route_names_a_missing_responsibility_field(
+    active_finding_decisions: None,
+) -> None:
+    context = _context(previous=(_finding("C-01", AgentRole.CLAUDE),))
+    document = _review(context, approved=False)
+    document["responsibility_routes"] = [
+        {
+            "finding_id": "C-01",
+            "responsibility": {
+                "responsibility_kind": "SLICE",
+                "target_run_id": "later-run",
+                "approved_plan_commit": "b" * 40,
+            },
+            "rationale": "The later Slice owns the follow-up.",
+        }
+    ]
+
+    with pytest.raises(NativeReviewContractError, match="slice_id"):
+        parse_native_review_response(document, context)
+
+
+def test_closed_status_requires_a_typed_closure(
+    active_finding_decisions: None,
+) -> None:
+    context = _context(previous=(_finding("C-01", AgentRole.CLAUDE),))
+    document = _review(context, approved=False)
+    document["responsibility_routes"] = []
+    document["status_changes"] = [
+        {
+            "finding_id": "C-01",
+            "status": "CLOSED",
+            "rationale": "The evidence resolves the finding.",
+        }
+    ]
+
+    with pytest.raises(NativeReviewContractError, match="requires closure"):
+        parse_native_review_response(document, context)
+
+
+@pytest.mark.parametrize(
+    "closure",
+    (
+        {"kind": "fixed"},
+        {
+            "kind": "rejected",
+            "rejection_reason": "already_fixed",
+            "evidence": "The fingerprint-bound diff already contains the repair.",
+        },
+    ),
+)
+def test_closed_status_accepts_fixed_or_evidenced_rejection(
+    active_finding_decisions: None,
+    closure: dict[str, str],
+) -> None:
+    context = _context(previous=(_finding("C-01", AgentRole.CLAUDE),))
+    document = _review(context, approved=True)
+    document["responsibility_routes"] = []
+    document["status_changes"] = [
+        {
+            "finding_id": "C-01",
+            "status": "CLOSED",
+            "rationale": "Claude decides the finding from bound evidence.",
+            "closure": closure,
+        }
+    ]
+
+    response = parse_native_review_response(document, context)
+    result = native_response_to_contract_result(response, context)
+
+    assert response.status_changes[0].closure is not None
+    assert result.findings[0].status is FindingStatus.CLOSED
+
+
+@pytest.mark.parametrize(
+    ("closure", "diagnostic"),
+    (
+        (
+            {"kind": "rejected", "rejection_reason": "no_defect"},
+            "evidence",
+        ),
+        (
+            {
+                "kind": "rejected",
+                "rejection_reason": "not_convenient",
+                "evidence": "Compared against the bound acceptance test.",
+            },
+            "unknown rejection_reason",
+        ),
+    ),
+)
+def test_rejected_closure_requires_named_evidence_and_a_known_reason(
+    active_finding_decisions: None,
+    closure: dict[str, str],
+    diagnostic: str,
+) -> None:
+    context = _context(previous=(_finding("C-01", AgentRole.CLAUDE),))
+    document = _review(context, approved=False)
+    document["responsibility_routes"] = []
+    document["status_changes"] = [
+        {
+            "finding_id": "C-01",
+            "status": "CLOSED",
+            "rationale": "Claude rejects the reported defect.",
+            "closure": closure,
+        }
+    ]
+
+    with pytest.raises(NativeReviewContractError, match=diagnostic):
+        parse_native_review_response(document, context)
+
+
+def test_combined_review_budget_counts_status_class_and_route_before_effects(
+    active_finding_decisions: None,
+) -> None:
+    previous = tuple(
+        _finding(f"C-{number:02d}", AgentRole.CLAUDE)
+        for number in range(1, 34)
+    )
+    context = _context(approval=ApprovalMarker.FINAL, previous=previous)
+    document = _review(context, approved=False)
+    document["status_changes"] = [{} for _ in range(30)]
+    document["reclassifications"] = [{}]
+    document["responsibility_routes"] = [{}, {}]
+
+    with pytest.raises(NativeReviewContractError) as raised:
+        validate_native_review_disposition_budget(document, context)
+
+    assert raised.value.disposition_limit == NativeReviewDispositionLimit(33, 32)
+    assert "status_changes=30" in raised.value.detail
+    assert "reclassifications=1" in raised.value.detail
+    assert "responsibility_routes=2" in raised.value.detail
+
+
+def test_dormant_review_contract_rejects_new_fields_with_named_diagnostic() -> None:
+    context = _context()
+    document = _review(context, approved=False)
+    document["responsibility_routes"] = []
+
+    with pytest.raises(NativeReviewContractError) as raised:
+        parse_native_review_response(document, context)
+
+    assert (
+        raised.value.code
+        is NativeReviewErrorCode.DORMANT_FINDING_DECISION_FIELD
+    )
+    assert "responsibility_routes" in raised.value.detail
+
+
+def test_dormant_review_contract_rejects_closure_with_named_diagnostic() -> None:
+    context = _context()
+    document = _review(context, approved=False)
+    document["status_changes"] = [
+        {
+            "finding_id": "C-01",
+            "status": "CLOSED",
+            "rationale": "The finding is fixed.",
+            "closure": {"kind": "fixed"},
+        }
+    ]
+
+    with pytest.raises(NativeReviewContractError) as raised:
+        parse_native_review_response(document, context)
+
+    assert (
+        raised.value.code
+        is NativeReviewErrorCode.DORMANT_FINDING_DECISION_FIELD
+    )
+    assert "closure" in raised.value.detail
 
 
 def _assert_error(

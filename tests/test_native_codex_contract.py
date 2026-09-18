@@ -7,6 +7,7 @@ from dataclasses import replace
 import pytest
 
 import native_codex_contract
+import native_finding_decisions
 
 from contracts import (
     AgentRole,
@@ -19,6 +20,7 @@ from contracts import (
     ReadinessMarker,
 )
 from finding_reducer import project_finding_response_delta
+from finding_responsibility import SliceResponsibility
 from native_codex_contract import (
     BoundNativeCodexContext,
     NativeCodexContext,
@@ -28,6 +30,8 @@ from native_codex_contract import (
     canonical_native_codex_json,
     load_native_codex_schema,
     native_codex_provider_response_schema,
+    native_responsibility_proposals,
+    parse_native_codex_response,
     parse_bound_native_codex_contract_result,
 )
 from native_provider_schema import (
@@ -979,6 +983,85 @@ def test_implementation_result_applies_each_supplied_finding_disposition() -> No
     result = parse_bound_native_codex_contract_result(document, bound)
     assert result.test_files == ("tests/test_native_codex_contract.py",)
     assert result.findings[0].responses[0].decision is FindingResponseDecision.ACCEPTED
+
+
+def test_codex_responsibility_proposal_is_visible_but_never_authoritative(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        native_finding_decisions,
+        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
+        True,
+    )
+    bound = _bound(
+        NativeCodexRequestKind.IMPLEMENTATION,
+        findings=(_finding(),),
+        expected_tests=(),
+        test_changes_approved=True,
+    )
+    document = {
+        **_base(bound, "implementation_result"),
+        "ready": True,
+        "test_files": [],
+        "finding_dispositions": [
+            {
+                "finding_id": "C-01",
+                "decision": "accepted",
+                "rationale": "A later Slice is the proposed owner.",
+                "responsibility_proposal": {
+                    "responsibility_kind": "SLICE",
+                    "target_run_id": "later-run",
+                    "approved_plan_commit": "c" * 40,
+                    "slice_id": "6",
+                },
+            }
+        ],
+    }
+
+    response = parse_native_codex_response(document, bound)
+    result = parse_bound_native_codex_contract_result(document, bound)
+
+    proposals = native_responsibility_proposals(response)
+    assert proposals[0].responsibility == SliceResponsibility(
+        "later-run", "c" * 40, "6"
+    )
+    delta = project_finding_response_delta(
+        bound.context.previous_findings, result.findings
+    )
+    assert tuple(item.finding.finding_id for item in delta) == ("C-01",)
+    assert result.findings[0].status is FindingStatus.OPEN
+    assert not hasattr(result.findings[0], "responsibility")
+
+
+def test_dormant_codex_contract_rejects_proposal_with_named_diagnostic() -> None:
+    bound = _bound(
+        NativeCodexRequestKind.IMPLEMENTATION,
+        findings=(_finding(),),
+        expected_tests=(),
+        test_changes_approved=True,
+    )
+    document = {
+        **_base(bound, "implementation_result"),
+        "ready": True,
+        "test_files": [],
+        "finding_dispositions": [
+            {
+                "finding_id": "C-01",
+                "decision": "accepted",
+                "rationale": "Codex proposes a later owner.",
+                "responsibility_proposal": None,
+            }
+        ],
+    }
+
+    with pytest.raises(NativeCodexContractError) as raised:
+        parse_native_codex_response(document, bound)
+
+    assert (
+        raised.value.code
+        is NativeCodexErrorCode.DORMANT_FINDING_DECISION_FIELD
+    )
+    assert "responsibility_proposal" in raised.value.detail
 
 
 def test_implementation_disposition_records_do_not_scale_with_open_findings() -> None:

@@ -13,6 +13,7 @@ from enum import StrEnum
 from pathlib import PurePosixPath
 import re
 from typing import Any, ClassVar, Mapping, TypeAlias
+import copy
 
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
@@ -130,6 +131,91 @@ def responsibility_document(
     )
 
 
+def responsibility_json_schema() -> dict[str, Any]:
+    """Return the closed native wire schema for the three responsibility kinds.
+
+    Keeping this schema beside the parser and document projection prevents native
+    agent contracts from growing a second, independently maintained definition of
+    responsibility targets.
+    """
+
+    return copy.deepcopy(
+        {
+            "oneOf": [
+                {
+                    "type": "object",
+                    "properties": {
+                        "responsibility_kind": {
+                            "type": "string",
+                            "const": ResponsibilityKind.SLICE.value,
+                        },
+                        "target_run_id": {"type": "string", "minLength": 1},
+                        "approved_plan_commit": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{40}$",
+                        },
+                        "slice_id": {"type": "string", "minLength": 1},
+                    },
+                    "required": [
+                        "responsibility_kind",
+                        "target_run_id",
+                        "approved_plan_commit",
+                        "slice_id",
+                    ],
+                    "additionalProperties": False,
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "responsibility_kind": {
+                            "type": "string",
+                            "const": ResponsibilityKind.BRANCH_PLANNING.value,
+                        },
+                        "family_id": {"type": "string", "minLength": 1},
+                        "cycle_number": {"type": "integer", "minimum": 1},
+                    },
+                    "required": [
+                        "responsibility_kind",
+                        "family_id",
+                        "cycle_number",
+                    ],
+                    "additionalProperties": False,
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "responsibility_kind": {
+                            "type": "string",
+                            "const": ResponsibilityKind.PLAN_REVISION.value,
+                        },
+                        "run_id": {"type": "string", "minLength": 1},
+                        "plan_path": {
+                            "type": "string",
+                            "pattern": (
+                                "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))"
+                                "(?!.*\\\\)[^/]+(?:/[^/]+)*$"
+                            ),
+                        },
+                        "plan_digest": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$",
+                        },
+                        "revision": {"type": "integer", "minimum": 1},
+                    },
+                    "required": [
+                        "responsibility_kind",
+                        "run_id",
+                        "plan_path",
+                        "plan_digest",
+                        "revision",
+                    ],
+                    "additionalProperties": False,
+                },
+            ]
+        }
+    )
+
+
 def parse_responsibility(raw: Mapping[str, Any]) -> FindingResponsibility:
     """Parse one closed responsibility document, rejecting unknown fields."""
 
@@ -217,4 +303,5 @@ __all__ = [
     "SliceResponsibility",
     "parse_responsibility",
     "responsibility_document",
+    "responsibility_json_schema",
 ]
