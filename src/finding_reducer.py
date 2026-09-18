@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Mapping, Sequence
 
 from artifact_models import (
+    BranchDiscoveryHandoffImportPayload,
     ArtifactRecord,
     CorrectionWorkUnitPayload,
     FindingHandoffImportPayload,
@@ -1003,7 +1004,10 @@ def _transition_events(
     events: list[FindingTransitionProjection] = []
     for sequence, record in enumerate(records, start=1):
         payload = record.payload
-        if isinstance(payload, FindingHandoffImportPayload):
+        if isinstance(
+            payload,
+            (FindingHandoffImportPayload, BranchDiscoveryHandoffImportPayload),
+        ):
             events.extend(
                 FindingTransitionProjection(
                     sequence=sequence,
@@ -1386,7 +1390,10 @@ def _project_import_snapshot(
 ) -> FindingImportSnapshotProjection | None:
     imports = tuple(
         record for record in records
-        if isinstance(record.payload, FindingHandoffImportPayload)
+        if isinstance(
+            record.payload,
+            (FindingHandoffImportPayload, BranchDiscoveryHandoffImportPayload),
+        )
     )
     if not imports:
         return None

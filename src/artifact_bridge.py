@@ -19,6 +19,8 @@ from artifact_models import (
     AgentResultPayload,
     ArtifactPayload,
     ArtifactRecord,
+    BranchDiscoveryHandoffExportPayload,
+    BranchDiscoveryHandoffImportPayload,
     BindingPayload,
     CommandSpec,
     CorrectionWorkUnitPayload,
@@ -26,6 +28,7 @@ from artifact_models import (
     Fingerprint,
     FingerprintKind,
     FindingSeverity,
+    FindingSnapshotItem,
     FindingHandoffExportPayload,
     FindingHandoffImportPayload,
     ImportedFindingTransition,
@@ -51,6 +54,7 @@ from artifact_models import (
     canonical_json,
     stable_side_effect_key,
     finding_transition_sequence_sha256,
+    flatten_finding_transition_history,
 )
 from artifact_store import ArtifactStore
 from contracts import (
@@ -64,6 +68,8 @@ from contracts import (
     ValidationCommandSpec,
 )
 from finding_order import replay_compatible_finding_ids, sorted_finding_ids
+from finding_signature import finding_record_signature
+import native_finding_decisions
 from task_contract import TaskContract
 from validation_matrix import ValidationRequest
 from provider_input_budget import ProviderInputMeasurement
@@ -384,10 +390,15 @@ def finding_handoff_export_payload(
     plans = [record.payload for record in replay.records if isinstance(record.payload, PlanPayload)]
     if not plans or not any(plan.approved_plan_commit == approved_plan_commit for plan in plans):
         raise ArtifactBridgeError("finding export plan commit is not present in accepted replay")
-    transitions = tuple(
-        ImportedFindingTransition(record.record_id, record.payload)
-        for record in replay.records
-        if isinstance(record.payload, FindingTransitionPayload)
+    transitive = native_finding_decisions.native_finding_decisions_enabled()
+    transitions = (
+        flatten_finding_transition_history(replay.records)
+        if transitive
+        else tuple(
+            ImportedFindingTransition(record.record_id, record.payload)
+            for record in replay.records
+            if isinstance(record.payload, FindingTransitionPayload)
+        )
     )
     if not transitions:
         raise ArtifactBridgeError("finding export requires at least one source transition")
@@ -423,18 +434,29 @@ def finding_handoff_import_payload(
         raise ArtifactBridgeError("finding export record is not in the accepted source replay")
     if export_record.run_id != source_replay.expected_run_id:
         raise ArtifactBridgeError("finding export record belongs to another source run")
-    transitions = tuple(
+    source_prefix = source_replay.records[: source_replay.records.index(export_record)]
+    transitive = flatten_finding_transition_history(source_prefix)
+    legacy = tuple(
         ImportedFindingTransition(record.record_id, record.payload)
-        for record in source_replay.records
+        for record in source_prefix
         if isinstance(record.payload, FindingTransitionPayload)
+    )
+    transitions = next(
+        (
+            candidate
+            for candidate in (transitive, legacy)
+            if export.finding_transition_record_ids
+            == tuple(item.record_id for item in candidate)
+            and export.finding_transitions_sha256
+            == finding_transition_sequence_sha256(candidate)
+        ),
+        None,
     )
     if (
         export.source_run_id != source_replay.expected_run_id
         or not export_record.predecessor_ids
         or export.source_head_record_id != export_record.predecessor_ids[0]
-        or export.finding_transition_record_ids != tuple(item.record_id for item in transitions)
-        or export.finding_transitions_sha256
-        != finding_transition_sequence_sha256(transitions)
+        or transitions is None
     ):
         raise ArtifactBridgeError("finding export differs from its accepted source replay")
     target_digest = hashlib.sha256(target_task_bytes).hexdigest()
@@ -450,6 +472,241 @@ def finding_handoff_import_payload(
         target_task_sha256=target_digest,
         finding_transitions_sha256=export.finding_transitions_sha256,
         transitions=transitions,
+        authority=Role.ORCHESTRATOR,
+    )
+
+
+def _finding_snapshot(replay: ArtifactReplayResult) -> tuple[FindingSnapshotItem, ...]:
+    from finding_reducer import reduce_findings
+
+    findings = reduce_findings(replay).ledger.findings
+    findings_by_id = {finding.finding_id: finding for finding in findings}
+    snapshot = tuple(
+        FindingSnapshotItem(
+            finding.finding_id,
+            finding_record_signature(finding),
+            finding.status.value.lower(),
+            FindingSeverity(finding.finding_class.value),
+        )
+        for finding in (
+            findings_by_id[finding_id]
+            for finding_id in sorted_finding_ids(findings_by_id)
+        )
+    )
+    if not snapshot:
+        raise ArtifactBridgeError(
+            "branch discovery handoff requires a non-empty finding snapshot"
+        )
+    return snapshot
+
+
+def branch_discovery_handoff_export_payload(
+    replay: ArtifactReplayResult,
+    *,
+    discovery_review_record_id: str,
+    validation_attestation_record_id: str,
+    reviewed_head_commit: str,
+    family_binding: object,
+    target_task_path: str,
+    target_task_bytes: bytes,
+    target_run_identity: str,
+) -> BranchDiscoveryHandoffExportPayload:
+    """Build E9's discovery export from one accepted source-chain head."""
+
+    from artifact_models import FamilyBindingPayload
+
+    if not native_finding_decisions.native_finding_decisions_enabled():
+        raise ArtifactBridgeError(
+            "branch discovery handoff requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER"
+        )
+    if replay.head_record_id is None:
+        raise ArtifactBridgeError(
+            "branch discovery handoff export requires a non-empty accepted replay"
+        )
+    if not isinstance(family_binding, FamilyBindingPayload):
+        raise ArtifactBridgeError(
+            "branch discovery handoff export requires a family binding"
+        )
+    review = next(
+        (
+            record
+            for record in replay.records
+            if record.record_id == discovery_review_record_id
+        ),
+        None,
+    )
+    attestation = next(
+        (
+            record
+            for record in replay.records
+            if record.record_id == validation_attestation_record_id
+        ),
+        None,
+    )
+    if (
+        review is None
+        or not isinstance(review.payload, ReviewPayload)
+        or review.payload.verdict != "approved"
+    ):
+        raise ArtifactBridgeError(
+            "branch discovery handoff export requires its approved discovery review record"
+        )
+    if attestation is None or not isinstance(
+        attestation.payload, ValidationAttestationPayload
+    ):
+        raise ArtifactBridgeError(
+            "branch discovery handoff export requires its validation attestation record"
+        )
+    if review.fingerprint != attestation.fingerprint:
+        raise ArtifactBridgeError(
+            "branch discovery review and validation attestation fingerprints differ"
+        )
+    transitions = flatten_finding_transition_history(replay.records)
+    if not transitions:
+        raise ArtifactBridgeError(
+            "branch discovery handoff export requires at least one source transition"
+        )
+    if (
+        family_binding.predecessor_run_id != replay.expected_run_id
+        or family_binding.predecessor_head_record_id != replay.head_record_id
+    ):
+        raise ArtifactBridgeError(
+            "branch discovery target family predecessor differs from the source head"
+        )
+    return BranchDiscoveryHandoffExportPayload(
+        source_run_id=replay.expected_run_id,
+        source_head_record_id=replay.head_record_id,
+        discovery_review_record_id=discovery_review_record_id,
+        validation_attestation_record_id=validation_attestation_record_id,
+        reviewed_head_commit=reviewed_head_commit,
+        family_id=family_binding.family_id,
+        family_base_commit=family_binding.family_base_commit,
+        cycle_number=family_binding.cycle_number,
+        predecessor_run_id=family_binding.predecessor_run_id,
+        predecessor_head_record_id=family_binding.predecessor_head_record_id,
+        finding_transition_record_ids=tuple(
+            item.source_record_id or item.record_id for item in transitions
+        ),
+        finding_transitions_sha256=finding_transition_sequence_sha256(transitions),
+        target_task_path=target_task_path,
+        target_task_sha256=hashlib.sha256(target_task_bytes).hexdigest(),
+        target_run_identity=target_run_identity,
+        authority=Role.ORCHESTRATOR,
+    )
+
+
+def branch_discovery_handoff_import_payload(
+    source_replay: ArtifactReplayResult,
+    export_record: ArtifactRecord,
+    *,
+    target_run_id: str,
+    target_task_path: str,
+    target_task_bytes: bytes,
+    target_family_binding: object,
+) -> BranchDiscoveryHandoffImportPayload:
+    """Revalidate E9's source, task, identity, family and transitive history."""
+
+    from artifact_models import FamilyBindingPayload
+
+    export = export_record.payload
+    if not isinstance(export, BranchDiscoveryHandoffExportPayload):
+        raise ArtifactBridgeError(
+            "branch discovery import requires a branch discovery export record"
+        )
+    if not isinstance(target_family_binding, FamilyBindingPayload):
+        raise ArtifactBridgeError(
+            "branch discovery import requires the target RunProfile family binding"
+        )
+    accepted_export = next(
+        (
+            record
+            for record in source_replay.records
+            if record.record_id == export_record.record_id
+        ),
+        None,
+    )
+    if accepted_export != export_record:
+        raise ArtifactBridgeError(
+            "branch discovery export record is not resolvable in the source run"
+        )
+    if source_replay.head_record_id != export_record.record_id:
+        raise ArtifactBridgeError(
+            "branch discovery export must be the accepted source replay head"
+        )
+    if (
+        export_record.run_id != source_replay.expected_run_id
+        or export.source_run_id != source_replay.expected_run_id
+        or not export_record.predecessor_ids
+        or export.source_head_record_id != export_record.predecessor_ids[0]
+    ):
+        raise ArtifactBridgeError(
+            "branch discovery export source run or bound source head differs"
+        )
+    source_prefix = source_replay.records[:-1]
+    transitions = flatten_finding_transition_history(source_prefix)
+    if (
+        export.finding_transition_record_ids
+        != tuple(item.source_record_id or item.record_id for item in transitions)
+        or export.finding_transitions_sha256
+        != finding_transition_sequence_sha256(transitions)
+    ):
+        raise ArtifactBridgeError(
+            "branch discovery export differs from its flattened source history"
+        )
+    task_digest = hashlib.sha256(target_task_bytes).hexdigest()
+    if task_digest != export.target_task_sha256:
+        raise ArtifactBridgeError(
+            "branch discovery import target_task_sha256 differs from task bytes"
+        )
+    if target_task_path != export.target_task_path:
+        raise ArtifactBridgeError(
+            "branch discovery import target_task_path differs from queue position"
+        )
+    if target_run_id != export.target_run_identity:
+        raise ArtifactBridgeError(
+            "branch discovery import target_run_identity differs from target run"
+        )
+    family_values = (
+        target_family_binding.family_id,
+        target_family_binding.family_base_commit,
+        target_family_binding.cycle_number,
+        target_family_binding.predecessor_run_id,
+        target_family_binding.predecessor_head_record_id,
+    )
+    if family_values != (
+        export.family_id,
+        export.family_base_commit,
+        export.cycle_number,
+        export.predecessor_run_id,
+        export.predecessor_head_record_id,
+    ):
+        raise ArtifactBridgeError(
+            "branch discovery import family binding differs from target RunProfile"
+        )
+    source_without_export = replace(
+        source_replay,
+        records=source_prefix,
+        head_record_id=export.source_head_record_id,
+    )
+    return BranchDiscoveryHandoffImportPayload(
+        source_run_id=export.source_run_id,
+        source_head_record_id=export.source_head_record_id,
+        discovery_review_record_id=export.discovery_review_record_id,
+        validation_attestation_record_id=export.validation_attestation_record_id,
+        reviewed_head_commit=export.reviewed_head_commit,
+        family_id=export.family_id,
+        family_base_commit=export.family_base_commit,
+        cycle_number=export.cycle_number,
+        predecessor_run_id=export.predecessor_run_id,
+        predecessor_head_record_id=export.predecessor_head_record_id,
+        export_record_id=export_record.record_id,
+        target_run_id=target_run_id,
+        target_task_path=target_task_path,
+        target_task_sha256=task_digest,
+        target_run_identity=export.target_run_identity,
+        finding_transitions_sha256=export.finding_transitions_sha256,
+        transitions=transitions,
+        finding_snapshot=_finding_snapshot(source_without_export),
         authority=Role.ORCHESTRATOR,
     )
 
@@ -1095,6 +1352,8 @@ __all__ = [
     "ArtifactBridge", "ArtifactBridgeError", "agent_result_payload",
     "attestation_payload", "command_payload", "finding_payload",
     "finding_handoff_export_payload", "finding_handoff_import_payload", "plan_payload",
+    "branch_discovery_handoff_export_payload",
+    "branch_discovery_handoff_import_payload",
     "review_payload", "review_payload_matches_complete_result",
     "review_payload_matches_result", "task_payload", "validation_request_payload",
     "provider_input_measurement_payload",

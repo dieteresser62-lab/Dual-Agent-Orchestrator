@@ -1512,9 +1512,12 @@ class WorkflowState:
                 "finding handoff requires source run and export record"
             )
         if self.finding_handoff_source_run_id is not None:
-            if self.approved_plan_commit is None:
+            if (
+                self.approved_plan_commit is None
+                and self.execution_mode != "PLAN_ONLY"
+            ):
                 raise WorkflowStateValidationError(
-                    "finding handoff requires approved_plan_commit"
+                    "finding handoff requires PLAN_ONLY or approved_plan_commit"
                 )
             if re.fullmatch(
                 r"[A-Za-z0-9][A-Za-z0-9._:-]{0,199}",

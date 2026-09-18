@@ -15,13 +15,17 @@ import artifact_replay
 from artifact_models import (
     AgentResultPayload,
     ArtifactRecord,
+    BranchDiscoveryHandoffExportPayload,
+    BranchDiscoveryHandoffImportPayload,
     BindingPayload,
     BlobReference,
     CommandSpec,
     FinalReviewPreflightPayload,
+    FamilyBindingPayload,
     FindingHandoffExportPayload,
     FindingHandoffImportPayload,
     FindingSeverity,
+    FindingSnapshotItem,
     FindingTransitionPayload,
     Fingerprint,
     FingerprintKind,
@@ -44,11 +48,14 @@ from artifact_models import (
     ReviewPayload,
     ReviewValidationBindingPayload,
     Role,
+    RoleProfilePayload,
     RunIdentityPayload,
+    RunProfilePayload,
     SideEffectPayload,
     SliceBoundaryPayload,
     SliceSpec,
     TransientRetryPayload,
+    TaskPayload,
     ValidationAttestationPayload,
     ValidationContentPayload,
     ValidationOutputContent,
@@ -65,6 +72,7 @@ from artifact_models import (
     technical_text_evidence,
 )
 from artifact_replay import ArtifactReplayError, ReplayDiagnosticCode
+from finding_signature import finding_signature
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -490,6 +498,129 @@ def _export_payload(
     )
 
 
+def _family_binding(*, family_id: str = "finding-family") -> FamilyBindingPayload:
+    return FamilyBindingPayload(
+        family_id,
+        "1" * 40,
+        ("src/a.py",),
+        "source-run",
+        "ar1-" + "4" * 64,
+        2,
+        None,
+        "2" * 40,
+    )
+
+
+def _branch_import_payload(
+    *,
+    target_run_id: str = RUN_ID,
+    source_run_id: str = "source-run",
+    snapshot_signature: str | None = None,
+) -> BranchDiscoveryHandoffImportPayload:
+    transition = _finding_transition()
+    imported = ImportedFindingTransition(
+        "ar1-" + "3" * 64,
+        transition,
+        source_run_id,
+        "ar1-" + "3" * 64,
+    )
+    digest = finding_transition_sequence_sha256((imported,))
+    return BranchDiscoveryHandoffImportPayload(
+        source_run_id,
+        "ar1-" + "4" * 64,
+        "ar1-" + "5" * 64,
+        "ar1-" + "6" * 64,
+        "2" * 40,
+        "finding-family",
+        "1" * 40,
+        2,
+        "source-run",
+        "ar1-" + "4" * 64,
+        "ar1-" + "7" * 64,
+        target_run_id,
+        "inbox/backlog/b40-followup.md",
+        "8" * 64,
+        target_run_id,
+        digest,
+        (imported,),
+        (
+            FindingSnapshotItem(
+                "C-01",
+                snapshot_signature
+                or finding_signature("The observation remains visible.", ()),
+                "open",
+                FindingSeverity.OBSERVATION,
+            ),
+        ),
+        Role.ORCHESTRATOR,
+    )
+
+
+def _branch_export_prefix(
+    records: list[ArtifactRecord],
+    *,
+    attestation_fingerprint: Fingerprint = FP_A,
+) -> tuple[ArtifactRecord, ArtifactRecord, ArtifactRecord]:
+    _append(
+        records,
+        RunProfilePayload(
+            RoleProfilePayload("implementer", "medium"),
+            RoleProfilePayload("reviewer", "high"),
+            family_binding=replace(
+                _family_binding(),
+                predecessor_run_id=None,
+                predecessor_head_record_id=None,
+                cycle_number=1,
+            ),
+        ),
+    )
+    finding = _append(records, _finding_transition())
+    review = _append(
+        records,
+        _review(finding_ids=("C-01",)),
+        logical_id="review-claude-discovery-1",
+    )
+    attestation = _append_attestation(
+        records,
+        fingerprint=attestation_fingerprint,
+    )
+    return finding, review, attestation
+
+
+def _branch_export_payload(
+    finding: ArtifactRecord,
+    review: ArtifactRecord,
+    attestation: ArtifactRecord,
+    *,
+    family_id: str = "finding-family",
+    transition_digest: str | None = None,
+) -> BranchDiscoveryHandoffExportPayload:
+    transition = ImportedFindingTransition(
+        finding.record_id,
+        finding.payload,  # type: ignore[arg-type]
+        RUN_ID,
+        finding.record_id,
+    )
+    return BranchDiscoveryHandoffExportPayload(
+        RUN_ID,
+        attestation.record_id,
+        review.record_id,
+        attestation.record_id,
+        "2" * 40,
+        family_id,
+        "1" * 40,
+        2,
+        RUN_ID,
+        attestation.record_id,
+        (finding.record_id,),
+        transition_digest or finding_transition_sequence_sha256((transition,)),
+        "inbox/backlog/b40-followup.md",
+        "8" * 64,
+        "target-run",
+        Role.ORCHESTRATOR,
+    )
+
+
 def _side_effect(*, phase: str = "intent") -> SideEffectPayload:
     operation = ("b40-marker",)
     key = stable_side_effect_key("internal", "1", operation)
@@ -506,7 +637,73 @@ def _side_effect(*, phase: str = "intent") -> SideEffectPayload:
 def _case(line: int) -> RejectionInput:  # noqa: C901, PLR0912, PLR0915
     records: list[ArtifactRecord] = []
 
-    if line == 1416:
+    if line in {3001, 3002, 3003, 3004, 3005}:
+        finding, review, attestation = _branch_export_prefix(
+            records,
+            attestation_fingerprint=FP_B if line == 3003 else FP_A,
+        )
+        payload = _branch_export_payload(
+            finding,
+            review,
+            attestation,
+            family_id="wrong-family" if line == 3005 else "finding-family",
+            transition_digest="9" * 64 if line == 3004 else None,
+        )
+        if line == 3001:
+            payload = replace(payload, predecessor_run_id="wrong-run")
+        elif line == 3002:
+            payload = replace(
+                payload,
+                discovery_review_record_id="ar1-" + "9" * 64,
+            )
+        if line != 3012:
+            _append(records, payload)
+    elif line in {3006, 3007, 3008, 3009, 3010, 3011, 3012}:
+        payload = _branch_import_payload(
+            target_run_id="wrong-run" if line == 3006 else RUN_ID,
+            source_run_id=RUN_ID if line == 3007 else "source-run",
+            snapshot_signature="9" * 64 if line == 3008 else None,
+        )
+        if line != 3012:
+            _append(records, payload)
+        if line in {3009, 3010, 3011, 3012}:
+            _append(
+                records,
+                RunProfilePayload(
+                    RoleProfilePayload("implementer", "medium"),
+                    RoleProfilePayload("reviewer", "high"),
+                    family_binding=_family_binding(
+                        family_id=(
+                            "wrong-family" if line == 3009 else "finding-family"
+                        )
+                    ),
+                ),
+            )
+        if line == 3010:
+            _append(
+                records,
+                TaskPayload("feature/b40", ("src/a.py",), "9" * 64),
+            )
+        elif line == 3011:
+            _append(
+                records,
+                RunIdentityPayload(
+                    "inbox/backlog/wrong.md",
+                    "feature/b40",
+                    "1" * 40,
+                    "1" * 40,
+                    "PLAN_ONLY",
+                    None,
+                ),
+            )
+            _append(
+                records,
+                TaskPayload("feature/b40", ("src/a.py",), "8" * 64),
+            )
+        elif line == 3012:
+            _append(records, _measurement(operation="codex_plan"))
+            _append(records, payload)
+    elif line == 1416:
         _append(records, _transition(slice_id="1"))
         _append(records, _transition(slice_id="2"))
     elif line == 1424:
@@ -847,7 +1044,7 @@ def _load_baseline() -> dict[str, object]:
 
 def _entries() -> tuple[dict[str, object], ...]:
     entries = _load_baseline()["entries"]
-    assert isinstance(entries, list) and len(entries) == 81
+    assert isinstance(entries, list) and len(entries) == 93
     assert all(
         isinstance(entry, dict)
         and set(entry) == {"case_id", "input", "code", "line", "message"}
@@ -924,17 +1121,17 @@ def test_rejection_corpus_baseline_is_complete_and_source_bound() -> None:
     entries = _entries()
     expected = tuple((int(entry["line"]), str(entry["code"])) for entry in entries)
     assert _source_emissions() == expected
-    assert len({entry["case_id"] for entry in entries}) == 81
-    assert len({entry["line"] for entry in entries}) == 81
+    assert len({entry["case_id"] for entry in entries}) == 93
+    assert len({entry["line"] for entry in entries}) == 93
     assert Counter(entry["code"] for entry in entries) == {
-        "RECORD-FINGERPRINT-MISMATCH": 35,
-        "RECORD-REFERENCE-MISSING": 26,
+        "RECORD-FINGERPRINT-MISMATCH": 44,
+        "RECORD-REFERENCE-MISSING": 28,
         "RECORD-DUPLICATE": 9,
         "RECORD-MISSING": 9,
-        "RECORD-RUN-MISMATCH": 1,
+        "RECORD-RUN-MISMATCH": 2,
         "RECORD-TYPE-MISMATCH": 1,
     }
-    # All 81 rejection sites are reducer-reachable.  Three deliberately duplicated
+    # All 93 rejection sites are reducer-reachable.  Three deliberately duplicated
     # defences cannot be produced by schema-valid persisted bytes; their cases
     # mutate an already validated object so the independent reducer check stays
     # executable and their ingress unreachability remains explicit.

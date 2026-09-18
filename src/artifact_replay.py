@@ -22,10 +22,14 @@ from artifact_models import (
     AgentResultPayload,
     ArtifactRecord,
     artifact_payload_document, family_binding_document,
+    BranchDiscoveryHandoffExportPayload,
+    BranchDiscoveryHandoffImportPayload,
     BindingPayload,
     DiagnosticPayload,
     FinalReviewPreflightPayload,
+    FindingSeverity,
     FindingTransitionPayload,
+    FindingSnapshotItem,
     FindingHandoffExportPayload,
     FindingHandoffImportPayload,
     GateDecisionPayload,
@@ -34,6 +38,7 @@ from artifact_models import (
     ImportedFindingTransition,
     InvocationFailurePayload,
     finding_transition_sequence_sha256,
+    flatten_finding_transition_history,
     ProviderInputMeasurementPayload,
     ProviderAttemptPayload,
     PlanPayload,
@@ -65,6 +70,8 @@ from artifact_models import (
     TransientRetryPayload,
     canonical_json,
 )
+from finding_order import sorted_finding_ids
+from finding_signature import finding_record_signature
 from contracts import (
     AgentRole,
     AnchorRecord,
@@ -386,6 +393,8 @@ def replay_artifacts(
             RecordType.WORKFLOW_COMPLETION,
             RecordType.FINDING_HANDOFF_EXPORT,
             RecordType.FINDING_HANDOFF_IMPORT,
+            RecordType.BRANCH_DISCOVERY_HANDOFF_EXPORT,
+            RecordType.BRANCH_DISCOVERY_HANDOFF_IMPORT,
         }:
             if record.record_type in singleton_types:
                 _fail(
@@ -439,7 +448,13 @@ def replay_artifacts(
     has_run_profile = RecordType.RUN_PROFILE in singleton_types
     finding_import_bootstrap = (
         allow_finding_import_bootstrap
-        and all(isinstance(record.payload, FindingHandoffImportPayload) for record in chain)
+        and all(
+            isinstance(
+                record.payload,
+                (FindingHandoffImportPayload, BranchDiscoveryHandoffImportPayload),
+            )
+            for record in chain
+        )
     )
     if (not has_run_identity or not has_run_profile) and not finding_import_bootstrap:
         missing = []
@@ -1136,7 +1151,10 @@ def project_workflow_state(replay: ArtifactReplayResult) -> ReplayedWorkflowStat
         (
             record
             for record in records
-            if isinstance(record.payload, FindingHandoffImportPayload)
+            if isinstance(
+                record.payload,
+                (FindingHandoffImportPayload, BranchDiscoveryHandoffImportPayload),
+            )
         ),
         None,
     )
@@ -2335,7 +2353,10 @@ def _validate_single_finding_import(
 ) -> None:
     import_records = [
         record for record in chain
-        if isinstance(record.payload, FindingHandoffImportPayload)
+        if isinstance(
+            record.payload,
+            (FindingHandoffImportPayload, BranchDiscoveryHandoffImportPayload),
+        )
     ]
     if len(import_records) > 1:
         _fail(
@@ -2376,34 +2397,31 @@ def _validate_finding_handoff_record(
                 "finding export approval review is not present",
                 record,
             )
-        source_records = tuple(
-            records_by_id.get(record_id)
-            for record_id in payload.finding_transition_record_ids
+        source_prefix = chain[:positions[record.record_id]]
+        transitive = flatten_finding_transition_history(source_prefix)
+        legacy = tuple(
+            ImportedFindingTransition(source.record_id, source.payload)
+            for source in source_prefix
+            if isinstance(source.payload, FindingTransitionPayload)
         )
+        available_ids = {
+            item.record_id for candidate in (transitive, legacy) for item in candidate
+        }
         if any(
-            source is None
-            or not isinstance(source.payload, FindingTransitionPayload)
-            or positions[source.record_id] >= positions[record.record_id]
-            for source in source_records
+            record_id not in available_ids
+            for record_id in payload.finding_transition_record_ids
         ):
             _fail(
                 ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
                 "finding export transition sequence is not present",
                 record,
             )
-        actual = tuple(
-            ImportedFindingTransition(source.record_id, source.payload)
-            for source in source_records
-            if source is not None and isinstance(source.payload, FindingTransitionPayload)
-        )
-        ordered_ids = tuple(
-            source.record_id for source in chain[:positions[record.record_id]]
-            if isinstance(source.payload, FindingTransitionPayload)
-        )
-        if (
-            payload.finding_transition_record_ids != ordered_ids
-            or finding_transition_sequence_sha256(actual)
-            != payload.finding_transitions_sha256
+        if not any(
+            payload.finding_transition_record_ids
+            == tuple(item.record_id for item in candidate)
+            and payload.finding_transitions_sha256
+            == finding_transition_sequence_sha256(candidate)
+            for candidate in (transitive, legacy)
         ):
             _fail(
                 ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
@@ -2436,6 +2454,240 @@ def _validate_finding_handoff_record(
         # An import is atomic authority: validate its entire embedded
         # lifecycle now, not only when a later consumer asks for findings.
         reduce_findings(_result(record.run_id, (record,)))
+    elif isinstance(
+        payload,
+        (BranchDiscoveryHandoffExportPayload, BranchDiscoveryHandoffImportPayload),
+    ):
+        _validate_branch_discovery_handoff_record(
+            record,
+            payload,
+            chain,
+            records_by_id,
+            positions,
+            reduce_findings,
+        )
+
+
+def _validate_branch_discovery_handoff_record(
+    record: ArtifactRecord,
+    payload: BranchDiscoveryHandoffExportPayload | BranchDiscoveryHandoffImportPayload,
+    chain: tuple[ArtifactRecord, ...],
+    records_by_id: dict[str, ArtifactRecord],
+    positions: dict[str, int],
+    reduce_findings: Callable[..., object],
+) -> None:
+    if isinstance(payload, BranchDiscoveryHandoffExportPayload):
+        _validate_branch_discovery_export(
+            record, payload, chain, records_by_id, positions
+        )
+    else:
+        _validate_branch_discovery_import(
+            record, payload, chain, positions, reduce_findings
+        )
+
+
+def _validate_branch_discovery_export(
+    record: ArtifactRecord,
+    payload: BranchDiscoveryHandoffExportPayload,
+    chain: tuple[ArtifactRecord, ...],
+    records_by_id: dict[str, ArtifactRecord],
+    positions: dict[str, int],
+) -> None:
+    if (
+        payload.source_run_id != record.run_id
+        or not record.predecessor_ids
+        or payload.source_head_record_id != record.predecessor_ids[0]
+        or payload.predecessor_run_id != payload.source_run_id
+        or payload.predecessor_head_record_id != payload.source_head_record_id
+    ):
+        _fail(
+            ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+            "branch discovery export source or predecessor binding differs",
+            record,
+        )
+    review = records_by_id.get(payload.discovery_review_record_id)
+    attestation = records_by_id.get(payload.validation_attestation_record_id)
+    if (
+        review is None
+        or not isinstance(review.payload, ReviewPayload)
+        or review.payload.verdict != "approved"
+        or attestation is None
+        or not isinstance(attestation.payload, ValidationAttestationPayload)
+        or positions[review.record_id] >= positions[record.record_id]
+        or positions[attestation.record_id] >= positions[record.record_id]
+    ):
+        _fail(
+            ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+            "branch discovery export review or validation attestation is not present",
+            record,
+        )
+    if review.fingerprint != attestation.fingerprint:
+        _fail(
+            ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+            "branch discovery export review and attestation fingerprints differ",
+            record,
+        )
+    source_prefix = chain[:positions[record.record_id]]
+    flattened = flatten_finding_transition_history(source_prefix)
+    if (
+        payload.finding_transition_record_ids
+        != tuple(item.record_id for item in flattened)
+        or payload.finding_transitions_sha256
+        != finding_transition_sequence_sha256(flattened)
+    ):
+        _fail(
+            ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+            "branch discovery export flattened transition history differs",
+            record,
+        )
+    profile = next(
+        (
+            candidate.payload
+            for candidate in source_prefix
+            if isinstance(candidate.payload, RunProfilePayload)
+        ),
+        None,
+    )
+    binding = None if profile is None else profile.family_binding
+    if (
+        binding is None
+        or binding.family_id != payload.family_id
+        or binding.family_base_commit != payload.family_base_commit
+    ):
+        _fail(
+            ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+            "branch discovery export family identity differs from RunProfile",
+            record,
+        )
+
+
+def _validate_branch_discovery_import(
+    record: ArtifactRecord,
+    payload: BranchDiscoveryHandoffImportPayload,
+    chain: tuple[ArtifactRecord, ...],
+    positions: dict[str, int],
+    reduce_findings: Callable[..., object],
+) -> None:
+    if (
+        payload.target_run_id != record.run_id
+        or payload.target_run_identity != record.run_id
+    ):
+        _fail(
+            ReplayDiagnosticCode.RECORD_RUN_MISMATCH,
+            "branch discovery import target run differs",
+            record,
+        )
+    if payload.source_run_id == record.run_id:
+        _fail(
+            ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+            "branch discovery import must retain foreign provenance",
+            record,
+        )
+    reduction = reduce_findings(_result(record.run_id, (record,)))
+    findings_by_id = {
+        finding.finding_id: finding for finding in reduction.ledger.findings
+    }
+    expected_snapshot = tuple(
+        FindingSnapshotItem(
+            finding.finding_id,
+            finding_record_signature(finding),
+            finding.status.value.lower(),
+            FindingSeverity(finding.finding_class.value),
+        )
+        for finding in (
+            findings_by_id[finding_id]
+            for finding_id in sorted_finding_ids(findings_by_id)
+        )
+    )
+    if payload.finding_snapshot != expected_snapshot:
+        _fail(
+            ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+            "branch discovery import finding_snapshot differs from transitions",
+            record,
+        )
+    profile = next(
+        (
+            candidate.payload
+            for candidate in chain
+            if isinstance(candidate.payload, RunProfilePayload)
+        ),
+        None,
+    )
+    binding = None if profile is None else profile.family_binding
+    bootstrap_only = all(
+        isinstance(candidate.payload, BranchDiscoveryHandoffImportPayload)
+        for candidate in chain
+    )
+    actual_family = None if binding is None else (
+        binding.family_id,
+        binding.family_base_commit,
+        binding.cycle_number,
+        binding.predecessor_run_id,
+        binding.predecessor_head_record_id,
+    )
+    expected_family = (
+        payload.family_id,
+        payload.family_base_commit,
+        payload.cycle_number,
+        payload.predecessor_run_id,
+        payload.predecessor_head_record_id,
+    )
+    if not bootstrap_only and actual_family != expected_family:
+        _fail(
+            ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+            "branch discovery import family binding differs from RunProfile",
+            record,
+        )
+    task = next(
+        (item.payload for item in chain if isinstance(item.payload, TaskPayload)),
+        None,
+    )
+    identity = next(
+        (
+            item.payload
+            for item in chain
+            if isinstance(item.payload, RunIdentityPayload)
+        ),
+        None,
+    )
+    if task is not None and task.assignment_sha256 != payload.target_task_sha256:
+        _fail(
+            ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+            "branch discovery import task bytes digest differs from Task record",
+            record,
+        )
+    if identity is not None:
+        normalized_task = identity.task_file.replace("\\", "/")
+        if not (
+            normalized_task == payload.target_task_path
+            or normalized_task.endswith("/" + payload.target_task_path)
+        ):
+            _fail(
+                ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+                "branch discovery import task path differs from RunIdentity",
+                record,
+            )
+    first_dispatch = next(
+        (
+            positions[item.record_id]
+            for item in chain
+            if isinstance(
+                item.payload,
+                (
+                    ProviderInputMeasurementPayload,
+                    ProviderAttemptPayload,
+                    AgentResultPayload,
+                ),
+            )
+        ),
+        None,
+    )
+    if first_dispatch is not None and positions[record.record_id] >= first_dispatch:
+        _fail(
+            ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+            "branch discovery import must precede the first dispatch",
+            record,
+        )
 
 
 def _validate_work_unit_finding_import(
@@ -3220,14 +3472,16 @@ def _semantic_payload_document(payload: object) -> dict[str, object]:
     raw = asdict(payload)  # type: ignore[arg-type]
     if isinstance(payload, (AgentResultPayload, PlanPayload, FindingTransitionPayload, RunProfilePayload)):
         return artifact_payload_document(payload)
-    if isinstance(payload, FindingHandoffImportPayload):
-        raw["transitions"] = [
-            {
-                "record_id": item.record_id,
-                "payload": artifact_payload_document(item.payload),
-            }
-            for item in payload.transitions
-        ]
+    if isinstance(
+        payload,
+        (
+            FindingHandoffExportPayload,
+            FindingHandoffImportPayload,
+            BranchDiscoveryHandoffExportPayload,
+            BranchDiscoveryHandoffImportPayload,
+        ),
+    ):
+        return artifact_payload_document(payload)
     if (
         isinstance(payload, InvocationFailurePayload)
         and payload.orchestrator_diagnostic is None

@@ -10,6 +10,8 @@ from typing import Any, Mapping, Sequence
 from artifact_models import (
     AgentResultPayload,
     ArtifactRecord,
+    BranchDiscoveryHandoffExportPayload,
+    BranchDiscoveryHandoffImportPayload,
     BindingPayload,
     CorrectionWorkUnitPayload,
     DiagnosticPayload,
@@ -124,6 +126,8 @@ class ArtifactAuditProjection:
             elif isinstance(payload, (
                 TaskPayload, PlanPayload, FindingTransitionPayload,
                 FindingHandoffExportPayload, FindingHandoffImportPayload,
+                BranchDiscoveryHandoffExportPayload,
+                BranchDiscoveryHandoffImportPayload,
             )):
                 selected.append(record)
             elif record.fingerprint in slice_fingerprints:
@@ -468,6 +472,37 @@ def _render_finding_handoff_export_record(
     ))
 
 
+def _render_branch_discovery_handoff_record(
+    rendering: _ReplayRendering,
+    payload: BranchDiscoveryHandoffExportPayload | BranchDiscoveryHandoffImportPayload,
+    prefix: str,
+) -> None:
+    kind = "Import" if isinstance(payload, BranchDiscoveryHandoffImportPayload) else "Export"
+    rendering.bindings_and_units.extend((
+        f"### Branch-Discovery-Handoff-{kind}",
+        "",
+        "| Seq/Record | Quell-Run | Quell-Head | Discovery-Review | Attestierung | Geprüfter HEAD | Familie/Cycle | Zieltask | Ziel-Run |",
+        "|---|---|---|---|---|---|---|---|---|",
+        f"| {prefix} | `{_safe(payload.source_run_id)}` | `{payload.source_head_record_id}` | "
+        f"`{payload.discovery_review_record_id}` | `{payload.validation_attestation_record_id}` | "
+        f"`{payload.reviewed_head_commit}` | `{_safe(payload.family_id)}` / `{payload.cycle_number}` | "
+        f"`{_safe(payload.target_task_path)}` | `{_safe(payload.target_run_identity)}` |",
+        "",
+    ))
+    if isinstance(payload, BranchDiscoveryHandoffImportPayload):
+        rendering.findings.extend((
+            "### Importierter Finding-Snapshot",
+            "",
+            "| Finding | Signatur | Status | Klasse |",
+            "|---|---|---|---|",
+            *(
+                f"| `{item.finding_id}` | `{item.signature}` | `{item.finding_status}` | `{item.severity.value}` |"
+                for item in payload.finding_snapshot
+            ),
+            "",
+        ))
+
+
 def _render_validation_request_record(
     rendering: _ReplayRendering,
     payload: ValidationRequestPayload,
@@ -628,6 +663,11 @@ def _render_record(
         _render_finding_handoff_import_record(rendering, payload, prefix)
     elif isinstance(payload, FindingHandoffExportPayload):
         _render_finding_handoff_export_record(rendering, payload, prefix)
+    elif isinstance(
+        payload,
+        (BranchDiscoveryHandoffExportPayload, BranchDiscoveryHandoffImportPayload),
+    ):
+        _render_branch_discovery_handoff_record(rendering, payload, prefix)
     elif isinstance(payload, ValidationRequestPayload):
         _render_validation_request_record(rendering, payload, prefix)
     elif isinstance(payload, ValidationAttestationPayload):

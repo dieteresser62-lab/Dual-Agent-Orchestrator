@@ -75,6 +75,8 @@ class RecordType(StrEnum):
     FINDING_TRANSITION = "finding_transition"
     FINDING_HANDOFF_EXPORT = "finding_handoff_export"
     FINDING_HANDOFF_IMPORT = "finding_handoff_import"
+    BRANCH_DISCOVERY_HANDOFF_EXPORT = "branch_discovery_handoff_export"
+    BRANCH_DISCOVERY_HANDOFF_IMPORT = "branch_discovery_handoff_import"
     VALIDATION_REQUEST = "validation_request"
     VALIDATION_CONTENT = "validation_content"
     VALIDATION_ATTESTATION = "validation_attestation"
@@ -956,13 +958,47 @@ class ImportedFindingTransition:
 
     record_id: str
     payload: FindingTransitionPayload
+    source_run_id: str | None = None
+    source_record_id: str | None = None
 
     def __post_init__(self) -> None:
-        _require_identifier(self.record_id, "record_id")
-        if not self.record_id.startswith("ar1-"):
-            raise ArtifactValidationError("imported transition record_id must be an artifact ID")
+        _require_record_id(self.record_id, "record_id")
         if self.payload.work_unit_id is None:
             raise ArtifactValidationError("imported transitions must be structured")
+        provenance = (self.source_run_id, self.source_record_id)
+        if any(value is None for value in provenance) != all(
+            value is None for value in provenance
+        ):
+            missing = (
+                "source_run_id"
+                if self.source_run_id is None
+                else "source_record_id"
+            )
+            raise ArtifactValidationError(
+                f"imported transition is missing required field {missing}"
+            )
+        if self.source_run_id is not None:
+            _require_identifier(self.source_run_id, "source_run_id")
+            _require_record_id(self.source_record_id or "", "source_record_id")
+            if self.source_record_id != self.record_id:
+                raise ArtifactValidationError(
+                    "imported transition source_record_id must equal record_id"
+                )
+
+
+def imported_finding_transition_document(
+    transition: ImportedFindingTransition,
+) -> dict[str, Any]:
+    """Preserve the legacy wire form unless explicit provenance is present."""
+
+    document: dict[str, Any] = {
+        "record_id": transition.record_id,
+        "payload": artifact_payload_document(transition.payload),
+    }
+    if transition.source_run_id is not None:
+        document["source_run_id"] = transition.source_run_id
+        document["source_record_id"] = transition.source_record_id
+    return document
 
 
 def finding_transition_sequence_sha256(
@@ -970,13 +1006,36 @@ def finding_transition_sequence_sha256(
 ) -> str:
     """Digest the ordered canonical source documents, including their IDs."""
     documents = tuple(
-        {
-            "record_id": item.record_id,
-            "payload": artifact_payload_document(item.payload),
-        }
-        for item in transitions
+        imported_finding_transition_document(item) for item in transitions
     )
     return hashlib.sha256(canonical_json(documents)).hexdigest()
+
+
+def _validate_transitive_transition_sequence(
+    transitions: Sequence[ImportedFindingTransition],
+    *,
+    label: str,
+) -> None:
+    if not transitions:
+        raise ArtifactValidationError(f"{label} transitions must not be empty")
+    identities: list[tuple[str, str]] = []
+    for transition in transitions:
+        if transition.source_run_id is None or transition.source_record_id is None:
+            missing = (
+                "source_run_id"
+                if transition.source_run_id is None
+                else "source_record_id"
+            )
+            raise ArtifactValidationError(
+                f"{label} transition is missing required field {missing}"
+            )
+        identities.append(
+            (transition.source_run_id, transition.source_record_id)
+        )
+    if len(identities) != len(set(identities)):
+        raise ArtifactValidationError(
+            f"{label} transition provenance must be unique"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1044,6 +1103,170 @@ class FindingHandoffImportPayload:
             raise ArtifactValidationError("imported finding transition digest does not match")
         if self.authority is not Role.ORCHESTRATOR:
             raise ArtifactValidationError("finding handoff import authority must be orchestrator")
+
+
+@dataclass(frozen=True, slots=True)
+class FindingSnapshotItem:
+    finding_id: str
+    signature: str
+    finding_status: str
+    severity: FindingSeverity
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.finding_id, str) or _FINDING_ID_RE.fullmatch(
+            self.finding_id
+        ) is None:
+            raise ArtifactValidationError("finding_snapshot finding_id is invalid")
+        _require_sha256(self.signature, "finding_snapshot signature")
+        if self.finding_status not in {"open", "closed"}:
+            raise ArtifactValidationError("finding_snapshot finding_status is invalid")
+        if not isinstance(self.severity, FindingSeverity):
+            raise ArtifactValidationError("finding_snapshot severity is invalid")
+
+
+def _validate_finding_snapshot(snapshot: Sequence[FindingSnapshotItem]) -> None:
+    if not snapshot:
+        raise ArtifactValidationError("finding_snapshot must not be empty")
+    ids = tuple(item.finding_id for item in snapshot)
+    if ids != tuple(sorted_finding_ids(ids)):
+        raise ArtifactValidationError("finding_snapshot must be ordered by finding_id")
+    if len(ids) != len(set(ids)):
+        raise ArtifactValidationError("finding_snapshot finding_id values must be unique")
+
+
+@dataclass(frozen=True, slots=True)
+class BranchDiscoveryHandoffExportPayload:
+    source_run_id: str
+    source_head_record_id: str
+    discovery_review_record_id: str
+    validation_attestation_record_id: str
+    reviewed_head_commit: str
+    family_id: str
+    family_base_commit: str
+    cycle_number: int
+    predecessor_run_id: str
+    predecessor_head_record_id: str
+    finding_transition_record_ids: tuple[str, ...]
+    finding_transitions_sha256: str
+    target_task_path: str
+    target_task_sha256: str
+    target_run_identity: str
+    authority: Role
+    status: ClassVar[str] = "exported"
+    record_type: ClassVar[RecordType] = RecordType.BRANCH_DISCOVERY_HANDOFF_EXPORT
+
+    def __post_init__(self) -> None:
+        for value, name in (
+            (self.source_run_id, "source_run_id"),
+            (self.family_id, "family_id"),
+            (self.predecessor_run_id, "predecessor_run_id"),
+            (self.target_run_identity, "target_run_identity"),
+        ):
+            _require_identifier(value, name)
+        for value, name in (
+            (self.source_head_record_id, "source_head_record_id"),
+            (self.discovery_review_record_id, "discovery_review_record_id"),
+            (
+                self.validation_attestation_record_id,
+                "validation_attestation_record_id",
+            ),
+            (
+                self.predecessor_head_record_id,
+                "predecessor_head_record_id",
+            ),
+        ):
+            _require_record_id(value, name)
+        _require_git_sha(self.reviewed_head_commit, "reviewed_head_commit")
+        _require_git_sha(self.family_base_commit, "family_base_commit")
+        _require_positive(self.cycle_number, "cycle_number")
+        _require_unique_identifiers(
+            self.finding_transition_record_ids,
+            "finding_transition_record_ids",
+        )
+        _require_sha256(
+            self.finding_transitions_sha256, "finding_transitions_sha256"
+        )
+        _require_path(self.target_task_path)
+        _require_sha256(self.target_task_sha256, "target_task_sha256")
+        if self.authority is not Role.ORCHESTRATOR:
+            raise ArtifactValidationError(
+                "branch discovery handoff export authority must be orchestrator"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class BranchDiscoveryHandoffImportPayload:
+    source_run_id: str
+    source_head_record_id: str
+    discovery_review_record_id: str
+    validation_attestation_record_id: str
+    reviewed_head_commit: str
+    family_id: str
+    family_base_commit: str
+    cycle_number: int
+    predecessor_run_id: str
+    predecessor_head_record_id: str
+    export_record_id: str
+    target_run_id: str
+    target_task_path: str
+    target_task_sha256: str
+    target_run_identity: str
+    finding_transitions_sha256: str
+    transitions: tuple[ImportedFindingTransition, ...]
+    finding_snapshot: tuple[FindingSnapshotItem, ...]
+    authority: Role
+    status: ClassVar[str] = "imported"
+    record_type: ClassVar[RecordType] = RecordType.BRANCH_DISCOVERY_HANDOFF_IMPORT
+
+    def __post_init__(self) -> None:
+        for value, name in (
+            (self.source_run_id, "source_run_id"),
+            (self.family_id, "family_id"),
+            (self.predecessor_run_id, "predecessor_run_id"),
+            (self.target_run_id, "target_run_id"),
+            (self.target_run_identity, "target_run_identity"),
+        ):
+            _require_identifier(value, name)
+        for value, name in (
+            (self.source_head_record_id, "source_head_record_id"),
+            (self.discovery_review_record_id, "discovery_review_record_id"),
+            (
+                self.validation_attestation_record_id,
+                "validation_attestation_record_id",
+            ),
+            (
+                self.predecessor_head_record_id,
+                "predecessor_head_record_id",
+            ),
+            (self.export_record_id, "export_record_id"),
+        ):
+            _require_record_id(value, name)
+        _require_git_sha(self.reviewed_head_commit, "reviewed_head_commit")
+        _require_git_sha(self.family_base_commit, "family_base_commit")
+        _require_positive(self.cycle_number, "cycle_number")
+        _require_path(self.target_task_path)
+        _require_sha256(self.target_task_sha256, "target_task_sha256")
+        _require_sha256(
+            self.finding_transitions_sha256, "finding_transitions_sha256"
+        )
+        if self.target_run_id != self.target_run_identity:
+            raise ArtifactValidationError(
+                "branch discovery handoff target_run_id differs from target_run_identity"
+            )
+        _validate_transitive_transition_sequence(
+            self.transitions, label="branch discovery handoff import"
+        )
+        if finding_transition_sequence_sha256(self.transitions) != (
+            self.finding_transitions_sha256
+        ):
+            raise ArtifactValidationError(
+                "branch discovery handoff import transition digest does not match"
+            )
+        _validate_finding_snapshot(self.finding_snapshot)
+        if self.authority is not Role.ORCHESTRATOR:
+            raise ArtifactValidationError(
+                "branch discovery handoff import authority must be orchestrator"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -2107,6 +2330,7 @@ ArtifactPayload: TypeAlias = (
     | ReviewAnchorPayload | ReviewValidationBindingPayload
     | FindingTransitionPayload
     | FindingHandoffExportPayload | FindingHandoffImportPayload
+    | BranchDiscoveryHandoffExportPayload | BranchDiscoveryHandoffImportPayload
     | ValidationRequestPayload | ValidationContentPayload
     | ValidationAttestationPayload | ProviderContentPayload
     | ReviewPacketPayload | GatePayload
@@ -2149,12 +2373,12 @@ def artifact_payload_document(payload: ArtifactPayload) -> dict[str, Any]:
         elif payload.closure_kind == "fixed":
             raw.pop("rejection_reason", None)
             raw.pop("closure_evidence", None)
-    if isinstance(payload, FindingHandoffImportPayload):
+    if isinstance(
+        payload,
+        (FindingHandoffImportPayload, BranchDiscoveryHandoffImportPayload),
+    ):
         raw["transitions"] = [
-            {
-                "record_id": item.record_id,
-                "payload": artifact_payload_document(item.payload),
-            }
+            imported_finding_transition_document(item)
             for item in payload.transitions
         ]
     if (
@@ -2281,6 +2505,58 @@ class ArtifactRecord:
         validate_artifact_document(self.to_dict())
 
 
+def flatten_finding_transition_history(
+    records: Sequence[ArtifactRecord],
+) -> tuple[ImportedFindingTransition, ...]:
+    """Flatten imported history plus local facts with stable provenance."""
+
+    flattened: list[ImportedFindingTransition] = []
+    by_identity: dict[tuple[str, str], ImportedFindingTransition] = {}
+    for record in records:
+        payload = record.payload
+        if isinstance(
+            payload,
+            (FindingHandoffImportPayload, BranchDiscoveryHandoffImportPayload),
+        ):
+            candidates = tuple(
+                ImportedFindingTransition(
+                    item.record_id,
+                    item.payload,
+                    item.source_run_id or payload.source_run_id,
+                    item.source_record_id or item.record_id,
+                )
+                for item in payload.transitions
+            )
+        elif isinstance(payload, FindingTransitionPayload):
+            candidates = (
+                ImportedFindingTransition(
+                    record.record_id,
+                    payload,
+                    record.run_id,
+                    record.record_id,
+                ),
+            )
+        else:
+            continue
+        for candidate in candidates:
+            assert candidate.source_run_id is not None
+            assert candidate.source_record_id is not None
+            identity = (
+                candidate.source_run_id,
+                candidate.source_record_id,
+            )
+            prior = by_identity.get(identity)
+            if prior is not None:
+                if prior.payload != candidate.payload:
+                    raise ArtifactValidationError(
+                        "duplicate finding transition provenance has different payload"
+                    )
+                continue
+            by_identity[identity] = candidate
+            flattened.append(candidate)
+    return tuple(flattened)
+
+
 def stable_record_id(run_id: str, record_type: RecordType | str, logical_id: str, revision: int) -> str:
     """Return a deterministic opaque ID for one logical record revision."""
     kind = record_type.value if isinstance(record_type, RecordType) else record_type
@@ -2342,6 +2618,28 @@ def _slice_spec_from_dict(data: Mapping[str, Any]) -> SliceSpec:
         )
     except ValueError as exc:
         raise ArtifactValidationError(str(exc)) from exc
+
+
+def _imported_finding_transition_from_dict(
+    data: Mapping[str, Any],
+) -> ImportedFindingTransition:
+    return ImportedFindingTransition(
+        data["record_id"],
+        _payload_from_dict(RecordType.FINDING_TRANSITION, data["payload"]),
+        data.get("source_run_id"),
+        data.get("source_record_id"),
+    )
+
+
+def _finding_snapshot_item_from_dict(
+    data: Mapping[str, Any],
+) -> FindingSnapshotItem:
+    return FindingSnapshotItem(
+        data["finding_id"],
+        data["signature"],
+        data["finding_status"],
+        FindingSeverity(data["severity"]),
+    )
 
 
 _PAYLOAD_READERS: dict[
@@ -2513,11 +2811,40 @@ _PAYLOAD_READERS: dict[
             data["export_record_id"], data["target_run_id"],
             data["target_task_sha256"], data["finding_transitions_sha256"],
             tuple(
-                ImportedFindingTransition(
-                    item["record_id"],
-                    _payload_from_dict(RecordType.FINDING_TRANSITION, item["payload"]),
-                )
+                _imported_finding_transition_from_dict(item)
                 for item in data["transitions"]
+            ),
+            Role(data["authority"]),
+        ),
+    RecordType.BRANCH_DISCOVERY_HANDOFF_EXPORT: lambda data: BranchDiscoveryHandoffExportPayload(
+            data["source_run_id"], data["source_head_record_id"],
+            data["discovery_review_record_id"],
+            data["validation_attestation_record_id"],
+            data["reviewed_head_commit"], data["family_id"],
+            data["family_base_commit"], data["cycle_number"],
+            data["predecessor_run_id"], data["predecessor_head_record_id"],
+            tuple(data["finding_transition_record_ids"]),
+            data["finding_transitions_sha256"], data["target_task_path"],
+            data["target_task_sha256"], data["target_run_identity"],
+            Role(data["authority"]),
+        ),
+    RecordType.BRANCH_DISCOVERY_HANDOFF_IMPORT: lambda data: BranchDiscoveryHandoffImportPayload(
+            data["source_run_id"], data["source_head_record_id"],
+            data["discovery_review_record_id"],
+            data["validation_attestation_record_id"],
+            data["reviewed_head_commit"], data["family_id"],
+            data["family_base_commit"], data["cycle_number"],
+            data["predecessor_run_id"], data["predecessor_head_record_id"],
+            data["export_record_id"], data["target_run_id"],
+            data["target_task_path"], data["target_task_sha256"],
+            data["target_run_identity"], data["finding_transitions_sha256"],
+            tuple(
+                _imported_finding_transition_from_dict(item)
+                for item in data["transitions"]
+            ),
+            tuple(
+                _finding_snapshot_item_from_dict(item)
+                for item in data["finding_snapshot"]
             ),
             Role(data["authority"]),
         ),

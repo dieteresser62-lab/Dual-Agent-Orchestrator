@@ -68,8 +68,6 @@ class TaskContract:
                 )
             if self.approved_plan_commit is not None or self.approved_slices:
                 raise TaskContractError("PLAN_ONLY cannot consume an approved-plan handoff")
-            if self.finding_handoff_source_run_id is not None:
-                raise TaskContractError("PLAN_ONLY cannot consume a finding handoff")
         handoff_values = (
             self.finding_handoff_source_run_id,
             self.finding_handoff_export_record_id,
@@ -79,8 +77,13 @@ class TaskContract:
         ):
             raise TaskContractError("finding handoff requires both source run and export record")
         if self.finding_handoff_source_run_id is not None:
-            if self.approved_plan_commit is None:
-                raise TaskContractError("finding handoff requires an approved-plan IMPLEMENT task")
+            if (
+                self.approved_plan_commit is None
+                and self.mode is not TaskMode.PLAN_ONLY
+            ):
+                raise TaskContractError(
+                    "finding handoff requires PLAN_ONLY or an approved-plan IMPLEMENT task"
+                )
             if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,199}", self.finding_handoff_source_run_id) is None:
                 raise TaskContractError("FINDING_HANDOFF_SOURCE_RUN is invalid")
             if re.fullmatch(r"ar1-[0-9a-f]{64}", self.finding_handoff_export_record_id or "") is None:

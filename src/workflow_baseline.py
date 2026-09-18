@@ -26,6 +26,7 @@ from artifact_resume import (
 )
 from artifact_models import (
     ArtifactRecord,
+    BranchDiscoveryHandoffImportPayload,
     CorrectionWorkUnitPayload,
     FingerprintKind,
     FindingHandoffImportPayload,
@@ -383,7 +384,10 @@ def matches_baseline_initialization_prefix(
         (
             index
             for index, record in enumerate(records)
-            if not isinstance(record.payload, FindingHandoffImportPayload)
+            if not isinstance(
+                record.payload,
+                (FindingHandoffImportPayload, BranchDiscoveryHandoffImportPayload),
+            )
         ),
         len(records),
     )
@@ -761,7 +765,13 @@ class WorkflowBaseline:
         existing_replay = None
         if existing_chain:
             import_only_prefix = all(
-                isinstance(record.payload, FindingHandoffImportPayload)
+                isinstance(
+                    record.payload,
+                    (
+                        FindingHandoffImportPayload,
+                        BranchDiscoveryHandoffImportPayload,
+                    ),
+                )
                 for record in existing_chain
             )
             try:

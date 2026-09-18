@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from artifact_models import (
+    BranchDiscoveryHandoffExportPayload,
+    BranchDiscoveryHandoffImportPayload,
     ArtifactRecord,
     FindingHandoffExportPayload,
     FindingHandoffImportPayload,
@@ -271,7 +273,10 @@ def _validate_finding_handoff(
     import_records = tuple(
         record
         for record in replay.records
-        if isinstance(record.payload, FindingHandoffImportPayload)
+        if isinstance(
+            record.payload,
+            (FindingHandoffImportPayload, BranchDiscoveryHandoffImportPayload),
+        )
     )
     source_run_id = projected.finding_handoff_source_run_id
     export_record_id = projected.finding_handoff_export_record_id
@@ -294,6 +299,7 @@ def _validate_finding_handoff(
         # task_contract -> audit_trail -> state_io initialization cycle.
         from artifact_bridge import (
             ArtifactBridgeError,
+            branch_discovery_handoff_import_payload,
             finding_handoff_import_payload,
         )
 
@@ -308,23 +314,58 @@ def _validate_finding_handoff(
             for record in source_replay.records
             if record.record_id == export_record_id
         )
-        if not isinstance(export_record.payload, FindingHandoffExportPayload):
+        if not isinstance(
+            export_record.payload,
+            (FindingHandoffExportPayload, BranchDiscoveryHandoffExportPayload),
+        ):
             raise ArtifactBridgeError(
                 "referenced source record is not a finding export"
             )
-        if (
-            export_record.payload.approved_plan_commit
-            != projected.approved_plan_commit
-        ):
-            raise ArtifactBridgeError(
-                "source export plan commit differs from target records"
+        if isinstance(export_record.payload, BranchDiscoveryHandoffExportPayload):
+            if not isinstance(
+                import_records[0].payload,
+                BranchDiscoveryHandoffImportPayload,
+            ):
+                raise ArtifactBridgeError(
+                    "branch discovery export differs from target import type"
+                )
+            try:
+                target_task_path = Path(projected.task_file).resolve().relative_to(
+                    repository_root.resolve()
+                ).as_posix()
+            except ValueError as exc:
+                raise ArtifactBridgeError(
+                    "branch discovery target task is outside the repository"
+                ) from exc
+            expected_import = branch_discovery_handoff_import_payload(
+                source_replay,
+                export_record,
+                target_run_id=projected.run_id,
+                target_task_path=target_task_path,
+                target_task_bytes=Path(projected.task_file).read_bytes(),
+                target_family_binding=projected.family_binding,
             )
-        expected_import = finding_handoff_import_payload(
-            source_replay,
-            export_record,
-            target_run_id=projected.run_id,
-            target_task_bytes=Path(projected.task_file).read_bytes(),
-        )
+        else:
+            if not isinstance(
+                import_records[0].payload,
+                FindingHandoffImportPayload,
+            ):
+                raise ArtifactBridgeError(
+                    "finding export differs from target import type"
+                )
+            if (
+                export_record.payload.approved_plan_commit
+                != projected.approved_plan_commit
+            ):
+                raise ArtifactBridgeError(
+                    "source export plan commit differs from target records"
+                )
+            expected_import = finding_handoff_import_payload(
+                source_replay,
+                export_record,
+                target_run_id=projected.run_id,
+                target_task_bytes=Path(projected.task_file).read_bytes(),
+            )
     except (
         ArtifactStoreError,
         ArtifactReplayError,

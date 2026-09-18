@@ -43,6 +43,7 @@ EXPECTED_SETUP_FUNCTIONS = {
     "_apply_resumed_agent_profiles",
     "_context",
     "_current_gate_approval",
+    "_branch_discovery_family_binding",
     "_fresh_state",
     "_initialize_finding_handoff",
     "_new_watch_task_control_paths",
@@ -50,7 +51,12 @@ EXPECTED_SETUP_FUNCTIONS = {
     "_plan_only_step_boundary",
     "_recover_legacy_plan_only_post_gate",
 }
-EXPECTED_SETUP_EDGES = Counter({("_context", "_plan_only_step_boundary"): 1})
+EXPECTED_SETUP_EDGES = Counter(
+    {
+        ("_context", "_plan_only_step_boundary"): 1,
+        ("_fresh_state", "_branch_discovery_family_binding"): 1,
+    }
+)
 EXPECTED_PRODUCTION_BINDINGS = {
     "apply_resumed_agent_profiles": "_apply_resumed_agent_profiles",
     "context": "_context",

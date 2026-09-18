@@ -37,6 +37,10 @@ PRE_CUT_DOCUMENT = _load_json(PRE_CUT)
 CORPUS_DOCUMENT = _load_json(CORPUS)
 CORPUS_CASES = tuple(CORPUS_DOCUMENT["cases"])
 CORPUS_TYPES = tuple(case["record_type"] for case in CORPUS_CASES)
+E9_ADDITIVE_PAYLOAD_TYPES = {
+    "branch_discovery_handoff_export": "BranchDiscoveryHandoffExportPayload",
+    "branch_discovery_handoff_import": "BranchDiscoveryHandoffImportPayload",
+}
 
 
 def _git(*args: str) -> str:
@@ -167,6 +171,9 @@ def _normalized_payload_fields(payload: object) -> object:
     if isinstance(payload, artifact_models.FindingHandoffImportPayload):
         raw = asdict(payload)
         for transition in raw["transitions"]:
+            if transition["source_run_id"] is None:
+                transition.pop("source_run_id")
+                transition.pop("source_record_id")
             transition_payload = transition["payload"]
             if transition_payload["responsibility"] is None:
                 transition_payload.pop("responsibility")
@@ -299,8 +306,21 @@ def test_corpus_and_mapping_cover_every_pre_cut_branch_exactly() -> None:
     assert len(CORPUS_TYPES) == len(set(CORPUS_TYPES))
     assert tuple(pre_cut) == CORPUS_TYPES
     assert {case["record_type"]: case["expected_class"] for case in CORPUS_CASES} == pre_cut
-    assert current == pre_cut
-    assert tuple(item.value for item in artifact_models._PAYLOAD_READERS) == CORPUS_TYPES
+    assert {
+        name: payload_class
+        for name, payload_class in current.items()
+        if name not in E9_ADDITIVE_PAYLOAD_TYPES
+    } == pre_cut
+    assert {
+        name: payload_class
+        for name, payload_class in current.items()
+        if name in E9_ADDITIVE_PAYLOAD_TYPES
+    } == E9_ADDITIVE_PAYLOAD_TYPES
+    assert tuple(
+        item.value
+        for item in artifact_models._PAYLOAD_READERS
+        if item.value not in E9_ADDITIVE_PAYLOAD_TYPES
+    ) == CORPUS_TYPES
     assert set(artifact_models._PAYLOAD_READERS) == set(RecordType)
 
 

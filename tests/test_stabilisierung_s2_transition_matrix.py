@@ -114,6 +114,34 @@ BRIDGE_ERROR_MARKERS = (
     "provider attempt terminal differs from its durable result",
     "referenced finding export record is missing",
     "finding export plan commit differs from the task",
+    "branch discovery export differs from target import type",
+    "finding export differs from target import type",
+    "branch discovery target task is outside the repository",
+    "branch discovery handoff requires a non-empty finding snapshot",
+    "branch discovery handoff requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
+    "branch discovery handoff export requires a non-empty accepted replay",
+    "branch discovery handoff export requires a family binding",
+    "branch discovery handoff export requires its approved discovery review record",
+    "branch discovery handoff export requires its validation attestation record",
+    "branch discovery review and validation attestation fingerprints differ",
+    "branch discovery handoff export requires at least one source transition",
+    "branch discovery target family predecessor differs from the source head",
+    "branch discovery import requires a branch discovery export record",
+    "branch discovery import requires the target RunProfile family binding",
+    "branch discovery export record is not resolvable in the source run",
+    "branch discovery export must be the accepted source replay head",
+    "branch discovery export source run or bound source head differs",
+    "branch discovery export differs from its flattened source history",
+    "branch discovery import target_task_sha256 differs from task bytes",
+    "branch discovery import target_task_path differs from queue position",
+    "branch discovery import target_run_identity differs from target run",
+    "branch discovery import family binding differs from target RunProfile",
+    "PLAN_ONLY finding handoff does not reference a branch discovery export",
+    "branch discovery source has no RunProfile family binding",
+    "branch discovery export is not the source run head",
+    "branch discovery target_task_sha256 differs from loaded task bytes",
+    "branch discovery export requires a PLAN_ONLY target task",
+    "branch discovery import requires the target family binding",
 )
 
 RECOVERABLE_FUNCTIONS: dict[str, set[str]] = {}
@@ -345,6 +373,9 @@ COMPARISON_TARGETS = (
     ("src/artifact_replay.py", None, "_validate_work_unit_revisions"),
     ("src/artifact_replay.py", None, "_validate_single_finding_import"),
     ("src/artifact_replay.py", None, "_validate_finding_handoff_record"),
+    ("src/artifact_replay.py", None, "_validate_branch_discovery_handoff_record"),
+    ("src/artifact_replay.py", None, "_validate_branch_discovery_export"),
+    ("src/artifact_replay.py", None, "_validate_branch_discovery_import"),
     ("src/artifact_replay.py", None, "_validate_work_unit_finding_import"),
     ("src/artifact_replay.py", None, "_validate_work_unit_activity_reference"),
     ("src/artifact_replay.py", None, "_validate_bound_record_references"),
@@ -354,6 +385,9 @@ COMPARISON_TARGETS = (
     ("src/artifact_replay.py", None, "_validate_payload_references"),
     ("src/artifact_bridge.py", None, "finding_handoff_export_payload"),
     ("src/artifact_bridge.py", None, "finding_handoff_import_payload"),
+    ("src/artifact_bridge.py", None, "_finding_snapshot"),
+    ("src/artifact_bridge.py", None, "branch_discovery_handoff_export_payload"),
+    ("src/artifact_bridge.py", None, "branch_discovery_handoff_import_payload"),
     ("src/artifact_bridge.py", None, "review_payload_matches_result"),
     ("src/artifact_bridge.py", "ArtifactBridge", "append"),
     ("src/artifact_bridge.py", "ArtifactBridge", "record_side_effect_intent"),
@@ -373,6 +407,9 @@ COMPARISON_TARGETS = (
     ("src/orchestrator.py", None, "_load_bound_queue_terminal"),
     ("src/orchestrator.py", None, "run_pipeline"),
     ("src/workflow_run_setup.py", None, "_apply_resumed_agent_profiles"),
+    ("src/workflow_run_setup.py", None, "_branch_discovery_family_binding"),
+    ("src/workflow_run_setup.py", None, "_initialize_finding_handoff"),
+    ("src/artifact_resume.py", None, "_validate_finding_handoff"),
     ("src/workflow_production.py", None, "_read_production_task"),
     ("src/workflow_production.py", None, "_prepare_new_watch_task"),
     ("src/workflow_production.py", None, "_validate_resumed_state"),
@@ -572,7 +609,10 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/artifact_replay.py:_validate_review_packet_bindings": 2,
     "src/artifact_replay.py:_validate_work_unit_revisions": 6,
     "src/artifact_replay.py:_validate_single_finding_import": 1,
-    "src/artifact_replay.py:_validate_finding_handoff_record": 13,
+    "src/artifact_replay.py:_validate_finding_handoff_record": 11,
+    "src/artifact_replay.py:_validate_branch_discovery_handoff_record": 0,
+    "src/artifact_replay.py:_validate_branch_discovery_export": 16,
+    "src/artifact_replay.py:_validate_branch_discovery_import": 13,
     "src/artifact_replay.py:_validate_work_unit_finding_import": 4,
     "src/artifact_replay.py:_validate_work_unit_activity_reference": 4,
     "src/artifact_replay.py:_validate_bound_record_references": 18,
@@ -581,7 +621,10 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/artifact_replay.py:_validate_side_effect_sequences": 13,
     "src/artifact_replay.py:_validate_payload_references": 0,
     "src/artifact_bridge.py:finding_handoff_export_payload": 5,
-    "src/artifact_bridge.py:finding_handoff_import_payload": 8,
+    "src/artifact_bridge.py:finding_handoff_import_payload": 9,
+    "src/artifact_bridge.py:_finding_snapshot": 0,
+    "src/artifact_bridge.py:branch_discovery_handoff_export_payload": 9,
+    "src/artifact_bridge.py:branch_discovery_handoff_import_payload": 12,
     "src/artifact_bridge.py:review_payload_matches_result": 13,
     "src/artifact_bridge.py:ArtifactBridge.append": 3,
     "src/artifact_bridge.py:ArtifactBridge.record_side_effect_intent": 1,
@@ -601,6 +644,9 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/orchestrator.py:_load_bound_queue_terminal": 4,
     "src/orchestrator.py:run_pipeline": 16,
     "src/workflow_run_setup.py:_apply_resumed_agent_profiles": 3,
+    "src/workflow_run_setup.py:_branch_discovery_family_binding": 9,
+    "src/workflow_run_setup.py:_initialize_finding_handoff": 8,
+    "src/artifact_resume.py:_validate_finding_handoff": 6,
     "src/workflow_production.py:_read_production_task": 2,
     "src/workflow_production.py:_prepare_new_watch_task": 1,
     "src/workflow_production.py:_validate_resumed_state": 10,
@@ -679,6 +725,7 @@ EXPECTED_COMPARISON_COUNTS = {
 
 EXPECTED_STRICT_BODY_DIGESTS = {
     "src/artifact_bridge.py:review_payload_matches_result": "4ad048b9ff2fdd56f813abe6f8b8b72114f3fc0a3d59426185d74031e7b65506",
+    "src/artifact_resume.py:_validate_finding_handoff": "40f91b2e0127b7fc16403a8b79bc12462b3a3dfa1cbecef1fe9a65b73f029e1f",
     "src/artifact_resume.py:require_workflow_status_prefix": "964d356480288034c6dc52de377c2326c06d2db50d6aae52fd2b3d5dbcc5bdec",
     "src/artifact_resume.py:require_workflow_event_prefix": "baf1ce7cd7ef465131f9779714b33b34d5e929f10c19c48b7a92b68089543d5a",
     "src/artifact_resume.py:require_gate_prefix": "67196c4e07c9c428033a8bf93726a93adc22a66929cbf975019913bf60979b82",
@@ -956,7 +1003,7 @@ def test_bridge_error_inventory_is_source_bound() -> None:
     )
     combined_source = "\n".join(_string_constants(path) for path in paths)
     document = MATRIX_PATH.read_text(encoding="utf-8")
-    assert sum(_raise_count(path, "ArtifactBridgeError") for path in paths) == 26
+    assert sum(_raise_count(path, "ArtifactBridgeError") for path in paths) == 58
     for marker in BRIDGE_ERROR_MARKERS:
         assert marker in combined_source
         assert marker in document
@@ -1332,7 +1379,7 @@ def test_comparison_expression_inventory_has_not_grown() -> None:
         count
         for label, count in actual.items()
         if label.startswith("src/artifact_replay.py:")
-    ) == 189
+    ) == 216
     document = MATRIX_PATH.read_text(encoding="utf-8")
     assert (
         "`WorkflowPersistence.persist_native_implementer_contract()` 11 "

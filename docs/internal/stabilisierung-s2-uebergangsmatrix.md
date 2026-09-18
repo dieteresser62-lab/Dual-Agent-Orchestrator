@@ -795,7 +795,12 @@ Tabelle inventarisiert daher 30 Stämme, während der AST-Zähler 32 direkte
 | `finding handoff source is no longer valid` | A02 |
 | `finding import differs from its revalidated source` | A02/B03 |
 
-### 26 `ArtifactBridgeError`-Stellen
+### 58 `ArtifactBridgeError`-Stellen
+
+Die ursprünglichen 26 S2-Stellen bleiben erhalten. Der dormante E9-
+Entdeckungsübergang ergänzt 32 bewusst fail-closed gehaltene Wurfstellen für
+Quellauflösung, Transitivität sowie Zieltask-, Kindidentitäts- und
+Familienbindung.
 
 | Meldungsstamm | Kante |
 |---|---|
@@ -825,6 +830,34 @@ Tabelle inventarisiert daher 30 Stämme, während der AST-Zähler 32 direkte
 | `provider attempt terminal differs from its durable result` | B04 |
 | `referenced finding export record is missing` | B03/B08 |
 | `finding export plan commit differs from the task` | B03/B08 |
+| `branch discovery export differs from target import type` | E9; Quell- und Zielrecord müssen dasselbe Handoffpaar bilden |
+| `finding export differs from target import type` | E9; der vorhandene Handoff darf nicht als Entdeckungsimport gelesen werden |
+| `branch discovery target task is outside the repository` | E9; Ziel-Queueposition bleibt repositorygebunden |
+| `branch discovery handoff requires a non-empty finding snapshot` | E2/E9; ein leerer Entdeckungsübergang besitzt keine Findingautorität |
+| `branch discovery handoff requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER` | E9-Dormanz; keine neue Semantik bei ausgeschaltetem gemeinsamen Schalter |
+| `branch discovery handoff export requires a non-empty accepted replay` | E9; Export nur von einem akzeptierten Quellpräfix |
+| `branch discovery handoff export requires a family binding` | E2a/E9 |
+| `branch discovery handoff export requires its approved discovery review record` | E2/E9; positives Entdeckungsreview bleibt Recordautorität |
+| `branch discovery handoff export requires its validation attestation record` | E2/E9 |
+| `branch discovery review and validation attestation fingerprints differ` | E2/E9; Review und Matrix müssen denselben geprüften Stand binden |
+| `branch discovery handoff export requires at least one source transition` | E2/E2b |
+| `branch discovery target family predecessor differs from the source head` | E2a/E9 |
+| `branch discovery import requires a branch discovery export record` | E9 |
+| `branch discovery import requires the target RunProfile family binding` | E2a/E9 |
+| `branch discovery export record is not resolvable in the source run` | E9-Replayregel 2 |
+| `branch discovery export must be the accepted source replay head` | E9-Replayregel 2 |
+| `branch discovery export source run or bound source head differs` | E9-Replayregel 2 |
+| `branch discovery export differs from its flattened source history` | E2b/E9-Replayregel 3 |
+| `branch discovery import target_task_sha256 differs from task bytes` | E9-Replayregel 4 |
+| `branch discovery import target_task_path differs from queue position` | E9-Replayregel 4 |
+| `branch discovery import target_run_identity differs from target run` | E2/E9; deterministische Kindidentität |
+| `branch discovery import family binding differs from target RunProfile` | E9-Replayregel 5 |
+| `PLAN_ONLY finding handoff does not reference a branch discovery export` | E9; Planlauf und vorhandener Implementierungshandoff bleiben getrennt |
+| `branch discovery source has no RunProfile family binding` | E2a/E9 |
+| `branch discovery export is not the source run head` | E9-Replayregel 2 |
+| `branch discovery target_task_sha256 differs from loaded task bytes` | E9-Replayregel 4 |
+| `branch discovery export requires a PLAN_ONLY target task` | E9; der Entdeckungsübergang autorisiert genau den Planlauf |
+| `branch discovery import requires the target family binding` | E2a/E9 |
 
 ### Laufzeitvergleiche außerhalb der Migration
 

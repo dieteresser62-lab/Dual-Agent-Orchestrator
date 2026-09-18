@@ -12,9 +12,11 @@ from typing import Callable
 from artifact_bridge import (
     ArtifactBridge,
     ArtifactBridgeError,
+    branch_discovery_handoff_import_payload,
     finding_handoff_import_payload,
 )
 from artifact_models import (
+    BranchDiscoveryHandoffExportPayload,
     FamilyBindingPayload,
     FindingHandoffExportPayload,
     FingerprintKind,
@@ -303,6 +305,21 @@ def _fresh_state(
             "prepared watch-task branch HEAD changed before state initialization"
         )
     if (
+        task_contract.mode is TaskMode.PLAN_ONLY
+        and task_contract.finding_handoff_source_run_id is not None
+    ):
+        discovered_binding = _branch_discovery_family_binding(
+            repository_root,
+            task_file,
+            run_id,
+            task_contract,
+        )
+        if family_binding is not None and family_binding != discovered_binding:
+            raise StateSchemaError(
+                "branch discovery handoff family binding differs from requested binding"
+            )
+        family_binding = discovered_binding
+    if (
         family_binding is not None
         and not native_finding_decisions.native_finding_decisions_enabled()
     ):
@@ -362,6 +379,93 @@ def _fresh_state(
     return state
 
 
+def _branch_discovery_family_binding(
+    repository_root: Path,
+    task_file: Path,
+    target_run_id: str,
+    task_contract: TaskContract,
+) -> FamilyBindingPayload:
+    """Resolve E9's target family facts before writing the local RunProfile."""
+
+    if not native_finding_decisions.native_finding_decisions_enabled():
+        raise StateSchemaError(
+            "branch discovery handoff requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER"
+        )
+    source_run_id = task_contract.finding_handoff_source_run_id
+    export_record_id = task_contract.finding_handoff_export_record_id
+    assert source_run_id is not None and export_record_id is not None
+    try:
+        source_replay = replay_artifacts(
+            ArtifactStore(repository_root, source_run_id).load_chain(),
+            source_run_id,
+        )
+        export_record = next(
+            record
+            for record in source_replay.records
+            if record.record_id == export_record_id
+        )
+        export = export_record.payload
+        if not isinstance(export, BranchDiscoveryHandoffExportPayload):
+            raise ArtifactBridgeError(
+                "PLAN_ONLY finding handoff does not reference a branch discovery export"
+            )
+        source_binding = (
+            None
+            if source_replay.run_profile is None
+            else source_replay.run_profile.family_binding
+        )
+        if source_binding is None:
+            raise ArtifactBridgeError(
+                "branch discovery source has no RunProfile family binding"
+            )
+        try:
+            target_path = task_file.resolve().relative_to(
+                repository_root.resolve()
+            ).as_posix()
+        except ValueError as exc:
+            raise ArtifactBridgeError(
+                "branch discovery target task is outside the repository"
+            ) from exc
+        if source_replay.head_record_id != export_record.record_id:
+            raise ArtifactBridgeError(
+                "branch discovery export is not the source run head"
+            )
+        if export.target_run_identity != target_run_id:
+            raise ArtifactBridgeError(
+                "branch discovery target_run_identity differs from target run"
+            )
+        if export.target_task_path != target_path:
+            raise ArtifactBridgeError(
+                "branch discovery target_task_path differs from queue position"
+            )
+        if export.target_task_sha256 != task_contract.digest:
+            raise ArtifactBridgeError(
+                "branch discovery target_task_sha256 differs from loaded task bytes"
+            )
+        return FamilyBindingPayload(
+            family_id=export.family_id,
+            family_base_commit=export.family_base_commit,
+            family_authorized_change_set=(
+                source_binding.family_authorized_change_set
+            ),
+            predecessor_run_id=export.predecessor_run_id,
+            predecessor_head_record_id=export.predecessor_head_record_id,
+            cycle_number=export.cycle_number,
+            current_plan_commit=source_binding.current_plan_commit,
+            current_implementation_commit=(
+                source_binding.current_implementation_commit
+            ),
+        )
+    except (
+        ArtifactBridgeError,
+        ArtifactReplayError,
+        OSError,
+        StopIteration,
+        ValueError,
+    ) as exc:
+        raise StateSchemaError(f"BRANCH-DISCOVERY-HANDOFF-INVALID: {exc}") from exc
+
+
 def _initialize_finding_handoff(
     repository_root: Path,
     state: WorkflowState,
@@ -385,22 +489,59 @@ def _initialize_finding_handoff(
         if export_record is None:
             raise ArtifactBridgeError("referenced finding export record is missing")
         export_payload = export_record.payload
-        if (
-            not isinstance(export_payload, FindingHandoffExportPayload)
-            or export_payload.approved_plan_commit != task_contract.approved_plan_commit
-        ):
-            raise ArtifactBridgeError("finding export plan commit differs from the task")
-        payload = finding_handoff_import_payload(
-            source_replay,
-            export_record,
-            target_run_id=state.run_id,
-            target_task_bytes=task_bytes,
-        )
+        if isinstance(export_payload, BranchDiscoveryHandoffExportPayload):
+            if task_contract.mode is not TaskMode.PLAN_ONLY:
+                raise ArtifactBridgeError(
+                    "branch discovery export requires a PLAN_ONLY target task"
+                )
+            if state.family_binding is None:
+                raise ArtifactBridgeError(
+                    "branch discovery import requires the target family binding"
+                )
+            try:
+                target_task_path = Path(state.task_file).resolve().relative_to(
+                    repository_root.resolve()
+                ).as_posix()
+            except ValueError as exc:
+                raise ArtifactBridgeError(
+                    "branch discovery target task is outside the repository"
+                ) from exc
+            payload = branch_discovery_handoff_import_payload(
+                source_replay,
+                export_record,
+                target_run_id=state.run_id,
+                target_task_path=target_task_path,
+                target_task_bytes=task_bytes,
+                target_family_binding=state.family_binding,
+            )
+            logical_id = "branch-discovery-handoff-import"
+            idempotency_key = (
+                f"branch-discovery-handoff-import:{source_run_id}:{export_record_id}"
+            )
+        else:
+            if (
+                not isinstance(export_payload, FindingHandoffExportPayload)
+                or export_payload.approved_plan_commit
+                != task_contract.approved_plan_commit
+            ):
+                raise ArtifactBridgeError(
+                    "finding export plan commit differs from the task"
+                )
+            payload = finding_handoff_import_payload(
+                source_replay,
+                export_record,
+                target_run_id=state.run_id,
+                target_task_bytes=task_bytes,
+            )
+            logical_id = "finding-handoff-import"
+            idempotency_key = (
+                f"finding-handoff-import:{source_run_id}:{export_record_id}"
+            )
         bridge = ArtifactBridge(ArtifactStore(repository_root, state.run_id))
         imported = bridge.append(
             payload,
-            logical_id="finding-handoff-import",
-            idempotency_key=f"finding-handoff-import:{source_run_id}:{export_record_id}",
+            logical_id=logical_id,
+            idempotency_key=idempotency_key,
             fingerprint_sha256=task_contract.digest,
             fingerprint_kind=FingerprintKind.CONTRACT,
         )
