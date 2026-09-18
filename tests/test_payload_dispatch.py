@@ -139,6 +139,14 @@ def _current_mapping() -> dict[str, str]:
 
 
 def _normalized_payload_fields(payload: object) -> object:
+    if isinstance(
+        payload,
+        (
+            artifact_models.FindingTransitionPayload,
+            artifact_models.FindingHandoffImportPayload,
+        ),
+    ):
+        return artifact_models.artifact_payload_document(payload)
     raw = asdict(payload)  # type: ignore[arg-type]
     if isinstance(payload, artifact_models.InvocationFailurePayload):
         if payload.orchestrator_diagnostic is None:

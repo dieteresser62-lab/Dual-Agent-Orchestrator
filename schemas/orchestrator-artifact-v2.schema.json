@@ -222,9 +222,16 @@
       "type": "object", "additionalProperties": false, "required": ["review_record_id", "attestation_record_id"],
       "properties": {"review_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "attestation_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}}
     },
+    "finding_responsibility": {
+      "oneOf": [
+        {"type": "object", "additionalProperties": false, "required": ["responsibility_kind", "target_run_id", "approved_plan_commit", "slice_id"], "properties": {"responsibility_kind": {"const": "SLICE"}, "target_run_id": {"$ref": "#/$defs/identifier"}, "approved_plan_commit": {"$ref": "#/$defs/git_sha"}, "slice_id": {"$ref": "#/$defs/identifier"}}},
+        {"type": "object", "additionalProperties": false, "required": ["responsibility_kind", "family_id", "cycle_number"], "properties": {"responsibility_kind": {"const": "BRANCH_PLANNING"}, "family_id": {"$ref": "#/$defs/identifier"}, "cycle_number": {"type": "integer", "minimum": 1}}},
+        {"type": "object", "additionalProperties": false, "required": ["responsibility_kind", "run_id", "plan_path", "plan_digest", "revision"], "properties": {"responsibility_kind": {"const": "PLAN_REVISION"}, "run_id": {"$ref": "#/$defs/identifier"}, "plan_path": {"$ref": "#/$defs/path"}, "plan_digest": {"$ref": "#/$defs/sha256"}, "revision": {"type": "integer", "minimum": 1}}}
+      ]
+    },
     "finding_transition": {
       "type": "object", "additionalProperties": false, "required": ["finding_id", "reporter", "actor", "action", "severity", "finding_status", "rationale"],
-      "properties": {"finding_id": {"$ref": "#/$defs/finding_id"}, "reporter": {"$ref": "#/$defs/reviewer"}, "actor": {"$ref": "#/$defs/role"}, "action": {"enum": ["opened", "responded", "status_changed", "reclassified"]}, "severity": {"enum": ["BLOCKER", "OBSERVATION"]}, "finding_status": {"enum": ["open", "closed"]}, "rationale": {"$ref": "#/$defs/non_empty"}, "work_unit_id": {"type": ["string", "null"], "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$"}, "summary": {"type": ["string", "null"], "minLength": 1}, "acceptance_test": {"type": ["string", "null"], "minLength": 1}, "origin_slice_id": {"type": ["string", "null"], "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$"}, "origin_round_number": {"type": ["integer", "null"], "minimum": 1}, "response_decision": {"enum": ["accepted", "rejected", null]}}
+      "properties": {"finding_id": {"$ref": "#/$defs/finding_id"}, "reporter": {"$ref": "#/$defs/reviewer"}, "actor": {"$ref": "#/$defs/role"}, "action": {"enum": ["opened", "responded", "status_changed", "reclassified", "routed"]}, "severity": {"enum": ["BLOCKER", "OBSERVATION"]}, "finding_status": {"enum": ["open", "closed"]}, "rationale": {"$ref": "#/$defs/non_empty"}, "work_unit_id": {"type": ["string", "null"], "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$"}, "summary": {"type": ["string", "null"], "minLength": 1}, "acceptance_test": {"type": ["string", "null"], "minLength": 1}, "origin_slice_id": {"type": ["string", "null"], "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$"}, "origin_round_number": {"type": ["integer", "null"], "minimum": 1}, "response_decision": {"enum": ["accepted", "rejected", null]}, "responsibility": {"$ref": "#/$defs/finding_responsibility"}}
     },
     "imported_finding_transition": {
       "type": "object", "additionalProperties": false, "required": ["record_id", "payload"],

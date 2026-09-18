@@ -16,7 +16,10 @@ from artifact_models import (
     CorrectionWorkUnitPayload,
     FindingHandoffImportPayload,
     FindingTransitionPayload,
+    PlanPayload,
+    TaskPayload,
     WorkUnitPayload,
+    WorkflowTransitionPayload,
 )
 from artifact_replay import (
     ArtifactReplayResult,
@@ -35,6 +38,13 @@ from contracts import (
     apply_reviewer_finding_update,
 )
 from finding_order import finding_id_sort_key, sorted_finding_ids
+from finding_responsibility import (
+    BranchPlanningResponsibility,
+    FindingResponsibility,
+    PlanRevisionResponsibility,
+    SliceResponsibility,
+    responsibility_document,
+)
 
 
 def is_closed_finding_status(status: FindingStatus) -> bool:
@@ -85,6 +95,16 @@ class FindingLineageProjection:
     finding: FindingRecord
     opening_record_id: str
     transition_record_ids: tuple[str, ...]
+    responsibility: FindingResponsibility | None
+
+
+@dataclass(frozen=True, slots=True)
+class FindingResponsibilityProjection:
+    """Current responsibility while keeping Finding origin independent."""
+
+    finding_id: str
+    origin_slice_id: str
+    responsibility: FindingResponsibility
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,13 +225,14 @@ class FindingRecordedStatusProjection:
 
 @dataclass(frozen=True, slots=True)
 class FindingReduction:
-    """All six named projections derived from one accepted record prefix."""
+    """All named Finding projections derived from one accepted record prefix."""
 
     ledger: FindingLedgerProjection
     open_set: FindingOpenSetProjection
     correction_attribution: tuple[CorrectionAttributionProjection, ...]
     import_snapshot: FindingImportSnapshotProjection | None
     status_transitions: FindingStatusTransitionsProjection
+    responsibilities: tuple[FindingResponsibilityProjection, ...]
     diagnostics: tuple[FindingOpeningConflictDiagnostic, ...]
     _events: tuple[FindingTransitionProjection, ...] = field(
         repr=False
@@ -309,12 +330,23 @@ def reduce_finding_records(records: Sequence[ArtifactRecord]) -> FindingReductio
 
     events = _transition_events(records)
     diagnostics: list[FindingOpeningConflictDiagnostic] = []
-    lineages = _reduce_lineages(events, diagnostics=diagnostics)
+    lineages = _reduce_lineages(
+        events, records=records, diagnostics=diagnostics
+    )
     ledger_findings = _current_lineage_findings(lineages)
     ledger = FindingLedgerProjection(ledger_findings, lineages, events)
     open_set = project_open_set(ledger_findings)
     status_transitions = FindingStatusTransitionsProjection(
         tuple(event for event in events if event.payload.action != "responded")
+    )
+    responsibilities = tuple(
+        FindingResponsibilityProjection(
+            item.finding.finding_id,
+            item.finding.origin.slice_id,
+            item.responsibility,
+        )
+        for item in lineages
+        if item.responsibility is not None
     )
     import_snapshot = _project_import_snapshot(records, events)
     correction_attribution = _project_correction_attribution(
@@ -326,6 +358,7 @@ def reduce_finding_records(records: Sequence[ArtifactRecord]) -> FindingReductio
         correction_attribution=correction_attribution,
         import_snapshot=import_snapshot,
         status_transitions=status_transitions,
+        responsibilities=responsibilities,
         diagnostics=tuple(diagnostics),
         _events=events,
     )
@@ -874,6 +907,7 @@ def _reduce_events(
 def _reduce_lineages(
     events: Sequence[FindingTransitionProjection],
     *,
+    records: Sequence[ArtifactRecord] | None = None,
     diagnostics: list[FindingOpeningConflictDiagnostic] | None = None,
 ) -> tuple[FindingLineageProjection, ...]:
     findings: dict[tuple[str, str], FindingRecord] = {}
@@ -881,6 +915,7 @@ def _reduce_lineages(
     head_openings: dict[str, FindingTransitionProjection] = {}
     opening_records: dict[tuple[str, str], str] = {}
     transition_records: dict[tuple[str, str], list[str]] = {}
+    responsibilities: dict[tuple[str, str], FindingResponsibility | None] = {}
     opening_order: list[tuple[str, str]] = []
     for event in events:
         payload = event.payload
@@ -920,6 +955,8 @@ def _reduce_lineages(
                     f"structured finding opening is invalid: {exc}",
                     record,
                 )
+            if payload.responsibility is not None and records is not None:
+                _validate_opening_responsibility(event, records)
             if lineage_key in findings or payload.finding_id in active_keys:
                 head = head_openings[payload.finding_id]
                 if diagnostics is not None:
@@ -944,6 +981,7 @@ def _reduce_lineages(
             head_openings[payload.finding_id] = event
             opening_records[lineage_key] = event.source_record_id
             transition_records[lineage_key] = [event.source_record_id]
+            responsibilities[lineage_key] = payload.responsibility
             opening_order.append(lineage_key)
             continue
         scoped_key = (payload.work_unit_id, payload.finding_id)
@@ -997,6 +1035,16 @@ def _reduce_lineages(
                     rationale=payload.rationale,
                     finding_class=FindingClass(payload.severity.value),
                 )
+            elif payload.action == "routed":
+                assert payload.responsibility is not None
+                if finding.status is not FindingStatus.OPEN:
+                    _fail(
+                        ReplayDiagnosticCode.RECORD_TYPE_MISMATCH,
+                        f"cannot route closed finding {payload.finding_id}",
+                        record,
+                    )
+                _validate_routed_responsibility(payload.responsibility, record)
+                responsibilities[lineage_key] = payload.responsibility
         except ValueError as exc:
             _fail(
                 ReplayDiagnosticCode.RECORD_TYPE_MISMATCH,
@@ -1011,8 +1059,160 @@ def _reduce_lineages(
             finding=findings[lineage_key],
             opening_record_id=opening_records[lineage_key],
             transition_record_ids=tuple(transition_records[lineage_key]),
+            responsibility=responsibilities[lineage_key],
         )
         for lineage_key in opening_order
+    )
+
+
+def responsibility_projection_document(
+    reduction: FindingReduction,
+) -> dict[str, dict[str, str | int]]:
+    """Serialize the current typed assignment in canonical Finding-ID order."""
+
+    return {
+        item.finding_id: responsibility_document(item.responsibility)
+        for item in sorted(
+            reduction.responsibilities,
+            key=lambda item: finding_id_sort_key(item.finding_id),
+        )
+    }
+
+
+def _validate_opening_responsibility(
+    event: FindingTransitionProjection,
+    records: Sequence[ArtifactRecord],
+) -> None:
+    payload = event.payload
+    responsibility = payload.responsibility
+    assert responsibility is not None
+    record = _event_record(event)
+    if event.imported:
+        _validate_routed_responsibility(responsibility, record)
+        return
+    prior = records[: event.sequence - 1]
+    review_step = next(
+        (
+            candidate.payload.step
+            for candidate in reversed(prior)
+            if isinstance(candidate.payload, WorkflowTransitionPayload)
+            and candidate.payload.work_unit_id == payload.work_unit_id
+        ),
+        None,
+    )
+    if review_step == "claude_slice_review":  # allowlist:provider -- persisted step
+        if not isinstance(responsibility, SliceResponsibility):
+            _responsibility_fail(
+                "Slicereview opening requires responsibility kind SLICE",
+                record,
+            )
+        plan = next(
+            (
+                candidate.payload
+                for candidate in reversed(prior)
+                if isinstance(candidate.payload, PlanPayload)
+            ),
+            None,
+        )
+        unit = next(
+            (
+                candidate.payload
+                for candidate in reversed(prior)
+                if candidate.logical_id == f"work-unit-{payload.work_unit_id}"
+                and isinstance(
+                    candidate.payload, (WorkUnitPayload, CorrectionWorkUnitPayload)
+                )
+            ),
+            None,
+        )
+        assert isinstance(responsibility, SliceResponsibility)
+        if responsibility.target_run_id != record.run_id:
+            _responsibility_fail(
+                "SLICE.target_run_id differs from the opening record run",
+                record,
+            )
+        if plan is None:
+            _responsibility_fail(
+                "SLICE.approved_plan_commit has no approved Plan fact in the run",
+                record,
+            )
+        if responsibility.approved_plan_commit != plan.approved_plan_commit:
+            _responsibility_fail(
+                "SLICE.approved_plan_commit differs from the approved Plan fact",
+                record,
+            )
+        expected_slice = (
+            payload.origin_slice_id if unit is None else unit.slice_id
+        )
+        if responsibility.slice_id != expected_slice:
+            _responsibility_fail(
+                "SLICE.slice_id differs from the opening review Slice",
+                record,
+            )
+        return
+    if review_step == "claude_plan_review":  # allowlist:provider -- persisted step
+        if not isinstance(responsibility, PlanRevisionResponsibility):
+            _responsibility_fail(
+                "Planreview opening requires responsibility kind PLAN_REVISION",
+                record,
+            )
+        task = next(
+            (
+                candidate.payload
+                for candidate in reversed(prior)
+                if isinstance(candidate.payload, TaskPayload)
+            ),
+            None,
+        )
+        assert isinstance(responsibility, PlanRevisionResponsibility)
+        if responsibility.run_id != record.run_id:
+            _responsibility_fail(
+                "PLAN_REVISION.run_id differs from the opening record run",
+                record,
+            )
+        if task is None or task.work_plan_path is None:
+            _responsibility_fail(
+                "PLAN_REVISION.plan_path has no bound work-plan path in the run",
+                record,
+            )
+        if responsibility.plan_path != task.work_plan_path:
+            _responsibility_fail(
+                "PLAN_REVISION.plan_path differs from the bound work-plan path",
+                record,
+            )
+        return
+    if review_step == "claude_final_review":  # allowlist:provider -- persisted step
+        if not isinstance(responsibility, BranchPlanningResponsibility):
+            _responsibility_fail(
+                "Entdeckungsreview opening requires responsibility kind BRANCH_PLANNING",
+                record,
+            )
+        _responsibility_fail(
+            "BRANCH_PLANNING has no run-bound family_id and cycle_number before point 67",
+            record,
+        )
+    _responsibility_fail(
+        f"responsibility-bearing opening has no supported review context; step={review_step!r}",
+        record,
+    )
+
+
+def _validate_routed_responsibility(
+    responsibility: FindingResponsibility,
+    record: ArtifactRecord,
+) -> None:
+    if isinstance(responsibility, BranchPlanningResponsibility):
+        _responsibility_fail(
+            "BRANCH_PLANNING has no run-bound family_id and cycle_number before point 67",
+            record,
+        )
+
+
+def _responsibility_fail(message: str, record: ArtifactRecord) -> None:
+    _fail(
+        ReplayDiagnosticCode.RECORD_TYPE_MISMATCH,
+        f"finding responsibility is invalid: {message}",
+        record,
     )
 
 

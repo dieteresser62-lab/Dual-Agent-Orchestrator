@@ -27,6 +27,7 @@ from artifact_models import (
     GatePayload,
     GateTransitionPayload,
     InvocationFailurePayload,
+    PlanPayload,
     ProviderContentPayload,
     ReviewPacketPayload,
     ReviewEvidencePayload,
@@ -37,6 +38,7 @@ from artifact_models import (
     RunProfilePayload,
     STATE_PROJECTION_REDUCER_VERSION,
     SliceBoundaryPayload,
+    SliceSpec,
     TaskPayload,
     ValidationAttestationPayload,
     ValidationResult,
@@ -64,6 +66,7 @@ from content_authority_support import (
     append_validation_authority,
 )
 from finding_reducer import reduce_findings
+from finding_responsibility import SliceResponsibility
 from state_io import write_workflow_state_projection
 from workflow import WorkflowHistory
 from workflow_state import (
@@ -1166,6 +1169,60 @@ def test_state_projection_baseline_matches_pre_cut_bytes(tmp_path: Path) -> None
     assert final_review["open_findings"] == ["C-01"]
 
 
+def test_state_projection_carries_current_responsibility_separately_from_origin(
+    tmp_path: Path,
+) -> None:
+    bridge = _state_projection_bridge(tmp_path, "typed-responsibility")
+    _journey(bridge)
+    bridge.append(
+        PlanPayload(
+            "docs/internal/plan.md",
+            "9" * 40,
+            (
+                SliceSpec("1", "First", ("src/one.py",)),
+                SliceSpec("2", "Second", ("src/two.py",)),
+                SliceSpec("3", "Third", ("src/three.py",)),
+            ),
+        ),
+        logical_id="approved-plan",
+        idempotency_key="approved-plan",
+        fingerprint_sha256=FINGERPRINT,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+    bridge.append(
+        FindingTransitionPayload(
+            "C-01",
+            Role.CLAUDE,
+            Role.CLAUDE,
+            "routed",
+            FindingSeverity.BLOCKER,
+            "open",
+            "Claude routes the still-open finding to the bound follow-up Slice",
+            "4",
+            responsibility=SliceResponsibility(RUN_ID, "9" * 40, "3"),
+        ),
+        logical_id="finding-C-01",
+        idempotency_key="finding:C-01:routed",
+        fingerprint_sha256=FINGERPRINT,
+        fingerprint_kind=FingerprintKind.CONTRACT,
+    )
+
+    replay = replay_artifacts(bridge.store.load_chain(), RUN_ID)
+    reduction = reduce_findings(replay)
+    projected = project_workflow_state(replay)
+
+    assert reduction.ledger.lineages[0].finding.origin.slice_id == "03"
+    assert projected.to_document()["finding_responsibilities"] == {
+        "C-01": {
+            "responsibility_kind": "SLICE",
+            "target_run_id": RUN_ID,
+            "approved_plan_commit": "9" * 40,
+            "slice_id": "3",
+        }
+    }
+    assert WorkflowState.from_dict(projected.to_document()) == projected.state
+
+
 def test_multi_slice_open_findings_match_authoritative_reduction_in_state_cache(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1560,7 +1617,12 @@ def test_multi_slice_correction_gate_halt_resume_projects_every_accepted_prefix(
             json.dumps(_normalized_independent_mirror(mirrors[end], replay))
         ) == first.to_document(), end
         assert isinstance(first.state, WorkflowState)
-        assert set(first.to_document()) == set(WorkflowState.__dataclass_fields__)
+        assert set(first.to_document()) == (
+            set(WorkflowState.__dataclass_fields__) - {"finding_responsibilities"}
+        )
+        assert "finding_responsibilities" not in first.canonical_document.decode(
+            "utf-8"
+        )
         projected_prefixes.append(first.to_document())
         accepted_ends.append(end)
 

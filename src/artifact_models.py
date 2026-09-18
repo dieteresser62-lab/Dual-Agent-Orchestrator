@@ -29,6 +29,11 @@ from schema_validation import (
     validate_schema_document,
 )
 from finding_order import sorted_finding_ids
+from finding_responsibility import (
+    FindingResponsibility,
+    parse_responsibility,
+    responsibility_document,
+)
 from orchestrator_diagnostics import (
     ORCHESTRATOR_DIAGNOSTIC_TEXTS,
     STRUCTURED_OUTPUT_DIAGNOSTIC_CODE,
@@ -704,6 +709,8 @@ class FindingTransitionPayload:
     origin_slice_id: str | None = None
     origin_round_number: int | None = None
     response_decision: str | None = None
+    # Optional until the joint 67/68 cutover ratchets new openings to mandatory.
+    responsibility: FindingResponsibility | None = None
     status: ClassVar[str] = "recorded"
     record_type: ClassVar[RecordType] = RecordType.FINDING_TRANSITION
 
@@ -711,7 +718,9 @@ class FindingTransitionPayload:
         _require_finding_id(self.finding_id, "finding_id")
         if self.reporter is not Role.CLAUDE:
             raise ArtifactValidationError("finding reporter must be claude")
-        if self.action not in {"opened", "responded", "status_changed", "reclassified"}:
+        if self.action not in {
+            "opened", "responded", "status_changed", "reclassified", "routed",
+        }:
             raise ArtifactValidationError("finding action is invalid")
         if self.finding_status not in {"open", "closed"}:
             raise ArtifactValidationError("finding_status is invalid")
@@ -721,6 +730,30 @@ class FindingTransitionPayload:
             raise ArtifactValidationError("only codex may record a finding response")
         if self.action == "responded" and self.finding_status != "open":
             raise ArtifactValidationError("a codex response cannot close a finding")
+        if self.action == "routed":
+            if self.actor is not Role.CLAUDE:  # allowlist:provider -- reviewer authority
+                raise ArtifactValidationError(
+                    f"finding routing actor must be claude; got {self.actor.value}"  # allowlist:provider -- diagnostic role
+                )
+            if self.finding_status != "open":
+                raise ArtifactValidationError(
+                    "a routed finding must retain finding_status open"
+                )
+            if self.responsibility is None:
+                raise ArtifactValidationError(
+                    "a routed finding requires a new responsibility"
+                )
+        if self.responsibility is not None:
+            try:
+                responsibility_document(self.responsibility)
+            except ValueError as exc:
+                raise ArtifactValidationError(
+                    f"finding responsibility is invalid: {exc}"
+                ) from exc
+            if self.action not in {"opened", "routed"}:
+                raise ArtifactValidationError(
+                    "finding responsibility is limited to opened and routed transitions"
+                )
         _require_text(self.rationale, "rationale")
         if self.work_unit_id is not None:
             _require_identifier(self.work_unit_id, "work_unit_id")
@@ -743,6 +776,12 @@ class FindingTransitionPayload:
             _require_text(self.acceptance_test, "acceptance_test")
             _require_identifier(self.origin_slice_id, "origin_slice_id")
             _require_positive(self.origin_round_number, "origin_round_number")
+        if self.action == "opened" and self.responsibility is not None and (
+            self.work_unit_id is None or any(item is None for item in opening_metadata)
+        ):
+            raise ArtifactValidationError(
+                "a responsibility-bearing opening requires complete review context metadata"
+            )
         if self.response_decision is not None:
             if self.action != "responded" or self.response_decision not in {
                 "accepted",
@@ -772,7 +811,14 @@ def finding_transition_sequence_sha256(
     transitions: Sequence[ImportedFindingTransition],
 ) -> str:
     """Digest the ordered canonical source documents, including their IDs."""
-    return hashlib.sha256(canonical_json(tuple(transitions))).hexdigest()
+    documents = tuple(
+        {
+            "record_id": item.record_id,
+            "payload": artifact_payload_document(item.payload),
+        }
+        for item in transitions
+    )
+    return hashlib.sha256(canonical_json(documents)).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1922,6 +1968,19 @@ def artifact_payload_document(payload: ArtifactPayload) -> dict[str, Any]:
             raw.pop("review_evidence", None)
         if payload.red_state_followup_slice is None:
             raw.pop("red_state_followup_slice", None)
+    if isinstance(payload, FindingTransitionPayload):
+        if payload.responsibility is None:
+            raw.pop("responsibility", None)
+        else:
+            raw["responsibility"] = responsibility_document(payload.responsibility)
+    if isinstance(payload, FindingHandoffImportPayload):
+        raw["transitions"] = [
+            {
+                "record_id": item.record_id,
+                "payload": artifact_payload_document(item.payload),
+            }
+            for item in payload.transitions
+        ]
     if (
         isinstance(payload, InvocationFailurePayload)
         and payload.orchestrator_diagnostic is None
@@ -2216,6 +2275,11 @@ _PAYLOAD_READERS: dict[
             origin_slice_id=data.get("origin_slice_id"),
             origin_round_number=data.get("origin_round_number"),
             response_decision=data.get("response_decision"),
+            responsibility=(
+                None
+                if "responsibility" not in data
+                else parse_responsibility(data["responsibility"])
+            ),
         ),
     RecordType.FINDING_HANDOFF_EXPORT: lambda data: FindingHandoffExportPayload(
             data["source_run_id"], data["source_head_record_id"],

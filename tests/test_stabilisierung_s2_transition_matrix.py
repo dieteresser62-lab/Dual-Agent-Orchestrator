@@ -319,6 +319,7 @@ WORKFLOW_STATE_FIELD_INVENTORY = {
         "target_branch",
         "protocol_binding",
         "bootstrap_checks",
+        "finding_responsibilities",
     },
 }
 

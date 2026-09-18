@@ -8,6 +8,12 @@ from pathlib import PurePosixPath
 from typing import Any, Mapping
 
 from contracts import PlannedSlice
+from finding_order import finding_id_sort_key
+from finding_responsibility import (
+    FindingResponsibility,
+    parse_responsibility,
+    responsibility_document,
+)
 
 
 STATE_VERSION = 3
@@ -1200,6 +1206,41 @@ class BootstrapCheckFact:
         )
 
 
+def _parse_finding_responsibilities(
+    raw: Mapping[str, Any],
+) -> tuple[tuple[str, FindingResponsibility], ...]:
+    responsibility_raw = _mapping(
+        raw.get("finding_responsibilities", {}),
+        "finding_responsibilities",
+    )
+    try:
+        return tuple(
+            (
+                finding_id,
+                parse_responsibility(
+                    _mapping(
+                        responsibility_raw[finding_id],
+                        f"finding_responsibilities.{finding_id}",
+                    )
+                ),
+            )
+            for finding_id in sorted(
+                responsibility_raw, key=finding_id_sort_key
+            )
+        )
+    except ValueError as exc:
+        raise WorkflowStateValidationError(
+            f"finding_responsibilities is invalid: {exc}"
+        ) from exc
+
+
+def _parse_bootstrap_checks(raw: Mapping[str, Any]) -> tuple[BootstrapCheckFact, ...]:
+    return tuple(
+        BootstrapCheckFact.from_dict(_mapping(item, f"bootstrap_checks[{index}]"))
+        for index, item in enumerate(_list(raw.get("bootstrap_checks", []), "bootstrap_checks"))
+    )
+
+
 @dataclass(frozen=True)
 class WorkflowState:
     version: int
@@ -1227,6 +1268,7 @@ class WorkflowState:
     target_branch: str | None = None
     protocol_binding: ProtocolBinding | None = None
     bootstrap_checks: tuple[BootstrapCheckFact, ...] = ()
+    finding_responsibilities: tuple[tuple[str, FindingResponsibility], ...] = ()
 
     def __post_init__(self) -> None:
         if self.version != STATE_VERSION:
@@ -1386,6 +1428,29 @@ class WorkflowState:
         keys = tuple((item.check_kind, item.transition_fingerprint) for item in self.bootstrap_checks)
         if len(keys) != len(set(keys)):
             raise WorkflowStateValidationError("bootstrap checks must be idempotently unique")
+        responsibility_ids = tuple(
+            finding_id for finding_id, _responsibility in self.finding_responsibilities
+        )
+        if any(
+            re.fullmatch(r"C-(0[1-9]|[1-9][0-9]*)", finding_id) is None
+            for finding_id in responsibility_ids
+        ):
+            raise WorkflowStateValidationError(
+                "finding_responsibilities contains an invalid finding ID"
+            )
+        if responsibility_ids != tuple(
+            sorted(set(responsibility_ids), key=finding_id_sort_key)
+        ):
+            raise WorkflowStateValidationError(
+                "finding_responsibilities must be sorted and unique by finding ID"
+            )
+        try:
+            for _finding_id, responsibility in self.finding_responsibilities:
+                responsibility_document(responsibility)
+        except ValueError as exc:
+            raise WorkflowStateValidationError(
+                f"finding_responsibilities is invalid: {exc}"
+            ) from exc
 
     @property
     def current_work_unit(self) -> WorkUnitRecord:
@@ -2579,7 +2644,7 @@ class WorkflowState:
         )
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        document: dict[str, object] = {
             "version": self.version,
             "run_id": self.run_id,
             "task_file": self.task_file,
@@ -2615,6 +2680,12 @@ class WorkflowState:
             ),
             "bootstrap_checks": [item.to_dict() for item in self.bootstrap_checks],
         }
+        if self.finding_responsibilities:
+            document["finding_responsibilities"] = {
+                finding_id: responsibility_document(responsibility)
+                for finding_id, responsibility in self.finding_responsibilities
+            }
+        return document
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> WorkflowState:
@@ -2662,6 +2733,8 @@ class WorkflowState:
             "finding_handoff_export_record_id",
         }
         handoff_keys = {*handoff_shape_keys, "bootstrap_checks"}
+        # The dormant responsibility field is optional for every historical shape.
+        finding_responsibilities = _parse_finding_responsibilities(raw)
         if set(raw) == legacy_keys:
             planned_slices: tuple[PlannedSlice, ...] = ()
             runtime_history = None
@@ -2678,7 +2751,7 @@ class WorkflowState:
         else:
             # ``bootstrap_checks`` is an additive optional mirror field.  Remove it
             # for historical shape selection while validating its contents below.
-            raw_keys = frozenset(raw) - {"bootstrap_checks"}
+            raw_keys = frozenset(raw) - {"bootstrap_checks", "finding_responsibilities"}
             if raw_keys not in {
                 frozenset(previous_keys),
                 frozenset(current_keys),
@@ -2778,10 +2851,7 @@ class WorkflowState:
                     _mapping(binding_raw, "protocol_binding")
                 )
             )
-            bootstrap_checks = tuple(
-                BootstrapCheckFact.from_dict(_mapping(item, f"bootstrap_checks[{index}]"))
-                for index, item in enumerate(_list(raw.get("bootstrap_checks", []), "bootstrap_checks"))
-            )
+            bootstrap_checks = _parse_bootstrap_checks(raw)
         if set(raw) == legacy_keys:
             bootstrap_checks = ()
         slices_raw = _list(raw["slices"], "slices")
@@ -2816,6 +2886,7 @@ class WorkflowState:
             target_branch=target_branch,
             protocol_binding=protocol_binding,
             bootstrap_checks=bootstrap_checks,
+            finding_responsibilities=finding_responsibilities,
         )
 
 

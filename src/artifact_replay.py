@@ -21,6 +21,7 @@ from finding_order import replay_compatible_finding_ids
 from artifact_models import (
     AgentResultPayload,
     ArtifactRecord,
+    artifact_payload_document,
     BindingPayload,
     DiagnosticPayload,
     FinalReviewPreflightPayload,
@@ -1007,11 +1008,10 @@ def _assemble_workflow_state_document(
     import_record: ArtifactRecord | None,
     runtime_history: dict[str, dict[str, tuple[str, ...]]],
 ) -> dict[str, object]:
-    # Keep the complete state-v3 assembly together: this is the one schema
-    # boundary where independently projected fact groups become a WorkflowState.
-    # Its named boundary makes omission mutations explicit without splitting
-    # the cohesive mapping into artificial fragments.
+    from finding_reducer import reduce_findings, responsibility_projection_document
+    responsibilities = responsibility_projection_document(reduce_findings(replay))
     return {
+        **({"finding_responsibilities": responsibilities} if responsibilities else {}),
         "version": 3,
         "run_id": replay.expected_run_id,
         "task_file": identity.task_file,
@@ -3218,6 +3218,16 @@ def _fail(
 
 def _semantic_payload_document(payload: object) -> dict[str, object]:
     raw = asdict(payload)  # type: ignore[arg-type]
+    if isinstance(payload, FindingTransitionPayload):
+        return artifact_payload_document(payload)
+    if isinstance(payload, FindingHandoffImportPayload):
+        raw["transitions"] = [
+            {
+                "record_id": item.record_id,
+                "payload": artifact_payload_document(item.payload),
+            }
+            for item in payload.transitions
+        ]
     if (
         isinstance(payload, InvocationFailurePayload)
         and payload.orchestrator_diagnostic is None
