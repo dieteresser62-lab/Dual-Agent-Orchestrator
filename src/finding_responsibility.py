@@ -150,7 +150,7 @@ def responsibility_document(
     )
 
 
-def responsibility_json_schema() -> dict[str, Any]:
+def responsibility_json_schema(*, union_keyword: str = "anyOf") -> dict[str, Any]:
     """Return the closed native wire schema for the three responsibility kinds.
 
     Keeping this schema beside the parser and document projection prevents native
@@ -158,9 +158,12 @@ def responsibility_json_schema() -> dict[str, Any]:
     responsibility targets.
     """
 
+    if union_keyword not in {"anyOf", "oneOf"}:
+        raise ValueError("responsibility schema requires anyOf or oneOf")
+
     return copy.deepcopy(
         {
-            "oneOf": [
+            union_keyword: [
                 {
                     "type": "object",
                     "properties": {

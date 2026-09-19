@@ -307,13 +307,13 @@ def native_codex_provider_response_schema(
         required.append("finding_dispositions")
     required.append("plan_treatments")
     slice_responsibility = schema["$defs"]["finding_responsibility"][
-        "oneOf"
+        "anyOf"
     ][0]
     acceptance_criterion = slice_responsibility["properties"][
         "acceptance_criterion_id"
     ]
     slice_responsibility["properties"]["acceptance_criterion_id"] = {
-        "oneOf": [acceptance_criterion, {"type": "null"}]
+        "anyOf": [acceptance_criterion, {"type": "null"}]
     }
     slice_responsibility["required"].append("acceptance_criterion_id")
     open_ids = project_open_set(context.previous_findings).finding_ids
@@ -757,7 +757,7 @@ def _enable_native_finding_decision_schema(schema: dict[str, Any]) -> None:
     definitions["finding_responsibility"] = responsibility_json_schema()
     disposition = definitions["finding_disposition"]
     disposition["properties"]["responsibility_proposal"] = {
-        "oneOf": [
+        "anyOf": [
             {"$ref": "#/$defs/finding_responsibility"},
             {"type": "null"},
         ]
@@ -788,7 +788,7 @@ def _enable_native_finding_decision_schema(schema: dict[str, Any]) -> None:
                 "items": {"type": "integer", "minimum": 1},
             },
             "no_code_reason": {
-                "oneOf": [
+                "anyOf": [
                     {
                         "type": "string",
                         "enum": [item.value for item in NativeRejectionReason],
@@ -797,7 +797,7 @@ def _enable_native_finding_decision_schema(schema: dict[str, Any]) -> None:
                 ]
             },
             "evidence": {
-                "oneOf": [
+                "anyOf": [
                     {"$ref": "#/$defs/safe_text"},
                     {"type": "null"},
                 ]

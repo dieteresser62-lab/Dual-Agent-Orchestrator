@@ -22,6 +22,48 @@ CAPABILITY_SCHEMA_VERSION = "native-provider-schema-capabilities-v1"
 EXCEPTION_SCHEMA_VERSION = "native-provider-schema-exceptions-v1"
 PROVIDER_VERSION_POLICY = "same-major-forward"
 OPENAI_PROVIDER = "co" + "dex"
+OPENAI_STRUCTURED_OUTPUT_KEYWORDS = frozenset(
+    {
+        "$defs",
+        "$ref",
+        "additionalProperties",
+        "anyOf",
+        "const",
+        "description",
+        "enum",
+        "exclusiveMaximum",
+        "exclusiveMinimum",
+        "format",
+        "items",
+        "maxItems",
+        "maxLength",
+        "maximum",
+        "minItems",
+        "minLength",
+        "minimum",
+        "multipleOf",
+        "pattern",
+        "properties",
+        "required",
+        "title",
+        "type",
+    }
+)
+OPENAI_STRUCTURED_OUTPUT_TYPES = frozenset(
+    {"array", "boolean", "integer", "null", "number", "object", "string"}
+)
+OPENAI_UNSUPPORTED_SCHEMA_KEYWORDS = frozenset(
+    {
+        "allOf",
+        "dependentRequired",
+        "dependentSchemas",
+        "else",
+        "if",
+        "not",
+        "oneOf",
+        "then",
+    }
+)
 CLI_VERSION_PATTERNS = {
     "claude": re.compile(r"^(\d+)\.(\d+)\.(\d+) \(Claude Code\)$"),
     "codex": re.compile(r"^codex-cli (\d+)\.(\d+)\.(\d+)$"),
@@ -242,47 +284,92 @@ def assert_projected_provider_schema(
 
     violations: list[str] = []
     if projected_schema.get("type") != "object":
-        violations.append("/: root must have type object")
+        violations.append("/type: root must have type object")
     if "anyOf" in projected_schema:
-        violations.append("/: root must not use anyOf")
+        violations.append("/anyOf: root must not use anyOf")
 
-    pending: list[tuple[str, object]] = [("", projected_schema)]
+    pending: list[tuple[str, Mapping[str, Any]]] = [("", projected_schema)]
     while pending:
         pointer, node = pending.pop()
-        if isinstance(node, dict):
-            location = pointer or "/"
-            if "$ref" in node and set(node) != {"$ref"}:
-                siblings = sorted(set(node) - {"$ref"})
+        unsupported = sorted(set(node) - OPENAI_STRUCTURED_OUTPUT_KEYWORDS)
+        for keyword in unsupported:
+            keyword_path = _schema_pointer(pointer, keyword)
+            rule = (
+                "is not permitted"
+                if keyword == "oneOf"
+                else "is not supported"
+                if keyword in OPENAI_UNSUPPORTED_SCHEMA_KEYWORDS
+                else "is not a supported schema keyword"
+            )
+            violations.append(f"{keyword_path}: keyword {keyword!r} {rule}")
+        if "$ref" in node and set(node) != {"$ref"}:
+            siblings = sorted(set(node) - {"$ref"})
+            violations.append(
+                f"{pointer or '/'}: $ref must not have sibling keys {siblings!r}"
+            )
+        declared_types = node.get("type")
+        type_names = (
+            declared_types if isinstance(declared_types, list) else [declared_types]
+        )
+        unsupported_types = sorted(
+            repr(item)
+            for item in type_names
+            if item is not None
+            and (
+                not isinstance(item, str)
+                or item not in OPENAI_STRUCTURED_OUTPUT_TYPES
+            )
+        )
+        if unsupported_types:
+            violations.append(
+                f"{_schema_pointer(pointer, 'type')}: unsupported JSON type(s) "
+                f"{unsupported_types!r}"
+            )
+        if node.get("type") == "object":
+            if node.get("additionalProperties") is not False:
                 violations.append(
-                    f"{location}: $ref must not have sibling keys "
-                    f"{siblings!r}"
+                    f"{_schema_pointer(pointer, 'additionalProperties')}: "
+                    "object must set additionalProperties false"
                 )
-            if node.get("type") == "object":
-                if node.get("additionalProperties") is not False:
-                    violations.append(
-                        f"{location}: object must set additionalProperties false"
+            properties = node.get("properties")
+            required = node.get("required")
+            if isinstance(properties, dict) and (
+                not isinstance(required, list)
+                or set(required) != set(properties)
+            ):
+                violations.append(
+                    f"{_schema_pointer(pointer, 'required')}: every object "
+                    "property must be required"
+                )
+        for container in ("$defs", "properties"):
+            children = node.get(container)
+            if isinstance(children, Mapping):
+                for name, child in children.items():
+                    if isinstance(child, Mapping):
+                        pending.append(
+                            (_schema_pointer(pointer, container, str(name)), child)
+                        )
+        items = node.get("items")
+        if isinstance(items, Mapping):
+            pending.append((_schema_pointer(pointer, "items"), items))
+        branches = node.get("anyOf")
+        if isinstance(branches, list):
+            for index, child in enumerate(branches):
+                if isinstance(child, Mapping):
+                    pending.append(
+                        (_schema_pointer(pointer, "anyOf", str(index)), child)
                     )
-                properties = node.get("properties")
-                required = node.get("required")
-                if isinstance(properties, dict) and (
-                    not isinstance(required, list)
-                    or set(required) != set(properties)
-                ):
-                    violations.append(
-                        f"{location}: every object property must be required"
-                    )
-            for key, value in node.items():
-                escaped = str(key).replace("~", "~0").replace("/", "~1")
-                pending.append((f"{pointer}/{escaped}", value))
-        elif isinstance(node, list):
-            for index, value in enumerate(node):
-                pending.append((f"{pointer}/{index}", value))
 
     if violations:
         raise NativeProviderSchemaError(
             f"{provider} projected schema violates provider acceptance rules: "
             + "; ".join(sorted(violations))
         )
+
+
+def _schema_pointer(pointer: str, *parts: str) -> str:
+    encoded = [part.replace("~", "~0").replace("/", "~1") for part in parts]
+    return pointer + "".join(f"/{part}" for part in encoded)
 
 
 def normalize_transport_profile(

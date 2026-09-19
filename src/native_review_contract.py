@@ -1974,7 +1974,9 @@ def _validate_native_closure(
 
 def _enable_native_review_finding_decision_schema(schema: dict[str, Any]) -> None:
     definitions = schema["$defs"]
-    definitions["finding_responsibility"] = responsibility_json_schema()
+    definitions["finding_responsibility"] = responsibility_json_schema(
+        union_keyword="oneOf"
+    )
     definitions["finding_closure"] = {
         "oneOf": [
             {

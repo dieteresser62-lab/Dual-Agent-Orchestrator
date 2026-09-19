@@ -796,7 +796,9 @@ def _enable_native_review_request_finding_decision_schema(
         ],
         "additionalProperties": False,
     }
-    definitions["finding_responsibility"] = responsibility_json_schema()
+    definitions["finding_responsibility"] = responsibility_json_schema(
+        union_keyword="oneOf"
+    )
     definitions["responsibility_proposal"] = {
         "type": "object",
         "properties": {

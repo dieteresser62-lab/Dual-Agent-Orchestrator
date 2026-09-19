@@ -38,6 +38,7 @@ from native_codex_contract import (
 )
 from native_provider_schema import (
     NativeProviderSchemaError,
+    assert_projected_provider_schema,
     defensive_provider_projection,
     registered_exceptions,
 )
@@ -231,6 +232,23 @@ def test_provider_schema_uses_explicit_scalar_types_and_closed_objects() -> None
                 visit(value)
 
     visit(provider_schema)
+
+
+def test_generated_codex_writer_schema_passes_provider_conformance_ratchet() -> None:
+    provider_schema = native_codex_provider_response_schema(
+        _bound(NativeCodexRequestKind.PLAN).context
+    )
+
+    assert_projected_provider_schema(provider_schema, provider="codex")
+
+    pending: list[object] = [provider_schema]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, dict):
+            assert "oneOf" not in node
+            pending.extend(node.values())
+        elif isinstance(node, list):
+            pending.extend(node)
 
 
 def test_writer_schema_exposes_only_bound_result_kind_and_stop() -> None:

@@ -90,12 +90,12 @@ def test_active_codex_request_bytes_match_the_cutover_baseline() -> None:
     bundle = build_native_codex_request(_spec())
 
     assert hashlib.sha256(bundle.canonical_json.encode("utf-8")).hexdigest() == (
-        "400e5b3916c5e8d4d0e3210f7510860f34be804a06c7e29a3191378f4306ab84"
+        "f9a0e1a702b23766cf7429735865f56a97fbb3034b3f7ef1d9d077ba4f84476f"
     )
     assert hashlib.sha256(
         bundle.provider_response_schema_json.encode("utf-8")
     ).hexdigest() == (
-        "3a376fdfdf726fe09974c980acd33a399a1ed26a244760f5c46c84a8fa9a1ab0"
+        "fd95e88955516dbe1c2a35347318d7f1973d77e1b5c2487d3fcd07308e1eec39"
     )
 
 

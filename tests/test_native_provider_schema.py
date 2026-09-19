@@ -204,9 +204,25 @@ def test_defensive_projection_does_not_mutate_reader_schema() -> None:
 @pytest.mark.parametrize(
     ("violation", "message"),
     (
-        ("root_any_of", "root must not use anyOf"),
-        ("optional_property", "every object property must be required"),
-        ("open_object", "object must set additionalProperties false"),
+        ("root_any_of", "/anyOf: root must not use anyOf"),
+        ("optional_property", "/required: every object property must be required"),
+        (
+            "open_object",
+            "/additionalProperties: object must set additionalProperties false",
+        ),
+        (
+            "nested_one_of",
+            "/properties/value/oneOf: keyword 'oneOf' is not permitted",
+        ),
+        (
+            "unsupported_keyword",
+            "/properties/value/default: keyword 'default' is not a supported "
+            "schema keyword",
+        ),
+        (
+            "documented_unsupported_keyword",
+            "/properties/value/allOf: keyword 'allOf' is not supported",
+        ),
     ),
 )
 def test_projected_schema_guard_enforces_other_codex_provider_rules(
@@ -222,8 +238,17 @@ def test_projected_schema_guard_enforces_other_codex_provider_rules(
         schema["anyOf"] = [{"type": "object"}]
     elif violation == "optional_property":
         schema["required"] = []
-    else:
+    elif violation == "open_object":
         schema["additionalProperties"] = True
+    elif violation == "nested_one_of":
+        schema["properties"]["value"]["oneOf"] = [
+            {"type": "string"},
+            {"type": "null"},
+        ]
+    elif violation == "documented_unsupported_keyword":
+        schema["properties"]["value"]["allOf"] = [{"type": "string"}]
+    else:
+        schema["properties"]["value"]["default"] = ""
 
     with pytest.raises(NativeProviderSchemaError, match=message):
         assert_projected_provider_schema(schema, provider="codex")
