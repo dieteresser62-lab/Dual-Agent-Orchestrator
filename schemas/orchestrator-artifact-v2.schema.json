@@ -8,7 +8,7 @@
   "properties": {
     "schema_version": {"const": "2"},
     "record_id": {"$ref": "#/$defs/identifier"},
-    "record_type": {"enum": ["run_identity", "run_profile", "workflow_transition", "workflow_event", "workflow_policy", "slice_boundary", "task", "plan", "work_unit", "correction_work_unit", "agent_result", "diagnostic", "review", "review_anchor", "review_validation_binding", "finding_transition", "finding_handoff_export", "finding_handoff_import", "branch_discovery_handoff_export", "branch_discovery_handoff_import", "validation_request", "validation_content", "validation_attestation", "provider_content", "review_packet", "gate", "gate_transition", "gate_decision", "binding", "invocation_failure", "quota_pause", "transient_retry", "resume_check", "workflow_completion", "provider_input_measurement", "provider_attempt", "final_review_preflight", "side_effect"]},
+    "record_type": {"enum": ["run_identity", "run_profile", "workflow_transition", "workflow_event", "workflow_policy", "slice_boundary", "task", "plan", "work_unit", "correction_work_unit", "agent_result", "diagnostic", "review", "branch_discovery_completed", "review_anchor", "review_validation_binding", "finding_transition", "finding_handoff_export", "finding_handoff_import", "branch_discovery_handoff_export", "branch_discovery_handoff_import", "validation_request", "validation_content", "validation_attestation", "provider_content", "review_packet", "gate", "gate_transition", "gate_decision", "binding", "invocation_failure", "quota_pause", "transient_retry", "resume_check", "workflow_completion", "provider_input_measurement", "provider_attempt", "final_review_preflight", "side_effect"]},
     "run_id": {"$ref": "#/$defs/identifier"},
     "logical_id": {"$ref": "#/$defs/identifier"},
     "revision": {"type": "integer", "minimum": 1},
@@ -33,6 +33,7 @@
     {"if": {"properties": {"record_type": {"const": "agent_result"}}}, "then": {"properties": {"status": {"const": "ready"}, "payload": {"$ref": "#/$defs/agent_result"}}}},
     {"if": {"properties": {"record_type": {"const": "diagnostic"}}}, "then": {"properties": {"status": {"const": "failed"}, "payload": {"$ref": "#/$defs/diagnostic"}}}},
     {"if": {"properties": {"record_type": {"const": "review"}}}, "then": {"properties": {"status": {"const": "decided"}, "payload": {"$ref": "#/$defs/review"}}}},
+    {"if": {"properties": {"record_type": {"const": "branch_discovery_completed"}}}, "then": {"properties": {"status": {"const": "completed"}, "payload": {"$ref": "#/$defs/branch_discovery_completed"}}}},
     {"if": {"properties": {"record_type": {"const": "review_anchor"}}}, "then": {"properties": {"status": {"const": "bound"}, "payload": {"$ref": "#/$defs/review_anchor"}}}},
     {"if": {"properties": {"record_type": {"const": "review_validation_binding"}}}, "then": {"properties": {"status": {"const": "bound"}, "payload": {"$ref": "#/$defs/review_validation_binding"}}}},
     {"if": {"properties": {"record_type": {"const": "finding_transition"}}}, "then": {"properties": {"status": {"const": "recorded"}, "payload": {"$ref": "#/$defs/finding_transition"}}}},
@@ -104,7 +105,7 @@
         "branch": {"$ref": "#/$defs/non_empty"},
         "branch_base": {"$ref": "#/$defs/non_empty"},
         "first_slice_start_commit": {"$ref": "#/$defs/git_sha"},
-        "execution_mode": {"enum": ["IMPLEMENT", "PLAN_ONLY"]},
+        "execution_mode": {"enum": ["IMPLEMENT", "PLAN_ONLY", "BRANCH_DISCOVERY"]},
         "audit_report_path": {"oneOf": [{"$ref": "#/$defs/path"}, {"type": "null"}]}
       }
     },
@@ -227,6 +228,33 @@
       "properties": {"reviewer": {"const": "claude"}, "work_unit_id": {"$ref": "#/$defs/identifier"}, "verdict": {"enum": ["approved", "denied", "stop"]}, "finding_ids": {"$ref": "#/$defs/finding_ids"}, "evidence": {"type": ["string", "null"], "minLength": 1}, "review_evidence": {"oneOf": [{"$ref": "#/$defs/review_evidence"}, {"type": "null"}]}, "red_state_followup_slice": {"type": ["string", "null"], "minLength": 1}, "test_files": {"$ref": "#/$defs/paths"}, "pre_mortem": {"type": ["string", "null"], "minLength": 1}, "stop_request": {"oneOf": [{"$ref": "#/$defs/review_stop_request"}, {"type": "null"}]}, "transport_schema": {"const": "native-claude-review-v2"}, "request_id": {"type": "string", "pattern": "^native-review-request-[0-9a-f]{64}$"}, "response_sha256": {"$ref": "#/$defs/sha256"}},
       "allOf": [{"if": {"properties": {"verdict": {"const": "approved"}}}, "then": {"anyOf": [{"properties": {"finding_ids": {"minItems": 1}}}, {"properties": {"evidence": {"type": "string"}}}, {"properties": {"review_evidence": {"$ref": "#/$defs/review_evidence"}}, "required": ["review_evidence"]}]}}, {"if": {"properties": {"red_state_followup_slice": {"type": "string"}}, "required": ["red_state_followup_slice"]}, "then": {"properties": {"verdict": {"const": "approved"}}}}, {"if": {"properties": {"evidence": {"type": "string"}}, "required": ["evidence"]}, "then": {"properties": {"review_evidence": {"type": "null"}}}}, {"if": {"properties": {"review_evidence": {"$ref": "#/$defs/review_evidence"}}, "required": ["review_evidence"]}, "then": {"properties": {"evidence": {"type": "null"}}}}, {"if": {"properties": {"verdict": {"const": "stop"}}}, "then": {"properties": {"stop_request": {"$ref": "#/$defs/review_stop_request"}}}, "else": {"properties": {"stop_request": {"type": "null"}}}}]
     },
+    "branch_discovery_finding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["finding_id", "severity", "summary", "acceptance_test"],
+      "properties": {"finding_id": {"$ref": "#/$defs/finding_id"}, "severity": {"enum": ["BLOCKER", "OBSERVATION"]}, "summary": {"$ref": "#/$defs/non_empty"}, "acceptance_test": {"$ref": "#/$defs/non_empty"}}
+    },
+    "branch_discovery_occurrence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["finding_id", "rationale"],
+      "properties": {"finding_id": {"$ref": "#/$defs/finding_id"}, "rationale": {"$ref": "#/$defs/non_empty"}}
+    },
+    "branch_discovery_completed": {
+      "type": "object", "additionalProperties": false,
+      "required": ["reviewer", "work_unit_id", "new_findings", "occurrences", "review_evidence", "pre_mortem", "validation_attestation_record_id", "reviewed_head_commit", "transport_schema", "request_id", "response_sha256"],
+      "properties": {
+        "reviewer": {"$ref": "#/$defs/review/properties/reviewer"},
+        "work_unit_id": {"$ref": "#/$defs/identifier"},
+        "new_findings": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/branch_discovery_finding"}},
+        "occurrences": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/branch_discovery_occurrence"}},
+        "review_evidence": {"$ref": "#/$defs/review_evidence"},
+        "pre_mortem": {"$ref": "#/$defs/non_empty"},
+        "validation_attestation_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"},
+        "reviewed_head_commit": {"$ref": "#/$defs/git_sha"},
+        "transport_schema": {"$ref": "#/$defs/review/properties/transport_schema"},
+        "request_id": {"type": "string", "pattern": "^native-review-request-[0-9a-f]{64}$"},
+        "response_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
     "review_stop_request": {
       "type": "object", "additionalProperties": false, "required": ["rule_id", "rationale", "remediation_paths"],
       "properties": {"rule_id": {"$ref": "#/$defs/non_empty"}, "rationale": {"$ref": "#/$defs/non_empty"}, "remediation_paths": {"$ref": "#/$defs/paths"}}
@@ -283,13 +311,15 @@
     },
     "branch_discovery_handoff_export": {
       "type": "object", "additionalProperties": false,
-      "required": ["source_run_id", "source_head_record_id", "discovery_review_record_id", "validation_attestation_record_id", "reviewed_head_commit", "family_id", "family_base_commit", "cycle_number", "predecessor_run_id", "predecessor_head_record_id", "finding_transition_record_ids", "finding_transitions_sha256", "target_task_path", "target_task_sha256", "target_run_identity", "authority"],
-      "properties": {"source_run_id": {"$ref": "#/$defs/identifier"}, "source_head_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "discovery_review_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "validation_attestation_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "reviewed_head_commit": {"$ref": "#/$defs/git_sha"}, "family_id": {"$ref": "#/$defs/identifier"}, "family_base_commit": {"$ref": "#/$defs/git_sha"}, "cycle_number": {"type": "integer", "minimum": 1}, "predecessor_run_id": {"$ref": "#/$defs/identifier"}, "predecessor_head_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "finding_transition_record_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}}, "finding_transitions_sha256": {"$ref": "#/$defs/sha256"}, "target_task_path": {"$ref": "#/$defs/path"}, "target_task_sha256": {"$ref": "#/$defs/sha256"}, "target_run_identity": {"$ref": "#/$defs/identifier"}, "authority": {"const": "orchestrator"}}
+      "required": ["source_run_id", "source_head_record_id", "validation_attestation_record_id", "reviewed_head_commit", "family_id", "family_base_commit", "cycle_number", "predecessor_run_id", "predecessor_head_record_id", "finding_transition_record_ids", "finding_transitions_sha256", "target_task_path", "target_task_sha256", "target_run_identity", "authority"],
+      "properties": {"source_run_id": {"$ref": "#/$defs/identifier"}, "source_head_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "discovery_review_record_id": {"type": ["string", "null"], "pattern": "^ar1-[0-9a-f]{64}$"}, "validation_attestation_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "reviewed_head_commit": {"$ref": "#/$defs/git_sha"}, "family_id": {"$ref": "#/$defs/identifier"}, "family_base_commit": {"$ref": "#/$defs/git_sha"}, "cycle_number": {"type": "integer", "minimum": 1}, "predecessor_run_id": {"$ref": "#/$defs/identifier"}, "predecessor_head_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "finding_transition_record_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}}, "finding_transitions_sha256": {"$ref": "#/$defs/sha256"}, "target_task_path": {"$ref": "#/$defs/path"}, "target_task_sha256": {"$ref": "#/$defs/sha256"}, "target_run_identity": {"$ref": "#/$defs/identifier"}, "authority": {"const": "orchestrator"}, "target_execution_mode": {"const": "BRANCH_DISCOVERY"}, "source_completion_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}},
+      "allOf": [{"if": {"required": ["target_execution_mode"]}, "then": {"required": ["source_completion_record_id"], "properties": {"discovery_review_record_id": {"type": "null"}}}, "else": {"required": ["discovery_review_record_id"], "properties": {"finding_transition_record_ids": {"minItems": 1}}}}]
     },
     "branch_discovery_handoff_import": {
       "type": "object", "additionalProperties": false,
-      "required": ["source_run_id", "source_head_record_id", "discovery_review_record_id", "validation_attestation_record_id", "reviewed_head_commit", "family_id", "family_base_commit", "cycle_number", "predecessor_run_id", "predecessor_head_record_id", "export_record_id", "target_run_id", "target_task_path", "target_task_sha256", "target_run_identity", "finding_transitions_sha256", "transitions", "finding_snapshot", "authority"],
-      "properties": {"source_run_id": {"$ref": "#/$defs/identifier"}, "source_head_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "discovery_review_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "validation_attestation_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "reviewed_head_commit": {"$ref": "#/$defs/git_sha"}, "family_id": {"$ref": "#/$defs/identifier"}, "family_base_commit": {"$ref": "#/$defs/git_sha"}, "cycle_number": {"type": "integer", "minimum": 1}, "predecessor_run_id": {"$ref": "#/$defs/identifier"}, "predecessor_head_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "export_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "target_run_id": {"$ref": "#/$defs/identifier"}, "target_task_path": {"$ref": "#/$defs/path"}, "target_task_sha256": {"$ref": "#/$defs/sha256"}, "target_run_identity": {"$ref": "#/$defs/identifier"}, "finding_transitions_sha256": {"$ref": "#/$defs/sha256"}, "transitions": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/imported_finding_transition"}}, "finding_snapshot": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/finding_snapshot_item"}}, "authority": {"const": "orchestrator"}}
+      "required": ["source_run_id", "source_head_record_id", "validation_attestation_record_id", "reviewed_head_commit", "family_id", "family_base_commit", "cycle_number", "predecessor_run_id", "predecessor_head_record_id", "export_record_id", "target_run_id", "target_task_path", "target_task_sha256", "target_run_identity", "finding_transitions_sha256", "transitions", "finding_snapshot", "authority"],
+      "properties": {"source_run_id": {"$ref": "#/$defs/identifier"}, "source_head_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "discovery_review_record_id": {"type": ["string", "null"], "pattern": "^ar1-[0-9a-f]{64}$"}, "validation_attestation_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "reviewed_head_commit": {"$ref": "#/$defs/git_sha"}, "family_id": {"$ref": "#/$defs/identifier"}, "family_base_commit": {"$ref": "#/$defs/git_sha"}, "cycle_number": {"type": "integer", "minimum": 1}, "predecessor_run_id": {"$ref": "#/$defs/identifier"}, "predecessor_head_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "export_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}, "target_run_id": {"$ref": "#/$defs/identifier"}, "target_task_path": {"$ref": "#/$defs/path"}, "target_task_sha256": {"$ref": "#/$defs/sha256"}, "target_run_identity": {"$ref": "#/$defs/identifier"}, "finding_transitions_sha256": {"$ref": "#/$defs/sha256"}, "transitions": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/imported_finding_transition"}}, "finding_snapshot": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/finding_snapshot_item"}}, "authority": {"const": "orchestrator"}, "target_execution_mode": {"const": "BRANCH_DISCOVERY"}, "source_completion_record_id": {"type": "string", "pattern": "^ar1-[0-9a-f]{64}$"}},
+      "allOf": [{"if": {"required": ["target_execution_mode"]}, "then": {"required": ["source_completion_record_id"], "properties": {"discovery_review_record_id": {"type": "null"}}}, "else": {"required": ["discovery_review_record_id"], "properties": {"transitions": {"minItems": 1}, "finding_snapshot": {"minItems": 1}}}}]
     },
     "validation_request": {
       "type": "object", "additionalProperties": false, "required": ["commands", "requested_by"],

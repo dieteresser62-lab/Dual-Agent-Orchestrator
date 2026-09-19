@@ -23,6 +23,7 @@ from artifact_bridge import (
     ArtifactBridge,
     agent_result_payload,
     attestation_payload,
+    branch_discovery_completed_payload,
     command_payload,
     finding_payload,
     plan_payload,
@@ -33,6 +34,7 @@ from artifact_models import (
     AgentResultPayload,
     ArtifactRecord,
     BindingPayload,
+    BranchDiscoveryCompletedPayload,
     FingerprintKind,
     GatePayload,
     GateTransitionPayload,
@@ -64,6 +66,7 @@ from artifact_replay import (
 )
 from contracts import (
     AgentRole,
+    ApprovalMarker,
     ContractResult,
     FindingRecord,
     ValidationAttestation,
@@ -663,22 +666,39 @@ class WorkflowPersistence:
             )
         ):
             chain = bridge.store.current_chain()
+            branch_discovery = (
+                state.execution_mode == TaskMode.BRANCH_DISCOVERY.value
+            )
             rejected = (
-                state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
+                not branch_discovery
+                and state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
                 and bool(state.current_work_unit.open_findings)
             )
-            final_binding = next(
-                (
-                    item
-                    for item in reversed(chain)
-                    if isinstance(item.payload, BindingPayload)
-                    and item.payload.binding_kind in {"commit", "plan_commit"}
-                ),
-                None,
+            final_binding = (
+                next(
+                    (
+                        item
+                        for item in reversed(chain)
+                        if isinstance(
+                            item.payload, BranchDiscoveryCompletedPayload
+                        )
+                    ),
+                    None,
+                )
+                if branch_discovery
+                else next(
+                    (
+                        item
+                        for item in reversed(chain)
+                        if isinstance(item.payload, BindingPayload)
+                        and item.payload.binding_kind in {"commit", "plan_commit"}
+                    ),
+                    None,
+                )
             )
             if final_binding is None and not rejected:
                 raise WorkflowExecutionError(
-                    "structured completion requires a reviewed commit binding"
+                    "structured completion requires its authoritative final binding"
                 )
             bridge.append(
                 WorkflowCompletionPayload(
@@ -964,11 +984,70 @@ class WorkflowPersistence:
                 fingerprint_sha256=fingerprint,
             )
 
-    def persist_native_review_contract(
+    def _persist_branch_discovery_completion(
         self,
+        *,
         output: NativeAgentReviewOutput,
         fingerprint: str,
         round_number: int,
+        previous_findings: tuple[FindingRecord, ...],
+        attestation_record: ArtifactRecord,
+        logical: str,
+        binding_digest: str,
+        response_sha256: str,
+    ) -> bool:
+        if output.result.delivery_kind != "branch_discovery_completed":
+            return False
+        bridge = self._artifact_bridge
+        state = self.active_state
+        native_context = output.context
+        assert bridge is not None and state is not None and native_context is not None
+        if (
+            state.execution_mode != TaskMode.BRANCH_DISCOVERY.value
+            or native_context.approval_marker is not ApprovalMarker.BRANCH_DISCOVERY
+        ):
+            raise WorkflowExecutionError(
+                "branch discovery completion lacks its dedicated run binding"
+            )
+        reviewed_head = state.slices[0].start_commit
+        if reviewed_head is None:
+            raise WorkflowExecutionError(
+                "branch discovery completion lacks its reviewed HEAD"
+            )
+        unit = state.current_work_unit
+        completion_record = bridge.append(
+            branch_discovery_completed_payload(
+                output.result,
+                previous_findings,
+                work_unit_id=unit.work_unit_id,
+                validation_attestation_record_id=attestation_record.record_id,
+                reviewed_head_commit=reviewed_head,
+                transport_schema=NATIVE_REVIEW_TRANSPORT,
+                request_id=output.request_id,
+                response_sha256=response_sha256,
+            ),
+            logical_id=logical,
+            idempotency_key=f"native:{logical}:{binding_digest}",
+            fingerprint_sha256=fingerprint,
+        )
+        self._persist_review_finding_transitions(
+            output.result,
+            fingerprint=fingerprint,
+            round_number=round_number,
+            previous_findings=previous_findings,
+            structured=True,
+        )
+        self._append_workflow_event(
+            event_kind="review",
+            work_unit_id=str(unit.work_unit_id),
+            slice_id=str(unit.slice_id),
+            round_number=round_number,
+            domain_record=completion_record,
+        )
+        return True
+
+    def persist_native_review_contract(
+        self, output: NativeAgentReviewOutput, fingerprint: str, round_number: int,
         previous_findings: tuple[FindingRecord, ...],
     ) -> None:
         bridge = self._artifact_bridge
@@ -997,7 +1076,10 @@ class WorkflowPersistence:
                 record
                 for record in chain
                 if record.logical_id == logical
-                and isinstance(record.payload, ReviewPayload)
+                and isinstance(
+                    record.payload,
+                    (ReviewPayload, BranchDiscoveryCompletedPayload),
+                )
             ),
             None,
         )
@@ -1021,8 +1103,7 @@ class WorkflowPersistence:
                     "native review persistence lacks its correction finding scope"
                 )
             request_scope_findings = reduced.request_subset(
-                finding_ids=attribution.finding_ids
-            ).findings
+                finding_ids=attribution.finding_ids).findings
         else:
             request_scope_findings = reduced.ledger.findings
         try:
@@ -1079,13 +1160,9 @@ class WorkflowPersistence:
                 "native review persistence has no unique earlier validation record"
             )
         attestation_record = attestation_records[0]
-        response_sha256 = hashlib.sha256(
-            output.canonical_json.encode("utf-8")
-        ).hexdigest()
+        response_sha256 = hashlib.sha256(output.canonical_json.encode("utf-8")).hexdigest()
         binding_digest = hashlib.sha256(
-            (
-                f"{fingerprint}:{output.request_id}:{response_sha256}"
-            ).encode("utf-8")
+            f"{fingerprint}:{output.request_id}:{response_sha256}".encode("utf-8")
         ).hexdigest()
         content_record = self._persist_provider_content(
             role=Role(output.result.reviewer.value),
@@ -1099,9 +1176,18 @@ class WorkflowPersistence:
         )
         assert isinstance(content_record.payload, ProviderContentPayload)
         if content_record.payload.response_sha256 != response_sha256:
-            raise WorkflowExecutionError(
-                "native reviewer content digest differs from its review binding"
-            )
+            raise WorkflowExecutionError("native reviewer content digest differs from its review binding")
+        if self._persist_branch_discovery_completion(
+            output=output,
+            fingerprint=fingerprint,
+            round_number=round_number,
+            previous_findings=previous_findings,
+            attestation_record=attestation_record,
+            logical=logical,
+            binding_digest=binding_digest,
+            response_sha256=response_sha256,
+        ):
+            return
         review_record = bridge.append(
             review_payload(
                 output.result,

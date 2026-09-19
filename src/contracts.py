@@ -33,6 +33,7 @@ class ApprovalMarker(str, Enum):
     PLAN = "PLAN_APPROVAL"
     SLICE = "SLICE_APPROVAL"
     FINAL = "FINAL_APPROVAL"
+    BRANCH_DISCOVERY = "BRANCH_DISCOVERY_COMPLETED"
 
 
 class ReadinessMarker(str, Enum):
@@ -151,6 +152,18 @@ class FindingRecord:
             raise ValueError("finding acceptance test must not be empty")
         if self.status is FindingStatus.CLOSED and not (self.status_rationale or "").strip():
             raise ValueError("closed finding requires a status rationale")
+
+
+@dataclass(frozen=True)
+class FindingOccurrence:
+    finding_id: str
+    rationale: str
+
+    def __post_init__(self) -> None:
+        if not SOURCE_FINDING_ID_PATTERN.fullmatch(self.finding_id):
+            raise ValueError(f"invalid occurrence finding id {self.finding_id}")
+        if not self.rationale.strip():
+            raise ValueError("finding occurrence requires a rationale")
 
 
 @dataclass(frozen=True)
@@ -409,8 +422,31 @@ class ContractResult:
     findings: tuple[FindingRecord, ...]
     anchors: tuple[AnchorRecord, ...]
     red_state_followup_slice: str | None = None
+    delivery_kind: str = "review"
+    occurrences: tuple[FindingOccurrence, ...] = ()
 
     def __post_init__(self) -> None:
+        if self.delivery_kind not in {"review", "branch_discovery_completed"}:
+            raise ValueError("review delivery_kind is invalid")
+        if self.delivery_kind == "branch_discovery_completed":
+            if self.stopped or self.stop_request is not None or self.approval is not None:
+                raise ValueError(
+                    "branch discovery completion is neither an approval nor a stop"
+                )
+            if self.evidence is None or self.pre_mortem is None:
+                raise ValueError(
+                    "branch discovery completion requires evidence and pre_mortem"
+                )
+            occurrence_ids = tuple(item.finding_id for item in self.occurrences)
+            if occurrence_ids != sorted_finding_ids(occurrence_ids):
+                raise ValueError(
+                    "branch discovery occurrences must be sorted and unique"
+                )
+        else:
+            if self.occurrences:
+                raise ValueError("ordinary reviews cannot carry discovery occurrences")
+            if not self.stopped and self.approval is None:
+                raise ValueError("a completed review requires an approval decision")
         if (
             self.red_state_followup_slice is not None
             and not self.red_state_followup_slice.strip()

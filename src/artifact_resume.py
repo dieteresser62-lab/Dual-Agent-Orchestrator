@@ -19,6 +19,7 @@ from artifact_models import (
     FindingHandoffImportPayload,
     RecordType,
     ReviewPayload,
+    BranchDiscoveryCompletedPayload,
     RunIdentityPayload,
     ValidationAttestationPayload,
     WorkflowEventPayload,
@@ -105,7 +106,10 @@ def require_workflow_event_prefix(
             else "validation"
             if isinstance(record.payload, ValidationAttestationPayload)
             else "review"
-            if isinstance(record.payload, ReviewPayload)
+            if isinstance(
+                record.payload,
+                (ReviewPayload, BranchDiscoveryCompletedPayload),
+            )
             else None,
         )
         if kind is not None

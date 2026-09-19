@@ -12,14 +12,18 @@ from artifact_bridge import (
     ArtifactBridgeError,
     branch_discovery_handoff_export_payload,
     branch_discovery_handoff_import_payload,
+    derive_family_acceptance,
     finding_handoff_export_payload,
     finding_handoff_import_payload,
 )
 from artifact_models import (
     ArtifactRecord,
     ArtifactValidationError,
+    BranchDiscoveryCompletedPayload,
+    BranchDiscoveryOccurrencePayload,
     BranchDiscoveryHandoffExportPayload,
     BranchDiscoveryHandoffImportPayload,
+    BindingPayload,
     CommandSpec,
     FamilyBindingPayload,
     FindingHandoffImportPayload,
@@ -40,6 +44,7 @@ from artifact_models import (
     TaskPayload,
     ValidationAttestationPayload,
     ValidationResult,
+    WorkflowCompletionPayload,
     _payload_from_dict,
     artifact_payload_document,
     canonical_json,
@@ -116,12 +121,14 @@ def _identity(
     task_path: str,
     mode: str,
     approved_plan_commit: str | None,
+    *,
+    first_slice_start_commit: str = BASE_COMMIT,
 ) -> RunIdentityPayload:
     return RunIdentityPayload(
         task_path,
         "feature/finding-decision-in-slice",
         BASE_COMMIT,
-        BASE_COMMIT,
+        first_slice_start_commit,
         mode,
         approved_plan_commit,
     )
@@ -200,7 +207,12 @@ def _discovery_edge(monkeypatch: pytest.MonkeyPatch) -> _DiscoveryEdge:
         records,
         run_id,
         "run-identity",
-        _identity("inbox/doing/run-a.md", "IMPLEMENT", "1" * 40),
+        _identity(
+            "inbox/doing/run-a.md",
+            "BRANCH_DISCOVERY",
+            None,
+            first_slice_start_commit=REVIEWED_COMMIT,
+        ),
     )
     _append(
         records,
@@ -209,17 +221,37 @@ def _discovery_edge(monkeypatch: pytest.MonkeyPatch) -> _DiscoveryEdge:
         _profile(_family(1, implementation_commit=REVIEWED_COMMIT)),
     )
     opening = _append(records, run_id, "finding-C-01", _opening())
-    review = _append(
-        records,
-        run_id,
-        "discovery-review",
-        _approved_review("discovery"),
-    )
     attestation = _append(
         records,
         run_id,
         "discovery-validation",
         _attestation(),
+    )
+    review = _append(
+        records,
+        run_id,
+        "discovery-review",
+        BranchDiscoveryCompletedPayload(
+            reviewer=Role.CLAUDE,
+            work_unit_id="discovery",
+            new_findings=(),
+            occurrences=(
+                BranchDiscoveryOccurrencePayload(
+                    "C-01", "The earlier finding still occurs on the reviewed HEAD."
+                ),
+            ),
+            review_evidence=ReviewEvidencePayload(
+                "Finding identity, source history, and target binding checked.",
+                "A later family edge could drop imported history.",
+                "Removing the opening transition breaks the three-run proof.",
+            ),
+            pre_mortem="A digest could cover only the current run's transitions.",
+            validation_attestation_record_id=attestation.record_id,
+            reviewed_head_commit=REVIEWED_COMMIT,
+            transport_schema="native-claude-review-v2",
+            request_id="native-review-request-" + "d" * 64,
+            response_sha256="e" * 64,
+        ),
     )
     before_export = _replay(records, run_id)
     target_family = _family(
@@ -581,6 +613,120 @@ def test_three_run_handoff_keeps_opening_and_local_status_transition(
     assert export.finding_transitions_sha256 == finding_transition_sequence_sha256(
         imported_c.transitions
     )
+
+
+@pytest.mark.parametrize(
+    ("source_mode", "cycle_number", "plan_commit"),
+    (
+        ("IMPLEMENT", 2, None),
+        ("PLAN_ONLY", 2, "1" * 40),
+        ("IMPLEMENT", 3, "1" * 40),
+    ),
+)
+def test_all_three_e1_edges_use_the_same_branch_discovery_handoff(
+    monkeypatch: pytest.MonkeyPatch,
+    source_mode: str,
+    cycle_number: int,
+    plan_commit: str | None,
+) -> None:
+    monkeypatch.setattr(
+        native_finding_decisions,
+        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
+        True,
+    )
+    run_id = f"source-{source_mode.lower()}-{cycle_number}"
+    records: list[ArtifactRecord] = []
+    _append(
+        records,
+        run_id,
+        "run-identity",
+        _identity("inbox/source.md", source_mode, None),
+    )
+    source_family = _family(
+        cycle_number - 1,
+        plan_commit=plan_commit,
+        implementation_commit=(
+            REVIEWED_COMMIT if source_mode == "IMPLEMENT" else None
+        ),
+    )
+    _append(records, run_id, "run-profile", _profile(source_family))
+    attestation = _append(records, run_id, "validation", _attestation())
+    approval = _append(
+        records,
+        run_id,
+        "source-approval",
+        _approved_review("source"),
+    )
+    binding = _append(
+        records,
+        run_id,
+        "final-binding",
+        BindingPayload(
+            "implementation_handoff",
+            REVIEWED_COMMIT,
+            attestation.record_id,
+            (approval.record_id,),
+        ),
+    )
+    completion = _append(
+        records,
+        run_id,
+        "workflow-completion",
+        WorkflowCompletionPayload("completed", binding.record_id),
+    )
+    before_export = _replay(records, run_id)
+    target_family = _family(
+        cycle_number,
+        predecessor_run_id=run_id,
+        predecessor_head_record_id=before_export.head_record_id,
+        plan_commit=plan_commit,
+        implementation_commit=(
+            REVIEWED_COMMIT if source_mode == "IMPLEMENT" else None
+        ),
+    )
+    payload = branch_discovery_handoff_export_payload(
+        before_export,
+        discovery_review_record_id=None,
+        validation_attestation_record_id=attestation.record_id,
+        reviewed_head_commit=REVIEWED_COMMIT,
+        family_binding=target_family,
+        target_task_path="inbox/doing/discovery.md",
+        target_task_bytes=b"ORCHESTRATOR_MODE: BRANCH_DISCOVERY\n",
+        target_run_identity=f"discovery-{cycle_number}",
+        target_execution_mode="BRANCH_DISCOVERY",
+        source_completion_record_id=completion.record_id,
+    )
+
+    assert isinstance(payload, BranchDiscoveryHandoffExportPayload)
+    assert payload.target_execution_mode == "BRANCH_DISCOVERY"
+    assert payload.discovery_review_record_id is None
+    assert payload.source_completion_record_id == completion.record_id
+
+
+def test_family_acceptance_is_local_to_terminal_discovery_and_open_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    edge = _discovery_edge(monkeypatch)
+    completion_record = next(
+        record
+        for record in edge.source_records
+        if isinstance(record.payload, BranchDiscoveryCompletedPayload)
+    )
+    _append(
+        edge.source_records,
+        "run-a-discovery",
+        "workflow-completion",
+        WorkflowCompletionPayload("completed", completion_record.record_id),
+    )
+    replay = _replay(edge.source_records, "run-a-discovery")
+    assert derive_family_acceptance(replay) is False
+
+    non_discovery = replace(
+        replay,
+        run_identity=_identity("inbox/source.md", "IMPLEMENT", None),
+    )
+    with pytest.raises(ArtifactBridgeError, match="only from its own"):
+        derive_family_acceptance(non_discovery)
 
 
 def test_joint_switch_is_dormant_and_legacy_export_shape_stays_exact(

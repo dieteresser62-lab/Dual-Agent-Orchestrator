@@ -12,9 +12,11 @@ from typing import Callable
 import pytest
 
 import artifact_replay
+import native_finding_decisions
 from artifact_models import (
     AgentResultPayload,
     ArtifactRecord,
+    BranchDiscoveryCompletedPayload,
     BranchDiscoveryHandoffExportPayload,
     BranchDiscoveryHandoffImportPayload,
     BindingPayload,
@@ -44,6 +46,7 @@ from artifact_models import (
     RecordType,
     ResumeCheckPayload,
     ReviewAnchorPayload,
+    ReviewEvidencePayload,
     ReviewPacketPayload,
     ReviewPayload,
     ReviewValidationBindingPayload,
@@ -315,7 +318,10 @@ def _append_validation_pair(
 
 
 def _append_attestation(
-    records: list[ArtifactRecord], *, fingerprint: Fingerprint = FP_A
+    records: list[ArtifactRecord],
+    *,
+    fingerprint: Fingerprint = FP_A,
+    logical_id: str = "validation-1",
 ) -> ArtifactRecord:
     _, result = _validation_parts()
     return _append(
@@ -323,7 +329,7 @@ def _append_attestation(
         ValidationAttestationPayload(
             (result,), Role.ORCHESTRATOR, "e" * 64, "ar1-" + "f" * 64
         ),
-        logical_id="validation-1",
+        logical_id=logical_id,
         fingerprint=fingerprint,
     )
 
@@ -556,11 +562,33 @@ def _branch_import_payload(
     )
 
 
+def _with_joint_cutover(factory: Callable[[], object]) -> object:
+    prior = native_finding_decisions.JOINT_67_68_NATIVE_CONTRACT_CUTOVER
+    native_finding_decisions.JOINT_67_68_NATIVE_CONTRACT_CUTOVER = True
+    try:
+        return factory()
+    finally:
+        native_finding_decisions.JOINT_67_68_NATIVE_CONTRACT_CUTOVER = prior
+
+
 def _branch_export_prefix(
     records: list[ArtifactRecord],
     *,
     attestation_fingerprint: Fingerprint = FP_A,
 ) -> tuple[ArtifactRecord, ArtifactRecord, ArtifactRecord]:
+    _append(
+        records,
+        _with_joint_cutover(
+            lambda: RunIdentityPayload(
+                "inbox/b40.md",
+                "feature/b40",
+                "1" * 40,
+                "2" * 40,
+                "BRANCH_DISCOVERY",
+                None,
+            )
+        ),
+    )
     _append(
         records,
         RunProfilePayload(
@@ -575,16 +603,34 @@ def _branch_export_prefix(
         ),
     )
     finding = _append(records, _finding_transition())
-    review = _append(
-        records,
-        _review(finding_ids=("C-01",)),
-        logical_id="review-claude-discovery-1",
-    )
     attestation = _append_attestation(
         records,
         fingerprint=attestation_fingerprint,
     )
-    return finding, review, attestation
+    completion = _append(
+        records,
+        _with_joint_cutover(
+            lambda: BranchDiscoveryCompletedPayload(
+                reviewer=Role.CLAUDE,
+                work_unit_id="1",
+                new_findings=(),
+                occurrences=(),
+                review_evidence=ReviewEvidencePayload(
+                    "all dimensions",
+                    "residual risk",
+                    "break condition",
+                ),
+                pre_mortem="pre mortem",
+                validation_attestation_record_id=attestation.record_id,
+                reviewed_head_commit="2" * 40,
+                transport_schema="native-claude-review-v2",
+                request_id="native-review-request-" + "c" * 64,
+                response_sha256=RESPONSE_SHA,
+            )
+        ),
+        logical_id="review-claude-discovery-1",
+    )
+    return finding, completion, attestation
 
 
 def _branch_export_payload(
@@ -603,7 +649,7 @@ def _branch_export_payload(
     )
     return BranchDiscoveryHandoffExportPayload(
         RUN_ID,
-        attestation.record_id,
+        review.record_id,
         review.record_id,
         attestation.record_id,
         "2" * 40,
@@ -611,13 +657,110 @@ def _branch_export_payload(
         "1" * 40,
         2,
         RUN_ID,
-        attestation.record_id,
+        review.record_id,
         (finding.record_id,),
         transition_digest or finding_transition_sequence_sha256((transition,)),
         "inbox/backlog/b40-followup.md",
         "8" * 64,
         "target-run",
         Role.ORCHESTRATOR,
+    )
+
+
+def _branch_discovery_target_export_prefix(
+    records: list[ArtifactRecord],
+    *,
+    source_mode: str = "IMPLEMENT",
+) -> tuple[ArtifactRecord, ArtifactRecord]:
+    identity = (
+        RunIdentityPayload(
+            "inbox/b40.md",
+            "feature/b40",
+            "1" * 40,
+            "2" * 40,
+            source_mode,
+            None,
+        )
+        if source_mode != "BRANCH_DISCOVERY"
+        else _with_joint_cutover(
+            lambda: RunIdentityPayload(
+                "inbox/b40.md",
+                "feature/b40",
+                "1" * 40,
+                "2" * 40,
+                source_mode,
+                None,
+            )
+        )
+    )
+    _append(
+        records,
+        identity,
+    )
+    _append(
+        records,
+        RunProfilePayload(
+            RoleProfilePayload("implementer", "medium"),
+            RoleProfilePayload("reviewer", "high"),
+            family_binding=replace(
+                _family_binding(),
+                predecessor_run_id=None,
+                predecessor_head_record_id=None,
+                cycle_number=1,
+            ),
+        ),
+    )
+    attestation = _append_attestation(records)
+    approval = _append(
+        records,
+        _review(),
+        logical_id="review-claude-source-1",
+    )
+    binding = _append(
+        records,
+        BindingPayload(
+            "commit",
+            "2" * 40,
+            attestation.record_id,
+            (approval.record_id,),
+        ),
+    )
+    completion = _append(
+        records,
+        WorkflowCompletionPayload("completed", binding.record_id),
+    )
+    return attestation, completion
+
+
+def _branch_discovery_target_export_payload(
+    attestation: ArtifactRecord,
+    completion: ArtifactRecord,
+    *,
+    source_completion_record_id: str | None = None,
+) -> BranchDiscoveryHandoffExportPayload:
+    return BranchDiscoveryHandoffExportPayload(
+        source_run_id=RUN_ID,
+        source_head_record_id=completion.record_id,
+        discovery_review_record_id=None,
+        validation_attestation_record_id=attestation.record_id,
+        reviewed_head_commit="2" * 40,
+        family_id="finding-family",
+        family_base_commit="1" * 40,
+        cycle_number=2,
+        predecessor_run_id=RUN_ID,
+        predecessor_head_record_id=completion.record_id,
+        finding_transition_record_ids=(),
+        finding_transitions_sha256=finding_transition_sequence_sha256(()),
+        target_task_path="inbox/backlog/b40-discovery.md",
+        target_task_sha256="8" * 64,
+        target_run_identity="target-run",
+        authority=Role.ORCHESTRATOR,
+        target_execution_mode="BRANCH_DISCOVERY",
+        source_completion_record_id=(
+            completion.record_id
+            if source_completion_record_id is None
+            else source_completion_record_id
+        ),
     )
 
 
@@ -637,15 +780,20 @@ def _side_effect(*, phase: str = "intent") -> SideEffectPayload:
 def _case(line: int) -> RejectionInput:  # noqa: C901, PLR0912, PLR0915
     records: list[ArtifactRecord] = []
 
-    if line in {3001, 3002, 3003, 3004, 3005}:
-        finding, review, attestation = _branch_export_prefix(
-            records,
-            attestation_fingerprint=FP_B if line == 3003 else FP_A,
-        )
+    if line in {3001, 3002, 3003, 3004, 3005, 3013}:
+        finding, review, attestation = _branch_export_prefix(records)
+        if line == 3003:
+            export_attestation = _append_attestation(
+                records,
+                fingerprint=FP_B,
+                logical_id="validation-2",
+            )
+        else:
+            export_attestation = attestation
         payload = _branch_export_payload(
             finding,
             review,
-            attestation,
+            export_attestation,
             family_id="wrong-family" if line == 3005 else "finding-family",
             transition_digest="9" * 64 if line == 3004 else None,
         )
@@ -656,9 +804,33 @@ def _case(line: int) -> RejectionInput:  # noqa: C901, PLR0912, PLR0915
                 payload,
                 discovery_review_record_id="ar1-" + "9" * 64,
             )
+        elif line == 3013:
+            payload = replace(
+                payload,
+                validation_attestation_record_id="ar1-" + "9" * 64,
+            )
+        elif line == 3003:
+            payload = replace(
+                payload,
+                source_head_record_id=export_attestation.record_id,
+                predecessor_head_record_id=export_attestation.record_id,
+            )
         if line != 3012:
             _append(records, payload)
-    elif line in {3006, 3007, 3008, 3009, 3010, 3011, 3012}:
+    elif line in {3014, 3015}:
+        attestation, completion = _branch_discovery_target_export_prefix(
+            records,
+            source_mode="BRANCH_DISCOVERY" if line == 3015 else "IMPLEMENT",
+        )
+        payload = _branch_discovery_target_export_payload(
+            attestation,
+            completion,
+            source_completion_record_id=(
+                "ar1-" + "9" * 64 if line == 3014 else None
+            ),
+        )
+        _append(records, payload)
+    elif line in {3006, 3007, 3008, 3009, 3010, 3011, 3012, 3016}:
         payload = _branch_import_payload(
             target_run_id="wrong-run" if line == 3006 else RUN_ID,
             source_run_id=RUN_ID if line == 3007 else "source-run",
@@ -666,7 +838,7 @@ def _case(line: int) -> RejectionInput:  # noqa: C901, PLR0912, PLR0915
         )
         if line != 3012:
             _append(records, payload)
-        if line in {3009, 3010, 3011, 3012}:
+        if line in {3009, 3010, 3011, 3012, 3016}:
             _append(
                 records,
                 RunProfilePayload(
@@ -703,6 +875,79 @@ def _case(line: int) -> RejectionInput:  # noqa: C901, PLR0912, PLR0915
         elif line == 3012:
             _append(records, _measurement(operation="codex_plan"))
             _append(records, payload)
+        elif line == 3016:
+            _append(
+                records,
+                _with_joint_cutover(
+                    lambda: RunIdentityPayload(
+                        "inbox/backlog/b40-followup.md",
+                        "feature/b40",
+                        "1" * 40,
+                        "1" * 40,
+                        "BRANCH_DISCOVERY",
+                        None,
+                    )
+                ),
+            )
+            _append(
+                records,
+                TaskPayload("feature/b40", ("src/a.py",), "8" * 64),
+            )
+    elif line in {3017, 3018, 3019}:
+        _append(
+            records,
+            (
+                RunIdentityPayload(
+                    "inbox/b40.md",
+                    "feature/b40",
+                    "1" * 40,
+                    "2" * 40,
+                    "IMPLEMENT",
+                    None,
+                )
+                if line == 3019
+                else _with_joint_cutover(
+                    lambda: RunIdentityPayload(
+                        "inbox/b40.md",
+                        "feature/b40",
+                        "1" * 40,
+                        "2" * 40,
+                        "BRANCH_DISCOVERY",
+                        None,
+                    )
+                )
+            ),
+        )
+        attestation = _append_attestation(
+            records,
+            fingerprint=FP_B if line == 3018 else FP_A,
+        )
+        _append(
+            records,
+            _with_joint_cutover(
+                lambda: BranchDiscoveryCompletedPayload(
+                    reviewer=Role.CLAUDE,
+                    work_unit_id="1",
+                    new_findings=(),
+                    occurrences=(),
+                    review_evidence=ReviewEvidencePayload(
+                        "all dimensions",
+                        "residual risk",
+                        "break condition",
+                    ),
+                    pre_mortem="pre mortem",
+                    validation_attestation_record_id=(
+                        "ar1-" + "9" * 64
+                        if line == 3017
+                        else attestation.record_id
+                    ),
+                    reviewed_head_commit="2" * 40,
+                    transport_schema="native-claude-review-v2",
+                    request_id="native-review-request-" + "c" * 64,
+                    response_sha256=RESPONSE_SHA,
+                )
+            ),
+        )
     elif line == 1416:
         _append(records, _transition(slice_id="1"))
         _append(records, _transition(slice_id="2"))
@@ -1044,7 +1289,7 @@ def _load_baseline() -> dict[str, object]:
 
 def _entries() -> tuple[dict[str, object], ...]:
     entries = _load_baseline()["entries"]
-    assert isinstance(entries, list) and len(entries) == 93
+    assert isinstance(entries, list) and len(entries) == 100
     assert all(
         isinstance(entry, dict)
         and set(entry) == {"case_id", "input", "code", "line", "message"}
@@ -1121,17 +1366,17 @@ def test_rejection_corpus_baseline_is_complete_and_source_bound() -> None:
     entries = _entries()
     expected = tuple((int(entry["line"]), str(entry["code"])) for entry in entries)
     assert _source_emissions() == expected
-    assert len({entry["case_id"] for entry in entries}) == 93
-    assert len({entry["line"] for entry in entries}) == 93
+    assert len({entry["case_id"] for entry in entries}) == 100
+    assert len({entry["line"] for entry in entries}) == 100
     assert Counter(entry["code"] for entry in entries) == {
-        "RECORD-FINGERPRINT-MISMATCH": 44,
-        "RECORD-REFERENCE-MISSING": 28,
+        "RECORD-FINGERPRINT-MISMATCH": 45,
+        "RECORD-REFERENCE-MISSING": 31,
         "RECORD-DUPLICATE": 9,
         "RECORD-MISSING": 9,
         "RECORD-RUN-MISMATCH": 2,
-        "RECORD-TYPE-MISMATCH": 1,
+        "RECORD-TYPE-MISMATCH": 4,
     }
-    # All 93 rejection sites are reducer-reachable.  Three deliberately duplicated
+    # All 100 rejection sites are reducer-reachable. Three deliberately duplicated
     # defences cannot be produced by schema-valid persisted bytes; their cases
     # mutate an already validated object so the independent reducer check stays
     # executable and their ingress unreachability remains explicit.

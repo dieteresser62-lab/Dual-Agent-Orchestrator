@@ -38,6 +38,7 @@ CORPUS_DOCUMENT = _load_json(CORPUS)
 CORPUS_CASES = tuple(CORPUS_DOCUMENT["cases"])
 CORPUS_TYPES = tuple(case["record_type"] for case in CORPUS_CASES)
 E9_ADDITIVE_PAYLOAD_TYPES = {
+    "branch_discovery_completed": "BranchDiscoveryCompletedPayload",
     "branch_discovery_handoff_export": "BranchDiscoveryHandoffExportPayload",
     "branch_discovery_handoff_import": "BranchDiscoveryHandoffImportPayload",
 }

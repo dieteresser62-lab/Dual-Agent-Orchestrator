@@ -79,6 +79,7 @@ RENDERED_RECORD_TYPES = (
 RECORD_RENDERER_HELPERS = {
     "_render_agent_result_record",
     "_render_binding_record",
+    "_render_branch_discovery_completed_record",
     "_render_branch_discovery_handoff_record",
     "_render_final_review_preflight_record",
     "_render_finding_handoff_export_record",

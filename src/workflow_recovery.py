@@ -24,12 +24,14 @@ from agent_runtime import (
 from artifact_bridge import (
     ArtifactBridge,
     agent_result_payload,
+    branch_discovery_completed_payload_matches_result,
     logical_provider_operation_id,
     review_payload_matches_result,
 )
 from artifact_models import (
     AgentResultPayload,
     ArtifactRecord,
+    BranchDiscoveryCompletedPayload,
     ProviderAttemptPayload,
     ProviderContentPayload,
     ProviderInputMeasurementPayload,
@@ -113,6 +115,9 @@ from workflow_state import (
 
 
 logger = logging.getLogger(__name__)
+
+
+ReviewerDecisionPayload = ReviewPayload | BranchDiscoveryCompletedPayload
 _IMPLEMENTER_ARTIFACT_ROLE = Role.CODEX
 
 
@@ -532,7 +537,7 @@ class WorkflowRecovery:
         self,
         document: dict[str, Any],
         native_context: NativeReviewContext,
-        payload: ReviewPayload,
+        payload: ReviewerDecisionPayload,
         request_digest: str,
         request_ledger: _RequestLedgerSnapshot,
     ) -> ContractResult:
@@ -595,7 +600,7 @@ class WorkflowRecovery:
 
     @staticmethod
     def _durable_reviewer_request_id(
-        payload: ReviewPayload | None,
+        payload: ReviewerDecisionPayload | None,
         content_payload: ProviderContentPayload,
     ) -> str:
         return (
@@ -612,7 +617,7 @@ class WorkflowRecovery:
         state: WorkflowState,
         invocation: ReviewerInvocation,
         bundle: NativeReviewRequestBundle,
-        payload: ReviewPayload | None,
+        payload: ReviewerDecisionPayload | None,
         canonical: str,
     ) -> NativeAgentReviewOutput:
         request_attempt = self._request_attempt(
@@ -637,7 +642,7 @@ class WorkflowRecovery:
                 request_ledger,
                 (
                     tuple(payload.finding_ids)
-                    if payload is not None
+                    if isinstance(payload, ReviewPayload)
                     else None
                 ),
             )
@@ -1637,18 +1642,25 @@ class WorkflowRecovery:
         approval_marker = (
             ApprovalMarker.PLAN
             if state.current_step is WorkflowStep.CLAUDE_PLAN_REVIEW
+            else ApprovalMarker.BRANCH_DISCOVERY
+            if getattr(state, "execution_mode", None) == "BRANCH_DISCOVERY"
             else ApprovalMarker.FINAL
             if state.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW
             else ApprovalMarker.SLICE
         )
         payload = record.payload
-        assert isinstance(payload, ReviewPayload)
+        assert isinstance(payload, (ReviewPayload, BranchDiscoveryCompletedPayload))
         finding_ledger = (
             history.findings
             if request_replay is None
             else reduce_findings(request_replay).ledger.findings
         )
-        offered_ids = dict.fromkeys(payload.finding_ids, True)
+        offered_ids = dict.fromkeys(
+            payload.finding_ids
+            if isinstance(payload, ReviewPayload)
+            else (item.finding_id for item in finding_ledger),
+            True,
+        )
         previous_findings = tuple(
             item
             for item in finding_ledger
@@ -1700,7 +1712,7 @@ class WorkflowRecovery:
         self,
         canonical: str,
         native_context: NativeReviewContext,
-        payload: ReviewPayload,
+        payload: ReviewerDecisionPayload,
         request_digest: str,
         request_ledger: _RequestLedgerSnapshot,
     ) -> ContractResult:
@@ -1723,9 +1735,8 @@ class WorkflowRecovery:
     ) -> PersistedNativeReviewerReplay | None:
         """Recover a native decision before current-worktree policy is evaluated.
 
-        A provider response and its ReviewPayload are written before the state-v3
-        checkpoint.  Repository changes made after that durable write must not
-        force the already completed reviewer round to be rebuilt against a new
+        A response and its decision record precede the state-v3 checkpoint; later
+        repository changes must not force the completed round to be rebuilt against a new
         fingerprint or invoke the provider again.
         """
         bridge = self._dependencies.artifact_bridge()
@@ -1770,7 +1781,10 @@ class WorkflowRecovery:
             candidates = tuple(
                 item
                 for item in chain
-                if isinstance(item.payload, ReviewPayload)
+                if isinstance(
+                    item.payload,
+                    (ReviewPayload, BranchDiscoveryCompletedPayload),
+                )
                 and item.logical_id == logical_id
             )
             if not candidates:
@@ -1782,7 +1796,10 @@ class WorkflowRecovery:
             record = candidates[0]
         if (
             record is None
-            or not isinstance(record.payload, ReviewPayload)
+            or not isinstance(
+                record.payload,
+                (ReviewPayload, BranchDiscoveryCompletedPayload),
+            )
             or record.payload.reviewer is not Role.CLAUDE
             or record.payload.work_unit_id != str(unit.work_unit_id)
             or record.payload.transport_schema != NATIVE_REVIEW_TRANSPORT
@@ -1798,7 +1815,7 @@ class WorkflowRecovery:
             )
         round_number = int(suffix)
         payload = record.payload
-        assert isinstance(payload, ReviewPayload)
+        assert isinstance(payload, (ReviewPayload, BranchDiscoveryCompletedPayload))
         if payload.request_id is None or payload.response_sha256 is None:
             raise WorkflowExecutionError(
                 "pre-policy native reviewer recovery lacks its request binding"
@@ -1866,7 +1883,16 @@ class WorkflowRecovery:
             raise WorkflowExecutionError(
                 f"pre-policy native reviewer response no longer validates: {exc}"
             ) from exc
-        if not review_payload_matches_result(payload, result):
+        payload_matches = (
+            review_payload_matches_result(payload, result)
+            if isinstance(payload, ReviewPayload)
+            else branch_discovery_completed_payload_matches_result(
+                payload,
+                result,
+                native_context.previous_findings,
+            )
+        )
+        if not payload_matches:
             raise WorkflowExecutionError(
                 "pre-policy native reviewer result differs from its decision record"
             )
@@ -1930,7 +1956,10 @@ class WorkflowRecovery:
         candidates = tuple(
             item
             for item in chain
-            if isinstance(item.payload, ReviewPayload)
+            if isinstance(
+                item.payload,
+                (ReviewPayload, BranchDiscoveryCompletedPayload),
+            )
             and item.logical_id == logical_id
         )
         if len(candidates) > 1:
@@ -1940,7 +1969,7 @@ class WorkflowRecovery:
         record = candidates[0] if candidates else None
         payload = None if record is None else record.payload
         if record is not None:
-            assert isinstance(payload, ReviewPayload)
+            assert isinstance(payload, (ReviewPayload, BranchDiscoveryCompletedPayload))
             if (
                 payload.reviewer is not Role.CLAUDE
                 or payload.work_unit_id != str(invocation.work_unit_id)
@@ -2011,7 +2040,18 @@ class WorkflowRecovery:
             raise WorkflowExecutionError(
                 "native reviewer recovery output does not match its durable request"
             )
-        if payload is not None and not review_payload_matches_result(payload, result):
+        payload_matches = (
+            True
+            if payload is None
+            else review_payload_matches_result(payload, result)
+            if isinstance(payload, ReviewPayload)
+            else branch_discovery_completed_payload_matches_result(
+                payload,
+                result,
+                native_context.previous_findings,
+            )
+        )
+        if not payload_matches:
             raise WorkflowExecutionError(
                 "native reviewer recovery result differs from its decision record"
             )

@@ -248,6 +248,37 @@ def test_each_final_transition_accepts_only_currently_available_facts(
     assert result.passed
 
 
+def test_branch_discovery_preflight_skips_only_the_implementer_final_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ordinary = _state(WorkflowStep.CLAUDE_FINAL_REVIEW)
+    bridge = ArtifactBridge(ArtifactStore(tmp_path, ordinary.run_id))
+    _attest(bridge)
+    measurement = _measurement(bridge, ordinary, ordinary.current_step.value)
+
+    denied = run_final_review_preflight(
+        state=ordinary,
+        records=bridge.store.load_chain(),
+        measurement_record=measurement,
+        repository_paths=("src/one.py",),
+    )
+    assert denied.error_code == "CODEX-FINAL-RESULT-MISSING"
+
+    monkeypatch.setattr(
+        native_finding_decisions,
+        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
+        True,
+    )
+    discovery = replace(ordinary, execution_mode="BRANCH_DISCOVERY")
+    passed = run_final_review_preflight(
+        state=discovery,
+        records=bridge.store.load_chain(),
+        measurement_record=measurement,
+        repository_paths=("src/one.py",),
+    )
+    assert passed.passed
+
+
 def test_preflight_matches_repository_paths_against_task_scope_globs(
     tmp_path: Path,
 ) -> None:

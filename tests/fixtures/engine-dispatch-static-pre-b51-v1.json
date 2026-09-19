@@ -341,8 +341,9 @@
         },
         {
           "ordinal": 10,
-          "expression": "is_final_review",
+          "expression": "is_final_review and (not is_branch_discovery)",
           "read_names": [
+            "is_branch_discovery",
             "is_final_review"
           ]
         },
@@ -456,6 +457,13 @@
         },
         {
           "ordinal": 24,
+          "expression": "is_branch_discovery",
+          "read_names": [
+            "is_branch_discovery"
+          ]
+        },
+        {
+          "ordinal": 25,
           "expression": "request_findings != history.findings",
           "read_names": [
             "history",
@@ -539,6 +547,10 @@
         },
         {
           "ordinal": 10,
+          "expression": "self._apply_review_result(state=state, context=context, history=history, reviewer=reviewer, result=result, fingerprint=changes.fingerprint, round_number=review_round, is_plan_review=False, is_final_review=True, finding_ledger=finding_ledger)"
+        },
+        {
+          "ordinal": 11,
           "expression": "self._apply_review_result(state=state, context=context, history=history, reviewer=reviewer, result=result, fingerprint=changes.fingerprint, round_number=review_round, is_plan_review=is_plan_review, is_final_review=is_final_review, finding_ledger=finding_ledger, user_gate_paths=changes.user_gate_paths, final_review_requested_ids=requested_ids if is_final_review else None, final_review_new_finding_ids=new_ids, final_review_progress_ids=progress_ids)"
         }
       ],
@@ -561,7 +573,7 @@
           "ordinal": 1,
           "state_expression": "state",
           "history_expression": "history",
-          "statement_path": "body[7].handlers[0].body[2]",
+          "statement_path": "body[8].handlers[0].body[2]",
           "after_condition_count": 2,
           "enclosing_condition_ordinals": []
         },
@@ -569,7 +581,7 @@
           "ordinal": 2,
           "state_expression": "state",
           "history_expression": "history",
-          "statement_path": "body[12].body[0]",
+          "statement_path": "body[13].body[0]",
           "after_condition_count": 6,
           "enclosing_condition_ordinals": [
             6
@@ -579,7 +591,7 @@
           "ordinal": 3,
           "state_expression": "state",
           "history_expression": "history",
-          "statement_path": "body[14].handlers[0].body[2]",
+          "statement_path": "body[15].handlers[0].body[2]",
           "after_condition_count": 7,
           "enclosing_condition_ordinals": []
         },
@@ -587,7 +599,7 @@
           "ordinal": 4,
           "state_expression": "state",
           "history_expression": "history",
-          "statement_path": "body[15]",
+          "statement_path": "body[16]",
           "after_condition_count": 7,
           "enclosing_condition_ordinals": []
         },
@@ -595,7 +607,7 @@
           "ordinal": 5,
           "state_expression": "state",
           "history_expression": "history",
-          "statement_path": "body[22].body[5].body[1]",
+          "statement_path": "body[23].body[5].body[1]",
           "after_condition_count": 11,
           "enclosing_condition_ordinals": [
             10,
@@ -606,7 +618,7 @@
           "ordinal": 6,
           "state_expression": "state",
           "history_expression": "history",
-          "statement_path": "body[26].body[6]",
+          "statement_path": "body[27].body[6]",
           "after_condition_count": 18,
           "enclosing_condition_ordinals": [
             17

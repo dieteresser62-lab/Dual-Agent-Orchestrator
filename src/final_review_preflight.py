@@ -231,6 +231,8 @@ def run_final_review_preflight(
         if incomplete:
             return _deny("correction_required", "SLICE-BINDING-MISSING", (), (), "commit and bind every approved implementation Slice")
     elif operation == "claude_final_review":
+        if state.execution_mode == "BRANCH_DISCOVERY":
+            return FinalReviewPreflightResult("passed")
         codex = [
             item for item in records if isinstance(item.payload, AgentResultPayload)
             and item.payload.role is Role.CODEX and item.payload.work_unit_id == payload.work_unit_id

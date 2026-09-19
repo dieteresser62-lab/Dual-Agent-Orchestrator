@@ -19,8 +19,12 @@ from artifact_models import (
     AgentResultPayload,
     ArtifactPayload,
     ArtifactRecord,
+    ArtifactValidationError,
+    BranchDiscoveryCompletedPayload,
+    BranchDiscoveryFindingPayload,
     BranchDiscoveryHandoffExportPayload,
     BranchDiscoveryHandoffImportPayload,
+    BranchDiscoveryOccurrencePayload,
     BindingPayload,
     CommandSpec,
     CorrectionWorkUnitPayload,
@@ -51,6 +55,7 @@ from artifact_models import (
     ValidationRequestPayload,
     ValidationResult,
     WorkUnitPayload,
+    WorkflowCompletionPayload,
     canonical_json,
     stable_side_effect_key,
     finding_transition_sequence_sha256,
@@ -260,6 +265,101 @@ def review_payload(
             )
         ),
     )
+
+
+def branch_discovery_completed_payload(
+    result: ContractResult,
+    previous_findings: tuple[FindingRecord, ...],
+    *,
+    work_unit_id: int | str,
+    validation_attestation_record_id: str,
+    reviewed_head_commit: str,
+    transport_schema: str,
+    request_id: str,
+    response_sha256: str,
+) -> BranchDiscoveryCompletedPayload:
+    """Persist the E6 delivery without manufacturing an approval verdict."""
+
+    if result.delivery_kind != "branch_discovery_completed":
+        raise ArtifactBridgeError(
+            "branch discovery payload requires BRANCH_DISCOVERY_COMPLETED"
+        )
+    if result.approval is not None or result.stopped:
+        raise ArtifactBridgeError(
+            "branch discovery completion cannot carry approved, denied, or stop"
+        )
+    if result.evidence is None or result.pre_mortem is None:
+        raise ArtifactBridgeError(
+            "branch discovery completion requires evidence and pre_mortem"
+        )
+    previous = {item.finding_id: item for item in previous_findings}
+    unknown_occurrences = tuple(
+        item.finding_id for item in result.occurrences
+        if item.finding_id not in previous
+    )
+    if unknown_occurrences:
+        raise ArtifactBridgeError(
+            "branch discovery occurrence references an unknown prior finding"
+        )
+    new_findings = tuple(
+        BranchDiscoveryFindingPayload(
+            finding.finding_id,
+            FindingSeverity(finding.finding_class.value),
+            finding.summary,
+            finding.acceptance_test,
+        )
+        for finding in result.findings
+        if finding.finding_id not in previous
+    )
+    occurrences = tuple(
+        BranchDiscoveryOccurrencePayload(
+            occurrence.finding_id,
+            occurrence.rationale,
+        )
+        for occurrence in result.occurrences
+    )
+    return BranchDiscoveryCompletedPayload(
+        reviewer=_role(result.reviewer),
+        work_unit_id=str(work_unit_id),
+        new_findings=new_findings,
+        occurrences=occurrences,
+        review_evidence=ReviewEvidencePayload(
+            result.evidence.dimensions,
+            result.evidence.largest_residual_risk,
+            result.evidence.break_condition,
+        ),
+        pre_mortem=result.pre_mortem,
+        validation_attestation_record_id=validation_attestation_record_id,
+        reviewed_head_commit=reviewed_head_commit,
+        transport_schema=transport_schema,
+        request_id=request_id,
+        response_sha256=response_sha256,
+    )
+
+
+def branch_discovery_completed_payload_matches_result(
+    payload: BranchDiscoveryCompletedPayload,
+    result: ContractResult,
+    previous_findings: tuple[FindingRecord, ...],
+) -> bool:
+    """Compare the E6 delivery with its request-bound native result."""
+
+    try:
+        expected = branch_discovery_completed_payload(
+            result,
+            previous_findings,
+            work_unit_id=payload.work_unit_id,
+            validation_attestation_record_id=(
+                payload.validation_attestation_record_id
+            ),
+            reviewed_head_commit=payload.reviewed_head_commit,
+            transport_schema=payload.transport_schema,
+            request_id=payload.request_id,
+            response_sha256=payload.response_sha256,
+        )
+    except (ArtifactBridgeError, ArtifactValidationError):
+        return False
+    return payload == expected
 
 
 def review_payload_matches_result(
@@ -476,7 +576,9 @@ def finding_handoff_import_payload(
     )
 
 
-def _finding_snapshot(replay: ArtifactReplayResult) -> tuple[FindingSnapshotItem, ...]:
+def _finding_snapshot(
+    replay: ArtifactReplayResult, *, allow_empty: bool = False
+) -> tuple[FindingSnapshotItem, ...]:
     from finding_reducer import reduce_findings
 
     findings = reduce_findings(replay).ledger.findings
@@ -493,7 +595,7 @@ def _finding_snapshot(replay: ArtifactReplayResult) -> tuple[FindingSnapshotItem
             for finding_id in sorted_finding_ids(findings_by_id)
         )
     )
-    if not snapshot:
+    if not snapshot and not allow_empty:
         raise ArtifactBridgeError(
             "branch discovery handoff requires a non-empty finding snapshot"
         )
@@ -503,15 +605,17 @@ def _finding_snapshot(replay: ArtifactReplayResult) -> tuple[FindingSnapshotItem
 def branch_discovery_handoff_export_payload(
     replay: ArtifactReplayResult,
     *,
-    discovery_review_record_id: str,
+    discovery_review_record_id: str | None,
     validation_attestation_record_id: str,
     reviewed_head_commit: str,
     family_binding: object,
     target_task_path: str,
     target_task_bytes: bytes,
     target_run_identity: str,
+    target_execution_mode: str = "PLAN_ONLY",
+    source_completion_record_id: str | None = None,
 ) -> BranchDiscoveryHandoffExportPayload:
-    """Build E9's discovery export from one accepted source-chain head."""
+    """Build the one family handoff used on every E1/E9 edge."""
 
     from artifact_models import FamilyBindingPayload
 
@@ -527,14 +631,10 @@ def branch_discovery_handoff_export_payload(
         raise ArtifactBridgeError(
             "branch discovery handoff export requires a family binding"
         )
-    review = next(
-        (
-            record
-            for record in replay.records
-            if record.record_id == discovery_review_record_id
-        ),
-        None,
-    )
+    if target_execution_mode not in {"PLAN_ONLY", "BRANCH_DISCOVERY"}:
+        raise ArtifactBridgeError(
+            "branch discovery handoff target execution mode is invalid"
+        )
     attestation = next(
         (
             record
@@ -543,26 +643,59 @@ def branch_discovery_handoff_export_payload(
         ),
         None,
     )
-    if (
-        review is None
-        or not isinstance(review.payload, ReviewPayload)
-        or review.payload.verdict != "approved"
-    ):
-        raise ArtifactBridgeError(
-            "branch discovery handoff export requires its approved discovery review record"
-        )
     if attestation is None or not isinstance(
         attestation.payload, ValidationAttestationPayload
     ):
         raise ArtifactBridgeError(
             "branch discovery handoff export requires its validation attestation record"
         )
-    if review.fingerprint != attestation.fingerprint:
-        raise ArtifactBridgeError(
-            "branch discovery review and validation attestation fingerprints differ"
+    if target_execution_mode == "PLAN_ONLY":
+        review = next(
+            (
+                record
+                for record in replay.records
+                if record.record_id == discovery_review_record_id
+            ),
+            None,
         )
+        if review is None or not isinstance(
+            review.payload, BranchDiscoveryCompletedPayload
+        ):
+            raise ArtifactBridgeError(
+                "branch discovery handoff export requires its "
+                "BRANCH_DISCOVERY_COMPLETED record; approved is not scan completion"
+            )
+        if review.fingerprint != attestation.fingerprint:
+            raise ArtifactBridgeError(
+                "branch discovery completion and validation attestation fingerprints differ"
+            )
+        if (
+            review.payload.validation_attestation_record_id
+            != validation_attestation_record_id
+            or review.payload.reviewed_head_commit != reviewed_head_commit
+        ):
+            raise ArtifactBridgeError(
+                "branch discovery completion differs from its validation or HEAD binding"
+            )
+        source_completion_record_id = None
+    else:
+        completion = next(
+            (
+                record
+                for record in replay.records
+                if record.record_id == source_completion_record_id
+            ),
+            None,
+        )
+        if completion is None or not isinstance(
+            completion.payload, WorkflowCompletionPayload
+        ) or completion.payload.outcome != "completed":
+            raise ArtifactBridgeError(
+                "BRANCH_DISCOVERY family handoff requires a completed source run"
+            )
+        discovery_review_record_id = None
     transitions = flatten_finding_transition_history(replay.records)
-    if not transitions:
+    if not transitions and target_execution_mode != "BRANCH_DISCOVERY":
         raise ArtifactBridgeError(
             "branch discovery handoff export requires at least one source transition"
         )
@@ -592,6 +725,8 @@ def branch_discovery_handoff_export_payload(
         target_task_sha256=hashlib.sha256(target_task_bytes).hexdigest(),
         target_run_identity=target_run_identity,
         authority=Role.ORCHESTRATOR,
+        target_execution_mode=target_execution_mode,
+        source_completion_record_id=source_completion_record_id,
     )
 
 
@@ -706,9 +841,62 @@ def branch_discovery_handoff_import_payload(
         target_run_identity=export.target_run_identity,
         finding_transitions_sha256=export.finding_transitions_sha256,
         transitions=transitions,
-        finding_snapshot=_finding_snapshot(source_without_export),
+        finding_snapshot=_finding_snapshot(
+            source_without_export,
+            allow_empty=export.target_execution_mode == "BRANCH_DISCOVERY",
+        ),
         authority=Role.ORCHESTRATOR,
+        target_execution_mode=export.target_execution_mode,
+        source_completion_record_id=export.source_completion_record_id,
     )
+
+
+def derive_family_acceptance(replay: ArtifactReplayResult) -> bool:
+    """Derive E6 family acceptance only from a terminal discovery run.
+
+    This is deliberately separate from ``ReviewPayload.verdict``: a completed
+    scan can contain open findings and therefore need not accept the family.
+    """
+
+    if not native_finding_decisions.native_finding_decisions_enabled():
+        raise ArtifactBridgeError(
+            "family acceptance requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER"
+        )
+    identity = replay.run_identity
+    profile = replay.run_profile
+    if (
+        identity is None
+        or identity.execution_mode != "BRANCH_DISCOVERY"
+        or profile is None
+        or profile.family_binding is None
+    ):
+        raise ArtifactBridgeError(
+            "family acceptance may be derived only from its own BRANCH_DISCOVERY run"
+        )
+    completions = tuple(
+        record
+        for record in replay.records
+        if isinstance(record.payload, BranchDiscoveryCompletedPayload)
+    )
+    terminal = tuple(
+        record
+        for record in replay.records
+        if isinstance(record.payload, WorkflowCompletionPayload)
+        and record.payload.outcome == "completed"
+    )
+    if len(completions) != 1 or len(terminal) != 1:
+        raise ArtifactBridgeError(
+            "family acceptance requires one completed scan and one terminal workflow"
+        )
+    completion_position = replay.records.index(completions[0])
+    terminal_position = replay.records.index(terminal[0])
+    if completion_position >= terminal_position:
+        raise ArtifactBridgeError(
+            "family acceptance completion order is invalid"
+        )
+    from finding_reducer import reduce_findings
+
+    return not reduce_findings(replay).open_set.finding_ids
 
 
 def attestation_payload(
@@ -1354,6 +1542,9 @@ __all__ = [
     "finding_handoff_export_payload", "finding_handoff_import_payload", "plan_payload",
     "branch_discovery_handoff_export_payload",
     "branch_discovery_handoff_import_payload",
+    "branch_discovery_completed_payload",
+    "branch_discovery_completed_payload_matches_result",
+    "derive_family_acceptance",
     "review_payload", "review_payload_matches_complete_result",
     "review_payload_matches_result", "task_payload", "validation_request_payload",
     "provider_input_measurement_payload",

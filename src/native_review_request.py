@@ -10,7 +10,7 @@ from pathlib import Path, PurePosixPath
 import re
 from typing import Any, Mapping
 
-from contracts import AgentRole
+from contracts import AgentRole, ApprovalMarker
 from finding_responsibility import responsibility_json_schema
 import native_finding_decisions
 from native_review_contract import (
@@ -69,6 +69,7 @@ class NativeReviewKind(StrEnum):
     PLAN = "plan"
     SLICE = "slice"
     FINAL = "final"
+    BRANCH_DISCOVERY = "branch_discovery"
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,6 +207,7 @@ class NativeReviewRequestSpec:
             NativeReviewKind.PLAN: "claude_plan_review",
             NativeReviewKind.SLICE: "claude_slice_review",
             NativeReviewKind.FINAL: "claude_final_review",
+            NativeReviewKind.BRANCH_DISCOVERY: "claude_final_review",  # allowlist:provider -- canonical operation
         }[self.review_kind]
         if self.context.operation != expected_operation:
             raise NativeReviewRequestError(
@@ -379,6 +381,7 @@ def load_native_review_request_schema() -> dict[str, Any]:
         )
     if native_finding_decisions.native_finding_decisions_enabled():
         _enable_native_review_request_finding_decision_schema(schema)
+        _enable_branch_discovery_request_schema(schema)
     try:
         check_schema(schema, location="<native-review-request-schema>")
     except SchemaDefinitionError as exc:
@@ -574,7 +577,11 @@ def _review_context_request_projection(
     review_kind = {
         "claude_plan_review": NativeReviewKind.PLAN.value,
         "claude_slice_review": NativeReviewKind.SLICE.value,
-        "claude_final_review": NativeReviewKind.FINAL.value,
+        "claude_final_review": (
+            NativeReviewKind.BRANCH_DISCOVERY.value
+            if context.approval_marker is ApprovalMarker.BRANCH_DISCOVERY
+            else NativeReviewKind.FINAL.value
+        ),
     }.get(context.operation)
     if review_kind is None:
         raise NativeReviewRequestError(
@@ -729,6 +736,18 @@ def _enable_native_review_request_finding_decision_schema(
         "items": {"$ref": "#/$defs/planned_slice"},
     }
     contract["required"].append("planned_slices")
+
+
+def _enable_branch_discovery_request_schema(schema: dict[str, Any]) -> None:
+    definitions = schema["$defs"]
+    contract = definitions["review_contract"]
+    contract["properties"]["approval_marker"]["enum"].append(
+        ApprovalMarker.BRANCH_DISCOVERY.value
+    )
+    request = definitions["review_request"]
+    request["properties"]["review_kind"]["enum"].append(
+        NativeReviewKind.BRANCH_DISCOVERY.value
+    )
 
 
 def _validate_manifest_semantic_binding(item: Mapping[str, Any], content: str) -> None:

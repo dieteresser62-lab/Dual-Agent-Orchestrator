@@ -121,9 +121,12 @@ BRIDGE_ERROR_MARKERS = (
     "branch discovery handoff requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
     "branch discovery handoff export requires a non-empty accepted replay",
     "branch discovery handoff export requires a family binding",
-    "branch discovery handoff export requires its approved discovery review record",
+    "branch discovery handoff target execution mode is invalid",
+    "branch discovery handoff export requires its BRANCH_DISCOVERY_COMPLETED record; approved is not scan completion",
     "branch discovery handoff export requires its validation attestation record",
-    "branch discovery review and validation attestation fingerprints differ",
+    "branch discovery completion and validation attestation fingerprints differ",
+    "branch discovery completion differs from its validation or HEAD binding",
+    "BRANCH_DISCOVERY family handoff requires a completed source run",
     "branch discovery handoff export requires at least one source transition",
     "branch discovery target family predecessor differs from the source head",
     "branch discovery import requires a branch discovery export record",
@@ -136,12 +139,21 @@ BRIDGE_ERROR_MARKERS = (
     "branch discovery import target_task_path differs from queue position",
     "branch discovery import target_run_identity differs from target run",
     "branch discovery import family binding differs from target RunProfile",
-    "PLAN_ONLY finding handoff does not reference a branch discovery export",
+    "family handoff does not reference a branch discovery export",
     "branch discovery source has no RunProfile family binding",
     "branch discovery export is not the source run head",
     "branch discovery target_task_sha256 differs from loaded task bytes",
-    "branch discovery export requires a PLAN_ONLY target task",
+    "branch discovery export requires its bound family target task",
+    "branch discovery export target mode differs from the target task",
     "branch discovery import requires the target family binding",
+    "branch discovery payload requires BRANCH_DISCOVERY_COMPLETED",
+    "branch discovery completion cannot carry approved, denied, or stop",
+    "branch discovery completion requires evidence and pre_mortem",
+    "branch discovery occurrence references an unknown prior finding",
+    "family acceptance requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
+    "family acceptance may be derived only from its own BRANCH_DISCOVERY run",
+    "family acceptance requires one completed scan and one terminal workflow",
+    "family acceptance completion order is invalid",
 )
 
 RECOVERABLE_FUNCTIONS: dict[str, set[str]] = {}
@@ -611,11 +623,11 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/artifact_replay.py:_validate_single_finding_import": 1,
     "src/artifact_replay.py:_validate_finding_handoff_record": 11,
     "src/artifact_replay.py:_validate_branch_discovery_handoff_record": 0,
-    "src/artifact_replay.py:_validate_branch_discovery_export": 16,
-    "src/artifact_replay.py:_validate_branch_discovery_import": 13,
+    "src/artifact_replay.py:_validate_branch_discovery_export": 24,
+    "src/artifact_replay.py:_validate_branch_discovery_import": 14,
     "src/artifact_replay.py:_validate_work_unit_finding_import": 4,
     "src/artifact_replay.py:_validate_work_unit_activity_reference": 4,
-    "src/artifact_replay.py:_validate_bound_record_references": 18,
+    "src/artifact_replay.py:_validate_bound_record_references": 26,
     "src/artifact_replay.py:_validate_chain_record_references": 0,
     "src/artifact_replay.py:_validate_provider_attempt_sequences": 11,
     "src/artifact_replay.py:_validate_side_effect_sequences": 13,
@@ -623,8 +635,8 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/artifact_bridge.py:finding_handoff_export_payload": 5,
     "src/artifact_bridge.py:finding_handoff_import_payload": 9,
     "src/artifact_bridge.py:_finding_snapshot": 0,
-    "src/artifact_bridge.py:branch_discovery_handoff_export_payload": 9,
-    "src/artifact_bridge.py:branch_discovery_handoff_import_payload": 12,
+    "src/artifact_bridge.py:branch_discovery_handoff_export_payload": 16,
+    "src/artifact_bridge.py:branch_discovery_handoff_import_payload": 13,
     "src/artifact_bridge.py:review_payload_matches_result": 13,
     "src/artifact_bridge.py:ArtifactBridge.append": 3,
     "src/artifact_bridge.py:ArtifactBridge.record_side_effect_intent": 1,
@@ -637,15 +649,15 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/artifact_bridge.py:ArtifactBridge.start_provider_attempt": 17,
     "src/artifact_bridge.py:ArtifactBridge.finish_provider_attempt": 10,
     "src/artifact_bridge.py:ArtifactBridge.side_effect_result": 7,
-    "src/final_review_preflight.py:run_final_review_preflight": 21,
+    "src/final_review_preflight.py:run_final_review_preflight": 22,
     "src/final_review_preflight.py:_approved_external_paths": 15,
     "src/workflow_audit_projection.py:_persisted_histories": 6,
     "src/workflow_audit_projection.py:_attach_record_events": 13,
     "src/orchestrator.py:_load_bound_queue_terminal": 4,
     "src/orchestrator.py:run_pipeline": 16,
     "src/workflow_run_setup.py:_apply_resumed_agent_profiles": 3,
-    "src/workflow_run_setup.py:_branch_discovery_family_binding": 9,
-    "src/workflow_run_setup.py:_initialize_finding_handoff": 8,
+    "src/workflow_run_setup.py:_branch_discovery_family_binding": 10,
+    "src/workflow_run_setup.py:_initialize_finding_handoff": 9,
     "src/artifact_resume.py:_validate_finding_handoff": 6,
     "src/workflow_production.py:_read_production_task": 2,
     "src/workflow_production.py:_prepare_new_watch_task": 1,
@@ -670,7 +682,7 @@ EXPECTED_COMPARISON_COUNTS = {
     "src/orchestrator.py:ProductionWorkflowDriver._canonical_native_agent_result": 4,
     "src/workflow_recovery.py:WorkflowRecovery.recover_pending_native_implementer": 39,
     "src/workflow_recovery.py:WorkflowRecovery.recover_pending_native_reviewer": 30,
-    "src/workflow_recovery.py:WorkflowRecovery.recover_pending_native_reviewer_before_policy": 35,
+    "src/workflow_recovery.py:WorkflowRecovery.recover_pending_native_reviewer_before_policy": 36,
     "src/workflow_persistence.py:WorkflowPersistence.persist_native_implementer_contract": 11,
     "src/orchestrator.py:ProductionWorkflowDriver.prepare_finding_handoff": 13,
     "src/orchestrator.py:ProductionWorkflowDriver.checkpoint": 9,
@@ -727,10 +739,10 @@ EXPECTED_STRICT_BODY_DIGESTS = {
     "src/artifact_bridge.py:review_payload_matches_result": "4ad048b9ff2fdd56f813abe6f8b8b72114f3fc0a3d59426185d74031e7b65506",
     "src/artifact_resume.py:_validate_finding_handoff": "40f91b2e0127b7fc16403a8b79bc12462b3a3dfa1cbecef1fe9a65b73f029e1f",
     "src/artifact_resume.py:require_workflow_status_prefix": "964d356480288034c6dc52de377c2326c06d2db50d6aae52fd2b3d5dbcc5bdec",
-    "src/artifact_resume.py:require_workflow_event_prefix": "baf1ce7cd7ef465131f9779714b33b34d5e929f10c19c48b7a92b68089543d5a",
+    "src/artifact_resume.py:require_workflow_event_prefix": "daa17cb027ef984f4264dda460c5987b76cf311ba22290e2a1857e4158f90537",
     "src/artifact_resume.py:require_gate_prefix": "67196c4e07c9c428033a8bf93726a93adc22a66929cbf975019913bf60979b82",
     "src/artifact_resume.py:require_side_effect_ledger_prefix": "7803832a9e825309cbbecf6b49d54d9dad15f2eeb0a973d803d90ae324acb7fd",
-    "src/final_review_preflight.py:run_final_review_preflight": "7aac993574977c42acaa89fef43f40d7bd4ce144354681b9da4ae67de19daa80",
+    "src/final_review_preflight.py:run_final_review_preflight": "2447d579ce26a21d4a4655b8afe826b0d69e77261bb473aa7151f26c57597523",
     "src/final_review_preflight.py:_approved_external_paths": "24a9647addbf8df21fba7ecd0e25164e7237b00eb9c831bd7ee7b9ce1b8f5439",
     "src/workflow_audit_projection.py:_persisted_histories": "46d16ba2f5f168dbb9f86da548b7c370305003fa27f39d3979423f76f53b8d86",
     "src/workflow_audit_projection.py:_attach_record_events": "cf8f419efeb90e9231c017a7df0779fd0bad7ccf501f7c2df503f5d1598d74d0",
@@ -1003,7 +1015,7 @@ def test_bridge_error_inventory_is_source_bound() -> None:
     )
     combined_source = "\n".join(_string_constants(path) for path in paths)
     document = MATRIX_PATH.read_text(encoding="utf-8")
-    assert sum(_raise_count(path, "ArtifactBridgeError") for path in paths) == 58
+    assert sum(_raise_count(path, "ArtifactBridgeError") for path in paths) == 71
     for marker in BRIDGE_ERROR_MARKERS:
         assert marker in combined_source
         assert marker in document
@@ -1080,7 +1092,7 @@ def test_recordless_review_and_attestation_fields_are_source_bound() -> None:
             "output_digest",
             "content_record_id",
         },
-        ("src/contracts.py", "ContractResult"): {
+            ("src/contracts.py", "ContractResult"): {
             "reviewer",
             "approval",
             "stopped",
@@ -1091,7 +1103,9 @@ def test_recordless_review_and_attestation_fields_are_source_bound() -> None:
             "evidence",
             "findings",
             "anchors",
-            "red_state_followup_slice",
+                "red_state_followup_slice",
+                "delivery_kind",
+                "occurrences",
         },
         ("src/artifact_models.py", "ReviewPayload"): {
             "reviewer",
@@ -1379,7 +1393,7 @@ def test_comparison_expression_inventory_has_not_grown() -> None:
         count
         for label, count in actual.items()
         if label.startswith("src/artifact_replay.py:")
-    ) == 216
+    ) == 233
     document = MATRIX_PATH.read_text(encoding="utf-8")
     assert (
         "`WorkflowPersistence.persist_native_implementer_contract()` 11 "

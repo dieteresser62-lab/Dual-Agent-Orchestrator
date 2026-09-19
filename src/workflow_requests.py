@@ -66,6 +66,7 @@ _NATIVE_REVIEW_KIND_BY_APPROVAL_MARKER = {
     ApprovalMarker.PLAN: NativeReviewKind.PLAN,
     ApprovalMarker.SLICE: NativeReviewKind.SLICE,
     ApprovalMarker.FINAL: NativeReviewKind.FINAL,
+    ApprovalMarker.BRANCH_DISCOVERY: NativeReviewKind.BRANCH_DISCOVERY,
 }
 FINDING_SIGNATURE_REVIEW_CRITERION = (
     "review_contract.known_open_finding_signatures binds every known open "
@@ -546,7 +547,10 @@ def native_review_request(
                 "review-diff", review_evidence_kind, review_evidence_content
             )
         )
-    if evidence_kind is full_branch_evidence_kind:
+    if (
+        evidence_kind is full_branch_evidence_kind
+        and review_kind is not NativeReviewKind.BRANCH_DISCOVERY
+    ):
         if history.codex_final_report is None:
             raise execution_error(
                 "native Claude final review requires a persisted Codex final "

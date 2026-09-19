@@ -4,6 +4,7 @@ from dataclasses import replace
 
 import pytest
 import workflow_requests
+import native_finding_decisions
 
 from acceptance_criteria import acceptance_criteria_from_texts
 from artifact_models import FamilyBindingPayload, technical_text_evidence
@@ -57,6 +58,32 @@ def make_state():
         slice_count=3,
         timestamp="2026-08-11T10:00:00+00:00",
     )
+
+
+def test_branch_discovery_state_starts_as_its_own_terminal_review_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        native_finding_decisions,
+        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
+        True,
+    )
+    reviewed_head = "b" * 40
+    state = init_workflow_state(
+        run_id="branch-discovery-run",
+        task_file="/repo/discovery.md",
+        branch="feature/state-v3",
+        branch_base="a" * 40,
+        first_slice_start_commit=reviewed_head,
+        slice_count=1,
+        execution_mode="BRANCH_DISCOVERY",
+    )
+
+    assert state.current_work_unit.kind is WorkUnitKind.FINAL_REVIEW
+    assert state.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW
+    assert state.current_slice.status is SliceStatus.COMPLETED
+    assert state.current_slice.start_commit == reviewed_head
+    assert state.current_slice.commit_ref == reviewed_head
 
 
 def test_init_workflow_state_uses_v3_and_one_based_ids() -> None:

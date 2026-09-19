@@ -1464,9 +1464,16 @@ class WorkflowState:
                 raise WorkflowStateValidationError(
                     "runtime_history.events is retired; project workflow events from records"
                 )
-        if self.execution_mode not in {"IMPLEMENT", "PLAN_ONLY"}:
+        if self.execution_mode not in {"IMPLEMENT", "PLAN_ONLY", "BRANCH_DISCOVERY"}:
             raise WorkflowStateValidationError(
-                "execution_mode must be IMPLEMENT or PLAN_ONLY"
+                "execution_mode must be IMPLEMENT, PLAN_ONLY, or BRANCH_DISCOVERY"
+            )
+        if (
+            self.execution_mode == "BRANCH_DISCOVERY"
+            and not native_finding_decisions.native_finding_decisions_enabled()
+        ):
+            raise WorkflowStateValidationError(
+                "BRANCH_DISCOVERY requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER"
             )
         if self.task_digest is not None:
             if not SHA256_PATTERN.fullmatch(self.task_digest):
@@ -1514,10 +1521,10 @@ class WorkflowState:
         if self.finding_handoff_source_run_id is not None:
             if (
                 self.approved_plan_commit is None
-                and self.execution_mode != "PLAN_ONLY"
+                and self.execution_mode not in {"PLAN_ONLY", "BRANCH_DISCOVERY"}
             ):
                 raise WorkflowStateValidationError(
-                    "finding handoff requires PLAN_ONLY or approved_plan_commit"
+                    "finding handoff requires PLAN_ONLY, BRANCH_DISCOVERY, or approved_plan_commit"
                 )
             if re.fullmatch(
                 r"[A-Za-z0-9][A-Za-z0-9._:-]{0,199}",
@@ -3092,20 +3099,38 @@ def init_workflow_state(
     _require_positive_int(slice_count, "slice_count")
     _require_non_empty(first_slice_start_commit, "first_slice_start_commit")
     stamp = timestamp or _now_iso()
+    branch_discovery = execution_mode == "BRANCH_DISCOVERY"
     slices = tuple(
         SliceRecord(
             slice_id=slice_id,
-            status=SliceStatus.IN_PROGRESS if slice_id == 1 else SliceStatus.PENDING,
-            start_commit=first_slice_start_commit if slice_id == 1 else None,
+            status=(
+                SliceStatus.COMPLETED
+                if branch_discovery
+                else SliceStatus.IN_PROGRESS
+                if slice_id == 1
+                else SliceStatus.PENDING
+            ),
+            start_commit=(
+                first_slice_start_commit
+                if slice_id == 1 or branch_discovery
+                else None
+            ),
+            commit_ref=(first_slice_start_commit if branch_discovery else None),
         )
         for slice_id in range(1, slice_count + 1)
     )
     work_unit = WorkUnitRecord(
         work_unit_id=1,
         slice_id=1,
-        kind=WorkUnitKind.PLAN,
+        kind=(
+            WorkUnitKind.FINAL_REVIEW if branch_discovery else WorkUnitKind.PLAN
+        ),
         status=WorkUnitStatus.IN_PROGRESS,
-        current_step=WorkflowStep.CODEX_PLAN,
+        current_step=(
+            WorkflowStep.CLAUDE_FINAL_REVIEW  # allowlist:provider -- canonical state-v3 step
+            if branch_discovery
+            else WorkflowStep.CODEX_PLAN
+        ),
     )
     return WorkflowState(
         version=STATE_VERSION,

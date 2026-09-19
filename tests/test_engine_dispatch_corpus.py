@@ -915,7 +915,7 @@ def test_static_dispatch_corpus_is_cleartext_complete_and_source_bound() -> None
     assert _static_document() == baseline
     codex, review = baseline["layers"]
     assert (len(codex["conditions"]), len(codex["aborts"])) == (20, 6)
-    assert (len(review["conditions"]), len(review["aborts"])) == (24, 7)
+    assert (len(review["conditions"]), len(review["aborts"])) == (25, 7)
     assert len(codex["checkpoints"]) == 5
     assert len(review["checkpoints"]) == 6
     assert review["catchers"] == [

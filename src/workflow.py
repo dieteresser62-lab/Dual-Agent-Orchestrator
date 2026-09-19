@@ -62,6 +62,7 @@ from contracts import (
     ContractResult,
     FindingRecord,
     FindingClass,
+    FindingOccurrence,
     FindingOrigin,
     FindingResponse,
     FindingResponseDecision,
@@ -91,6 +92,7 @@ from gates import (
 from review_packets import (
     ReviewPacket, ReviewPacketError, build_review_packet, exclude_review_diff_paths,
 )
+from task_contract import TaskMode
 from validation_matrix import (
     ValidationCommand,
     ValidationMatrix,
@@ -1024,6 +1026,24 @@ def _review_to_dict(item: ContractResult | None) -> dict[str, object] | None:
             for value in item.anchors
         ],
         "red_state_followup_slice": item.red_state_followup_slice,
+        **(
+            {"delivery_kind": item.delivery_kind}
+            if item.delivery_kind != "review"
+            else {}
+        ),
+        **(
+            {
+                "occurrences": [
+                    {
+                        "finding_id": occurrence.finding_id,
+                        "rationale": occurrence.rationale,
+                    }
+                    for occurrence in item.occurrences
+                ]
+            }
+            if item.occurrences
+            else {}
+        ),
     }
 
 
@@ -1073,6 +1093,12 @@ def _review_from_dict(raw: object) -> ContractResult | None:
         red_state_followup_slice=(
             None if raw.get("red_state_followup_slice") is None
             else str(raw["red_state_followup_slice"])
+        ),
+        delivery_kind=str(raw.get("delivery_kind", "review")),
+        occurrences=tuple(
+            FindingOccurrence(str(item["finding_id"]), str(item["rationale"]))
+            for item in _json_list(raw.get("occurrences", []))
+            if isinstance(item, dict)
         ),
     )
 
@@ -1148,6 +1174,11 @@ class WorkflowRunResult:
 
         if self._provider_input_boundary_verdict or self._quota_automation_verdict:
             return True
+        if self.state.execution_mode == TaskMode.BRANCH_DISCOVERY.value:
+            # E6 deliberately permits a completed discovery delivery to retain
+            # open findings.  Those findings determine the locally derived
+            # family acceptance; they are not a denial of the delivery itself.
+            return False
         if is_finding_cleanup_work_unit(self.state):
             return False
         return bool(workflow_rejection_finding_ids(self.state, self.history))
@@ -1670,6 +1701,9 @@ class WorkflowEngine:
             )
         is_plan_review = state.current_step is WorkflowStep.CLAUDE_PLAN_REVIEW
         is_final_review = state.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW
+        is_branch_discovery = is_final_review and (
+            state.execution_mode == TaskMode.BRANCH_DISCOVERY.value
+        )
         request_result = pending.output.result
         result = request_result
         finding_ledger = self._authoritative_finding_ledger(
@@ -2664,6 +2698,7 @@ class WorkflowEngine:
         request_findings: tuple[FindingRecord, ...],
         finding_ledger: tuple[FindingRecord, ...],
         final_review_pending_count: int | None = None,
+        is_branch_discovery: bool = False,
     ) -> tuple[WorkflowState, WorkflowHistory]:
         request_history = replace(history, findings=request_findings)
         build_request = partial(
@@ -2762,6 +2797,19 @@ class WorkflowEngine:
                 else request_findings
             ),
         )
+        if is_branch_discovery:
+            return self._apply_review_result(
+                state=state,
+                context=context,
+                history=history,
+                reviewer=reviewer,
+                result=result,
+                fingerprint=changes.fingerprint,
+                round_number=review_round,
+                is_plan_review=False,
+                is_final_review=True,
+                finding_ledger=finding_ledger,
+            )
         request_result = result
         requested_findings = request_findings
         request_findings, history, result = self._prepare_recovered_review_merge(
@@ -2936,17 +2984,17 @@ class WorkflowEngine:
         return state, True
 
     def _run_review(
-        self,
-        state: WorkflowState,
-        context: WorkflowContext,
-        history: WorkflowHistory,
-        reviewer: AgentRole,
+        self, state: WorkflowState, context: WorkflowContext,
+        history: WorkflowHistory, reviewer: AgentRole,
     ) -> tuple[WorkflowState, WorkflowHistory]:
         unit = state.current_work_unit
         if reviewer is not AgentRole.CLAUDE:
             raise WorkflowExecutionError("only Claude may execute review steps")
         is_plan_review = state.current_step is WorkflowStep.CLAUDE_PLAN_REVIEW
         is_final_review = state.current_step is WorkflowStep.CLAUDE_FINAL_REVIEW
+        is_branch_discovery = is_final_review and state.execution_mode == (
+            TaskMode.BRANCH_DISCOVERY.value
+        )
         is_cleanup_review = is_final_review and is_finding_cleanup_work_unit(state, unit)
         history = self._bind_correction_request_history(state, history)
         start_commit = state.branch_review_base_commit if is_final_review else (
@@ -2965,9 +3013,7 @@ class WorkflowEngine:
             return state, history
         if is_cleanup_review:
             changes = self._scope_cleanup_review_changes(
-                changes,
-                state.branch_base,
-                context.current_scope_paths,
+                changes, state.branch_base, context.current_scope_paths
             )
         state, halted = self._apply_review_change_boundary(
             state, context, history, changes,
@@ -3004,8 +3050,8 @@ class WorkflowEngine:
             )
             self.driver.checkpoint(state, history)
             return state, history
-        # Project the newly appended attestation before
-        # invoking Claude. The idempotent checkpoint protects record-ahead recovery.
+        # Project the appended attestation before invoking the reviewer; the
+        # idempotent checkpoint protects record-ahead recovery.
         self.driver.checkpoint(state, history)
         if not attestation.complete and is_cleanup_review:
             return self._complete_cleanup_review(state, history)
@@ -3019,7 +3065,7 @@ class WorkflowEngine:
         )
         finding_ledger = history.findings
         final_review_pending_count: int | None = None
-        if is_final_review:
+        if is_final_review and not is_branch_discovery:
             pending_findings = self.driver.authoritative_final_review_findings(
                 state, history.findings
             )
@@ -3052,7 +3098,9 @@ class WorkflowEngine:
             name=f"work-unit-{unit.work_unit_id}-{state.current_step.value}",
             reviewer=reviewer,
             approval_marker=(
-                ApprovalMarker.PLAN
+                ApprovalMarker.BRANCH_DISCOVERY
+                if is_branch_discovery
+                else ApprovalMarker.PLAN
                 if is_plan_review
                 else ApprovalMarker.FINAL
                 if is_final_review
@@ -3132,6 +3180,7 @@ class WorkflowEngine:
             request_findings,
             finding_ledger,
             final_review_pending_count,
+            is_branch_discovery,
         )
 
     def _apply_review_result(
@@ -3154,8 +3203,8 @@ class WorkflowEngine:
     ) -> tuple[WorkflowState, WorkflowHistory]:
         """Mirror one durable verdict and perform its deterministic transition."""
         unit = state.current_work_unit
-        is_cleanup_review = (
-            is_final_review and is_finding_cleanup_work_unit(state, unit)
+        is_cleanup_review = is_final_review and is_finding_cleanup_work_unit(
+            state, unit
         )
         correction_progress = self._slice_review_progress(
             state,
@@ -3192,6 +3241,14 @@ class WorkflowEngine:
                     f"{reviewer.value} stop has no structured stop request"
                 )
             state = self._halt_for_stop_request(state, context, result.stop_request)
+            self.driver.checkpoint(state, history)
+            return state, history
+        if result.delivery_kind == "branch_discovery_completed":
+            if state.execution_mode != TaskMode.BRANCH_DISCOVERY.value:
+                raise WorkflowExecutionError(
+                    "BRANCH_DISCOVERY_COMPLETED is outside a branch discovery run"
+                )
+            state = state.complete_current_work_unit()
             self.driver.checkpoint(state, history)
             return state, history
 

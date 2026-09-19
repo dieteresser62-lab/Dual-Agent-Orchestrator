@@ -196,7 +196,11 @@ class ReviewAuditEvent:
             raise AuditTrailError("review stop state and stop request are inconsistent")
         if self.result.stopped and self.result.approval is not None:
             raise AuditTrailError("a stopped review cannot carry an approval")
-        if not self.result.stopped and self.result.approval is None:
+        if (
+            not self.result.stopped
+            and self.result.approval is None
+            and self.result.delivery_kind != "branch_discovery_completed"
+        ):
             raise AuditTrailError("a completed review requires an approval decision")
         if self.result.approval is True and self.result.own_open_blockers:
             raise AuditTrailError(

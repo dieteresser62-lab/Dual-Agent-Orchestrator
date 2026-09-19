@@ -9,6 +9,7 @@ from pathlib import PurePosixPath
 
 from contracts import PlannedSlice
 from gates import matches_path_patterns, normalize_path_patterns
+import native_finding_decisions
 
 
 FEATURE_BRANCH_PATTERN = re.compile(r"^(?:feature|codex)/[A-Za-z0-9._-]+$")
@@ -31,6 +32,7 @@ class TaskContractError(ValueError):
 class TaskMode(str, Enum):
     IMPLEMENT = "IMPLEMENT"
     PLAN_ONLY = "PLAN_ONLY"
+    BRANCH_DISCOVERY = "BRANCH_DISCOVERY"
 
 
 @dataclass(frozen=True)
@@ -59,6 +61,13 @@ class TaskContract:
             raise TaskContractError("informal_intake must be a boolean")
         if self.informal_intake and self.mode is not TaskMode.PLAN_ONLY:
             raise TaskContractError("informal intake must be bound to PLAN_ONLY")
+        if (
+            self.mode is TaskMode.BRANCH_DISCOVERY
+            and not native_finding_decisions.native_finding_decisions_enabled()
+        ):
+            raise TaskContractError(
+                "BRANCH_DISCOVERY requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER"
+            )
         if self.mode is TaskMode.PLAN_ONLY:
             if self.work_plan_path is None:
                 raise TaskContractError("PLAN_ONLY requires WORK_PLAN_PATH")
@@ -68,6 +77,13 @@ class TaskContract:
                 )
             if self.approved_plan_commit is not None or self.approved_slices:
                 raise TaskContractError("PLAN_ONLY cannot consume an approved-plan handoff")
+        if self.mode is TaskMode.BRANCH_DISCOVERY:
+            if self.work_plan_path is not None:
+                raise TaskContractError("BRANCH_DISCOVERY forbids WORK_PLAN_PATH")
+            if self.approved_plan_commit is not None or self.approved_slices:
+                raise TaskContractError(
+                    "BRANCH_DISCOVERY cannot consume an approved-plan handoff"
+                )
         handoff_values = (
             self.finding_handoff_source_run_id,
             self.finding_handoff_export_record_id,
@@ -79,15 +95,23 @@ class TaskContract:
         if self.finding_handoff_source_run_id is not None:
             if (
                 self.approved_plan_commit is None
-                and self.mode is not TaskMode.PLAN_ONLY
+                and self.mode not in {
+                    TaskMode.PLAN_ONLY,
+                    TaskMode.BRANCH_DISCOVERY,
+                }
             ):
                 raise TaskContractError(
-                    "finding handoff requires PLAN_ONLY or an approved-plan IMPLEMENT task"
+                    "finding handoff requires PLAN_ONLY, BRANCH_DISCOVERY, or an "
+                    "approved-plan IMPLEMENT task"
                 )
             if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,199}", self.finding_handoff_source_run_id) is None:
                 raise TaskContractError("FINDING_HANDOFF_SOURCE_RUN is invalid")
             if re.fullmatch(r"ar1-[0-9a-f]{64}", self.finding_handoff_export_record_id or "") is None:
                 raise TaskContractError("FINDING_HANDOFF_EXPORT must be an artifact record ID")
+        elif self.mode is TaskMode.BRANCH_DISCOVERY:
+            raise TaskContractError(
+                "BRANCH_DISCOVERY requires the family predecessor handoff"
+            )
         if self.approved_plan_commit is not None:
             if self.mode is not TaskMode.IMPLEMENT or self.work_plan_path is None:
                 raise TaskContractError(
@@ -222,7 +246,7 @@ def parse_task_contract(
         declared_mode = TaskMode(raw_mode.upper()) if raw_mode is not None else None
     except ValueError as exc:
         raise TaskContractError(
-            "ORCHESTRATOR_MODE must be PLAN_ONLY or IMPLEMENT"
+            "ORCHESTRATOR_MODE must be PLAN_ONLY, IMPLEMENT, or BRANCH_DISCOVERY"
         ) from exc
     override_mode = (
         TaskMode.PLAN_ONLY if mode_override is True

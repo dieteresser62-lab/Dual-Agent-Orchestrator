@@ -1,8 +1,40 @@
 from __future__ import annotations
 
 import pytest
+import native_finding_decisions
 
 from task_contract import TaskContractError, TaskMode, parse_task_contract
+
+
+BRANCH_DISCOVERY_TASK = """ORCHESTRATOR_MODE: BRANCH_DISCOVERY
+FINDING_HANDOFF_SOURCE_RUN: predecessor-run
+FINDING_HANDOFF_EXPORT: ar1-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+TARGET_BRANCH: feature/example
+TASK_SCOPE: src/**, tests/**
+"""
+
+
+def test_branch_discovery_task_is_dormant_and_requires_its_family_handoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(TaskContractError, match="JOINT_67_68"):
+        parse_task_contract(BRANCH_DISCOVERY_TASK)
+
+    monkeypatch.setattr(
+        native_finding_decisions,
+        "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
+        True,
+    )
+    contract = parse_task_contract(BRANCH_DISCOVERY_TASK)
+    assert contract.mode is TaskMode.BRANCH_DISCOVERY
+    assert contract.work_plan_path is None
+    assert contract.finding_handoff_source_run_id == "predecessor-run"
+
+    with pytest.raises(TaskContractError, match="family predecessor handoff"):
+        parse_task_contract(
+            "ORCHESTRATOR_MODE: BRANCH_DISCOVERY\n"
+            "TARGET_BRANCH: feature/example\nTASK_SCOPE: src/**\n"
+        )
 
 
 def test_plan_only_contract_parses_german_scope_and_markdown_escape() -> None:

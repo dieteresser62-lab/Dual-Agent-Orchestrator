@@ -22,6 +22,7 @@ from artifact_models import (
     AgentResultPayload,
     ArtifactRecord,
     artifact_payload_document, family_binding_document,
+    BranchDiscoveryCompletedPayload,
     BranchDiscoveryHandoffExportPayload,
     BranchDiscoveryHandoffImportPayload,
     BindingPayload,
@@ -395,6 +396,7 @@ def replay_artifacts(
             RecordType.FINDING_HANDOFF_IMPORT,
             RecordType.BRANCH_DISCOVERY_HANDOFF_EXPORT,
             RecordType.BRANCH_DISCOVERY_HANDOFF_IMPORT,
+            RecordType.BRANCH_DISCOVERY_COMPLETED,
         }:
             if record.record_type in singleton_types:
                 _fail(
@@ -1650,7 +1652,7 @@ def _validate_workflow_transitions_and_events(
                 "run": RunIdentityPayload,
                 "transition": WorkflowTransitionPayload,
                 "validation": ValidationAttestationPayload,
-                "review": ReviewPayload,
+                "review": (ReviewPayload, BranchDiscoveryCompletedPayload),
             }[payload.event_kind]
             if len(typed_references) != 1 or not isinstance(
                 typed_references[0].payload, expected_type
@@ -1992,7 +1994,10 @@ def _validate_provider_decision_content(
     )
     provider_decisions = tuple(
         record for record in chain
-        if isinstance(record.payload, (AgentResultPayload, ReviewPayload))
+        if isinstance(
+            record.payload,
+            (AgentResultPayload, ReviewPayload, BranchDiscoveryCompletedPayload),
+        )
     )
     bound_provider_records: set[str] = set()
     for decision_record in provider_decisions:
@@ -2005,7 +2010,11 @@ def _validate_provider_decision_content(
                 "native decision lacks its provider-content binding",
                 decision_record,
             )
-        role = decision.role if isinstance(decision, AgentResultPayload) else decision.reviewer
+        role = (
+            decision.role
+            if isinstance(decision, AgentResultPayload)
+            else decision.reviewer
+        )
         decision_unit = next(
             (
                 candidate.payload
@@ -2070,7 +2079,10 @@ def _validate_provider_decision_content(
             None,
         )
         expected_kind = (
-            "review_result" if isinstance(decision, ReviewPayload)
+            "review_result"
+            if isinstance(
+                decision, (ReviewPayload, BranchDiscoveryCompletedPayload)
+            )
             else "final_report"
             if decision.outcome == "ready"
             and content.operation.endswith("_final_review")
@@ -2505,28 +2517,48 @@ def _validate_branch_discovery_export(
             "branch discovery export source or predecessor binding differs",
             record,
         )
-    review = records_by_id.get(payload.discovery_review_record_id)
     attestation = records_by_id.get(payload.validation_attestation_record_id)
     if (
-        review is None
-        or not isinstance(review.payload, ReviewPayload)
-        or review.payload.verdict != "approved"
-        or attestation is None
+        attestation is None
         or not isinstance(attestation.payload, ValidationAttestationPayload)
-        or positions[review.record_id] >= positions[record.record_id]
         or positions[attestation.record_id] >= positions[record.record_id]
     ):
         _fail(
             ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
-            "branch discovery export review or validation attestation is not present",
+            "branch discovery export validation attestation is not present",
             record,
         )
-    if review.fingerprint != attestation.fingerprint:
-        _fail(
-            ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
-            "branch discovery export review and attestation fingerprints differ",
-            record,
-        )
+    if payload.target_execution_mode == "PLAN_ONLY":
+        review = records_by_id.get(payload.discovery_review_record_id or "")
+        if (
+            review is None
+            or not isinstance(review.payload, BranchDiscoveryCompletedPayload)
+            or positions[review.record_id] >= positions[record.record_id]
+        ):
+            _fail(
+                ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+                "branch discovery export completion is not present; approved is not scan completion",
+                record,
+            )
+        if review.fingerprint != attestation.fingerprint:
+            _fail(
+                ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
+                "branch discovery export completion and attestation fingerprints differ",
+                record,
+            )
+    else:
+        completion = records_by_id.get(payload.source_completion_record_id or "")
+        if (
+            completion is None
+            or not isinstance(completion.payload, WorkflowCompletionPayload)
+            or completion.payload.outcome != "completed"
+            or positions[completion.record_id] >= positions[record.record_id]
+        ):
+            _fail(
+                ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+                "BRANCH_DISCOVERY family handoff source completion is not present",
+                record,
+            )
     source_prefix = chain[:positions[record.record_id]]
     flattened = flatten_finding_transition_history(source_prefix)
     if (
@@ -2538,6 +2570,29 @@ def _validate_branch_discovery_export(
         _fail(
             ReplayDiagnosticCode.RECORD_FINGERPRINT_MISMATCH,
             "branch discovery export flattened transition history differs",
+            record,
+        )
+    identity = next(
+        (
+            candidate.payload
+            for candidate in source_prefix
+            if isinstance(candidate.payload, RunIdentityPayload)
+        ),
+        None,
+    )
+    if identity is not None and (
+        (
+            payload.target_execution_mode == "PLAN_ONLY"
+            and identity.execution_mode != "BRANCH_DISCOVERY"
+        )
+        or (
+            payload.target_execution_mode == "BRANCH_DISCOVERY"
+            and identity.execution_mode not in {"IMPLEMENT", "PLAN_ONLY"}
+        )
+    ):
+        _fail(
+            ReplayDiagnosticCode.RECORD_TYPE_MISMATCH,
+            "branch discovery handoff source and target run kinds are invalid",
             record,
         )
     profile = next(
@@ -2667,6 +2722,12 @@ def _validate_branch_discovery_import(
                 "branch discovery import task path differs from RunIdentity",
                 record,
             )
+        if identity.execution_mode != payload.target_execution_mode:
+            _fail(
+                ReplayDiagnosticCode.RECORD_TYPE_MISMATCH,
+                "branch discovery import target execution mode differs from RunIdentity",
+                record,
+            )
     first_dispatch = next(
         (
             positions[item.record_id]
@@ -2754,6 +2815,7 @@ def _validate_work_unit_activity_reference(
                 AgentResultPayload,
                 DiagnosticPayload,
                 ReviewPayload,
+                BranchDiscoveryCompletedPayload,
                 ProviderInputMeasurementPayload,
                 ProviderAttemptPayload,
                 FinalReviewPreflightPayload,
@@ -2778,7 +2840,40 @@ def _validate_bound_record_references(
     records_by_id: dict[str, ArtifactRecord],
     positions: dict[str, int],
 ) -> None:
-    if isinstance(payload, BindingPayload):
+    if isinstance(payload, BranchDiscoveryCompletedPayload):
+        attestation = records_by_id.get(
+            payload.validation_attestation_record_id
+        )
+        identity = next(
+            (
+                item.payload
+                for item in records_by_id.values()
+                if isinstance(item.payload, RunIdentityPayload)
+            ),
+            None,
+        )
+        if (
+            attestation is None
+            or not isinstance(attestation.payload, ValidationAttestationPayload)
+            or positions[attestation.record_id] >= positions[record.record_id]
+        ):
+            _fail(
+                ReplayDiagnosticCode.RECORD_REFERENCE_MISSING,
+                "branch discovery completion validation attestation is not present",
+                record,
+            )
+        _same_fingerprint(record, attestation)
+        if (
+            identity is None
+            or identity.execution_mode != "BRANCH_DISCOVERY"
+            or identity.first_slice_start_commit != payload.reviewed_head_commit
+        ):
+            _fail(
+                ReplayDiagnosticCode.RECORD_TYPE_MISMATCH,
+                "branch discovery completion requires its own HEAD-bound BRANCH_DISCOVERY run",
+                record,
+            )
+    elif isinstance(payload, BindingPayload):
         attestation = records_by_id.get(payload.attestation_id)
         if (
             attestation is None
@@ -2807,9 +2902,25 @@ def _validate_bound_record_references(
             _same_fingerprint(record, approval)
     elif isinstance(payload, WorkflowCompletionPayload) and payload.final_binding_id is not None:
         binding = records_by_id.get(payload.final_binding_id)
+        identity = next(
+            (
+                item.payload
+                for item in records_by_id.values()
+                if isinstance(item.payload, RunIdentityPayload)
+            ),
+            None,
+        )
+        discovery_binding = (
+            identity is not None
+            and identity.execution_mode == "BRANCH_DISCOVERY"
+            and binding is not None
+            and isinstance(binding.payload, BranchDiscoveryCompletedPayload)
+        )
         if (
             binding is None
-            or not isinstance(binding.payload, BindingPayload)
+            or not (
+                isinstance(binding.payload, BindingPayload) or discovery_binding
+            )
             or positions[binding.record_id] >= positions[record.record_id]
         ):
             _fail(
@@ -3160,6 +3271,8 @@ def _workflow_event_domain_kind(payload: object) -> str | None:
         return "validation"
     if isinstance(payload, ReviewPayload):
         return "review"
+    if isinstance(payload, BranchDiscoveryCompletedPayload):
+        return "review"
     return None
 
 
@@ -3186,6 +3299,13 @@ def _pending_workflow_event_record_id(
     if isinstance(candidate.payload, ReviewPayload):
         positions = {record.record_id: index for index, record in enumerate(records)}
         if _review_prefix_end(records, positions, candidate) != len(records):
+            return None
+    elif isinstance(candidate.payload, BranchDiscoveryCompletedPayload):
+        candidate_index = records.index(candidate)
+        if any(
+            not isinstance(record.payload, FindingTransitionPayload)
+            for record in records[candidate_index + 1 :]
+        ):
             return None
     elif candidate is not records[-1]:
         return None
@@ -3218,7 +3338,11 @@ def pending_workflow_event_payload(
             None,
             (record_id,),
         )
-    work_unit_id = domain.work_unit_id if isinstance(domain, ReviewPayload) else None
+    work_unit_id = (
+        domain.work_unit_id
+        if isinstance(domain, (ReviewPayload, BranchDiscoveryCompletedPayload))
+        else None
+    )
     prior_transitions = tuple(
         record.payload
         for record in replay.records[: positions[record_id] + 1]
@@ -3243,7 +3367,7 @@ def pending_workflow_event_payload(
         if isinstance(payload, (WorkUnitPayload, CorrectionWorkUnitPayload))
         and record.logical_id.removeprefix("work-unit-") == work_unit_id
     ]
-    if isinstance(domain, ReviewPayload):
+    if isinstance(domain, (ReviewPayload, BranchDiscoveryCompletedPayload)):
         suffix = domain_record.logical_id.rsplit("-", 1)[-1]
         if not suffix.isdigit():
             _fail(

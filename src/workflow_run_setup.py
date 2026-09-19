@@ -305,7 +305,7 @@ def _fresh_state(
             "prepared watch-task branch HEAD changed before state initialization"
         )
     if (
-        task_contract.mode is TaskMode.PLAN_ONLY
+        task_contract.mode in {TaskMode.PLAN_ONLY, TaskMode.BRANCH_DISCOVERY}
         and task_contract.finding_handoff_source_run_id is not None
     ):
         discovered_binding = _branch_discovery_family_binding(
@@ -407,7 +407,7 @@ def _branch_discovery_family_binding(
         export = export_record.payload
         if not isinstance(export, BranchDiscoveryHandoffExportPayload):
             raise ArtifactBridgeError(
-                "PLAN_ONLY finding handoff does not reference a branch discovery export"
+                "family handoff does not reference a branch discovery export"
             )
         source_binding = (
             None
@@ -429,6 +429,10 @@ def _branch_discovery_family_binding(
         if source_replay.head_record_id != export_record.record_id:
             raise ArtifactBridgeError(
                 "branch discovery export is not the source run head"
+            )
+        if export.target_execution_mode != task_contract.mode.value:
+            raise ArtifactBridgeError(
+                "branch discovery export target mode differs from the target task"
             )
         if export.target_run_identity != target_run_id:
             raise ArtifactBridgeError(
@@ -490,9 +494,16 @@ def _initialize_finding_handoff(
             raise ArtifactBridgeError("referenced finding export record is missing")
         export_payload = export_record.payload
         if isinstance(export_payload, BranchDiscoveryHandoffExportPayload):
-            if task_contract.mode is not TaskMode.PLAN_ONLY:
+            if task_contract.mode not in {
+                TaskMode.PLAN_ONLY,
+                TaskMode.BRANCH_DISCOVERY,
+            }:
                 raise ArtifactBridgeError(
-                    "branch discovery export requires a PLAN_ONLY target task"
+                    "branch discovery export requires its bound family target task"
+                )
+            if export_payload.target_execution_mode != task_contract.mode.value:
+                raise ArtifactBridgeError(
+                    "branch discovery export target mode differs from the target task"
                 )
             if state.family_binding is None:
                 raise ArtifactBridgeError(

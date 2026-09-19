@@ -12,6 +12,7 @@ from contracts import (
     AnchorRecord,
     ApprovalMarker,
     FindingClass,
+    FindingOccurrence,
     FindingOrigin,
     FindingRecord,
     FindingStatus,
@@ -164,6 +165,76 @@ def active_finding_decisions(monkeypatch: pytest.MonkeyPatch) -> None:
         "JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
         True,
     )
+
+
+def test_branch_discovery_completion_is_not_an_approval_and_keeps_open_findings(
+    active_finding_decisions: None,
+) -> None:
+    existing = _finding(
+        "C-01",
+        AgentRole.CLAUDE,
+        finding_class=FindingClass.OBSERVATION,
+    )
+    context = replace(
+        _context(previous=(existing,), anchor_origin=None),
+        operation="claude_final_review",
+        approval_marker=ApprovalMarker.BRANCH_DISCOVERY,
+        slice_id="FINAL",
+    )
+    document = {
+        "schema_version": "native-agent-review-result-v2",
+        "result_type": "branch_discovery_completed",
+        "request_id": context.request_id,
+        "reviewer": "claude",
+        "new_findings": [
+            {
+                "finding_id": "C-02",
+                "finding_class": "BLOCKER",
+                "summary": "A new defect remains on the reviewed branch HEAD.",
+                "acceptance_test": {
+                    "kind": "prose",
+                    "text": "A later ordinary plan must address the defect.",
+                },
+            }
+        ],
+        "occurrences": [
+            {
+                "finding_id": "C-01",
+                "rationale": "The known defect is still reproducible on this HEAD.",
+            }
+        ],
+        "review_evidence": {
+            "dimensions": "correctness, contracts, failure paths, and resume",
+            "largest_residual_risk": "A future family edge could omit a finding.",
+            "break_condition": "One imported opening disappears from replay.",
+        },
+        "pre_mortem": "The scan could complete while silently dropping history.",
+    }
+
+    validate_schema_document(
+        {"result": document}, native_review_provider_response_schema(context)
+    )
+    result = parse_native_contract_result(document, context)
+
+    assert result.delivery_kind == "branch_discovery_completed"
+    assert result.approval is None
+    assert result.stopped is False
+    assert result.occurrences == (
+        FindingOccurrence(
+            "C-01", "The known defect is still reproducible on this HEAD."
+        ),
+    )
+    assert project_open_set(result.findings).finding_ids == ("C-01", "C-02")
+
+    ordinary_review = _review(context)
+    ordinary_review["responsibility_routes"] = []
+    with pytest.raises(SchemaMismatch):
+        validate_schema_document(
+            {"result": ordinary_review},
+            native_review_provider_response_schema(context),
+        )
+    with pytest.raises(NativeReviewContractError, match="cannot use approved"):
+        parse_native_contract_result(ordinary_review, context)
 
 
 @pytest.mark.parametrize(

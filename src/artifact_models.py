@@ -43,6 +43,7 @@ from orchestrator_diagnostics import (
     ORCHESTRATOR_DIAGNOSTIC_TEXTS,
     STRUCTURED_OUTPUT_DIAGNOSTIC_CODE,
 )
+import native_finding_decisions
 
 SCHEMA_VERSION = "2"
 STATE_PROJECTION_REDUCER_VERSION = "structured-v2-schema-2-state-v3-v1"
@@ -70,6 +71,7 @@ class RecordType(StrEnum):
     AGENT_RESULT = "agent_result"
     DIAGNOSTIC = "diagnostic"
     REVIEW = "review"
+    BRANCH_DISCOVERY_COMPLETED = "branch_discovery_completed"
     REVIEW_ANCHOR = "review_anchor"
     REVIEW_VALIDATION_BINDING = "review_validation_binding"
     FINDING_TRANSITION = "finding_transition"
@@ -181,8 +183,19 @@ class RunIdentityPayload:
             raise ArtifactValidationError(
                 "first_slice_start_commit must be a lowercase 40-character Git SHA"
             )
-        if self.execution_mode not in {"IMPLEMENT", "PLAN_ONLY"}:
+        if self.execution_mode not in {
+            "IMPLEMENT",
+            "PLAN_ONLY",
+            "BRANCH_DISCOVERY",
+        }:
             raise ArtifactValidationError("execution_mode is invalid")
+        if (
+            self.execution_mode == "BRANCH_DISCOVERY"
+            and not native_finding_decisions.native_finding_decisions_enabled()
+        ):
+            raise ArtifactValidationError(
+                "BRANCH_DISCOVERY requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER"
+            )
         if self.audit_report_path is not None:
             _require_path(self.audit_report_path)
 
@@ -764,6 +777,106 @@ class ReviewPayload:
 
 
 @dataclass(frozen=True, slots=True)
+class BranchDiscoveryFindingPayload:
+    finding_id: str
+    severity: FindingSeverity
+    summary: str
+    acceptance_test: str
+
+    def __post_init__(self) -> None:
+        _require_finding_id(self.finding_id, "branch discovery finding_id")
+        if not isinstance(self.severity, FindingSeverity):
+            raise ArtifactValidationError(
+                "branch discovery finding severity is invalid"
+            )
+        _require_text(self.summary, "branch discovery finding summary")
+        _require_text(
+            self.acceptance_test, "branch discovery finding acceptance_test"
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class BranchDiscoveryOccurrencePayload:
+    finding_id: str
+    rationale: str
+
+    def __post_init__(self) -> None:
+        _require_finding_id(self.finding_id, "branch discovery occurrence finding_id")
+        _require_text(self.rationale, "branch discovery occurrence rationale")
+
+
+@dataclass(frozen=True, slots=True)
+class BranchDiscoveryCompletedPayload:
+    """Record-native E6 delivery; completion is intentionally not approval."""
+
+    reviewer: Role
+    work_unit_id: str
+    new_findings: tuple[BranchDiscoveryFindingPayload, ...]
+    occurrences: tuple[BranchDiscoveryOccurrencePayload, ...]
+    review_evidence: ReviewEvidencePayload
+    pre_mortem: str
+    validation_attestation_record_id: str
+    reviewed_head_commit: str
+    transport_schema: str
+    request_id: str
+    response_sha256: str
+    status: ClassVar[str] = "completed"
+    record_type: ClassVar[RecordType] = RecordType.BRANCH_DISCOVERY_COMPLETED
+
+    def __post_init__(self) -> None:
+        if not native_finding_decisions.native_finding_decisions_enabled():
+            raise ArtifactValidationError(
+                "BRANCH_DISCOVERY_COMPLETED requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER"
+            )
+        if self.reviewer is not Role.CLAUDE:  # allowlist:provider -- reviewer authority
+            raise ArtifactValidationError(
+                "branch discovery completion reviewer must be claude"  # allowlist:provider -- diagnostic role
+            )
+        _require_identifier(self.work_unit_id, "work_unit_id")
+        new_ids = tuple(item.finding_id for item in self.new_findings)
+        if new_ids != tuple(sorted_finding_ids(new_ids)) or len(new_ids) != len(
+            set(new_ids)
+        ):
+            raise ArtifactValidationError(
+                "branch discovery new findings must be sorted and unique"
+            )
+        occurrence_ids = tuple(item.finding_id for item in self.occurrences)
+        if occurrence_ids != tuple(sorted_finding_ids(occurrence_ids)) or len(
+            occurrence_ids
+        ) != len(set(occurrence_ids)):
+            raise ArtifactValidationError(
+                "branch discovery occurrences must be sorted and unique"
+            )
+        if set(new_ids).intersection(occurrence_ids):
+            raise ArtifactValidationError(
+                "branch discovery finding cannot also be an occurrence"
+            )
+        if not isinstance(self.review_evidence, ReviewEvidencePayload):
+            raise ArtifactValidationError(
+                "branch discovery completion requires review_evidence"
+            )
+        _require_text(self.pre_mortem, "pre_mortem")
+        _require_record_id(
+            self.validation_attestation_record_id,
+            "validation_attestation_record_id",
+        )
+        _require_git_sha(self.reviewed_head_commit, "reviewed_head_commit")
+        if self.transport_schema != "native-claude-review-v2":  # allowlist:provider -- persisted protocol vocabulary
+            raise ArtifactValidationError(
+                "branch discovery completion transport_schema is unsupported"
+            )
+        if (
+            not isinstance(self.request_id, str)
+            or re.fullmatch(r"native-review-request-[0-9a-f]{64}", self.request_id)
+            is None
+        ):
+            raise ArtifactValidationError(
+                "branch discovery completion request_id is invalid"
+            )
+        _require_sha256(self.response_sha256, "response_sha256")
+
+
+@dataclass(frozen=True, slots=True)
 class ReviewAnchor:
     anchor_id: str
     origin: str
@@ -1124,8 +1237,10 @@ class FindingSnapshotItem:
             raise ArtifactValidationError("finding_snapshot severity is invalid")
 
 
-def _validate_finding_snapshot(snapshot: Sequence[FindingSnapshotItem]) -> None:
-    if not snapshot:
+def _validate_finding_snapshot(
+    snapshot: Sequence[FindingSnapshotItem], *, allow_empty: bool = False
+) -> None:
+    if not snapshot and not allow_empty:
         raise ArtifactValidationError("finding_snapshot must not be empty")
     ids = tuple(item.finding_id for item in snapshot)
     if ids != tuple(sorted_finding_ids(ids)):
@@ -1138,7 +1253,7 @@ def _validate_finding_snapshot(snapshot: Sequence[FindingSnapshotItem]) -> None:
 class BranchDiscoveryHandoffExportPayload:
     source_run_id: str
     source_head_record_id: str
-    discovery_review_record_id: str
+    discovery_review_record_id: str | None
     validation_attestation_record_id: str
     reviewed_head_commit: str
     family_id: str
@@ -1152,6 +1267,8 @@ class BranchDiscoveryHandoffExportPayload:
     target_task_sha256: str
     target_run_identity: str
     authority: Role
+    target_execution_mode: str = "PLAN_ONLY"
+    source_completion_record_id: str | None = None
     status: ClassVar[str] = "exported"
     record_type: ClassVar[RecordType] = RecordType.BRANCH_DISCOVERY_HANDOFF_EXPORT
 
@@ -1165,7 +1282,6 @@ class BranchDiscoveryHandoffExportPayload:
             _require_identifier(value, name)
         for value, name in (
             (self.source_head_record_id, "source_head_record_id"),
-            (self.discovery_review_record_id, "discovery_review_record_id"),
             (
                 self.validation_attestation_record_id,
                 "validation_attestation_record_id",
@@ -1176,12 +1292,41 @@ class BranchDiscoveryHandoffExportPayload:
             ),
         ):
             _require_record_id(value, name)
+        if self.target_execution_mode not in {"PLAN_ONLY", "BRANCH_DISCOVERY"}:
+            raise ArtifactValidationError(
+                "branch discovery handoff target_execution_mode is invalid"
+            )
+        if self.target_execution_mode == "PLAN_ONLY":
+            if self.discovery_review_record_id is None:
+                raise ArtifactValidationError(
+                    "PLAN_ONLY branch discovery handoff requires discovery_review_record_id"
+                )
+            _require_record_id(
+                self.discovery_review_record_id, "discovery_review_record_id"
+            )
+            if self.source_completion_record_id is not None:
+                raise ArtifactValidationError(
+                    "PLAN_ONLY branch discovery handoff forbids source_completion_record_id"
+                )
+        else:
+            if self.discovery_review_record_id is not None:
+                raise ArtifactValidationError(
+                    "BRANCH_DISCOVERY handoff forbids discovery_review_record_id"
+                )
+            if self.source_completion_record_id is None:
+                raise ArtifactValidationError(
+                    "BRANCH_DISCOVERY handoff requires source_completion_record_id"
+                )
+            _require_record_id(
+                self.source_completion_record_id, "source_completion_record_id"
+            )
         _require_git_sha(self.reviewed_head_commit, "reviewed_head_commit")
         _require_git_sha(self.family_base_commit, "family_base_commit")
         _require_positive(self.cycle_number, "cycle_number")
         _require_unique_identifiers(
             self.finding_transition_record_ids,
             "finding_transition_record_ids",
+            allow_empty=self.target_execution_mode == "BRANCH_DISCOVERY",
         )
         _require_sha256(
             self.finding_transitions_sha256, "finding_transitions_sha256"
@@ -1198,7 +1343,7 @@ class BranchDiscoveryHandoffExportPayload:
 class BranchDiscoveryHandoffImportPayload:
     source_run_id: str
     source_head_record_id: str
-    discovery_review_record_id: str
+    discovery_review_record_id: str | None
     validation_attestation_record_id: str
     reviewed_head_commit: str
     family_id: str
@@ -1215,6 +1360,8 @@ class BranchDiscoveryHandoffImportPayload:
     transitions: tuple[ImportedFindingTransition, ...]
     finding_snapshot: tuple[FindingSnapshotItem, ...]
     authority: Role
+    target_execution_mode: str = "PLAN_ONLY"
+    source_completion_record_id: str | None = None
     status: ClassVar[str] = "imported"
     record_type: ClassVar[RecordType] = RecordType.BRANCH_DISCOVERY_HANDOFF_IMPORT
 
@@ -1229,7 +1376,6 @@ class BranchDiscoveryHandoffImportPayload:
             _require_identifier(value, name)
         for value, name in (
             (self.source_head_record_id, "source_head_record_id"),
-            (self.discovery_review_record_id, "discovery_review_record_id"),
             (
                 self.validation_attestation_record_id,
                 "validation_attestation_record_id",
@@ -1241,6 +1387,34 @@ class BranchDiscoveryHandoffImportPayload:
             (self.export_record_id, "export_record_id"),
         ):
             _require_record_id(value, name)
+        if self.target_execution_mode not in {"PLAN_ONLY", "BRANCH_DISCOVERY"}:
+            raise ArtifactValidationError(
+                "branch discovery handoff target_execution_mode is invalid"
+            )
+        if self.target_execution_mode == "PLAN_ONLY":
+            if self.discovery_review_record_id is None:
+                raise ArtifactValidationError(
+                    "PLAN_ONLY branch discovery import requires discovery_review_record_id"
+                )
+            _require_record_id(
+                self.discovery_review_record_id, "discovery_review_record_id"
+            )
+            if self.source_completion_record_id is not None:
+                raise ArtifactValidationError(
+                    "PLAN_ONLY branch discovery import forbids source_completion_record_id"
+                )
+        else:
+            if self.discovery_review_record_id is not None:
+                raise ArtifactValidationError(
+                    "BRANCH_DISCOVERY import forbids discovery_review_record_id"
+                )
+            if self.source_completion_record_id is None:
+                raise ArtifactValidationError(
+                    "BRANCH_DISCOVERY import requires source_completion_record_id"
+                )
+            _require_record_id(
+                self.source_completion_record_id, "source_completion_record_id"
+            )
         _require_git_sha(self.reviewed_head_commit, "reviewed_head_commit")
         _require_git_sha(self.family_base_commit, "family_base_commit")
         _require_positive(self.cycle_number, "cycle_number")
@@ -1253,16 +1427,20 @@ class BranchDiscoveryHandoffImportPayload:
             raise ArtifactValidationError(
                 "branch discovery handoff target_run_id differs from target_run_identity"
             )
-        _validate_transitive_transition_sequence(
-            self.transitions, label="branch discovery handoff import"
-        )
+        if self.transitions or self.target_execution_mode != "BRANCH_DISCOVERY":
+            _validate_transitive_transition_sequence(
+                self.transitions, label="branch discovery handoff import"
+            )
         if finding_transition_sequence_sha256(self.transitions) != (
             self.finding_transitions_sha256
         ):
             raise ArtifactValidationError(
                 "branch discovery handoff import transition digest does not match"
             )
-        _validate_finding_snapshot(self.finding_snapshot)
+        _validate_finding_snapshot(
+            self.finding_snapshot,
+            allow_empty=self.target_execution_mode == "BRANCH_DISCOVERY",
+        )
         if self.authority is not Role.ORCHESTRATOR:
             raise ArtifactValidationError(
                 "branch discovery handoff import authority must be orchestrator"
@@ -2327,6 +2505,7 @@ ArtifactPayload: TypeAlias = (
     | WorkflowPolicyPayload | SliceBoundaryPayload
     | TaskPayload | PlanPayload | WorkUnitPayload | CorrectionWorkUnitPayload
     | AgentResultPayload | DiagnosticPayload | ReviewPayload
+    | BranchDiscoveryCompletedPayload
     | ReviewAnchorPayload | ReviewValidationBindingPayload
     | FindingTransitionPayload
     | FindingHandoffExportPayload | FindingHandoffImportPayload
@@ -2381,6 +2560,14 @@ def artifact_payload_document(payload: ArtifactPayload) -> dict[str, Any]:
             imported_finding_transition_document(item)
             for item in payload.transitions
         ]
+    if isinstance(
+        payload,
+        (BranchDiscoveryHandoffExportPayload, BranchDiscoveryHandoffImportPayload),
+    ):
+        if payload.target_execution_mode == "PLAN_ONLY":
+            raw.pop("target_execution_mode", None)
+        if payload.source_completion_record_id is None:
+            raw.pop("source_completion_record_id", None)
     if (
         isinstance(payload, InvocationFailurePayload)
         and payload.orchestrator_diagnostic is None
@@ -2758,6 +2945,38 @@ _PAYLOAD_READERS: dict[
                 )
             ),
         ),
+    RecordType.BRANCH_DISCOVERY_COMPLETED: lambda data: BranchDiscoveryCompletedPayload(
+            reviewer=Role(data["reviewer"]),
+            work_unit_id=data["work_unit_id"],
+            new_findings=tuple(
+                BranchDiscoveryFindingPayload(
+                    item["finding_id"],
+                    FindingSeverity(item["severity"]),
+                    item["summary"],
+                    item["acceptance_test"],
+                )
+                for item in data["new_findings"]
+            ),
+            occurrences=tuple(
+                BranchDiscoveryOccurrencePayload(
+                    item["finding_id"], item["rationale"]
+                )
+                for item in data["occurrences"]
+            ),
+            review_evidence=ReviewEvidencePayload(
+                data["review_evidence"]["dimensions"],
+                data["review_evidence"]["largest_residual_risk"],
+                data["review_evidence"]["break_condition"],
+            ),
+            pre_mortem=data["pre_mortem"],
+            validation_attestation_record_id=data[
+                "validation_attestation_record_id"
+            ],
+            reviewed_head_commit=data["reviewed_head_commit"],
+            transport_schema=data["transport_schema"],
+            request_id=data["request_id"],
+            response_sha256=data["response_sha256"],
+        ),
     RecordType.REVIEW_ANCHOR: lambda data: ReviewAnchorPayload(
             data["review_record_id"],
             tuple(
@@ -2818,7 +3037,7 @@ _PAYLOAD_READERS: dict[
         ),
     RecordType.BRANCH_DISCOVERY_HANDOFF_EXPORT: lambda data: BranchDiscoveryHandoffExportPayload(
             data["source_run_id"], data["source_head_record_id"],
-            data["discovery_review_record_id"],
+            data.get("discovery_review_record_id"),
             data["validation_attestation_record_id"],
             data["reviewed_head_commit"], data["family_id"],
             data["family_base_commit"], data["cycle_number"],
@@ -2827,10 +3046,12 @@ _PAYLOAD_READERS: dict[
             data["finding_transitions_sha256"], data["target_task_path"],
             data["target_task_sha256"], data["target_run_identity"],
             Role(data["authority"]),
+            data.get("target_execution_mode", "PLAN_ONLY"),
+            data.get("source_completion_record_id"),
         ),
     RecordType.BRANCH_DISCOVERY_HANDOFF_IMPORT: lambda data: BranchDiscoveryHandoffImportPayload(
             data["source_run_id"], data["source_head_record_id"],
-            data["discovery_review_record_id"],
+            data.get("discovery_review_record_id"),
             data["validation_attestation_record_id"],
             data["reviewed_head_commit"], data["family_id"],
             data["family_base_commit"], data["cycle_number"],
@@ -2847,6 +3068,8 @@ _PAYLOAD_READERS: dict[
                 for item in data["finding_snapshot"]
             ),
             Role(data["authority"]),
+            data.get("target_execution_mode", "PLAN_ONLY"),
+            data.get("source_completion_record_id"),
         ),
     RecordType.VALIDATION_REQUEST: lambda data: ValidationRequestPayload(
         tuple(

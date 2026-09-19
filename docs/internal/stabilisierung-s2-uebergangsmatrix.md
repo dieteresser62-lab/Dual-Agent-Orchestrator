@@ -837,9 +837,12 @@ Familienbindung.
 | `branch discovery handoff requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER` | E9-Dormanz; keine neue Semantik bei ausgeschaltetem gemeinsamen Schalter |
 | `branch discovery handoff export requires a non-empty accepted replay` | E9; Export nur von einem akzeptierten Quellpräfix |
 | `branch discovery handoff export requires a family binding` | E2a/E9 |
-| `branch discovery handoff export requires its approved discovery review record` | E2/E9; positives Entdeckungsreview bleibt Recordautorität |
+| `branch discovery handoff target execution mode is invalid` | E1/E9; alle Familienkanten benutzen ausschließlich den typisierten Zielmodus desselben Handoffs |
+| `branch discovery handoff export requires its BRANCH_DISCOVERY_COMPLETED record; approved is not scan completion` | E6; die Scan-Zustellung ist Recordautorität und kein positives Reviewverdikt |
 | `branch discovery handoff export requires its validation attestation record` | E2/E9 |
-| `branch discovery review and validation attestation fingerprints differ` | E2/E9; Review und Matrix müssen denselben geprüften Stand binden |
+| `branch discovery completion and validation attestation fingerprints differ` | E2/E6/E9; Zustellung und Matrix müssen denselben geprüften Stand binden |
+| `branch discovery completion differs from its validation or HEAD binding` | E6; Zustellung bindet Attestation und geprüften HEAD explizit |
+| `BRANCH_DISCOVERY family handoff requires a completed source run` | E1; die drei Vorgängerkanten starten den eigenen Entdeckungslauf nur aus einem abgeschlossenen Lauf |
 | `branch discovery handoff export requires at least one source transition` | E2/E2b |
 | `branch discovery target family predecessor differs from the source head` | E2a/E9 |
 | `branch discovery import requires a branch discovery export record` | E9 |
@@ -852,12 +855,21 @@ Familienbindung.
 | `branch discovery import target_task_path differs from queue position` | E9-Replayregel 4 |
 | `branch discovery import target_run_identity differs from target run` | E2/E9; deterministische Kindidentität |
 | `branch discovery import family binding differs from target RunProfile` | E9-Replayregel 5 |
-| `PLAN_ONLY finding handoff does not reference a branch discovery export` | E9; Planlauf und vorhandener Implementierungshandoff bleiben getrennt |
+| `family handoff does not reference a branch discovery export` | E1/E9; jede Folgekante liest denselben vorhandenen Familienhandoff |
 | `branch discovery source has no RunProfile family binding` | E2a/E9 |
 | `branch discovery export is not the source run head` | E9-Replayregel 2 |
 | `branch discovery target_task_sha256 differs from loaded task bytes` | E9-Replayregel 4 |
-| `branch discovery export requires a PLAN_ONLY target task` | E9; der Entdeckungsübergang autorisiert genau den Planlauf |
+| `branch discovery export requires its bound family target task` | E1/E9; der Handoff autorisiert exakt den gebundenen Folgelauf |
+| `branch discovery export target mode differs from the target task` | E1/E9; alle drei Kanten binden den tatsächlichen Zielmodus explizit |
 | `branch discovery import requires the target family binding` | E2a/E9 |
+| `branch discovery payload requires BRANCH_DISCOVERY_COMPLETED` | E6; ein Entdeckungspayload darf nicht aus einem normalen Reviewresultat erzeugt werden |
+| `branch discovery completion cannot carry approved, denied, or stop` | E6; `approved` behält ausschließlich die Bedeutung „Änderung freigegeben“ |
+| `branch discovery completion requires evidence and pre_mortem` | E6; die Zustellung bleibt beweis- und risikogebunden |
+| `branch discovery occurrence references an unknown prior finding` | E6; Vorkommen referenzieren eine bekannte Signatur statt ein neues Finding zu erfinden |
+| `family acceptance requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER` | E1/E6-Dormanz |
+| `family acceptance may be derived only from its own BRANCH_DISCOVERY run` | E1/E6; Familienfreigabe entsteht ausschließlich im terminalen Entdeckungslauf |
+| `family acceptance requires one completed scan and one terminal workflow` | E6; Zustellung und Laufabschluss sind getrennte Tatsachen |
+| `family acceptance completion order is invalid` | E6; die Zustellung muss dem terminalen Laufabschluss vorausgehen |
 
 ### Laufzeitvergleiche außerhalb der Migration
 

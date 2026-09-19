@@ -27,6 +27,7 @@ from contracts import (
     ApprovalMarker,
     ContractResult,
     FindingClass,
+    FindingOccurrence,
     FindingOrigin,
     FindingRecord,
     FindingStatus,
@@ -366,6 +367,24 @@ class NativeReviewResult:
 
 
 @dataclass(frozen=True, slots=True)
+class NativeFindingOccurrence:
+    finding_id: str
+    rationale: str
+
+
+@dataclass(frozen=True, slots=True)
+class NativeBranchDiscoveryCompleted:
+    """E6 delivery: a completed scan, deliberately not an approval decision."""
+
+    request_id: str
+    reviewer: AgentRole
+    new_findings: tuple[NativeFinding, ...]
+    occurrences: tuple[NativeFindingOccurrence, ...]
+    evidence: ReviewEvidence
+    pre_mortem: str
+
+
+@dataclass(frozen=True, slots=True)
 class NativeStopResult:
     request_id: str
     reviewer: AgentRole
@@ -374,7 +393,9 @@ class NativeStopResult:
     remediation_paths: tuple[str, ...] = ()
 
 
-NativeReviewResponse: TypeAlias = NativeReviewResult | NativeStopResult
+NativeReviewResponse: TypeAlias = (
+    NativeReviewResult | NativeBranchDiscoveryCompleted | NativeStopResult
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -403,6 +424,14 @@ class NativeReviewContext:
     planned_slices: tuple[PlannedSlice, ...] = ()
 
     def __post_init__(self) -> None:
+        if (
+            self.approval_marker is ApprovalMarker.BRANCH_DISCOVERY
+            and not native_finding_decisions.native_finding_decisions_enabled()
+        ):
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.CONTEXT_INVALID,
+                "branch discovery review requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
+            )
         for label, value in (
             ("run_id", self.run_id),
             ("work_unit_id", self.work_unit_id),
@@ -691,6 +720,7 @@ def load_native_review_schema() -> dict[str, Any]:
         )
     if native_finding_decisions.native_finding_decisions_enabled():
         _enable_native_review_finding_decision_schema(schema)
+        _enable_branch_discovery_result_schema(schema)
     try:
         check_schema(schema, location="<native-review-schema>")
     except SchemaDefinitionError as exc:
@@ -702,16 +732,163 @@ def load_native_review_schema() -> dict[str, Any]:
     return schema
 
 
-def native_review_provider_response_schema(
-    context: NativeReviewContext, *,
-    base_schema: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Project the immutable reader schema into one bound Claude writer schema.
+def _enable_branch_discovery_result_schema(schema: dict[str, Any]) -> None:
+    """Add E6's delivery without changing the dormant reader schema on disk."""
 
-    The projection is selected solely by typed, request-bound review context.
-    In particular, the free-form operation name is deliberately not consulted.
-    The reader schema is the closed v2 result contract; live generation is
-    constrained here before the provider is invoked.
+    definitions = schema["$defs"]
+    definitions["branch_discovery_occurrence"] = {
+        "type": "object",
+        "properties": {
+            "finding_id": {
+                "type": "string",
+                "pattern": "^C-(0[1-9]|[1-9][0-9]*)$",
+            },
+            "rationale": {
+                "type": "string",
+                "pattern": NONBLANK_TEXT_PATTERN,
+                "maxLength": 3000,
+            },
+        },
+        "required": ["finding_id", "rationale"],
+        "additionalProperties": False,
+    }
+    definitions["branch_discovery_completed"] = {
+        "allOf": [
+            {"$ref": "#/$defs/common"},
+            {
+                "type": "object",
+                "properties": {
+                    "schema_version": {"const": SCHEMA_VERSION},
+                    "result_type": {"const": "branch_discovery_completed"},
+                    "request_id": {
+                        "type": "string",
+                        "pattern": "^native-review-request-[0-9a-f]{64}$",
+                    },
+                    "reviewer": {"const": "claude"},  # allowlist:provider -- canonical reviewer role
+                    "new_findings": {
+                        "type": "array",
+                        "maxItems": 32,
+                        "items": {"$ref": "#/$defs/finding"},
+                    },
+                    "occurrences": {
+                        "type": "array",
+                        "maxItems": 10000,
+                        "items": {
+                            "$ref": "#/$defs/branch_discovery_occurrence"
+                        },
+                    },
+                    "review_evidence": {"$ref": "#/$defs/evidence"},
+                    "pre_mortem": {
+                        "type": "string",
+                        "pattern": NONBLANK_TEXT_PATTERN,
+                        "maxLength": 3000,
+                    },
+                },
+                "required": [
+                    "schema_version",
+                    "result_type",
+                    "request_id",
+                    "reviewer",
+                    "new_findings",
+                    "occurrences",
+                    "review_evidence",
+                    "pre_mortem",
+                ],
+                "additionalProperties": False,
+            },
+        ]
+    }
+    common_result_types = definitions["common"]["properties"]["result_type"]
+    common_result_types["enum"] = [
+        "review_result",
+        "stop_request",
+        "branch_discovery_completed",
+    ]
+    schema["oneOf"].append(
+        {"$ref": "#/$defs/branch_discovery_completed"}
+    )
+
+
+def _branch_discovery_provider_response_schema(
+    context: NativeReviewContext,
+    definitions: dict[str, Any],
+) -> dict[str, Any]:
+    if not native_finding_decisions.native_finding_decisions_enabled():
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.CONTEXT_INVALID,
+            "branch discovery writer requires JOINT_67_68_NATIVE_CONTRACT_CUTOVER",
+        )
+    finding_ids = _native_finding_id_window(context, size=32)
+    finding = _bound_review_definition(
+        definitions["finding"], finding_ids=finding_ids
+    )
+    finding["properties"]["summary"].update(
+        pattern=NONBLANK_TEXT_PATTERN, maxLength=3000
+    )
+    definitions["bound_branch_discovery_finding"] = finding
+    known_ids = tuple(
+        item.finding_id for item in context.effective_known_open_findings
+    )
+    occurrence = _bound_review_definition(
+        definitions["branch_discovery_occurrence"], finding_ids=known_ids
+    )
+    definitions["bound_branch_discovery_occurrence"] = occurrence
+    completed = json.loads(
+        json.dumps(definitions["branch_discovery_completed"]["allOf"][1])
+    )
+    completed["properties"]["schema_version"] = {
+        "type": "string",
+        "const": SCHEMA_VERSION,
+    }
+    completed["properties"]["result_type"] = {
+        "type": "string",
+        "const": "branch_discovery_completed",
+    }
+    completed["properties"]["reviewer"] = {
+        "type": "string",
+        "const": context.reviewer.value,
+    }
+    completed["properties"]["new_findings"]["items"] = {
+        "$ref": "#/$defs/bound_branch_discovery_finding"
+    }
+    completed["properties"]["occurrences"].update(
+        maxItems=len(known_ids),
+        items={"$ref": "#/$defs/bound_branch_discovery_occurrence"},
+    )
+    definitions["bound_branch_discovery_completed"] = completed
+    stop = _bound_stop_result_definition(
+        definitions["stop_request"], reviewer=context.reviewer
+    )
+    stop["properties"]["rule_id"].update(
+        pattern=NONBLANK_TEXT_PATTERN, maxLength=200
+    )
+    stop["properties"]["rationale"].update(
+        pattern=NONBLANK_TEXT_PATTERN, maxLength=3000
+    )
+    definitions["bound_branch_discovery_stop"] = stop
+    return {
+        "title": "Native branch discovery writer projection",
+        "type": "object",
+        "properties": {
+            "result": {
+                "oneOf": [
+                    {"$ref": "#/$defs/bound_branch_discovery_completed"},
+                    {"$ref": "#/$defs/bound_branch_discovery_stop"},
+                ]
+            }
+        },
+        "required": ["result"],
+        "additionalProperties": False,
+        "$defs": definitions,
+    }
+
+
+def native_review_provider_response_schema(
+    context: NativeReviewContext, *, base_schema: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Project the reader contract into a request-bound reviewer writer schema.
+
+    Typed review context selects the projection; free-form operation names do not.
     """
     if not isinstance(context, NativeReviewContext):
         raise NativeReviewContractError(
@@ -763,6 +940,10 @@ def native_review_provider_response_schema(
     definitions["anchor"]["properties"]["input_fixture"]["maxLength"] = 2000
     definitions["anchor"]["properties"]["expected"]["maxLength"] = 2000
     definitions["anchor"]["properties"]["tolerance"]["maxLength"] = 1000
+    if context.approval_marker is ApprovalMarker.BRANCH_DISCOVERY:
+        return _branch_discovery_provider_response_schema(
+            context, definitions
+        )
     own_findings = tuple(
         item
         for item in context.previous_findings
@@ -1156,6 +1337,40 @@ def _parse_native_review_response(
             remediation_paths=tuple(document["remediation_paths"]),
         )
 
+    if document["result_type"] == "branch_discovery_completed":
+        if context.approval_marker is not ApprovalMarker.BRANCH_DISCOVERY:
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.APPROVAL_INVALID,
+                "BRANCH_DISCOVERY_COMPLETED requires a branch discovery request",
+            )
+        try:
+            discovery_evidence = ReviewEvidence(**document["review_evidence"])
+        except ValueError as exc:
+            raise NativeReviewContractError(
+                NativeReviewErrorCode.REVIEW_CONTENT_MISSING, str(exc)
+            ) from exc
+        discovery = NativeBranchDiscoveryCompleted(
+            request_id=document["request_id"],
+            reviewer=reviewer,
+            new_findings=tuple(
+                _parse_native_finding(item) for item in document["new_findings"]
+            ),
+            occurrences=tuple(
+                NativeFindingOccurrence(item["finding_id"], item["rationale"])
+                for item in document["occurrences"]
+            ),
+            evidence=discovery_evidence,
+            pre_mortem=document["pre_mortem"],
+        )
+        _validate_branch_discovery_completed(discovery, context)
+        return discovery
+
+    if context.approval_marker is ApprovalMarker.BRANCH_DISCOVERY:
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.APPROVAL_INVALID,
+            "branch discovery cannot use approved or denied review_result",
+        )
+
     evidence: ReviewEvidence | None = None
     if document["review_evidence"] is not None:
         try:
@@ -1270,6 +1485,28 @@ def _native_response_to_contract_result(
             findings=context.previous_findings,
             anchors=(),
             red_state_followup_slice=None,
+        )
+
+    if isinstance(response, NativeBranchDiscoveryCompleted):
+        _validate_branch_discovery_completed(response, context)
+        findings = _merge_branch_discovery_findings(response, context)
+        return ContractResult(
+            reviewer=response.reviewer,
+            approval=None,
+            stopped=False,
+            stop_request=None,
+            validation=context.validation_attestation,
+            test_files=context.test_files,
+            pre_mortem=response.pre_mortem,
+            evidence=response.evidence,
+            findings=findings,
+            anchors=(),
+            red_state_followup_slice=None,
+            delivery_kind="branch_discovery_completed",
+            occurrences=tuple(
+                FindingOccurrence(item.finding_id, item.rationale)
+                for item in response.occurrences
+            ),
         )
 
     response = _coalesce_known_finding_occurrences(response, context)
@@ -1752,6 +1989,86 @@ def _validate_response_events(
             NativeReviewErrorCode.ANCHOR_INVALID,
             "native anchors require a bound anchor_origin",
         )
+
+
+def _validate_branch_discovery_completed(
+    response: NativeBranchDiscoveryCompleted,
+    context: NativeReviewContext,
+) -> None:
+    """Validate E6 without routing inherited findings or deriving approval."""
+
+    if context.approval_marker is not ApprovalMarker.BRANCH_DISCOVERY:
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.APPROVAL_INVALID,
+            "BRANCH_DISCOVERY_COMPLETED requires its dedicated request marker",
+        )
+    _require_native_text(
+        response.pre_mortem,
+        "branch discovery pre_mortem",
+        max_length=3000,
+        code=NativeReviewErrorCode.REVIEW_CONTENT_MISSING,
+    )
+    validation = context.validation_attestation
+    if validation is None or not validation.complete or not validation.passed:
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.APPROVAL_INVALID,
+            "branch discovery completion requires a complete PASS attestation",
+        )
+    if context.test_files and not context.test_changes_approved:
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.APPROVAL_INVALID,
+            "branch discovery completion with test changes requires prior approval",
+        )
+    occurrence_ids = tuple(item.finding_id for item in response.occurrences)
+    if len(occurrence_ids) != len(set(occurrence_ids)):
+        raise NativeReviewContractError(
+            NativeReviewErrorCode.FINDING_EVENT_CONFLICT,
+            "branch discovery occurrences must reference each finding at most once",
+        )
+    fake = NativeReviewResult(
+        request_id=response.request_id,
+        reviewer=response.reviewer,
+        approved=False,
+        new_findings=response.new_findings,
+        status_changes=tuple(
+            NativeStatusChange(
+                finding_id=item.finding_id,
+                status=FindingStatus.OPEN,
+                rationale=item.rationale,
+            )
+            for item in response.occurrences
+        ),
+        reclassifications=(),
+        anchors=(),
+        evidence=response.evidence,
+        pre_mortem=response.pre_mortem,
+    )
+    _validate_response_events(fake, context)
+
+
+def _merge_branch_discovery_findings(
+    response: NativeBranchDiscoveryCompleted,
+    context: NativeReviewContext,
+) -> tuple[FindingRecord, ...]:
+    fake = NativeReviewResult(
+        request_id=response.request_id,
+        reviewer=response.reviewer,
+        approved=False,
+        new_findings=response.new_findings,
+        status_changes=tuple(
+            NativeStatusChange(
+                finding_id=item.finding_id,
+                status=FindingStatus.OPEN,
+                rationale=item.rationale,
+            )
+            for item in response.occurrences
+        ),
+        reclassifications=(),
+        anchors=(),
+        evidence=response.evidence,
+        pre_mortem=response.pre_mortem,
+    )
+    return _merge_findings(fake, context)
 
 
 def _coalesce_known_finding_occurrences(

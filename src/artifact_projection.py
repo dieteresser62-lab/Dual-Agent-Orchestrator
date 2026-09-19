@@ -10,6 +10,7 @@ from typing import Any, Mapping, Sequence
 from artifact_models import (
     AgentResultPayload,
     ArtifactRecord,
+    BranchDiscoveryCompletedPayload,
     BranchDiscoveryHandoffExportPayload,
     BranchDiscoveryHandoffImportPayload,
     BindingPayload,
@@ -109,7 +110,12 @@ class ArtifactAuditProjection:
             for record in self.records
             if isinstance(
                 record.payload,
-                (AgentResultPayload, DiagnosticPayload, ReviewPayload),
+                (
+                    AgentResultPayload,
+                    DiagnosticPayload,
+                    ReviewPayload,
+                    BranchDiscoveryCompletedPayload,
+                ),
             )
             and record.payload.work_unit_id in unit_ids
         }
@@ -312,6 +318,36 @@ def _render_review_record(
             f"- Remediation-Pfade: {_codes(payload.stop_request.remediation_paths)}",
         ))
     output.append("")
+
+
+def _render_branch_discovery_completed_record(
+    rendering: _ReplayRendering,
+    record: ArtifactRecord,
+    payload: BranchDiscoveryCompletedPayload,
+    prefix: str,
+) -> None:
+    round_number = rendering.work_unit_rounds.get(payload.work_unit_id, "–")
+    finding_ids = tuple(
+        item.finding_id for item in (*payload.new_findings, *payload.occurrences)
+    )
+    output = rendering.reviews[payload.reviewer]
+    output.extend((
+        f"### {payload.reviewer.value.title()} · Runde {round_number} · completed",
+        "",
+        "| Seq/Record | Rolle | Runde | Status | Work-Unit | Findings | Fingerprint |",
+        "|---|---|---:|---|---|---|---|",
+        f"| {prefix} | `{payload.reviewer.value}` | `{round_number}` | "
+        f"`BRANCH_DISCOVERY_COMPLETED` | `{_safe(payload.work_unit_id)}` | "
+        f"{_codes(finding_ids)} | `{record.fingerprint.sha256}` |",
+        "",
+        "#### Strukturierte Reviewevidenz",
+        "",
+        f"- Prüfdimensionen: {_prose(payload.review_evidence.dimensions)}",
+        f"- Größtes Restrisiko: {_prose(payload.review_evidence.largest_residual_risk)}",
+        f"- Realistische Bruchbedingung: {_prose(payload.review_evidence.break_condition)}",
+        f"- Pre-Mortem: {_prose(payload.pre_mortem)}",
+        "",
+    ))
 
 
 def _render_review_anchor_record(
@@ -651,6 +687,8 @@ def _render_record(
     prefix = f"{sequence}. `{_safe(record.record_id)}`"
     if isinstance(payload, AgentResultPayload):
         _render_agent_result_record(rendering, record, payload, prefix)
+    elif isinstance(payload, BranchDiscoveryCompletedPayload):
+        _render_branch_discovery_completed_record(rendering, record, payload, prefix)
     elif isinstance(payload, ReviewPayload):
         _render_review_record(rendering, record, payload, prefix)
     elif isinstance(payload, ReviewAnchorPayload):
