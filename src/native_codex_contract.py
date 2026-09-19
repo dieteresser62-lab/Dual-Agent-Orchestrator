@@ -44,6 +44,7 @@ from native_finding_decisions import (
     PlanCompletionKind,
     PlanTreatmentKind,
     PlanTreatmentProposal,
+    plan_treatment_json_schema,
 )
 from finding_planning import (
     canonical_open_signature_groups,
@@ -799,13 +800,13 @@ def _parse_plan_treatments(
                 signature=item["signature"],
                 finding_ids=tuple(item["finding_ids"]),
                 treatment_kind=PlanTreatmentKind(item["treatment_kind"]),
-                closing_slice_ids=tuple(item["closing_slice_ids"]),
+                closing_slice_ids=tuple(item.get("closing_slice_ids", ())),
                 no_code_reason=(
                     None
-                    if item["no_code_reason"] is None
+                    if item.get("no_code_reason") is None
                     else NativeRejectionReason(item["no_code_reason"])
                 ),
-                evidence=item["evidence"],
+                evidence=item.get("evidence"),
                 evidence_paths=tuple(item.get("evidence_paths", ())),
                 affected_paths=tuple(item.get("affected_paths", ())),
             )
@@ -895,70 +896,7 @@ def _enable_native_finding_decision_schema(schema: dict[str, Any]) -> None:
         ]
     }
     disposition["required"].append("responsibility_proposal")
-    definitions["plan_treatment"] = {
-        "type": "object",
-        "properties": {
-            "signature": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-            "finding_ids": {
-                "type": "array",
-                "minItems": 1,
-                "maxItems": 128,
-                "uniqueItems": True,
-                "items": {
-                    "type": "string",
-                    "pattern": "^C-(0[1-9]|[1-9][0-9]*)$",
-                },
-            },
-            "treatment_kind": {
-                "type": "string",
-                "enum": [item.value for item in PlanTreatmentKind],
-            },
-            "closing_slice_ids": {
-                "type": "array",
-                "maxItems": 1,
-                "uniqueItems": True,
-                "items": {"type": "integer", "minimum": 1},
-            },
-            "no_code_reason": {
-                "anyOf": [
-                    {
-                        "type": "string",
-                        "enum": [item.value for item in NativeRejectionReason],
-                    },
-                    {"type": "null"},
-                ]
-            },
-            "evidence": {
-                "anyOf": [
-                    {"$ref": "#/$defs/safe_text"},
-                    {"type": "null"},
-                ]
-            },
-            "evidence_paths": {
-                "type": "array",
-                "maxItems": 1000,
-                "uniqueItems": True,
-                "items": {"$ref": "#/$defs/safe_path"},
-            },
-            "affected_paths": {
-                "type": "array",
-                "maxItems": 1000,
-                "uniqueItems": True,
-                "items": {"$ref": "#/$defs/safe_path"},
-            },
-        },
-        "required": [
-            "signature",
-            "finding_ids",
-            "treatment_kind",
-            "closing_slice_ids",
-            "no_code_reason",
-            "evidence",
-            "evidence_paths",
-            "affected_paths",
-        ],
-        "additionalProperties": False,
-    }
+    definitions["plan_treatment"] = plan_treatment_json_schema()
     plan_result = definitions["plan_result"]
     plan_result["properties"]["plan_treatments"] = {
         "type": "array",

@@ -13,6 +13,7 @@ from typing import Any, Mapping
 from contracts import AgentRole, ApprovalMarker
 from finding_responsibility import responsibility_json_schema
 import native_finding_decisions
+from native_finding_decisions import plan_treatment_json_schema
 from native_review_contract import (
     BoundNativeReviewContext,
     MAX_BRANCH_DISCOVERY_NEW_FINDINGS,
@@ -832,92 +833,9 @@ def _enable_native_review_request_finding_decision_schema(
         "items": {"$ref": "#/$defs/planned_slice"},
     }
     contract["required"].append("planned_slices")
-    definitions["plan_treatment_proposal"] = {
-        "oneOf": [
-            {
-                "type": "object",
-                "properties": {
-                    "signature": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-                    "finding_ids": {
-                        "type": "array",
-                        "minItems": 1,
-                        "maxItems": 128,
-                        "uniqueItems": True,
-                        "items": {
-                            "type": "string",
-                            "pattern": "^C-(0[1-9]|[1-9][0-9]*)$",
-                        },
-                    },
-                    "treatment_kind": {
-                        "type": "string",
-                        "const": "implementation",
-                    },
-                    "closing_slice_ids": {
-                        "type": "array",
-                        "minItems": 1,
-                        "maxItems": 1,
-                        "uniqueItems": True,
-                        "items": {"type": "integer", "minimum": 1},
-                    },
-                },
-                "required": [
-                    "signature",
-                    "finding_ids",
-                    "treatment_kind",
-                    "closing_slice_ids",
-                ],
-                "additionalProperties": False,
-            },
-            {
-                "type": "object",
-                "properties": {
-                    "signature": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-                    "finding_ids": {
-                        "type": "array",
-                        "minItems": 1,
-                        "maxItems": 128,
-                        "uniqueItems": True,
-                        "items": {
-                            "type": "string",
-                            "pattern": "^C-(0[1-9]|[1-9][0-9]*)$",
-                        },
-                    },
-                    "treatment_kind": {
-                        "type": "string",
-                        "const": "no_code",
-                    },
-                    "no_code_reason": {
-                        "type": "string",
-                        "enum": ["no_defect", "out_of_scope", "already_fixed"],
-                    },
-                    "evidence": {"$ref": "#/$defs/safe_text"},
-                    "evidence_paths": {
-                        "type": "array",
-                        "minItems": 1,
-                        "maxItems": 1000,
-                        "uniqueItems": True,
-                        "items": {"$ref": "#/$defs/safe_path"},
-                    },
-                    "affected_paths": {
-                        "type": "array",
-                        "maxItems": 1000,
-                        "uniqueItems": True,
-                        "items": {"$ref": "#/$defs/safe_path"},
-                    },
-                },
-                "required": [
-                    "signature",
-                    "finding_ids",
-                    "treatment_kind",
-                    "no_code_reason",
-                    "evidence",
-                    "evidence_paths",
-                    "affected_paths",
-                ],
-                "additionalProperties": False,
-            },
-        ]
-    }
+    definitions["plan_treatment_proposal"] = plan_treatment_json_schema(
+        union_keyword="oneOf"
+    )
     contract["properties"]["plan_treatments"] = {
         "type": "array",
         "maxItems": 128,

@@ -655,14 +655,10 @@ def test_native_codex_plan_transports_complete_signature_treatments(
                 "signature": signature,
                 "finding_ids": ["C-01"],
                 "treatment_kind": "implementation",
-                    "closing_slice_ids": [1],
-                    "no_code_reason": None,
-                    "evidence": None,
-                    "evidence_paths": [],
-                    "affected_paths": [],
-                }
-            ],
-            "plan_completion": "IMPLEMENTATION_REQUIRED",
+                "closing_slice_ids": [1],
+            }
+        ],
+        "plan_completion": "IMPLEMENTATION_REQUIRED",
     }
 
     validate_schema_document(

@@ -309,7 +309,6 @@ def test_native_plan_can_finish_explicitly_without_an_implementation_slice() -> 
                     "signature": signature,
                     "finding_ids": ["C-01"],
                     "treatment_kind": "no_code",
-                    "closing_slice_ids": [],
                     "no_code_reason": "no_defect",
                     "evidence": "tests/evidence.txt establishes the intended behavior.",
                     "evidence_paths": ["tests/evidence.txt"],

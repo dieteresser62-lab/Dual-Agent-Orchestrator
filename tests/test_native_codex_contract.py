@@ -257,6 +257,95 @@ def test_generated_codex_writer_schema_passes_provider_conformance_ratchet() -> 
             pending.extend(node)
 
 
+def test_plan_treatment_writer_schema_is_closed_enum_discriminated_union() -> None:
+    provider_schema = native_codex_provider_response_schema(
+        _bound(NativeCodexRequestKind.PLAN).context
+    )
+    treatment_schema = provider_schema["$defs"]["plan_treatment"]
+
+    assert set(treatment_schema) == {"anyOf"}
+    branches = {
+        branch["properties"]["treatment_kind"]["enum"][0]: branch
+        for branch in treatment_schema["anyOf"]
+    }
+    assert set(branches) == {"implementation", "no_code"}
+    assert set(branches["implementation"]["properties"]) == {
+        "signature",
+        "finding_ids",
+        "treatment_kind",
+        "closing_slice_ids",
+    }
+    assert set(branches["no_code"]["properties"]) == {
+        "signature",
+        "finding_ids",
+        "treatment_kind",
+        "no_code_reason",
+        "evidence",
+        "evidence_paths",
+        "affected_paths",
+    }
+    for branch in branches.values():
+        assert set(branch["required"]) == set(branch["properties"])
+        assert branch["additionalProperties"] is False
+
+    pending: list[object] = [treatment_schema]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, dict):
+            assert "const" not in node
+            pending.extend(node.values())
+        elif isinstance(node, list):
+            pending.extend(node)
+
+    assert "anyOf" not in provider_schema
+    assert_projected_provider_schema(provider_schema, provider="codex")
+
+
+@pytest.mark.parametrize(
+    "treatment",
+    (
+        {
+            "signature": "c" * 64,
+            "finding_ids": ["C-01"],
+            "treatment_kind": "implementation",
+            "closing_slice_ids": [1],
+        },
+        {
+            "signature": "c" * 64,
+            "finding_ids": ["C-01"],
+            "treatment_kind": "no_code",
+            "no_code_reason": "no_defect",
+            "evidence": "The finding does not identify a product defect.",
+            "evidence_paths": ["tests/evidence.txt"],
+            "affected_paths": [],
+        },
+    ),
+)
+def test_plan_treatment_writer_accepts_each_union_branch(
+    treatment: dict[str, object],
+) -> None:
+    bound = _bound(NativeCodexRequestKind.PLAN)
+    document = {
+        **_base(bound, "plan_result"),
+        "ready": True,
+        "slice_plan": [
+            {
+                "slice_id": 1,
+                "summary": "Bind the treatment shape.",
+                "scope_paths": ["src/contract.py"],
+                "acceptance_criteria": [_criterion("The treatment is bound.")],
+            }
+        ],
+        "finding_dispositions": [],
+        "plan_treatments": [treatment],
+    }
+
+    validate_schema_document(
+        {"result": document},
+        native_codex_provider_response_schema(bound.context),
+    )
+
+
 def test_writer_schema_exposes_only_bound_result_kind_and_stop() -> None:
     expected = {
         NativeCodexRequestKind.PLAN: "plan_result",
@@ -980,10 +1069,6 @@ def test_plan_revision_accepts_sparse_finding_dispositions() -> None:
                 "finding_ids": ["C-01"],
                 "treatment_kind": "implementation",
                 "closing_slice_ids": [1],
-                "no_code_reason": None,
-                "evidence": None,
-                "evidence_paths": [],
-                "affected_paths": [],
             }
         ],
     }
@@ -1005,7 +1090,9 @@ def test_plan_revision_accepts_sparse_finding_dispositions() -> None:
     assert result.findings[0].responses[-1].decision is FindingResponseDecision.ACCEPTED
 
 
-def test_implementation_treatment_no_code_fields_get_exact_closed_diagnostic() -> None:
+def test_implementation_treatment_no_code_fields_are_rejected_by_wire_and_domain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     finding = _finding()
     bound = _bound(NativeCodexRequestKind.PLAN, findings=(finding,))
     document = {
@@ -1026,14 +1113,22 @@ def test_implementation_treatment_no_code_fields_get_exact_closed_diagnostic() -
                 "finding_ids": ["C-01"],
                 "treatment_kind": "implementation",
                 "closing_slice_ids": [1],
-                "no_code_reason": "no_defect",
-                "evidence": None,
-                "evidence_paths": [],
-                "affected_paths": [],
+                "affected_paths": ["src/contract.py"],
             }
         ],
     }
 
+    with pytest.raises(SchemaMismatch):
+        validate_schema_document(
+            {"result": document},
+            native_codex_provider_response_schema(bound.context),
+        )
+
+    monkeypatch.setattr(
+        native_codex_contract,
+        "validate_native_codex_document",
+        lambda _document: None,
+    )
     with pytest.raises(NativeCodexContractError) as raised:
         parse_native_codex_response(document, bound)
 
@@ -1075,10 +1170,6 @@ def test_enabled_plan_contract_carries_ordered_acceptance_criteria_losslessly(
                 "finding_ids": ["C-01"],
                 "treatment_kind": "implementation",
                 "closing_slice_ids": [1],
-                "no_code_reason": None,
-                "evidence": None,
-                "evidence_paths": [],
-                "affected_paths": [],
             }
         ],
         "plan_completion": "IMPLEMENTATION_REQUIRED",

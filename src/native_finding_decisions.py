@@ -8,6 +8,7 @@ import hashlib
 import json
 from pathlib import PurePosixPath
 import re
+from typing import Any
 
 from finding_order import sorted_finding_ids
 from finding_responsibility import FindingResponsibility
@@ -253,6 +254,95 @@ class PlanTreatmentProposal:
             )
 
 
+def plan_treatment_json_schema(
+    *, union_keyword: str = "anyOf"
+) -> dict[str, Any]:
+    """Return the closed native wire union for plan-treatment proposals."""
+
+    if union_keyword not in {"anyOf", "oneOf"}:
+        raise ValueError("plan treatment schema requires anyOf or oneOf")
+
+    signature = {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    finding_ids = {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 128,
+        "uniqueItems": True,
+        "items": {
+            "type": "string",
+            "pattern": "^C-(0[1-9]|[1-9][0-9]*)$",
+        },
+    }
+    return {
+        union_keyword: [
+            {
+                "type": "object",
+                "properties": {
+                    "signature": signature,
+                    "finding_ids": finding_ids,
+                    "treatment_kind": {
+                        "type": "string",
+                        "enum": [PlanTreatmentKind.IMPLEMENTATION.value],
+                    },
+                    "closing_slice_ids": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 1,
+                        "uniqueItems": True,
+                        "items": {"type": "integer", "minimum": 1},
+                    },
+                },
+                "required": [
+                    "signature",
+                    "finding_ids",
+                    "treatment_kind",
+                    "closing_slice_ids",
+                ],
+                "additionalProperties": False,
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "signature": signature,
+                    "finding_ids": finding_ids,
+                    "treatment_kind": {
+                        "type": "string",
+                        "enum": [PlanTreatmentKind.NO_CODE.value],
+                    },
+                    "no_code_reason": {
+                        "type": "string",
+                        "enum": [item.value for item in NativeRejectionReason],
+                    },
+                    "evidence": {"$ref": "#/$defs/safe_text"},
+                    "evidence_paths": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 1000,
+                        "uniqueItems": True,
+                        "items": {"$ref": "#/$defs/safe_path"},
+                    },
+                    "affected_paths": {
+                        "type": "array",
+                        "maxItems": 1000,
+                        "uniqueItems": True,
+                        "items": {"$ref": "#/$defs/safe_path"},
+                    },
+                },
+                "required": [
+                    "signature",
+                    "finding_ids",
+                    "treatment_kind",
+                    "no_code_reason",
+                    "evidence",
+                    "evidence_paths",
+                    "affected_paths",
+                ],
+                "additionalProperties": False,
+            },
+        ]
+    }
+
+
 def content_path_digest(
     paths: tuple[str, ...], content_sha256_by_path: dict[str, str]
 ) -> str:
@@ -359,4 +449,5 @@ __all__ = [
     "PlanTreatmentKind",
     "PlanTreatmentProposal",
     "content_path_digest",
+    "plan_treatment_json_schema",
 ]
