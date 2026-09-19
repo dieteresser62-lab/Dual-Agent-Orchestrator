@@ -1277,6 +1277,58 @@ def test_new_watch_task_switches_to_existing_target_and_uses_its_head_as_baselin
     assert _git(repository, "branch", "--show-current") == "feature/inbox-target"
 
 
+def test_new_watch_task_generates_and_persists_task_bound_target_branch(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repository = _repository(tmp_path, "feature/source")
+    _git(repository, "switch", "master")
+    task = tmp_path / "beitragsgrenzen.md"
+    task.write_text(
+        "# Beitragsgrenzen für Ärzte prüfen\n\n"
+        "Die Berechnung soll nachvollziehbar werden.\n",
+        encoding="utf-8",
+    )
+    args = _args(repository, task)
+    args.watch_run_id = "watch-derived-target"
+    captured: dict[str, WorkflowState] = {}
+    real_fresh_state = orchestrator._fresh_state
+
+    class StateCaptured(RuntimeError):
+        pass
+
+    def capture_state(**kwargs):
+        state = real_fresh_state(**kwargs)
+        captured["state"] = state
+        raise StateCaptured
+
+    monkeypatch.setattr(orchestrator, "_fresh_state", capture_state)
+    monkeypatch.chdir(repository)
+
+    with pytest.raises(StateCaptured):
+        run_production_workflow(task, args, force_new=True)
+
+    state = captured["state"]
+    reparsed = parse_task_contract(
+        task.read_text(encoding="utf-8"), source_name=task.name
+    )
+    assert state.target_branch == reparsed.target_branch
+    assert state.target_branch.startswith(
+        "feature/beitragsgrenzen-fur-arzte-prufen-"
+    )
+    assert _git(repository, "branch", "--show-current") == state.target_branch
+    assert _git(
+        repository,
+        "config",
+        "--local",
+        "--get",
+        f"branch.{state.target_branch}.orchestratorTaskDigest",
+    ) == reparsed.digest
+    assert (
+        workflow_production._validate_resumed_state(state, task.resolve(), reparsed)
+        is state
+    )
+
+
 def test_resume_uses_persisted_profiles_and_rejects_explicit_drift_before_provider(
     tmp_path: Path,
 ) -> None:

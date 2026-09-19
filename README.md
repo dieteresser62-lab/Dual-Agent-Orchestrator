@@ -65,8 +65,6 @@ Im normalen Betrieb genügt im Zielrepository eine informelle Datei wie `inbox/m
 ```markdown
 # Meine Idee
 
-TARGET_BRANCH: feature/mein-vorhaben
-
 Beschreibe hier in eigenen Worten, was verbessert oder untersucht werden soll.
 ```
 
@@ -76,7 +74,9 @@ Danach startet ein einziger Befehl Planung, Planreviews, lokalen Plancommit, Imp
 run_task --watch
 ```
 
-Der Watcher legt einen fehlenden Zielbranch an oder wechselt sicher auf einen vorhandenen. Bei einem notwendigen Branchwechsel mit nicht ignorierten Arbeitsbaum- oder Indexänderungen hält er an, statt Änderungen zu stashen oder mitzunehmen. Die einzige enge Ausnahme ist ein bereits vorhandener, regulärer und noch unversionierter `PLAN_ONLY`-Arbeitsplan, der im Auftrag exakt als `WORK_PLAN_PATH` gebunden ist; diesen nimmt der Branchwechsel als Aufgabenartefakt mit. Andere Änderungen oder ein bereits getrackter Plan bleiben ein Stopgrund. Auf einem bereits aktiven Zielbranch beginnt die neue Aufgabe am aktuellen `HEAD`.
+Der Watcher verwendet einen ausdrücklich angegebenen Zielbranch unverändert, erkennt genau einen im Fließtext genannten `feature/<name>`- oder `codex/<name>`-Branch oder erzeugt andernfalls aus Überschrift beziehungsweise erster Sinnzeile und Aufgabendigest einen sprechenden Namen. Mehrere verschiedene Textkandidaten werden als mehrdeutig abgewiesen. Einen fehlenden Zielbranch legt der Watcher an; auf einen vorhandenen ausdrücklich angegebenen oder erkannten Branch wechselt er sicher. Ein bereits vorhandener automatisch erzeugter Branch wird nur bei passender vollständiger Digestbindung wiederverwendet, andernfalls stoppt der Lauf mit `DERIVED-BRANCH-COLLISION`.
+
+Bei einem notwendigen Branchwechsel mit nicht ignorierten Arbeitsbaum- oder Indexänderungen hält der Watcher an, statt Änderungen zu stashen oder mitzunehmen. Die einzige enge Ausnahme ist ein bereits vorhandener, regulärer und noch unversionierter `PLAN_ONLY`-Arbeitsplan, der im Auftrag exakt als `WORK_PLAN_PATH` gebunden ist; diesen nimmt der Branchwechsel als Aufgabenartefakt mit. Andere Änderungen oder ein bereits getrackter Plan bleiben ein Stopgrund. Auf einem bereits aktiven Zielbranch beginnt die neue Aufgabe am aktuellen `HEAD`.
 
 Formale Einzelaufgaben bleiben für fortgeschrittene und maschinell erzeugte Aufträge verfügbar. [example-plan-task.md](example-plan-task.md) zeigt einen formalen Planauftrag, [example-task.md](example-task.md) einen formalen Implementierungsauftrag:
 
@@ -94,7 +94,7 @@ Eine nicht abgeschlossene `.orchestrator/state.json` wird im Einzelaufgabenmodus
 
 ## Informeller Inbox- und formaler Aufgabenbetrieb
 
-Im normalen Inbox-Betrieb darf die menschliche Aufgabe bewusst informell bleiben. Freier Markdown-Text plus `TARGET_BRANCH: feature/<name>` oder `TARGET_BRANCH: codex/<name>` genügt. Wenn keine formalen Ausführungsmarker und kein Scope-Abschnitt vorhanden sind, erzeugt der Orchestrator deterministisch einen `PLAN_ONLY`-Vertrag: Der Dateiname wird zu einem ASCII-Slug normalisiert, der Arbeitsplan liegt unter `docs/internal/<slug>-arbeitsplan.md`, und nur dieser Planpfad ist im ersten Lauf beschreibbar. Codex übersetzt die Idee anhand des Repositorys in Slices, Pfade, Akzeptanzkriterien, Risiken und Validierung. Direkter Implementierungsscope wird niemals aus freier Prosa abgeleitet.
+Im normalen Inbox-Betrieb darf die menschliche Aufgabe bewusst informell bleiben; freier Markdown-Text genügt. `TARGET_BRANCH: feature/<name>`, `TARGET_BRANCH: codex/<name>` und `--target-branch` bleiben optionale ausdrückliche Vorgaben. Ohne sie wird genau ein im Fließtext vorkommender Branchname übernommen. Fehlt auch dieser, entsteht deterministisch `feature/<gegenstand>-<digest-kurzteil>` aus Aufgabeninhalt und SHA-256-Digest. Wenn keine formalen Ausführungsmarker und kein Scope-Abschnitt vorhanden sind, erzeugt der Orchestrator außerdem deterministisch einen `PLAN_ONLY`-Vertrag: Der Dateiname wird zu einem ASCII-Slug normalisiert, der Arbeitsplan liegt unter `docs/internal/<slug>-arbeitsplan.md`, und nur dieser Planpfad ist im ersten Lauf beschreibbar. Codex übersetzt die Idee anhand des Repositorys in Slices, Pfade, Akzeptanzkriterien, Risiken und Validierung. Direkter Implementierungsscope wird niemals aus freier Prosa abgeleitet.
 
 Sobald einer der formalen Marker `ORCHESTRATOR_MODE`, `WORK_PLAN_PATH`, `APPROVED_PLAN_COMMIT` oder `TASK_SCOPE` vorkommt, gilt die Datei als formaler Vertrag und muss vollständig sein. Eine formale produktive Aufgabe deklariert zusätzlich zu Ziel, Nicht-Scope und Akzeptanzkriterien diese maschinenlesbare Grenze:
 
@@ -106,7 +106,7 @@ TARGET_BRANCH: feature/<name>|codex/<name>
 TASK_SCOPE: <comma-separated repository-relative paths or globs>
 ```
 
-`WORK_PLAN_PATH` ist bei `PLAN_ONLY` und im automatisch erzeugten Implementierungs-Handoff erforderlich. `APPROVED_PLAN_COMMIT` wird ausschließlich vom Handoff-Erzeuger zusammen mit den übernommenen `SLICE_PLAN`-Datensätzen geschrieben. Alternativ zu `TASK_SCOPE` wird ein Abschnitt `## Erlaubter Scope` oder `## Allowed Scope` mit Aufzählung akzeptiert. Im Einzelaufgabenmodus muss der angegebene Zielbranch vor dem Start existieren und aktiv sein. Im Watch-Modus bereitet der Orchestrator den Zielbranch beim ersten Start einer neuen Inbox-Aufgabe automatisch vor; die Agenten selbst dürfen Branches weiterhin weder erstellen noch wechseln.
+`TARGET_BRANCH` ist auch im formalen Vertrag optional und dient nur der ausdrücklichen Festlegung; ohne Marker gilt dieselbe eindeutige Textableitung beziehungsweise deterministische Erzeugung. `WORK_PLAN_PATH` ist bei `PLAN_ONLY` und im automatisch erzeugten Implementierungs-Handoff erforderlich. `APPROVED_PLAN_COMMIT` wird ausschließlich vom Handoff-Erzeuger zusammen mit den übernommenen `SLICE_PLAN`-Datensätzen geschrieben. Alternativ zu `TASK_SCOPE` wird ein Abschnitt `## Erlaubter Scope` oder `## Allowed Scope` mit Aufzählung akzeptiert. Im Einzelaufgabenmodus muss der aufgelöste Zielbranch vor dem Start existieren und aktiv sein. Im Watch-Modus bereitet der Orchestrator den Zielbranch beim ersten Start einer neuen Inbox-Aufgabe automatisch vor; die Agenten selbst dürfen Branches weiterhin weder erstellen noch wechseln.
 
 `PLAN_ONLY` bildet intern den Planungsteil des automatischen Ablaufs ab; [example-plan-task.md](example-plan-task.md) ist nur für bewusst formale Planaufträge erforderlich. Codex erstellt ausschließlich das deklarierte Arbeitsplan-MD. Die späteren Umsetzungsslices stehen als Überschriften im Dokument, während der ausführbare `SLICE_PLAN` dieses Laufs genau einen Dokumentationsslice enthält. Vor dem Planreview prüft der Orchestrator bereits, ob jede Slice-Überschrift und jeder Abschnitt `**Exakter Änderungspfad**` einen gültigen Implementierungs-Handoff ergeben. Die kompatible Schreibweise `**Exakte Änderungspfade:**` wird ebenfalls gelesen. Scheitert dieser Vertrag, erhält Codex vor Claude automatisch genau einen gezielten Reparaturdurchlauf; ein weiterhin ungültiger Plan hält anschließend als nachvollziehbares, fortsetzbares Gate an. Claude prüft den Plan; im automatischen Standardpfad wird er danach lokal commitet und die `IMPLEMENT`-Aufgabe erzeugt. Im Watch-Modus wird diese neue Inbox-Aufgabe unmittelbar als Nächstes verarbeitet. `--plan-gate` schaltet eine zusätzliche menschliche Abnahme vor dem Plancommit ein.
 
@@ -252,8 +252,8 @@ Der Orchestrator kann als FIFO-Warteschlangenworker ausgeführt werden:
 Der Watch-Modus:
 
 - überwacht stabile `*.md`-Dateien in `inbox/`, älteste zuerst;
-- akzeptiert informelle Ideen mit `TARGET_BRANCH` und leitet daraus automatisch einen eng begrenzten `PLAN_ONLY`-Auftrag ab;
-- liest `TARGET_BRANCH` aus der Aufgabe und legt diesen Branch beim ersten Start an oder wechselt auf einen bereits vorhandenen Branch;
+- akzeptiert informelle Ideen auch ohne `TARGET_BRANCH` und leitet daraus automatisch einen eng begrenzten `PLAN_ONLY`-Auftrag ab;
+- priorisiert `--target-branch` beziehungsweise `TARGET_BRANCH`, übernimmt alternativ genau einen Branchnamen aus dem Fließtext und erzeugt sonst einen digestgebundenen sprechenden Namen;
 - erweitert einen bereits aktiven Zielbranch ab dessen aktuellem `HEAD`, sodass frühere Branch-Commits nicht erneut zum Diff der neuen Aufgabe gehören;
 - verweigert einen erforderlichen Branchwechsel bei nicht ignorierten Arbeitsbaum- oder Indexänderungen, ohne Dateien zu stashen, zu bereinigen oder zu übernehmen;
 - wechselt bei einem Resume mit vorhandenem Workflow-State niemals automatisch den Branch; weicht der aktive Branch vom persistierten Zielbranch ab, stoppt der bestehende `BRANCH-MISMATCH`-Gate;
@@ -326,7 +326,7 @@ Für deterministische Negativ- und Fortsetzungsszenarien kann ein State-v3-JSON-
 | `--test-change-gate` / `--no-test-change-gate` | Repositorykonfiguration oder aus | Vor Review und Commit eines Slices mit Testdateiänderungen eine zusätzliche fingerprintgebundene Benutzerfreigabe verlangen. Ohne Gate bleiben Scopeprüfung, Tests und der Claude-Review verpflichtend. |
 | `--plan-only` / `--no-plan-only` | Aufgabenmarker oder nicht gesetzt | Den Lauf auf das deklarierte Arbeitsplanartefakt begrenzen beziehungsweise explizit als Implementierung ausführen. |
 | `--work-plan <path>` | Aufgabenmarker | Exakter repositoryrelativer `WORK_PLAN_PATH` für `PLAN_ONLY`; darf dem Marker nicht widersprechen. |
-| `--target-branch <branch>` | Aufgabenmarker | Exakter erforderlicher Feature-Branch; darf dem Marker nicht widersprechen. |
+| `--target-branch <branch>` | Aufgabenmarker, eindeutige Textableitung oder deterministische Erzeugung | Exakter erforderlicher Feature-Branch; darf dem Marker nicht widersprechen. |
 | `--approve-gate` / `--reject-gate` | nicht gesetzt | Zusammen mit explizitem `--resume` über das exakt persistierte Benutzergate entscheiden. |
 | `--gate-rationale <text>` | nicht gesetzt | Erforderliche Begründung für eine explizite Gate-Entscheidung. |
 

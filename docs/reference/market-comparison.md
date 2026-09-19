@@ -20,7 +20,7 @@ Sein stärkstes Alleinstellungsmerkmal ist die Kombination aus:
 - schreibgeschützten Reviewer-Workspaces;
 - persistierter Finding-Zuständigkeit und exakter Schrittfortsetzung;
 - pfadbegrenzten, lokal verifizierten Plan-, Slice- und Korrekturcommits ohne Push- oder Merge-Berechtigung;
-- einem menschenfreundlichen Inbox-Intake, der freie Prosa plus Zielbranch zunächst in einen unabhängig geprüften Arbeitsplan überführt;
+- einem menschenfreundlichen Inbox-Intake, der freie Prosa mit optionalem Zielbranch zunächst in einen unabhängig geprüften Arbeitsplan überführt;
 - einem vollständig automatischen Standardpfad vom Plan über alle Slices bis zum dreifachen Abschlussreview, während echte Produkt- und Richtlinienentscheidungen weiterhin sicher anhalten.
 
 Diese Kontrolle bringt bewusste Nachteile mit sich. Der Orchestrator besitzt keine IDE, keine gehostete Ausführungsflotte, keinen Browseragenten, keine Pull-Request-Oberfläche, keinen Modellmarktplatz, keine verteilte Warteschlange und keine parallele Slice-Ausführung. Mehrere Marktprodukte sind in diesen Bereichen deutlich stärker.

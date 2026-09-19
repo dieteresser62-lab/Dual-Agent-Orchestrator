@@ -1,6 +1,6 @@
 # Arbeitsplan für einen begrenzten Gap erstellen
 
-> Formales Expertenbeispiel für einen bewusst separat gestarteten Planlauf. Für den normalen Inbox-Ablauf genügen eine freie Ideenbeschreibung und `TARGET_BRANCH`; der Orchestrator leitet daraus sicher den Planauftrag ab.
+> Formales Expertenbeispiel für einen bewusst separat gestarteten Planlauf. Für den normalen Inbox-Ablauf genügt eine freie Ideenbeschreibung; `TARGET_BRANCH` ist eine optionale ausdrückliche Vorgabe. Der Orchestrator leitet daraus sicher den Planauftrag ab.
 
 ORCHESTRATOR_MODE: PLAN_ONLY
 WORK_PLAN_PATH: docs/internal/beispiel-work-plan.md

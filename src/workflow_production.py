@@ -246,6 +246,11 @@ def _prepare_new_watch_task(
         prepared = prepare_new_watch_task_branch(
             root,
             target_branch=task_contract.target_branch,
+            derived_task_digest=(
+                task_contract.digest
+                if task_contract.target_branch_generated
+                else None
+            ),
             excluded_control_paths=new_watch_task_control_paths(root, task_file),
             preserved_task_paths=new_watch_task_preserved_paths(root, task_contract),
         )

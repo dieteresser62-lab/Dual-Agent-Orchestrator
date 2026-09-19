@@ -420,6 +420,7 @@ def prepare_new_watch_task_branch(
     repository_root: Path,
     *,
     target_branch: str,
+    derived_task_digest: str | None = None,
     excluded_control_paths: Sequence[str] = (),
     preserved_task_paths: Sequence[str] = (),
 ) -> TaskBranchPreparation:
@@ -436,7 +437,40 @@ def prepare_new_watch_task_branch(
             "automatic task branch preparation requires a feature/<name> or "
             "codex/<name> target branch"
         )
+    if derived_task_digest is not None and re.fullmatch(
+        r"[0-9a-f]{64}", derived_task_digest
+    ) is None:
+        raise GitTransactionError(
+            "derived task branch ownership requires a lowercase SHA-256 task digest"
+        )
     current = inspect_repository(repository_root)
+    exists = _git(
+        current.repository_root,
+        "show-ref",
+        "--verify",
+        "--quiet",
+        f"refs/heads/{target_branch}",
+        accepted_exit_codes=(0, 1),
+    )
+    if exists.returncode == 0 and derived_task_digest is not None:
+        binding_key = f"branch.{target_branch}.orchestratorTaskDigest"
+        binding = _git(
+            current.repository_root,
+            "config",
+            "--local",
+            "--get",
+            binding_key,
+            accepted_exit_codes=(0, 1),
+        )
+        bound_digest = (
+            os.fsdecode(binding.stdout).strip() if binding.returncode == 0 else None
+        )
+        if bound_digest != derived_task_digest:
+            raise GitTransactionError(
+                "DERIVED-BRANCH-COLLISION: generated target branch "
+                f"{target_branch!r} already exists without the matching task digest; "
+                "refusing to adopt a foreign branch"
+            )
     excluded = _normalize_optional_scope_paths(excluded_control_paths)
     preserved = _normalize_optional_scope_paths(preserved_task_paths)
     if set(excluded).intersection(preserved):
@@ -510,19 +544,19 @@ def prepare_new_watch_task_branch(
             f"{current.branch!r}; found: {', '.join(changes.paths)}"
         )
 
-    exists = _git(
-        current.repository_root,
-        "show-ref",
-        "--verify",
-        "--quiet",
-        f"refs/heads/{target_branch}",
-        accepted_exit_codes=(0, 1),
-    )
     if exists.returncode == 0:
         _git(current.repository_root, "switch", target_branch)
         action: Literal["created", "switched"] = "switched"
     else:
         _git(current.repository_root, "switch", "-c", target_branch)
+        if derived_task_digest is not None:
+            _git(
+                current.repository_root,
+                "config",
+                "--local",
+                f"branch.{target_branch}.orchestratorTaskDigest",
+                derived_task_digest,
+            )
         action = "created"
 
     prepared = inspect_repository(current.repository_root)

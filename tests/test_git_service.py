@@ -179,6 +179,54 @@ def test_new_watch_task_creates_missing_target_branch(tmp_path: Path) -> None:
     assert _git(repository, "branch", "--show-current") == "feature/inbox-created"
 
 
+def test_generated_watch_branch_records_and_reuses_matching_task_digest(
+    tmp_path: Path,
+) -> None:
+    repository, base = _new_repository(tmp_path)
+    _git(repository, "switch", "master")
+    digest = "a" * 64
+
+    created = prepare_new_watch_task_branch(
+        repository,
+        target_branch="feature/readable-a1b2c3d4",
+        derived_task_digest=digest,
+    )
+    assert created.action == "created"
+    assert created.identity.head == base
+    assert _git(
+        repository,
+        "config",
+        "--local",
+        "--get",
+        "branch.feature/readable-a1b2c3d4.orchestratorTaskDigest",
+    ) == digest
+
+    _git(repository, "switch", "master")
+    reused = prepare_new_watch_task_branch(
+        repository,
+        target_branch="feature/readable-a1b2c3d4",
+        derived_task_digest=digest,
+    )
+    assert reused.action == "switched"
+    assert reused.identity.branch == "feature/readable-a1b2c3d4"
+
+
+def test_generated_watch_branch_rejects_existing_foreign_branch(
+    tmp_path: Path,
+) -> None:
+    repository, _ = _new_repository(tmp_path)
+    _git(repository, "switch", "master")
+
+    with pytest.raises(GitTransactionError, match="DERIVED-BRANCH-COLLISION"):
+        prepare_new_watch_task_branch(
+            repository,
+            target_branch="feature/transaction",
+            derived_task_digest="b" * 64,
+        )
+
+    assert _git(repository, "branch", "--show-current") == "master"
+
+
 def test_new_watch_task_switches_to_existing_target_and_extends_its_head(
     tmp_path: Path,
 ) -> None:

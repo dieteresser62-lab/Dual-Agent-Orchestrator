@@ -3,7 +3,12 @@ from __future__ import annotations
 import pytest
 import native_finding_decisions
 
-from task_contract import TaskContractError, TaskMode, parse_task_contract
+from task_contract import (
+    FEATURE_BRANCH_PATTERN,
+    TaskContractError,
+    TaskMode,
+    parse_task_contract,
+)
 
 
 BRANCH_DISCOVERY_TASK = """ORCHESTRATOR_MODE: BRANCH_DISCOVERY
@@ -89,7 +94,63 @@ Bitte frage nur bei echten fachlichen Alternativen nach.
         "docs/internal/strategie-vergleich-arbeitsplan.md",
     )
     assert contract.target_branch == "codex/strategie-vergleich"
+    assert contract.target_branch_generated is False
     assert contract.informal_intake is True
+
+
+def test_task_uses_one_unique_branch_reference_from_free_text() -> None:
+    contract = parse_task_contract(
+        """# Export stabilisieren
+
+Die Umsetzung soll auf `feature/export-stabilisieren` erfolgen. Der Branch
+feature/export-stabilisieren wird in the acceptance criteria erneut genannt.
+""",
+        source_name="export.md",
+    )
+
+    assert contract.target_branch == "feature/export-stabilisieren"
+    assert contract.target_branch_generated is False
+
+
+def test_task_rejects_distinct_free_text_branch_references_as_ambiguous() -> None:
+    with pytest.raises(TaskContractError, match="ambiguous target branches"):
+        parse_task_contract(
+            """# Export stabilisieren
+
+Als Möglichkeiten werden feature/export-v1 und codex/export-v2 genannt.
+""",
+            source_name="export.md",
+        )
+
+
+def test_task_generates_readable_deterministic_branch_from_task_content() -> None:
+    text = """# Beitragsgrenzen für Ärzte: Check!
+
+Die Berechnung soll nachvollziehbar werden.
+"""
+
+    first = parse_task_contract(text, source_name="first-name.md")
+    second = parse_task_contract(text, source_name="another-name.md")
+
+    assert first.target_branch == second.target_branch
+    assert first.target_branch.startswith(
+        "feature/beitragsgrenzen-fur-arzte-check-"
+    )
+    assert FEATURE_BRANCH_PATTERN.fullmatch(first.target_branch)
+    assert first.target_branch_generated is True
+
+
+def test_formal_task_without_branch_generates_from_its_heading() -> None:
+    contract = parse_task_contract(
+        """# Audit-Export absichern
+ORCHESTRATOR_MODE: IMPLEMENT
+TASK_SCOPE: src/audit.py
+"""
+    )
+
+    assert contract.mode is TaskMode.IMPLEMENT
+    assert contract.target_branch.startswith("feature/audit-export-absichern-")
+    assert contract.target_branch_generated is True
 
 
 def test_informal_task_slug_is_ascii_and_has_digest_fallback() -> None:
@@ -187,10 +248,6 @@ SLICE_PLAN: 1 | implementation | src/x.py
             "WORK_PLAN_PATH",
         ),
         (
-            "ORCHESTRATOR_MODE: IMPLEMENT\nTASK_SCOPE: src/app.py\n",
-            "TARGET_BRANCH",
-        ),
-        (
             "ORCHESTRATOR_MODE: IMPLEMENT\nTARGET_BRANCH: main\n"
             "TASK_SCOPE: src/app.py\n",
             "feature/<name>",
@@ -223,3 +280,14 @@ def test_cli_overrides_must_not_conflict_with_task_markers() -> None:
         parse_task_contract(text, mode_override=False)
     with pytest.raises(TaskContractError, match="conflicts"):
         parse_task_contract(text, target_branch_override="feature/other")
+
+
+def test_cli_branch_override_keeps_priority_over_free_text_reference() -> None:
+    contract = parse_task_contract(
+        "# Plan\nThe prose mentions feature/prose-only.\n",
+        source_name="plan.md",
+        target_branch_override="codex/cli-wins",
+    )
+
+    assert contract.target_branch == "codex/cli-wins"
+    assert contract.target_branch_generated is False

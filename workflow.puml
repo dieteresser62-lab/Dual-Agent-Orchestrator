@@ -15,12 +15,13 @@ start
 :Read task, repository policy, Git identity, and persisted state;
 
 if (New watch task?) then (yes)
-  :Prepare TARGET_BRANCH under safe worktree rules;
+  :Resolve explicit, unique prose, or deterministic target branch;
+  :Prepare target branch under safe worktree and collision rules;
 else (formal single task)
-  :Require the declared active target branch;
+  :Require the resolved active target branch;
 endif
 
-if (Only prose plus TARGET_BRANCH?) then (yes)
+if (Only informal prose?) then (yes)
   :Derive PLAN_ONLY and exact work-plan scope;
 else (formal contract)
   :Validate every declared contract marker fail-closed;

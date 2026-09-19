@@ -13,6 +13,12 @@ import native_finding_decisions
 
 
 FEATURE_BRANCH_PATTERN = re.compile(r"^(?:feature|codex)/[A-Za-z0-9._-]+$")
+BRANCH_REFERENCE_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9._/-])"
+    r"(?P<branch>(?:feature|codex)/[A-Za-z0-9]"  # allowlist:provider
+    r"(?:[A-Za-z0-9._-]*[A-Za-z0-9_-])?)"
+    r"(?![A-Za-z0-9_/-])"
+)
 MARKER_PATTERN = re.compile(
     r"^[ \t]*(ORCHESTRATOR_MODE|WORK_PLAN_PATH|APPROVED_PLAN_COMMIT|TARGET_BRANCH|TASK_SCOPE|"
     r"FINDING_HANDOFF_SOURCE_RUN|FINDING_HANDOFF_EXPORT)"
@@ -47,6 +53,7 @@ class TaskContract:
     finding_handoff_source_run_id: str | None = None
     finding_handoff_export_record_id: str | None = None
     informal_intake: bool = False
+    target_branch_generated: bool = False
 
     def __post_init__(self) -> None:
         if re.fullmatch(r"[0-9a-f]{64}", self.digest) is None:
@@ -59,6 +66,10 @@ class TaskContract:
             )
         if not isinstance(self.informal_intake, bool):
             raise TaskContractError("informal_intake must be a boolean")
+        if not isinstance(self.target_branch_generated, bool):
+            raise TaskContractError("target_branch_generated must be a boolean")
+        if self.target_branch_generated and not self.target_branch.startswith("feature/"):
+            raise TaskContractError("a generated target branch must use feature/<name>")
         if self.informal_intake and self.mode is not TaskMode.PLAN_ONLY:
             raise TaskContractError("informal intake must be bound to PLAN_ONLY")
         if self.mode is TaskMode.PLAN_ONLY:
@@ -140,6 +151,67 @@ def _informal_plan_slug(source_name: str, digest: str) -> str:
     if not slug:
         slug = f"task-{digest[:12]}"
     return slug
+
+
+def _ascii_slug(value: str) -> str:
+    transliterated = value.translate(
+        str.maketrans(
+            {
+                "ß": "ss",
+                "ẞ": "SS",
+                "æ": "ae",
+                "Æ": "AE",
+                "œ": "oe",
+                "Œ": "OE",
+            }
+        )
+    )
+    normalized = (
+        unicodedata.normalize("NFKD", transliterated)
+        .encode("ascii", "ignore")
+        .decode()
+    )
+    return re.sub(r"[^A-Za-z0-9]+", "-", normalized).strip("-").lower()
+
+
+def _task_subject(text: str) -> str:
+    for line in text.splitlines():
+        heading = re.match(r"^[ \t]{0,3}#{1,6}[ \t]+(.+?)[ \t]*#*[ \t]*$", line)
+        if heading is not None:
+            slug = _ascii_slug(heading.group(1))
+            if slug:
+                return slug
+
+    for line in text.splitlines():
+        value = line.strip()
+        if (
+            not value
+            or value.startswith("```")
+            or MARKER_PATTERN.fullmatch(value) is not None
+            or re.match(r"^SLICE_PLAN[ \t]*:", value, re.IGNORECASE) is not None
+        ):
+            continue
+        value = re.sub(r"^(?:>[ \t]*|[-*+][ \t]+|\d+[.)][ \t]+)", "", value)
+        slug = _ascii_slug(value)
+        if slug:
+            return slug
+    return "task"
+
+
+def _generated_target_branch(text: str, digest: str) -> str:
+    subject = _task_subject(text)[:48].rstrip("-") or "task"
+    return f"feature/{subject}-{digest[:16]}"
+
+
+def _branch_references(text: str) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            {
+                match.group("branch")
+                for match in BRANCH_REFERENCE_PATTERN.finditer(text)
+            }
+        )
+    )
 
 
 def _is_informal_intake(
@@ -295,11 +367,20 @@ def parse_task_contract(
             raise TaskContractError(
                 "--target-branch conflicts with TARGET_BRANCH in the task"
             )
+    target_branch_generated = False
     target_branch = (target_branch_override or declared_branch or "").strip()
     if not target_branch:
-        raise TaskContractError(
-            "task requires TARGET_BRANCH or the --target-branch option"
-        )
+        branch_references = _branch_references(text)
+        if len(branch_references) > 1:
+            raise TaskContractError(
+                "task text contains ambiguous target branches: "
+                + ", ".join(branch_references)
+            )
+        if branch_references:
+            target_branch = branch_references[0]
+        else:
+            target_branch = _generated_target_branch(text, digest)
+            target_branch_generated = True
 
     approved_plan_commit = _single_marker(markers, "APPROVED_PLAN_COMMIT")
     approved_slices = _parse_embedded_slice_plan(text)
@@ -321,6 +402,7 @@ def parse_task_contract(
         finding_handoff_source_run_id=finding_handoff_source_run_id,
         finding_handoff_export_record_id=finding_handoff_export_record_id,
         informal_intake=informal_intake,
+        target_branch_generated=target_branch_generated,
     )
 
 

@@ -25,11 +25,13 @@ git status --short
 mkdir -p inbox
 ```
 
-Den Zielbranch musst du im Watch-Modus weder vorher anlegen noch auschecken. Der Orchestrator liest ihn aus der Inbox-Datei und verhält sich beim ersten Start so:
+Den Zielbranch musst du im Watch-Modus weder benennen noch vorher anlegen oder auschecken. Der Orchestrator priorisiert eine ausdrückliche Angabe, übernimmt alternativ genau einen `feature/<name>`- oder `codex/<name>`-Namen aus dem Fließtext und erzeugt sonst deterministisch einen sprechenden Namen aus Gegenstand und Aufgabendigest. Mehrere verschiedene Textkandidaten oder ein vorhandener fremder automatisch erzeugter Branch führen zu einem sicheren Halt.
+
+Beim ersten Start verhält er sich so:
 
 - Fehlt der Zielbranch, wird er vom aktuellen `HEAD` angelegt und aktiviert.
-- Existiert er, ist aber nicht aktiv, wird zu ihm gewechselt, sofern der Arbeitsbaum sicher wechselbar ist.
-- Ist er bereits aktiv, wird die Aufgabe ab seinem aktuellen `HEAD` fortgeführt; vorhandene Branch-Commits bleiben erhalten.
+- Existiert ein ausdrücklich angegebener, erkannter oder passend digestgebundener erzeugter Branch, wird zu ihm gewechselt, sofern der Arbeitsbaum sicher wechselbar ist.
+- Ist ein solcher Branch bereits aktiv, wird die Aufgabe ab seinem aktuellen `HEAD` fortgeführt; vorhandene Branch-Commits bleiben erhalten.
 - Erfordert die Aufgabe einen Branchwechsel, während nicht ignorierte Arbeitsbaum- oder Indexänderungen vorliegen, stoppt der Orchestrator ohne Stash, Bereinigung oder Übernahme dieser Änderungen.
 - Bei einem Resume bleibt der persistierte Zielbranch bindend; ein abweichender aktiver Branch führt zum `BRANCH-MISMATCH`-Gate.
 
@@ -43,17 +45,17 @@ Erstelle eine beschreibend benannte Markdown-Datei, beispielsweise:
 nano inbox/meine-idee.md
 ```
 
-Für den normalen Ablauf genügen eine menschlich formulierte Idee und der Zielbranch:
+Für den normalen Ablauf genügt eine menschlich formulierte Idee:
 
 ```markdown
 # Meine Idee
-
-TARGET_BRANCH: feature/mein-vorhaben
 
 Ich möchte zwei Varianten verständlich miteinander vergleichen können.
 Bitte untersuche zuerst die bestehende Anwendung. Frage nur nach, wenn eine
 echte Produktentscheidung zu unterschiedlichen Ergebnissen führen würde.
 ```
+
+Falls du den Namen festlegen möchtest, ergänze optional beispielsweise `TARGET_BRANCH: feature/mein-vorhaben`.
 
 Du musst keine Pfade, Slices, Akzeptanzkriterien, Risiken oder Tests vorgeben. Fehlen formale Ausführungsmarker und ein Scope-Abschnitt, leitet der Orchestrator sicher einen `PLAN_ONLY`-Auftrag ab. Aus `meine-idee.md` entsteht der Arbeitsplan `docs/internal/meine-idee-arbeitsplan.md`; zunächst ist nur dieser Planpfad beschreibbar. Codex übersetzt die Idee anhand des Repositorys in einen konkreten, von Claude geprüften Arbeitsplan. Direkter Implementierungsscope wird niemals aus freier Prosa geraten.
 
@@ -105,7 +107,7 @@ run_task --watch --plan-gate
 
 Entsprechend aktivieren `--test-change-gate` eine zusätzliche Abnahme für Teständerungen und `--manual-slice-gate` eine Abnahme vor jedem Slice-Commit. Ohne diese Optionen bleiben Validierung sowie Claude-Reviews vollständig verpflichtend; nur der zusätzliche menschliche Halt entfällt.
 
-Für bereits ausgearbeitete, maschinell erzeugte oder bewusst getrennt ausgeführte Aufträge bleiben formale Dateien unterstützt. [example-plan-task.md](example-plan-task.md) zeigt `ORCHESTRATOR_MODE: PLAN_ONLY`; [example-task.md](example-task.md) zeigt `ORCHESTRATOR_MODE: IMPLEMENT`, `TARGET_BRANCH`, `TASK_SCOPE`, Akzeptanzkriterien und Stopbedingungen.
+Für bereits ausgearbeitete, maschinell erzeugte oder bewusst getrennt ausgeführte Aufträge bleiben formale Dateien unterstützt. [example-plan-task.md](example-plan-task.md) zeigt `ORCHESTRATOR_MODE: PLAN_ONLY`; [example-task.md](example-task.md) zeigt `ORCHESTRATOR_MODE: IMPLEMENT`, einen optional ausdrücklich gesetzten `TARGET_BRANCH`, `TASK_SCOPE`, Akzeptanzkriterien und Stopbedingungen.
 
 Ein formaler Einzelauftrag kann so gestartet werden:
 
